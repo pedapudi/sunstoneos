@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import subprocess
 from unittest.mock import patch
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
@@ -97,7 +98,7 @@ def main():
     if 'linked-input' in selected and 'linked-input' not in results['cases']:
         out=a.output/'linked-input';out.mkdir(exist_ok=False)
         source=out/'check.c';source.write_text('#include "input.h"\n#include <stdio.h>\n#include <stdlib.h>\nint main(int argc,char **argv){if(argc!=2)return 2;FILE *f=fopen(argv[1],"rb");if(!f)return 2;fseek(f,0,SEEK_END);long n=ftell(f);rewind(f);if(n<144||n>1048576)return 2;void *p=calloc(1,(size_t)n);if(!p||fread(p,1,(size_t)n,f)!=(size_t)n)return 2;fclose(f);int r=gpu_display_inputs_valid(p);free(p);return r?0:1;}\n')
-        command=[str(a.clang),'-std=c11','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer','-ffunction-sections','-fdata-sections','-I'+str(ROOT/'include'),'-I'+str(ROOT/'apps/gpu-display'),str(source),str(ROOT/'apps/gpu-display/input.c'),str(ROOT/'drivers/gpu/pvr_render_texture.c'),str(ROOT/'drivers/storage/storage_digest.c'),'-Wl,--gc-sections','-o',str(out/'check')]
+        command=[str(a.clang),'-std=c11','-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-ffunction-sections','-fdata-sections','-I'+str(ROOT/'include'),'-I'+str(ROOT/'apps/gpu-display'),str(source),str(ROOT/'apps/gpu-display/input.c'),str(ROOT/'drivers/gpu/pvr_render_texture.c'),str(ROOT/'drivers/storage/storage_digest.c'),'-Wl,--gc-sections','-o',str(out/'check')]
         p.save_json(out/'command.json',command);r=subprocess.run(command,capture_output=True,text=True);(out/'build.log').write_text(r.stdout+r.stderr);assert r.returncode==0
         path=out/'inputs.bin';path.write_bytes(data);r=subprocess.run([str(out/'check'),str(path)],capture_output=True,text=True);(out/'valid.log').write_text(r.stdout+r.stderr);assert r.returncode==0 and not r.stderr
         bad=bytearray(data);offset=struct.unpack_from('<I',bad,16+20)[0];struct.pack_into('<I',bad,offset,0x7fc00000)

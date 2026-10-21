@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()
 p.add_argument('--source-root', type=pathlib.Path, required=True)
@@ -151,7 +152,7 @@ def run(cmd):
 
 binary = a.evidence/'check'
 run([a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-parameter',
-     '-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(root/'include'),
+     '-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-I'+str(root/'include'),
      str(root/'checks/a733-tcon-lcd.c'),str(root/'drivers/display/a733_tcon_lcd.c'),
      str(root/'drivers/display/a733_dsi_video.c'),str(root/'drivers/display/a733_dsi_phy.c'),
      str(reference),'-o',str(binary)])

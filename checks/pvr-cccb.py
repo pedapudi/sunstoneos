@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 SHIM = r'''
 #include <assert.h>
@@ -95,7 +96,7 @@ def main():
     sources = ['checks/pvr-cccb.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_ccb.c']
     binary = args.output / 'check'
     command = [args.compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-               '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+               '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
                '-I' + str(args.output), '-I' + str(root / 'include')]
     command += [str(root / name) for name in sources] + ['-o', str(binary)]
     (args.output / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')

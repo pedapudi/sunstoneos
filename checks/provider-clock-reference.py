@@ -2,6 +2,7 @@
 """Exercise selected provider clock admissions on modeled register reads."""
 import argparse, hashlib, json, re, shlex, subprocess
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def block(text,name):
     start=re.search(r'(?:static )?(?:int|enum a733_pins_result) '+name+r'\(',text).start()
@@ -95,7 +96,7 @@ for(unsigned bad=0;bad<5;bad++){initial(2,96,104);prepare();switch(bad){case 0:*
             main+='initial(2,96,104);prepare();'+setroute+'assert(test());\n'
         main+='puts("PASS '+name+' normalized reference admission");return 0;}\n'
         generated=a.output/(name+'.c');generated.write_text(common+setup+actual+'\n'+tail+main)
-        cmd=['/usr/bin/clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I'+str(ROOT/'include'),str(generated),'-o',str(a.output/name)]
+        cmd=['/usr/bin/clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'include'),str(generated),'-o',str(a.output/name)]
         for phase,command in [('build',cmd),('run',[str(a.output/name)])]:
             v=subprocess.run(command,cwd=ROOT,capture_output=True,text=True);(a.output/(name+'-'+phase+'.log')).write_text(v.stdout+v.stderr)
             if v.returncode:raise RuntimeError(name+' '+phase+' failed; see preserved log')

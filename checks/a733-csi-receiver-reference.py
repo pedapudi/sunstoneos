@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 p=argparse.ArgumentParser()
 p.add_argument('--sources',type=pathlib.Path,required=True)
 p.add_argument('--evidence',type=pathlib.Path,required=True)
@@ -91,7 +92,7 @@ flags=['-std=c11','-O1','-g','-Wall','-Wextra','-Werror']
 # Reference headers use signed 1<<31 masks. Preserve their register behavior;
 # sanitize the native implementation rather than rewriting those expressions.
 commands=[[a.cc,*flags,str(ref),'-o',str(a.evidence/'reference')],
-          [a.cc,*flags,'-fsanitize=address,undefined','-fno-omit-frame-pointer','-Iinclude',
+          [a.cc,*flags,'-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-Iinclude',
            'checks/a733-csi-receiver.c','drivers/camera/a733_csi_receiver.c','-o',str(a.evidence/'check')],
           [str(a.evidence/'reference'),str(a.evidence/'reference.bin')],
           [str(a.evidence/'check'),str(a.evidence/'native.bin')]]

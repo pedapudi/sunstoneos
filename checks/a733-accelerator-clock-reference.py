@@ -2,6 +2,7 @@
 """Run only GPU/NPU actual-provider cases for detected DCXO and REF24."""
 import argparse, hashlib, json, subprocess
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
@@ -13,7 +14,7 @@ plans={'gpu':['drivers/gpu/a733_gpu_resources.c','checks/a733-gpu-clock-referenc
 results=[]
 for name in a.providers:
  sources=plans[name]
- command=['/usr/bin/clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-pthread','-Iinclude','-Ichecks','-I'+str(fixture.parent)]+sources+['-o',str(a.output/name)]
+ command=['/usr/bin/clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-pthread','-Iinclude','-Ichecks','-I'+str(fixture.parent)]+sources+['-o',str(a.output/name)]
  for phase,cmd in [('build',command),('run',[str(a.output/name)])]:
   result=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True)
   (a.output/(name+'-'+phase+'.log')).write_text(result.stdout+result.stderr)

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 SHIM = r'''
 #include <assert.h>
@@ -53,7 +54,7 @@ def main():
     shim.write_text(SHIM)
     binary = args.output / 'check'
     command = [args.compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-               '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+               '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
                '-include', str(shim), '-I' + str(args.output), '-I' + str(root / 'include'),
                str(root / 'checks/pvr-gpu-events.c'), str(root / 'drivers/gpu/pvr_gpu_events.c'),
                '-o', str(binary)]
@@ -67,7 +68,7 @@ def main():
         raise RuntimeError('GPU event check failed')
     integration_binary = args.output / 'control-check'
     integration_command = [args.compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-        '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I' + str(root / 'include'),
+        '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-I' + str(root / 'include'),
         str(root / 'checks/pvr-gpu-events-control.c'), str(root / 'drivers/gpu/pvr_gpu_events.c'),
         str(root / 'drivers/gpu/pvr_gpu_control.c'), str(root / 'drivers/gpu/pvr_ccb.c'),
         '-o', str(integration_binary)]

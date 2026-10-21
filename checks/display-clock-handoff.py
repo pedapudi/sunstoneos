@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()
 p.add_argument('--evidence', type=pathlib.Path, required=True)
@@ -57,7 +58,7 @@ def run(command):
 
 binary = a.evidence/'check'
 run([compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-     '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Iinclude',
+     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-Iinclude',
      'checks/display-clock-handoff.c', *compiled, '-o', binary])
 result = run([binary])
 for name in compiled:

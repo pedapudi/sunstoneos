@@ -7,6 +7,7 @@ import pathlib
 import re
 import shlex
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 REVISION = '86c7176d2dd0065555521bf8c61f208bf53c75d6'
 SOURCE_HASHES = {'src/imagination/pco/usclib/common.cl': '0b89e8c7cf9af7182ab97220fa3dac5c87380325af94aaa8fc0ff850da7ee1cf',
@@ -86,7 +87,7 @@ def main():
                              str(evidence / 'mesa-pds.o'), str(build / 'src/util/libmesa_util.a'),
                              '-Wl,--gc-sections', '-pthread', '-lm', '-o', str(evidence / 'reference')], build, evidence, 'reference-build'))
     used.append(run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
                      '-I' + str(root / 'include'), str(root / 'checks/pvr-compute-programs.c'),
                      str(root / 'drivers/gpu/pvr_compute_programs.c'), '-o', str(evidence / 'native')], root, evidence, 'native-build'))
     comparisons = []

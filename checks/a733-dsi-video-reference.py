@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()
 p.add_argument('--source-root', type=pathlib.Path, required=True)
@@ -100,7 +101,7 @@ reference.write_text(shim)
 binary = a.evidence / 'check'
 cmd = [a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra',
        '-Wno-unused-variable', '-Wno-unused-but-set-variable', '-Wno-sign-compare',
-       '-Wno-uninitialized', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+       '-Wno-uninitialized', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
        '-I' + str(root / 'include'), str(root / 'checks/a733-dsi-video.c'),
        str(root / 'drivers/display/a733_dsi_video.c'), str(root / 'drivers/display/a733_dsi_phy.c'),
        str(root / 'drivers/display/a733_dsi.c'), str(reference), '-o', str(binary)]

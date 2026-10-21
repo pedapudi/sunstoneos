@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 
 def main():
@@ -49,7 +50,7 @@ def main():
     native = ['drivers/watchdog/a733_maintenance_watchdog.c','platform/a733/maintenance_watchdog.c']
     if a.core_only:
         native = native[:1]
-    host_flags = [cc,'-O1','-g','-fsanitize=address,undefined']+common
+    host_flags = [cc,'-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all']+common
     native_flags = [cc,'--target=aarch64-none-elf','-O2','-ffreestanding','-fno-builtin','-Iruntime/include']+common
     commands = []
     def run(cmd, name):

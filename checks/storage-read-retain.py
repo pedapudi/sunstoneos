@@ -2,12 +2,13 @@
 """Build and execute only the additive MMC retain API against existing real managers."""
 import argparse,hashlib,json,subprocess
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def run(out):
  out.mkdir(parents=True,exist_ok=False);original=(ROOT/'checks/sunxi-mmc.c').read_text();model=original[original.index('struct model {'):original.index('static int barrier(void *ctx)')];(out/'mmc-card-model.h').write_text(model)
  composition=(ROOT/'checks/a733-mmc-platform.c').read_text();(out/'storage-platform-model.h').write_text(composition[:composition.index('int main(')])
  sources=['drivers/storage/a733_storage_update.c','drivers/storage/storage_digest.c','drivers/storage/a733_mmc_platform.c','drivers/storage/sunxi_mmc.c','drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/gpu/a733_gpu_resources.c','drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','checks/storage-read-retain.c']
- command=['/usr/lib/llvm-21/bin/clang','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined','-Iinclude','-Ichecks','-I'+str(out),*sources,'-o',str(out/'retain')]
+ command=['/usr/lib/llvm-21/bin/clang','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined','-fno-sanitize-recover=all','-Iinclude','-Ichecks','-I'+str(out),*sources,'-o',str(out/'retain')]
  records=[]
  for c in (command,[str(out/'retain')]):
   p=subprocess.run(c,cwd=ROOT,capture_output=True,text=True);records.append(dict(command=c,returncode=p.returncode,stdout=p.stdout,stderr=p.stderr));(out/'commands.json').write_text(json.dumps(records,indent=2)+'\n');assert p.returncode==0,records[-1]

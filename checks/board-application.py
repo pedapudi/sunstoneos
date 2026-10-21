@@ -14,6 +14,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn import arm64_const as registers
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT = Path(__file__).resolve().parents[1]
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -139,6 +140,7 @@ def main():
         source/'drivers/storage/storage_digest.c','-nostdlib',f'-fuse-ld={linker}',
         '-Wl,-Ttext=0x41000000','-Wl,--gc-sections','-Wl,-e,board_check_run','-o',output_fixture])
     run('admission-build',[compiler,'-std=c11','-O1','-g','-fsanitize=address,undefined',
+        '-fno-sanitize-recover=all',
         '-I'+str(source/'include'),'-I'+str(source/'platform/a733-smp-cached'),
         source/'apps/board/admission.c',source/'drivers/storage/storage_digest.c',
         source/'checks/board-application-admission.c','-o',out/'admission'])

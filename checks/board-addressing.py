@@ -11,6 +11,7 @@ import shutil
 import struct
 import sys
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 
 def load(name,path):
@@ -64,7 +65,7 @@ def main():
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     common=['-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_AIC8800_RSN=1',
         '-DSUNSTONE_BOARD_SUPERVISED=1','-DINCLUDE_xSemaphoreGetMutexHolder=1',
-        '-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+        '-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer',
         '-Inetwork/include','-Iinclude','-Iruntime/include','-Iplatform/a733-smp-cached',
         '-I'+str(a.freertos/'include'),'-I'+str(a.freertos/'portable/GCC/ARM_AARCH64_SRE'),
         '-I'+str(a.tcp/'source/include'),'-I'+str(a.tcp/'source/portable/Compiler/GCC')]
@@ -78,7 +79,7 @@ def main():
         # Compile both inputs before executing any fixture.
         for name,source in [('profile','checks/board-addressing.c'),('digest','drivers/storage/storage_digest.c')]:
             run(name,[a.cc,*common,'-MMD','-MF',str(out/(name+'.d')),'-c',source,'-o',str(out/(name+'.o'))])
-        run('link',[a.cc,'-fsanitize=address,undefined','-Wl,--gc-sections',str(out/'profile.o'),str(out/'digest.o'),'-o',str(out/'board-addressing')])
+        run('link',[a.cc,'-fsanitize=address,undefined','-fno-sanitize-recover=all','-Wl,--gc-sections',str(out/'profile.o'),str(out/'digest.o'),'-o',str(out/'board-addressing')])
         host_checks();(out/'host.log').write_text('PASS fixed/DHCP host admission, geometry and result decoding\n')
         run('profile-run',[str(out/'board-addressing')])
         (out/'result.json').write_text(json.dumps({'passed':True,'hardware_access':False,

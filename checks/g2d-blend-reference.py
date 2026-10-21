@@ -5,6 +5,7 @@ This checks command construction, not device pixels or alpha quantization.
 """
 import argparse,hashlib,json,subprocess
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 NAMES={'g2d_bld.c':['bld_in_set','bld_out_setting','bld_set_rop_ctrl','bld_cs_set','bld_porter_duff'],
        'g2d_ovl_u.c':['g2d_ovl_u_fc_set','g2d_uilayer_set','g2d_uilayer_overlay_set']}
@@ -66,7 +67,7 @@ int main(void)
 }
 '''
  source=a.output/'reference.c';source.write_text(prelude+'\n'.join(parts)+test)
- cmd=[a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I'+str(ROOT/'include'),'-I'+str(ROOT/'drivers/g2d'),'-I'+str(a.reference),str(source),str(ROOT/'drivers/g2d/a733_g2d.c'),'-o',str(a.output/'reference')]
+ cmd=[a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'include'),'-I'+str(ROOT/'drivers/g2d'),'-I'+str(a.reference),str(source),str(ROOT/'drivers/g2d/a733_g2d.c'),'-o',str(a.output/'reference')]
  (a.output/'commands.json').write_text(json.dumps([cmd,[str(a.output/'reference')]],indent=2)+'\n')
  for args in (cmd,[str(a.output/'reference')]):
   run=subprocess.run(args,capture_output=True,text=True);(a.output/('build.log' if args==cmd else 'run.log')).write_text(run.stdout+run.stderr);run.check_returncode()
