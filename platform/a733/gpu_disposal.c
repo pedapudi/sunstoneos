@@ -2,6 +2,7 @@
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_backend.h"
 #include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include <string.h>
 struct a733_gpu_disposal *a733_gpu_disposal_owner(struct pvr_gpu_service *s)
 {
@@ -18,13 +19,7 @@ static int extent_equal(struct device_memory_extent a,struct device_memory_exten
 static int mapping(struct device_memory_extent e,unsigned attr)
 {
     if(!e.bytes || (e.cpu&4095) || (e.bytes&4095) || e.cpu!=e.physical || e.bytes>UINTPTR_MAX-e.cpu)return 0;
-    for(uintptr_t p=e.cpu;p<e.cpu+e.bytes;p+=4096) {
-        struct aarch64_translation r,w;
-        if(!aarch64_device_translate(p,0,&r) || !aarch64_device_translate(p,1,&w) ||
-           r.physical!=p || w.physical!=p || r.attributes!=attr || w.attributes!=attr ||
-           r.shareability!=w.shareability || (r.shareability!=3 && (attr!=0x44 || r.shareability!=2)))return 0;
-    }
-    return 1;
+    return a733_gpu_identity_mapped(e.cpu,e.bytes,attr,1);
 }
 static int ledger(struct a733_gpu_disposal *d)
 {

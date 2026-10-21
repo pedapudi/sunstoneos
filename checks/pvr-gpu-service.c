@@ -203,8 +203,17 @@ static int irq_read(void *ctx, uint32_t off, uint32_t *out)
     if (get(&fault_mode) == 3) return 0;
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     if (get(&fault_mode) == 4) {
-        /* Deliberately violate pinned writable mappings. This is a fault fixture,
-         * not a supported live remap. Keep NC attributes; no cached alias exists. */
+        /* Publish one firmware event, then deliberately violate pinned writable
+         * mappings. This is a fault fixture, not a supported live remap. Keep NC
+         * attributes; no cached alias exists. Reading the event stays valid; the
+         * queue write that consumes it must refuse before writing. */
+        static unsigned published_event;
+        if (!published_event++) {
+            unsigned write = get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
+            unsigned char *command = resource(PVR_FW_EVENTS) + (write & 31) * 88;
+            memset(command, 0, 88); put(command, 4, PVR_CCB_MAGIC | 101); put(command + 8, 4, 0x1234);
+            __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL), (write + 1) & 31, __ATOMIC_RELEASE);
+        }
         fixture_level2[(0x46000000 - 0x40000000) / 0x200000] |= 1u << 7;
         configASSERT(aarch64_device_cache(AARCH64_CACHE_CLEAN, (uintptr_t)fixture_level2, 4096));
         __asm__ volatile("dsb sy\n tlbi vmalle1is\n dsb sy\n isb" ::: "memory");

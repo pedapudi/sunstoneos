@@ -1,6 +1,6 @@
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_disposal.h"
-#include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include "pvr_render_draw.h"
 #include <string.h>
 
@@ -11,24 +11,11 @@ static struct a733_gpu_graphics_memory *graphics_owner;
 static size_t rounded(size_t n) { return (n + 4095) & ~(size_t)4095; }
 static int apart(uintptr_t a, size_t n, uintptr_t b, size_t m)
 { return a + n <= b || b + m <= a; }
-static int mapped_access(uintptr_t cpu, size_t bytes, unsigned attr, int write)
-{
-    if (!bytes || cpu > UINTPTR_MAX - bytes) return 0;
-    uintptr_t last = (cpu + bytes - 1) & ~(uintptr_t)4095;
-    for (uintptr_t page = cpu & ~(uintptr_t)4095; ; page += 4096) {
-        struct aarch64_translation r, w;
-        if (!aarch64_device_translate(page, 0, &r) || r.physical != page || r.attributes != attr ||
-            (r.shareability != 3 && (attr != 0x44 || r.shareability != 2)) ||
-            (write && (!aarch64_device_translate(page, 1, &w) || w.physical != page ||
-                       w.attributes != attr || w.shareability != r.shareability))) return 0;
-        if (page == last) return 1;
-    }
-}
 static int mapped(uintptr_t cpu, size_t bytes, unsigned attr)
-{ return mapped_access(cpu, bytes, attr, 1); }
+{ return a733_gpu_identity_mapped(cpu, bytes, attr, 1); }
 static int private_image(uintptr_t cpu, size_t bytes, uintptr_t pool_start, int write)
 { return cpu >= UINT32_C(0x41000000) && cpu < pool_start &&
-    bytes <= pool_start - cpu && mapped_access(cpu, bytes, 0xff, write); }
+    bytes <= pool_start - cpu && a733_gpu_identity_mapped(cpu, bytes, 0xff, write); }
 static int lease(struct device_memory_pool *pool, struct device_memory_lease token,
                   struct device_memory_extent expected, uint64_t owner)
 {

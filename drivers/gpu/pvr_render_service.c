@@ -1,6 +1,6 @@
 #include "pvr_render_service.h"
 #include "a733_gpu_graphics_memory.h"
-#include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include <string.h>
 
 void pvr_render_service_abort(struct pvr_render_service *s, unsigned error)
@@ -39,17 +39,7 @@ static int now(void *context,uint64_t *out)
     s->last_now=*out;return 1;
 }
 static int mapped(uintptr_t cpu,size_t bytes,unsigned attr)
-{
-    if(!bytes || cpu>UINTPTR_MAX-bytes) return 0;
-    uintptr_t end=(cpu+bytes-1)&~(uintptr_t)4095;
-    for(uintptr_t p=cpu&~(uintptr_t)4095;;p+=4096) {
-        struct aarch64_translation r,w;
-        if(!aarch64_device_translate(p,0,&r) || !aarch64_device_translate(p,1,&w) ||
-            r.physical!=p || w.physical!=p || r.attributes!=attr || w.attributes!=attr ||
-            r.shareability!=w.shareability || (r.shareability!=3 && (attr!=0x44 || r.shareability!=2))) return 0;
-        if(p==end)return 1;
-    }
-}
+{ return a733_gpu_identity_mapped(cpu,bytes,attr,1); }
 static int transfer(void *context,unsigned fragment,enum pvr_cccb_region region,
     uint32_t offset,void *data,size_t bytes,int write)
 {
@@ -60,7 +50,8 @@ static int transfer(void *context,unsigned fragment,enum pvr_cccb_region region,
     if(offset>limit || bytes>limit-offset)return 0;
     uintptr_t base=a733_gpu_graphics_memory_render_shared(s->owner);
     base+=(region==PVR_CCCB_CONTROL?(fragment?1344:1280):(fragment?8192:4096))+offset;
-    if(!mapped(base,bytes,0x44))return 0;
+    /* A ring read needs only its read translation; a write checks both. */
+    if(!a733_gpu_identity_mapped(base,bytes,0x44,write))return 0;
     for(size_t i=0;i<bytes;i+=4) {
         uint32_t v;
         if(write){memcpy(&v,(const unsigned char *)data+i,4);__atomic_store_n((uint32_t *)(base+i),v,__ATOMIC_RELEASE);}
