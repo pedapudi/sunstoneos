@@ -28,7 +28,7 @@ struct model {
     _Alignas(4096) uint8_t pages[8192];
     struct reg regs[40];unsigned count;
     uint64_t now;
-    unsigned held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
+    unsigned scrubs,held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
     unsigned fail_health_write,finish_late,retain_busy,retained;
     unsigned cipher_starts,key_cleans,fail_sync,fail_cipher_number,clean_late,clean_fault,clean_busy,publish_fault,publish_busy;
 };
@@ -135,8 +135,14 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
     } else if (op==A733_CE_KEY_CLEAN) {
         assert(!m->pending && m->engine->controller.key_dirty);
         assert(!(*reg(m,NS+12)&255) && !(*reg(m,NS+8)&15));
-        for (unsigned i=0;i<64;++i) assert(!mem->key[i]);
-        memcpy(m->visible+3456,mem->key,64);++m->key_cleans;
+        /* Key, plaintext/ciphertext input and cipher output lines are cleaned
+         * together; the model's DRAM view receives the zeroed lines. */
+        for (size_t i=384;i<3520;++i) assert(!((uint8_t *)mem)[i]);
+        memcpy(m->visible+384,(uint8_t *)mem+384,3520-384);++m->key_cleans;
+    } else if (op==A733_CE_SCRUB) {
+        assert(!(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        for (size_t i=256;i<2432;++i) assert(!((uint8_t *)mem)[i]);
+        memcpy(m->visible+256,(uint8_t *)mem+256,2432-256);++m->scrubs;
     } else {
         assert(op==A733_CE_ACQUIRE || op==A733_CE_CIPHER_ACQUIRE);
         assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;
@@ -355,7 +361,7 @@ static void transform(struct model *m,size_t n,unsigned decrypt,unsigned print_r
     assert(cipher_poll(m,g,out,n)==A733_CE_CIPHER_OUTPUT);
     for (size_t i=0;i<n;++i) assert(out[i]==(decrypt?vector_plain:vector_cipher)[i%64]);
     assert(m->cipher_starts-first==(n+1023)/1024 && m->key_cleans==m->cipher_starts);
-    zeroed(m->pages+3456,64);zeroed(m->visible+3456,64);
+    zeroed(m->pages+384,3520-384);zeroed(m->visible+384,3520-384);
     zeroed(m->cipher.key,16);zeroed(m->cipher.input,sizeof(m->cipher.input));zeroed(m->cipher.output,sizeof(m->cipher.output));
     assert(!m->engine->client && a733_ce_idle(&m->engine->controller));
     if (print_result) {printf("cipher %u %zu ",decrypt,n);for (size_t i=0;i<n;++i) printf("%02x",out[i]);puts("");}

@@ -16,7 +16,7 @@ struct model {
     _Alignas(4096) uint8_t pages[8192];
     struct reg regs[40];unsigned count;
     uint64_t now;
-    unsigned held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
+    unsigned scrubs,held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
     unsigned fail_health_write,finish_late,retain_busy,retained;
 };
 static uint32_t *reg(struct model *m,uintptr_t a)
@@ -80,7 +80,12 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
     assert(m->held && mem==(void *)m->pages);
     assert(device_memory_describe(&m->pool,m->lease,&e,&state) && state==DEVICE_MEMORY_DEVICE);
     if (op==A733_CE_PUBLISH) {assert(!m->pending);++m->published;}
-    else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
+    else if (op==A733_CE_SCRUB) {
+        /* The copied task result and hash state leave the retained page. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        for (size_t i=offsetof(struct a733_ce_memory,output);i<offsetof(struct a733_ce_memory,cipher_output);++i) assert(!((uint8_t *)mem)[i]);
+        ++m->scrubs;
+    } else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
     return 1;
 }
 static const struct a733_ce_ops ops={now,authorize,enter,leave,retain,read_reg,write_reg,sync_memory};
@@ -153,7 +158,7 @@ int main(void)
     setup(&m,1);g=request(&m,65,10000);
     assert(pump(&m,g,out,65,1)==A733_CE_ENTROPY_BYTES);
     for (unsigned i=0;i<65;++i) assert(out[i]==(uint8_t)(32+i));
-    assert(m.starts==3 && m.health_writes==5 && m.authorizations==1);empty_staging(&m);
+    assert(m.starts==3 && m.scrubs==3 && m.health_writes==5 && m.authorizations==1);empty_staging(&m);
     memset(out,0xa5,sizeof(out));assert(a733_ce_entropy_poll(&m.service,g,out,65)==A733_CE_ENTROPY_CONSUMED);unchanged(out,65);
     old=g;g=request(&m,33,20000);assert(g!=old);
     assert(a733_ce_entropy_poll(&m.service,old,out,33)==A733_CE_ENTROPY_INVALID);

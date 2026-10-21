@@ -33,7 +33,7 @@ enum a733_ce_cipher_result a733_ce_cipher_begin(struct a733_ce_cipher *,const ui
 /* Output changes only on OUTPUT, exactly once, after all tasks and software key
  * line cleanup succeed. Output size must match the admitted input size. Caller
  * input/key may have been discarded; output may reuse their storage.
- * Successful cleanup zeros only software key backing and cleans its cache line.
+ * Successful cleanup zeros the DMA key, input and cipher output and cleans them.
  * Internal CE key-register erasure is not established. On failure, clear CPU
  * staging and retain the real session/page/token. DMA key/input/output remain
  * quarantined after uncertainty. No cancellation, reset or release is provided. */

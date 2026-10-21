@@ -43,10 +43,14 @@ entry and chain pointer is zero. The driver writes both task-address registers,
 including the upper byte for addresses below 4 GiB, then writes hash doorbell
 bit 10. No seed or deterministic fallback is available.
 
-The native cache adapter verifies a 64-byte data-cache line. Before submission,
-it cleans the descriptor and cleans and invalidates the output allocation.
-After successful task completion, it invalidates the output allocation and
-completes barriers before the CPU reads it. The driver copies bytes to the caller
+The native cache adapter uses the shared AArch64 device-cache helper. That helper
+refuses an unknown or larger-than-64-byte writeback granule, a caller outside
+EL1 and a disabled MMU or data cache. Before submission, the adapter cleans the
+descriptor and cleans and invalidates the output allocation. After successful
+task completion, it invalidates the output allocation and completes barriers
+before the CPU reads it. Once the random block is copied and the task stopped,
+the controller zeros the output line and cleans it, so the block does not
+remain in the retained page. The driver copies bytes to the caller
 only after its final deadline check. It returns the result once; subsequent
 polls report that the result was consumed.
 

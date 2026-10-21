@@ -261,6 +261,10 @@ def main():
   assert bytes(m.u.mem_read(m.app+m.af['payload'],32))==hashlib.sha256(request[48:]).digest()
   pointer=m.get(m.engine+m.ef['controller']+image.layouts['a733_ce']['memory'],8)
   assert [0xd5087620,pointer+256] in m.cache
+  # After the copy, digest, IV and input are zeroed and cleaned from the page.
+  scrub=m.cache[m.cache.index([0xd5087620,pointer+256])+1:]
+  assert all([0xd50b7a20,pointer+off] in scrub for off in range(256,2432,64))
+  assert not any(m.u.mem_read(pointer+256,2432-256))
   terminal=m.snapshot();m.checkpoint(a.output,'terminal');save(a.output/'nominal-mmio.json',m.mmio)
   m.incoming.extend(b'\0');m.call('board_usb0_task')
   response=image.address('crypto_response');count=image.address('crypto_response_bytes')

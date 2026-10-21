@@ -216,6 +216,14 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
                 p->ops.sync(p->cookie,p->memory,p->operation==2?A733_CE_CIPHER_ACQUIRE:A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
             if (p->operation!=2) for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
             if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
+            /* The task completed and its result is copied. Do not leave the
+             * random block, digest or (HMAC) hash state in the retained page. */
+            if (p->operation!=2) {
+                zero(p->memory->output,sizeof(p->memory->output));
+                zero(p->memory->iv,sizeof(p->memory->iv));
+                zero(p->memory->input,sizeof(p->memory->input));
+                if (p->ops.sync(p->cookie,p->memory,A733_CE_SCRUB)!=1 || !timely(p)) goto fail;
+            }
             ready=1;next=DONE;
         }
     }
@@ -328,6 +336,8 @@ enum a733_ce_result a733_ce_cipher_clear_key(struct a733_ce *p)
         p->held=1;
         if (lock!=1 || !timely(p)) return failed(p);
         zero(p->memory->key,sizeof(p->memory->key));
+        zero(p->memory->input,sizeof(p->memory->input));
+        zero(p->memory->cipher_output,sizeof(p->memory->cipher_output));
         if (p->ops.sync(p->cookie,p->memory,A733_CE_KEY_CLEAN)!=1 || !timely(p)) return failed(p);
         p->ops.leave(p->cookie);p->held=0;
         if (!timely(p)) return failed(p);

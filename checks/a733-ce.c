@@ -14,7 +14,7 @@ struct model {
     struct a733_ce_memory memory;
     struct reg regs[40];unsigned count;
     uint64_t now;
-    unsigned reads,writes,syncs,starts,enters,leaves,retained,held,published,acquired;
+    unsigned reads,writes,syncs,starts,enters,leaves,retained,held,published,acquired,scrubs;
     unsigned inject_write,inject_read,sync_failure,authorize_pending,lock_busy;
     unsigned finish_late,rollback,health_late,retain_busy;
 };
@@ -81,7 +81,13 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
 {
     struct model *m=v;assert(m->held && mem==&m->memory);++m->syncs;
     if (op==A733_CE_PUBLISH) {assert(!m->starts);m->published=1;}
-    else {
+    else if (op==A733_CE_SCRUB) {
+        /* After completion acknowledgement and task stop, before publication. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        for (unsigned i=0;i<64;++i) assert(!mem->output[i] && !mem->iv[i]);
+        for (unsigned i=0;i<sizeof(mem->input);++i) assert(!mem->input[i]);
+        ++m->scrubs;
+    } else {
         assert(m->starts==1 && (*reg(m,NS+12)&0x30)==0x10);
         m->acquired=1;
         /* Deterministic bytes are a DMA model fixture, never entropy. */
@@ -137,7 +143,8 @@ int main(void)
         assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING);unchanged(out);
         *reg(&m,NS+12)=0x10;
         assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM);
-        for (unsigned i=0;i<32;++i) assert(out[i]==17+i);
+        for (unsigned i=0;i<32;++i) assert(out[i]==17+i && !m.memory.output[i]);
+        assert(m.scrubs==1);
         assert((*reg(&m,NS+8))==0x10000000 && (*reg(&m,NS+4)&0xffffff00)==0xa5000000);
         unsigned reads=m.reads,writes=m.writes;
         assert(a733_ce_poll(&m.controller,out)==A733_CE_CONSUMED);
@@ -185,7 +192,7 @@ int main(void)
         }
         assert(result==A733_CE_RETAINED);terminal(&m,out);
     }
-    for (unsigned i=1;i<=2;++i) {
+    for (unsigned i=1;i<=3;++i) {
         setup(&m,0);m.sync_failure=i;
         enum a733_ce_result result=A733_CE_PENDING;
         for (unsigned poll=0;poll<5 && result==A733_CE_PENDING;++poll) {
