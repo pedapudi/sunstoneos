@@ -1,12 +1,23 @@
 #ifndef SUNSTONE_A733_SMP_BOOT_H
 #define SUNSTONE_A733_SMP_BOOT_H
 #include <stdint.h>
+/* A resident image runs without a terminal deadline. The stage-2 loader, not
+ * the FEL host, produces its contract after arming the watchdog. It has its
+ * own magic numbers, so a FEL contract can never admit a resident image or
+ * the reverse. */
+#ifdef SUNSTONE_A733_RESIDENT
+#define A733_SMP_CONTRACT_MAGIC UINT64_C(0x4153373352455331)
+#define A733_SMP_RESULT_MAGIC UINT64_C(0x4153373352525331)
+#endif
 #ifndef A733_SMP_CONTRACT_MAGIC
 #define A733_SMP_CONTRACT_MAGIC UINT64_C(0x4153373343414331)
 #endif
 #ifndef A733_SMP_RESULT_MAGIC
 #define A733_SMP_RESULT_MAGIC UINT64_C(0x4153373343525331)
 #endif
+/* Resident contracts set the diagnostic deadline to this value: the interrupt
+ * path's deadline stop then never fires, and only the watchdog bounds a hang. */
+#define A733_SMP_NO_DEADLINE UINT64_MAX
 #define A733_SMP_COUNTER_HZ UINT64_C(24000000)
 #define A733_SMP_CONTRACT_ADDRESS UINT64_C(0x42004000)
 #define A733_SMP_RESULT_ADDRESS UINT64_C(0x42000000)

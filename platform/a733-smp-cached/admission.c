@@ -19,6 +19,21 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 #else
     for(unsigned i=0;i<6;++i)if(c->reserved[i])return 0;
 #endif
+#ifdef SUNSTONE_A733_RESIDENT
+    /* Resident lifetime: no diagnostic deadline and no FEL return. The armed
+     * four-second watchdog is the bounded-failure mechanism, so its first
+     * window must end after startup; a supervising task renews it only while
+     * every service progresses. Startup keeps the one-second bound. */
+    if(c->armed_at>now || now>=c->startup_deadline ||
+       c->startup_deadline-now>A733_SMP_COUNTER_HZ ||
+       c->diagnostic_deadline!=A733_SMP_NO_DEADLINE ||
+       c->expires_at-c->armed_at!=4*A733_SMP_COUNTER_HZ ||
+       c->startup_deadline>=c->expires_at)return 0;
+    if(c->watchdog_mode!=0x41 || c->watchdog_configuration!=1 ||
+       c->watchdog_output!=2 || c->fel_flag || c->redirect_flag ||
+       c->redirect_entry || c->alternate_flag)return 0;
+    return 1;
+#endif
     /* Limit one immutable watchdog lease to the documented four-second mode.
      * Deadlines reserve at least one second for reset after diagnostic stop. */
     if(c->armed_at>now || now>=c->startup_deadline ||
