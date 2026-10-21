@@ -113,7 +113,8 @@ def run_case(fixture,base,case):
         if (case=='output-save' and kind=='output') or (case=='disposed-save' and kind=='disposed'):
             wire.injected=True;raise OSError('Modeled durable publication failure')
         if case=='interrupt-retain' and kind=='output':wire.injected=True;raise KeyboardInterrupt('Modeled retention interruption')
-        if case=='late-output' and kind=='output':wire.injected=True;clock['late']=True
+        if (case=='late-output' and kind=='output') or (case=='late-receipt' and kind=='disposed'):
+            wire.injected=True;clock['late']=True
     client=client_for(fixture,wire,retain)
     inputs=[]
     for item in fixture.get('inputs',[]):
@@ -154,9 +155,9 @@ def run_case(fixture,base,case):
         else:raise AssertionError('Stopped lifecycle resumed')
         assert len(wire.requests)==before
         if case in ('output-save','interrupt-retain','late-output'):assert client.outputs and retained[0][0]=='output'
-        if case=='disposed-save':assert client.state==5 and retained[-1][0]=='disposed'
+        if case in ('disposed-save','late-receipt'):assert client.state==5 and retained[-1][0]=='disposed'
         if case=='partial-stream':assert client.failure['partial']==wire.body[:wire.body_offset] and wire.body_offset>0
-        if case=='late-output':assert isinstance(caught,TimeoutError)
+        if case in ('late-output','late-receipt'):assert isinstance(caught,TimeoutError)
         if case.startswith('interrupt-'):assert isinstance(caught,KeyboardInterrupt)
     return {'case':case,'requests':len(wire.requests),'retained':[row[0] for row in retained],
             'stopped':client.failure is not None,'partial_bytes':len(client.failure['partial']) if client.failure else 0}
@@ -167,7 +168,7 @@ def main():
     parser.add_argument('--fixture',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--baseline',type=Path,help='Preserved matching healthy result for negative-only continuation')
     parser.add_argument('--case',action='append',choices=('healthy','session-epoch','queue-epoch','open-epoch','open-status-closed',
-        'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','partial-stream','epoch-wrap'))
+        'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','late-receipt','partial-stream','epoch-wrap'))
     args=parser.parse_args();fixture_raw=args.fixture.read_bytes();fixture=json.loads(fixture_raw);base=args.fixture.parent
     if fixture.get('schema')!='pvr-gpu-lifecycle-host-fixture-v1' or fixture.get('physical_authority') is not False or fixture.get('modeled') is not True:
         raise ValueError('Fixture must explicitly identify modeled hardware authority')
