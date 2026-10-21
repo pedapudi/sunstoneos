@@ -318,7 +318,7 @@ layer0 carries the source format in `lay_fbfmt`, writeback carries the output
 format in `fmt`, and the blender alpha mode stays 0, as the pinned
 `bld_cs_set` selects for every RGB format. No buffer, mapping, clock, power or
 completion step changes. Rebuilt image SHA-256
-`2cb92b672afeafcf2e577403692b58e4a404c58982099bf8eb6d4a238bdd1448` passes four
+`08e56fc59dca1f9f148dc217649e78453944c9a7a81a143cd5b31a47ff30351b` passes four
 focused checks. None executes a G2D job or establishes physical pixels.
 
 - `checks/g2d-modes-reference.py` runs unchanged pinned scaler, overlay,

@@ -267,7 +267,7 @@ generation under ASan/UBSan produces all four strengths with the pinned DI301
 code, confirms that only the strength word differs among submitted TNR words,
 and refuses strength 4, strength outside mode 3 and an unknown strength word.
 The linked AArch64 image, SHA-256
-`5cdd400fa6b10f0c2c63d783971ba5485af03874a873864b0cf2c128591d130c`, produces
+`9a4c1c388770184a5ce52079bd4583e5883c47e0aa4c2f84bb8c14a297bbc7d2`, produces
 identical register plans for strengths 0 to 3 and refuses strengths 4 and 5.
 Host preparation mirrors the strength rule for every mode, refuses a selected
 strength for the accepted revision-3 image and labels each captured mode. A

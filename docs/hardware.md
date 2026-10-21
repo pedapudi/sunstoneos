@@ -977,7 +977,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reclamation or drain. General scaling at any other ratio, including reduction with
   the pinned coarse decimation, image-over-image blending with per-pixel and plane alpha,
   and RGB order conversion reuse the same buffers, mappings and lifetime. Image
-  `2cb92b67…` passes register-image comparisons with the pinned setters, the linked
+  `08e56fc5…` passes register-image comparisons with the pinned setters, the linked
   AArch64 validator and builder, a rebuilt 3008-byte SRAM launcher model and host
   sealing/ACK-policy checks; earlier operations emit identical commands. Rotation and
   mirroring (the pinned set lacks `g2d_rotate.c`), YUV color-space conversion, other
@@ -2062,7 +2062,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   WEAVE/motion/power/USB matrices retain their original scopes without replay.
   TNR strength 1–3 now selects the pinned adaptive mode's LOW, MIDDLE or HIGH initial
   gain (38, 48 or 62) for the one operation; strength 0 keeps the fixed 58. Image
-  `5cdd400f…` reports geometry revision 4 and passes host and linked-image plan
+  `9a4c1c38…` reports geometry revision 4 and passes host and linked-image plan
   generation, host predicate and capture-label checks and a rebuilt SRAM launcher
   model. Gain feedback between frames, other shapes/formats, film detection,
   crop/scale and repeated jobs remain required. All buffers/providers stay retained; no drain,
