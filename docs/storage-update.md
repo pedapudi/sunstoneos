@@ -95,8 +95,10 @@ must fail within that lease; they cannot cause indefinite feeding.
 
 An incomplete write, failed status, mismatched readback, invalid sequence or USB
 loss permanently faults the session. The transport loss latch is checked before
-each later platform access and core step. A FIFO burst of up to one sector that
-was already admitted completes before that check. The service retains its source bytes,
+each later platform access and core step. A FIFO burst counts as one access and
+holds up to one sector (128 words). Once admitted, the burst reaches the FIFO in
+full even when a loss is latched during it. The CMD24 write has already started
+by then, so that write is uncertain in either case. The service retains its source bytes,
 range and platform resources. It does not retry, release ownership on timeout,
 or reset a card into an assumed cold state.
 
