@@ -61,6 +61,10 @@ struct a733_de {
     enum a733_de_error error;
     enum a733_de_action action;
     unsigned initialized, entered, step, index, substep, writes_attempted;
+    /* Ring slot of the last completed replay (slot 0 after START), the slot
+     * count of the last accepted replay and completed replays. */
+    unsigned scanout_slot, replay_slots;
+    uint64_t presented;
 };
 /* Fresh zero storage; privileged serialized caller; no reinitialization.
  * Callbacks/context and driver storage remain private, live and disjoint.
@@ -91,17 +95,32 @@ int a733_de_request(struct a733_de *, enum a733_de_action, uint64_t deadline);
  * pixels reached a panel. OBSERVE records raw status without acknowledgement.
  * REPLAY (see below) submits one RCQ update, waits for RCQ_FINISH, verifies
  * the layer address and then waits for a frame-end latched after a cleared
- * and read-back status. Interrupts stay disabled. No vblank accounting,
- * DMA-drain claim or buffer retirement. */
+ * and read-back status. Interrupts stay disabled. No vblank accounting or
+ * DMA-drain claim; a733_de_replay_writable() reports slots that left scanout. */
 enum a733_de_state a733_de_poll(struct a733_de *);
-/* Optional closed two-frame replay bank: [F0][F1][4KiB RCQ0][4KiB RCQ1].
- * F is page aligned and covers the admitted padded surface. Both frames and
- * command pages stay immutable, mapped READ and permanently owned. The closed
+/* Optional closed replay ring: [F0]..[Fn-1][4KiB RCQ0]..[4KiB RCQn-1] with
+ * 2 <= n <= A733_DE_RING_SLOTS; the surface mapping is exactly n*(F+4096).
+ * F is page aligned and covers the admitted padded surface. Command pages stay
+ * immutable; the whole ring stays mapped READ and permanently owned. The closed
  * LCD1/XRGB8888, TV0/RGB565 and TV1/RGB565 profiles use the same DE1 queue.
- * The queue changes only UCH3 layer0 low address; it grants no retirement or
- * reuse. A frame-end seen at the post-clear readback is cleared again until
- * the readback shows it clear, bounded by the request deadline. */
+ * The queue changes only UCH3 layer0 low address. A frame-end seen at the
+ * post-clear readback is cleared again until the readback shows it clear,
+ * bounded by the request deadline. The replay functions without "ring" in
+ * their name build and check the original two-slot bank. */
+#define A733_DE_RING_SLOTS 4u
+int a733_de_ring_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes,unsigned slots);
+int a733_de_ring_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes,unsigned slots);
 int a733_de_replay_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_request(struct a733_de *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);
+/* 1 when the owner may rewrite this slot's pixels: the DE is ARMED with no
+ * request pending, and the slot is not the one the last completed replay (or
+ * START, for slot 0) selected. Completion requires RCQ finish, address
+ * readback and a later frame-end, so the old slot is outside the current
+ * frame's fetches. Only pixel contents are recycled; the ring stays mapped,
+ * owned and retained. The writer publishes the slot (barrier for an uncached
+ * mapping, clean to the point of coherency for a cached alias) before its
+ * replay request. STOP, OBSERVE pending, any fault or a different geometry
+ * returns 0; no transition after STOP makes a slot writable. */
+int a733_de_replay_writable(const struct a733_de *,unsigned slot,uint64_t frame_bytes);
 #endif

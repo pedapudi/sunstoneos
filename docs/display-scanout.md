@@ -369,7 +369,7 @@ copying it, so the slot hash is complete when the last fragment arrives. A
 refused last fragment leaves the running hash unchanged.
 Providers cannot start DSI scanout until both complete copies are hash-checked.
 
-A presentation follows the [DE352 RCQ protocol](display-engine.md#de352-replay-of-two-immutable-addresses),
+A presentation follows the [DE352 RCQ protocol](display-engine.md#de352-replay-over-a-ring-of-two-to-four-frames),
 then the existing controller observation and IOMMU fault scan. A copied replay
 result reports sequence, slot, session/frame hashes, generations, allocation
 extents, RCQ completion and a later DE frame-end observation. USB response

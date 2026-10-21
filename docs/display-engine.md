@@ -178,26 +178,33 @@ No physical hardware was accessed.
 ## Complete display support requires further work
 
 Required follow-ons include production resource and memory binding, physical
-fetch/scanout qualification, independent DMA drain, live RCQ updates, buffer
-replacement and vblank retirement, interrupt/error handling, and recovery.
+fetch/scanout qualification, independent DMA drain, an application that
+streams through the replay ring, physical qualification of slot retirement,
+interrupt/error handling, and recovery.
 Further profiles must cover the remaining formats, layers, channels, scalers,
 color processing, compression, dual outputs, HDMI/eDP routes, writeback, and
 other supported display modes. The immutable RGB plane is one implemented
 component of full board support.
 
-## DE352 replay of two immutable addresses
+## DE352 replay over a ring of two to four frames
 
-The optional replay operation uses a fixed bank containing two page-rounded
-frames followed by two 4 KiB command pages. Both frames have the same format,
-pitch and dimensions. Each command page contains an aligned pair of 16-byte RCQ
-headers and a 32-byte-aligned source word. One header copies the selected frame's
-low address into UCH3 layer0 at DE offset `0x221010`; the second is inactive.
-The bank stays below a 4 GiB IOVA boundary, so the unchanged high address is zero.
-No caller supplies an arbitrary register destination or command stream.
+The optional replay operation uses a fixed ring of `n` page-rounded frames
+followed by `n` 4 KiB command pages, where `n` is 2, 3 or 4. The surface
+mapping must equal `n` times the frame size plus 4 KiB; the driver derives `n`
+from that size and refuses any other mapping. The two-frame case is the
+original replay bank, with an unchanged layout. Every frame has the same
+format, pitch and dimensions. Each command page contains an aligned pair of
+16-byte RCQ headers and a 32-byte-aligned source word. One header copies the
+selected frame's low address into UCH3 layer0 at DE offset `0x221010`; the
+second is inactive. The ring stays below a 4 GiB IOVA boundary, so the
+unchanged high address is zero. No caller supplies an arbitrary register
+destination or command stream.
 
-`a733_de_replay_build()` constructs these pages before publication;
-`a733_de_replay_valid()` checks every command-page byte. The native binding
-validates the canonical pages and the complete bank's immutable READ mapping.
+`a733_de_ring_build()` constructs the command pages before publication, and
+`a733_de_ring_valid()` checks every command-page byte for a given slot count.
+`a733_de_replay_build()` and `a733_de_replay_valid()` do the same for the
+two-frame bank. The native binding validates the canonical two-frame pages and
+the complete bank's immutable READ mapping.
 `a733_display_native_replay()` passes through the existing source/token handoff
 and display coordinator, preserving media-clock, PLL, PCK and framebuffer-bank
 ownership. One presentation may be pending at a time.
@@ -220,17 +227,47 @@ the readback after the post-RCQ clear sends the operation back to that clear.
 Frame-end therefore counts only after a readback has shown it clear, and a flag
 that never clears ends at the request deadline as a time fault.
 
-These observations do not prove that old framebuffer reads or read-ahead have
-drained. Neither frame nor command pages may be overwritten, unmapped or
-released. The pinned Linux CRTC code uses DE busy and RCQ completion when
-signaling page flips, but its vendor commit tail omits the vblank wait before
-old-plane cleanup. That cleanup path does not supply an independent transaction
-retirement proof. The manual's DE chapter provides no such mechanism.
+### Recycling a frame slot after it leaves scanout
+
+`a733_de_replay_writable()` reports whether the owner may write new pixels
+into a slot. It returns 1 only when the DE is `ARMED`, no request is pending,
+the frame size describes the ring, and the slot differs from the scanned slot.
+After `START` the scanned slot is slot 0. A replay changes the scanned slot
+only when it completes: RCQ finish, a readback of the new layer address, and a
+frame-end latched after a later clear. That frame-end ends a frame whose
+fetches began after the address change, so the previous slot is outside the
+current frame. A producer can therefore stream by writing a slot that the
+function reports as writable, publishing it, and requesting its replay. With
+three or four slots, one slot can be filled while another waits to be shown.
+
+Publication is the writer's duty. An uncached mapping needs a completed
+barrier before the replay request; the replay's own barrier precedes RCQ
+submission. A cached alias needs a clean to the point of coherency.
+
+Recycling covers pixel contents only. The command pages stay immutable, and
+the ring stays mapped READ, owned and retained after `STOP` and after every
+fault. `STOP`, a pending request, any fault and a frame size that describes a
+different ring all make every slot unwritable. The retirement condition
+assumes that the DE latches the layer address at a frame boundary or applies
+it at once. Both cases leave the old slot unread after the observed frame-end,
+but physical qualification of that assumption is pending. A wrong condition
+would show a torn frame; it cannot release memory to another owner.
+
+This frame-end condition does not prove that the DE has stopped all memory
+access, and it is not used for `STOP`. The pinned Linux `sunxi_de_disable()`
+clears the output enable and gates the clocks without waiting for a drain
+signal, and the manual's DE chapter provides no drain mechanism. The ring
+therefore stays retained after `STOP` until an independent drain proof exists.
 
 Replay source authority remains Linux revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`: `de_top.c`, `de_base.h`,
 `sunxi_de.c`, `sunxi_drm_crtc.c`, `sunxi_drm_drv.c` and `drm_atomic_helper.c`,
 with hashes in `sources.lock.json`. Failed admission, uncertain submission,
 readback mismatch, stale completion or deadline retains the bank and resources.
-Arbitrary new-frame streaming and safe old-buffer recycling remain required
-work, independent of this two-slot replay operation.
+The host model in `checks/a733-display-engine.c` streams new contents through
+two-, three- and four-slot rings and checks slot retirement after each
+completed replay. It also covers refusal of slot counts, ring geometry,
+pending requests, `STOP`, deadline and stale-completion faults. No application
+yet writes recycled slots: the GPU-to-HDMI and DSI applications still present
+sealed two-frame banks. A streaming producer, physical scanout and the
+retirement assumption above remain unqualified.
