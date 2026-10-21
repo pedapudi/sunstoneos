@@ -169,16 +169,24 @@ critical thresholds are separate per-session raw codes. The thermal
 application requires all five alarm and critical interrupts, while the
 returning client disables them, so the policy cannot depend on either setting.
 
-Other tasks and cores read the level with `a733_thermal_policy_level`. The
-owner's `notify` callback runs once for each level change. Its result is
+Other tasks and cores read the level with `a733_thermal_policy_level`, and
+the channels that have had at least one valid reading with
+`a733_thermal_policy_seen`. Each update publishes the channels after the
+level, so a task that reads the channels and then the level sees at least the
+level that those readings produced. The owner's `notify` callback runs once
+for each level change, after both are published. Its result is
 ignored for normal and throttle. For critical, the callback returns 1 after it
 has refused new work and issued its stop request. A return of 0 repeats the
 request at the next update. Any other value records an uncertain outcome, and
 the policy does not repeat the request. The policy object keeps the channel
 masks that caused the critical level for reporting. The policy changes no
-clock, voltage, power or controller state. No DVFS exists yet; any future CPU
-PLL or voltage increase requires this policy to be running on a qualified
-controller first.
+clock, voltage, power or controller state itself. The
+[CPU clock driver](cpu-clock.md#the-thermal-policy-selects-operating-points)
+reads its level and channels: it raises a cluster only after that cluster's
+sensor has a valid reading and the level is NORMAL, lowers raised clusters to
+1014 MHz under THROTTLE, and refuses every transition at CRITICAL. No image
+connects the two yet. Any physical CPU PLL or voltage increase still requires
+this policy to run on a qualified controller first.
 
 ## Faults retain the controller
 
@@ -240,7 +248,9 @@ hysteresis, channels without a passive trip, alarm and critical events that do
 not change the level, a stale channel and its recovery, a channel with no reading
 for 5 s, a critical trip, repeated and uncertain stop requests, a controller
 failure, replayed samples and backward time. A modeled consumer runs one worker
-while throttled and records continuing progress. The check passes with
+while throttled and records continuing progress. The check also requires the
+published channels to match the policy's own before each notification,
+including a first reading that throttles. The check passes with
 AddressSanitizer and UndefinedBehaviorSanitizer. The existing controller,
 lease-wait, clock-reference and configured-stop checks also pass with the
 policy code present.
