@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--reference-dir", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--cc", default="cc")
-    parser.add_argument("--case", choices=["all", "select-io", "cis-shape", "reinit"], default="all")
+    parser.add_argument("--case", choices=["all", "select-io", "cis-shape", "reinit", "widen"], default="all")
     args = parser.parse_args()
     evidence = args.evidence.resolve()
     if evidence == ROOT or ROOT in evidence.parents:

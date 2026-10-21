@@ -32,6 +32,8 @@ set_property(TARGET radio-network-model PROPERTY SOURCES "${{units}}")
 target_sources(radio-network-model PRIVATE "{ROOT}/checks/radio-dhcp-reconnect.c")
 ''')
   toolchain=out/'toolchain.cmake';shutil.copyfile(ACCEPTED/'toolchain.cmake',toolchain)
+  # The repository toolchain also defines the path-map helpers its CMakeLists uses.
+  with toolchain.open('a') as f:f.write('set(SUNSTONE_LLD /home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21)\ninclude("'+str(ROOT)+'/cmake/aarch64-clang.cmake")\n')
   record={'physical_access':False,'commands':[],'accepted_toolchain':str(ACCEPTED/'toolchain.cmake')}
   commands=[['cmake','-G',cache['CMAKE_GENERATOR'],'-S',str(project),'-B',str(out/'build'),'-DCMAKE_TOOLCHAIN_FILE='+str(toolchain),'-DCMAKE_EXPORT_COMPILE_COMMANDS=ON']+['-D'+k+'='+cache[k] for k in selected],['cmake','--build',str(out/'build'),'--target','radio-network-model','-j4']]
   for command in commands:

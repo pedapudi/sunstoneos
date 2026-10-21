@@ -5,10 +5,13 @@
 
 #define SUNXI_SDIO_MAX_BYTES 4096u
 #define SUNXI_SDIO_FIFO_BUDGET 16u
+/* Four-bit default speed moves at most one 512-byte block per poll, sized from
+ * one FIFO-level sample, as the SD/eMMC core does at the same clock. */
+#define SUNXI_SDIO_FIFO_BUDGET_WIDE 128u
 
 enum sunxi_sdio_state { SUNXI_SDIO_UNPREPARED, SUNXI_SDIO_PREPARING,
     SUNXI_SDIO_READY, SUNXI_SDIO_QUEUED, SUNXI_SDIO_ACTIVE,
-    SUNXI_SDIO_DONE, SUNXI_SDIO_FAULT };
+    SUNXI_SDIO_DONE, SUNXI_SDIO_FAULT, SUNXI_SDIO_WIDENING };
 enum sunxi_sdio_error { SUNXI_SDIO_NO_ERROR, SUNXI_SDIO_IO_ERROR,
     SUNXI_SDIO_TIMEOUT, SUNXI_SDIO_CLOCK_ERROR, SUNXI_SDIO_VARIANT_ERROR,
     SUNXI_SDIO_SETUP_ERROR, SUNXI_SDIO_CONTROLLER_ERROR,
@@ -22,6 +25,9 @@ struct sunxi_sdio_ops {
     int (*write32)(void *, uint32_t offset, uint32_t);
     int (*barrier)(void *);
     int (*now)(void *, uint64_t *);
+    /* Optional; required only by sunxi_sdio_widen. Select the PERI0 400 MHz
+     * parent and this linear module divisor while the card clock is stopped. */
+    int (*module)(void *, unsigned divisor);
 };
 struct sunxi_sdio_config {
     struct sunxi_sdio_ops ops;
@@ -51,8 +57,9 @@ struct sunxi_sdio {
     struct sunxi_sdio_result result;
     enum sunxi_sdio_state state;
     uint64_t last_now, deadline;
+    uint64_t progress; /* Owner-only count of polls that changed state or moved FIFO words. */
     uint32_t version, card_hz;
-    uint8_t step, response_seen, sdio_pending, entered, initialized;
+    uint8_t step, response_seen, sdio_pending, entered, initialized, wide, divisor;
 };
 
 /* Single serialized owner; no API is safe for concurrent task/ISR use.
@@ -66,6 +73,15 @@ int sunxi_sdio_init(struct sunxi_sdio *, const struct sunxi_sdio_config *);
 /* Pure admission; absolute deadlines use ops.now units. No automatic retries. */
 int sunxi_sdio_prepare(struct sunxi_sdio *, uint64_t deadline);
 int sunxi_sdio_submit(struct sunxi_sdio *, const struct sunxi_sdio_request *, uint64_t deadline);
+/* READY only, once, after the owner has set the card's CCCR bus width to four
+ * bits. Poll stops the card clock, has ops.module select PERI0 400 MHz divided
+ * by 8..32, sets four-bit width, then restarts the clock: card clock is
+ * 400 MHz / (2 x divisor), at most 25 MHz. The controller stays in the old
+ * timing mode with the drive/sample delays from prepare, which the pinned tm4
+ * table also gives for 25 MHz default speed. READY follows readback of clock,
+ * width, delays and timing mode. Failure is terminal like any request;
+ * the card keeps its four-bit setting and no automatic one-bit fallback exists. */
+int sunxi_sdio_widen(struct sunxi_sdio *, unsigned divisor, uint64_t deadline);
 /* One bounded step. Pending controller conditions return immediately. */
 void sunxi_sdio_poll(struct sunxi_sdio *);
 /* DONE becomes READY. FAULT is copied but remains terminal with request retained.

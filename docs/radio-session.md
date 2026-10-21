@@ -171,12 +171,60 @@ A busy attachment refuses the request without changing the session. Its existing
 profile and reports PENDING until the address is usable. Socket clients continue
 to use the existing copied request/reply APIs. No USB command is added.
 
-This operation does not recover an unsolicited lost connection. The pinned
-[disconnect handler](radio-association.md#disconnection-events-preserve-ordering-and-ownership)
-invalidates the old station, while native port closure still needs that station's
-index. The inspected source does not establish safe port/key cleanup afterward.
-Unexpected loss therefore retains the existing terminal outcome.
 Physical reconnect, RF behavior and entropy quality remain unqualified.
+
+## Clean link loss is recovered without disposing sockets
+
+When the network adapter reports a clean loss (see the
+[network adapter](radio-network.md#security-authority-belongs-to-one-association)),
+the session stays in its network stage and `a733_radio_session_poll` returns
+`A733_SESSION_LOST`. The owner then calls `a733_radio_session_recover` with the
+same target and credentials that reconnect admits, or OPEN authority, and an
+absolute deadline inside the runtime lease. Admission requires the link to be
+down rather than unresolved, an idle Wi-Fi worker and data worker, and a
+supplicant that is authorized or in a group-key handshake.
+
+Recovery reuses the reconnect phases with three differences:
+
+- Security retirement skips controlled-port closure and the pairwise-key
+  delete, then deletes the remaining group keys with KEY_DEL. The pinned
+  [disconnect handler](radio-association.md#disconnection-events-preserve-ordering-and-ownership)
+  invalidates the firmware station. The pinned host path never closes the port
+  afterwards, and the reference driver refuses the pairwise delete for an
+  invalid station, so no command for that station is sent. The pinned
+  supplicant's disconnect handling deletes the group keys, which the driver
+  sends as KEY_DEL. The local pairwise record is wiped and the port is recorded
+  closed.
+- No disconnect command is sent, because the link is already down.
+- A refused or failed reassociation that leaves the link down is retried until
+  the deadline. Each attempt starts a new association generation. Rearm therefore
+  accepts any association later than the retired one, not only the next one.
+
+Only that reassociation step is retried. A second loss after reassociation
+succeeds is terminal. During the WPA2 4-way handshake it leaves the network
+adapter without authority to resume. After the adapter resumes, it leaves the
+address unassigned. In both cases recovery cannot finish, and when the recovery
+deadline passes the session faults and retains the complete graph.
+
+During recovery the session keeps servicing socket requests, so their timeouts
+and CLOSE still complete. After the address returns, the same IP interface
+resumes and socket submission reopens. Firmware key and port state after a
+disconnection indication has not been observed on hardware. Loss with
+outstanding work or unresolved roaming still retains the complete graph.
+
+[checks/radio-recovery-loss.c](../checks/radio-recovery-loss.c), built and run
+with `checks/radio-reconnect.py --fixture loss`, executes the actual session,
+network adapter, socket service and IP task on the modeled MMIO of the reconnect
+composition. An idle fixed-address OPEN association with one open UDP socket
+receives a source-layout disconnection indication. The session reports LOST
+without fault, the network is offline, and submissions are refused while the
+socket survives. Recovery refuses a foreign BSSID and missing OPEN authority. Its
+first reassociation fails in the indication; the retry succeeds at association
+generation three, and the address and a new TCP exchange follow. A separate
+part of the same image retires a WPA2 security pair after loss: no port command,
+the pairwise key wiped locally, one group-key KEY_DEL with its hardware index,
+and rearm accepted for a later generation. Key state there is a modeled input,
+and the WPA2 handshake after recovery is not executed.
 
 The focused AArch64 composition in [checks/radio-reconnect.c](../checks/radio-reconnect.c)
 passed once with actual FreeRTOS tasks, providers, session workers, disconnect and

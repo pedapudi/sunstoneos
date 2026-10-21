@@ -82,8 +82,9 @@ struct a733_radio_platform {
     a733_clock_mask_t shared;
     a733_rail_mask_t rail_scopes;
     uint64_t deadline,last_now,wait_since;
-    uint32_t selected_mhz[3],initial_module,initial_bus;
+    uint32_t selected_mhz[3],initial_module,initial_bus,running_module;
     unsigned initialized,stage,fault,held,retained,core_call,rail_count,rail_index,rail_retained;
+    unsigned four_bit,card_pending,bus_interface;
 };
 /* Pure scope planning and init; no MMIO. Fresh private storage only. All inputs,
  * managers, provider objects and callback contexts remain disjoint and live. */
@@ -93,6 +94,13 @@ int a733_radio_platform_init(struct a733_radio_platform *,const struct a733_radi
     const struct a733_radio_platform_ops *,void *,struct a733_clock_leases *,
     struct a733_pins *,struct a733_rail_leases *,struct a733_pmic *);
 int a733_radio_platform_bluetooth(struct a733_radio_platform *,const struct a733_radio_bluetooth_pins *);
+/* Request four-bit default speed before the first poll. Adds the shared PERI0
+ * lease scope and its 400 MHz branch to every clock observation. After
+ * enumeration of a full-speed card, the platform sets CCCR bus width to four
+ * bits (read-after-write), switches SMHC1 to PERI0 400 MHz / 8 under the register
+ * lock, verifies the controller, and rereads CCCR before READY: a 25 MHz card
+ * clock. A low-speed card stays at one bit. Physically unqualified. */
+int a733_radio_platform_four_bit(struct a733_radio_platform *);
 /* Sample PM4 host-wake through the actual shared pin owner. Its level does
  * not establish controller readiness or acknowledge an interrupt. */
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *,

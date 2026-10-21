@@ -39,6 +39,7 @@ struct aic8800_network {
     uint64_t generation,rx_packets,tx_bus_completions,rx_dropped,tx_dropped;
     atomic_uint ready,failed,address_ready,address_failed,address_sequence;
     atomic_uint offline_request,offline_ack,offline,resume_request;
+    atomic_uint lost; /* Offline after a clean unsolicited link loss, until resume. */
     unsigned offline_queued; /* Sole IP task; private FIFO marker identity below. */
     uint8_t offline_marker;
     atomic_uint_least32_t address_value,mask_value,gateway_value,dns_value;
@@ -63,6 +64,12 @@ void aic8800_network_ip_step(void);
  * processing and every earlier FIFO event. No failed flag is cleared. */
 void aic8800_network_ip_event(unsigned,void *);
 int aic8800_network_offline(struct aic8800_network *);
+/* An unsolicited disconnection indication with nothing outstanding (no packet
+ * transfer, Wi-Fi command or security operation) takes the interface offline
+ * through the same IP-task fence as aic8800_network_offline instead of faulting.
+ * Any outstanding work, unresolved roaming or another generation still faults.
+ * True from that point until resume; offline_ready and resume apply unchanged. */
+int aic8800_network_lost(const struct aic8800_network *);
 int aic8800_network_offline_ready(struct aic8800_network *);
 int aic8800_network_resume(struct aic8800_network *);
 int aic8800_network_address(const struct aic8800_network *,uint8_t [4]);

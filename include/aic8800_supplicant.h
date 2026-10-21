@@ -59,11 +59,15 @@ int aic8800_supplicant_claim(struct aic8800_supplicant *,struct aic8800_sdio_tra
 void aic8800_supplicant_observe(struct aic8800_supplicant *,uint64_t);
 void aic8800_supplicant_step(struct aic8800_supplicant *,uint64_t);
 int aic8800_supplicant_receive(struct aic8800_supplicant *,const struct aic8800_data_frame *,uint64_t);
-/* Rearm only this successfully retired and detached pair. Never accepts a
- * fault or uncertain key; preserves the transport/data sequence lifetime. */
+/* Rearm only this successfully retired and detached pair, for any later
+ * association. Never accepts a fault or uncertain key; preserves the
+ * transport/data sequence lifetime. */
 int aic8800_supplicant_rearm(struct aic8800_supplicant *,struct aic8800_security *,
     struct aic8800_sdio_transport *,const struct aic8800_supplicant_config *);
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *);
+/* Close the port, delete every key, then wipe. After an unsolicited
+ * disconnection (link DOWN) the station's port and pairwise key are gone with
+ * it, so only group keys are deleted. Refused during unresolved roaming. */
 int aic8800_supplicant_retire(struct aic8800_supplicant *,uint64_t,uint64_t);
 void aic8800_supplicant_stop(struct aic8800_supplicant *);
 /* Private external-library OS entry. No global entropy fallback is provided. */

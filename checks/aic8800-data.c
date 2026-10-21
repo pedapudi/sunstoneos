@@ -19,6 +19,7 @@ static int data_write(void *ctx,uint32_t off,uint32_t value)
     int ok=write_cb(ctx,off,value);
     if(off==0x200&&m.write&&m.position==m.bytes) {
         ++sent_data;assert(m.bytes==data.request_bytes&&!memcmp(m.transmitted,data.request,m.bytes));
+        assert(host.request.data==data.request); /* CMD53 borrows the worker's packet. */
         assert(!memcmp(m.transmitted,expected[data.result.eapol?0:1],m.bytes));
     }
     return ok;
@@ -73,6 +74,38 @@ static void raw(void)
     unsigned commands=m.command_count;step();assert(m.command_count==commands);
     assert(aic8800_transport_consume(&transport));idle();
 }
+/* QoS MPDU carrying a two-subframe A-MSDU: IPv4 with four and six payload
+ * bytes, the first padded to four bytes. Optional damage tests refusal. */
+static unsigned amsdu(uint8_t *record,unsigned damage)
+{
+    memset(record,0,256);memcpy(record,rx_packet,60);
+    uint8_t *m=record+60;m[0]=0x88;m[1]=2;memcpy(m+4,wifi.mac,6);memcpy(m+10,wifi.target.bssid,6);
+    memcpy(m+16,wifi.target.bssid,6);m[24]=0x80;
+    const uint8_t snap[]={0xaa,0xaa,3,0,0,0,8,0};uint8_t *q=m+26;
+    memcpy(q,wifi.mac,6);memcpy(q+6,wifi.target.bssid,6);q[13]=12;memcpy(q+14,snap,8);
+    for(unsigned i=0;i<4;++i)q[22+i]=(uint8_t)(1+i);
+    q+=28;q[0]=0xff;q[5]=0xff;q[1]=q[2]=q[3]=q[4]=0xff;q[6]=9;q[13]=14;memcpy(q+14,snap,8);
+    for(unsigned i=0;i<6;++i)q[22+i]=(uint8_t)(0x40+i);
+    if(damage==1)q[13]=15;      /* Declared length runs past the MPDU. */
+    if(damage==2){q[20]=0x88;q[21]=0x8e;} /* EAPOL inside an aggregate. */
+    if(damage==3)m[24]=0;      /* Hardware A-MSDU bit without the QoS bit. */
+    if(damage==3)record[48]|=1;
+    unsigned n=26+28+28;record[0]=(uint8_t)n;record[1]=0;return n+60;
+}
+static void amsdu_cases(void)
+{
+    uint8_t record[256];struct aic8800_data_frame view;
+    rx(record,amsdu(record,0));until_held();
+    assert(aic8800_transport_peek_data(&transport,&view)&&!view.eapol&&view.bytes==18);
+    assert(!memcmp(view.ethernet,wifi.mac,6)&&!memcmp(view.ethernet+6,wifi.target.bssid,6));
+    assert(view.ethernet[12]==8&&view.ethernet[13]==0&&view.ethernet[14]==1&&view.ethernet[17]==4);
+    size_t cursor=transport.cursor;
+    assert(aic8800_transport_consume(&transport)&&transport.held&&transport.cursor==cursor);
+    assert(aic8800_transport_peek_data(&transport,&view)&&view.bytes==20&&view.ethernet[0]==0xff);
+    assert(view.ethernet[6]==9&&view.ethernet[14]==0x40&&view.ethernet[19]==0x45);
+    assert(aic8800_transport_consume(&transport)&&!data.held);idle();
+    for(unsigned damage=1;damage<=3;++damage){rx(record,amsdu(record,damage));raw();}
+}
 int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&(!strcmp(argv[3],"--retained-disconnect")||!strcmp(argv[3],"--high-bit-cfm"))));FILE *f=fopen(argv[1],"rb");assert(f);assert(fread(expected,1536,2,f)==2&&fgetc(f)==EOF);assert(!fclose(f));
@@ -118,13 +151,17 @@ int main(int argc,char **argv)
     unsigned commands=m.command_count;step();assert(m.command_count==commands);
     assert(!aic8800_transport_peek_data(&transport,(void *)data.ethernet));
     assert(aic8800_transport_consume(&transport));idle();assert(!data.held);
-    /* Unsupported encrypted/reordered/AMSDU/foreign/truncated/LLC records stay raw. */
+    /* Unsupported encrypted, monitor, hardware-AMSDU-without-QoS, foreign,
+     * truncated and LLC records stay raw. */
     const unsigned offsets[]={36,48,48,49,60,84,95};
-    const uint8_t masks[]={12,32,1,3,4,1,0xff};
+    const uint8_t masks[]={12,0x80,1,3,4,1,0xff};
     for(unsigned i=0;i<7;++i){uint8_t record[128];memcpy(record,rx_packet,128);record[offsets[i]]^=masks[i];rx(record,128);raw();}
     /* QoS without reorder/AMSDU has a bounded two-byte header extension. */
     uint8_t qos[128];memcpy(qos,rx_packet,128);memmove(qos+86,qos+84,12);qos[84]=qos[85]=0;qos[60]|=0x80;qos[0]+=2;
     rx(qos,128);until_held();assert(aic8800_transport_peek_data(&transport,&view)&&view.bytes==18);
+    assert(aic8800_transport_consume(&transport));idle();
+    /* A reorder-flagged MPDU is delivered in arrival order. */
+    qos[48]|=0x20;rx(qos,128);until_held();assert(aic8800_transport_peek_data(&transport,&view)&&view.bytes==18);
     assert(aic8800_transport_consume(&transport));idle();
     cfm(reply,9,0);rx(reply,12);raw(); /* stale CFM cannot complete another packet */
 
@@ -140,6 +177,7 @@ int main(int argc,char **argv)
     uint8_t ip[128];memcpy(ip,rx_packet,128);ip[90]=8;ip[91]=0;
     rx(ip,128);until_held();assert(aic8800_transport_peek_data(&transport,&view)&&!view.eapol&&view.generation==2);
     assert(aic8800_transport_consume(&transport));idle();
+    amsdu_cases();
     wifi.link=AIC8800_WIFI_LINK_UNRESOLVED;step();assert(!data.open_authority&&data.state==AIC8800_DATA_IDLE);
 
     checkpoint(1);frame(1);assert(aic8800_transport_send_data(&transport,ethernet,18,m.now+2000));
@@ -152,5 +190,5 @@ int main(int argc,char **argv)
     checkpoint(0);frame(0);assert(aic8800_transport_authorize_open_data(&transport,5));
     assert(aic8800_transport_send_data(&transport,ethernet,sizeof(ethernet),m.now+2000));late_bus=1;
     bus_done();assert(data.state==AIC8800_DATA_FAULT&&data.result.bus_transferred);retained_fault();
-    puts("AIC data: source descriptors, credits, EAPOL status, open-port authority, retained RX, generation revocation and uncertain completion passed");return 0;
+    puts("AIC data: source descriptors, credits, EAPOL status, open-port authority, retained RX, reorder-flagged and A-MSDU receive, generation revocation and uncertain completion passed");return 0;
 }

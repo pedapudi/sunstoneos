@@ -5,7 +5,8 @@ The firmware engine sends every patch-table pair as its own padded 512-byte
 CMD53 block and every 1 KiB image chunk as a padded 1,536-byte transfer. This
 check counts those transfers from the pinned artifacts, adds the smallest
 SD-protocol framing for each command and its confirmation, and converts the
-clock cycles to time at the admitted one-bit SDIO clock. The result is a lower
+clock cycles to time at the admitted one-bit SDIO clock, or with --four-bit at
+the platform's optional four-bit default-speed clock. The result is a lower
 bound: it excludes controller and task latency, card busy time, card setup,
 boot work before the radio platform starts and the time spent polling between
 transfers. The fixed platform power-up waits (supply, module settle and reset)
@@ -31,9 +32,9 @@ BLOBS = {
     "fmacfw_8800d80_h_u02.bin": "ae8d548df96c132c445f888b91eab5ef03c19991b8bdef4fc12ebfcbf9f953e7",
 }
 # Minimum SD clock cycles (SD Physical Layer Simplified Specification timing).
+# Commands use the CMD line; data bits and CRC16 run on every data line at once.
 COMMAND = 48 + 2 + 48          # command, minimum NCR, R5 response
 CMD52 = COMMAND + 8            # plus NCC before the next command
-WRITE_BLOCK = 2 + 1 + 512 * 8 + 16 + 1 + 2 + 5   # NWR, start, data, CRC16, end, NCRC, CRC status
 CONFIRMATION_BYTES = 20        # Smallest D80 confirmation record the engine reads
 
 
@@ -45,19 +46,22 @@ def source(path, pattern):
     return match
 
 
-def read_cycles(byte_count):
-    return COMMAND + 2 + 1 + 8 * byte_count + 16 + 1   # NAC, start, data, CRC16, end
+def read_cycles(byte_count, lines):
+    return COMMAND + 2 + 1 + 8 * byte_count // lines + 16 + 1   # NAC, start, data, CRC16, end
 
 
-def write_cycles(byte_count):
+def write_cycles(byte_count, lines):
     assert byte_count % 512 == 0
-    return COMMAND + (byte_count // 512) * WRITE_BLOCK
+    block = 2 + 1 + 512 * 8 // lines + 16 + 1 + 2 + 5   # NWR, start, data, CRC16, end, NCRC, CRC status
+    return COMMAND + (byte_count // 512) * block
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--firmware", type=Path, required=True, help="Pinned aic8800d80 firmware directory")
     parser.add_argument("--output", type=Path, help="Write the computed budget as JSON")
+    parser.add_argument("--four-bit", action="store_true",
+                        help="Evaluate the optional four-bit default-speed platform profile")
     args = parser.parse_args()
     data = {}
     for name, expected in BLOBS.items():
@@ -72,10 +76,15 @@ def main():
     source("drivers/net/aic8800_firmware.c", r"if\(bytes>1024\)bytes=1024")
     source("drivers/net/aic8800_firmware.c", r"word_write\(f,address,value\)")
     module_hz = int(source("drivers/net/a733_radio_platform.c",
-                           r"host_time\}\s*,\s*p\s*,\s*(\d+)\}").group(1))
+                           r"host_time,host_module\}\s*,\s*p\s*,\s*(\d+)\}").group(1))
+    lines = 1
+    if args.four_bit:
+        source("drivers/storage/sunxi_sdio.c", r"h->card_hz = 400000000u / \(2u \* divisor\)")
+        divisor = int(source("drivers/net/a733_radio_platform.c", r"#define WIDE_DIVISOR (\d+)u").group(1))
+        module_hz, lines = 400000000 // divisor, 4
     bootstrap_us = int(source("apps/board/radio_profile.c",
                               r"#define BOARD_RADIO_BOOTSTRAP_US (\d+)u").group(1))
-    bus_hz = module_hz // 2   # sunxi_sdio selects the SDR divide-by-two path, one data line.
+    bus_hz = module_hz // 2   # sunxi_sdio selects the SDR divide-by-two path.
     # Minimum waits the radio platform holds before the first card command.
     power_up_us = sum(int(source("drivers/net/a733_radio_platform.c",
                                  r"p->last_now-p->wait_since>=(\d+)\)p->stage=" + stage).group(1))
@@ -102,15 +111,15 @@ def main():
         commands = chunks + small
         tx_bytes = chunks * chunk_bytes + small * word_bytes
         # Each command: credit poll, write, status poll, length poll, confirmation read.
-        cycles = (chunks * write_cycles(chunk_bytes) + small * write_cycles(word_bytes) +
-                  commands * (3 * CMD52 + read_cycles(CONFIRMATION_BYTES)))
+        cycles = (chunks * write_cycles(chunk_bytes, lines) + small * write_cycles(word_bytes, lines) +
+                  commands * (3 * CMD52 + read_cycles(CONFIRMATION_BYTES, lines)))
         seconds = cycles / bus_hz
         results[image] = {"chunks": chunks, "word_commands": small, "tx_bytes": tx_bytes,
-                          "payload_only_seconds": round(tx_bytes * 8 / bus_hz, 3),
+                          "payload_only_seconds": round(tx_bytes * 8 / lines / bus_hz, 3),
                           "lower_bound_cycles": cycles, "lower_bound_seconds": round(seconds, 3)}
     worst = max(r["lower_bound_seconds"] for r in results.values())
     budget = (bootstrap_us - power_up_us) / 1e6
-    report = {"module_hz": module_hz, "bus_hz": bus_hz, "data_lines": 1, "patch_table_pairs": pairs,
+    report = {"module_hz": module_hz, "bus_hz": bus_hz, "data_lines": lines, "patch_table_pairs": pairs,
               "bootstrap_offset_seconds": bootstrap_us / 1e6, "power_up_wait_seconds": power_up_us / 1e6,
               "bootstrap_budget_seconds": budget, "images": results,
               "lower_bound_seconds": worst, "within_budget": worst < budget,
@@ -121,7 +130,7 @@ def main():
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if worst >= budget:
-        print(f"FAIL radio bootstrap: at least {worst:.1f} s of SDIO bus time at {bus_hz} Hz "
+        print(f"FAIL radio bootstrap: at least {worst:.1f} s of SDIO bus time at {bus_hz} Hz, {lines} line(s), "
               f"exceeds the {budget:.3f} s left of the bootstrap bound after power-up waits")
         raise SystemExit(1)
     print(f"PASS radio bootstrap bus bound: {worst:.1f} s fits in the {budget:.3f} s left after "
