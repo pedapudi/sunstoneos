@@ -45,6 +45,16 @@ static int tick(struct a733_twi *s)
     if(s->ops.now(s->context,&n)!=1 || n<s->last_now || n>=s->deadline)return 0;
     s->last_now=n;return 1;
 }
+/* An observation after an access cannot replay that access. Repeat a BUSY
+ * observation in place until the transaction deadline. */
+static int authentic(struct a733_twi *s)
+{
+    for(;;) {
+        int r=s->ops.authenticate(s->context);
+        if(r)return r==1;
+        if(!tick(s))return 0;
+    }
+}
 static int rd(struct a733_twi *s,unsigned off,uint32_t *v)
 {return tick(s) && s->ops.read(s->context,s->base+off,v)==1 && tick(s);}
 static int wr(struct a733_twi *s,unsigned off,uint32_t v)
@@ -94,7 +104,10 @@ int a733_twi_poll(struct a733_twi *s)
         if(!idle(s))goto fault;
         s->state=A733_TWI_SEND;break;
     case A733_TWI_SEND:
-        if(s->ops.authenticate(s->context)!=1)goto fault;
+        /* BUSY before this step's first access leaves the step pending. */
+        v=(uint32_t)s->ops.authenticate(s->context);
+        if(v==0)break;
+        if(v!=1)goto fault;
         if(s->index==0 || (s->reading && s->index==2u+s->register_bytes)) {
             if(!wr(s,0xc,ENABLE|FLAG|0x20))goto fault;
         } else if(s->reading && s->index>=4u+s->register_bytes) {
@@ -125,7 +138,9 @@ int a733_twi_poll(struct a733_twi *s)
         }
         s->state=++s->index==(s->reading?4u:2u)+s->register_bytes+s->length?A733_TWI_STOP:A733_TWI_SEND;break;
     case A733_TWI_STOP:
-        if(s->ops.authenticate(s->context)!=1 || !wr(s,0xc,ENABLE|FLAG|0x10))goto fault;
+        v=(uint32_t)s->ops.authenticate(s->context);
+        if(v==0)break;
+        if(v!=1 || !wr(s,0xc,ENABLE|FLAG|0x10))goto fault;
         s->state=A733_TWI_STOP_WAIT;break;
     case A733_TWI_STOP_WAIT:
         if(!rd(s,0xc,&v))goto fault;
@@ -133,9 +148,9 @@ int a733_twi_poll(struct a733_twi *s)
         if((v&0xfd)!=ENABLE)goto fault;
         if(!rd(s,0x10,&v))goto fault;
         if(v!=0xf8)break;
-        if(!rd(s,0x20,&v) || (v&0x35)!=0x30 || s->ops.authenticate(s->context)!=1)goto fault;
+        if(!rd(s,0x20,&v) || (v&0x35)!=0x30 || !authentic(s))goto fault;
         s->ops.leave(s->context);s->held=0;
-        if(!tick(s) || s->ops.authenticate(s->context)!=1)goto fault;
+        if(!tick(s) || !authentic(s))goto fault;
         s->state=A733_TWI_COMPLETE;result=1;break;
     default:goto fault;
     }
@@ -148,7 +163,7 @@ int a733_twi_take_block(struct a733_twi *s,uint8_t *value,unsigned length)
 {
     if(!s || s->self!=s || s->state!=A733_TWI_COMPLETE || s->entered || length!=s->length ||
        (s->reading && (!value || !separate(s,sizeof(*s),value,length))) || s->ops.current(s->context)!=1)return -1;
-    if(!tick(s) || s->ops.authenticate(s->context)!=1)return fail(s);
+    if(!tick(s) || !authentic(s))return fail(s);
     if(s->reading)for(unsigned i=0;i<length;i++)value[i]=s->block[i];
     s->received=0;s->state=A733_TWI_READY;return 1;
 }
