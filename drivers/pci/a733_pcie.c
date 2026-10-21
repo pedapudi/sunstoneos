@@ -32,7 +32,7 @@ static int config_valid(const struct a733_pcie_config *c)
 {
     if(!c->owner||!c->identity||!c->topology||!c->deadline||
         c->lifetime_deadline<c->deadline||c->lifetime_deadline>UINT64_MAX-100000||
-        c->pck_client>=A733_GPU_RESOURCE_CLIENTS)return 0;
+        c->pck_client>=A733_GPU_RESOURCE_CLIENTS||c->link_speed<1||c->link_speed>3)return 0;
     for(unsigned i=0;i<4;++i) {
         if(!a733_pin_config_valid_banked(A733_PIN_D,20+i,c->inherited[i]))return 0;
         if(i==2 ? c->inherited[i].function!=1 :
@@ -207,14 +207,40 @@ static int capability(struct a733_pcie *p,uintptr_t base,uint8_t *pcie,uint8_t *
     }
     return !v;
 }
-static int atu_start(struct a733_pcie *p,unsigned function)
+static int window_valid(const struct a733_pcie *p,unsigned region,uint32_t type,
+    uint32_t cpu,uint32_t pci,uint32_t bytes)
 {
-    if(!wr(p,ATU+4,0)||!check(p,ATU+4,BIT(31),0)||!wr(p,ATU+8,CFG)||
-        !wr(p,ATU+12,0)||!wr(p,ATU+16,CFG+4095)||
-        !wr(p,ATU+20,0x01000000u|(function<<16))||!wr(p,ATU+24,0)||
-        !wr(p,ATU,4)||!wr(p,ATU+4,BIT(31)))return 0;
-    return 1;
+    if(!region)return type==4&&cpu==CFG&&bytes==4096&&(pci&~UINT32_C(0x70000))==0x01000000u;
+    return region==1&&p->test&&!type&&cpu==pci&&!(cpu&4095)&&bytes&&!(bytes&4095)&&
+        cpu>=A733_PCIE_MEM&&bytes<=A733_PCIE_MEM_BYTES&&cpu-A733_PCIE_MEM<=A733_PCIE_MEM_BYTES-bytes;
 }
+int a733_pcie_atu_program(struct a733_pcie *p,unsigned region,uint32_t type,
+    uint32_t cpu,uint32_t pci,uint32_t bytes)
+{
+    if(!window_valid(p,region,type,cpu,pci,bytes))return 0;
+    uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
+    p->windows[region]=(struct a733_pcie_window){type,cpu,pci,bytes};
+    return wr(p,at+4,0)&&check(p,at+4,BIT(31),0)&&wr(p,at+8,cpu)&&wr(p,at+12,0)&&
+        wr(p,at+16,cpu+bytes-1)&&wr(p,at+20,pci)&&wr(p,at+24,0)&&wr(p,at,type)&&wr(p,at+4,BIT(31));
+}
+int a733_pcie_atu_write_allowed(const struct a733_pcie *p,uintptr_t a,uint32_t v)
+{
+    if(!p||a<A733_PCIE_ATU_OUTBOUND(0)||a>=A733_PCIE_ATU_OUTBOUND(2))return 0;
+    unsigned off=(unsigned)(a-A733_PCIE_ATU_OUTBOUND(0));
+    const struct a733_pcie_window *w=&p->windows[off/0x200];
+    if(!w->bytes)return 0;
+    switch(off%0x200) {
+    case 0:return v==w->type;
+    case 4:return !v||v==BIT(31);
+    case 8:return v==w->cpu;
+    case 12:case 24:return !v;
+    case 16:return v==w->cpu+w->bytes-1;
+    case 20:return v==w->pci;
+    default:return 0;
+    }
+}
+static int atu_start(struct a733_pcie *p,unsigned function)
+{return a733_pcie_atu_program(p,0,4,CFG,0x01000000u|(function<<16),4096);}
 static int root_setup(struct a733_pcie *p)
 {
     uint8_t msi;uint32_t flags,control;
@@ -225,13 +251,29 @@ static int root_setup(struct a733_pcie *p)
         !wr(p,DBI+0x18,0x00010100)||!wr(p,DBI+0x10,0)||!wr(p,DBI+0x14,0)||
         !a733_pcie_write(p,DBI+4,2,0x102)||!update(p,DBI+0x8bc,1,1))return 0;
     if(!a733_pcie_write(p,DBI+0xa,2,0x0604)||
-        !update(p,DBI+p->root_cap+0xc,15,1)||
+        !update(p,DBI+p->root_cap+0xc,15,p->config.link_speed)||
         !a733_pcie_read(p,DBI+p->root_cap+0x30,2,&control)||
-        !a733_pcie_write(p,DBI+p->root_cap+0x30,2,(control&~15u)|1)||
+        !a733_pcie_write(p,DBI+p->root_cap+0x30,2,(control&~15u)|p->config.link_speed)||
         !update(p,DBI+0x8bc,1,0))return 0;
     for(unsigned i=0;i<8;++i)
         if(!wr(p,DBI+0x828+12*i,0)||!wr(p,DBI+0x82c+12*i,UINT32_MAX))return 0;
     return 1;
+}
+/* The link first trains at 2.5 GT/s. Above Gen1, follow the board kernel's
+ * sunxi_pcie_host_speed_change(): with Link Control 2 already at the target,
+ * a 0-to-1 transition of DBI+0x80c bit 17 directs a speed change, and the
+ * controller clears that bit when it finishes. 1 done, 0 pending, -1 fault. */
+static int speed(struct a733_pcie *p)
+{
+    uint32_t v;
+    if(p->config.link_speed==1)return 1;
+    if(!p->speed_change) {
+        if(!a733_pcie_read(p,DBI+p->root_cap+0x30,2,&v)||(v&15)!=p->config.link_speed||
+            !rd(p,DBI+0x80c,&v)||!wr(p,DBI+0x80c,v&~BIT(17))||!wr(p,DBI+0x80c,v|BIT(17)))return -1;
+        p->speed_change=1;return 0;
+    }
+    if(!rd(p,DBI+0x80c,&v))return -1;
+    return !(v&BIT(17));
 }
 /* PCIe Base 6.6.1 allows an endpoint up to 1 s after PERST release to answer
  * configuration requests. Inside that window, vendor ID FFFFh (no successful
@@ -254,7 +296,8 @@ static int endpoint(struct a733_pcie *p)
     p->endpoint.header_type=(uint8_t)v;
     if(!capability(p,CFG,&p->endpoint.pcie_cap,&p->endpoint.msi_cap)||!p->endpoint.pcie_cap||
         !a733_pcie_read(p,CFG+p->endpoint.pcie_cap+2,2,&v)||!(v&15)||((v>>4)&15)>1||
-        !a733_pcie_read(p,DBI+p->root_cap+0x12,2,&v)||(v&0x3ff)!=0x11)return 0;
+        !a733_pcie_read(p,DBI+p->root_cap+0x12,2,&v)||(v&0x3f0)!=0x10||!(v&15)||
+        (v&15)>p->config.link_speed||(p->endpoint.link_status&&(v&0x3ff)!=(p->endpoint.link_status&0x3ffu)))return 0;
     p->endpoint.link_status=(uint16_t)v;return 1;
 }
 enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
@@ -352,7 +395,10 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
         case TRAIN:ok=update(p,APP+0xc00,0x41,0x41);if(ok)++p->phase;break;
         case LINK:
             if(!rd(p,APP+0xe0c,&p->last_value))ok=0;
-            else if((p->last_value&3)==3){ok=atu_start(p,0);if(ok)++p->phase;}
+            else if((p->last_value&3)==3) {
+                int r=speed(p);ok=r>=0;
+                if(r>0){ok=atu_start(p,0);if(ok)++p->phase;}
+            }
             break;
         case IDENTIFY:
             /* No configuration request until 100 ms after PERST release. */

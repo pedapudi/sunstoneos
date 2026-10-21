@@ -31,7 +31,7 @@ static int admitted(void *v,const struct a733_pcie_config *c)
  return v==&pcie&&pcie_live()&&c==&pcie.port.config&&c->owner==pcie.session.owner&&
  c->identity==pcie.session.authority&&c->topology==pcie.session.board.topology&&
  c->deadline==pcie.config.deadline&&c->lifetime_deadline==pcie.config.lifetime_deadline&&
- c->pck_client==pcie.session.pck_client&&!memcmp(c->inherited,pcie.config.inherited,sizeof(c->inherited))&&
+ c->pck_client==pcie.session.pck_client&&c->link_speed==1&&!memcmp(c->inherited,pcie.config.inherited,sizeof(c->inherited))&&
  !memcmp(c->fabric,board.session.fabric,sizeof(c->fabric))&&!memcmp(c->fabric_hz,board.session.fabric_hz,sizeof(c->fabric_hz))&&mappings();
 }
 static int now(void *v,uint64_t *n)
@@ -61,7 +61,7 @@ int pcie_construct(void)
  atomic_init(&pcie.failed,0);atomic_init(&pcie.result,0);
  pcie.config=(struct a733_pcie_config){.owner=pcie.session.owner,.identity=pcie.session.authority,
  .topology=pcie.session.board.topology,.deadline=start+pcie.session.link_timeout_us,
- .lifetime_deadline=board.session.deadline_us-10000,.pck_client=(unsigned)pcie.session.pck_client};
+ .lifetime_deadline=board.session.deadline_us-10000,.pck_client=(unsigned)pcie.session.pck_client,.link_speed=1};
  for(unsigned i=0;i<4;++i)pcie.config.inherited[i]=(struct a733_pin_config){pcie.session.inherited[i][0],pcie.session.inherited[i][1],pcie.session.inherited[i][2]};
  memcpy(pcie.config.fabric,board.session.fabric,sizeof(pcie.config.fabric));memcpy(pcie.config.fabric_hz,board.session.fabric_hz,sizeof(pcie.config.fabric_hz));
  if(!a733_pcie_native_init(&pcie.native,&pcie.port,&providers.shared.locks,pcie.handle,admitted,&pcie))return 0;

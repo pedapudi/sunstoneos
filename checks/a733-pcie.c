@@ -15,6 +15,9 @@ static struct a733_pcie port;
 static struct { uintptr_t address; unsigned width; uint32_t value; } trace[2048];
 static unsigned trace_count,reg_retained,stall_phy,stall_atu,bad_caps,late_fault,raise_before_adopt,not_ready,phy_polls;
 static uint64_t phy_done,reset_rise;
+/* Configured target speed and the speed a modeled directed change reaches. */
+static unsigned link_speed=1,negotiated=1,speed_pending,speed_stuck;
+static uint64_t speed_since;
 static int pcie_gpu_read(void *v,uintptr_t a,uint32_t *out)
 {struct pmic_model *m=v;*out=*pmic_model_word(m,a);return 1;}
 static int pcie_gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t deadline)
@@ -67,6 +70,13 @@ static int pcie_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
     struct pmic_model *m=v;assert(m->register_held&&!reg_retained);
     assert(a733_pcie_native_address(a,width,0));
+    /* The controller clears the directed-change bit when the new speed is up. */
+    if(a==0x0600080c&&speed_pending&&!speed_stuck&&m->now-speed_since>=200) {
+        uint32_t *root=pmic_model_word(m,0x06000080),cap=*pmic_model_word(m,0x20000034)&255;
+        uint32_t *endpoint=pmic_model_word(m,0x20000010+cap);
+        *pmic_model_word(m,a)&=~(1u<<17);speed_pending=0;
+        *root=(*root&65535)|((0x10u|negotiated)<<16);*endpoint=(*endpoint&65535)|((0x10u|negotiated)<<16);
+    }
     uint32_t word=*pmic_model_word(m,a&~(uintptr_t)3);
     *out=word>>((a&3)*8);
     if(width==1)*out&=255;if(width==2)*out&=65535;
@@ -87,6 +97,11 @@ static int pcie_write(void *v,uintptr_t a,unsigned width,uint32_t value)
     assert(a733_pcie_native_address(a,width,1)&&trace_count<2048);
     trace[trace_count++]=(typeof(trace[0])){a,width,value};
     uint32_t *word=pmic_model_word(m,a&~(uintptr_t)3);
+    if(a==0x0600080c&&(value&(1u<<17))) {
+        /* A directed change needs a 0-to-1 bit transition on a trained link. */
+        assert(port.config.link_speed>1&&!(*word&(1u<<17))&&*pmic_model_word(m,0x06400e0c)==3&&!speed_pending);
+        speed_pending=1;speed_since=m->now;
+    }
     uint32_t mask=width==4?UINT32_MAX:(width==2?65535u:255u)<<((a&3)*8);
     *word=(*word&~mask)|(value<<((a&3)*8));
     if(a==0x03400194)*pmic_model_word(m,0x03400114)&=~value;
@@ -102,7 +117,7 @@ static int pcie_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 }
 static void setup(void)
 {
-    memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=not_ready=phy_polls=0;
+    memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=not_ready=phy_polls=speed_pending=speed_stuck=0;
     phy_done=reset_rise=0;pmic_model_setup(&model);
     model.pmic[0x20]=0x40;model.pmic[0x2a]=13;
     *pmic_model_word(&model,0x02002000)=0xf8636300;
@@ -129,7 +144,7 @@ static void setup(void)
     *pmic_model_word(&model,0x20000090)=5;
     struct a733_pcie_config c={.owner=99,.identity=88,.topology=12,.deadline=900000,
         .lifetime_deadline=10000000,.pck_client=2,.inherited={{0,0,0},{0,0,0},{1,0,0},{0,0,0}},
-        .fabric={0,0x83000002,0x84000001},.fabric_hz={24000000,200000000,200000000}};
+        .fabric={0,0x83000002,0x84000001},.fabric_hz={24000000,200000000,200000000},.link_speed=link_speed};
     const struct a733_pcie_ops ops={pmic_model_now,pcie_current,pcie_admit,pcie_enter,pcie_leave,
         pcie_retain,pcie_read,pcie_write,pmic_model_outside};
     assert(a733_pcie_init(&port,&c,&ops,&model,&model.clocks,&model.pins,&model.rails,&model.provider,&model.gpu));
@@ -199,6 +214,49 @@ static void pin_conditions(void)
     assert(a733_pins_acquire_banked_checked(&model.pins,55,&q,1,&c,&token,900000)==A733_PINS_CONFLICT&&!token.id);
     assert(*pmic_model_word(&model,0x02000210)==(1u<<22)&&!model.pins.pins[A733_PIN_D][22].id);
 }
+/* One plus the index of the first matching write after write number from. */
+static unsigned written(unsigned from,uintptr_t address,unsigned width,uint32_t mask,uint32_t value)
+{
+    for(unsigned i=from;i<trace_count;++i)
+        if(trace[i].address==address&&trace[i].width==width&&(trace[i].value&mask)==value)return i+1;
+    return 0;
+}
+static void windows(void)
+{
+    /* Native iATU writes must repeat the owned region's recorded window. */
+    assert(a733_pcie_atu_write_allowed(&port,0x06300008,0x20000000)&&a733_pcie_atu_write_allowed(&port,0x06300010,0x20000fff));
+    assert(a733_pcie_atu_write_allowed(&port,0x06300014,0x01000000)&&!a733_pcie_atu_write_allowed(&port,0x06300014,0x01010000));
+    assert(!a733_pcie_atu_write_allowed(&port,0x06300000,0)&&!a733_pcie_atu_write_allowed(&port,0x06300008,0x22000000));
+    assert(!a733_pcie_atu_write_allowed(&port,0x06300004,1)&&!a733_pcie_atu_write_allowed(&port,0x0630001c,0));
+    /* Region 1 is unused until a claimed client maps it; region 2 is never owned. */
+    assert(!a733_pcie_atu_write_allowed(&port,0x06300204,0)&&!a733_pcie_atu_write_allowed(&port,0x06300404,0));
+    unsigned writes=trace_count;
+    assert(!a733_pcie_atu_program(&port,1,0,0x22000000,0x22000000,0x100000)&&!a733_pcie_atu_program(&port,0,0,0x20000000,0x01000000,4096));
+    assert(!a733_pcie_atu_program(&port,0,4,0x20000000,0x01080000,4096)&&!a733_pcie_atu_program(&port,2,0,0x22000000,0x22000000,4096));
+    assert(trace_count==writes&&!port.windows[1].bytes);
+}
+static void speeds(void)
+{
+    /* Gen2 trains at Gen1, then directs one change before the first CFG0 window. */
+    link_speed=negotiated=2;setup();assert(complete()==A733_PCIE_READY&&port.endpoint.link_status==0x12&&port.speed_change);
+    unsigned train=written(0,0x06400c00,4,1,1),clear=written(train,0x0600080c,4,1u<<17,0);
+    unsigned direct=written(clear,0x0600080c,4,1u<<17,1u<<17),window=written(0,0x06300004,4,UINT32_MAX,0);
+    assert(written(0,0x0600007c,4,15,2)&&written(0,0x060000a0,2,15,2)&&train&&clear&&direct&&direct<window);
+    uint32_t value=0;assert(a733_pcie_config_read(&port,0,0,model.now+10000,&value)==A733_PCIE_READY&&value==0x56781234);
+    /* A Gen1-only endpoint stays at 2.5 GT/s and that status becomes exact. */
+    negotiated=1;setup();assert(complete()==A733_PCIE_READY&&port.endpoint.link_status==0x11);
+    /* Faster than the target, or a change that never finishes, retains the port. */
+    negotiated=3;setup();retained();assert(written(0,0x06300004,4,UINT32_MAX,1u<<31));
+    negotiated=2;setup();speed_stuck=1;retained();assert(port.speed_change&&!written(0,0x06300004,4,UINT32_MAX,0));
+    /* A later retrain to another speed fails the exact identity check. */
+    setup();assert(complete()==A733_PCIE_READY);*pmic_model_word(&model,0x06000080)=0x00110000;
+    assert(a733_pcie_test_claim(&port,(struct a733_pcie_epf_test *)&model)==A733_PCIE_RETAINED&&port.failed&&!port.test);
+    /* Only speeds 1..3 are admitted; the Gen1 profile issues no directed change. */
+    static struct a733_pcie other;struct a733_pcie_config c=port.config;
+    for(unsigned i=0;i<2;++i){c.link_speed=i?4:0;assert(!a733_pcie_init(&other,&c,&port.ops,&model,&model.clocks,&model.pins,
+        &model.rails,&model.provider,&model.gpu)&&!other.self);}
+    link_speed=negotiated=1;setup();assert(complete()==A733_PCIE_READY&&!port.speed_change&&!written(0,0x0600080c,4,1u<<17,1u<<17));
+}
 int main(int argc,char **argv)
 {
     setup();assert(complete()==A733_PCIE_READY);
@@ -218,7 +276,7 @@ int main(int argc,char **argv)
     assert(a733_pcie_config_read(&port,0,0,model.now+10000,(uint32_t *)&model.clocks)==A733_PCIE_INVALID);
     assert(!a733_pcie_native_address(0x20000000,4,1)&&!a733_pcie_native_address(0x020033c4,4,1)&&
         !a733_pcie_native_address(0x07067000,4,1)&&!a733_pcie_native_address(0x06300104,4,1));
-    decode();scopes();pin_conditions();
+    windows();decode();scopes();pin_conditions();
     /* Not-ready endpoints inside the 1 s window after PERST release. */
     setup();not_ready=50;assert(complete()==A733_PCIE_READY&&!not_ready&&port.endpoint.vendor==0x1234);
     setup();port.config.deadline=3000000;not_ready=UINT32_MAX;retained();
@@ -239,6 +297,7 @@ int main(int argc,char **argv)
     setup();bad_caps=1;retained();
     setup();stall_atu=1;retained();
     setup();late_fault=1;retained();assert(!late_fault);
-    puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/readiness/config and retained failures");
+    speeds();
+    puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/readiness/config, Gen2 directed speed change and retained failures");
     return 0;
 }
