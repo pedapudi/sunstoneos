@@ -18,9 +18,13 @@ import sys
 from pathlib import Path
 
 STRING_ROUTINES = ('memcpy', 'memmove', 'memset')
-DEFAULT_ROOTS = r'^(local_boot|a733_cpu_.*|a733_cached_prepare)$'
+# C entries and fault handlers that EL3 assembly reaches with translation off.
+DEFAULT_ROOTS = (r'^(local_boot|monitor_init|a733_cpu_.*|a733_smp_boot|a733_cached_prepare'
+                 r'|a733_cached_el3_fault|a733_cached_cold_fault|a733_stage2_main)$')
 FUNCTION = re.compile(r'^([0-9a-f]+) <([^>]+)>:$')
 INSTRUCTION = re.compile(r'^\s*([0-9a-f]+):\s+(\S+)\s*(.*)$')
+# Literal data inside a code section, such as SHA-256 round constants.
+DATA = re.compile(r'^\s*[0-9a-f]+:(?:\s+[0-9a-f]{2})+\s+\.(?:byte|short|word|long|quad)\b')
 SIMD_REGISTER = re.compile(r'\b(?:[vqdshb](?:[12]?[0-9]|3[01])(?:\.\w+)?|z[0-9]+|p[0-9]+)\b')
 TARGET = re.compile(r'<([^>+]+)(\+0x[0-9a-f]+)?>')
 THUNK = re.compile(r'^__AArch64\w*Thunk_(.+)$')
@@ -35,7 +39,7 @@ def disassemble(objdump, image):
             current = functions.setdefault(match[2], [])
             continue
         match = INSTRUCTION.match(line)
-        if match and current is not None:
+        if match and current is not None and not DATA.match(line):
             current.append((int(match[1], 16), match[2].lower(), match[3].lower()))
     return functions
 

@@ -3,7 +3,8 @@
 
 Covers allocation against a backup, standby-slot planning, header-last
 application with interruption, compare-before-write refusal, container
-extents, rollback and header admission rules. No block device is opened.
+extents, resume instead of re-planning, foreign headers, address limits,
+rollback and header admission rules. No block device is opened.
 """
 import argparse
 import contextlib
@@ -140,6 +141,53 @@ def main():
     assert data[16793600:16793600 + len(package)] == package
     assert data[:512] == backup.read_bytes()[:512]
     cases.append('install-slot-a-then-monitor-extents-only')
+
+    # An install that stopped after its header must be resumed: planning the
+    # same contents again would overwrite the slot that holds the old image.
+    partial = out / 'partial.img'
+    shutil.copyfile(backup, partial)
+    container_plan = plan(partial, 1, 'plan-partial', '--container', out / 'synthetic.manifest.json')
+    tool('apply', '--plan', container_plan, '--card-image', partial, '--stop-after', 'header')
+    assert verify(partial)['selected'] == 'A'
+    assert partial.read_bytes()[8192:8192 + len(boot0)] != boot0
+    refused(lambda: plan(partial, 1, 'plan-partial-again', '--container', out / 'synthetic.manifest.json'))
+    assert not (out / 'plan-partial-again').exists()
+    tool('apply', '--plan', container_plan, '--card-image', partial)
+    data = partial.read_bytes()
+    assert data[8192:8192 + len(boot0)] == boot0 and data[16793600:16793600 + len(package)] == package
+    cases.append('interrupted-install-refuses-replan-and-resumes')
+
+    def forged_header(name, generation, shift):
+        path = out / name
+        shutil.copyfile(working, path)
+        extents = [dict(e, first_sector=e['first_sector'] + shift) for e in plan_1['extents']]
+        with path.open('r+b') as stream:
+            if shift:
+                stream.seek(40960 * 512)
+                region = stream.read(8192 * 512)
+                stream.seek((40960 + shift) * 512)
+                stream.write(region)
+            stream.seek(slots.HEADER_SECTORS['A'] * 512)
+            stream.write(slots.pack_header('A', generation, plan_1['entry'], extents))
+        assert verify(path)['selected'] == 'A'
+        return path
+
+    # A valid header whose extents lie in the standby region keeps that region.
+    foreign_extent = forged_header('foreign-extent.img', 1, 8192)
+    refused(lambda: plan(foreign_extent, 2, 'plan-foreign-extent'))
+    assert not (out / 'plan-foreign-extent').exists()
+    cases.append('plan-refuses-standby-region-used-by-valid-header')
+    # Values that do not fit the 64-bit header fields refuse without a traceback.
+    last = forged_header('last-generation.img', slots.MASK64, 0)
+    refused(lambda: plan(last, 2, 'plan-last-generation'))
+    refused(lambda: tool('plan', '--allocation', allocation, '--card-image', working,
+                         '--image', '%s@0x41000000' % (out / 'image2'), '--entry', hex(1 << 64),
+                         '--output', out / 'plan-wide-entry'))
+    refused(lambda: tool('plan', '--allocation', allocation, '--card-image', working,
+                         '--image', '%s@%#x' % (out / 'image2', 1 << 64), '--entry', '0x41000000',
+                         '--output', out / 'plan-wide-load'))
+    assert not any((out / n).exists() for n in ('plan-last-generation', 'plan-wide-entry', 'plan-wide-load'))
+    cases.append('plan-refuses-64-bit-overflow-cleanly')
 
     second = plan(working, 2, 'plan-2')
     plan_2 = json.loads(second.read_text())

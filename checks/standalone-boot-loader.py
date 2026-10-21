@@ -4,7 +4,8 @@
 The actual boot0 parser and cleanup produce the inherited header. The linked
 AArch64 monitor then runs from 0x47000000: cold-entry gate, stage-2 loader,
 SD core, SHA-256 and the ROM-return request. System registers, the counter,
-the SD controller and card, and cold SD admission evidence are modeled.
+the SD controller and card, and cold SD admission and card-detect
+evidence are modeled.
 Card images come from tools/boot-slots.py.
 """
 import argparse
@@ -39,6 +40,7 @@ SDC0, RVBAR = 0x04020000, 0x08001000
 RAM, RAM_END = 0x41000000, 0x47400000
 REPORT_MAGIC = int.from_bytes(b'AS73STG2', 'big')
 COLD_MAGIC = 0x41533733434f4c44
+SUNXI_MMC_ADMISSION = 4
 HEADER_STATES = {0: 'unread', 1: 'valid', 2: 'read', 3: 'absent', 4: 'digest', 5: 'fields'}
 LOAD_STATES = {0: 'none', 1: 'done', 2: 'read', 3: 'digest'}
 CARD_SECTORS = 131072  # 64 MiB; the modeled CSD encodes (127 + 1) * 1024 sectors.
@@ -240,7 +242,8 @@ def main():
     windows = [(e['load'], e['load'] + e['bytes']) for s in 'AB' for e in headers[s]['extents']]
     cases = []
 
-    def run(name, card_bytes, expected, admitted=True, fail_sector=None, registers=None, vector=False):
+    def run(name, card_bytes, expected, admitted=True, fail_sector=None, registers=None, vector=False,
+            counter_step=2400, removed_after_reads=None):
         card = Card(card_bytes, fail_sector)
         cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         cpu.mem_map(RAM, RAM_END - RAM)
@@ -254,6 +257,7 @@ def main():
                   'esr_el3': 0x96000010, 'far_el3': 0xdead0000,
                   'elr_el3': table['a733_stage2_main'], 'spsr_el3': 0x3cd, **(registers or {})}
         controls, stops, foreign, report_writes, entered, unaligned = [], [], [], [], [], []
+        cold_at_entry = []
 
         def instruction(u, address, size, context):
             mnemonic, operands = system[address]
@@ -265,7 +269,7 @@ def main():
             if mnemonic == 'mrs':
                 value = values[second_operand]
                 if second_operand == 'cntpct_el0':
-                    values['cntpct_el0'] += 2400  # 100 us per sample.
+                    values['cntpct_el0'] += counter_step  # 100 us per sample by default.
                 u.reg_write(getattr(a64, 'UC_ARM64_REG_' + first_operand.upper()), value)
             else:
                 assert first_operand in ('daifset', 'vbar_el3', 'rmr_el3'), first_operand
@@ -276,6 +280,16 @@ def main():
         def admission(u, address, size, context):
             u.reg_write(a64.UC_ARM64_REG_X0, 1)
             u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
+
+        # Modeled PF6 card-detect: the card leaves after the given number of reads.
+        def present(u, address, size, context):
+            gone = removed_after_reads is not None and len(card.reads) >= removed_after_reads
+            u.reg_write(a64.UC_ARM64_REG_X0, 0 if gone else 1)
+            u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
+
+        # The cold report is final once the loader starts; keep its bytes.
+        def stage2(u, address, size, context):
+            cold_at_entry.append(bytes(u.mem_read(0x47008000, 512)))
 
         def loaded(u, address, size, context):
             entered.append(address)
@@ -290,9 +304,10 @@ def main():
         def write(u, access, address, size, value, context):
             aligned(u, access, address, size, value, context)
             end = address + size
+            storage = 0x47008200 if cold_at_entry else 0x47008000
             if 0x47008200 <= address < 0x47008400:
                 report_writes.append(address)
-            elif not (0x47008000 <= address and end <= table['a733_stage2_stack_top']
+            elif not (storage <= address and end <= table['a733_stage2_stack_top']
                       or 0x08001004 <= address and end <= 0x0800100c
                       or SDC0 <= address and end <= SDC0 + 0x1000
                       or any(lo <= address and end <= hi for lo, hi in windows)):
@@ -303,6 +318,9 @@ def main():
         if admitted:
             cpu.hook_add(UC_HOOK_CODE, admission, begin=table['a733_stage2_card_admission'],
                          end=table['a733_stage2_card_admission'])
+            cpu.hook_add(UC_HOOK_CODE, present, begin=table['a733_stage2_card_present'],
+                         end=table['a733_stage2_card_present'])
+        cpu.hook_add(UC_HOOK_CODE, stage2, begin=table['a733_stage2_main'], end=table['a733_stage2_main'])
         cpu.hook_add(UC_HOOK_CODE, loaded, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
         cpu.hook_add(UC_HOOK_MEM_READ, aligned)
@@ -315,7 +333,8 @@ def main():
         cold_report = bytes(cpu.mem_read(0x47008000, 512))
         report = bytes(cpu.mem_read(0x47008200, 512))
         result = {'case': name, 'stops': stops, 'controls': controls, 'card_accesses': card.accesses,
-                  'card_reads': len(card.reads), 'counter_samples': (values['cntpct_el0'] - 24000123) // 2400}
+                  'card_reads': len(card.reads),
+                  'counter_samples': (values['cntpct_el0'] - 24000123) // counter_step if counter_step else None}
         if expected is None:  # Refused before stage-2 storage or the loader.
             status = struct.unpack_from('<Q', cold_report, 24)[0]
             assert stops == ['wfe'] and card.accesses == 0
@@ -324,6 +343,7 @@ def main():
             cases.append(result)
             return result
         assert struct.unpack_from('<4Q', cold_report) == (COLD_MAGIC, 1, 512, 1)
+        assert cold_at_entry == [cold_report], name
         fields = struct.unpack_from('<16Q', report)
         per_slot = [struct.unpack_from('<4Q', report, 128 + 32 * s) for s in range(2)]
         status, detail, selected, generation = fields[3], fields[4], fields[5], fields[6]
@@ -331,7 +351,7 @@ def main():
         assert not any(report[192:]) and not any(report[112:128])
         assert controls[-1] == ['rmr_el3', 2] and stops == ['wfi']
         assert struct.unpack('<2I', cpu.mem_read(0x08001004, 8)) == (0x20, 0)
-        assert fields[8] < fields[9]
+        assert fields[8] < fields[9] if counter_step else fields[8] == fields[9]
         result.update({'status': status, 'detail': detail, 'mmc_error': fields[10],
                        'selected': 'AB'[selected] if selected < 2 else None, 'generation': generation,
                        'slots': {s: {'header': HEADER_STATES.get(r[0], r[0]), 'generation': r[1],
@@ -380,7 +400,13 @@ def main():
                   fail_sector=extent('B', 0)['first_sector'])
     assert faulted['mmc_error'] == 6 and faulted['slots']['B']['load'] == 'read'
     refused = run('admission-refused', image(both), (2, None, False), admitted=False)
-    assert refused['card_accesses'] == 0 and refused['mmc_error'] == 4
+    assert refused['card_accesses'] == 0 and refused['mmc_error'] == SUNXI_MMC_ADMISSION
+    # Two header reads and the first slot B chunk, then card-detect reports no card.
+    removed = run('card-removed', image(both), (4, None, False), removed_after_reads=3)
+    assert removed['mmc_error'] == SUNXI_MMC_ADMISSION and removed['card_reads'] == 3
+    assert removed['slots']['B']['load'] == 'read' and removed['slots']['A']['load'] == 'read'
+    stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0)
+    assert stopped['card_accesses'] == 0
     run('wrong-el-parks', image(both), None, registers={'currentel': 4})
     run('exception-parks', image(both), None, vector=True)
     assert cases[-1]['cold_status'] == 3 and cases[-2]['cold_status'] is None
@@ -389,7 +415,7 @@ def main():
               'inherited_monitor_sha256': hashlib.sha256(inherited).hexdigest(),
               'predecessor': predecessor, 'cases': cases,
               'limitations': [
-                  'System registers, the 24 MHz counter, the SD controller and card, and cold SD admission evidence are modeled; the native admission refuses.',
+                  'System registers, the 24 MHz counter, the SD controller and card, and cold SD admission and card-detect evidence are modeled; the native admission and presence callbacks refuse.',
                   'No launch contract is built and the loaded image is never entered; remote-writer exclusion, memory ownership and the cold ROM return remain unqualified.',
                   'Card images are sparse ordinary files written by tools/boot-slots.py; no card or block device was opened.']}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
