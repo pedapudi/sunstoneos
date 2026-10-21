@@ -45,11 +45,24 @@ does not qualify the single-core archive for concurrent use.
 
 ## Memory copy and fill routines
 
-Every A733 image links `runtime/memory.c` and `runtime/memmove.c` for
-`memcpy`, `memmove` and `memset`. This includes the newlib images for mimus
-recognition, the mimus board application, I2S transcription and Bluetooth
-recognition. The linker resolves these symbols from the project objects, so it
-never extracts newlib's AArch64 copy and fill routines from `libc.a`.
+Most A733 boot images link `runtime/memory.c` and `runtime/memmove.c` for
+`memcpy`, `memmove` and `memset`. These are the board and device
+applications; the SMP diagnostic, supervised, observation and storage
+maintenance images; the kernel checks; the USB runtime, power and storage
+probe images; and the newlib images for native mimus recognition
+(`sunstone-a733-mimus-native`), the mimus board application, I2S transcription and Bluetooth recognition. In the newlib
+images the linker resolves these symbols from the project objects, so it
+never extracts newlib's AArch64 copy and fill routines from `libc.a`. The same
+holds for `memcmp`, `strlen`, `strcmp`, `strchr`, `strcpy`, `strncpy` and
+`strcasecmp`, which `runtime/memory.c` also defines.
+The radio network model links only `runtime/memmove.c`.
+
+Two groups of single-core newlib images that boot through the RAM monitor do
+not link these files and still take `memcpy`, `memmove` and `memset` from
+`libc.a`: the C++ runtime check and its emulator model from
+[cxx-runtime.cmake](../cmake/cxx-runtime.cmake), and the RAM-monitor mimus
+images `a733-mimus` and `a733-mimus-usb` and their emulator models from
+[mimus.cmake](../cmake/mimus.cmake). The hazard check below fails on them.
 
 Boot C at EL3 calls `memset` and `memcpy` for structure initialization while
 translation is off. Every data access is then a Device-nGnRnE access, where an
@@ -86,16 +99,24 @@ python=$HOME/.cache/sunstoneos/venv/bin/python
 
 The first check compiles both files with and without `-mgeneral-regs-only` and
 runs them under Unicorn instruction emulation. It covers every source and
-destination alignment modulo 16, lengths from 0 to 300 bytes, and overlapping
+destination alignment modulo 16, every length from 0 to 40 bytes and the
+lengths 47, 63, 64, 65, 100, 127, 128, 129, 255, 256 and 300, and overlapping
 `memmove` in both directions. Each result must match a byte-wise reference, and
 each data access must be naturally aligned and inside the caller's range. The
 second check disassembles final images. It fails when `memcpy`, `memmove` or
 `memset` contains a SIMD or floating-point register, `DC ZVA`, or a call. It
 applies the same instruction test to every function reachable by direct
-branches from the EL3 boot functions `local_boot`, `a733_cached_prepare` and
-`a733_cpu_*`. Indirect calls are counted but not followed. Alignment of scalar
-accesses in boot code depends on `-mstrict-align`, which this check does not
-inspect.
+branches from the functions that EL3 assembly enters with translation off:
+
+- the C entries `local_boot`, `monitor_init`, `a733_smp_boot`,
+  `a733_cached_prepare`, `a733_cpu_*` and the stage-2 loader's
+  `a733_stage2_main`;
+- the cached images' EL3 fault handlers `a733_cached_el3_fault` and
+  `a733_cached_cold_fault`.
+
+Indirect calls are counted but not followed, and literal data words inside
+code sections are skipped. Alignment of scalar accesses in boot code depends
+on `-mstrict-align`, which this check does not inspect.
 
 ## Build and bounded checks
 
