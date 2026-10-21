@@ -97,6 +97,9 @@ void a733_smp_diagnostic_start(void)
   240000,4096,5,1,dma_fatal,&app};
  if(!a733_dma_pool_session_stream_supervised_init(&app.dma,&config,app.stream,I2S_PERIODS,I2S_PERIOD_BYTES)||
     !dma_service_bind(&app.dma.service,0,app.handles[2],duplex?3:1))platform_panic("I2S native pool",8);
+ /* Queue end wakes the DMA worker at once instead of at its next tick, so
+  * a finite period's FIFO bridge starts within interrupt latency. */
+ if(!dma_service_i2s_irq_bind(&app.dma_irq,&app.dma.service,A733_SMP_COUNTER_HZ))platform_panic("I2S DMA interrupt",8);
  for(unsigned i=0;i<I2S_PERIODS;++i){
   app.period_memory[i]=app.dma.stream_mappings[i].cpu;
   if(duplex)app.playback_memory[i]=app.dma.duplex_mappings[i].cpu;

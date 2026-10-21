@@ -77,9 +77,26 @@ that affected period as successful audio. A delayed DMA drain does not release
 storage merely because the hardware completion event appeared.
 
 This mechanism requires bounded scheduling, register access and DMA drain on the
-real board. A two-core register model cannot establish that those bounds hold
-at 16 kHz. Physical timing and FIFO continuity remain qualification requirements.
-No performance measurement is included in the model checks.
+real board. For mono receive at 16 kHz with an empty FIFO at the boundary, the
+deadline is 63 samples, about 3.9 ms. Without a DMA interrupt, the worker detects queue end at its next
+FreeRTOS tick, up to 1 ms late. The native I2S image binds the DMA0 interrupt
+with a one-tick fallback ([i2s-application.md](i2s-application.md)), which
+removes that detection delay while delivery works and keeps the tick bound when
+it does not. A two-core register model cannot establish that these bounds hold
+at 16 kHz. Physical timing, interrupt latency and FIFO continuity remain
+qualification requirements; the per-period `observed_before_us` and
+`observed_after_us` records can measure the bridge on the board. No performance
+measurement is included in the model checks.
+
+`checks/i2s-interrupt.py` builds `checks/i2s-interrupt.c` on the stream model
+above with the image's interrupt adapter and runs two QEMU cases. With a
+200-tick fallback, five finite receive periods each bridge into the next
+period after their queue-end interrupt alone, the worker reads no DMA register
+between periods, each interrupt masks the SPI once and the worker re-enables it
+only after acknowledging the event. With the native one-tick fallback and no
+interrupt delivery at all, the same five periods bridge within the polled path's
+few ticks. DMA and I2S registers, the GIC SPI and interrupt delivery are
+modeled.
 
 Period records carry a sequential frame offset, host observation times and the
 raw direction counter. RXCNT counts samples entering the receive FIFO. TXCNT
