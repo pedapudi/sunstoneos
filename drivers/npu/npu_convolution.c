@@ -128,15 +128,7 @@ static int bootstrap_image(struct a733_npu_buffer *b)
 {
     unsigned char *p=(void *)b->cpu;
     for(size_t i=0;i<b->bytes;i+=8){little(p+i,0x10000000);little(p+i+4,0);}
-    if(!a733_npu_bootstrap(p,b->bytes))return 0;
-    /* Accepted INIT zeros AXI SRAM base/end. Insert after VIP SRAM state,
-     * before the final sync/event/END. Preserve the generic encoder. */
-    memmove(p+168,p+152,40);
-    little(p+152,0x08010e4f);little(p+156,0);
-    little(p+160,0x08010e50);little(p+164,0);
-    /* The encoder's final eight bytes are padding after END. */
-    little(p+200,0x10000000);little(p+204,0);
-    return 1;
+    return a733_npu_bootstrap(p,b->bytes);
 }
 static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size_t bytes)
 {

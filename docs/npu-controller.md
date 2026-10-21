@@ -58,9 +58,11 @@ A failed pass ends the attempt. The core then configures memory counters,
 clock-gating controls, page-directory MMU mode, reorder behavior, and event
 reporting. Board power and clock configuration must already be valid.
 
-The bootstrap encoder writes 192 bytes containing a translation-cache flush,
-reference initialization commands, internal-SRAM base configuration, completion
-event zero, END, and trailing padding. The internal SRAM base is `0x400000`.
+The bootstrap encoder writes 208 bytes containing a translation-cache flush,
+reference initialization commands, internal-SRAM base configuration, zero AXI
+SRAM base and end states (`0x0e4f` and `0x0e50`), completion event zero, END,
+and one further END pair as padding. The convolution session submits these
+bytes unchanged. The internal SRAM base is `0x400000`.
 The platform must reserve the SRAM virtual window from ordinary allocations;
 its complete translation and access behavior still needs implementation and
 physical qualification.

@@ -72,12 +72,12 @@ allocations, including their padding. Publication checks those digests before
 native cache maintenance or device submission. Command 0 is bootstrap; command 1
 is the convolution. Applications cannot supply streams or register writes.
 
-The convolution bootstrap preserves the existing initialization sequence and
-inserts `LOAD_STATE 0x0e4f=0` followed by `0x0e50=0` after VIP SRAM setup.
-Those writes occur in the accepted binary's INIT record and establish its zero
-external-SRAM window. The final synchronization, event and END follow them.
-The 208-byte image and all remaining mapped fetch bytes contain terminating
-padding. The generic bootstrap encoder remains unchanged.
+The convolution bootstrap is the 208-byte sequence written by the controller's
+bootstrap encoder. After VIP SRAM setup it writes `LOAD_STATE 0x0e4f=0`
+followed by `0x0e50=0`. Those writes occur in the accepted binary's INIT record
+and establish its zero external-SRAM window. The final synchronization, event
+and END follow them. The session fills the remaining mapped fetch bytes with
+END pairs.
 
 The source basis is the pinned board driver
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, `vip_drv_device.c` initialization

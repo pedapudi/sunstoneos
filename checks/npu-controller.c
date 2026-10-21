@@ -141,10 +141,11 @@ static void check_bootstrap(void)
     assert(!a733_npu_bootstrap(bootstrap, A733_NPU_BOOTSTRAP_BYTES - 1));
     for (unsigned i = 0; i < sizeof(bootstrap); ++i) assert(bootstrap[i] == 0xa5);
     assert(a733_npu_bootstrap(bootstrap, sizeof(bootstrap)));
-    unsigned banks = 0, sram = 0, event = 0, flush = 0, ended = 0, stalls = 0;
+    unsigned banks = 0, sram = 0, axi = 0, event = 0, flush = 0, ended = 0, stalls = 0;
     for (unsigned at = 0; at < A733_NPU_BOOTSTRAP_BYTES; at += 8) {
         uint32_t op = word(at), data = word(at + 4);
-        if (ended) { assert(op == 0 && data == 0); continue; }
+        /* Padding after END repeats END, matching the submitted buffer fill. */
+        if (ended) { assert(op == 0x10000000 && data == 0); ++ended; continue; }
         switch (op >> 27) {
         case 1: {
             assert(((op >> 16) & 0x3ff) == 1);
@@ -152,15 +153,33 @@ static void check_bootstrap(void)
             if (reg == 0x61) { assert(data == 0xffffff7f && at == 0); ++flush; }
             if (reg == 0xe55) { assert(data == (0x03010000 | banks)); ++banks; }
             if (reg == 0xe4e) { assert(data == 0x400000); ++sram; }
+            if (reg == 0xe4f || reg == 0xe50) {
+                /* AXI SRAM base then end, both zero, after VIP SRAM. */
+                assert(data == 0 && sram == 1 && reg == 0xe4f + axi); ++axi;
+            }
             if (reg == 0xe01) { assert(data == 0x40); ++event; }
             break;
         }
         case 9: assert(data == 0x701 || data == 0x30000701); ++stalls; break;
-        case 2: assert(data == 0 && banks == 8 && sram == 1 && event == 1 && flush == 1); ended = 1; break;
+        case 2: assert(data == 0 && banks == 8 && sram == 1 && axi == 2 && event == 1 && flush == 1); ended = 1; break;
         default: assert(0);
         }
     }
-    assert(ended && stalls == 3);
+    assert(ended == 2 && stalls == 3);
+    /* The exact sequence the convolution session submits, spelled independently
+     * of the encoder (see checks/npu-convolution.py). */
+    static const uint32_t accepted[] = {
+        0x08010061, 0xffffff7f, 0x08010e02, 0x30000701, 0x48000000, 0x30000701,
+        0x0801028a, 0x11, 0x08010e13, 2, 0x08010e12, 0x18010000,
+        0x08010e55, 0x03010000, 0x08010e55, 0x03010001, 0x08010e55, 0x03010002,
+        0x08010e55, 0x03010003, 0x08010e55, 0x03010004, 0x08010e55, 0x03010005,
+        0x08010e55, 0x03010006, 0x08010e55, 0x03010007,
+        0x08010e21, 0x20000, 0x08010e02, 0x701, 0x48000000, 0x701,
+        0x0801022c, 0x1f, 0x08010e4e, 0x400000, 0x08010e4f, 0, 0x08010e50, 0,
+        0x08010e02, 0x30000701, 0x48000000, 0x30000701,
+        0x08010e01, 0x40, 0x10000000, 0, 0x10000000, 0};
+    assert(sizeof(accepted) == A733_NPU_BOOTSTRAP_BYTES && A733_NPU_BOOTSTRAP_BYTES == 208);
+    for (unsigned i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i) assert(word(4 * i) == accepted[i]);
     for (unsigned i = A733_NPU_BOOTSTRAP_BYTES; i < sizeof(bootstrap); ++i) assert(bootstrap[i] == 0xa5);
 }
 
