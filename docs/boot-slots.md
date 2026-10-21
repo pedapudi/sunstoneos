@@ -11,8 +11,11 @@ previous slot selectable.
 Status: the card layout, the host tool [boot-slots.py](../tools/boot-slots.py)
 and the loader in [boot/a733/stage2](../boot/a733/stage2) are implemented and
 pass host checks. No card has been written and no board has run the loader.
-The loader does not enter the loaded image, and its native SD admission refuses
-before any controller access. The [boundary section](#the-loader-stops-before-entering-the-image)
+The loader's entry path, which arms the watchdog, builds the resident contract
+of the [integrated OS image](os-image.md) and branches to it, is implemented
+and host-modeled. Its native entry prerequisites refuse, so the loader does not
+enter the loaded image, and its native SD admission refuses before any
+controller access. The [boundary section](#the-loader-stops-before-entering-the-image)
 lists what each of these needs.
 
 ## Card layout
@@ -84,9 +87,11 @@ polling loop.
 3. For the first candidate, copy each extent in 4 KiB chunks to its load
    address, then hash the destination bytes. A hash mismatch or read failure
    moves to the other valid slot.
-4. Publish a 512-byte report at `0x47008200`, magic last, and request the ROM
-   forced-FEL return: RVBAR is set to `0x20` and an AArch32 warm reset is
-   requested, as the RAM monitor does.
+4. Check the entry prerequisites. While they refuse, publish a 512-byte
+   report at `0x47008200`, magic last, and request the ROM forced-FEL return:
+   RVBAR is set to `0x20` and an AArch32 warm reset is requested, as the RAM
+   monitor does. The [entry path](#the-entry-path-builds-the-resident-contract)
+   follows when they are granted.
 
 The report holds status, detail, selected slot and generation, card capacity,
 start and end counter values and the last SD core result. Per slot it records
@@ -99,6 +104,9 @@ the header state, generation, load state and failing extent.
 | 3 | Neither header is valid | SD core error |
 | 4 | Every valid slot failed to load | SD core error |
 | 5 | The system counter does not advance; the card was not accessed | Zero |
+| 6 | The resident contract was published and the image entered | Entry address |
+| 7 | Entry refused: no 808-byte session extent at `0x41f00000` (1), or its board magic, version, size, generation or lease differs (2) | 1 or 2 |
+| 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Arming counter value, or zero |
 
 The SD core never retries after a fault, so a read failure during one slot
 also fails the other. An exception during the loader uses the cold-entry
@@ -111,33 +119,68 @@ fails while running. That case needs the rollback procedure below.
 
 ## The loader stops before entering the image
 
-Four prerequisites are missing, and each is outside this monitor:
+`a733_stage2_entry_admission` in [admission.c](../boot/a733/stage2/admission.c)
+returns refusal, because three prerequisites are missing. A fourth blocks the
+SD controller access itself.
 
-- **Launch record.** Runtime images enter at EL3 and require a sealed launch
-  contract at `0x42004000`. That contract records facts that only the host
-  establishes, such as watchdog arming, FEL redirect state and an exclusive
-  lease. The loader does not forge those fields. A cold-boot contract version
-  with its own admission rules, together with runtime support for it, must
-  exist first.
 - **Remote-writer exclusion.** No stop or drain procedure exists for the E902
   core or for other DMA-capable agents
   ([cold-entry record](cold-entry.md#remote-processor-exclusion-needs-the-effective-a733-register-map)).
   Ownership of the `0x42e00000` boot0 staging area is also undecided.
+- **Watchdog recovery.** A watchdog expiry after a cold boot has not been
+  shown to restart the board into this monitor with both cards preserved. A
+  forced-FEL return from a cold boot has not been observed either; the
+  FEL-launched watchdog path writes an RTC FEL flag and a redirect flag that a
+  cold boot never sets.
+- **Entry state.** The CPU, GIC and timer state that boot0 leaves at EL3 has
+  not been compared with the reset state that FEL-launched images see.
 - **Cold SD admission.** The SD core requires evidence of settled controller
   clocks, pins, card supplies, presence and exclusive ownership.
-  `a733_stage2_card_admission` in
-  [admission.c](../boot/a733/stage2/admission.c) returns refusal until a
+  `a733_stage2_card_admission` in the same file returns refusal until a
   fixed-board subset of the shared providers supplies that evidence. On a
   board the current loader therefore reports status 2 without touching the
   controller. Before every poll the SD core also revalidates card presence
   through the loader's `retained` callback, which calls
-  `a733_stage2_card_present` in the same file; that function also refuses.
-  An admission that accepts must replace both. Presence comes from the
-  active-low PF6 card-detect pin, read under the pin ownership that admission
-  retains ([SD presence](mmc.md)).
-- **Cold ROM return.** A forced-FEL return from a cold boot has not been
-  observed. The FEL-launched watchdog path also writes an RTC FEL flag and a
-  redirect flag that a cold boot never sets.
+  `a733_stage2_card_present`; that function also refuses. An admission that
+  accepts must replace both. Presence comes from the active-low PF6
+  card-detect pin, read under the pin ownership that admission retains
+  ([SD presence](mmc.md)).
+
+## The entry path builds the resident contract
+
+With the prerequisites granted, the loader enters only the integrated OS
+image. Its slot carries the 808-byte OS session as an asset loaded at
+`0x41f00000`; the slot header's extent digest has already authenticated it.
+
+1. Refuse with status 7 unless that extent exists, and the session's board
+   magic, version 2, size, nonzero lease and generation equal the slot's.
+2. If the image result record at `0x42000000` holds the resident OS result
+   magic, copy its 128 bytes into report bytes 192..319 and clear its magic.
+   Each boot of a slot repeats its generation, and the image refuses a
+   contract whose generation a retained result already holds.
+3. Refuse with status 8 if WDT0 mode bit 0 or configuration bit 8 is set,
+   the ROM redirect words or RTC FEL flag are nonzero, or CCU word `0x24` bit 8
+   is set. Otherwise write the reset output and four-second configuration, read
+   them back, read the counter as `armed_at`, enable the mode and restart it.
+   The arming must read back within one millisecond. This is the FEL
+   launcher's sequence without the redirect and FEL flag.
+4. Write `armed_at` into the session as its fresh epoch and hash the 808
+   session bytes.
+5. Clear the contract magic at `0x42004000`. Write version 2, the epoch, the
+   slot generation and its inverse, the build ID named by the session and the
+   session lease. Write `armed_at`, a startup deadline one second later, no
+   diagnostic deadline (`UINT64_MAX`) and expiry four seconds after arming.
+   Write the armed watchdog fields, zero FEL fields, and the session address,
+   size and digest. Write the resident OS contract magic last.
+6. Publish the report with status 6, `armed_at` in report bytes 112..119 and
+   the contract address in bytes 120..127, then mask interrupts, invalidate
+   the instruction cache and branch to the slot entry at EL3 with
+   translation and caches off.
+
+The OS image's armed boot reads WDT0, the redirect words and the FEL flag
+back against this contract before it admits it. A slot has one image and at
+most three assets, so the OS image's two models and recorded WAV must form
+one asset extent at `0x44000000`, with the session as the second asset.
 
 The legacy profile reads about 25 KB/s, so 14 MB of models would take roughly
 ten minutes. A faster SD profile needs the provider-owned module clock change
@@ -227,7 +270,8 @@ built by the host tool. Fourteen cases cover:
   controller access;
 - the unchanged entry gate refusing EL1, and an exception parking.
 
-Every case checks the report, the ROM-return request and the copied bytes. It
+Every case checks the report, the ROM-return request and the copied bytes.
+The native entry prerequisites refuse in every case. It
 also checks that data accesses stay naturally aligned, as Device memory
 requires, and that no store leaves the monitor storage, the load extents and
 the reset-vector registers. Once the loader starts, a store to the cold report
@@ -244,7 +288,21 @@ and resumed update, an interrupted install that refuses a new plan and then
 resumes, refusal of a changed image before any write, rollback and its
 refusal, plan refusals and the header rules. The plan refusals include a
 foreign header with an extent in the standby region and the 64-bit limits.
-Both checks run on the development host:
+[os-image-stage2.py](../checks/os-image-stage2.py) runs the same monitor with
+the entry prerequisites, card admission and card presence modeled as granted,
+and with WDT0, the redirect words, the RTC FEL flag and CCU word `0x24`
+modeled. Its slot holds an image, the OS session and an asset. Eight cases
+cover entry with and without a retained result, refused prerequisites, a
+missing session extent, a session generation that differs from the slot's,
+and an enabled watchdog, a ROM redirect or an RTC FEL flag left by another
+owner. The entry cases check the four arming writes, every contract field,
+the stamped session epoch and digest and the branch to the entry, then pass
+the contract and session to the OS image's resident admission
+([os-image-model.c](../checks/os-image-model.c)), which must accept them.
+The refusal cases check that no register write or contract publication
+happens.
+
+The checks run on the development host:
 
 ```sh
 cmake -S boot/a733/stage2 -B BUILD -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/aarch64-clang.cmake \
@@ -252,7 +310,12 @@ cmake -S boot/a733/stage2 -B BUILD -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/aarch64-cla
 cmake --build BUILD --target a733-stage2
 python checks/standalone-boot-loader.py --build BUILD --boot0 boot0_sdcard_orangepizero3w.fex --output NEW
 python checks/standalone-boot-slots.py --output NEW
+python checks/os-image-stage2.py --build BUILD --boot0 boot0_sdcard_orangepizero3w.fex \
+  --model RESIDENT_MODEL --output NEW
 ```
+
+`RESIDENT_MODEL` is `checks/os-image-model.c` built for the resident lifetime,
+as its header comment shows.
 
 The loader uses the Python environment with Unicorn, Capstone and pyelftools.
 The cold-entry recorder built by `tools/prepare-cold-entry.py` is unchanged;
