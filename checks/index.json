@@ -4617,6 +4617,22 @@
   "summary": "Only hdmi admission-to-consumption binding; providers and publication are modeled.",
   "usb": false
  },
+ "hevc-decode-model.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check native HEVC slice parsing and register programming on the host.",
+  "usb": false
+ },
  "hevc-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -4633,6 +4649,37 @@
    "--lld"
   ],
   "summary": "Check HEVC preparation and durable capture using a frozen actual native image.",
+  "usb": false
+ },
+ "hevc-image.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--manifest",
+   "--output"
+  ],
+  "summary": "Check a built native HEVC image against host preparation's ELF rules.",
+  "usb": false
+ },
+ "hevc-native-access.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--trace",
+   "--output"
+  ],
+  "summary": "Run every HEVC VE access through the real lower native access policy.",
   "usb": false
  },
  "i2s-application-observer.py": {
@@ -4666,7 +4713,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/i2s-stream.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7028,6 +7077,32 @@
    "--compile-commands"
   ],
   "summary": "Run the focused rail ownership batch and preserve all executed inputs.",
+  "usb": false
+ },
+ "remote-writers-model.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/remote-writers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Execute the AArch64 remote-writer exclusion check against modeled register states.",
+  "usb": false
+ },
+ "remote-writers-sources.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/remote-writers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Survey which remote bus masters the pinned boot0 and the captured board ROM can start.",
   "usb": false
  },
  "rtc-application-cases.py": {
