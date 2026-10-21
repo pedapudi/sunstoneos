@@ -112,10 +112,10 @@ def main():
             artifacts.append(artifact)
         preserve()
         for name in (['board-radio-listener'] if a.listener_only else ['board-radio', 'board-radio-session']):
-            for variant in (range(4) if a.listener_only else (None,)):
+            for variant in (range(5) if a.listener_only else (None,)):
                 assert 'PASS board radio' in run(name+('-'+str(variant) if variant is not None else ''), [str(out / name)]+([str(variant)] if variant is not None else []))
         (out / 'result.json').write_text(json.dumps({'passed': True,
-            'scope': ('Actual new listener profile conversion/client with modeled socket replies; nominal and peer/late/address failures, both closes' if a.listener_only else 'Actual coordinator/profile admission/client and session busy admission/retention with modeled lower protocol observations; five actual native source compilations.'),
+            'scope': ('Actual new listener profile conversion/client with modeled socket replies; nominal, repeated exchange timeouts and peer/late/address failures, both closes' if a.listener_only else 'Actual coordinator/profile admission/client and session busy admission/retention with modeled lower protocol observations; five actual native source compilations.'),
             'limits': 'No physical SID, CE quality, RF, firmware transfer, WPA2 or IPv4 hardware qualification.'}, indent=2) + '\n')
     finally:
         preserve()
