@@ -68,6 +68,12 @@
     "archive": "board-boot/boot0_sdcard_orangepizero3w.fex",
     "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
   },
+  "board-dragonsecboot": {
+    "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/tools/dragonsecboot",
+    "archive": "board-boot/dragonsecboot",
+    "sha256": "e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6"
+  },
   "tinyusb": {
     "revision": "d668b0abb7219b9ce324fa88d46604bb9e869973",
     "url": "https://codeload.github.com/hathach/tinyusb/tar.gz/d668b0abb7219b9ce324fa88d46604bb9e869973",
