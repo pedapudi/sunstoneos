@@ -459,8 +459,9 @@ pool reclamation still needs shared serialization.
 All queued mutations and copied outputs bind their queue epoch at service
 consumption. Optional wire versions are compute 6, triangle 7, texture 8,
 depth/blend 9 and batches 10. The default transports use versions 2 through 6
-with their own layouts. Batch-profile disposal and reopening reuse the same
-owner reconstruction but have no separate lifecycle check. Render OPEN
+with their own layouts. `checks/gpu-resource-disposal.py --profile 4` runs the
+same native disposal and reconstruction for a 64 × 64 batch-profile owner; the
+application protocol checks do not cover that profile. Render OPEN
 publishes frame/generation zero and requires fresh submission before READ.
 Compute OPEN executes the original sealed input and publishes sequence one.
 Texture replies use a separate 72-byte header, followed by the existing copied
