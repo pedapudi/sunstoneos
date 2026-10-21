@@ -33,16 +33,16 @@ def main():
   assert sha(a.firmware/name)==h,name
   lines += ['.balign 16',f'.global session_blob{i}',f'session_blob{i}:',f'.incbin "{a.firmware/name}"']
  assembly.write_text("\n".join(lines)+"\n")
- (source/"CMakeLists.txt").write_text(f'cmake_minimum_required(VERSION 3.24)\nproject(session_composition C ASM)\nadd_subdirectory("{ROOT}" base)\ninclude("{ROOT}/cmake/radio-dispatch.cmake")\ninclude("{ROOT}/cmake/radio-session.cmake")\n')
+ (source/"CMakeLists.txt").write_text(f'cmake_minimum_required(VERSION 3.24)\nproject(session_composition C ASM)\nadd_subdirectory("{ROOT}" base)\nif(NOT TARGET radio-dispatch-model)\ninclude("{ROOT}/cmake/radio-dispatch.cmake")\nendif()\ninclude("{ROOT}/cmake/radio-session.cmake")\n')
  toolchain=out/"toolchain.cmake";toolchain.write_text(f'set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER clang)\nset(CMAKE_ASM_COMPILER clang)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")\n')
  result={"references":REFERENCES,"firmware":dict(blobs),"commands":[],"runs":[]}
- commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DTINYUSB_DIR={a.tinyusb}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_SESSION_BLOBS={assembly}"],
+ commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DTINYUSB_DIR={a.tinyusb}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_LLD={a.linker}",f"-DSUNSTONE_SESSION_BLOBS={assembly}"],
  ["cmake","--build",str(out/"build"),"--target","radio-session-model","-j4"]]
  for cmd in commands:
   run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"returncode":run.returncode,"stdout":run.stdout,"stderr":run.stderr})
   if run.returncode:break
  if not run.returncode:
-  elf=out/"build/radio-session-model.elf";identity=sha(elf);artifact=out/("radio-session-"+identity+".elf");shutil.copyfile(elf,artifact)
+  matches=list((out/"build").rglob("radio-session-model.elf"));assert len(matches)==1,matches;elf=matches[0];identity=sha(elf);artifact=out/("radio-session-"+identity+".elf");shutil.copyfile(elf,artifact)
   result.update(artifact=str(artifact),elf_sha256=identity)
   snapshot=out/("source-"+identity);snapshot.mkdir(exist_ok=True)
   result["source_sha256"]={}
@@ -52,7 +52,7 @@ def main():
   # Preserve the complete compile dependency closure before executing the image.
   paths={ROOT/name for name in INPUTS}
   paths.update([assembly,toolchain,source/"CMakeLists.txt",ROOT/"CMakeLists.txt",ROOT/"platform/qemu-virt/link.ld",a.qemu,a.linker])
-  target_dir=out/"build/CMakeFiles/radio-session-model.dir"
+  target_dir=elf.parent/"CMakeFiles/radio-session-model.dir"
   paths.update(path for path in target_dir.iterdir() if path.is_file() and path.suffix in (".txt",".make"))
   paths.update(ROOT.glob("cmake/*.cmake"))
   paths.update(a.firmware/name for name,_ in blobs)

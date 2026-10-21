@@ -29,6 +29,13 @@ enum aic8800_codec_result {
     AIC8800_CODEC_UNSUPPORTED
 };
 
+/* CRC-8 of the first three bytes of a 4-byte transfer header. */
+uint8_t aic8800_sdio_header_crc(const uint8_t header[3]);
+/* Write the 16-byte host command header: length, type 0x11, CRC, zero word,
+ * message ID, destination task ID >> 10, DRV_TASK_ID 100, parameter length.
+ * Parameters follow at offset 16; parameters + 12 must fit in 16 bits. */
+void aic8800_sdio_command_header(uint8_t header[16], uint16_t id, uint16_t parameters);
+
 /* Encode exactly 20 bytes. The unused destination tail remains unchanged.
  * No allocation, hardware access, CMD53 block padding, or setup writes occur.
  * The complete board identity sequence needs additional setup, including the

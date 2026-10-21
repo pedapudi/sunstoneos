@@ -46,7 +46,7 @@ static int address_for(enum aic8800_identity_register which, uint32_t *address)
 }
 
 /* CRC-8, polynomial 0x107, initial value zero, no reflection or final XOR. */
-static uint8_t header_crc(const uint8_t *header)
+uint8_t aic8800_sdio_header_crc(const uint8_t header[3])
 {
     uint8_t crc = 0;
     for (unsigned i = 0; i < 3; ++i) {
@@ -55,6 +55,19 @@ static uint8_t header_crc(const uint8_t *header)
             crc = (uint8_t)((crc << 1) ^ ((crc & 0x80u) ? 0x07u : 0u));
     }
     return crc;
+}
+
+void aic8800_sdio_command_header(uint8_t header[16], uint16_t id, uint16_t parameters)
+{
+    uint16_t length = (uint16_t)(12u + parameters);
+    const uint8_t bytes[16] = {
+        (uint8_t)length, (uint8_t)(length >> 8), 0x11, 0,
+        0, 0, 0, 0, (uint8_t)id, (uint8_t)(id >> 8), (uint8_t)(id >> 10), 0,
+        100, 0, (uint8_t)parameters, (uint8_t)(parameters >> 8)
+    };
+    for (unsigned i = 0; i < 16; ++i)
+        header[i] = bytes[i];
+    header[3] = aic8800_sdio_header_crc(header);
 }
 
 enum aic8800_codec_result aic8800_sdio_encode_identity_read(
@@ -72,7 +85,7 @@ enum aic8800_codec_result aic8800_sdio_encode_identity_read(
         return AIC8800_CODEC_INVALID;
     if (capacity < sizeof(bytes))
         return AIC8800_CODEC_TRUNCATED;
-    bytes[3] = header_crc(bytes);
+    bytes[3] = aic8800_sdio_header_crc(bytes);
     put32(bytes + 16, address);
     for (size_t i = 0; i < sizeof(bytes); ++i)
         ((uint8_t *)output)[i] = bytes[i];
@@ -139,7 +152,7 @@ enum aic8800_codec_result aic8800_sdio_encode_bootstrap_setup(void *output, size
     };
     if (!span(output, sizeof(bytes))) return AIC8800_CODEC_INVALID;
     if (capacity < sizeof(bytes)) return AIC8800_CODEC_TRUNCATED;
-    bytes[3] = header_crc(bytes);
+    bytes[3] = aic8800_sdio_header_crc(bytes);
     put32(bytes + 16, AIC8800_SDIO_SETUP_ADDRESS);
     put32(bytes + 20, AIC8800_SDIO_SETUP_VALUE);
     for (size_t i = 0; i < sizeof(bytes); ++i) ((uint8_t *)output)[i] = bytes[i];

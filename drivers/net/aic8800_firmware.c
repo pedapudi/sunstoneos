@@ -20,40 +20,8 @@ static uint32_t le32(const uint8_t *p)
 static void put32(uint8_t *p, uint32_t v)
 { for (unsigned i = 0; i < 4; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
 static unsigned nibble(char c) { return c <= '9' ? (unsigned)(c - '0') : (unsigned)(c - 'a' + 10); }
-static uint32_t rotate(uint32_t v, unsigned n) { return (v >> n) | (v << (32 - n)); }
 static void hash_init(struct aic8800_firmware *f)
-{
-    static const uint32_t initial[] = { 0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-        0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19 };
-    for (unsigned i = 0; i < 8; ++i) f->hash[i] = initial[i];
-    f->hash_offset = 0; f->hash_padding = 0;
-}
-static void hash_block(struct aic8800_firmware *f, const uint8_t *p)
-{
-    static const uint32_t k[] = {
-        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
-    uint32_t w[64], a=f->hash[0],b=f->hash[1],c=f->hash[2],d=f->hash[3],
-        e=f->hash[4],g=f->hash[6],h=f->hash[7],v=f->hash[5];
-    for (unsigned i=0;i<16;++i) w[i]=(uint32_t)p[4*i]<<24|(uint32_t)p[4*i+1]<<16|(uint32_t)p[4*i+2]<<8|p[4*i+3];
-    for (unsigned i=16;i<64;++i) {
-        uint32_t x=w[i-15],y=w[i-2];
-        w[i]=w[i-16]+(rotate(x,7)^rotate(x,18)^(x>>3))+w[i-7]+(rotate(y,17)^rotate(y,19)^(y>>10));
-    }
-    for (unsigned i=0;i<64;++i) {
-        uint32_t t1=h+(rotate(e,6)^rotate(e,11)^rotate(e,25))+((e&v)^(~e&g))+k[i]+w[i];
-        uint32_t t2=(rotate(a,2)^rotate(a,13)^rotate(a,22))+((a&b)^(a&c)^(b&c));
-        h=g;g=v;v=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;
-    }
-    f->hash[0]+=a;f->hash[1]+=b;f->hash[2]+=c;f->hash[3]+=d;
-    f->hash[4]+=e;f->hash[5]+=v;f->hash[6]+=g;f->hash[7]+=h;
-}
+{ storage_digest_init(&f->digest); f->hash_offset = 0; }
 void aic8800_firmware_stop(struct aic8800_firmware *f, const void *owner, enum aic8800_firmware_error error)
 {
     if (!f || !f->initialized || f->owner != owner || f->state == AIC8800_FW_FAULT) return;
@@ -96,20 +64,13 @@ int aic8800_firmware_claim(struct aic8800_firmware *f, const struct aic8800_radi
 static void hash_step(struct aic8800_firmware *f)
 {
     const struct aic8800_firmware_blob *b=&f->config.blobs[f->hash_role];
-    size_t left=b->bytes-f->hash_offset;
-    if (left>=64) {hash_block(f,b->data+f->hash_offset);f->hash_offset+=64;return;}
-    uint8_t tail[64]={0};
-    if (!f->hash_padding) {
-        for (size_t i=0;i<left;++i) tail[i]=b->data[f->hash_offset+i];
-        tail[left]=0x80;
-        if (left>55) {hash_block(f,tail);f->hash_padding=1;return;}
-    }
-    uint64_t bits=(uint64_t)b->bytes*8;
-    for (unsigned i=0;i<8;++i) tail[63-i]=(uint8_t)(bits>>(8*i));
-    hash_block(f,tail);
+    size_t bytes=b->bytes-f->hash_offset;
+    if (bytes>AIC8800_FIRMWARE_HASH_STEP_BYTES) bytes=AIC8800_FIRMWARE_HASH_STEP_BYTES;
+    (void)storage_digest_add(&f->digest,b->data+f->hash_offset,bytes);f->hash_offset+=bytes;
+    if (f->hash_offset<b->bytes) return;
+    uint8_t actual[32];storage_digest_end(&f->digest,actual);
     const char *wanted=hashes[f->hash_role==AIC8800_WIFI_IMAGE && f->h_variant ? 4 : f->hash_role];
-    for (unsigned i=0;i<32;++i) if (((f->hash[i/4]>>(24-8*(i%4)))&255) !=
-        ((nibble(wanted[2*i])<<4)|nibble(wanted[2*i+1]))) {
+    for (unsigned i=0;i<32;++i) if (actual[i] != ((nibble(wanted[2*i])<<4)|nibble(wanted[2*i+1]))) {
         aic8800_firmware_stop(f,f->owner,AIC8800_FW_HASH_ERROR);return;
     }
     if (++f->hash_role<AIC8800_FIRMWARE_BLOBS) hash_init(f);
@@ -136,16 +97,10 @@ static void validate_step(struct aic8800_firmware *f)
     }
     f->table_offset+=24+(size_t)f->table_pairs*8;
 }
-static uint8_t crc(const uint8_t *p)
-{
-    uint8_t c=0;for(unsigned i=0;i<3;++i){c^=p[i];for(unsigned j=0;j<8;++j)c=(uint8_t)((c<<1)^((c&128)?7:0));}return c;
-}
 static void packet(struct aic8800_firmware *f,uint16_t id,unsigned parameters)
 {
     for(size_t i=0;i<sizeof(f->request);++i)f->request[i]=0;
-    unsigned length=12+parameters;f->request[0]=(uint8_t)length;f->request[1]=(uint8_t)(length>>8);
-    f->request[2]=0x11;f->request[3]=crc(f->request);f->request[8]=(uint8_t)id;f->request[9]=(uint8_t)(id>>8);
-    f->request[10]=1;f->request[12]=100;f->request[14]=(uint8_t)parameters;f->request[15]=(uint8_t)(parameters>>8);
+    aic8800_sdio_command_header(f->request,id,(uint16_t)parameters);
     f->request_bytes=((16u+parameters+4u+511u)/512u)*512u;f->expected_message=id+1;
     f->state=AIC8800_FW_REQUEST;
 }

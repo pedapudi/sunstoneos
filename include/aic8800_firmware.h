@@ -1,8 +1,11 @@
 #ifndef SUNSTONE_AIC8800_FIRMWARE_H
 #define SUNSTONE_AIC8800_FIRMWARE_H
 #include "aic8800_sdio_codec.h"
+#include "a733_storage_digest.h"
 #define AIC8800_FIRMWARE_PACKET_BYTES 1536u
 #define AIC8800_FIRMWARE_BLOBS 4u
+/* Artifact bytes hashed per step; bounded and below one tick on an A55. */
+#define AIC8800_FIRMWARE_HASH_STEP_BYTES 4096u
 /* Roles are separate radio resources, not files in a runtime filesystem. */
 enum aic8800_firmware_role { AIC8800_BT_ADID, AIC8800_BT_PATCH,
     AIC8800_BT_TABLE, AIC8800_WIFI_IMAGE };
@@ -26,13 +29,14 @@ struct aic8800_firmware {
     enum aic8800_firmware_state state;
     enum aic8800_firmware_error error;
     uint64_t last_now, deadline, power_delay_ticks, delay_until;
-    uint32_t hash[8], pointers[4];
+    struct storage_digest digest;
+    uint32_t pointers[4];
     size_t hash_offset, table_offset, image_offset, request_bytes;
     uint32_t table_type, table_pairs, pair_index, last_status, bootstatus;
     uint32_t expected_address, last_response[2], first_nonzero_block_status;
     uint16_t last_response_message;
     uint16_t expected_message;
-    uint8_t initialized, hash_role, hash_padding, h_variant, phase, patch_index;
+    uint8_t initialized, hash_role, h_variant, phase, patch_index;
     uint8_t binding_required, bt_patch_applied, binding_challenge[16];
     uint8_t request[AIC8800_FIRMWARE_PACKET_BYTES];
 };
@@ -45,7 +49,7 @@ int aic8800_firmware_init(struct aic8800_firmware *, const struct aic8800_firmwa
 /* Privileged transport integration only. Owner is a retained identity for one
  * serialized transport, not an application capability. No reentry/concurrency.
  * Claim follows completed identity under uninterrupted clean bootstrap ownership.
- * One step hashes <=64 bytes, validates one record, or builds one request.
+ * One step hashes <=4 KiB, validates one record, or builds one request.
  * REQUEST/WAITING retain the request until a matching CFM; faults never retry.
  * START_CONFIRMED reports the published start CFM, not Wi-Fi/HCI readiness.
  */

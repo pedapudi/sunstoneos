@@ -64,10 +64,12 @@ also remain independent under the platform ownership contract.
 
 Before any firmware command, the engine computes SHA-256 over every admitted
 blob and compares the digest with its built-in artifact catalogue. Each step
-compresses at most one 64-byte block. The accepted sizes bound total work; the
-shared absolute deadline also applies during hashing and table validation.
-The implementation follows the SHA-256 algorithm in [FIPS 180-4][sha256] and
-is checked against complete artifacts independently hashed by the host runner.
+hashes at most 4 KiB, so the four D80 artifacts need 98 steps. The accepted
+sizes bound total work; the shared absolute deadline also applies during hashing
+and table validation. The engine uses the existing software SHA-256 in
+[storage_digest.c](../drivers/storage/storage_digest.c), which follows
+[FIPS 180-4][sha256]. The host runner checks it against complete artifacts that
+it hashes independently, and against a changed final byte of the Wi-Fi image.
 This verifies artifact identity against the pinned catalogue.
 
 The complete Bluetooth table is authenticated by its pinned digest before its

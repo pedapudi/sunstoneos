@@ -15,7 +15,7 @@ REFERENCES = {
     "sdio_io.c": "2f9db1b81f01d359faa689fb7609c04d6a9fdd7d833d16e201f74d7201e51e44",
 }
 SOURCES = ["drivers/net/aic8800_firmware.c", "drivers/net/aic8800_runtime.c", "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c", "checks/aic8800-sdio-transport.c", "drivers/net/aic8800_sdio_transport.c", "drivers/storage/sunxi_sdio.c",
-           "drivers/storage/sdio_card.c", "drivers/net/aic8800_sdio_codec.c"]
+           "drivers/storage/sdio_card.c", "drivers/net/aic8800_sdio_codec.c", "drivers/storage/storage_digest.c"]
 HEADERS = ["include/aic8800_firmware.h", "include/aic8800_runtime.h", "include/aic8800_wifi.h", "include/aic8800_security.h", "include/aic8800_data.h", "include/sunxi_sdio.h", "include/sdio_card.h", "include/aic8800_sdio_codec.h", "include/aic8800_sdio_transport.h", "checks/sdio-controller.c"]
 
 

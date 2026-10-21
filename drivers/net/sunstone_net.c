@@ -21,6 +21,16 @@
 #include "event_groups.h"
 #include <string.h>
 static struct sunstone_net *service;
+/* A group rekey closes the controlled port and clears ready while the lease
+ * remains valid. As in operation(), a waiting request pauses (BUSY) and stops
+ * only for link loss, address revocation or lease expiry (which revokes). */
+static enum sunstone_net_result address_stop(struct sunstone_net *s)
+{
+    if(atomic_load(&s->failed)||atomic_load(&s->network.failed))return SUNSTONE_NET_LINK_LOST;
+    if(atomic_load(&s->network.address_failed))return SUNSTONE_NET_ADDRESS_LOST;
+    if(!aic8800_network_ready(&s->network))return SUNSTONE_NET_BUSY;
+    return aic8800_network_address(&s->network,NULL)?SUNSTONE_NET_OK:SUNSTONE_NET_ADDRESS_LOST;
+}
 static void accept_ip_step(struct sunstone_net *s)
 {
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){
@@ -29,13 +39,13 @@ static void accept_ip_step(struct sunstone_net *s)
         if(state==SUNSTONE_ACCEPT_CANCEL){atomic_store_explicit(&a->state,SUNSTONE_ACCEPT_CANCELED,memory_order_release);continue;}
         unsigned expected=SUNSTONE_ACCEPT_START;
         if(state!=expected||!atomic_compare_exchange_strong(&a->state,&expected,SUNSTONE_ACCEPT_RUNNING))continue;
-        if((TickType_t)(xTaskGetTickCount()-a->submitted)>=a->timeout||
-           atomic_load(&s->failed)||atomic_load(&s->network.failed)||
-           !aic8800_network_address(&s->network,NULL)){
-            a->result=(TickType_t)(xTaskGetTickCount()-a->submitted)>=a->timeout?SUNSTONE_NET_TIMEOUT:
-                atomic_load(&s->failed)||atomic_load(&s->network.failed)?SUNSTONE_NET_LINK_LOST:SUNSTONE_NET_ADDRESS_LOST;
+        enum sunstone_net_result stopped=address_stop(s);
+        unsigned expired=(TickType_t)(xTaskGetTickCount()-a->submitted)>=a->timeout;
+        if(expired||(stopped!=SUNSTONE_NET_OK&&stopped!=SUNSTONE_NET_BUSY)){
+            a->result=expired?SUNSTONE_NET_TIMEOUT:stopped;
             atomic_store_explicit(&a->state,SUNSTONE_ACCEPT_CANCELED,memory_order_release);continue;
         }
+        if(stopped==SUNSTONE_NET_BUSY){atomic_store_explicit(&a->state,SUNSTONE_ACCEPT_START,memory_order_release);continue;}
         Socket_t listener=s->sockets[a->listener].socket;
         if(a->operation==SUNSTONE_NET_LISTEN){
             a->result=FreeRTOS_listen(listener,1);
@@ -97,9 +107,11 @@ void sunstone_net_ip_step(void)
         }
         if(state!=SUNSTONE_DNS_START)continue;
         TickType_t elapsed=xTaskGetTickCount()-q->submitted;
-        if(elapsed>=q->timeout||!aic8800_network_address(&s->network,NULL)){
+        enum sunstone_net_result stopped=address_stop(s);
+        if(elapsed>=q->timeout||(stopped!=SUNSTONE_NET_OK&&stopped!=SUNSTONE_NET_BUSY)){
             q->address=0;atomic_store(&q->state,SUNSTONE_DNS_DONE);continue;
         }
+        if(stopped==SUNSTONE_NET_BUSY)continue;
         /* API callback timeout is milliseconds, request timeout is ticks. The
          * owner independently enforces its earlier absolute tick deadline. */
         TickType_t remaining=q->timeout-elapsed;
@@ -173,9 +185,8 @@ static enum sunstone_net_result accept_stop(struct sunstone_net *s,struct sunsto
 {
     if(atomic_load(&s->cancel[p->message.client])==p->message.ticket)return SUNSTONE_NET_CANCELED;
     if((TickType_t)(xTaskGetTickCount()-p->message.submitted)>=p->message.request.timeout)return SUNSTONE_NET_TIMEOUT;
-    if(atomic_load(&s->failed)||atomic_load(&s->network.failed))return SUNSTONE_NET_LINK_LOST;
-    if(!aic8800_network_address(&s->network,NULL))return SUNSTONE_NET_ADDRESS_LOST;
-    return SUNSTONE_NET_OK;
+    enum sunstone_net_result stopped=address_stop(s);
+    return stopped==SUNSTONE_NET_BUSY?SUNSTONE_NET_OK:stopped;
 }
 static void accept_collect(struct sunstone_net *s,struct sunstone_net_pending *p)
 {

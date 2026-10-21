@@ -167,31 +167,39 @@ enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy
     }
     return finish(s,result);
 }
-int a733_radio_entropy_bytes(void *cookie,uint8_t *out,size_t bytes)
+/* The owner holds the reservoir lock for one bounded refill copy. A consumer
+ * retries a fixed number of times, then reports a temporary refusal. */
+#define RESERVOIR_ATTEMPTS 256u
+/* 1 copied, 0 temporary shortage or contention, -1 fault or invalid caller.
+ * Only a draw with a zero reserve may consume the last reserve bytes. */
+static int draw(void *cookie,uint8_t *out,size_t bytes,size_t reserve)
 {
     struct a733_radio_entropy *s=cookie;
     if(!identity(s) || !bytes || bytes>A733_CE_ENTROPY_MAX || !outside(s,out,bytes) ||
-        xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING)return 0;
+        xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING)return -1;
     TaskHandle_t current=xTaskGetCurrentTaskHandle();
-    if(!current || (current!=s->config.owner && current!=FreeRTOS_GetIPTaskHandle()))return 0;
-    if(!lock(&s->reservoir_busy))return 0;
+    if(!current || (current!=s->config.owner && current!=FreeRTOS_GetIPTaskHandle()))return -1;
+    for(unsigned attempt=1;!lock(&s->reservoir_busy);++attempt)
+        if(attempt==RESERVOIR_ATTEMPTS)return healthy(s)?0:-1;
     if(!healthy(s)) {
         atomic_store_explicit(&s->fault,1,memory_order_release);
         erase(s->reservoir,sizeof(s->reservoir));s->first=s->count=0;
-        unlock(&s->reservoir_busy);return 0;
+        unlock(&s->reservoir_busy);return -1;
     }
-    if(bytes>s->count){unlock(&s->reservoir_busy);return 0;}
+    if(bytes>s->count || s->count-bytes<reserve){unlock(&s->reservoir_busy);return 0;}
     for(size_t i=0;i<bytes;++i) {
         out[i]=s->reservoir[s->first];s->reservoir[s->first]=0;
         s->first=(s->first+1)%A733_RADIO_ENTROPY_CAPACITY;
     }
     s->count-=bytes;unlock(&s->reservoir_busy);return 1;
 }
+int a733_radio_entropy_bytes(void *cookie,uint8_t *out,size_t bytes)
+{return draw(cookie,out,bytes,0)==1;}
 int a733_radio_entropy_random32(void *cookie,uint32_t *out)
-{return a733_radio_entropy_bytes(cookie,(uint8_t *)out,sizeof(*out));}
+{return draw(cookie,(uint8_t *)out,sizeof(*out),A733_RADIO_ENTROPY_SEQUENCE_RESERVE);}
 int a733_radio_entropy_sequence(void *cookie,uint32_t src,uint16_t sport,uint32_t dst,uint16_t dport,uint32_t *out)
 {
     /* A fresh independent word per call; no tuple-derived deterministic seed. */
     (void)src;(void)sport;(void)dst;(void)dport;
-    return a733_radio_entropy_random32(cookie,out);
+    return draw(cookie,(uint8_t *)out,sizeof(*out),0);
 }

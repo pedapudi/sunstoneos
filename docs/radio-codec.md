@@ -36,7 +36,12 @@ use little-endian byte order; input and output buffers need no word alignment.
 
 The [D80 header CRC][sdio] uses polynomial `0x107`, initial value zero,
 no bit reflection, and no final XOR. The encoder produces exactly 20 bytes
-and preserves the remainder of the destination buffer. CMD53 block padding,
+and preserves the remainder of the destination buffer. The codec exports this
+CRC as `aic8800_sdio_header_crc`, which the data worker uses for its type-1
+transmit header. It also exports `aic8800_sdio_command_header`, which writes
+the 16-byte command header above for any message ID and parameter length; the
+destination task is the message ID shifted right by ten bits. The firmware,
+runtime, Wi-Fi and security workers build their requests with it. CMD53 block padding,
 FIFO credit accounting, and transfer submission belong to the native transport.
 
 | Control response offset | Field |

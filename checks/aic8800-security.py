@@ -62,7 +62,8 @@ def main():
         external = source.is_relative_to(up)
         obj = out / (str(source.relative_to(up if external else ROOT)).replace("/", "_") + ".o")
         cmd = [a.cc] + flags
-        if source.parent == ROOT / "runtime": cmd += ["-I", str(ROOT / "runtime/include")]
+        # Native runtime and storage sources use the freestanding string declarations.
+        if source.parent in (ROOT / "runtime", ROOT / "drivers/storage"): cmd += ["-I", str(ROOT / "runtime/include")]
         if external: cmd += ["-include", str(ROOT / "include/aic8800_supplicant_port.h")]
         else: cmd += ["-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter"]
         cmd += ["-c", str(source), "-o", str(obj)]

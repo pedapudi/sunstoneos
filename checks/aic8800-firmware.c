@@ -125,8 +125,11 @@ int main(int argc, char **argv)
     assert(!aic8800_firmware_init(&firmware, &c));
     assert(aic8800_transport_load_firmware(&transport, &firmware, m.now + 200000));
     assert(!aic8800_transport_load_firmware(&transport, &firmware, m.now + 200000));
-    unsigned initial_commands = m.command_count;
-    for (unsigned i = 0; i < 7000 && (firmware.state == AIC8800_FW_VERIFYING || firmware.state == AIC8800_FW_VALIDATING); ++i) step();
+    unsigned initial_commands = m.command_count, verifying_steps = 0;
+    for (unsigned i = 0; i < 7000 && firmware.state == AIC8800_FW_VERIFYING; ++i) { step(); ++verifying_steps; }
+    printf("AIC firmware: %u verification steps\n", verifying_steps);
+    assert(verifying_steps <= 100); /* Bounded 4 KiB digest steps, not one block per step. */
+    for (unsigned i = 0; i < 7000 && firmware.state == AIC8800_FW_VALIDATING; ++i) step();
     assert(firmware.state == AIC8800_FW_PREPARING && m.command_count == initial_commands);
     checkpoint();
     if (argc == 8) {
@@ -198,6 +201,19 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 40 && transport.state == AIC8800_TRANSPORT_FIRMWARE; ++i) step();
     assert(firmware.state == AIC8800_FW_FAULT && firmware.error == AIC8800_FW_HASH_ERROR);
     assert(m.command_count == before);
+
+    /* A changed final byte of the largest artifact is refused after its last step. */
+    m = identified_model; host = identified_host; transport = identified_transport;
+    memset(&firmware, 0, sizeof(firmware)); c = config();
+    size_t late_bytes = c.blobs[3].bytes; uint8_t *late = malloc(late_bytes); assert(late);
+    memcpy(late, c.blobs[3].data, late_bytes); late[late_bytes - 1] ^= 0x80; c.blobs[3].data = late;
+    assert(aic8800_firmware_init(&firmware, &c));
+    assert(aic8800_transport_load_firmware(&transport, &firmware, m.now + 200000));
+    before = m.command_count;
+    for (unsigned i = 0; i < 200 && transport.state == AIC8800_TRANSPORT_FIRMWARE; ++i) step();
+    assert(firmware.state == AIC8800_FW_FAULT && firmware.error == AIC8800_FW_HASH_ERROR);
+    assert(firmware.hash_role == AIC8800_WIFI_IMAGE && m.command_count == before);
+    free(late);
 
     memset(&firmware, 0, sizeof(firmware)); c = config(); c.identity.chip_word = 0x00010000;
     assert(!aic8800_firmware_init(&firmware, &c)); /* Missing non-H U01 artifacts. */
