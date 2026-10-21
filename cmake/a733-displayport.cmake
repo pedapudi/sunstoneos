@@ -28,7 +28,8 @@ list(APPEND displayport_sources "${displayport_build}/boot.c"
  "${SUNSTONE_SOURCE_ROOT}/platform/a733/device_memory_layout.c")
 foreach(source IN ITEMS apps/displayport/main.c apps/displayport/memory.c apps/displayport/native.c apps/displayport/output.c apps/displayport/admission.c apps/displayport/snapshot.c
  drivers/display/a733_dp.c drivers/display/a733_dp_cadence.c drivers/display/a733_dp_profile.c
- drivers/display/a733_display_engine.c drivers/display/a733_tcon_lcd.c
+ drivers/display/a733_display_engine.c drivers/display/a733_display_framebuffer.c
+ drivers/power/a733_de_sys_power.c drivers/display/a733_tcon_lcd.c
  drivers/display/a733_dsi_video.c drivers/display/a733_dsi_phy.c
  drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
  drivers/iommu/a733_iommu.c)

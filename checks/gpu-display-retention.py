@@ -19,7 +19,7 @@ def main():
  service=m.app+m.af['gpu_service'];sl=e.layouts['pvr_gpu_service'];graphics=m.app+m.af['gpu_graphics'];gl=e.layouts['a733_gpu_graphics_memory'];source=graphics+gl['submission'];rl=e.layouts['pvr_render_service'];scratch=0x43e00000
  assert m.call('pvr_render_texture_layout_profile',1280,720,2,scratch)==1
  output=m.get(graphics+gl['payload_extent'])+m.get(graphics+gl['render']+e.layouts['pvr_render_requirements']['payload_bytes'],4)+m.get(scratch+e.layouts['pvr_render_texture_layout']['download'],4)
- fb=e.address('framebuffer');fl=e.layouts['hdmi_framebuffer'];pool=m.get(fb+fl['pool']);slot=m.get(fb+fl['lease']+e.layouts['device_memory_lease']['slot'],4);allocation=pool+e.layouts['device_memory_pool']['allocations']+slot*32;ownership=allocation+e.layouts['device_memory_allocation']['state']
+ fb=e.address('framebuffer');fl=e.layouts['a733_display_framebuffer'];pool=m.get(fb+fl['pool']);slot=m.get(fb+fl['lease']+e.layouts['device_memory_lease']['slot'],4);allocation=pool+e.layouts['device_memory_pool']['allocations']+slot*32;ownership=allocation+e.layouts['device_memory_allocation']['state']
  assert m.get(ownership,4)==2
  m.put(m.app+m.af['frames_ready'],0,4);m.put(m.app+m.af['copied'],0,4);m.put(service+sl['owner'],0,4);m.put(service+sl['phase'],3,4)
  for key,value,width in [('phase',9,4),('sequence',1,4),('texture_output_state',1,4),('texture_output_ticket',999,8),('texture_output_client',0,4),('texture_output_frame',1,4),('texture_output_offset',0,4),('texture_output_bytes',4,4)]:m.put(source+rl[key],value,width)

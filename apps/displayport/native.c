@@ -44,7 +44,7 @@ void dp_retain(void)
  if(n.held&&a733_platform_lock_retain(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK)==1)n.held=0;
  if(n.clock.id)(void)a733_clock_retain(&providers.shared.clocks,&n.clock);
  if(n.rail.id)(void)a733_rail_retain(&providers.shared.rails,&n.rail);
- dp_memory_retain();
+ a733_display_framebuffer_retain(&dp_app.memory);
 }
 static int bad(void){dp_retain();return -1;}
 static int address(uintptr_t a,unsigned width)
@@ -120,7 +120,7 @@ int dp_native_source(void *v,unsigned starting)
  (void)v;if(!tokens()||!timely()||!supplies()||!n.token.generation||!n.token.hpd)return 0;
  for(;;){int valid=a733_typec_dp_validate(&app.typec.provider,&n.token,app.deadline);
   if(valid<0)return 0;if(valid==1)break;if(!timely())return 0;taskYIELD();}
- if(starting==1)return n.tv_prepared&&dp_memory_source(&app.memory,1)==1;
+ if(starting==1)return n.tv_prepared&&a733_display_framebuffer_source(&app.memory,1)==1;
  return starting==0;
 }
 /* Reserve the complete COMB0/SERDES lifecycle before PD Configure can switch

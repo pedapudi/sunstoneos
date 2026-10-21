@@ -216,11 +216,11 @@ def main():
  # Bind terminal output to values obtained from actual restored constructors
  # and negotiated provider state, before any continuation executes.
  sf=image.layouts['a733_displayport_session'];bf=image.layouts['a733_board_session']
- session=m.app+m.af['session'];mf=image.layouts['dp_memory'];memory_at=m.app+m.af['memory'];ef=image.layouts['device_memory_extent']
+ session=m.app+m.af['session'];mf=image.layouts['a733_display_framebuffer'];memory_at=m.app+m.af['memory'];ef=image.layouts['device_memory_extent']
  nf=image.layouts['dp_native'];native_at=m.app+m.af['native'];tf=image.layouts['a733_typec_dp_token'];token_at=native_at+nf['token']
  expected=dict(epoch=m.get(session+sf['board']+bf['epoch']),generation=m.get(session+sf['board']+bf['generation']),lease=m.get(session+sf['board']+bf['lease']))
  for name in ('cpu','physical','bytes'):expected['allocation_'+name]=m.get(memory_at+mf['extent']+ef[name])
- expected['pixel_digest']=bytes(m.u.mem_read(memory_at+mf['pixel_digest'],32))
+ expected['pixel_digest']=bytes(m.u.mem_read(m.app+m.af['pixel_digest'],32))
  expected['build_id']=bytes(m.u.mem_read(image.address('a733_smp_build_id'),32))
  for name in ('generation','hpd_irq','polarity','pin_assignment','hpd'):expected['token_'+name]=m.get(token_at+tf[name],8 if name in ('generation','hpd_irq') else 4)
  baseline={key:value.hex() if isinstance(value,bytes) else value for key,value in expected.items()}

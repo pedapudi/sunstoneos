@@ -104,12 +104,11 @@ void a733_smp_diagnostic_start(void)
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.handles[0]) ||
        !a733_pmic_init(&app.pmic,&pmic,&app.pmic_native.operations,&app.pmic_native,&app.clocks,&app.rails,&app.pins) ||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))platform_panic("GPU display PMIC",9);
-    framebuffer.self=&framebuffer;framebuffer.session=app.session.framebuffer;
     struct a733_hdmi_native_config hdmi={.clocks=&app.clocks,.rails=&app.rails,.pmic=&app.pmic,
         .locks=&app.locks,.pck=&app.pck,.pck_client=app.session.pck_client,.task=app.handles[1],
         .owner=app.session.owner,.epoch=app.session.epoch,.request=app.session.request,
         .supervision=app.session.supervisor,.recovery_mode=A733_HDMI_SUPERVISED_FRAMEBUFFER,
-        .pixel_source=hdmi_framebuffer_source,.pixel_context=&framebuffer};
+        .pixel_source=a733_display_framebuffer_source,.pixel_context=&framebuffer};
     if(!a733_hdmi_native_init(&app.hdmi,&hdmi) || !gpu_display_usb_init() || !gpu_display_render_prepare() ||
        !hdmi_framebuffer_boot())platform_panic("GPU display native binding",10);
     if(!a733_smp_device_preparation_admitted())platform_panic("GPU display startup expired",11);
