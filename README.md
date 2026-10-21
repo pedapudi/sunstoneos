@@ -4,18 +4,30 @@ sunstoneos is a FreeRTOS-based embedded operating system under development for
 the Orange Pi Zero 3W. Its scope includes all onboard hardware, independently
 of the first application, mimus speech transcription.
 
-The attached board runs a FreeRTOS kernel check with timer preemption, queues,
-and floating-point context preservation. An EL3 monitor recovers from a forced
-EL1 stall and returns results through FEL. A native USB device channel passes
-status, echo, log, and recovery checks. Persistent boot, application qualification, and
-complete hardware qualification remain outstanding. Mimus
-now matches the host on 32 development recordings; performance remains below target.
+On the board, a FreeRTOS kernel check passes with timer preemption, queues and
+floating-point context preservation. An EL3 monitor recovers from a forced EL1
+stall and returns results through FEL. A native USB device channel passes
+status, echo, log and recovery checks. All eight CPU cores have reached their
+first FreeRTOS task on the board; sustained eight-core scheduling has passed
+only in emulators.
+
+An [integrated OS image](docs/os-image.md) runs the mimus board application
+with a thermal service. It builds in a supervised lifetime and in a resident
+lifetime that a stage-2 microSD loader enters, and it passes host models; no
+board has run it. A [source audit](docs/audit/README.md) and three rounds of
+fixes based on it are merged; they were checked on the host only. Persistent
+boot, application qualification and complete hardware qualification remain
+outstanding. Mimus matches the host on 32 development recordings. One board run of
+recognition compute on one core at the boot loader's 494 MHz CPU clock took
+about 2.2 times the audio duration, against a target of at most 0.05 times.
 
 - [Interactive progress dashboard](docs/progress-ui.md)
 - [Accepted goal](docs/goal.md)
 - [Hardware inventory and qualification](docs/hardware.md)
 - [Validation policy](docs/validation.md)
 - [Current work and next actions](docs/handoff.md)
+- [Integrated OS image](docs/os-image.md)
+- [Implementation audit and fix rounds](docs/audit/README.md)
 - [Reference sources](docs/sources.md)
 - [Build and kernel check](docs/build.md)
 - [Boot investigation and physical evidence](docs/boot.md)

@@ -5,7 +5,9 @@ operating system for the Orange Pi Zero 3W (Allwinner A733: eight CPU cores,
 six Cortex-A55 and two Cortex-A76, a GIC-600 interrupt controller and 12 GiB of DDR). The
 audit looked for four kinds of problem: performance limits, design and cleanup
 work, latent defects, and features still missing for bring-up. It then grouped
-the confirmed findings into implementation packages.
+the confirmed findings into implementation packages. Three rounds of fixes
+based on those packages are merged; [Implementation rounds](#implementation-rounds)
+records what each package changed and which findings remain deferred.
 
 - **Date:** 2026-10-20.
 - **Code audited:** branch `bringup` at commit `70a4e63`, checked out as branch
@@ -115,150 +117,201 @@ merges 24 such groups. For example, `cpu-startup-3`, `clock-power-pins-5`,
 494 MHz left by the boot loader, and the plan keeps `cpu-startup-3`. The
 counts above include every confirmed finding before merging.
 
-## Implementation packages
+## Implementation rounds
 
-Each package owns a disjoint set of files so packages can be implemented in
-parallel and merged without conflicts. A package's findings list includes the
-duplicates merged into its kept findings. Priority 1 is the most urgent.
-Detailed plans, file ownership, verification commands and risks are in the
-audit plan; the findings themselves are described in the four reports.
+Three rounds of fixes followed the audit and are merged into `bringup`:
 
-| Package | Scope | Findings | Priority | Implementation status |
-| --- | --- | --- | ---: | --- |
-| `multicore` | CPU startup, EL3 monitor, the FreeRTOS SMP port and the multicore runtime. Reserved for the primary agent. | runtime-memory-1, runtime-memory-2, build-system-12, smp-1, smp-2, smp-4, smp-5, smp-7, smp-9, smp-10, build-system-11, smp-8, cpu-startup-1, cpu-startup-4, cpu-startup-5, cpu-startup-6, cpu-startup-7, cpu-startup-8, cpu-startup-10, mimus-perf-6, smp-3, bringup-gaps-8, x-concurrency-2, mimus-perf-7, bringup-gaps-2, supervisor-apps-9, bringup-gaps-10, x-concurrency-7, x-concurrency-9, x-duplication-4, buses-pcie-10, supervisor-apps-2, x-concurrency-5, npu-9, x-coherence-10 | 1 | planned |
-| `contention-polling` | Retry transient lock and registry BUSY results within the deadline instead of faulting; bound the counter-clock lock by time; poll the PMIC, Type-C and USB host faster | clock-power-pins-2, usb-3, cpu-startup-11, clock-power-pins-7, x-concurrency-3, usb-9, clock-power-pins-6, usb-4, clock-power-pins-11, clock-power-pins-14 | 1 | planned |
-| `display-hdmi` | Fix the display-engine replay race with frame end, the HDMI PHY lock wait and the HDMI-audio Normal-NC shareability check; reduce display polling cost | display-1, display-2, x-coherence-1, audio-5, display-6, display-7, display-8, display-9, display-10 | 1 | planned |
-| `video` | Accept the board's 26 MHz crystal in the decoder clock check; retry BUSY in video-engine register access; reduce guard scanning and per-tick pacing | video-1, video-2, video-3, video-4, video-11 | 1 | planned |
-| `bluetooth` | Release unhandled HCI events, schedule SCO audio on a fixed period, accept a legal codec change during audio, discard peer data during local disconnect, share one range helper | bluetooth-1, bluetooth-3, bluetooth-8, bluetooth-7, bluetooth-10 | 1 | planned |
-| `host-tools` | Size the FEL timeout by bytes moved, append to session journals, include libraries in evidence, bind board-test queues to a USB port, check launcher text replacement | host-tools-1, host-tools-2, host-tools-3, host-tools-4, host-tools-5, host-tools-8, host-tools-9, host-tools-10, host-tools-11, supervisor-apps-7, x-bounds-1, x-duplication-3 | 1 | planned |
-| `radio` | Fix the radio startup deadlock and the address loss on group-key rekey, tolerate entropy contention, check the bootstrap time budget, consolidate SHA-256 and message encoders | radio-net-4, radio-net-5, radio-net-1, radio-net-11, radio-net-7, radio-net-13, supervisor-apps-13, supervisor-apps-14 | 2 | planned |
-| `storage` | Accept OUT_OF_RANGE at the card's last sector, give each SD write its own busy budget, move whole FIFO blocks per step | storage-3, storage-4, storage-1, storage-2, storage-8, storage-9 | 2 | planned |
-| `buses` | Wait for PCIe endpoint readiness and handle CRS; raise the UART receive trigger level and cut per-byte cost; batch PCIe PHY writes; UART and SPI cleanup | buses-pcie-1, buses-pcie-2, buses-pcie-3, buses-pcie-6, buses-pcie-7, buses-pcie-8, buses-pcie-11, buses-pcie-12, buses-pcie-13, x-concurrency-4 | 2 | planned |
-| `build-repro` | Reproducible builds: path prefix maps, complete build identities, inputs checked against the source lock, header checks for images that reuse old objects | x-duplication-1, build-system-4, bringup-gaps-5, build-system-3, build-system-2, build-system-6, build-system-9, build-system-14, usb-10, build-system-15, bringup-gaps-13 | 2 | planned |
-| `mimus-warm` | Keep the loaded model between recognition requests, time from PCM input to text, verify integrity once per asset generation, yield on a time quantum, give the recognition library its own compiler flags | mimus-perf-5, bringup-gaps-7, mimus-perf-9, smp-6, runtime-memory-3, build-system-1, mimus-perf-10, bluetooth-2, audio-8, mimus-perf-12 | 2 | planned |
-| `usb0-service` | One shared USB0 vendor service that runs until idle instead of one packet per tick; diagnostics protocol resynchronization; cheaper NPU health polling | usb-1, x-bounds-2, supervisor-apps-4, x-concurrency-1, video-5, usb-2, x-bounds-3, supervisor-apps-5, x-duplication-7, usb-6, npu-2 | 3 | planned |
-| `dma-audio` | Fix I2S stream end-of-input underrun, START admission and cancel of an unstarted stream; separate the DMA service from the legacy I2S capture path; DMA cleanup | audio-3, audio-4, audio-12, audio-7, audio-10, audio-13, dma-iommu-3, audio-11, dma-iommu-1, dma-iommu-5, dma-iommu-6, dma-iommu-7, x-coherence-9 | 3 | planned |
-| `security` | Treat benign thermal, ADC, LRADC, RTC and watchdog conditions as benign; scrub and consolidate the crypto engine; share the PERI0 clock check; faster SHA-256 | security-misc-2, security-misc-3, security-misc-4, security-misc-5, security-misc-8, security-misc-9, security-misc-6, x-coherence-3, security-misc-11, supervisor-apps-11 | 3 | planned |
-| `camera` | Native camera: selectable color bars, a module profile with power-down only, buffer canaries, BUSY-tolerant authority checks; cheaper ISP0 guard scans | camera-2, camera-3, camera-4, camera-5, camera-11 | 3 | planned |
-| `checks-harness` | Make sanitizer builds stop on undefined behavior, add a shared harness module and a check index, complete the Python requirements, remove dead headers | checks-harness-1, checks-harness-3, checks-harness-10, checks-harness-11, checks-harness-12, checks-harness-14, checks-harness-15 | 3 | planned |
+- **Round one** ran eighteen packages: seventeen implemented by parallel
+  workers, and the multicore package implemented by the primary agent. Two of
+  the worker packages were added to the original plan and took findings from
+  its multicore list or its deferred list: `runtime-string` took the runtime memory routines, and
+  `standalone-boot` took persistent boot.
+- **Round two** ran thirteen follow-up packages. Most repaired problems that
+  round-one packages reported in files they did not own; four took deferred
+  findings. The primary agent added the resident contract and the fixed
+  interrupt table in the same round.
+- **Round three** ran thirteen packages. One built the integrated OS image; the
+  others took deferred findings.
 
-Three constraints apply to every package:
+Each package owned a disjoint set of files, so packages in one round could be
+implemented in parallel and merged without conflicts. Every package passed
+review before it merged. In the tables below, **done** means the review
+accepted the package as complete; the outcome column notes any assigned
+finding that was narrowed, met through an alternative fix that the verifiers
+accepted, or left. **Partial** means the package reported part of its assigned
+work as not done; the outcome column gives the reason. The findings column lists audit
+identifiers; a package that only repaired checks, builds or review notes lists
+none.
 
-- Verification uses host builds and host checks only. No package runs a
-  board launcher, a FEL tool or any program that opens a USB device.
-- Packages do not edit [docs/hardware.md](../hardware.md) or
-  [docs/handoff.md](../handoff.md); the integrator updates them after merging.
+Three constraints applied to every package:
+
+- Verification used host builds, emulators and host models only. No package
+  ran a board launcher, a FEL tool or any program that opens a USB device.
+- Packages did not edit [docs/hardware.md](../hardware.md) or
+  [docs/handoff.md](../handoff.md); the integrator updated them after merging.
 - Changing an image changes its identity. Images that were frozen with
   recorded evidence keep that evidence; a rebuilt image needs new evidence.
 
+No physical board test ran in any round, so no change below is physically
+tested or qualified.
+
+### Round one
+
+| Change | Package | Findings addressed | Outcome |
+| --- | --- | --- | --- |
+| EL3 recovery cleanup that re-derives the GIC bank count and clears shared peripheral interrupts enabled during a run; ordered counter reads; a CPU-identity check that tests both affinity levels; an eight-core emulator scheduling soak; the mimus asynchronous two-core pipeline; corrected SMP status records | `multicore` | cpu-startup-1, cpu-startup-5, cpu-startup-7, x-coherence-10, smp-9, mimus-perf-7; smp-2 and bringup-gaps-10 in emulation only; smp-1, smp-8 and build-system-11 in part | Partial. The uncached eight-core diagnostic is marked superseded instead of corrected (smp-1). A compile-time check refuses a configuration with other than eight cores, but include order still selects the configuration (smp-8, build-system-11). Physical eight-core scheduling, recognition on the A76 cores and the lock and polling measurements need the board. Not done in any round: cpu-startup-4, cpu-startup-6, cpu-startup-8, cpu-startup-10, smp-3, smp-4, smp-5, smp-7, smp-10, x-concurrency-2, x-concurrency-7, x-concurrency-9, x-duplication-4, buses-pcie-10, mimus-perf-6 and bringup-gaps-8. Later rounds addressed bringup-gaps-2, supervisor-apps-9, supervisor-apps-2, x-concurrency-5 and npu-9 from this package's list. |
+| Word-sized `memcpy`, `memmove` and `memset` that are safe at EL3 with the MMU off, and an ELF check that refuses unsafe library routines in EL3 code | `runtime-string` | runtime-memory-1, runtime-memory-2, build-system-12 | Done. |
+| Bounded retry of transient lock and registry BUSY results; a time-bounded fair counter-clock lock; PMIC polls that advance several bus phases; faster Type-C and USB host polling | `contention-polling` | clock-power-pins-2, usb-3, cpu-startup-11, clock-power-pins-7, x-concurrency-3, usb-9, clock-power-pins-6, usb-4, clock-power-pins-14 | Done. clock-power-pins-11, which proposes caching the TWI adapter's registry slot, was assigned but is not among the addressed findings. |
+| Display-engine replay race with frame end, HDMI PHY lock wait, HDMI-audio Normal-NC shareability check, cheaper display polling | `display-hdmi` | display-1, display-2, x-coherence-1, audio-5, display-6, display-7, display-8, display-9, display-10 | Done. For display-9 the DSI task yields while the PLL holds the register mutex, an alternative the verifiers accepted, instead of batching inside the PLL driver. |
+| Decoder admission of the board's 26 MHz crystal, BUSY retry in video-engine register access, cheaper guard scans and per-tick pacing | `video` | video-1, video-2, video-3, video-4, video-11 | Done. |
+| Release of unhandled HCI events, fixed-period SCO audio, acceptance of a legal codec change during audio, discard of peer data during a local disconnect, one shared range helper | `bluetooth` | bluetooth-1, bluetooth-3, bluetooth-8, bluetooth-7, bluetooth-10 | Done. |
+| FEL timeouts sized by bytes moved, append-only session journals, libraries in evidence, board-test queues bound to a USB port, checked launcher text replacement | `host-tools` | host-tools-1, host-tools-2, host-tools-3, host-tools-4, host-tools-5, host-tools-8, host-tools-9, host-tools-10, host-tools-11, supervisor-apps-7, x-bounds-1, x-duplication-3 | Done. Runners that check the binding refuse a queue with no recorded port, so both live queues must be bound before the next supervised launch. |
+| Stage-2 loader, two-slot card layout with fallback, and the install, update and rollback procedure | `standalone-boot` | cpu-startup-2, storage-6, bringup-gaps-3, bringup-gaps-4 | Partial. Copy and hash verification at EL3 with caches off are implemented and modeled. The loader built no launch contract; round three added it. Native cold SD admission refuses, because no fixed-board subset of the clock, pin, rail and PMIC providers exists at EL3. Remote-writer exclusion is unresolved. |
+| Radio startup deadlock, address loss on group-key rekey, entropy contention, a bootstrap time-budget check, shared SHA-256 and message encoders | `radio` | radio-net-4, radio-net-5, radio-net-1, radio-net-11, radio-net-7, radio-net-13, supervisor-apps-13, supervisor-apps-14 | Done. The budget check shows that bootstrap needs at least 46.7 s at one data line and 400 kHz, more than the 40 s supervised bound, so the radio board test waits for a qualified faster SDIO mode. |
+| Acceptance of OUT_OF_RANGE at the card's last sector, a separate busy budget for each SD write, whole-FIFO transfers per step | `storage` | storage-3, storage-4, storage-1, storage-2, storage-8, storage-9 | Done. |
+| PCIe endpoint readiness and CRS handling, a higher UART receive trigger level and lower per-byte cost, batched PCIe PHY writes, UART and SPI cleanup | `buses` | buses-pcie-1, buses-pcie-2, buses-pcie-3, buses-pcie-6, buses-pcie-7, buses-pcie-8, buses-pcie-11, buses-pcie-12, buses-pcie-13, x-concurrency-4 | Partial at merge. The UART model check needed stubs in a file the package did not own, and the PCIe clock-reference record needed an entry. Round two applied both. |
+| Reproducible builds: path prefix maps, complete build identities, inputs checked against the source lock, header checks for images that reuse old objects | `build-repro` | x-duplication-1, build-system-4, bringup-gaps-5, build-system-3, build-system-2, build-system-6, build-system-9, build-system-14, usb-10, build-system-15, bringup-gaps-13 | Done. |
+| Loaded model kept between recognition requests, PCM-to-text timing, integrity verification once per asset generation, time-quantum yields, separate compiler flags for the recognition library | `mimus-warm` | mimus-perf-5, bringup-gaps-7, mimus-perf-9, smp-6, runtime-memory-3, build-system-1, mimus-perf-10, bluetooth-2, audio-8, mimus-perf-12 | Done. The dot-product instruction flag waits for a board record of `ID_AA64ISAR0_EL1`. Round two added the audio-8 ordering assertion in a file this package did not own. |
+| One shared USB0 vendor service that runs until idle, diagnostics protocol resynchronization, cheaper NPU health polling | `usb0-service` | usb-1, x-bounds-2, supervisor-apps-4, x-concurrency-1, video-5, usb-2, x-bounds-3, supervisor-apps-5, x-duplication-7, usb-6, npu-2 | Done. Thirteen application USB sources keep their own USB0 copies; the camera image moved to the shared service in round three. |
+| I2S end-of-input underrun, START admission and cancel of an unstarted stream; the DMA service separated from the legacy I2S capture path; DMA cleanup | `dma-audio` | audio-3, audio-4, audio-12, audio-7, audio-10, audio-13, dma-iommu-3, audio-11, dma-iommu-1, dma-iommu-5, dma-iommu-6, dma-iommu-7, x-coherence-9 | Done. |
+| Benign thermal, ADC, LRADC, RTC and watchdog conditions treated as benign; crypto-engine scrub and consolidation; one PERI0 clock check; faster portable SHA-256 | `security` | security-misc-2, security-misc-3, security-misc-4, security-misc-5, security-misc-8, security-misc-9, x-coherence-3, security-misc-6, security-misc-11, supervisor-apps-11 | Partial. No shared retained-controller core for thermal, ADC and LRADC was built (security-misc-6): the thermal rule counts any nonzero entry result as held, which would turn an ADC or LRADC denial without ownership into an assertion. No ARMv8 SHA2 instruction path was added (security-misc-11): the digest runs at EL0, where the feature registers cannot be read, and no image records them. |
+| Selectable color bars, a camera module profile with power-down only, buffer canaries, BUSY-tolerant authority checks, cheaper ISP0 guard scans | `camera` | camera-2, camera-3, camera-4, camera-5, camera-11 | Done. For camera-4 only the canary fill was added; the retained readout path does not permit guard reads. |
+| Sanitizer builds that stop on undefined behavior, a shared harness module, a check index, complete Python requirements, removal of dead headers | `checks-harness` | checks-harness-1, checks-harness-3, checks-harness-10, checks-harness-11, checks-harness-12, checks-harness-14, checks-harness-15 | Done. Two dead headers owned by other components were kept, and 68 checks owned by other components still compile without `-fno-sanitize-recover=all`. |
+
+### Round two
+
+| Change | Package | Findings addressed | Outcome |
+| --- | --- | --- | --- |
+| A resident SMP contract for cold-booted images, and a fixed interrupt table for images with several device owners | Primary agent | bringup-gaps-2, supervisor-apps-9, supervisor-apps-2, x-concurrency-5, in part | Done for the contract and table, which are host-checked. Round three put both into use in the integrated OS image. |
+| The six GPU host model targets link again | `gpu-model-links` | gpu-8 | Done. |
+| Stale storage host checks and the launch-chain size repaired | `storage-checks` | None | Done. |
+| UART model stubs, a 1.5 s PCIe link-timeout floor on the device, and VE and PCIe clock-reference entries | `uart-pcie-followups` | None | Done. The host preparation scripts still accept 250 ms, so the device refuses a session that the host accepts. |
+| The I2S transcription image builds; mimus compiler options are part of the native, Bluetooth and I2S build identities | `i2s-mimus-build` | audio-8 | Done. |
+| Standalone application projects configure and build; the central build offers the stage-2 loader | `app-configure` | None | Partial. The camera record version was not raised, because four files outside the package hard-code it. The central stage-2 build was blocked until `boot-tools` supplied the loader's FIFO callbacks. |
+| Review notes in H.264, USB diagnostics, Bluetooth SCO and camera | `device-minors` | None | Done. |
+| Stage-2 loader and boot-slot tool hardening; card-update planning as one storage session per changed range | `boot-tools` | storage-7 | Done. |
+| Review notes in RTC, crypto, radio entropy and the warm mimus path | `security-radio-mimus-minors` | None | Done. |
+| Review notes in DSI scanout, HDMI audio and the display replay checks | `display-minors` | None | Done. |
+| The PMIC object released across its I2C mutex and register-lock waits, removing the remaining lock-order hazard with the USB2 platform poll | `pmic-followups` | None | Done. |
+| A fixed board thermal trip, throttle and shutdown policy | `thermal-policy` | security-misc-1 | Done. The thermal application ends its observation at the critical level; no consumer reduces load at the throttle level. |
+| The DMA service worker woken by the DMA0 interrupt instead of a 1 kHz poll | `dma0-interrupt` | dma-iommu-2 | Done in the service. The platform interrupt binding is not wired, so every image still polls. |
+| Host fixtures repaired after the queue port check, and earlier check failures fixed | `host-fixtures` | None | Partial. Three defects are in files the package did not own: the crypto packaging fixture passes a nonexistent queue database, `docs/hardware-dependencies.md` names the deinterlacer with the wrong identifier, and an unused function in the video encoder platform fails `-Werror`. |
+
+### Round three
+
+| Change | Package | Findings addressed | Outcome |
+| --- | --- | --- | --- |
+| An [integrated OS image](../os-image.md) with one interrupt table, a fixed start list and supervised and resident lifetimes; the stage-2 loader builds its resident contract | `integrated-os` | bringup-gaps-1, supervisor-apps-1, bringup-gaps-2, supervisor-apps-9, cpu-startup-2, supervisor-apps-2, x-concurrency-5, bringup-gaps-12 | Done in host models. On a board the loader's entry admission still refuses. |
+| GPU worker steps in bursts, idle sleep while ready, one service clock, firmware statistics events, one mapping-check helper | `gpu-performance` | gpu-1, gpu-3, gpu-5, gpu-6, gpu-7, gpu-9, gpu-10 | Partial. The accelerator client still polls STATUS. DEBUG and CLOCK firmware events still fault. Per-access mapping checks remain, limited to the access direction. The 52 span helpers were not merged, because their preconditions differ. |
+| NPU job hashing and cache maintenance limited to job-relevant bytes, a held WAIT reply, one buffer layout table per profile, shared command templates, a worker-affinity check for interrupt binding | `npu-performance` | npu-1, npu-3, npu-4, npu-5, npu-6, npu-9, npu-10, npu-11 | Partial. Descriptors and coefficients are still hashed per job, because no API maps them read-only. The fixed two-job client keeps its recorded STATUS sequence. npu-8 remains deferred. |
+| One video-engine resource core for decoder and encoder, a clear HEVC configuration refusal, three full-HD High-profile references | `video-consolidation` | video-6, video-10; video-8 in part | Partial. video-7 is unchanged. The HEVC parser and controller were not integrated. The frozen High-profile evidence describes the earlier layout. |
+| One DE1 framebuffer source shared by HDMI, DisplayPort and GPU display; DE_SYS domain 1 through the domain-ON provider; the powered-domain entry state of DSI and deinterlace documented | `display-consolidation` | display-5, display-4, display-3 | Done as reviewed. The VO1 power copies in HDMI and DisplayPort remain, because the power provider takes no domain base. DSI and deinterlace still power no domain; their entry requirement is documented instead. |
+| Recovery from a clean unsolicited link loss, repeated session polls, an optional four-bit 25 MHz SDIO profile, reorder-flagged and A-MSDU receive records, fewer transmit copies | `radio-recovery` | radio-net-2, radio-net-6, radio-net-9, radio-net-10, radio-net-14 | Done. No image requests the four-bit profile until a physical identity read qualifies it. A second loss during recovery retains the radio. |
+| Reuse of ACL slots from attempts that closed without a handle; retry of a headset connection that failed before it connected | `bluetooth-reconnect` | bluetooth-5, in part | Partial. Reconnect after a confirmed disconnect needs a retired-handle design across ACL, L2CAP, SCO, security, RFCOMM and HFP. bluetooth-6 and buses-pcie-4 are unchanged; see the deferred list. |
+| xHCI Disable Slot on detach with page clearing for reattach, and a 1 s bound on a held transaction error | `usb-host-detach` | usb-8 | Done in the xHCI core. The TinyUSB adapter does not call the detach path yet. |
+| Rearm of retained captures, discarded warm-up images, OV5640 block writes, camera USB0 through the shared board service | `camera-capture` | camera-1, camera-9; camera-7 in part | Partial. camera-10 needs TWI9 support in the I2C and clock drivers. Moving the camera onto the board framework would change the session and wire format that the supervised camera host tool reads. |
+| A separate camera TWI11 mutex; the PB4–PB8 pin entry points running on the bank-qualified implementation | `power-consolidation` | clock-power-pins-1, clock-power-pins-13 | Partial. clock-power-pins-9 and clock-power-pins-10 remain deferred. |
+| The maintenance session selects the SD bus profile; backup requests read eight sectors | `storage-update-speed` | storage-5 | Done. Writes stay at one sector per request, because two sectors could exceed the one-second operation deadline on a conforming card. |
+| Shared outbound iATU programming checked against a recorded request; a configurable PCIe link speed target | `pcie-general` | buses-pcie-5 | Done. BAR assignment and MSI setup stay in the endpoint test driver until a second endpoint driver exists. Both applications still select 2.5 GT/s. |
+| Central build patches applied without fuzz; supervised profiles require an explicit supervised board mode; a refusal helper and a cache override in the check harness | `build-safety` | build-system-5, build-system-10, checks-harness-4, checks-harness-13 | Partial. About 30 standalone projects keep their own fuzzy patch function, four patches are pinned by hash because they still need fuzz, and existing checks were not migrated to the new helpers. build-system-7 remains deferred. |
+
 ## Deferred findings
 
-The following confirmed findings are not assigned to a package in this round.
-A finding listed with merged identifiers stands for all of them.
+The original plan deferred the findings below. A finding listed with merged
+identifiers stands for all of them.
 
-| Finding | Reason for deferral |
+### Deferred findings implemented later
+
+| Finding | Round and package | What exists now |
+| --- | --- | --- |
+| cpu-startup-2 (with storage-6, bringup-gaps-3) | One, `standalone-boot`; three, `integrated-os` | The [stage-2 loader](../boot-slots.md) verifies and loads a slot and builds the resident contract in host models. On a board its entry and SD admissions refuse. |
+| bringup-gaps-4 | One, `standalone-boot` | Boot slots with fallback and the install, update and rollback procedure, in host tools and models. No card has been written. |
+| storage-7 | Two, `boot-tools` | Card updates are planned as one storage session per changed range. |
+| dma-iommu-2 | Two, `dma0-interrupt` | The DMA service can sleep on the DMA0 interrupt. No platform binds it yet. |
+| security-misc-1 | Two, `thermal-policy` | A fixed thermal policy ends the thermal application and the OS thermal service at the critical level. No consumer reduces load at the throttle level. |
+| gpu-8 | Two, `gpu-model-links` | [docs/gpu.md](../gpu.md) describes completed-job compute admission. |
+| bringup-gaps-1 (with supervisor-apps-1) | Three, `integrated-os` | The integrated OS image. I2S capture, radio, crypto, display, camera, GPU and NPU are not part of it. |
+| bringup-gaps-12 | Three, `integrated-os` | The OS link check reads the model, recording and arena extents from shared headers and refuses overlaps and extents outside the loader window. |
+| usb-8 | Three, `usb-host-detach` | Detach and reattach in the xHCI core. The TinyUSB adapter does not use them yet. |
+| storage-5 | Three, `storage-update-speed` | The selectable bus profile and eight-sector backup reads. Writes stay at one sector per request. |
+| radio-net-2 | Three, `radio-recovery` | The radio owner repeats session polls while the transport advances; a host check cuts owner ticks for the setup sequence from 172 to 42. |
+| radio-net-6 | Three, `radio-recovery` | An optional four-bit 25 MHz SDIO profile that no image requests yet. |
+| radio-net-9 | Three, `radio-recovery` | Recovery from a clean unsolicited link loss. Loss with outstanding work still retains the radio. |
+| radio-net-10 | Three, `radio-recovery` | Reorder-flagged and A-MSDU receive records. Neither occurs until an HT profile exists. |
+| radio-net-14 | Three, `radio-recovery` | Transmission from the data worker's buffer. The network adapter's queue copies remain. |
+| bluetooth-5 | Three, `bluetooth-reconnect`, in part | Slot reuse for attempts that never held a handle and retry before the first connection. |
+| display-4 | Three, `display-consolidation`, in part | DE_SYS domain 1 uses the shared domain-ON provider. The VO1 copies remain. |
+| display-5 | Three, `display-consolidation` | One DE1 framebuffer source for HDMI, DisplayPort and GPU display. |
+| camera-1, camera-9 | Three, `camera-capture` | Rearmed repeated capture with discarded warm-up images, and block writes during sensor configuration. |
+| camera-7 | Three, `camera-capture`, in part | The camera image uses the shared USB0 service. It does not use the board framework. |
+| gpu-1, gpu-3, gpu-5, gpu-6, gpu-7, gpu-9, gpu-10 | Three, `gpu-performance`, in part | See the round-three table. |
+| npu-1, npu-3 (with x-coherence-5), npu-4, npu-5, npu-6, npu-10, npu-11 | Three, `npu-performance`, in part | See the round-three table. |
+| video-6, video-10 | Three, `video-consolidation` | One video-engine resource core, and three full-HD High-profile references. |
+| clock-power-pins-1, clock-power-pins-13 | Three, `power-consolidation` | A separate TWI11 mutex, and PB pin entry points on the bank-qualified implementation. The I2S binding still uses the PB types. |
+| buses-pcie-5 | Three, `pcie-general`, in part | Shared iATU programming and a configurable link speed target. BAR and MSI setup stay in the endpoint test driver. |
+| build-system-5 (with x-duplication-2, build-system-13, supervisor-apps-8), build-system-10, checks-harness-4, checks-harness-13 | Three, `build-safety`, in part | Central patches apply without fuzz, supervised profiles need an explicit mode, and the harness offers the new helpers. Standalone projects and existing checks were not migrated. |
+
+### Findings that remain deferred
+
+| Finding | Reason it remains deferred |
 | --- | --- |
-| cpu-startup-2 (with storage-6, bringup-gaps-3) | Persistent boot is assigned to the primary agent in docs/handoff.md. Exclusion of the E902 coprocessor as a remote writer is unresolved, and card writes need an established recovery procedure. |
-| cpu-startup-3 (with clock-power-pins-5, mimus-perf-1, bringup-gaps-6) | CPU frequency and voltage scaling cannot be finished offline. Mapping the CPU rails (DCDC5 and DCDC3), reading the voltage-frequency bin from eFuse and writing voltages could hang the only board, which cannot be reconnected. Needs primary-agent planning and approval for physical tests. |
-| cpu-startup-9 (with clock-power-pins-12, x-concurrency-8, x-duplication-6, buses-pcie-9, security-misc-10) | Consolidating the task-context check touches about 15 native adapters owned by other packages and FreeRTOS port internals changed by `multicore`. Do after those merge. |
-| runtime-memory-5 | Needs pool initialization moved into the platform boot path owned by `multicore`. Low severity. |
-| runtime-memory-6 (with x-coherence-4) | A shared identity-range helper would touch GPU, USB, NPU, HDMI-audio and DMA mapping checkers owned by several packages. |
-| runtime-memory-7 | Adopting a helper for the CPU-to-device ownership change spans about 35 sites owned by many packages. Low value. |
-| runtime-memory-8 | Merging `memmove.c` into `memory.c` edits many CMake source lists owned by several packages; `multicore` already rewrites `memory.c`. |
-| dma-iommu-2 | DMA0 interrupt delivery needs GIC routing from the `multicore` interrupt table and physical interrupt qualification. Low severity. |
-| dma-iommu-4 | Generalizing the DMA pool session for UART and HDMI is a large design change that overlaps recently integrated DMA work and an unmerged DMA pool-session branch. |
+| cpu-startup-3 (with clock-power-pins-5, mimus-perf-1, bringup-gaps-6) | CPU frequency and voltage scaling cannot be finished offline. Mapping the CPU rails (DCDC5 and DCDC3), reading the voltage-frequency bin from eFuse and writing voltages could hang the only board, which cannot be reconnected. The thermal policy that any increase must depend on now exists, but it reads unqualified temperatures. Needs primary-agent planning and approval for physical tests. |
+| cpu-startup-9 (with clock-power-pins-12, x-concurrency-8, x-duplication-6, buses-pcie-9, security-misc-10) | Consolidating the task-context check touches about 15 native adapters and FreeRTOS port internals. Not yet scheduled. |
+| runtime-memory-5 | Needs pool initialization moved into the platform boot path, which the primary agent owns. Low severity. |
+| runtime-memory-6 (with x-coherence-4) | A shared identity-range helper would touch the GPU, USB, NPU, HDMI-audio and DMA mapping checkers. Round three added one helper inside the GPU only (gpu-7). |
+| runtime-memory-7 | Adopting a helper for the CPU-to-device ownership change spans about 35 sites in many components. Low value. |
+| runtime-memory-8 | Merging `memmove.c` into `memory.c` edits the source lists of many image recipes. Low severity. |
+| dma-iommu-4 | Generalizing the DMA pool session for UART and HDMI is a large design change that overlaps an unmerged DMA pool-session branch. |
 | dma-iommu-8 | Saves microseconds per tick; wait until hardware function is established. |
-| dma-iommu-9 | Low-severity cleanup; display and camera code in other packages read the mask fields directly. |
-| clock-power-pins-1 | Low severity. A separate camera-bus lock changes the layout of `struct a733_platform_locks`, which breaks reuse of old objects (`x-duplication-1`). Do after `build-repro`. |
-| clock-power-pins-9 | Merging three S_TWI0 protocol engines needs engine mode changes and migration of single-core images, and conflicts with the TWI changes in `contention-polling`. |
-| clock-power-pins-10 | Unifying rail authority touches media clock, G2D, deinterlace, NPU and GPU managers and overlaps the G2D and NPU work. No current defect. |
-| clock-power-pins-13 | Moving I2S to the bank-qualified pin API changes I2S platform initialization while `dma-audio` edits the same file. |
-| usb-8 | USB host detach, reattach and storage recovery is a proposed workstream for the USB host owner in docs/handoff.md. Large. |
-| storage-5 | A faster update profile with 4 KiB chunks changes the session format, commitment-chain fixtures and eMMC limits. Do after `storage`. |
-| storage-7 | Update-plan tooling depends on the card layout and boot-slot decisions in the primary agent's persistent-boot work. |
-| radio-net-2 | Batching the radio worker gains little at the 400 kHz bus rate and conflicts with `apps/board/main.c` in `contention-polling`. Do with the faster SDIO mode. |
+| dma-iommu-9 | Low-severity cleanup; display and camera code read the mask fields directly. |
+| clock-power-pins-9 | Removing the separate I2C engine edits NPU, GPU, check and single-core build files. Moving the PMIC onto the shared TWI engine needs board evidence of the S_TWI0 FIFO and DMA state after boot, and would undo the tuned PMIC poll latency. |
+| clock-power-pins-10 | The DCDC2 and DCDC4 users in G2D, deinterlace, NPU and GPU must move together; moving only the media clock would add a second admission step without removing the bridge code. No current defect. |
 | radio-net-3 | Splitting receive aggregates needs hardware evidence that the AIC8800 accepts split CMD53 reads or a larger request size. |
-| radio-net-6 | Four-bit, high-speed and IDMA SDIO need physical qualification and should reuse the SD timing code after `storage` lands. |
 | radio-net-8 | Coalescing patch-table writes departs from the vendor per-word sequence and needs a hardware readback check. |
-| radio-net-9 | Recovery from unsolicited link loss is a proposed workstream for the radio owner and needs evidence about firmware key state. |
-| radio-net-10 | HT and A-MSDU receive matter only once HT and a faster bus are enabled. Low severity. |
-| radio-net-12 | Refactoring the radio transport is large and risky; do after the radio defect fixes and the SDIO speed work. |
-| radio-net-14 | Fewer Ethernet frame copies matter only once SDIO is faster. Low severity. |
-| bluetooth-5 | Reusing link slots after disconnect needs a design for quarantining retired handles across the ACL, SCO and security code, and conflicts with the documented single-session scope. |
-| bluetooth-6 | Packet-loss tolerance should follow a physical measurement of the eSCO loss rate. |
+| radio-net-12 | Refactoring the radio transport is large and risky; the faster SDIO profile it would serve is not physically qualified. |
+| bluetooth-6 | Packet-loss tolerance should follow a physical measurement of the eSCO loss rate. An opt-in mode would also need the recognizer and the supervised Bluetooth host tool to accept captures with loss. |
 | audio-1 | A guard band in the cyclic receive copy changes a physical-admission condition that is already blocked and needs board timing evidence. |
 | audio-2 | Low severity. Measure the real FIFO margin on hardware before redesigning capture. |
-| display-3 | Powering DE_SYS and VO0 for DSI and deinterlace overlaps the proposed G2D workstream, which coordinates the shared DE_SYS and IOMMU contracts. |
-| display-4 | Consolidating PCK power domains overlaps the same G2D and DE_SYS work. Low value. |
-| display-5 | Consolidating the HDMI, DisplayPort and GPU-display framebuffer pipelines is large and overlaps recent GPU and G2D work. |
-| camera-1 | Re-arming and continuous capture is a large lifecycle design that must keep the producer-quiet and drain proofs; no camera module is attached to validate it. |
+| display-3 | DSI needs PCK domains 0, 2, 3, 8 and 9 as well as domain 1, and no qualified VO0 or IOMMU domain sequence exists. Round three documented the required powered entry state instead of powering the domains. |
 | camera-6 | Changing the stop order depends on unverified OV5640 register semantics and departs from the Linux reference. |
-| camera-7 | Moving the camera application to the board framework conflicts with `usb0-service`, which migrates the camera USB file. |
 | camera-8 | Merging the register-program interpreters changes polling granularity and needs requalification. |
-| camera-9 | Boot-time sensor configuration cost; no sensor is attached. |
-| camera-10 | A CAM2 profile needs MCLK2 register and pin values from the pinned device tree and a review of receiver port 1. |
-| gpu-1 | Batching the GPU worker touches service code just reworked by the GPU lifecycle integration; docs/handoff.md asks to confirm that lifecycle first. The GPU is not on the recognition path. |
+| camera-10 | A CAM2 profile needs a native TWI9 controller and a TWI9 clock-registry entry, and the receiver port-1 deskew value has no qualified source. [docs/camera.md](../camera.md) lists the missing pieces. |
 | gpu-2 | A GPU compute interface for mimus needs a new DRAM reservation and a feasibility measurement. |
-| gpu-3 | The GPU owner should schedule this after the lifecycle integration; it needs physical evidence that the firmware emits these events. |
-| gpu-5 | GPU reuse after CLOSE overlaps the just-integrated disposal lifecycle and mixed-device serialization that is not yet designed. |
-| gpu-6 | Clock-check consolidation must keep the post-operation resampling; low value in actively changing code. |
-| gpu-7 | Grouped with runtime-memory-6. |
-| gpu-8 | Fold the documentation fix into the GPU owner's next update of docs/gpu.md. |
-| gpu-9 | The MMU cache flush should gain a consumer when mappings change at runtime. |
-| gpu-10 | Per-word check cost matters only after gpu-1. |
-| npu-1 | Per-submit hashing lives in the core of the proposed NPU runtime lifecycle workstream. |
-| npu-3 (with x-coherence-5) | Avoiding per-submit republication needs an explicit integrity-policy decision and overlaps the NPU lifecycle workstream. |
-| npu-4 | A completion notification changes the NPU service protocol; overlaps the NPU lifecycle workstream. |
-| npu-5 | Layouts derived from the assembly plan have no consumer that uses several model families, and would invalidate recorded layout evidence. |
-| npu-6 | Merging the two network-binary assemblers should wait for a concrete consumer. |
 | npu-7 | A mimus network binary that keeps mimus quantization needs compiler and quantization research. |
-| npu-8 | Larger NPU pages and reservations depend on mimus-scale NPU models that do not exist yet. |
-| npu-10 | Changing the bootstrap encoder alters model and QEMU expectations across NPU checks. |
-| npu-11 | Fold documentation fixes into the NPU owner's workstream. |
-| video-6 | Consolidating the decoder and encoder platforms is large; `video` fixes both copies directly. |
-| video-7 | Consolidating per-application video scaffolding is large and overlaps launcher edits in `host-tools`. |
-| video-8 | HEVC integration is held on a separate unreviewed branch. |
+| npu-8 | Larger NPU pages and reservations depend on mimus-scale NPU models that do not exist yet. A new layout would also need a DDR reservation outside image RAM and would invalidate recorded page-table evidence. |
+| video-7 | The verifiers withdrew the launcher-drift defect. What remains is cleanup across five applications that would change launchers, build identities and native checks, with no hardware to requalify them. |
+| video-8 | The HEVC parser, controller and bridge remain on a separate unreviewed branch. Configuration now stops and lists the missing files. |
 | video-9 | A larger JPEG profile should follow the first physical decode of the existing fixture. |
-| video-10 | More H.264 High references need a memory-layout redesign and overlap a separate unreviewed branch. |
-| security-misc-1 | A thermal throttling policy depends on CPU frequency scaling (deferred) and qualified thermal-sensor acquisition. |
-| security-misc-7 | WDT0 consolidation touches launchers owned by `multicore`. Low severity. |
-| buses-pcie-4 | Streaming UART receive with DMA overlaps a separate unmerged UART DMA proposal and needs a cyclic DMA design. |
-| buses-pcie-5 | PCIe Gen2, BAR and MSI support has no concrete endpoint consumer. |
-| supervisor-apps-3 (with bringup-gaps-11) | A shared extended contract version depends on the resident-contract design and boot-patch rewrite in `multicore`. |
-| supervisor-apps-6 | Snapshot consolidation edits boot patches owned by `multicore`. |
-| supervisor-apps-10 | Unifying the board and NPU provider roots is a large change that overlaps the NPU and OS-integration workstreams. |
-| supervisor-apps-12 | Service-task affinity matters only with multicore recognition; `apps/board/main.c` belongs to `contention-polling` this round. |
+| security-misc-7 | WDT0 consolidation touches launchers owned by the primary agent. Low severity. |
+| buses-pcie-4 | No measured need: the Bluetooth stages already drain up to about 192 KB/s against the 150 KB/s line rate with RTS/CTS enforced. A cyclic UART receive mode would also have to be added to the DMA driver. |
+| supervisor-apps-3 (with bringup-gaps-11) | The resident contract now exists, but replacing the private extended records of at least seven applications with one shared contract version has not been scheduled. |
+| supervisor-apps-6 | Snapshot consolidation edits the EL3 boot hooks of about 24 applications. |
+| supervisor-apps-10 | Unifying the board and NPU provider roots is a large change that overlaps the NPU and OS-integration work. |
+| supervisor-apps-12 | Service-task affinity matters only once recognition runs on several cores. |
 | mimus-perf-2 | The NEON matrix kernel is in the external mimus repository, which this project does not modify. |
 | mimus-perf-3 | The SDOT kernel is in the external mimus repository. |
-| mimus-perf-4 | The CRC code is in the external mimus repository; `mimus-warm` removes the per-request CRC instead. |
+| mimus-perf-4 | The CRC code is in the external mimus repository; `mimus-warm` removed the per-request CRC instead. |
 | mimus-perf-8 | NEON quantization is in the external mimus repository. |
 | mimus-perf-11 | Larger USB messages change the host protocol and need an approved board measurement. Low severity. |
-| build-system-5 (with x-duplication-2, build-system-13, supervisor-apps-8) | Applying patches without fuzz requires regenerating patch sets that `multicore` rewrites; do immediately after it lands. |
-| build-system-7 | Generating identities at build time is a redesign across 46 recipes; follow `build-repro`. |
-| build-system-8 | Shared object libraries for board-derived images are large and conflict with identity changes. Low severity. |
-| build-system-10 | Removing the sticky cache setting edits about 20 recipe fragments and changes the documented opt-in procedure; follow `build-repro`. |
-| host-tools-6 | Consolidating supervised wrappers is large and must keep a central reviewed capture-limit table; follow `host-tools`. |
-| host-tools-7 | Consolidating FEL session loops follows host-tools-1. Low severity. |
-| checks-harness-2 | Promoting evidence baselines into fixtures touches many checks owned by other packages. |
-| checks-harness-4 | Tightening refusal matching touches many checks owned by other packages; follow the shared harness module. |
-| checks-harness-5 | The G2D check chain belongs to the G2D workstream. |
-| checks-harness-6 | Launcher-check consolidation should follow launcher parameterization in `host-tools`. |
+| build-system-7 | The build-identity writes live in the component recipe fragments. Round three measured a 2.0 s full reconfigure and left the change to the fragment owners. |
+| build-system-8 | Shared object libraries for board-derived images are large and change image identities. Low severity. |
+| host-tools-6 | Consolidating supervised wrappers is large and must keep a central reviewed capture-limit table. |
+| host-tools-7 | Consolidating FEL session loops. Low severity. |
+| checks-harness-2 | Promoting evidence baselines into fixtures touches many checks owned by other components. |
+| checks-harness-5 | The G2D check chain belongs to the G2D work. |
+| checks-harness-6 | Launcher-check consolidation. Not yet scheduled. |
 | checks-harness-7 | Moving the ELF layout helper changes evidence snapshot names. |
-| checks-harness-8 | Ranged emulator hooks touch many checks owned by other packages. |
+| checks-harness-8 | Ranged emulator hooks touch many checks owned by other components. |
 | checks-harness-9 | Redesigning the evidence store changes recorded hashes. Low severity. |
-| checks-harness-13 | Removing hard-coded paths follows adoption of the shared harness module. |
-| bringup-gaps-1 (with supervisor-apps-1) | An integrated multi-device image is the proposed OS and mimus integration workstream and needs the `multicore` interrupt table first. |
-| bringup-gaps-4 | Boot slots, update and rollback belong to the primary agent's persistent-boot work and need established recovery before card writes. |
 | bringup-gaps-9 | Streaming recognition requires moving to a mimus revision with the streaming interface and re-establishing output parity. |
-| bringup-gaps-12 | A central recognition memory map touches files in `host-tools`, `usb0-service` and `mimus-warm`. Low severity. |
 | x-coherence-2 | Generalizing the Normal-NC DMA policy should wait for a second Normal-NC DMA consumer. |
-| x-coherence-6 | MMIO accessor consolidation spans about 59 files across all packages. |
-| x-coherence-7 | Unifying cache-operation enums spans DMA and NPU headers in different packages. |
-| x-coherence-8 | GPU per-page cache maintenance is deferred with the GPU work. |
-| x-concurrency-6 | A shared GIC SPI binding touches about 11 applications and drivers and the `multicore` interrupt table. |
-| x-bounds-4 (with x-duplication-9) | A global range-helper header spans about 190 sites owned by many packages. |
-| x-duplication-5 | Consolidating board-application recipes is large and conflicts with identity changes in `build-repro`. |
-| x-duplication-8 | Building returning images in CMake is large; `build-repro` first adds the header check. |
+| x-coherence-6 | MMIO accessor consolidation spans about 59 files across all components. |
+| x-coherence-7 | Unifying cache-operation enums spans DMA and NPU headers. |
+| x-coherence-8 | GPU per-page cache maintenance was not part of the round-three GPU work. |
+| x-concurrency-6 | The interrupt table now exists and the OS image uses it. A shared task-side binding would still change about 11 applications and drivers whose recorded evidence binds their current patches. |
+| x-bounds-4 (with x-duplication-9) | A global range-helper header spans about 190 sites in many components. |
+| x-duplication-5 | Consolidating board-application recipes is large and changes image identities. |
+| x-duplication-8 | Building returning images in CMake is large; the header check for reused objects already guards their inputs. |
 
 ## Refuted findings
 
@@ -295,8 +348,9 @@ they were considered.
   [performance.md](performance.md) are unmeasured on the board, and fixes in
   [latent-issues.md](latent-issues.md) are verified against modeled hardware
   only.
-- Findings describe commit `70a4e63`. Work merged after that commit may change
-  or resolve them.
+- Findings describe commit `70a4e63`. The four reports were not revised after
+  the implementation rounds; the tables above record which findings those
+  rounds addressed. The rounds were also verified on the host only.
 - Some packages exclude files held on other unmerged branches (HEVC decode,
   H.264 interframe references, UART DMA, DMA pool sessions). Those branches
   were not audited.
