@@ -74,9 +74,12 @@ int nbg_assemble(const struct nbg_model *,
                  struct nbg_assembly_plan *);
 
 /* General form of the two functions above for graphs with 1..8 inputs and
- * 1..8 outputs of affine UINT8 or INT8 tensors. The profile, relocation,
- * ring and checksum policy is otherwise identical, and patch sources 1 and 2
- * select the input or output allocation by their tensor index. Supply
+ * 1..8 outputs of affine UINT8, INT8 or INT16 tensors. In the directory
+ * format it also accepts neural-transpose operations (kind 8), which the
+ * compiler emits around fully connected layers, and the 32-byte operation
+ * state for every operation; nn_operations then counts both kinds. The
+ * relocation, ring and checksum policy is otherwise identical, and patch
+ * sources 1 and 2 select the input or output allocation by tensor index. Supply
  * NBG_ALLOC_INPUT + inputs + outputs buffer slots in plan order with the same
  * placement rules. The same refusal guarantees and the same lack of
  * submission authorization apply. The six-slot functions remain limited to

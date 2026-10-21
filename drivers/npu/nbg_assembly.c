@@ -77,7 +77,16 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p)
     p->nn_operations = h->operation_count - 1;
     if (m->sections[NBG_NN].bytes != p->nn_operations * 192 ||
         m->sections[NBG_LOAD_STATES_TABLE].bytes != h->operation_count * 8) return 0;
-    p->command_body_bytes = (uint32_t)sizeof(prefix) + p->nn_operations * 24 + 8;
+    /* The body is the prefix plus every operation's state; operation()
+     * later admits only the 24- and 32-byte state forms. */
+    uint64_t body = sizeof(prefix);
+    for (uint32_t i = 1; i <= p->nn_operations; ++i) {
+        struct nbg_span state_span;
+        if (!nbg_model_table(m, NBG_LOAD_STATES_TABLE, i, &state_span) || state_span.bytes > 32)
+            return 0;
+        body += state_span.bytes;
+    }
+    p->command_body_bytes = (uint32_t)body;
     uint32_t command_bytes = p->command_body_bytes + (uint32_t)sizeof(footer);
     uint64_t fetch = A733_NPU_FETCH_BYTES;
     if (fetch < command_bytes) fetch = command_bytes;
@@ -87,12 +96,13 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p)
                      (uint64_t)m->sections[NBG_COEFF].bytes + 128) ||
         (h->pool_bytes && !requirement(&p->buffers[NBG_ALLOC_POOL], h->pool_bytes, h->pool_bytes)) ||
         !requirement(&p->buffers[NBG_ALLOC_COMMAND], command_bytes, fetch)) return 0;
-    /* Affine UINT8 and INT8 tensors, in model order: inputs, then outputs. */
+    /* Affine UINT8, INT8 and INT16 tensors, in model order: inputs, then outputs. */
     for (uint32_t i = 0; i < p->inputs + p->outputs; ++i) {
         struct nbg_tensor t;
         int output = i >= p->inputs;
         if (!nbg_model_tensor(m, output ? NBG_OUTPUT : NBG_INPUT, output ? i - p->inputs : i, &t) ||
-            (t.format != 2 && t.format != 3) || t.buffer_type != 0 || t.quantization != 2 ||
+            (t.format != 2 && t.format != 3 && t.format != 5) || t.buffer_type != 0 ||
+            t.quantization != 2 ||
             !requirement(&p->buffers[NBG_ALLOC_INPUT + i], t.logical_bytes,
                          (((uint64_t)t.logical_bytes + 63) & ~UINT64_C(63)) + 64)) return 0;
     }
@@ -154,15 +164,25 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
 {
     struct nbg_operation op;
     struct nbg_span span;
-    if (!nbg_model_operation(m, number, &op) || op.kind != 2 || op.index != number - 1 ||
+    int directory = m->header.version == NBG_MODEL_DIRECTORY_VERSION;
+    /* Kind 2 is a neural-network operation; kind 8, a neural-transpose step
+     * (observed only in the directory format), uses the same 192-byte
+     * descriptor and pointer fields without coefficients. */
+    if (!nbg_model_operation(m, number, &op) || (op.kind != 2 && !(op.kind == 8 && directory)) ||
+        op.index != number - 1 ||
         op.state != number || op.first_patch != first || !op.patch_count ||
         op.patch_count > POINTER_COUNT + 1 || op.auxiliary[0] ||
         !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op.state, &span)) return 0;
     int last = number == plan->nn_operations;
-    image->command_bytes = last ? 32 : 24;
-    if (span.bytes != image->command_bytes) return 0;
+    /* The 24-byte state sets word 5 and runs straight into the next
+     * operation. The 32-byte state clears it and appends a second pair; the
+     * compiler emits it for the last operation and, in the directory format,
+     * for every operation of graphs that contain transpose steps. */
+    if (span.bytes != 32 && (last || span.bytes != 24)) return 0;
+    if (span.bytes == 32 && !last && !directory) return 0;
+    image->command_bytes = (uint32_t)span.bytes;
     for (unsigned i = 0; i < span.bytes / 4; ++i) {
-        uint32_t expected = i == 5 && last ? 0 : state[i];
+        uint32_t expected = i == 5 && span.bytes == 32 ? 0 : state[i];
         // The observed directory profile changes bit 17 of this state value.
         // Its hardware meaning remains unresolved; require the captured bytes.
         if (i == 1 && m->header.version == NBG_MODEL_DIRECTORY_VERSION) expected = 0x0493e040;
@@ -190,7 +210,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             unsigned field;
             switch (p.destination) {
             case 20:
-                if (p.source != 5 || p.transformed != 1) return 0;
+                if (op.kind != 2 || p.source != 5 || p.transformed != 1) return 0;
                 field = WEIGHTS; break;
             case 24:
                 if ((p.source != 1 && p.source != 3 && p.source != 8) || p.transformed) return 0;

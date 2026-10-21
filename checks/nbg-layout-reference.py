@@ -154,7 +154,7 @@ def main():
     for kind, index, _, state_index, first, patch_count, *_ in native.operations():
         if kind == 0xffff:
             continue
-        assert kind == 2
+        assert kind in (2, 8)  # neural-network or neural-transpose operation
         for patch_kind, destination, source, source_index, source_offset, transformed, *_ in \
                 records[first:first + patch_count]:
             if patch_kind == 0:
