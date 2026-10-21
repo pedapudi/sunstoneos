@@ -71,7 +71,9 @@ static int prepare(void *ctx)
         if(!ag_current(q,l->ag,l->acl_generation,l->channel,&s) || s.generation!=l->security.generation ||
            s.secure_connections!=l->security.secure_connections)return fault(q,BT_SCO_SECURITY);
         /* An open link keeps the codec bound at open. A cleared selection only
-         * requires reselection before the next open; a different one faults. */
+         * requires reselection before the next open (HFP 1.9 section 4.11.4:
+         * a new AT+BAC list does not require closing open audio); a different
+         * selection faults. */
         if(l->phase==BT_SCO_OPEN&&l->ag->local_codecs&&(l->ag->hf_features&128)&&
            l->ag->selected_codec&&l->ag->selected_codec!=l->codec)return fault(q,BT_SCO_IDENTITY);
         if(l->phase!=BT_SCO_OPEN && q->now>=l->deadline)return fault(q,BT_SCO_EXPIRED);
@@ -213,8 +215,10 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
     if(event==0x0f || event==0x0e){
         if(q->refuse==2 && le16(p+(event==0x0f ? 4 : 3))==0x042a && r->tag==q->refuse_tag){
             if(q->acl->hci->command!=BT_HCI_IDLE)return fault(q,BT_SCO_PROTOCOL);
-            /* A refused reject means the controller already ended the request. */
-            q->refuse=p[event==0x0f ? 2 : 5] ? 0 : 3;q->refuse_acknowledgement=r->serial;return release(q,r);
+            /* A refused reject means the controller already ended the request.
+             * An accepted one waits a bounded time for its failed completion. */
+            q->refuse=p[event==0x0f ? 2 : 5] ? 0 : 3;q->refuse_acknowledgement=r->serial;
+            q->refuse_deadline=after(q->now,q->binding.response_timeout_us);return release(q,r);
         }
         if(q->command_link>=BT_SCO_LINKS)return 0;
         struct bt_sco_link *l=&q->links[q->command_link];
@@ -277,7 +281,8 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
     }
     if(event==0x2c){
         if(n!=17)return fault(q,BT_SCO_PROTOCOL);
-        if(q->refuse==3 && p[2] && equal(q->refuse_address,p+5) && r->serial>q->refuse_acknowledgement){
+        if(q->refuse==3 && q->now<q->refuse_deadline && p[2] && equal(q->refuse_address,p+5) &&
+           r->serial>q->refuse_acknowledgement){
             q->refuse=0;return release(q,r);}
         if(q->command_link>=BT_SCO_LINKS)return p[2] ? 0 : fault(q,BT_SCO_IDENTITY);
         struct bt_sco_link *l=&q->links[q->command_link];
@@ -381,8 +386,9 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     if(prepare(q)!=1)return -1;
     if(q->active_tx<BT_SCO_PACKETS || q->acl->active_tx<BT_ACL_TX_SLOTS ||
        q->acl->hci->command!=BT_HCI_IDLE || q->acl->command_link<BT_ACL_LINKS)return 1;
-    /* A refusal past its response bound is left to the controller timeout. */
-    if(q->refuse==1 && q->now>=q->refuse_deadline)q->refuse=0;
+    /* A refusal past its response bound is left to the controller timeout,
+     * and a missing failed completion no longer reserves the next one. */
+    if((q->refuse==1 || q->refuse==3) && q->now>=q->refuse_deadline)q->refuse=0;
     if(q->command_link==BT_SCO_LINKS && q->refuse==1){
         uint8_t p[7];for(unsigned j=0;j<6;++j)p[j]=q->refuse_address[j];p[6]=0x0d;
         int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,after(q->now,q->binding.response_timeout_us));

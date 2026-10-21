@@ -29,17 +29,17 @@ struct a733_cpu_start {
 };
 /* Pure topology conversion. Accept architectural MPIDR flags, reject reserved
  * bits and unknown affinities. Output unchanged on refusal. A733 uses Aff1 for
- * core number, Aff0/Aff2/Aff3 zero. Expected types: cores0..5 A55,6..7 A76. */
+ * core number, Aff0/Aff2/Aff3 zero. Expected types: cores 0..5 A55, 6..7 A76. */
 int a733_cpu_index(uint64_t mpidr, unsigned *out);
 /* Privileged boot owner only, zero unused storage. One-shot, no reinit/disposal.
  * lease is an existing nonzero platform reservation, NOT created/verified here.
  * It must own this OFF secondary CPU, its boot/power words, stable CPU clocks,
  * rails, interconnect, and published executable entry/stack/mailbox allocations.
  * All remote firmware writers must have relinquished those resources. The
- * boot CPU must be core0; this component admits cores1..7 and a 4-byte-aligned
- * DRAM entry below4GiB. The entry runs at reset privilege and must park without
+ * boot CPU must be core 0; this component admits cores 1..7 and a 4-byte-aligned
+ * DRAM entry below 4 GiB. The entry runs at reset privilege and must park without
  * touching hotplug words until the boot owner hands off after POWERED.
- * Callbacks return exactly1, are bounded/non-reentrant, and preserve their
+ * Callbacks return exactly 1, are bounded/non-reentrant, and preserve their
  * original context. They perform ordered, privileged physical register access.
  * One serialized owner; callback state/storage must remain disjoint and live.
  * Requires independently qualified watchdog recovery before physical use.

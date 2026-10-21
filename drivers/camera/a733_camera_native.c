@@ -392,12 +392,15 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
     if(!device_memory_acquire_aligned(n->pool,n->boot.owner,A733_CAMERA_NATIVE_BYTES,16384,&n->memory,&n->extent))return fail(n);
     struct device_memory_allocation *a=device_memory_lookup(n->pool,n->memory);
     if(!a || a->state!=DEVICE_MEMORY_CPU)return fail(n);
+    /* Validate the geometry before any write. A refused extent stays device
+     * owned, as it did when this check followed the fill. */
+    if(n->extent.cpu!=n->extent.physical || n->extent.physical>=UINT64_C(0x100000000) ||
+       n->extent.bytes!=A733_CAMERA_NATIVE_BYTES || n->extent.bytes>UINT64_C(0x100000000)-n->extent.physical){
+        a->state=DEVICE_MEMORY_DEVICE;return fail(n);}
     /* Unwritten payload or guard bytes then cannot repeat stale DRAM, such as
      * an earlier image. dma_admit's clean/invalidate publishes this fill. */
     memset((void *)(n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES),A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
     a->state=DEVICE_MEMORY_DEVICE;
-    if(n->extent.cpu!=n->extent.physical || n->extent.physical>=UINT64_C(0x100000000) ||
-       n->extent.bytes!=A733_CAMERA_NATIVE_BYTES || n->extent.bytes>UINT64_C(0x100000000)-n->extent.physical)return fail(n);
     uintptr_t p=n->extent.cpu;
     struct a733_camera_capture_config capture={
         .ops={time_read,native_acquire,native_handoff,no_drain},.context=n,

@@ -6,15 +6,15 @@
 #define A733_USB2_SUPPLIES 5u
 /* Cold, direct USB2 host on TYPEC24. The immutable admission authenticates
  * V1.2 wiring, measured supply stability, independent recovery and exclusion
- * of every remote/secure/IRQ/DMA owner. PCK7/8 and SERDES100MHz are inherited
+ * of every remote/secure/IRQ/DMA owner. PCK7/8 and SERDES 100 MHz are inherited
  * ON. Local USB2 reset/gates start off. No reset proves DMA drain.
  */
 struct a733_usb2_platform_config {
     uint64_t owner,identity,topology,deadline,lifetime_deadline;
     unsigned pck_client,superspeed,companion_root;
-    unsigned topology_mode; /* 0 legacy,1 direct,2 one self-powered root hub. */
+    unsigned topology_mode; /* 0 legacy, 1 direct, 2 one self-powered root hub. */
     uint32_t fabric[3],fabric_hz[3]; /* AHB/NSI/MBUS exact held profiles. */
-    uint32_t supply_uv[A733_USB2_SUPPLIES]; /* DCDC1,DC1SW2,DCDC9,ELDO6,CLDO5. */
+    uint32_t supply_uv[A733_USB2_SUPPLIES]; /* DCDC1, DC1SW2, DCDC9, ELDO6, CLDO5. */
     uint32_t revision; /* Actual admitted DWC_usb31 release, checked after power. */
 };
 struct a733_usb2_platform_ops {
@@ -63,8 +63,8 @@ int a733_usb2_platform_init(struct a733_usb2_platform *,const struct a733_usb2_p
     const struct a733_usb2_platform_ops *,void *,struct a733_clock_leases *,
     struct a733_rail_leases *,struct a733_pmic *,struct a733_gpu_resource_manager *,struct a733_typec *);
 enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *);
-/* Concurrent Type-C publication may return0; issue no controller/ring access
- * until1. Pin first attachment; never adopt a replacement. No MMIO here.
+/* Concurrent Type-C publication may return 0; issue no controller/ring access
+ * until 1. Pin first attachment; never adopt a replacement. No MMIO here.
  */
 int a733_usb2_platform_live(struct a733_usb2_platform *,uint64_t generation,uint64_t deadline);
 int a733_usb2_platform_outside(struct a733_usb2_platform *,const void *,size_t);

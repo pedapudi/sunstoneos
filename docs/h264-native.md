@@ -204,7 +204,13 @@ also checks the unused capacity beyond its admitted reference slots, which can
 reach megabytes, before the first rows and after the last. The callback reads
 device memory as aligned 64-bit words and publishes only after the final hash
 and fault scan. A partial
-copy remains private after failure.
+copy remains private after failure. The High host check changes one byte of
+device memory during the HD qualification copy, after the scan of the chunk
+that starts at row 64. A changed byte in the guard page after the MV span fails
+the next callback's scan at row 96. A changed byte in the unused Y capacity
+beyond the admitted reference slots fails only the full scan after the last
+row. Both failures retain all seven allocations and leave the picture
+unpublished.
 
 ### Source-defined storage and hardware format
 
@@ -785,12 +791,16 @@ failure. Host modeling does not qualify the physical timing window.
 
 The executor performs at most one register operation per poll. The decoder task
 polls again while each poll advances the executor's state or index, up to 1,024
-polls per wake, and rechecks board liveness between polls. It sleeps for one
-1 ms tick when a poll makes no progress: the engine is busy, a copy callback
-handled its rows or a shared resource is busy. A completed legacy picture ends
-the wake so that the task publishes it before the next picture's copy. In the
-full-HD and High host checks, the copied output is unchanged and the number
-of task wakes falls by a factor of 3.5 to 7.
+polls per wake. Between polls it rechecks board liveness and, in stream mode,
+the stream failure flag that the USB task sets, so a flagged failure is handled
+at the next wake without further register operations. It sleeps for one 1 ms
+tick when a poll makes no progress: the engine is busy, a copy callback handled
+its rows or a shared resource is busy. A completed legacy picture ends the wake
+so that the task publishes it before the next picture's copy. With one poll
+per wake, the host checks needed 1,786 task wakes for the full-HD nominal run,
+273 for the full-HD normal run and 1,593 for the High full-HD normal run. With
+the poll loop they need 457, 78 and 225, and the copied output is identical.
+The other High variants were counted only with the poll loop.
 
 Focused evidence is under
 `~/.cache/sunstoneos/evidence/h264-interframes-20261019`:
