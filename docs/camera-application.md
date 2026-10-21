@@ -72,7 +72,13 @@ with product `sunstoneos native camera` and serial `sunstoneos-a733-camera`.
 Physical preparation and capture remain the board coordinator's responsibility.
 
 The wire format retains the existing twelve-byte request and seventy-two-byte
-response header. Reads return at most 4,096 bytes. The collector validates epoch,
+response header. Reads return at most 4,096 bytes. USB0 uses the shared board
+service in `apps/board/usb0_service.h` for its descriptors, provider startup
+and polling loop, which repeats passes within one tick while the transfer makes
+progress. The camera image's build identity hashes that header. When an IN
+transfer completes, the transmit callback refills the vendor FIFO before the
+TinyUSB vendor class decides whether to send a zero-length packet, so a
+response cannot end early on a 512-byte boundary. The collector validates epoch,
 generation and the immutable session digest on every response. It records all
 fragments and requires all 150 chunks before publishing a 614,400-byte NV16
 artifact and metadata. A failed transfer, inconsistent response, deadline or
