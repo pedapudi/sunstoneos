@@ -10,8 +10,11 @@ MODE,CONFIG,FLAG,ALT,RVBAR=0x02050014,0x02050010,0x070501c0,0x070501d4,0x0800100
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bundle',type=Path,required=True)
 parser.add_argument('--output',type=Path,required=True)
-parser.add_argument('--blend-only',action='store_true',
+selection=parser.add_mutually_exclusive_group()
+selection.add_argument('--blend-only',action='store_true',
                     help='Check only source-over admission and nonopaque-background refusal')
+selection.add_argument('--scale-only',action='store_true',
+                    help='Check only 2x scaling admission and changed geometry refusals')
 args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 image=args.bundle/'image.elf'
 with image.open('rb') as stream:
@@ -40,6 +43,16 @@ if args.blend_only:
     cases=[
         ('source-over-handoff',None,None,12),
         ('nonopaque-background',900,struct.pack('<I',color&0x00ffffff|0xfe000000),14),
+    ]
+elif args.scale_only:
+    width,height,stride,fmt,op,dx,dy,w,h,sx,sy,color=struct.unpack_from('<12I',template,856)
+    assert op==4 and not color and w>=2 and h>=2 and not (w&1 or h&1)
+    assert sx+w//2<=width and sy+h//2<=height
+    assert sx+w>width or sy+h>height, 'Use a source crop that requires half-size bounds'
+    cases=[
+        ('scale-half-source-handoff',None,None,12),
+        ('scale-odd-destination',884,struct.pack('<I',w-1),14),
+        ('scale-source-overflow',892,struct.pack('<I',width-w//2+1),14),
     ]
 for name,offset,value,reason in cases:
     session=bytearray(template)
@@ -97,7 +110,7 @@ for name,offset,value,reason in cases:
         assert terminal==['handoff'] and writes==[(RVBAR,0x41000000),(RVBAR+4,0)] and len(ticks)==4
         assert struct.unpack_from('<4Q',published,80)==(ticks[0],ticks[0]+24000000,ticks[0]+480000000,ticks[0]+480000000)
         assert published[8:80]==contract[8:80] and published[112:]==contract[112:]
-        if args.blend_only:
+        if args.blend_only or args.scale_only:
             (args.output/'runtime-contract.bin').write_bytes(published)
     else:
         assert terminal==['return'] and not writes and not ticks and published==contract
