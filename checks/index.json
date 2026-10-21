@@ -588,6 +588,19 @@
   "summary": "Run one composed PCIe batch and compare executed primary-source helpers.",
   "usb": false
  },
+ "a733-pcie-trace.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/pcie.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Run the PCIe host models and compare write traces with an earlier revision.",
+  "usb": false
+ },
  "a733-pins-reference.py": {
   "cache_areas": [],
   "docs": [],
@@ -1124,6 +1137,19 @@
   "summary": "Execute package codec selection and register routing for admitted VE IDs.",
   "usb": false
  },
+ "a733-xhci-detach.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/usb2-host.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "xHCI core detach, slot disable and reattach against a modeled controller; no board access.",
+  "usb": false
+ },
  "accelerator-host.py": {
   "cache_areas": [
    "evidence"
@@ -1446,6 +1472,19 @@
    "--output"
   ],
   "summary": "Execute the returning 32-round FreeRTOS workload with modeled hardware.",
+  "usb": false
+ },
+ "audit-build-safety-configure.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/build.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check that build patches apply exactly and supervised profiles require an explicit board mode.",
   "usb": false
  },
  "audit-device-minors-usb-control.py": {
@@ -4024,7 +4063,9 @@
  },
  "h264-high-allocation.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4037,7 +4078,9 @@
  },
  "h264-high-bounds.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4051,7 +4094,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4066,7 +4111,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4093,7 +4140,9 @@
  },
  "h264-high-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4117,7 +4166,9 @@
  },
  "h264-high-register-oracle.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5916,6 +5967,40 @@
   "summary": "One supervised native link and retained supply/PLL/startup composition.",
   "usb": true
  },
+ "os-image-link.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--assets",
+   "--recognizer",
+   "--loader",
+   "--output"
+  ],
+  "summary": "Check the linked integrated OS image's fixed interrupt table, start list and layout.",
+  "usb": false
+ },
+ "os-image-stage2.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/boot-slots.md",
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--boot0",
+   "--model",
+   "--output"
+  ],
+  "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
+  "usb": false
+ },
  "ov5640-reference.py": {
   "cache_areas": [],
   "docs": [
@@ -6384,6 +6469,19 @@
   "summary": "Compare native MMU cache commands with the pinned driver's complete function.",
   "usb": false
  },
+ "pvr-gpu-flush.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-flush.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Build and run the MMU cache invalidation sanitizer check and its target object.",
+  "usb": false
+ },
  "pvr-gpu-freelist-service.py": {
   "cache_areas": [],
   "docs": [
@@ -6757,6 +6855,19 @@
   "summary": "Check a published radio table and malformed structures on the host.",
   "usb": false
  },
+ "radio-poll-batching.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-transport.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Count owner ticks for the transport setup and identity sequence with and",
+  "usb": false
+ },
  "radio-reconnect-wpa.py": {
   "cache_areas": [
    "evidence"
@@ -6776,14 +6887,16 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/radio-session.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "--evidence",
    "--phase"
   ],
-  "summary": "Build or execute only the affected retained-session reconnect composition.",
+  "summary": "Build or execute only the affected retained-session reconnect composition,",
   "usb": false
  },
  "rail-leases.py": {
