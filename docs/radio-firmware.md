@@ -100,6 +100,28 @@ zeros unused bytes and the transport pads each request to 1,536 bytes.
 These addresses belong to the radio processor's memory space. They are never
 used as A733 CPU or MMIO pointers.
 
+## Optional block writes for long table runs
+
+The source loader writes each Bluetooth table pair with its own confirmed memory
+write. In the pinned table, the trap record ends with 2,766 pairs whose radio-RAM
+addresses increase by four from `0x0020b43c`. Each word write is a 512-byte
+request followed by a status poll and a confirmation, so that run dominates the
+bootstrap command count.
+
+Setting the firmware configuration field `table_bursts` to 1 writes such runs
+with the block-write request that image uploads already use. A run qualifies when
+at least 16 consecutive pairs in one record have consecutive word addresses below
+`0x40000000`; each block write carries up to 256 words. Register writes at
+`0x40000000` and above, the substituted mode record, and shorter runs keep
+individual word writes in record order. With the pinned table, the Bluetooth
+table needs 125 commands instead of 2,880, and the complete upload needs 501
+instead of 3,256.
+
+The source does not write this table with block writes, and no hardware
+readback has confirmed that the radio accepts them for this region. The default
+value 0 keeps the source's per-pair sequence. Enabling the option requires a
+board run that reads the run back with memory-read requests after the upload.
+
 The accepted images contain version `0x06090101`. Both name patch structure
 `0x00174000` and pair buffer `0x0017cd7c`; their configuration bases are
 `0x001730dc` for non-H and `0x0017310c` for H. The engine checks each device-read
@@ -199,6 +221,13 @@ or immutable artifact bytes, with retained-message deadline coverage.
 Results are under the adjacent `mode-alias/` directory. Evidence for the remaining
 3,255 commands and unaffected state transitions is reused without another upload
 simulation.
+
+The focused `--case table-bursts` check runs the complete upload twice from the
+same identified device model: once with per-pair table writes and once with
+block writes for long runs. A radio-memory model applies every word and block
+write and answers metadata reads from that memory. Both runs leave identical
+radio RAM between `0x00100000` and `0x00300000` and the same ordered register
+writes, and the block-write run needs 125 table commands instead of 2,880.
 
 Both changed runtime files compile once for freestanding AArch64 with Clang
 21.1.8 and warnings as errors. Commands, source/object hashes, and symbols are

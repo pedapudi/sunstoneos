@@ -113,7 +113,7 @@ def main():
     p.add_argument("--reference-dir", type=Path, required=True)
     p.add_argument("--evidence", type=Path, required=True)
     p.add_argument("--cc", default="cc")
-    p.add_argument("--case", choices=["all", "mode-alias"], default="all")
+    p.add_argument("--case", choices=["all", "mode-alias", "table-bursts"], default="all")
     a = p.parse_args()
     out = a.evidence.resolve()
     if out == ROOT or ROOT in out.parents:
