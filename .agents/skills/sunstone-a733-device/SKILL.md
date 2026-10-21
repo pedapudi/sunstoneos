@@ -168,6 +168,8 @@ Prevent recurring fixture failures at setup:
   closure. An inherited manual source list can omit a dependency added to a
   sibling service, even when the selected case does not execute that service.
 - Construct valid sessions and provider configurations with their actual producers.
+  Read the actual frozen input's record count and lengths before writing its
+  parser; a newer fixture can expect records absent from an older accepted vector.
   Resolve structure sizes, hashes, callback layouts, clock parents, rail ownership
   and deadlines together before running cases. A session-sealing fixture can
   leave provider fields unused; validate its pin and PMIC handoff before reusing
@@ -215,6 +217,12 @@ Prevent recurring fixture failures at setup:
   delay and suspend sites; a yield may be an inline SVC rather than a function
   call. Save CPU, RAM, task and scheduler state on every execution-budget or
   failure stop so unfinished work can resume without repeating initialization.
+  Derive debugger addresses from the exact ELF symbols or type information,
+  never from manually copied addresses. Verify writes by reading them back.
+  Keep the debugger attached until assertion/exit stops preserve terminal RAM.
+  Publish fixture readiness once; do not overwrite a client's later completion
+  state on subsequent polls. Capture the native result before classifying a
+  reporting failure, and do not replay completed device work to repair reporting.
 - Snapshot mutable model registers and state by value. Restore each case from
   the preserved checkpoint without sharing dictionaries, lists or buffers with
   a running case. Check pristine case-entry state before injecting a fault.
