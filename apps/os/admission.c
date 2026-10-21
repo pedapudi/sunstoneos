@@ -27,6 +27,22 @@ int os_session_valid(const struct os_session *s)
     if(!hz||hz%div||s->apb1_hz!=hz/div)return 0;
     for(unsigned i=0;i<5;++i)if(!s->limits[i][0]||s->limits[i][0]>=s->limits[i][1]||s->limits[i][1]>4095||
        !s->limits[i][2]||s->limits[i][2]>s->limits[i][0])return 0;
+#ifdef SUNSTONE_A733_OS_AUDIO
+    /* The I2S image's supervised DMA0 handoff rules, bound to this session:
+     * one service channel, the board fabric, the board lease as handoff and
+     * evidence identity, and a deadline that only the image derives. */
+    const struct os_audio_session *a=&s->audio;
+    const struct a733_dma_platform_config *d=&a->dma;
+    if(a->magic!=OS_AUDIO_SESSION_MAGIC||a->version!=OS_AUDIO_SESSION_VERSION||a->bytes!=sizeof(*a)||
+       !present(a->evidence,32)||!d->owner||d->owner==s->thermal_owner||d->handoff!=s->board.lease||
+       a->dma_evidence!=s->board.lease||d->deadline_us||a->dma_established!=OS_AUDIO_DMA_SUPERVISED||
+       a->dma_owned_channels!=0xffff||a->dma_service_channels!=1||a->dma_controller!=0x04601000||
+       memcmp(d->fabric,s->board.fabric,sizeof(d->fabric))||memcmp(d->rate_hz,s->board.fabric_hz,sizeof(d->rate_hz))||
+       a->audio_cold>1||a->capture_samples<OS_AUDIO_MIN_SAMPLES||a->capture_samples>OS_AUDIO_MAX_SAMPLES||
+       present(a->reserved,7))
+        return 0;
+    for(unsigned i=0;i<4;++i)if(owners[i]==d->owner)return 0;
+#endif
     return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
