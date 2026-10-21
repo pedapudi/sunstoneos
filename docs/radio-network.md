@@ -107,13 +107,25 @@ Held receive records transfer with that ownership.
 
 The adapter checks the association generation before admitting queued frames.
 Generation change, link loss, or unresolved roaming revokes the interface and
-all application handles. Temporary controlled-port closure during rekey pauses
-ordinary data admission. EAPOL remains owned by the supplicant and cannot enter
+all application handles. EAPOL remains owned by the supplicant and cannot enter
 the ordinary Ethernet output queue.
 
+A group-key renewal closes the controlled port for a few firmware actions. The
+supplicant leaves its authorized state, while the association generation, link
+and address lease stay unchanged. The network then reports not ready, which
+pauses ordinary data admission and every pending socket request. Pending
+LISTEN, ACCEPT and RESOLVE requests wait through this pause in the same way as
+other operations. They end with `SUNSTONE_NET_ADDRESS_LOST` only after address
+revocation or lease expiry, and with `SUNSTONE_NET_LINK_LOST` after a generation
+change, link loss or network fault. Each request's own timeout still applies.
+
 Production configuration requires cryptographic random-number and TCP sequence
-providers plus an admission record identifying their qualification. Provider
-failure closes output synchronously. The TCP sequence hook has no error return;
+providers plus an admission record identifying their qualification. A
+random-number provider returns 0 for a temporary shortage or lock contention.
+The FreeRTOS+TCP random-number hook then fails only that call; the stack handles
+the failure at each use, for example by retrying a DHCP transmission later or
+not sending a DNS query. Any other random-number failure, and every TCP sequence
+failure, closes output synchronously. The TCP sequence hook has no error return;
 its placeholder result cannot authorize an outgoing SYN after that closure.
 The composition's deterministic providers are test inputs only.
 
@@ -136,7 +148,14 @@ The synthetic peer validates outgoing IPv4 and transport checksums, answers ARP,
 echoes UDP, and completes a TCP handshake and data exchange. The model also
 exercises allocation refusal, socket limits, finite receive waits, IP-queue
 saturation, retained close ownership, and association-generation revocation.
-A separate short invocation exercises entropy failure before SYN output.
+A separate short invocation checks that a temporary random-number refusal
+leaves the network open and that a sequence failure blocks SYN output.
+The `rekey` invocation withdraws supplicant authorization, as a group-key
+renewal does, while an ACCEPT is pending and again while a RESOLVE is pending.
+Both requests remain pending during the pause. After authorization returns, the
+ACCEPT completes and the accepted socket exchanges data; the unanswered RESOLVE
+ends at its own timeout. With the earlier address check, the ACCEPT ended
+during the pause.
 Another delays a positive stack send result beyond its request deadline and
 checks that the timeout reply preserves accepted bytes and the socket handle.
 The lifecycle and entropy results reuse their original executable; the delayed

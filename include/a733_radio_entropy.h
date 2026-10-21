@@ -7,6 +7,8 @@
 #include "task.h"
 
 #define A733_RADIO_ENTROPY_CAPACITY 512u
+/* Reservoir bytes left for the TCP initial-sequence hook, which cannot fail. */
+#define A733_RADIO_ENTROPY_SEQUENCE_RESERVE 16u
 struct a733_radio_entropy_config {
     struct a733_ce_entropy *source;
     TaskHandle_t owner;
@@ -61,8 +63,10 @@ enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy
 enum a733_radio_entropy_result a733_radio_entropy_retain(struct a733_radio_entropy *);
 /* Callback signatures match WPA2 and network configuration. Only the recorded
  * owner or the actual FreeRTOS IP task can consume. All-or-nothing, 1..256 bytes;
- * no waiting, allocation, CE access or device callback. Exhaustion/contention
- * returns 0 with unchanged output. Network callers already fail closed on 0.
+ * no allocation, CE access or device callback. Lock contention retries a fixed
+ * number of times. Refusal leaves the output unchanged. bytes returns 1 or 0.
+ * random32 and sequence return 1, 0 for temporary exhaustion or contention,
+ * and -1 for a fault or invalid caller. random32 leaves the sequence reserve.
  * No PRNG, seed fallback or replay; consumed reservoir bytes are zeroed. */
 int a733_radio_entropy_bytes(void *,uint8_t *,size_t);
 int a733_radio_entropy_random32(void *,uint32_t *);

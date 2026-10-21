@@ -22,6 +22,8 @@ def main():
     parser.add_argument('--freertos', type=Path, required=True)
     parser.add_argument('--tcp', type=Path, required=True)
     parser.add_argument('--cc', default='/usr/bin/clang-21')
+    parser.add_argument('--fixture', choices=['refill', 'contention'], default='refill',
+                        help='contention runs the owner publish path against a threaded IP consumer')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -45,7 +47,8 @@ def main():
                   '-DINCLUDE_xTaskGetCurrentTaskHandle=1', '-DINCLUDE_xTaskGetSchedulerState=1',
                   '-DINCLUDE_xSemaphoreGetMutexHolder=1', '-Iinclude',
                   '-I' + str(freertos / 'include')]
-        sources = ['checks/a733-radio-entropy.c', 'drivers/net/a733_radio_entropy.c',
+        fixture = 'checks/a733-radio-entropy.c' if args.fixture == 'refill' else 'checks/a733-radio-entropy-contention.c'
+        sources = [fixture, 'drivers/net/a733_radio_entropy.c',
                    'drivers/crypto/a733_ce_entropy.c', 'drivers/crypto/a733_ce_session.c',
                    'drivers/crypto/a733_ce.c', 'drivers/clock/a733_clock_leases.c',
                    'runtime/device_memory_pool.c']
@@ -57,7 +60,7 @@ def main():
                 '-MMD', '-MF', str(out / f'host-{index}.d'), '-c', source, '-o', str(obj)])
             objects.append(obj)
         model = out / 'radio-entropy-model'
-        run('host-link', [args.cc, '-fsanitize=address,undefined', *map(str, objects), '-o', str(model)])
+        run('host-link', [args.cc, '-fsanitize=address,undefined', *map(str, objects), '-pthread', '-o', str(model)])
         # The changed adapter is compiled against both supported native task ABIs.
         # No unchanged CE driver scenario or native model is executed again.
         smp = out / 'smp-port'
@@ -104,7 +107,7 @@ def main():
         (out / 'compiler.json').write_text(json.dumps({'path': args.cc,
             'sha256': sha(Path(args.cc).resolve())}, indent=2) + '\n')
         output = run('model', [str(model)])
-        assert 'PASS radio entropy:' in output
+        assert ('PASS radio entropy:' if args.fixture == 'refill' else 'PASS radio entropy contention:') in output
         (out / 'result.json').write_text(json.dumps({'passed': True, 'elf_sha256': sha(model),
             'scope': 'Actual adapter, CE entropy/session/controller, clock registry and pool; modeled counter, task identity, mutex dispatch, CE MMIO and DMA bytes. Native adapter compiled against single-core and cached eight-core headers; five affected CE native consumers compiled once.',
             'limits': 'No physical entropy qualification, RF, network application execution or performance measurement.'}, indent=2) + '\n')
