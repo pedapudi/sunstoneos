@@ -147,7 +147,7 @@ contexts and selected SVC #105 yield sites, plus tick-relative delays. It does
 not qualify SMP scheduling, preemption, priority inheritance, real interrupt
 latency, MMIO stall recovery, electrical timing, transmitted packets or sound.
 The [host evidence](hdmi-audio-preparation.md) separately covers sealed packaging,
-offline decoding and bounded launcher cases. There is no live capture path.
+offline decoding and bounded launcher cases for that original profile.
 
 Earlier inputs and failures remain under `hdmi-audio-20261020`. The initial
 provider run correctly refused an incorrectly modeled PL1 drive field. The
@@ -158,3 +158,37 @@ shared DMA policy or CPU mapping was changed. The inherited-DMA-interrupt guard
 cases were reused because generated boot source, object code and all 1340
 linked bytes of `a733_smp_boot` are identical between those images. No old image
 or result was relabeled as the successor.
+
+The opt-in `SUNSTONE_HDMI_AUDIO_USB` profile adds copied observation of this
+finite operation. Its version-2 session is 816 bytes; the original 656-byte
+version-1 session remains an offline-only profile. The appended USB authority
+binds a distinct owner, four exact supply voltages, shared fabric settings and
+three physical-authority records. USB uses ordinary cold-reference mode 1,
+with both USB controllers initially gated/reset, excluded remote PHY/reference
+consumers and quiet owned interrupts 188–190. These prerequisites supplement
+the existing HDMI, audio, DMA-security and supervised-entry requirements.
+
+The output task copies its published 160-byte result into one 512-byte reply.
+Each request binds the session epoch and generation; each reply also carries
+the lease, build identity and full session hash. USB retains that copied slot
+through actual data-transfer completion and the terminal zero-length packet.
+A fully delivered reply permits another copied snapshot. There is no host ACK
+or resource release. The host permits at most
+200 sequential requests within 19 seconds of the original 20-second lifetime.
+A partial or late transfer retains the slot and resources. Provider failure
+can park USB before a fault reply is available; retained failure does not imply
+that the host can retrieve it.
+
+Evidence under `hdmi-audio-usb-20261020/native-cases/` covers the final image
+`0c661c29d33fc1e17001d4c7c052ad3bc6e9b4e4c893a7fb76119b57845b4546`.
+Seven affected cases execute the new constructor, shared USB preparation,
+result publisher, mailbox and linked TinyUSB framing, including full-speed and
+high-speed terminal packets, request ownership refusals and late completion.
+The prior accepted finite-audio disposition is explicitly seeded into the new
+constructor-owned result; PCM DMA and the sampler interval are not repeated.
+The new publisher binds the actual session and unchanged PCM hashes. The model
+supplies RTOS scheduling, architectural services, PMIC/readback effects and DCD
+transfer completion. It establishes neither physical USB operation nor sound,
+serializer drain or DMA visibility. The original finite-operation evidence
+retains its original scope. Root's four new pre-GIC guard cases and the separate
+[host checks](hdmi-audio-preparation.md) cover their respective boundaries.
