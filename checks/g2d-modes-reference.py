@@ -246,7 +246,7 @@ int main(int argc,char **argv)
 '''
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--reference',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--cc',default='/usr/bin/clang-21');p.add_argument('--previous',default='HEAD',help='Git revision holding the previous native builder')
+    p.add_argument('--cc',default='/usr/bin/clang-21');p.add_argument('--previous',required=True,help='Git revision with the builder before general scaling, such as f99e356')
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     manifest=json.loads((ROOT/'apps/g2d/sources.json').read_text());identities={};parts=[]
     for name,functions in NAMES.items():
