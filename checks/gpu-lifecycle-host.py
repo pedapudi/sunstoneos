@@ -29,7 +29,24 @@ class Replay:
         self.rows=[(artifact(row['request'],base),artifact(row['response'],base),
                     artifact(row['body'],base) if 'body' in row else b'') for row in fixture['exchanges']]
         self.cursor=0;self.header=None;self.body=b'';self.body_offset=0;self.injected=False;self.requests=[]
-        self.first_epoch=None
+        self.first_epoch=None;self.expected_retained=[];pages={};opened=set();initial_epoch=None
+        for request,response,body in self.rows:
+            op=struct.unpack_from('<I',request,8)[0];state=struct.unpack_from('<I',response,8)[0]
+            epoch=struct.unpack_from('<Q',response,64 if self.texture else 40)[0]
+            sequence=struct.unpack_from('<I',response,16 if self.texture else 24)[0]
+            if initial_epoch is None and epoch:initial_epoch=epoch
+            if state==1 and op==(4 if self.texture else 1):
+                if self.texture:output=body
+                else:
+                    key=(epoch,sequence);pages.setdefault(key,bytearray()).extend(response[48:])
+                    total=struct.unpack_from('<I',response,20)[0]*4
+                    if len(pages[key])!=total:continue
+                    output=bytes(pages[key])
+                self.expected_retained.append(('output',epoch,sequence,output))
+            elif state==3:self.expected_retained.append(('closed',epoch,sequence,response))
+            elif state==5:self.expected_retained.append(('disposed',epoch,sequence,response))
+            elif state==1 and op in (0,7 if self.texture else 5) and initial_epoch is not None and epoch>initial_epoch and epoch not in opened:
+                opened.add(epoch);self.expected_retained.append(('opened',epoch,sequence,response))
 
     def mutate(self,request,response):
         raw=bytearray(response);offset=64 if self.texture else 40
@@ -117,6 +134,12 @@ def run_case(fixture,base,case):
             else:client.submit(inputs[1])
             client.close()
     except BaseException as error:caught=error
+    expected=wire.expected_retained[:len(retained)]
+    observed=[(kind,identity['queue_epoch'],identity['sequence'],data) for kind,identity,data in retained]
+    assert observed==expected,'Durable copies/receipts differ from actual producer bytes or identity'
+    expected_outputs=[row for row in wire.expected_retained if row[0]=='output']
+    for output,expected_output in zip(client.outputs,expected_outputs):
+        assert (output['identity']['queue_epoch'],output['identity']['sequence'],output['bytes'])==expected_output[1:]
     if case=='healthy':
         assert caught is None,caught
         assert wire.cursor==len(wire.rows) and client.state==3 and not client.failure
@@ -132,7 +155,7 @@ def run_case(fixture,base,case):
         assert len(wire.requests)==before
         if case in ('output-save','interrupt-retain','late-output'):assert client.outputs and retained[0][0]=='output'
         if case=='disposed-save':assert client.state==5 and retained[-1][0]=='disposed'
-        if case=='partial-stream':assert client.failure['partial']
+        if case=='partial-stream':assert client.failure['partial']==wire.body[:wire.body_offset] and wire.body_offset>0
         if case=='late-output':assert isinstance(caught,TimeoutError)
         if case.startswith('interrupt-'):assert isinstance(caught,KeyboardInterrupt)
     return {'case':case,'requests':len(wire.requests),'retained':[row[0] for row in retained],
@@ -142,21 +165,33 @@ def run_case(fixture,base,case):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--baseline',type=Path,help='Preserved matching healthy result for negative-only continuation')
     parser.add_argument('--case',action='append',choices=('healthy','session-epoch','queue-epoch','open-epoch','open-status-closed',
         'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','partial-stream','epoch-wrap'))
-    args=parser.parse_args();fixture=json.loads(args.fixture.read_bytes());base=args.fixture.parent
+    args=parser.parse_args();fixture_raw=args.fixture.read_bytes();fixture=json.loads(fixture_raw);base=args.fixture.parent
     if fixture.get('schema')!='pvr-gpu-lifecycle-host-fixture-v1' or fixture.get('physical_authority') is not False or fixture.get('modeled') is not True:
         raise ValueError('Fixture must explicitly identify modeled hardware authority')
+    fixture_sha=hashlib.sha256(fixture_raw).hexdigest()
     image=artifact(fixture['image'],base)
+    producer=json.loads(artifact(fixture['producer'],base))
+    if (producer['image_sha256'],producer['session_epoch'],producer['profile'],producer['exchanges'])!=(fixture['image']['sha256'],fixture['session_epoch'],fixture['profile'],fixture['exchanges']):
+        raise ValueError('Original producer manifest does not bind the selected image/session/wire artifacts')
     if image[:4]!=b'\x7fELF' or fixture['profile'] not in ('compute','triangle','texture','depth') or not 0<fixture['session_epoch']<2**64:
         raise ValueError('Actual native fixture identity')
+    selected=args.case or ['healthy']
+    if 'healthy' in selected and selected[0]!='healthy':raise ValueError('Healthy compatibility case must precede injections')
+    if 'healthy' not in selected:
+        if args.baseline is None:raise ValueError('Negative continuation requires preserved healthy evidence')
+        baseline=json.loads(args.baseline.read_bytes())
+        if not baseline.get('passed') or baseline.get('fixture_sha256')!=fixture_sha or not any(row['case']=='healthy' for row in baseline['cases']):
+            raise ValueError('Healthy compatibility evidence does not match actual fixture')
     args.output.mkdir(parents=True,exist_ok=False)
     results=[]
-    for case in args.case or ['healthy']:
+    for case in selected:
         result=run_case(fixture,base,case);results.append(result)
         (args.output/(case+'.json')).write_text(json.dumps(result,indent=2)+'\n')
     summary={'passed':True,'physical_access':False,'physical_authority':False,'profile':fixture['profile'],
-             'fixture_sha256':hashlib.sha256(args.fixture.read_bytes()).hexdigest(),
+             'fixture_sha256':fixture_sha,'producer_sha256':fixture['producer']['sha256'],
              'image_sha256':hashlib.sha256(image).hexdigest(),'session_epoch':fixture['session_epoch'],'cases':results,
              'scope':'Actual frozen native request/reply bytes; modeled transport, interruption, persistence and clock failures. No GPU arithmetic, pixels, device, queue, physical drain or timing qualification.'}
     (args.output/'result.json').write_text(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary))
