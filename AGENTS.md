@@ -110,6 +110,10 @@ second build while preserving checks for the actual requested application.
   change invocations: `ld.lld` needs its name, and Python needs its virtualenv path.
   Reuse the generator and toolchain from a successful native configuration;
   do not select an unverified build tool for the next device target.
+  Supply the compiler and all dependency paths together on the first CMake
+  configuration. Changing a compiler in an existing cache can clear those paths
+  during automatic reconfiguration. Preserve the failed cache and use a fresh
+  build directory; diagnose missing variables before changing source patches.
 - Set `PYTHONDONTWRITEBYTECODE=1` when running Python from preserved source
   snapshots. Incidental `.pyc` files are not source inputs; compare the declared
   sources and compiled dependencies instead of generated cache files.
