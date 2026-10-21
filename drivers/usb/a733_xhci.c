@@ -10,7 +10,9 @@
 #define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
-enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_SET_DEQUEUE=16 };
+enum { C_ENABLE=9,C_DISABLE=10,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_STOP=15,C_SET_DEQUEUE=16 };
+#define DETACH_US 5000000u /* Teardown bound; pinned Linux XHCI_CMD_DEFAULT_TIMEOUT. */
+#define PRESERVE (UINT32_C(0xe000000)|UINT32_C(0xc000)|BIT(9)|UINT32_C(0x1e0)) /* PORTSC RWS fields. */
 enum { T_NORMAL=1,T_SETUP=2,T_DATA=3,T_STATUS=4,T_ADDRESS_STATUS=5 };
 enum { CONTROL_IDLE,CONTROL_SETUP,CONTROL_DATA,CONTROL_STATUS };
 static uint32_t get32(const void *v)
@@ -84,15 +86,35 @@ static unsigned dci(unsigned address)
 static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned address)
 {
     if(!x||x->self!=x||address>127)return NULL;
-    if(!address)return x->default_device<A733_XHCI_DEVICES&&!x->devices[x->default_device].zero_retired?&x->devices[x->default_device]:NULL;
-    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address)return &x->devices[i];
+    if(!address)return x->default_device<A733_XHCI_DEVICES&&!x->devices[x->default_device].zero_retired&&
+        !x->devices[x->default_device].detach?&x->devices[x->default_device]:NULL;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return &x->devices[i];
     return NULL;
+}
+/* A record under teardown keeps its logical address only for repeated detach
+ * or abort requests; new requests never reach it. */
+static int detaching(const struct a733_xhci *x,unsigned address)
+{
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].detach&&x->devices[i].address==address)return 1;
+    return 0;
 }
 static struct a733_xhci_endpoint *endpoint(struct a733_xhci_device *d,unsigned address)
 {
     if(!(address&15))return &d->endpoints[0];
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].opened&&d->endpoints[i].address==address)return &d->endpoints[i];
     return NULL;
+}
+/* Fixed context pair and EP0/data ring and bounce pages of one device record. */
+static void pages(struct a733_xhci *x,unsigned j)
+{
+    uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;struct a733_xhci_device *d=&x->devices[j];
+    d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
+    d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
+    for(unsigned i=0;i<2;++i){
+        unsigned n=j*2+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
+        e->ring=(void *)(p+40960+4096*n);e->ring_pa=base+40960+4096*n;
+        e->bounce=p+69632+4096*n;e->bounce_pa=base+69632+4096*n;e->cycle=1;
+    }
 }
 static int layout(struct a733_xhci *x)
 {
@@ -115,17 +137,31 @@ static int layout(struct a733_xhci *x)
     _Static_assert(98304+8*4096==A733_XHCI_MEMORY_BYTES,"retained parent extent");
     _Static_assert(A733_XHCI_RING_TRBS*sizeof(struct a733_xhci_trb)<=4096,"ring extent");
     _Static_assert(A733_XHCI_TRANSFER_BYTES<=4096,"bounce extent");
-    for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
-        struct a733_xhci_device *d=&x->devices[j];
-        d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
-        d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
-        for(unsigned i=0;i<2;++i){
-            unsigned n=j*2+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
-            e->ring=(void *)(p+40960+4096*n);e->ring_pa=base+40960+4096*n;
-            e->bounce=p+69632+4096*n;e->bounce_pa=base+69632+4096*n;e->cycle=1;
-        }
-    }
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j)pages(x,j);
     return barrier(x);
+}
+/* Disable Slot completion returns the slot's contexts, rings and bounce pages
+ * to software. Clear them in place for a later device; the parent remains
+ * DEVICE-owned and no pointer moves. */
+static int reclaim(struct a733_xhci *x,unsigned j)
+{
+    uint8_t *p=(void *)x->extent.cpu;struct a733_xhci_device *d=&x->devices[j];
+    if(d->slot)put64(x->dcbaa+8*d->slot,0);
+    memset(p+16384+8192*j,0,8192);
+    for(unsigned i=0;i<2;++i){memset(p+40960+4096*(j*2+i),0,4096);memset(p+69632+4096*(j*2+i),0,4096);}
+    if(x->extra_endpoint_owner==j+1){memset(p+65536,0,4096);memset(p+94208,0,4096);x->extra_endpoint_owner=0;}
+    memset(d,0,sizeof(*d));pages(x,j);
+    if(x->default_device==j)x->default_device=0;
+    return barrier(x);
+}
+/* Revoke every caller destination now. A TD already on its ring stays owned
+ * by the controller until its completion or Stop Endpoint resolves it. */
+static void detach(struct a733_xhci *x,struct a733_xhci_device *d)
+{
+    d->detach=1;d->deadline=x->lifetime_deadline-x->last_now>DETACH_US?x->last_now+DETACH_US:x->lifetime_deadline;
+    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+        struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;if(e->pending!=2)e->pending=0;
+    }
 }
 /* Publish payload before the cycle bit. The last entry is an owned Link TRB;
  * each ring has one outstanding TD, so a completed slot is not reused early. */
@@ -149,7 +185,7 @@ static int command(struct a733_xhci *x,struct a733_xhci_device *d,unsigned kind,
     if(x->command_kind)return 0;
     x->command_kind=kind;x->command_device=(unsigned)(d-x->devices)+1;x->command_deadline=x->deadline;
     if(!ring(x,x->commands,x->command_pa,&x->command_index,&x->command_cycle,
-       kind==C_ENABLE||kind==C_RESET_ENDPOINT?0:kind==C_SET_DEQUEUE?
+       kind==C_ENABLE||kind==C_DISABLE||kind==C_RESET_ENDPOINT||kind==C_STOP?0:kind==C_SET_DEQUEUE?
          (d->endpoints[0].ring_pa+16*d->endpoints[0].index)|d->endpoints[0].cycle:d->input_pa,
        0,TYPE(kind)|flags,&x->command_pointer))return 0;
     return wr(x,x->doorbell,0);
@@ -220,6 +256,31 @@ static int submit_endpoint(struct a733_xhci *x,struct a733_xhci_device *d,struct
     if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,parameter,status,control,&e->pending_trb))return 0;
     return wr(x,x->doorbell+d->slot*4,e->number);
 }
+/* A TD on a Halted or Stopped endpoint whose dequeue pointer still addresses
+ * it has ended without a completion; the controller no longer executes it. */
+static int finished(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
+{
+    const uint8_t *c=d->device+e->number*x->context_bytes;unsigned state=get32(c)&7;
+    uint64_t dequeue=((uint64_t)get32(c+8)|((uint64_t)get32(c+12)<<32))&~UINT64_C(15);
+    if((state!=2&&state!=3)||dequeue!=e->pending_trb)return 0;
+    e->pending=0;e->pending_trb=0;return 1;
+}
+/* Under teardown, a TD may still finish by itself, by a halting error or by
+ * the requested stop. No completion reaches the class. A forced stop event may
+ * name another TRB of the stopped ring (pinned Linux handle_tx_event). */
+static int detached_event(struct a733_xhci_device *d,unsigned number,unsigned code,uint64_t pointer)
+{
+    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+        struct a733_xhci_endpoint *e=&d->endpoints[i];
+        if(!number||e->number!=number)continue;
+        unsigned stopped=code>=26&&code<=28;
+        if(stopped&&d->stopping!=i+1)return 0;
+        if(e->pending==2&&pointer==e->pending_trb&&
+           (stopped||code==1||code==4||code==6||code==13||code==36)){e->pending=0;e->pending_trb=0;return 1;}
+        return stopped&&pointer>=e->ring_pa&&pointer<e->ring_pa+16*A733_XHCI_RING_TRBS;
+    }
+    return 0;
+}
 static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
 {
     unsigned slot=event->control>>24,number=(event->control>>16)&31,code=event->status>>24,residual=event->status&0xffffff;
@@ -227,6 +288,7 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     struct a733_xhci_device *d=NULL;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)d=&x->devices[i];
     if((event->control&BIT(2))||!slot||!d)return 0;
+    if(d->detach)return detached_event(d,number,code,pointer);
     struct a733_xhci_endpoint *e=NULL;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].number==number&&d->endpoints[i].pending==2)e=&d->endpoints[i];
     if(!e||e->pending_trb!=pointer||e->aborted)return 0;
@@ -242,6 +304,12 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
         e->caller=NULL;
         if(!barrier(x)||(get32(d->device+x->context_bytes)&7)!=2)return 0;
         e->pending=3;return 1;
+    }
+    if(code==4||code==36){
+        /* A transaction error retires the TD and halts its endpoint, as a
+         * disconnect can before its port change is seen. Hold it without a
+         * class completion until teardown or the TD's own deadline. */
+        e->caller=NULL;e->pending=5;return 1;
     }
     if(code!=1&&code!=13)return 0;
     unsigned requested=e->kind==T_SETUP?8:e->length;
@@ -262,16 +330,27 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
 static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
 {
     uint64_t pointer=(uint64_t)event->parameter_lo|((uint64_t)event->parameter_hi<<32);
-    unsigned slot=event->control>>24,kind=x->command_kind;
+    unsigned slot=event->control>>24,kind=x->command_kind,code=event->status>>24;
     if(!x->command_device||x->command_device>A733_XHCI_DEVICES)return 0;
     struct a733_xhci_device *d=&x->devices[x->command_device-1];
-    if(!kind||pointer!=x->command_pointer||(event->status>>24)!=1||!slot||slot>x->cap_slots||slot>A733_XHCI_DEVICES||
+    /* Context State Error is accepted only for a stop that raced a halt. */
+    if(!kind||pointer!=x->command_pointer||(code!=1&&(kind!=C_STOP||code!=19))||!slot||slot>x->cap_slots||slot>A733_XHCI_DEVICES||
        (kind!=C_ENABLE&&slot!=d->slot))return 0;
     x->command_kind=0;x->command_pointer=0;
     if(kind==C_ENABLE) {
         for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)return 0;d->slot=slot;put64(x->dcbaa+8*slot,d->device_pa);d->port_ready=2;return 1;
     }
     if(!barrier(x))return 0;
+    if(kind==C_STOP||(kind==C_RESET_ENDPOINT&&d->stopping)){
+        /* A stop that raced a halt leaves the endpoint Halted for a reset. */
+        if(d->detach!=1||!d->stopping)return 0;
+        struct a733_xhci_endpoint *e=&d->endpoints[d->stopping-1];d->stopping=0;
+        unsigned state=get32(d->device+e->number*x->context_bytes)&7;
+        if(state!=3&&(code!=19||state!=2))return 0;
+        return e->pending!=2||finished(x,d,e);
+    }
+    if(kind==C_DISABLE)return d->detach==2&&reclaim(x,(unsigned)(d-x->devices));
+    if(d->detach)return 1; /* Teardown owns the slot; a completed request has no further effect. */
     unsigned slot_state=get32(d->device+12)>>27;
     if(kind==C_RESET_ENDPOINT||kind==C_SET_DEQUEUE){
         struct a733_xhci_endpoint *e=&d->endpoints[0];
@@ -342,13 +421,19 @@ static int port(struct a733_xhci *x)
     struct a733_xhci_device *d=&x->devices[0];
     uint32_t v,offset=x->operational+0x400+(x->usb2_port-1)*16;
     if(!rd(x,offset,&v)||(v&BIT(3)))return 0;
-    if(!(v&1)){if(x->announced)return 0;x->connected=0;return 1;}
-    x->connected=1;
-    if(v&UINT32_C(0xfe0000)) {
-        /* Preserve only RWS fields; writing back PED would disable the port. */
-        uint32_t preserve=v&(UINT32_C(0xe000000)|UINT32_C(0xc000)|BIT(9)|UINT32_C(0x1e0));
-        if(!wr(x,offset,preserve|(v&UINT32_C(0xfe0000))))return 0;
+    if(x->detaching){x->connected=0;return 1;} /* A new connection waits for the old teardown. */
+    if(!(v&1)){
+        if(!x->announced){x->connected=0;return 1;}
+        /* Only a reported connect-status change starts an orderly detach; a
+         * lost CCS without CSC is uncertain. Children are torn down first. */
+        if(!(v&BIT(17))||!wr(x,offset,(v&PRESERVE)|(v&UINT32_C(0xfe0000))))return 0;
+        x->connected=0;x->detaching=1;x->removed=1;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j)if(x->devices[j].port_ready&&!x->devices[j].detach)detach(x,&x->devices[j]);
+        notify(x,A733_XHCI_REMOVE,d->address,0,0,0);return 1;
     }
+    x->connected=1;
+    /* Preserve only RWS fields; writing back PED would disable the port. */
+    if((v&UINT32_C(0xfe0000))&&!wr(x,offset,(v&PRESERVE)|(v&UINT32_C(0xfe0000))))return 0;
     if(x->require_ss){
         unsigned speed=(v>>10)&15;uint32_t pmsc;
         if(!rd(x,offset+4,&pmsc)||(pmsc&0xffff))return 0;
@@ -360,8 +445,7 @@ static int port(struct a733_xhci *x)
     }
     if(!x->announced){x->announced=1;notify(x,A733_XHCI_ATTACH,0,0,0,0);return 1;}
     if(x->port_reset==1) {
-        uint32_t preserve=v&(UINT32_C(0xe000000)|UINT32_C(0xc000)|BIT(9)|UINT32_C(0x1e0));
-        if(!(v&BIT(9))||!wr(x,offset,preserve|BIT(4)))return 0;x->port_reset=2;return 1;
+        if(!(v&BIT(9))||!wr(x,offset,(v&PRESERVE)|BIT(4)))return 0;x->port_reset=2;return 1;
     }
     if(x->port_reset==2) {
         if(v&BIT(4))return 1;
@@ -371,6 +455,29 @@ static int port(struct a733_xhci *x)
         x->port_reset=3;d->port_ready=1;
     }else if(x->port_reset==3&&((v>>10)&15)!=x->speed)return 0;
     return 1;
+}
+/* xHCI 1.2 sections 4.4, 4.6.4 and 4.6.9: before Disable Slot, every endpoint
+ * must be Stopped or idle and every Transfer Event received. Stop each Running
+ * endpoint and reset each Halted one, then disable the slot. Each step needs
+ * its matched completion; anything else fails and retains the controller. */
+static int teardown(struct a733_xhci *x,unsigned j)
+{
+    struct a733_xhci_device *d=&x->devices[j];
+    if(!d->slot)return reclaim(x,j);
+    if(!barrier(x))return 0;
+    if(d->detach==1){
+        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+            struct a733_xhci_endpoint *e=&d->endpoints[i];
+            if(!e->number)continue;
+            unsigned state=get32(d->device+e->number*x->context_bytes)&7;
+            if(state==1||state==2){
+                d->stopping=i+1;return command(x,d,state==1?C_STOP:C_RESET_ENDPOINT,(d->slot<<24)|(e->number<<16));
+            }
+            if(state==4||(e->pending==2&&!finished(x,d,e)))return 0;
+        }
+        d->detach=2;
+    }
+    return command(x,d,C_DISABLE,d->slot<<24);
 }
 static int capabilities(struct a733_xhci *x)
 {
@@ -446,7 +553,8 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->command_kind&&x->command_deadline<x->deadline)x->deadline=x->command_deadline;
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             struct a733_xhci_device *d=&x->devices[j];
-            if(d->port_ready&&d->port_ready!=3&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
+            if((d->detach||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
+            if(d->detach)continue;
             for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if((d->endpoints[i].pending||(i&&d->endpoints[i].opened&&!d->endpoints[i].configured))&&
                 d->endpoints[i].deadline<x->deadline)x->deadline=d->endpoints[i].deadline;
         }
@@ -488,6 +596,8 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->failed)goto failed;
         if(!x->irq_mode||x->irq_service){int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
         if(x->command_kind)break;
+        for(unsigned j=A733_XHCI_DEVICES;j-->0;)if(x->devices[j].detach){if(!teardown(x,j))goto failed;goto done;}
+        if(x->detaching){x->detaching=x->announced=x->removed=x->port_reset=x->speed=0;goto done;}
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             struct a733_xhci_device *d=&x->devices[j];
             if(d->port_ready==1){if(!command(x,d,C_ENABLE,x->slot_type<<16))goto failed;d->port_ready=4;goto done;}
@@ -521,7 +631,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         break;
     default:goto failed;
     }
-done:return x->phase==P_ACTIVE&&x->devices[0].port_ready==3?A733_XHCI_READY:A733_XHCI_PENDING;
+done:return x->phase==P_ACTIVE&&x->devices[0].port_ready==3&&!x->devices[0].detach?A733_XHCI_READY:A733_XHCI_PENDING;
 failed:fault(x);return A733_XHCI_RETAINED;
 }
 int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_number,unsigned speed,uint64_t deadline)
@@ -532,6 +642,7 @@ int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_numbe
     if((hub->speed==4?speed!=4:speed>3)||hub->address!=parent||!hub->hub_configured||port_number>hub->hub_ports||(hub->speed!=3&&hub->speed!=4)||!hub->zero_retired)return 0;
     for(unsigned j=1;j<A733_XHCI_DEVICES&&j<x->cap_slots;++j){
         struct a733_xhci_device *d=&x->devices[j];
+        if(d->detach)continue;
         if(d->port_ready){
             if(d->parent_port!=port_number)continue;
             return x->default_device==j&&!d->zero_retired&&d->parent==hub->slot&&d->speed==speed;
@@ -565,7 +676,7 @@ unsigned a733_xhci_device_speed(const struct a733_xhci *x,unsigned address)
 {
     if(!x||x->self!=x||x->failed)return 0;
     if(!address)return x->default_device<A733_XHCI_DEVICES?x->devices[x->default_device].speed:0;
-    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address)return x->devices[i].speed;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return x->devices[i].speed;
     return 0;
 }
 int a733_xhci_reset_port(struct a733_xhci *x,uint64_t deadline)
@@ -670,9 +781,19 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
 int a733_xhci_abort(struct a733_xhci *x,unsigned address,unsigned ep)
 {
     struct a733_xhci_device *d=device_address(x,address);
-    if(!owner(x)||!d||address!=d->address||ep&~0x8fu)return 0;
+    if(!owner(x)||ep&~0x8fu)return 0;
+    if(!d)return detaching(x,address); /* Detach already revoked its destinations. */
+    if(address!=d->address)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(!e||!e->pending)return 1;e->caller=NULL;e->aborted=1;fault(x);return 1;
+}
+int a733_xhci_detach(struct a733_xhci *x,unsigned address)
+{
+    if(!owner(x)||x->failed||address>127||settled(x,x->lifetime_deadline)!=1)return 0;
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!d||!d->port_ready)return 1; /* Already detaching, or no slot or context exists. */
+    if(d==&x->devices[0])return 0; /* The root device follows its port. */
+    detach(x,d);return 1;
 }
 void a733_xhci_lost(struct a733_xhci *x)
 {if(owner(x))fault(x);}
