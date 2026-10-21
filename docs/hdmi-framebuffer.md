@@ -18,17 +18,30 @@ or independent recovery qualification.
 
 The application uses the existing clock registry, rail ledger, PMIC provider,
 PCK manager, media-clock controller and register mutex. HDMI first prepares its
-actual PHY/controller and disabled TV0. The framebuffer provider borrows those
+actual PHY/controller and disabled TV0. The framebuffer source borrows those
 live PCK and supply reservations, obtains whole-DE and complementary IOMMU
 exclusion, and prepares DE domain 1 using the published power/reset sequence.
+The source is `drivers/display/a733_display_framebuffer.c`, which the
+DisplayPort image (TV1) and the GPU display image (TV0) also use. Each image
+supplies only its session values and output callbacks: the designated task and
+unchanged session, the live output clock, rail, PMIC and PCK leases, and the
+output state that admits each DE action.
+
+Domain preparation first checks that the low four bits of the DE_SYS PCK command
+and status registers agree at OFF (0) or ON (8), then asserts the DE bus and module resets and waits 10 µs. The
+shared fixed domain-ON provider (`a733_de_sys_power`, also used by G2D) adopts
+an ON domain without writes. For an OFF domain it writes the pinned
+`0x170/0x174/0xc00/0xc04/0xc10` delay row, requests ON and waits at most
+10 ms for the status. Any other state, or an expired wait, retains everything.
 It adopts a verified stable 600 MHz DE PLL and authenticated fabric settings.
 It does not invent a cold PLL image. Both IOMMU bus-clock groups and the global DE AHB/MBUS gates must already
 be enabled, consistent with the authenticated initial handoff.
 
 Serialized boot initializes the pool and constructs one complete allocation before
 scheduling starts. Startup admission is checked again before releasing tasks.
-The allocation owns the existing uncached interval
-`0x41c00000..0x41e00000`. Native initialization verifies every CPU translation.
+The allocation must lie inside the uncached pool; in this image it owns the
+pool's complete interval `0x41c00000..0x41e00000`. Native initialization
+verifies every CPU translation.
 The first 32 KiB contains the IOMMU tables. The remaining bytes are mapped read
 only to display master 8 at IOVA `0x10000000`. A 4 KiB guard precedes the pixels;
 the immutable surface starts at IOVA `0x10001000`, physical `0x41c09000`, with a
@@ -76,7 +89,11 @@ and the broader DSI/display requirements remain separate required work.
 
 The focused check is `checks/hdmi-framebuffer.py`. It builds the affected native
 image, reuses its compiled objects in one composition, and continues four faults
-from saved CPU/memory checkpoints. Hardware and scheduling are modeled; the
+from saved CPU/memory checkpoints. The nominal run powers DE_SYS from OFF and
+must write the delay row and ON request in order. A second complete run starts
+from an inherited ON domain and must reach DE start without any PCK write. The
+hook sites and HDMI native structure offsets come from the fixture ELF and its
+debug information. Hardware and scheduling are modeled; the
 prepared HDMI PHY/EDID checkpoint reuses prior component evidence. The new path
 runs actual allocation, table construction, ownership managers, media clocks,
 DE, TV0 and application start/stop code. Source expectations for the new RGB565

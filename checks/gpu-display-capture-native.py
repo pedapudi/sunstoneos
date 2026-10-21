@@ -125,7 +125,7 @@ class Machine(n.Machine):
   for frame in range(2):
    self.shapes.append(bytes(self.u.mem_read(inputs+16+frame*64,20)));offset,count=struct.unpack('<2I',self.u.mem_read(inputs+16+frame*64+20,8));self.canonical.append(bytes(self.u.mem_read(inputs+offset,count)))
  def display_setup(self):
-  e=self.image;self.fb=e.address('framebuffer');self.fl=e.layouts['hdmi_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=e.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=e.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=e.layouts['a733_de'];self.bank=self.get(self.fb+self.fl['extent']);r.Machine.setup(self)
+  e=self.image;self.fb=e.address('framebuffer');self.fl=e.layouts['a733_display_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=e.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=e.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=e.layouts['a733_de'];self.bank=self.get(self.fb+self.fl['extent']);r.Machine.setup(self)
  def deliver(self,packet):
   self.rx.extend(packet);self.tx=bytearray()
   for i in range(20):
@@ -215,7 +215,7 @@ def main():
   assert 0<m.get(m.de+m.dl['replay_rcq_done'])<m.get(m.de+m.dl['replay_frame_end'])
   preserve(m,a.output,'presented-checkpoint');print('PASS source-verified 0/1/0 records with post-completion timestamps',flush=True)
  # Recreate only the private address aliases after restoring preserved memory.
- m.fb=e.address('framebuffer');m.fl=e.layouts['hdmi_framebuffer'];m.hdmi=m.app+m.af['hdmi'];m.hl=e.layouts['a733_hdmi_native'];m.h=m.hdmi+m.hl['controller'];m.hcl=e.layouts['a733_hdmi'];m.de=m.fb+m.fl['de'];m.dl=e.layouts['a733_de'];m.deadline=m.get(m.app+m.af['deadline']);m.bank=m.get(m.fb+m.fl['extent'])
+ m.fb=e.address('framebuffer');m.fl=e.layouts['a733_display_framebuffer'];m.hdmi=m.app+m.af['hdmi'];m.hl=e.layouts['a733_hdmi_native'];m.h=m.hdmi+m.hl['controller'];m.hcl=e.layouts['a733_hdmi'];m.de=m.fb+m.fl['de'];m.dl=e.layouts['a733_de'];m.deadline=m.get(m.app+m.af['deadline']);m.bank=m.get(m.fb+m.fl['extent'])
  if (a.output/'terminal-checkpoint.json').exists():restore(m,a.output,'terminal-checkpoint')
  else:
   m.task=m.get(m.app+m.af['handles']+8);m.ticks=m.get(m.app+m.af['stop_at'])*24

@@ -103,16 +103,13 @@ void a733_smp_diagnostic_start(void)
           &app.clocks,&app.rails,&app.pins)||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))
         platform_panic("HDMI PMIC",9);
-#if SUNSTONE_HDMI_FRAMEBUFFER
-    framebuffer.self=&framebuffer;framebuffer.session=app.session.framebuffer;
-#endif
     struct a733_hdmi_native_config config={.clocks=&app.clocks,.rails=&app.rails,
         .pmic=&app.pmic,.locks=&app.locks,.pck=&app.pck,.pck_client=app.session.pck_client,
         .task=app.handles[1],.owner=app.session.owner,.epoch=app.session.epoch,
         .request=app.session.request,.supervision=app.session.supervisor,
 #if SUNSTONE_HDMI_FRAMEBUFFER
         .recovery_mode=A733_HDMI_SUPERVISED_FRAMEBUFFER,
-        .pixel_source=hdmi_framebuffer_source,.pixel_context=&framebuffer
+        .pixel_source=a733_display_framebuffer_source,.pixel_context=&framebuffer
 #else
         .recovery_mode=A733_HDMI_SUPERVISED_PATTERN
 #endif

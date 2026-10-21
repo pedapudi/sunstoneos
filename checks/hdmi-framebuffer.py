@@ -37,6 +37,7 @@ def main():
  image=build/'sunstone-a733-hdmi.elf'
  units=[u for u in json.loads((build/'compile_commands.json').read_text()) if 'sunstone-a733-hdmi.dir/' in u['command']]
  selected=['apps/hdmi/framebuffer.c','apps/hdmi/output.c','platform/a733/hdmi_native.c',
+  'drivers/display/a733_display_framebuffer.c','drivers/power/a733_de_sys_power.c',
   'drivers/display/a733_display_engine.c','drivers/display/a733_tcon_lcd.c','drivers/display/a733_dsi_video.c','drivers/display/a733_dsi_phy.c',
   'drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c',
   'drivers/clock/a733_clock_leases.c','drivers/clock/a733_media_clock.c','drivers/clock/a733_media_clock_native.c',
@@ -217,6 +218,7 @@ def main():
    for i,(b,n) in enumerate(regions):(out/f'failed-memory-{i}.bin').write_bytes(bytes(uc.mem_read(b,n)))
    save(out/'failed-state.json',dict(pc=uc.reg_read(UC_ARM64_REG_PC),pstate=uc.reg_read(UC_ARM64_REG_PSTATE),events=state,elf_sha256=sha(exe)))
    raise SystemExit(1)
+ initial=(uc.context_save(),[(b,bytes(uc.mem_read(b,n))) for b,n in regions])
  execute('frame-allocation-translation-DE-TV0-output-stop',sym['framebuffer_check_run'],100000000)
  save(out/'nominal-trace.json',state)
  events=state['events'];start=next(i for i,e in enumerate(events) if e[0]==0x05008140 and e[2]==1)
@@ -235,6 +237,14 @@ def main():
   before_events=len(state['events'])
   execute(label,uc.reg_read(UC_ARM64_REG_PC),10000000)
   if mode==4:assert not any(0x05000000<=e[0]<0x05400000 for e in state['events'][before_events:])
+ # The same composition from an inherited ON8 DE_SYS domain adopts it without
+ # any PCK write; the nominal run above powered the domain from OFF0.
+ assert [(e[0],e[2]) for e in events if 0x07061000<=e[0]<0x07062000]==[(0x07061170,0x1f1f1f),(0x07061174,0x1f1f),(0x07061c00,0x08080808),(0x07061c04,0x0808),(0x07061c10,8),(0x07061000,8)]
+ which='inherited-domain-on';context,memory=initial
+ for b,data in memory:uc.mem_write(b,data)
+ uc.context_restore(context);state=dict(events=[],fault=0);put(0x07061000,8);put(0x07061008,8)
+ execute('inherited-domain-on-adopted-without-PCK-writes',sym['framebuffer_check_run'],100000000)
+ assert not any(0x07061000<=e[0]<0x07062000 for e in state['events']) and any(e[0]==0x05008140 and e[2]==1 for e in state['events'])
  assert all(sha(Path(p))==v['sha256'] for p,v in inputs.items())
- save(out/'completed.json',dict(passed=True,nominal_runs=1,checkpoint_faults=4,physical=False,image_sha256=sha(image),composition_sha256=sha(exe),total_instruction_limit=140000000,total_wall_limit_seconds=120))
+ save(out/'completed.json',dict(passed=True,nominal_runs=2,checkpoint_faults=4,physical=False,image_sha256=sha(image),composition_sha256=sha(exe),total_instruction_limit=240000000,total_wall_limit_seconds=120))
 if __name__=='__main__':main()

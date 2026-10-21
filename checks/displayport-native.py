@@ -126,7 +126,7 @@ def main():
   (a.output/'failure.json').write_text(json.dumps(dict(pc=m.u.reg_read(UC_ARM64_REG_PC),trace=m.trace[-40:],physical=False),indent=2)+'\n')
   raise
  assert m.stopped and len(m.tasks)==6,(m.tasks,m.trace[-20:])
- f=m.app+m.af['memory'];fl=image.layouts['dp_memory'];el=image.layouts['device_memory_extent']
+ f=m.app+m.af['memory'];fl=image.layouts['a733_display_framebuffer'];el=image.layouts['device_memory_extent']
  cpu=m.get(f+fl['extent']+el['cpu']);physical=m.get(f+fl['extent']+el['physical']);size=m.get(f+fl['extent']+el['bytes'])
  assert size==2097152 and cpu==physical and cpu%16384==0 and 0x78000000<=cpu<cpu+size<=0x79000000
  data=bytes(m.u.mem_read(cpu,size));(a.output/'allocation.bin').write_bytes(data);(a.output/'page-table.bin').write_bytes(data[:32768])

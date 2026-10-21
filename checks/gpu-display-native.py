@@ -178,7 +178,7 @@ def main():
     m.put(service+sl['owner'],0,4);m.put(service+sl['phase'],3,4)
     m.put(submission+rl['phase'],9,4);m.put(submission+rl['texture_output_state'],1,4)
     m.put(submission+rl['texture_output_client'],0,4)
-    fb=image.address('framebuffer');fl=image.layouts['hdmi_framebuffer'];extent=fb+fl['extent'];bank=m.get(extent)
+    fb=image.address('framebuffer');fl=image.layouts['a733_display_framebuffer'];extent=fb+fl['extent'];bank=m.get(extent)
     total=1280*720*4;framebytes=1847296;hashes=[]
     inputs=m.call('gpu_display_inputs_get')
     for frame in range(2):

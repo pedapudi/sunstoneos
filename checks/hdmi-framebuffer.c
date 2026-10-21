@@ -59,7 +59,6 @@ static void setup(void)
     app.session.framebuffer=(struct hdmi_framebuffer_session){.isolation={1},.memory={2},.authority=66,
         .fabric={0,0x80000000,0x80000000},.fabric_hz={24000000,24000000,24000000},
         .iommu_gates={0x10007,0x10007}};
-    framebuffer.self=&framebuffer;framebuffer.session=app.session.framebuffer;
     assert(a733_counter_clock_init(&app.counter,24000000));
     assert(a733_platform_locks_init(&app.locks,a733_counter_clock_now,&app.counter));
     assert(a733_clock_leases_init(&app.clocks,a733_counter_clock_now,&app.counter));
@@ -95,7 +94,7 @@ static void setup(void)
     struct a733_hdmi_native_config config={.clocks=&app.clocks,.rails=&app.rails,.pmic=&app.pmic,
         .locks=&app.locks,.pck=&app.pck,.pck_client=3,.task=(void *)1,.owner=11,.epoch=22,
         .request=app.session.request,.recovery_mode=A733_HDMI_SUPERVISED_FRAMEBUFFER,.supervision=33,
-        .pixel_source=hdmi_framebuffer_source,.pixel_context=&framebuffer};
+        .pixel_source=a733_display_framebuffer_source,.pixel_context=&framebuffer};
     assert(a733_hdmi_native_init(&app.hdmi,&config));
     assert(hdmi_framebuffer_boot());scheduler=1;
     assert(a733_hdmi_prepare(&app.hdmi.controller,app.deadline)==1);
@@ -122,7 +121,7 @@ static void retained(void)
 }
 int framebuffer_check_run(void)
 {
-    setup();assert(hdmi_framebuffer_source(&framebuffer,1)==-1);
+    setup();assert(a733_display_framebuffer_source(&framebuffer,1)==-1);
     unsigned checkpoint=0,start_checkpoint=0;
     for(unsigned i=0;i<4000&&atomic_load(&app.state)!=HDMI_APP_ACTIVE;++i){
         if(framebuffer.stage==2&&checkpoint<1){checkpoint=1;framebuffer_checkpoint(1);

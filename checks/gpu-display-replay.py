@@ -25,7 +25,7 @@ class Machine(n.Machine):
   assert record['image_sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
   self.scheduler=2;self.task=self.get(self.app+self.af['handles']+8);self.u.reg_write(UC_ARM64_REG_PSTATE,0x345)
   self.stopped=False
-  self.fb=image.address('framebuffer');self.fl=image.layouts['hdmi_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=image.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=image.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=image.layouts['a733_de'];self.holders={};self.events=[];self.queue=0;self.status=0;self.status_reads=0;self.races=[0,0];self.fault=0;self.critical=0
+  self.fb=image.address('framebuffer');self.fl=image.layouts['a733_display_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=image.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=image.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=image.layouts['a733_de'];self.holders={};self.events=[];self.queue=0;self.status=0;self.status_reads=0;self.races=[0,0];self.fault=0;self.critical=0
   for base,count in [(0x02002000,0x2000),(0x03900000,0x20000),(0x05000000,0x400000),(0x07010000,0x1000),(0x07061000,0x1000),(0x07090000,0x1000)]:self.u.mem_map(base,count)
   for address,value in [(0x07090160,0x10000002),(0x070101ac,1),(0x02002000,0xf8000000|(99<<16)|(99<<8)),(0x020022e0,0xf4000000|(3<<16)|(99<<8)),(0x02003928,0x20002),(0x020039a8,0x20000),(0x020025c0,1<<5),(0x020025e0,1<<11),(0x02002580,0x80000000),(0x02002588,0x80000000),(0x020025e4,0x40302),(0x0200258c,0x10007),(0x020025b4,0x10007)]:self.put(address,value,4)
   for name in ['a733_pmic_live','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','a733_hdmi_service','a733_hdmi_stop','a733_hdmi_poll','vTaskSuspend']:
@@ -90,7 +90,7 @@ class Machine(n.Machine):
   ml=self.image.layouts['a733_gpu_resource_manager'];self.u.mem_write(self.hdmi+self.hl['pck_lease'],bytes(self.u.mem_read(pck+ml['leases']+client*16,16)))
   self.put(self.h+self.hcl['state'],9,4)
   for i in range(3000):
-   result=self.call('hdmi_framebuffer_prepare');self.ticks+=2400
+   result=self.call('a733_display_framebuffer_prepare',self.fb);self.ticks+=2400
    if result!=0:break
   assert result==1,(result,i,self.get(self.fb+self.fl['stage'],4),self.trace[-20:])
   assert self.get(self.de+self.dl['state'],4)==2

@@ -7,7 +7,9 @@ function(sunstone_gpu_display_application target)
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/render.c"
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/display.c"
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/usb.c"
-    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/observation.c")
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/observation.c"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../drivers/display/a733_display_framebuffer.c"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../../drivers/power/a733_de_sys_power.c")
   target_include_directories(${target} BEFORE PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
   target_compile_definitions(${target} PRIVATE SUNSTONE_GPU_DISPLAY=1 SUNSTONE_HDMI_FRAMEBUFFER=1)
 endfunction()
