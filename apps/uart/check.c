@@ -11,10 +11,11 @@
 #include <stdio.h>
 #include <string.h>
 #define UART_OUTPUT_BYTES 144u
+typedef void *TaskHandle_t;
 struct uart_application {
  struct {unsigned tx_bytes,rx_bytes;} session;
  struct a733_uart_platform platform;
- struct gicv3_spi irq;
+ struct gicv3_spi irq;TaskHandle_t handle;
  atomic_uint result,failed,pending,irq_fault,notifications;
  unsigned masked,armed,tx_irqs,rx_irqs,other_irqs;
  unsigned stage;size_t sent,received;uint64_t deadline;
@@ -24,8 +25,10 @@ static struct uart_application uart;
 static uint64_t clock_us;
 static unsigned drop,corrupt,line_error,write_uncertain,retain_calls,service_writes,closing,close_failed,close_wait;
 static unsigned cause,enabled,active,sync_wait,critical,rearm_failed;
-static uint8_t fifo[32];static unsigned head,tail;
-typedef unsigned UBaseType_t;
+static uint8_t fifo[32];static unsigned head,tail,task_notifies;
+typedef unsigned UBaseType_t;typedef int BaseType_t;
+#define pdFALSE 0
+#define pdTRUE 1
 #define taskENTER_CRITICAL() do {assert(!critical);critical=1;} while(0)
 #define taskEXIT_CRITICAL() do {assert(critical);critical=0;} while(0)
 static UBaseType_t isr_enter(void){taskENTER_CRITICAL();return 0;}
@@ -33,7 +36,10 @@ static UBaseType_t isr_enter(void){taskENTER_CRITICAL();return 0;}
 #define taskEXIT_CRITICAL_FROM_ISR(saved) do {(void)(saved);taskEXIT_CRITICAL();} while(0)
 static uint64_t a733_smp_counter(void){return clock_us*24;}
 static int uart_live(void){return !atomic_load(&uart.failed);}
-static void vTaskDelay(unsigned n){(void)n;}
+static void vTaskNotifyGiveFromISR(TaskHandle_t t,BaseType_t *woken)
+{assert(critical&&t==uart.handle&&woken);++task_notifies;*woken=pdTRUE;}
+static void portYIELD_FROM_ISR(BaseType_t woken){assert(!critical);(void)woken;}
+static uint32_t ulTaskNotifyTake(BaseType_t clear,unsigned ticks){(void)clear;(void)ticks;return 0;}
 int gicv3_spi_mask(const struct gicv3_spi *s)
 {assert(critical&&s==&uart.irq);enabled=0;return 1;}
 int gicv3_spi_rearm(const struct gicv3_spi *s)
@@ -76,7 +82,7 @@ static void setup(void)
 {
  memset(&uart,0,sizeof(uart));clock_us=1;drop=corrupt=line_error=write_uncertain=retain_calls=service_writes=closing=close_failed=0;
  cause=enabled=active=sync_wait=critical=rearm_failed=0;uart.masked=1;uart.irq=(struct gicv3_spi){0x3400000,36};
- close_wait=2;head=tail=0;uart.session.tx_bytes=uart.session.rx_bytes=32;uart.deadline=10000;uart.platform.initialized=1;
+ close_wait=2;head=tail=task_notifies=0;uart.handle=(TaskHandle_t)&uart;uart.session.tx_bytes=uart.session.rx_bytes=32;uart.deadline=10000;uart.platform.initialized=1;
  for(unsigned i=0;i<32;++i)uart.tx[i]=(uint8_t)(i*7);
  uart.platform.uart=(struct a733_uart){.plan={.base=0x2502000,.actual_baud=115384},.ops={rd,wr,now},.state=A733_UART_READY,.ier=5};
 }
@@ -99,7 +105,7 @@ int main(int argc,char **argv)
  assert(step()==0&&closing&&!atomic_load(&uart.result));assert(step()==0&&step()==0&&!atomic_load(&uart.result));
  assert(step()==1&&atomic_load(&uart.result)==1);
  assert(!memcmp(uart.payload+32,uart.payload+64,32)&&!memcmp(uart.payload+96,(uint8_t[32]){0},32));
- assert(atomic_load(&uart.notifications)==2&&uart.tx_irqs==1&&uart.rx_irqs==1);
+ assert(atomic_load(&uart.notifications)==2&&task_notifies==2&&uart.tx_irqs==1&&uart.rx_irqs==1);
  unsigned writes=service_writes;clock_us=uart.deadline+1;assert(uart_step()==1&&service_writes==writes);
  setup();started();clock_us=uart.deadline;assert(uart_step()==-1&&!service_writes&&!enabled&&retain_calls==1); /* Lost IRQ has no polling fallback. */
  setup();drop=1;started();deliver(2);assert(step()==0&&uart.sent==32);clock_us=uart.deadline;assert(uart_step()==-1&&!enabled);

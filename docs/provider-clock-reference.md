@@ -142,3 +142,28 @@ the evidence. Firmware boot, GIC/startup and physical HDMI operation were not
 executed. Architectural services, scheduling, MMIO, electrical state and analog
 admission were modeled. No electrical or standard-compliance qualification is
 claimed for either nominal mode or the approximate raw-26 MHz clocks.
+
+## Video engine and PCIe
+
+The VE decoder binding (`drivers/video/a733_video_platform.c`) and the VE
+encoder binding (`drivers/video/a733_video_encode_platform.c`) check the
+reference with `a733_clock_ref24_valid()`. Both therefore admit the 26 MHz
+board's oscillator word `0x983fb0f7` with reference word `0xf8675f00`
+(N=96, M=104). Each computes the selected VE PLL rate as 24 MHz × N / M and
+requires it to equal the private module rate. The encoder also limits the
+reference multiplier to 80–116. Neither binding retunes PLL_REF or a VE PLL.
+See [video platform](video-platform.md) for the focused decoder cases.
+
+PCIe (`drivers/pci/a733_pcie.c`) has two clock inputs with different
+requirements:
+
+- **Controller parents.** The local AUX clock selects SYS24M, and the fabric
+  and AXI parents use SYS24M or admitted PERI0 branches. Admission checks
+  SYS24M with `a733_clock_ref24_valid()`.
+- **COMB1 PHY.** The PHY takes the raw DCXO through the DCXO_SERDES1 gate
+  (bit 5 of `0x0709016c`). Its fixed 91-entry register table is verified only
+  for a 24 MHz oscillator, so admission also requires
+  `a733_clock_dcxo_hz()` to report 24 MHz.
+
+A 19.2 MHz or 26 MHz board is therefore refused before PHY programming, even
+when its PLL_REF factors produce a valid SYS24M. See [PCIe](pcie.md).

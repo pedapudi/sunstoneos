@@ -17,6 +17,9 @@ int main(int argc,char **argv)
 {
  assert(argc==2);struct pcie_session s;FILE *f=fopen(argv[1],"rb");assert(f&&fread(&s,1,sizeof(s),f)==sizeof(s)&&fgetc(f)==EOF&&!fclose(f));
  expected=&s;assert(pcie_session_valid(&s));
+ /* The startup bound covers PERST timing plus the endpoint readiness window. */
+ for(unsigned i=0;i<4;++i){static const uint64_t t[4]={1499999,1500000,10000000,10000001};
+  struct pcie_session b=s;b.link_timeout_us=t[i];assert(pcie_session_valid(&b)==(i==1||i==2));}
  void *mapped=mmap((void *)A733_BOARD_SESSION_ADDRESS,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);assert(mapped==(void *)A733_BOARD_SESSION_ADDRESS);memcpy(mapped,&s,sizeof(s));
  struct a733_smp_contract c={.magic=A733_PCIE_CONTRACT_MAGIC,.version=2,.bytes=224,.epoch=s.board.epoch,.generation=s.board.generation,.inverse_generation=~s.board.generation,.lease=s.board.lease,.armed_at=100,.startup_deadline=24000100,.diagnostic_deadline=1440000100,.expires_at=1440000100,.reserved={A733_BOARD_SESSION_ADDRESS,sizeof(s)}};
  memcpy(c.build_id,s.board.image,32);storage_digest_bytes(&s,sizeof(s),(void *)&c.reserved[2]);assert(a733_smp_contract_valid(&c,101));

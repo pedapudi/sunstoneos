@@ -3,12 +3,15 @@
 #define a733_smp_contract_valid board_contract_unused
 #include "../board/admission.c"
 #undef a733_smp_contract_valid
+/* Startup must cover the 100 ms PERST hold after PHY completion and the 1 s
+ * endpoint readiness window after release; 400 ms remain for earlier phases. */
+#define PCIE_LINK_TIMEOUT_MIN_US 1500000u
 int pcie_session_valid(const struct pcie_session *s)
 {
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
  s->magic!=A733_PCIE_SESSION_MAGIC||s->version!=2||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
  s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||s->pck_client>=16||
- s->link_timeout_us<250000||s->link_timeout_us>10000000||!s->vendor||s->vendor==65535||
+ s->link_timeout_us<PCIE_LINK_TIMEOUT_MIN_US||s->link_timeout_us>10000000||!s->vendor||s->vendor==65535||
  !s->device||s->device==65535||s->bar>5||s->test_timeout_us<1000||s->test_timeout_us>5000000||
  !present(s->endpoint_test,32)||!present(s->initial,32)||!present(s->electrical,32)||!present(s->clocks,32)||!present(s->supervision,32))return 0;
  for(unsigned i=0;i<4;++i){

@@ -14,6 +14,16 @@ seal authenticate and publish retained copies before provider construction. Both
 application hooks reject a differing board prefix. Only the matching admitted
 session can extend pin authority to PD20–23.
 
+The startup bound is the session's link timeout, from 1.5 s to 10 s. Startup
+holds PERST for 100 ms after PHY completion, and the endpoint may then take up
+to 1 s after PERST release to answer configuration reads (see
+[PCIe](pcie.md)). The minimum leaves 400 ms for the clock, rail, PMIC, pin
+and PHY phases. The device's session validator refuses a shorter bound before
+provider construction, and the endpoint test application applies the same
+range. `apps/pcie/prepare.py` and `apps/pcie-test/prepare.py` still accept
+bounds from 250 ms, so a bundle prepared with a bound below 1.5 s is refused
+when the device starts.
+
 One task owns the existing controller and native adapter. It uses the same clock
 registry, rail ledger, PCK manager, pin manager, PMIC provider and register mutex
 as USB. The controller reserves PCIE0/COMB1 exclusively, holds the shared parent
