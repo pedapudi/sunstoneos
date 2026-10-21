@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import runpy
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 
 SOURCE_HASHES = {'src/imagination/vulkan/pvr_arch_cmd_buffer.c': '9b81fe28911aaba1335fbabfc7179660f4ae413b876cffbf82039d34be32761b',
@@ -163,7 +164,7 @@ def main():
                     [str(old / 'mesa-pds.o'), str(build / 'src/util/libmesa_util.a'), '-Wl,--gc-sections',
                      '-pthread', '-lm', '-o', str(out / 'reference')], build, out, 'reference-build'))
     cmds.append(run(['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I' + str(root / 'include')] +
+                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-I' + str(root / 'include')] +
                    [str(root / p) for p in inputs] + ['-o', str(out / 'native')], root, out, 'native-build'))
     comparisons = []
     for variant in [0, 1]:

@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
@@ -59,7 +60,7 @@ typedef uint64_t aligned_u64 __attribute__((aligned(8)));
     compiler=Path(shutil.which(a.compiler)).resolve()
     inputs.update(native+[ROOT/'checks/pvr-render.c',ROOT/'checks/pvr-render.py',o/'reference.h',compiler])
     inputs.update(ROOT/'include'/('pvr_render_'+n+'.h') for n in ('context','job','programs'))
-    command=[str(compiler),'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-MD','-I'+str(o),'-I'+str(ROOT/'include'),str(ROOT/'checks/pvr-render.c'),*map(str,native),'-o',str(o/'check')]
+    command=[str(compiler),'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-MD','-I'+str(o),'-I'+str(ROOT/'include'),str(ROOT/'checks/pvr-render.c'),*map(str,native),'-o',str(o/'check')]
     snapshots={}
     for i,p in enumerate(sorted(inputs)):
         d=o/'inputs'/str(i)/p.name;d.parent.mkdir(parents=True);shutil.copy2(p,d);snapshots[str(p)]={'snapshot':str(d),'sha256':sha(p)}

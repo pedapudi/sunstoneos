@@ -1,4 +1,12 @@
-# Host-only checks; neither package enters the target image.
+# Host-only checks; no package enters the target image.
 unicorn==2.1.4
 pyusb==1.3.1
 pyelftools==0.33
+# Disassembles linked entry code in the SMP model (a733-smp-cached.py and its users).
+capstone==5.0.9
+# AES key-wrap vectors in aic8800-supplicant.py.
+cryptography==46.0.5
+# npu-conv-reference.py and tools/npu-*-fixture.py run inside the pinned NPU
+# compiler image (docs/npu-compiler.md), not in this environment. That image
+# provides numpy==1.19.5, PyYAML==6.0 and onnx==1.12.0; its full package list is
+# ~/.cache/sunstoneos/evidence/npu-compiler-20261016/python-packages.txt.

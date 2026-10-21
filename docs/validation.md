@@ -37,7 +37,8 @@ prerequisite ownership, clocks, generation and deadlines through actual setup
 calls. Audit these prerequisites together before running the remaining cases;
 assigning a later state does not establish the effects of earlier states.
 
-Keep these checks in the existing harness and reuse their outputs. Reject empty
+Keep these checks under `checks/` with the shared policy described in the next
+section, and reuse their outputs. Reject empty
 dependency inventories when recording build evidence. Routine setup repairs
 require owner verification; request another substantive review only when the
 repair changes coverage, modeled boundaries or production behavior. Preserve
@@ -46,6 +47,71 @@ completed results and resume only failed or affected steps.
 Collect an executable's dependency inventory from its actual linked objects.
 A compilation database can also contain unrelated targets. Report entries outside
 the selected executable separately; their exclusion is not a source change.
+
+## Apply the shared check policy
+
+Host checks are standalone Python scripts. Run them with the host virtual
+environment, `~/.cache/sunstoneos/venv/bin/python`, which is installed from
+[checks/host-requirements.txt](../checks/host-requirements.txt). The NPU
+reference checks and fixture tools are the exception: they run inside the pinned
+NPU compiler image described in [npu-compiler.md](npu-compiler.md).
+
+[checks/harness.py](../checks/harness.py) holds the policy that every check must
+follow:
+
+- **Assertions stay enabled.** Checks decide pass or fail with `assert`, which
+  `python3 -O` and `PYTHONOPTIMIZE` remove. Importing the module under either
+  setting stops the check. Checks that do not import it carry the same one-line
+  `__debug__` guard.
+- **Sanitizers stop at the first report.** Every host build that enables
+  `-fsanitize=...undefined` also passes `-fno-sanitize-recover=all`. Without it,
+  Clang and GCC print an undefined-behavior report and the program still exits
+  with status 0. `SANITIZE` is the complete flag list for new checks.
+  `environment()` adds `UBSAN_OPTIONS=halt_on_error=1` for child processes as a
+  second guard.
+- **Reruns keep earlier attempts.** `Steps` records labelled commands in
+  `steps.json` for checks that resume with `--run-only`. A step that passed with
+  the same command is skipped. A retried step appends its command to the existing
+  command log and writes `<label>-attempt<N>.log` beside the earlier log. Its
+  earlier record moves into the step's `history`.
+
+## Find the checks that cover a change
+
+[checks/index.json](../checks/index.json) lists every Python check under
+`checks/` except the two policy modules. Each entry records:
+
+- the first line of the check's docstring;
+- the Markdown documents that name the check;
+- its required command-line arguments;
+- the areas of `~/.cache/sunstoneos` that it names, such as `sources` or
+  `evidence`;
+- whether it can reach USB devices, and whether it is a helper module that other
+  checks load.
+
+A check is *pure-host* when it can run with no input other than a new output
+directory: no USB access, no cached evidence or build output, and no other
+required argument. Pinned sources and host toolchains under the cache are
+allowed. Most checks are not pure-host, because they need an image, a bundle or
+earlier evidence; the index names those inputs.
+
+[checks/check-index.py](../checks/check-index.py) maintains the index and
+selects checks for changed paths:
+
+```sh
+python3 checks/check-index.py --write     # regenerate after adding or editing a check
+python3 checks/check-index.py --verify    # fail if the index is missing, extra or out of date
+python3 checks/check-index.py --changed drivers/rtc include/a733_rtc.h
+~/.cache/sunstoneos/venv/bin/python checks/check-index.py --changed drivers/rtc \
+  --run --output /absolute/new/directory
+```
+
+`--changed` prints each selected check with the inputs it needs. Adding `--run`
+runs only the selected pure-host checks, each with its own log under the output
+directory, and writes `results.json`. The selection is textual. A check covers
+a path when the check, or a `checks/` file that it names, names that path or a
+directory above it, or reaches it through `#include`. A path assembled from
+separate string segments is not found. An empty selection therefore does not
+show that no check covers the change.
 
 ## Reuse valid evidence
 

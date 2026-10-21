@@ -5,12 +5,13 @@ import ast
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 sys.dont_write_bytecode=True
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import harness
 ROOT=Path(__file__).resolve().parents[1]
 CACHE=Path.home()/'.cache/sunstoneos'
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -36,17 +37,8 @@ def main():
         save(out/'source-inputs.json',{str(p.relative_to(source)):sha(p) for p in source.rglob('*') if p.is_file()})
     else:
         for name,digest in json.loads((out/'runtime-inputs.json').read_text()).items():assert sha(Path(name))==digest,name
-    steps_path=out/'steps.json';steps=json.loads(steps_path.read_text()) if steps_path.exists() else {}
-    commands_path=out/('setup-commands.json' if args.setup_only else 'runtime-commands.json')
-    commands=[]
-    def command(label,values):
-        values=list(map(str,values))
-        if steps.get(label,{}).get('exit')==0:assert steps[label]['command']==values;return
-        commands.append(values);save(commands_path,commands)
-        result=subprocess.run(values,capture_output=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
-        (out/(label+'.log')).write_bytes(result.stdout+result.stderr);steps[label]={'exit':result.returncode,'command':values};save(steps_path,steps)
-        if result.returncode:raise RuntimeError(label+' failed; inspect retained log')
-    compiler=Path('/usr/bin/clang-21');linker=CACHE/'host/usr/bin/ld.lld-21'
+    steps=harness.Steps(out,'setup-commands.json' if args.setup_only else 'runtime-commands.json');command=steps.command
+    compiler=harness.CLANG;linker=harness.LLD
     if args.setup_only:
         configuration=out/'configuration';configuration.mkdir()
         text=(source/'apps/board/CMakeLists.txt').read_text()
@@ -82,10 +74,8 @@ def main():
             *[p for package in (unicorn,elftools) for p in Path(package.__file__).parent.rglob('*') if p.is_file() and '__pycache__' not in p.parts]]})
         print('Setup passed; no runtime cases executed.');return
     cases=module('session_cases',source/'checks/board-session-seal-cases.py')
-    def step(name,result=None):
-        if result is None:return steps.get(name,{}).get('exit')==0
-        steps[name]={'exit':0,**result};save(steps_path,steps)
-    cases.run(out,source,step)
+    try:cases.run(out,source,steps.case)
+    except BaseException as error:steps.failed(error);raise
     save(out/'result.json',{'passed':True,'physical_access':False,'scope':'Actual linked session/profile copying, hashing, identity and provider admission; EL3/cache/SID/translation/provider work are modeled boundaries.'})
     print('PASS retained authenticated board/Bluetooth sessions and profiles.')
 if __name__=='__main__':main()

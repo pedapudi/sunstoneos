@@ -9,6 +9,7 @@ import subprocess
 import tarfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 ROOT = Path(__file__).resolve().parents[1]
 SHIM = r'''
@@ -162,7 +163,7 @@ def main():
         dst = out / 'inputs' / str(i) / p.name; dst.parent.mkdir(parents=True); shutil.copy2(p, dst)
         snapshots[str(p)] = {'sha256': sha(p), 'snapshot': str(dst.relative_to(out))}
     command = [args.compiler, '-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-parameter',
-               '-Wno-unused-variable','-Wno-sign-compare','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+               '-Wno-unused-variable','-Wno-sign-compare','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer',
                '-I'+str(out),'-I'+str(ROOT/'include'),str(ROOT/'checks/pvr-render-target.c'),
                str(ROOT/'drivers/gpu/pvr_render_target.c'),'-o',str(out/'check')]
     (out/'compile-command.json').write_text(json.dumps(command,indent=2)+'\n')

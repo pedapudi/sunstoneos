@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
@@ -94,7 +95,7 @@ def main():
                'drivers/clock/a733_clock_leases.c', 'drivers/gpu/a733_gpu_resources.c',
                'drivers/gpu/a733_gpu_clock_parent.c']]
     run('host-build', [clang, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                      '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                      '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
                       '-Iinclude', *sources, '-o', host])
     # Record executable identity before its one declared execution.
     host_hash = hashlib.sha256(host.read_bytes()).hexdigest()

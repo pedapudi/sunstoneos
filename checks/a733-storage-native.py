@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 
 def main():
@@ -58,7 +59,7 @@ def main():
          '-Iplatform/a733-storage-update','-I'+str(kernel/'include'),'-I'+str(kernel/'portable/GCC/ARM_AARCH64_SRE'),'-I'+str(tiny/'src')]
     defines=['-DINCLUDE_xSemaphoreGetMutexHolder=1','-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1']
     flags=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function',
-        '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections']+inc+defines
+        '-fsanitize=address,undefined','-fno-sanitize-recover=all','-ffunction-sections','-fdata-sections']+inc+defines
     providers=['drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c',
         'drivers/gpu/a733_gpu_resources.c','drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c']
     storage=['drivers/storage/a733_storage_update.c','drivers/storage/storage_digest.c','drivers/storage/storage_update_usb.c',
