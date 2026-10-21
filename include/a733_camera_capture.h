@@ -94,9 +94,10 @@ enum a733_capture_state {
     A733_CAPTURE_VIDEO_STOP
 };
 /* Shortest stopped-producer interval before each rearm status check. The
- * interval is three frame periods of the selected mode, and at least this,
- * so a frame the sensor finishes after its stop readback ends inside the
- * first interval. Three periods of the 30 frame/s VGA mode equal it. */
+ * interval is three frame periods of the mode the sensor driver derived,
+ * rounded up to whole microseconds, and at least this, so a frame the sensor
+ * finishes after its stop readback ends inside the first interval. Three
+ * periods of the 30 frame/s VGA mode equal it exactly. */
 #define A733_CAPTURE_QUIET_US 100000u
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
@@ -153,9 +154,16 @@ int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
  * with the parser in video capture mode. Polls return 1 once STREAMING is
  * reached and after each further step; the owner must poll well within one
  * frame period, as each poll observes at most one frame start. DMA status
- * decides delivery: see a733_camera_dma_stream. Faults retain every
- * resource, as for still images. */
+ * decides delivery: see a733_camera_dma_stream. The deadline bounds the
+ * preparation and then the stream itself until renew replaces it; at the
+ * deadline the stream faults. Faults retain every resource, as for still
+ * images. */
 int a733_camera_capture_open_stream(struct a733_camera_capture *,uint64_t deadline);
+/* From STREAMING only: replace the coordinator's and the DMA's deadline with
+ * one later than the last clock reading, so the owner can keep a short
+ * watchdog of a few frame periods and renew it while it keeps polling.
+ * No I/O; returns 1, or -1 with both deadlines unchanged. */
+int a733_camera_capture_renew(struct a733_camera_capture *,uint64_t deadline);
 /* The oldest delivered frame: its slot, frame-start count, and CPU views of
  * its Y and UV planes (width x height bytes each, stride width). The views
  * are read-only and stay valid until give; returns 1, 0 if none, -1. */

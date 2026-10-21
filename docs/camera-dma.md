@@ -134,16 +134,23 @@ slot 0. Every slot stays device-owned until it is delivered.
 
 In `STREAMING` each poll performs one operation: a pending slot invalidation,
 a status read, the acknowledgement of the observed flags only, one of the
-two address writes, or a status read after them. Frame-done (bit 1) marks the
-active frame complete. A frame start (bit 7) activates the programmed slot,
-delivers the previous slot if its frame completed, and programs the next free
-slot; the reference driver's frame-start handler relies on the same latching
+two address writes, or a status read after them. The ring counts frame-done
+flags still owed: each observed frame start (bit 7) adds one, and each status
+read that shows frame done (bit 1) removes one. A frame start activates the
+programmed slot, delivers the previous slot only if no flag is then owed, and
+programs the next free slot. A late or merged frame-done flag therefore drops
+frames and never delivers a slot the device may still write; the reference driver's frame-start handler relies on the same latching
 of the address registers. When no slot is free the active slot repeats and its
 frame is lost. When the status read after the address writes shows another
 frame start, the write may have missed it: the controller acknowledges only
 that flag, delivers nothing, and does not deliver the active slot at the next
 start either. The [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
 describes the delivery rules and the frame counts.
+
+The deadline given to `a733_camera_dma_stream` bounds `STREAM_START` and then
+`STREAMING`. `a733_camera_dma_renew`, valid only in `STREAMING`, replaces it
+with a deadline later than the last clock reading and performs no I/O. Without
+renewal the stream faults at the deadline and keeps every resource.
 
 `a733_camera_dma_take` hands the oldest delivered slot to the caller with its
 frame-start count; `a733_camera_dma_give` returns it to the device. Neither

@@ -113,6 +113,11 @@ int a733_camera_dma_stream(struct a733_camera_dma *s,unsigned slots,uint64_t slo
     s->ring=(struct a733_camera_ring){.slot_bytes=slot_bytes,.count=(uint8_t)slots,.next=0,.active=NONE};
     s->ring.state[0]=A733_SLOT_NEXT;s->stream=1;return 1;
 }
+int a733_camera_dma_renew(struct a733_camera_dma *s,uint64_t d)
+{
+    if(!s || !s->initialized || s->state!=A733_CAM_DMA_STREAMING || !d || d<=s->now)return -1;
+    s->deadline=d;return 1;
+}
 int a733_camera_dma_take(struct a733_camera_dma *s,unsigned *slot,uint32_t *sequence)
 {
     if(!s || !s->initialized || s->state!=A733_CAM_DMA_STREAMING || !slot || !sequence)return -1;
@@ -135,9 +140,13 @@ int a733_camera_dma_stop_stream(struct a733_camera_dma *s,uint64_t d)
     return begin(s,A733_CAM_DMA_STOP,d);
 }
 /* One observed frame start. The programmed slot becomes active unless it
- * is the active slot itself, which then repeats. The previous frame is
- * delivered only if it completed and its slot cannot be latched again. An
- * uncertain start, seen after an address write, delivers nothing and marks
+ * is the active slot itself, which then repeats. Every start owes one
+ * frame-done flag, and each observed flag pays the oldest debt. The previous
+ * frame is delivered only if no debt remains at its successor's start: its
+ * own flag and every earlier frame's flag were then observed, so a late flag
+ * of an earlier frame cannot pass for its own. Two flags merged into one
+ * observation leave a debt, which drops frames instead of delivering them.
+ * An uncertain start, seen after an address write, delivers nothing and marks
  * the active slot's contents as unattributable. */
 static void frame_start(struct a733_camera_dma *s,int uncertain)
 {
@@ -150,12 +159,12 @@ static void frame_start(struct a733_camera_dma *s,int uncertain)
     } else if(g->next!=g->active){
         unsigned old=g->active;
         g->active=g->next;g->state[g->active]=A733_SLOT_ACTIVE;
-        if(g->frame_done && g->trusted){g->state[old]=A733_SLOT_SYNC;++g->delivered;}
+        if(!g->owed && g->trusted){g->state[old]=A733_SLOT_SYNC;++g->delivered;}
         else g->state[old]=A733_SLOT_FREE;
         g->trusted=1;
     }
     if(!uncertain)g->sequence[g->active]=g->starts;
-    g->frame_done=0;g->dropped=g->starts-1-g->delivered;
+    ++g->owed;g->dropped=g->starts-1-g->delivered;
 }
 static int read_reg(struct a733_camera_dma *s,uint16_t off,uint32_t *v)
 {
@@ -232,7 +241,7 @@ static int stream_poll(struct a733_camera_dma *s)
         return 1;
     case 1:
         if(write_reg(s,0x254,s->saved)!=1)return -1;
-        if(s->saved&FRAME_DONE)g->frame_done=1;
+        if((s->saved&FRAME_DONE) && g->owed)--g->owed;
         s->index=0;
         if(!(s->saved&FRAME_START))return 1;
         frame_start(s,0);

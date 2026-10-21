@@ -164,9 +164,6 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         spans[i]=(struct a733_iommu_span){m->iova,m->physical,m->bytes,i?A733_IOMMU_WRITE:A733_IOMMU_READ};
     }
     s->config=*c;s->initialized=1;
-    /* Three frame periods, rounded up, and never below the VGA interval. */
-    uint64_t period=((uint64_t)mode->htotal*mode->vtotal*1000000u+mode->pixel_hz-1)/mode->pixel_hz;
-    s->quiet_us=3*period>A733_CAPTURE_QUIET_US?3*period:A733_CAPTURE_QUIET_US;
     if(a733_iommu_build(&s->tables,c->table_words,c->table_physical,spans,3)!=1)return fail(s);
     struct a733_camera_platform_ops a={clock_read,analog_admit,analog_read,analog_write};
     struct a733_iommu_ops i={clock_read,mmu_admit,mmu_read,mmu_write,mmu_publish};
@@ -184,6 +181,11 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
        a733_camera_route_init_format(&s->route,&r,s,&rc,&format)!=1 ||
        a733_csi_init_format(&s->receiver,&v,s,&c->receiver,&format)!=1 ||
        a733_camera_dma_init_format(&s->dma,&d,s,&dc,&format)!=1)return fail(s);
+    /* Three frame periods of the mode the sensor derived, rounded up once,
+     * and never below the VGA interval. */
+    mode=&s->sensor.mode;
+    uint64_t three=((uint64_t)3*mode->htotal*mode->vtotal*1000000u+mode->pixel_hz-1)/mode->pixel_hz;
+    s->quiet_us=three>A733_CAPTURE_QUIET_US?three:A733_CAPTURE_QUIET_US;
     return 1;
 }
 int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)
@@ -201,6 +203,11 @@ int a733_camera_capture_open_retained(struct a733_camera_capture *s,uint64_t d){
 int a733_camera_capture_open_stream(struct a733_camera_capture *s,uint64_t d){
     if(!s || !s->initialized || !s->config.slots || a733_camera_capture_open(s,d)!=1)return -1;
     s->streaming=1;return 1;
+}
+int a733_camera_capture_renew(struct a733_camera_capture *s,uint64_t d){
+    if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_STREAMING ||
+       !d || d<=s->now || a733_camera_dma_renew(&s->dma,d)!=1)return -1;
+    s->deadline=d;return 1;
 }
 int a733_camera_capture_take(struct a733_camera_capture *s,unsigned *slot,uint32_t *sequence,
                              const uint8_t **y,const uint8_t **uv){

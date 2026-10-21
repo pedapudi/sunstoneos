@@ -39,9 +39,11 @@ struct a733_camera_ring {
     uint32_t sequence[A733_CAMERA_DMA_SLOTS]; /* Frame start count per slot. */
     uint8_t state[A733_CAMERA_DMA_SLOTS], queue[A733_CAMERA_DMA_SLOTS];
     uint8_t count, active, next, queued;
-    /* A frame-done observation followed the active frame's start, and that
-     * start is known to have latched the active slot. */
-    uint8_t frame_done, trusted;
+    /* Frame-done flags still owed: observed starts minus observed
+     * frame-done flags, never below zero. */
+    uint32_t owed;
+    /* The active frame's start is known to have latched the active slot. */
+    uint8_t trusted;
 };
 enum a733_camera_frame_owner {
     A733_CAMERA_CALLER, A733_CAMERA_RESERVED, A733_CAMERA_DEVICE
@@ -152,16 +154,23 @@ int a733_camera_dma_rearm(struct a733_camera_dma *,uint64_t deadline_us);
  * programmed, start_stream runs, and STREAMING then reads status once per
  * poll. The address registers latch at each frame start, as the reference
  * driver's frame-start handler assumes. Each observed frame start makes the
- * programmed slot active, delivers the previous active slot if a frame-done
- * observation followed its start, and programs the next free slot. With no
- * free slot the active slot repeats and its frame is dropped. After each
- * address write a status read checks for a new frame start; if one
- * arrived, the write may have missed it, so the frame is counted as dropped
- * and no slot is delivered until the following start. A slot is never
- * delivered while an address register can name it. Delivered slots are
- * invalidated by sync_slot, then queued in capture order. Errors fault. */
+ * programmed slot active, delivers the previous active slot if every frame
+ * started so far, that one included, has had its frame-done flag observed,
+ * and programs the next free slot. A late frame-done flag, or two flags
+ * merged into one observation, therefore drops frames and never delivers a
+ * frame the device may still write. With no free slot the active slot
+ * repeats and its frame is dropped. After each address write a status read
+ * checks for a new frame start; if one arrived, the write may have missed
+ * it, so the frame is counted as dropped and no slot is delivered until the
+ * following start. A slot is never delivered while an address register can
+ * name it. Delivered slots are invalidated by sync_slot, then queued in
+ * capture order. Errors fault. The deadline bounds STREAM_START and then
+ * STREAMING until renew replaces it. */
 int a733_camera_dma_stream(struct a733_camera_dma *, unsigned slots,
                            uint64_t slot_bytes, uint64_t deadline_us);
+/* From STREAMING only: replace the deadline with one later than the last
+ * clock reading. No I/O; without renewal the stream faults at the deadline. */
+int a733_camera_dma_renew(struct a733_camera_dma *, uint64_t deadline_us);
 /* Oldest delivered slot and its frame-start count; 1, 0 if none, -1 if not
  * streaming. The slot's two planes become readable by the caller only, and
  * no MMIO occurs. give returns a HELD slot to the device. */

@@ -3,8 +3,10 @@
  * analog, IOMMU, route, receiver and DMA controllers run against modeled
  * registers. A frame engine latches the DMA address registers at each frame
  * start, raises the start flag, writes one frame's payload into the latched
- * Y and UV slots at frame end and raises frame done. Device and CPU memory
- * are separate; slot invalidation copies one slot to the CPU view. */
+ * Y and UV slots at frame end and raises frame done. A late frame writes its
+ * last bytes and raises frame done only after the next frame starts. Device
+ * and CPU memory are separate; slot invalidation copies one slot to the CPU
+ * view. */
 #include "a733_camera_capture.h"
 #include <assert.h>
 #include <stdio.h>
@@ -28,6 +30,11 @@ struct model {
     unsigned frames,writing,plane_bytes,global_held,local,packets,quiet,syncs,final_syncs;
     unsigned releases,drains,race,race_middle,missing_done,error_frame,fail_slot_sync;
     unsigned delivered,checked_frames;
+    /* Late frame done: delay after the next start, and the one late frame
+     * (counted from 1), or every frame when zero. */
+    uint64_t late,late_frame,tail_at;
+    unsigned pending,pending_frame;uint32_t pending_latched[2];
+    uint64_t renew; /* Stream watchdog renewed on every poll when nonzero. */
 };
 static struct model model;
 static struct a733_camera_capture capture;
@@ -50,23 +57,48 @@ static void writable(const struct model *m,unsigned slot){
     uint8_t state=m->capture->dma.ring.state[slot];
     assert(state==A733_SLOT_NEXT || state==A733_SLOT_ACTIVE);
 }
+/* A late frame's tail may land in a slot the driver has already freed or
+ * reprogrammed, but never in one the CPU may read. */
+static void device_owned(const struct model *m,unsigned slot){
+    assert(m->capture->dma.ring.state[slot]<A733_SLOT_SYNC);
+}
 static void frame_start(struct model *m){
     m->latched[0]=m->dma[0x220/4];m->latched[1]=m->dma[0x228/4];
     m->dma[0x254/4]|=0x80;m->writing=1;m->frame_end=m->next_start+m->active;
     m->next_start+=m->period;
 }
 static void frame_end(struct model *m){
+    assert(!m->pending); /* A late tail lands before the next frame ends. */
     for(unsigned plane=0;plane<2;plane++){
         unsigned slot=slot_of(m,plane,m->latched[plane]);writable(m,slot);
         uint8_t *d=(plane?uv_device:y_device)+slot*SLOT_BYTES;
         for(unsigned i=0;i<m->plane_bytes;i++)d[i]=pixel(m->frames,plane,i);
     }
     ++m->frames;m->writing=0;
+    if(m->late && (!m->late_frame || m->frames==m->late_frame)){
+        /* The last 64 bytes of each plane stay unwritten until the tail. */
+        for(unsigned plane=0;plane<2;plane++){
+            uint8_t *d=(plane?uv_device:y_device)+slot_of(m,plane,m->latched[plane])*SLOT_BYTES;
+            memset(d+m->plane_bytes-64,0x5a,64);
+        }
+        m->pending=1;m->pending_frame=m->frames-1;
+        memcpy(m->pending_latched,m->latched,sizeof(m->latched));
+        m->tail_at=m->next_start+m->late;return;
+    }
     if(!m->missing_done)m->dma[0x254/4]|=2;
     if(m->error_frame && m->frames==m->error_frame)m->dma[0x254/4]|=0x80000; /* Pixel miss. */
 }
+static void tail(struct model *m){
+    for(unsigned plane=0;plane<2;plane++){
+        unsigned slot=slot_of(m,plane,m->pending_latched[plane]);device_owned(m,slot);
+        uint8_t *d=(plane?uv_device:y_device)+slot*SLOT_BYTES;
+        for(unsigned i=m->plane_bytes-64;i<m->plane_bytes;i++)d[i]=pixel(m->pending_frame,plane,i);
+    }
+    m->pending=0;m->dma[0x254/4]|=2;
+}
 static void advance(struct model *m){
     for(;;){
+        if(m->pending && m->tail_at<=m->now){tail(m);continue;}
         if(m->writing && m->frame_end<=m->now){frame_end(m);continue;}
         if(!m->writing && streaming(m) && m->next_start<=m->now){frame_start(m);continue;}
         if(!streaming(m) && m->next_start<=m->now)m->next_start=m->now+m->period;
@@ -88,7 +120,7 @@ static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a
 }
 static int packet_quiet(void *p,uint64_t t,uint64_t d){
     struct model *m=p;assert(t==101 && m->now<d && m->sensor[0x300e]==0x40 && m->sensor[0x4202]==15);
-    if(m->writing)return 0; /* A frame in flight ends before quiet holds. */
+    if(m->writing || m->pending)return 0; /* A frame in flight ends before quiet holds. */
     m->quiet=1;return 1;
 }
 static int analog_admit(void *p,uint64_t d,struct a733_camera_admission *a){
@@ -197,7 +229,7 @@ static int dma_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){
     if(o==0x254)m->dma[o/4]&=~v;else m->dma[o/4]=v;
     if(m->packets && o==0x200 && !(v&1)){
         /* Capture disable ends DMA writes; it follows the producer fence. */
-        assert(m->quiet && !m->writing);m->dma[0x24c/4]=0;
+        assert(m->quiet && !m->writing && !m->pending);m->dma[0x24c/4]=0;
     }
     return 1;
 }
@@ -213,27 +245,28 @@ static int dma_sync_slot(void *p,uint64_t t,unsigned slot,uint64_t d){
     /* Neither address register nor the latched frame names the slot. */
     assert(slot_of(m,0,m->dma[0x220/4])!=slot && slot_of(m,1,m->dma[0x228/4])!=slot);
     assert(!m->writing || (slot_of(m,0,m->latched[0])!=slot && slot_of(m,1,m->latched[1])!=slot));
+    assert(!m->pending || (slot_of(m,0,m->pending_latched[0])!=slot && slot_of(m,1,m->pending_latched[1])!=slot));
     if(m->fail_slot_sync)return -1;
     memcpy(y_cpu+slot*SLOT_BYTES,y_device+slot*SLOT_BYTES,SLOT_BYTES);
     memcpy(uv_cpu+slot*SLOT_BYTES,uv_device+slot*SLOT_BYTES,SLOT_BYTES);
     ++m->syncs;return 1;
 }
 static int dma_release(void *p,uint64_t t,uint64_t d){struct model *m=p;assert(t==205 && m->now<d);++m->releases;return 1;}
-static int setup_mode(unsigned port,enum ov5640_format format,unsigned slots,uint32_t slot_bytes,uint64_t y_bytes){
+static int setup_with(const struct ov5640_mode *mode,unsigned port,unsigned slots,uint32_t slot_bytes,
+                      const struct a733_capture_span image[2]){
     memset(&model,0,sizeof(model));memset(&capture,0,sizeof(capture));model.capture=&capture;model.now=1;
     model.common[0]=0x360500;model.common[1]=0xa5;
     for(unsigned i=1;i<=3;i++)model.common[i*0x100/4]=0x40000;
     model.sensor[0x300a]=0x56;model.sensor[0x300b]=0x40;
     memset(y_cpu,0xcc,SPAN);memset(uv_cpu,0xcc,SPAN);memset(y_device,0xa5,SPAN);memset(uv_device,0xa5,SPAN);
-    struct ov5640_mode mode;assert(ov5640_mode_get(&mode,OV5640_QVGA,format,0)==1);
-    model.plane_bytes=(unsigned)mode.width*mode.height;
-    model.period=(uint64_t)mode.htotal*mode.vtotal*1000000u/mode.pixel_hz;
-    model.active=model.period*mode.height/mode.vtotal;
+    model.plane_bytes=(unsigned)mode->width*mode->height;
+    model.period=(uint64_t)mode->htotal*mode->vtotal*1000000u/mode->pixel_hz;
+    model.active=mode->vtotal?model.period*mode->height/mode->vtotal:0;
     struct a733_camera_capture_config c={
         .ops={now,global_acquire,handoff,packet_quiet},.context=&model,
-        .memory={{parameters,0x48000000,0x50000000,4096},{y_cpu,Y_IOVA,0x50100000,y_bytes},{uv_cpu,UV_IOVA,0x50200000,SPAN}},
+        .memory={{parameters,0x48000000,0x50000000,4096},image[0],image[1]},
         .table_words=table,.table_physical=0x4f000000,.frame_id=19,
-        .receiver={(uint8_t)port,(uint8_t)port,42,(uint8_t)(port?7:2),324000000},.mode=mode,
+        .receiver={(uint8_t)port,(uint8_t)port,42,(uint8_t)(port?7:2),324000000},.mode=*mode,
         .slots=(uint8_t)slots,.slot_bytes=slot_bytes,.color_bars=1,
         .sensor={.acquire=sensor_acquire,.line=sensor_line,.read=sensor_read,.write=sensor_write,.receiver=sensor_receiver,.release=sensor_release},
         .analog={.admit=analog_admit,.read=analog_read,.write=analog_write},
@@ -245,11 +278,18 @@ static int setup_mode(unsigned port,enum ov5640_format format,unsigned slots,uin
     };
     return a733_camera_capture_init(&capture,&c);
 }
+static int setup_mode(unsigned port,enum ov5640_format format,unsigned slots,uint32_t slot_bytes,uint64_t y_bytes){
+    struct ov5640_mode mode;assert(ov5640_mode_get(&mode,OV5640_QVGA,format,0)==1);
+    const struct a733_capture_span image[2]={{y_cpu,Y_IOVA,0x50100000,y_bytes},{uv_cpu,UV_IOVA,0x50200000,SPAN}};
+    return setup_with(&mode,port,slots,slot_bytes,image);
+}
 static void setup(unsigned port,enum ov5640_format format){
     assert(setup_mode(port,format,SLOTS,SLOT_BYTES,SPAN)==1);
     assert(a733_camera_capture_open_stream(&capture,600000000)==1);
 }
 static int poll(void){
+    if(model.renew && capture.state==A733_CAPTURE_STREAMING)
+        assert(a733_camera_capture_renew(&capture,model.now+model.renew)==1);
     int r=a733_camera_capture_poll(&capture);model.now+=1000;return r;
 }
 /* A delivered frame holds one complete frame, the one its sequence names. */
@@ -329,6 +369,63 @@ int main(void){
         assert(!model.race && capture.dma.ring.dropped==2 && model.checked_frames==9);
         stop();
     }
+    /* A frame done that arrives after the next frame start drops that frame
+     * while the device writes its last bytes into the freed slot. Once every
+     * owed flag has been observed, the following frames are delivered. */
+    setup(0,OV5640_UYVY);model.late=3000;model.late_frame=4;run(12,0,0);
+    assert(capture.dma.ring.dropped==1 && model.checked_frames==10);
+    stop();
+    /* Frame done late on every frame, up to the frame's active time: the
+     * device keeps writing slots already freed, and nothing is delivered. */
+    for(unsigned late=3000;late<=7000;late+=2000){
+        setup(0,OV5640_UYVY);model.late=late;run(12,0,0);
+        assert(!model.checked_frames && !model.syncs && capture.dma.ring.dropped==11);
+        stop();
+    }
+    /* A late flag merged with the next frame's flag in one status read
+     * leaves one flag owed, so every later frame is dropped, not delivered. */
+    setup(0,OV5640_UYVY);model.late=7500;model.late_frame=4;run(12,0,0);
+    assert(model.checked_frames==3 && capture.dma.ring.dropped==8 && capture.dma.ring.owed>1);
+    stop();
+    /* The open deadline bounds preparation, which takes about one second
+     * here, and then the stream until renewed. Renewal is refused outside
+     * STREAMING and for a deadline already reached. A stream renewed on every
+     * poll by three frame periods outlives the open deadline. */
+    const uint64_t open_deadline=1200000;
+    assert(setup_mode(0,OV5640_UYVY,SLOTS,SLOT_BYTES,SPAN)==1);
+    assert(a733_camera_capture_open_stream(&capture,open_deadline)==1);
+    assert(a733_camera_capture_renew(&capture,open_deadline+1000000)==-1);
+    while(capture.state!=A733_CAPTURE_STREAMING)assert(poll()>=0);
+    assert(a733_camera_capture_renew(&capture,capture.now)==-1);
+    assert(a733_camera_capture_renew(&capture,capture.dma.now)==-1);
+    assert(capture.deadline==open_deadline && capture.dma.deadline==open_deadline);
+    model.renew=3*model.period;run(24,0,0);
+    assert(model.now>open_deadline+300000 && model.checked_frames==23);
+    stop();
+    /* Without renewal the stream faults at the open deadline and keeps every
+     * lease; renewal after the fault is refused. */
+    assert(setup_mode(0,OV5640_UYVY,SLOTS,SLOT_BYTES,SPAN)==1);
+    assert(a733_camera_capture_open_stream(&capture,open_deadline)==1);
+    while(capture.state!=A733_CAPTURE_STREAMING)assert(poll()>=0);
+    while(poll()>=0)assert(model.now<=open_deadline+1000);
+    assert(model.now>=open_deadline && capture.dma.ring.starts>0 && capture.state==A733_CAPTURE_FAULT);
+    assert(capture.dma.token==205 && capture.sensor.token==203 && capture.receiver.token==206 && !model.releases);
+    assert(a733_camera_capture_renew(&capture,model.now+1000000)==-1);
+    /* The rearm quiet interval follows the mode the sensor derived: a QSXGA
+     * mode given with frame length 0 runs at the reference 66.6 ms period. */
+    {
+        struct ov5640_mode mode;assert(ov5640_mode_get(&mode,OV5640_QSXGA,OV5640_UYVY,0)==1);
+        uint64_t bytes=((uint64_t)mode.width*mode.height+4095)&~UINT64_C(4095);
+        uint8_t *y=aligned_alloc(4096,bytes),*uv=aligned_alloc(4096,bytes);assert(y && uv);
+        const struct a733_capture_span image[2]={{y,0x48400000,0x50400000,bytes},{uv,0x48a00000,0x50a00000,bytes}};
+        uint64_t derived=mode.vtotal;mode.vtotal=0;
+        assert(setup_with(&mode,0,0,0,image)==1 && capture.sensor.mode.vtotal==derived);
+        assert(capture.quiet_us==(3*(uint64_t)mode.htotal*derived*1000000u+mode.pixel_hz-1)/mode.pixel_hz);
+        assert(capture.quiet_us>2*A733_CAPTURE_QUIET_US-200);
+        assert(ov5640_mode_get(&mode,OV5640_VGA,OV5640_UYVY,0)==1);
+        assert(setup_with(&mode,0,0,0,image)==1 && capture.quiet_us==A733_CAPTURE_QUIET_US);
+        free(y);free(uv);
+    }
     /* Without frame-done observations no frame is delivered. */
     setup(1,OV5640_UYVY);model.missing_done=1;run(8,0,0);
     assert(!model.checked_frames && !model.syncs && capture.dma.ring.dropped==7);
@@ -353,6 +450,7 @@ int main(void){
      * single-image configuration cannot stream. */
     assert(setup_mode(0,OV5640_UYVY,0,0,SPAN)==1 && a733_camera_capture_open_stream(&capture,1000000)==-1);
     puts("PASS camera streaming: ring delivery on both ports and orders, dropped-frame accounting, "
-         "start races, missing frame done, faults and refusals");
+         "start races, late and merged frame done, deadline renewal and expiry, derived quiet interval, "
+         "missing frame done, faults and refusals");
     return 0;
 }

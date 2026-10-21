@@ -32,8 +32,11 @@ the [route](camera-route.md) and the [DMA](camera-dma.md) compare these register
 and parameter images for further sizes in both byte orders.
 
 The stopped-producer interval of the retained rearm sequence is three frame
-periods of the selected mode, rounded up, and at least 100 ms. Three periods of
-the 30 frame/s VGA mode equal 100 ms; the 15 frame/s modes need 200 ms.
+periods of the mode the sensor driver derived, rounded up to a whole
+microsecond, and at least 100 ms. A mode given with frame length 0 uses the
+reference frame length, so its interval follows that length. Three periods of
+the 30 frame/s VGA mode equal 100 ms; the 15 frame/s reference QSXGA mode needs
+199,893 µs.
 
 ## The global lease remains held after image delivery
 
@@ -190,14 +193,33 @@ capture (`VCAP`) and the DMA enters its ring mode before the packet handoff.
 After the sensor starts, the coordinator returns 1 from each poll and the DMA
 reads its status once per poll.
 
+The absolute deadline given to `a733_camera_capture_open_stream` bounds the
+preparation, including admissions and handoffs that stay pending. It then
+bounds the stream: at that deadline the coordinator faults and keeps every
+lease. `a733_camera_capture_renew`, valid only in `STREAMING`, replaces the
+coordinator's and the DMA's deadline with a later one and performs no I/O. An
+owner keeps a short watchdog, for example three frame periods ahead, and
+renews it while it keeps polling. A short open deadline therefore still fails
+a hung preparation in bounded time, and a stream lasts as long as its owner
+renews it.
+
 The DMA address registers latch at each frame start; the reference driver's
 frame-start handler programs the buffer for the frame after next on this
 assumption. On each observed frame start the DMA controller:
 
 1. Makes the slot programmed at the previous start the active slot.
-2. Delivers the previous active slot if a frame-done flag was observed after
-   that slot's own frame start. Otherwise the slot returns to the free pool
-   unread and the frame counts as dropped.
+2. Delivers the previous active slot only if every frame started so far,
+   that frame included, has had its frame-done flag observed. The controller
+   counts the flags still owed: each observed start adds one, and each status
+   read that shows frame done removes one. A frame-done flag seen in the same
+   status read as a frame start belongs to a frame before that start. If any
+   flag is still owed, the slot returns to the free pool unread and the frame
+   counts as dropped. A frame-done flag that arrives after the next frame
+   start therefore pays the debt of its own frame and cannot make a later,
+   unfinished frame look complete. Two flags that merge into one status read
+   leave one flag owed for the rest of the stream, so every later frame is
+   dropped; the owner sees the drop count rise with nothing delivered and can
+   stop and reopen the stream.
 3. Programs the first free slot after the active one into both address
    registers. With no free slot, the registers keep naming the active slot;
    the next frame overwrites it, and the overwritten frame counts as dropped.
@@ -209,7 +231,9 @@ assumption. On each observed frame start the DMA controller:
    programmed slot becomes active at the next start.
 
 A delivered slot is therefore never one that either address register names or
-that the current frame may write. Before the caller sees it, the platform's
+that any frame may still write: its frame-done flag, and those of all earlier
+frames, were observed before delivery. A slot freed without delivery stays
+device-owned, so a late frame may still finish writing it. Before the caller sees it, the platform's
 `sync_slot` operation invalidates the CPU cache over both of its planes. The
 consumer takes delivered slots in capture order with their frame-start count,
 reads the two planes through `a733_camera_capture_take`, and returns each slot
@@ -228,7 +252,9 @@ capture-done requirement and cache invalidation of both complete spans.
 `READY` returns both spans to the caller.
 
 Whether the address registers latch at frame start, and whether frame done
-precedes the next frame start in every mode, needs a module on the board.
+precedes the next frame start in every mode, needs a module on the board. The
+1080p and QSXGA modes have only 24 lines of vertical blanking, so a frame-done
+flag after the next start is most likely there; it drops frames.
 The native application does not use continuous capture yet.
 
 ## Faults retain resources without automatic rollback
@@ -288,22 +314,39 @@ A separate continuous-capture model, `checks/a733-camera-stream.py`, runs the
 same native controllers in a 320 × 240 mode with three slots. Its frame engine
 latches the address registers at each modeled frame start, writes each frame's
 own payload into the latched slots at frame end and raises the frame-done
-flag. The model checks that the device writes only the programmed or active
-slot, that every invalidated slot is named by neither address register nor the
-frame in progress, and that every delivered frame is complete and matches its
-frame-start count. The cases are:
+flag. A late frame instead writes its last 64 bytes per plane and raises frame
+done a set delay after the next frame start. The model checks that the device
+writes only the programmed or active slot, and a late frame's last bytes only
+a slot the CPU cannot read. It checks that every invalidated slot is named by
+neither address register, the frame in progress nor a late frame, and that
+every delivered frame is complete and matches its frame-start count. The cases
+are:
 
 - both ports and both byte orders, with every frame delivered;
 - a consumer holding two of three slots, with the dropped frames counted;
 - a frame start racing the first or the second address write, which drops two
   frames and keeps every later frame correct;
+- one frame whose frame done arrives 3 ms after the next start, which drops
+  that frame only;
+- every frame's frame done arriving 3, 5 or 7 ms after the next start, which
+  delivers nothing;
+- one late frame done that merges with the next frame's flag in one status
+  read, which drops every later frame;
+- a stream renewed on every poll by three frame periods, which runs past its
+  open deadline, refused renewals before `STREAMING` and for a reached
+  deadline, and a stream without renewal, which faults at the open deadline
+  and keeps every lease;
+- a QSXGA mode given with frame length 0, whose quiet interval follows the
+  derived reference frame length, and the VGA interval of 100 ms;
 - missing frame-done flags, which deliver nothing;
 - an error flag and a failed invalidation, which fault and retain every lease;
 - refused slot counts, slot sizes, spans and the raw format.
 
 Removing the status read after the address writes, delivering without
-a frame-done flag or delivering an unattributable slot each makes the model
-fail. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
+a frame-done flag, delivering an unattributable slot, or delivering whenever
+a frame-done flag followed the slot's start without counting owed flags each
+makes the model fail. Computing the quiet interval from the given mode instead of
+the derived one also fails it. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 Its results are under
 `~/.cache/sunstoneos/build/audit-camera-streaming/dev/stream-check/`.
 
