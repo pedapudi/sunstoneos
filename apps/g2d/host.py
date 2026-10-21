@@ -68,6 +68,19 @@ def expected_output(source,session):
     return bytes(out)
 
 
+def untouched_zero(pixels,session):
+    """Check exact zero bytes outside the written rectangle, including padding."""
+    preparation.session_check(session)
+    _,height,stride,_,_,dx,dy,w,h,_,_,_=struct.unpack_from('<12I',session,856)
+    require(len(pixels)==height*stride,'G2D untouched-byte extent differs.')
+    for y in range(height):
+        start=y*stride
+        if dy<=y<dy+h:
+            if any(pixels[start:start+dx*4]) or any(pixels[start+(dx+w)*4:start+stride]):return False
+        elif any(pixels[start:start+stride]):return False
+    return True
+
+
 def ack(frame,session):
     require(decode(frame,session)['status']==1,'Cannot acknowledge absent G2D output.')
     return b'\1'+session[32:40]+frame[96:128]
@@ -115,6 +128,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             if expected is None:
                 copied['reference_qualified']=False
                 copied['reference_comparison']='unchecked-no-interpolation-oracle'
+                copied['untouched_bytes_zero']=untouched_zero(frame[HEADER:],session)
+                result.update(matches_cpu_reference=None,reference_qualified=False,
+                    reference_comparison=copied['reference_comparison'],untouched_bytes_zero=copied['untouched_bytes_zero'])
+                if not copied['untouched_bytes_zero']:
+                    record['g2d_result']='observed-failure';record['durable_result']=entry.copy();save();return result
                 save()
             elif struct.unpack_from('<I',session,872)[0]==3:
                 copied['reference_qualified']=False
