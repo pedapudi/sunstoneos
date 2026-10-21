@@ -210,6 +210,9 @@ Short transfers and zero-length packets retain their actual lengths. They are
 raw transfer records and do not imply valid boot keyboard or mouse semantics.
 One consumed result permits another receive. Failure, disconnect, expiry or
 active cancellation permanently closes admission and retains all DMA backing.
+A report transfer that ends with USB Transaction Error delivers no callback;
+the session is retained at most 1 s later, as described in
+[Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused).
 The application has no reattachment or endpoint-stall recovery path.
 
 The native board task preserves its storage behavior and selects HID by the
@@ -277,8 +280,12 @@ Hub interrupt status uses private bounce DMA and a validated one-byte copied
 completion. Port status binds the first connected port for the lifetime. Removal,
 a second connected port, suspend, overcurrent, failed transfers, an unexpected
 slot/TRB or malformed status prevents further callbacks and caller-output copy.
-Both slots and the whole DMA parent remain retained. Type-C VBUS shutdown does
-not prove that a self-powered hub or its downstream ports lost external power.
+Both slots and the whole DMA parent remain retained. A hub status transfer that
+ends with USB Transaction Error or Split Transaction Error is held without a
+callback for at most 1 s before that retention. The hub status transfer carries
+the session lifetime as its deadline, so this hold limit applies to it. Type-C
+VBUS shutdown does not prove that a self-powered hub or its downstream ports
+lost external power.
 The TinyUSB adapter does not yet use the xHCI child detach described in
 [Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused),
 so a hub child cannot be replaced within one session.
@@ -691,9 +698,18 @@ and enumerates again on the same pages and slot numbers. A cleared child record
 can be bound again by `a733_xhci_bind_child`.
 
 A transfer completing with USB Transaction Error or Split Transaction Error
-retires its TD and halts the endpoint. The core revokes the caller destination
-and holds that endpoint without a class completion. A following detach resets
-the endpoint; otherwise the TD's own deadline retains the session.
+retires its TD and halts the endpoint. A disconnect can report this error before
+its port change. The core therefore revokes the caller destination and holds
+that endpoint without a class completion. A detach that follows resets the
+endpoint. Otherwise the session is retained 1 s after the error, or earlier at
+the TD's own deadline. The 1 s limit covers a hub status interval of up to
+256 ms and the port status request that follows it.
+
+Teardown waits for an Address Device command that is still in flight. A
+successful completion, or a USB Transaction Error completion after teardown has
+started, lets teardown continue with Endpoint 0; no TD exists for that command.
+A Transaction Error completion that arrives before the detach retains the
+session.
 
 Every other outcome retains the controller, contexts, rings and DMA parent.
 These outcomes include:
@@ -717,13 +733,23 @@ hub lost power, so hub topologies need separate evidence before reuse.
 with address and undefined-behavior sanitizers. Successful cases detach and
 reattach a direct device with a bulk read on each attachment, replace a hub
 child while the hub status TD stays outstanding, and detach a hub with its
-child. Further successful cases cover a stop that races a halt and a held
-transaction error before disconnect. Retention cases cover a missing CSC,
-Type-C loss, a stop that never completes, a failed Disable Slot, a transfer
-event for a disabled slot and a held error without disconnect. The model
-checks that contexts and rings keep their contents until Disable Slot
-completes. Controller timing, DMA visibility and physical disconnect behavior
-remain unqualified.
+child. Further successful cases cover a stop that races a halt, a held
+transaction error before disconnect, and a child detach while its Address
+Device command is in flight, with either a successful or a Transaction Error
+completion. Retention cases cover a missing CSC, Type-C loss, a stop that never
+completes, a failed Disable Slot, a transfer event for a disabled slot, and a
+held error without disconnect on a bulk TD and on a hub status TD whose deadline
+is the session lifetime. In each held-error case, retention follows 1 s after
+the error. The model checks that contexts and rings keep their contents until
+Disable Slot completes.
+
+The composed USB2 check covers the adapter side of a root disconnect. With a TD
+outstanding on a high-speed storage device, a HID device or a storage device
+behind a hub, the root port reports CCS clear with CSC. The core sends REMOVE
+with result 0 and starts teardown. TinyUSB then closes the device, and the
+adapter retains the session. No transfer callback or caller copy follows the
+REMOVE notice, and the DMA parent is RETAINED. Controller timing, DMA
+visibility and physical disconnect behavior remain unqualified.
 
 ## Required wider modes and physical qualification
 

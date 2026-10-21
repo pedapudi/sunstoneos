@@ -9,6 +9,7 @@
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define PHYS UINT64_C(0x79000000)
+#define HOLD 1000000u /* The core's bound on a held transaction error. */
 static _Alignas(4096) uint8_t dma[A733_XHCI_MEMORY_BYTES];
 static struct device_memory_pool pool;
 static struct device_memory_lease lease;
@@ -70,6 +71,7 @@ static void command_step(void)
     last_command=x.command_pointer;
     struct a733_xhci_device *d=&x.devices[x.command_device-1];
     if(kind==9){slot=1;while(slots&BIT(slot))++slot;assert(slot<=3);slots|=BIT(slot);}
+    else if(kind==11&&!(t->control&BIT(9))&&x.devices[1].detach&&is("address-error"))code=4; /* SET_ADDRESS reached no device. */
     else if(kind==11){
         uint8_t *out=context(slot);assert(get32(d->input+4)==3);
         memcpy(out,d->input+64,64);memcpy(out+64,d->input+128,64);
@@ -88,8 +90,9 @@ static void command_step(void)
             event(32,e->pending_trb,4,e->length,dci,slot);set_state(ep,2);put64(ep+8,e->pending_trb|(e->ring[(e->pending_trb-e->ring_pa)/16].control&1));code=19;
         }else{
             /* Force Stopped Event: the interrupted TD, or the empty ring's dequeue TRB. */
-            uint64_t dequeue=e->pending==2?e->pending_trb|(e->ring[(e->pending_trb-e->ring_pa)/16].control&1):(e->ring_pa+16*e->index)|e->cycle;
-            event(32,dequeue&~UINT64_C(15),e->pending==2?26:27,e->pending==2?e->length:0,dci,slot);
+            unsigned busy=e->pending==2&&e->pending_trb;
+            uint64_t dequeue=busy?e->pending_trb|(e->ring[(e->pending_trb-e->ring_pa)/16].control&1):(e->ring_pa+16*e->index)|e->cycle;
+            event(32,dequeue&~UINT64_C(15),busy?26:27,busy?e->length:0,dci,slot);
             set_state(ep,3);put64(ep+8,dequeue);
         }
     }else if(kind==10){
@@ -186,12 +189,43 @@ int main(int argc,char **argv)
     const struct a733_xhci_ops ops={cn,current,live,rd,wr,wr64,barrier,outside,notice};
     assert(a733_xhci_init(&x,&ops,&pool,&pool,lease,7,now+10000000,now+100000000));
     UNTIL(portsc&BIT(9)); /* Port power is the last startup phase. */
-    if(is("hub")){
+    if(!strncmp(mode,"hub",3)||!strncmp(mode,"address-",8)){
         attach(1);enumerate(3);
         assert(a733_xhci_mark_hub(&x,3)&&a733_xhci_hub_configure(&x,3,4,0,0)&&a733_xhci_open_interrupt(&x,3,0x81,1,12,now+1000000));
         UNTIL(x.devices[0].hub_configured&&x.devices[0].endpoints[1].configured);
-        /* The hub status TD stays outstanding while its child is replaced. */
-        uint8_t status=0x5a;hold=BIT(1);assert(a733_xhci_transfer(&x,3,0x81,&status,1,now+50000000));
+        /* The hub status TD stays outstanding while its child is replaced. Like
+         * the TinyUSB adapter's, it may carry the session lifetime. */
+        uint8_t status=0x5a;hold=BIT(1);
+        assert(a733_xhci_transfer(&x,3,0x81,&status,1,is("hub-error-expiry")?x.lifetime_deadline:now+50000000));
+        if(is("hub-error-expiry")){
+            /* The hub stays attached after the error; no port change follows. */
+            struct a733_xhci_endpoint *e=&x.devices[0].endpoints[1];unsigned slot=x.devices[0].slot,base=notice_count;
+            UNTIL(e->pending==2);uint8_t *ep=context(slot)+64*e->number;
+            set_state(ep,2);put64(ep+8,e->pending_trb|(e->ring[(e->pending_trb-e->ring_pa)/16].control&1));
+            uint64_t errored=now;event(32,e->pending_trb,4,1,e->number,slot);
+            for(unsigned i=0;i<4;++i)assert(step()!=A733_XHCI_RETAINED);
+            assert(e->pending==5&&!e->caller&&notice_count==base);
+            retained();assert(now>=errored+HOLD&&now<errored+HOLD+1000&&now+HOLD<x.lifetime_deadline);
+            assert(status==0x5a&&notice_count==base+1&&notices[base].kind==A733_XHCI_REMOVE&&notices[base].result==2);
+            puts("PASS a held hub status error retains after the hold bound, long before the session lifetime");return 0;
+        }
+        if(!strncmp(mode,"address-",8)){
+            /* The child detaches while its Address Device command is in flight. */
+            assert(a733_xhci_bind_child(&x,3,2,3,now+1000000));UNTIL(x.devices[1].port_ready==3);
+            assert(a733_xhci_open(&x,0,0,0,64,now+1000000));
+            uint8_t descriptor[18];const uint8_t get[8]={0x80,6,0,1,0,0,18,0},set[8]={0,5,1,0,0,0,0,0};
+            control(0,get,descriptor,18);
+            unsigned slot=x.devices[1].slot,base=notice_count,from=command_count;
+            assert(a733_xhci_setup(&x,0,set,now+1000000));
+            for(unsigned i=0;!(x.command_kind==11&&x.devices[1].endpoints[0].pending==2);++i)assert(i<100&&step()!=A733_XHCI_RETAINED);
+            assert(a733_xhci_detach(&x,0)==1&&!a733_xhci_device_speed(&x,0));
+            UNTIL(!x.devices[1].detach);
+            assert(count(11,0,from)==1&&count(15,1,from)==1&&count(10,0,from)==1&&notice_count==base);
+            cleared(1,slot);assert(x.devices[0].endpoints[1].pending==2&&status==0x5a&&memory()==DEVICE_MEMORY_DEVICE);
+            assert(a733_xhci_bind_child(&x,3,2,3,now+1000000));UNTIL(x.devices[1].port_ready==3);
+            enumerate(1);open_bulk(1);bulk_read(1,0x30);
+            printf("PASS %s: a detach during Address Device stops EP0, disables the slot, and a new child enumerates\n",mode);return 0;
+        }
         for(unsigned round=0;round<2;++round){
             assert(a733_xhci_bind_child(&x,3,2,3,now+1000000));UNTIL(x.devices[1].port_ready==3);
             enumerate(1);open_bulk(1);assert(x.extra_endpoint_owner==2);bulk_read(1,0x10+round);
@@ -229,13 +263,13 @@ int main(int argc,char **argv)
         /* The TD ends with a transaction error and its endpoint halts. */
         struct a733_xhci_endpoint *e=&d->endpoints[1];uint8_t *ep=context(slot)+64*e->number;
         set_state(ep,2);put64(ep+8,e->pending_trb|(e->ring[(e->pending_trb-e->ring_pa)/16].control&1));
-        unsigned base=notice_count;event(32,e->pending_trb,4,512,e->number,slot);
+        unsigned base=notice_count;uint64_t errored=now;event(32,e->pending_trb,4,512,e->number,slot);
         for(unsigned i=0;i<4;++i)assert(step()!=A733_XHCI_RETAINED);
         assert(e->pending==5&&!e->caller&&notice_count==base);
         if(is("error-expiry")){
-            retained();assert(now>=e->deadline&&now<e->deadline+1000);
+            retained();assert(now>=errored+HOLD&&now<errored+HOLD+1000);
             for(unsigned k=0;k<512;++k)assert(held[k]==0x5a);
-            puts("PASS a held transaction error without a disconnect retains at the TD deadline");return 0;
+            puts("PASS a held transaction error without a disconnect retains after the hold bound");return 0;
         }
     }
     unsigned base=notice_count,from=command_count,bells=doorbells;uint64_t unplugged=now;

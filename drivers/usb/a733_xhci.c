@@ -12,6 +12,7 @@ enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
 enum { C_ENABLE=9,C_DISABLE=10,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_STOP=15,C_SET_DEQUEUE=16 };
 #define DETACH_US 5000000u /* Teardown bound; pinned Linux XHCI_CMD_DEFAULT_TIMEOUT. */
+#define HOLD_US 1000000u /* Error hold: a hub status interval (at most 256 ms) and a port status request. */
 #define PRESERVE (UINT32_C(0xe000000)|UINT32_C(0xc000)|BIT(9)|UINT32_C(0x1e0)) /* PORTSC RWS fields. */
 enum { T_NORMAL=1,T_SETUP=2,T_DATA=3,T_STATUS=4,T_ADDRESS_STATUS=5 };
 enum { CONTROL_IDLE,CONTROL_SETUP,CONTROL_DATA,CONTROL_STATUS };
@@ -155,12 +156,13 @@ static int reclaim(struct a733_xhci *x,unsigned j)
     return barrier(x);
 }
 /* Revoke every caller destination now. A TD already on its ring stays owned
- * by the controller until its completion or Stop Endpoint resolves it. */
+ * by the controller until its completion or Stop Endpoint resolves it. An
+ * Address Device in flight queues no TD; teardown waits for its completion. */
 static void detach(struct a733_xhci *x,struct a733_xhci_device *d)
 {
     d->detach=1;d->deadline=x->lifetime_deadline-x->last_now>DETACH_US?x->last_now+DETACH_US:x->lifetime_deadline;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
-        struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;if(e->pending!=2)e->pending=0;
+        struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;if(e->pending!=2||!e->pending_trb)e->pending=0;
     }
 }
 /* Publish payload before the cycle bit. The last entry is an owned Link TRB;
@@ -308,8 +310,10 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     if(code==4||code==36){
         /* A transaction error retires the TD and halts its endpoint, as a
          * disconnect can before its port change is seen. Hold it without a
-         * class completion until teardown or the TD's own deadline. */
-        e->caller=NULL;e->pending=5;return 1;
+         * class completion until teardown, for at most HOLD_US. */
+        e->caller=NULL;e->pending=5;
+        if(e->deadline>x->last_now+HOLD_US)e->deadline=x->last_now+HOLD_US;
+        return 1;
     }
     if(code!=1&&code!=13)return 0;
     unsigned requested=e->kind==T_SETUP?8:e->length;
@@ -333,8 +337,10 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     unsigned slot=event->control>>24,kind=x->command_kind,code=event->status>>24;
     if(!x->command_device||x->command_device>A733_XHCI_DEVICES)return 0;
     struct a733_xhci_device *d=&x->devices[x->command_device-1];
-    /* Context State Error is accepted only for a stop that raced a halt. */
-    if(!kind||pointer!=x->command_pointer||(code!=1&&(kind!=C_STOP||code!=19))||!slot||slot>x->cap_slots||slot>A733_XHCI_DEVICES||
+    /* Context State Error is accepted only for a stop that raced a halt, and
+     * Transaction Error only for Address Device to a detaching device. */
+    if(!kind||pointer!=x->command_pointer||
+       (code!=1&&(kind!=C_STOP||code!=19)&&(kind!=C_ADDRESS||code!=4||!d->detach))||!slot||slot>x->cap_slots||slot>A733_XHCI_DEVICES||
        (kind!=C_ENABLE&&slot!=d->slot))return 0;
     x->command_kind=0;x->command_pointer=0;
     if(kind==C_ENABLE) {
@@ -675,7 +681,7 @@ int a733_xhci_retire_zero(struct a733_xhci *x)
 unsigned a733_xhci_device_speed(const struct a733_xhci *x,unsigned address)
 {
     if(!x||x->self!=x||x->failed)return 0;
-    if(!address)return x->default_device<A733_XHCI_DEVICES?x->devices[x->default_device].speed:0;
+    if(!address)return x->default_device<A733_XHCI_DEVICES&&!x->devices[x->default_device].detach?x->devices[x->default_device].speed:0;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address&&!x->devices[i].detach)return x->devices[i].speed;
     return 0;
 }

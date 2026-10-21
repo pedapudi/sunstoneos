@@ -8,8 +8,8 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ['direct', 'hub', 'stop-race', 'transaction-error', 'error-expiry', 'no-csc', 'generation',
-         'stop-timeout', 'disable-fail', 'stale-event']
+CASES = ['direct', 'hub', 'address-detach', 'address-error', 'stop-race', 'transaction-error', 'error-expiry',
+         'hub-error-expiry', 'no-csc', 'generation', 'stop-timeout', 'disable-fail', 'stale-event']
 
 
 def main():
