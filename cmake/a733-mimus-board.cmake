@@ -15,9 +15,11 @@ if(NOT mb_status EQUAL 0)
 endif()
 apply_build_patch("${mb_build}/link.ld" "${storage_build}/link.ld" "${mb_root}/apps/mimus/link.patch")
 get_target_property(mb_sources sunstone-a733-board SOURCES)
+# The board's runtime/memory.c and memmove.c stay linked: newlib's SIMD string
+# routines fault when EL3 boot code clears or copies Device memory.
 list(REMOVE_ITEM mb_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
   "${mb_root}/apps/board/client.c" "${mb_root}/apps/board/usb0.c" "${mb_root}/apps/board/identity.c"
-  "${board_build}/build-id.c" "${mb_root}/runtime/memory.c" "${mb_root}/runtime/memmove.c")
+  "${board_build}/build-id.c")
 set(mb_added apps/mimus-board/application.c apps/mimus-board/keyboard.c apps/mimus-board/identity.c apps/mimus-board/recognition.cc
   apps/mimus-board/usb0.c apps/mimus/recorded.cc apps/mimus/platform.cc runtime/newlib.c runtime/newlib_smp.c
   runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc)

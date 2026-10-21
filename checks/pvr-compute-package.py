@@ -8,6 +8,7 @@ from pathlib import Path
 import runpy
 import struct
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 ROOT=Path(__file__).resolve().parents[1]
 def main():
@@ -25,7 +26,7 @@ def main():
         return cmd
     inputs=['drivers/gpu/pvr_compute_package.c','drivers/gpu/pvr_compute_job.c','drivers/gpu/pvr_compute_programs.c',
       'drivers/gpu/pvr_compute_context.c','drivers/gpu/pvr_gpu_vm.c','drivers/gpu/pvr_cccb.c','drivers/gpu/pvr_ccb.c']
-    cc=['clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(ROOT/'include')]
+    cc=['clang-21','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-I'+str(ROOT/'include')]
     commands=[]
     commands.append(run(cc+[str(ROOT/'checks/pvr-compute-package.c')]+[str(ROOT/x) for x in inputs]+['-o',str(out/'package-native')],'native-build'))
     # The authoritative Mesa reference object and flags retain their existing pin.

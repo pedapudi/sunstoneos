@@ -256,8 +256,8 @@ static void interleaved(void)
     cs(&f,HCI_OP_ACCEPT_CONN_REQ,1,0);astep(&a);
     terminal(&f,&a.links[1],0,0x24);astep(&a);
     assert(a.links[incoming-1].state==BT_ACL_CONNECTED && a.credits==2);
-    const struct bt_h4_record *r=bt_acl_receive(&a);
-    assert(r && r->storage.bytes[0]==HCI_EV_CMD_STATUS && bt_acl_receive_release(&a,r->serial)==1);
+    /* The wrong-opcode status had no owner; its receive slot is already free. */
+    assert(!bt_acl_receive(&a));
     /* Multiple queued requests cannot displace each other's command owner. */
     listen_peer(&a,8);listen_peer(&a,9);
     request(&f,a.links[2].peer.address,1);request(&f,a.links[3].peer.address,1);
@@ -312,18 +312,17 @@ static void refusal_paths(void)
 static void synchronous_and_stale(void)
 {
     struct fixture f;struct bt_acl a;enable(&f,&a);uint8_t peer[]={1,2,3,4,5,6};
+    /* Without a synchronous owner no host reply is sent; the controller's
+     * accept timeout refuses the request, and its receive slot is freed. */
     for(unsigned type=0;type<=2;type+=2) {
-        request(&f,peer,type);astep(&a);const struct bt_h4_record *r=bt_acl_receive(&a);
-        assert(r && r->storage.bytes[11]==type && a.next_link==1 &&
-            bt_acl_receive_release(&a,r->serial)==1);
+        request(&f,peer,type);astep(&a);assert(!bt_acl_receive(&a) && a.next_link==1);
     }
     listen_peer(&a,1);
     /* Status acquired together with Request, before command transmission,
      * cannot satisfy the subsequently issued Accept. */
     request(&f,peer,1);cs(&f,HCI_OP_ACCEPT_CONN_REQ,1,0);
     astep(&a);astep(&a);assert(a.links[0].state==BT_ACL_ACCEPT_STATUS);
-    const struct bt_h4_record *r=bt_acl_receive(&a);assert(r && !r->tag);
-    assert(bt_acl_receive_release(&a,r->serial)==1);
+    assert(!bt_acl_receive(&a));
     if(f.hci.command==BT_HCI_SENDING) astep(&a);
     cs(&f,HCI_OP_ACCEPT_CONN_REQ,1,0);astep(&a);
     terminal(&f,&a.links[0],0,0x23);astep(&a);assert(a.links[0].state==BT_ACL_CONNECTED);

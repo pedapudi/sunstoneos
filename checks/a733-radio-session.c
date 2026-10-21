@@ -17,6 +17,7 @@ static TaskHandle_t session_task,client_task;
 static StaticTask_t session_task_storage,client_task_storage;
 static StackType_t session_stack[8192],client_stack[4096];
 static atomic_uint network_started,inject_fault;
+static unsigned open_authorized;
 static uint64_t clock_bias,renewed_from;
 static unsigned firmware_checkpoint,association_checkpoint,renewed,io_at_fault,contended,contention_done;
 extern const uint8_t session_blob0[],session_blob1[],session_blob2[],session_blob3[];
@@ -280,7 +281,7 @@ static void session_worker(void *unused)
     for(unsigned iteration=0;iteration<20000;++iteration){
         r.power.now=100+(uint64_t)xTaskGetTickCount()*1000+clock_bias;m.now=r.power.now;
         if(!session.fault)assert(pmic_model_step(&r.power)!=A733_PMIC_RETAINED);
-        if(atomic_load(&network_started))open_rx();
+        if(atomic_load(&network_started)||open_authorized)open_rx();
         if(atomic_load(&inject_fault)&&session.sockets.network.active&&session.transport.pending&&!session.fault){
             assert(session.sockets.network.owns_current);
             io_at_fault=m.accesses+r.accesses;
@@ -313,7 +314,16 @@ static void session_worker(void *unused)
             assert(session.deadline==r.radio.deadline&&session.deadline==session.transport.deadline);renewed=1;
         }
         if(status==A733_SESSION_MANAGEMENT&&renewed&&!atomic_load(&network_started)){
-            if(a733_radio_session_authorize_open(&session,91)){
+            if(!open_authorized&&a733_radio_session_authorize_open(&session,91)){
+                /* A broadcast received after port authorization but before
+                 * socket attachment must be discarded, not held forever. */
+                uint8_t arp[42]={0xff,0xff,0xff,0xff,0xff,0xff};memcpy(arp+6,peer_mac,6);
+                store16(arp+12,0x806);store16(arp+14,1);store16(arp+16,0x800);arp[18]=6;arp[19]=4;store16(arp+20,1);
+                memcpy(arp+22,peer_mac,6);memcpy(arp+28,peer_ip,4);memcpy(arp+38,(uint8_t[]){10,0,0,99},4);
+                enqueue(arp,sizeof(arp));open_authorized=1;
+            }
+            if(open_authorized&&session.discarded_data==1&&!peer_count&&
+               aic8800_transport_attachment_ready(&session.transport)){
                 struct sunstone_net_config c={.network={.transport=&session.transport,.dispatcher=&session.dispatcher,
                     .address={10,0,0,2},.netmask={255,255,255,0},.gateway={10,0,0,1},.tx_timeout=2000000,.queue_timeout=3000,
                     .random32=model_entropy,.sequence=model_sequence,.entropy_context=&m,.entropy_record=1},
@@ -347,19 +357,26 @@ static void client_worker(void *unused)
     assert(request(&r).result==SUNSTONE_NET_OK);
     r.operation=SUNSTONE_NET_RECEIVE;r.bytes=1472;reply=request(&r);
     assert(reply.result==SUNSTONE_NET_OK&&reply.bytes==sizeof(payload)-1&&!memcmp(reply.payload,payload,reply.bytes));
-    assert(syn_packets==1&&tcp_packets==1&&renewed&&contention_done&&firmware_checkpoint&&association_checkpoint);
+    assert(syn_packets==1&&tcp_packets==1&&renewed&&contention_done&&firmware_checkpoint&&association_checkpoint&&
+        session.discarded_data==1);
     atomic_store(&inject_fault,1);
     r.operation=SUNSTONE_NET_SEND;r.bytes=sizeof(payload)-1;memcpy(r.payload,payload,r.bytes);assert(request(&r).result==SUNSTONE_NET_OK);
     r.operation=SUNSTONE_NET_RECEIVE;r.bytes=1472;reply=request(&r);assert(reply.result==SUNSTONE_NET_LINK_LOST);
     assert(session.fault&&!aic8800_network_ready(&session.sockets.network));
     assert(session.sockets.sockets[0].socket&&session.borrow.generation==session.platform->clock.id);
-    platform_puts("PASS actual radio session ownership, staged lease renewal, native TCP queues and retained live-guard failure; firmware/association checkpoints and entropy are modeled\n");
+    platform_puts("PASS actual radio session ownership, staged lease renewal, pre-network broadcast discard, native TCP queues and retained live-guard failure; firmware/association checkpoints and entropy are modeled\n");
     platform_exit(0);
 }
-/* Keep the existing wrapper link option without altering send behavior. */
+/* Keep the existing wrapper link options without altering stack behavior. */
 int32_t __real_FreeRTOS_sendto(Socket_t,const void *,size_t,BaseType_t,const struct freertos_sockaddr *,socklen_t);
 int32_t __wrap_FreeRTOS_sendto(Socket_t socket,const void *p,size_t n,BaseType_t flags,const struct freertos_sockaddr *peer,socklen_t bytes)
 {return __real_FreeRTOS_sendto(socket,p,n,flags,peer,bytes);}
+Socket_t __real_FreeRTOS_accept(Socket_t,struct freertos_sockaddr *,socklen_t *);
+Socket_t __wrap_FreeRTOS_accept(Socket_t socket,struct freertos_sockaddr *peer,socklen_t *bytes)
+{return __real_FreeRTOS_accept(socket,peer,bytes);}
+struct xSOCKET *__real_prvHandleListen_IPV4(struct xSOCKET *,struct xNETWORK_BUFFER *);
+struct xSOCKET *__wrap_prvHandleListen_IPV4(struct xSOCKET *parent,struct xNETWORK_BUFFER *packet)
+{return __real_prvHandleListen_IPV4(parent,packet);}
 _Noreturn void __assert_func(const char *file,int line,const char *function,const char *expression)
 {(void)function;platform_puts(expression);platform_puts("\n");platform_panic(file,(unsigned)line);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)

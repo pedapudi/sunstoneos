@@ -81,6 +81,22 @@ admission records cannot supply those facts for a cold boot. Media loading,
 package authentication, DDR training, full boot0 initialization, sustained
 FreeRTOS operation and recovery remain outside this evidence.
 
+## The stage-2 build continues into the slot loader
+
+Assembling `cold-entry.S` with `A733_COLD_STAGE2` produces a second monitor,
+built by [cmake/a733-standalone-boot.cmake](../cmake/a733-standalone-boot.cmake)
+as the `a733-stage2` target. It keeps the header, gate, exception table and
+report above. Only status 1 continues: the monitor sets a stack and zeroes its
+storage after the report, then calls the [boot-slot loader](boot-slots.md).
+Status 2, status 3 and every fault, including a fault inside the loader,
+publish the report and park as the recorder does. The recorder built by
+`tools/prepare-cold-entry.py` is byte-identical to the evidence monitor above.
+
+The loader reads and verifies a slot but does not enter it, because the
+exclusion and launch-record prerequisites in the preceding paragraph remain
+open. Its native SD admission also refuses, so on a board it reports a card
+failure and requests the ROM forced-FEL return.
+
 ## The parser cleans CPU caches before returning
 
 The pinned boot0 parser enables the data cache through `0x49066` before copying

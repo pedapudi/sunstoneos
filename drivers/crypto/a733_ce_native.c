@@ -1,5 +1,7 @@
 #include "a733_ce_native.h"
 #include "a733_ce_clock.h"
+#include "aarch64_device_memory.h"
+#include <stddef.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
 #define SEC UINT32_C(0x04603800)
@@ -87,40 +89,48 @@ int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
     *(volatile uint32_t *)a=value;
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
+/* Field ranges per mode, in order. iv, input, cipher_output and key are
+ * contiguous, so one range covers a run of them. */
+#define FIELD(f) offsetof(struct a733_ce_memory,f)
+static const struct {
+    enum a733_ce_sync mode;enum aarch64_cache_op op;size_t offset,bytes;
+} ranges[]={
+    {A733_CE_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(descriptor),256},
+    {A733_CE_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
+    {A733_CE_PUBLISH,AARCH64_CACHE_CLEAN_INVALIDATE,FIELD(output),64},
+    {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(descriptor),256},
+    {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
+    {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(key),64},
+    {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN_INVALIDATE,FIELD(cipher_output),1024},
+    {A733_CE_ACQUIRE,AARCH64_CACHE_INVALIDATE,FIELD(output),64},
+    {A733_CE_CIPHER_ACQUIRE,AARCH64_CACHE_INVALIDATE,FIELD(cipher_output),1024},
+    {A733_CE_KEY_CLEAN,AARCH64_CACHE_CLEAN,FIELD(input),FIELD(key)+64-FIELD(input)},
+    {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
+    {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
+};
+#undef FIELD
+_Static_assert(offsetof(struct a733_ce_memory,input)+A733_CE_HASH_INPUT_BYTES==offsetof(struct a733_ce_memory,cipher_output) &&
+    offsetof(struct a733_ce_memory,cipher_output)+1024==offsetof(struct a733_ce_memory,key),"CE ranges assume contiguous fields");
 int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync mode)
 {
     (void)cookie;
     if (!m || ((uintptr_t)m&63) || sizeof(*m)>UINTPTR_MAX-(uintptr_t)m ||
-        mode>A733_CE_KEY_CLEAN || (int)mode<0) return 0;
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    if (((ctr>>16)&15)!=4) return 0; /* A733 DminLine: 4 * 2^4 = 64 bytes. */
-    __asm__ volatile("dsb sy" ::: "memory");
-    if (mode==A733_CE_PUBLISH || mode==A733_CE_CIPHER_PUBLISH) {
-        for (unsigned i=0;i<256;i+=64) {
-            uintptr_t a=(uintptr_t)m->descriptor+i;
-            __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
-        }
-        for (uintptr_t a=(uintptr_t)m->iv;a<(uintptr_t)m->input+sizeof(m->input);a+=64)
-            __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
-        if (mode==A733_CE_PUBLISH)
-            __asm__ volatile("dc civac, %0" :: "r"((uintptr_t)m->output) : "memory");
-        else {
-            __asm__ volatile("dc cvac, %0" :: "r"((uintptr_t)m->key) : "memory");
-            for (uintptr_t a=(uintptr_t)m->cipher_output;a<(uintptr_t)m->cipher_output+sizeof(m->cipher_output);a+=64)
-                __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
-        }
-    } else if (mode==A733_CE_ACQUIRE)
-        __asm__ volatile("dc ivac, %0" :: "r"((uintptr_t)m->output) : "memory");
-    else if (mode==A733_CE_CIPHER_ACQUIRE) {
-        for (uintptr_t a=(uintptr_t)m->cipher_output;a<(uintptr_t)m->cipher_output+sizeof(m->cipher_output);a+=64)
-            __asm__ volatile("dc ivac, %0" :: "r"(a) : "memory");
-    } else __asm__ volatile("dc cvac, %0" :: "r"((uintptr_t)m->key) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+        mode>A733_CE_SCRUB || (int)mode<0) return 0;
+    /* The shared helper refuses an unknown or larger-than-64-byte writeback
+     * granule, a non-EL1 caller and a disabled MMU or data cache. */
+    for (unsigned i=0;i<sizeof(ranges)/sizeof(ranges[0]);++i)
+        if (ranges[i].mode==mode &&
+            !aarch64_device_cache(ranges[i].op,(uintptr_t)m+ranges[i].offset,ranges[i].bytes)) return 0;
+    return 1;
 }
 
 #include "a733_ce_entropy.h"
 #include "a733_memory_reservations.h"
+static int separate(const void *a,size_t an,const void *b,size_t bn)
+{
+    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
+    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
+}
 int a733_ce_session_native_init(struct a733_ce_session *s,const struct a733_ce_config *c,
     const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
     const struct a733_clock_token *token)
@@ -144,18 +154,16 @@ int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_c
     const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
     const struct a733_clock_token *token)
 {
-    if (!s || s->initialized || !c || !platform || !registry || !token || !c->owner ||
-        !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) return 0;
-    struct a733_ce_session *owner=&s->owned_session;
-    if (!a733_ce_session_native_claim(owner)) return 0;
+    if (!s || s->initialized || !c || !platform || !registry || !token ||
+        !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
+        !separate(s,sizeof(*s),c,sizeof(*c)) || !separate(s,sizeof(*s),platform,sizeof(*platform)) ||
+        !separate(s,sizeof(*s),registry,sizeof(*registry)) || !separate(s,sizeof(*s),token,sizeof(*token))) return 0;
+    /* Check attach's pool placement first, so a refusal binds nothing. */
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if (!pool) {a733_ce_session_native_abort(owner);return 0;}
-    struct device_memory_lease lease;struct device_memory_extent extent;
-    if (!device_memory_acquire(pool,c->owner,DEVICE_MEMORY_PAGE,&lease,&extent)) {a733_ce_session_native_abort(owner);return 0;}
-    struct a733_ce_ops ops=*platform;
-    ops.read=a733_ce_native_read;ops.write=a733_ce_native_write;ops.sync=a733_ce_native_sync;
-    if (a733_ce_entropy_bind(s,pool,lease,c,&ops,cookie,registry,token)) return 1;
-    (void)device_memory_release(pool,lease);
-    if (owner->initialized) (void)a733_ce_session_retain(owner);
-    a733_ce_session_native_abort(owner);return 0;
+    if (!pool || !separate(s,sizeof(*s),pool,sizeof(*pool)) ||
+        !separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
+    if (!a733_ce_session_native_init(&s->owned_session,c,platform,cookie,registry,token)) return 0;
+    if (a733_ce_entropy_attach(s,&s->owned_session)) return 1;
+    /* The page is DEVICE and the controller bound; keep both retained. */
+    (void)a733_ce_session_retain(&s->owned_session);return 0;
 }

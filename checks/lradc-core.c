@@ -24,7 +24,8 @@ static int write_reg(void *v,uintptr_t a,uint32_t x)
  struct fixture *f=v;assert(f->held);++f->writes;
  assert(a==0x02003024||a==0x02524000||a==0x02524004||a==0x02524008);
  if(f->ignore)return 1;
- if(a==0x02524008){assert(x==1);*cell(f,a)=f->reassert?1:0;}
+ /* reassert 1 models a stuck flag; 2 models one conversion landing after W1C. */
+ if(a==0x02524008){assert(x==1);*cell(f,a)=f->reassert?1:0;if(f->reassert==2)f->reassert=0;}
  else *cell(f,a)=x;
  return 1;
 }
@@ -60,6 +61,15 @@ int main(void)
  setup(&f);f.ignore=1;assert(start(&f)==A733_ADC_RETAINED&&f.retained);++cases;
  setup(&f);assert(start(&f)==A733_ADC_READY);*cell(&f,0x02524008)=1;f.reassert=1;memset(&s,0xa5,sizeof(s));first=s;
  assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_RETAINED&&!memcmp(&s,&first,sizeof(s)));++cases;
+ setup(&f);assert(start(&f)==A733_ADC_READY);*cell(&f,0x02524008)=1;*cell(&f,0x0252400c)=5;f.reassert=2;io=f.writes;
+ assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_SAMPLE&&s.sequence==1&&s.code[0]==5&&f.writes==io+2&&!f.driver.fault);
+ assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_AGAIN);*cell(&f,0x02524008)=1;*cell(&f,0x0252400c)=6;
+ assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_SAMPLE&&s.sequence==2&&s.code[0]==6);++cases;
+ setup(&f);assert(a733_lradc_poll(&f.driver)==A733_ADC_PENDING);io=f.reads+f.writes;memset(&s,0xa5,sizeof(s));first=s;
+ assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_INVALID&&!f.driver.fault&&!f.retained&&io==f.reads+f.writes&&!memcmp(&s,&first,sizeof(s)));
+ assert(a733_clock_token_status(&f.clocks,&f.token)==A733_CLOCK_OK&&a733_lradc_poll(&f.driver)==A733_ADC_READY);
+ assert(a733_lradc_read(&f.driver,0,&s)==A733_ADC_INVALID&&!f.driver.fault);*cell(&f,0x02524008)=1;
+ assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_SAMPLE&&s.sequence==1);++cases;
  setup(&f);assert(start(&f)==A733_ADC_READY);*cell(&f,0x02524008)=1;*cell(&f,0x0252400c)=64;
  assert(a733_lradc_read(&f.driver,100000,&s)==A733_ADC_RETAINED);++cases;
  setup(&f);assert(start(&f)==A733_ADC_READY);f.now=100000;io=f.reads;

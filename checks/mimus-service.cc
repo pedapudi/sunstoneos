@@ -14,6 +14,8 @@
 
 static bool queued;
 static uint32_t queued_value;
+static unsigned invalidated;
+void mimus_engine_invalidate() { ++invalidated; }
 extern "C" QueueHandle_t xQueueGenericCreateStatic(UBaseType_t, UBaseType_t,
     uint8_t *, StaticQueue_t *state, uint8_t) { return reinterpret_cast<QueueHandle_t>(state); }
 extern "C" BaseType_t xQueueGenericSend(QueueHandle_t, const void *item, TickType_t, BaseType_t) {
@@ -52,8 +54,12 @@ int main() {
     request(0x11, words({2, 2 * 1024 * 1024 + 1, 0}), 1);
     const std::vector<uint8_t> data{1, 2, 3, 4, 5};
     const uint32_t crc = mimus::asr::Crc32(data);
+    assert(!invalidated);
     for (unsigned slot = 0; slot < 3; ++slot) {
+        // Only accepted model-slot replacements invalidate the retained engine.
+        const unsigned before = invalidated;
         request(0x11, words({slot, uint32_t(data.size()), crc ^ 1}));
+        assert(invalidated == before + (slot < 2));
         request(0x13, words({slot}), 5);
         auto packet = words({slot, 1}); packet.insert(packet.end(), data.begin(), data.end());
         request(0x12, packet, 3);
@@ -68,7 +74,9 @@ int main() {
     for (unsigned generation = 1; generation <= 2; ++generation) {
         request(generation == 1 ? 0x14 : 0x16, {});
         request(0x14, {}, 2);
+        const unsigned before = invalidated;
         request(0x11, words({0, 1, 0}), 2);
+        assert(invalidated == before);
         request(0x15, words({0}), 2);
         std::span<const uint8_t> inputs[3];
         assert(mimus_service_wait(inputs) == (generation == 2));

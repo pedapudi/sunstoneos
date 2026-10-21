@@ -11,7 +11,7 @@
 #define cyclic_case (*(volatile unsigned *)UINT64_C(0x47fff000))
 static _Alignas(4096) unsigned char cyclic_pool[10*4096];
 static unsigned char cyclic_device[2][4][4096],copied[4096];
-static uint32_t amounts[2],range_invalidations,copy_inject,link_transition,final_packet;
+static uint32_t amounts[2],range_invalidations,copy_inject,copied_inject,link_transition,final_packet;
 static void cycle(unsigned,unsigned);
 static unsigned start_delay;
 static int clock_now(void *context,uint64_t *out)
@@ -48,6 +48,8 @@ static void dma_advance(void)
 static uint32_t dma_read(void *context,uintptr_t address)
 {
     (void)context;privileged();configASSERT(address>=D && address<D+sizeof(dma));
+    /* Reuse after the copy, before its package-count postcheck. */
+    if(copied_inject && address==D+0x130){copied_inject=0;__atomic_fetch_add(&us,192000,__ATOMIC_SEQ_CST);cycle(0,3);}
     dma_advance();uint32_t value=dma[(address-D)/4];
     if(link_transition && address==D+0x108){--link_transition;return value^64;}
     return value;
@@ -81,7 +83,8 @@ static void cyclic_cache(void *context,enum a733_dma_cache op,void *cpu,size_t b
             configASSERT(!ch);
             if(live&1){
                 ++range_invalidations;
-                if(copy_inject && range_invalidations==copy_inject){copy_inject=0;__atomic_fetch_add(&us,192000,__ATOMIC_SEQ_CST);cycle(0,3);}
+                if(copy_inject==1){copy_inject=0;__atomic_fetch_add(&us,192000,__ATOMIC_SEQ_CST);cycle(0,3);}
+                if(copy_inject==2){copy_inject=0;copied_inject=1;}
             }
             memcpy(cpu,cyclic_device[ch][slot],bytes);
         }
@@ -92,7 +95,7 @@ static struct a733_i2s_period cyclic_period(unsigned job)
     for(unsigned n=0;n<100;++n){struct dma_service_reply r=request(DMA_SERVICE_PERIOD_GET,job,0,0);
         if(r.result==DMA_SERVICE_OK)return r.period;
         if(r.result!=DMA_SERVICE_BUSY){platform_puts("cyclic period fault job=");platform_hex(job);
-            for(unsigned j=0;j<2;++j){struct a733_i2s_stream *q=&service.channels[j].stream;
+            for(unsigned j=0;j<2;++j){struct a733_i2s_stream *q=&service.streams[j];
                 platform_puts(" status/stage/frames/time/since/dma=");platform_hex(q->status);platform_hex(q->stage);platform_hex(q->frames);platform_hex(q->time);platform_hex(q->cyclic_since);platform_hex(service.controller.channels[j].status);}
             platform_puts("\n");configASSERT(0);}
         vTaskDelay(1);}
@@ -174,7 +177,7 @@ static void cyclic_client(void *unused)
                 configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,t.ticket).result==DMA_SERVICE_INVALID);
                 configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,p.ticket).result==DMA_SERVICE_OK);
             }
-            configASSERT(get(&submissions)==2 && range_invalidations==24);
+            configASSERT(get(&submissions)==2 && range_invalidations==12);
             final_packet=1;__atomic_fetch_add(&us,64000,__ATOMIC_SEQ_CST);finish_pair(0);
             configASSERT(service.controller.channels[1].packages==13);
         }

@@ -16,7 +16,7 @@ enum a733_twi_state { A733_TWI_NEW, A733_TWI_READY, A733_TWI_BEGIN,
     A733_TWI_COMPLETE, A733_TWI_FAULT };
 struct a733_twi_ops {
     int (*now)(void *,uint64_t *);
-    /* Real ownership authentication; BUSY is allowed only before enter.
+    /* Real ownership authentication: 1 owned, 0 metadata BUSY, -1 refused.
      * enter acquires the platform I2C mutex for the entire transaction.
      * Authentication while held must not acquire the register mutex. */
     int (*authenticate)(void *);
@@ -64,6 +64,8 @@ int a733_twi_take_block(struct a733_twi *,uint8_t *,unsigned);
 /* One bounded protocol step; 0 pending,1 complete,-1 terminal retained fault.
  * NACK/arbitration/error/deadline/MMIO uncertainty retains the bus and every
  * lease. No STOP after an unexpected status, no retry, reset or bus pulses.
+ * Authentication BUSY before a step's first access leaves it pending; after an
+ * access, the observation is repeated until the deadline without replay.
  * Successful read data stays private until take() authenticates ownership. */
 int a733_twi_poll(struct a733_twi *);
 int a733_twi_take(struct a733_twi *,uint8_t *value);
@@ -90,8 +92,8 @@ struct a733_twi_native {
     struct a733_twi_native_config config;
     struct a733_twi_ops operations;
     uint32_t divider,rate_hz;
-    uint64_t deadline;
-    unsigned prepared,held,fault;
+    uint64_t deadline,until; /* Prepare deadline; current transaction deadline. */
+    unsigned prepared,held,fault,stored,busy;
 };
 /* One native TWI11 instance, constructed once during serialized platform boot.
  * Its real token has exclusive TWI11 and stable FABRIC/REF/OSC (plus PERI0
@@ -107,6 +109,9 @@ int a733_twi_native_init(struct a733_twi_native *,const struct a733_twi_native_c
  * gate/reset must both be0. Release reset, then open gate as prescribed by the
  * manual, establish100kHz-or-less standard mode, and verify inactive driver,
  * IRQ and high bus lines. Failed/uncertain writes retain the mutex and token.
+ * Registry or ledger BUSY before the first write leaves the mutex and returns
+ * 0; after it, the observation is repeated until the deadline. Transactions
+ * likewise repeat a BUSY observation in place and never reissue an access.
  * Already enabled/inherited controllers are refused rather than reset. */
 int a733_twi_native_prepare(struct a733_twi_native *,uint64_t deadline);
 #endif

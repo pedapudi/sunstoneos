@@ -230,7 +230,7 @@ void kernel_main(void)
     struct a733_dma_segment segment={{(uintptr_t)pool+64,0,4,8},{(uintptr_t)pool+128,0,4,8},64};
     struct a733_dma_mapping mappings[]={{pool+64,(uintptr_t)pool+64,64,A733_DMA_READ},
         {pool+128,(uintptr_t)pool+128,64,A733_DMA_WRITE}};
-    struct dma_service_job job={DMA_SERVICE_RAM,0,{{pool,(uintptr_t)pool,64,A733_DMA_DESCRIPTORS},&segment,1,mappings,2},NULL,NULL};
+    struct dma_service_job job={DMA_SERVICE_RAM,0,{{pool,(uintptr_t)pool,64,A733_DMA_DESCRIPTORS},&segment,1,mappings,2},NULL};
     struct dma_service_protected protected[]={
         {(uintptr_t)&service,(uintptr_t)&service,sizeof(service)},
         {(uintptr_t)&startup,(uintptr_t)&startup,sizeof(startup)},

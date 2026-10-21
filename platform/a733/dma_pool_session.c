@@ -14,14 +14,11 @@ static void bootstrap(void *);
 
 static int privileged(void)
 { uint64_t v; __asm__ volatile("mrs %0,CurrentEL":"=r"(v)); return v==4; }
-static int separate(uintptr_t a,size_t an,uintptr_t b,size_t bn)
-{ return a && b && an && bn && an<=UINTPTR_MAX-a && bn<=UINTPTR_MAX-b &&
-    (a+an<=b || b+bn<=a); }
 static int image(const void *p,size_t bytes,int write)
 {
     uintptr_t start=(uintptr_t)p;
     if(start<0x41000000 || start>=0x42000000 || !bytes || bytes>0x42000000-start ||
-       !separate(start,bytes,pool_extent.cpu,pool_extent.bytes)) return 0;
+       !a733_dma_separate(start,bytes,pool_extent.cpu,pool_extent.bytes)) return 0;
     uintptr_t end=start+bytes;
     for(uintptr_t a=start&~(uintptr_t)4095;a<end;a+=4096) {
         struct aarch64_translation t;
@@ -166,7 +163,7 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !s || !c ||
        instance || (uintptr_t)s%_Alignof(struct a733_dma_pool_session) ||
        (uintptr_t)c%_Alignof(struct a733_dma_pool_config) ||
-       !separate((uintptr_t)s,sizeof(*s),(uintptr_t)c,sizeof(*c))) return 0;
+       !a733_dma_separate((uintptr_t)s,sizeof(*s),(uintptr_t)c,sizeof(*c))) return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     /* This constructor uses the initial in-image pool profile. A later external
      * carveout requires explicit image-exclusion integration, not subtraction
@@ -190,7 +187,7 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
     for(unsigned i=0;i<sizeof(objects)/sizeof(objects[0]);++i) {
         if((uintptr_t)objects[i]%alignments[i] || !image(objects[i],sizes[i],i!=1 && i!=2)) return 0;
         for(unsigned j=0;j<i;++j)
-            if(!separate((uintptr_t)objects[i],sizes[i],(uintptr_t)objects[j],sizes[j])) return 0;
+            if(!a733_dma_separate((uintptr_t)objects[i],sizes[i],(uintptr_t)objects[j],sizes[j])) return 0;
     }
     if(!image((const void *)(uintptr_t)c->fatal,4,0) ||
        (c->fatal_cookie && !image(c->fatal_cookie,1,1)) ||

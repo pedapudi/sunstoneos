@@ -19,7 +19,10 @@
 #define LSR 0x14u
 #define MSR 0x18u
 #define USR 0x7cu
+#define HSK 0x88u        /* UART_HSK: 0xe5 selects DMA handshake mode. */
+#define DMA_REQ_EN 0x8cu /* bit0 RX, bit1 TX DMA request enable. */
 #define HALT 0xa4u
+#define HALT_DMA 0xc2u   /* HALT DMA_PTE_RX(7), PTE(6), CHCFG_AT_BUSY(1). */
 #define ERRORS 0x9eu
 
 static int span(const void *p, size_t n)
@@ -56,6 +59,7 @@ int a733_uart_plan(const struct a733_uart_format *f, struct a733_uart_plan *out)
     if (f->stop_half_bits != 2) p.lcr |= 4;
     if (f->parity) p.lcr |= 8u | (f->parity == 2 ? 16u : 0);
     p.mcr = f->auto_flow ? 0x22u : 0;
+    p.fcr = a733_uart_fcr(f->port);
     p.divisor = (uint32_t)div;
     p.actual_baud = f->clock_hz / (16u * p.divisor);
     *out = p;
@@ -82,6 +86,12 @@ static int write_reg(struct a733_uart *u, unsigned off, uint32_t v)
     if (u->ops.write32(u->context, u->plan.base + off, v) != 1) return fault(u);
     return clock_ok(u);
 }
+/* FIFO batches check the deadline before and after the batch instead of
+ * around every access. Each access still faults on an uncertain result. */
+static int fifo_read(struct a733_uart *u, unsigned off, uint32_t *v)
+{ return u->ops.read32(u->context, u->plan.base + off, v) == 1 || fault(u); }
+static int fifo_write(struct a733_uart *u, unsigned off, uint32_t v)
+{ return u->ops.write32(u->context, u->plan.base + off, v) == 1 || fault(u); }
 int a733_uart_begin(struct a733_uart *u, const struct a733_uart_ops *ops, void *context,
                     const struct a733_uart_format *format, uint64_t deadline)
 {
@@ -99,7 +109,7 @@ int a733_uart_begin(struct a733_uart *u, const struct a733_uart_ops *ops, void *
     if (!read_reg(u, LCR, &v)) return u->state;
     if (v || !read_reg(u, USR, &v)) { fault(u); return u->state; }
     if (v & 9u) { fault(u); return u->state; }
-    if (!write_reg(u, IER, 0) || !write_reg(u, FCR, 1) ||
+    if (!write_reg(u, IER, 0) || !write_reg(u, FCR, plan.fcr) ||
         !write_reg(u, HALT, 3) || !write_reg(u, LCR, plan.lcr | 0x80u) ||
         !write_reg(u, DLL, plan.divisor & 255u) ||
         !write_reg(u, DLH, plan.divisor >> 8) || !write_reg(u, HALT, 7)) return u->state;
@@ -121,7 +131,7 @@ int a733_uart_poll(struct a733_uart *u)
     if (u->state != A733_UART_CONFIGURING) return -1;
     if (!read_reg(u, HALT, &v) || (v & 4u)) return u->state;
     if (!write_reg(u, LCR, u->plan.lcr) || !write_reg(u, HALT, 2) ||
-        !write_reg(u, FCR, 7) || !write_reg(u, FCR, 1) ||
+        !write_reg(u, FCR, u->plan.fcr | 6u) || !write_reg(u, FCR, u->plan.fcr) ||
         !write_reg(u, MCR, u->plan.mcr)) return u->state;
     if (!read_reg(u, LCR, &v)) return u->state;
     if ((v & 255u) != u->plan.lcr) { fault(u); return u->state; }
@@ -147,11 +157,11 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
                    struct a733_uart_result *r, int irq)
 {
     uint32_t v, data, ier;
-    unsigned dorx = 1, dotx = 1;
+    unsigned dorx = 1, dotx = 1, timed = 0;
     if (!u || !budget || budget > 256 || !deadline ||
         !buffers_ok(u, rx, rn, tx, tn, r)) return -1;
     if (u->state == A733_UART_FAULT) return u->state;
-    if (u->state != A733_UART_READY || u->dma_owned) return -1;
+    if (u->state != A733_UART_READY || u->dma_owned || u->dma_released) return -1;
     *r = (struct a733_uart_result){0}; r->cause = 1;
     u->deadline = deadline;
     if (irq) {
@@ -170,23 +180,31 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
             if (!read_reg(u, MSR, &v)) return u->state;
             r->modem = v & 255u;
         }
+        timed = 1; /* The IIR/MSR read just checked the deadline. */
     }
-    if (dorx) {
+    if (dorx && rn) {
+        if (!timed && !clock_ok(u)) return u->state;
         /* Do not clear the next byte's line flags without a destination. */
         for (unsigned n = 0; n < budget && r->received < rn; ++n) {
-            if (!read_reg(u, LSR, &v)) return u->state;
+            if (!fifo_read(u, LSR, &v)) return u->state;
             r->errors |= v & ERRORS; u->errors |= v & ERRORS;
             if (!(v & 1u)) break;
-            if (!read_reg(u, RBR, &data)) return u->state;
+            if (!fifo_read(u, RBR, &data)) return u->state;
             rx[r->received++] = (struct a733_uart_byte){(uint8_t)data, (uint8_t)(v & ERRORS)};
         }
+        if (!clock_ok(u)) return u->state;
+        timed = 1;
     }
     if (dotx) {
-        for (unsigned n = 0; n < budget && r->transmitted < tn; ++n) {
-            if (!read_reg(u, USR, &v)) return u->state;
-            if (!(v & 2u)) break;
-            if (!write_reg(u, THR, tx[r->transmitted])) return u->state;
-            ++r->transmitted;
+        if (tn) {
+            if (!timed && !clock_ok(u)) return u->state;
+            for (unsigned n = 0; n < budget && r->transmitted < tn; ++n) {
+                if (!fifo_read(u, USR, &v)) return u->state;
+                if (!(v & 2u)) break;
+                if (!fifo_write(u, THR, tx[r->transmitted])) return u->state;
+                ++r->transmitted;
+            }
+            if (!clock_ok(u)) return u->state;
         }
         ier = (u->ier & ~2u) | (r->transmitted < tn ? 2u : 0u);
         if (ier != u->ier) {
@@ -204,7 +222,7 @@ int a733_uart_tx_irq(struct a733_uart *u,unsigned enabled,uint64_t deadline)
 {
     if (!u || enabled>1 || !deadline) return -1;
     if (u->state==A733_UART_FAULT) return u->state;
-    if (u->state!=A733_UART_READY || u->dma_owned) return -1;
+    if (u->state!=A733_UART_READY || u->dma_owned || u->dma_released) return -1;
     u->deadline=deadline;
     uint32_t ier=(u->ier&~2u)|(enabled?2u:0u);
     if (!write_reg(u,IER,ier)) return u->state;
@@ -231,17 +249,17 @@ int a733_uart_dma_prepare(struct a733_uart *u,uint64_t deadline)
 {
     uint32_t v;
     if(!u || !deadline || u->plan.base!=0x02502000 ||
-       u->state!=A733_UART_READY || u->dma_owned)return -1;
+       u->state!=A733_UART_READY || u->dma_owned || u->dma_released)return -1;
     u->deadline=deadline;u->dma_owned=1;
-    if(!write_reg(u,0x8c,0) || !read_reg(u,0x8c,&v))return u->state;
+    if(!write_reg(u,DMA_REQ_EN,0) || !read_reg(u,DMA_REQ_EN,&v))return u->state;
     if(v){fault(u);return u->state;}
-    if(!write_reg(u,IER,0) || !write_reg(u,0x88,0xe5) ||
-       !write_reg(u,FCR,9) || !write_reg(u,HALT,0xc2))return u->state;
+    if(!write_reg(u,IER,0) || !write_reg(u,HSK,0xe5) ||
+       !write_reg(u,FCR,9) || !write_reg(u,HALT,HALT_DMA))return u->state;
     u->ier=0;u->dma_requests=0;
-    if(!read_reg(u,0x88,&v))return u->state;
+    if(!read_reg(u,HSK,&v))return u->state;
     if(v!=0xe5){fault(u);return u->state;}
     if(!read_reg(u,HALT,&v))return u->state;
-    if(v!=0xc2)fault(u);
+    if(v!=HALT_DMA)fault(u);
     return u->state;
 }
 int a733_uart_dma_requests(struct a733_uart *u,unsigned enabled,uint64_t deadline)
@@ -249,7 +267,7 @@ int a733_uart_dma_requests(struct a733_uart *u,unsigned enabled,uint64_t deadlin
     uint32_t v;
     if(!u || !deadline || enabled>1 || !u->dma_owned || u->state!=A733_UART_READY)return -1;
     u->deadline=deadline;
-    if(!write_reg(u,0x8c,enabled?3:0) || !read_reg(u,0x8c,&v))return u->state;
+    if(!write_reg(u,DMA_REQ_EN,enabled?3:0) || !read_reg(u,DMA_REQ_EN,&v))return u->state;
     if(v!=(enabled?3u:0u)){fault(u);return u->state;}
     u->dma_requests=enabled;return u->state;
 }
@@ -267,12 +285,14 @@ int a733_uart_dma_release(struct a733_uart *u,unsigned quiet,uint64_t deadline)
     if(!u || !deadline || quiet!=1 || !u->dma_owned || u->dma_requests ||
        u->state!=A733_UART_READY)return -1;
     u->deadline=deadline;
-    if(!read_reg(u,0x8c,&v))return u->state;
+    if(!read_reg(u,DMA_REQ_EN,&v))return u->state;
     if(v){fault(u);return u->state;}
     if(!read_reg(u,LSR,&lsr))return u->state;
     u->errors|=lsr&ERRORS;
     if(!read_reg(u,USR,&v))return u->state;
     if((lsr&0x41)!=0x40 || (v&9) || !(v&4))return 0;
-    /* Keep handshake registers until reset: requests remain disabled. */
-    u->dma_owned=0;return u->state;
+    /* Keep handshake registers until reset: requests remain disabled. IER
+     * stays 0 and FCR in DMA mode, so release is terminal: only drain and
+     * close follow. */
+    u->dma_owned=0;u->dma_released=1;return u->state;
 }

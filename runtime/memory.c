@@ -1,17 +1,35 @@
+#include <stdint.h>
 #include <string.h>
 
-void *memcpy(void *restrict dest, const void *restrict src, size_t count)
+/* Boot C calls these at EL3 with translation off, where every access is
+ * Device-nGnRnE and must be naturally aligned. Only general registers are used
+ * and each access is a byte or an aligned 8-byte word inside the caller's
+ * ranges, so the routines are valid on Device and Normal memory alike. The
+ * target attribute keeps SIMD out where the image does not pass
+ * -mgeneral-regs-only; -fno-builtin keeps the loops from becoming calls. */
+#define RUNTIME_GENERAL_REGS __attribute__((target("+nofp")))
+typedef uint64_t __attribute__((may_alias)) runtime_word;
+
+RUNTIME_GENERAL_REGS void *memcpy(void *restrict dest, const void *restrict src, size_t count)
 {
     unsigned char *out = dest;
     const unsigned char *in = src;
-    for (size_t i = 0; i < count; ++i) out[i] = in[i];
+    if ((((uintptr_t)out ^ (uintptr_t)in) & 7) == 0) {
+        for (; count && ((uintptr_t)out & 7); --count) *out++ = *in++;
+        for (; count >= 8; count -= 8, out += 8, in += 8)
+            *(runtime_word *)out = *(const runtime_word *)in;
+    }
+    for (; count; --count) *out++ = *in++;
     return dest;
 }
 
-void *memset(void *dest, int value, size_t count)
+RUNTIME_GENERAL_REGS void *memset(void *dest, int value, size_t count)
 {
-    unsigned char *out = dest;
-    for (size_t i = 0; i < count; ++i) out[i] = (unsigned char)value;
+    unsigned char *out = dest, byte = (unsigned char)value;
+    for (; count && ((uintptr_t)out & 7); --count) *out++ = byte;
+    runtime_word word = byte * UINT64_C(0x0101010101010101);
+    for (; count >= 8; count -= 8, out += 8) *(runtime_word *)out = word;
+    for (; count; --count) *out++ = byte;
     return dest;
 }
 

@@ -10,6 +10,7 @@ import shutil
 import struct
 import subprocess
 import sys
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 sys.dont_write_bytecode=True
 ROOT=Path(__file__).resolve().parents[1]
 CACHE=Path.home()/'.cache/sunstoneos'
@@ -82,7 +83,7 @@ def main():
         else:
             for name,digest in json.loads((out/'scheduler-source-pins.json').read_text())['files'].items():assert sha(kernel/name)==digest,name
         posix=kernel/'portable/ThirdParty/GCC/Posix'
-        host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=undefined','-pthread','-D_POSIX_C_SOURCE=200809L',
+        host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-pthread','-D_POSIX_C_SOURCE=200809L',
               '-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'checks/rtc-service-posix'),'-I'+str(posix),'-I'+str(kernel/'include'),'-I'+str(source/'include'),'-I'+str(source/'apps/rtc'),'-I'+str(source/'platform/a733-smp-cached')]
         jobs={'scheduler-build':host+[source/'checks/rtc-service-posix/model.c',source/'apps/rtc/service.c',source/'drivers/rtc/a733_rtc.c',source/'drivers/rtc/a733_rtc_initialize.c',
               source/'drivers/storage/storage_digest.c',kernel/'tasks.c',kernel/'queue.c',kernel/'list.c',posix/'port.c',posix/'utils/wait_for_event.c','-o',out/'scheduler']}

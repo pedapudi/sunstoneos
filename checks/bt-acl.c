@@ -242,12 +242,12 @@ static void command_ownership(void)
 {
     struct fixture f;struct bt_acl a;ready(&f,&a);
     uint64_t l=begin_connect(&f,&a,1);
-    /* A different command's status supplies neither link acceptance nor credit. */
+    /* A different command's status supplies neither link acceptance nor credit.
+     * No worker owns it, so the link worker frees its receive slot. */
     cs(&f,HCI_OP_DISCONNECT,9,0);astep(&a);
-    assert(!f.hci.credits && a.links[0].state==BT_ACL_CONNECT_STATUS && bt_acl_receive(&a));
+    assert(!f.hci.credits && a.links[0].state==BT_ACL_CONNECT_STATUS && !bt_acl_receive(&a));
     cs(&f,HCI_OP_CREATE_CONN,1,0x0c);astep(&a);
-    assert(a.links[0].state==BT_ACL_CLOSED && a.links[0].status==0x0c);
-    const struct bt_h4_record *r=bt_acl_receive(&a);assert(r && bt_acl_receive_release(&a,r->serial)==1);
+    assert(a.links[0].state==BT_ACL_CLOSED && a.links[0].status==0x0c && !bt_acl_receive(&a));
     struct bt_acl_peer prior={{1,2,3,4,5,6},1,0,0};uint64_t unchanged=99;
     assert(bt_acl_connect(&a,&prior,5000,&unchanged)==-1 && unchanged==99);
     l=begin_connect(&f,&a,2);cc(&f,HCI_OP_CREATE_CONN,1,1,1);astep(&a);
@@ -261,9 +261,31 @@ static void command_ownership(void)
     struct bt_acl_peer peer={{5,2,3,4,5,6},1,0,0};uint64_t output=123;
     assert(bt_acl_connect(&a,&peer,5000,&output)==0 && output==123 && l==4);
 }
+/* Events no owner consumes free their receive slot after exact validation.
+ * Other unknown events stay owned, and a malformed known one faults. */
+static void unowned_events(void)
+{
+    struct fixture f;struct bt_acl a;ready(&f,&a);
+    uint64_t l=begin_connect(&f,&a,1);connected(&f,&a,l,0x23);
+    const uint8_t slots[]={0x23,0,5},lsto[]={0x23,0,0x80,0x0c},role[]={0,1,2,3,4,5,6,1},
+        mode[]={0,0x23,0,2,0x20,0},psrm[]={1,2,3,4,5,6,1},vendor[]={0x42},
+        features[]={0,0x23,0,1,2,3,4,5,6,7,8},failed[]={0x04,0x24,0,9,2,3,4,5,6,1,0},
+        request[]={9,2,3,4,5,6,4,4,0x24,1},sync[]={0x10,0,0,9,2,3,4,5,6,2,0,0,0,0,0,0,2};
+    const struct {unsigned code;const uint8_t *p;unsigned n;} released[]={{0x1b,slots,3},{0x38,lsto,4},
+        {0x12,role,8},{0x14,mode,6},{0x20,psrm,7},{0xff,vendor,1},{0xff,vendor,0},{0x0b,features,11},
+        {HCI_EV_CONN_COMPLETE,failed,11},{0x04,request,10},{0x2c,sync,17}};
+    for(unsigned i=0;i<sizeof(released)/sizeof(released[0]);++i){
+        event(&f,released[i].code,released[i].p,released[i].n);astep(&a);
+        assert(!bt_acl_receive(&a) && a.links[0].state==BT_ACL_CONNECTED && a.next_link==2);
+    }
+    const uint8_t overflow[]={1};event(&f,0x1a,overflow,1);astep(&a);
+    const struct bt_h4_record *r=bt_acl_receive(&a);
+    assert(r && r->storage.bytes[0]==0x1a && bt_acl_receive_release(&a,r->serial)==1);
+    event(&f,0x38,lsto,3);assert(bt_acl_step(&a,64,10000)==-1 && a.links[0].state==BT_ACL_CONNECTED);
+}
 int main(void)
 {
-    scheduling();atomic_counts();retained_failures();closed_handle_count();command_ownership();
-    puts("Source-layout ACL/link commands, bounded UART composition, exact credits, retained disconnect/flush/fault and lifetime limits passed.");
+    scheduling();atomic_counts();retained_failures();closed_handle_count();command_ownership();unowned_events();
+    puts("Source-layout ACL/link commands, bounded UART composition, exact credits, retained disconnect/flush/fault, unowned-event release and lifetime limits passed.");
     return 0;
 }

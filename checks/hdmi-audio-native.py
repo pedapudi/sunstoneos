@@ -77,7 +77,7 @@ def seed(image,out):
 
 class Machine:
  def __init__(self,image,session,contract,pcm,edid):
-  self.i=image;self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.time=100;self.scheduler=1;self.task=0;self.tasks=[];self.holders={};self.queues={};self.notifications={};self.events=[];self.trace=[];self.registers={};self.pending={};self.internal={};self.publishes=[];self.boundary=None;self.stopped=False;self.edid=edid;self.completion_reported=False;self.dma_started=0;self.dma_done=0;self.fifo_empty_at=0;self.dma_payload=b'';self.callsites=[];self.phase="constructor";self.active_handle=None;self.sequence=0
+  self.i=image;self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.time=100;self.scheduler=1;self.task=0;self.tasks=[];self.holders={};self.queues={};self.notifications={};self.events=[];self.trace=[];self.registers={};self.pending={};self.internal={};self.publishes=[];self.boundary=None;self.stopped=False;self.edid=edid;self.completion_reported=False;self.dma_started=0;self.dma_done=0;self.fifo_empty_at=0;self.underrun=False;self.underrun_reads=0;self.dma_payload=b'';self.callsites=[];self.phase="constructor";self.active_handle=None;self.sequence=0
   self.regions=[(0x41000000,0x03000000),(0x02000000,0x4000),(0x02535000,4096),(0x03000000,4096),(0x03400000,4096),(0x04601000,8192),(0x05510000,0x20000),(0x05600000,4096),(0x05730000,4096),(0x07010000,4096),(0x07025000,4096),(0x0706a000,4096),(0x07083000,4096),(0x07090000,4096)]
   for a,n in self.regions:self.u.mem_map(a,n)
   for a,_,d,_ in image.parts:
@@ -132,8 +132,10 @@ class Machine:
   elif name=='a733_smp_device_preparation_admitted':self.ret(1)
   elif name=='a733_cpu_coherence_publish':self.publishes.append([a[0],a[1],self.time]);self.ret(1)
   elif name=='aarch64_device_translate':
+   # PAR_EL1.SH reads 2 (outer) for Device and Normal-NC whatever the
+   # descriptor holds; only cacheable WB reports the mapped inner value 3.
    attr=0x44 if 0x41c00000<=a[0]<0x41e00000 else 0xff if a[0]>=0x40000000 else 0
-   self.u.mem_write(a[2],struct.pack('<QII',a[0],attr,3 if attr else 2));self.ret(1)
+   self.u.mem_write(a[2],struct.pack('<QII',a[0],attr,3 if attr==0xff else 2));self.ret(1)
   elif name=='aarch64_device_cache_stride':self.ret(64)
   elif name=='aarch64_device_cache':self.ret(1)
   elif name=='a733_counter_clock_init':
@@ -174,6 +176,7 @@ class Machine:
   elif a==0x05600040:value=int(self.registers.get(0x05600020,0)&0xe0000000==0xe0000000)
   elif a==0x05523004:value=2|int(bool(self.registers.get(0x05523000,0)&8))
   elif a==0x02535018:value=128<<16 if not self.dma_started or self.time>=self.fifo_empty_at else 64<<16
+  elif a==0x0253500c and getattr(self,'underrun',False) and self.dma_started:value=0x40;self.underrun_reads+=1
   elif a==0x04601100 and self.dma_started and self.time>=self.dma_done:value=0;self.registers[a]=0
   elif a==0x04601030:value=1 if self.dma_started and self.time<self.dma_done else 0
   elif a==0x04601138 and self.dma_started and self.time>=self.dma_done and not self.completion_reported:value=4
@@ -195,6 +198,9 @@ class Machine:
    self.pending[0x05520108]=(2,1)
   elif a==0x05523100:self.pending[a]=(value&~0x80,1)
   elif a==0x02535014:self.pending[a]=(value&~(1<<25),4)
+  elif a==0x02535000 and value&4:
+   # TXEN follows FIFO requests and observed queued samples (FIFO priming).
+   assert self.dma_started and self.registers.get(0x0253501c,0)&0x80 and self.time<self.fifo_empty_at
   elif a==0x0253501c and value&0x80 and not self.dma_started:
    # Decode the actual native descriptor only after the actual client enables
    # FIFO requests. Device consumption and completion below are modeled.
@@ -210,7 +216,7 @@ class Machine:
    assert self.registers[0x04601034]&1 and not self.registers[0x04601038]&1
    assert self.registers[0x02002704]&0x10001==0x10001 and self.registers[0x020025e4]&1
    for at,mask,expected in ((0x02003230,0x8700001f,0x82000018),(0x0200323c,0x10001,0x10001),
-       (0x02535000,0x70137,0x60115),(0x02535004,0xffff,0x1f37),(0x02535024,0x1ff,0x50),
+       (0x02535000,0x70137,0x60111),(0x02535004,0xffff,0x1f37),(0x02535024,0x1ff,0x50),
        (0x02535030,15,1),(0x02535034,0xff000f,0x110003),(0x02535044,0xffffffff,0),
        (0x02535048,0xffffffff,0x10),(0x02535014,0x800ff07f,0x80040075),
        (0x05523200,255,0),(0x05523201,255,0x18),(0x05523202,15,0),
@@ -371,31 +377,33 @@ def run(args):
    assert not args.checkpoint
    for path,digest in inputs.items():assert sha(path)==digest,('input changed during constructor',path)
    save(out/'constructor-result.json',dict(passed=True,physical=False,identity=m.identity));return
-  m.scheduler=2;sequence=m.sequence
-  interrupted=m.active_handle if m.phase=='task-slice' else None
-  if m.phase!='task-slice':m.phase='scheduling'
-  while m.time<15000000 and m.get(app+af['state'],4)!=2:
-   ready=[t for t in tasks if t['wake']<=m.time]
-   if not ready:m.time=min(t['wake'] for t in tasks);continue
-   task=next(t for t in tasks if t['handle']==interrupted) if interrupted else min(ready,key=lambda t:t['last']);interrupted=None;m.task=task['handle'];m.boundary=None;m.stopped=False
-   if task['context'] is None:
-    m.u.reg_write(UC_ARM64_REG_SP,(task['stack']+task['bytes'])&~15);m.u.reg_write(UC_ARM64_REG_LR,0x43fff000);m.u.reg_write(UC_ARM64_REG_X0,task['argument']);at=task['entry']
-   else:m.u.context_restore(task['context']);at=m.u.reg_read(UC_ARM64_REG_PC)
-   m.phase='task-slice';m.active_handle=task['handle'];m.sequence=sequence
-   m.u.emu_start(at,0,count=1000000);assert m.stopped,('task instruction bound',hex(m.u.reg_read(UC_ARM64_REG_PC)))
-   task['context']=m.u.context_save();task['runs']+=1;sequence+=1;task['last']=sequence;m.sequence=sequence;m.phase='scheduling';m.active_handle=None
-   kind,ticks=m.boundary
-   assert kind not in ('return','scheduler','suspend'),(kind,task)
-   task['wake']=(m.time//1000+1)*1000 if kind in ('delay','queue','notify') else m.time
-   # Serialized cooperative model wakes blocked queue/notify tasks each tick;
-   # it preserves actual call contexts and does not claim SMP/preemption.
-   state=m.get(app+af['state'],4)
-   stage=m.get(audio+nf['stage'],4)
-   if stage in (4,7) and stage not in forks:
-    label='before-sampler' if stage==4 else 'submitted-requests-disabled'
-    forks[stage]=(m.checkpoint(out,label,tasks),out,m.fixture_source_sha,m.hardware_source_sha)
-   if state in (2,3):break
-  state=m.get(app+af['state'],4)
+  def schedule(m,tasks,forks):
+   m.scheduler=2;sequence=m.sequence
+   interrupted=m.active_handle if m.phase=='task-slice' else None
+   if m.phase!='task-slice':m.phase='scheduling'
+   while m.time<15000000 and m.get(app+af['state'],4)!=2:
+    ready=[t for t in tasks if t['wake']<=m.time]
+    if not ready:m.time=min(t['wake'] for t in tasks);continue
+    task=next(t for t in tasks if t['handle']==interrupted) if interrupted else min(ready,key=lambda t:t['last']);interrupted=None;m.task=task['handle'];m.boundary=None;m.stopped=False
+    if task['context'] is None:
+     m.u.reg_write(UC_ARM64_REG_SP,(task['stack']+task['bytes'])&~15);m.u.reg_write(UC_ARM64_REG_LR,0x43fff000);m.u.reg_write(UC_ARM64_REG_X0,task['argument']);at=task['entry']
+    else:m.u.context_restore(task['context']);at=m.u.reg_read(UC_ARM64_REG_PC)
+    m.phase='task-slice';m.active_handle=task['handle'];m.sequence=sequence
+    m.u.emu_start(at,0,count=1000000);assert m.stopped,('task instruction bound',hex(m.u.reg_read(UC_ARM64_REG_PC)))
+    task['context']=m.u.context_save();task['runs']+=1;sequence+=1;task['last']=sequence;m.sequence=sequence;m.phase='scheduling';m.active_handle=None
+    kind,ticks=m.boundary
+    assert kind not in ('return','scheduler','suspend'),(kind,task)
+    task['wake']=(m.time//1000+1)*1000 if kind in ('delay','queue','notify') else m.time
+    # Serialized cooperative model wakes blocked queue/notify tasks each tick;
+    # it preserves actual call contexts and does not claim SMP/preemption.
+    state=m.get(app+af['state'],4)
+    stage=m.get(audio+nf['stage'],4)
+    if forks is not None and stage in (4,7) and stage not in forks:
+     label='before-sampler' if stage==4 else 'submitted-requests-disabled'
+     forks[stage]=(m.checkpoint(out,label,tasks),out,m.fixture_source_sha,m.hardware_source_sha)
+    if state in (2,3):break
+   return m.get(app+af['state'],4)
+  state=schedule(m,tasks,forks)
   m.checkpoint(out,'terminal',tasks)
   result=bytes(m.u.mem_read(i.address('hdmi_audio_result'),160));(out/'result.bin').write_bytes(result)
   ready=m.get(i.address('hdmi_audio_result_ready'),4);(out/'ready.bin').write_bytes(struct.pack('<I',ready))
@@ -437,6 +445,21 @@ def run(args):
     assert f.registers[0x04601100]==1 and f.dma_started==0
    f.checkpoint(out,label,fork_tasks);(out/(label+'-result.bin')).write_bytes(fault)
    fault_results.append(dict(case=label,passed=True,no_later_device_writes=True,retained_memory=True,source_consumed=0,wire_drained=False))
+  # A FIFO underrun latched while requests still refill the FIFO must end in a
+  # retained failure instead of INPUT_ENDED with an empty FIFO.
+  label='playback-underrun-retained'
+  saved,producer,producer_source,producer_hardware=forks[7];f=Machine(i,raw,contract,pcm,edid);f.identity=m.identity;f.fixture_source_sha=m.fixture_source_sha;f.hardware_source_sha=m.hardware_source_sha
+  saved=restore(f,producer/('submitted-requests-disabled.pickle'),m.identity,producer_source,producer_hardware);fork_tasks=copy.deepcopy(saved['task_contexts']);active_machine=f;active_tasks=fork_tasks
+  assert f.get(audio+nf['stage'],4)==7
+  f.underrun=True;state=schedule(f,fork_tasks,None)
+  fault=bytes(f.u.mem_read(i.address('hdmi_audio_result'),160));fw=struct.unpack('<12Q',fault[:96])
+  assert state==3 and fw[3]==3 and fw[7]==0 and f.dma_started and f.underrun_reads,(state,fw,f.underrun_reads)
+  assert f.get(i.address('hdmi_audio_result_ready'),4)==1
+  assert f.get(audio+nf['local']) and f.get(audio+nf['record']+i.field('device_memory_allocation','state'),4)==2
+  channel=audio+nf['service']+i.field('dma_service','channels')
+  assert f.get(channel+i.field('dma_service_channel','holds_buffers'),4)==1
+  f.checkpoint(out,label,fork_tasks);(out/(label+'-result.bin')).write_bytes(fault)
+  fault_results.append(dict(case=label,passed=True,retained_memory=True,fifo_empty=False,wire_drained=False))
   save(out/'faults.json',fault_results)
   for path,digest in inputs.items():assert sha(path)==digest,('input changed during continuations',path)
   active_machine=m;active_tasks=tasks

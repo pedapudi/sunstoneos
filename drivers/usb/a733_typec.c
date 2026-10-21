@@ -123,17 +123,31 @@ static int active(struct a733_typec *s)
     case 0:{
         uint64_t d;if(!add(s->now,1000,&d))return -1;
         r=s->config.ops.irq(s->config.context,&s->irq_level,d);
-        if(r==1){if(!s->irq_level)return -1;++s->step;}
-        return r<0?-1:0;}
+        if(r!=1)return r<0?-1:0;
+        if(!s->irq_level)return -1;
+        /* RISE cleared the interrupt registers and unmasked only VBUSOK,
+         * comparator and OCP/temperature changes. Status reads do not clear
+         * them, so INT_N stays low after any such change. While it is high,
+         * the last status read still holds: publish from this sample, and
+         * read both status registers again once per REFRESH_US. */
+        if(s->status_at && s->now-s->status_at<A733_TYPEC_REFRESH_US){
+            s->cycle_start=s->now;s->step=3;return 2;
+        }
+        ++s->step;}
+        /* fall through: each completed stage starts the next in this poll. */
     case 1:
         if(!s->transaction)s->cycle_start=s->now;
         r=io(s,0x40,1,0);
-        if(r==1){if((s->value&(VBUSOK|COMP))!=VBUSOK)return -1;s->status=s->value;++s->step;}
-        return r<0?-1:0;
+        if(r!=1)return r<0?-1:0;
+        if((s->value&(VBUSOK|COMP))!=VBUSOK)return -1;
+        s->status=s->value;++s->step;
+        /* fall through */
     case 2:
         r=io(s,0x41,1,0);
-        if(r==1){if(s->value&3)return -1;++s->step;}
-        return r<0?-1:0;
+        if(r!=1)return r<0?-1:0;
+        if(s->value&3)return -1;
+        s->status_at=s->cycle_start;++s->step;
+        /* fall through */
     case 3:
         return 2; /* Publish only after final authority and time checks in poll. */
     default:return -1;

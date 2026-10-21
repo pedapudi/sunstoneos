@@ -38,9 +38,9 @@ extern "C" int mimus_board_keyboard(){return 1;}
 extern "C" int mimus_board_trigger_step(){return live.load()?mimus_keyboard_step():-1;}
 extern "C" int mimus_board_rearm(){return mimus_keyboard_rearm();}
 extern "C" void mimus_board_fail(){failed=true;live=false;changed.notify_all();}
-bool mimus_transcribe_recorded(std::span<const uint8_t>[3],std::span<uint8_t>,const std::atomic<bool> *)
+bool mimus_transcribe_recorded(std::span<const uint8_t>[3],std::span<uint8_t>,const std::atomic<bool> *,unsigned options)
 {
-    ++calls;assert(mimus_board_started()==calls);
+    ++calls;assert(mimus_board_started()==calls&&options==(kMimusWarm|kMimusVerified));
     platform_puts(calls==1?"first immutable transcript\n":"second immutable transcript\n");
     if(!no_overlap)mimus_board_storage_completed(calls);
     return true;

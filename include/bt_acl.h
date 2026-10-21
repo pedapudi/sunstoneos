@@ -121,7 +121,9 @@ int bt_acl_step(struct bt_acl *, unsigned budget, uint64_t deadline);
 const struct bt_acl_packet *bt_acl_result(const struct bt_acl *);
 int bt_acl_release(struct bt_acl *, uint64_t serial);
 /* Only already-classified records are exposed. ACL RX remains a raw HCI packet;
- * match its handle against links[] to find the immutable generation. Unknown,
+ * match its handle against links[] to find the immutable generation. Validated
+ * informational and vendor events, unmatched command events, unclaimed remote
+ * features, failed completions and unanswered requests are released. Unknown,
  * SCO, ISO and security events are retained for later protocol owners. */
 const struct bt_h4_record *bt_acl_receive(const struct bt_acl *);
 int bt_acl_receive_release(struct bt_acl *, uint64_t serial);

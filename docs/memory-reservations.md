@@ -92,72 +92,34 @@ IOMMU tables, camera frames and video buffers still need concrete consumer
 bindings and device-address policies. Cached multicore builds use their own
 linker geometry, with separate admission for extended device-memory reservations.
 
-## DMA completion controls return to CPU ownership
+## DMA users bind through the pool session
 
-`a733_memory_dma_init()` supplies the actual linker pool to the existing native
-DMA memory policy. The policy continues checking every covered CPU page and
-performs whole-allocation cache maintenance. The register window and native
-adapter state remain outside the pool.
-
-After native controller initialization and channel claim, bind one
-`a733_dma_reserved` service to that channel and a nonzero owner identifier.
-All service, controller, callback and pool metadata must remain private and
-immutable. The service serializes its operations with the pool's allocation
-operations. Callers use this service for submission, polling and cancellation.
-
-Submission accepts leases for descriptors and payload buffers. It derives all
-CPU addresses, physical addresses and byte lengths from live allocations.
-It copies the segment and mapping metadata before invoking the actual DMA
-controller. Each allocation must belong to the bound owner and occupy a distinct
-slot. Callers may dispose of their input metadata after submission returns.
-They must preserve the service and payload bytes according to ownership state.
-
-The service marks all allocations device-owned before controller submission.
-A refusal before controller ownership restores CPU ownership. During execution,
-completion or cancellation must pass the controller's idle, pending-event,
-descriptor-restoration and destination-cache protocol. Only terminal controller
-state together with detachment of the specific copied transfer returns the
-allocations to CPU ownership. A channel elsewhere reporting completion cannot
-release this transfer's buffers.
-
-Copied active services and changed pool, controller, channel or owner bindings
-are refused before device callbacks. A detected mismatch retains the original
-leases. Recovery also retains every allocation and prevents further callbacks
-through that service. These checks detect accidental copying or rebinding;
-they do not provide protection against arbitrary metadata corruption.
-
-Physical reuse depends on the DMA controller's completion contract proving that
-all accepted accesses have completed. Software checks do not qualify that
-hardware guarantee. FIFO producer shutdown remains a separate responsibility;
-for example, I2S capture must stop the producer before stopping DMA.
-Independent watchdog recovery, native channel ownership, clocks, routing and
-remote-user exclusion remain prerequisites for physical execution.
+DMA images do not lease individual pool allocations around each transfer. The
+[DMA pool session](dma-pool-session.md) takes one parent allocation from this pool
+for its lifetime, keeps it device-owned, and registers a fixed catalogue of
+descriptor and payload regions with the [DMA service](dma-service.md). The native
+DMA memory policy admits only those regions, each for its own role. The service
+then holds every registered buffer from submission until verified drain and an
+explicit REAP. Physical reuse still depends on the DMA controller's completion
+contract, which software checks do not qualify.
 
 ## Focused validation
 
-The composed check runs the allocator, reservation service, actual DMA controller
-and memory policy against modeled registers and separate CPU/device byte arrays.
-It checks complete page extents, stale and cross-pool leases, allocation and
-generation exhaustion, copied submission metadata, complete cache publication,
-completion, cancellation, mapping refusal and retained recovery.
-Copying an active service or substituting another controller must produce no
-device callbacks and must retain the original buffers.
-
-One AddressSanitizer/UndefinedBehaviorSanitizer run passed. Native AArch64
-compilation also passed. The companion runner compares allocated
-sections, bytes, existing symbol addresses and load-segment extents with the
-previous linker script when no pool is requested. It also checks the explicit
-pool's placement and linker refusal cases. The real mimus image also preserves every allocated section byte, existing
-symbol and load-segment extent after relinking with the default pool size.
-It matches the previously built application image. A separate image links the
-allocator, native initializer, DMA service, native adapter and cache operations
-with a 64 KiB pool. Linking does not establish execution of the initializer.
+The host check runs the allocator against modeled backing storage. It checks
+complete page extents, stale and cross-pool leases, retained allocations, and
+allocation and generation exhaustion under AddressSanitizer and
+UndefinedBehaviorSanitizer. Native AArch64 compilation covers the allocator,
+the reservation initializer and the translation helper. The companion runner
+compares allocated sections, bytes, existing symbol addresses and load-segment
+extents with the previous linker script when no pool is requested. It also
+checks the explicit pool's placement and linker refusal cases. The real mimus
+image also preserves every allocated section byte, existing symbol and
+load-segment extent after relinking with the default pool size.
 
 Evidence is under `~/.cache/sunstoneos/evidence/memory-reservations-20261016/`.
 `batch1/results.json` records the focused ownership, native-object and linker
-checks. `native-links/result.json` records the actual mimus comparison and native
-link closure. The initial freestanding memory-routine compile needed its
-`string.h` include path corrected; successful image comparisons were reused.
+checks of an earlier revision that also exercised a per-allocation DMA service,
+since removed. `native-links/result.json` records the actual mimus comparison.
 No physical memory or device access ran in these checks.
 
 Run only the mode affected by a later change:

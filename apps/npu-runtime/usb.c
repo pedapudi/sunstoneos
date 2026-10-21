@@ -38,6 +38,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index,uint16_t language)
     unsigned n=(unsigned)strlen(text[index]);if(n>63)return NULL;out[0]=(uint16_t)(0x0300|2*n+2);
     for(unsigned i=0;i<n;++i)out[i+1]=(uint8_t)text[index][i];return out;
 }
+void npu_runtime_expire(void);
 void tud_umount_cb(void)
 {if(sequence||received||payload||response_bytes)npu_runtime_fail(41);}
 void tud_suspend_cb(bool wake)
@@ -72,9 +73,9 @@ void a733_observe_privileged(void)
   if(!tusb_init(0,&init))a733_observe_failure(10);initialized=1;}
  a733_usb_poll();tud_task_ext(0,false);a733_observe_deadline();
  /* Poll request expiry even when a host abandons an incomplete upload or a
-  * completed response. This only latches failure; it does not reuse storage. */
- uint8_t health[1024];unsigned ignored;uint64_t ignored_id;
- npu_runtime_frame(health,&ignored,&ignored_id);
+  * completed response. This only latches failure; it does not reuse storage
+  * and builds no frame. */
+ npu_runtime_expire();
  if(response_bytes){
   if(ack_state&&atomic_load_explicit(&npu_runtime.state,memory_order_acquire)==NR_FAILED){
    if(!sent){npu_runtime_frame(response+16,&ack_state,&ack_id);}

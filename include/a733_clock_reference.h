@@ -18,4 +18,15 @@ static inline int a733_clock_ref24_valid(uint32_t oscillator,uint32_t reference)
         n>=80&&n<=116&&
         (uint64_t)a733_clock_dcxo_hz(oscillator)*n==UINT64_C(24000000)*m;
 }
+/* PLL_PERI0_CTRL at CCU+0x0a0 (manual 4.1.6.6) with the normalized 24 MHz
+ * PLL_REF parent: enable, LDO, lock enable, lock and all three output gates
+ * (bits31:25) set, input divider M1=1 (bit1 clear), N=(bits15:8)+1 within
+ * 53..105 and PERI0PLL2X=24 MHz*N/P0=1.2 GHz with P0=(bits22:20)+1.
+ * Reserved bits24:23 are not selectors and are ignored. Callers still check
+ * their own gate, effective-status and No-Auto words. */
+static inline int a733_clock_peri0_valid(uint32_t pll)
+{
+    unsigned n=((pll>>8)&255)+1,p0=((pll>>20)&7)+1;
+    return (pll&UINT32_C(0xfe000002))==UINT32_C(0xfe000000)&&n>=53&&n<=105&&24u*n==1200u*p0;
+}
 #endif

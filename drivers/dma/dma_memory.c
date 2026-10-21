@@ -6,14 +6,6 @@
 #define WIDTHS ((1u << 1) | (1u << 2) | (1u << 4))
 #define BURSTS ((1u << 1) | (1u << 4) | (1u << 8) | (1u << 16))
 
-static int overlap(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
-{ return a < b + m && b < a + n; }
-
-unsigned dma_cache_stride(uint64_t ctr)
-{
-    return aarch64_cache_stride_from_ctr(ctr);
-}
-
 int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window *windows,
                     size_t count, const struct dma_fifo_port *ports, size_t port_count,
                     dma_translate_fn translate, void *cookie)
@@ -25,12 +17,12 @@ int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window 
         if (!w->cpu || !w->bytes || (w->cpu & 63) || (w->physical & 63) || (w->bytes & 63) ||
             w->cpu > UINTPTR_MAX - w->bytes || w->physical >= LIMIT || w->bytes > LIMIT - w->physical ||
             !w->roles || (w->roles & ~ROLES) ||
-            overlap(w->cpu, w->bytes, (uintptr_t)p, sizeof(*p))) return 0;
+            a733_dma_overlap(w->cpu, w->bytes, (uintptr_t)p, sizeof(*p))) return 0;
         if ((w->roles & DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)) &&
             (w->physical >= UINT64_C(0xfffff800) || w->bytes > UINT64_C(0xfffff800) - w->physical)) return 0;
         for (size_t j = 0; j < i; ++j)
-            if (overlap(w->cpu, w->bytes, windows[j].cpu, windows[j].bytes) ||
-                overlap(w->physical, w->bytes, windows[j].physical, windows[j].bytes)) return 0;
+            if (a733_dma_overlap(w->cpu, w->bytes, windows[j].cpu, windows[j].bytes) ||
+                a733_dma_overlap(w->physical, w->bytes, windows[j].physical, windows[j].bytes)) return 0;
     }
     for (size_t i = 0; i < port_count; ++i) {
         const struct dma_fifo_port *f = &ports[i];
@@ -40,7 +32,7 @@ int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window 
         unsigned width = f->widths & (1u << 4) ? 4 : f->widths & (1u << 2) ? 2 : 1;
         if (f->address % width || width > LIMIT - f->address) return 0;
         for (size_t j = 0; j < count; ++j)
-            if (overlap(f->address, width, windows[j].physical, windows[j].bytes)) return 0;
+            if (a733_dma_overlap(f->address, width, windows[j].physical, windows[j].bytes)) return 0;
         for (size_t j = 0; j < i; ++j)
             if (f->request == ports[j].request && f->access == ports[j].access) return 0;
     }
@@ -59,9 +51,7 @@ int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window 
 
 int dma_memory_accept(const struct dma_memory_policy *p, const struct a733_dma_mapping *m)
 {
-    if (!p || !p->initialized || !m || !m->cpu || !m->bytes ||
-        ((uintptr_t)m->cpu & 63) || (m->bus & 63) || (m->bytes & 63) ||
-        (uintptr_t)m->cpu > UINTPTR_MAX - m->bytes || m->bus >= LIMIT || m->bytes > LIMIT - m->bus ||
+    if (!p || !p->initialized || !m || !a733_dma_mapping_shape(m) ||
         (m->access != A733_DMA_READ && m->access != A733_DMA_WRITE && m->access != A733_DMA_DESCRIPTORS)) return 0;
     const struct dma_memory_window *window = NULL;
     for (size_t i = 0; i < p->window_count; ++i) {

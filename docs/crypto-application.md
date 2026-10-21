@@ -56,7 +56,9 @@ failure, mismatch, stop or expiry revokes success and permits only retention
 retries under the pool lock. The DMA page, clock token and uncertain register
 ownership remain reserved. No failure clears potentially active DMA backing,
 retries a command or releases resources. Successful AES cleanup covers the
-software key cache line; internal CE key-register erasure remains unqualified.
+key, input and cipher output cache lines, and successful SHA completion covers
+the output, intermediate state and input lines; internal CE key-register
+erasure remains unqualified.
 
 USB uses product `sunstoneos native CRYPTO`, serial `sunstoneos-a733-crypto` and
 the existing PID `0xefe8`. A zero byte requests a 128-byte header; success appends the 160 copied

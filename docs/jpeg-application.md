@@ -54,6 +54,12 @@ The task acquires a shared DCDC2 lease and requires an enabled 800 mV PMIC
 observation. It changes no voltage. Separate electrical authority must qualify
 the selected VE frequency and inherited VE/IOMMU clocks.
 
+The executor performs at most one register operation per poll, and decoding one
+picture writes 659 registers. The task polls again while each poll advances the
+executor's state or index, up to 1,024 polls per wake, and rechecks board
+liveness between polls. It sleeps for one 1 ms tick only when a poll makes no
+progress, such as while the engine is busy.
+
 ## One bounded upload publishes immutable parsed bytes
 
 USB0 uses VID/PID `1f3a:efe8`, revision `0100`, product

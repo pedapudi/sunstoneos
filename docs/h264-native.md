@@ -198,8 +198,12 @@ bytes; Cr starts after 522,240 coded Cb bytes. The primary stride register is
 output contains only the visible rows: 2,073,600 Y bytes and 518,400 bytes for each
 chroma plane, totaling 3,110,400 bytes. Its 192-byte version-4 response header
 reports both visible and coded geometry, strides and crop rows. The copy callback
-handles at most 32 rows per invocation, checks guards, status, faults and liveness
-around the copy, and publishes only after the final hash and fault scan. A partial
+handles at most 32 rows per invocation. Each invocation checks the guard pages,
+per-slot slack, status, faults and liveness around its rows. The High build
+also checks the unused capacity beyond its admitted reference slots, which can
+reach megabytes, before the first rows and after the last. The callback reads
+device memory as aligned 64-bit words and publishes only after the final hash
+and fault scan. A partial
 copy remains private after failure.
 
 ### Source-defined storage and hardware format
@@ -393,7 +397,9 @@ and post-callback deadline/liveness checks. Only then does the controller return
 the input lease from DEVICE to CPU ownership. Before the next refill, a fresh
 non-destructive IOMMU scan must complete for masters 6 and 7. The application
 rechecks guards/liveness, refills the owned input, publishes it with the existing
-barrier and returns it to DEVICE ownership. Engine checks precede the next
+barrier and returns it to DEVICE ownership. Input bytes beyond the current access
+unit remain zero: a refill clears only the bytes that the previous, longer
+access unit occupied. Engine checks precede the next
 trigger. This scan observes faults; it supplies no drain authority.
 
 Reference-slot retirement, input refill and copied-output acknowledgment are
@@ -776,6 +782,15 @@ The image retains the existing 60-second supervised lifetime and 10 ms margin.
 Every external executor operation checks a monotonic deadline before and after
 it. Timeout, backward time, unexpected callback results and device errors retain
 failure. Host modeling does not qualify the physical timing window.
+
+The executor performs at most one register operation per poll. The decoder task
+polls again while each poll advances the executor's state or index, up to 1,024
+polls per wake, and rechecks board liveness between polls. It sleeps for one
+1 ms tick when a poll makes no progress: the engine is busy, a copy callback
+handled its rows or a shared resource is busy. A completed legacy picture ends
+the wake so that the task publishes it before the next picture's copy. In the
+full-HD and High host checks, the copied output is unchanged and the number
+of task wakes falls by a factor of 3.5 to 7.
 
 Focused evidence is under
 `~/.cache/sunstoneos/evidence/h264-interframes-20261019`:

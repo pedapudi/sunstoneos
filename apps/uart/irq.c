@@ -10,7 +10,10 @@ void uart_application_irq(void)
   atomic_store_explicit(&uart.irq_fault,1,memory_order_release);
  else atomic_store_explicit(&uart.notifications,count+1,memory_order_release);
  atomic_store_explicit(&uart.pending,1,memory_order_release);
- taskEXIT_CRITICAL_FROM_ISR(saved);
+ /* Wake the owner now instead of at its next tick. */
+ BaseType_t woken=pdFALSE;
+ if(uart.handle)vTaskNotifyGiveFromISR(uart.handle,&woken);
+ taskEXIT_CRITICAL_FROM_ISR(saved);portYIELD_FROM_ISR(woken);
 }
 int uart_irq_rearm(void)
 {

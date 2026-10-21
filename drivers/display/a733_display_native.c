@@ -1,6 +1,12 @@
 #include "a733_display_native.h"
 #include <string.h>
 
+/* The full walk reads all 8192 uncached table words and translates every
+ * frame and table page, so it runs once per scanout phase and again after
+ * each prepare, request or replay. Allocation, extent and IOMMU generation
+ * checks still run on every access. One owner task serializes this record. */
+static const struct a733_display_native *walked;
+static enum display_phase walked_phase;
 static int memory(struct a733_display_native *n)
 {
     const struct a733_display_native_config *c=&n->config;
@@ -9,15 +15,17 @@ static int memory(struct a733_display_native *n)
        !device_memory_describe(c->pool,c->tables,&t,&ts)||fs!=DEVICE_MEMORY_DEVICE||ts!=DEVICE_MEMORY_DEVICE||
        memcmp(&f,&n->frame_extent,sizeof(f))||memcmp(&t,&n->table_extent,sizeof(t))||
        c->iommu->state!=A733_IOMMU_ACTIVE||c->iommu->translated_masters!=0x100||
-       c->iommu->accessible_masters!=0x100||memcmp(&c->iommu->tables,&n->tables,sizeof(n->tables))||
-       a733_iommu_validate(&n->tables)!=1)return 0;
+       c->iommu->accessible_masters!=0x100||memcmp(&c->iommu->tables,&n->tables,sizeof(n->tables)))return 0;
+    if(walked==n&&walked_phase==n->binding.scanout.phase)return 1;
+    walked=0;
+    if(a733_iommu_validate(&n->tables)!=1)return 0;
     /* The one immutable READ span and every table word were validated above.
      * Checking each CPU page needs no repeated full-table translation walk. */
     for(uint64_t off=0;off<f.bytes;off+=DEVICE_MEMORY_PAGE)
         if(!a733_display_native_mapping(f.cpu+off,f.physical+off,0x44))return 0;
     for(uint64_t off=0;off<t.bytes;off+=DEVICE_MEMORY_PAGE)
         if(!a733_display_native_mapping(t.cpu+off,t.physical+off,0x44))return 0;
-    return 1;
+    walked=n;walked_phase=n->binding.scanout.phase;return 1;
 }
 static int live(struct a733_display_native *n)
 {return n&&n->self==n&&n->initialized&&!n->failed&&a733_display_native_owner(n->config.task);}
@@ -67,7 +75,7 @@ static int address(uintptr_t a)
 }
 static void retain(struct a733_display_native *n)
 {
-    n->failed=1;
+    n->failed=1;walked=0;
     if(n->held){a733_display_native_retain(n->config.locks);n->held=0;}
     (void)device_memory_retain(n->config.pool,n->config.frame);
     (void)device_memory_retain(n->config.pool,n->config.tables);
@@ -157,9 +165,9 @@ int a733_display_native_init(struct a733_display_native *n,const struct a733_dis
     n->last_now=n->binding.last_now;n->self=n;n->initialized=1;return 1;
 }
 int a733_display_native_prepare(struct a733_display_native *n,uint64_t d)
-{return live(n)&&a733_display_handoff_prepare(&n->binding,d);}
+{walked=0;return live(n)&&a733_display_handoff_prepare(&n->binding,d);}
 int a733_display_native_request(struct a733_display_native *n,enum display_scanout_action a,uint64_t d)
-{return live(n)&&a733_display_handoff_request(&n->binding,a,d);}
+{walked=0;return live(n)&&a733_display_handoff_request(&n->binding,a,d);}
 enum display_scanout_state a733_display_native_poll(struct a733_display_native *n)
 {
     if(!n||n->self!=n||!n->initialized)return DISPLAY_SCANOUT_FAULT_RETAINED;
@@ -171,6 +179,7 @@ enum display_scanout_state a733_display_native_poll(struct a733_display_native *
 
 int a733_display_native_replay(struct a733_display_native *n,unsigned slot,uint64_t deadline)
 {
+ walked=0;
  if(!live(n)||!n->config.replay_frame_bytes||!authority(n,deadline))return 0;
  return a733_display_handoff_replay(&n->binding,slot,n->config.replay_frame_bytes,deadline);
 }

@@ -12,12 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
     'include/device_memory_pool.h', 'runtime/device_memory_pool.c',
     'include/a733_memory_reservations.h', 'platform/a733/memory_reservations.c',
-    'include/a733_dma_reserved.h', 'platform/a733/dma_reserved.c',
     'platform/a733/link.ld', 'checks/memory-reservations.c', 'checks/memory-reservations.py',
     'include/a733_dma.h', 'include/a733_dma_controller.h', 'include/a733_dma_native.h',
     'include/dma_memory.h', 'include/aarch64_device_memory.h',
-    'drivers/dma/a733_dma.c', 'drivers/dma/a733_dma_controller.c', 'drivers/dma/dma_memory.c',
-    'platform/a733/dma_native.c', 'arch/aarch64/device_memory.c',
+    'arch/aarch64/device_memory.c',
 ]
 
 
@@ -66,8 +64,7 @@ def main():
     clang = shutil.which('clang-21')
     lld = Path.home() / '.cache/sunstoneos/host/usr/bin/ld.lld-21'
     common = [clang, '-std=c11', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-Iinclude']
-    runtime = ['runtime/device_memory_pool.c', 'platform/a733/dma_reserved.c',
-               'drivers/dma/a733_dma.c', 'drivers/dma/a733_dma_controller.c', 'drivers/dma/dma_memory.c']
+    runtime = ['runtime/device_memory_pool.c']
     results = {}
     try:
         if args.mode in ('all', 'host'):
@@ -78,8 +75,7 @@ def main():
             (out / 'executed.json').write_text(json.dumps({'path': str(binary), 'sha256': digest(binary)}, indent=2) + '\n')
             results['host'] = run('ownership', [str(binary)]).strip()
         if args.mode in ('all', 'native'):
-            native = runtime + ['platform/a733/memory_reservations.c', 'platform/a733/dma_native.c',
-                                'arch/aarch64/device_memory.c']
+            native = runtime + ['platform/a733/memory_reservations.c', 'arch/aarch64/device_memory.c']
             objects = []
             for source in native:
                 obj = out / (Path(source).stem + '.o')

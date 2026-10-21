@@ -17,10 +17,11 @@ admission remain unqualified.
 
 The protected record in `a733_camera_native.h` binds the camera owner, image
 build, boot epoch, generation, lease and deadline to reviewed physical evidence.
-The record includes inherited pin configurations, actual reset wiring, supply
-identities and programmed voltages, APB1 configuration, analog trim, receiver
-timing and mapped guard requirements. Nonzero identifiers or matching fields
-alone cannot establish the required authority.
+The record includes inherited pin configurations, the module's reset wiring,
+supply identities and programmed voltages, APB1 configuration, analog trim,
+receiver timing and mapped guard requirements. Its test-pattern byte selects
+the ordinary sensor image (0) or the OV5640 color bars (1). Nonzero identifiers
+or matching fields alone cannot establish the required authority.
 
 The boot coordinator must establish these conditions before constructing the
 binding:
@@ -41,15 +42,30 @@ binding:
   guard does not itself establish the hardware's maximum prefetch extent.
 
 CAM1 uses PK0–PK9 for CSI, PE5 for MCLK1, PE6 for power-down and PE7/PE8 for
-TWI11. PE6 starts asserted. The module must also provide a separately admitted
-reset GPIO, initially asserted; the implementation has no successful no-op
-reset substitute. A module-specific wiring profile must resolve that connection.
+TWI11. PE6 starts asserted. The connector carries no other module-control
+signal, so the record names one of two module profiles:
+
+- **Separate reset.** The record names an admitted reset GPIO outside PE5–PE8
+  and PK0–PK9, initially asserted. The binding claims it as a fifteenth pin and
+  releases RESETB 1 ms after power-down release.
+- **Power-down only.** The module provides its own RESETB, for example through a
+  pull-up. The record sets the power-down-only flag and leaves the reset bank,
+  reset pin and its inherited configuration zero. The binding claims fourteen
+  pins, refuses any RESETB request and keeps the 1 ms and 20 ms waits between
+  power-down release and the identity read. The Linux driver uses this sequence
+  when no reset GPIO exists.
+
+The module's wiring evidence must establish which profile applies.
 Conflicting schematic supply labels prevent choosing camera rails from the
 connector name alone. The binding observes three explicitly qualified PMIC
 outputs and never changes their voltages.
 
 One designated privileged FreeRTOS task advances capture. The existing PMIC
 provider task must run independently to complete queued supply observations.
+Each register access rechecks the media, TWI11 clock and rail leases. When the
+clock registry or rail ledger reports BUSY, another task holds its metadata lock;
+the binding then repeats only the status read until the boot deadline. Any other
+result, or the deadline, faults the capture with all resources retained.
 The constructor runs once during serialized primary memory preparation. All
 referenced providers and leases remain private and valid for the image lifetime.
 
@@ -80,6 +96,12 @@ parameter memory and two 311,296-byte plane allocations. Each plane includes
 and one allocator record. Every address is an identity CPU/physical/IOVA address
 below 4 GiB. These spans fit at most two of the IOMMU builder's four 4 MiB windows.
 The native constructor refuses insufficient capacity; it does not shrink the mode.
+Before the parent becomes DEVICE-owned, the constructor fills both planes and
+their guards with `0xa5`. DMA admission cleans and invalidates that range, so
+bytes the DMA never writes hold the fill instead of earlier DRAM contents such
+as a previous image. The retained path does not read guards, so it cannot check
+them; the DMA status check remains the device-side detector of short frames and
+address errors. The host decoder reports rows that still hold the fill.
 
 The parent becomes DEVICE-owned before preparation and remains reserved after
 success or failure. Tables and parameter memory are immutable after publication.
@@ -121,8 +143,13 @@ The focused native composition fixture executes the actual resource managers
 and camera controllers with modeled MMIO, task identity, cache visibility and
 physical admission. It covers completed payload copying, bus arbitration loss,
 DMA errors, incomplete single-image capture, cache failure, late clock-authority
-failure, pin-manager failure and IOMMU faults. A separate short case covers S_TWI1 register width and
-retained cancellation. Models do not qualify wiring, prefetch, timing, coherence,
+failure, pin-manager failure and IOMMU faults. A color-bar case checks that the
+modeled sensor register `0x503d` reads `0x84`. A power-down-only case claims
+fourteen pins and waits at least 21 ms from power-down release to the identity
+read. Two cases hold both registries BUSY: capture succeeds when the hold ends
+before the deadline and faults when it does not. A short frame without DMA
+error status leaves fill bytes in the unwritten rows. A separate short case
+covers S_TWI1 register width and retained cancellation. Models do not qualify wiring, prefetch, timing, coherence,
 reset, camera output or physical recovery.
 
 Wider resolutions, continuous capture, alternate sensors, ISP processing,

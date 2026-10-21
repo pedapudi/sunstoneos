@@ -7,6 +7,10 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
+
+sys.dont_write_bytecode=True;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
+from returning_build import object_closure,require_unchanged_headers
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
@@ -36,6 +40,8 @@ for name in ['02-counter_clock.obj','13-tasks.obj','14-queue.obj']:
  source=base/'build/objects'/name
  pin=next(x for x in accepted['new_objects'] if x['path']==str(source))
  items.append({'path':str(source),'sha256':pin['sha256'],'original':str(source)})
+# Accepted objects keep the layouts of the headers they were compiled with.
+headers=require_unchanged_headers([object_closure(x['path'],x.get('original')) for x in items],old[-2][0])
 for i,item in enumerate(items):
  source=Path(item['path']);assert digest(source)==item['sha256'],source
  dest=o/f'reused-{i}.obj';shutil.copy2(source,dest);objects.append(dest)
@@ -67,7 +73,7 @@ for command in commands:
   if path.is_absolute() and path.is_file() and (value.startswith('--ld-path=') or value==command[0]):
    assert digest(path)==accepted['tools'][str(path)]['sha256'],path
    tools[str(path)]={'sha256':digest(path),'resolved':str(path.resolve())}
-save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'baseline_snapshot_manifest_sha256':digest(base/'snapshot/manifest.json'),'toolchain':tools,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'policy_elf_sha256':digest(b/'policy.elf'),'physical_access':False})
+save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'baseline_snapshot_manifest_sha256':digest(base/'snapshot/manifest.json'),'toolchain':tools,'reused_object_headers':headers,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'policy_elf_sha256':digest(b/'policy.elf'),'physical_access':False})
 shutil.copy2(base/'input-identities.json',e/'baseline-input-identities.json')
 print(f'Built RTC returning image; {len(reused)} unchanged objects, two runtime units plus one check-only initializer.')
 

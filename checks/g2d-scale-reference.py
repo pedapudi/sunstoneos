@@ -5,6 +5,7 @@ This checks emitted register images, not interpolation pixels or edge behavior.
 """
 import argparse,hashlib,json,re,subprocess
 from pathlib import Path
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 def function(text,name):
  match=re.search(r'(?:static )?__(?:s32|u32) '+name+r'\(',text);assert match,name
@@ -77,7 +78,7 @@ int main(int argc,char **argv)
 }
 '''
  source=a.output/'reference.c';source.write_text(prelude+'\n'.join(parts)+test)
- cmd=[a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-but-set-variable','-fsanitize=address,undefined','-I'+str(ROOT/'include'),'-I'+str(ROOT/'drivers/g2d'),'-I'+str(a.reference),str(source),str(ROOT/'drivers/g2d/a733_g2d.c'),'-o',str(a.output/'reference')]
+ cmd=[a.cc,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-but-set-variable','-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'include'),'-I'+str(ROOT/'drivers/g2d'),'-I'+str(a.reference),str(source),str(ROOT/'drivers/g2d/a733_g2d.c'),'-o',str(a.output/'reference')]
  (a.output/'commands.json').write_text(json.dumps([cmd,[str(a.output/'reference'),str(a.output/'commands.bin')]],indent=2)+'\n')
  for args in (cmd,[str(a.output/'reference'),str(a.output/'commands.bin')]):
   run=subprocess.run(args,capture_output=True,text=True);(a.output/('build.log' if args==cmd else 'run.log')).write_text(run.stdout+run.stderr);run.check_returncode()

@@ -37,8 +37,14 @@ def board_lock(node=None):
     port = target(node)
     if (port / "idVendor").read_text().strip() != "1f3a":
         raise ValueError("Target is not an Allwinner device.")
-    with board_lock_path(port.name).open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    path = board_lock_path(port.name)
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            # Keep the contention type; name the port and lock for the operator.
+            raise BlockingIOError(error.errno, f"USB port {port.name} is held by another "
+                                  f"process through {path}; inspect it with fuser") from None
         if identity(node) != before or target(node).name != port.name:
             raise ValueError("USB target changed while acquiring its board lock.")
         yield node

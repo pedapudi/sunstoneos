@@ -1,0 +1,64 @@
+#ifndef SUNSTONE_SUNXI_SMHC_H
+#define SUNSTONE_SUNXI_SMHC_H
+/* SMHC v5p3x registers shared by the SD/eMMC core, the SDIO core and the
+ * native command filters. Source: A733 user manual revision 1.00, sections
+ * 11.3.8 (SMHC0-2) and 11.3.9 (SMHC3). Offsets are relative to a slot base. */
+#define SUNXI_SMHC_GCTRL 0x00u
+#define SUNXI_SMHC_CLKCR 0x04u
+#define SUNXI_SMHC_TMOUT 0x08u
+#define SUNXI_SMHC_WIDTH 0x0cu
+#define SUNXI_SMHC_BLKSZ 0x10u
+#define SUNXI_SMHC_BCNT 0x14u
+#define SUNXI_SMHC_CMD 0x18u
+#define SUNXI_SMHC_ARG 0x1cu
+#define SUNXI_SMHC_RESP0 0x20u
+#define SUNXI_SMHC_RESP1 0x24u /* Automatic CMD12 response. */
+#define SUNXI_SMHC_IMASK 0x30u
+#define SUNXI_SMHC_RINT 0x38u
+#define SUNXI_SMHC_STATUS 0x3cu
+#define SUNXI_SMHC_A12A 0x58u
+#define SUNXI_SMHC_NTSR 0x5cu
+#define SUNXI_SMHC_DMAC 0x80u
+#define SUNXI_SMHC_IDIE 0x8cu
+#define SUNXI_SMHC_EDSD 0x104u
+#define SUNXI_SMHC_DRIVE 0x140u
+#define SUNXI_SMHC_SAMPLE 0x144u
+#define SUNXI_SMHC_FIFO 0x200u
+#define SUNXI_SMHC_VERSION 0x300u
+
+/* Command register fields; the low six bits hold the command index. */
+#define SUNXI_SMHC_CMD_START (1u << 31)
+#define SUNXI_SMHC_CMD_UPDATE_CLOCK (1u << 21)
+#define SUNXI_SMHC_CMD_INIT (1u << 15)
+#define SUNXI_SMHC_CMD_WAIT (1u << 13)
+#define SUNXI_SMHC_CMD_AUTO_STOP (1u << 12)
+#define SUNXI_SMHC_CMD_WRITE (1u << 10)
+#define SUNXI_SMHC_CMD_DATA (1u << 9)
+#define SUNXI_SMHC_CMD_CRC (1u << 8)
+#define SUNXI_SMHC_CMD_LONG (1u << 7)
+#define SUNXI_SMHC_CMD_RESP (1u << 6)
+#define SUNXI_SMHC_CMD_INDEX 63u
+#define SUNXI_SMHC_UPDATE (SUNXI_SMHC_CMD_START | SUNXI_SMHC_CMD_UPDATE_CLOCK | SUNXI_SMHC_CMD_WAIT)
+
+/* Raw interrupt status. */
+#define SUNXI_SMHC_INT_CMD_DONE (1u << 2)
+#define SUNXI_SMHC_INT_DATA_DONE (1u << 3)
+#define SUNXI_SMHC_INT_AUTO_STOP_DONE (1u << 14)
+#define SUNXI_SMHC_INT_SDIO (1u << 16)
+/* Terminal errors of the pinned BSP (SDXC_INTERRUPT_ERROR_BIT): response error
+ * 1, response/data CRC 6/7, response/data timeout 8/9, FIFO underrun/overflow
+ * 11, command busy 12, start bit 13 and end bit 15. */
+#define SUNXI_SMHC_ERRORS 0xbbc2u
+/* The SD/eMMC core also stops on data starvation or 1.8 V switch completion
+ * (10), write-busy timeout (18) and DAT3 card removal (31). Its profile expects
+ * none of them, so each fails closed with retained ownership. SD presence
+ * still comes from the board card-detect pin, not from DAT3. */
+#define SUNXI_SMHC_MMC_ERRORS (SUNXI_SMHC_ERRORS | (1u << 10) | (1u << 18) | (1u << 31))
+
+/* Status register. FIFO level counts filled 32-bit locations. */
+#define SUNXI_SMHC_STATUS_FIFO_EMPTY (1u << 2)
+#define SUNXI_SMHC_STATUS_FIFO_FULL (1u << 3)
+#define SUNXI_SMHC_STATUS_BUSY ((1u << 10) | (1u << 9) | (15u << 4)) /* Data FSM, card DAT0, command FSM. */
+#define SUNXI_SMHC_STATUS_FIFO_LEVEL(status) (((status) >> 17) & 0x7ffu)
+#define SUNXI_SMHC_FIFO_DEPTH 256u /* Words; FIFOTH documents 256 x 32 bits. */
+#endif

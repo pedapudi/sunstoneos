@@ -35,7 +35,7 @@ enum a733_i2s_status {
     A733_I2S_INVALID = -1, A733_I2S_CONFLICT = -2, A733_I2S_RECOVERY = -3
 };
 
-/* Resource results are distinct from capture states. BUSY on the first acquire
+/* Resource results are distinct from stream states. BUSY on the first acquire
  * has no effects. PENDING admits resources and requires acquire_poll. RETAINED
  * means uncertain state: preserve every token and perform no further I/O.
  * BUSY while opening/closing retains already admitted resources. */
@@ -44,10 +44,10 @@ enum a733_i2s_resource_result {
     A733_I2S_RESOURCE_PENDING, A733_I2S_RESOURCE_RETAINED
 };
 /* All resource deadlines are absolute, nonwrapping monotonic microseconds;
- * DMA capture timeout uses the DMA controller's separate tick unit.
+ * DMA period timeouts use the DMA controller's separate tick unit.
  * Callbacks are bounded, ordered and non-reentrant. READY acquire guarantees
  * leased pins, stable exact clocks and a fresh reset I2S0. release requires
- * producer/DMA quiescence. Parent clock leases can outlive this local capture.
+ * producer/DMA quiescence. Parent clock leases can outlive this local binding.
  * Native access requires actual IRQ/clock/producer ownership and admitted
  * recovery: qualified watchdog or explicit supervised manual power removal.
  * Supervision retains every uncertain DMA allocation; timeout or reconnection
@@ -60,44 +60,5 @@ struct a733_i2s_operations {
     int (*read)(void *cookie, uintptr_t address, uint32_t *value);
     int (*write)(void *cookie, uintptr_t address, uint32_t value);
 };
-
-/* Zero-initialize once. Serialize this object AND every operation on its DMA
- * controller. Do not modify fields, reinitialize failures, or operate its DMA
- * channel independently. A controller uses an explicit, already authorized
- * DMA0 channel; this service never changes global DMA clocks or routing. */
-struct a733_i2s_capture {
-    struct a733_i2s_plan plan;
-    struct a733_i2s_operations operations;
-    void *cookie;
-    struct a733_dma_controller *dma;
-    const struct a733_dma_transfer *transfer;
-    uint64_t started, timeout, resource_deadline, resource_time;
-    enum a733_i2s_status status, outcome;
-    unsigned channel, platform_held, dma_held, buffers_held;
-};
-
-/* OPENING and CLOSING continue through poll() with the originally admitted
- * deadline. An unfinished open cannot be canceled; expiry retains resources.
- * owns() concerns capture buffers only, not platform/clock/pin ownership. */
-enum a733_i2s_status a733_i2s_open(struct a733_i2s_capture *,
-    const struct a733_i2s_format *, const struct a733_i2s_operations *, void *cookie,
-    struct a733_dma_controller *, unsigned channel, uint64_t acquisition_deadline_us);
-
-/* One finite capture per open. Metadata and complete buffer allocations are
- * exclusive/immutable from accepted start until owns() is false, even if the
- * underlying DMA controller releases them sooner. timeout uses DMA ticks and
- * covers preparation and capture; DMA has its separate bounded drain timeout.
- * Segments must read I2S0 RXFIFO, request 3, burst 8, with container-sized bus
- * accesses, and write ordinary RAM with the same width/burst. Whole frames only.
- * PREPARING polls wait for FIFO flush; no call spins. Format/route refusals
- * have no I/O. DMA validates mappings before arming and can then report FAILED.
- * COMPLETE proves finite DMA completion and drain, not valid microphone audio.
- * CANCELED/FAILED buffers can be reused but contain no accepted audio result. */
-enum a733_i2s_status a733_i2s_start(struct a733_i2s_capture *,
-    const struct a733_dma_transfer *, uint64_t timeout);
-enum a733_i2s_status a733_i2s_poll(struct a733_i2s_capture *);
-enum a733_i2s_status a733_i2s_cancel(struct a733_i2s_capture *);
-enum a733_i2s_status a733_i2s_close(struct a733_i2s_capture *, uint64_t release_deadline_us);
-int a733_i2s_owns(const struct a733_i2s_capture *);
 
 #endif

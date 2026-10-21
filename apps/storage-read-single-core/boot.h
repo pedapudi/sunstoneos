@@ -20,7 +20,7 @@ struct boot_result {
 #define RESULT ((volatile struct boot_result *)RESULT_BASE)
 static inline uint32_t mmio_read(uintptr_t a){return *(volatile uint32_t *)a;}
 static inline void mmio_write(uintptr_t a,uint32_t v){*(volatile uint32_t *)a=v;}
-static inline uint64_t counter(void){uint64_t v;__asm__ volatile("mrs %0,cntpct_el0":"=r"(v));return v;}
+static inline uint64_t counter(void){uint64_t v;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(v)::"memory");return v;}
 int sd_single_core_secondaries_admitted(void);
 void sd_single_core_monitor_init(void);
 _Noreturn void sd_single_core_exception(uint64_t,uint64_t,uint64_t);

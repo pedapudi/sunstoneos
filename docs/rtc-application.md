@@ -92,7 +92,12 @@ Task access holds existing clock stability leases and the shared register mutex.
 The interrupt handler only masks 228, checks session lifetime and publishes an
 atomic notification. The owner waits for distributor mask propagation and an
 inactive interrupt before RTC access. It acknowledges only its own pending bit
-with an exact write 1. Cancellation may race its own alarm; an observed pending
+with an exact write 1. Arming writes the target, reads it back and rereads the
+calendar before enabling the alarm. With a one-second delay, the calendar can
+reach the target during that sequence. The driver then writes a new target once
+from the later calendar value, because the alarm is still disabled and its
+registers hold only this owner's values. A second miss retains ownership.
+Cancellation may race its own alarm; an observed pending
 event wins and is reported as an alarm. Saved targets are restored only after
 confirmed RTC disable/acknowledgement. Copied publication additionally requires
 GIC quiescence and an unexpired, live session. Ownership lasts until manual

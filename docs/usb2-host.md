@@ -77,6 +77,21 @@ The actual Type-C provider owns FUSB302, source-role classification and PL8 VBUS
 control. The host pins one provider identity, attachment generation and polarity.
 Every controller operation requires a fresh observation from that provider.
 A busy publication permits no new MMIO, DMA publication or caller-output copy.
+A busy observation is momentary metadata contention, such as another core
+holding the PMIC object, a lease registry or the Type-C publication lock. The
+xHCI core and the USB2 platform repeat it without any access until it succeeds,
+is refused, lasts 2 ms of counter time or reaches the operation deadline. Only
+success lets the access proceed; the other outcomes fault the session. A poll
+that observes BUSY before its first access still returns BUSY.
+
+The 2 ms limit matters because the PMIC poll keeps its object busy while it
+waits for the I2C mutex or for REGISTER_LOCK. The USB2 platform observes the
+PMIC while it holds REGISTER_LOCK for its register phases. If the PMIC poll
+waits for that lock at the same time, neither side can progress. The platform
+access then faults after 2 ms instead of spinning until the startup deadline.
+Like any platform fault after the lock is taken, it retains REGISTER_LOCK, so
+the waiting PMIC poll later expires. The host check covers this case and a BUSY
+that never clears inside an xHCI access; both fault after about 2 ms.
 Loss permanently revokes the host session; a new attachment is not adopted.
 
 Type-C service and its independent power task must continue when the USB worker
@@ -125,6 +140,12 @@ reattach or retry API. A failed command is not reported as a completed read.
 The TinyUSB stack uses its single-context queue implementation inside the actual
 FreeRTOS owner task. No interrupt or second task may call the stack. Each host
 poll advances at most one xHCI event/state and two TinyUSB queue iterations.
+In the default polled profile, the board owner polls again without sleeping
+while setup or a transfer is outstanding, up to 32 polls per tick, the
+interrupt profile's batch size. The repeated polls stop after four consecutive
+polls without progress. Progress means a changed platform phase or supply
+index, core phase, consumed event, mount state or request state. A HID transfer
+that waits for input therefore costs one poll per tick.
 All control calls are asynchronous. The optional interrupt handler masks its
 source and notifies this same task; it never calls TinyUSB. The native image
 must schedule this task within operation deadlines and keep the independent Type-C tasks runnable.

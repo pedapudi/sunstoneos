@@ -66,7 +66,8 @@ struct a733_pcie {
     struct a733_pmic_snapshot supplies[2];
     struct a733_pcie_endpoint endpoint;
     atomic_uint busy;
-    uint64_t deadline,last_now,wait_until,perst_since;
+    uint64_t deadline,last_now,wait_until;
+    uint64_t perst_since; /* Start of the current PERST timing interval: hold start, PHY completion, then release. */
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
     uint8_t root_cap;
     uint32_t last_value;

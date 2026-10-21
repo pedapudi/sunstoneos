@@ -24,10 +24,16 @@ int pcie_test_irq_arm(void)
  }
  taskEXIT_CRITICAL();return result;
 }
+/* The mask is not waited on before EOI, so the still-asserted level SPI can be
+ * delivered again while OBSERVED. That repeat is re-masked and not counted:
+ * GIC delivery cannot tell it from a duplicate MSI, which the client detects
+ * from the controller MSI status. Delivery in any other phase faults, and the
+ * fault stays latched. */
 void pcie_test_application_irq(void)
 {
  UBaseType_t saved=taskENTER_CRITICAL_FROM_ISR();
  int masked=gicv3_spi_mask(&source);
+ if(masked&&irq.phase==OBSERVED){taskEXIT_CRITICAL_FROM_ISR(saved);return;}
  if(!masked||irq.phase!=ARMED||irq.count)irq.fault=1;
  if(irq.count<2)++irq.count;
  irq.phase=OBSERVED;taskEXIT_CRITICAL_FROM_ISR(saved);

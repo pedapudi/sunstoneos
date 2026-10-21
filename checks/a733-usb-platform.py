@@ -11,6 +11,7 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_SP
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 
 def main():
@@ -76,7 +77,7 @@ __usbc_otg_t h={0};cell=old;USBC_Phyx_Write(&h,0x188);return cell;}
         assert json.loads((a.output/'source-comparison.json').read_text())['inputs']==references
     else:
         (a.output/'source-comparison.json').write_text(json.dumps({'published_tuning_cases':4,'inputs':references},indent=2)+'\n')
-    flags=[a.clang,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(snapshot/'include')]
+    flags=[a.clang,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-I'+str(snapshot/'include')]
     if not a.reuse_passed:
         run(flags+[str(snapshot/path) for path in ['checks/a733-usb-platform.c','drivers/usb/a733_usb_platform.c','drivers/clock/a733_clock_leases.c']]+['-o',str(a.output/'platform-check')],'host-build')
         run([str(a.output/'platform-check')],'host-result')

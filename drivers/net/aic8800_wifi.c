@@ -79,10 +79,6 @@ int aic8800_wifi_disconnect(struct aic8800_wifi *w,const void *owner,uint16_t re
 }
 static void channel(uint8_t *p,const struct aic8800_wifi_channel *c)
 {put16(p,c->frequency);p[2]=c->band;p[3]=c->flags;p[4]=(uint8_t)c->max_power_dbm;}
-static uint8_t crc(const uint8_t *p)
-{
-    uint8_t c=0;for(unsigned i=0;i<3;++i){c^=p[i];for(unsigned j=0;j<8;++j)c=(uint8_t)((c<<1)^((c&128)?7:0));}return c;
-}
 void aic8800_wifi_step(struct aic8800_wifi *w,const void *owner,uint64_t now)
 {
     if(!w||!w->initialized||w->owner!=owner)return;
@@ -90,8 +86,7 @@ void aic8800_wifi_step(struct aic8800_wifi *w,const void *owner,uint64_t now)
     if(w->phase>DISCONNECT||w->config.command_timeout>UINT64_MAX-now){aic8800_wifi_stop(w,owner,AIC8800_WIFI_TIME_ERROR);return;}
     for(unsigned i=0;i<512;++i)w->request[i]=0;
     uint16_t id=ids[w->phase],size=sizes[w->phase];uint8_t *p=w->request+16;
-    put16(w->request,(uint16_t)(size+12));w->request[2]=0x11;w->request[3]=crc(w->request);
-    put16(w->request+8,id);put16(w->request+10,id>>10);put16(w->request+12,100);put16(w->request+14,size);
+    aic8800_sdio_command_header(w->request,id,size);
     switch(w->phase) {
     case POWER: {
         static const uint8_t power[69]={1,

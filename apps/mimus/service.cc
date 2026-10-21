@@ -1,4 +1,5 @@
 #include "service.h"
+#include "recorded.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "boot.h"
@@ -70,6 +71,8 @@ extern "C" bool usb_application_dispatch(uint32_t command, const uint8_t *input,
             const uint32_t bytes = word(input + 4);
             if (!bytes || bytes > asset.capacity) error = Invalid;
             else {
+                // A retained engine refers to model slots; mark it stale before 0x12 writes.
+                if (word(input) < 2) mimus_engine_invalidate();
                 asset.size = bytes;
                 asset.received = 0;
                 asset.crc = word(input + 8);

@@ -14,6 +14,9 @@ void platform_puts(const char *text)
 {
     volatile char *log = (volatile char *)(RESULT_BASE + LOG_OFFSET);
     uint64_t size = RESULT->log_length;
+    // A corrupt length must not turn the terminator into a wild store.
+    if (size > RESULT_SIZE - LOG_OFFSET - 1)
+        return;
     while (*text && size < RESULT_SIZE - LOG_OFFSET - 1)
         log[size++] = *text++;
     log[size] = 0;

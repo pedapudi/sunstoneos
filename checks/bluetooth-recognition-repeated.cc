@@ -80,6 +80,8 @@ extern "C" void vTaskDelay(TickType_t)
    assert(bluetooth_recognition_segment_copy(app,s.ticket,off,n,chunk,&copied,&next)==1&&copied==n&&
       !std::memcmp(&s,&next,sizeof(s)));text.insert(text.end(),chunk,chunk+n);off+=static_cast<uint32_t>(n);}
   uint8_t digest[32];storage_digest_bytes(text.data(),text.size(),digest);assert(!std::memcmp(digest,s.result.text_sha256,32));
+  // The first segment loads the retained engine; later segments reuse it.
+  assert((std::string(text.begin(),text.end()).find("LOAD load_us=")!=std::string::npos)==(s.ticket==1));
   const std::string stem=std::string(prefix)+"-"+std::to_string(s.ticket);
   write(stem+".txt",text.data(),text.size());write(stem+".snapshot.bin",&s,sizeof(s));
   uint8_t wav[96044];size_t bytes;

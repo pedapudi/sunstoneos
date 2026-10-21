@@ -1,5 +1,6 @@
 #include "a733_dma_platform.h"
 #include "a733_clock_reference.h"
+#include "a733_dma_regs.h"
 
 #define CCU UINT32_C(0x02002000)
 #define DMA UINT32_C(0x04601000)
@@ -67,7 +68,6 @@ static int update(struct a733_dma_platform *p,uintptr_t address,uint32_t mask,
     value=(old&~mask)|(value&mask);
     if (value==old) return 1;
     if (!timely(p)) return 0;
-    p->wrote=1; /* A failed write callback can still have performed the write. */
     return p->ops.write(p->cookie,address,value)==1 && timely(p) &&
         rd(p,address,&actual) && actual==value;
 }
@@ -116,31 +116,31 @@ static int baseline(struct a733_dma_platform *p)
 static int quiet(struct a733_dma_platform *p)
 {
     uint32_t v;
-    if (!rd(p,DMA+0x30,&v) || v) return 0;
+    if (!rd(p,DMA+A733_DMA_REG_BUSY,&v) || v) return 0;
     /* Refuse inherited mode, pending interrupt, paused, enabled or high-address
      * descriptor state. No acknowledgment or channel stop is performed here. */
-    static const unsigned offsets[]={0,4,0x28,0x34,0x38,0x3c};
+    static const unsigned offsets[]={A733_DMA_QUIET_REGISTERS};
     for (unsigned ch=0;ch<16;++ch)
         for (unsigned j=0;j<sizeof(offsets)/sizeof(*offsets);++j)
-            if (!rd(p,DMA+0x100+0x40*ch+offsets[j],&v) || v) return 0;
-    return rd(p,DMA+0x30,&v) && !v;
+            if (!rd(p,DMA+A733_DMA_REG_CHANNELS+A733_DMA_REG_CHANNEL_STRIDE*ch+offsets[j],&v) || v) return 0;
+    return rd(p,DMA+A733_DMA_REG_BUSY,&v) && !v;
 }
 static int controller(struct a733_dma_platform *p)
 {
     const struct a733_dma_platform_config *c=&p->config;
     uint32_t cpu,mcu,automatic;
-    if (!quiet(p) || !rd(p,DMA+0x34,&cpu) || (cpu&0xffff)!=c->expected_cpu ||
-        !rd(p,DMA+0x38,&mcu) || (mcu&0xffff)!=c->expected_mcu ||
-        !rd(p,DMA+0x28,&automatic)) return 0;
+    if (!quiet(p) || !rd(p,DMA+A733_DMA_REG_CPU_ROUTE,&cpu) || (cpu&0xffff)!=c->expected_cpu ||
+        !rd(p,DMA+A733_DMA_REG_MCU_ROUTE,&mcu) || (mcu&0xffff)!=c->expected_mcu ||
+        !rd(p,DMA+A733_DMA_REG_AUTO_GATE,&automatic)) return 0;
     if (!c->cold) return automatic==4;
     if (automatic && automatic!=4) return 0;
     /* Clear removed routes before adding destinations. Interrupt masks and
      * exclusive remote-MCU handoff remain prerequisites throughout. */
-    return update(p,DMA+0x28,UINT32_MAX,4,0) &&
-        update(p,DMA+0x34,0xffff,c->expected_cpu&c->desired_cpu,0) &&
-        update(p,DMA+0x38,0xffff,c->expected_mcu&c->desired_mcu,0) &&
-        update(p,DMA+0x34,0xffff,c->desired_cpu,0) &&
-        update(p,DMA+0x38,0xffff,c->desired_mcu,0) && quiet(p);
+    return update(p,DMA+A733_DMA_REG_AUTO_GATE,UINT32_MAX,4,0) &&
+        update(p,DMA+A733_DMA_REG_CPU_ROUTE,0xffff,c->expected_cpu&c->desired_cpu,0) &&
+        update(p,DMA+A733_DMA_REG_MCU_ROUTE,0xffff,c->expected_mcu&c->desired_mcu,0) &&
+        update(p,DMA+A733_DMA_REG_CPU_ROUTE,0xffff,c->desired_cpu,0) &&
+        update(p,DMA+A733_DMA_REG_MCU_ROUTE,0xffff,c->desired_mcu,0) && quiet(p);
 }
 static int same_token(const struct a733_clock_token *a,const struct a733_clock_token *b)
 {return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}

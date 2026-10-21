@@ -21,11 +21,10 @@ struct a733_de_plan {
  * must be disjoint. Output is unchanged on rejection. */
 int a733_de_plan(const struct a733_tcon_lcd_timing *, const struct a733_de_surface *, struct a733_de_plan *);
 
-/* Additional closed profile: UCH3 -> DE1 -> TV0, 1280x720 RGB565.
- * The HDMI controller independently establishes the exact 720p60 timing. */
+/* Additional closed profiles: UCH3 -> DE1 -> TV0 or TV1, 1280x720 RGB565.
+ * The HDMI or DisplayPort controller independently establishes the exact
+ * 720p60 timing. Both TV outputs use this one planner. */
 enum a733_de_output { A733_DE_LCD1_XRGB8888=0, A733_DE_TV0_RGB565=1, A733_DE_TV1_RGB565=2 };
-/* TV1 uses the same immutable surface format and fixed720p60 dimensions. */
-int a733_de_plan_tv1(const struct a733_de_surface *,struct a733_de_plan *);
 int a733_de_plan_tv0(const struct a733_de_surface *,struct a733_de_plan *);
 enum a733_de_action { A733_DE_PREPARE, A733_DE_START, A733_DE_OBSERVE, A733_DE_STOP, A733_DE_REPLAY };
 enum a733_de_state { A733_DE_PENDING, A733_DE_READY, A733_DE_ARMED,
@@ -90,13 +89,18 @@ int a733_de_request(struct a733_de *, enum a733_de_action, uint64_t deadline);
  * PREPARE uses inactive AHB programming; START enables the producer for a
  * later authenticated LCD1 start. ARMED means programmed/read back, not that
  * pixels reached a panel. OBSERVE records raw status without acknowledgement.
- * No RCQ, interrupts, vblank accounting, DMA-drain claim or buffer retirement. */
+ * REPLAY (see below) submits one RCQ update, waits for RCQ_FINISH, verifies
+ * the layer address and then waits for a frame-end latched after a cleared
+ * and read-back status. Interrupts stay disabled. No vblank accounting,
+ * DMA-drain claim or buffer retirement. */
 enum a733_de_state a733_de_poll(struct a733_de *);
 /* Optional closed two-frame replay bank: [F0][F1][4KiB RCQ0][4KiB RCQ1].
  * F is page aligned and covers the admitted padded surface. Both frames and
- * command pages stay immutable, mapped READ and permanently owned. Both closed
- * LCD1/XRGB8888 and TV0/RGB565 profiles use the same DE1 queue. The queue
- * changes only UCH3 layer0 low address; it grants no retirement or reuse. */
+ * command pages stay immutable, mapped READ and permanently owned. The closed
+ * LCD1/XRGB8888, TV0/RGB565 and TV1/RGB565 profiles use the same DE1 queue.
+ * The queue changes only UCH3 layer0 low address; it grants no retirement or
+ * reuse. A frame-end seen at the post-clear readback is cleared again until
+ * the readback shows it clear, bounded by the request deadline. */
 int a733_de_replay_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_request(struct a733_de *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);

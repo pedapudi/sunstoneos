@@ -5,6 +5,7 @@ import hashlib
 import json
 import pathlib
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 p = argparse.ArgumentParser()
 p.add_argument('--evidence', type=pathlib.Path, required=True)
@@ -32,7 +33,7 @@ def run(cmd):
 
 binary = a.evidence/'check'
 run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-     '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I'+str(root/'include'),
+     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-I'+str(root/'include'),
      str(root/'checks/display-scanout.c'), *[str(root/n) for n in compiled], '-o', str(binary)])
 result = run([str(binary)])
 obj = a.evidence/'display_scanout.o'

@@ -14,7 +14,7 @@ struct model {
     struct a733_ce_memory memory;
     struct reg regs[40];unsigned count;
     uint64_t now;
-    unsigned reads,writes,syncs,starts,enters,leaves,retained,held,published,acquired;
+    unsigned reads,writes,syncs,starts,enters,leaves,retained,held,published,acquired,scrubs;
     unsigned inject_write,inject_read,sync_failure,authorize_pending,lock_busy;
     unsigned finish_late,rollback,health_late,retain_busy;
 };
@@ -81,7 +81,13 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
 {
     struct model *m=v;assert(m->held && mem==&m->memory);++m->syncs;
     if (op==A733_CE_PUBLISH) {assert(!m->starts);m->published=1;}
-    else {
+    else if (op==A733_CE_SCRUB) {
+        /* After completion acknowledgement and task stop, before publication. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        for (unsigned i=0;i<64;++i) assert(!mem->output[i] && !mem->iv[i]);
+        for (unsigned i=0;i<sizeof(mem->input);++i) assert(!mem->input[i]);
+        ++m->scrubs;
+    } else {
         assert(m->starts==1 && (*reg(m,NS+12)&0x30)==0x10);
         m->acquired=1;
         /* Deterministic bytes are a DMA model fixture, never entropy. */
@@ -102,7 +108,7 @@ static void setup(struct model *m,unsigned high)
         .fabric={0x03000001,0x83000000,0x84000000},.fabric_hz={300000000,600000000,400000000},
         .health={9,325,0,0x30200}};
     /* Health values are artificial contract fixtures, not physical thresholds. */
-    *reg(m,0x07090160)=1;
+    *reg(m,0x07090160)=0x10000003;
     *reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0xa8)=0;*reg(m,CCU+0xac)=0;
@@ -137,13 +143,18 @@ int main(void)
         assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING);unchanged(out);
         *reg(&m,NS+12)=0x10;
         assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM);
-        for (unsigned i=0;i<32;++i) assert(out[i]==17+i);
+        for (unsigned i=0;i<32;++i) assert(out[i]==17+i && !m.memory.output[i]);
+        assert(m.scrubs==1);
         assert((*reg(&m,NS+8))==0x10000000 && (*reg(&m,NS+4)&0xffffff00)==0xa5000000);
         unsigned reads=m.reads,writes=m.writes;
         assert(a733_ce_poll(&m.controller,out)==A733_CE_CONSUMED);
         assert(reads==m.reads && writes==m.writes);
         memset(out,0xa5,sizeof(out));
     }
+    /* Reserved PERI0 bit 24, as observed on the board, is not a selector. */
+    setup(&m,0);*reg(&m,CCU+0xa0)|=1u<<24;submit(&m,out);
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING);*reg(&m,NS+12)=0x10;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM);memset(out,0xa5,sizeof(out));
     /* Hardware failure status and errors in either security bank. */
     for (unsigned k=0;k<7;++k) {
         setup(&m,0);submit(&m,out);*reg(&m,NS+12)=0x10;
@@ -185,7 +196,7 @@ int main(void)
         }
         assert(result==A733_CE_RETAINED);terminal(&m,out);
     }
-    for (unsigned i=1;i<=2;++i) {
+    for (unsigned i=1;i<=3;++i) {
         setup(&m,0);m.sync_failure=i;
         enum a733_ce_result result=A733_CE_PENDING;
         for (unsigned poll=0;poll<5 && result==A733_CE_PENDING;++poll) {

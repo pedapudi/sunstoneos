@@ -25,7 +25,8 @@ Profile zero retains one-bit SDR signaling and programmed I/O. SD profiles one
 and two negotiate four-bit default-speed and high-speed operation; eMMC remains
 on its existing profile. The public API provides startup polling, card information,
 bounded block reads and result collection. It exposes no raw controller pointer,
-command escape, write, erase, partition switch or recovery operation.
+command escape, write, erase, partition switch or recovery operation. Writes
+exist only through a bound [storage update service](storage-update.md).
 
 | Selected device | Controller | Clock/reset addresses | Interrupt ID | Active signals |
 | --- | --- | --- | --- | --- |
@@ -147,11 +148,23 @@ admission excludes every alternate route and unselected pad writer before
 startup. For eMMC this includes the unselected eMMC controller, NAND and SPIF
 activity. Later writers must honor the same controller and pin ownership.
 
-Each bounded card step revalidates the actual clock, pin and rail tokens, PMIC
+Each platform poll revalidates the actual clock, pin and rail tokens, PMIC
 provider health, card presence, GPIO voltage and clock/reset/interrupt state.
-Pin-manager failure is checked under its common register mutex. All controller
+While a read or write transfer advances without a timed wait, that poll then
+runs up to eight MMC core steps. Each core step still checks the owner task, the
+shared-clock failure flag, the update service and the deadline. A pending
+millisecond retry, such as a programming-status wait, ends the poll. Identification
+runs one core step per poll. Pin-manager failure is checked under its common
+register mutex. All controller
 callbacks execute while that mutex remains held, without recursively calling
-pin-manager operations. SDC3 additionally requires its normal-DMA request
+pin-manager operations. The native adapter records a successful register-mutex
+entry and clears that record on leave or retain. Each access checks the record,
+the owner task, the selected aperture and the retained-lock bit, so register
+accesses need no kernel critical section to query the mutex holder. FIFO bursts
+of at most 128 words are admitted once and then use plain device loads or
+stores between two barriers. A write burst additionally requires the bound
+update service to own the active sector and the burst to fit its remaining
+bytes. SDC3 additionally requires its normal-DMA request
 bits at offset `0x7c` to remain disabled. This is a read-only admission check;
 an enabled request causes retained refusal. The binding never reads or writes
 the unselected controller's registers.
@@ -246,7 +259,7 @@ that the physical version register meets this condition. A mismatch remains a
 retained refusal requiring investigation.
 
 SD v1, voltage switching, UHS/tuning, DMA, interrupts,
-hotplug, recovery, storage writes, alternate eMMC partitions, command queuing and
+hotplug, recovery, physically qualified storage writes, alternate eMMC partitions, command queuing and
 power management remain required storage work. UFS remains separate. Physical
 read qualification must preserve the inserted card and use its reviewed recovery
 plan; the supervised read-only SD lifetime retains resources until complete

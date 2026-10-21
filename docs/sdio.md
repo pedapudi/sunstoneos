@@ -57,6 +57,9 @@ concrete board bindings before its register operations can run on hardware.
 callbacks, a barrier, and a monotonic clock. Callbacks must return promptly,
 report failure, and avoid reentry. One serialized worker owns all API calls;
 the core is not a concurrent task/ISR interface.
+Register offsets, command fields and raw-interrupt bits come from
+[include/sunxi_smhc.h](../include/sunxi_smhc.h), which the SD/eMMC core also
+uses. SDIO stops on the pinned BSP's error mask `0xbbc2`.
 
 Both host and card objects require zero-initialized storage before first use.
 Successful initialization sets a permanent guard; later initialization attempts

@@ -231,16 +231,21 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         if(field(b,A733_HDMI_BASE+0x3000,1,8,8)!=1)return -1;
         if(b->now>UINT64_MAX-2500)return a733_hdmi_fail(b);
         p->operation_deadline=b->now+2500;p->until=b->now+5;
-        p->locks=0;p->stage=15;return 0;
+        p->locks=0;p->index=0;p->stage=15;return 0;
     case 15:
-        if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
+        /* The source samples lock every 5us for 2.5ms. A tick-paced owner may
+         * take only two samples in that time, so the wait also lasts for at
+         * least four samples (index counts them) and lets a pending
+         * confirming sample complete. */
+        if(b->now>=p->operation_deadline&&p->index>=4&&!p->locks)return a733_hdmi_fail(b);
         if(b->now<p->until)return 0;
         if(a733_hdmi_read(b,A733_HDMI_BASE+0x3004,1,&x)!=1)return -1;
-        if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
-        if(!(x&1)){p->locks=0;p->until=p->operation_deadline-b->now<5?
-            p->operation_deadline:b->now+5;return 0;}
-        if(++p->locks<2){p->until=p->operation_deadline-b->now<5?
-            p->operation_deadline:b->now+5;return 0;}
+        if(b->now>UINT64_MAX-5)return a733_hdmi_fail(b);
+        ++p->index;
+        if(!(x&1)){p->locks=0;
+            if(b->now>=p->operation_deadline&&p->index>=4)return a733_hdmi_fail(b);
+            p->until=b->now+5;return 0;}
+        if(++p->locks<2){p->until=b->now+5;return 0;}
         if(a733_hdmi_tick(b)!=1)return -1;
         p->ready=1;return 1;
     default:return a733_hdmi_fail(b);

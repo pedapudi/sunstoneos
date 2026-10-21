@@ -42,8 +42,6 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surfa
 }
 int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
 {return plan(1280,720,2,0x0a,s,out);}
-int a733_de_plan_tv1(const struct a733_de_surface *s,struct a733_de_plan *out)
-{return plan(1280,720,2,0x0a,s,out);}
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {
     if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
@@ -178,16 +176,21 @@ static int replay_poll(struct a733_de *d)
  else if(step==6)ok=d->config.ops.write32(c,DE+0x8158,0);
  else if(step==7)ok=d->config.ops.write32(c,DE+0x815c,32);
  else if(step==8||step==12)ok=d->config.ops.barrier(c);
+ /* Steps 10 and 11 are unused: a submitted RCQ continues at the step12 barrier. */
  else if(step==9){ok=d->config.ops.rcq_submit(c);if(ok==0)return time_ok(d);if(ok==1){d->step=12;return time_ok(d);}}
  else if(step==14)ok=d->config.ops.read32(c,DE+OVL+0x10,&v);
  if(ok!=1){fail(d,step?A733_DE_IO:A733_DE_AUTHORITY);return 0;}
  if(!time_ok(d))return 0;
  if(step==1&&!(v&1)){fail(d,A733_DE_INITIAL_STATE);return 0;}
  if(step==2||step==15)d->raw_status=v;
- if(step==4&&(v&5)){fail(d,A733_DE_VERIFY);return 0;}
+ /* FRAME_END keeps latching while scanout runs, so a frame boundary may land
+  * between a status clear and its readback. Only stale RCQ_FINISH faults at
+  * step4; bit0 is first relied on after the step16 clear, which step17 retries
+  * until a readback shows it clear or the deadline expires. */
+ if(step==4&&(v&4)){fail(d,A733_DE_VERIFY);return 0;}
  if(step==13){if(!(v&4))return 1;d->replay_rcq_done=d->last_now;}
  if(step==14&&v!=(uint32_t)(d->config.surface.device_address+d->replay_slot*d->replay_frame_bytes)){fail(d,A733_DE_VERIFY);return 0;}
- if(step==17&&(v&1)){fail(d,A733_DE_VERIFY);return 0;}
+ if(step==17&&(v&1)){d->step=16;return 1;}
  if(step==18){if(!(v&1))return 1;d->raw_status=v;d->replay_frame_end=d->last_now;d->state=A733_DE_ARMED;}
  ++d->step;return 1;
 }
@@ -216,6 +219,8 @@ enum a733_de_state a733_de_poll(struct a733_de *d)
     } else if (step == 2) ok = d->config.ops.read32(ctx, DE + 0x8010, &value);
     else if (step == 3) {
         w = write_word(d, d->index);
+        /* A full-mask word keeps no current bits, so it needs no pre-read. */
+        if (!d->substep && w.mask == UINT32_MAX) { d->expected = w.value; d->substep = 1; }
         if (d->substep == 1) {
             ++d->writes_attempted; ok = d->config.ops.write32(ctx, DE + w.offset, d->expected);
         } else ok = d->config.ops.read32(ctx, DE + w.offset, &value);

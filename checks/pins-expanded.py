@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--sources',type=pathlib.Path,default=pathlib.Path.home()/'.cache/sunstoneos/sources')
@@ -134,7 +135,7 @@ for path in [root/f for f in files]+[args.sources/name for name,_ in pins]+[refe
     data=path.read_bytes(); inputs.append({'path':str(path),'sha256':hashlib.sha256(data).hexdigest()})
 (args.evidence/'inputs.json').write_text(json.dumps(inputs,indent=2)+'\n')
 common=['cc','-D_XOPEN_SOURCE=700','-std=c11','-O1','-g','-Wall','-Wextra','-Werror',
-        '-fsanitize=address,undefined','-pthread','-I'+str(root/'include')]
+        '-fsanitize=address,undefined','-fno-sanitize-recover=all','-pthread','-I'+str(root/'include')]
 implementation=[str(root/'drivers/pinctrl/a733_pins.c'),str(root/'drivers/pinctrl/a733_pin_tables.c')]
 objects=[]
 for source in implementation:

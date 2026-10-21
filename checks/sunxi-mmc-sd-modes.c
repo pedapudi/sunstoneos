@@ -7,12 +7,14 @@ static int mode_read(void *v,uint32_t off,uint32_t *out)
 {
  struct sd_model *s=v;struct model *m=&s->base;
  if(off==0x200&&((m->data_command&63)==51||((m->data_command&63)==6))){
-  assert(++m->fifo_this_poll<=16&&m->fifo_pos<m->fifo_total);*out=0;
+  assert(++m->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS&&m->fifo_pos<m->fifo_total);*out=0;
   for(unsigned b=0;b<4;++b)*out|=(uint32_t)((m->data_command&63)==51?s->scr[m->fifo_pos++]:s->switch_data[m->fifo_pos++])<<(8*b);
   return 1;
  }
  return read32(m,off,out);
 }
+static inline int mode_read_fifo(void *v,uint32_t *words,unsigned count)
+{for(unsigned i=0;i<count;++i)if(mode_read(v,0x200,&words[i])!=1)return 0;return 1;}
 static int mode_write(void *v,uint32_t off,uint32_t value)
 {
  struct sd_model *s=v;struct model *m=&s->base;
@@ -47,7 +49,7 @@ static void start(struct sd_model *s,struct sunxi_mmc *h,unsigned profile,unsign
 {
  memset(s,0,sizeof(*s));seed(&s->base,h,SUNXI_MMC_SD,sector);
  field(s->base.csd,84,12,5|(1u<<10));field(s->base.csd,96,8,speed);s->scr[0]=2;s->scr[1]=5;
- struct sunxi_mmc_config c={{mode_read,mode_write,barrier,now_us,admit,retained,module},s,0xa733,SUNXI_MMC_SD,800000,0x300000,(enum sunxi_mmc_sd_profile)profile};
+ struct sunxi_mmc_config c={{mode_read,mode_write,barrier,now_us,admit,retained,module,mode_read_fifo,model_write_fifo},s,0xa733,SUNXI_MMC_SD,800000,0x300000,(enum sunxi_mmc_sd_profile)profile};
  assert(sunxi_mmc_init(h,&c)&&sunxi_mmc_open(h,1000000));
 }
 static void expect_fault(struct sd_model *s,struct sunxi_mmc *h)

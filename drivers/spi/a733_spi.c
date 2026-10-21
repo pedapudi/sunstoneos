@@ -14,7 +14,8 @@
 #define TXD 0x200u
 #define RXD 0x300u
 #define BSR 0x400u
-#define XCH 0x80000000u
+#define XCH 0x80000000u /* TCR: start exchange. */
+#define GCR_SRST 0x80000000u /* GCR: soft reset, self-clearing. */
 #define RESETS 0x80008000u
 #define ERRORS 0x2700u /* RX overflow/underflow, TX overflow, invalid SS */
 #define DONE 0x1000u
@@ -88,9 +89,9 @@ int a733_spi_begin(struct a733_spi *s,const struct a733_spi_ops *ops,void *ctx,
     s->last_now=0;s->errors=0;s->sent=0;s->received=0;
     s->state=A733_SPI_RESETTING;
     if (!admission(s)||!rd(s,GCR,&g)) return s->state;
-    if ((g&(XCH|1u)) || !idle(s)) { fault(s);return s->state; }
+    if ((g&(GCR_SRST|1u)) || !idle(s)) { fault(s);return s->state; }
     /* Reset only an exclusively owned disabled controller. */
-    wr(s,GCR,XCH);
+    wr(s,GCR,GCR_SRST);
     return s->state;
 }
 static int span(const void *p,uint32_t n)
@@ -137,21 +138,22 @@ static int move(struct a733_spi *s,unsigned budget)
     if (!rd(s,FSR,&f)) return 0;
     unsigned rx=f&255u,tx=(f>>16)&255u;
     if (rx>192||tx>64||rx>s->transfer.rx_bytes-s->received) return fault(s);
+    /* FSR bounds each FIFO batch; the deadline is checked around each batch
+     * rather than around every byte. */
     unsigned count=rx<budget?rx:budget;
     for(unsigned i=0;i<count;i++) {
         uint8_t byte;
-        if (!timely(s)||s->ops.read8(s->context,s->plan.base+RXD,&byte)!=1) return fault(s);
+        if (s->ops.read8(s->context,s->plan.base+RXD,&byte)!=1) return fault(s);
         s->transfer.rx[s->received++]=byte;
-        if (!timely(s)) return 0;
     }
+    if (count&&!timely(s)) return 0;
     count=64u-tx;if(count>budget)count=budget;
     if(count>s->transfer.tx_bytes-s->sent)count=s->transfer.tx_bytes-s->sent;
     for(unsigned i=0;i<count;i++) {
-        if (!timely(s)||s->ops.write8(s->context,s->plan.base+TXD,s->transfer.tx[s->sent])!=1) return fault(s);
+        if (s->ops.write8(s->context,s->plan.base+TXD,s->transfer.tx[s->sent])!=1) return fault(s);
         s->sent++;
-        if(!timely(s))return 0;
     }
-    return 1;
+    return !count||timely(s);
 }
 int a733_spi_poll(struct a733_spi *s,unsigned budget)
 {
@@ -162,7 +164,7 @@ int a733_spi_poll(struct a733_spi *s,unsigned budget)
     if(!admission(s))return s->state;
     switch(s->state) {
     case A733_SPI_RESETTING:
-        if(!rd(s,GCR,&v)||v&XCH)break;
+        if(!rd(s,GCR,&v)||v&GCR_SRST)break;
         s->tcr=0x2040u|s->format.mode|(s->format.cs<<4)|
             (s->format.lsb_first?0x1000u:0)|(s->format.active_high?0:0x84u);
         if(!wr(s,GCR,0x82)||!wr(s,TCR,s->tcr)||!wr(s,IER,0)||

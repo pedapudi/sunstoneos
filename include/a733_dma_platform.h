@@ -47,7 +47,7 @@ struct a733_dma_platform {
     uint64_t last_now, reset_since;
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
-    unsigned initialized, stage, failed, wrote;
+    unsigned initialized, stage, failed;
 };
 /* Pure profile validation; output untouched on refusal. FABRIC stabilizes the
  * AHB/NSI/MBUS source/divisor/global-gate fields. DMA0 exclusively owns its bus

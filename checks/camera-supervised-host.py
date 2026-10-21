@@ -53,7 +53,7 @@ def main():
         'camera.generation':37,'camera.lease':41,'camera.proof':0x6ff,'camera.origin':1,'camera.excluded_masters':0xfcf,
         'camera.powered_masters':0xfcf,'camera.raw_trim':0xb00,'camera.parameter_guard_bytes':4096,
         'camera.plane_guard_bytes':4096,'camera.apb1_hz':24000000,'camera.settle':20,'camera.deskew':2,
-        'camera.reset_bank':6,'camera.reset_pin':10,'media.owner':6,'media.handoff':41,'media.groups':9,'media.camera_mclk_mask':2}.items():put(n,v)
+        'camera.reset_bank':6,'camera.reset_pin':10,'camera.test_pattern':1,'media.owner':6,'media.handoff':41,'media.groups':9,'media.camera_mclk_mask':2}.items():put(n,v)
     put('image',identity);put('camera.build',identity)
     inherited=bytearray([15,0,0]*15);inherited[33]=inherited[42]=1;put('camera.inherited',bytes(inherited))
     put('camera.rails',struct.pack('<3I',0,7,19));put('camera.programmed_uv',struct.pack('<3I',3300000,1800000,1800000))
@@ -96,7 +96,7 @@ def main():
         return {'image_sha256':value['image_sha256'],'launcher_sha256':value['launcher_sha256'],'fixture_not_physical':True}
     case('exact-package',package);prepared=prep.validate_bundle(bundle)
     def launcher(d):
-        original=(ROOT/'checks/a733-smp-supervised-launch.py').read_text();start=original.index('    if args.frequency_only:');end=original.index('    result =',start)
+        original=(ROOT/'checks/a733-smp-supervised-launch.py').read_text();start=original.index('    if args.accelerator_profile:\n        cases');end=original.index('    result =',start)
         text=original[:start]+"    cases=[check('camera sixty-second publication',12),check('wrong session size',3,mutation=(CONTRACT+184,1)),check('wrong session digest',3,mutation=(CONTRACT+192,0)),check('armed watchdog refuses',0,initial={MODE:0x41})]\n"+original[end:]
         text=text.replace('480000000','1440000000').replace('0x4153373353554333',hex(prep.CONTRACT_MAGIC));script=d/'launcher-cases.py';script.write_text(text)
         command=[sys.executable,'-B',str(script),'--bundle',str(bundle),'--output',str(d/'result.json')];r=subprocess.run(command,capture_output=True,text=True);(d/'output.txt').write_text(r.stdout+r.stderr);assert r.returncode==0,r.stderr
@@ -116,10 +116,21 @@ def main():
             try:path.write_bytes(bytes([b[0]^1])+b[1:]);refused(lambda:prep.validate_bundle(bundle))
             finally:path.write_bytes(b)
         case('mutated-'+filename,mutation)
-    for n,v in [('shared.usb.deadline_us',1),('camera.proof',0x3ff),('camera.lease',42)]:
+    for n,v in [('shared.usb.deadline_us',1),('camera.proof',0x3ff),('camera.lease',42),('camera.test_pattern',2),('camera.pwdn_only',2),('camera.pwdn_only',1)]:
         def typed(d,n=n,v=v):
             b=bytearray(session);f=layout['fields'][n];b[f['offset']:f['offset']+f['size']]=v.to_bytes(f['size'],'little');refused(lambda:prep.session_profile(bytes(b),layout,identity))
-        case('typed-'+n,typed)
+        case('typed-'+n+'-'+str(v),typed)
+    def pwdn_only(d):
+        # A PWDN-only module names no reset GPIO and leaves its inherited entry zero.
+        b=bytearray(session)
+        def set_field(name,value):f=layout['fields'][name];b[f['offset']:f['offset']+f['size']]=value if isinstance(value,bytes) else value.to_bytes(f['size'],'little')
+        for name,value in [('camera.pwdn_only',1),('camera.reset_bank',0),('camera.reset_pin',0)]:set_field(name,value)
+        refused(lambda:prep.session_profile(bytes(b),layout,identity))
+        f=layout['fields']['camera.inherited'];b[f['offset']+42:f['offset']+45]=bytes(3)
+        assert prep.session_profile(bytes(b),layout,identity)==profile
+        set_field('camera.pwdn_only',0);refused(lambda:prep.session_profile(bytes(b),layout,identity))
+        return {'accepted':'pwdn-only without reset wiring','refused':['pwdn-only with inherited reset entry','reset profile without reset wiring']}
+    case('typed-pwdn-only-profile',pwdn_only)
     def missing_prior_drain(d):
         cache={path:prepared['_frozen'][item['name']] for path,item in prepared['entry_evidence'].items()}
         admission_value=json.loads(prepared['_frozen']['admission.json']);facts_path=admission_value['recovery']['path']

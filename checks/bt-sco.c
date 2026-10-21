@@ -185,6 +185,27 @@ static void refusals_and_partial(void)
     audio_start(&f,0,0);command(&f,0x041b);status(&f,0x041b,0);f.g.rf.d.lower.f.now=f.q.links[0].deadline;
     assert(audio_poll(&f)==-1 && f.q.links[0].phase==BT_SCO_RETAINED);
 }
+static unsigned owned_events(const struct fixture *h)
+{unsigned n=0;for(unsigned i=0;i<h->hci.transport.count;++i)n+=h->hci.transport.records[i].owner==BT_H4_OWNED;return n;}
+/* A request that no link awaits is refused once, without a link identity;
+ * a second request while that refusal is outstanding is only released. */
+static void stray_refusal(void)
+{
+    struct audio_fixture f;opened(&f);struct fixture *h=&f.g.rf.d.lower.f;
+    const uint8_t request[]={1,2,3,4,5,6,4,4,0x24,2};event(h,4,request,10);assert(audio_poll(&f)==1);
+    size_t at=command(&f,0x042a);const uint8_t reject[]={1,0x2a,4,7,1,2,3,4,5,6,0x0d};
+    assert(!memcmp(h->tx+at,reject,sizeof(reject)) && f.q.refuse==2);
+    status(&f,0x042a,0);assert(f.q.refuse==3);size_t before=h->tn;
+    event(h,4,request,10);assert(audio_poll(&f)==1 && audio_poll(&f)==1 && h->tn==before && f.q.refuse==3);
+    complete(&f,0x0d,0,0);assert(audio_poll(&f)==1);
+    assert(!f.q.refuse && f.q.links[0].phase==BT_SCO_OPEN && f.q.next_link==2 && !owned_events(h));
+    /* The later unanswered request ends with a failed completion no owner claims. */
+    complete(&f,0x10,0,0);assert(audio_poll(&f)==1 && f.q.links[0].phase==BT_SCO_OPEN && !owned_events(h));
+    /* A refused reject means the controller already ended the request. */
+    event(h,4,request,10);assert(audio_poll(&f)==1);command(&f,0x042a);status(&f,0x042a,0x02);
+    assert(!f.q.refuse && f.q.links[0].phase==BT_SCO_OPEN && !owned_events(h));
+    puts("Unexpected synchronous requests are refused or released without a link identity");
+}
 static void acknowledgement_backlog(void)
 {
     struct audio_fixture f;audio_start(&f,0,0);command(&f,0x041b);
@@ -215,4 +236,4 @@ static void closed_held_receive(void)
     puts("Known audio RX retained before disconnect drains after confirmed close; newly acquired late RX remains refused.");
 }
 int main(int argc,char **argv)
-{(void)config_ready;if(argc==2 && !strcmp(argv[1],"--close-held")){closed_held_receive();return 0;}if(argc!=2 || strcmp(argv[1],"--remaining"))acknowledgement_backlog();credits_and_audio();mixed_refusal();incoming_and_fallback();refusals_and_partial();puts("New synchronous audio composition passed; prior Bluetooth scenario suites were not executed.");return 0;}
+{(void)config_ready;if(argc==2 && !strcmp(argv[1],"--close-held")){closed_held_receive();return 0;}if(argc!=2 || strcmp(argv[1],"--remaining"))acknowledgement_backlog();credits_and_audio();mixed_refusal();incoming_and_fallback();refusals_and_partial();stray_refusal();puts("New synchronous audio composition passed; prior Bluetooth scenario suites were not executed.");return 0;}

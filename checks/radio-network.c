@@ -21,7 +21,8 @@ static struct {uint8_t bytes[1514];unsigned length;} peer_rx[8];
 static unsigned peer_head,peer_count,udp_packets,tcp_packets,syn_packets;
 static uint64_t peer_pn;
 static uint32_t tcp_next,peer_next=9001;
-static int entropy_failure,case_entropy,case_late,case_alias,case_inbound;
+static int entropy_failure,case_entropy,case_late,case_alias,case_inbound,case_rekey;
+static unsigned dns_queries;
 static unsigned inbound_resets,backlog_refusals;
 FreeRTOS_Socket_t *__real_prvHandleListen_IPV4(FreeRTOS_Socket_t *,NetworkBufferDescriptor_t *);
 FreeRTOS_Socket_t *__wrap_prvHandleListen_IPV4(FreeRTOS_Socket_t *parent,NetworkBufferDescriptor_t *packet)
@@ -96,7 +97,9 @@ static void peer(const uint8_t *p,unsigned n)
     if(memcmp(ip+16,peer_ip,4))return;
     const uint8_t *payload=ip+ihl;unsigned length=bytes-ihl;
     if(ip[9]==17){
-        assert(length>=8&&be16(payload+4)==length&&!protocol_checksum(ip,payload,length,17));++udp_packets;
+        assert(length>=8&&be16(payload+4)==length&&!protocol_checksum(ip,payload,length,17));
+        if(case_rekey&&be16(payload+2)==53){++dns_queries;return;} /* No DNS server answers. */
+        ++udp_packets;
         uint8_t reply[1514]={0};ip_header(reply,length,17);memcpy(reply+34,payload,length);
         store16(reply+34,be16(payload+2));store16(reply+36,be16(payload));store16(reply+40,0);
         store16(reply+40,protocol_checksum(reply+14,reply+34,length,17));enqueue(reply,34+length);return;
@@ -197,6 +200,21 @@ static void exchange(uint64_t handle,const char *text)
     if(result.result!=SUNSTONE_NET_OK){platform_puts("receive result/transport/error/held/rx/tx/peer ");platform_hex(result.result);platform_hex(transport.state);platform_hex(transport.error);platform_hex(transport.held);platform_hex(net.network.rx_packets);platform_hex(net.network.tx_bus_completions);platform_hex(peer_count);platform_puts("\n");}
     assert(result.result==SUNSTONE_NET_OK&&result.bytes==strlen(text)&&!memcmp(result.payload,text,result.bytes));
 }
+/* Model the supplicant's group-handshake transition: authority is withdrawn
+ * while link, association generation and lease stay unchanged. */
+static void rekey_pause(void)
+{
+    security.authorized=0;supplicant.state=AIC8800_SUPPLICANT_HANDSHAKE;
+    unsigned n=0;while(aic8800_network_ready(&net.network)){assert(++n<100);vTaskDelay(1);}
+    vTaskDelay(20); /* Many owner and IP-task passes observe the pause. */
+    assert(!atomic_load(&net.network.failed)&&!atomic_load(&net.network.address_failed)&&
+        atomic_load(&net.network.address_ready));
+}
+static void rekey_resume(void)
+{
+    supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;security.authorized=1;
+    unsigned n=0;while(!aic8800_network_ready(&net.network)){assert(++n<100);vTaskDelay(1);}
+}
 static void application(void *context)
 {
     (void)context;
@@ -212,6 +230,36 @@ static void application(void *context)
     assert(sunstone_net_activate(&net));
     for(unsigned i=0;i<100&&!aic8800_network_ready(&net.network);++i)vTaskDelay(1);
     assert(aic8800_network_ready(&net.network));
+    if(case_rekey){
+        uint64_t listener=open_socket(1,7400);
+        struct sunstone_net_request r={.operation=SUNSTONE_NET_LISTEN,.handle=listener,.timeout=1000};
+        assert(call(&r).result==SUNSTONE_NET_OK);
+        r.operation=SUNSTONE_NET_ACCEPT;r.timeout=5000;uint64_t ticket;struct sunstone_net_reply reply;
+        assert(sunstone_net_submit(&net,&r,&ticket));vTaskDelay(5);
+        rekey_pause();assert(!sunstone_net_receive(&net,&reply,0));rekey_resume();
+        inbound_packet(9000,9000,0,2,NULL,0);
+        assert(sunstone_net_receive(&net,&reply,r.timeout+100)&&reply.ticket==ticket);
+        assert(reply.result==SUNSTONE_NET_OK&&reply.handle&&reply.handle!=listener&&reply.port==9000);
+        /* Output is admitted again after the second port-open confirmation. */
+        uint64_t child=reply.handle;
+        r=(struct sunstone_net_request){.operation=SUNSTONE_NET_SEND,.handle=child,.timeout=1000,.bytes=5,.payload={'r','e','k','e','y'}};
+        assert(call(&r).stack_result==5);
+        r=(struct sunstone_net_request){.operation=SUNSTONE_NET_RECEIVE,.handle=child,.timeout=1000,.bytes=5};
+        reply=call(&r);assert(reply.result==SUNSTONE_NET_OK&&reply.bytes==5&&!memcmp(reply.payload,"rekey",5));
+        close_socket(child);close_socket(listener);
+        /* A RESOLVE published to the IP task before the pause waits for it. */
+        vTaskSuspend(FreeRTOS_GetIPTaskHandle());
+        r=(struct sunstone_net_request){.operation=SUNSTONE_NET_RESOLVE,.timeout=300,.bytes=12};memcpy(r.payload,"example.test",12);
+        assert(sunstone_net_submit(&net,&r,&ticket));
+        unsigned n=0;while(atomic_load(&net.dns[0].state)!=SUNSTONE_DNS_START){assert(++n<100);vTaskDelay(1);}
+        rekey_pause();vTaskResume(FreeRTOS_GetIPTaskHandle());vTaskDelay(20);
+        assert(atomic_load(&net.dns[0].state)==SUNSTONE_DNS_START&&!sunstone_net_receive(&net,&reply,0));
+        rekey_resume();
+        assert(sunstone_net_receive(&net,&reply,r.timeout+100)&&reply.ticket==ticket&&reply.result==SUNSTONE_NET_TIMEOUT);
+        assert(!atomic_load(&net.network.failed)&&!atomic_load(&net.network.address_failed));
+        platform_puts("rekey DNS queries ");platform_hex(dns_queries);platform_puts("\n");
+        platform_puts("PASS network: group-key pause keeps pending ACCEPT and RESOLVE until port reopens\n");platform_exit(0);
+    }
     if(case_inbound){
         uint64_t listener=open_socket(1,7400);
         struct sunstone_net_request r={.operation=SUNSTONE_NET_LISTEN,.handle=listener,.timeout=1000};
@@ -271,9 +319,12 @@ static void application(void *context)
     }
     if(case_entropy){
         uint64_t tcp=open_socket(1,7400);entropy_failure=1;unsigned old_syn=syn_packets;
+        /* A temporary refusal fails one random-number call; only the
+         * initial-sequence hook, which cannot report failure, closes output. */
+        uint32_t word=1;assert(xApplicationGetRandomNumber(&word)==pdFALSE&&!word&&aic8800_network_ready(&net.network));
         struct sunstone_net_request r=(struct sunstone_net_request){.operation=SUNSTONE_NET_CONNECT,.handle=tcp,.timeout=1000,.port=9000};memcpy(r.address,peer_ip,4);
         struct sunstone_net_reply retained=call(&r);assert(retained.result==SUNSTONE_NET_LINK_LOST&&syn_packets==old_syn&&!aic8800_network_ready(&net.network));
-        platform_puts("PASS network: entropy failure blocks SYN output\n");
+        platform_puts("PASS network: temporary random refusal stays open; sequence failure blocks SYN output\n");
         platform_exit(0);
     }
     if(case_late){
@@ -347,6 +398,7 @@ static void arguments(void)
         if(!memcmp(command+i,"late",4))case_late=1;
         if(!memcmp(command+i,"alias",5))case_alias=1;
         if(!memcmp(command+i,"inbound",7))case_inbound=1;
+        if(i+5<=sizeof(command)&&!memcmp(command+i,"rekey",5))case_rekey=case_inbound=1;
         if(!memcmp(command+i,"cancel",6))inbound_cancel=1;
         if(!memcmp(command+i,"timeout",7))inbound_timeout=1;
         if(!memcmp(command+i,"queue",5))inbound_queue=1;
@@ -362,5 +414,6 @@ void kernel_main(void)
     struct sunstone_net_config c={.network={.transport=&transport,.tx_timeout=5000,.queue_timeout=5000,
         .random32=random32,.sequence=sequence,.entropy_context=&m,.entropy_record=1,
         .address={10,0,0,2},.netmask={255,255,255,0},.gateway={10,0,0,1}},.bootstrap=app,.clients={app}};
+    if(case_rekey)memcpy(c.network.dns,(uint8_t[]){10,0,0,1},4);
     assert(sunstone_net_init(&net,&c));vTaskStartScheduler();platform_panic("scheduler",0);
 }

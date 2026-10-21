@@ -31,6 +31,7 @@ for name in ['RBR','THR','DLL','DLH','IER','IIR','FCR','LCR','MCR','LSR','MSR','
     assert ref == actual, name
 # The reference driver leaves FORCECFG set after CHANGE_UPDATE clears. Its
 # DLAB/FIFO sequence produces these writes for 24MHz, 1.5Mbaud and RTS/CTS.
+# Above 9600 baud the reference RX trigger is half FIFO (FCR bits 7:6 = 2).
 core = (a.source / 'sunxi-uart-ng-core.c').read_bytes()
 assert hashlib.sha256(core).hexdigest() == '29237c6c3497c6f1dfd7b850d7b8596030e1d7d99a728cff79436ec1fb084fda'
 commands = []
@@ -45,8 +46,10 @@ log += run([str(exe)])
 log += run([str(exe), '--drain'])
 log += run([str(exe), '--capacity'])
 trace = run([str(exe), '--trace'])
-expected = [(4,0),(8,1),(0xa4,3),(0xc,0x83),(0,1),(4,0),(0xa4,7),
-            (0xc,3),(0xa4,2),(8,7),(8,1),(0x10,0x22),(4,13)]
+rxtrg = re.search(r'if \(baud <= 9600\)\s*uart_port->reg\.fcr = SUNXI_UART_FCR_RXTRG_1CH[^;]*;\s*else\s*uart_port->reg\.fcr = SUNXI_UART_FCR_RXTRG_1_2\b', core.decode())
+assert rxtrg and int(re.search(r'#define SUNXI_UART_FCR_RXTRG_1_2\s+\((\d+) << 6\)', header)[1]) << 6 == 0x80
+expected = [(4,0),(8,0x81),(0xa4,3),(0xc,0x83),(0,1),(4,0),(0xa4,7),
+            (0xc,3),(0xa4,2),(8,0x87),(8,0x81),(0x10,0x22),(4,13)]
 assert [tuple(int(v,16) for v in line.split()) for line in trace.splitlines()] == expected
 obj = a.output / 'a733_uart.o'
 log += run([compiler, '--target=aarch64-none-elf', '-std=c11', '-Wall', '-Wextra', '-Werror', '-ffreestanding', '-fno-builtin', '-O2', '-Iinclude', '-c', inputs[1], '-o', str(obj)])

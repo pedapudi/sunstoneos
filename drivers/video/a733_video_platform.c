@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_platform.h"
+#include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07062000)
 #define R_CCU UINT32_C(0x07010000)
@@ -55,14 +56,25 @@ static int clock_now(void *v,uint64_t *out)
 }
 static int timely(struct a733_video_platform *p)
 {uint64_t n;return clock_now(p,&n)==1&&n<p->deadline;}
+/* A busy registry is effect-free: another task is inside its short critical
+ * section. Retry for at most two scheduler ticks, so an equal-priority holder
+ * on this core can finish after a time slice; then report 0 (not held). */
+#define BUSY_RETRY_US 2000u
 static int held(struct a733_video_platform *p)
 {
-    enum a733_clock_result c=a733_clock_token_status(p->config.clocks,&p->config.clock);
-    if(c==A733_CLOCK_BUSY)return 0;
-    if(c!=A733_CLOCK_OK)return fail(p);
-    enum a733_gpu_resource_result g=a733_gpu_resources_status(p->config.power,p->config.power_client,&p->config.pck);
-    if(g==A733_GPU_RESOURCE_BUSY)return 0;
-    return g==A733_GPU_RESOURCE_OK?1:fail(p);
+    uint64_t first=0,n;
+    for(unsigned tries=0;;++tries) {
+        enum a733_clock_result c=a733_clock_token_status(p->config.clocks,&p->config.clock);
+        if(c!=A733_CLOCK_OK&&c!=A733_CLOCK_BUSY)return fail(p);
+        if(c==A733_CLOCK_OK) {
+            enum a733_gpu_resource_result g=a733_gpu_resources_status(p->config.power,p->config.power_client,&p->config.pck);
+            if(g==A733_GPU_RESOURCE_OK)return 1;
+            if(g!=A733_GPU_RESOURCE_BUSY)return fail(p);
+        }
+        if(clock_now(p,&n)!=1)return -1;
+        if(!tries)first=n;
+        if(n>=p->deadline||n-first>=BUSY_RETRY_US||tries==65535)return 0;
+    }
 }
 static int lock(struct a733_video_platform *p)
 {
@@ -103,11 +115,10 @@ static int update(struct a733_video_platform *p,uintptr_t a,uint32_t mask,uint32
 static int parents(struct a733_video_platform *p)
 {
     uint32_t osc,ref,pll,pat,gate,status;
-    if(rd(p,0x07090160,&osc)!=1||(((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||
-       rd(p,CCU,&ref)!=1||(ref&0xf8000000u)!=0xf8000000u)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if(n<80||n>116||n!=m)return 0;
-    unsigned v0=!!(p->config.module&BIT(24)),off=v0?0x220:0x240;
+    /* The shared rule admits an enabled, stable DCXO whose PLL_REF output is
+     * normalized to 24 MHz, including the 26 MHz board's N=96/M=104. */
+    if(rd(p,0x07090160,&osc)!=1||rd(p,CCU,&ref)!=1||!a733_clock_ref24_valid(osc,ref))return 0;
+    unsigned n,m,v0=!!(p->config.module&BIT(24)),off=v0?0x220:0x240;
     if(rd(p,CCU+off,&pll)!=1||(pll&0xf8000000u)!=0xf8000000u||
        rd(p,CCU+off+8,&pat)!=1||(pat&BIT(31))||
        rd(p,CCU+off+12,&pat)!=1||(pat&BIT(27))||

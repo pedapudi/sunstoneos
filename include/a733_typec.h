@@ -8,6 +8,10 @@
 
 #define A733_TYPEC_FRESH_US UINT64_C(10000)
 #define A733_TYPEC_SERVICE_GAP_US UINT64_C(2000)
+/* While INT_N stays high, attached monitoring publishes from the pin alone
+ * and repeats both I2C status reads at this interval. The last status read
+ * is therefore younger than FRESH_US whenever a token is published. */
+#define A733_TYPEC_REFRESH_US (A733_TYPEC_FRESH_US/2)
 struct a733_typec;
 /* Copied observation, valid only for this permanent provider and attachment.
  * No USB operation may advance from an expired or revoked observation. */
@@ -62,7 +66,7 @@ struct a733_typec {
     struct a733_typec_pd pd;
     unsigned pd_turn;
     uint64_t now,last_service,startup_deadline,transaction_deadline,until,
-        candidate_since,shutdown_deadline,cycle_start;
+        candidate_since,shutdown_deadline,cycle_start,status_at;
     enum a733_typec_state state,after_measure;
     unsigned step,substep,transaction,measuring,candidate,polarity,cc[2],
         measure_result,classification_step,irq_level,

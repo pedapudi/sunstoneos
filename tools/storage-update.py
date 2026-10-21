@@ -18,7 +18,10 @@ import secrets
 import stat
 import struct
 
-CHUNK = 1024
+READ_BLOCKS = 2  # BACKUP returns at most two sectors.
+# WRITE carries one sector, so one CMD24 busy period and its readback fit in
+# the native one-second operation deadline (docs/storage-update.md).
+WRITE_CHUNK = 512
 ZERO = bytes(32)
 
 
@@ -191,15 +194,15 @@ def card_range(g):
 
 def make_chain(store, fd, size):
     """Store next commitments backwards; each write verifies before card I/O."""
-    count = (size + CHUNK - 1) // CHUNK
+    count = (size + WRITE_CHUNK - 1) // WRITE_CHUNK
     table = store.create('chain.bin')
     os.ftruncate(table, count * 32)
     following = ZERO
     for index in range(count - 1, -1, -1):
-        data = os.pread(fd, min(CHUNK, size - index * CHUNK), index * CHUNK)
-        require(len(data) == min(CHUNK, size - index * CHUNK), 'Candidate snapshot is incomplete.')
+        data = os.pread(fd, min(WRITE_CHUNK, size - index * WRITE_CHUNK), index * WRITE_CHUNK)
+        require(len(data) == min(WRITE_CHUNK, size - index * WRITE_CHUNK), 'Candidate snapshot is incomplete.')
         require(os.pwrite(table, following, index * 32) == 32, 'Commitment table write incomplete.')
-        following = digest(struct.pack('<QII', index * 2, len(data), 0) + following + data)
+        following = digest(struct.pack('<QII', index * WRITE_CHUNK // 512, len(data), 0) + following + data)
     # Reopen only after sealing; hash the write-only descriptor through a fresh read descriptor.
     os.fsync(table)
     tmp = os.open('chain.bin', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=store.fd)
@@ -290,9 +293,9 @@ def backup(client, store):
     client.identify()
     fd = store.create('backup.bin')
     sha = hashlib.sha256()
-    for offset in range(0, client.grant['blocks'], 2):
+    for offset in range(0, client.grant['blocks'], READ_BLOCKS):
         data, expected = client.call(2, offset)
-        require(len(data) == min(2, client.grant['blocks'] - offset) * 512 and digest(data) == expected, 'Backup chunk differs from native read.')
+        require(len(data) == min(READ_BLOCKS, client.grant['blocks'] - offset) * 512 and digest(data) == expected, 'Backup chunk differs from native read.')
         write_all(fd, data)
         sha.update(data)
     whole = sha.digest()
@@ -368,23 +371,23 @@ def apply(client, store):
     size = manifest['bytes']
     prior = store.open('backup.bin', size, bytes.fromhex(manifest['backup_sha256']))
     image = store.open('candidate.bin', size, bytes.fromhex(manifest['candidate_sha256']))
-    chain = store.open('chain.bin', ((size + CHUNK - 1) // CHUNK) * 32, bytes.fromhex(manifest['chain_sha256']))
+    chain = store.open('chain.bin', ((size + WRITE_CHUNK - 1) // WRITE_CHUNK) * 32, bytes.fromhex(manifest['chain_sha256']))
     client.identify()
     sha = hashlib.sha256()
-    for offset in range(0, g['blocks'], 2):
+    for offset in range(0, g['blocks'], READ_BLOCKS):
         data, expected = client.call(2, offset)
         require(digest(data) == expected and data == os.pread(prior, len(data), offset * 512) and
-                len(data) == min(2, g['blocks'] - offset) * 512, 'Current card differs from protected backup; writes refused.')
+                len(data) == min(READ_BLOCKS, g['blocks'] - offset) * 512, 'Current card differs from protected backup; writes refused.')
         sha.update(data)
     require(sha.hexdigest() == g['backup'], 'Complete current-card backup differs.')
     _, receipt = store.record('admission.json', dict(grant_sha256=manifest['grant_sha256'], backup_sha256=sha.hexdigest(), candidate_sha256=manifest['candidate_sha256']))
     _, observed = client.call(3, g['blocks'], receipt=receipt)
     require(observed == sha.digest(), 'Native backup hash differs.')
     after = hashlib.sha256()
-    for index, offset in enumerate(range(0, g['blocks'], 2)):
-        data = os.pread(image, min(CHUNK, size - offset * 512), offset * 512)
+    for index, offset in enumerate(range(0, g['blocks'], WRITE_CHUNK // 512)):
+        data = os.pread(image, min(WRITE_CHUNK, size - offset * 512), offset * 512)
         following = os.pread(chain, 32, index * 32)
-        require(len(data) == min(CHUNK, size - offset * 512) and len(following) == 32, 'Sealed candidate changed.')
+        require(len(data) == min(WRITE_CHUNK, size - offset * 512) and len(following) == 32, 'Sealed candidate changed.')
         intent = dict(nonce=g['nonce'], sequence=client.sequence + 1, sector=g['first'] + offset, bytes=len(data), sha256=digest(data).hex(), next_commitment=following.hex())
         _, receipt = store.record(f'intent-{index:08d}.json', intent)
         _, readback = client.call(4, offset, data, receipt, following)

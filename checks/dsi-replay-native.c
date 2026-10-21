@@ -10,7 +10,11 @@
 #include "../apps/dsi-scanout/input.h"
 #include "a733_storage_digest.h"
 static uint8_t *uploads[2],present_headers[3][96];static size_t upload_bytes[2],upload_at[2];
-static unsigned upload_slot,completed,replay_fault,rcq_pending,rcq_copied,frame_pending;
+static unsigned upload_slot,completed,replay_fault,rcq_pending,rcq_copied;
+/* FRAME_END latches on a fixed pseudo-random half of status reads,
+ * independent of the driver step, so it lands between W1C clears and their
+ * readbacks as a free-running vblank can. */
+static uint32_t status_reads;static unsigned races4,races17;
 static const char *output_directory;
 static uintptr_t translated(uint64_t iova,size_t bytes)
 {
@@ -30,14 +34,17 @@ int a733_display_native_read(uintptr_t address,uint32_t *out)
    *word(A733_DE_BASE+h[3])=*(uint32_t *)translated(h[0],4);*word(address)|=4;
    if(replay_fault==1)*word(A733_DE_BASE+h[3])^=4;
   }
-  if(de->step==18&&frame_pending){*word(address)|=1;frame_pending=0;}
+  status_reads=status_reads*1103515245u+12345u;if((status_reads>>16)&1)*word(address)|=1;
+  int r=previous_display_read(address,out);
+  if(r&&(*out&1)){races4+=de->step==4;races17+=de->step==17;}
+  return r;
  }
  return previous_display_read(address,out);
 }
 int a733_display_native_write(uintptr_t address,uint32_t value)
 {
  uint32_t old=*word(address);int r=previous_display_write(address,value);
- if(address==A733_DE_BASE+0x8144){*word(address)=old&~(value&13u);if(dsi.native.binding.scanout.de.step==16)frame_pending=1;}
+ if(address==A733_DE_BASE+0x8144)*word(address)=old&~(value&13u);
  if(address==A733_DE_BASE+0x8150&&(value&1)){rcq_pending=1;rcq_copied=0;*word(address)=0;}
  return r;
 }
@@ -49,6 +56,8 @@ int a733_display_native_rcq_submit(void)
 }
 void vTaskDelay(TickType_t ticks)
 {
+ if(!ticks){assert(dsi.stage==4&&dsi.pll.held&&pm.register_held);return;}
+ assert(!dsi.pll.held);
  assert(ticks==1);pm.now+=1000;
  if(atomic_load_explicit(&dsi.input.allocated,memory_order_acquire)&&upload_slot<2){
   size_t n=dsi_input_remaining(&dsi.input);if(n>512)n=512;if(n>upload_bytes[upload_slot]-upload_at[upload_slot])n=upload_bytes[upload_slot]-upload_at[upload_slot];
@@ -61,6 +70,8 @@ void vTaskDelay(TickType_t ticks)
  if(atomic_load_explicit(&dsi.input.request,memory_order_acquire)==3){
   char name[1024];assert(snprintf(name,sizeof(name),"%s/present-%u.bin",output_directory,completed+1)>0);
   FILE *f=fopen(name,"wb");assert(f&&fwrite(dsi.replay_result,1,256,f)==256&&!fclose(f));
+  uint64_t rcq_done,frame_end;memcpy(&rcq_done,dsi.replay_result+56,8);memcpy(&frame_end,dsi.replay_result+64,8);
+  assert(rcq_done&&frame_end>rcq_done);
   ++completed;atomic_store_explicit(&dsi.input.request,0,memory_order_release);
   if(completed==3)longjmp(done,1);
  }
@@ -79,7 +90,8 @@ int main(int argc,char **argv)
  board.admitted_session=input.board;board.session=input.board;board.session.session_start_ticks=0;board.session.deadline_us=60000000;
  application_setup();if(!setjmp(done))dsi_task(0);
  if(replay_fault){assert(atomic_load(&dsi.result)==2&&completed==0);assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_RETAINED&&device_memory_lookup(&memory_pool,dsi.tables)->state==DEVICE_MEMORY_RETAINED);}
- else {assert(completed==3&&dsi.iommu.state==A733_IOMMU_ACTIVE);uint8_t hash[32];
+ else {fprintf(stderr,"frame-end at clear readbacks: step4 %u, step17 %u\n",races4,races17);
+ assert(completed==3&&dsi.iommu.state==A733_IOMMU_ACTIVE&&races4&&races17);uint8_t hash[32];
  for(unsigned i=0;i<2;++i){storage_digest_bytes((void *)(dsi.frame_extent.cpu+i*dsi_frame_bytes(&input)),dsi_frame_bytes(&input),hash);assert(!memcmp(hash,input.replay.hashes[i],32));}
  assert(a733_de_replay_valid((void *)(dsi.frame_extent.cpu+2*dsi_frame_bytes(&input)),0x10000000,dsi_frame_bytes(&input)));}
  printf("PASS actual %ux%u two-upload/three-replay native composition %s; immutable bank retained; no retirement\n",input.values[3],input.values[4],argv[8]);

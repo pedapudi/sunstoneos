@@ -60,13 +60,17 @@ The actual component sources are unchanged.
 
 USB0 uses the existing native provider and patched programmed-I/O DCD. A host
 sends one zero byte to the vendor interface. The 72-byte response header contains
-six little-endian 32-bit words: magic `0x52414f42`, version one, USB state, sector
-length, radio state and verified radio-byte count. Two little-endian 64-bit
+six little-endian 32-bit words: magic `0x52414f42`, payload kind, USB state,
+payload length, radio state and verified radio-byte count. Two little-endian 64-bit
 values identify the session epoch and generation; the final 32 bytes identify
 the admitted radio profile SHA256.
 
-USB state zero means pending, one means a completed copied sector, and two means
-retained failure. Only USB state one carries a 512-byte payload after the header.
+USB state zero means pending, one means a completed copied result, and two means
+retained failure. The payload kind identifies the result: one is a USB mass-storage
+sector, two is HID input, three is a combined storage sector and HID input, and
+four is a SuperSpeed storage sector. Only USB state one carries a payload after
+the header: 512 bytes for kinds one and two, 1,088 bytes for kind three and
+544 bytes for kind four. Other states report kind one.
 Radio state zero means disabled, one means pending, two means a full response
 comparison followed by successful TCP CLOSE, and three means failure. Only
 radio state two carries a nonzero verified-byte count. The host observer
@@ -76,9 +80,12 @@ bytes remain immutable until the session expires.
 
 The immutable workload selector chooses USB only or USB with native radio.
 USB-only execution uses one externally armed watchdog window. Radio firmware
-contains 391,000 bytes, requiring at least 7.82 seconds at the initial one-bit
-400 kHz SDIO rate before protocol overhead. The four-second watchdog therefore
-requires renewal during radio startup.
+loading moves about 2.04 MB over the bus because the engine pads each
+patch-table write to a 512-byte block, so it needs at least 46.7 seconds at the
+admitted one-bit 400 kHz SDIO rate. The four-second watchdog therefore requires
+renewal during radio startup. That load also exceeds the forty-second bootstrap
+bound described below; [the radio component](board-radio.md) records the
+budget check and the resulting restriction on board tests.
 
 The radio supervisor uses the existing hardware reload mechanism. Only an
 increased count of successfully completed nonempty SDIO transactions earns a
@@ -197,12 +204,17 @@ returns the existing 72-byte header and optional copied sector. Fresh epoch,
 generation and lease identify each prepared session; the response binds epoch,
 generation and the profile hash. There is no separate challenge field.
 
-Supervised radio input uses profile version two with the same 1856-byte layout.
+Supervised radio input uses the 1,872-byte radio profile. Profile versions three
+and five are the native client and listener profiles; supervised input uses
+version four or six, and boot converts it to three or five respectively.
 Uploaded platform/CE handoffs and absolute deadline fields must be zero. After
 validating the raw session/profile hash, boot copies the profile into private
 lifetime storage. It derives handoffs from the admitted generation, a forty-second
 bootstrap bound, a fifty-second startup bound, and a client lifetime ending ten
-milliseconds before the sixty-second session deadline. The private copy uses the
+milliseconds before the session deadline. The session length comes from
+`A733_BOARD_SUPERVISED_SECONDS`, which is sixty seconds for this board image.
+An image built with a session too short to contain the fifty-second startup
+bound refuses every radio profile. The private copy uses the
 existing native constructor version and its own computed digest. Physical
 qualification, chip identity, health epoch, firmware spans and peer data remain
 unchanged. USB output identifies the original reviewed raw-profile digest.

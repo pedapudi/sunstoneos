@@ -152,7 +152,7 @@ def main():
         str(ROOT / 'platform/a733-smp-cached/link-devices.ld'), '-Map=' + str(out / 'native.map'),
         *map(str, native), '-o', str(elf_path)])
     # Compile real startup callers and direct/transitive reservation consumers once.
-    closure = ['platform/a733/dma_reserved.c', 'platform/a733/gpu_reserved.c',
+    closure = ['platform/a733/gpu_reserved.c',
                'platform/a733/gpu_compute_reserved.c', 'platform/a733/npu_reserved.c',
                'drivers/crypto/a733_ce_native.c', 'drivers/crypto/a733_ce_session.c',
                'drivers/crypto/a733_ce_entropy.c', 'drivers/crypto/a733_ce_hash.c',

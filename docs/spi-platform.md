@@ -67,6 +67,11 @@ CS polarity to an active-high peripheral.
 Application calls use platform submit, poll and reap wrappers. The underlying
 controller is private. Each new command validates the live registry token,
 pin ownership, pin-manager health and actual native clock/interrupt state.
+A poll during a transfer reads that clock/interrupt profile once, through the
+core's admission callback under the same mutex hold. A poll that the core
+answers without admission reads the profile in the platform instead. FIFO byte
+accesses carry no per-byte clock reads; the core checks its deadline around each
+FIFO batch.
 Idle polling returns cached READY or COMPLETE; it does not extend a completed
 operation's deadline. Submit, reap and close supply fresh absolute deadlines.
 Successful reap releases borrowed buffers after every fallible admission check.

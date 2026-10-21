@@ -42,6 +42,9 @@ static int current(void)
  }
  last_time=now;return state!=NR_FAILED;
 }
+/* USB owner poll: latch request expiry without building a response frame. */
+void npu_runtime_expire(void)
+{(void)current();}
 int npu_runtime_header(const uint8_t p[64])
 {
  if(!current())return -1;

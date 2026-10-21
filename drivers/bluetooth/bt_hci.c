@@ -3,6 +3,7 @@
  * Protocol values and field lengths are checked against separately retained
  * Linux reference structures; no Linux implementation code is included. */
 #include "bt_hci.h"
+#include "bt_memory.h"
 #define HCI_OP_RESET 0x0c03u
 #define HCI_OP_READ_LOCAL_VERSION 0x1001u
 #define HCI_OP_READ_LOCAL_COMMANDS 0x1002u
@@ -25,15 +26,13 @@ static uint16_t config_opcode(const struct bt_hci *h,unsigned stage)
 {return h->incoming_config.synchronous_audio ? audio_opcodes[stage] : config_opcodes[stage];}
 static unsigned config_return(const struct bt_hci *h,unsigned stage)
 {return h->incoming_config.synchronous_audio ? audio_returns[stage] : config_returns[stage];}
-/* Core5.4 §7.3.1: all defined Classic events; reserved and LE bits stay0.
+/* Core5.4 §7.3.1: only Classic events a stack owner consumes. Connection,
+ * disconnection, authentication, encryption, remote features, hardware error,
+ * flush, PIN/link-key, synchronous link, key refresh and SSP events stay
+ * enabled. Every other event would occupy a receive slot without an owner.
  * Command Complete/Status and Number Of Completed Packets are unmaskable. */
-static const uint8_t config_mask[]={0xff,0x9f,0xfb,0xbf,0x07,0xf8,0xbf,0x1d};
+static const uint8_t config_mask[]={0xbc,0x84,0xe1,0x00,0x00,0x98,0x2f,0x04};
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
-static int overlaps(const void *a, size_t an, const void *b, size_t bn)
-{
-    return an && bn && ((uintptr_t)a <= (uintptr_t)b ?
-        (uintptr_t)b-(uintptr_t)a < an : (uintptr_t)a-(uintptr_t)b < bn);
-}
 static int fail(struct bt_hci *h)
 { bt_h4_fail(&h->transport);h->state=BT_HCI_FAULT;return -1; }
 int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
@@ -42,9 +41,9 @@ int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
 {
     if(!h || !b || !s || count<2 || count>BT_H4_SLOTS || !timeout || !deadline ||
        h->state!=BT_HCI_CLOSED || !b->uart ||
-       overlaps(h,sizeof(*h),b,sizeof(*b)) || overlaps(h,sizeof(*h),s,count*sizeof(*s)) ||
-       overlaps(h,sizeof(*h),b->uart,sizeof(*b->uart))) return -1;
-    for(unsigned i=0;i<count;++i) if(overlaps(h,sizeof(*h),s[i].bytes,s[i].capacity)) return -1;
+       !bt_range_disjoint_empty(h,sizeof(*h),b,sizeof(*b)) || !bt_range_disjoint_empty(h,sizeof(*h),s,count*sizeof(*s)) ||
+       !bt_range_disjoint_empty(h,sizeof(*h),b->uart,sizeof(*b->uart))) return -1;
+    for(unsigned i=0;i<count;++i) if(!bt_range_disjoint_empty(h,sizeof(*h),s[i].bytes,s[i].capacity)) return -1;
     /* H4 validates all storage before mutation; its initial callback may fail
      * after admission. Such failure retains the outer lifetime too. */
     int result=bt_h4_init(&h->transport,b,s,count,deadline);
@@ -85,8 +84,8 @@ int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_conf
        c->page_interval_slots<0x0012 || c->page_interval_slots>0x1000 || (c->page_interval_slots&1) ||
        c->page_window_slots<0x0011 || c->page_window_slots>c->page_interval_slots ||
        c->receive_latency_us>=(uint64_t)c->accept_timeout_slots*625-1 ||
-       overlaps(c,sizeof(*c),h,sizeof(*h)) ||
-       overlaps(c,sizeof(*c),h->transport.binding.uart,sizeof(struct a733_uart)) ||
+       !bt_range_disjoint_empty(c,sizeof(*c),h,sizeof(*h)) ||
+       !bt_range_disjoint_empty(c,sizeof(*c),h->transport.binding.uart,sizeof(struct a733_uart)) ||
        h->transport.state!=BT_H4_ACTIVE || h->transport.staged ||
        h->transport.assembling!=h->transport.count || h->transport.tx_offset!=h->transport.tx_length ||
        (h->identity.features[4]&0x20u) || (h->identity.supported_commands[1]&3u)!=3u ||
@@ -95,7 +94,7 @@ int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_conf
        (h->identity.supported_commands[8]&3u)!=3u) return -1;
     for(unsigned i=0;i<h->transport.count;++i)
         if(h->transport.records[i].owner!=BT_H4_FREE ||
-           overlaps(c,sizeof(*c),h->transport.records[i].storage.bytes,
+           !bt_range_disjoint_empty(c,sizeof(*c),h->transport.records[i].storage.bytes,
                     h->transport.records[i].storage.capacity)) return -1;
     struct bt_hci_incoming_config copied=*c;
     if(copied.current(copied.context,&h->transport.binding,copied.service_generation,copied.receive_latency_us)!=1) return -1;
@@ -113,7 +112,7 @@ int bt_hci_incoming_bound(struct bt_hci *h,uint64_t response)
 }
 static int request(struct bt_hci *h,uint16_t opcode,const uint8_t *p,size_t n,uint64_t deadline)
 {
-    if(!h || h->self!=h || !deadline || !p || overlaps(h,sizeof(*h),p,n))return -1;
+    if(!h || h->self!=h || !deadline || !p || !bt_range_disjoint_empty(h,sizeof(*h),p,n))return -1;
     if(h->state!=BT_HCI_IDENTIFIED) return -1;
     if(h->command!=BT_HCI_IDLE || !h->credits ||
        h->transport.tx_offset<h->transport.tx_length) return 0;
@@ -142,7 +141,7 @@ int bt_hci_synchronous_request(struct bt_hci *h,const void *owner,uint16_t op,co
 int bt_hci_security_register(struct bt_hci *h,const void *owner)
 {
     if(!h||h->self!=h||!owner||h->security_owner||h->state!=BT_HCI_IDENTIFIED||
-        h->command!=BT_HCI_IDLE||overlaps(h,sizeof(*h),owner,1))return -1;
+        h->command!=BT_HCI_IDLE||!bt_range_disjoint_empty(h,sizeof(*h),owner,1))return -1;
     h->security_owner=owner;return 1;
 }
 int bt_hci_security_acknowledge(struct bt_hci *h,const void *owner,uint64_t tag)

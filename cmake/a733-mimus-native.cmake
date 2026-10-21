@@ -10,12 +10,14 @@ option(SUNSTONE_MIMUS_SUPERVISED "Retained mimus session with manual whole-board
 set(mimus_native_build "${CMAKE_CURRENT_BINARY_DIR}/mimus-native")
 file(MAKE_DIRECTORY "${mimus_native_build}")
 get_target_property(mimus_native_sources sunstone-a733-storage-maintenance SOURCES)
+# runtime/memory.c and memmove.c stay linked: they replace newlib's SIMD string
+# routines, which fault when EL3 boot code clears or copies Device memory.
 foreach(source IN ITEMS
   platform/a733-storage-maintenance/main.c platform/a733-storage-maintenance/session.c platform/a733-storage-maintenance/admission.c
   platform/a733-storage-update/bootstrap.c platform/a733-storage-update/worker.c platform/a733-storage-update/usb.c
   drivers/watchdog/a733_maintenance_watchdog.c drivers/storage/a733_storage_update.c
   drivers/storage/storage_update_usb.c drivers/storage/a733_mmc_platform.c
-  drivers/storage/a733_mmc_platform_native.c drivers/storage/sunxi_mmc.c runtime/memory.c runtime/memmove.c)
+  drivers/storage/a733_mmc_platform_native.c drivers/storage/sunxi_mmc.c)
   list(REMOVE_ITEM mimus_native_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 list(REMOVE_ITEM mimus_native_sources "${storage_build}/build-id.c")

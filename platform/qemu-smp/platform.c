@@ -107,18 +107,21 @@ void platform_init(void) {
     local_init();
     write32(GICD, (1U << 6) | (1U << 4) | 2); wait_clear(GICD, 1U << 31);
     // QEMU uses HVC for PSCI when virtualization=off.
-    register uint64_t id __asm__("x0") = 0xc4000003;
-    register uint64_t affinity __asm__("x1") = 1;
-    register uint64_t entry __asm__("x2") = (uintptr_t)_start;
-    register uint64_t context __asm__("x3") = 0;
-    __asm__ volatile("dsb sy\n hvc #0" : "+r"(id) : "r"(affinity), "r"(entry), "r"(context) : "memory");
-    configASSERT(id == 0);
+    for (uint64_t cpu = 1; cpu < configNUMBER_OF_CORES; ++cpu) {
+        register uint64_t id __asm__("x0") = 0xc4000003;
+        register uint64_t affinity __asm__("x1") = cpu;
+        register uint64_t entry __asm__("x2") = (uintptr_t)_start;
+        register uint64_t context __asm__("x3") = 0;
+        __asm__ volatile("dsb sy\n hvc #0" : "+r"(id) : "r"(affinity), "r"(entry), "r"(context) : "memory");
+        configASSERT(id == 0);
+    }
     uint64_t end = counter() + frequency();
-    while (!__atomic_load_n(&cpu_online, __ATOMIC_ACQUIRE)) configASSERT(counter() < end);
+    while (__atomic_load_n(&cpu_online, __ATOMIC_ACQUIRE) != configNUMBER_OF_CORES - 1)
+        configASSERT(counter() < end);
 }
 void platform_secondary(void) {
     local_init();
-    __atomic_store_n(&cpu_online, 1, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&cpu_online, 1, __ATOMIC_RELEASE);
     uint64_t end = counter() + frequency();
     while (!__atomic_load_n(&ucPrimaryCoreInitDoneFlag, __ATOMIC_ACQUIRE)) configASSERT(counter() < end);
     __atomic_store_n(&ucSecondaryCoresReadyFlags[core() - 1], 1, __ATOMIC_RELEASE);

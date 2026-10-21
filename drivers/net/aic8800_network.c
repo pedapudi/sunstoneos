@@ -141,9 +141,13 @@ size_t uxNetworkInterfaceAllocateRAMToBuffers(NetworkBufferDescriptor_t descript
 BaseType_t xApplicationGetRandomNumber(uint32_t *value)
 {
     struct aic8800_network *n=stack_owner;
-    if(!n||atomic_load(&n->failed)||!value||n->config.random32(n->config.entropy_context,value)!=1){
-        if(value)*value=0;aic8800_network_fault(n);return pdFALSE;}
-    return pdTRUE;
+    int r=n&&!atomic_load(&n->failed)&&value?n->config.random32(n->config.entropy_context,value):-1;
+    if(r==1)return pdTRUE;
+    /* The stack handles pdFALSE per use, so a temporary shortage or contention
+     * (0) fails only this call. Any other refusal closes output. */
+    if(value)*value=0;
+    if(r!=0)aic8800_network_fault(n);
+    return pdFALSE;
 }
 uint32_t ulApplicationGetNextSequenceNumber(uint32_t source,uint16_t sport,uint32_t destination,uint16_t dport)
 {

@@ -1,7 +1,11 @@
 #ifndef SUNSTONE_SMP_CONFIG_H
 #define SUNSTONE_SMP_CONFIG_H
 #include "../../include/FreeRTOSConfig.h"
-#define configNUMBER_OF_CORES 2
+// The default emulator target has two cores; smp8-* targets define eight.
+#ifndef SUNSTONE_SMP_CORES
+#define SUNSTONE_SMP_CORES 2
+#endif
+#define configNUMBER_OF_CORES SUNSTONE_SMP_CORES
 #define configUSE_CORE_AFFINITY 1
 #define configRUN_MULTIPLE_PRIORITIES 1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0

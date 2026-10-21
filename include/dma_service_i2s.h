@@ -1,20 +1,12 @@
 #ifndef SUNSTONE_DMA_SERVICE_I2S_H
 #define SUNSTONE_DMA_SERVICE_I2S_H
-#include "a733_i2s.h"
+#include "dma_service.h"
 
-/* Trusted startup profile. Callback state and all parent leases outlive the
- * service. Only the DMA service worker may operate this binding or capture. */
-struct dma_service_i2s_profile {
-    struct a733_i2s_format format;
-    struct a733_i2s_operations operations;
-    void *cookie;
-};
-int dma_service_i2s_profile_valid(const struct dma_service_i2s_profile *);
-int dma_service_i2s_profile_equal(const struct dma_service_i2s_profile *,
-                                const struct dma_service_i2s_profile *);
-/* Relative microseconds become a finite absolute resource deadline. Capture
- * duration remains in DMA counter ticks. Call only from the privileged worker. */
-enum a733_i2s_status dma_service_i2s_open(struct a733_i2s_capture *,
-    const struct dma_service_i2s_profile *, struct a733_dma_controller *, unsigned, uint64_t timeout_us);
-enum a733_i2s_status dma_service_i2s_close(struct a733_i2s_capture *, uint64_t timeout_us);
+/* Private to the DMA service. Each channel that runs I2S stream jobs receives
+ * one context in dma_service.streams before any job can open. The binding never
+ * changes, so a retained or duplex-paired stream keeps its address for the
+ * service lifetime. Returns 0 when the jobs need more contexts than exist. */
+int dma_service_i2s_bind(struct dma_service *, const struct dma_service_job *, unsigned count);
+/* The stream context of a channel, or NULL when no stream job uses it. */
+struct a733_i2s_stream *dma_service_i2s_stream(struct dma_service *, unsigned channel);
 #endif

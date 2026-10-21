@@ -125,12 +125,50 @@ python3 tools/check-smp.py "$cache/build/qemu-virt/smp-context-model.elf" \
   --evidence "$cache/evidence/smp-context-check.json"
 ```
 
+## Eight emulated cores pass a scheduling soak
+
+The `smp8-soak-model` target builds the same port, platform and kernel sources
+with `SUNSTONE_SMP_CORES=8`. The platform then starts seven secondaries through
+PSCI and reserves eight exception stacks. The two-core targets are unchanged.
+
+The [soak check](../checks/smp8-soak.c) runs four kinds of work at once:
+
+- A token makes 64 laps of a ring of eight queues, one receiving task pinned to
+  each core. Every hop wakes a task on the next core through a queue operation
+  and its interprocessor interrupt. Each task checks the hop count it receives.
+- Every ring hop and every mover iteration updates 16 shared words under one
+  mutex and checks that no other core changed them mid-update.
+- Two tasks migrate through all eight cores in 32 rounds. The control task sets
+  each new affinity and waits, with a one-second bound, until the task reports
+  running on that core. Each visit holds a callee-saved FP register across a
+  blocking delay.
+- A lowest-priority task pinned to each core never yields and checks its own FP
+  register and core. The check requires progress from all eight, so the tick and
+  interprocessor interrupts must preempt every core.
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+cmake --build "$cache/build/qemu-virt" --target smp8-soak-model -j 8
+python3 tools/check-smp.py "$cache/build/qemu-virt/smp8-soak-model.elf" \
+  --case soak8 --trials 10 --qemu "$cache/host/usr/bin/qemu-system-aarch64" \
+  --evidence "$cache/evidence/smp8-soak.json"
+```
+
+Ten consecutive trials passed on 2026-10-20. QEMU runs identical Cortex-A55
+models with sequentially consistent memory, so the soak establishes kernel and
+port behavior with eight participants, not A733 timing, A55/A76 differences or
+physical coherence. It uses the QEMU platform, not the A733 cached platform.
+
 ## Requirements before application and physical integration
 
-Physical integration requires independent watchdog recovery, A733 core power and
-reset sequencing, logical-to-hardware affinity translation, and per-core monitor
-state. The current physical monitor and startup remain single-core.
-The emulator's CPU_ON service does not implement those board operations.
+The emulator's CPU_ON service does not implement the A733 core power, reset and
+affinity operations. Those are implemented natively: all eight physical cores
+reach their first FreeRTOS task context, pass the production barrier and 256
+shared atomic increments, and shut down to independently observed OFF. Task
+bodies, timer preemption on every core and sustained workloads remain modeled
+only. [Supervised startup](a733-smp-supervised.md) records the physical
+checkpoints; the [reference audit](a733-multicore-reference-audit.md) records the
+architectural decisions.
 
 The separate [SMP C/C++ runtime](smp-runtime.md) supplies task-local library
 state and passes concurrent allocation and shared-stream checks in QEMU.

@@ -2,21 +2,20 @@
 /* Original bounded implementation of Bluetooth Core BR/EDR L2CAP basic mode.
  * Published kernel wire structures are retained in external reference fixtures. */
 #include "bt_l2cap.h"
+#include "bt_memory.h"
 static uint16_t get16(const uint8_t *p) {return (uint16_t)p[0]|((uint16_t)p[1]<<8);}
 static void put16(uint8_t *p,unsigned n) {p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static void copy(uint8_t *d,const uint8_t *s,size_t n) {for(size_t i=0;i<n;++i)d[i]=s[i];}
 static int equal(const uint8_t *a,const uint8_t *b,size_t n)
 {for(size_t i=0;i<n;++i)if(a[i]!=b[i])return 0;return 1;}
-static int overlaps(const void *a,size_t an,const void *b,size_t bn)
-{return an && bn && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn);}
 static int outside(const struct bt_l2cap *q,const void *p,size_t n)
 {
     if(!n)return 1;
-    if(!p || (uintptr_t)p>UINTPTR_MAX-(n-1) || overlaps(q,sizeof(*q),p,n) ||
-       overlaps(q->acl,sizeof(*q->acl),p,n) || overlaps(q->acl->hci,sizeof(*q->acl->hci),p,n) ||
-       overlaps(q->acl->hci->transport.binding.uart,sizeof(struct a733_uart),p,n))return 0;
+    if(!p || (uintptr_t)p>UINTPTR_MAX-(n-1) || !bt_range_disjoint_empty(q,sizeof(*q),p,n) ||
+       !bt_range_disjoint_empty(q->acl,sizeof(*q->acl),p,n) || !bt_range_disjoint_empty(q->acl->hci,sizeof(*q->acl->hci),p,n) ||
+       !bt_range_disjoint_empty(q->acl->hci->transport.binding.uart,sizeof(struct a733_uart),p,n))return 0;
     for(unsigned i=0;i<q->acl->hci->transport.count;++i)
-        if(overlaps(p,n,q->acl->hci->transport.records[i].storage.bytes,
+        if(!bt_range_disjoint_empty(p,n,q->acl->hci->transport.records[i].storage.bytes,
                     q->acl->hci->transport.records[i].storage.capacity))return 0;
     return 1;
 }
@@ -128,14 +127,14 @@ static int initialize(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t 
     if(!q || !a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->l2cap_owner ||
        q->state!=BT_L2CAP_OFF || a->state!=BT_ACL_ACTIVE || !authorize ||
        mtu<48 || mtu>BT_L2CAP_MTU || timeout<1000000 || timeout>60000000 || ertx<60000000 || ertx>300000000 ||
-       overlaps(q,sizeof(*q),a,sizeof(*a)) || overlaps(q,sizeof(*q),a->hci,sizeof(*a->hci)) ||
-       overlaps(q,sizeof(*q),a->hci->transport.binding.uart,sizeof(struct a733_uart)))return -1;
+       !bt_range_disjoint_empty(q,sizeof(*q),a,sizeof(*a)) || !bt_range_disjoint_empty(q,sizeof(*q),a->hci,sizeof(*a->hci)) ||
+       !bt_range_disjoint_empty(q,sizeof(*q),a->hci->transport.binding.uart,sizeof(struct a733_uart)))return -1;
     if(bootstrap&&(bootstrap!=&a->hci->transport.binding||!bootstrap->firmware_generation||
         !bootstrap->uart_generation||bootstrap->current(bootstrap->context,bootstrap->firmware_generation,bootstrap->uart_generation)!=1))return -1;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)if(a->packets[i].state!=BT_ACL_TX_FREE)return -1;
     for(unsigned i=0;i<a->hci->transport.count;++i) {
         const struct bt_h4_record *r=&a->hci->transport.records[i];
-        if(overlaps(q,sizeof(*q),r->storage.bytes,r->storage.capacity) ||
+        if(!bt_range_disjoint_empty(q,sizeof(*q),r->storage.bytes,r->storage.capacity) ||
            (!bootstrap&&r->owner!=BT_H4_FREE && r->type==2))return -1;
     }
     if((!bootstrap&&(a->hci->transport.staged || a->hci->transport.assembling!=a->hci->transport.count)) ||
@@ -179,7 +178,7 @@ int bt_l2cap_close(struct bt_l2cap *q,uint64_t identity,uint64_t bound)
 int bt_l2cap_send(struct bt_l2cap *q,uint64_t identity,const uint8_t *p,size_t n,uint64_t bound,uint64_t *serial)
 {
     if(!q || q->state!=BT_L2CAP_ACTIVE || !serial || !outside(q,serial,sizeof(*serial)) ||
-       !outside(q,p,n) || overlaps(p,n,serial,sizeof(*serial)) || n>BT_L2CAP_MTU ||
+       !outside(q,p,n) || !bt_range_disjoint_empty(p,n,serial,sizeof(*serial)) || n>BT_L2CAP_MTU ||
        bound<=q->acl->hci->transport.now)return -1;
     struct bt_l2cap_channel *c=owned_channel(q,identity);
     if(!c || c->state!=BT_L2CAP_OPEN || !live(q,c->link) || n>c->remote_mtu)return -1;
@@ -447,7 +446,17 @@ static int receive_acl(struct bt_l2cap *q,const struct bt_h4_record *record)
     if((flags&0xc000) || (pb!=1 && pb!=2) || n!=record->length-4)return fault(q,BT_L2CAP_PROTOCOL);
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->acl->links[i].handle==h &&
        q->acl->links[i].state==BT_ACL_CONNECTED && !q->acl->links[i].flush_seen){li=i;break;}
-    if(li==BT_ACL_LINKS)return fault(q,BT_L2CAP_OWNERSHIP);
+    if(li==BT_ACL_LINKS) {
+        /* Peer data may precede Disconnection Complete after a local Disconnect.
+         * The link's channels are already quarantined, so discard the frame and
+         * any partial PDU; a later continuation on a restored link then faults. */
+        for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->acl->links[i].handle==h &&
+           q->acl->links[i].state>=BT_ACL_DISCONNECT_QUEUED && q->acl->links[i].state<=BT_ACL_DISCONNECTING) {
+            if(q->assembling[i]!=BT_L2CAP_PDUS){q->rx[q->assembling[i]].state=BT_L2CAP_FREE;q->assembling[i]=BT_L2CAP_PDUS;}
+            return bt_acl_receive_release(q->acl,record->serial)==1 ? 1 : fault(q,BT_L2CAP_LOWER);
+        }
+        return fault(q,BT_L2CAP_OWNERSHIP);
+    }
     if(!n)return bt_acl_receive_release(q->acl,record->serial);
     struct bt_l2cap_pdu *r;
     if(pb==2) {

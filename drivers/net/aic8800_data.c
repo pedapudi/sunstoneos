@@ -66,8 +66,7 @@ int aic8800_data_send(struct aic8800_data *d,const void *owner,const uint8_t *p,
     if(control)d->result.sequence=d->next_sequence++;
     for(unsigned i=0;i<sizeof(d->request);++i)d->request[i]=0;
     uint8_t *q=d->request;size_t payload=n-14,length=28+payload;
-    put16(q,(uint16_t)length);q[2]=1;uint8_t crc=0;
-    for(unsigned i=0;i<3;++i){crc^=q[i];for(unsigned j=0;j<8;++j)crc=(uint8_t)((crc<<1)^((crc&128)?7:0));}q[3]=crc;
+    put16(q,(uint16_t)length);q[2]=1;q[3]=aic8800_sdio_header_crc(q);
     put16(q+4,(uint16_t)payload);if(control)put32(q+8,0x80000000u|d->result.sequence);
     for(unsigned i=0;i<14;++i)q[12+i]=p[i];
     q[26]=1; /* AC_BE */ q[27]=d->wifi->peer_qos?0:0xff;

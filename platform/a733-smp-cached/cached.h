@@ -26,4 +26,10 @@ int a733_cached_allow_ns_code(void);
 _Noreturn void a733_cached_enter_el1(unsigned core,uint64_t epoch,uint64_t startup,uint64_t diagnostic,uint64_t rdist);
 _Noreturn void a733_cached_el1(unsigned core,uint64_t epoch,uint64_t startup,uint64_t diagnostic,uint64_t rdist);
 _Noreturn void a733_cached_smc(unsigned status,uint64_t detail);
+/* SMP builds add the two-core QEMU configuration directory to the include
+ * path; A733 images rely on include order to select this platform's file.
+ * Every translation unit that includes FreeRTOS.h first checks the result. */
+#if defined(configNUMBER_OF_CORES) && configNUMBER_OF_CORES != 8
+#error "A733 SMP images require the eight-core FreeRTOSConfig.h"
+#endif
 #endif

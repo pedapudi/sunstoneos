@@ -26,6 +26,9 @@ allocating a page. A second construction is refused, including one using a
 different token. Failed construction can undo that reservation only while the
 session remains uninitialized. An initialized or fault-retained owner persists
 for its entire lifetime. Both constructors use the actual singleton linker pool.
+The entropy constructor checks its TRNG capability and object placement, then
+calls the session constructor and attaches the entropy client to that session.
+If attachment fails after the session is bound, the session is retained.
 Portable binding requires equivalent exclusion of every other controller or
 session borrowing the same token or physical engine.
 
@@ -55,7 +58,14 @@ A 208-byte descriptor occupies 256 private bytes at the page start. Separate
 cache lines hold the output at offset 256, the intermediate state at offset 320
 and up to 2048 input bytes at offset 384. Native publication cleans descriptor,
 state and input, then cleans and invalidates the output. Successful completion
-invalidates the output before CPU acquisition. All referenced physical spans
+invalidates the output before CPU acquisition. After the controller copies the
+digest and stops the task, it zeros the output, intermediate state and input
+lines and cleans them under the register mutex. The input, digest and an
+HMAC-style intermediate state therefore do not remain in the retained page.
+A failed scrub withholds the digest and retains the session. Cache maintenance
+uses the shared AArch64 device-cache helper, which refuses an unknown or
+larger-than-64-byte writeback granule, a caller outside EL1 and a disabled MMU
+or data cache. All referenced physical spans
 must be admitted as CE-accessible RAM; encoding an address does not establish
 its reachability or security permissions.
 

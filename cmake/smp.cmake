@@ -35,3 +35,23 @@ foreach(target IN ITEMS smp-kernel-model smp-context-model)
   set_target_properties(${target} PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
 endforeach()
+
+# Eight-core emulator soak over the same port and platform sources.
+add_executable(smp8-soak-model EXCLUDE_FROM_ALL
+  platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
+  checks/smp8-soak.c checks/fp-context.S
+  "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+  "${smp_build}/port.c" "${smp_build}/portASM.S")
+target_include_directories(smp8-soak-model PRIVATE platform/qemu-smp include runtime/include
+  "${FREERTOS_DIR}/include" "${smp_build}")
+target_compile_definitions(smp8-soak-model PRIVATE SUNSTONE_SMP_CORES=8)
+target_compile_options(smp8-soak-model PRIVATE
+  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
+  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
+  -O2 -g -Wall -Wextra)
+target_link_options(smp8-soak-model PRIVATE -nostdlib -static -Wl,--gc-sections
+  -Wl,--defsym=SUNSTONE_SMP_STACKS=8
+  "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+  "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/smp8-soak-model.map")
+set_target_properties(smp8-soak-model PROPERTIES SUFFIX ".elf"
+  LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")

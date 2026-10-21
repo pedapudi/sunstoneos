@@ -34,7 +34,8 @@ enum a733_ce_hash_result a733_ce_hash_update(struct a733_ce_hash *,uint64_t,cons
  * bit length. Empty messages and exact block multiples are supported. */
 enum a733_ce_hash_result a733_ce_hash_final(struct a733_ce_hash *,uint64_t);
 /* Output changes only on DIGEST, once per stream. READY requests more input or
- * finalization. Failure clears private CPU staging and retains the actual page,
+ * finalization. Each successful task zeros and cleans the DMA output, IV and
+ * input after copying. Failure clears private CPU staging and retains the actual page,
  * token and active client slot; DMA memory is not cleared after uncertainty.
  * No cancellation, reset or resource reclamation is provided. */
 enum a733_ce_hash_result a733_ce_hash_poll(struct a733_ce_hash *,uint64_t,uint8_t digest[32]);

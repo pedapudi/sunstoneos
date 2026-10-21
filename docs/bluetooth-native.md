@@ -504,8 +504,12 @@ Wideband advertisement requires the reported local eSCO and transparent-data
 features. The AG advertises codec negotiation in BRSF bit 9 and wideband in SDP
 bit 5. After the HF advertises negotiation support and supplies BAC, the AG
 selects only a codec in that list. A matching BCS command and complete local
-acceptance of its OK response precede synchronous setup. A changed BAC cancels
-an outstanding selection. Invalid or missing BCS cannot establish audio.
+acceptance of its OK response precede synchronous setup. HFP lets the HF send
+BAC again at any time. A new list cancels an outstanding offer. It keeps the
+selected codec when the list still contains that codec and clears the selection
+otherwise, so the AG must select again before the next audio setup. An open audio
+link keeps the codec bound when it opened; only a different nonzero selection
+faults it. Invalid or missing BCS cannot establish audio.
 
 The existing HCI owner queries remote features before setup. Transparent mSBC
 requires matching local and remote eSCO/transparent support. Enhanced setup and
@@ -558,6 +562,15 @@ sequence. Its 60-byte backing remains stable until all fragments have entered
 SCO-owned copied packets. Controller credits and actual local H4 completion
 remain independent of this application buffer. Cancellation may truncate audio;
 no serial-wire drain or peer rendering is inferred.
+
+Every synchronous transmit stream keeps a fixed period: 7.5 ms per 60-byte mSBC
+frame, for silence and caller playback, and 125 µs per CVSD sample for silence
+packets. Each send time is the previous scheduled send time plus one period. The
+owner task polls on the 1 ms FreeRTOS tick, so computing the next time from the
+serving poll would round 7.5 ms up to 8 ms and send 6% fewer frames than the eSCO
+link consumes. A poll that falls up to two periods behind sends the missed
+frames back to back, within the eight-packet SCO pool. A longer stall restarts
+the schedule at the current time once and increments a private restart counter.
 
 Mode 3 retains the 16-byte requests and 272-byte response header. Responses use
 version 2, and offset 124 holds the actual codec ID: 1 for CVSD, 2 for mSBC.

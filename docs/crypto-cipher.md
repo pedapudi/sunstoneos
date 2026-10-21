@@ -74,9 +74,11 @@ invalidates cipher output lines. Completion invalidates those output lines
 before the controller copies task bytes into private service staging. The
 caller receives no partial result if a later task fails.
 
-A consumed successful AES task permits cleanup of its software key line.
-The controller checks the actual token and deadline, takes the common mutex,
-zeros that line and completes cache cleaning and barriers. The session refuses
+A consumed successful AES task permits cleanup of its key, input and cipher
+output lines. The controller checks the actual token and deadline, takes the
+common mutex, zeros those lines and completes cache cleaning and barriers.
+Plaintext, decrypted output and the key therefore do not remain in the retained
+page after a successful task, including while later TRNG or SHA tasks run. The session refuses
 reuse or client release until cleanup succeeds. Final token checks follow all
 cleanup and publication callbacks. Busy metadata preserves completed cleanup
 and staged output without resubmitting a task. The source driver's successful
@@ -86,7 +88,7 @@ It does not establish global engine drain.
 Internal CE key-register erasure is not proven. Failed or uncertain tasks retain
 DMA key, input and output backing under the same reservation. Private CPU
 staging is cleared on failure; quarantined DMA memory is not cleared after
-uncertain activity. A failed key-line clean also retains the session and
+uncertain activity. A failed cleanup also retains the session and
 prevents caller output. No reset, cancellation or resource release API is
 provided.
 

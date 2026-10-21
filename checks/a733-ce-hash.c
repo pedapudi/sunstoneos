@@ -25,7 +25,7 @@ struct model {
     _Alignas(4096) uint8_t pages[8192];
     struct reg regs[40];unsigned count;
     uint64_t now;
-    unsigned held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
+    unsigned scrubs,held,reads,writes,starts,pending,published,acquired,health_writes,authorizations;
     unsigned fail_health_write,finish_late,retain_busy,retained;
 };
 static uint32_t *reg(struct model *m,uintptr_t a)
@@ -103,7 +103,12 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
     assert(m->held && mem==(void *)m->pages);
     assert(device_memory_describe(&m->pool,m->lease,&e,&state) && state==DEVICE_MEMORY_DEVICE);
     if (op==A733_CE_PUBLISH) {assert(!m->pending);memcpy(m->visible,mem,sizeof(*mem));++m->published;}
-    else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
+    else if (op==A733_CE_SCRUB) {
+        /* The copied task result and hash state leave the retained page. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        for (size_t i=offsetof(struct a733_ce_memory,output);i<offsetof(struct a733_ce_memory,cipher_output);++i) assert(!((uint8_t *)mem)[i]);
+        ++m->scrubs;
+    } else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
     return 1;
 }
 static const struct a733_ce_ops ops={now,authorize,enter,leave,retain,read_reg,write_reg,sync_memory};
@@ -122,7 +127,7 @@ static void setup(struct model *m,unsigned hash_only,unsigned cold)
         .health={9,325,0,0x30200},.configure_health=cold,.profile=A733_CE_TRNG_SHA256};
     if (hash_only) {m->config.profile=A733_CE_SHA256_ONLY;m->config.health_profile=0;m->config.configure_health=0;memset(m->config.health,0,sizeof(m->config.health));}
     /* Artificial model values: no production threshold or entropy assertion. */
-    *reg(m,0x07090160)=!hash_only;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
+    *reg(m,0x07090160)=0x10000002|!hash_only;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0x1908)=0x0a060a06;*reg(m,CCU+0x1988)=0x0a060000;
     *reg(m,CCU+0xac0)=0x81000000;*reg(m,CCU+0xac4)=0x30003;*reg(m,CCU+0x5e4)=4;
@@ -216,6 +221,10 @@ static void message(struct model *m,size_t length,unsigned print_digest)
     if (print_digest) {printf("digest %zu ",length);for (unsigned i=0;i<32;++i) printf("%02x",out[i]);puts("");}
     memset(out,0xa5,sizeof(out));assert(a733_ce_hash_poll(&m->hash,g,out)==A733_CE_HASH_CONSUMED);unchanged(out,32);
     assert(!m->engine->client);zeroed(m->hash.buffer,sizeof(m->hash.buffer));zeroed(m->hash.digest,32);
+    /* Input, intermediate IV and digest do not remain in the DMA page. */
+    zeroed((const uint8_t *)m->pages+offsetof(struct a733_ce_memory,output),
+        offsetof(struct a733_ce_memory,cipher_output)-offsetof(struct a733_ce_memory,output));
+    assert(m->scrubs==m->hash_starts+m->rng_starts);
 }
 static void entropy(struct model *m,size_t n)
 {

@@ -91,7 +91,10 @@ appended to the caller-selected prefix, separated by a period. These files hold
 the copied monitor, exact configuration, actual package, log, merged container
 and JSON manifest. The manifest records complete file hashes, dependency URLs and hashes,
 monitor format and extent, and explicit false qualification fields. It has no
-board-admission flag.
+board-admission flag. Its `card_writes` list names the two extents that carry
+container data, boot0 and the TOC1 package, with offset, length and hash.
+A card install writes only those extents; the
+[boot-slot layout](boot-slots.md) keeps slot headers in the container's zero gaps.
 
 | Container extent | Contents |
 | --- | --- |

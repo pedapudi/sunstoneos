@@ -27,7 +27,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument("--verify-source",type=Path)
     p.add_argument("--tinyusb",type=Path);p.add_argument("--tcp",type=Path);p.add_argument("--rsn",type=Path);p.add_argument("--kernel",type=Path)
     p.add_argument("--headers",type=Path);p.add_argument("--linker",type=Path);p.add_argument("--qemu",type=Path)
-    p.add_argument("--case",choices=["generation","entropy","late","alias","inbound","inbound-cancel","inbound-timeout","inbound-queue","inbound-late-child","inbound-lost-child","inbound-pending"],default="generation");p.add_argument("--evidence",type=Path);p.add_argument("--build-only",action="store_true")
+    p.add_argument("--case",choices=["generation","entropy","late","alias","inbound","inbound-cancel","inbound-timeout","inbound-queue","inbound-late-child","inbound-lost-child","inbound-pending","rekey"],default="generation");p.add_argument("--evidence",type=Path);p.add_argument("--build-only",action="store_true")
     a=p.parse_args()
     if a.verify_source:verify(a.verify_source.resolve());print("Pinned FreeRTOS+TCP source matches");return
     assert all([a.tcp,a.rsn,a.kernel,a.headers,a.linker,a.evidence,a.tinyusb])

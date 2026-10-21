@@ -43,10 +43,14 @@ entry and chain pointer is zero. The driver writes both task-address registers,
 including the upper byte for addresses below 4 GiB, then writes hash doorbell
 bit 10. No seed or deterministic fallback is available.
 
-The native cache adapter verifies a 64-byte data-cache line. Before submission,
-it cleans the descriptor and cleans and invalidates the output allocation.
-After successful task completion, it invalidates the output allocation and
-completes barriers before the CPU reads it. The driver copies bytes to the caller
+The native cache adapter uses the shared AArch64 device-cache helper. That helper
+refuses an unknown or larger-than-64-byte writeback granule, a caller outside
+EL1 and a disabled MMU or data cache. Before submission, the adapter cleans the
+descriptor and cleans and invalidates the output allocation. After successful
+task completion, it invalidates the output allocation and completes barriers
+before the CPU reads it. Once the random block is copied and the task stopped,
+the controller zeros the output line and cleans it, so the block does not
+remain in the retained page. The driver copies bytes to the caller
 only after its final deadline check. It returns the result once; subsequent
 polls report that the result was consumed.
 
@@ -57,7 +61,11 @@ exclusive; PERI0, REF, OSC, FABRIC and RC16M ownership must remain stable. Every
 writer uses the common register mutex. The native path observes the adopted
 400 MHz CE clock, PLL factors, disabled modulation, forced enabled parent gates
 and their effective status. It checks both CE reset releases, local gates, the
-AXI leaf gate and the admitted AHB, NSI and MBUS source/divider words. This first
+AXI leaf gate and the admitted AHB, NSI and MBUS source/divider words. The PLL
+factor check is the shared `a733_clock_peri0_valid` rule in
+`include/a733_clock_reference.h`, also used by the thermal and ADC drivers.
+Reserved PERI0 bits 24:23 do not select a source, so a set bit 24, as
+observed on the board, is admitted. This first
 profile does not change clock parents, dividers, gates or resets.
 
 The TRNG sample clock derives from RC16M divided by eight. Native admission

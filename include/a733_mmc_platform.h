@@ -5,6 +5,14 @@
 #include "a733_pmic.h"
 #include "sunxi_mmc.h"
 enum a733_mmc_emmc_host { A733_MMC_EMMC_SDC2=0, A733_MMC_EMMC_SDC3=1 };
+/* Controller slot of a validated selection: SDC0 for SD, SDC2 or SDC3 for eMMC.
+ * The slot fixes the register aperture, module clock, bus gate and GIC bit. */
+static inline unsigned a733_mmc_slot(enum sunxi_mmc_kind kind,enum a733_mmc_emmc_host host)
+{return kind==SUNXI_MMC_SD?0:host==A733_MMC_EMMC_SDC3?3:2;}
+#define A733_MMC_BASE(slot) (UINT32_C(0x04020000)+(uint32_t)(slot)*0x1000u)
+#define A733_MMC_MODULE(slot) (UINT32_C(0x02002d00)+(uint32_t)(slot)*0x10u)
+#define A733_MMC_BUS(slot) (A733_MMC_MODULE(slot)+0xcu)
+#define A733_MMC_GIC_BIT(slot) (UINT32_C(1)<<((slot)+1)) /* GIC enable word 0x118. */
 /* Private, permanent provider. SD selects SDC0; eMMC explicitly selects SDC2
  * or SDC3. Zero preserves the existing default SDC2 selection.
  * Default APIs are read-only. A separate actual storage update service may bind
@@ -57,6 +65,10 @@ struct a733_mmc_platform_ops {
     int (*write)(void *,uintptr_t,uint32_t);
     int (*barrier)(void *);
     int (*outside)(void *,const void *,size_t);
+    /* Bounded FIFO bursts at one selected-controller FIFO address, with the
+     * same admission as read/write performed once per burst. */
+    int (*read_fifo)(void *,uintptr_t,uint32_t *,unsigned);
+    int (*write_fifo)(void *,uintptr_t,const uint32_t *,unsigned);
 };
 struct a733_storage_update;
 struct a733_mmc_platform {

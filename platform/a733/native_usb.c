@@ -105,15 +105,22 @@ int a733_native_usb_step(struct a733_native_usb *n)
         if(q==A733_PMIC_BUSY)return 0;if(q!=A733_PMIC_READY)return -1;n->usb_step=2;return 0;
     }
     if(n->usb_step==2) {
-        enum a733_pmic_status r=a733_pmic_submit(&n->pmic,n->boot.usb.owner,&n->usb_rail,
-            rail[n->usb_rail_index],n->boot.usb.deadline_us,&n->usb_request);
-        if(r==A733_PMIC_BUSY)return 0;
-        if(r!=A733_PMIC_PENDING)return -1;
-        if(n->usb_request.id)n->usb_step=3;return 0;
+        /* Queue all four snapshots so the provider reads them back to back.
+         * Results are still checked and reaped in rail order; a failure
+         * leaves every outstanding borrow in place. */
+        for(unsigned i=0;i<4;++i) {
+            if(n->usb_request[i].id)continue;
+            enum a733_pmic_status r=a733_pmic_submit(&n->pmic,n->boot.usb.owner,&n->usb_rail,
+                rail[i],n->boot.usb.deadline_us,&n->usb_request[i]);
+            if(r==A733_PMIC_BUSY)return 0;
+            if(r!=A733_PMIC_PENDING)return -1;
+            if(!n->usb_request[i].id)return 0;
+        }
+        n->usb_step=3;return 0;
     }
     if(n->usb_step==3) {
         struct a733_pmic_snapshot *s=&n->usb_snapshot[n->usb_rail_index];
-        enum a733_pmic_status r=a733_pmic_result(&n->pmic,&n->usb_request,s);
+        enum a733_pmic_status r=a733_pmic_result(&n->pmic,&n->usb_request[n->usb_rail_index],s);
         if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)return 0;
         if(r!=A733_PMIC_COMPLETE||s->rail!=rail[n->usb_rail_index]||s->page_before||s->page_after||
            s->chip!=3||s->revision||s->decoded!=1||s->enabled!=1||
@@ -121,10 +128,10 @@ int a733_native_usb_step(struct a733_native_usb *n)
         n->usb_step=4;return 0;
     }
     if(n->usb_step==4) {
-        enum a733_pmic_status r=a733_pmic_reap(&n->pmic,&n->usb_request);
+        enum a733_pmic_status r=a733_pmic_reap(&n->pmic,&n->usb_request[n->usb_rail_index]);
         if(r==A733_PMIC_BUSY)return 0;if(r!=A733_PMIC_COMPLETE)return -1;
-        n->usb_request=(struct a733_pmic_request){0};
-        n->usb_step=++n->usb_rail_index==4?5:2;return 0;
+        n->usb_request[n->usb_rail_index]=(struct a733_pmic_request){0};
+        n->usb_step=++n->usb_rail_index==4?5:3;return 0;
     }
     enum a733_usb_platform_result r=a733_usb_platform_poll(&n->usb);
     if(r==A733_USB_PLATFORM_PENDING||r==A733_USB_PLATFORM_BUSY)return 0;

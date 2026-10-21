@@ -52,15 +52,23 @@ for row in records:
     expected = hashlib.sha256(bytes((i * 37 + 11) & 255 for i in range(n))).hexdigest()
     assert row[2] == expected, (n, row[2], expected)
 assembly = subprocess.check_output([a.objdump, '-dr', str(a.native_object)], text=True)
-for function, bind in [('a733_ce_session_native_init', 'a733_ce_session_bind'),
-                       ('a733_ce_entropy_native_init', 'a733_ce_entropy_bind')]:
-    body = assembly.split('<' + function + '>:', 1)[1]
-    if '\n00000000' in body:
-        body = body.split('\n00000000', 1)[0]
-    for symbol in ['a733_ce_session_native_claim', 'a733_ce_session_native_abort',
-                   'a733_memory_reservations_init', 'device_memory_acquire', bind,
-                   'a733_ce_native_read', 'a733_ce_native_write', 'a733_ce_native_sync']:
-        assert symbol in body, (function, symbol)
-for instruction in ['dc\tcvac', 'dc\tcivac', 'dc\tivac', 'dsb\tsy']:
-    assert instruction in assembly, instruction
+def body(function):
+    text = assembly.split('<' + function + '>:', 1)[1]
+    return text.split('\n00000000', 1)[0] if '\n00000000' in text else text
+for symbol in ['a733_ce_session_native_claim', 'a733_ce_session_native_abort',
+               'a733_memory_reservations_init', 'device_memory_acquire', 'a733_ce_session_bind',
+               'a733_ce_native_read', 'a733_ce_native_write', 'a733_ce_native_sync']:
+    assert symbol in body('a733_ce_session_native_init'), symbol
+# The entropy owner reuses the session constructor instead of a second copy.
+entropy = body('a733_ce_entropy_native_init')
+for symbol in ['a733_memory_reservations_init', 'a733_ce_session_native_init',
+               'a733_ce_entropy_attach', 'a733_ce_session_retain']:
+    assert symbol in entropy, symbol
+for symbol in ['device_memory_acquire', 'a733_ce_session_bind', 'a733_ce_entropy_bind']:
+    assert symbol not in entropy, symbol
+# Cache maintenance goes through the shared CWG/EL/MMU-checked helper.
+sync = body('a733_ce_native_sync')
+assert 'aarch64_device_cache' in sync
+assert 'dc\t' not in assembly
+assert 'dsb\tsy' in body('a733_ce_native_read')
 print('PASS pinned SHA streaming descriptors, independent hashlib digests and actual native singleton/session/cache composition; no physical qualification')

@@ -72,6 +72,14 @@ controller-owned fragment or return its credit. Later controller completion can
 release fragment backing, while the uncertain channel remains quarantined.
 Transport deadline expiry faults the worker and retains all remaining ownership.
 
+After a local ACL Disconnect, the peer can still send data until Disconnection
+Complete arrives. While the link waits to send Disconnect, waits for its status
+or waits for completion, the worker discards such frames, frees their receive
+slots and drops any partial reassembly on that link. The link's channels are
+already quarantined, and confirmed closure marks them `BT_L2CAP_CLOSED`. If the
+controller refuses the Disconnect, the link remains connected and a later
+continuation fragment of the dropped reassembly faults the worker.
+
 ## Confirmed closure permits host storage reuse with fresh wire identities
 
 Channel handles are opaque 64-bit generations returned by `bt_l2cap_open`.

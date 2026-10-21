@@ -50,6 +50,11 @@ struct bt_sco {
     struct bt_sco_link links[BT_SCO_LINKS];
     struct bt_sco_packet tx[BT_SCO_PACKETS],rx[BT_SCO_PACKETS];
     uint64_t next_link,next_packet,now,held_rx[BT_H4_SLOTS];
+    /* One Reject Synchronous Connection Request for a request no link expects:
+     * 0 idle,1 queued,2 awaiting status,3 awaiting the failed completion. */
+    uint64_t refuse_deadline,refuse_tag,refuse_acknowledgement;
+    uint8_t refuse_address[6];
+    unsigned refuse;
     unsigned capacity,credits,mtu,command_link,active_tx,initialized;
     enum bt_sco_error error;
 };
@@ -63,7 +68,9 @@ struct bt_sco {
  * handles and peers stay quarantined until real controller recovery. */
 int bt_sco_init(struct bt_sco *,struct bt_acl *,const struct bt_sco_binding *);
 /* Bind actual AG READY and live ACL. listening1 awaits an incoming synchronous
- * request after querying remote features;0 initiates. Callback-proven security
+ * request after querying remote features;0 initiates. A synchronous request no
+ * link awaits is refused with reason0x0d, one at a time; while a refusal is
+ * outstanding, the controller's accept timeout refuses the next. Callback-proven security
  * determines S1 or S4 eSCO safe settings and whether SCO fallback is legal.
  * No active call is fabricated. Exact1 admitted,0 capacity,-1 refusal. */
 int bt_sco_open(struct bt_sco *,const struct bt_hfp_ag *,unsigned listening,

@@ -121,7 +121,19 @@ the lifetime. A fault retains link state, packet descriptors, receive records,
 borrowed payload pointers and partial transmit position. Releases are refused
 until external recovery resolves their ownership. No reset or retry is implicit.
 
-Unconsumed ACL, SCO, ISO and unrelated events retain their original bytes in H4
+The link worker releases events that no owner consumes after checking their
+exact parameter length. These are Role Change, Mode Change, Max Slots Change,
+Packet Type Changed, Page Scan Repetition Mode Change, Read Remote Version and
+Extended Features Complete, Sniff Subrating, Link Supervision Timeout Changed,
+Remote Host Supported Features and vendor events. It also releases unmatched
+Command Complete or Status events, Read Remote Supported Features Complete
+without an audio query, failed Connection Complete without an attempt, failed
+Synchronous Connection Complete without an audio owner, and Connection Requests
+that no worker answers. An unanswered request is refused on air by the
+controller when its connection accept timeout expires. A malformed known event
+faults the worker. An unexpected successful synchronous connection also faults.
+
+Other ACL, SCO, ISO and unknown events retain their original bytes in H4
 receive slots. The public receive operation exposes records only after the link
 worker has classified them. A caller can map a raw ACL handle to the immutable
 link generation. Full slots apply transport backpressure; the platform must poll

@@ -47,6 +47,23 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
     if(msbc_refuse){for(unsigned n=0;n<2000&&!atomic_load(&app.failed);++n)if(pump()<0)break;
         assert(atomic_load(&app.failed)&&msbc_setups==1&&!atomic_load(&voice.segment_disconnected));puts("PASS command refusal retains without speculative fallback");return 0;}
     until(CAPTURE);assert(stream()->codec==(msbc_no_cap||msbc_fallback?1u:2u));
+    if(!strcmp(argv[1],"cadence")){
+        /* mSBC silence follows the 7.5 ms eSCO frame period on a jittered poll grid. */
+        uint64_t start=wire.now,before=sco_bytes;jittered(900000);
+        uint64_t frames=(sco_bytes-before)/60,expected=(wire.now-start)/7500;
+        fprintf(stderr,"mSBC silence %llu frames over %llu us, expected %llu\n",(unsigned long long)frames,(unsigned long long)(wire.now-start),(unsigned long long)expected);
+        assert(frames<=expected+1&&frames+1>=expected&&!voice.silence_restarts);
+        puts("PASS mSBC silence cadence anchored to its frame period");return 0;
+    }
+    if(!strcmp(argv[1],"bac")){
+        /* HFP lets the HF resend AT+BAC during audio. A list that keeps mSBC
+         * keeps the selection; one that drops it requires reselection only. */
+        const char *same="AT+BAC=1,2\r",*narrow="AT+BAC=1\r";
+        rf_in(14,0xef,(const uint8_t *)same,(unsigned)strlen(same),-1);for(unsigned n=0;n<100;++n)assert(pump()>=0);
+        assert(voice.ag.peer_codecs==6&&voice.ag.selected_codec==2&&stream()->phase==BT_SCO_OPEN);
+        rf_in(14,0xef,(const uint8_t *)narrow,(unsigned)strlen(narrow),-1);for(unsigned n=0;n<100;++n)assert(pump()>=0);
+        assert(voice.ag.peer_codecs==2&&!voice.ag.selected_codec&&stream()->phase==BT_SCO_OPEN&&stream()->codec==2);
+    }
     if(msbc_fallback)assert(msbc_setups==3&&voice.stream==2&&voice.ag.selected_codec==1);
     if(msbc_no_cap||msbc_fallback){uint8_t pcm[240]={0};inject(pcm,sizeof(pcm),0);for(unsigned n=0;n<20&&!atomic_load(&voice.segment_head);++n)assert(pump()>=0);take(1,NULL);close_audio();puts("PASS explicit CVSD fallback identity");return 0;}
     sbc_t encoder;assert(!sbc_init_msbc(&encoder,0));encoder.endian=SBC_LE;

@@ -53,8 +53,11 @@ Electrical compatibility still requires physical qualification.
 Preparation mutes output, verifies hotplug presence, reads the sink's Extended
 Display Identification Data (EDID), programs the controller and PHY, and prepares
 TV0 with its enable bit clear. EDID reads use the Display Data Channel (DDC),
-including segment addressing. Each byte transaction has a 10 ms deadline;
-errors stop preparation without automatic retries.
+including segment addressing. Each byte takes one poll for the status clear,
+segment, offset and read command, one or more status polls, and one poll that
+reads the byte, clears the completion flag and samples hotplug. Each byte
+transaction has a 10 ms deadline; errors stop preparation without automatic
+retries.
 
 Admission requires a complete, checksummed digital EDID version 1.3 or 1.4,
 up to three extension blocks, an HDMI identification block, and an advertised
@@ -88,6 +91,10 @@ It programs the documented factor and analog fields, observes lock within
 The internal PHY receives three MPLL words and three board-specific drive
 words. Each word is read back. SVSRET stays low for at least 5 microseconds;
 internal I2C operations and PHY lock observation have bounded deadlines.
+PHY lock requires two consecutive locked samples at least 5 microseconds apart.
+The source samples lock for 2.5 ms; an owner that polls once per 1 ms tick
+fits only two or three samples into that time. The wait therefore fails only
+after 2.5 ms and at least four samples, with no confirming sample pending.
 Lock observations establish register-programming completion, not sink acceptance.
 
 Start enables TV0, waits at least 50 ms, rechecks TOP PLL lock, PHY lock and
@@ -116,7 +123,9 @@ outside Git under `~/.cache/sunstoneos/sources/hdmi-research/`.
 The selected check composes the actual controller, PHY and TV0 runtime using
 fabricated fixture authority and modeled registers. It covers both modes,
 limited/full range, extended EDID reads, startup delays, hotplug stop, and
-checkpoint-based faults without repeating preparation for each fault. A separate
+checkpoint-based faults without repeating preparation for each fault. It also
+counts three polls per EDID byte and accepts a PHY lock that appears 1.2 ms
+after enable when the owner polls once per 1 ms tick, at every tick phase. A separate
 comparison consumes the same trace and unchanged primary source bytes.
 AArch64 compilation checks the native freestanding implementation. Evidence
 belongs under `~/.cache/sunstoneos/evidence/hdmi-controller-20261016/`.

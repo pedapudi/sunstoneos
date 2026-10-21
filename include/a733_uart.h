@@ -15,7 +15,15 @@ struct a733_uart_plan {
     uintptr_t base;
     uint32_t lcr, mcr, divisor, actual_baud;
     unsigned fifo_bytes;
+    uint32_t fcr; /* FIFO enable and RX trigger, without the reset bits. */
 };
+/* Fixed RX FIFO trigger. The 256-byte FIFOs of UART1..6 trigger at half full,
+ * as the Linux BSP does above 9600 baud, so automatic RTS does not throttle
+ * the peer after every character and IRQ mode gets one RX interrupt per burst
+ * (a receive timeout, IIR cause 12, ends a shorter burst). The 64-byte FIFOs of
+ * UART0 and S_UART0..1 keep the one-character trigger. */
+static inline uint32_t a733_uart_fcr(unsigned port)
+{ return port && port < 7 ? 0x81u : 1u; }
 int a733_uart_plan(const struct a733_uart_format *, struct a733_uart_plan *);
 
 enum a733_uart_state {
@@ -46,7 +54,7 @@ struct a733_uart {
     uint64_t deadline, last_now;
     enum a733_uart_state state;
     uint32_t ier, errors;
-    unsigned dma_owned, dma_requests;
+    unsigned dma_owned, dma_requests, dma_released;
 };
 /* Errors retain LSR bits 1..4 (overrun, parity, framing, break) and bit 7
  * (an error remains in RX FIFO). Per-byte status accompanies received data. */
@@ -63,8 +71,10 @@ int a733_uart_begin(struct a733_uart *, const struct a733_uart_ops *, void *,
                     const struct a733_uart_format *, uint64_t deadline);
 int a733_uart_poll(struct a733_uart *);
 /* Each call moves at most budget RX and budget TX bytes, with budget 1..256.
- * Counts report accesses completed within the deadline. On a failed or late
- * access, the final byte may already have crossed the hardware interface.
+ * The deadline is checked before and after each RX or TX FIFO batch, not
+ * around every access. Counts report every byte the batch moved; a failed
+ * access or a late batch then faults the object, and the final byte may
+ * already have crossed the hardware interface.
  * TX completion here means accepted by FIFO. Retain/retry only the unconsumed suffix. An uncertain
  * write faults the object; do not retransmit it automatically.
  * exchange services FIFO status directly; interrupt services one IIR cause.
@@ -96,6 +106,8 @@ int a733_uart_drain(struct a733_uart *, uint64_t deadline);
  * never RBR: DMA cannot preserve per-byte error flags. stop disables/readbacks
  * requests but preserves the lease. release requires externally proved DMA
  * channel quiescence and true TEMT/RX-empty/USR-idle. All uncertainty retains.
+ * Release is terminal: IER stays 0 and FCR stays in DMA mode, so exchange,
+ * interrupt, tx_irq and another prepare refuse; only drain and close follow.
  * Return READY, FAULT or -1 for invalid calls; release returns 0 while draining.
  * The caller retains both DMA buffers until release, copy and matched REAP. */
 int a733_uart_dma_prepare(struct a733_uart *,uint64_t deadline);

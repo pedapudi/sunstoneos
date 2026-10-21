@@ -50,10 +50,11 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    nonlocal node,identity
    old=identity;deadline=time.monotonic()+30
    while True:
-    candidate=access.session_node(config)
-    if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):break
+    # Identity comes from one guarded lstat; a node removed by the expected disconnect is absent.
+    candidate,current=base.present_instance(access,config)
+    if candidate is not None and current!=old and os.access(candidate,os.R_OK|os.W_OK):break
     require(time.monotonic()<deadline,'No new ROM instance within return window; no retry.');time.sleep(.05)
-   node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
+   node,identity=candidate,current;access.require_session(node);access.require_rom(node)
    require(access.target(node).name==port.name,'Returned instance changed physical port.')
    record.update(returned_node=str(node),returned_identity=identity,automatic_access=True);journal()
   try:

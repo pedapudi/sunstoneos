@@ -37,18 +37,3 @@ int a733_memory_reservations_commit_verified(void)
         device_memory_pool_init(&boot_pool, start, start, end - start);
 }
 #endif
-
-int a733_memory_dma_init(struct a733_dma_native *native, struct device_memory_pool *pool,
-                         uintptr_t registers, uint64_t physical,
-                         const struct dma_fifo_port *ports, size_t count,
-                         void (*fatal)(void *), void *cookie)
-{
-    if (pool != &boot_pool || !boot_pool.initialized) return 0;
-#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-    if (!a733_device_memory_ready()) return 0;
-#endif
-    struct dma_memory_window window = {pool->backing.cpu, pool->backing.physical,
-        pool->backing.bytes, DMA_MEMORY_ROLE(A733_DMA_READ) | DMA_MEMORY_ROLE(A733_DMA_WRITE) |
-                             DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)};
-    return a733_dma_native_init(native, registers, physical, &window, 1, ports, count, fatal, cookie);
-}

@@ -68,10 +68,20 @@ positions. A sequence request consumes a fresh independent 32-bit word; endpoint
 addresses do not seed a deterministic generator. No PRNG or fallback seed is
 provided. A refusal leaves the caller's entire output unchanged.
 
-Insufficient bytes, short-lock contention or invalid ownership returns failure.
-The existing network service closes output when either randomness callback
-fails. Reservoir capacity therefore does not establish a sustainable network
-rate or scheduling bound. Those depend on actual consumers and CE service time.
+A consumer that finds the reservoir lock held retries the lock a fixed 256
+times. Every holder keeps it only for one copy of at most 256 bytes or for an
+erase after a fault. The word and sequence callbacks return three results:
+1 after copying bytes, 0 for a temporary refusal (too few bytes or a lock still
+held after the retries), and -1 for a fault or an invalid caller. The byte
+callback returns 1 or 0; the supplicant treats every refusal as a failure.
+
+The network service treats a temporary word refusal as the failure of one
+FreeRTOS+TCP random-number call and keeps output open. A permanent refusal,
+or any refusal from the sequence callback, closes output. The TCP
+initial-sequence hook cannot report failure, so ordinary word requests leave
+the last 16 reservoir bytes for it. Those bytes cover four connection attempts
+between refills. Reservoir capacity does not establish a sustainable network
+rate or scheduling bound; that depends on actual consumers and CE service time.
 
 ## Faults preserve resources and discard private copies
 
@@ -99,7 +109,19 @@ mutex dispatch, the counter, MMIO and DMA-produced bytes are explicit model inpu
 
 The selected cases cover refill and circular-buffer consumption, copied and
 wrong-task refusal, output aliases, exhaustion, mutex contention, final-token
-contention, late authority loss and deadline retention. The
+contention, late authority loss and deadline retention. That refill fixture
+currently fails at its first refill: the CE controller model it reuses no longer
+starts a request, and the CE entropy check that owns the model fails at the same
+point.
+
+A separate [contention fixture](../checks/a733-radio-entropy-contention.c),
+selected with `--fixture contention`, does not run a CE request. The owner
+thread places a completed refill in staging and runs the actual adapter poll,
+which publishes it under the reservoir lock. An IP-task thread consumes words
+concurrently. Every call must copy a word or return a temporary refusal, the
+adapter must not fault, and the published bytes must equal the copied bytes
+plus the remaining count. Single-threaded cases cover a held lock, the sequence
+reserve, wrong-task refusal and session fault. The
 [runner](../checks/a733-radio-entropy.py) preserves compiled input dependencies,
 the executable and native objects before one sanitizer execution. It compiles
 the adapter against the actual single-core and cached eight-core task headers.

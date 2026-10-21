@@ -66,6 +66,10 @@ def main():
     assert fixture.read_bytes() == original
     manifest = json.loads(prepared('manifest.json').read_text())
     assert not any(manifest['qualification'].values())
+    assert manifest['card_writes'] == [
+        {'name': 'boot0', 'offset': host.BOOT0_OFFSET, 'bytes': len(boot0), 'sha256': host.digest(boot0)},
+        {'name': 'monitor-package', 'offset': host.PACKAGE_OFFSET, 'bytes': len(package),
+         'sha256': host.digest(package)}]
     for name, identity in manifest['files'].items():
         data = prepared(name).read_bytes()
         assert len(data) == identity['bytes'] and host.digest(data) == identity['sha256']

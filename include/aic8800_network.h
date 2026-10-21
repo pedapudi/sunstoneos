@@ -14,7 +14,9 @@ struct aic8800_network_config {
     uint8_t address[4],netmask[4],gateway[4];
     uint64_t tx_timeout; /* Same counter units as the admitted radio transport. */
     TickType_t queue_timeout;
-    int (*random32)(void *,uint32_t *); /* Exact 1; production cryptographic entropy. */
+    /* Exact 1 on success; production cryptographic entropy. random32 may return
+     * 0 for a temporary refusal; any other failure closes output. */
+    int (*random32)(void *,uint32_t *);
     int (*sequence)(void *,uint32_t,uint16_t,uint32_t,uint16_t,uint32_t *);
     void *entropy_context;
     uint64_t entropy_record;

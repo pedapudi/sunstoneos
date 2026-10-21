@@ -64,20 +64,12 @@ static void typec(void *unused)
             if(a733_typec_begin(&board.typec.provider,board.session.deadline_us)<0)a733_typec_revoke(&board.typec.provider);
             started=1;
         }
-        unsigned cc_progress=0;
-        if(started){
-            enum a733_typec_state oldstate=board.typec.provider.state;
-            unsigned oldstep=board.typec.provider.step;
-            (void)a733_typec_poll(&board.typec.provider);
-            cc_progress=oldstate==A733_TYPEC_MONITOR&&
-                board.typec.provider.state==A733_TYPEC_MONITOR&&
-                !board.typec.provider.pd_turn&&board.typec.provider.step&&
-                board.typec.provider.step!=oldstep;
-        }
-        /* Advance owned transfers and progressing CC observation steps.
-         * Completed observations and no-progress work still sleep one tick. */
-        if((board.typec.bus.state>=A733_TWI_BEGIN&&
-            board.typec.bus.state<=A733_TWI_COMPLETE)||cc_progress)taskYIELD();
+        if(started)(void)a733_typec_poll(&board.typec.provider);
+        /* Advance an owned I2C transfer without sleeping after each state.
+         * Attached monitoring reads status only once per REFRESH_US, so
+         * every other poll sleeps one tick, inside SERVICE_GAP_US. */
+        if(board.typec.bus.state>=A733_TWI_BEGIN&&
+           board.typec.bus.state<=A733_TWI_COMPLETE)taskYIELD();
         else vTaskDelay(1);
     }
 }

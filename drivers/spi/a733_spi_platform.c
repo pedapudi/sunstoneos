@@ -126,15 +126,17 @@ static int core_read(void *p,uintptr_t a,uint32_t *v)
 {struct a733_spi_platform *s=p;return s->held&&s->core_call&&!s->fault&&rd(s,a,v);}
 static int core_write(void *p,uintptr_t a,uint32_t v)
 {struct a733_spi_platform *s=p;return s->held&&s->core_call&&!s->fault&&wr(s,a,v);}
+/* FIFO byte accesses: the core checks its deadline around each FSR-bounded
+ * batch through core_now, so no per-byte clock reads are repeated here. */
 static int core_read8(void *p,uintptr_t a,uint8_t *v)
 {
     struct a733_spi_platform *s=p;
-    return s->held&&s->core_call&&!s->fault&&time_ok(s)&&s->ops.read8(s->context,a,v)==1&&time_ok(s);
+    return s->held&&s->core_call&&!s->fault&&s->ops.read8(s->context,a,v)==1;
 }
 static int core_write8(void *p,uintptr_t a,uint8_t v)
 {
     struct a733_spi_platform *s=p;
-    return s->held&&s->core_call&&!s->fault&&time_ok(s)&&s->ops.write8(s->context,a,v)==1&&time_ok(s);
+    return s->held&&s->core_call&&!s->fault&&s->ops.write8(s->context,a,v)==1;
 }
 static int core_now(void *p,uint64_t *t)
 {struct a733_spi_platform *s=p;if(!s->held||!s->core_call||s->fault||!time_ok(s))return 0;*t=s->last_now;return 1;}
@@ -202,7 +204,8 @@ static enum a733_spi_platform_result metadata(struct a733_spi_platform *s)
 static enum a733_spi_platform_result registers(struct a733_spi_platform *s,unsigned budget)
 {
     int held=lock(s);if(held<0)return fault(s);if(!held)return BUSY;
-    uint32_t v;int ok=parent(s);
+    /* Stages that run profile() revalidate the parent there. */
+    uint32_t v;int ok=s->stage==S_PIN_CHECK||s->stage==S_READY||s->stage==S_DRAIN||parent(s);
     if(!ok)return fault(s);
     switch(s->stage) {
     case S_BASELINE:
@@ -228,8 +231,13 @@ static enum a733_spi_platform_result registers(struct a733_spi_platform *s,unsig
         if(ok)s->stage=r==A733_SPI_READY?S_PIN_CHECK:S_CONFIGURE;break;}
     case S_PIN_CHECK:
         ok=profile(s)&&inactive(s);if(ok)s->stage=S_PINS;break;
-    case S_READY:
-        ok=profile(s);if(ok){s->core_call=1;int r=a733_spi_poll(&s->spi,budget);s->core_call=0;ok=r!=A733_SPI_FAULT&&r>=0;}break;
+    case S_READY: {
+        /* A transfer in progress runs admission(), and so profile(), inside
+         * the core poll under this same mutex hold. Otherwise the core returns
+         * early and this is the only clock, reset and GIC revalidation. */
+        unsigned st=s->spi.state;
+        ok=(st!=A733_SPI_CLOSED&&st!=A733_SPI_READY&&st!=A733_SPI_COMPLETE&&st!=A733_SPI_FAULT)||profile(s);
+        if(ok){s->core_call=1;int r=a733_spi_poll(&s->spi,budget);s->core_call=0;ok=r!=A733_SPI_FAULT&&r>=0;}break;}
     case S_DRAIN:
         ok=profile(s)&&inactive(s)&&wr(s,irq(s,0x180),irqbit(s));
         if(ok)s->stage=S_UNPIN;break;

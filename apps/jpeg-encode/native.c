@@ -186,13 +186,26 @@ static int setup(void)
     struct a733_jpeg_encode_job j={jpeg_encode.input,460800,0x10000000,0x10100000,462848,1048576};
     return a733_jpeg_encode_begin(&jpeg_encode.run,a733_encode_platform_jpeg_ops(),&jpeg_encode.platform,&j,jpeg_encode_deadline())?1:-1;
 }
+/* The controller performs at most one register operation per poll. Repeat
+ * polls while each one advances its state or index, so programming sequences
+ * finish in one wake. Waiting for hardware, a copy step or a busy resource
+ * makes no progress and sleeps a tick; the budget bounds one wake's work. */
+#define POLL_BUDGET 1024u
+static int advance(void)
+{
+    for(unsigned n=0;;){
+        enum a733_jpeg_encode_state state=jpeg_encode.run.state;unsigned index=jpeg_encode.run.index;
+        int r=a733_jpeg_encode_poll(&jpeg_encode.run);
+        if(r||(jpeg_encode.run.state==state&&jpeg_encode.run.index==index)||++n==POLL_BUDGET||!board_live(NULL))return r;
+    }
+}
 void jpeg_encode_task(void *unused)
 {
     (void)unused;for(;;){
       if(!board_live(NULL)){atomic_store_explicit(&jpeg_encode.result,2,memory_order_release);vTaskDelay(1);continue;}
       if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&jpeg_encode.result,memory_order_acquire)){
         if(!jpeg_encode_input_ready(&jpeg_encode.supplied)){vTaskDelay(1);continue;}
-        int r=jpeg_encode.stage?a733_jpeg_encode_poll(&jpeg_encode.run):setup();
+        int r=jpeg_encode.stage?advance():setup();
         if(r<0)atomic_store_explicit(&jpeg_encode.result,2,memory_order_release);
         else if(!jpeg_encode.stage&&r==1)jpeg_encode.stage=1;
         else if(jpeg_encode.stage&&r==1&&jpeg_encode.run.state==A733_JPEG_ENCODE_COPIED)

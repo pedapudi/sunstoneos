@@ -9,7 +9,9 @@ static int rd(void *p,uint32_t o,uint32_t *v)
 {
  struct model *m=p;assert(o<=0x50&&!(o&3));++m->reads;
  if(m->roll&&o==0x14){m->regs[4]=2;m->regs[5]=0;m->roll=0;}
- if(m->late&&o==0x14&&m->writes>=2)m->regs[5]=2;
+ /* late 1: one second passes during the first target write; 2: it keeps passing. */
+ if(m->late==1&&o==0x14&&m->writes>=2)m->regs[5]=2;
+ if(m->late==2&&o==0x14)m->regs[5]=m->writes;
  *v=m->regs[o/4];return 1;
 }
 static int wr(void *p,uint32_t o,uint32_t v)
@@ -52,7 +54,9 @@ int main(void)
  for(unsigned i=0;i<4;++i){m=base();r=(struct a733_rtc){0};m.regs[inherited[i]/4]=1;
   struct a733_rtc_ops ops={now,rd,wr};assert(!a733_rtc_open(&r,&ops,&m,1000000)&&!m.writes);}
  m=base();r=(struct a733_rtc){0};m.regs[4]=0;struct a733_rtc_ops ops={now,rd,wr};assert(!a733_rtc_open(&r,&ops,&m,1000000));
- m=base();r=(struct a733_rtc){0};opened(&m,&r);m.late=1;assert(!a733_rtc_arm(&r,1)&&!(m.regs[10]&1));
+ m=base();r=(struct a733_rtc){0};opened(&m,&r);m.late=1;assert(a733_rtc_arm(&r,1)&&r.state==A733_RTC_ARMED&&m.writes==6&&
+  r.snapshot.target_day==1&&r.snapshot.target_hms==3&&(m.regs[9]&0x001f3f3f)==3&&(m.regs[10]&1));
+ m=base();r=(struct a733_rtc){0};opened(&m,&r);m.late=2;assert(!a733_rtc_arm(&r,1)&&r.state==A733_RTC_RETAINED&&m.writes==4&&!(m.regs[10]&1));
  m=base();r=(struct a733_rtc){0};opened(&m,&r);assert(a733_rtc_arm(&r,2));assert(!a733_rtc_irq(&r)&&!m.acks);
  m=base();r=(struct a733_rtc){0};opened(&m,&r);assert(a733_rtc_arm(&r,2));assert(a733_rtc_finish(&r,1)&&r.state==A733_RTC_CANCELLED&&!m.acks);
  m=base();r=(struct a733_rtc){0};opened(&m,&r);assert(a733_rtc_arm(&r,2));m.regs[5]=2;m.regs[12]=1;

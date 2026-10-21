@@ -45,6 +45,4 @@ int dma_memory_init(struct dma_memory_policy *, const struct dma_memory_window *
 int dma_memory_accept(const struct dma_memory_policy *, const struct a733_dma_mapping *);
 int dma_memory_fifo(const struct dma_memory_policy *, const struct a733_dma_endpoint *,
                     enum a733_dma_access);
-/* Return the maintenance stride, or zero if CTR cannot justify 64-byte leases. */
-unsigned dma_cache_stride(uint64_t ctr);
 #endif

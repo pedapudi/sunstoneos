@@ -34,6 +34,13 @@ static void composed_setup(unsigned cold)
     assert(a733_audio_leases_init(&leases,&registry,100,&backend,&parent));
     parent.ops=leases.operations;parent.cookie=&leases;
 }
+/* The registry holds the published stable AUDIO5 profile. */
+static int stable_audio(void)
+{
+    const struct a733_clock_token *t=&leases.tokens[A733_AUDIO_STABLE-1];
+    return a733_clock_token_status(&registry,t)==A733_CLOCK_OK &&
+        !t->exclusive && (t->shared&A733_CLOCK_AUDIO5);
+}
 static unsigned held_count(void)
 {unsigned count=0;for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i)count+=registry.slots[i].id!=0;return count;}
 static void *race(void *arg)
@@ -57,7 +64,7 @@ static void ownership_cases(void)
     assert(a733_clock_acquire(&registry,3,A733_CLOCK_AUDIO2,0,1000,&other)==A733_CLOCK_BUSY);
     struct a733_clock_token stable={0};
     assert(a733_clock_publish_audio(&registry,&audio,1000,&stable)==A733_CLOCK_OK);
-    assert(registry.audio_profile==1 && stable.id!=audio.id && held_count()==2);
+    assert(a733_clock_token_status(&registry,&stable)==A733_CLOCK_OK && stable.id!=audio.id && held_count()==2);
     assert(a733_clock_release(&registry,&audio,1000)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&registry,3,0,A733_CLOCK_I2S4,1000,&other)==A733_CLOCK_OK);
     struct a733_clock_token changed=stable;changed.shared^=A733_CLOCK_AUDIO5;
@@ -66,7 +73,7 @@ static void ownership_cases(void)
     now=1001;assert(a733_clock_release(&registry,&stable,2000)==A733_CLOCK_OK);
     assert(a733_clock_release(&registry,&other,2000)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&registry,2,0,A733_CLOCK_AUDIO_CHANGE,2000,&audio)==A733_CLOCK_OK);
-    assert(registry.audio_profile==0);
+    assert(a733_clock_token_status(&registry,&audio)==A733_CLOCK_OK && audio.exclusive==A733_CLOCK_AUDIO_CHANGE);
     assert(a733_clock_retain(&registry,&audio)==A733_CLOCK_FAULT && held_count()==2);
     assert(a733_clock_release(&registry,&gpu,2000)==A733_CLOCK_FAULT);
     assert(a733_clock_acquire(&registry,3,A733_CLOCK_OSC,0,2000,&other)==A733_CLOCK_FAULT);
@@ -87,7 +94,7 @@ static void ownership_cases(void)
     for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i)
         assert(a733_clock_acquire(&registry,i+1,A733_CLOCK_REF,0,1000,&other)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&registry,100,A733_CLOCK_REF,0,1000,&other)==A733_CLOCK_BUSY);
-    now=0;assert(a733_clock_release(&registry,&other,1000)==A733_CLOCK_FAULT && held_count()==32);
+    now=0;assert(a733_clock_release(&registry,&other,1000)==A733_CLOCK_FAULT && held_count()==A733_CLOCK_CLIENTS);
 }
 static void race_case(void)
 {
@@ -105,7 +112,7 @@ static void composition_cases(void)
     composed_setup(1);
     struct a733_clock_token gpu={0},other={0};
     assert(a733_clock_acquire(&registry,200,A733_CLOCK_PERI0,0,900,&gpu)==A733_CLOCK_OK);
-    ready_parent();assert(registry.audio_profile==1 && held_count()==3);
+    ready_parent();assert(stable_audio() && held_count()==3);
     assert(parent.audio.id==leases.tokens[A733_AUDIO_STABLE-1].id);
     assert(!leases.tokens[A733_AUDIO_CHANGE-1].id);
     assert(a733_clock_acquire(&registry,201,0,A733_CLOCK_REF,900,&other)==A733_CLOCK_BUSY);
@@ -122,7 +129,7 @@ static void composition_cases(void)
     assert(a733_audio_parent_poll(&parent)==PENDING);
     assert(a733_audio_parent_poll(&parent)==PENDING && !parent.audio.id && !writes && !reads);
     assert(a733_clock_release(&registry,&other,900)==A733_CLOCK_OK);
-    ready_parent();assert(registry.audio_profile==1);
+    ready_parent();assert(stable_audio());
 
     composed_setup(0);ready_parent();assert(writes==0 && held_count()==2);
     ready_local();write_failure=1;failure_address=C+0x1200;

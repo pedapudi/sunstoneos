@@ -26,8 +26,8 @@ and FIFO routes; access to the complete shared allocator pool is insufficient.
 Stream OPEN reserves the entire catalogue against every overlapping job,
 including DMA readers. Playback periods are writable by the application between
 GET and PUT, so ordinary read-only DMA sharing cannot apply to them.
-Single-direction profiles use the same service instance and fixed DMA channel
-as finite capture. A duplex service admits one compatible receive/transmit pair
+Single-direction receive and transmit profiles share one fixed DMA channel in
+the service instance. A duplex service admits one compatible receive/transmit pair
 on distinct DMA channels, with disjoint descriptor and payload allocations.
 Both profiles use the same format, callbacks and platform binding. The worker
 dispatches each channel exclusively through the stream core.
@@ -44,14 +44,19 @@ sequence. Task abandonment retains its periods and reservations indefinitely.
 Finite capture publishes a period only after DMA completion, verified drain, cache
 acquisition, live resource checks and the final deadline check. A client-held
 period cannot be overwritten when the ring wraps. Missing free capture storage
-stops the stream with a failed result. Finite playback requires two committed periods
-before start; missing committed storage at a later boundary stops it as well.
+stops the stream with a failed result. START refuses finite playback until every
+catalogue period has been committed, or every period up to and including a
+committed final lease. After START, PERIOD_GET leases only periods that DMA has
+already consumed, so an uncommitted period could never be filled; a missing
+commit at a later boundary still stops the stream with a failed result.
 The driver neither inserts silence nor silently drops samples.
 
 TX_MEMORY_CONSUMED means that DMA has finished reading the segment and can no
 longer access its allocation until the client commits it. It does not prove that
 those samples have left the serializer. CANCEL disables the direction and may
-truncate queued wire output. Final-wire completion requires a separate bounded
+truncate queued wire output. Canceling a stream that has not started disables its
+DMA request and leaves the CTL global-enable bit (GEN) as it was, so it never
+starts BCLK and LRCK. Final-wire completion requires a separate bounded
 serializer-drain design.
 
 ## FIFO occupancy bounds the handoff
@@ -61,8 +66,10 @@ Each entry is a sample word. Receive availability is FSTA bits 6:0; transmit
 empty space is bits 23:16. The driver uses receive threshold eight and transmit
 empty-space threshold 64. It preserves the other FIFO control fields.
 
-At a finite-transfer completion, the driver disables the selected DMA request
-and verifies the register before asking DMA to stop. The receiver or transmitter
+The driver detects a finite-transfer completion through the DMA controller's
+read-only finite-state query, which reports queue end, error events and
+timeout without acknowledging them. At a completion, the driver disables the
+selected DMA request before asking DMA to stop. The receiver or transmitter
 continues running. It samples FIFO capacity and computes a handoff deadline from
 sample rate and channel count, withholding one sample as margin. FIFO errors or
 a missed handoff deadline stop the direction and drain DMA without publishing
@@ -105,7 +112,10 @@ and GPIO users. Bank voltage does not change. External device voltage, routing,
 clock requirements and codec initialization remain separate prerequisites.
 
 Every lease query precedes register-mutex entry. Register access and readback
-occur under the shared mutex. A failed readback or deadline reached before
+occur under the shared mutex. Each platform write reads the register back and
+compares every written bit except the ISTA write-one-to-clear bits and the
+self-clearing FCTL flush bits. The stream driver relies on that comparison and
+does not read written registers a second time. A failed readback or deadline reached before
 unlock preserves the actually held mutex and all tokens. A deadline first
 observed after a successful unlock retains tokens and terminal failure; it does
 not claim that the mutex is still held. Terminal recovery makes no further
@@ -133,14 +143,15 @@ implementation.
 memory/cache adapter, audio lease adapter, pin manager and shared register mutex.
 Its device registers and sample data are modeled. The selected cases cover
 multi-period capture and playback, client-held period ownership, stale tickets,
-read-alias exclusion, stop ordering, cache publication, busy authority and late
-publication retention. Existing finite-capture and DMA cases supply unchanged
-lower-layer evidence; they are not replayed by this target.
+read-alias exclusion, stop ordering, cache publication, busy authority, late
+publication retention, cancellation of a never-started stream without GEN, and
+START refusal for a partly committed playback catalogue. The host fixture
+`checks/i2s.c` checks the same driver against the actual DMA controller under
+sanitizers, including retained faults; [i2s.md](i2s.md) lists its cases.
 
-The private CMake fragment adds the new service dependencies to the existing
-DMA service and startup targets. Those targets require recompilation because
-private service storage has grown; their established scenarios do not require
-another execution solely for that layout change.
+The private CMake fragment adds the stream driver to the existing DMA service
+and startup targets, because the service links stream dispatch even for images
+that register no stream job.
 
 The duplex compositions in `checks/i2s-stream.c` use the same real providers and
 modeled FIFO/DMA registers. They account for five completed periods in each
@@ -168,8 +179,14 @@ This plays the embedded recording repeatedly; it does not support live refills.
 Capture keeps all four raw periods reserved for DMA. Each period occupies
 separate cache lines. Initial publication cleans and invalidates them; later CPU
 access only reads them. The worker copies a completed period into a private
-4,096-byte staging buffer. It invalidates the raw range before and after copying,
-using the existing native INVALIDATE operation without cleaning DMA-written data.
+4,096-byte staging buffer. It invalidates the raw range and issues a barrier
+before copying, using the existing native INVALIDATE operation without cleaning
+DMA-written data. A second barrier after the copy completes its memory loads
+before the postcheck reads the package-count, destination and remaining-byte
+registers. Without it, the processor could read those registers before the
+copy finished, and a DMA overwrite of the period could reach staging
+undetected. The CPU only reads the raw range, and the next copy of the same
+period invalidates it again, so no cache maintenance follows the copy.
 No raw pointer reaches the application. `CAPTURED_COPY` grants the immutable
 staging copy until its exact ticket is returned. The application copies staging
 into its existing four USB slots before returning it.
@@ -233,7 +250,7 @@ serial wire drain remain unqualified. DMA idle does not establish wire drain.
 `~/.cache/sunstoneos/evidence/i2s-hardware-cyclic-20261019/` preserves descriptor
 checks, the actual native link, actual FreeRTOS/provider composition checks and
 producer-derived native client cases. The provider cases cover three ring wraps,
-coalesced progress, reuse during each invalidation, cursor transitions, retained
+coalesced progress, reuse during the invalidation and after the copy, cursor transitions, retained
 staging, held fill leases, untrusted initial counts, delayed start readback and
 ambiguous observation history. Modeled registers, DMA writes and cache effects
 do not establish physical device ordering. Earlier finite, duplex and USB
@@ -255,11 +272,20 @@ catalogue allocation remains retained in full. Package completion still follows
 the existing DMA ownership-ending protocol. Final period accounting uses that
 prefix, and subsequent PUT operations release leases without scheduling refill.
 
-After final DMA ownership ends, the worker leaves TX enabled and polls FIFO state
-within the existing operation deadline. A FIFO-empty observation enters
-`A733_I2S_INPUT_ENDED`, which maps to retained service COMPLETE. It does not release
-shared clocks or pins, disable the serializer, or admit CLOSE/REAP. FIFO errors,
-invalid free counts and expired observations retain failure. Explicit CANCEL may
+After final DMA ownership ends, the worker leaves TX enabled and polls FIFO state.
+The deadline is the time to drain 128 FIFO entries at the configured frame rate
+plus the operation budget; at 16 kHz mono the drain takes 8 ms. A FIFO-empty
+observation enters `A733_I2S_INPUT_ENDED`, which maps to retained service
+COMPLETE. It does not release shared clocks or pins, disable the serializer, or
+admit CLOSE/REAP.
+
+The final DMA completion checks the FIFO error bits, and no sample enters the
+FIFO after it. A TX underrun (ISTA TXU) observed while polling therefore means
+that the serializer emptied the FIFO; it is expected and does not fail the
+stream. Only an FSTA reading of 128 free entries reports the end of input. TX
+overflow, invalid free counts and expired observations retain failure. Whether
+the device latches TXU at that point is inferred from ordinary underrun
+behavior and has not been observed on the board. Explicit CANCEL may
 truncate output and uses the existing stop protocol; duplex peer control bits
 remain preserved.
 
