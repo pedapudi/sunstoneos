@@ -25,7 +25,7 @@ class Machine(n.Machine):
   assert record['image_sha256']==hashlib.sha256(path.read_bytes()).hexdigest()
   self.scheduler=2;self.task=self.get(self.app+self.af['handles']+8);self.u.reg_write(UC_ARM64_REG_PSTATE,0x345)
   self.stopped=False
-  self.fb=image.address('framebuffer');self.fl=image.layouts['hdmi_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=image.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=image.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=image.layouts['a733_de'];self.holders={};self.events=[];self.queue=0;self.status=0;self.pending_frame=False;self.fault=0;self.critical=0
+  self.fb=image.address('framebuffer');self.fl=image.layouts['hdmi_framebuffer'];self.hdmi=self.app+self.af['hdmi'];self.hl=image.layouts['a733_hdmi_native'];self.h=self.hdmi+self.hl['controller'];self.hcl=image.layouts['a733_hdmi'];self.de=self.fb+self.fl['de'];self.dl=image.layouts['a733_de'];self.holders={};self.events=[];self.queue=0;self.status=0;self.status_reads=0;self.races=[0,0];self.fault=0;self.critical=0
   for base,count in [(0x02002000,0x2000),(0x03900000,0x20000),(0x05000000,0x400000),(0x07010000,0x1000),(0x07061000,0x1000),(0x07090000,0x1000)]:self.u.mem_map(base,count)
   for address,value in [(0x07090160,0x10000002),(0x070101ac,1),(0x02002000,0xf8000000|(99<<16)|(99<<8)),(0x020022e0,0xf4000000|(3<<16)|(99<<8)),(0x02003928,0x20002),(0x020039a8,0x20000),(0x020025c0,1<<5),(0x020025e0,1<<11),(0x02002580,0x80000000),(0x02002588,0x80000000),(0x020025e4,0x40302),(0x0200258c,0x10007),(0x020025b4,0x10007)]:self.put(address,value,4)
   for name in ['a733_pmic_live','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','a733_hdmi_service','a733_hdmi_stop','a733_hdmi_poll','vTaskSuspend']:
@@ -51,15 +51,18 @@ class Machine(n.Machine):
   if address==0x07061008:self.put(address,self.get(address-8,4)&15,4)
   elif address==0x05008150:self.put(address,0,4)
   elif address==0x05008144:
-   if self.pending_frame:
-    self.pending_frame-=1
-    if not self.pending_frame:self.status|=1
+   # FRAME_END latches on a free-running cadence of replay status reads,
+   # independent of the driver step and of its W1C clears.
+   if self.get(self.de+self.dl['action'],4)==4:
+    self.status_reads+=1
+    if self.status_reads%3==0:self.status|=1
+    step=self.get(self.de+self.dl['step'],4)
+    if self.status&1 and step in (4,17):self.races[step==17]+=1
    self.put(address,self.status,4)
  def write(self,u,access,address,size,value,unused):
   self.events.append([address,value,self.ticks//24])
   if address==0x05008144:
    self.status&=~(value&5)
-   if value&1 and self.queue:self.pending_frame=2
   elif address==0x05008150 and value&1:
    assert self.critical==1 and any(v==self.task for v in self.holders.values())
    self.queue+=1;self.status|=4
@@ -95,7 +98,7 @@ def save(m,folder,label):
  folder.mkdir(parents=True,exist_ok=True);memory=[]
  for address,count in [(0x41000000,0x400000),(m.bank,4194304),(0x02002000,0x2000),(0x03900000,0x20000),(0x05000000,0x400000),(0x07010000,0x1000),(0x07061000,0x1000),(0x07090000,0x1000)]:
   file=label+'-'+hex(address)+'.bin';(folder/file).write_bytes(bytes(m.u.mem_read(address,count)));memory.append(dict(address=address,file=file))
- record={k:getattr(m,k) for k in ['ticks','queue','status','pending_frame','holders','events','owner','deadline']};record['memory']=memory;record['binding']=m.binding;record['image_sha256']=hashlib.sha256(m.image_path.read_bytes()).hexdigest();(folder/(label+'.json')).write_text(json.dumps(record,indent=2)+'\n')
+ record={k:getattr(m,k) for k in ['ticks','queue','status','status_reads','races','holders','events','owner','deadline']};record['memory']=memory;record['binding']=m.binding;record['image_sha256']=hashlib.sha256(m.image_path.read_bytes()).hexdigest();(folder/(label+'.json')).write_text(json.dumps(record,indent=2)+'\n')
 def restore(m,folder,label):
  record=json.loads((folder/(label+'.json')).read_text());assert record['image_sha256']==hashlib.sha256(m.image_path.read_bytes()).hexdigest()
  assert record.pop('binding')==m.binding
@@ -116,6 +119,8 @@ def main():
    if m.get(m.app+m.af['presentations'],4)==3:break
   assert m.get(m.app+m.af['presentations'],4)==3
   assert struct.unpack('<3I',m.u.mem_read(m.app+m.af['presented'],12))==(1,2,1)
+  assert all(m.races),m.races
+  assert 0<m.get(m.de+m.dl['replay_rcq_done'])<m.get(m.de+m.dl['replay_frame_end'])
   save(m,a.output,'presented');print('PASS actual TV0 replay 0→1→0',flush=True)
  m.ticks=m.get(m.app+m.af['stop_at'])*24
  for i in range(300):
@@ -128,7 +133,8 @@ def main():
  # Stable completion stays observable beyond the original absolute lifetime.
  m.ticks=(m.deadline+1)*24;assert m.call('gpu_display_output_step')==1
  results=dict(passed=True,scope=__doc__,physical_access=False,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),queue_updates=m.queue,presented=[1,2,1],events=m.events,
-  cases=['native-tv0-setup-iommu','three-paired-rcq-and-frame-end-observations','hdmi-stop-before-de-disable','actual-pmic-owner-park-before-success','stable-terminal-success-after-expiry'])
+  frame_end_races=dict(step4=m.races[0],step17=m.races[1]),
+  cases=['native-tv0-setup-iommu','three-paired-rcq-and-frame-end-observations','free-running-frame-end-at-clear-readbacks','hdmi-stop-before-de-disable','actual-pmic-owner-park-before-success','stable-terminal-success-after-expiry'])
  (a.output/'replay.json').write_text(json.dumps(results,indent=2)+'\n');print('PASS healthy HDMI/DE stop and PMIC owner acknowledgment',flush=True)
  # A separate pending submission reaches its original stop deadline without
  # an acquired final frame-end. No drain/reset/recycle is inferred.

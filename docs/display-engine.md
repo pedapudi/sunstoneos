@@ -131,7 +131,9 @@ The source inspected here does not supply a sufficient drain proof. That
 platform completion mechanism remains required work.
 
 Each poll performs at most one admission, MMIO, or barrier callback, with a
-monotonic absolute deadline checked before and after it. An uncertain write,
+monotonic absolute deadline checked before and after it. A word whose mask
+covers all 32 bits is written without a preceding read, because none of its
+current bits survive; its readback still verifies the written value. An uncertain write,
 failed readback, callback failure, clock regression, deadline, or reentry ends
 in `FAULT_RETAINED`. There is no automatic rollback, reset, retry, or release.
 Terminal states perform no callbacks.
@@ -209,6 +211,14 @@ sample from an earlier task poll cannot authorize submission. Idle returns
 pending without writing. Fresh RCQ finish completes the register copy; a cleared
 and subsequently observed DE frame-end flag records a later controller frame
 boundary. Readback also checks the selected address.
+
+Frame-end latches on every frame while the output scans out, so a frame
+boundary can fall between a W1C clear and its readback. A stale RCQ-finish flag
+at the readback before submission is a verify fault. A frame-end flag at that
+readback is ignored, because no later step depends on it. A frame-end flag at
+the readback after the post-RCQ clear sends the operation back to that clear.
+Frame-end therefore counts only after a readback has shown it clear, and a flag
+that never clears ends at the request deadline as a time fault.
 
 These observations do not prove that old framebuffer reads or read-ahead have
 drained. Neither frame nor command pages may be overwritten, unmapped or
