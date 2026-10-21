@@ -4,13 +4,14 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import sys
 sys.dont_write_bytecode=True
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import harness
 ROOT=Path(__file__).resolve().parents[1]
 CACHE=Path.home()/'.cache/sunstoneos'
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -49,21 +50,13 @@ def main():
         save(out/'source-inputs.json',{str(p.relative_to(source)):sha(p) for p in source.rglob('*') if p.is_file()})
     else:
         for name,digest in json.loads((out/'runtime-inputs.json').read_text()).items():assert sha(Path(name))==digest,name
-    steps_path=out/'steps.json';steps=json.loads(steps_path.read_text()) if steps_path.exists() else {}
-    commands_path=out/('setup-commands.json' if a.setup_only else 'runtime-commands.json');commands=[]
-    def command(label,values):
-        values=list(map(str,values))
-        if steps.get(label,{}).get('exit')==0:assert steps[label]['command']==values;return
-        commands.append(values);save(commands_path,commands)
-        steps[label]={'state':'running','command':values};save(steps_path,steps)
-        result=subprocess.run(values,capture_output=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
-        (out/(label+'.log')).write_bytes(result.stdout+result.stderr);steps[label]={'exit':result.returncode,'command':values};save(steps_path,steps)
-        if result.returncode:raise RuntimeError(label+' failed; inspect preserved log')
-    compiler=Path('/usr/bin/clang-21');linker=CACHE/'host/usr/bin/ld.lld-21'
+    steps=harness.Steps(out,'setup-commands.json' if a.setup_only else 'runtime-commands.json');command=steps.command
+    compiler=harness.CLANG;linker=harness.LLD
     image=out/'build/sunstone-a733-rtc.elf'
     if a.setup_only:
         failures=[]
         host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+              '-fno-sanitize-recover=all',
               '-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'platform/a733-smp-cached')]
         jobs={'driver-build':host+[source/'checks/a733-rtc-calendar.c',source/'drivers/rtc/a733_rtc.c',source/'drivers/rtc/a733_rtc_initialize.c','-o',out/'driver'],
               'default-startup-build':host+[source/'checks/rtc-calendar-default.c',source/'apps/board/admission.c',source/'drivers/storage/storage_digest.c','-o',out/'default-startup'],
@@ -109,21 +102,11 @@ def main():
         paths += [p for package in (unicorn,elftools) for p in Path(package.__file__).parent.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
         save(out/'runtime-inputs.json',{str(p):sha(p) for p in dict.fromkeys(paths)})
         print('Setup passed; no runtime cases executed.');return
-    def step(name,result=None):
-        if result is None:
-            if steps.get(name,{}).get('exit')==0:return True
-            steps[name]={'state':'running'};save(steps_path,steps);return False
-        steps[name]={'exit':0,**result};save(steps_path,steps)
     command('driver',[out/'driver'])
     command('default-startup',[out/'default-startup',out/'source-adoption-session.bin'])
     command('rtc-startup',[out/'rtc-startup',out/'source-adoption-session.bin'])
-    try:module('rtc_cases_run',source/'checks/rtc-calendar-cases.py').run(out,source,step)
-    except BaseException as error:
-        import traceback
-        (out/'runtime-failure.log').write_text(traceback.format_exc())
-        for label,value in steps.items():
-            if value.get('state')=='running':value.update(state='failed',error=str(error))
-        save(steps_path,steps);raise
+    try:module('rtc_cases_run',source/'checks/rtc-calendar-cases.py').run(out,source,steps.case)
+    except BaseException as error:steps.failed(error);raise
     command('launcher',[sys.executable,out/'rtc-launcher-model.py','--bundle',out/'launcher','--output',out/'launcher-result.json'])
     command('host',[sys.executable,source/'checks/rtc-calendar-host.py',out])
     save(out/'result.json',{'passed':True,'physical_access':False,'image_sha256':sha(image),'scope':'New explicit calendar/source operations and linked sealed initialization/copy instructions; default startup validation, own v2 launcher and host boundary. Physical clocks/GIC/cache/USB and wall-clock accuracy remain modeled/unqualified.'})
