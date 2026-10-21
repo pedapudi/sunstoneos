@@ -86,6 +86,27 @@ int aic8800_data_sent(struct aic8800_data *d,const void *owner)
     else {d->state=AIC8800_DATA_DONE;d->completion_deadline=d->deadline;}
     return 1;
 }
+/* One A-MSDU subframe at MPDU offset at: DA, SA, big-endian MSDU length, then
+ * an RFC 1042 SNAP MSDU with an ordinary EtherType. Every subframe except the
+ * last is padded to four bytes, as in the reference receive path. Returns the
+ * next subframe offset (end after the last), or 0 for a malformed subframe. */
+static size_t subframe(const struct aic8800_data *d,const uint8_t *m,size_t at,size_t end)
+{
+    const uint8_t snap[]={0xaa,0xaa,3,0,0,0};
+    if(end-at<22)return 0;
+    size_t length=be16(m+at+12),used=14+length;
+    if(length<8||length>end-at-14||length+6>AIC8800_DATA_ETHERNET_BYTES||!equal(m+at+14,snap,6)||
+        be16(m+at+20)<1536||be16(m+at+20)==0x888e||(!(m[at]&1)&&!equal(m+at,d->wifi->mac,6)))return 0;
+    if(used==end-at)return end;
+    used=(used+3)&~(size_t)3;
+    return used<=end-at?at+used:0;
+}
+static void deliver_subframe(struct aic8800_data *d)
+{
+    const uint8_t *m=d->amsdu;size_t at=d->amsdu_next,length=be16(m+at+12);
+    memcpy(d->ethernet,m+at,12);memcpy(d->ethernet+12,m+at+20,length-6);
+    d->frame.bytes=(uint16_t)(length+6);d->amsdu_next=subframe(d,m,at,d->amsdu_end);
+}
 enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const void *owner,
     const struct aic8800_sdio_response *r,uint64_t now)
 {
@@ -108,9 +129,12 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
     size_t n=le16(p);if(n!=r->record_bytes-60||n<24)return AIC8800_CODEC_UNRELATED;
     uint32_t flags=le32(p+48),status=le32(p+36);
     unsigned encrypted=((status>>2)&7)==3;
-    /* upload required; management, four-address, reorder, AMSDU and monitor
-     * records stay opaque. Error/decryption bits are not fabricated as success. */
-    if(!(flags&0x40)||(flags&0xa7)||p[49]!=d->wifi->vif||
+    /* upload required; management, four-address and monitor records stay
+     * opaque. Error/decryption bits are not fabricated as success. Records that
+     * need reordering are delivered in arrival order; the CCMP replay check then
+     * drops any older packet number. As in the reference SDIO receive path,
+     * A-MSDU follows the QoS control bit; a set hardware bit without it is refused. */
+    if(!(flags&0x40)||(flags&0x86)||p[49]!=d->wifi->vif||
         (p[50]!=d->wifi->ap_index&&p[50]!=0xff)||(status&0x3e0)||
         ((status&0x1c)&&!encrypted))return AIC8800_CODEC_UNRELATED;
     const uint8_t *m=p+60;uint16_t fc=le16(m);
@@ -121,7 +145,8 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
     /* Only data or QoS data; null/CF variants are not Ethernet MSDUs. */
     if((fc&0x00f0)!=0&&(fc&0x00f0)!=0x0080)return AIC8800_CODEC_UNRELATED;
     size_t header=(fc&0x0080)?26:24;
-    if(n<header+8||((fc&0x0080)&&(m[24]&0x80)))return AIC8800_CODEC_UNRELATED;
+    unsigned amsdu=(fc&0x0080)&&(m[24]&0x80);
+    if(n<header+8||((flags&1)&&!amsdu))return AIC8800_CODEC_UNRELATED;
     unsigned key_slot=0,tid=(fc&0x80)?m[24]&15:16;uint64_t pn=0;
     if(encrypted) {
         if(n<header+16)return AIC8800_CODEC_UNRELATED;
@@ -131,6 +156,17 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
         for(unsigned i=0;i<4;++i)pn|=(uint64_t)ccmp[4+i]<<(16+8*i);
         if(!aic8800_security_rx_key(d->security,!!(m[4]&1),ccmp[3]>>6,tid,pn,&key_slot))return AIC8800_CODEC_UNRELATED;
         header+=8;
+    }
+    if(amsdu) {
+        /* Validate every subframe before committing the MPDU's packet number.
+         * EAPOL is never accepted inside an aggregate. */
+        if(!port_open(d)||(d->wifi->target.security==AIC8800_WIFI_WPA2_PSK_CCMP&&!encrypted))return AIC8800_CODEC_UNRELATED;
+        for(size_t at=header;at<n;)if(!(at=subframe(d,m,at,n)))return AIC8800_CODEC_UNRELATED;
+        d->frame=(struct aic8800_data_frame){.generation=d->wifi->association_generation,.ethernet=d->ethernet,
+            .encrypted=(uint8_t)encrypted,.vif=d->wifi->vif,.ap_index=d->wifi->ap_index};
+        d->amsdu=m;d->amsdu_next=header;d->amsdu_end=n;deliver_subframe(d);
+        if(encrypted)aic8800_security_rx_commit(d->security,key_slot,tid,pn);
+        d->held_record=r->record;d->held=1;return AIC8800_CODEC_UNRELATED;
     }
     const uint8_t snap[]={0xaa,0xaa,3,0,0,0};
     if(!equal(m+header,snap,6))return AIC8800_CODEC_UNRELATED;
@@ -147,4 +183,9 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
     d->held_record=r->record;d->held=1;return AIC8800_CODEC_UNRELATED;
 }
 void aic8800_data_consumed(struct aic8800_data *d,const void *owner,const uint8_t *record)
-{ if(d&&d->owner==owner&&d->state!=AIC8800_DATA_FAULT&&d->held_record==record){d->held=0;d->held_record=0;} }
+{
+    if(!d||d->owner!=owner||d->state==AIC8800_DATA_FAULT||d->held_record!=record)return;
+    /* The next A-MSDU subframe replaces the consumed view; the record stays held. */
+    if(d->amsdu&&d->amsdu_next<d->amsdu_end){deliver_subframe(d);return;}
+    d->held=0;d->held_record=0;d->amsdu=0;
+}

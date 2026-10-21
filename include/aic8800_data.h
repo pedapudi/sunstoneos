@@ -31,6 +31,8 @@ struct aic8800_data {
     uint8_t initialized, held;
     size_t request_bytes;
     const uint8_t *held_record;
+    const uint8_t *amsdu; /* Held A-MSDU MPDU in the transport receive buffer. */
+    size_t amsdu_next,amsdu_end;
     struct aic8800_data_result result;
     struct aic8800_data_frame frame;
     uint8_t request[AIC8800_DATA_PACKET_BYTES], ethernet[AIC8800_DATA_ETHERNET_BYTES];
@@ -40,8 +42,11 @@ struct aic8800_data {
  * quiescence/disposal. These worker functions are transport-internal contracts.
  * Inputs/outputs must not overlap any owned object or immutable firmware blob;
  * public transport wrappers enforce this across the complete ownership graph.
- * Initial RX profile: unencrypted, unfragmented station FromDS, RFC1042 SNAP,
- * no AMSDU/reorder. Unsupported records remain in the raw transport queue.
+ * RX profile: unfragmented station FromDS, RFC1042 SNAP, with or without CCMP.
+ * Reorder-flagged MPDUs arrive in order of receipt. An A-MSDU is validated
+ * whole, then each subframe is a separate view of the same held record; consume
+ * advances to the next subframe and releases the record after the last.
+ * Unsupported records remain in the raw transport queue.
  * There is no WPA controlled-port authorization: only EAPOL is admitted while
  * SECURITY_PENDING. Open-network authorization is explicit and generation-bound.
  */
@@ -53,6 +58,7 @@ void aic8800_data_observe(struct aic8800_data *, const void *, uint64_t);
 int aic8800_data_sent(struct aic8800_data *, const void *);
 enum aic8800_codec_result aic8800_data_response(struct aic8800_data *, const void *,
     const struct aic8800_sdio_response *, uint64_t);
+/* Releases the record, or replaces the view with the next A-MSDU subframe. */
 void aic8800_data_consumed(struct aic8800_data *, const void *, const uint8_t *);
 void aic8800_data_stop(struct aic8800_data *, const void *, enum aic8800_data_error);
 #endif
