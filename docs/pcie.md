@@ -97,10 +97,14 @@ translation unit is at 0x06300000, and the application registers are at
 and refuses endpoint configuration writes.
 
 Local PCIe AUX uses SYS24M and AXI uses PERI0 400 MHz. SYS24M is the normalized
-24 MHz PLL_REF output, so admission uses the shared `a733_clock_ref24_valid()`
-decoder and accepts a 19.2 MHz or 26 MHz oscillator whose PLL_REF factors
-produce 24 MHz. The inherited parent checks require No-Auto mode, software
-enable and effective gate status for every selected branch. The native controller keeps GIC delivery masked and
+24 MHz PLL_REF output, and admission checks it with the shared
+`a733_clock_ref24_valid()` decoder. The COMB1 PHY also takes the raw DCXO
+oscillator through the DCXO_SERDES1 gate (0x0709016c bit 5), and its fixed
+91-entry register table is verified only for a 24 MHz oscillator. Admission
+therefore also requires a 24 MHz DCXO and refuses a 19.2 MHz or 26 MHz board,
+even when its PLL_REF factors produce a valid SYS24M. The inherited parent
+checks require No-Auto mode, software enable and effective gate status for
+every selected branch. The native controller keeps GIC delivery masked and
 checks pending/active state, observes both link-up bits, bounds capability-list
 walking and refuses cyclic or malformed lists. PCI command accesses use 16-bit
 writes so adjacent status write-one-to-clear bits are preserved.

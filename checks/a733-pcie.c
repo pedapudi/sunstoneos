@@ -224,6 +224,11 @@ int main(int argc,char **argv)
     setup();port.config.deadline=3000000;not_ready=UINT32_MAX;retained();
     assert(port.last_now-port.perst_since>=1000000&&port.last_now<3000000);
     setup();*pmic_model_word(&model,0x20000000)=0x56780001;retained();
+    /* A valid 26 MHz SYS24M pair is still refused: the PHY table is 24 MHz only.
+     * APBS1 moves to SYS24M so the PMIC TWI divider stays in range. */
+    setup();*pmic_model_word(&model,0x07090160)=0x983fb0f7;*pmic_model_word(&model,0x02002000)=0xf8675f00;
+    *pmic_model_word(&model,0x07010010)=0x04000000;
+    retained();assert(!phy_done&&!trace_count);
     setup();model.pmic[0x20]=0;retained();assert(!phy_done&&!port.pin.id);
     setup();*pmic_model_word(&model,0x02000210)=1u<<22;retained();assert(!phy_done&&!port.pin.id);
     setup();raise_before_adopt=1;retained();
