@@ -259,9 +259,9 @@ or an expired deadline prevents healthy shutdown; no retry occurs.
 
 Only complete cleanup enters the existing firmware power and isolation protocol.
 One absolute CLOSE deadline covers draining, cleanup and shutdown. The service
-retains mappings and allocations and refuses reopen. Physical cleanup and memory
-draining remain unqualified. Translation removal and allocation reclamation
-remain unimplemented.
+retains mappings and allocations by default. The optional standalone lifecycle
+profile below can remove child mappings, release their parent allocations and
+reconstruct the session. Physical cleanup and memory draining remain unqualified.
 
 Eight focused cases exercise the actual native reserved owners, allocator,
 mappings, admission callbacks, service and queue transport. They cover completed
@@ -271,6 +271,63 @@ first shutdown power command, and staged or borrowed output refusal. All pass in
 `~/.cache/sunstoneos/evidence/gpu-render-cleanup-20261020/`. Firmware returns,
 GPU pixels, register responses, mode observation and isolation are modeled.
 The separate native application build establishes compilation and linking only.
+
+## Standalone sessions can dispose and reconstruct child resources
+
+The supervised single-core GPU application accepts `SUNSTONE_GPU_LIFECYCLE=ON`
+with its existing runtime-input, triangle or texture configuration. The selected
+texture target remains `sunstone-a733-gpu-texture-single-core`; its manifest
+workload becomes `copied-indexed-texture-draw-lifecycle`. Default builds retain
+CLOSE ownership and their existing wire versions.
+
+After healthy CLOSE, explicit DISPOSE binds the exact closed client and queue
+epoch. The native backend checks the completed firmware shutdown, retired
+queues, reset/isolation acknowledgment, platform OFF and zero resource token.
+This uses the [accepted normal shutdown contract](gpu-isolation.md); physical
+visibility and shutdown remain unqualified. Power OFF alone is insufficient.
+
+The sole GPU worker invalidates complete WB child extents, removes child MIPS
+translations, clears GPU VM tables and context records, then releases three
+compute parent leases and four graphics parent leases. Global firmware parents,
+the backend and shared power/clock/PMIC/USB providers remain retained. Successful
+cleanup receipts and each completed release remain recorded after later failure.
+A partial reconstruction preserves new allocations as DEVICE-owned or
+constructor-RETAINED; the poisoned service prevents retry.
+
+OPEN after successful DISPOSE reconstructs child descriptors and allocations
+with fresh lease generations. It initializes new queues, timelines and event
+references, and publishes exactly the next queue epoch. Client ticket counters
+survive. The complete authenticated compute package stays outside disposed
+pools. Graphics reconstruction uses retained profile metadata; caller texture
+and geometry drafts require a fresh upload after OPEN.
+
+This profile admits only the source-audited standalone image: exact static
+service/owner/provider bindings, one GPU client, the actual GPU worker, static
+task allocation, disabled timers and an exact pool ledger containing only the
+GPU parents. Other images refuse disposal and reopening. Mixed-device runtime
+pool reclamation still needs shared serialization.
+
+All queued mutations and copied outputs bind their queue epoch at service
+consumption. Optional wire versions are compute 6, triangle 7, texture 8 and
+depth/blend 9; legacy versions 2 through 5 retain their layouts. Render OPEN
+publishes frame/generation zero and requires fresh submission before READ.
+Compute OPEN executes the original sealed input and publishes sequence one.
+Texture replies use a separate 72-byte header, followed by the existing copied
+stream and terminal-ZLP ownership rules.
+
+DISPOSE and reconstruction each allow up to 15 seconds, capped by the original
+absolute session deadline. CLOSE retains its one-second allowance. Disposal
+handles at most 16 WB pages per worker step; the admitted maximum depth layout
+needs fewer than 2,000 steps at the configured 1 kHz tick rate. Neither an
+expired deadline nor uncertain completion authorizes reuse.
+
+Focused lifecycle evidence is retained in
+`~/.cache/sunstoneos/evidence/gpu-resource-disposal-20261020/`. Native child
+allocation/disposal/reconstruction and application protocol checks have separate
+model boundaries. The selected linked consumer covers texture/depth; compute
+and triangle application leaves have additional compilation coverage. These
+checks do not establish physical cache visibility, firmware execution, rasterized
+pixels, SMP scheduling or mixed-device disposal.
 
 ## Copied triangle submission
 
@@ -339,8 +396,8 @@ The maximum frame sequence is `UINT32_MAX/2`. With freshly constructed cleanup
 records, this conservatively bounds two cleanup references per complete frame
 below 32-bit wrap. Ticket and ring-serial wrap are also refused. A timeout or
 uncertain kick retains the context and allocations; it does not enable reuse.
-CLOSE performs the firmware cleanup described above. Mapping removal, allocation
-release and reopening remain unsupported.
+CLOSE performs the firmware cleanup described above. Explicit child disposal and
+reopening require the optional standalone lifecycle profile below.
 
 Build `apps/gpu-render` with `SUNSTONE_GPU_RUNTIME_DRAW=ON`,
 `SUNSTONE_GPU_SUPERVISED=ON` and `SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`,

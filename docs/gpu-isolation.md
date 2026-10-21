@@ -41,7 +41,9 @@ OFFLINE. Every callback failure, invalid result, clock regression or expired
 deadline latches failure and prevents subsequent stop callbacks. Bookkeeping
 preserves a resource release that already completed, even when a later clock
 check fails. Reserved allocation parents and copied application output remain
-owned for the application lifetime. Compute/free-list services cannot reopen.
+owned after ordinary CLOSE. The optional [standalone GPU lifecycle profile](gpu-render.md#standalone-sessions-can-dispose-and-reconstruct-child-resources)
+uses this full healthy-stop proof for explicit child mapping/allocation disposal
+and fresh reconstruction; global firmware/provider parents remain pinned.
 
 An optional synchronous platform override remains supported. Its result must be
 one and its completed platform state must satisfy the same ownership checks.

@@ -113,7 +113,8 @@ ownership and prevents the healthy power-off path. BUSY is a terminal refusal
 for this bounded operation; no retry is implied.
 
 Cleanup acknowledges firmware context disposal. Compute backing, VM mappings
-and pool allocations remain retained, and OPEN refuses to reuse that session.
+and pool allocations remain retained after ordinary CLOSE. Explicit disposal
+and reconstruction require the [standalone lifecycle profile](gpu-render.md#standalone-sessions-can-dispose-and-reconstruct-child-resources).
 Native graphics owners use the [ordered render cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping)
 for render contexts, render-target datasets and free lists. An unexpected multicore observation also requires per-core
 context state and command support; the documented A733 GPU is MC1. Power OFF
