@@ -33,6 +33,7 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 }
 static void exchange(void)
 {
+    BOARD_PROGRESS(BOARD_SERVICE_USB0);
     if(frame_bytes){
         if(!board_live(NULL))stop();
         if(frame_success){int live=mimus_board_export_live();if(live<0)stop();if(!live)return;}

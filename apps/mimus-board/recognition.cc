@@ -24,13 +24,13 @@ void recognize(void *)
 {
     /* Board owners must first establish live storage attachment. Hashing is
      * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
-    while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}vTaskDelay(1);}
+    while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
     for(unsigned i=0;i<3;++i){
         storage_digest digest;storage_digest_init(&digest);
         const auto *p=reinterpret_cast<const uint8_t *>(mimus_asset_address[i]);
         for(size_t n=0;n<mimus_asset_bytes[i];){
             if(!mimus_board_live()){failed();}size_t count=mimus_asset_bytes[i]-n;if(count>4096)count=4096;
-            if(!storage_digest_add(&digest,p+n,count)){failed();}n+=count;taskYIELD();
+            if(!storage_digest_add(&digest,p+n,count)){failed();}n+=count;mimus_board_progress();taskYIELD();
         }
         uint8_t hash[32];storage_digest_end(&digest,hash);
         if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
@@ -42,7 +42,7 @@ void recognize(void *)
     for(;;){
         for(;;){
             int trigger=mimus_board_trigger_step();if(trigger<0){failed();}
-            if(trigger==1)break;vTaskDelay(1);
+            if(trigger==1)break;mimus_board_progress();vTaskDelay(1);
         }
         unsigned current=generation.load(std::memory_order_acquire);
         started.store(current,std::memory_order_release);
@@ -53,9 +53,9 @@ void recognize(void *)
         /* A read finishing after recognition is not overlap. */
         if(overlap.load(std::memory_order_acquire)!=current){failed();}
         state.store(1,std::memory_order_release);
-        if(!mimus_board_keyboard())for(;;)vTaskDelay(1);
+        if(!mimus_board_keyboard())for(;;){mimus_board_progress();vTaskDelay(1);}
         while(acknowledged.load(std::memory_order_acquire)!=current){
-            if(!mimus_board_live()){failed();}vTaskDelay(1);
+            if(!mimus_board_live()){failed();}mimus_board_progress();vTaskDelay(1);
         }
         if(current==UINT32_MAX){failed();} /* Refuse before identity wraps. */
         state.store(0,std::memory_order_release);
@@ -66,7 +66,7 @@ void recognize(void *)
 }
 }
 extern "C" void mimus_native_checkpoint(void)
-{if(!mimus_board_live())failed();}
+{if(!mimus_board_live())failed();mimus_board_progress();}
 extern "C" void platform_puts(const char *text)
 {
     mimus_native_checkpoint();

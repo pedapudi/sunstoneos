@@ -7,4 +7,8 @@
  * The getter exposes only the authenticated board prefix after publication. */
 int board_session_prepare(const struct a733_smp_contract *);
 const struct a733_board_session *board_session_snapshot(void);
+/* The complete authenticated span, for an image whose session extends the
+ * board prefix. Its contract admission fixes the span length; bytes past the
+ * sealed length read as zero. */
+const void *board_session_sealed(void);
 #endif
