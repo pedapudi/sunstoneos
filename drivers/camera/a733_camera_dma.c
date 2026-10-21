@@ -115,8 +115,8 @@ int a733_camera_dma_stream(struct a733_camera_dma *s,unsigned slots,uint64_t slo
 }
 int a733_camera_dma_take(struct a733_camera_dma *s,unsigned *slot,uint32_t *sequence)
 {
-    struct a733_camera_ring *g=&s->ring;
     if(!s || !s->initialized || s->state!=A733_CAM_DMA_STREAMING || !slot || !sequence)return -1;
+    struct a733_camera_ring *g=&s->ring;
     if(!g->queued)return 0;
     unsigned k=g->queue[0];
     for(unsigned i=1;i<g->queued;i++)g->queue[i-1]=g->queue[i];
