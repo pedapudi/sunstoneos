@@ -135,3 +135,24 @@ The current motion host closure is
 Preparation and capture results are `result.json` and `capture/result.json`
 beneath the same parent directory. Native source, constructor and execution
 closure remains in `~/.cache/sunstoneos/evidence/deinterlace-motion-20261020/`.
+
+Fixed-strength TNR selects `--mode tnr` and requires geometry marker revision 3.
+It authenticates two 640 × 480 NV12 frames, previous then current, totaling
+921600 bytes. Its first source sequence skips CPU feedback; hardware TNR stays
+enabled. Strength follows the pinned native configuration.
+
+TNR copies one 460800-byte planar YUV420 frame. Y starts at byte 0 with stride
+640; U starts at 307200 and V at 384000, each with stride 320. The wire header
+continues to describe the authenticated NV12 input. Capture records the output
+format, separate plane strides and offsets and writes `output.yuv420`. It has
+no numerical pixel oracle or picture-quality claim.
+
+Each TNR flag buffer uses 307200 bytes and a 315392-byte guarded allocation.
+The input flag maps read-only at `0x10c00000`; the output flag maps writable at
+`0x10c50000`. Preparation checks the actual allocator rows and complete table,
+including every flag page and unmapped hole. All allocations remain retained.
+The focused checks are `checks/deinterlace-tnr-preparation.py` and
+`checks/deinterlace-tnr-host.py`; predecessor USB framing and durability evidence
+continues to cover unchanged code. Their model fixture preserves the allocated
+template's identities through fixture-only deterministic entropy. Production
+preparation still chooses fresh identities and rejects modeled authority.

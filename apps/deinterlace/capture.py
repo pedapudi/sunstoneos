@@ -36,6 +36,10 @@ def decode(raw,session):
         format='YUV420' if geometry[5]==3 else 'NV12',mode={1:'WEAVE',2:'MOTION-OUT_1FRAME',3:'TNR-FIXED'}[geometry[5]],top_field_first=True,matched_finish=finish,
         hardware_status=hardware_status,scanned_masters=scanned,guards=guards,
         physical_qualified=False)
+    if geometry[5]==3:
+        result.update(input_format='NV12',input_y_stride=640,input_uv_stride=640,
+            u_stride=320,v_stride=320,layout='planar-Y-U-V',
+            plane_offsets=dict(y=0,u=307200,v=384000))
     if status in (1,3):
         require(finish==1 and hardware_status&1 and not hardware_status&0x100 and scanned==0x200 and guards==1,
             'Deinterlace completion or guard proof differs.')
@@ -49,7 +53,7 @@ def decode(raw,session):
 
 
 def expected_output(source,session):
-    """Return the WEAVE identity oracle; motion has no numerical pixel oracle."""
+    """Return the WEAVE identity oracle; motion/TNR have no numerical pixel oracle."""
     preparation.session_check(session)
     require(len(source)==preparation.geometry_check(struct.unpack_from('<8I',session,856)) and
         hashlib.sha256(source).digest()==session[768:800],
@@ -100,6 +104,9 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
                 matches_cpu_reference=frame[HEADER:]==expected if expected is not None else None,
                 pixel_reference_checked=expected is not None,wire_header_hex=frame[:HEADER].hex())
+            if result['mode']=='TNR-FIXED':
+                copied.update(format='YUV420',layout=result['layout'],y_stride=640,u_stride=320,v_stride=320,
+                    plane_offsets=result['plane_offsets'])
             record['deinterlace_output']=copied;save()
             if expected is not None and not copied['matches_cpu_reference']:
                 result['matches_cpu_reference']=False

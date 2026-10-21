@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seal fixed combined-field NV12 input for DI301 WEAVE or first-operation motion."""
+"""Seal fixed combined-field NV12 input for DI301 WEAVE, first-operation motion or fixed-strength TNR."""
 import argparse
 import hashlib
 import importlib.util
@@ -42,7 +42,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mode',choices=('weave','motion','tnr'),default='weave')
     parser.add_argument('--pattern-output',type=Path,
-        help='Write one WEAVE frame or two motion frames, then exit.')
+        help='Write one WEAVE frame or two motion/TNR frames, then exit.')
     for name in ('board','input','initial','memory','electrical','supervision','output'):
         parser.add_argument('--'+name,type=Path)
     for name in ('owner','authority','client'):

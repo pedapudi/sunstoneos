@@ -100,19 +100,20 @@ def physical_authority(record):
 def allocation_check(proof,raw,table):
     """Check actual provider rows and every IOMMU descriptor, including holes."""
     input_bytes=geometry_check(struct.unpack_from('<8I',raw,856))
-    motion=input_bytes==921600;rounded=462848
+    mode=struct.unpack_from('<I',raw,876)[0];history=mode!=1;rounded=462848
+    md_bytes=307200 if mode==3 else 76800;md_rounded=(md_bytes+4095)&~4095
     input_rounded=(input_bytes+4095)&~4095
-    if motion:require(all(proof.get(key)==value for key,value in
-        dict(input_bytes=input_bytes,input_rounded=input_rounded,md_bytes=76800,md_rounded=77824).items()),
-        'Motion input/history allocation geometry differs.')
+    if history:require(all(proof.get(key)==value for key,value in
+        dict(input_bytes=input_bytes,input_rounded=input_rounded,md_bytes=md_bytes,md_rounded=md_rounded).items()),
+        'Deinterlace temporal input/flag allocation geometry differs.')
     require(proof.get('rounded')==rounded and proof.get('table_bytes')==32768,
         'deinterlace allocation geometry differs.')
     groups=proof.get('allocations',{})
     require(set(groups)=={'boot_pool','uncached_pool'} and
-        len(groups['boot_pool'])==2 and len(groups['uncached_pool'])==(6 if motion else 3),'Incomplete deinterlace allocations.')
+        len(groups['boot_pool'])==2 and len(groups['uncached_pool'])==(6 if history else 3),'Incomplete deinterlace allocations.')
     extents=[]
     for pool,low,high,sizes,state in [('boot_pool',0x48000000,0x78000000,[input_rounded,rounded],1),
-            ('uncached_pool',0x78000000,0x79000000,[32768,rounded+8192,rounded+8192]+([rounded+8192,86016,86016] if motion else []),2)]:
+            ('uncached_pool',0x78000000,0x79000000,[32768,rounded+8192,rounded+8192]+([rounded+8192,md_rounded+8192,md_rounded+8192] if history else []),2)]:
         for slot,(row,size) in enumerate(zip(groups[pool],sizes)):
             address=row.get('physical');alignment=16384 if pool=='uncached_pool' and slot==0 else 4096
             require(type(address) is int and row.get('slot')==slot and row.get('cpu')==address and
@@ -122,12 +123,13 @@ def allocation_check(proof,raw,table):
             extents.append((address,size))
     nc=groups['uncached_pool'];pa=nc[0]['physical']
     mapping=[(0x10000000,rounded,1),(0x10400000,rounded,3)]
-    if motion:mapping += [(0x10800000,rounded,1),(0x10c00000,77824,1),(0x10c20000,77824,3)]
+    if history:mapping += [(0x10800000,rounded,1),(0x10c00000,md_rounded,1),
+        (0x10c50000 if mode==3 else 0x10c20000,md_rounded,3)]
     spans=[dict(iova=iova,physical=nc[i+1]['physical']+4096,bytes=size,access=access)
         for i,(iova,size,access) in enumerate(mapping)]
-    if motion:require(all(proof.get(key)==spans[index]['physical'] for key,index in
+    if history:require(all(proof.get(key)==spans[index]['physical'] for key,index in
         [('current_physical',2),('flag_input_physical',3),('flag_output_physical',4)]),
-        'Motion current/history physical identities differ.')
+        'Deinterlace current/flag physical identities differ.')
     require(proof.get('spans')==spans and proof.get('table_physical')==pa and
         proof.get('source_physical')==spans[0]['physical'] and
         proof.get('destination_physical')==spans[1]['physical'],
