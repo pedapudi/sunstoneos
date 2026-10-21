@@ -4,6 +4,9 @@
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
 #include <string.h>
+/* About 150 single-operation PLL polls and 100 us of PLL waits fit well
+ * within this when each poll takes tens of microseconds. */
+#define DSI_PLL_YIELD_US 5000u
 struct dsi_application dsi;
 int dsi_live(void)
 {return dsi.admitted&&board_live(NULL)&&!atomic_load_explicit(&dsi.failed,memory_order_acquire)&&
@@ -258,9 +261,15 @@ void dsi_task(void *unused)
  dsi.deadline=start+dsi.session.values[DSI_TIMEOUT];if(dsi.deadline>=board.session.deadline_us-10000)goto fault;
  /* The PLL holds the common register mutex from its ENTER to LEAVE polls and
   * its own waits are microseconds, so poll it again after a yield instead of
-  * sleeping a tick per register operation while other MMIO users wait. */
+  * sleeping a tick per register operation while other MMIO users wait.
+  * Its lock filter has no timeout short of the session deadline, so a hold
+  * longer than DSI_PLL_YIELD_US goes back to one poll per tick rather than
+  * keeping the core from lower-priority tasks until that deadline. */
+ uint64_t held_since=0;unsigned holding=0;
  for(;;){if(!dsi_live())break;if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&step()<0)break;
-  vTaskDelay(dsi.stage==4&&dsi.pll.held?0:1);}
+  uint64_t n=a733_smp_counter()/24;
+  if(!(dsi.stage==4&&dsi.pll.held))holding=0;else if(!holding){holding=1;held_since=n;}
+  vTaskDelay(holding&&n-held_since<DSI_PLL_YIELD_US?0:1);}
  fault:
  atomic_store_explicit(&dsi.failed,1,memory_order_release);atomic_store_explicit(&dsi.result,2,memory_order_release);
  if(dsi.pool){if(dsi.frame.generation)(void)device_memory_retain(dsi.pool,dsi.frame);if(dsi.tables.generation)(void)device_memory_retain(dsi.pool,dsi.tables);}
