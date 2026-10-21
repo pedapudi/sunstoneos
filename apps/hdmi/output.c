@@ -75,4 +75,8 @@ int hdmi_output_step(void)
     }
 }
 void hdmi_output_task(void *unused)
-{(void)unused;for(;;){(void)hdmi_output_step();vTaskDelay(1);}}
+{(void)unused;for(;;){(void)hdmi_output_step();
+#if SUNSTONE_HDMI_AUDIO_USB
+    hdmi_audio_observation_poll();
+#endif
+    vTaskDelay(1);}}

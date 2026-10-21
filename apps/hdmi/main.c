@@ -7,7 +7,9 @@
 struct hdmi_application app;
 const uint64_t a733_hdmi_session_bytes=sizeof(struct hdmi_session);
 const uint64_t a733_hdmi_framebuffer_mode=SUNSTONE_HDMI_FRAMEBUFFER;
-#if SUNSTONE_HDMI_AUDIO
+#if SUNSTONE_HDMI_AUDIO_USB
+const uint64_t a733_hdmi_audio_geometry[12]={2,816,440,216,HDMI_AUDIO_PCM_ADDRESS,192000,48000,2,16,32,656,160};
+#elif SUNSTONE_HDMI_AUDIO
 const uint64_t a733_hdmi_audio_geometry[10]={1,656,440,216,HDMI_AUDIO_PCM_ADDRESS,192000,48000,2,16,32};
 #endif
 #if SUNSTONE_HDMI_FRAMEBUFFER
@@ -49,7 +51,11 @@ int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
 #if SUNSTONE_HDMI_AUDIO
     if(dma_service_task_privileged(entry,context))return 1;
 #endif
-    return !context&&(entry==pmic_task||entry==hdmi_output_task);
+    return !context&&(entry==pmic_task||entry==hdmi_output_task
+#if SUNSTONE_HDMI_AUDIO_USB
+        ||entry==hdmi_audio_usb_task
+#endif
+        );
 }
 void a733_smp_diagnostic_start(void)
 {
@@ -77,9 +83,17 @@ void a733_smp_diagnostic_start(void)
         platform_panic("HDMI PCK",6);
     struct a733_rail_binding rb={&app.clocks,&app.pck,app.session.generation,a733_counter_clock_now,&app.counter};
     if(!a733_rail_leases_init(&app.rails,&rb))platform_panic("HDMI rails",7);
-    TaskFunction_t functions[]={pmic_task,hdmi_output_task};
-    const char *names[]={"hdmi-pmic","hdmi-output"};
-    for(unsigned i=0;i<2;++i){
+    TaskFunction_t functions[]={pmic_task,hdmi_output_task
+#if SUNSTONE_HDMI_AUDIO_USB
+        ,hdmi_audio_usb_task
+#endif
+    };
+    const char *names[]={"hdmi-pmic","hdmi-output"
+#if SUNSTONE_HDMI_AUDIO_USB
+        ,"hdmi-audio-usb"
+#endif
+    };
+    for(unsigned i=0;i<HDMI_TASK_COUNT;++i){
         app.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,4,app.stacks[i],&app.tasks[i]);
         if(!app.handles[i])platform_panic("HDMI tasks",8);
     }
@@ -109,6 +123,9 @@ void a733_smp_diagnostic_start(void)
 #endif
 #if SUNSTONE_HDMI_AUDIO
     if(!hdmi_audio_boot())platform_panic("HDMI audio memory/provider",14);
+#endif
+#if SUNSTONE_HDMI_AUDIO_USB
+    if(!hdmi_audio_usb_init())platform_panic("HDMI audio USB authority",15);
 #endif
     if(!a733_smp_device_preparation_admitted())platform_panic("HDMI startup expired",13);
     vTaskStartScheduler();platform_panic("HDMI scheduler returned",11);

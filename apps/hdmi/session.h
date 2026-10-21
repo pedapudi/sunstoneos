@@ -8,6 +8,9 @@
 #if SUNSTONE_HDMI_AUDIO
 #include "../hdmi-audio/session.h"
 #endif
+#if SUNSTONE_HDMI_AUDIO_USB
+#include "../hdmi-audio/usb-authority.h"
+#endif
 #define A733_STORAGE_SESSION_ADDRESS UINT64_C(0x41f00000)
 #define HDMI_SESSION_MAGIC UINT64_C(0x4153373348444131)
 #define HDMI_CONTRACT_MAGIC UINT64_C(0x4153373348444331)
@@ -31,8 +34,13 @@ struct hdmi_session {
 #if SUNSTONE_HDMI_AUDIO
     struct hdmi_audio_session audio;
 #endif
+#if SUNSTONE_HDMI_AUDIO_USB
+    struct hdmi_audio_usb_authority usb;
+#endif
 };
-#if SUNSTONE_HDMI_AUDIO
+#if SUNSTONE_HDMI_AUDIO_USB
+_Static_assert(sizeof(struct hdmi_session)==816&&offsetof(struct hdmi_session,audio)==440&&offsetof(struct hdmi_session,usb)==656,"audio USB session ABI");
+#elif SUNSTONE_HDMI_AUDIO
 _Static_assert(sizeof(struct hdmi_session)==656&&offsetof(struct hdmi_session,audio)==440,"audio session ABI");
 #endif
 _Static_assert(sizeof(struct hdmi_session)<=4096,"immutable HDMI session page");

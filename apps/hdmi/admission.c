@@ -9,8 +9,13 @@ static int present(const uint8_t *p)
 {unsigned b=0;for(unsigned i=0;i<32;++i)b|=p[i];return b!=0;}
 int hdmi_session_valid(const struct hdmi_session *s)
 {
-    return s&&s->magic==HDMI_SESSION_MAGIC&&s->version==1&&s->bytes==sizeof(*s)&&
-        s->epoch&&s->generation&&s->lease&&s->supervisor&&s->owner&&!s->reserved&&
+    return s&&s->magic==HDMI_SESSION_MAGIC&&s->version==
+#if SUNSTONE_HDMI_AUDIO_USB
+        2&&s->bytes==sizeof(*s)
+#else
+        1&&s->bytes==sizeof(*s)
+#endif
+        &&s->epoch&&s->generation&&s->lease&&s->supervisor&&s->owner&&!s->reserved&&
         present(s->image)&&present(s->evidence)&&present(s->analog)&&present(s->power)&&
         present(s->supervision)&&s->pck_client<A733_GPU_RESOURCE_CLIENTS&&
         s->request.mode==A733_HDMI_720P60&&s->request.range==A733_HDMI_LIMITED&&
@@ -25,6 +30,15 @@ int hdmi_session_valid(const struct hdmi_session *s)
 #endif
 #if SUNSTONE_HDMI_AUDIO
         &&hdmi_audio_session_valid(&s->audio)
+#if SUNSTONE_HDMI_AUDIO_USB
+        &&s->usb.owner&&s->usb.handoff&&s->usb.owner!=s->owner&&s->usb.owner!=s->pmic.owner&&
+        s->usb.owner!=s->audio.authority&&s->usb.owner!=s->audio.dma.allowed.owner&&
+        present(s->usb.initial)&&present(s->usb.electrical)&&present(s->usb.supervision)&&
+        s->usb.cold_reference==1&&!s->usb.reserved&&s->usb.supply_uv[0]==3300000&&
+        s->usb.supply_uv[1]==3300000&&s->usb.supply_uv[2]==1200000&&s->usb.supply_uv[3]==900000&&
+        !memcmp(s->usb.fabric,s->audio.dma.allowed.fabric,sizeof(s->usb.fabric))&&
+        !memcmp(s->usb.fabric_hz,s->audio.dma.allowed.rate_hz,sizeof(s->usb.fabric_hz))
+#endif
 #endif
         ;
 }
