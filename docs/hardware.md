@@ -943,9 +943,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the application-only budget change. All 169 compiled repository inputs match
   final integration; ten noncompiled declared-source differences are separately
   classified under `gpu-resource-disposal-20261020/root-integration.json`.
-  Compute/triangle leaves compile only; version-8 texture runtime and asynchronous
-  OPEN via STATUS are not exercised. Physical firmware/pixels, cache visibility,
-  reclamation/reopen, SMP and mixed-device allocator serialization remain unqualified.
+  That depth batch compiled compute/triangle leaves only. Version-8 texture runtime
+  and pending texture OPEN via STATUS remain unexercised.
+  Separate [compute-only lifecycle evidence](gpu-compute-service.md#compute-only-disposal-and-reopening)
+  now covers actual three-parent disposal/reconstruction and seventeen application/
+  TinyUSB exchanges on image `06315568…`. The immutable 8,288-byte package and
+  global parents stay retained. Fifteen modeled 1 ms owner steps rebuild fresh
+  generations/queue identity. Two 65-word outputs use pages of 32, 32 and 1 word,
+  before and after CLOSE/DISPOSE/OPEN. Pending STATUS preserves old epoch/sequence;
+  coherent READY publishes new identity/result and permits immediate READ.
+  One healthy host replay and four tail-page refusals pass, preserving each exact
+  256-byte prefix. Root matches all 169 compiled repository inputs at `7d6b89a`;
+  later changes add checks/docs only. Three noncompiled declared-source differences
+  are classified under `gpu-compute-lifecycle-20261020/root-integration.json`.
+  The corrected runtime image retains 86 of 89 objects from the initial build-only
+  image; their runtime evidence is separate. GPU/service completion, CPU
+  cache/translation and healthy-stop
+  authority remain modeled. No numerical or physical execution is added.
+  Physical firmware/pixels, cache visibility, reclamation/reopen, SMP and mixed-device
+  allocator serialization remain unqualified.
   The finite GPU adapter is integrated with eight passing linked cases and
   Astra review. Its worker/PMIC quiescence and retained object placement are
   checked. The returning composition's Nonsecure publication and host capture
