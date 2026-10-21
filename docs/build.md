@@ -106,13 +106,17 @@ python3 tools/build-sunxi-fel.py --output "$cache/build/sunxi-fel-rebuild"
 The script extracts the locked sunxi-tools archive, applies the four patches in
 the order recorded in [the source record](sources.md#local-compatibility-patches)
 without fuzz, runs `make sunxi-fel` and writes `build.json` with the tool's
-SHA-256. It never runs the tool. When the host lacks the libusb-1.0 and libfdt
+SHA-256. It never runs the tool. It exits with an error when that SHA-256
+differs from the recorded tool's, after writing `build.json`; pass
+`--allow-different` to accept a different build. When the host lacks the libusb-1.0 and libfdt
 development packages, pass make variables that point at extracted headers, for
 example `LIBUSB_CFLAGS=-I<dir>/usr/include/libusb-1.0 LIBUSB_LIBS=-l:libusb-1.0.so.0`.
 With GCC 15.2.0 and the headers from `libusb-1.0-0-dev` `2:1.0.29-2build1` and
-`libfdt-dev` `1.7.2-2ubuntu1`, the result matches the tool used for the recorded
-DDR, AArch64 and model-readback evidence,
-`4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e`.
+`libfdt-dev` `1.7.2-2ubuntu1`, the result is the recorded four-patch tool,
+`4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e`. The
+model-readback evidence records this tool, and `tools/check-a733-smp.py` and
+related checks require it through their `FEL_HASH` constants. The earliest DDR
+and AArch64 probes used an earlier build with only the first three patches.
 
 ## What the check establishes
 

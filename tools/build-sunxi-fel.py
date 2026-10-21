@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # and the bounded receive follows the status patch it modifies.
 PATCHES = ("sunxi-a733-sram.patch", "sunxi-fel-status.patch",
            "sunxi-execute-arguments.patch", "sunxi-fel-bounded-read.patch")
-# Tool used for the recorded DDR, AArch64 and model-readback evidence.
+# Four-patch tool recorded by the model-readback evidence and by FEL_HASH in
+# tools/check-a733-smp.py and related checks. The earliest DDR and AArch64
+# probes used an earlier build without the bounded receive.
 RECORDED = "4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e"
 
 
@@ -31,6 +33,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="new directory for the source tree and record")
     parser.add_argument("--cache", type=Path, default=Path.home() / ".cache/sunstoneos/sources")
     parser.add_argument("--cc", default="gcc")
+    parser.add_argument("--allow-different", action="store_true",
+                        help="exit 0 even when the tool differs from the recorded one")
     parser.add_argument("make_vars", nargs="*", metavar="NAME=VALUE", help="extra make variables")
     args = parser.parse_args()
     source = json.loads((ROOT / "sources.lock.json").read_text())["sunxi-tools"]
@@ -59,6 +63,9 @@ def main():
     (args.output / "build.json").write_text(json.dumps(record, indent=2) + "\n")
     print(f"{tool} {record['sunxi_fel']['sha256']} "
           f"({'matches' if record['matches_recorded'] else 'differs from'} the recorded tool)")
+    if not record["matches_recorded"] and not args.allow_different:
+        raise SystemExit(f"{tool} differs from the recorded tool {RECORDED}; "
+                         "pass --allow-different to accept it")
 
 
 if __name__ == "__main__":
