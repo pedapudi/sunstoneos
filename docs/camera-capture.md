@@ -40,7 +40,8 @@ The global lease, analog lease, IOMMU lease, mappings, table arena and copied
 mapping metadata remain owned. Table contents and metadata stay immutable.
 `READY` transfers the image payloads to the caller; it does not authorize reuse
 of their mappings, destruction of the coordinator or release of global resources.
-Restart, disposal and shared-master admission need separate implementations.
+Only the retained readout below can capture another image. Disposal and
+shared-master admission need separate implementations.
 
 This initial IOMMU profile excludes the other nine masters even after image
 delivery. Those masters include USB and the display engine. Production camera
@@ -111,6 +112,36 @@ is this coordinator; the application receives ownership only when the outer
 capture operation returns success. No buffer is returned on an overdue or
 uncertain completion.
 
+## Retained images are rearmed with the sensor stopped
+
+`a733_camera_capture_open_retained` ends in `READABLE`: the sensor is stopped,
+the parser's single-image capture (SCAP) has cleared itself, and DMA capture
+stays enabled with every lease and mapping held. `a733_camera_capture_rearm`
+captures the next image into the same planes. Calling it declares that every
+view and copy of the current image has ended. The sensor stays stopped until
+the next packet handoff, and the rearm runs these steps:
+
+1. Wait 100 ms after the receiver status sample that followed the sensor stop.
+   This is three periods of the nominal 30 frame/s mode, so a frame the
+   sensor finishes after its stop readback ends inside the interval.
+2. Sample receiver status again. Errors fault; other flags are acknowledged.
+3. Rearm DMA. Its status must still equal the final observation of the
+   previous image; only those bits are acknowledged. Status must then read
+   clear, capture must be inactive and the channel must still be enabled. The
+   DMA admission callback runs again with the retained token to prepare the
+   cache for device writes.
+4. Wait another 100 ms after the second sample.
+5. Rearm the receiver. Packet-port and parser status must hold no flag at all,
+   which shows that no packet arrived during the interval, and every parser
+   capture field must read clear. SCAP is then written and read back.
+
+The packet handoff, sensor start and the complete retained readout then run as
+for the first image. Rearm needs no drain proof because ownership never leaves
+the device and the tables and mappings stay unchanged. The retained readout
+already relies on DMA capture completion meaning that the image writes have
+landed; the rearm adds two silent intervals of at least 100 ms each before the
+same memory is written again.
+
 ## Faults retain resources without automatic rollback
 
 Each poll executes at most one external admission, MMIO, I2C, cache or release
@@ -136,6 +167,13 @@ and DMA implementations against shared register state. It executes native
 table construction and installation, verifies mapping permissions, and models
 separate device and CPU image storage. Both camera ports complete one capture;
 an offered second frame cannot overwrite memory after SCAP clears.
+
+A second model case captures three retained images on each port, each with
+its own payload. It checks that the previous image is unchanged until the DMA
+rearm, that DMA acknowledges only the observed status, and that SCAP is
+rewritten only after both quiet intervals, with clear status and the sensor
+stopped. A fault at the receiver sample, DMA rearm or receiver rearm keeps
+every lease and the previous image.
 
 The model compares every Y and UV payload byte after synchronization and
 checks untouched guard bytes. CPU storage retains its prior contents until

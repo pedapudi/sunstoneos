@@ -116,7 +116,7 @@ def main():
             try:path.write_bytes(bytes([b[0]^1])+b[1:]);refused(lambda:prep.validate_bundle(bundle))
             finally:path.write_bytes(b)
         case('mutated-'+filename,mutation)
-    for n,v in [('shared.usb.deadline_us',1),('camera.proof',0x3ff),('camera.lease',42),('camera.test_pattern',2),('camera.pwdn_only',2),('camera.pwdn_only',1)]:
+    for n,v in [('shared.usb.deadline_us',1),('camera.proof',0x3ff),('camera.lease',42),('camera.test_pattern',2),('camera.pwdn_only',2),('camera.pwdn_only',1),('camera.discard_frames',16)]:
         def typed(d,n=n,v=v):
             b=bytearray(session);f=layout['fields'][n];b[f['offset']:f['offset']+f['size']]=v.to_bytes(f['size'],'little');refused(lambda:prep.session_profile(bytes(b),layout,identity))
         case('typed-'+n+'-'+str(v),typed)
@@ -131,6 +131,12 @@ def main():
         set_field('camera.pwdn_only',0);refused(lambda:prep.session_profile(bytes(b),layout,identity))
         return {'accepted':'pwdn-only without reset wiring','refused':['pwdn-only with inherited reset entry','reset profile without reset wiring']}
     case('typed-pwdn-only-profile',pwdn_only)
+    def discard_limit(d):
+        # Up to fifteen discarded images; each is one more sensor stop/start.
+        b=bytearray(session);f=layout['fields']['camera.discard_frames'];b[f['offset']]=15
+        assert f['size']==1 and prep.session_profile(bytes(b),layout,identity)==profile
+        return {'accepted':15,'refused':16}
+    case('typed-discard-limit',discard_limit)
     def missing_prior_drain(d):
         cache={path:prepared['_frozen'][item['name']] for path,item in prepared['entry_evidence'].items()}
         admission_value=json.loads(prepared['_frozen']['admission.json']);facts_path=admission_value['recovery']['path']

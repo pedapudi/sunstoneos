@@ -41,6 +41,15 @@ most one I2C or platform operation, plus clock reads. Masked register updates
 use separate read and write polls. Delays yield to the worker; the driver neither
 spins nor allocates memory.
 
+A platform can supply an optional block-write operation. The driver then writes
+a run of up to 40 configuration entries at consecutive register addresses in
+one I2C transaction, relying on the sensor's register-address auto-increment.
+Masked entries, entries followed by a delay and the test-pattern register are
+always written alone. Every register receives the same value in the same order
+as with single writes. With block writes, configuration takes 125 write
+transactions instead of 308. The native binding supplies the operation; the
+sensor's auto-increment behavior on this board has not been observed.
+
 The platform acquire callback must reserve the sensor, bus, pins, clocks and
 power resources. It publishes a nonzero lease before any change that could
 require recovery. Successful admission proves stable 24 MHz XCLK, suitable
@@ -180,7 +189,10 @@ The fixture passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 It checks minimum delays, chip mismatch before writes, bounded polls,
 pending admissions, normal stop/restart/close, receiver retention, uncertain
 GPIO/register/release operations, clock failure/regression, deadline expiry,
-changed lease identity, readback mismatch and terminal silence.
+changed lease identity, readback mismatch and terminal silence. A block-write
+run must reproduce the single-write access sequence register for register, with
+no masked or delayed entry inside a block; failed and overdue block writes
+retain the lease.
 An independent harness executes unchanged Linux clock, timing and control
 functions with the pinned initialization tables. Its complete modeled 65,536-byte
 sensor image matches the native driver for the selected color-bar profile.
@@ -194,12 +206,25 @@ No runtime performance was measured. Raw command logs,
 source hashes, extracted reference functions, binary identities and target
 metadata are under `~/.cache/sunstoneos/evidence/ov5640-20261016/`.
 
-The [native capture path](camera-native.md) captures one retained still image
-from CAM1. Rearm and continuous capture, the CAM2 connector and wider modes
-remain to be implemented. Physical validation requires an electrically matched
-OV5640 module, independent recovery and a coordinator-owned board test.
-The first sensor-to-memory acceptance result is a color-bar frame with verified
-dimensions and plane ordering, followed by transport error handling and repeated
-stop/start. `apps/camera/observe.py --image <frame> --color-bars --ppm <file>`
-checks a saved frame for vertical-bar structure and writes a review image.
-No board request or physical camera test has run for this component.
+The [native capture path](camera-native.md) captures retained still images from
+CAM1. Its boot record can request up to fifteen discarded images before the
+readable one. Each discarded image is a complete sensor stop and start through
+the [retained rearm sequence](camera-capture.md). Continuous capture and wider
+modes remain to be implemented.
+
+CAM2 has no native binding. The receiver, route and capture coordinator accept
+port and parser one, and the media clock provider can prepare MCLK2 at
+`0x02003808`. A CAM2 profile still needs a native TWI9 controller at
+`0x02519000` with its own clock-registry entry, because the TWI engine and the
+clock registry provide only TWI11 for the camera. It also needs a qualified
+deskew count for port one. The pinned device tree places CAM2 data on
+PK10–PK19, MCLK2 on PE9 and the module control on PE10.
+
+Physical validation requires an electrically matched OV5640 module,
+independent recovery and a coordinator-owned board test. The first
+sensor-to-memory acceptance result is a color-bar frame with verified
+dimensions and plane ordering, followed by transport error handling and
+repeated stop/start through discarded images.
+`apps/camera/observe.py --image <frame> --color-bars --ppm <file>` checks a
+saved frame for vertical-bar structure and writes a review image. No board
+request or physical camera test has run for this component.

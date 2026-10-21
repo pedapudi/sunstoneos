@@ -90,6 +90,13 @@ It acknowledges only the observed non-error bits using write-one-to-clear writes
 An intervening different status bit survives acknowledgement. Repeated events
 represented by the same latched bit can coalesce; flags are not frame counters.
 
+`a733_csi_rearm_image` rewrites SCAP for the next image, only from the armed
+image mode while the caller keeps the sensor stopped. Packet-port and parser
+status must hold no flag since the last sample, which shows that no packet
+arrived in between, and every parser capture field must read clear. It then
+writes SCAP and reads it back. Any other observation faults without
+acknowledging status.
+
 Any packet error, including an ECC correction warning, enters a terminal fault.
 The parser's documented `MUL_ERR` flag also faults. Error flags remain uncleared
 for diagnosis. Frame-end status does not prove DMA completion or memory visibility.

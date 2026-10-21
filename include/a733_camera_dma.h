@@ -13,7 +13,7 @@ enum a733_camera_dma_state {
     A733_CAM_DMA_WAIT, A733_CAM_DMA_STOP, A733_CAM_DMA_DISABLE,
     A733_CAM_DMA_DRAIN, A733_CAM_DMA_FINAL_STATUS, A733_CAM_DMA_SYNC,
     A733_CAM_DMA_READY, A733_CAM_DMA_RELEASE, A733_CAM_DMA_CLOSED,
-    A733_CAM_DMA_FAULT, A733_CAM_DMA_READABLE
+    A733_CAM_DMA_FAULT, A733_CAM_DMA_READABLE, A733_CAM_DMA_REARM
 };
 enum a733_camera_frame_owner {
     A733_CAMERA_CALLER, A733_CAMERA_RESERVED, A733_CAMERA_DEVICE
@@ -92,9 +92,17 @@ int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
  * the same retained mappings. Fresh DMA status and CPU synchronization still
  * execute. No disable, drain, status acknowledgement or release occurs.
  * READABLE keeps DEVICE ownership; only the 307,200-byte payload of each plane
- * may be read. Neither padding nor guards are image data. No second request,
- * close/release, CPU write or mapping/buffer reuse is authorized. */
+ * may be read. Neither padding nor guards are image data. No close/release or
+ * mapping change is authorized; only rearm starts another image in the planes. */
 int a733_camera_dma_readout(struct a733_camera_dma *,uint64_t deadline_us);
+/* Return a READABLE channel to ARMED for one more image into the same planes
+ * and mappings. The caller declares every view and copy of the previous image
+ * ended and keeps the producer stopped behind a cleared SCAP fence. Status
+ * must still equal the final observation, which alone is acknowledged; status
+ * must then read clear, capture inactive and the channel still enabled. The
+ * admit callback runs again with the retained token to prepare the cache for
+ * device writes. Ownership stays DEVICE; faults retain everything. */
+int a733_camera_dma_rearm(struct a733_camera_dma *,uint64_t deadline_us);
 /* At most one MMIO/platform operation plus pre/post monotonic time checks.
  * Faults are terminal and retain ownership; no automatic stop/reset/retry.
  * READY alone returns frame ownership. ARMED has not captured any data.

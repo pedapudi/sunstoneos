@@ -24,7 +24,11 @@ void camera_check_run(unsigned mode)
  atomic_store(&app.result,mode==1?1:2);
  put32(input,mode==2?2:1);put32(input+4,mode==2?0:307199);put32(input+8,mode==2?0:4096);
  exchange();check(request_bytes==5&&!response_bytes,10);exchange();
- unsigned expected=mode?72:4168;check(response_bytes==expected,11);
+ unsigned expected=mode?72:4168,early=0;check(response_bytes==expected,11);
+ /* A completed transfer refills from the callback, before the vendor class
+  * could end the response with a zero-length packet. */
+ if(!mode){exchange();check(response_sent==512,21);tud_vendor_tx_cb(0,512);
+  check(response_sent==1024&&response_bytes==expected,22);early=512;}
  for(unsigned i=0;i<9&&response_sent<response_bytes;++i)exchange();
  check(wire_bytes==expected&&response_sent==expected&&response_bytes==expected,12);
  check(get32(wire)==0x524d4143&&get32(wire+4)==1&&get32(wire+8)==(mode==2?3:mode==1?1:2),13);
@@ -33,7 +37,7 @@ void camera_check_run(unsigned mode)
  uint8_t digest[32];storage_digest_bytes(&app.session,sizeof(app.session),digest);
  check(!memcmp(wire+40,digest,32),16);
  if(!mode)for(unsigned i=0;i<4096;++i)check(wire[72+i]==(uint8_t)((307199+i)*17),17);
- tud_vendor_tx_cb(0,expected-1);check(response_bytes==expected,18);
+ tud_vendor_tx_cb(0,expected-early-1);check(response_bytes==expected,18);
  tud_vendor_tx_cb(0,1);check(!response_bytes,19);
  if(mode==2)check(atomic_load(&app.cancel)==1,20);
  camera_check_result=1;__asm__ volatile("brk #0");for(;;){}

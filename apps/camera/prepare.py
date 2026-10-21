@@ -109,6 +109,7 @@ def session_profile(raw,layout,identity):
           'camera.deadline_us','camera.proof','camera.origin','camera.excluded_masters','camera.powered_masters',
           'camera.raw_trim','camera.parameter_guard_bytes','camera.plane_guard_bytes','camera.apb1','camera.apb1_hz',
           'camera.settle','camera.deskew','camera.reset_bank','camera.reset_pin','camera.test_pattern','camera.pwdn_only',
+          'camera.discard_frames',
           'media.owner','media.handoff','media.deadline_us','media.groups','media.camera_mclk_mask']
     values={k:number(raw,layout,k) for k in keys}
     epoch,generation,lease=(values[k] for k in ('epoch','generation','lease'))
@@ -132,6 +133,8 @@ def session_profile(raw,layout,identity):
         1<=values['camera.settle']<=255 and 1<=values['camera.deskew']<=31,'Camera native admission profile differs')
     # 0 is the ordinary image, 1 the OV5640 color bars; a PWDN-only module names no reset GPIO.
     require(values['camera.test_pattern'] in (0,1) and values['camera.pwdn_only'] in (0,1),'Camera test pattern or module profile differs')
+    # Images captured and discarded before the readable one, each a full sensor stop/start.
+    require(values['camera.discard_frames']<=15,'Camera discard count exceeds the native limit')
     bank,pin=values['camera.reset_bank'],values['camera.reset_pin'];inherited=field(raw,layout,'camera.inherited')
     if values['camera.pwdn_only']:
         require(bank==pin==0 and inherited[14*3:15*3]==bytes(3),'PWDN-only camera module names reset wiring')
