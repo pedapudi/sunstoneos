@@ -112,7 +112,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                 if struct.unpack_from('<Q',raw,600)[0]==2 else [[0x10001000,8192,'r'],[0x10010000,8192,'rw'],
                 [0x10014000,8192,'rw'],[0x10020000,0x21000,'rw'],[0x10068000,8192,'rw'],[0x10070000,0xc000,'rw']])
             if struct.unpack_from('<Q',raw,600)[0]==4:
-                expected_spans=[[0x10000000,4194304,'r'],[0x10401000,6266880,'rw'],[0x109fc000,3133440,'rw'],[0x10cfa000,217088,'rw'],[0x10d30000,786432,'rw'],[0x10df4000,49152,'rw']]
+                expected_spans=[[0x10000000,2097152,'r'],[0x10201000,8355840,'rw'],[0x109fa000,4177920,'rw'],[0x10df7000,217088,'rw'],[0x10e30000,1048576,'rw'],[0x10f34000,49152,'rw']]
             elif struct.unpack_from('<Q',raw,600)[0]==3:
                 expected_spans=[[0x10000000,0x400000,'r'],[0x10401000,0x3fc000,'rw'],[0x10801000,0x1fe000,'rw'],[0x10a00000,0x35000,'rw'],[0x10a36000,0x80000,'rw'],[0x10abc000,0xc000,'rw']]
             if struct.unpack_from('<Q',raw,600)[0]>=3:

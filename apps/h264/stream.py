@@ -12,7 +12,7 @@ def high_module():
     spec=importlib.util.spec_from_file_location('h264_high_host',ROOT/'apps/h264/high.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
 def profile(version=2):
-    if version==4:return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=4194304,header_bytes=256,response_version=5,name='high-cabac-runtime')
+    if version==4:return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=2097152,header_bytes=256,response_version=5,name='high-cabac-runtime')
     require(version in (2,3),'Unsupported stream session version.')
     return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=4194304,header_bytes=192,response_version=4,name='fullhd1920x1080-idr-p') if version==3 else dict(width=WIDTH,height=HEIGHT,frame_bytes=FRAME_BYTES,input_limit=INPUT_LIMIT,header_bytes=160,response_version=3,name='vga640x480-idr-p')
 

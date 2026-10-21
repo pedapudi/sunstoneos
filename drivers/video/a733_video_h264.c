@@ -230,7 +230,7 @@ static int begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
         {8192,8192,8192,0x21000,8192,0xc000},
         {524288,614400,311296,0x22000,81920,0xc000},
         {4194304,4177920,2088960,0x35000,524288,0xc000},
-        {4194304,6266880,3133440,0x35000,786432,0xc000}};
+        {A733_H264_HIGH_INPUT_BYTES,A733_H264_HIGH_Y_BYTES,A733_H264_HIGH_C_BYTES,0x35000,A733_H264_HIGH_MV_BYTES,0xc000}};
     if(!j||j->profile>A733_H264_HIGH_STREAM||(int)j->profile<0)return 0;
     const uint64_t *capacity=sizes[j->profile];
     if(!r||r->state!=A733_H264_NEW||!o||!j||!j->input||!d||!o->now_us||
@@ -275,7 +275,7 @@ int a733_h264_vga_next(struct a733_h264_run *r,size_t bytes,unsigned frame_num)
 int a733_h264_high_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
     const struct a733_h264_job *j,size_t bytes,const struct h264_high_plan *p,uint64_t deadline)
 {
-    if(!j||j->profile!=A733_H264_HIGH_STREAM||j->input_bytes!=4194304||!bytes||bytes>j->input_bytes||!p||!p->slots||p->slots>5||p->slot>=p->slots||!begin(r,o,v,j,deadline))return 0;
+    if(!j||j->profile!=A733_H264_HIGH_STREAM||j->input_bytes!=A733_H264_HIGH_INPUT_BYTES||!bytes||bytes>j->input_bytes||!p||!p->slots||p->slots>5||p->slot>=p->slots||!begin(r,o,v,j,deadline))return 0;
     r->high=p;r->picture=p->picture;r->frame_bytes=bytes;return 1;
 }
 int a733_h264_high_next(struct a733_h264_run *r,size_t bytes,const struct h264_high_plan *p)
@@ -290,7 +290,7 @@ static int program_high(struct a733_h264_run *r)
     unsigned n=r->index;uint32_t off,value;
     static const uint32_t offsets[]={0xec,0xc4,0xc8,0x250,0x254,0x240,0x22c,0x260,0x24c,0x200,0x204,0x208,0x20c,0x21c,0x220,0x234,0x238,0x23c,0x230,0x2e0};
     uint32_t input=(uint32_t)b[0].iova;
-    uint32_t values[]={r->format,p->picture.width*p->picture.height/4,(p->picture.width/2<<16)|p->picture.width,(uint32_t)b[3].iova,(uint32_t)b[5].iova,0,0,0,p->slot,p->picture.sps,p->picture.pps,p->picture.shs,p->picture.shs2,p->picture.qp,0x407,0,p->picture.slice_bytes*8,input+4194303,(input&0x0ffffff0)|(input>>28)|0x70000000,0x400};
+    uint32_t values[]={r->format,p->picture.width*p->picture.height/4,(p->picture.width/2<<16)|p->picture.width,(uint32_t)b[3].iova,(uint32_t)b[5].iova,0,0,0,p->slot,p->picture.sps,p->picture.pps,p->picture.shs,p->picture.shs2,p->picture.qp,0x407,0,p->picture.slice_bytes*8,input+A733_H264_HIGH_INPUT_BYTES-1,(input&0x0ffffff0)|(input>>28)|0x70000000,0x400};
     unsigned count=sizeof(offsets)/sizeof(*offsets);
     if(n<count){off=offsets[n];value=values[n];}
     else if((n-=count)<18*8){

@@ -44,9 +44,19 @@ Visible dimensions must be positive and even, at most 1920-by-1080. Even crop
 amounts on all four edges are accepted. The full coded picture remains available
 for prediction; copied YU12 output contains only visible samples. Geometry,
 level limits and reference count are validated together against the fixed pool.
-For example, 1920-by-1088 permits two references plus the destination;
+For example, 1920-by-1088 permits three references plus the destination, which
+admits common level-4.0 encodes such as libx264's default of three references;
 1280-by-720 permits four references plus the destination. Runtime dimensions do
 not increase the existing extended-memory reservation.
+
+Each coded picture may use at most 2 MiB of input. The 16 MiB uncached pool and
+the four 4 MiB IOMMU windows must hold the input, four full-HD picture slots and
+the scratch buffers, which leaves 2 MiB for input. For a level-4.0 stream at 30
+frames per second, Annex A of H.264 bounds each access unit after the first to
+786,432 bytes: 384 × 245,760 / 30 / 4, with 245,760 macroblocks per second and
+minimum compression ratio 4. The first access unit, and pictures of slower
+streams, may legally be larger, up to the 31,250,000-bit coded picture buffer;
+the parser refuses any picture above 2 MiB.
 
 ### Fixed device and CPU storage budgets
 
@@ -55,12 +65,12 @@ windows. No generic IOMMU policy changes are required.
 
 | IOVA | Capacity in bytes | Device access |
 | --- | --- | --- |
-| `0x10000000` | 4,194,304 input | Read |
-| `0x10401000` | 6,266,880 Y pictures | Read/write |
-| `0x109fc000` | 3,133,440 chroma pictures | Read/write |
-| `0x10cfa000` | 217,088 picture scratch | Read/write |
-| `0x10d30000` | 786,432 motion vectors | Read/write |
-| `0x10df4000` | 49,152 neighbor scratch | Read/write |
+| `0x10000000` | 2,097,152 input | Read |
+| `0x10201000` | 8,355,840 Y pictures | Read/write |
+| `0x109fa000` | 4,177,920 chroma pictures | Read/write |
+| `0x10df7000` | 217,088 picture scratch | Read/write |
+| `0x10e30000` | 1,048,576 motion vectors | Read/write |
+| `0x10f34000` | 49,152 neighbor scratch | Read/write |
 
 For coded width W and height H, each picture uses page-rounded W*H Y bytes and
 W*H/2 chroma bytes. Each motion-vector field requires
@@ -72,12 +82,12 @@ publishing a plan. Picture scratch uses the greater of 130 KiB and
 and the effective A733 allocation anchors are the same as the full-HD branch
 below. These formulas include coded padding and are independent of visible crop.
 
-Actual allocator execution requires 14,749,696 uncached bytes, including tables,
-alignment and guards. CPU write-back allocations require 23,920,640 bytes: a
-4 MiB upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
+Actual allocator execution requires 16,044,032 of the 16,777,216 uncached bytes,
+including tables, alignment and guards. CPU write-back allocations require
+21,823,488 bytes: a 2 MiB upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
 metadata. Each copied-output capacity is 3,110,400 bytes. The actual metadata
 structure uses 243,064 bytes. Observed native parser stack use in the allocation
-fixture is 2,616 bytes; the existing USB task has a 16 KiB stack. These are
+fixture is 2,600 bytes; the existing USB task has a 16 KiB stack. These are
 modeled execution measurements, not worst-case stack or physical timing proofs.
 All eight CPU leases are retained before publication. Device spans, CPU leases,
 alignment, guard capacity and table construction are validated before device use.
@@ -167,6 +177,19 @@ checks output persistence before ACK and preserves the earlier output on B
 failure. `bounds/result.json` records focused sanitized syntax refusals.
 `preparation-coverage.json` records setup failures and their limited repairs.
 No completed native case is replayed for those repairs.
+
+The evidence above predates the four-slot full-HD layout, which moved every
+device span except the input and halved the input capacity. The same checks
+were rerun on the four-slot image: `checks/h264-high-allocation.py` with the
+full-HD, HD and three-reference full-HD fixtures, `checks/h264-high-native.py`
+with the full-HD, HD, four-reference HD, three-reference full-HD and
+normal-mode variants, `checks/h264-high-register-oracle.py`,
+`checks/h264-high-bounds.py`, `checks/h264-high-entry.py` and
+`checks/h264-high-host.py`. The
+three-reference fixture is a 12-picture libx264 clip made with the full-HD
+fixture command and `ref=3`; its pictures use slots 0 to 3. Copied frames of
+the earlier variants are unchanged. These results are retained under
+`~/.cache/sunstoneos/build/audit-video-consolidation/checks`.
 
 The focused Astra source review covers POC/lists/marking, speculative commit,
 reference/MV lifetime and output ordering. Existing Baseline parser and CPU startup evidence remains scoped to

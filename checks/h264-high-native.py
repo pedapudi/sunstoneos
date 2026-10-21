@@ -21,7 +21,7 @@ OPS=0x7af00000
 STUB=0x7af10000
 POOL=0x7ae00000
 # High capacities of the six guarded spans in apps/h264/native.c.
-CAPACITY=(4194304,6266880,3133440,0x35000,786432,0xc000)
+CAPACITY=(2097152,8355840,4177920,0x35000,1048576,0xc000)
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
@@ -30,7 +30,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','inputs','output'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--resume',type=Path)
-    parser.add_argument('--variants',nargs='+',choices=('fullhd-qualification','hd-qualification','four-qualification','fullhd-normal'))
+    parser.add_argument('--variants',nargs='+',choices=('fullhd-qualification','hd-qualification','four-qualification','fullhd3-qualification','fullhd-normal'))
     args=parser.parse_args();args.output.mkdir(exist_ok=False)
     cases=module('native_cases',ROOT/'checks/h264-application-cases.py')
     syms,segments,types,_,_=cases.setup(args.image,args.output,session_optional=True,fixture_optional=True,high=True)
@@ -43,7 +43,7 @@ def main():
     with args.image.open('rb') as file:
         elf=ELFFile(file);sizes={d.attributes['DW_AT_name'].value.decode():d.attributes['DW_AT_byte_size'].value for cu in elf.get_dwarf_info().iter_CUs() for d in cu.iter_DIEs() if d.tag=='DW_TAG_structure_type' and 'DW_AT_name' in d.attributes and 'DW_AT_byte_size' in d.attributes}
     output_size=sizes['h264_stream_output']
-    variants=args.variants or ['fullhd-qualification','hd-qualification','fullhd-normal']
+    variants=args.variants or ['fullhd-qualification','hd-qualification','fullhd3-qualification','fullhd-normal']
     fixture_identity={str(p.relative_to(args.inputs)):hashlib.sha256(p.read_bytes()).hexdigest() for geometry in sorted({v.rsplit('-',1)[0] for v in variants}) for p in (args.inputs/geometry).rglob('*') if p.is_file() and (p.suffix in ('.h264','.yu12','.yuv','.bin') or p.name=='syntax-plans.json')}
     resumed=pickle.loads(gzip.decompress(args.resume.read_bytes())) if args.resume else None
     if resumed:
@@ -115,11 +115,11 @@ def main():
                         p=get(rbase+run['picture_index'],4);slot=pf('slot');number=descs[p]['frame_num'];b=buffers()
                         assert get(streambase+streamtype['au_state'],4)==2 and get(streambase+streamtype['active'],4)==p
                         assert mmio[0x24c]==slot and mmio[0xc4]==w*h//4 and mmio[0xc8]==((w//2)<<16)|w
-                        assert mmio[0x250]==0x10cfa000 and mmio[0x254]==0x10df4000 and mmio[0x234]==0 and mmio[0x23c]==0x103fffff
+                        assert mmio[0x250]==0x10df7000 and mmio[0x254]==0x10f34000 and mmio[0x234]==0 and mmio[0x23c]==0x101fffff
                         for field,off in [('sps',0x200),('pps',0x204),('shs',0x208),('shs2',0x20c),('qp',0x21c)]:assert mmio[off]==get(streambase+streamtype['picture']+types['a733_h264_picture'][field],4)
                         for k in range(5):
                             if not get(planbase+plan_type['valid']+4*k,4):continue
-                            top,bottom=struct.unpack('<2I',m.mem_read(planbase+plan_type['pocs']+8*k,8));expected=[top,bottom,0x22 if k==slot and not pf('reference') else 0,0x10401000+k*pf('y_step'),0x109fc000+k*pf('c_step'),0x10d30000+k*pf('mv_step'),0x10d30000+k*pf('mv_step')+pf('mv_field')]
+                            top,bottom=struct.unpack('<2I',m.mem_read(planbase+plan_type['pocs']+8*k,8));expected=[top,bottom,0x22 if k==slot and not pf('reference') else 0,0x10201000+k*pf('y_step'),0x109fa000+k*pf('c_step'),0x10e30000+k*pf('mv_step'),0x10e30000+k*pf('mv_step')+pf('mv_field')]
                             assert sram[256+8*k:256+8*k+7]==expected
                         for l in range(2):
                             count=get(planbase+plan_type['ref_count']+4*l,4);refs=struct.unpack('<8I',m.mem_read(planbase+plan_type['lists']+32*l,32));expected=bytes([2*refs[j] if j<count else 0 for j in range(32)])
@@ -307,7 +307,7 @@ def main():
         else:assert 0 in snapshots and not observe.decode(snapshots[0],session,manifest,0,None)['oracle_verified']
         assert calls.count('acquire')==1 and calls.count('prepare')==1 and len(set(tables))==1 and invoke('a733_iommu_validate',base+app['tables'])==1
         spans=base+app['tables']+types['a733_iommu_tables']['spans'];declared=[struct.unpack('<3QI4x',cpu.mem_read(spans+32*i,32)) for i in range(6)]
-        expected=[(0x10000000,4194304,1),(0x10401000,6266880,3),(0x109fc000,3133440,3),(0x10cfa000,217088,3),(0x10d30000,786432,3),(0x10df4000,49152,3)]
+        expected=[(0x10000000,2097152,1),(0x10201000,8355840,3),(0x109fa000,4177920,3),(0x10df7000,217088,3),(0x10e30000,1048576,3),(0x10f34000,49152,3)]
         for i,(va,n,access) in enumerate(expected):assert declared[i]==(va,buffers()[i],n,access)
         # Task wakes in this process, one per tick; resumed runs count only the remainder.
         reports.append(dict(case=variant,task_wakes=wakes[0],completed=get(streambase+streamtype['next'],4),copied_presentation_ordinals=sorted(snapshots),backpressure=backpressure[0],branches=branches,triggers=triggers,table_sha256=tables[0],provider_admission='Actual native parser/DPB, allocation/table, controller, copy/hash/ordering/serializer. Power, readiness/device translation, MMIO/pixels, fault scans and USB modeled; no startup/physical execution.'))

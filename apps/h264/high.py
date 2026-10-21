@@ -11,12 +11,12 @@ def profile(manifest):
     require(len(manifest)>=128 and struct.unpack_from('<4I',manifest)==(0x34484d48,1,128,128),'Wrong High manifest.')
     values=struct.unpack_from('<18I',manifest);_,_,_,_,count,mode,w,h,vw,vh,left,top,right,bottom,refs,reorder,dpb,zero=values
     require(0<count<=256 and len(manifest)==128+128*count and mode in (0,1) and 0<w<=1920 and 0<h<=1088 and not (w|h)&15 and 0<vw<=1920 and 0<vh<=1080 and not (vw|vh)&1 and left+vw+right==w and top+vh+bottom==h and not (left|top|right|bottom)&1 and 0<refs<=4 and 0<=reorder<=2 and refs<=dpb<=4 and reorder<=dpb and not zero and any(manifest[72:104]) and not any(manifest[104:128]),'Invalid High geometry/bounds.')
-    return dict(count=count,oracle=bool(mode),coded_width=w,coded_height=h,width=vw,height=vh,crop=(left,top,right,bottom),refs=refs,reorder=reorder,dpb=dpb,frame_bytes=vw*vh*3//2,header_bytes=256,response_version=5,input_limit=4194304,name='high-cabac-runtime')
+    return dict(count=count,oracle=bool(mode),coded_width=w,coded_height=h,width=vw,height=vh,crop=(left,top,right,bottom),refs=refs,reorder=reorder,dpb=dpb,frame_bytes=vw*vh*3//2,header_bytes=256,response_version=5,input_limit=2097152,name='high-cabac-runtime')
 def descriptors(manifest):
     p=profile(manifest);result=[];display=set()
     for i in range(p['count']):
         d=manifest[128+i*128:256+i*128];n,oracle,number,poc=struct.unpack_from('<4I',d);decode,present,gop,kind,ref,idr=struct.unpack_from('<6I',d,80)
-        require(0<n<=4194304 and oracle==(p['frame_bytes'] if p['oracle'] else 0) and number<=65535 and any(d[16:48]) and bool(any(d[48:80]))==p['oracle'] and decode==i and present<p['count'] and present not in display and kind<=2 and ref<=3 and idr<=1 and not any(d[104:]),'Invalid High descriptor.')
+        require(0<n<=2097152 and oracle==(p['frame_bytes'] if p['oracle'] else 0) and number<=65535 and any(d[16:48]) and bool(any(d[48:80]))==p['oracle'] and decode==i and present<p['count'] and present not in display and kind<=2 and ref<=3 and idr<=1 and not any(d[104:]),'Invalid High descriptor.')
         display.add(present);result.append(dict(ordinal=i,presentation=present,input_bytes=n,oracle_bytes=oracle,frame_num=number,poc=poc,gop=gop,kind=kind,reference=ref,idr=idr,input_hash=d[16:48],oracle_hash=d[48:80]))
     return result
 
@@ -45,7 +45,7 @@ def prepare_inputs(clip,output,reference,helper):
         nal=data[m.end():starts[i+1].start() if i+1<len(starts) else len(data)].rstrip(b'\0');require(nal and not nal[0]&128,'Invalid High NAL.');kind=nal[0]&31
         if kind in (7,8):config[kind]=b'\0\0\0\1'+nal
         elif kind in (1,5):
-            require(set(config)=={7,8} and len(frames)<256,'High configuration/count invalid.');au=config[7]+config[8]+b'\0\0\0\1'+nal;require(len(au)<=4194304,'High AU too large.')
+            require(set(config)=={7,8} and len(frames)<256,'High configuration/count invalid.');au=config[7]+config[8]+b'\0\0\0\1'+nal;require(len(au)<=2097152,'High AU too large.')
             path=out/f'frame-{len(frames):03}.h264';path.write_bytes(au);frames.append((path,au))
         else:require(kind in (6,9),'Unsupported High NAL.')
     require(frames,'No High pictures.');command=[str(helper),*[str(p) for p,_ in frames]]

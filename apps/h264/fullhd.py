@@ -44,11 +44,11 @@ def image_parts(path,high=False):
             require(len(match)==1,'Full-HD marker is not immutable/file-backed.')
             p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
         _,geometry=immutable('h264_fullhd_geometry',64)
-        require(struct.unpack('<8Q',geometry)==(0x4844464844323634,1,1920,1088,1920,1080,4194304,3110400),'Full-HD compiled geometry differs.')
+        require(struct.unpack('<8Q',geometry)==(0x4844464844323634,1,1920,1088,1920,1080,2097152 if high else 4194304,3110400),'Full-HD compiled geometry differs.')
         require(('h264_high_geometry' in symbols)==high,'Extended image/profile selection differs.')
         if high:
             _,marker=immutable('h264_high_geometry',64)
-            require(struct.unpack('<8Q',marker)==(0x4847494844323634,1,1920,1088,5,5,14749696,1048576),'High compiled capacity marker differs.')
+            require(struct.unpack('<8Q',marker)==(0x4847494844323634,1,1920,1088,5,5,16044032,1048576),'High compiled capacity marker differs.')
         address,identity=immutable('a733_smp_build_id',32)
         for p in parts:p.pop('flags')
         return parts,address,identity
