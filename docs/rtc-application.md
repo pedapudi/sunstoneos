@@ -96,7 +96,10 @@ with an exact write 1. Arming writes the target, reads it back and rereads the
 calendar before enabling the alarm. With a one-second delay, the calendar can
 reach the target during that sequence. The driver then writes a new target once
 from the later calendar value, because the alarm is still disabled and its
-registers hold only this owner's values. A second miss retains ownership.
+registers hold only this owner's values. A second miss retains ownership. A
+delay of two or more seconds whose target is reached before the alarm is
+enabled also retains ownership, because that sequence must have stalled for at
+least a second.
 Cancellation may race its own alarm; an observed pending
 event wins and is reported as an alarm. Saved targets are restored only after
 confirmed RTC disable/acknowledgement. Copied publication additionally requires

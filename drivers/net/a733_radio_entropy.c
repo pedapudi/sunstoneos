@@ -171,7 +171,8 @@ enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy
  * retries a fixed number of times, then reports a temporary refusal. */
 #define RESERVOIR_ATTEMPTS 256u
 /* 1 copied, 0 temporary shortage or contention, -1 fault or invalid caller.
- * Only a draw with a zero reserve may consume the last reserve bytes. */
+ * Only the TCP initial-sequence hook, which cannot report failure, draws with
+ * a zero reserve; supplicant bytes and stack words leave the last reserve. */
 static int draw(void *cookie,uint8_t *out,size_t bytes,size_t reserve)
 {
     struct a733_radio_entropy *s=cookie;
@@ -194,7 +195,7 @@ static int draw(void *cookie,uint8_t *out,size_t bytes,size_t reserve)
     s->count-=bytes;unlock(&s->reservoir_busy);return 1;
 }
 int a733_radio_entropy_bytes(void *cookie,uint8_t *out,size_t bytes)
-{return draw(cookie,out,bytes,0)==1;}
+{return draw(cookie,out,bytes,A733_RADIO_ENTROPY_SEQUENCE_RESERVE)==1;}
 int a733_radio_entropy_random32(void *cookie,uint32_t *out)
 {return draw(cookie,(uint8_t *)out,sizeof(*out),A733_RADIO_ENTROPY_SEQUENCE_RESERVE);}
 int a733_radio_entropy_sequence(void *cookie,uint32_t src,uint16_t sport,uint32_t dst,uint16_t dport,uint32_t *out)

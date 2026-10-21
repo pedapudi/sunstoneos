@@ -98,11 +98,18 @@ int main(void)
     assert(a733_radio_entropy_sequence(&a,1,2,3,4,&word));
     memcpy(bytes,&word,4);for(unsigned i=0;i<4;++i)assert(bytes[i]==36+i);
     assert(a733_radio_entropy_bytes(&a,out,256));for(unsigned i=0;i<256;++i)assert(out[i]==(uint8_t)(40+i));
-    assert(a733_radio_entropy_bytes(&a,out,248));assert(!a.count);cleared(a.reservoir,sizeof(a.reservoir));
+    /* Supplicant bytes leave the sequence reserve; only the sequence hook spends it. */
+    assert(a733_radio_entropy_bytes(&a,out,248-A733_RADIO_ENTROPY_SEQUENCE_RESERVE));
+    assert(a.count==A733_RADIO_ENTROPY_SEQUENCE_RESERVE);
     memset(out,0xa5,sizeof(out));assert(!a733_radio_entropy_bytes(&a,out,1));unchanged(out,sizeof(out));
+    for(unsigned i=0;i<A733_RADIO_ENTROPY_SEQUENCE_RESERVE/4;++i)assert(a733_radio_entropy_sequence(&a,1,2,3,4,&word)==1);
+    assert(!a.count);cleared(a.reservoir,sizeof(a.reservoir));
+    assert(!a733_radio_entropy_bytes(&a,out,1));unchanged(out,sizeof(out));
     assert(b.model.starts==starts && b.model.reads==reads && b.model.writes==writes && pool_calls==calls);
     current=OWNER;assert(fill(&b,&a)==A733_RADIO_ENTROPY_READY && b.model.starts==24);
-    assert(a733_radio_entropy_bytes(&a,out,256));for(unsigned i=0;i<256;++i)assert(out[i]==(uint8_t)(32+i));
+    assert(!a733_radio_entropy_bytes(&a,out,256));unchanged(out,sizeof(out));
+    assert(a733_radio_entropy_bytes(&a,out,256-A733_RADIO_ENTROPY_SEQUENCE_RESERVE));
+    for(unsigned i=0;i<256-A733_RADIO_ENTROPY_SEQUENCE_RESERVE;++i)assert(out[i]==(uint8_t)(32+i));
 
     /* A completed refill survives final-token contention without another task. */
     init(&b,&q,&a);b.model.service.engine->binding.ops.leave=fixture_leave;

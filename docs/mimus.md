@@ -96,6 +96,12 @@ after the failure retains them. The USB service also marks them stale before
 model buffers change. One-shot images and the I2S transcription task keep the
 per-request load.
 
+A caller that has authenticated the exact model bytes also passes
+`kMimusVerified`, and the load then skips the per-tensor CRC pass. The retained
+engine records whether its load ran that pass. A later caller without
+`kMimusVerified` reloads the model with CRCs instead of reusing an engine that
+was loaded without them.
+
 A request that loads the model logs `LOAD load_us=<time> verify_crc=<0|1>`.
 Whole-recording results add `TIMING total_us=<time> compute_us=<time>`.
 `total_us` runs from WAV parsing through the final formatting flush. It is the
@@ -107,15 +113,21 @@ The engine calls its yield hook once per matrix row. The hook runs the
 supervised liveness checkpoint on every call where the image defines one. It
 yields the processor at most once per millisecond, because preemption and time
 slicing already serve equal-priority tasks. The whole-recording `MEMORY` record
-reports `yields`, the number of actual yields. The emulator bench recording
-yields 2,256 times in 2.95 seconds of emulated compute.
+reports `yields`, the number of actual yields. The count depends on timing.
+Two emulator runs of the bench recording reported 2,256 yields in 2.95 seconds
+and 2,183 yields in 2.67 seconds of emulated compute, 0.76 and 0.82 yields per
+millisecond.
 
 `checks/mimus-warm.py --output <directory>` runs the actual recorded engine on
-the bench bundle with the host portable library. Two retained-engine requests
-load once, skip the tensor CRC pass and both match the host reference. Marking
-the engine stale, other model buffers, a failed request and a cold request each
-cause a new load. The check models the clock and requires at most one yield
-per millisecond of modeled time.
+the bench bundle with the host portable library. It first requires the mimus
+worktree named in `apps/mimus/source.json` to be at the pinned revision with no
+local engine changes, builds the library from it and records the revision and
+library hash in `provenance.json`. Two retained-engine requests load once, skip
+the tensor CRC pass and both match the host reference. Marking the engine
+stale, other model buffers, a failed request, a cold request and a request
+without `kMimusVerified` after an unchecked load each cause a new load. The
+check models the clock and requires at most one yield per millisecond of
+modeled time.
 
 ## Build and execute
 

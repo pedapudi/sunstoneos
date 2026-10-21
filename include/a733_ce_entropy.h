@@ -34,9 +34,13 @@ int a733_ce_entropy_bind(struct a733_ce_entropy *,struct device_memory_pool *,
 /* Attach an entropy client to an already bound session with TRNG capability.
  * The session and client lifetimes remain coupled; no alternate token is created. */
 int a733_ce_entropy_attach(struct a733_ce_entropy *,struct a733_ce_session *);
-/* Serialized boot only: get the actual singleton linker pool, acquire one page
- * and bind native CE MMIO/cache operations. No peripheral MMIO here. Must run
- * after platform_init, before concurrent users, with real native authority. */
+/* Serialized boot only: construct the embedded owned_session with
+ * a733_ce_session_native_init, which claims the one native CE instance,
+ * acquires one page of the actual singleton linker pool and binds native CE
+ * MMIO/cache operations, then attach this client to it. A refusal before that
+ * constructor binds nothing; an attach failure after it retains the bound
+ * session and its page. No peripheral MMIO here. Must run after platform_init,
+ * before concurrent users, with real native authority. */
 int a733_ce_entropy_native_init(struct a733_ce_entropy *,const struct a733_ce_config *,
     const struct a733_ce_ops *,void *,struct a733_clock_leases *,const struct a733_clock_token *);
 /* One request at a time, 1..256 bytes. A generation is issued only on PENDING.

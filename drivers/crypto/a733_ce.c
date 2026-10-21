@@ -13,11 +13,6 @@ static const unsigned fabric_offset[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const unsigned parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0},{24,0,0,600,0,0,0,0},{24,600,0,0,400,0,0,0}};
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static void zero(void *p,size_t n)
 {volatile uint8_t *b=p;while (n--) *b++=0;}
 static int extent(uint64_t a,uint64_t n)
@@ -33,7 +28,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
     const void *objects[]={p,c,o,r,t,m};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*r),sizeof(*t),sizeof(*m)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
-        if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        if (!a733_ce_separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     a733_clock_mask_t stable=A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
     if ((a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) stable|=A733_CLOCK_RC16M;
     if ((t->exclusive&A733_CLOCK_CE)!=A733_CLOCK_CE || ((t->shared|t->exclusive)&stable)!=stable ||
@@ -169,8 +164,8 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
 {
     if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output ||
         output_bytes!=(p->operation==2?p->cipher_bytes:32) ||
-        !separate(p,sizeof(*p),output,output_bytes) ||
-        !separate(p->memory,sizeof(*p->memory),output,output_bytes) || !separate(p->registry,sizeof(*p->registry),output,output_bytes)) return A733_CE_INVALID;
+        !a733_ce_separate(p,sizeof(*p),output,output_bytes) ||
+        !a733_ce_separate(p->memory,sizeof(*p->memory),output,output_bytes) || !a733_ce_separate(p->registry,sizeof(*p->registry),output,output_bytes)) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
@@ -213,12 +208,16 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
             if (p->operation!=2) for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
             if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
             /* The task completed and its result is copied. Do not leave the
-             * random block, digest or (HMAC) hash state in the retained page. */
+             * random block, digest or (HMAC) hash state in the retained page.
+             * TRNG writes only the output; IV and input hold no TRNG data. */
             if (p->operation!=2) {
                 zero(p->memory->output,sizeof(p->memory->output));
-                zero(p->memory->iv,sizeof(p->memory->iv));
-                zero(p->memory->input,sizeof(p->memory->input));
-                if (p->ops.sync(p->cookie,p->memory,A733_CE_SCRUB)!=1 || !timely(p)) goto fail;
+                if (p->operation==1) {
+                    zero(p->memory->iv,sizeof(p->memory->iv));
+                    zero(p->memory->input,sizeof(p->memory->input));
+                }
+                if (p->ops.sync(p->cookie,p->memory,p->operation==1?A733_CE_SCRUB:A733_CE_RANDOM_SCRUB)!=1 ||
+                    !timely(p)) goto fail;
             }
             ready=1;next=DONE;
         }
@@ -245,15 +244,15 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     unsigned capability=operation==0?A733_CE_CAP_TRNG:(operation==1?A733_CE_CAP_SHA256:A733_CE_CAP_AES128);
     if (!(a733_ce_capabilities(p->config.profile)&capability)) return A733_CE_INVALID;
     if (operation && (!input || !bytes || continuation>1 ||
-        !separate(input,bytes,p,sizeof(*p)) || !separate(input,bytes,p->memory,sizeof(*p->memory)) ||
-        !separate(input,bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
+        !a733_ce_separate(input,bytes,p,sizeof(*p)) || !a733_ce_separate(input,bytes,p->memory,sizeof(*p->memory)) ||
+        !a733_ce_separate(input,bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
     if (operation==1 && (bytes>2048 || bytes%64 || total%512 || total<(uint64_t)bytes*8 ||
         (!continuation && total!=(uint64_t)bytes*8) || (continuation && (total==(uint64_t)bytes*8 || !iv)))) return A733_CE_INVALID;
     if (operation==2 && (bytes>1024 || bytes%16 || !iv || total)) return A733_CE_INVALID;
     size_t auxiliary_bytes=operation==2?16:32;
     if ((operation==2 || (operation==1 && continuation)) &&
-        (!separate(iv,auxiliary_bytes,p,sizeof(*p)) || !separate(iv,auxiliary_bytes,p->memory,sizeof(*p->memory)) ||
-         !separate(iv,auxiliary_bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
+        (!a733_ce_separate(iv,auxiliary_bytes,p,sizeof(*p)) || !a733_ce_separate(iv,auxiliary_bytes,p->memory,sizeof(*p->memory)) ||
+         !a733_ce_separate(iv,auxiliary_bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
@@ -280,6 +279,12 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     if (!timely(p)) return failed(p);
     p->stage=PREPARE;
 configure:
+    /* A TRNG request replacing an unadmitted SHA request clears the hash
+     * input and IV here, because its own scrub covers only the output. */
+    if (!operation && p->operation==1) {
+        zero(p->memory->iv,sizeof(p->memory->iv));
+        zero(p->memory->input,sizeof(p->memory->input));
+    }
     p->operation=operation;p->task_configured=1;
     if (operation) {
         zero(p->memory->input,sizeof(p->memory->input));

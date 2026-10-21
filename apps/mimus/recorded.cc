@@ -52,10 +52,13 @@ static bool recognition_error(const char *message)
 namespace {
 // One loaded model and recognizer, owned by the single recognition task. The
 // recognizer refers to the model, and the model to the caller's spans.
+// crc_checked records whether the load ran the per-tensor CRC pass; an engine
+// loaded without it serves only callers that pass kMimusVerified.
 struct Engine {
     std::optional<mimus::asr::Model> model;
     std::optional<mimus::asr::Recognizer> recognizer;
     std::span<const uint8_t> base, overlay;
+    bool crc_checked = false;
 };
 // The bare-metal images register no exit-time destructors.
 [[clang::no_destroy]] Engine engine;
@@ -94,16 +97,18 @@ void mimus_engine_release()
     engine.recognizer.reset();
     engine.model.reset();
     engine.base = engine.overlay = {};
+    engine.crc_checked = false;
 }
 void mimus_engine_invalidate() { engine_stale.store(true, std::memory_order_release); }
 const mimus::asr::Recognizer *mimus_engine_open(std::span<const uint8_t> inputs[3], unsigned options)
 {
     using namespace mimus;
     if (engine_stale.exchange(false, std::memory_order_acq_rel)) mimus_engine_release();
-    if (engine.recognizer && same(engine.base, inputs[0]) && same(engine.overlay, inputs[1]))
+    const bool verify = !(options & kMimusVerified);
+    if (engine.recognizer && same(engine.base, inputs[0]) && same(engine.overlay, inputs[1]) &&
+        (engine.crc_checked || !verify))
         return &*engine.recognizer;
     mimus_engine_release();
-    const bool verify = !(options & kMimusVerified);
     const uint64_t start = asr::platform::MonotonicNanos();
     auto model = asr::Model::Load(inputs[0], inputs[1], verify, asr::kTargetOrangePi);
     if (!model) { recognition_error(asr::ErrorName(model.error())); return nullptr; }
@@ -117,6 +122,7 @@ const mimus::asr::Recognizer *mimus_engine_open(std::span<const uint8_t> inputs[
     engine.recognizer.emplace(std::move(*recognizer));
     engine.base = inputs[0];
     engine.overlay = inputs[1];
+    engine.crc_checked = verify;
     char line[96];
     snprintf(line, sizeof(line), "LOAD load_us=%llu verify_crc=%u\n",
              static_cast<unsigned long long>((asr::platform::MonotonicNanos() - start) / 1000), unsigned(verify));
