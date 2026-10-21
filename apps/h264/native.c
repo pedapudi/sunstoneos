@@ -349,6 +349,21 @@ static int h264_setup(void)
     return (vga()?a733_h264_stream_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_stream.input_bytes,h264_deadline()):
         a733_h264_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_deadline()))?1:-1;
 }
+/* The controller performs at most one register operation per poll. Repeat
+ * polls while each one advances its state or index, so programming sequences
+ * finish in one wake. Waiting for hardware, a copy step or a busy resource
+ * makes no progress and sleeps a tick; the budget bounds one wake's work. */
+#define H264_POLL_BUDGET 1024u
+static int h264_advance(void)
+{
+    for(unsigned n=0;;){
+        enum a733_h264_state state=h264.run.state;unsigned index=h264.run.index,picture=h264.run.picture_index;
+        int r=a733_h264_poll(&h264.run);
+        /* A completed legacy picture is published by the caller first. */
+        if(r||(h264.run.state==state&&h264.run.index==index)||h264.run.picture_index!=picture||
+           ++n==H264_POLL_BUDGET||!board_live(NULL))return r;
+    }
+}
 static void h264_vga_failure(void)
 {
     h264_stream_fail(&h264_stream);h264_stream_storage_retain();atomic_store_explicit(&h264.result,2,memory_order_release);
@@ -389,7 +404,7 @@ static void h264_vga_step(void)
         {h264_vga_failure();return;}
         h264.refill_step=0;
     }
-    int result=h264.stage?a733_h264_poll(&h264.run):h264_setup();
+    int result=h264.stage?h264_advance():h264_setup();
     if(result<0){h264_vga_failure();return;}
     if(!h264.stage){if(result==1)h264.stage=1;return;}
     if(result==1&&h264.run.state==A733_H264_COPIED){
@@ -411,7 +426,7 @@ void h264_task(void *unused)
         if(vga()){if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))h264_vga_step();vTaskDelay(1);continue;}
         if(a733_h264_input_ready(&h264.supplied)&&
            atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&h264.result,memory_order_acquire)){
-            int r=h264.stage?a733_h264_poll(&h264.run):h264_setup();
+            int r=h264.stage?h264_advance():h264_setup();
             if(r>=0&&h264.stage&&h264.run.picture_index>
                atomic_load_explicit(&h264.completed,memory_order_acquire)){
                 if(!board_live(NULL))r=-1;

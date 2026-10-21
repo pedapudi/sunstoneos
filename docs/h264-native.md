@@ -783,6 +783,15 @@ Every external executor operation checks a monotonic deadline before and after
 it. Timeout, backward time, unexpected callback results and device errors retain
 failure. Host modeling does not qualify the physical timing window.
 
+The executor performs at most one register operation per poll. The decoder task
+polls again while each poll advances the executor's state or index, up to 1,024
+polls per wake, and rechecks board liveness between polls. It sleeps for one
+1 ms tick when a poll makes no progress: the engine is busy, a copy callback
+handled its rows or a shared resource is busy. A completed legacy picture ends
+the wake so that the task publishes it before the next picture's copy. In the
+full-HD and High host checks, the copied output is unchanged and the number
+of task wakes falls by a factor of 3.5 to 7.
+
 Focused evidence is under
 `~/.cache/sunstoneos/evidence/h264-interframes-20261019`:
 

@@ -129,7 +129,7 @@ class Image:
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','input','session','output'):p.add_argument('--'+n,type=Path,required=True)
- p.add_argument('--resume',type=Path);p.add_argument('--case',required=True,choices=['allocation','nominal','registry-busy','generation','hash','truncated','nonfinish','stall','error','empty','overflow','unaligned','later-fault','header-timeout','p-failure','duplicate-upload'])
+ p.add_argument('--resume',type=Path);p.add_argument('--case',required=True,choices=['allocation','nominal','registry-busy','task-wakes','generation','hash','truncated','nonfinish','stall','error','empty','overflow','unaligned','later-fault','header-timeout','p-failure','duplicate-upload'])
  a=p.parse_args();a.output.mkdir(exist_ok=False);im=Image(a.image);m=Machine(im,a.session.read_bytes());raw=a.input.read_bytes();assert len(raw)==921600
  # Freeze this fixture before any case, including failures.
  (a.output/'fixture.py').write_bytes(Path(__file__).read_bytes())
@@ -168,20 +168,28 @@ def main():
   if not a.resume:checkpoint('allocated.pkl.gz')
   if a.case!='allocation':
    m.configuration();m.variant=a.case if a.case not in ('p-failure','header-timeout') else 'nominal'
-   result=0;outputs=[]
+   result=0;outputs=[];polls=[];wake_writes=[];task=a.case=='task-wakes'
+   if task:
+    # task-wakes runs the actual task loop, one call per tick until vTaskDelay.
+    shared=im.address('providers')+im.layouts['board_provider']['shared']
+    m.put(shared+im.layouts['a733_native_usb']['pmic_ready'],1);m.put(m.base+m.a['stage'],1)
    for ordinal in range(2):
     if ordinal:
      # Caller ACK ownership is modeled here; actual USB consumer has separate checks.
-     m.put(m.base+m.a['acked'],1);m.put(m.base+m.a['result'],1)
-     assert m.call('a733_h264_encode_next',m.base+m.a['run'])==1
+     m.put(m.base+m.a['acked'],1)
+     if not task:m.put(m.base+m.a['result'],1);assert m.call('a733_h264_encode_next',m.base+m.a['run'])==1
      if a.case=='p-failure':m.variant='p-error'
      if a.case=='header-timeout':m.variant='header-timeout'
     for i in range(5000):
-     result=m.call('a733_h264_encode_poll',m.base+m.a['run'])
+     if task:
+      before=len(m.codec_writes);m.call('h264_encode_task',0);wake_writes.append(len(m.codec_writes)-before)
+      result=1 if m.get(m.base+m.a['result']+4*ordinal,4) else -1 if m.get(m.base+m.a['fatal'],4) else 0
+     else:result=m.call('a733_h264_encode_poll',m.base+m.a['run'])
      if result:break
+    polls.append(i+1)
     if a.case=='nonfinish' or (ordinal and a.case=='header-timeout'):
      assert result==0;m.now=990000;result=m.call('a733_h264_encode_poll',m.base+m.a['run'])
-    expected=1 if a.case in ('nominal','registry-busy') or (ordinal==0 and a.case in ('p-failure','header-timeout')) else -1
+    expected=1 if a.case in ('nominal','registry-busy','task-wakes') or (ordinal==0 and a.case in ('p-failure','header-timeout')) else -1
     assert result==expected,(a.case,ordinal,result,i)
     if result<0:break
     n=m.get(m.base+m.a['output_bytes']+ordinal*8);out=m.get(storage+im.layouts['h264_encode_storage']['copies']+ordinal*8);bits=bytes(m.u.mem_read(out,n));outputs.append(bits)
@@ -194,6 +202,8 @@ def main():
    for _,off in m.io:
     if off%0x10000>=0x400:assert 0xa00<=off<0xc00,hex(off)
    if a.case=='registry-busy':assert m.busy_states==[13,23] and m.busy==[0,0],m.busy_states
-   report.update(result=result,triggers=m.triggers,busy_states=m.busy_states,programmed=m.codec_writes,io_accesses=m.io,device_writes=len(m.codec_writes),copied_sizes=[len(x) for x in outputs])
+   # Each poll formerly made at most one register access per wake.
+   if task:assert max(wake_writes)>=32,wake_writes
+   report.update(result=result,polls=polls,wake_writes=wake_writes,triggers=m.triggers,busy_states=m.busy_states,programmed=m.codec_writes,io_accesses=m.io,device_writes=len(m.codec_writes),copied_sizes=[len(x) for x in outputs])
  (a.output/'result.json').write_text(json.dumps(dict(passed=True,case=a.case,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),input_sha256=hashlib.sha256(raw).hexdigest(),session_sha256=hashlib.sha256(a.session.read_bytes()).hexdigest(),physical_access=False,scope='Actual linked allocation/upload/controller/typed encoder provider/lowest native MMIO policy/IOMMU/copy. Memory readiness, translation attributes, lease status, locks, clocks, MMIO completion and placeholder entropy modeled. Caller ACK modeled here. No CPU startup, numerical encoding, physical visibility or drain qualification.',**report),indent=2)+'\n');print('PASS',a.case)
 if __name__=='__main__':main()
