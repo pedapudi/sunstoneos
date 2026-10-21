@@ -193,8 +193,10 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
 {
     const uint8_t *p=r->storage.bytes;
     if(p[1]!=10 || p[11]>2) return fault(a);
-    /* Synchronous requests belong to their own protocol owner. */
-    if(p[11]!=1 || !a->incoming_timeout_us) return 1;
+    /* A registered synchronous owner has already answered its own requests.
+     * Without incoming ACL or audio service, no host reply is sent; the
+     * controller's connection accept timeout refuses the peer on air. */
+    if(p[11]!=1 || !a->incoming_timeout_us) return release_record(a,r);
     unsigned any=0;for(unsigned j=0;j<6;++j) any|=p[2+j];
     if(!any || a->hci->transport.now>UINT64_MAX-a->incoming_timeout_us) return fault(a);
     uint64_t deadline=a->hci->transport.now+a->incoming_timeout_us;
@@ -220,6 +222,24 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
     l->request_serial=r->serial;
     return release_record(a,r);
 }
+/* Exact parameter length of a link event no owner consumes. These carry no
+ * credit or terminal state, so the link worker releases them after
+ * validation; vendor events have no fixed length. 0 marks other events. */
+static unsigned informational(unsigned event)
+{
+    switch(event){
+    case 0x0c:case 0x12:return 8;
+    case 0x14:return 6;
+    case 0x1b:return 3;
+    case 0x1d:return 5;
+    case 0x20:return 7;
+    case 0x23:return 13;
+    case 0x2e:return 11;
+    case 0x38:return 4;
+    case 0x3d:return 14;
+    default:return 0;
+    }
+}
 static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 {
     if(a->security){
@@ -234,14 +254,19 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
     const uint8_t *p=r->storage.bytes;unsigned event=p[0],n=p[1];
     if(event==0x04) return incoming_request(a,r);
     if(event==0x13) { if(n<1) return fault(a);return credit_event(a,r); }
+    if(event==0xff) return release_record(a,r);
+    if(informational(event)) return n==informational(event) ? release_record(a,r) : fault(a);
+    if(event==0x0b) return n==11 ? release_record(a,r) : fault(a);
+    /* Completions no worker owns, such as a status acquired before its command
+     * was sent, neither change command state nor return credits. */
     if(event==0x0f || event==0x0e) {
-        if(a->command_link==BT_ACL_LINKS) return 1;
+        if(a->command_link==BT_ACL_LINKS) return release_record(a,r);
         struct bt_acl_link *l=&a->links[a->command_link];
         unsigned op=le16(p+(event==0x0f ? 4 : 3));
         unsigned expected=l->state==BT_ACL_CONNECT_STATUS ? 0x0405 :
             l->state==BT_ACL_ACCEPT_STATUS ? 0x0409 :
             l->state==BT_ACL_REJECT_STATUS ? 0x040a : 0x0406;
-        if(op!=expected || r->tag!=l->command_tag) return 1;
+        if(op!=expected || r->tag!=l->command_tag) return release_record(a,r);
         if(a->hci->command!=BT_HCI_IDLE) return fault(a);
         l->status=p[event==0x0f ? 2 : 5];l->acknowledgement=r->serial;
         if(l->state==BT_ACL_CONNECT_STATUS)
@@ -262,7 +287,7 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
             (a->links[i].state==BT_ACL_CONNECTING || a->links[i].state==BT_ACL_CONNECT_STATUS ||
              a->links[i].state==BT_ACL_ACCEPTING || a->links[i].state==BT_ACL_ACCEPT_STATUS ||
              a->links[i].state==BT_ACL_REJECTING || a->links[i].state==BT_ACL_REJECT_STATUS)) l=&a->links[i];
-        if(!l) return p[2] ? 1 : fault(a);
+        if(!l) return p[2] ? release_record(a,r) : fault(a);
         if((l->state!=BT_ACL_CONNECTING && l->state!=BT_ACL_ACCEPTING &&
             l->state!=BT_ACL_REJECTING) || r->serial<=l->acknowledgement) return fault(a);
         if(l->state==BT_ACL_REJECTING && !p[2]) return fault(a);
@@ -305,6 +330,9 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
         else l->flush_seen=1;
         return release_record(a,r);
     }
+    /* Failed synchronous setup that no audio owner claimed, such as after an
+     * unanswered request. A successful one would be an unowned handle. */
+    if(event==0x2c) return n==17 && p[2] ? release_record(a,r) : fault(a);
     return 1;
 }
 int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)

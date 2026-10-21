@@ -9,7 +9,7 @@ void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine
 #endif
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss;
-static uint16_t local_cid;static unsigned handoff,speech;
+static uint16_t local_cid;static unsigned handoff,speech,informational;
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -40,7 +40,16 @@ r[7]=0x80;r[9]=0x20;r[10]=8;}
     else if(op==0x0c2e||op==0x0c5a||op==0x0c55||op==0x0c79){length=5;r[4]=1;}
     else if(op==0x0c19){length=5;r[4]=2;}
     else if(op==0x1004){length=14;r[4]=p[0];r[5]=0;}
-    else if(op==0x0409){cs(&wire,op,1,0);const uint8_t conn[]={0,0x23,0,1,2,3,4,5,6,1,0};event(&wire,3,conn,sizeof(conn));return;}
+    else if(op==0x0409){cs(&wire,op,1,0);const uint8_t conn[]={0,0x23,0,1,2,3,4,5,6,1,0};event(&wire,3,conn,sizeof(conn));
+        /* Link events a real controller may emit after connection, more than
+         * the four receive slots; no stack owner consumes them. */
+        if(informational){const uint8_t slots[]={0x23,0,5},psrm[]={1,2,3,4,5,6,1},lsto[]={0x23,0,0x80,0x0c},
+            role[]={0,1,2,3,4,5,6,1},mode[]={0,0x23,0,2,0x20,0},vendor[]={0x42};
+            event(&wire,0x1b,slots,3);event(&wire,0x20,psrm,7);event(&wire,0x38,lsto,4);
+            event(&wire,0x12,role,8);event(&wire,0x14,mode,6);event(&wire,0xff,vendor,1);}
+        return;}
+    else if(op==0x042a){assert(informational&&n==7&&!memcmp(p,"\1\2\3\4\5\6",6)&&p[6]==0x0d);cs(&wire,op,1,0);
+        const uint8_t failed[]={0x0d,0,0,1,2,3,4,5,6,2,0,0,0,0,0,0,2};event(&wire,0x2c,failed,sizeof(failed));return;}
     else if(op==0x0411){
         assert(n==2&&get16(p)==0x23);cs(&wire,op,1,0);
         const uint8_t io[]={1,2,3,4,5,6,3,0,4};event(&wire,0x32,io,sizeof(io));
@@ -134,6 +143,8 @@ static int pump(void)
 {wire.room=1024;++wire.now;int r=bluetooth_application_poll(&app);wire_outputs();return r;}
 static void until(unsigned phase)
 {for(unsigned i=0;i<2000&&voice.stage!=phase;++i){int r=pump();if(r<0)fprintf(stderr,"failure phase=%u HCI=%u acl=%u sec=%u config=%u now=%llu\n",voice.stage,app.hci.state,voice.acl.state,voice.security.fatal,voice.security.configuration_stage,(unsigned long long)wire.now);assert(r>=0);}assert(voice.stage==phase);}
+static unsigned owned_records(void)
+{unsigned n=0;for(unsigned i=0;i<app.hci.transport.count;++i)n+=app.hci.transport.records[i].owner==BT_H4_OWNED;return n;}
 static void setup(void)
 {
     wire.now=1;wire.room=1024;providers.used=1;providers.boot.identity=99;atomic_init(&recovery,1);
@@ -180,7 +191,8 @@ static void setup(void)
 #endif
 int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
 {
-    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");setup();
+    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");
+    informational=!strcmp(argv[1],"informational");setup();
     if(handoff){
         until(SECURITY_CONFIG);struct bt_h4 *h=&app.hci.transport;
         assert(h->assembling<h->count&&voice.acl.l2cap_owner==&voice.l2cap);
@@ -216,6 +228,7 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     const uint8_t connect[]={3,0,0x61,0};sig_in(2,50,connect,4);until(AG);
     assert(rf_stage);const char *at="AT+BRSF=0\rAT+CIND=?\rAT+CIND?\rAT+CMER=3,,,1\r";rf_in(14,0xef,(const uint8_t *)at,(unsigned)strlen(at),-1);at_sent=1;
     until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY);
+    if(informational){const uint8_t request[]={1,2,3,4,5,6,4,4,0x24,2};event(&wire,4,request,sizeof(request));}
     if(speech){
         assert(argc==4);FILE *input=fopen(argv[2],"rb");assert(input);
         uint8_t data[48000];assert(fread(data,1,sizeof(data),input)==sizeof(data)&&fgetc(input)==EOF&&!fclose(input));
@@ -235,6 +248,8 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     const uint8_t closed[]={0,0,0,0x13};event(&wire,5,closed,sizeof(closed));disconnected=1;
     if(loss){assert(pump()==-1);assert(bluetooth_headset_copy(&app,0,0,8,out,&copied,&snapshot)==-1);puts("PASS loss metadata prevents successful PCM publication");return 0;}
     until(DONE);assert(disconnected);
+    if(informational){assert(!owned_records()&&!voice.audio.refuse&&voice.audio.next_link==2);
+        puts("PASS informational link events and a stray eSCO request free every receive slot");return 0;}
     if(speech){
         assert(voice.snapshot.bytes==48000&&!voice.snapshot.loss_packets);
         FILE *output=fopen(argv[3],"wb");assert(output);

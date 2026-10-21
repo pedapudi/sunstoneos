@@ -48,10 +48,9 @@ static void config_send(struct fixture *f,unsigned stage)
     assert(f->hci.command==BT_HCI_WAITING && f->tn==before+4+configuration_lengths[stage]);
     uint8_t expected[12]={1,configuration_ops[stage],configuration_ops[stage]>>8,configuration_lengths[stage]};
     if(stage==0) {
-        /* Independent event-number list from Core5.4 §7.3.1, including
-         * Classic security/synchronous events, excluding LE and reserved bits. */
-        const unsigned events[]={1,2,3,4,5,6,7,8,9,10,11,12,13,16,17,18,20,21,22,23,24,
-            25,26,27,28,29,30,32,33,34,35,44,45,46,47,48,49,50,51,52,53,54,56,57,59,60,61};
+        /* Independent event-number list from Core5.4 §7.3.1: only events a
+         * link, security or synchronous owner consumes, plus Hardware Error. */
+        const unsigned events[]={3,4,5,6,8,11,16,17,22,23,24,44,45,48,49,50,51,52,54,59};
         for(unsigned j=0;j<sizeof(events)/sizeof(events[0]);++j)
             expected[4+(events[j]-1)/8]|=(uint8_t)(1u<<((events[j]-1)%8));
     } else if(stage==2) {expected[4]=0xa0;expected[5]=0x1f;}

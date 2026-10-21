@@ -89,6 +89,7 @@ static int prepare(void *ctx)
 static int acknowledgement_pending(void *ctx)
 {
     struct bt_sco *q=ctx;
+    if(q->refuse==2)return 1;
     if(q->command_link>=BT_SCO_LINKS)return 0;
     enum bt_sco_phase p=q->links[q->command_link].phase;
     return p==BT_SCO_FEATURE_STATUS || p==BT_SCO_SETUP_STATUS || p==BT_SCO_REJECT_STATUS || p==BT_SCO_DISCONNECT_STATUS;
@@ -207,6 +208,11 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
     if(r->type!=4)return 0;
     unsigned event=p[0],n=p[1];
     if(event==0x0f || event==0x0e){
+        if(q->refuse==2 && le16(p+(event==0x0f ? 4 : 3))==0x042a && r->tag==q->refuse_tag){
+            if(q->acl->hci->command!=BT_HCI_IDLE)return fault(q,BT_SCO_PROTOCOL);
+            /* A refused reject means the controller already ended the request. */
+            q->refuse=p[event==0x0f ? 2 : 5] ? 0 : 3;q->refuse_acknowledgement=r->serial;return release(q,r);
+        }
         if(q->command_link>=BT_SCO_LINKS)return 0;
         struct bt_sco_link *l=&q->links[q->command_link];
         unsigned op=le16(p+(event==0x0f ? 4 : 3));
@@ -247,7 +253,14 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
         struct bt_sco_link *l=0;
         for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED && equal(q->links[i].address,p+2))l=&q->links[i];
         if(!l || !l->listening || l->requested || (l->phase!=BT_SCO_LISTENING &&
-            l->phase!=BT_SCO_FEATURE_QUEUED && l->phase!=BT_SCO_FEATURE_STATUS && l->phase!=BT_SCO_FEATURE_WAIT))return 0;
+            l->phase!=BT_SCO_FEATURE_QUEUED && l->phase!=BT_SCO_FEATURE_STATUS && l->phase!=BT_SCO_FEATURE_WAIT)){
+            /* No link expects this request; it never consumes a link identity.
+             * A repeat for an already requested link is not refused, since
+             * the controller would apply the refusal to the pending request. */
+            if(!q->refuse && !(l && l->listening && l->requested)){for(unsigned j=0;j<6;++j)q->refuse_address[j]=p[2+j];
+                q->refuse_deadline=after(q->now,q->binding.response_timeout_us);q->refuse=1;}
+            return release(q,r);
+        }
         if(bt_hci_incoming_bound(q->acl->hci,q->binding.response_timeout_us)!=1)return fault(q,BT_SCO_IDENTITY);
         l->requested=1;l->request_type=p[11];l->request_serial=r->serial;
         l->request_deadline=after(q->now,q->binding.response_timeout_us);
@@ -261,6 +274,8 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
     }
     if(event==0x2c){
         if(n!=17)return fault(q,BT_SCO_PROTOCOL);
+        if(q->refuse==3 && p[2] && equal(q->refuse_address,p+5) && r->serial>q->refuse_acknowledgement){
+            q->refuse=0;return release(q,r);}
         if(q->command_link>=BT_SCO_LINKS)return p[2] ? 0 : fault(q,BT_SCO_IDENTITY);
         struct bt_sco_link *l=&q->links[q->command_link];
         if(!equal(l->address,p+5))return p[2] ? 0 : fault(q,BT_SCO_IDENTITY);
@@ -363,7 +378,16 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     if(prepare(q)!=1)return -1;
     if(q->active_tx<BT_SCO_PACKETS || q->acl->active_tx<BT_ACL_TX_SLOTS ||
        q->acl->hci->command!=BT_HCI_IDLE || q->acl->command_link<BT_ACL_LINKS)return 1;
-    if(q->command_link==BT_SCO_LINKS){
+    /* A refusal past its response bound is left to the controller timeout. */
+    if(q->refuse==1 && q->now>=q->refuse_deadline)q->refuse=0;
+    if(q->command_link==BT_SCO_LINKS && q->refuse==1){
+        uint8_t p[7];for(unsigned j=0;j<6;++j)p[j]=q->refuse_address[j];p[6]=0x0d;
+        int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,after(q->now,q->binding.response_timeout_us));
+        if(result<0)return fault(q,BT_SCO_LOWER);
+        if(result==1){q->refuse=2;q->refuse_tag=q->acl->hci->command_tag;}
+        return 1;
+    }
+    if(q->command_link==BT_SCO_LINKS && q->refuse!=2){
         for(unsigned i=0;i<BT_SCO_LINKS;++i){struct bt_sco_link *l=&q->links[i];
             uint8_t p[63]={0};unsigned op=0;size_t n=0;
             if(l->phase==BT_SCO_FEATURE_QUEUED){op=0x041b;n=2;put16(p,l->acl_handle);}

@@ -26,9 +26,12 @@ static uint16_t config_opcode(const struct bt_hci *h,unsigned stage)
 {return h->incoming_config.synchronous_audio ? audio_opcodes[stage] : config_opcodes[stage];}
 static unsigned config_return(const struct bt_hci *h,unsigned stage)
 {return h->incoming_config.synchronous_audio ? audio_returns[stage] : config_returns[stage];}
-/* Core5.4 §7.3.1: all defined Classic events; reserved and LE bits stay0.
+/* Core5.4 §7.3.1: only Classic events a stack owner consumes. Connection,
+ * disconnection, authentication, encryption, remote features, hardware error,
+ * flush, PIN/link-key, synchronous link, key refresh and SSP events stay
+ * enabled. Every other event would occupy a receive slot without an owner.
  * Command Complete/Status and Number Of Completed Packets are unmaskable. */
-static const uint8_t config_mask[]={0xff,0x9f,0xfb,0xbf,0x07,0xf8,0xbf,0x1d};
+static const uint8_t config_mask[]={0xbc,0x84,0xe1,0x00,0x00,0x98,0x2f,0x04};
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static int fail(struct bt_hci *h)
 { bt_h4_fail(&h->transport);h->state=BT_HCI_FAULT;return -1; }
