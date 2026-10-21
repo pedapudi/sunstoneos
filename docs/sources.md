@@ -225,11 +225,13 @@ replacement is not established by the current reverse-engineering evidence.
   consumes its command and address, leaving the following command intact.
 
 The FEL patches retain the upstream tool's GPL licensing. The SRAM probe used
-the first two FEL patches; the argument-consumption fix was recorded afterward.
-DDR and AArch64 probes used all three patches. `tools/build-sunxi-fel.py` applies
-the SRAM, status, execute-argument and bounded-receive patches in that order;
-they change separate hunks, and the result matches the recorded patched sources. The DDR wrapper supplies its own
-SRAM layout instead of loading the full boot0 through the original SPL path.
+the SRAM and status patches. The earliest DDR and AArch64 probes used a build
+that added the execute-argument fix. `tools/build-sunxi-fel.py` applies those
+three patches and then the bounded-receive patch described below; they change
+separate hunks. Its four-patch result is the tool recorded by the model-readback
+evidence and required by the `FEL_HASH` constants in `tools/check-a733-smp.py`
+and related checks. The DDR wrapper supplies its own SRAM layout instead of
+loading the full boot0 through the original SPL path.
 
 The monitor's interrupt grouping follows the [Trusted Firmware-A interrupt
 controller API](https://trustedfirmware-a.readthedocs.io/en/latest/components/platform-interrupt-controller-API.html):
