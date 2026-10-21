@@ -119,7 +119,27 @@ def main():
  # prepared-HDMI checkpoint. There is one nominal path and four saved-state
  # fault continuations. No automatic retry on failure or instruction cap.
  with exe.open('rb') as f:
-  elf=ELFFile(f);segments=[(int(s['p_vaddr']),bytes(s.data())) for s in elf.iter_segments() if s['p_type']=='PT_LOAD'];sym={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
+  elf=ELFFile(f);segments=[(int(s['p_vaddr']),bytes(s.data())) for s in elf.iter_segments() if s['p_type']=='PT_LOAD'];symbols=list(elf.get_section_by_name('.symtab').iter_symbols());sym={s.name:int(s['st_value']) for s in symbols}
+  # Hook sites and native offsets come from this fixture link, not frozen addresses.
+  layouts={}
+  for cu in elf.get_dwarf_info().iter_CUs():
+   for d in cu.iter_DIEs():
+    if d.tag=='DW_TAG_structure_type' and 'DW_AT_name' in d.attributes and d.attributes['DW_AT_name'].value in (b'a733_hdmi_native',b'a733_clock_token'):
+     layouts.setdefault(d.attributes['DW_AT_name'].value.decode(),{c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_data_member_location' in c.attributes})
+ def code(name):
+  s=next(s for s in symbols if s.name==name and s['st_info']['type']=='STT_FUNC');start=int(s['st_value'])
+  b,data=next((b,d) for b,d in segments if b<=start<b+len(d));return [(start+i,struct.unpack_from('<I',data,start-b+i)[0]) for i in range(0,int(s['st_size']),4)]
+ def calls(caller,target):
+  found=[]
+  for a,word in code(caller):
+   imm=word&0x3ffffff
+   if imm&(1<<25):imm-=1<<26
+   if word>>26==0x25 and a+4*imm==sym[target]:found.append(a+4)
+  return found
+ tokens_return,=calls('lock','tokens')
+ # Fixture source order of framebuffer_checkpoint(1), (4), (2) and (3).
+ checkpoint_calls=dict(zip(calls('framebuffer_check_run','framebuffer_checkpoint'),(1,4,2,3)));assert len(checkpoint_calls)==4
+ nl=layouts['a733_hdmi_native'];tl=layouts['a733_clock_token']
  uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
  regions=[(0x41000000,0x1000000),(0x50000000,0x20000),(0x02002000,0x2000),(0x03000000,0x1000),(0x03900000,0x20000),(0x05000000,0x400000),(0x05510000,0x10000),(0x05520000,0x8000),(0x05600000,0x1000),(0x05730000,0x1000),(0x07010000,0x1000),(0x07061000,0x1000),(0x0706a000,0x1000),(0x07090000,0x1000)]
  for b,n in regions:uc.mem_map(b,n)
@@ -136,7 +156,7 @@ def main():
  uc.cpr_write(3,3,14,0,0,24000000);uc.reg_write(UC_ARM64_REG_PSTATE,0x345)
  uc.reg_write(UC_ARM64_REG_SP,0x5001f000);uc.reg_write(UC_ARM64_REG_LR,0x5001e000)
  def instruction(u,a,n,v):
-  if a==0x41003ddc: # Reviewed return from native tokens() in lock().
+  if a==tokens_return: # Return from native tokens() in lock().
    word=get(a-4);imm=word&0x3ffffff
    if imm&(1<<25):imm-=1<<26
    assert word>>26==0x25 and a-4+4*imm==sym['tokens']
@@ -146,14 +166,13 @@ def main():
   if a==sym['platform_panic']:
    panic.append(dict(file=bytes(u.mem_read(u.reg_read(UC_ARM64_REG_X0),256)).split(b'\0')[0].decode(errors='replace'),line=u.reg_read(UC_ARM64_REG_X1)));u.emu_stop();return
   if a==sym['framebuffer_checkpoint']:
-   # Clang omits the unused C parameter. These reviewed call sites belong to
-   # this frozen fixture ELF; validate the actual BL target before admission.
-   calls={0x41014b28:1,0x41014b58:4,0x41014b84:2,0x41014cbc:3}
-   lr=u.reg_read(UC_ARM64_REG_LR);assert lr in calls
+   # Clang omits the unused C parameter. The call sites were located in this
+   # fixture ELF; validate the actual BL target before admission.
+   lr=u.reg_read(UC_ARM64_REG_LR);assert lr in checkpoint_calls
    word=get(lr-4);imm=word&0x3ffffff
    if imm&(1<<25):imm-=1<<26
    assert word>>26==0x25 and lr-4+4*imm==sym['framebuffer_checkpoint']
-   cp=calls[lr]
+   cp=checkpoint_calls[lr]
    if which=='nominal' and cp not in checkpoints:
     checkpoints[cp]=(u.context_save(),[(b,bytes(u.mem_read(b,n))) for b,n in regions],copy.deepcopy(state))
     (out/f'checkpoint-{cp}.pickle').write_bytes(pickle.dumps(checkpoints[cp]))
@@ -173,14 +192,14 @@ def main():
  def write(u,access,a,n,value,v):
   if a==0x020025c0:
    native=state['native']
-   assert state['tokens_valid'] and get(sym['holders'],8)==1 and get(native+0x800)==1
-   assert get(native+0x668,8)==11 and get(native+0x670,16)==0x4001 and get(native+0x680,16)==1<<63
+   assert state['tokens_valid'] and get(sym['holders'],8)==1 and get(native+nl['held'])==1
+   clock=native+nl['clock'];assert get(clock+tl['owner'],8)==11 and get(clock+tl['shared'],16)==0x4003 and get(clock+tl['exclusive'],16)==1<<63
    assert (get(a)^value)==1<<4
    state['vo1_gate_authorized']=True
   state['events'].append((a,n,value,get(sym['framebuffer_test_time'],8)))
   if a==0x05008140 and value==0:state['de_disabled']=True
  uc.hook_add(UC_HOOK_MEM_READ,read,begin=0x02000000,end=0x08000000);uc.hook_add(UC_HOOK_MEM_WRITE,write,begin=0x02000000,end=0x08000000)
- hooks={sym['platform_panic'],sym['framebuffer_checkpoint'],0x41003ddc}
+ hooks={sym['platform_panic'],sym['framebuffer_checkpoint'],tokens_return}
  for b,data in segments:
   for i in range(0,len(data)-3,4):
    if struct.unpack_from('<I',data,i)[0]&0xffffffe0 in (0xd5384240,0xd5381000,0xd53b0020,0xd53be020,0xd5087800,0xd5087820):hooks.add(b+i)
