@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Original implementation of Core5.4 HCI and HFP1.9 audio procedures. */
 #include "bt_sco.h"
+#include "bt_memory.h"
 static unsigned le16(const uint8_t *p){return p[0]|((unsigned)p[1]<<8);}
 static void put16(uint8_t *p,unsigned x){p[0]=(uint8_t)x;p[1]=(uint8_t)(x>>8);}
 static void put32(uint8_t *p,unsigned x){put16(p,x);put16(p+2,x>>16);}
 static int equal(const uint8_t *a,const uint8_t *b)
 {for(unsigned i=0;i<6;++i)if(a[i]!=b[i])return 0;return 1;}
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return !a || !b || an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);}
 static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static struct bt_sco_link *link(struct bt_sco *q,uint64_t id)
 {for(unsigned i=0;i<BT_SCO_LINKS;++i)if(id && q->links[i].generation==id)return &q->links[i];return 0;}
@@ -24,24 +23,24 @@ static int valid(const struct bt_sco *q)
 static int lower_external(const struct bt_acl *a,const void *p,size_t n)
 {
     const struct bt_h4 *h=&a->hci->transport;
-    if(overlap(a,sizeof(*a),p,n) || overlap(a->hci,sizeof(*a->hci),p,n) ||
-       overlap(h->binding.uart,sizeof(*h->binding.uart),p,n))return 0;
-    for(unsigned i=0;i<h->count;++i)if(overlap(h->records[i].storage.bytes,h->records[i].storage.capacity,p,n))return 0;
+    if(!bt_range_disjoint(a,sizeof(*a),p,n) || !bt_range_disjoint(a->hci,sizeof(*a->hci),p,n) ||
+       !bt_range_disjoint(h->binding.uart,sizeof(*h->binding.uart),p,n))return 0;
+    for(unsigned i=0;i<h->count;++i)if(!bt_range_disjoint(h->records[i].storage.bytes,h->records[i].storage.capacity,p,n))return 0;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)if(a->packets[i].state!=BT_ACL_TX_FREE &&
-        overlap(a->packets[i].bytes,a->packets[i].length,p,n))return 0;
+        !bt_range_disjoint(a->packets[i].bytes,a->packets[i].length,p,n))return 0;
     return 1;
 }
 static int ag_external(const struct bt_hfp_ag *a,const void *p,size_t n)
 {
-    if(overlap(a,sizeof(*a),p,n) || overlap(a->rfcomm,sizeof(*a->rfcomm),p,n) ||
-       overlap(a->registry,sizeof(*a->registry),p,n) || overlap(a->rfcomm->l2cap,sizeof(*a->rfcomm->l2cap),p,n))return 0;
+    if(!bt_range_disjoint(a,sizeof(*a),p,n) || !bt_range_disjoint(a->rfcomm,sizeof(*a->rfcomm),p,n) ||
+       !bt_range_disjoint(a->registry,sizeof(*a->registry),p,n) || !bt_range_disjoint(a->rfcomm->l2cap,sizeof(*a->rfcomm->l2cap),p,n))return 0;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(a->registry->session[i] &&
-        overlap(a->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
+        !bt_range_disjoint(a->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
     return 1;
 }
 static int external(const struct bt_sco *q,const void *p,size_t n)
 {
-    if(overlap(q,sizeof(*q),p,n) || !lower_external(q->acl,p,n))return 0;
+    if(!bt_range_disjoint(q,sizeof(*q),p,n) || !lower_external(q->acl,p,n))return 0;
     for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED && !ag_external(q->links[i].ag,p,n))return 0;
     return 1;
 }
@@ -295,7 +294,7 @@ int bt_sco_init(struct bt_sco *q,struct bt_acl *a,const struct bt_sco_binding *b
        a->hci->self!=a->hci || a->hci->acl_owner!=a || !a->hci->synchronous_ready || a->synchronous ||
        !b->current || !b->security || !b->scheduling_generation || !b->service_latency_us ||
        !b->response_timeout_us || b->response_timeout_us>60000000 ||
-       !lower_external(a,q,sizeof(*q)) || !lower_external(a,b,sizeof(*b)) || overlap(q,sizeof(*q),b,sizeof(*b)))return -1;
+       !lower_external(a,q,sizeof(*q)) || !lower_external(a,b,sizeof(*b)) || !bt_range_disjoint(q,sizeof(*q),b,sizeof(*b)))return -1;
     struct bt_hci *h=a->hci;
     if(!bt_hci_synchronous_supported(h) || bt_hci_incoming_bound(h,b->response_timeout_us)!=1 ||
        b->current(b->context,&h->transport.binding,b->scheduling_generation,b->service_latency_us)!=1)return -1;
@@ -307,7 +306,7 @@ int bt_sco_init(struct bt_sco *q,struct bt_acl *a,const struct bt_sco_binding *b
 int bt_sco_open(struct bt_sco *q,const struct bt_hfp_ag *ag,unsigned listening,uint64_t deadline,uint64_t *id)
 {
     if(!valid(q) || !ag || listening>1 || !external(q,ag,sizeof(*ag)) || !external(q,id,sizeof(*id)) ||
-       overlap(ag,sizeof(*ag),id,sizeof(*id)) || deadline<=q->acl->hci->transport.now)return -1;
+       !bt_range_disjoint(ag,sizeof(*ag),id,sizeof(*id)) || deadline<=q->acl->hci->transport.now)return -1;
     struct bt_sco_security s={0};
     if((ag->local_codecs&&(ag->hf_features&128)&&!ag->selected_codec)||
        !ag_current(q,ag,ag->link,ag->channel,&s) || !ag_external(ag,q,sizeof(*q)) || !ag_external(ag,id,sizeof(*id)))return -1;
@@ -390,7 +389,7 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
 int bt_sco_send(struct bt_sco *q,uint64_t generation,const uint8_t *bytes,size_t n,uint64_t deadline,uint64_t *serial)
 {
     if(!valid(q) || !n || n>255 || n>q->mtu || deadline<=q->acl->hci->transport.now ||
-       !external(q,bytes,n) || !external(q,serial,sizeof(*serial)) || overlap(bytes,n,serial,sizeof(*serial)))return -1;
+       !external(q,bytes,n) || !external(q,serial,sizeof(*serial)) || !bt_range_disjoint(bytes,n,serial,sizeof(*serial)))return -1;
     struct bt_sco_link *l=link(q,generation);if(!l || l->phase!=BT_SCO_OPEN || (l->codec!=2&&((n&1)||n>254)))return -1;
     if(prepare(q)!=1)return -1;
     if(q->next_packet==UINT64_MAX)return fault(q,BT_SCO_IDENTITY);

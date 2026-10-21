@@ -2,19 +2,18 @@
 /* Original implementation of Bluetooth Core HCI packet flow control and
  * BR/EDR link commands. Reference structures remain external. */
 #include "bt_acl.h"
+#include "bt_memory.h"
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static int span(const void *p,size_t n) { return p && n && (uintptr_t)p<=UINTPTR_MAX-(n-1); }
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{ return an && bn && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn); }
 static int private(const struct bt_acl *a,const void *p,size_t n)
 {
-    if(!span(p,n) || overlap(a,sizeof(*a),p,n) || overlap(a->hci,sizeof(*a->hci),p,n) ||
-       overlap(a->hci->transport.binding.uart,sizeof(struct a733_uart),p,n)) return 0;
+    if(!span(p,n) || !bt_range_disjoint_empty(a,sizeof(*a),p,n) || !bt_range_disjoint_empty(a->hci,sizeof(*a->hci),p,n) ||
+       !bt_range_disjoint_empty(a->hci->transport.binding.uart,sizeof(struct a733_uart),p,n)) return 0;
     for(unsigned i=0;i<a->hci->transport.count;++i)
-        if(overlap(p,n,a->hci->transport.records[i].storage.bytes,
+        if(!bt_range_disjoint_empty(p,n,a->hci->transport.records[i].storage.bytes,
                    a->hci->transport.records[i].storage.capacity)) return 0;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].state!=BT_ACL_TX_FREE &&
-       overlap(p,n,a->packets[i].bytes,a->packets[i].length)) return 0;
+       !bt_range_disjoint_empty(p,n,a->packets[i].bytes,a->packets[i].length)) return 0;
     return 1;
 }
 static int fault(struct bt_acl *a)
@@ -46,13 +45,13 @@ int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
        h->command!=BT_HCI_IDLE || h->transport.state!=BT_H4_ACTIVE ||
        (!configured && (h->transport.staged || h->transport.assembling!=h->transport.count)) ||
        h->transport.tx_offset!=h->transport.tx_length ||
-       overlap(a,sizeof(*a),h,sizeof(*h)) ||
-       overlap(a,sizeof(*a),h->transport.binding.uart,sizeof(struct a733_uart)) ||
+       !bt_range_disjoint_empty(a,sizeof(*a),h,sizeof(*h)) ||
+       !bt_range_disjoint_empty(a,sizeof(*a),h->transport.binding.uart,sizeof(struct a733_uart)) ||
        !le16(h->identity.buffer_size) || !le16(h->identity.buffer_size+3) ||
        (h->identity.features[4]&0x20u) || (h->identity.supported_commands[0]&0x30u)!=0x30u) return -1;
     for(unsigned i=0;i<h->transport.count;++i)
         if((!configured && h->transport.records[i].owner!=BT_H4_FREE) ||
-           overlap(a,sizeof(*a),h->transport.records[i].storage.bytes,h->transport.records[i].storage.capacity)) return -1;
+           !bt_range_disjoint_empty(a,sizeof(*a),h->transport.records[i].storage.bytes,h->transport.records[i].storage.capacity)) return -1;
     if(configured && bt_hci_incoming_bound(h,1)!=1) return -1;
     /* One serialized owner: after every admission check, neither assignment
      * calls external code or can fail. The claimed address cannot be reused. */
@@ -80,7 +79,7 @@ int bt_acl_synchronous_register(struct bt_acl *a,const struct bt_acl_synchronous
 int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadline,uint64_t *generation)
 {
     if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !p || !generation || !private(a,p,sizeof(*p)) ||
-       !private(a,generation,sizeof(*generation)) || overlap(p,sizeof(*p),generation,sizeof(*generation)) ||
+       !private(a,generation,sizeof(*generation)) || !bt_range_disjoint_empty(p,sizeof(*p),generation,sizeof(*generation)) ||
        deadline<=a->hci->transport.now || p->page_scan_mode>2 || p->role_switch>1) return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i) any|=p->address[i];
     if(!any) return -1;
@@ -111,7 +110,7 @@ int bt_acl_listen(struct bt_acl *a,const uint8_t address[6],uint64_t deadline,ui
 {
     if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !a->incoming_timeout_us ||
        !private(a,address,6) || !private(a,generation,sizeof(*generation)) ||
-       overlap(address,6,generation,sizeof(*generation)) || deadline<=a->hci->transport.now ||
+       !bt_range_disjoint_empty(address,6,generation,sizeof(*generation)) || deadline<=a->hci->transport.now ||
        equal(address,a->hci->identity.address)) return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i) any|=address[i];
     if(!any) return -1;
@@ -140,7 +139,7 @@ int bt_acl_submit(struct bt_acl *a,uint64_t generation,unsigned pb,const uint8_t
 {
     if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !serial || (pb!=1 && pb!=2) ||
        !n || n>a->mtu || deadline<=a->hci->transport.now ||
-       !private(a,bytes,n) || !private(a,serial,sizeof(*serial)) || overlap(bytes,n,serial,sizeof(*serial))) return -1;
+       !private(a,bytes,n) || !private(a,serial,sizeof(*serial)) || !bt_range_disjoint_empty(bytes,n,serial,sizeof(*serial))) return -1;
     struct bt_acl_link *l=link(a,generation);
     if(!l || l->state!=BT_ACL_CONNECTED || l->flush_seen) return -1;
     if(a->next_packet==UINT64_MAX) return fault(a);

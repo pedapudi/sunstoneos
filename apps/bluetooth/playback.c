@@ -4,6 +4,7 @@
 #include "msbc.h"
 #include "a733_storage_digest.h"
 #include <string.h>
+#include "bt_memory.h"
 /* state0: USB producer owns bytes;1: Bluetooth owns immutable PCM;2: USB owns
  * immutable result. Release/acquire transfers ownership; neither task writes
  * fields belonging to the other state. Provider associations are owner-only. */
@@ -24,11 +25,9 @@ int bluetooth_playback_mode(const struct bluetooth_application *a)
 static int live(struct bluetooth_application *a)
 {return bluetooth_playback_mode(a)&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}
-static int outside(const void *p,size_t n,const void *q,size_t m)
-{uintptr_t x=(uintptr_t)p,y=(uintptr_t)q;return p&&q&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 static int external(struct bluetooth_application *a,const void *p,size_t n)
-{return outside(p,n,&playback,sizeof(playback))&&outside(p,n,a,sizeof(*a))&&
-    outside(p,n,a->profile,sizeof(*a->profile))&&outside(p,n,a->shared,sizeof(*a->shared));}
+{return bt_range_disjoint(p,n,&playback,sizeof(playback))&&bt_range_disjoint(p,n,a,sizeof(*a))&&
+    bt_range_disjoint(p,n,a->profile,sizeof(*a->profile))&&bt_range_disjoint(p,n,a->shared,sizeof(*a->shared));}
 static int producer(struct bluetooth_application *a)
 {
     if(!live(a))return 0;
@@ -61,7 +60,7 @@ int bluetooth_playback_commit(struct bluetooth_application *a,uint64_t ticket,co
 }
 int bluetooth_playback_copy(struct bluetooth_application *a,struct bluetooth_playback_result *r,struct bluetooth_playback_status *s)
 {
-    if(!producer(a)||!external(a,r,sizeof(*r))||!external(a,s,sizeof(*s))||!outside(r,sizeof(*r),s,sizeof(*s)))return -1;
+    if(!producer(a)||!external(a,r,sizeof(*r))||!external(a,s,sizeof(*s))||!bt_range_disjoint(r,sizeof(*r),s,sizeof(*s)))return -1;
     memset(r,0,sizeof(*r));memset(s,0,sizeof(*s));
     s->disconnected=atomic_load_explicit(&playback.closed,memory_order_acquire);
     s->acknowledged=atomic_load_explicit(&playback.acknowledged,memory_order_relaxed);

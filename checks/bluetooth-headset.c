@@ -3,9 +3,7 @@
 #define BLUETOOTH_APPLICATION_FIXTURE_ENTRY archived_application_main
 #include "bluetooth-application.c"
 #undef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
-#define separate headset_separate
 #include "../apps/bluetooth/headset.c"
-#undef separate
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
 void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine completion. */
 #endif

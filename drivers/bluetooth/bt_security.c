@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_security.h"
+#include "bt_memory.h"
 static struct bt_security *active;
 const bt_addr_t bt_security_any_address={{0}};
 static int fault(struct bt_security *s)
@@ -177,8 +178,6 @@ static int event(void *ctx,const struct bt_h4_record *r)
     if(s->fatal)return -1;return release(s,r);
 }
 static const struct bt_acl_security_ops operations={prepare,event};
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return an&&bn&&(x<=y?y-x<an:x-y<bn);}
 int bt_security_init(struct bt_security *s,struct bt_acl *a,TaskHandle_t task,
                     atomic_uint *recovery,const struct bt_security_policy *policy,uint64_t timeout)
 {
@@ -187,11 +186,11 @@ int bt_security_init(struct bt_security *s,struct bt_acl *a,TaskHandle_t task,
         policy->minimum_level<2||policy->minimum_level>3||policy->allow_just_works>1||
         policy->pin[16]||!(a->hci->identity.features[6]&8)||
         (atomic_load_explicit(recovery,memory_order_acquire)&4)||
-        overlap(s,sizeof(*s),a,sizeof(*a))||overlap(s,sizeof(*s),a->hci,sizeof(*a->hci))||
-        overlap(s,sizeof(*s),policy,sizeof(*policy))||overlap(s,sizeof(*s),recovery,sizeof(*recovery)))return -1;
+        !bt_range_disjoint_empty(s,sizeof(*s),a,sizeof(*a))||!bt_range_disjoint_empty(s,sizeof(*s),a->hci,sizeof(*a->hci))||
+        !bt_range_disjoint_empty(s,sizeof(*s),policy,sizeof(*policy))||!bt_range_disjoint_empty(s,sizeof(*s),recovery,sizeof(*recovery)))return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i)any|=policy->peer[i];if(!any)return -1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(a->links[i].state!=BT_ACL_UNUSED)return -1;
-    for(unsigned i=0;i<a->hci->transport.count;++i)if(overlap(s,sizeof(*s),a->hci->transport.records[i].storage.bytes,a->hci->transport.records[i].storage.capacity))return -1;
+    for(unsigned i=0;i<a->hci->transport.count;++i)if(!bt_range_disjoint_empty(s,sizeof(*s),a->hci->transport.records[i].storage.bytes,a->hci->transport.records[i].storage.capacity))return -1;
     *s=(struct bt_security){.self=s,.acl=a,.owner=task,.recovery=recovery,.policy=*policy,.deadline=policy->deadline,
         .timeout_us=timeout,.firmware_generation=a->hci->transport.binding.firmware_generation,
         .uart_generation=a->hci->transport.binding.uart_generation,.now=a->hci->transport.now};
@@ -258,8 +257,8 @@ int bt_security_step(struct bt_security *s,unsigned budget,uint64_t deadline)
 }
 int bt_security_authorized(struct bt_security *s,uint64_t link,uint64_t *generation,unsigned *sc)
 {
-    if(!live(s)||!generation||!sc||overlap(s,sizeof(*s),generation,sizeof(*generation))||
-        overlap(s,sizeof(*s),sc,sizeof(*sc))||overlap(generation,sizeof(*generation),sc,sizeof(*sc)))return -1;
+    if(!live(s)||!generation||!sc||!bt_range_disjoint_empty(s,sizeof(*s),generation,sizeof(*generation))||
+        !bt_range_disjoint_empty(s,sizeof(*s),sc,sizeof(*sc))||!bt_range_disjoint_empty(generation,sizeof(*generation),sc,sizeof(*sc)))return -1;
     struct bt_conn *c=connection(s,link);struct bt_acl_link *l=c?actual(s,c):NULL;
     if(!l||l->state!=BT_ACL_CONNECTED||!c->authenticated||!c->encrypt||!c->key_verified||
         !c->br.link_key||c->sec_level<c->required_sec_level)return 0;

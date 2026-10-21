@@ -1,30 +1,29 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Original implementation of RFCOMM1.2 and its GSM07.10 basic-mode framing. */
 #include "bt_rfcomm.h"
+#include "bt_memory.h"
 enum action { OTHER, MUX, PN, DLC, MSC, DISC, PEER_MSC, PEER_CLOSE, CREDIT, DATA, MUX_ACCEPT, PN_ACCEPT, DLC_ACCEPT };
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{return an && bn && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn);}
 static void copy(uint8_t *d,const uint8_t *s,size_t n){for(size_t i=0;i<n;++i)d[i]=s[i];}
 static unsigned le16(const uint8_t *p){return p[0]|((unsigned)p[1]<<8);}
 static uint64_t clock_now(const struct bt_rfcomm *q){return q->l2cap->acl->hci->transport.now;}
 static uint64_t after(uint64_t now,uint64_t interval){return interval>UINT64_MAX-now ? UINT64_MAX : now+interval;}
 static int lower_disjoint(const struct bt_l2cap *l,const void *p,size_t n)
 {
-    if(overlap(p,n,l,sizeof(*l)))return 0;
+    if(!bt_range_disjoint_empty(p,n,l,sizeof(*l)))return 0;
     if(l->state==BT_L2CAP_OFF)return 1;
-    if(overlap(p,n,l->acl,sizeof(*l->acl)) || overlap(p,n,l->acl->hci,sizeof(*l->acl->hci)) ||
-       overlap(p,n,l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
+    if(!bt_range_disjoint_empty(p,n,l->acl,sizeof(*l->acl)) || !bt_range_disjoint_empty(p,n,l->acl->hci,sizeof(*l->acl->hci)) ||
+       !bt_range_disjoint_empty(p,n,l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
     for(unsigned i=0;i<l->acl->hci->transport.count;++i)
-        if(overlap(p,n,l->acl->hci->transport.records[i].storage.bytes,
+        if(!bt_range_disjoint_empty(p,n,l->acl->hci->transport.records[i].storage.bytes,
                    l->acl->hci->transport.records[i].storage.capacity))return 0;
     return 1;
 }
 static int external(const struct bt_rfcomm *q,const void *p,size_t n)
 {
-    if(!p || overlap(p,n,q,sizeof(*q)) || overlap(p,n,q->registry,sizeof(*q->registry)) ||
+    if(!p || !bt_range_disjoint_empty(p,n,q,sizeof(*q)) || !bt_range_disjoint_empty(p,n,q->registry,sizeof(*q->registry)) ||
        !lower_disjoint(q->l2cap,p,n))return 0;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->registry->session[i] &&
-        overlap(p,n,q->registry->session[i],sizeof(*q)))return 0;
+        !bt_range_disjoint_empty(p,n,q->registry->session[i],sizeof(*q)))return 0;
     return 1;
 }
 static const struct bt_l2cap_channel *channel(const struct bt_rfcomm *q)
@@ -47,7 +46,7 @@ int bt_rfcomm_registry_init(struct bt_rfcomm_registry *r,struct bt_l2cap *l,
     int (*psm)(void *,uint64_t,uint16_t,unsigned),int (*service)(void *,uint64_t,uint16_t,uint8_t),void *ctx)
 {
     if(!r || !l || !psm || !service || r->l2cap || l->state!=BT_L2CAP_OFF ||
-       overlap(r,sizeof(*r),l,sizeof(*l)))return -1;
+       !bt_range_disjoint_empty(r,sizeof(*r),l,sizeof(*l)))return -1;
     *r=(struct bt_rfcomm_registry){.l2cap=l,.authorize_psm=psm,.authorize_service=service,.context=ctx};return 1;
 }
 int bt_rfcomm_admit(void *p,uint64_t link,uint16_t psm,unsigned incoming)
@@ -78,7 +77,7 @@ int bt_rfcomm_begin(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,const struc
     if(!q || !r || !s || !r->l2cap || q->phase!=BT_RFCOMM_OFF || r->l2cap->state!=BT_L2CAP_ACTIVE ||
        r->l2cap->authorize!=bt_rfcomm_admit || r->l2cap->context!=r || s->l2cap!=r->l2cap ||
        mtu<23 || mtu>BT_RFCOMM_MTU || bound<=r->l2cap->acl->hci->transport.now ||
-       overlap(q,sizeof(*q),r,sizeof(*r)) || overlap(q,sizeof(*q),s,sizeof(*s)) ||
+       !bt_range_disjoint_empty(q,sizeof(*q),r,sizeof(*r)) || !bt_range_disjoint_empty(q,sizeof(*q),s,sizeof(*s)) ||
        !lower_disjoint(r->l2cap,q,sizeof(*q)) || !lower_disjoint(r->l2cap,r,sizeof(*r)))return -1;
     const struct bt_sdp_record *rec=bt_sdp_record(s,record);
     if(!rec || !rec->matches_class || endpoint>=rec->endpoints)return -1;
@@ -88,7 +87,7 @@ int bt_rfcomm_begin(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,const struc
     unsigned slot=BT_ACL_LINKS;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) {
         if(!r->session[i]){if(slot==BT_ACL_LINKS)slot=i;continue;}
-        if(r->session[i]->link==s->link || overlap(q,sizeof(*q),r->session[i],sizeof(*q)))return -1;
+        if(r->session[i]->link==s->link || !bt_range_disjoint_empty(q,sizeof(*q),r->session[i],sizeof(*q)))return -1;
     }
     if(slot==BT_ACL_LINKS)return 0;
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(r->l2cap->channels[i].state!=BT_L2CAP_UNUSED &&
@@ -106,12 +105,12 @@ int bt_rfcomm_listen(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,uint64_t l
     if(!q || !r || !r->l2cap || q->phase!=BT_RFCOMM_OFF || r->l2cap->state!=BT_L2CAP_ACTIVE ||
        r->l2cap->authorize!=bt_rfcomm_admit || r->l2cap->context!=r || !uuid || !server || server>30 ||
        mtu<23 || mtu>BT_RFCOMM_MTU || bound<=r->l2cap->acl->hci->transport.now ||
-       overlap(q,sizeof(*q),r,sizeof(*r)) || !lower_disjoint(r->l2cap,q,sizeof(*q)) ||
+       !bt_range_disjoint_empty(q,sizeof(*q),r,sizeof(*r)) || !lower_disjoint(r->l2cap,q,sizeof(*q)) ||
        !lower_disjoint(r->l2cap,r,sizeof(*r)))return -1;
     unsigned slot=BT_ACL_LINKS;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) {
         if(!r->session[i]){if(slot==BT_ACL_LINKS)slot=i;continue;}
-        if(r->session[i]->link==link || overlap(q,sizeof(*q),r->session[i],sizeof(*q)))return -1;
+        if(r->session[i]->link==link || !bt_range_disjoint_empty(q,sizeof(*q),r->session[i],sizeof(*q)))return -1;
     }
     if(!live_link(r->l2cap,link) || r->authorize_service(r->context,link,uuid,server)!=1)return -1;
     if(slot==BT_ACL_LINKS)return 0;
@@ -452,7 +451,7 @@ int bt_rfcomm_step(struct bt_rfcomm *q,unsigned budget,uint64_t bound)
 int bt_rfcomm_send(struct bt_rfcomm *q,const uint8_t *p,size_t n,uint64_t bound,uint64_t *serial)
 {
     if(!q || q->phase!=BT_RFCOMM_OPEN || !n || n>q->mtu || bound<=clock_now(q) ||
-       !external(q,p,n) || !external(q,serial,sizeof(*serial)) || overlap(p,n,serial,sizeof(*serial)) || !authorized(q))return -1;
+       !external(q,p,n) || !external(q,serial,sizeof(*serial)) || !bt_range_disjoint_empty(p,n,serial,sizeof(*serial)) || !authorized(q))return -1;
     return frame(q,q->dlci,0xef,!q->incoming,p,(unsigned)n,0,DATA,bound,serial);
 }
 static const struct bt_rfcomm_buffer *oldest(const struct bt_rfcomm_buffer *p,unsigned n,unsigned received)
