@@ -1,7 +1,7 @@
 if(SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
 endif()
-# Same supervised board provider composition with one retained DI301 WEAVE or initial MOTION task.
+# Same supervised board provider composition with one retained DI301 WEAVE, initial MOTION or fixed-strength TNR task.
 set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
 if(NOT TARGET sunstone-a733-board)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-board.cmake")
@@ -89,7 +89,7 @@ set_target_properties(sunstone-a733-deinterlace PROPERTIES SUFFIX ".elf" LINK_DE
 
 set(deinterlace_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@deinterlace_build@/manifest.json" "{\"target\":\"sunstone-a733-deinterlace\",\"execution_profile\":\"deinterlace-supervised-v1\",\"workload\":\"copied-NV12-offline-weave-or-initial-motion\",\"build_id\":\"@deinterlace_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@deinterlace_build@/manifest.json" "{\"target\":\"sunstone-a733-deinterlace\",\"execution_profile\":\"deinterlace-supervised-v1\",\"workload\":\"copied-NV12-offline-weave-motion-or-fixed-tnr\",\"build_id\":\"@deinterlace_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${deinterlace_manifest_script}" deinterlace_manifest_script @ONLY)
 file(WRITE "${deinterlace_build}/finish-manifest.cmake" "${deinterlace_manifest_script}")

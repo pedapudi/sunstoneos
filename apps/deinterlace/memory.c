@@ -3,8 +3,9 @@
 #include "a733_memory_reservations.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-static unsigned motion(void){return deinterlace.session.mode==A733_DEINTERLACE_MOTION;}
-static size_t md_rounded(void){return 77824;}
+static unsigned motion(void){return deinterlace.session.mode!=A733_DEINTERLACE_WEAVE;}
+static size_t md_bytes(void){return deinterlace.session.mode==A733_DEINTERLACE_TNR?A733_DEINTERLACE_TNR_MD_BYTES:A733_DEINTERLACE_MD_BYTES;}
+static size_t md_rounded(void){return (md_bytes()+4095)&~(size_t)4095;}
 static unsigned allocations(void){return motion()?6:3;}
 static uint8_t *image(unsigned i)
 {return i==1?deinterlace.input:i==2?deinterlace.output:i==3?deinterlace.current:i==4?deinterlace.flag_input:deinterlace.flag_output;}
@@ -29,7 +30,7 @@ int deinterlace_guards(void)
 {
     for(unsigned i=1;i<allocations();++i){struct device_memory_extent e;enum device_memory_state state;
         size_t size=i<4?deinterlace.rounded:md_rounded();
-        size_t used=i<4?deinterlace.bytes:A733_DEINTERLACE_MD_BYTES;
+        size_t used=i<4?deinterlace.bytes:md_bytes();
         uint8_t *expected=image(i);
         if(!device_memory_describe(deinterlace.pool,deinterlace.leases[i],&e,&state)||
            state!=DEVICE_MEMORY_DEVICE||e.bytes!=size+8192||e.cpu+4096!=(uintptr_t)expected)return 0;
@@ -56,8 +57,8 @@ __attribute__((noinline)) int deinterlace_allocate(void)
     if(motion()){
         memcpy(deinterlace.current,deinterlace.supplied.bytes+deinterlace.bytes,deinterlace.bytes);
         /* Pinned di_client_alloc_mbuf zeroes both initial flag buffers. */
-        memset(deinterlace.flag_input,0,A733_DEINTERLACE_MD_BYTES);
-        memset(deinterlace.flag_output,0,A733_DEINTERLACE_MD_BYTES);
+        memset(deinterlace.flag_input,0,md_bytes());
+        memset(deinterlace.flag_output,0,md_bytes());
     }
     if(!a733_deinterlace_commands(&deinterlace.plan,&deinterlace.session))return 0;
     struct a733_iommu_span spans[5]={
@@ -66,7 +67,7 @@ __attribute__((noinline)) int deinterlace_allocate(void)
     if(motion()){
         spans[2]=(struct a733_iommu_span){A733_DEINTERLACE_CURRENT_IOVA,(uintptr_t)deinterlace.current,deinterlace.rounded,A733_IOMMU_READ};
         spans[3]=(struct a733_iommu_span){A733_DEINTERLACE_FLAG_IN_IOVA,(uintptr_t)deinterlace.flag_input,md_rounded(),A733_IOMMU_READ};
-        spans[4]=(struct a733_iommu_span){A733_DEINTERLACE_FLAG_OUT_IOVA,(uintptr_t)deinterlace.flag_output,md_rounded(),A733_IOMMU_READ|A733_IOMMU_WRITE};
+        spans[4]=(struct a733_iommu_span){deinterlace.session.mode==A733_DEINTERLACE_TNR?A733_DEINTERLACE_TNR_FLAG_OUT_IOVA:A733_DEINTERLACE_FLAG_OUT_IOVA,(uintptr_t)deinterlace.flag_output,md_rounded(),A733_IOMMU_READ|A733_IOMMU_WRITE};
     }
     if(a733_iommu_build(&deinterlace.tables,deinterlace.table,(uintptr_t)deinterlace.table,spans,motion()?5:2)!=1)return 0;
     __asm__ volatile("dsb sy":::"memory");

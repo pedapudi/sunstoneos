@@ -1,6 +1,6 @@
 {
   "schema": "a733-deinterlace-references-v1",
-  "runtime": "Pinned GPL DI301 configuration and algorithm defaults execute on the FreeRTOS CPU against a private register image. Native callbacks publish only the explicit active-weave register whitelist. No Linux kernel, queue or hardware status shadow executes.",
+  "runtime": "Pinned GPL DI301 configuration and algorithm defaults execute on the FreeRTOS CPU against a private register image. Native callbacks publish mode-specific active WEAVE, initial MOTION or fixed-strength TNR register whitelists. No Linux kernel, queue or hardware status shadow executes.",
   "license": "GPL-2.0-or-later for DI code; preserve all original notices. drm_fourcc.h retains its own permissive notice.",
   "reference_pins": {
     "bsp/drivers/di/Kconfig": {
@@ -95,5 +95,5 @@
     "sha256": "ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc"
   },
   "manual": "A733 manual14.4 and4.1 DI CCU controls; existing manual pin remains in sources.lock.json.",
-  "scope": "One offline NV12 combined-field weave frame. Matched processing finish and nonbusy authorize immutable copied output only, never fabric-drain/reclamation. Physical DMA completion/visibility remains unqualified."
+  "scope": "One offline combined-field NV12 WEAVE, initial MOTION or fixed-strength TNR operation. TNR consumes two frames and produces planar YUV420. Matched processing finish and nonbusy authorize immutable copied output only; resources remain retained and physical DMA completion/visibility remains unqualified."
 }

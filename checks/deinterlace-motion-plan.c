@@ -19,7 +19,7 @@ int main(void)
  }
  assert(a733_deinterlace_input_bytes(&s)==921600);
  storage.plan.words[0x120/4]+=4096;assert(!a733_deinterlace_plan_valid(&storage.plan));
- memset(&storage.plan,0,sizeof(storage.plan));s.mode=3;assert(!a733_deinterlace_commands(&storage.plan,&s));
+ memset(&storage.plan,0,sizeof(storage.plan));s.mode=4;assert(!a733_deinterlace_commands(&storage.plan,&s));
  memset(&storage.plan,0,sizeof(storage.plan));s.mode=2;s.top_field_first=0;assert(!a733_deinterlace_commands(&storage.plan,&s));
  puts("PASS pinned DI301 initial MOTION generation, MD masks/addresses and refusals; no pixel arithmetic executed");
 }

@@ -23,7 +23,8 @@ static int di_address(uintptr_t address,unsigned writing,uint32_t value)
  if(off==0x10)return !writing||value==1;
  if(off==0x14)return !writing||!(value&1);
  if(off==0x18)return !writing||value==1;
- size_t n;const struct a733_deinterlace_word *w=a733_deinterlace_words(&n);
+ size_t n;const struct a733_deinterlace_word *w=deinterlace.session.mode==A733_DEINTERLACE_TNR?
+  a733_deinterlace_tnr_words(&n):a733_deinterlace_words(&n);
  for(size_t i=0;i<n;i++)if(off==w[i].offset)return 1;
  return 0;
 }
@@ -101,7 +102,7 @@ static int clocks(void)
       if(!bits(CCU+0xa20,0x80000000,0))return -1;
       /* MOTION admits the reset-held lifetime used by the pinned Linux
        * disable/enable sequence. Never assert/reset an inherited live engine. */
-      if(deinterlace.session.mode==A733_DEINTERLACE_MOTION&&
+      if(deinterlace.session.mode!=A733_DEINTERLACE_WEAVE&&
          !bits(CCU+0xa24,0x10001,0))return -1;
     }
     if(!parents()||!update(CCU+changes[deinterlace.clock_step].offset,changes[deinterlace.clock_step].mask,
@@ -143,6 +144,7 @@ static int launch(void)
  int r=enter();if(r!=1)return r<0?-1:0;
  size_t count;const struct a733_deinterlace_word *w=a733_deinterlace_words(&count);
  if(deinterlace.session.mode==A733_DEINTERLACE_WEAVE)count=A733_DEINTERLACE_WEAVE_WORDS;
+ if(deinterlace.session.mode==A733_DEINTERLACE_TNR)w=a733_deinterlace_tnr_words(&count);
  if(!deinterlace.command_step){
   /* Source disabled, inherited work excluded by admission. Clear only stale
    * finish before arming this one operation; never reset or infer bus drain. */
@@ -189,7 +191,7 @@ static int step(void)
  /* Recheck both immutable DMA inputs against the retained authenticated
   * upload; neither source span may be CPU-written after publication. */
  if(memcmp(deinterlace.input,deinterlace.supplied.bytes,deinterlace.bytes)||
-    (deinterlace.session.mode==A733_DEINTERLACE_MOTION&&
+    (deinterlace.session.mode!=A733_DEINTERLACE_WEAVE&&
      memcmp(deinterlace.current,deinterlace.supplied.bytes+deinterlace.bytes,deinterlace.bytes)))return -1;
  uint8_t hash[32];storage_digest_bytes(deinterlace.supplied.bytes,
    a733_deinterlace_input_bytes(&deinterlace.session),hash);

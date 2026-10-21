@@ -1,7 +1,8 @@
 # Native offline deinterlacing
 
 `sunstone-a733-deinterlace` accepts an authenticated fixed-geometry NV12 job,
-submits one offline WEAVE or initial motion-adaptive operation to A733 DI301, and exposes an immutable
+submits one offline WEAVE, initial motion-adaptive or fixed-strength temporal
+noise reduction (TNR) operation to A733 DI301, and exposes an immutable
 copied output through USB0. It retains the controller, buffers, IOMMU tables,
 clock/power ownership and copied result until whole-board power removal.
 Successful output delivery does not authorize another job or resource reuse.
@@ -11,9 +12,9 @@ strides. The Y plane contains 480 lines and the UV plane 240 lines, totaling
 460,800 bytes. Alternating lines belong to alternating fields. Deterministic
 field patterns and caller-supplied frames are valid inputs; no media permission
 or preknown output oracle is required. Weave preserves those fields without
-motion-adaptive interpolation. TNR, film detection, crop, scale, additional formats and repeated jobs remain
-outside both profiles. Mode 2 adds initial motion-adaptive processing as
-described below.
+motion-adaptive interpolation. Mode 2 adds initial motion-adaptive processing;
+mode 3 adds fixed-strength TNR. Film detection, crop, scale, additional input
+formats and repeated jobs remain unsupported.
 
 ## Selected implementation and configuration
 
@@ -133,7 +134,7 @@ contains two complete combined-field NV12 frames, previous then current,
 totaling 921,600 bytes. One digest authenticates both frames before provider
 acquisition. Output remains one 460,800-byte NV12 frame. The 888-byte session
 and 192-byte result retain their layout; the immutable geometry marker is
-revision 2 and declares the maximum upload size. Mode 1 retains its existing
+revision 3 and declares the maximum upload size and TNR support. Mode 1 retains its existing
 single-frame input and WEAVE behavior.
 
 This is one initial operation with zero motion history. The source initializes
@@ -164,6 +165,35 @@ at `0x10800000`, and flags at `0x10c00000` and `0x10c20000`. All have unmapped
 guard pages and checked tail padding. Both input frames are checked against the
 retained authenticated upload before output publication. The same one-attempt,
 retained-result and USB ACK rules apply.
+
+## Fixed-strength temporal noise reduction
+
+Mode 3 submits one TNR-only operation with two combined-field NV12 frames,
+previous then current, totaling 921,600 bytes. Output is planar YUV420:
+307,200 bytes of Y followed by 76,800 bytes each of U and V. Output strides
+are 640 bytes for Y and 320 bytes for U and V. The session still describes
+input geometry; mode 3 identifies the output format in the copied result.
+
+The effective single-file selector in pinned `di_client.c` enables MD and TNR,
+routes previous/current inputs and the TNR output, and requires planar output.
+The adapter uses `DI_TNR_MODE_FIX`. Fixed setup in `di301.c` programs strength
+58 for each channel. On the first sequence, per-frame setup skips CPU feedback
+but still enables TNR and programs its parameters. No source branch bypasses
+TNR for this initial operation. Numerical filtering remains unqualified.
+
+Each zeroed flag buffer follows the source's TNR allocation of width times
+height, totaling 307,200 bytes. The source retains stride 160 despite this
+larger allocation. Input flags map at `0x10c00000`; output flags map at
+`0x10c50000` to avoid overlap. Each guarded flag allocation occupies 315,392
+bytes. Frame allocations, authentication, reset-held admission, completion,
+copied output and retained-resource rules follow the initial motion path.
+
+Only active top-level, MD and TNR words reach hardware for this mode. Reserved
+bits remain preserved, and disabled DIT/FMD settings stay in the CPU image.
+The TNR word masks follow named fields in pinned `di301_reg.h`, including
+source-initialized accumulators and random state. No CPU-shadow confidence
+thresholds are submitted. Camera and display operation, steady-state history,
+pixel quality and physical DMA remain unqualified.
 
 ## Preserved software evidence
 
