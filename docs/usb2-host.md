@@ -137,11 +137,14 @@ matching tag, data residue and command status. `a733_usb2_read_result` copies
 one sector only after successful data and status completion, within the caller's
 absolute deadline and under a fresh attachment observation.
 
-Abort, malformed completion, disconnect and expiry revoke caller destinations
-and retain all private DMA backing. Reset, power-off and a halted status are not
-claimed to block and drain all external transactions. The application API has
-no release, reattach or retry call. A failed command is not reported as a
-completed read.
+Abort, malformed completion and expiry revoke caller destinations and retain
+all private DMA backing. Reset, power-off and a halted status are not claimed
+to block and drain all external transactions. A reported disconnect instead
+ends the device through the orderly teardown described in
+[Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused):
+the outstanding read returns -1 without copying a sector, and a later
+attachment can mount and read again. The application API has no release or
+retry call. A failed command is not reported as a completed read.
 
 The TinyUSB stack uses its single-context queue implementation inside the actual
 FreeRTOS owner task. No interrupt or second task may call the stack. Each host
@@ -208,12 +211,15 @@ check. It returns the actual byte count, monotonic sequence, Type-C attachment
 generation, logical device address, speed, interface protocol and endpoint.
 Short transfers and zero-length packets retain their actual lengths. They are
 raw transfer records and do not imply valid boot keyboard or mouse semantics.
-One consumed result permits another receive. Failure, disconnect, expiry or
-active cancellation permanently closes admission and retains all DMA backing.
+One consumed result permits another receive. Failure, expiry or active
+cancellation permanently closes admission and retains all DMA backing. A
+reported disconnect ends the outstanding receive without a report; a later
+attachment can mount and receive again, and report sequence numbers keep
+increasing across attachments.
 A report transfer that ends with USB Transaction Error delivers no callback;
 the session is retained at most 1 s later, as described in
 [Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused).
-The application has no reattachment or endpoint-stall recovery path.
+The application has no endpoint-stall recovery path.
 
 The native board task preserves its storage behavior and selects HID by the
 actual enumerated class. It collects four reports into an immutable 512-byte
@@ -277,8 +283,13 @@ control queue serializes hub and leaf requests; each physical device retains
 its own descriptor probes and configuration prefix.
 
 Hub interrupt status uses private bounce DMA and a validated one-byte copied
-completion. Port status binds the first connected port for the lifetime. Removal,
-a second connected port, suspend, overcurrent, failed transfers, an unexpected
+completion. Port status binds the first connected port until that port reports
+a disconnect. A port status with connection clear, the port disabled and the
+connection-change bit set removes the child: TinyUSB closes it and the adapter
+starts the core's child detach, while the hub and its status transfer stay in
+service. A later connection on any port can then bind a new child. A second
+connected port, a disconnect that leaves the port enabled or reports no
+connection change, suspend, overcurrent, failed transfers, an unexpected
 slot/TRB or malformed status prevents further callbacks and caller-output copy.
 Both slots and the whole DMA parent remain retained. A hub status transfer that
 ends with USB Transaction Error or Split Transaction Error is held without a
@@ -286,9 +297,6 @@ callback for at most 1 s before that retention. The hub status transfer carries
 the session lifetime as its deadline, so this hold limit applies to it. Type-C
 VBUS shutdown does not prove that a self-powered hub or its downstream ports
 lost external power.
-The TinyUSB adapter does not yet use the xHCI child detach described in
-[Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused),
-so a hub child cannot be replaced within one session.
 
 The application continues to return one copied sector or four raw HID reports.
 Its wire/session layout and host decoding are unchanged. HID metadata identifies
@@ -722,12 +730,52 @@ These outcomes include:
 - a teardown that has not finished 5 s after it started. This bound matches
   the pinned Linux `XHCI_CMD_DEFAULT_TIMEOUT`.
 
-The TinyUSB adapter still treats REMOVE notices, device close, endpoint close
-and class unmount as session loss. Application sessions therefore still end on
-any disconnect. Using the detach path from the adapter, adopting a new Type-C
-attachment generation after VBUS removal and BOT reset recovery for storage
-remain required work. VBUS removal alone does not establish that a self-powered
-hub lost power, so hub topologies need separate evidence before reuse.
+The TinyUSB adapter in `drivers/usb/a733_xhci_tinyusb.c` uses this teardown
+for both kinds of disconnect:
+
+- **Root disconnect.** On a REMOVE notice with result 0, the adapter ends the
+  outstanding sector read or HID receive without output and reports no mounted
+  device. It then passes the removal to TinyUSB, which unmounts each class and
+  closes each device. Every record is already under teardown, so the core
+  accepts each close. A REMOVE notice with result 2 follows a core fault and
+  ends the session.
+- **Hub child disconnect.** The hub port status described in
+  [One external hub connects one downstream application device](#one-external-hub-connects-one-downstream-application-device)
+  lets the pinned hub class report the removal. TinyUSB then unmounts and
+  closes the child, and the adapter calls `a733_xhci_detach` for it.
+
+After each accepted close, the adapter clears the descriptor, hub and leaf
+state that names the closed address. At every root ATTACH notice it clears all
+device state, because the core announces an attachment only after every slot
+is disabled. TinyUSB ignores root attach and remove events for 150 ms after a
+root attachment while it debounces the connection. A device that leaves in
+that window ends its own enumeration when TinyUSB finds the port disconnected.
+
+A device must mount by the startup deadline. After a removal, the adapter waits
+for a new attachment until the session lifetime ends. The next root attachment
+or hub port connection must then mount within the startup budget, measured
+from that attachment. The budget is the startup deadline minus the time at
+which the TinyUSB stack started.
+
+Other closes still end the session. The core refuses to detach the root device
+while its port reports a connection, so a TinyUSB close of that device retains
+the session, for example after a failed enumeration. Endpoint close and bulk
+clear-halt requests also retain it.
+
+On the supervised board, a single-device workload that loses its device before
+publishing a result issues its request again after a later attachment mounts.
+A published result is kept. The two-leaf workload still ends on a removal,
+because the other leaf's request can remain outstanding.
+
+Unplugging a device from the board's Type-C connector also ends the Type-C
+attachment, and Type-C attachment loss still retains the session. The root
+disconnect path therefore serves a device unplugged behind an adapter or hub
+that keeps the Type-C attachment. Adopting a new Type-C attachment generation
+after VBUS removal and BOT reset recovery for storage remain required work.
+The pinned TinyUSB storage class never requests a bulk clear-halt, so BOT reset
+recovery would need a change to that class as well as bulk-endpoint recovery
+in the core. VBUS removal alone does not establish that a self-powered hub lost
+power, so hub topologies need separate evidence before reuse.
 
 `checks/a733-xhci-detach.py` runs the actual core against a modeled controller
 with address and undefined-behavior sanitizers. Successful cases detach and
@@ -743,13 +791,27 @@ is the session lifetime. In each held-error case, retention follows 1 s after
 the error. The model checks that contexts and rings keep their contents until
 Disable Slot completes.
 
-The composed USB2 check covers the adapter side of a root disconnect. With a TD
-outstanding on a high-speed storage device, a HID device or a storage device
-behind a hub, the root port reports CCS clear with CSC. The core sends REMOVE
-with result 0 and starts teardown. TinyUSB then closes the device, and the
-adapter retains the session. No transfer callback or caller copy follows the
-REMOVE notice, and the DMA parent is RETAINED. Controller timing, DMA
-visibility and physical disconnect behavior remain unqualified.
+`checks/a733-usb2-host.py` runs the adapter, the actual TinyUSB classes and the
+core together against a controller model that completes Stop Endpoint, Reset
+Endpoint and Disable Slot commands. It covers these cases:
+
+- **Root disconnect and replug.** With a TD outstanding on a high-speed storage
+  device, a high-speed HID device or a storage device behind a hub, the root
+  port reports CCS clear with CSC. The core sends one REMOVE notice with result
+  0 and disables every slot. No transfer callback or caller copy follows, the
+  pending result returns -1, and the DMA parent stays DEVICE-owned. A new
+  connection then enumerates on the same pages and completes a sector read or
+  a HID report.
+- **Hub child replacement.** The hub reports its child's port disconnected,
+  disabled and changed while a sector read is outstanding, for a high-speed hub
+  and for a SuperSpeed hub. Only the child's slot is disabled; the hub stays
+  configured. A new child on the same port enumerates and completes a transfer.
+- **Retention.** A root teardown whose commands never complete retains the
+  session 5 s after the disconnect. A hub port that reports a disconnect while
+  still enabled retains both slots without a sector copy.
+
+Controller timing, DMA visibility and physical disconnect behavior remain
+unqualified.
 
 ## Required wider modes and physical qualification
 
@@ -768,8 +830,7 @@ Further required work includes wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain, adoption of a
-new Type-C attachment generation and use of the xHCI detach path by the
-TinyUSB adapter. DisplayPort lane ownership must be coordinated with display users.
+new Type-C attachment generation and BOT reset recovery for storage. DisplayPort lane ownership must be coordinated with display users.
 USB0 host capability requires an electrically valid route; USB1 needs a physical
 route before it can be considered usable on this board revision.
 
@@ -858,7 +919,8 @@ VBUS shutdown, device enumeration, report timing and observed report contents
 remain physically unqualified. Both microSD cards remain preserved. Broader
 speed/class support, broader hub topologies and power budgets, isochronous
 transfers, SuperSpeed, physical CPU
-interrupt delivery and application-level device replacement remain required work.
+interrupt delivery and device replacement after a Type-C attachment change
+remain required work.
 
 ## Offline Gen1 evidence
 
