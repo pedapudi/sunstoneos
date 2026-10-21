@@ -82,12 +82,20 @@ static int masked(struct a733_lradc *p,int initial)
  return bits(p,0x03400000,BIT(31),0)&&bits(p,0x03400108,BIT(5),0)&&
  bits(p,0x03400308,BIT(5),0)&&(!initial||bits(p,0x03400208,BIT(5),0));
 }
-static int clear_data(struct a733_lradc *p,uint32_t status)
+static int acknowledge(struct a733_lradc *p)
+{return timely(p)&&p->ops.write(p->cookie,ADC+8,1)==1&&timely(p);}
+static int clear_data(struct a733_lradc *p,uint32_t status,unsigned running)
 {
+ uint32_t v;
  if(status&~1u)return 0;
- if(status&&(!timely(p)||p->ops.write(p->cookie,ADC+8,1)!=1||!timely(p)))return 0;
+ if(status&&!acknowledge(p))return 0;
  /* Never mistake the power-on DATA0=63 or a stale pending flag for a sample. */
- return bits(p,ADC+8,0x1f1f,0);
+ if(!rd(p,ADC+8,&v))return 0;
+ /* While EN is set, the next conversion (tens of milliseconds apart) can
+  * land between W1C and readback. Acknowledge one such DATA0 reassertion;
+  * a second within microseconds means the W1C was ignored. */
+ if(running&&(v&0x1f1f)==1&&acknowledge(p))return bits(p,ADC+8,0x1f1f,0);
+ return !(v&0x1f1f);
 }
 static int startup(struct a733_lradc *p)
 {
@@ -98,7 +106,7 @@ static int startup(struct a733_lradc *p)
  if(!bits(p,CCU+0x1024,1,0)||!update(p,CCU+0x1024,BIT(16),BIT(16))||
     !update(p,CCU+0x1024,1,1))return 0;
  if(!bits(p,ADC,1,0)||!bits(p,ADC+4,0x1f1f,0)||!rd(p,ADC+8,&status)||
-    !clear_data(p,status))return 0;
+    !clear_data(p,status,0))return 0;
  if(!update(p,ADC,0xffcf3ffd,A733_LRADC_CONTROL&~1u)||
     !update(p,ADC+4,0x1f1f,1)||!update(p,ADC,1,1))return 0;
  return clocks(p,1)&&masked(p,0);
@@ -165,7 +173,8 @@ enum a733_adc_result a733_lradc_read(struct a733_lradc *p,uint64_t deadline,stru
  !separate(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
  if(!claim(p))return A733_ADC_BUSY;if(p->stage==STOPPED)return finish(p,A733_ADC_STOPPED);
  if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
- if(p->ops.current(p->cookie)!=1||p->stage!=ACTIVE||!deadline)return fault(p);p->deadline=deadline;
+ if(p->stage!=ACTIVE||!deadline)return finish(p,A733_ADC_INVALID);
+ if(p->ops.current(p->cookie)!=1)return fault(p);p->deadline=deadline;
  enum a733_adc_result r=lock(p);if(r!=A733_ADC_READY)return r;
  uint32_t status,code;
  if(!clocks(p,1)||!masked(p,0)||!bits(p,ADC,0xffcf3ffd,A733_LRADC_CONTROL)||
@@ -174,7 +183,7 @@ enum a733_adc_result a733_lradc_read(struct a733_lradc *p,uint64_t deadline,stru
  struct a733_adc_sample sample={.sequence=p->sequence+1,.valid=1};
  if(!sample.sequence||!rd(p,ADC+0xc,&code)||code>63)return fault(p);
  sample.code[0]=(uint16_t)code;sample.observed_us[0]=p->last_now;
- if(!clear_data(p,status)||!unlock(p))return fault(p);
+ if(!clear_data(p,status,1)||!unlock(p))return fault(p);
  p->sequence=sample.sequence;*out=sample;return finish(p,A733_ADC_SAMPLE);
 }
 enum a733_adc_result a733_lradc_stop(struct a733_lradc *p,uint64_t deadline)

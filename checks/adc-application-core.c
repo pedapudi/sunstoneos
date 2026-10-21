@@ -89,6 +89,12 @@ int main(int argc,char **argv)
   if(kind==3){f.deny_write=1;f.denied_address=0x02521038;}
   struct a733_adc_sample s,saved;memset(&s,0xa5,sizeof(s));saved=s;
   assert(a733_adc_read(&f.driver,100000,&s)==A733_ADC_RETAINED&&f.driver.fault&&!memcmp(&s,&saved,sizeof(s)));++cases;}
+ {struct fixture f;initialize(&f,0);assert(a733_adc_poll(&f.driver)==A733_ADC_PENDING);struct a733_adc_sample s,saved;
+  memset(&s,0xa5,sizeof(s));saved=s;unsigned io=f.reads+f.writes;
+  assert(a733_adc_read(&f.driver,100000,&s)==A733_ADC_INVALID&&!f.driver.fault&&!f.retained&&io==f.reads+f.writes&&!memcmp(&s,&saved,sizeof(s)));
+  assert(a733_clock_token_status(&f.clocks,&f.token)==A733_CLOCK_OK&&a733_adc_poll(&f.driver)==A733_ADC_READY);
+  assert(a733_adc_read(&f.driver,0,&s)==A733_ADC_INVALID&&!f.driver.fault);sample(&f,1);
+  assert(a733_adc_read(&f.driver,100000,&s)==A733_ADC_SAMPLE&&s.sequence==1);++cases;}
  {struct fixture f;initialize(&f,0);assert(start(&f)==A733_ADC_READY);f.now=100000;struct a733_adc_sample s;unsigned reads=f.reads;
   assert(a733_adc_read(&f.driver,100000,&s)==A733_ADC_RETAINED&&f.reads==reads);++cases;}
  {struct fixture f;initialize(&f,0);f.block_retention=1;f.deny_write=1;f.denied_address=0x02521000;
