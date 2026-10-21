@@ -126,9 +126,12 @@ service; its prepared callback checks byte identity and actual startup health.
 One live client task uses `npu_convolution_send` and
 `npu_convolution_collect`. Its supported sequence is:
 
-1. OPEN, then request STATUS until a copied reply reports READY.
+1. OPEN, then send WAIT (or request STATUS repeatedly) until a copied reply
+   reports READY.
 2. SUBMIT an input with the selected catalogue length. The wrapper copies it before queuing command 1.
-3. Request STATUS until DONE identifies the matching submission ticket.
+3. Send WAIT (or request STATUS repeatedly) until DONE identifies the matching
+   submission ticket. The live runtime client uses WAIT; the fixed two-job
+   client still polls STATUS once per tick.
 4. Copy the selected output length with `npu_convolution_output`.
 5. Explicitly REAP before submitting another input.
 

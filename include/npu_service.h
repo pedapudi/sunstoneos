@@ -12,7 +12,8 @@
 
 enum npu_service_operation {
     NPU_SERVICE_STATUS, NPU_SERVICE_OPEN, NPU_SERVICE_SUBMIT,
-    NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE
+    NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE,
+    NPU_SERVICE_WAIT
 };
 enum npu_service_result {
     NPU_SERVICE_OK, NPU_SERVICE_INVALID, NPU_SERVICE_DENIED,
@@ -76,6 +77,8 @@ struct npu_service {
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     struct npu_service_message deferred;
     unsigned has_deferred;
+    struct npu_service_message held;
+    unsigned has_held;
     struct a733_npu_mmu_image image;
     struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
     unsigned command_count, owner, initialized;
@@ -144,8 +147,13 @@ unsigned npu_service_irq_completions(const struct npu_service *);
  * Output arguments are unchanged on refusal/timeout. Queues own all message data,
  * so a timed-out caller's stack is never retained by the worker.
  *
- * OPEN claims the session; only its owner may submit, cancel, reap, or close.
- * STATUS is diagnostic for any registered task. Active polling waits at most
+ * OPEN claims the session; only its owner may submit, cancel, reap, close or
+ * wait. STATUS is diagnostic for any registered task. WAIT (owner only, zero
+ * timeout) replies like STATUS, but the worker holds the reply while the
+ * bootstrap, job or cancellation is still active and sends it at the first
+ * poll or interrupt pass after the controller leaves that state: READY, DONE,
+ * CANCELED or FAULT, including a controller deadline. A held WAIT never delays
+ * other clients' requests. Collect it with finite waits like any reply. Active polling waits at most
  * one tick for requests; scheduling/callback latency can extend that interval.
  * Idle sessions sample the counter at least once per one-second queue wait.
  * No client request is needed to advance completion/deadlines. Fault retains

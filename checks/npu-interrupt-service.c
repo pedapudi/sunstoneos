@@ -59,6 +59,14 @@ static struct npu_service_reply irq_wait(enum a733_npu_state wanted)
     if(r.state==A733_NPU_FAULT){platform_puts("IRQ fixture fault=");platform_hex(r.fault);platform_puts(" masks=");platform_hex(mask_calls);platform_puts(" rearms=");platform_hex(rearm_calls);platform_puts(" pending=");platform_hex(atomic_load(&service.irq_pending));platform_puts("\n");}
     return r;
 }
+/* WAIT: exactly one held reply once the bootstrap or job leaves its active
+ * state, with no STATUS polling by the owner. */
+static struct npu_service_reply irq_hold(void)
+{
+    struct npu_service_reply r=irq_request(NPU_SERVICE_WAIT,0,0);
+    vTaskDelay(2);configASSERT(!uxQueueMessagesWaiting(service.clients[0].replies));
+    return r;
+}
 static void irq_owner(void *unused)
 {
     (void)unused;configASSERT(npu_irq_case<=9);
@@ -70,16 +78,19 @@ static void irq_owner(void *unused)
         r=irq_wait(A733_NPU_CANCELED);configASSERT(r.state==A733_NPU_CANCELED);
         r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK && r.canceled);
     }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9){
-        r=irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
+        r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
         for(unsigned j=0;j<2;++j){
             r=irq_request(NPU_SERVICE_SUBMIT,1,100000);configASSERT(r.result==NPU_SERVICE_OK);
-            r=irq_wait(A733_NPU_DONE);configASSERT(r.state==A733_NPU_DONE);
+            uint64_t job=r.job_ticket;
+            r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_DONE);
+            configASSERT(r.state==A733_NPU_DONE && r.result==NPU_SERVICE_OK && r.job_ticket==job);
             configASSERT(native.memory.state==A733_NPU_MEMORY_IDLE && data[4096]==(uint8_t)(0x10080000>>19));
             r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK);
         }
         configASSERT(npu_service_irq_completions(&service)==3 && delivered==3 && critical_rearm==3);
     }else {
-        r=irq_wait(A733_NPU_FAULT);configASSERT(r.state==A733_NPU_FAULT);
+        r=npu_irq_case==1?irq_hold():irq_wait(A733_NPU_FAULT);configASSERT(r.state==A733_NPU_FAULT);
+        if(npu_irq_case==1)configASSERT(r.result==NPU_SERVICE_FAULT && r.fault==A733_NPU_TIMEOUT);
         configASSERT(!npu_service_irq_completions(&service) && !npu_service_irq_stopped(&service));
         unsigned accesses=model.accesses,mc=mask_calls,rc=rearm_calls;
         vTaskDelay(4);r=irq_request(NPU_SERVICE_STATUS,0,0);

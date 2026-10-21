@@ -180,7 +180,7 @@ def check_runtime(a,out,image,inputs,outputs):
   if value['state']==host.CLOSED:break
   sequence+=1;value=host.decode(m.exchange(host.packet(sequence,host.READ,m.prepared,3)),sequence,m.prepared,3)
  assert value['state']==host.CLOSED and value['jobs']==2 and value['irq_completions']==3 and m.closed
- assert m.operations==[1,2,0,4,2,0,4,5] and m.inputs==inputs
+ assert m.operations==[1,2,6,4,2,6,4,5] and m.inputs==inputs
  assert m.ticks<480000000+24000000
  return dict(result='pass',inputs=2,copied_outputs=2,healthy_close=True,usb_task_polls=m.polls,tick_hz=1000,polls_per_delay=8,request_deadlines=deadlines,numerical_output_and_irq_modeled=True)
 

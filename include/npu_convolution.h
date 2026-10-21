@@ -111,10 +111,12 @@ int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
  * bypass this wrapper through the embedded startup object. */
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
-/* Single designated client task, finite queue waits. Only OPEN, STATUS, SUBMIT,
- * REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
+/* Single designated client task, finite queue waits. Only OPEN, STATUS, WAIT,
+ * SUBMIT, REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
  * command 1. Other operations require NULL/zero input. OPEN/SUBMIT require
- * finite positive microsecond deadlines; STATUS/REAP/CLOSE use zero timeout.
+ * finite positive microsecond deadlines; STATUS/WAIT/REAP/CLOSE use zero
+ * timeout. WAIT after OPEN or SUBMIT replies once the bootstrap or job has
+ * left BOOTING/RUNNING, without STATUS polling.
  *
  * CLOSE requires READY after every job has been reaped. Its copied reply must
  * report CLOSED with no session/job ownership. It permanently stops admission;

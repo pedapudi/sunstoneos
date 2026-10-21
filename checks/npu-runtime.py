@@ -49,8 +49,8 @@ class Machine:
    assert a[1]==self.ticket
    if self.timeout:self.ticks+=24000000;self.ret(0);return
    self.u.mem_write(a[2],bytes(40));op=self.operation
-   st={1:2,2:3,0:6,4:2,5:9}[op]
-   if op==0:self.completions=len(self.inputs)+1
+   st={1:2,2:3,6:6,4:2,5:9}[op]  # WAIT (6) holds its reply until DONE.
+   if op==6:self.completions=len(self.inputs)+1
    for k,v in [('ticket',self.ticket),('job_ticket',0 if op in (1,5) else self.job),('state',st),('owns_session',int(op!=5))]:self.put(a[2]+self.reply[k],v,8 if k in ('ticket','job_ticket') else 4)
    self.ret(1)
   elif name=='npu_convolution_output':
@@ -136,7 +136,7 @@ def run(image_path,out):
  if value['state']!=host.CLOSED:
   sequence+=1;frame=m.exchange(host.packet(sequence,host.READ,m.prepared,3));value=host.decode(frame,sequence,m.prepared,3)
  assert value['state']==host.CLOSED and value['jobs']==2 and value['irq_completions']==3 and m.closed
- assert m.operations==[1,2,0,4,2,0,4,5] and m.inputs[0]!=m.inputs[1]
+ assert m.operations==[1,2,6,4,2,6,4,5] and m.inputs[0]!=m.inputs[1]
  (out/'closed-frame.bin').write_bytes(frame);results['runtime-sequence']={'passed':True,'operations':m.operations,'distinct_inputs':2,'copied_outputs':2,'closed_after_stop':True}
  (out/'result.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),cases=results,scope='Actual linked retained USB fragment/response/callback, mailbox and NPU client instructions. Convolution service/API replies, generated output, startup health, scheduler, transport and stop modeled; unchanged wrapper/controller evidence reused. Injected input-derived bytes test copying, not inference or physical IRQ.'),indent=2)+'\n');print('Actual linked runtime input/repeated output/healthy CLOSE passed')
 if __name__=='__main__':

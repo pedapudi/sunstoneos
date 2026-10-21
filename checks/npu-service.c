@@ -13,7 +13,7 @@ static _Alignas(4096) uint8_t command_memory[3][524288];
 static _Alignas(4096) uint8_t data[3 * 4096];
 static StaticTask_t tasks[3];
 static StackType_t stacks[3][4096];
-static uint32_t stage, peer_done, peer_owns, peer_release;
+static uint32_t stage, peer_done, peer_owns, peer_release, peer_waiting;
 struct context { uint64_t general[32], vector[64], nzcv, fpcr, fpsr, reserved; };
 struct gate { uint32_t ready, release, observed_core, complete; };
 static struct gate migration;
@@ -173,15 +173,28 @@ static void peer(void *unused)
     configASSERT(request(NPU_SERVICE_REAP, 0, 0).result == NPU_SERVICE_DENIED);
     configASSERT(request(NPU_SERVICE_CLOSE, 0, 0).result == NPU_SERVICE_DENIED);
     configASSERT(request(NPU_SERVICE_OPEN, 0, 100000).result == NPU_SERVICE_BUSY);
+    configASSERT(request(NPU_SERVICE_WAIT, 0, 0).result == NPU_SERVICE_DENIED);
     set(&peer_done, 1);
     wait_flag(&stage, 2);
     configASSERT(request(NPU_SERVICE_OPEN, 0, 100000).result == NPU_SERVICE_OK);
-    wait_state(A733_NPU_READY); set(&peer_owns, 1); wait_flag(&peer_release, 1);
+    /* WAIT replies once bootstrap leaves BOOTING, without STATUS polling. */
+    struct npu_service_reply waited = request(NPU_SERVICE_WAIT, 0, 0);
+    configASSERT(waited.result == NPU_SERVICE_OK && waited.state == A733_NPU_READY && waited.owns_session);
+    configASSERT(request(NPU_SERVICE_WAIT, 0, 5).result == NPU_SERVICE_INVALID);
+    set(&peer_owns, 1); wait_flag(&peer_release, 1);
     configASSERT(request(NPU_SERVICE_SUBMIT, 1, 100000).result == NPU_SERVICE_DENIED);
-    set(&model.allow_event, 1); set(&model.allow_idle, 1);
     struct npu_service_reply submitted = request(NPU_SERVICE_SUBMIT, 2, 100000);
     configASSERT(submitted.result == NPU_SERVICE_OK);
-    wait_state(A733_NPU_DONE);
+    /* The held reply arrives once, only after the job leaves RUNNING; the
+     * owner task still gets STATUS replies meanwhile. */
+    struct npu_service_request r = {NPU_SERVICE_WAIT, 0, 0}; uint64_t ticket;
+    configASSERT(npu_service_send(&service, &r, 100, &ticket));
+    configASSERT(!npu_service_collect(&service, ticket, &waited, 5));
+    set(&peer_waiting, 1);
+    configASSERT(npu_service_collect(&service, ticket, &waited, 1000));
+    configASSERT(waited.ticket == ticket && waited.result == NPU_SERVICE_OK &&
+        waited.state == A733_NPU_DONE && waited.job_ticket == submitted.ticket);
+    vTaskDelay(2); configASSERT(!uxQueueMessagesWaiting(service.clients[1].replies));
     struct npu_service_reply reaped = request(NPU_SERVICE_REAP, 0, 0);
     configASSERT(reaped.result == NPU_SERVICE_OK && reaped.job_ticket == submitted.ticket && !reaped.canceled);
     configASSERT(request(NPU_SERVICE_CLOSE, 0, 0).result == NPU_SERVICE_OK);
@@ -245,12 +258,17 @@ static void owner(void *unused)
     configASSERT(reply.result == NPU_SERVICE_OK && !reply.owns_session);
     set(&stage, 2); wait_flag(&peer_owns, 1);
     configASSERT(request(NPU_SERVICE_CANCEL, 0, 100000).result == NPU_SERVICE_DENIED);
-    set(&peer_release, 1); wait_flag(&peer_done, 2);
+    set(&peer_release, 1); wait_flag(&peer_waiting, 1);
+    reply = request(NPU_SERVICE_STATUS, 0, 0);
+    configASSERT(reply.result == NPU_SERVICE_OK && reply.state == A733_NPU_RUNNING && !reply.owns_session);
+    set(&model.allow_event, 1); set(&model.allow_idle, 1); wait_flag(&peer_done, 2);
     configASSERT(request(NPU_SERVICE_OPEN, 0, 100000).result == NPU_SERVICE_OK);
     wait_state(A733_NPU_READY);
     set(&model.allow_event, 0); set(&model.allow_idle, 0);
     configASSERT(request(NPU_SERVICE_SUBMIT, 1, 5000).result == NPU_SERVICE_OK);
-    vTaskDelay(10);
+    /* A held WAIT ends with the controller deadline. */
+    reply = request(NPU_SERVICE_WAIT, 0, 0);
+    configASSERT(reply.result == NPU_SERVICE_FAULT && reply.fault == A733_NPU_TIMEOUT && reply.owns_session);
     reply = request(NPU_SERVICE_STATUS, 0, 0);
     configASSERT(reply.result == NPU_SERVICE_FAULT && reply.fault == A733_NPU_TIMEOUT && reply.owns_session);
     uint32_t accesses = get(&model.accesses); samples = get(&model.clock_samples); vTaskDelay(2);
@@ -260,7 +278,7 @@ static void owner(void *unused)
     configASSERT(request(NPU_SERVICE_CANCEL, 0, 100000).result == NPU_SERVICE_FAULT);
     configASSERT(get(&model.accesses) == accesses && native.memory.state == A733_NPU_MEMORY_DEVICE);
     configASSERT(get(&model.clock_samples) == samples);
-    platform_puts("PASS NPU service: EL0 clients, preemptible EL1 worker migration/context, task ownership, reply timeouts, autonomous completion/cancel/deadline, and retained faults\n");
+    platform_puts("PASS NPU service: EL0 clients, preemptible EL1 worker migration/context, task ownership, reply timeouts, autonomous completion/cancel/deadline, held WAIT replies, and retained faults\n");
     platform_exit(0);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)

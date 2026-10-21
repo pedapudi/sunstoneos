@@ -37,10 +37,9 @@ static void client(void *unused)
  (void)unused;struct npu_service_reply reply;struct npu_convolution *c=NULL;
  while(!a733_npu_application_ready()){if(!npu_runtime_live())goto failed;vTaskDelay(1);}
  c=a733_npu_application_client();if(!c||!request(c,NPU_SERVICE_OPEN,NULL,0,&reply))goto failed;
- while(reply.state!=A733_NPU_READY){
-  if(reply.state!=A733_NPU_BOOTING||!request(c,NPU_SERVICE_STATUS,NULL,0,&reply))goto failed;
-  vTaskDelay(1);
- }
+ /* WAIT's held reply arrives when bootstrap or a job completes; no polling. */
+ if(reply.state==A733_NPU_BOOTING&&!request(c,NPU_SERVICE_WAIT,NULL,0,&reply))goto failed;
+ if(reply.state!=A733_NPU_READY)goto failed;
  if(npu_service_irq_completions(&c->service)!=1)goto failed;booting=0;
  for(;;){
   if(!npu_runtime_live())goto failed;
@@ -60,10 +59,9 @@ static void client(void *unused)
   }
   if(npu_runtime.jobs>=UINT_MAX-1||!request(c,NPU_SERVICE_SUBMIT,NPU_RUNTIME_INPUT,npu_runtime.bytes,&reply))goto failed;
   uint64_t job=reply.job_ticket;if(!job)goto failed;
-  while(reply.state!=A733_NPU_DONE){
-   if(reply.state!=A733_NPU_RUNNING||reply.job_ticket!=job)goto failed;
-   vTaskDelay(1);if(!request(c,NPU_SERVICE_STATUS,NULL,0,&reply))goto failed;
-  }
+  if(reply.state!=A733_NPU_DONE&&(reply.state!=A733_NPU_RUNNING||reply.job_ticket!=job||
+     !request(c,NPU_SERVICE_WAIT,NULL,0,&reply)))goto failed;
+  if(reply.state!=A733_NPU_DONE)goto failed;
   if(reply.job_ticket!=job||!bounded()||!npu_convolution_output(c,NPU_RUNTIME_OUTPUT,a733_npu_application_reference_bytes))goto failed;
   if(!request(c,NPU_SERVICE_REAP,NULL,0,&reply)||reply.state!=A733_NPU_READY||!bounded())goto failed;
   npu_runtime.job=job;++npu_runtime.jobs;npu_runtime.irq_count=npu_service_irq_completions(&c->service);

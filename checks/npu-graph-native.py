@@ -120,7 +120,7 @@ def main():
         seq += 1; frame=m.exchange(runtime.host.packet(seq,runtime.host.READ,m.prepared,3))
         value=runtime.host.decode(frame,seq,m.prepared,3)
     assert value['state'] == runtime.host.CLOSED and value['jobs'] == 2 and value['irq_completions'] == 3
-    assert m.operations == [1,2,0,4,2,0,4,5] and m.closed
+    assert m.operations == [1,2,6,4,2,6,4,5] and m.closed
     (a.output/'closed-frame.bin').write_bytes(frame)
     report = dict(result='pass',image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
                   constructor=('reused same image' if a.runtime_only else True),nn_operations=2,graph_completion_footers=1,

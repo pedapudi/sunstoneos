@@ -408,6 +408,7 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         if(c->opened || !timeout || timeout>INT64_MAX)return 0;
         break;
     case NPU_SERVICE_STATUS:
+    case NPU_SERVICE_WAIT:
         if(!c->opened || timeout)return 0;
         break;
     case NPU_SERVICE_SUBMIT:
