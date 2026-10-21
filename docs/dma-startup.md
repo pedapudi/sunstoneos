@@ -43,10 +43,11 @@ At the native 24 MHz rate, conversion to microseconds divides by the constant
 checked general conversion. The history word that the holder writes is at least
 64 bytes from the words that waiters poll, so the two never share a cache line.
 The [host contention check](../checks/clock-counter-contention.c) runs the
-provider with modeled counter reads on 8 and 16 threads, 200,000 calls each.
-No caller faults and each caller observes nondecreasing time. An injected
-regression, a changed counter frequency and a holder stalled beyond 100 modeled
-microseconds each latch the fault.
+provider with modeled counter reads on 16 threads, 200,000 calls each; the
+thread count and the call count are command-line parameters. No caller faults
+and each caller observes nondecreasing time. An injected regression, a changed
+counter frequency and a holder stalled beyond 100 modeled microseconds each
+latch the fault.
 
 This provider is for privileged platform operations. It requires a stable,
 synchronized architectural physical counter across participating CPUs. The

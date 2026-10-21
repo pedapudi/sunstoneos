@@ -113,11 +113,14 @@ continued polling with task yields; a one-tick sleep is permitted only between
 transactions. The board task sleeps one tick whenever no I2C transfer is in
 flight. In a modeled 100 ms of attached monitoring, it makes 1,194 polls with
 18 status refreshes, against 2,557 polls and 37 refreshes when it also yielded
-after every changed monitoring step and read status on every cycle. Physical scheduler latency remains unqualified. The GPIO task observes
-PL9 and checks deadlines renewed only by real provider progress and attachment
-observations. Host activity never extends them. Detach, expiry or failure closes
-host admission permanently. The GPIO task lowers PL8 independently of the I2C
-task and continues even when that task retains the S_TWI1 mutex.
+after every changed monitoring step and read status on every cycle. Physical
+scheduler latency remains unqualified.
+
+The GPIO task observes PL9 and checks deadlines renewed only by real provider
+progress and attachment observations. Host activity never extends them. Detach,
+expiry or failure closes host admission permanently. The GPIO task lowers PL8
+independently of the I2C task and continues even when that task retains the
+S_TWI1 mutex.
 
 Ordinary metadata or pin-lock contention before effects leaves shutdown pending
 for at most 5 ms. A return of `-1` revokes host admission but does not terminate
