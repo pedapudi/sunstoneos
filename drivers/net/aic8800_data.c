@@ -89,7 +89,11 @@ int aic8800_data_sent(struct aic8800_data *d,const void *owner)
 /* One A-MSDU subframe at MPDU offset at: DA, SA, big-endian MSDU length, then
  * an RFC 1042 SNAP MSDU with an ordinary EtherType. Every subframe except the
  * last is padded to four bytes, as in the reference receive path. Returns the
- * next subframe offset (end after the last), or 0 for a malformed subframe. */
+ * next subframe offset (end after the last), or 0 for a malformed subframe.
+ * The DA must be local or a group address. This also rejects the forged
+ * A-MSDU of CVE-2020-24588: when a plain MSDU's A-MSDU bit is set, its SNAP
+ * header aa:aa:03:00:00:00 reads as a foreign unicast DA. Relaxing the DA
+ * check would reopen that attack. */
 static size_t subframe(const struct aic8800_data *d,const uint8_t *m,size_t at,size_t end)
 {
     const uint8_t snap[]={0xaa,0xaa,3,0,0,0};
