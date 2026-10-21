@@ -11,6 +11,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'checks'))
+import harness
 import sram_launcher
 
 def digest(data):return hashlib.sha256(data).hexdigest()
@@ -18,8 +19,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--prior-freeze',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--clang',default='/usr/bin/clang-21')
-    p.add_argument('--lld',default='/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+    p.add_argument('--clang',default=str(harness.CLANG))
+    p.add_argument('--lld',default=str(harness.LLD))
     a=p.parse_args();a.output.mkdir(exist_ok=False)
     prior=json.loads(a.prior_freeze.read_text());prior_root=a.prior_freeze.parent.parent
     inputs={}

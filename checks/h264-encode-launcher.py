@@ -11,6 +11,7 @@ import sys
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'checks'))
+import harness
 import sram_launcher
 
 def digest(data):return hashlib.sha256(data).hexdigest()
@@ -21,8 +22,8 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--reuse-launcher',type=Path)
     p.add_argument('--skip-positive',action='store_true')
-    p.add_argument('--clang',default='/usr/bin/clang-21')
-    p.add_argument('--lld',default='/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+    p.add_argument('--clang',default=str(harness.CLANG))
+    p.add_argument('--lld',default=str(harness.LLD))
     a=p.parse_args();a.output.mkdir(exist_ok=False)
     native=a.image.read_bytes();image=a.image
     template=a.session.read_bytes()
