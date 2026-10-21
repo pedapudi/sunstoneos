@@ -282,7 +282,11 @@ sequence are preserved. The existing recorded caller passes its original
 scratch and the default null stop pointer. Capture integrations may pass a stop
 flag to the recognizer's existing cancellation checkpoints. The shared function
 checks cancellation around finite load, create, parse, recognition and formatting
-stages. It returns after all temporary engine/model objects are destroyed.
+stages. For a finite capture, it returns after all temporary engine and model
+objects are destroyed. In the repeated profile, the recognition task loads the
+model and recognizer once and keeps them in static storage. Every later segment
+reuses them until the session ends. Both profiles skip the per-tensor model CRC
+pass, because the recognition task has already checked the SHA256 of both models.
 
 The image reuses SMP newlib task reentrancy, locks and the existing 4 MiB heap
 and initializer-array linker patch. Runtime initialization completes before the
