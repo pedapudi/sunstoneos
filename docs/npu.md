@@ -40,6 +40,18 @@ and host numerical references do not establish physical inference. An independen
 boot-CPU profile is implemented alongside the cached all-core profile. All-core
 hardware support remains required.
 
+The [session runtime](npu-session.md) runs up to eight catalogue models on
+the NPU at once, one client task per model, with round-robin job starts
+through the service's shared mode. The general assembler now accepts graphs
+with several inputs and outputs, UINT8, INT8 and INT16 tensors, and the
+transpose steps that the compiler emits around fully connected layers; its
+output matches the pinned SDK loader for every catalogue graph. Sessions take
+their memory from the platform pool by model size, which in the extended
+cached profile is the DDR reservation. Emulator checks with modeled device
+output pass; no board image links the runtime yet. The
+[mimus layer study](npu-mimus-linear.md) shows that the simulator computes a
+mimus int8 linear layer's sums exactly but rounds the output to INT16.
+
 The single-core terminal-USB correction integrated as `ef00a07` allows an NPU
 failure frame only while USB retains its independent authenticated lifetime,
 clock, lock, task and provider checks. Ten affected native cases and independent
@@ -310,12 +322,15 @@ owned internal SRAM; its physical confinement remains unqualified.
    reviewed recovery condition is met. Interrupt-driven completion, cancellation,
    reset, stale interrupts, repeated loads, concurrent CPU access and power
    transitions remain required hardware coverage.
-4. **Extend admission beyond the trusted catalogue.** Arbitrary executable model
-   descriptors, runtime model switching, concurrent models and other graph or
-   operator classes are unsupported. Establish complete descriptor access extents,
-   command permissions, operator semantics and output padding for each added
-   profile. Reuse published source and representative compiler output; inspect
-   binary loader references where source is insufficient.
+4. **Extend admission beyond the trusted catalogue.** Concurrent models from
+   the [session catalogue](npu-session.md) are implemented, including
+   multi-tensor graphs and compiled fully connected layers, and are checked
+   only in emulation. Uncatalogued model uploads, runtime model switching and
+   tensor-processor, shader or software operations in general graphs are
+   unsupported. Establish complete descriptor access extents, command
+   permissions, operator semantics and output padding for each added profile.
+   Reuse published source and representative compiler output; inspect binary
+   loader references where source is insufficient.
 5. **Broaden application inference after the fixed path works.** The current
    service already provides model/session lifetime, copied tensor input and
    output, asynchronous jobs, deadlines and explicit result reaping. Wider
@@ -323,7 +338,11 @@ owned internal SRAM; its physical confinement remains unqualified.
    supported contract and hardware evidence. Required NPU behavior must work
    independently of mimus.
 6. **Evaluate mimus separately.** Map compatible operations and shapes while
-   preserving the existing model. After hardware functionality, measure transfer
+   preserving the existing model. The [linear-layer study](npu-mimus-linear.md)
+   compiles mimus layers from their int8 codes and per-row scales; the
+   simulator matches one rounding of the exact result to INT16, not the mimus
+   float32 output, and the compiler refuses the INT32 output an exact CPU
+   read-out would need. After hardware functionality, measure transfer
    and scheduling overhead, numerical differences, recognition accuracy, latency
    and resource use. Explicit CPU fallback for unsupported operations does not
    establish full NPU support. The native compiler/toolkit under issue 12 remains
