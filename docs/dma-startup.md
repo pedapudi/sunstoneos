@@ -29,10 +29,24 @@ intermediate regression.
 The provider masks interrupts around a short atomic critical section. It acquires
 that section before sampling the counter, so samples from different cores cannot
 be published in reverse order after preemption. The section contains no callbacks
-or scheduler operations. Admission attempts are bounded at 256; exhaustion,
-counter regression, frequency change, or conversion overflow permanently faults
-the provider. Failure preserves the caller's output. All consumers must retain
-their outstanding resources when time becomes uncertain.
+or scheduler operations. A ticket lock admits waiting cores in arrival order, so
+a slower Cortex-A55 core cannot lose every round to faster Cortex-A76 cores. The
+wait is bounded by counter time: a caller that waits 100 microseconds for the
+section permanently faults the provider. Live holders need far less, because
+each holder masks interrupts for only a few instructions. Counter regression,
+frequency change, or conversion overflow also permanently faults the provider.
+Failure preserves the caller's output. All consumers must retain their
+outstanding resources when time becomes uncertain.
+
+At the native 24 MHz rate, conversion to microseconds divides by the constant
+24 and cannot overflow; other admitted rates, such as the emulator's, keep the
+checked general conversion. The history word that the holder writes is at least
+64 bytes from the words that waiters poll, so the two never share a cache line.
+The [host contention check](../checks/clock-counter-contention.c) runs the
+provider with modeled counter reads on 8 and 16 threads, 200,000 calls each.
+No caller faults and each caller observes nondecreasing time. An injected
+regression, a changed counter frequency and a holder stalled beyond 100 modeled
+microseconds each latch the fault.
 
 This provider is for privileged platform operations. It requires a stable,
 synchronized architectural physical counter across participating CPUs. The
