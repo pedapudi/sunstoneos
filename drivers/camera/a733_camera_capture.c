@@ -217,7 +217,15 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         RUN(ov5640_start(&s->sensor,s->receiver.token,s->deadline),ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
     case A733_CAPTURE_DMA_RUN:
         r=a733_camera_dma_poll(&s->dma);
-        if(s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_SENSOR_STOP);break;
+        if(s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_FRAME_STATUS);break;
+    /* Record receiver status as the captured frame left it, before the
+     * sensor stop can add anything. Nothing is acknowledged; the sample
+     * after the stop still decides whether the capture faults. */
+    case A733_CAPTURE_FRAME_STATUS:
+        r=csi_read(s,s->receiver.token,s->started?A733_CSI_PARSER:A733_CSI_PORT,
+                   s->started?0x44:0x118,&v,s->deadline);
+        if(r==1){s->frame_status[s->started]=v;
+            if(s->started)next(s,A733_CAPTURE_SENSOR_STOP);else s->started=1;}break;
     case A733_CAPTURE_SENSOR_STOP:
         RUN(ov5640_stop(&s->sensor,s->deadline),ov5640_poll(&s->sensor),
             s->retained_readout?A733_CAPTURE_SAMPLE:A733_CAPTURE_QUIET);break;
