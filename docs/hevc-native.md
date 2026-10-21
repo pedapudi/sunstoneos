@@ -5,7 +5,9 @@ provider-bridge source resides in the separate
 `/home/sunil/git/sunstoneos-worktrees/hevc-decode` worktree at commit `69c4eac`.
 It is not integrated into bringup's shared providers, has not completed review
 and has no native build. Application tasks, USB integration, allocation/table
-proof and hardware qualification remain unfinished.
+proof and hardware qualification remain unfinished. Configuring `apps/hevc`
+stops at the start of `cmake/a733-hevc.cmake` with an error that lists the
+missing parser, controller, application and source-generation files.
 
 Bringup contains the typed session/startup/CMake foundations and source-only host
 preparation, producer, observer and coordinator. Runtime preparation explicitly
@@ -114,10 +116,12 @@ two destinations, two motion-vector buffers, neighbor metadata and entry points.
 These are planning bounds, not an executed allocator proof.
 
 Proposed new leaves are `a733_video_hevc` parser/planner/controller interfaces,
-a distinct typed decoder-provider bridge, `apps/hevc` input/copy/USB and host
-preparation/capture. The bridge should reuse the actual decoder coordinator,
-lock and VE_DEC lease; JPEG/H.264 structures and callbacks retain their types.
-The root owner approved that narrow typed bridge. Generic IOMMU policy changes
+an HEVC binding of the decoder sequencing in `drivers/video/a733_video_platform.c`,
+`apps/hevc` input/copy/USB and host preparation/capture. That sequencing is
+codec-neutral: like the H.264 binding, an HEVC binding passes its own typed job
+through the decoder's `admit` and `memory` hooks and supplies its own register
+allowlists, while reusing the actual cold start, lock and VE_DEC lease. JPEG and
+H.264 structures and callbacks keep their types. Generic IOMMU policy changes
 are unnecessary.
 
 The integrated 856-byte private-session foundation keeps the 592-byte board prefix. Its extension
