@@ -56,10 +56,6 @@ if(SUNSTONE_I2S_TRANSCRIBE)
  if(NOT TARGET mimus_asr_smp OR NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   message(FATAL_ERROR "I2S transcription requires root composition with pinned mimus and SMP newlib")
  endif()
- get_target_property(i2s_native_sources sunstone-a733-i2s SOURCES)
- list(REMOVE_ITEM i2s_native_sources "${i2s_root}/runtime/memory.c" "${i2s_root}/runtime/memmove.c")
- list(REMOVE_ITEM i2s_sources "${i2s_root}/runtime/memory.c" "${i2s_root}/runtime/memmove.c")
- set_property(TARGET sunstone-a733-i2s PROPERTY SOURCES "${i2s_native_sources}")
  set(i2s_recognition_sources
   "${i2s_root}/apps/i2s/recognition.cc" "${i2s_root}/apps/mimus/recorded.cc"
   "${i2s_root}/apps/mimus/platform.cc" "${i2s_root}/runtime/newlib.c"
