@@ -1,169 +1,44 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_platform.h"
-#include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07062000)
 #define R_CCU UINT32_C(0x07010000)
 #define VE UINT32_C(0x01c0e000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
-static const uint32_t fabric_off[]={0x500,0x580,0x588};
-static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
-static const uint32_t mhz[3][8]={
-    {24,0,0,600,0,0,0,0},{24,0,800,600,480,0,0,0},{24,600,0,480,400,0,0,0}
-};
-static int known(uint64_t v)
-{return v==UINT64_C(0x3332100021321)||v==UINT64_C(0x3331000021320)||v==UINT64_C(0x3052000012011);}
+#define fail a733_video_unit_fail
+#define timely a733_video_unit_timely
+#define held a733_video_unit_held
+#define lock a733_video_unit_lock
+#define unlock a733_video_unit_unlock
+#define rd a733_video_unit_read
+#define check a733_video_unit_check
+#define update a733_video_unit_update
+static struct a733_video_unit_config unit_config(const struct a733_video_platform_config *c)
+{
+    struct a733_video_unit_config u={.clocks=c->clocks,.clock=c->clock,.power=c->power,.pck=c->pck,
+        .power_client=c->power_client,.owner=c->owner,.handoff=c->handoff,.module=c->module,.module_hz=c->module_hz};
+    for(unsigned i=0;i<3;++i){u.fabric[i]=c->fabric[i];u.fabric_hz[i]=c->fabric_hz[i];}
+    return u;
+}
 int a733_video_platform_scopes(const struct a733_video_platform_config *c,a733_clock_mask_t *out)
 {
-    if(!c||!out||!c->clocks||!c->power||!c->owner||!c->handoff||!c->module_hz||
-       (c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM)||
-       c->module_hz>720000000u||(c->module&~0x8700001fu)||!(c->module&BIT(31))||
-       ((c->module>>24)&7)>1)return 0;
-    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|
-        ((c->module&BIT(24))?A733_CLOCK_PLL_VE0:A733_CLOCK_PLL_VE1);
-    for(unsigned i=0;i<3;++i) {
-        unsigned rate=mhz[i][(c->fabric[i]>>24)&7],div=(c->fabric[i]&31)+1;
-        if((c->fabric[i]&~fabric_mask[i])||(i&&!(c->fabric[i]&BIT(31)))||!rate||
-           (rate*1000000u)%div||c->fabric_hz[i]!=rate*1000000u/div)return 0;
-        if(rate!=24)shared|=A733_CLOCK_PERI0;
-    }
-    *out=shared;return 1;
+    if(!c||(c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM))return 0;
+    const struct a733_video_unit_config u=unit_config(c);
+    return a733_video_unit_scopes(&a733_video_decoder_unit,&u,out);
 }
-int a733_video_platform_init(struct a733_video_platform *p,
- const struct a733_video_platform_config *c,const struct a733_video_platform_ops *o,void *cookie)
+static int decoder_init(struct a733_video_decoder *p,const struct a733_video_platform_config *c,
+    const struct a733_video_unit_ops *o,void *cookie,
+    int (*admit)(void *,const struct a733_video_platform_config *,const void *,uint64_t,uint64_t *),
+    int (*memory)(void *,uint64_t,const void *,uint64_t),void *context)
 {
-    a733_clock_mask_t shared;
-    if(!p||p->initialized||!o||!o->now_us||!o->admit||!o->memory||!o->drain||
-       !o->enter||!o->leave||!o->read||!o->write||!a733_video_platform_scopes(c,&shared)||
-       !c->clock.id||c->clock.owner!=c->owner||c->clock.shared!=shared||
-       c->clock.exclusive!=A733_CLOCK_VE_DEC||c->power_client>=A733_GPU_RESOURCE_CLIENTS||
-       !c->pck.token||c->pck.mask!=(A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK)||
-       c->pck.mode!=A733_GPU_RESOURCE_STABLE)return 0;
+    if(!c||(c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM)||p->unit.initialized)return 0;
     const struct a733_video_platform_config config=*c;
-    const struct a733_video_platform_ops ops=*o;
-    *p=(struct a733_video_platform){.config=config,.ops=ops,.cookie=cookie,.shared=shared,.initialized=1};
-    for(unsigned i=0;i<3;++i)p->selected_mhz[i]=mhz[i][(config.fabric[i]>>24)&7];
+    const struct a733_video_unit_config u=unit_config(&config);
+    if(!a733_video_unit_init(&p->unit,&a733_video_decoder_unit,&u,o,cookie))return 0;
+    p->config=config;p->admit=admit;p->memory=memory;p->context=context;
+    p->version=p->reset_until=0;p->admitted=p->checked=p->mapped=p->prepared=p->step=p->cold_step=0;
     return 1;
-}
-static int fail(struct a733_video_platform *p) {p->failed=1;return -1;}
-static int clock_now(void *v,uint64_t *out)
-{
-    struct a733_video_platform *p=v;uint64_t n;
-    if(!p||!p->initialized||p->failed||!out||p->ops.now_us(p->cookie,&n)!=1||n<p->last_now)
-        return p?fail(p):-1;
-    p->last_now=n;*out=n;return 1;
-}
-static int timely(struct a733_video_platform *p)
-{uint64_t n;return clock_now(p,&n)==1&&n<p->deadline;}
-/* A busy registry is effect-free: another task is inside its short critical
- * section. Retry for at most two scheduler ticks, so an equal-priority holder
- * on this core can finish after a time slice; then report 0 (not held). */
-#define BUSY_RETRY_US 2000u
-static int held(struct a733_video_platform *p)
-{
-    uint64_t first=0,n;
-    for(unsigned tries=0;;++tries) {
-        enum a733_clock_result c=a733_clock_token_status(p->config.clocks,&p->config.clock);
-        if(c!=A733_CLOCK_OK&&c!=A733_CLOCK_BUSY)return fail(p);
-        if(c==A733_CLOCK_OK) {
-            enum a733_gpu_resource_result g=a733_gpu_resources_status(p->config.power,p->config.power_client,&p->config.pck);
-            if(g==A733_GPU_RESOURCE_OK)return 1;
-            if(g!=A733_GPU_RESOURCE_BUSY)return fail(p);
-        }
-        if(clock_now(p,&n)!=1)return -1;
-        if(!tries)first=n;
-        if(n>=p->deadline||n-first>=BUSY_RETRY_US||tries==65535)return 0;
-    }
-}
-static int lock(struct a733_video_platform *p)
-{
-    if(p->failed||!timely(p))return fail(p);
-    int h=held(p);if(h!=1)return h;
-    if(p->locked)return fail(p);
-    int r=p->ops.enter(p->cookie,p->deadline);
-    if(r==1)p->locked=1;
-    if((r!=0&&r!=1)||!timely(p))return fail(p);
-    return r;
-}
-static int unlock(struct a733_video_platform *p)
-{
-    if(p->failed||!p->locked||!timely(p))return fail(p);
-    if(p->ops.leave(p->cookie)!=1)return fail(p);
-    p->locked=0;
-    return timely(p)?1:fail(p);
-}
-static int rd(struct a733_video_platform *p,uintptr_t a,uint32_t *v)
-{
-    if(!p->locked||!timely(p)||p->ops.read(p->cookie,a,v)!=1||!timely(p))return fail(p);
-    return 1;
-}
-static int wr(struct a733_video_platform *p,uintptr_t a,unsigned width,uint32_t v)
-{
-    if(!p->locked||!timely(p)||p->ops.write(p->cookie,a,width,v)!=1||!timely(p))return fail(p);
-    return 1;
-}
-static int check(struct a733_video_platform *p,uintptr_t a,uint32_t mask,uint32_t expected)
-{uint32_t v;return rd(p,a,&v)==1&&(v&mask)==expected;}
-static int update(struct a733_video_platform *p,uintptr_t a,uint32_t mask,uint32_t value)
-{
-    uint32_t old,actual;
-    if(rd(p,a,&old)!=1)return 0;
-    value=(old&~mask)|(value&mask);
-    return wr(p,a,4,value)==1&&rd(p,a,&actual)==1&&actual==value;
-}
-static int parents(struct a733_video_platform *p)
-{
-    uint32_t osc,ref,pll,pat,gate,status;
-    /* The shared rule admits an enabled, stable DCXO whose PLL_REF output is
-     * normalized to 24 MHz, including the 26 MHz board's N=96/M=104. */
-    if(rd(p,0x07090160,&osc)!=1||rd(p,CCU,&ref)!=1||!a733_clock_ref24_valid(osc,ref))return 0;
-    unsigned n,m,v0=!!(p->config.module&BIT(24)),off=v0?0x220:0x240;
-    if(rd(p,CCU+off,&pll)!=1||(pll&0xf8000000u)!=0xf8000000u||
-       rd(p,CCU+off+8,&pat)!=1||(pat&BIT(31))||
-       rd(p,CCU+off+12,&pat)!=1||(pat&BIT(27))||
-       rd(p,CCU+0x1918,&gate)!=1)return 0;
-    unsigned required=v0?(BIT(0)|BIT(16)):(BIT(1)|BIT(17));
-    if((gate&required)!=required||rd(p,CCU+0x1998,&status)!=1||
-       (status&(required&0xffff0000u))!=(required&0xffff0000u))return 0;
-    /* No-Auto, requested enable and effective output status are independent. */
-    n=((pll>>8)&255)+1;m=(((pll>>20)&7)+1)*((pll&2)?2:1)*(1+(p->config.module&31));
-    if(n<53||n>105||24000000u*n%m||24000000u*n/m!=p->config.module_hz)return 0;
-    if(!(p->shared&A733_CLOCK_PERI0))return 1;
-    if(rd(p,CCU+0xa0,&pll)!=1||(pll&0xfe000000u)!=0xfe000000u||
-       (pll&(BIT(24)|BIT(1)))||rd(p,CCU+0xa8,&pat)!=1||(pat&BIT(31))||
-       rd(p,CCU+0xac,&pat)!=1||(pat&BIT(27))||rd(p,CCU+0x1908,&gate)!=1||rd(p,CCU+0x1988,&status)!=1)return 0;
-    n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
-    for(unsigned i=0;i<3;++i) {
-        unsigned div,mask,rate=p->selected_mhz[i];
-        switch(rate) {
-        case 24:continue;
-        case 600:div=(((pll>>20)&7)+1)*2;mask=BIT(11)|BIT(9);break;
-        case 400:div=(((pll>>20)&7)+1)*3;mask=BIT(11)|BIT(2)|BIT(1);break;
-        case 800:div=((pll>>16)&7)+1;mask=BIT(10);break;
-        case 480:div=((pll>>2)&7)+1;mask=BIT(8)|BIT(7);break;
-        default:return 0;
-        }
-        mask|=mask<<16;
-        if((gate&mask)!=mask||(status&(mask&0xffff0000u))!=(mask&0xffff0000u)||
-           24u*n!=rate*div)return 0;
-    }
-    return 1;
-}
-static int baseline(struct a733_video_platform *p)
-{
-    /* Inspect CCU/PCK before any potentially inaccessible VE read. No cold
-     * reset release/power-on is inferred from zeros or from identity values. */
-    for(unsigned i=0;i<3;++i)
-        if(!check(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
-    return parents(p)&&check(p,R_CCU+0x1ac,1,1)&&check(p,PCK,15,8)&&check(p,PCK+8,15,8)&&
-        check(p,CCU+0x1b10,0x30001,0x20000)&&
-        check(p,CCU+0xa88,0x8700001f,p->config.module)&&check(p,CCU+0xa8c,BIT(18)|BIT(2),BIT(18)|BIT(2))&&
-        check(p,CCU+0x5c0,1,1)&&check(p,CCU+0x5e0,BIT(14),BIT(14))&&
-        check(p,CCU+0x5e4,BIT(18),BIT(18))&&
-        check(p,GIC,BIT(31),0)&&check(p,GIC+0x108,BIT(17),0)&& /* SPI81 masked. */
-        check(p,GIC+0x208,BIT(17),0)&&check(p,GIC+0x308,BIT(17),0)&&
-        check(p,GIC+0xc14,3u<<2,0); /* IRQ81 level, no pending/active state. */
 }
 /* NS_BROM at0x17000, published sun60iw2p1 revision. These instruction
  * observations bind the literal to the FEL identity constructor. Never execute
@@ -178,162 +53,209 @@ static const struct {uint32_t address,word;} rom_identity[]={
     {0x19c98,0x58454642},{0x19ca0,0x00190300},
     {0x19ca4,0x000ee800}
 };
-static int cold_entry(struct a733_video_platform *p)
+static int cold_entry(struct a733_video_decoder *p)
 {
+    struct a733_video_unit *u=&p->unit;
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
-        if(!check(p,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
-    for(unsigned i=0;i<3;++i)
-        if(!check(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
-    return parents(p)&&check(p,R_CCU+0x1ac,1,1)&&
-        check(p,PCK,15,0)&&check(p,PCK+8,15,0)&&
-        check(p,CCU+0xa88,0x8700001f,p->config.module&~BIT(31))&&
-        check(p,CCU+0xa8c,BIT(18)|BIT(2),0)&&
-        check(p,CCU+0x5c0,1,0)&&check(p,CCU+0x5e0,BIT(14),0)&&
-        check(p,CCU+0x5e4,BIT(18),0)&&check(p,CCU+0x1b10,0x30001,0x10000)&&
-        check(p,GIC,BIT(31),0)&&check(p,GIC+0x108,BIT(17),0)&&
-        check(p,GIC+0x208,BIT(17),0)&&check(p,GIC+0x308,BIT(17),0)&&
-        check(p,GIC+0xc14,3u<<2,0);
+        if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
+    return a733_video_unit_clocks(u)&&
+        check(u,PCK,15,0)&&check(u,PCK+8,15,0)&&
+        check(u,CCU+0xa88,0x8700001f,p->config.module&~BIT(31))&&
+        check(u,CCU+0xa8c,BIT(18)|BIT(2),0)&&
+        check(u,CCU+0x5c0,1,0)&&check(u,CCU+0x5e0,BIT(14),0)&&
+        check(u,CCU+0x5e4,BIT(18),0)&&check(u,CCU+0x1b10,0x30001,0x10000)&&
+        a733_video_unit_irq_quiet(u);
 }
 /* One bounded action per acquire call. Reset remains asserted through the PCK
  * ON acknowledgement. Preserve all unrelated gates: the BSP's key-OR aliases
  * conflict with ordinary gate fields documented in manual4.1.6.82-84. */
-static int cold(struct a733_video_platform *p)
+static int cold(struct a733_video_decoder *p)
 {
+    struct a733_video_unit *u=&p->unit;
     switch(p->cold_step) {
     case 0:return cold_entry(p);
-    case 1:return update(p,PCK+0x170,UINT32_MAX,0x1f1f1f);
-    case 2:return update(p,PCK+0x174,UINT32_MAX,0x1f1f);
-    case 3:return update(p,PCK+0xc00,UINT32_MAX,0x08080808);
-    case 4:return update(p,PCK+0xc04,UINT32_MAX,0x0808);
-    case 5:return update(p,PCK+0xc10,UINT32_MAX,8);
-    case 6:return update(p,PCK,15,8);
+    case 1:return update(u,PCK+0x170,UINT32_MAX,0x1f1f1f);
+    case 2:return update(u,PCK+0x174,UINT32_MAX,0x1f1f);
+    case 3:return update(u,PCK+0xc00,UINT32_MAX,0x08080808);
+    case 4:return update(u,PCK+0xc04,UINT32_MAX,0x0808);
+    case 5:return update(u,PCK+0xc10,UINT32_MAX,8);
+    case 6:return update(u,PCK,15,8);
     case 7: {
         uint32_t status;
-        if(rd(p,PCK+8,&status)!=1)return 0;
+        if(rd(u,PCK+8,&status)!=1)return 0;
         return (status&15)==8?1:2; /* Bounded by the common deadline. */
     }
-    case 8:return update(p,CCU+0xa8c,BIT(18),BIT(18));
-    case 9:return update(p,CCU+0x5c0,1,1);
-    case 10:return update(p,CCU+0x5e0,BIT(14),BIT(14));
-    case 11:return update(p,CCU+0x5e4,BIT(18),BIT(18));
-    case 12:return update(p,CCU+0xa8c,BIT(2),BIT(2));
-    case 13:return update(p,CCU+0xa88,BIT(31),BIT(31));
-    case 14:return baseline(p);
+    case 8:return update(u,CCU+0xa8c,BIT(18),BIT(18));
+    case 9:return update(u,CCU+0x5c0,1,1);
+    case 10:return update(u,CCU+0x5e0,BIT(14),BIT(14));
+    case 11:return update(u,CCU+0x5e4,BIT(18),BIT(18));
+    case 12:return update(u,CCU+0xa8c,BIT(2),BIT(2));
+    case 13:return update(u,CCU+0xa88,BIT(31),BIT(31));
+    case 14:return a733_video_unit_baseline(u);
     /* A733 kernel cold startup always pulses VCU before any compound-ID
      * lookup. Immutable ROM/resource admission authorizes only this reset. */
-    case 15:return update(p,VE+0x804,0x11,0x11);
-    case 16:return update(p,VE+0x804,0x11,0);
+    case 15:return update(u,VE+0x804,0x11,0x11);
+    case 16:return update(u,VE+0x804,0x11,0);
     default:return 0;
     }
 }
-static int acquire(void *v,const struct a733_video_jpeg_job *j,uint64_t d,uint64_t *token)
+static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_t *token)
 {
-    struct a733_video_platform *p=v;
-    if(!p||!p->initialized||p->failed||!token||!d||(p->deadline&&p->deadline!=d))return -1;
-    p->deadline=d;
-    if(!timely(p))return fail(p);
+    struct a733_video_unit *u=&p->unit;
+    if(!u->initialized||u->failed||!token||!d||(u->deadline&&u->deadline!=d))return -1;
+    u->deadline=d;
+    if(!timely(u))return fail(u);
     if(!p->admitted) {
-        uint64_t previous=p->token;
-        int r=p->ops.admit(p->cookie,&p->config,j,d,&p->token);
-        *token=p->token;
-        if(!p->token||(previous&&previous!=p->token)||(r!=0&&r!=1)||!timely(p))return fail(p);
+        uint64_t previous=u->token;
+        int r=p->admit(p->context,&p->config,j,d,&u->token);
+        *token=u->token;
+        if(!u->token||(previous&&previous!=u->token)||(r!=0&&r!=1)||!timely(u))return fail(u);
         if(!r)return 0;
         p->admitted=1;
     }
-    *token=p->token;
+    *token=u->token;
     if(p->checked)return 1;
-    int r=lock(p);if(r!=1)return r;
+    int r=lock(u);if(r!=1)return r;
     if(p->config.start==A733_VIDEO_COLD_NS_ROM) {
         int c=cold(p);
-        if(!c)return fail(p);
+        if(!c)return fail(u);
         if(c==1)++p->cold_step;
-        if(unlock(p)!=1)return -1;
+        if(unlock(u)!=1)return -1;
         if(p->cold_step<17)return 0;
     }else {
-        if(!baseline(p))return fail(p);
-        if(unlock(p)!=1)return -1;
+        if(!a733_video_unit_baseline(u))return fail(u);
+        if(unlock(u)!=1)return -1;
     }
     p->checked=1;return 1;
-}
-static int identity(struct a733_video_platform *p)
-{
-    uint32_t f,h,l;
-    if(rd(p,VE+0xf0,&f)!=1||(f!=0&&f!=0x16670040)||rd(p,VE+0xe0,&h)!=1||rd(p,VE+0xe4,&l)!=1)return 0;
-    p->version=((uint64_t)(h&0xfffff)<<32)|(l&0xfffff);
-    return known(p->version);
 }
 /* VeReset policy45/52 delegates external reset; policy51 uses top+4 bit16.
  * Remaining updates combine package RMW operations with the same final fields.
  * A reset pulse is NOT a drain mechanism: authority must already prove drain.
  */
-static int prep_step(struct a733_video_platform *p,unsigned codec)
+static int prep_step(struct a733_video_decoder *p,unsigned codec)
 {
+    struct a733_video_unit *u=&p->unit;
     unsigned local=p->version==UINT64_C(0x3331000021320);
     switch(p->step) {
-    case 0:return update(p,VE,15,7);
+    case 0:return update(u,VE,15,7);
     case 1:
-        if(!update(p,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?BIT(16):0))return 0;
-        if(!local) {if(p->last_now>UINT64_MAX-10)return 0;p->reset_until=p->last_now+10;}
+        if(!update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?BIT(16):0))return 0;
+        if(!local) {if(u->last_now>UINT64_MAX-10)return 0;p->reset_until=u->last_now+10;}
         return 1;
-    case 2:return update(p,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?0:BIT(18));
-    case 3:return local?1:update(p,VE+0x804,0x11,0x11);
-    case 4:return local?1:update(p,VE+0x804,0x11,0);
-    case 5:return local?1:update(p,VE,0x130000,0x130000);
-    case 6:return update(p,VE,0x2c00101f,codec);
-    case 7:return update(p,VE+0x1c,0x100,0);
-    case 8:return update(p,VE+0xc4,UINT32_MAX,0);
-    case 9:return update(p,VE+0xc8,UINT32_MAX,0);
-    case 10:return update(p,VE+0xcc,UINT32_MAX,0);
-    case 11:return update(p,VE+0xe8,UINT32_MAX,0);
-    case 12:return update(p,VE+0xec,0x30077,0);
-    case 13:return update(p,VE+0x50,15,0);
-    case 14:return update(p,VE+0x54,UINT32_MAX,0);
-    case 15:return p->version==UINT64_C(0x3052000012011)?1:update(p,VE,0x400,0x400);
-    case 16:return update(p,VE,0x600000,0); /* width <=1920 */
-    case 17:return update(p,VE,0x130000,0x130000); /* Package DRAM mode5. */
+    case 2:return update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?0:BIT(18));
+    case 3:return local?1:update(u,VE+0x804,0x11,0x11);
+    case 4:return local?1:update(u,VE+0x804,0x11,0);
+    case 5:return local?1:update(u,VE,0x130000,0x130000);
+    case 6:return update(u,VE,0x2c00101f,codec);
+    case 7:return update(u,VE+0x1c,0x100,0);
+    case 8:return update(u,VE+0xc4,UINT32_MAX,0);
+    case 9:return update(u,VE+0xc8,UINT32_MAX,0);
+    case 10:return update(u,VE+0xcc,UINT32_MAX,0);
+    case 11:return update(u,VE+0xe8,UINT32_MAX,0);
+    case 12:return update(u,VE+0xec,0x30077,0);
+    case 13:return update(u,VE+0x50,15,0);
+    case 14:return update(u,VE+0x54,UINT32_MAX,0);
+    case 15:return p->version==UINT64_C(0x3052000012011)?1:update(u,VE,0x400,0x400);
+    case 16:return update(u,VE,0x600000,0); /* width <=1920 */
+    case 17:return update(u,VE,0x130000,0x130000); /* Package DRAM mode5. */
     default:return 0;
     }
 }
-static int prepare_codec(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
- const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d,unsigned codec)
+static int prepare(struct a733_video_decoder *p,uint64_t token,const void *j,uint64_t d,unsigned codec)
 {
-    struct a733_video_platform *p=v;
-    if(p->failed||!p->checked||token!=p->token||d!=p->deadline||!timely(p))return fail(p);
+    struct a733_video_unit *u=&p->unit;
+    if(u->failed||!p->checked||token!=u->token||d!=u->deadline||!timely(u))return fail(u);
     if(p->prepared)return 1;
     if(!p->version) {
-        int r=lock(p);if(r!=1)return r;
-        if(!identity(p))return fail(p);
-        if(unlock(p)!=1)return -1;
+        int r=lock(u);if(r!=1)return r;
+        if(!a733_video_unit_identity(u,&p->version))return fail(u);
+        if(unlock(u)!=1)return -1;
         return 0;
     }
     if(!p->mapped) {
-        int h=held(p);if(h!=1)return h;
-        int r=p->ops.memory(p->cookie,token,j,pic,stride,rows,d);
-        if((r!=0&&r!=1)||!timely(p))return fail(p);
+        int h=held(u);if(h!=1)return h;
+        int r=p->memory(p->context,token,j,d);
+        if((r!=0&&r!=1)||!timely(u))return fail(u);
         if(r==1)p->mapped=1;
         return 0;
     }
-    if(p->step==2&&p->last_now<p->reset_until)return 0;
-    int r=lock(p);if(r!=1)return r;
-    if(!prep_step(p,codec))return fail(p);
+    if(p->step==2&&u->last_now<p->reset_until)return 0;
+    int r=lock(u);if(r!=1)return r;
+    if(!prep_step(p,codec))return fail(u);
     ++p->step;
-    if(unlock(p)!=1)return -1;
+    if(unlock(u)!=1)return -1;
     if(p->step==18)p->prepared=1;
     return p->prepared?1:0;
 }
-static int prepare(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
+/* Identity reads are allowed after start; codec reads only after preparation. */
+static int codec_read(struct a733_video_decoder *p,uint64_t token,uint32_t off,uint32_t *out,uint64_t d,int allowed)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(u->failed||!p->checked||token!=u->token||d!=u->deadline||!out)return fail(u);
+    if(off!=0xf0&&off!=0xe0&&off!=0xe4&&(!p->prepared||!allowed))return fail(u);
+    if(lock(u)!=1)return fail(u);
+    if(rd(u,VE+off,out)!=1)return -1;
+    return unlock(u);
+}
+static int codec_write(struct a733_video_decoder *p,uint64_t token,uint32_t off,unsigned width,
+    uint32_t value,uint64_t d,int allowed)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(u->failed||!p->prepared||token!=u->token||d!=u->deadline||!allowed)return fail(u);
+    if(lock(u)!=1)return fail(u);
+    if(a733_video_unit_write(u,VE+off,width,value)!=1)return -1;
+    return unlock(u);
+}
+static int retained_copy(struct a733_video_decoder *p,uint64_t token,uint64_t d,
+    int (*copy)(void *,uint64_t,uint64_t),void *cookie)
+{
+    struct a733_video_unit *u=&p->unit;
+    if(!copy||u->failed||!p->prepared||token!=u->token||d!=u->deadline||!timely(u))return -1;
+    int h=held(u);if(h!=1)return h;
+    int r=copy(cookie,token,d);
+    return (r==0||r==1)&&timely(u)?r:fail(u);
+}
+
+/* JPEG binding. The memory callback also receives the parsed picture and the
+ * output geometry of the current prepare call. */
+struct jpeg_memory_job {
+    const struct a733_video_jpeg_job *job;
+    const struct a733_video_jpeg *picture;
+    uint32_t stride,rows;
+};
+static int jpeg_admit(void *v,const struct a733_video_platform_config *c,const void *j,uint64_t d,uint64_t *t)
+{struct a733_video_platform *p=v;return p->ops.admit(p->cookie,c,j,d,t);}
+static int jpeg_memory(void *v,uint64_t t,const void *job,uint64_t d)
+{
+    struct a733_video_platform *p=v;const struct jpeg_memory_job *m=job;
+    return p->ops.memory(p->cookie,t,m->job,m->picture,m->stride,m->rows,d);
+}
+int a733_video_platform_init(struct a733_video_platform *p,
+ const struct a733_video_platform_config *c,const struct a733_video_platform_ops *o,void *cookie)
+{
+    if(!p||!o||!o->admit||!o->memory||!o->drain)return 0;
+    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+    const struct a733_video_platform_ops ops=*o;
+    if(!decoder_init(&p->decoder,c,&unit,cookie,jpeg_admit,jpeg_memory,p))return 0;
+    p->ops=ops;p->cookie=cookie;
+    return 1;
+}
+static int jpeg_now(void *v,uint64_t *out)
+{struct a733_video_platform *p=v;return p?a733_video_unit_now(&p->decoder.unit,out):-1;}
+static int jpeg_acquire(void *v,const struct a733_video_jpeg_job *j,uint64_t d,uint64_t *token)
+{struct a733_video_platform *p=v;return p?acquire(&p->decoder,j,d,token):-1;}
+static int jpeg_prepare(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
  const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d)
-{return prepare_codec(v,token,j,pic,stride,rows,d,0);}
+{
+    struct a733_video_platform *p=v;const struct jpeg_memory_job job={j,pic,stride,rows};
+    return prepare(&p->decoder,token,&job,d,0);
+}
 static int jpeg_read(void *v,uint64_t token,uint32_t off,uint32_t *out,uint64_t d)
 {
     struct a733_video_platform *p=v;
-    if(p->failed||!p->checked||token!=p->token||d!=p->deadline||!out)return fail(p);
-    if(off!=0xf0&&off!=0xe0&&off!=0xe4&&(!p->prepared||(off!=0&&off!=0x11c&&off!=0xec)))return fail(p);
-    if(lock(p)!=1)return fail(p);
-    if(rd(p,VE+off,out)!=1)return -1;
-    return unlock(p);
+    return codec_read(&p->decoder,token,off,out,d,off==0||off==0x11c||off==0xec);
 }
-static int codec_write(uint32_t off,unsigned width)
+static int jpeg_write_allowed(uint32_t off,unsigned width)
 {
     if(width==1)return off==0x11b||off==0x118;
     if(width!=4)return 0;
@@ -347,33 +269,29 @@ static int codec_write(uint32_t off,unsigned width)
 static int jpeg_write(void *v,uint64_t token,uint32_t off,unsigned width,uint32_t value,uint64_t d)
 {
     struct a733_video_platform *p=v;
-    if(p->failed||!p->prepared||token!=p->token||d!=p->deadline||!codec_write(off,width))return fail(p);
-    if(lock(p)!=1)return fail(p);
-    if(wr(p,VE+off,width,value)!=1)return -1;
-    return unlock(p);
+    return codec_write(&p->decoder,token,off,width,value,d,jpeg_write_allowed(off,width));
 }
 static int finish(void *v,uint64_t token,uint64_t d)
 {
-    struct a733_video_platform *p=v;
-    if(p->failed||!p->prepared||token!=p->token||d!=p->deadline||!timely(p))return fail(p);
-    int h=held(p);if(h!=1)return h;
+    struct a733_video_platform *p=v;struct a733_video_unit *u=&p->decoder.unit;
+    if(u->failed||!p->decoder.prepared||token!=u->token||d!=u->deadline||!timely(u))return fail(u);
+    int h=held(u);if(h!=1)return h;
     int r=p->ops.drain(p->cookie,token,d);
-    return (r==0||r==1)&&timely(p)?r:fail(p);
+    return (r==0||r==1)&&timely(u)?r:fail(u);
 }
 int a733_video_platform_retained_copy(void *v,uint64_t token,uint64_t d,
     int (*copy)(void *,uint64_t,uint64_t),void *cookie)
 {
     struct a733_video_platform *p=v;
-    if(!p||!copy||p->failed||!p->prepared||token!=p->token||d!=p->deadline||!timely(p))return -1;
-    int h=held(p);if(h!=1)return h;
-    int r=copy(cookie,token,d);
-    return (r==0||r==1)&&timely(p)?r:fail(p);
+    return p?retained_copy(&p->decoder,token,d,copy,cookie):-1;
 }
 const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void)
 {
-    static const struct a733_video_jpeg_ops ops={clock_now,acquire,prepare,jpeg_read,jpeg_write,finish};
+    static const struct a733_video_jpeg_ops ops={jpeg_now,jpeg_acquire,jpeg_prepare,jpeg_read,jpeg_write,finish};
     return &ops;
 }
+
+/* H.264 binding. */
 static int h264_write_allowed(uint32_t off)
 {
     switch(off){
@@ -384,36 +302,19 @@ static int h264_write_allowed(uint32_t off)
     default:return 0;
     }
 }
-/* Private bridges reuse only common resource sequencing. No JPEG job/picture
- * is fabricated: those historical parameters are NULL and unused here. */
-static int h264_now(void *v,uint64_t *n)
-{struct a733_h264_platform *p=v;return p->ops.now_us(p->cookie,n);}
-static int h264_admit(void *v,const struct a733_video_platform_config *c,
- const struct a733_video_jpeg_job *unused,uint64_t d,uint64_t *t)
-{struct a733_h264_platform *p=v;(void)unused;return p->bound?p->ops.admit(p->cookie,c,&p->job,d,t):-1;}
-static int h264_memory(void *v,uint64_t t,const struct a733_video_jpeg_job *unused,
- const struct a733_video_jpeg *picture,uint32_t stride,uint32_t rows,uint64_t d)
-{struct a733_h264_platform *p=v;(void)unused;(void)picture;(void)stride;(void)rows;
- return p->ops.memory(p->cookie,t,&p->job,d);}
-static int h264_no_drain(void *v,uint64_t t,uint64_t d)
-{(void)v;(void)t;(void)d;return -1;}
-static int h264_enter(void *v,uint64_t d)
-{struct a733_h264_platform *p=v;return p->ops.enter(p->cookie,d);}
-static int h264_leave(void *v)
-{struct a733_h264_platform *p=v;return p->ops.leave(p->cookie);}
-static int h264_native_read(void *v,uintptr_t a,uint32_t *x)
-{struct a733_h264_platform *p=v;return p->ops.read(p->cookie,a,x);}
-static int h264_native_write(void *v,uintptr_t a,unsigned w,uint32_t x)
-{struct a733_h264_platform *p=v;return p->ops.write(p->cookie,a,w,x);}
+static int h264_admit(void *v,const struct a733_video_platform_config *c,const void *j,uint64_t d,uint64_t *t)
+{struct a733_h264_platform *p=v;return p->ops.admit(p->cookie,c,j,d,t);}
+static int h264_memory(void *v,uint64_t t,const void *j,uint64_t d)
+{struct a733_h264_platform *p=v;return p->ops.memory(p->cookie,t,j,d);}
 int a733_h264_platform_init(struct a733_h264_platform *p,const struct a733_video_platform_config *c,
  const struct a733_h264_platform_ops *o,void *cookie)
 {
-    if(!p||p->common.initialized||!o||!o->now_us||!o->admit||!o->memory||!o->copied||
-       !o->enter||!o->leave||!o->read||!o->write)return 0;
-    p->ops=*o;p->cookie=cookie;
-    struct a733_video_platform_ops ops={h264_now,h264_admit,h264_memory,h264_no_drain,
-        h264_enter,h264_leave,h264_native_read,h264_native_write};
-    return a733_video_platform_init(&p->common,c,&ops,p);
+    if(!p||!o||!o->admit||!o->memory||!o->copied)return 0;
+    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+    const struct a733_h264_platform_ops ops=*o;
+    if(!decoder_init(&p->decoder,c,&unit,cookie,h264_admit,h264_memory,p))return 0;
+    p->ops=ops;p->cookie=cookie;p->bound=0;
+    return 1;
 }
 static int h264_same_job(const struct a733_h264_job *a,const struct a733_h264_job *b)
 {
@@ -423,42 +324,31 @@ static int h264_same_job(const struct a733_h264_job *a,const struct a733_h264_jo
     return 1;
 }
 static int h264_clock(void *v,uint64_t *n)
-{struct a733_h264_platform *p=v;return clock_now(&p->common,n);}
+{struct a733_h264_platform *p=v;return p?a733_video_unit_now(&p->decoder.unit,n):-1;}
 static int h264_acquire(void *v,const struct a733_h264_job *j,uint64_t d,uint64_t *t)
 {
     struct a733_h264_platform *p=v;
     if(!p||!j)return -1;
-    if(p->bound&&!h264_same_job(&p->job,j))return fail(&p->common);
+    if(p->bound&&!h264_same_job(&p->job,j))return fail(&p->decoder.unit);
     if(!p->bound){p->job=*j;p->bound=1;}
-    return acquire(&p->common,NULL,d,t);
+    return acquire(&p->decoder,&p->job,d,t);
 }
 static int h264_prepare(void *v,uint64_t t,const struct a733_h264_job *j,uint64_t d)
 {
     struct a733_h264_platform *p=v;
     if(!p||!j||!p->bound||!h264_same_job(&p->job,j))return -1;
-    return prepare_codec(&p->common,t,NULL,NULL,0,0,d,1);
+    return prepare(&p->decoder,t,&p->job,d,1);
 }
 static int h264_read(void *v,uint64_t t,uint32_t off,uint32_t *x,uint64_t d)
 {
-    struct a733_h264_platform *p=v;struct a733_video_platform *c=&p->common;
-    if(c->failed||!c->checked||t!=c->token||d!=c->deadline||!x)return fail(c);
-    if(off!=0xf0&&off!=0xe0&&off!=0xe4&&(!c->prepared||
-       (off!=0&&off!=0x1c&&off!=0xb0&&off!=0xec&&off!=0x228&&off!=0x22c&&off!=0x5c&&off!=0x804)))return fail(c);
-    if(lock(c)!=1)return fail(c);
-    if(rd(c,VE+off,x)!=1)return -1;
-    return unlock(c);
+    struct a733_h264_platform *p=v;
+    return codec_read(&p->decoder,t,off,x,d,off==0||off==0x1c||off==0xb0||off==0xec||
+        off==0x228||off==0x22c||off==0x5c||off==0x804);
 }
 static int h264_write(void *v,uint64_t t,uint32_t off,uint32_t x,uint64_t d)
-{
-    struct a733_h264_platform *p=v;struct a733_video_platform *c=&p->common;
-    if(c->failed||!c->prepared||t!=c->token||d!=c->deadline||!h264_write_allowed(off))return fail(c);
-    if(lock(c)!=1)return fail(c);
-    if(wr(c,VE+off,4,x)!=1)return -1;
-    return unlock(c);
-}
+{struct a733_h264_platform *p=v;return codec_write(&p->decoder,t,off,4,x,d,h264_write_allowed(off));}
 static int h264_copied(void *v,uint64_t t,uint64_t d)
-{struct a733_h264_platform *p=v;
- return a733_video_platform_retained_copy(&p->common,t,d,p->ops.copied,p->cookie);}
+{struct a733_h264_platform *p=v;return retained_copy(&p->decoder,t,d,p->ops.copied,p->cookie);}
 const struct a733_h264_ops *a733_video_platform_h264_ops(void)
 {
     static const struct a733_h264_ops ops={h264_clock,h264_acquire,h264_prepare,h264_read,h264_write,h264_copied};
@@ -489,13 +379,7 @@ int a733_video_platform_native_read(void *cookie,uintptr_t a,uint32_t *out)
 {
     (void)cookie;
     if(!out||!readable(a))return -1;
-#if defined(__aarch64__)
-    __asm__ volatile("dsb sy":::"memory");
-    *out=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return 1;
-#else
-    return -1;
-#endif
+    return a733_video_unit_native_read(a,out);
 }
 int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uint32_t value)
 {
@@ -512,16 +396,8 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
     int allowed=(mask||delay)&&width==4;
     if(a>=VE&&a<VE+0x1000) {
         uint32_t off=(uint32_t)(a-VE);
-        allowed=codec_write(off,width)||(width==4&&(h264_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
+        allowed=jpeg_write_allowed(off,width)||(width==4&&(h264_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
     }
     if(!allowed)return -1;
-#if defined(__aarch64__)
-    __asm__ volatile("dsb sy":::"memory");
-    if(mask&&((*(volatile const uint32_t *)a^value)&~mask))return -1;
-    if(width==1)*(volatile uint8_t *)a=(uint8_t)value;
-    else *(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy":::"memory");return 1;
-#else
-    (void)value;return -1;
-#endif
+    return a733_video_unit_native_write(a,width,mask,value);
 }

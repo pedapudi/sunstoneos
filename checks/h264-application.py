@@ -91,7 +91,7 @@ def main():
                 '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-DSUNSTONE_BOARD_SUPERVISED=1',
                 '-I'+str(source/'include'), '-I'+str(source/'checks'), '-I'+str(source/'platform/a733-smp-cached')]
         jobs = {'admission': ['apps/h264/admission.c', 'apps/h264/snapshot.c', 'drivers/storage/storage_digest.c', 'checks/h264-application-admission.c'],
-                'executor': ['drivers/video/a733_video_h264.c', 'drivers/video/a733_video_platform.c',
+                'executor': ['drivers/video/a733_video_h264.c', 'drivers/video/a733_video_platform.c', 'drivers/video/a733_video_unit.c',
                     'drivers/clock/a733_clock_leases.c', 'drivers/gpu/a733_gpu_resources.c',
                     'drivers/storage/storage_digest.c', 'checks/a733-video-h264.c']}
         failures = []

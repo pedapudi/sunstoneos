@@ -22,7 +22,7 @@ apply_build_patch("${jpeg_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/boot.patch")
 list(APPEND jpeg_sources "${jpeg_build}/boot.c")
 foreach(source IN ITEMS apps/jpeg/main.c apps/jpeg/input.c apps/jpeg/native.c apps/jpeg/usb0.c apps/jpeg/admission.c apps/jpeg/snapshot.c
- drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c drivers/video/a733_video_platform.c
+ drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c
  drivers/iommu/a733_iommu.c)
  list(APPEND jpeg_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()

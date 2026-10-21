@@ -27,7 +27,7 @@ apply_build_patch("${h264_encode_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platfo
 list(APPEND h264_encode_sources "${h264_encode_build}/boot.c"
  "${SUNSTONE_SOURCE_ROOT}/platform/a733/device_memory_layout.c")
 foreach(source IN ITEMS apps/h264-encode/main.c apps/h264-encode/input.c apps/h264-encode/storage.c apps/h264-encode/native.c apps/h264-encode/usb0.c apps/h264-encode/admission.c apps/h264-encode/snapshot.c
- drivers/video/a733_video_h264_encode.c drivers/video/a733_video_encode_platform.c
+ drivers/video/a733_video_h264_encode.c drivers/video/a733_video_encode_platform.c drivers/video/a733_video_unit.c
  drivers/iommu/a733_iommu.c)
  list(APPEND h264_encode_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
@@ -56,7 +56,8 @@ set(h264_encode_inputs ${h264_encode_sources} ${h264_encode_headers} ${board_inp
  "${h264_encode_build}/link.ld"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_encode_application.h"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_video_h264_encode.h"
- "${SUNSTONE_SOURCE_ROOT}/include/a733_video_encode_platform.h" "${CMAKE_CURRENT_LIST_FILE}")
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_encode_platform.h"
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_unit.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES h264_encode_inputs)
 set(h264_encode_identity "runtime-native-h264-encode1;supervised60;two-VGA-NV12-Baseline-CAVLC-QP26;private-copy;extended-NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS h264_encode_inputs)

@@ -22,7 +22,7 @@ apply_build_patch("${jpeg_encode_build}/boot.c" "${board_build}/boot-supervised.
  "${SUNSTONE_SOURCE_ROOT}/apps/jpeg-encode/boot.patch")
 list(APPEND jpeg_encode_sources "${jpeg_encode_build}/boot.c")
 foreach(source IN ITEMS apps/jpeg-encode/main.c apps/jpeg-encode/input.c apps/jpeg-encode/native.c apps/jpeg-encode/usb0.c apps/jpeg-encode/admission.c apps/jpeg-encode/snapshot.c
- drivers/video/a733_video_jpeg_encode.c drivers/video/a733_video_jpeg_encode_tables.c drivers/video/a733_video_encode_platform.c
+ drivers/video/a733_video_jpeg_encode.c drivers/video/a733_video_jpeg_encode_tables.c drivers/video/a733_video_encode_platform.c drivers/video/a733_video_unit.c
  drivers/iommu/a733_iommu.c)
  list(APPEND jpeg_encode_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()

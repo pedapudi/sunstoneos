@@ -3,8 +3,7 @@
 #define SUNSTONE_A733_VIDEO_PLATFORM_H
 #include "a733_video_jpeg_run.h"
 #include "a733_video_h264.h"
-#include "a733_clock_leases.h"
-#include "a733_gpu_resources.h"
+#include "a733_video_unit.h"
 
 /* Privileged immutable configuration. Borrow exact live tokens from the ONE
  * clock registry and PCK resource manager; neither may be released until a
@@ -68,14 +67,24 @@ struct a733_video_platform_ops {
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
 };
-struct a733_video_platform {
+/* Codec-neutral decoder sequencing on the shared VE resource core: admission,
+ * inherited or cold start, identity, memory and reset/default preparation.
+ * Each codec binding passes its own typed job through admit and memory; the
+ * job pointer is the binding's object, never another codec's structure. */
+struct a733_video_decoder {
+    struct a733_video_unit unit;
     struct a733_video_platform_config config;
+    int (*admit)(void *,const struct a733_video_platform_config *,const void *,uint64_t,uint64_t *);
+    int (*memory)(void *,uint64_t,const void *,uint64_t);
+    void *context;
+    uint64_t version,reset_until;
+    unsigned admitted,checked,mapped,prepared,step,cold_step;
+};
+/* JPEG binding. */
+struct a733_video_platform {
+    struct a733_video_decoder decoder;
     struct a733_video_platform_ops ops;
     void *cookie;
-    uint64_t token,deadline,last_now,version,reset_until;
-    a733_clock_mask_t shared;
-    uint32_t selected_mhz[3],identity_high;
-    unsigned initialized,admitted,checked,mapped,prepared,step,failed,locked,cold_step;
 };
 /* Pure scope derivation; requires exclusive VE_DEC and exact shared result.
  * Preparation never releases, powers down, or claims physical qualification.
@@ -92,16 +101,16 @@ const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void);
  * Initial isolation/drain and source-derived mappings remain prerequisites. */
 int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
     int (*)(void *,uint64_t,uint64_t),void *);
-/* Read/write only within the checked platform/codec allowlists. Caller holds
- * admitted ownership and mutex; these functions do not acquire authority.
+/* Read/write only within the checked platform/codec allowlists, through
+ * identity-mapped Device-nGnRnE pages. Caller holds admitted ownership and
+ * mutex; these functions do not acquire authority.
  * Non-AArch64 builds refuse; no host model can silently become native I/O.
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
 
-/* One fixed H.264 consumer, sharing the actual cold/clock/reset/lease provider.
- * The JPEG structure and callback ABI above are unchanged. This wrapper keeps
- * the H.264 job typed and never presents it as a JPEG picture or scan.
+/* One fixed H.264 consumer of the same decoder sequencing and leases. The
+ * H.264 job stays typed and is never presented as a JPEG picture or scan.
  * Callback contracts are the same retained acquisition/memory contracts above;
  * memory supplies the six explicit H.264 spans, including scratch and MV data.
  */
@@ -116,7 +125,7 @@ struct a733_h264_platform_ops {
     int (*write)(void *,uintptr_t,unsigned,uint32_t);
 };
 struct a733_h264_platform {
-    struct a733_video_platform common;
+    struct a733_video_decoder decoder;
     struct a733_h264_platform_ops ops;
     struct a733_h264_job job;
     void *cookie;

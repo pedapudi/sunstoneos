@@ -92,7 +92,7 @@ def main():
     host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'checks'),'-I'+str(source/'platform/a733-smp-cached')]
     jobs={
         'admission':['apps/jpeg/admission.c','drivers/storage/storage_digest.c','checks/jpeg-application-admission.c'],
-        'retained':['drivers/video/a733_video_jpeg.c','drivers/video/a733_video_jpeg_run.c','drivers/video/a733_video_platform.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','checks/jpeg-application-retained.c'],
+        'retained':['drivers/video/a733_video_jpeg.c','drivers/video/a733_video_jpeg_run.c','drivers/video/a733_video_platform.c','drivers/video/a733_video_unit.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','checks/jpeg-application-retained.c'],
         'iommu':['drivers/iommu/a733_iommu.c','checks/jpeg-application-iommu.c']}
     compile_failures=[]
     for name,files in jobs.items():
