@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Native object has no fixture definitions. Root includes this fragment after npu.cmake.
 add_library(npu-convolution OBJECT EXCLUDE_FROM_ALL drivers/npu/npu_convolution.c)
 target_include_directories(npu-convolution PRIVATE platform/qemu-smp include runtime/include
@@ -32,9 +33,7 @@ if(NPU_CONVOLUTION_FIXTURES)
     "${NPU_CONVOLUTION_FIXTURES}" "${FREERTOS_DIR}/include" "${smp_build}")
   target_compile_definitions(npu-convolution-model PRIVATE INCLUDE_xTaskGetSchedulerState=1
     INCLUDE_xTaskGetCurrentTaskHandle=1 INCLUDE_xSemaphoreGetMutexHolder=1)
-  target_compile_options(npu-convolution-model PRIVATE -march=armv8-a -mstrict-align -ffreestanding
-    -fno-builtin -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables
-    -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra -Werror -fstack-usage)
+  target_compile_options(npu-convolution-model PRIVATE ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
   target_link_options(npu-convolution-model PRIVATE -nostdlib -static -Wl,--gc-sections
     -Wl,--wrap=a733_npu_native_operations -Wl,--wrap=a733_npu_startup_prepared
     -Wl,--wrap=aarch64_device_translate

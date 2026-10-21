@@ -98,8 +98,11 @@ card, firmware worker, or immutable firmware artifacts.
 Each poll advances at most one controller step, admits one command, or parses
 one record. The controller's existing FIFO budget remains in force. Receive
 status is polled; controller/GIC interrupt delivery stays disabled. The existing
-unsupported soft-interrupt fault and 4,096-byte aggregate limit remain explicit
-bounds. No interrupt source is cleared or acknowledged by this worker.
+unsupported soft-interrupt fault remains an explicit bound. One CMD53 reads each
+receive aggregate of up to 112 blocks (57,344 bytes), the largest function-1
+block count that the status register reports, as described in the
+[transport](radio-transport.md). No interrupt source is cleared or acknowledged
+by this worker.
 
 ## Deadlines retain incomplete work
 

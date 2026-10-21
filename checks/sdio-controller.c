@@ -97,7 +97,7 @@ static int write_cb(void *context, uint32_t offset, uint32_t value)
         } else {
             assert(((arg >> 28) & 7) == 1);
             x->bytes = x->regs[0x14 / 4]; x->position = 0; x->write = (arg >> 31) != 0;
-            assert(x->bytes <= sizeof(x->transmitted));
+            assert(!x->write || x->bytes <= sizeof(x->transmitted));
         }
         if (x->r5_error && (command == 52 || command == 53)) x->regs[0x20 / 4] |= 1u << 8;
     }
@@ -201,8 +201,18 @@ static void success(void)
     m.allow_irq_ack = 1;
     assert(sunxi_sdio_ack_irq(&host) && host.sdio_pending);
     m.irq_level = 0; assert(sunxi_sdio_ack_irq(&host) && !host.sdio_pending);
+    /* The largest radio receive aggregate, 112 blocks, is one counted CMD53. */
+    static uint8_t large[512 * 512];
+    assert(sdio_card_cmd53(&card, 1, 0x0f, 0, 0, 512, large, 112 * 512, &request));
+    assert(request.argument == 0x18001e70 && sunxi_sdio_submit(&host, &request, m.now + 1000));
+    for (unsigned i = 0; i < 1000 && host.state != SUNXI_SDIO_DONE && host.state != SUNXI_SDIO_FAULT; ++i) tick_host();
+    struct sunxi_sdio_result result;
+    assert(host.state == SUNXI_SDIO_DONE && sunxi_sdio_take_result(&host, &result));
+    assert(!result.error && result.transferred == 112 * 512 && m.command_count);
+    for (unsigned i = 0; i < 112 * 512; ++i) assert(large[i] == (uint8_t)i);
     unsigned before = m.accesses;
     struct sunxi_sdio_request snapshot = request;
+    assert(!sdio_card_cmd53(&card, 1, 0x0f, 0, 0, 512, large, sizeof(large), &request));
     assert(!sdio_card_cmd53(&card, 1, 0x1ffff, 0, 1, 0, bytes, 4, &request));
     assert(!sdio_card_cmd53(&card, 1, 0x10, 0, 0, 0, bytes, 3, &request));
     assert(!sdio_card_cmd52(&card, 1, 0x20, 0, 1, 0, &request));

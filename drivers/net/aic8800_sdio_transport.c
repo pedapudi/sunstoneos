@@ -15,6 +15,9 @@ enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     FUNCTION_IRQ_READ, FUNCTION_IRQ_WRITE, CREDIT, TX, RX_STATUS, RX_LENGTH,
     RX, PARSE, RESTORE_PAD, RESTORE_SETTLE, FIRMWARE_STEP, RUNTIME_STEP };
 #define SETUP_OPERATION 2u
+/* The configured command timeout covers this many receive bytes; a larger
+ * aggregate read gets one timeout per started unit. */
+#define RX_TIMEOUT_BYTES 4096u
 static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int overlap(const void *a, size_t an, const void *b, size_t bn)
 {
@@ -326,7 +329,13 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     struct sunxi_sdio_request r = {0};
     uint64_t deadline;
     if (now < t->wait_until) return 1;
-    if (!later(now, t->config.command_timeout, &deadline)) return 0;
+    uint64_t timeout = t->config.command_timeout;
+    if (t->phase == RX) {
+        uint64_t units = (t->rx_bytes + RX_TIMEOUT_BYTES - 1) / RX_TIMEOUT_BYTES;
+        if (timeout > UINT64_MAX / units) return 0;
+        timeout *= units;
+    }
+    if (!later(now, timeout, &deadline)) return 0;
     if (deadline > t->deadline) deadline = t->deadline;
     if (t->enable_deadline && deadline > t->enable_deadline) deadline = t->enable_deadline;
     int ok;

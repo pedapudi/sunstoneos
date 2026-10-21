@@ -76,7 +76,14 @@ or completed DMA. LRADC uses bit 72 for the complete LRADC0 controller, its CCU
 gate and reset, and interrupt 69. Its exclusive lease also holds FABRIC and
 RTC32K stable as shared parents. RTC32K uses bit 73 for the RTC 32 kHz source,
 mux, divider and gates. Legacy RTC writers also require explicit exclusion,
-because they do not use this registry. Bits 74–127 remain invalid.
+because they do not use this registry. CPU_L, CPU_B and CPU_DSU use bits
+74–76. Each covers one CPU PLL with its update and lock fields, and the
+matching cluster mux and P divider in the CPU PLL block at `0x08870000`. Each
+reserves OSC, because the PLL runs from the DCXO and a rate change parks the
+mux on it. A shared lease holds the rate stable; an exclusive lease admits a
+change. The [CPU clock driver](cpu-clock.md) holds its cluster exclusively and,
+for CPU-L, the DSU shared. Rail voltage remains a separate ledger lease.
+Bits 77–127 remain invalid.
 The focused `checks/a733-media-clock.c --encoder-ownership` case passes
 encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
 directions before register access. Time and hardware callbacks are modeled.

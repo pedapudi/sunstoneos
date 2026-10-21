@@ -1,0 +1,24 @@
+--- recognition.cc
++++ recognition-os.cc
+@@ -7,6 +7,7 @@
+ #include "FreeRTOS.h"
+ #include "task.h"
+ void runtime_smp_init(void);
++int os_audio_capture(unsigned,const uint8_t **,size_t *);
+ }
+ #include <atomic>
+ #include <cstring>
+@@ -45,6 +46,13 @@
+             if(trigger==1)break;mimus_board_progress();vTaskDelay(1);
+         }
+         unsigned current=generation.load(std::memory_order_acquire);
++        /* The microphone capture of this generation replaces the recorded WAV. */
++        for(;;){
++            const uint8_t *wav;size_t bytes;int r=os_audio_capture(current,&wav,&bytes);
++            if(r<0||!mimus_board_live()){failed();}
++            if(r==1){input[2]={wav,bytes};break;}
++            mimus_board_progress();vTaskDelay(1);
++        }
+         started.store(current,std::memory_order_release);
+         /* Authenticated above: load once, then reuse the retained engine. */
+         bool ok=mimus_transcribe_recorded(input,scratch,&stopped,kMimusWarm|kMimusVerified);

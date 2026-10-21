@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Shared host-check policy: assertions, sanitizer flags, host tools, refusals and resumable steps.
+"""Shared host-check policy and helpers: assertions, sanitizer flags, host tools, refusals,
+resumable steps, ELF layouts and ranged emulation hooks.
 
 Import this module before a check makes any pass/fail decision. Checks rely on
 Python assert statements, so importing it under `python3 -O` or PYTHONOPTIMIZE
@@ -8,6 +9,7 @@ stops the check instead of letting removed assertions record a pass.
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import traceback
 
@@ -44,6 +46,87 @@ def refused(action, reason, kind=ValueError):
         assert reason in message, f'refused for another reason: {message!r}; expected {reason!r}'
         return message
     raise AssertionError(f'accepted; expected a refusal containing {reason!r}')
+
+
+class Image:
+    """Loadable segments, symbols, functions and structure layouts of an ELF image.
+
+    parts holds (address, bytes) for each PT_LOAD segment; symbols maps a symbol
+    name to its addresses; functions maps a (compilation unit, name) pair to the
+    addresses of DWARF subprograms; layouts maps a structure name to its member
+    offsets. layout_names selects the structures a fixture consumes, because
+    unrelated compilation units may declare different private structures with
+    the same name; any other repeated name must have one layout.
+    """
+
+    def __init__(self, path, layout_names=None):
+        from elftools.elf.elffile import ELFFile
+        with Path(path).open('rb') as f:
+            e = ELFFile(f)
+            self.parts = [(int(p['p_vaddr']), p.data()) for p in e.iter_segments() if p['p_type'] == 'PT_LOAD']
+            self.symbols = {}
+            self.functions = {}
+            self.layouts = {}
+            for s in e.get_section_by_name('.symtab').iter_symbols():
+                self.symbols.setdefault(s.name, set()).add(int(s['st_value']))
+            for cu in e.get_dwarf_info().iter_CUs():
+                unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
+                for d in cu.iter_DIEs():
+                    if 'DW_AT_name' not in d.attributes:
+                        continue
+                    n = d.attributes['DW_AT_name'].value.decode()
+                    if d.tag == 'DW_TAG_subprogram' and 'DW_AT_low_pc' in d.attributes:
+                        self.functions.setdefault((unit, n), set()).add(int(d.attributes['DW_AT_low_pc'].value))
+                    if d.tag == 'DW_TAG_structure_type' and (layout_names is None or n in layout_names):
+                        fields = {c.attributes['DW_AT_name'].value.decode(): int(c.attributes['DW_AT_data_member_location'].value)
+                                  for c in d.iter_children() if c.tag == 'DW_TAG_member' and 'DW_AT_name' in c.attributes
+                                  and 'DW_AT_data_member_location' in c.attributes}
+                        if fields:
+                            if n in self.layouts:
+                                assert self.layouts[n] == fields, n
+                            self.layouts[n] = fields
+
+    def address(self, n, unit=None):
+        """The one nonzero address of symbol n, or of function n in the unit whose name ends with unit."""
+        values = self.symbols.get(n, set()) - {0}
+        if unit:
+            values = set().union(*(v for (u, name), v in self.functions.items() if name == n and u.endswith(unit)))
+        assert len(values) == 1, (n, unit, values)
+        return next(iter(values))
+
+
+def instruction_sites(parts, match):
+    """Addresses of the 32-bit words in loaded image parts for which match(word) is true.
+
+    parts holds (address, bytes) pairs. Data words that happen to match are
+    included too; code hooks on them never run.
+    """
+    return [base + index * 4 for base, data in parts
+            for index, (word,) in enumerate(struct.iter_unpack('<I', data[:len(data) & ~3])) if match(word)]
+
+
+def system_register_access(word):
+    """True for the AArch64 MRS, MSR (register), SYS and SYSL encodings.
+
+    SYS includes address translation (AT) and cache and TLB maintenance.
+    Hints such as WFE, barriers and MSR (immediate) do not match.
+    """
+    return word & 0xffd00000 == 0xd5100000 or word & 0xffd80000 == 0xd5080000
+
+
+def hook_addresses(uc, addresses, callback):
+    """Register callback as a Unicorn code hook on each address alone.
+
+    A code hook without a range calls into Python before every emulated
+    instruction. A model that acts only at known addresses, such as an end
+    sentinel, hooked symbols and system-register accesses, runs many times
+    faster when it hooks just those addresses. Return the hooked addresses.
+    """
+    from unicorn import UC_HOOK_CODE
+    addresses = set(addresses)
+    for address in sorted(addresses):
+        uc.hook_add(UC_HOOK_CODE, callback, begin=address, end=address)
+    return addresses
 
 
 def save(path, value):

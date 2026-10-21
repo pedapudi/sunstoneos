@@ -5,9 +5,11 @@
 #include "aic8800_sdio_transport.h"
 
 static struct aic8800_sdio_transport transport;
-static uint8_t receive[4096];
+static uint8_t receive[AIC8800_TRANSPORT_RX_BYTES];
 static unsigned transmissions, receive_commands, credit_reads, enable_reads, pad_writes;
 static int add_unrelated, malformed, response_status, ready_delay, zero_credit, fail_setup;
+static int large_aggregate, byte_words = 128;
+static uint64_t large_read_timeout;
 static uint64_t pad_time, byte_mode_time;
 static int drop_setup_confirmation, fail_pad_restore, setup_write_applied, fail_tx;
 static uint32_t get32(const uint8_t *p)
@@ -47,14 +49,20 @@ static void tx_done(void)
     if (add_unrelated && transmissions == 1) {
         confirmation(receive, 0x12345678, 0xabcdef12); at = 24;
     }
+    if (large_aggregate && transmissions == 1) {
+        /* Three 1,500-byte print records place the confirmation at byte 4,512. */
+        for (unsigned i = 0; i < 3; ++i, at += 1504) {
+            receive[at] = 0xdc; receive[at + 1] = 5; receive[at + 2] = 0x13; receive[at + 4] = (uint8_t)(0x61 + i);
+        }
+    }
     if (write_setup) {
         /* The published sender imposes no echo semantics on these CFM fields. */
         confirmation(receive + at, 0xdeadbeef, 0x11223344); receive[at + 4] = 3;
     } else confirmation(receive + at, address, transmissions == 2 ? 0x00c30000u : 0x70u);
     if (malformed) receive[10] = 9; /* Both confirmations declare eight bytes. */
     m.card[1][4] = drop_setup_confirmation && write_setup ? 0 :
-        response_status ? (uint8_t)response_status : 1;
-    m.card[1][5] = 128;
+        large_aggregate && write_setup ? 10 : response_status ? (uint8_t)response_status : 1;
+    m.card[1][5] = (uint8_t)byte_words;
 }
 static int transport_read(void *context, uint32_t offset, uint32_t *out)
 {
@@ -88,7 +96,10 @@ static int transport_write(void *context, uint32_t offset, uint32_t value)
             assert(fn == 1 && !(arg & (1u << 26))); /* Fixed FIFO address. */
             assert(m.card[0][0x110] == 0 && m.card[0][0x111] == 2 && (m.card[0][3] & 2));
             if (arg >> 31) assert(addr == 0x10 && m.regs[0x14 / 4] == 512);
-            else { assert(addr == 0x0f); ++receive_commands; }
+            else {
+                assert(addr == 0x0f); ++receive_commands;
+                if (m.regs[0x14 / 4] > 4096) large_read_timeout = host.deadline - m.now;
+            }
         }
     }
     if (fail_tx && offset == 0x200 && m.write && m.position == 4) { ++m.accesses; return 0; }
@@ -106,6 +117,7 @@ static void begin(enum aic8800_transport_pad pad)
     memset(&transport, 0, sizeof(transport)); memset(receive, 0, sizeof(receive));
     transmissions = receive_commands = credit_reads = enable_reads = pad_writes = 0;
     add_unrelated = malformed = response_status = ready_delay = zero_credit = fail_setup = 0;
+    large_aggregate = 0; byte_words = 128; large_read_timeout = 0;
     pad_time = byte_mode_time = 0;
     drop_setup_confirmation = fail_pad_restore = setup_write_applied = fail_tx = 0;
     prepare(); enumerate(); /* Real controller and card APIs, existing model. */
@@ -182,9 +194,11 @@ static void errors(void)
     assert(transport.error == AIC8800_TRANSPORT_HOST_ERROR && m.card[0][0x111] == 2);
     assert(transport.pending && host.request.command == 52); stopped();
 
-    const int statuses[] = { 9, 0x80, 120 };
+    /* Byte mode over 512 bytes stays out of bounds. */
+    const int statuses[] = { 120, 0x80, 120 };
     for (unsigned i = 0; i < 3; ++i) {
         begin(AIC8800_PAD_KEEP); setup(); response_status = statuses[i]; identity(2000);
+        if (i == 0) byte_words = 129;
         if (i == 2) malformed = 1;
         while (transport.state == AIC8800_TRANSPORT_IDENTITY) step();
         assert(transport.error == (i == 0 ? AIC8800_TRANSPORT_RX_BOUNDS :
@@ -203,6 +217,28 @@ static void errors(void)
     struct aic8800_sdio_response retained;
     assert(aic8800_transport_peek(&transport, &retained) && retained.address == 0x12345678);
     assert(transport.error == AIC8800_TRANSPORT_TIMEOUT); stopped();
+}
+/* Ten blocks exceed the former 4,096-byte buffer. One CMD53 reads the whole
+ * aggregate, as the pinned source's single sdio_readsb does, with a command
+ * timeout for each started 4,096 bytes. */
+static void aggregate(void)
+{
+    begin(AIC8800_PAD_KEEP); setup(); large_aggregate = 1; identity(2000);
+    uint64_t transfers = transport.completed_transfers;
+    for (unsigned i = 0; i < 3; ++i) {
+        for (unsigned j = 0; j < 1000 && !transport.held && transport.state == AIC8800_TRANSPORT_IDENTITY; ++j) step();
+        struct aic8800_sdio_response event;
+        assert(transport.held && aic8800_transport_peek(&transport, &event));
+        assert(event.transport_type == 0x13 && event.record_bytes == 1504 && event.record[4] == 0x61 + i);
+        assert(transport.rx_bytes == 5120 && transport.cursor == 1504u * i && receive_commands == 1);
+        assert(aic8800_transport_consume(&transport));
+    }
+    for (unsigned i = 0; i < 1000 && !transport.setup_confirmed && transport.state == AIC8800_TRANSPORT_IDENTITY; ++i) step();
+    assert(transport.setup_confirmed && transport.cursor == 4536 && receive_commands == 1);
+    /* One transmit and one receive transfer; the timeout covers two units. */
+    assert(transport.completed_transfers - transfers >= 2 && large_read_timeout > 100 && large_read_timeout <= 200);
+    for (unsigned i = 0; i < 1000 && transport.state == AIC8800_TRANSPORT_IDENTITY; ++i) step();
+    assert(transport.state == AIC8800_TRANSPORT_COMPLETE && transmissions == 3 && receive_commands == 3);
 }
 static void bootstrap_failures(void)
 {
@@ -248,8 +284,8 @@ int AIC8800_TRANSPORT_FIXTURE_MAIN(int argc, char **argv)
         good(); bootstrap_failures();
         puts("AIC SDIO bootstrap: fixed write, non-echo confirmation, pad restore, identity and retained uncertainty passed");
     } else {
-        assert(argc == 1); good(); errors(); bootstrap_failures();
-        puts("AIC SDIO transport: setup, identity, retained unrelated messages, bounds, deadlines and uncertain writes passed");
+        assert(argc == 1); good(); errors(); aggregate(); bootstrap_failures();
+        puts("AIC SDIO transport: setup, identity, retained unrelated messages, 10-block aggregate, bounds, deadlines and uncertain writes passed");
     }
     return 0;
 }

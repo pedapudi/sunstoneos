@@ -20,7 +20,7 @@ struct model {
     enum a733_capture_state fault_state;
     unsigned fail_emit,stuck_capture,stuck_fence,receiver_error,route_error,iommu_error;
     unsigned fail_sync,late_release,failed_global,changed_global,ready_clock_fault;
-    unsigned retained,rearm_admits,quiet_checked;
+    unsigned retained,rearm_admits,quiet_checked,stop_error;
 };
 static struct model model;
 static struct a733_camera_capture capture;
@@ -151,6 +151,8 @@ static void emit(struct model *m){
 }
 static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){
     struct model *m=p;assert(t==203 && a==0x3c && m->now<d);m->sensor[r]=v;++m->writes;
+    /* A packet error latched while the stop truncates the next frame. */
+    if(r==0x300e && v==0x40 && m->stop_error)m->common[(0x1118+m->capture->config.receiver.port*0x400)/4]|=0x100;
     if(r==0x4202 && !v && m->sensor[0x300e]==0x45){
         emit(m);if(m->fail_emit){operation(m);return -1;}
     }return operation(m);
@@ -357,7 +359,7 @@ int main(int argc,char **argv){
         assert(model.frames==1 && model.attempts==2 && model.cache_syncs==1 && model.releases==4);
         assert(capture.analog.admission.token==201 && capture.iommu.admission.token==202);
         assert(!capture.sensor.token && !capture.receiver.token && !capture.route.token && !capture.dma.token);
-        expect_cpu(0);
+        expect_cpu(0);assert(capture.frame_status[0]==3 && capture.frame_status[1]==1);
         for(unsigned i=PLANE;i<SPAN;i++)assert(y_cpu[i]==0xa5 && uv_cpu[i]==0xa5);
         for(unsigned i=1024;i<4096;i++)assert(parameters[i]==0xcc);
     }
@@ -373,7 +375,12 @@ int main(int argc,char **argv){
     setup(0);model.fail_emit=1;assert(drive()==-1 && model.frames==1 && !model.releases);
     setup(0);model.stuck_capture=1;assert(drive()==-1 && !model.quiet && !model.cache_syncs);
     setup(0);model.stuck_fence=1;assert(drive()==-1 && !model.route_drains && !model.cache_syncs);
+    /* The pre-stop record attributes an error to the captured frame or to the
+     * stop; either way the sensor is stopped before the sample faults. */
     setup(0);model.receiver_error=1;assert(drive()==-1 && !model.route_drains && !model.cache_syncs);
+    assert(capture.frame_status[0]==0x80 && model.sensor[0x300e]==0x40 && model.sensor[0x4202]==15);
+    setup(0);model.stop_error=1;assert(drive()==-1 && !model.route_drains && !model.cache_syncs);
+    assert(capture.frame_status[0]==3 && capture.receiver.mipi_events==0x103 && model.sensor[0x4202]==15);
     setup(0);model.route_error=1;assert(drive()==-1 && !model.cache_syncs && capture.route.token==204);
     setup(0);model.iommu_error=1;assert(drive()==-1 && capture.iommu.state==A733_IOMMU_FAULT && !model.cache_syncs);
     setup(0);model.fail_sync=1;assert(drive()==-1 && capture.dma.owner==A733_CAMERA_DEVICE && capture.dma.token==205);

@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Cold-entry monitor with the stage-2 slot loader (docs/boot-slots.md). The
 # flat image is a boot0 monitor payload for tools/prepare-microsd-boot.py.
 if(NOT SUNSTONE_SOURCE_ROOT)
@@ -19,9 +20,7 @@ target_compile_definitions(a733-stage2 PRIVATE A733_COLD_STAGE2=1)
 # MMU and caches stay off at EL3: Device memory requires aligned accesses, and
 # no FP/SIMD trap configuration exists before this code runs.
 target_compile_options(a733-stage2 PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections
-  -fdata-sections -O2 -g -Wall -Wextra -Werror
+  ${SUNSTONE_KERNEL_FLAGS} -Werror
   "$<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>")
 target_link_options(a733-stage2 PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${stage2_root}/boot/a733/stage2/link.ld"

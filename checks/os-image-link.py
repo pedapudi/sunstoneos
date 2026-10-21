@@ -8,8 +8,11 @@ and a start list whose entries are distinct linked functions. The fixed
 recognition inputs and arena must not overlap one another or any allocated
 image section, and must lie in the stage-2 loader's load window. Their
 extents come from the generated input header and the recognizer header; the
-window comes from the loader source. The standard library suffices, so the
-build can run this check.
+window comes from the loader source. The table, start list and lifetime must
+match the build's options: an audio build adds the DMA0 interrupt (INTID 143)
+and the audio start entry. The standard library suffices, so the build can run
+this check. Its output also serves the supervised preparation (apps/os/prepare.py)
+as the image manifest.
 """
 import argparse
 import hashlib
@@ -99,7 +102,7 @@ def layout(elf, assets, recognizer, loader):
             'image_end': hex(max(end for _, _, end in sections))}
 
 
-def check(path, assets, recognizer, loader):
+def check(path, assets, recognizer, loader, audio=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -147,6 +150,9 @@ def check(path, assets, recognizer, loader):
     assert len(entries) == len(set(entries)), 'a start function is listed twice'
     hooks = {one(n)['value'] for n in HOOKS[:3]}
     assert not hooks & set(entries), 'a start entry is a board hook itself'
+    expected = ['mimus', 'thermal'] + (['audio'] if audio else [])
+    assert names == expected, 'start entries %s differ from %s' % (names, expected)
+    assert ids == [71] + ([143] if audio else []), 'interrupt IDs %s differ from the build' % ids
     return {'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader)}
 
@@ -158,14 +164,19 @@ def main():
     parser.add_argument('--assets', type=Path, required=True, help='generated mimus input header (assets.h)')
     parser.add_argument('--recognizer', type=Path, required=True, help='apps/mimus/recorded.h')
     parser.add_argument('--loader', type=Path, required=True, help='boot/a733/stage2/loader.c')
+    parser.add_argument('--lifetime', choices=('supervised', 'resident'), required=True)
+    parser.add_argument('--audio', choices=('0', '1'), default='0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    audio = args.audio == '1'
     try:
-        result = check(args.image, args.assets, args.recognizer, args.loader)
+        assert not (audio and args.lifetime == 'resident'), 'audio builds are supervised only'
+        result = check(args.image, args.assets, args.recognizer, args.loader, audio)
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
-    result.update({'passed': True, 'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
+    result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
+                   'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
     if args.build_id:
         result['build_id'] = args.build_id.read_text().strip()
     args.output.write_text(json.dumps(result, indent=2) + '\n')

@@ -6,6 +6,7 @@
  * Authors: Zhao Wei <zhaowei@allwinnertech.com>
  */
 #include "a733_camera_dma.h"
+#include "a733_camera_common.h"
 #include <stddef.h>
 #define COUNT(a) (sizeof(a)/sizeof((a)[0]))
 #define PLANE_BYTES UINT64_C(307200)
@@ -35,14 +36,7 @@ static const struct step disable[] = {
 static int fail(struct a733_camera_dma *s) { s->state=A733_CAM_DMA_FAULT;return -1; }
 static int tick(struct a733_camera_dma *s)
 {
-    uint64_t n;
-    if(s->ops.now_us(s->context,&n)!=1 || n<s->now || n>=s->deadline)return fail(s);
-    s->now=n;return 1;
-}
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
+    return a733_camera_clock(s->ops.now_us,s->context,&s->now,s->deadline)?1:fail(s);
 }
 static int plane_valid(const struct a733_camera_plane *p)
 {
@@ -56,9 +50,10 @@ int a733_camera_dma_init(struct a733_camera_dma *s,
        c->block>5 || !c->frame_id || !plane_valid(&c->y) || !plane_valid(&c->uv) ||
        (c->y.bus_address<c->uv.bus_address+c->uv.mapped_bytes &&
         c->uv.bus_address<c->y.bus_address+c->y.mapped_bytes) ||
-       overlap(s,sizeof(*s),o,sizeof(*o)) || overlap(s,sizeof(*s),c,sizeof(*c)) ||
-       (ctx && overlap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit || !o->read ||
-       !o->write || !o->start_one || !o->producer_stop || !o->drain ||
+       a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
+       a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
+       (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
+       !o->read || !o->write || !o->start_one || !o->producer_stop || !o->drain ||
        !o->sync_cpu || !o->release)return -1;
     *s=(struct a733_camera_dma){.ops=*o,.config=*c,.context=ctx,.initialized=1};
     return 1;
@@ -153,9 +148,8 @@ int a733_camera_dma_poll(struct a733_camera_dma *s)
     switch(s->state) {
     case A733_CAM_DMA_ADMIT:
         token=s->token;r=s->ops.admit(s->context,&s->config,s->deadline,&token);
-        if(s->token && token!=s->token)return fail(s);
-        if(!s->token)s->token=token;
-        if(r<0 || r>1 || (r && !s->token) || tick(s)!=1)return fail(s);
+        r=a733_camera_adopt(&s->token,token,r);
+        if(r<0 || tick(s)!=1)return fail(s);
         if(r) { s->owner=A733_CAMERA_DEVICE;s->state=A733_CAM_DMA_CHECK; }
         return 0;
     case A733_CAM_DMA_CHECK:

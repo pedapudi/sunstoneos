@@ -83,10 +83,25 @@ admitted values. The sensor retains its existing 24 MHz input-clock requirement.
 ## Frame completion precedes shutdown, drain and CPU visibility
 
 The coordinator waits for the native DMA controller to observe `CAPTURE_DONE`.
-`FRAME_DONE` alone cannot advance the transaction. On completion, the native
-sensor driver stops packets and verifies its control registers. A separate
-packet-quiescence callback must prove that no in-flight ingress can change
-receiver status; sensor register readback alone is insufficient.
+`FRAME_DONE` alone cannot advance the transaction. On completion, the
+coordinator first reads packet-port status (`0x118`) and parser status (`0x44`)
+and records both words in `frame_status` without acknowledging them. The native
+sensor driver then stops packets and verifies its control registers. The stop
+writes `0x300e` before `0x4202`, the order used by the Linux reference driver.
+
+The recorded words are diagnostics. They do not change which captures fault.
+When the later sample faults on an error bit that the record lacks, the error
+arrived while the sensor was stopping, after the captured frame had ended.
+Whether the OV5640 stop can truncate a packet on this receiver is not known
+from hardware; this record supplies that evidence from a board run.
+
+In the close path, a separate packet-quiescence callback must then prove that
+no in-flight ingress can change receiver status; sensor register readback
+alone is insufficient. The retained readout described below omits this
+callback. Its receiver stays armed after the parser read confirms that SCAP has
+cleared, so the parser accepts no later frame. Before SCAP is written again,
+the rearm sequence requires two stopped-sensor intervals and status with no
+flag set.
 
 The native CSI controller then samples and checks packet/parser errors. A
 native parser read must show every capture-enable field clear, confirming the

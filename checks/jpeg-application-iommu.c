@@ -1,4 +1,5 @@
 #include "a733_iommu.h"
+#include "input.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,8 +22,10 @@ int main(int argc,char **argv)
 {
     (void)argv;assert(argc==1||argc==2);
     struct a733_iommu_tables tables;
-    const struct a733_iommu_span spans[]={{0x10001000,0x41c01000,4096,1},{0x10005000,0x41c05000,4096,2},{0x10009000,0x41c09000,4096,2}};
-    assert(a733_iommu_build(&tables,table,0x41c10000,spans,3)==1);
+    /* Largest admitted job: table, then each buffer between guard pages. */
+    const struct a733_iommu_span spans[]={{JPEG_INPUT_IOVA,0x41c09000,JPEG_INPUT_CAPACITY,1},
+        {JPEG_LUMA_IOVA,0x41c8b000,JPEG_PLANE_CAPACITY,2},{JPEG_CHROMA_IOVA,0x41cd8000,(JPEG_PLANE_CAPACITY/2u+4095u)&~4095u,2}};
+    assert(a733_iommu_build(&tables,table,0x41c00000,spans,3)==1);
     const struct a733_iommu_ops ops={now,admit,rd,wr,publish};
     if(argc==1)for(unsigned drained=0;drained<2;++drained){
         struct model m={.drained=drained};struct a733_iommu i={0};
@@ -34,7 +37,13 @@ int main(int argc,char **argv)
         m.regs[0x10638/4]=1;assert(a733_iommu_scan(&i,30000)==1&&poll(&i)==-1&&i.fault.micro_status[5]==1);
         assert(i.admission.token==9);
     }
-    uint64_t pa;assert(a733_iommu_translate(&tables,0x10001000,1,&pa)==1&&pa==0x41c01000);
-    assert(a733_iommu_translate(&tables,0x10001000,2,&pa)==-1&&a733_iommu_translate(&tables,0x10000000,1,&pa)==-1);
+    uint64_t pa;assert(a733_iommu_translate(&tables,JPEG_INPUT_IOVA,1,&pa)==1&&pa==0x41c09000);
+    assert(a733_iommu_translate(&tables,JPEG_INPUT_IOVA,2,&pa)==-1&&a733_iommu_translate(&tables,0x10000000,1,&pa)==-1);
+    /* Each span ends at its last page; the next IOVA page is unmapped. */
+    for(unsigned i=0;i<3;++i){
+        uint64_t last=spans[i].iova+spans[i].bytes-1;unsigned access=spans[i].access;
+        assert(a733_iommu_translate(&tables,last,access,&pa)==1&&pa==spans[i].physical+spans[i].bytes-1);
+        assert(a733_iommu_translate(&tables,last+1,access,&pa)==-1&&a733_iommu_translate(&tables,last+1,3-access,&pa)==-1);
+    }
     puts("JPEG decoder IOMMU: only6/7 micro MMIO, full prior drain, guards and retained fault passed");return 0;
 }

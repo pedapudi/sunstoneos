@@ -6,6 +6,7 @@
  * Copyright (c) 2007-2017 Allwinnertech Co., Ltd.
  */
 #include "a733_csi_receiver.h"
+#include "a733_camera_common.h"
 #include <stddef.h>
 #include <stdint.h>
 #define COUNT(a) (sizeof(a)/sizeof((a)[0]))
@@ -82,15 +83,7 @@ static const struct step precheck[] = {
 static int fault(struct a733_csi_receiver *s) { s->state=A733_CSI_FAULT; return -1; }
 static int tick(struct a733_csi_receiver *s)
 {
-    uint64_t n;
-    if (s->ops.now_us(s->context,&n)!=1 || n<s->now || n>=s->deadline)
-        return fault(s);
-    s->now=n;return 1;
-}
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
+    return a733_camera_clock(s->ops.now_us,s->context,&s->now,s->deadline)?1:fault(s);
 }
 int a733_csi_init(struct a733_csi_receiver *s,const struct a733_csi_ops *ops,
                   void *context,const struct a733_csi_config *cfg)
@@ -98,8 +91,9 @@ int a733_csi_init(struct a733_csi_receiver *s,const struct a733_csi_ops *ops,
     if (!s || !ops || !cfg || s->initialized || s->state!=A733_CSI_NEW ||
         cfg->port>1 || cfg->parser!=cfg->port || !cfg->settle ||
         !cfg->deskew || cfg->deskew>31 || cfg->top_hz!=324000000 ||
-        overlap(s,sizeof(*s),ops,sizeof(*ops)) || overlap(s,sizeof(*s),cfg,sizeof(*cfg)) ||
-        (context && overlap(s,sizeof(*s),context,1)) || !ops->now_us ||
+        a733_camera_overlap(s,sizeof(*s),ops,sizeof(*ops)) ||
+        a733_camera_overlap(s,sizeof(*s),cfg,sizeof(*cfg)) ||
+        (context && a733_camera_overlap(s,sizeof(*s),context,1)) || !ops->now_us ||
         !ops->admit || !ops->read || !ops->write || !ops->producer_stop ||
         !ops->drain || !ops->release) return -1;
     *s=(struct a733_csi_receiver){.ops=*ops,.config=*cfg,.context=context,.initialized=1};
@@ -187,9 +181,8 @@ int a733_csi_poll(struct a733_csi_receiver *s)
     switch(s->state) {
     case A733_CSI_ADMIT:
         token=s->token;r=s->ops.admit(s->context,&s->config,s->deadline,&token);
-        if(s->token && token!=s->token)return fault(s);
-        if(!s->token)s->token=token;
-        if(r<0 || r>1 || (r && !s->token) || tick(s)!=1)return fault(s);
+        r=a733_camera_adopt(&s->token,token,r);
+        if(r<0 || tick(s)!=1)return fault(s);
         if(r)s->state=A733_CSI_PRECHECK;
         return 0;
     case A733_CSI_PRECHECK: {

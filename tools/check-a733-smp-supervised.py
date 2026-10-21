@@ -240,6 +240,80 @@ def claimed(database,test_id,owner,bundle,admission,prepared):
     finally: db.close()
 
 
+# Claim and software-evidence validation shared by the device capture tools.
+# Each tool passes its own label, which names the device in refusals, its
+# prerequisites and its software-evidence schema and result flags.
+
+
+def reviewed_reference(value,label):
+    """Return the resolved path and bytes of an absolute review reference whose SHA-256 still matches."""
+    require(isinstance(value,dict) and set(value)=={'path','sha256'},'Invalid '+label+' review reference.')
+    path=Path(value['path']);require(path.is_absolute(),label+' review path must be absolute.')
+    data=path.read_bytes()
+    require(hashlib.sha256(data).hexdigest()==value['sha256'],label+' review reference changed.')
+    return path.resolve(),data
+
+
+def device_software_sources(sources):
+    """A device tool's own source files plus this tool, the base tool and the observer tool."""
+    paths=dict(sources)
+    paths.update({'supervised-host-tool.py':Path(__file__),
+                  'base-host-tool.py':Path(base.__file__),
+                  'observer-host-tool.py':Path(observer.__file__)})
+    return paths
+
+
+def validate_device_software(value,prepared,schema,flags,label,reference):
+    """Require software evidence that covers the admitted image, launcher and every host source.
+
+    reference is the device tool's own review-reference reader.
+    """
+    require(value.get('schema')==schema and value.get('physical_access') is False and
+            all(value.get(k) is True for k in flags),
+            label+' software evidence is incomplete.')
+    for key,name in [('image','image.elf'),('launcher','launch.bin')]:
+        _,data=reference(value[key])
+        require(hashlib.sha256(data).hexdigest()==prepared['files'][name],
+                'Software evidence covers different initially admitted executable bytes.')
+    require(set(value.get('sources',{}))==set(prepared['_source_hashes']),'Software source identities are incomplete.')
+    for name,expected in prepared['_source_hashes'].items():
+        _,data=reference(value['sources'][name])
+        require(hashlib.sha256(data).hexdigest()==expected,'Software evidence covers another implementation: '+name)
+    require(value.get('evidence'),'Software result evidence is missing.')
+    for item in value['evidence']:reference(item)
+
+
+def device_claim(database,test_id,owner,bundle,prepared,label,software,prerequisites,reference,validate):
+    """Require the coordinator's claim of this prepared device bundle.
+
+    The queue must not be halted, the row must be claimed by owner, and its
+    submission and review must name exactly prerequisites. The reviewed
+    supervised-ram-recovery entry must be this bundle's admission.json, the
+    software prerequisite must pass validate, and the submitted artifacts
+    must cover prepared.json, image.elf and launch.bin.
+    """
+    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
+    try:
+        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],label+' queue is halted.')
+        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
+        require(row is not None and row['state']=='claimed' and row['owner']==owner,'Matching coordinator claim is required.')
+        submission,review=json.loads(row['submission']),json.loads(row['review'])
+        require(set(submission['prerequisites'])==prerequisites and set(review['prerequisites'])==prerequisites,label+' prerequisites differ.')
+        refs=review['prerequisites']
+        path,data=reference(refs['supervised-ram-recovery'])
+        require(path==(bundle/'admission.json').resolve() and hashlib.sha256(data).hexdigest()==prepared['files']['admission.json'],
+                'Reviewed entry differs from the initially admitted '+label+' entry.')
+        _,data=reference(refs[software]);validate(json.loads(data),prepared)
+        covered={}
+        for value in submission['artifacts']:
+            path,data=reference(value);covered[path]=hashlib.sha256(data).hexdigest()
+        expected={'prepared.json':prepared['_prepared_sha256'],'image.elf':prepared['files']['image.elf'],
+                  'launch.bin':prepared['files']['launch.bin']}
+        require(all(covered.get((bundle/name).resolve())==h for name,h in expected.items()),
+                'Queue does not cover the initially admitted prepared image.')
+    finally:db.close()
+
+
 def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result"):
     require(not record.get('launch_attempted'), 'One supervised attempt only.')
     base.preload(transaction,bundle,prepared,evidence)

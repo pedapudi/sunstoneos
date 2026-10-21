@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Include after gpu.cmake. Reuse its pinned firmware and privileged SMP port.
 if(SUNSTONE_GPU_FIRMWARE)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/platform.c" gpu_irq_platform)
@@ -21,9 +22,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   target_compile_definitions(gpu-irq-model PRIVATE
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
   target_compile_options(gpu-irq-model PRIVATE
-    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-    -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-    -O2 -g -Wall -Wextra -Werror -fstack-usage)
+    ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
   target_link_options(gpu-irq-model PRIVATE -nostdlib -static -Wl,--gc-sections
     "-Wl,-T,${gpu_service_linker}"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-irq-model.map")

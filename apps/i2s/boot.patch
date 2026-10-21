@@ -1,9 +1,29 @@
 --- boot.c
 +++ boot-i2s.c
-@@ -88,3 +88,5 @@
--    if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+@@ -3,6 +3,7 @@
+ #endif
+ #include "cached.h"
+ #include "session.h"
++#include "irq_table.h"
+ #include "a733_cpu_continue.h"
+ #include <stddef.h>
+ static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
+@@ -82,6 +83,8 @@
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
 +    extern int i2s_session_prepare(const struct a733_smp_contract *);
 +    if(!i2s_session_prepare(&admission))a733_smp_stop(3,0x30b);
-+    if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
  #ifdef SUNSTONE_MIMUS_NATIVE
+@@ -99,6 +102,9 @@
+     for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
+     wait_clear(0x03400000,1u<<31);
+     write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
++    /* The image's fixed SPI table, configured while both groups are disabled.
++     * The DMA service enables its source through the first rearm. */
++    if(!a733_irq_table_route(admission.startup_deadline,a733_smp_counter))a733_smp_stop(3,0x310);
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));

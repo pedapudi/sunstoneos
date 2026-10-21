@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Production SD mode package, wire discriminator and copied capture checks."""
-import argparse,hashlib,importlib.util,json,struct,time
+import argparse,hashlib,importlib.util,json,struct,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'checks'))
+import harness
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def refused(call):
@@ -24,7 +26,7 @@ def run(image,manifest,evidence):
  out=evidence/'host';out.mkdir(parents=True,exist_ok=False);results={}
  for profile,label in ((1,'default'),(2,'hs')):
   fixture=evidence/('fixture-'+label);bundle=out/f'bundle-{profile}'
-  prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,'/usr/bin/clang-21','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+  prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,str(harness.CLANG),str(harness.LLD))
   frozen=host.freeze_bundle(bundle);session=frozen['_frozen']['session.bin'];raw_fixture=(fixture/'session-template.bin').read_bytes()
   frames=[]
   for name in ('idle-frame.bin','read-frame.bin','second-frame.bin'):

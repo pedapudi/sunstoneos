@@ -58,6 +58,19 @@ quarantined. Supervised runners repeat the check with the final claim check
 immediately before native entry. A claim in one board's queue therefore cannot
 authorize a launch through these runners on the other board.
 
+Eighteen device runners, for example `tools/check-a733-hevc-supervised.py`,
+check their claim through `device_claim` in `tools/check-a733-smp-supervised.py`.
+It refuses a halted queue, a test that the given owner has not claimed, a
+prerequisite set other than the runner's, a reviewed entry other than the
+bundle's `admission.json`, software evidence that does not cover the admitted
+image, launcher and host sources, and submitted artifacts that do not cover
+`prepared.json`, `image.elf` and `launch.bin`. Each runner supplies its device
+label, prerequisites and software-evidence schema and result flags. A change to
+these rules therefore applies to all eighteen runners. The board, accelerator,
+GPU display, NPU, combined mimus board, integrated OS and multicore observer
+runners keep their own claim checks. `checks/audit-build-harness-supervised-claims.py`
+records every runner's decision for a valid claim and for each tampered field.
+
 The other runners that read queue claims do not check the binding:
 `tools/check-a733-device-launch.py`, `tools/check-a733-storage-launch.py`,
 `tools/check-a733-smp-observe.py`, `tools/run-a64-entry-probe.py`,

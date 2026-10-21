@@ -90,3 +90,7 @@ current evidence establishes no such cause. Prefer one useful voltage observatio
 or a controlled comparison with a verified 5 V / 3 A source over repeated stress
 runs. Any alternate supply arrangement must preserve USB data and avoid feeding
 power back into the host.
+
+Raising CPU clocks and voltages through the [CPU clock driver](cpu-clock.md)
+increases the board's current draw. Its physical use therefore also depends on
+this unmeasured supply under load.

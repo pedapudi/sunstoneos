@@ -107,17 +107,29 @@ the function-1 FIFO, and the implementation follows that published route.
 
 Receive requests use fixed FIFO address `0x0f`. Byte-mode transfers contain at
 most 512 bytes; larger transfers must be multiples of 512. Every transfer is
-whole-word aligned in length and bounded by the owned 4,096-byte receive buffer.
-The controller itself moves at most 16 FIFO words per poll at one bit, or one
-512-byte block at four bits, and requires its completion events in addition to
-FIFO progress.
+whole-word aligned in length. Function-1 status values 1 to 112 report that
+many 512-byte blocks; values 113 to 127 select byte mode or the function-2
+encoding. The owned receive buffer therefore holds 57,344 bytes, the largest
+block-mode report.
+
+One CMD53 reads the complete reported aggregate. The [source receive
+path][sdio] reads the reported length with a single `sdio_readsb` call, and
+the [Linux SDIO helper][io] splits a transfer only above 511 blocks or the host's
+block-count limit, 8,192 for the Allwinner controller. Firmware acceptance of an
+aggregate drained by several separate CMD53 reads is not established, so the
+transport does not split one. The configured command timeout applies to each
+started 4,096 bytes of a receive transfer: a 10-block read gets two timeouts.
+At one bit and 400 kHz, 4,096 bytes need about 82 ms of bus time. The runtime
+lease deadline still bounds every transfer. The controller itself moves at most
+16 FIFO words per poll at one bit, or one 512-byte block at four bits, and
+requires its completion events in addition to FIFO progress.
 
 The source's miscellaneous interrupt bit `0x80` enters a separate soft-interrupt
 path that clears a pending bit. The native transport does not claim that path is
 implemented. It retains the raw status and enters a terminal unsupported-interrupt
-fault without clearing a device or controller interrupt. Oversized or invalid
-receive lengths similarly fail before a FIFO read. These limits are explicit
-qualification boundaries, even if ordinary identity replies fit within them.
+fault without clearing a device or controller interrupt. A byte-mode length
+over 512 bytes and any length beyond the receive buffer similarly fail before a
+FIFO read. These limits are explicit qualification boundaries.
 
 Card-level interrupt generation is enabled during setup, but controller/GIC
 delivery remains disabled. The transport polls status and never acknowledges the
@@ -182,10 +194,21 @@ without running that model's independent test suite. The integrated fixture cove
   both pad choices, and the required settling interval.
 - Credit backpressure, two identity reads, fixed FIFO addressing, zero transmit
   padding, and retained unrelated responses before a matching confirmation.
-- Oversized receive length, an unsupported interrupt reason, malformed byte-mode
-  response, partial FIFO failure, and a setup write that takes effect before failure.
+- A 10-block aggregate holding three 1,500-byte records before the setup-write
+  confirmation, which starts at byte 4,512. One CMD53 reads all 5,120 bytes,
+  with a deadline of two command timeouts, and every record is parsed in order.
+- A byte-mode length over 512 bytes, an unsupported interrupt reason, malformed
+  byte-mode response, partial FIFO failure, and a setup write that takes effect
+  before failure.
 - Deadline expiry while waiting for credit or holding an unrelated message,
   with retained state and no backend access after fault.
+
+[checks/radio-transport-aggregate.py](../checks/radio-transport-aggregate.py)
+runs the same model after runtime start, with the native dispatcher as receive
+owner. One CMD53 reads an 18-block aggregate holding three 1,500-byte data
+records, a 4,604-byte print record and an unrelated control message. The
+dispatcher retires all five in order and keeps a diagnostic copy of the print
+record truncated to 4,096 bytes.
 
 The function-setup and receive-boundary evidence remains under
 `~/.cache/sunstoneos/evidence/radio-transport-20261016/model-corrected/`.

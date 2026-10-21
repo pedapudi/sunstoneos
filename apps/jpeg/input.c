@@ -9,12 +9,17 @@ static uint64_t le64(const uint8_t *p){return le32(p)|((uint64_t)le32(p+4)<<32);
 static int present(const uint8_t *p){uint8_t v=0;for(unsigned i=0;i<32;++i)v|=p[i];return v!=0;}
 int jpeg_input_geometry(struct jpeg_input *p,const struct a733_video_jpeg *j)
 {
-    if(!p||!j||!j->width||!j->height||j->width>128||j->height>128)return 0;
+    if(!p||!j||!j->width||!j->height||j->width>1920||j->height>1080)return 0;
     uint32_t w=j->width,h=j->height,stride=(w+31u)&~31u,rows=(h+31u)&~31u;
     uint32_t luma=stride*rows,chroma=luma/2u,output=w*h+2u*((w+1u)/2u)*((h+1u)/2u);
     if(luma>JPEG_PLANE_CAPACITY||chroma>JPEG_PLANE_CAPACITY||output>JPEG_OUTPUT_CAPACITY)return 0;
     p->width=w;p->height=h;p->stride=stride;p->rows=rows;
     p->luma_bytes=luma;p->chroma_bytes=chroma;p->output_bytes=output;return 1;
+}
+uint32_t jpeg_input_mapped(const struct jpeg_input *p,unsigned buffer)
+{
+    size_t n=buffer==0?p->input_bytes:buffer==1?p->luma_bytes:p->chroma_bytes;
+    return (uint32_t)((n+4095u)&~(size_t)4095u);
 }
 int jpeg_input_ready(const struct jpeg_input *p)
 {return p&&atomic_load_explicit(&p->committed,memory_order_acquire)==1;}
@@ -51,7 +56,7 @@ int jpeg_input_feed(struct jpeg_input *p,const struct a733_jpeg_session *s,
         return 0;
     }
     if(p->received<p->input_bytes)memcpy(p->bytes+p->received,bytes,n);
-    else memcpy(p->oracle+p->received-p->input_bytes,bytes,n);
+    else memcpy(p->oracle+(p->received-p->input_bytes),bytes,n);
     p->received+=n;
     if(p->received!=p->input_bytes+p->oracle_bytes)return 0;
     uint8_t digest[32];struct a733_video_jpeg picture;

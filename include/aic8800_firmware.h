@@ -22,6 +22,11 @@ struct aic8800_firmware_config {
     /* Only profile 1: normal SDIO, shared antenna, UART 1.5M with flow control
      * and low-power signaling, AMSDU receive, no OOB/adaptivity/RF-test overrides. */
     unsigned profile;
+    /* 0: write each Bluetooth table pair separately, as the pinned source does.
+     * 1: write runs of at least 16 consecutive radio-RAM words within one record
+     * as 1,024-byte block writes. Unqualified on hardware; keep 0 until a
+     * readback of the written region confirms the result. */
+    uint8_t table_bursts;
 };
 struct aic8800_firmware {
     struct aic8800_firmware_config config;
@@ -33,6 +38,7 @@ struct aic8800_firmware {
     uint32_t pointers[4];
     size_t hash_offset, table_offset, image_offset, request_bytes;
     uint32_t table_type, table_pairs, pair_index, last_status, bootstatus;
+    uint32_t table_burst; /* Pairs in the outstanding table block write, else 0. */
     uint32_t expected_address, last_response[2], first_nonzero_block_status;
     uint16_t last_response_message;
     uint16_t expected_message;

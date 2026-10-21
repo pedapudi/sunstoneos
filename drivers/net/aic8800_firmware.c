@@ -37,7 +37,7 @@ static int observe(struct aic8800_firmware *f, uint64_t now)
 int aic8800_firmware_init(struct aic8800_firmware *f, const struct aic8800_firmware_config *c)
 {
     if (!span(f,sizeof(*f)) || !span(c,sizeof(*c)) || overlap(f,sizeof(*f),c,sizeof(*c)) ||
-        f->initialized || c->profile != 1) return 0;
+        f->initialized || c->profile != 1 || c->table_bursts > 1) return 0;
     struct aic8800_sdio_response chip={.is_memory_read=1,.address=AIC8800_SDIO_CHIP_ADDRESS,.value=c->identity.chip_word};
     struct aic8800_sdio_response sub={.is_memory_read=1,.address=AIC8800_SDIO_SUBREV_ADDRESS,.value=c->identity.subrevision_word};
     struct aic8800_radio_identity id;
@@ -113,6 +113,18 @@ static void image_step(struct aic8800_firmware *f,unsigned role,uint32_t address
     packet(f,0x040b,1032);put32(f->request+16,address+(uint32_t)f->image_offset);put32(f->request+20,(uint32_t)bytes);
     for(size_t i=0;i<bytes;++i)f->request[24+i]=b->data[f->image_offset+i];
 }
+/* Table bursts cover consecutive word addresses below the 0x40000000 register
+ * space, within one record, and only where they replace many word writes. */
+#define BURST_MIN_PAIRS 16u
+#define BURST_MAX_PAIRS 256u
+static uint32_t table_run(const struct aic8800_firmware *f,const uint8_t *pairs)
+{
+    uint32_t first=le32(pairs+f->pair_index*8),n=0;
+    if(!f->config.table_bursts||f->table_type==3||(first&3))return 0;
+    while(n<BURST_MAX_PAIRS&&f->pair_index+n<f->table_pairs&&
+        le32(pairs+(f->pair_index+n)*8)==first+4*n&&first+4*n<0x40000000u)++n;
+    return n>=BURST_MIN_PAIRS?n:0;
+}
 static void prepare_step(struct aic8800_firmware *f)
 {
     const uint8_t *table=f->config.blobs[AIC8800_BT_TABLE].data;
@@ -125,6 +137,13 @@ static void prepare_step(struct aic8800_firmware *f)
         if(f->table_offset==f->config.blobs[AIC8800_BT_TABLE].bytes){f->bt_patch_applied=1;f->phase=LOAD_WIFI;break;}
         if(!record(f)){aic8800_firmware_stop(f,f->owner,AIC8800_FW_FORMAT_ERROR);break;}
         if(f->table_type==6){f->table_offset+=24+(size_t)f->table_pairs*8;break;}
+        f->table_burst=table_run(f,table+f->table_offset+24);
+        if(f->table_burst){
+            const uint8_t *pair=table+f->table_offset+24+f->pair_index*8;
+            packet(f,0x040b,1032);put32(f->request+16,le32(pair));put32(f->request+20,f->table_burst*4);
+            for(uint32_t i=0;i<f->table_burst;++i)put32(f->request+24+4*i,le32(pair+8*i+4));
+            break;
+        }
         word_write(f,le32(table+f->table_offset+24+f->pair_index*8),f->table_type==3?mode[f->pair_index]:
             le32(table+f->table_offset+28+f->pair_index*8));break;
     case LOAD_WIFI:image_step(f,AIC8800_WIFI_IMAGE,0x120000);break;
@@ -159,17 +178,23 @@ int aic8800_firmware_sent(struct aic8800_firmware *f,const void *owner)
     if(!f||!f->initialized||!owner||f->owner!=owner||f->state!=AIC8800_FW_REQUEST)return 0;
     f->state=AIC8800_FW_WAITING;return 1;
 }
+static void block_status(struct aic8800_firmware *f,const struct aic8800_sdio_response *r)
+{
+    f->last_status=le32(r->parameters);
+    if(f->last_status&&!f->first_nonzero_block_status)f->first_nonzero_block_status=f->last_status;
+}
 static void advance(struct aic8800_firmware *f,uint64_t now,const struct aic8800_sdio_response *r)
 {
     f->state=AIC8800_FW_PREPARING;
     if(f->phase==LOAD_ADID||f->phase==LOAD_BT_PATCH||f->phase==LOAD_WIFI){
         unsigned role=f->phase==LOAD_ADID?AIC8800_BT_ADID:f->phase==LOAD_BT_PATCH?AIC8800_BT_PATCH:AIC8800_WIFI_IMAGE;
         size_t left=f->config.blobs[role].bytes-f->image_offset;f->image_offset+=left>1024?1024:left;
-        f->last_status=le32(r->parameters);
-        if(f->last_status&&!f->first_nonzero_block_status)f->first_nonzero_block_status=f->last_status;
+        block_status(f,r);
         if(f->image_offset==f->config.blobs[role].bytes){f->image_offset=0;++f->phase;}
     }else if(f->phase==APPLY_BT_TABLE){
-        if(++f->pair_index==f->table_pairs){
+        if(f->table_burst)block_status(f,r);
+        f->pair_index+=f->table_burst?f->table_burst:1;f->table_burst=0;
+        if(f->pair_index==f->table_pairs){
             f->pair_index=0;f->table_offset+=24+(size_t)f->table_pairs*8;
             if(f->table_type==4){
                 if(f->power_delay_ticks>UINT64_MAX-now){aic8800_firmware_stop(f,f->owner,AIC8800_FW_TIME_ERROR);return;}

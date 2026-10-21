@@ -106,6 +106,26 @@ build type, and the compile options and definitions of the image targets. The
 board inputs include the private headers in `network/include`, `drivers/usb`
 and `drivers/usb/host`. Text recorded from flags uses the fixed names above, so
 moving the checkout or the build directory leaves an identity unchanged.
+
+Applications derived from the supervised board image, such as
+`sunstone-a733-thermal`, `sunstone-a733-crypto` and `sunstone-a733-h264`, are
+defined through `sunstone_board_application` in
+[cmake/a733-board-application.cmake](../cmake/a733-board-application.cmake).
+The function keeps the board's sources, compile options, include directories
+and definitions, and replaces the board's USB0 owner, admission, boot and
+contract magics with the application's. Each recipe lists only what differs:
+its sources, its boot and platform patches, extra definitions, the linker
+script and its identity inputs. The function's `sunstone_build_identity`, also
+used by `sunstone-a733-pcie-test`, hashes the input files, the compiler and
+`ld.lld` binaries, the configuration flags, and the compile definitions,
+options, include directories and link options of the image and its USB2 host
+objects. A change to `CMAKE_C_FLAGS` therefore changes the build ID. Beside
+the image, the application's build directory holds `build-id.txt`,
+`identity-inputs.txt`, `identity-options.txt` with the hashed option text, and,
+after each link, `manifest.json` with the build ID and the SHA-256 of the final
+ELF. `build-id.c` is rewritten only when the ID changes, so reconfiguring does
+not relink an unchanged image.
+
 `checks/build-identity.py` configures two copies of the repository and checks
 these properties; pass the usual cache options after `--`:
 
@@ -129,6 +149,40 @@ from current source. Recorded paths under the original worktree are mapped to
 the current tree. A recorded header that remains in another git checkout, such
 as a different worktree, is also refused, because comparing it with that
 checkout would not test the current tree.
+
+The returning images link a finite client against one returning platform:
+the monitor, boot, I2C and FreeRTOS objects of the `a733-power-probe` target
+and the counter, lock, clock, rail, PMIC, pin, GPU-resource, task and queue
+units of the PMIC provider probe, which use the probe's FreeRTOS configuration
+in `checks/pmic-provider-probe`. `ReturningPlatform` in
+`tools/returning_build.py` supplies that platform to these builders:
+
+| Builder | Images |
+| --- | --- |
+| `apps/rtc-returning/build.py` | read-only RTC client and its check-only policy ELF |
+| `apps/rtc-source-returning/build.py` | RTC source initialization, or alarm with `--operation alarm` |
+| `apps/thermal-returning/build.py` | thermal client, or ADC client with `--device adc` |
+| `apps/npu-returning/build.py` | NPU supply client |
+| `apps/usb-returning/build.py` | finite USB client |
+
+By default the platform is the accepted objects of the
+`pmic-provider-probe-20261018` evidence, with the header check described
+above. Recorded compile flags are mapped from the checkout named in that
+evidence's source snapshot to the current repository. With
+`--platform-build <dir>`, where `<dir>` is a central build directory configured
+from this checkout with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, the builder
+builds `a733-power-probe` there, links its platform objects and compiles the
+provider units from the current tree with that target's flags, the provider
+probe's configuration and `-Werror`. Such an
+image depends on no earlier evidence, and its `input-identities.json` records
+the platform objects and the provider units' header closure. The USB builder
+also links accepted TinyUSB objects that exist only in evidence, so it accepts
+only the evidence platform.
+
+`apps/npu-finite/build.py` rebuilds the single-core NPU application from its
+recorded configuration and replaces its monitor and platform exit;
+`--interrupt`, which `apps/npu-interrupt/build.py` passes, selects the
+interrupt-driven variant.
 
 The patched FEL recovery tool is built only on the host:
 
