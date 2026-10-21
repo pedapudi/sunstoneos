@@ -124,6 +124,63 @@ Publication cleans owned ranges and issues `DSB SY`. It cannot repair an
 unknown firmware cache alias, drain another bus master or recover a stalled bus.
 A software deadline cannot bound an instruction blocked by the interconnect.
 
+## Resident contract
+
+Defining `SUNSTONE_A733_RESIDENT` selects a contract for an image that runs
+after a cold boot from the microSD card instead of under the FEL host. Its
+contract magic is `0x4153373352455331` and its result magic is
+`0x4153373352525331`, so neither kind of contract admits the other kind of
+image. The stage-2 loader is its intended producer. It must arm the watchdog
+before it publishes the contract.
+
+| Field | FEL-launched contract | Resident contract |
+| --- | --- | --- |
+| Diagnostic deadline | One second or more before watchdog expiry | `UINT64_MAX`: the interrupt path never stops on time |
+| Watchdog window | Four seconds from `armed_at`, never renewed | Four seconds from `armed_at`; a supervising task renews it |
+| FEL flag, redirect flag and entry | `0x5aa5a55a`, `0xfa50392f`, `0x20` | All zero |
+| Startup deadline | At most one second after admission | Same, and before the first watchdog expiry |
+
+The armed watchdog is the only bound on a hang in a resident image. A
+resident image must therefore link a supervising task that renews the watchdog
+only while every service reports progress. A stalled service then lets the
+watchdog reset the board into a cold boot. The resident contract is
+implemented and host-checked only. Its physical use needs the watchdog-expiry
+recovery trial, remote-writer exclusion and a stage-2 loader that produces it.
+
+`checks/a733-resident-contract.c` compiles the admission code both ways and
+checks the nominal contract plus every refusal listed above:
+
+```sh
+clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
+  -DSUNSTONE_A733_RESIDENT checks/a733-resident-contract.c -o resident && ./resident
+```
+
+## A fixed interrupt table serves images with several device owners
+
+Defining `SUNSTONE_A733_IRQ_TABLE` adds one dispatch step to the shared
+interrupt handler, after the timer and SGI cases. The image defines a constant
+table, `a733_irq_routes`, with one entry per shared peripheral interrupt: its
+interrupt ID, the one core that handles it, its GIC priority byte and its
+handler. [irq_table.c](../platform/a733-smp-cached/irq_table.c) provides:
+
+- `a733_irq_table_valid`: every ID is a distinct SPI, every core exists, every
+  handler is set, and every priority is numerically at least `0xb0`, the
+  FreeRTOS API ceiling in the secure-monitor configuration.
+- `a733_irq_table_route`: run once at EL3 by the primary boot, before groups
+  are re-enabled. It programs each entry as a level-sensitive nonsecure
+  Group 1 SPI routed to its core, then reads every register back. It refuses
+  before writing anything if the groups are enabled, a write is pending, an
+  entry is already enabled, pending or active, or the deadline has passed.
+  Enabling each source stays with its device owner.
+- `a733_irq_table_dispatch`: runs the handler routed to the interrupt and
+  core. An interrupt outside the table, or delivered to another core, keeps
+  the existing status-4 stop.
+
+Images built without the definition, including every existing device image
+and its `platform.patch`, compile the handler unchanged. The host model
+`checks/a733-irq-table.c` covers validation, dispatch, route programming and
+nine refusals against a modeled distributor.
+
 ## Build and evidence
 
 Build the separate target with the pinned FreeRTOS source and AArch64 toolchain:
