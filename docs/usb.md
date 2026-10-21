@@ -171,20 +171,41 @@ recovery. Those checks remain part of the USB qualification issue.
 ## Native application USB0 service
 
 Supervised native applications own USB0 through the board providers and
-expose a vendor result channel on the same endpoints. The shared header
-`apps/board/usb0_service.h` supplies their device, configuration, qualifier
-and string descriptors from a per-image identity: product ID, device revision
-and product, serial and interface strings. It also supplies the TinyUSB
-platform hooks, the provider startup and the service loop, and each
-application keeps its own failure policy, exchange and transmit accounting.
+expose a vendor result channel on the same endpoints. Most applications
+derived from the board image include the shared header
+`apps/board/usb0_service.h`.
+It supplies their device, configuration, qualifier and string descriptors
+from a per-image identity: product ID, device revision and product, serial and
+interface strings. It also supplies the TinyUSB platform hooks, the provider
+startup and the service loop. Each application keeps its own failure policy,
+exchange and transmit accounting.
 
-The loop uses the same burst rules as the diagnostics runtime and rechecks
-application liveness and provider health on every pass. Applications with
-their own provider checks, such as the GPU display and HDMI audio captures and
-the NPU and accelerator owners, use the burst alone. The board image's failure
-path parks only USB0. An image that reuses the board's USB0 source can add its
-own revocation by defining `BOARD_USB0_STOP()`; the mimus board image uses it
-to fail the board and revoke Type-C.
+Each image has a build ID: a SHA-256 digest of its listed source, header and
+patch inputs, which evidence and fixture records use to name the binary. A
+change to the shared header must change the build ID of every image that
+compiles it, so only images whose build identity hashes every `apps/board/*.h`
+file may include it. The board image and the images that inherit its board
+inputs qualify, as do the board, storage-read and eMMC single-core images.
+The images that use the header are the board image and the ADC, SPI, UART,
+PCIe, PCIe test, monitor, storage read, JPEG decode and encode, H.264 decode
+and encode, G2D, ISP0, deinterlace, HEVC, DisplayPort, Bluetooth and mimus
+board images.
+
+The camera, I2S, GPU render, GPU display, HDMI audio, accelerator, NPU
+runtime, NPU large-graph and DSI scanout images do not hash `apps/board/*.h`.
+Neither do the PWM, RTC, thermal and crypto single-core images, which compile
+the same USB source files as their multicore images. All of these application
+USB sources therefore keep their own copies of the descriptors, hooks and
+service loop. Those loops service one pass per tick, or eight passes per tick
+in the GPU display, HDMI audio, NPU large-graph and accelerator owners. Moving
+them to the shared header first requires adding the header to the build
+identity inputs of every image that compiles them.
+
+The shared loop uses the same burst rules as the diagnostics runtime and
+rechecks application liveness and provider health on every pass. The board image's failure path parks only
+USB0. An image that reuses the board's USB0 source can add its own revocation
+by defining `BOARD_USB0_STOP()`; the mimus board image uses it to fail the
+board and revoke Type-C.
 
 `checks/usb0-service-burst.py` runs the actual service loop against a modeled
 vendor stream, controller and host. With a 20 µs host turnaround it moves a

@@ -1,14 +1,18 @@
-/* Shared USB0 vendor device service for native applications.
+/* Shared USB0 vendor device service for native board applications.
  *
  * One FreeRTOS task owns TinyUSB, the polled sunxi DCD and one vendor
  * interface (bulk OUT 0x02, bulk IN 0x81). Include this header once from the
- * application's USB translation unit after defining its identity:
+ * application's USB translation unit after defining its identity and owner:
  *   USB0_PID, USB0_PRODUCT, USB0_SERIAL   required
+ *   USB0_LIVE(), USB0_PROVIDERS          required
  *   USB0_BCD (0x0100), USB0_INTERFACE ("Capture")   optional
- * An application that owns USB0 through the native board providers also
- * defines USB0_LIVE() and USB0_PROVIDERS, plus a static _Noreturn stop(void)
- * carrying its own failure and retention policy, before inclusion. That adds
- * the TinyUSB platform hooks, provider startup and usb0_service_run().
+ * and a static _Noreturn stop(void) carrying the application's own failure
+ * and retention policy. The header supplies the descriptors, the TinyUSB
+ * platform hooks, provider startup and usb0_service_run().
+ *
+ * Include it only from images whose build identity hashes the apps/board
+ * headers (board_inputs and the board single-core glob); in any other image a
+ * change here would not change the build ID.
  *
  * The service burst repeats one pass of TinyUSB, controller polling and the
  * application exchange while a pass makes progress: a queued controller event,
@@ -74,7 +78,6 @@ static inline void usb0_service_burst(void (*pass)(void))
     }
 }
 
-#ifdef USB0_PROVIDERS
 static unsigned polling;
 static void (*usb0_service_exchange)(void);
 void a733_usb_prepare(void)
@@ -98,5 +101,4 @@ static void usb0_service_pass(void)
 {if(!USB0_LIVE())stop();tud_task_ext(0,false);a733_usb_prepare();if(polling)dcd_int_handler(0);usb0_service_exchange();}
 static inline _Noreturn void usb0_service_run(void (*exchange)(void))
 {usb0_service_exchange=exchange;for(;;){usb0_service_burst(usb0_service_pass);vTaskDelay(1);}}
-#endif
 #endif

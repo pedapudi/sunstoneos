@@ -139,12 +139,27 @@ void a733_usb_trace(uint32_t event,uint32_t a,uint32_t b)
 void a733_usb_assert(void){stop();}
 uint32_t tusb_time_millis_api(void){return (uint32_t)(a733_smp_counter()/24000);}
 void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!owner())stop();vTaskDelay(pdMS_TO_TICKS(ms));}
-#define USB0_PID 0xefe8
-#define USB0_BCD 0x0110
-#define USB0_PRODUCT "sunstoneos GPU HDMI capture"
-#define USB0_SERIAL "sunstoneos-a733-gpu-display"
-#define USB0_INTERFACE "Observation"
-#include "../board/usb0_service.h"
+static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,
+    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefe8,.bcdDevice=0x0110,
+    .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
+static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
+static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
+static const tusb_desc_device_qualifier_t qualifier={.bLength=sizeof(tusb_desc_device_qualifier_t),.bDescriptorType=TUSB_DESC_DEVICE_QUALIFIER,.bcdUSB=0x200,.bMaxPacketSize0=64,.bNumConfigurations=1};
+uint8_t const *tud_descriptor_device_cb(void){return (const uint8_t *)&device;}
+uint8_t const *tud_descriptor_device_qualifier_cb(void){return (const uint8_t *)&qualifier;}
+uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
+{return index?NULL:(tud_speed_get()==TUSB_SPEED_HIGH?hs:fs);}
+uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index)
+{static uint8_t other[sizeof(hs)];if(index)return NULL;memcpy(other,tud_speed_get()==TUSB_SPEED_HIGH?fs:hs,sizeof(hs));other[1]=TUSB_DESC_OTHER_SPEED_CONFIG;return other;}
+uint16_t const *tud_descriptor_string_cb(uint8_t index,uint16_t language)
+{
+    (void)language;static uint16_t out[64];
+    static const char *const text[]={"","sunstoneos","sunstoneos GPU HDMI capture","sunstoneos-a733-gpu-display","Observation"};
+    if(!index){out[0]=0x0304;out[1]=0x0409;return out;}
+    if(index>=sizeof(text)/sizeof(*text))return NULL;
+    unsigned count=(unsigned)strlen(text[index]);if(count>63)return NULL;out[0]=(uint16_t)(0x0300|2*count+2);
+    for(unsigned i=0;i<count;++i)out[i+1]=(uint8_t)text[index][i];return out;
+}
 void tud_umount_cb(void){if(received||tx_active||app.observation.requests)stop();}
 void tud_suspend_cb(bool wake){(void)wake;if(received||tx_active||app.observation.requests)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
@@ -186,8 +201,6 @@ static void exchange(void)
     unsigned got=tud_vendor_read(request+received,count);if(got>count)stop();received+=got;
     if(received==sizeof(request)&&!gpu_display_observation_request(request,sizeof(request),exchange_deadline))stop();
 }
-/* Providers are checked once per tick; exchange rechecks ownership per pass. */
-static void service_pass(void){tud_task_ext(0,false);if(polling)dcd_int_handler(0);exchange();}
 void gpu_display_usb_task(void *unused)
 {
     (void)unused;if(!owner())stop();
@@ -197,7 +210,7 @@ void gpu_display_usb_task(void *unused)
     atomic_store_explicit(&app.usb_ready,1,memory_order_release);
     for(;;){
         if(!owner())stop();int r=providers();if(r<0)stop();if(!r){vTaskDelay(1);continue;}
-        usb0_service_burst(service_pass);
+        for(unsigned i=0;i<8;++i){tud_task_ext(0,false);if(polling)dcd_int_handler(0);exchange();}
         vTaskDelay(1);
     }
 }

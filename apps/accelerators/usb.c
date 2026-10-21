@@ -18,12 +18,31 @@ static int payload;
 static unsigned payload_admitted,tx_zlp;
 static uint32_t sequence;
 static uint8_t request[64],response[1040] __attribute__((aligned(64)));
-#define USB0_PID 0xefe8
-#define USB0_BCD 0x0105
-#define USB0_PRODUCT "sunstoneos GPU and NPU input"
-#define USB0_SERIAL "sunstoneos-a733-accelerators"
-#define USB0_INTERFACE "Result"
-#include "../board/usb0_service.h"
+static const tusb_desc_device_t device={
+    .bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,.bcdUSB=0x200,
+    .bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefe8,.bcdDevice=0x0105,
+    .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
+static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),
+    TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
+static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),
+    TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
+static const tusb_desc_device_qualifier_t qualifier={.bLength=sizeof(tusb_desc_device_qualifier_t),
+    .bDescriptorType=TUSB_DESC_DEVICE_QUALIFIER,.bcdUSB=0x200,.bMaxPacketSize0=64,.bNumConfigurations=1};
+uint8_t const *tud_descriptor_device_cb(void){return (const uint8_t *)&device;}
+uint8_t const *tud_descriptor_device_qualifier_cb(void){return (const uint8_t *)&qualifier;}
+uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
+{return index?NULL:(tud_speed_get()==TUSB_SPEED_HIGH?hs:fs);}
+uint8_t const *tud_descriptor_other_speed_configuration_cb(uint8_t index)
+{static uint8_t other[sizeof(hs)];if(index)return NULL;memcpy(other,tud_speed_get()==TUSB_SPEED_HIGH?fs:hs,sizeof(hs));other[1]=TUSB_DESC_OTHER_SPEED_CONFIG;return other;}
+uint16_t const *tud_descriptor_string_cb(uint8_t index,uint16_t language)
+{
+    (void)language;static uint16_t out[64];
+    static const char *const text[]={"","sunstoneos","sunstoneos GPU and NPU input","sunstoneos-a733-accelerators","Result"};
+    if(!index){out[0]=0x0304;out[1]=0x0409;return out;}
+    if(index>=sizeof(text)/sizeof(*text))return NULL;
+    unsigned n=(unsigned)strlen(text[index]);if(n>63)return NULL;out[0]=(uint16_t)(0x0300|2*n+2);
+    for(unsigned i=0;i<n;++i)out[i+1]=(uint8_t)text[index][i];return out;
+}
 void npu_runtime_expire(void);
 static void transport_fail(unsigned reason)
 {accelerator_shared_fail(reason);}
@@ -182,9 +201,9 @@ void a733_observe_privileged(void)
 }
 static void usb_task(void *unused)
 {(void)unused;for(;;){
- /* A bounded burst services headers, a full upload chunk and response progress
-  * without imposing a tick per64 bytes. Always yield after each burst. */
- usb0_service_burst(a733_observe_privileged);
+ /* A bounded batch services headers, a full upload chunk and response progress
+  * without imposing a tick per64 bytes. Always yield after eight polls. */
+ for(unsigned i=0;i<8;++i)a733_observe_privileged();
  vTaskDelay(1);
 }}
 void accelerator_usb_start(void)
