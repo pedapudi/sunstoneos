@@ -127,10 +127,14 @@ python3 tools/check-smp.py "$cache/build/qemu-virt/smp-context-model.elf" \
 
 ## Requirements before application and physical integration
 
-Physical integration requires independent watchdog recovery, A733 core power and
-reset sequencing, logical-to-hardware affinity translation, and per-core monitor
-state. The current physical monitor and startup remain single-core.
-The emulator's CPU_ON service does not implement those board operations.
+The emulator's CPU_ON service does not implement the A733 core power, reset and
+affinity operations. Those are implemented natively: all eight physical cores
+reach their first FreeRTOS task context, pass the production barrier and 256
+shared atomic increments, and shut down to independently observed OFF. Task
+bodies, timer preemption on every core and sustained workloads remain modeled
+only. [Supervised startup](a733-smp-supervised.md) records the physical
+checkpoints; the [reference audit](a733-multicore-reference-audit.md) records the
+architectural decisions.
 
 The separate [SMP C/C++ runtime](smp-runtime.md) supplies task-local library
 state and passes concurrent allocation and shared-stream checks in QEMU.

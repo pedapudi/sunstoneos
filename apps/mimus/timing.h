@@ -6,7 +6,7 @@
 static inline uint64_t counter(void)
 {
     uint64_t ticks;
-    __asm__ volatile("mrs %0, cntpct_el0" : "=r"(ticks));
+    __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(ticks) :: "memory");
     return ticks;
 }
 #else
