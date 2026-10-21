@@ -1,28 +1,31 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_sdp_server.h"
+#include "bt_memory.h"
 static unsigned b16(const uint8_t *p){return ((unsigned)p[0]<<8)|p[1];}
 static uint32_t b32(const uint8_t *p){return ((uint32_t)b16(p)<<16)|b16(p+2);}
 static void p16(uint8_t *p,unsigned v){p[0]=(uint8_t)(v>>8);p[1]=(uint8_t)v;}
 static void p32(uint8_t *p,uint32_t v){p16(p,v>>16);p16(p+2,v);}
 static void cp(uint8_t *d,const uint8_t *s,size_t n){for(size_t i=0;i<n;++i)d[i]=s[i];}
 static int eq(const uint8_t *a,const uint8_t *b,size_t n){for(size_t i=0;i<n;++i)if(a[i]!=b[i])return 0;return 1;}
-static int overlap(const void *a,size_t n,const void *b,size_t m)
-{return n && m && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<n : (uintptr_t)a-(uintptr_t)b<m);}
-static int disjoint(const struct bt_sdp_server *s)
+/* Callers first require ACTIVE L2CAP. From then on the lower objects and
+ * receive storage are fixed, since none of them can be initialized again in
+ * this controller lifetime, so one successful check is latched. */
+static int disjoint(struct bt_sdp_server *s)
 {
+    if(s->lower_checked)return 1;
     const struct bt_l2cap *l=s->l2cap;
-    if(overlap(s,sizeof(*s),l,sizeof(*l)) || overlap(s,sizeof(*s),l->acl,sizeof(*l->acl)) ||
-       overlap(s,sizeof(*s),l->acl->hci,sizeof(*l->acl->hci)) ||
-       overlap(s,sizeof(*s),l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
+    if(!bt_range_disjoint_empty(s,sizeof(*s),l,sizeof(*l)) || !bt_range_disjoint_empty(s,sizeof(*s),l->acl,sizeof(*l->acl)) ||
+       !bt_range_disjoint_empty(s,sizeof(*s),l->acl->hci,sizeof(*l->acl->hci)) ||
+       !bt_range_disjoint_empty(s,sizeof(*s),l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
     for(unsigned i=0;i<l->acl->hci->transport.count;++i)
-        if(overlap(s,sizeof(*s),l->acl->hci->transport.records[i].storage.bytes,l->acl->hci->transport.records[i].storage.capacity))return 0;
-    return 1;
+        if(!bt_range_disjoint_empty(s,sizeof(*s),l->acl->hci->transport.records[i].storage.bytes,l->acl->hci->transport.records[i].storage.capacity))return 0;
+    s->lower_checked=1;return 1;
 }
 int bt_sdp_server_init(struct bt_sdp_server *s,struct bt_l2cap *l,const struct bt_sdp_ag_profile *p,
     uint64_t response,uint64_t query,int (*policy)(void *,uint64_t,uint16_t,unsigned),void *ctx)
 {
     if(!s || !l || !p || !policy || s->initialized || l->state!=BT_L2CAP_OFF || !response || query<response ||
-       overlap(s,sizeof(*s),l,sizeof(*l)) || overlap(s,sizeof(*s),p,sizeof(*p)) ||
+       !bt_range_disjoint_empty(s,sizeof(*s),l,sizeof(*l)) || !bt_range_disjoint_empty(s,sizeof(*s),p,sizeof(*p)) ||
        p->handle<0x10000 || !p->rfcomm_channel || p->rfcomm_channel>30 || p->version!=0x0109 ||
        p->supported_features>63 || p->supported_features!=((p->brsf_features&31)|((p->brsf_features>>4)&32)) ||
        p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x3ffu))return -1;

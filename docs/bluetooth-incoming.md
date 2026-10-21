@@ -42,6 +42,9 @@ local controller address receives `0x0f`, unacceptable address. Both commands
 require Command Status followed by Connection Complete. A successful Reject
 status leaves the slot pending until a failure Connection Complete arrives.
 An unexpected successful connection after rejection faults the worker.
+A request that arrives before incoming handling is enabled receives no host
+reply; the link worker frees its receive slot and the controller refuses the
+peer when the configured accept timeout expires.
 
 A refused command closes the attempt while retaining its status. An
 unknown-command error may use Command Complete; a successful Command Complete

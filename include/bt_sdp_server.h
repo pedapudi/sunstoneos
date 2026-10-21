@@ -23,7 +23,7 @@ struct bt_sdp_server {
     int (*policy)(void *,uint64_t,uint16_t,unsigned);
     void *context;
     uint64_t response_us, query_us, next_query;
-    unsigned rotation, initialized, failed;
+    unsigned rotation, initialized, failed, lower_checked;
     struct bt_sdp_server_session sessions[BT_L2CAP_CHANNELS];
 };
 /* Zero-init before L2CAP initialization. Profile is copied and immutable;

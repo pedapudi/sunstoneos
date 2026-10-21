@@ -40,6 +40,13 @@ mutation. A successful write without the matching readback cannot establish
 Local feature bits do not establish remote capabilities. The audio worker
 queries the peer through the same HCI command owner before setup or acceptance.
 An incoming request during that query is copied and retains its response bound.
+A synchronous request that no link awaits, such as one from the headset while the
+AG sets up audio itself, is refused with Reject Synchronous Connection Request
+and reason `0x0d`, limited resources. The refusal uses no audio link identity.
+One refusal is outstanding at a time. Another unexpected request during that
+time, or a refusal that cannot be sent within the response bound, receives no
+host reply; the controller refuses it when its accept timeout expires. The
+matching failed Synchronous Connection Complete ends the refusal.
 The scheduling authority must prove that classification and response fit the
 read-back controller acceptance timeout.
 
@@ -91,8 +98,9 @@ A successful disconnect returns credits for fully submitted synchronous
 packets and leaves their copied results marked `FLUSHED`. That result records
 uncertain delivery. Queued packets become `NOT_SENT`. A partially transmitted
 H4 frame makes disconnect uncertain and retains the complete stack lifetime.
-Unknown successful synchronous connections fault with their event retained;
-unrelated failure and late records remain owned without assigning a new handle.
+Unknown successful synchronous connections fault with their event retained.
+The link worker releases an unrelated failed completion without assigning a
+handle, and late records remain owned.
 
 The worker copies up to eight TX and eight RX records. TX accepts complete
 16-bit samples, with even length from 2 through the lesser of the reported

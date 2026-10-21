@@ -34,7 +34,7 @@ ownership after any timeout, transport error, rejected command or wrong readback
 
 | Command | Required behavior |
 | --- | --- |
-| Set Event Mask, `0x0c01` | Enable all defined Classic events from Core 5.4; leave reserved and LE bits clear |
+| Set Event Mask, `0x0c01` | Enable only the Classic events that a stack owner consumes; leave all other bits clear |
 | Set Event Filter, `0x0c05` | Clear all filters with the single parameter `0`; this disables automatic acceptance |
 | Write Connection Accept Timeout, `0x0c16` | Write the configured timeout in 625-microsecond slots |
 | Read Connection Accept Timeout, `0x0c15` | Require the exact written value |
@@ -43,10 +43,15 @@ ownership after any timeout, transport error, rejected command or wrong readback
 | Write Scan Enable, `0x0c1a` | Enable page scan only, value `2` |
 | Read Scan Enable, `0x0c19` | Require value `2` before publishing configured state |
 
-The event mask is `0x1dbff807bffb9fff`. It includes link, Classic security and
-synchronous-audio events. Command Complete, Command Status and Number Of
-Completed Packets cannot be masked by this command. Retaining a security or
-audio event does not implement its associated protocol.
+The event mask is `0x042f980000e184bc`. It enables Connection Complete and
+Request, Disconnection Complete, Authentication Complete, Encryption Change,
+Read Remote Supported Features Complete, Hardware Error, Flush Occurred, the PIN
+code and link-key events, Synchronous Connection Complete and Changed,
+Encryption Key Refresh Complete and the Secure Simple Pairing events that the
+security owner handles. Command Complete, Command Status and Number Of Completed
+Packets cannot be masked by this command. Every other enabled event would occupy
+one of the four H4 receive slots without a consumer, so inquiry, QoS, mode,
+role, clock-offset and remote-version events stay disabled.
 
 Fresh Reset establishes disabled scans before this sequence. Page scan starts
 after the event policy and timeout/activity readbacks succeed. Inquiry scan

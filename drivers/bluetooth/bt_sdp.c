@@ -1,20 +1,19 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Original bounded SDP client based on Bluetooth Core Vol3B protocol rules. */
 #include "bt_sdp.h"
+#include "bt_memory.h"
 static unsigned be16(const uint8_t *p) {return ((unsigned)p[0]<<8)|p[1];}
 static uint32_t be32(const uint8_t *p)
 {return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static void put16(uint8_t *p,unsigned v) {p[0]=(uint8_t)(v>>8);p[1]=(uint8_t)v;}
 static void copy(uint8_t *d,const uint8_t *s,size_t n) {for(size_t i=0;i<n;++i)d[i]=s[i];}
-static int overlaps(const void *a,size_t an,const void *b,size_t bn)
-{return an && bn && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn);}
 static int disjoint(const struct bt_sdp *q,const struct bt_l2cap *l)
 {
-    if(overlaps(q,sizeof(*q),l,sizeof(*l)) || overlaps(q,sizeof(*q),l->acl,sizeof(*l->acl)) ||
-       overlaps(q,sizeof(*q),l->acl->hci,sizeof(*l->acl->hci)) ||
-       overlaps(q,sizeof(*q),l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
+    if(!bt_range_disjoint_empty(q,sizeof(*q),l,sizeof(*l)) || !bt_range_disjoint_empty(q,sizeof(*q),l->acl,sizeof(*l->acl)) ||
+       !bt_range_disjoint_empty(q,sizeof(*q),l->acl->hci,sizeof(*l->acl->hci)) ||
+       !bt_range_disjoint_empty(q,sizeof(*q),l->acl->hci->transport.binding.uart,sizeof(struct a733_uart)))return 0;
     for(unsigned i=0;i<l->acl->hci->transport.count;++i)
-        if(overlaps(q,sizeof(*q),l->acl->hci->transport.records[i].storage.bytes,
+        if(!bt_range_disjoint_empty(q,sizeof(*q),l->acl->hci->transport.records[i].storage.bytes,
                     l->acl->hci->transport.records[i].storage.capacity))return 0;
     return 1;
 }

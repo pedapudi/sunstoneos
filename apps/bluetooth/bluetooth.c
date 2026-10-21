@@ -10,8 +10,7 @@
 #include "recognition-models.h"
 #endif
 #include <string.h>
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
+#include "bt_memory.h"
 static int present(const uint8_t *p,size_t n)
 {unsigned value=0;for(size_t i=0;i<n;++i)value|=p[i];return value!=0;}
 int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t digest[32])
@@ -108,8 +107,8 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
     if(!a||a->self||!p||!shared||!shared->used||!id||id->secure_read_record!=p->sid_authority||!owner||!recovery||
         xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||end<=start||end-start!=60000000||
         !bluetooth_profile_valid(p,digest)||
-        !separate(a,sizeof(*a),p,sizeof(*p))||!separate(a,sizeof(*a),shared,sizeof(*shared))||
-        !separate(a,sizeof(*a),id,sizeof(*id))||!separate(a,sizeof(*a),recovery,sizeof(*recovery)))return 0;
+        !bt_range_disjoint(a,sizeof(*a),p,sizeof(*p))||!bt_range_disjoint(a,sizeof(*a),shared,sizeof(*shared))||
+        !bt_range_disjoint(a,sizeof(*a),id,sizeof(*id))||!bt_range_disjoint(a,sizeof(*a),recovery,sizeof(*recovery)))return 0;
     a->self=a;a->profile=p;a->shared=shared;a->chip_id=id;a->owner=owner;a->recovery_state=recovery;
     a->started=start;a->deadline=end-10000;a->hci_deadline=start+((p->version==3||(p->version==2&&p->headset.mode==4))?35000000:p->version==2?45000000:55000000);
     atomic_init(&a->failed,1);atomic_init(&a->result_lock,0);atomic_init(&a->result,0);
@@ -205,9 +204,9 @@ int bluetooth_application_poll(struct bluetooth_application *a)
 }
 int bluetooth_application_result(struct bluetooth_application *a,struct bt_hci_identity *out)
 {
-    if(!a||a->self!=a||!out||!separate(a,sizeof(*a),out,sizeof(*out))||
-        !separate(a->shared,sizeof(*a->shared),out,sizeof(*out))||
-        !separate(a->profile,sizeof(*a->profile),out,sizeof(*out)))return -1;
+    if(!a||a->self!=a||!out||!bt_range_disjoint(a,sizeof(*a),out,sizeof(*out))||
+        !bt_range_disjoint(a->shared,sizeof(*a->shared),out,sizeof(*out))||
+        !bt_range_disjoint(a->profile,sizeof(*a->profile),out,sizeof(*out)))return -1;
     if(atomic_load_explicit(&a->failed,memory_order_acquire)||(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4))return -1;
     if(!atomic_load_explicit(&a->result,memory_order_acquire))return 0;
     unsigned unlocked=0;if(!atomic_compare_exchange_strong_explicit(&a->result_lock,&unlocked,1,memory_order_acquire,memory_order_relaxed))return 0;
@@ -218,8 +217,8 @@ int bluetooth_application_result(struct bluetooth_application *a,struct bt_hci_i
 
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
 int bluetooth_recognition_output(struct bluetooth_application *a,const void *out,size_t bytes)
-{return a&&separate(a,sizeof(*a),out,bytes)&&separate(a->profile,sizeof(*a->profile),out,bytes)&&
-    separate(a->shared,sizeof(*a->shared),out,bytes);}
+{return a&&bt_range_disjoint(a,sizeof(*a),out,bytes)&&bt_range_disjoint(a->profile,sizeof(*a->profile),out,bytes)&&
+    bt_range_disjoint(a->shared,sizeof(*a->shared),out,bytes);}
 int bluetooth_recognition_live(struct bluetooth_application *a)
 {return a&&a->self==a&&a->profile->version==3&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}

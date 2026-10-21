@@ -4,6 +4,7 @@
 #include "msbc.h"
 #include "a733_storage_digest.h"
 #include <string.h>
+#include "bt_memory.h"
 /* state0: USB producer owns bytes;1: Bluetooth owns immutable PCM;2: USB owns
  * immutable result. Release/acquire transfers ownership; neither task writes
  * fields belonging to the other state. Provider associations are owner-only. */
@@ -14,7 +15,7 @@ static struct {
     atomic_ullong accepted,acknowledged,silence,rx_packets,rx_bytes,rx_loss;
     atomic_ullong silence_uart,silence_released,silence_flushed,silence_not_sent;
     atomic_uint sealed,cancelled,closed;
-    uint64_t next_owner,next_frame;
+    uint64_t next_owner,next_frame,frame_restarts;
     unsigned upload_bytes,pcm_offset,frame_offset,ready,started;
     uint8_t frame[60];
     struct {uint64_t serial,ticket;unsigned sent;} packets[BT_SCO_PACKETS];
@@ -24,11 +25,9 @@ int bluetooth_playback_mode(const struct bluetooth_application *a)
 static int live(struct bluetooth_application *a)
 {return bluetooth_playback_mode(a)&&!atomic_load_explicit(&a->failed,memory_order_acquire)&&
     !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}
-static int outside(const void *p,size_t n,const void *q,size_t m)
-{uintptr_t x=(uintptr_t)p,y=(uintptr_t)q;return p&&q&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 static int external(struct bluetooth_application *a,const void *p,size_t n)
-{return outside(p,n,&playback,sizeof(playback))&&outside(p,n,a,sizeof(*a))&&
-    outside(p,n,a->profile,sizeof(*a->profile))&&outside(p,n,a->shared,sizeof(*a->shared));}
+{return bt_range_disjoint(p,n,&playback,sizeof(playback))&&bt_range_disjoint(p,n,a,sizeof(*a))&&
+    bt_range_disjoint(p,n,a->profile,sizeof(*a->profile))&&bt_range_disjoint(p,n,a->shared,sizeof(*a->shared));}
 static int producer(struct bluetooth_application *a)
 {
     if(!live(a))return 0;
@@ -61,7 +60,7 @@ int bluetooth_playback_commit(struct bluetooth_application *a,uint64_t ticket,co
 }
 int bluetooth_playback_copy(struct bluetooth_application *a,struct bluetooth_playback_result *r,struct bluetooth_playback_status *s)
 {
-    if(!producer(a)||!external(a,r,sizeof(*r))||!external(a,s,sizeof(*s))||!outside(r,sizeof(*r),s,sizeof(*s)))return -1;
+    if(!producer(a)||!external(a,r,sizeof(*r))||!external(a,s,sizeof(*s))||!bt_range_disjoint(r,sizeof(*r),s,sizeof(*s)))return -1;
     memset(r,0,sizeof(*r));memset(s,0,sizeof(*s));
     s->disconnected=atomic_load_explicit(&playback.closed,memory_order_acquire);
     s->acknowledged=atomic_load_explicit(&playback.acknowledged,memory_order_relaxed);
@@ -141,6 +140,7 @@ int bluetooth_playback_step(struct bluetooth_application *a,struct bt_sco *q,uin
         else if(atomic_load_explicit(&playback.sealed,memory_order_acquire))return 1;
         else pcm=zero;
         if(bluetooth_msbc_encode(pcm,playback.frame)!=1)return -1;
+        if(!playback.next_frame)playback.next_frame=now;
         if(pcm!=zero){playback.pcm_offset+=240;playback.slots[slot].result.encoded_samples+=120;}
         else atomic_fetch_add_explicit(&playback.silence,1,memory_order_release);
         playback.ready=1;playback.frame_offset=0;
@@ -153,7 +153,8 @@ int bluetooth_playback_step(struct bluetooth_application *a,struct bt_sco *q,uin
         int r=bt_sco_send(q,audio,playback.frame+playback.frame_offset,bytes,deadline,&serial);if(r<0)return -1;
         if(r==1){uint64_t owner=playback.started==2?ticket:0;playback.packets[i].serial=serial;playback.packets[i].ticket=owner;
             if(owner)playback.slots[slot].result.submitted_bytes+=bytes;playback.frame_offset+=bytes;
-            if(playback.frame_offset==60){playback.ready=0;playback.frame_offset=0;playback.next_frame=now>UINT64_MAX-7500?UINT64_MAX:now+7500;}}
+            if(playback.frame_offset==60){playback.ready=0;playback.frame_offset=0;
+                playback.next_frame=bluetooth_cadence(playback.next_frame,now,7500,UINT64_MAX,&playback.frame_restarts);}}
     }
     return 1;
 }

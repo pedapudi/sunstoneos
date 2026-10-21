@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_hfp_ag.h"
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return !a || !b || an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);}
+#include "bt_memory.h"
 static uint64_t stamp(const struct bt_hfp_ag *q){return q->rfcomm->l2cap->acl->hci->transport.now;}
 static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static int fail(struct bt_hfp_ag *q,enum bt_hfp_ag_error e)
@@ -13,18 +12,18 @@ static int identity(const struct bt_hfp_ag *q)
 static int external(const struct bt_hfp_ag *q,const void *p,size_t n)
 {
     const struct bt_h4 *h=&q->rfcomm->l2cap->acl->hci->transport;
-    if(overlap(q,sizeof(*q),p,n) || overlap(q->rfcomm,sizeof(*q->rfcomm),p,n) ||
-       overlap(q->registry,sizeof(*q->registry),p,n) || overlap(q->rfcomm->l2cap,sizeof(*q->rfcomm->l2cap),p,n) ||
-       overlap(q->rfcomm->l2cap->acl,sizeof(*q->rfcomm->l2cap->acl),p,n) ||
-       overlap(q->rfcomm->l2cap->acl->hci,sizeof(*q->rfcomm->l2cap->acl->hci),p,n) ||
-       overlap(h->binding.uart,sizeof(*h->binding.uart),p,n))return 0;
-    for(unsigned i=0;i<h->count;++i)if(overlap(h->records[i].storage.bytes,h->records[i].storage.capacity,p,n))return 0;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->registry->session[i] && overlap(q->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
+    if(!bt_range_disjoint(q,sizeof(*q),p,n) || !bt_range_disjoint(q->rfcomm,sizeof(*q->rfcomm),p,n) ||
+       !bt_range_disjoint(q->registry,sizeof(*q->registry),p,n) || !bt_range_disjoint(q->rfcomm->l2cap,sizeof(*q->rfcomm->l2cap),p,n) ||
+       !bt_range_disjoint(q->rfcomm->l2cap->acl,sizeof(*q->rfcomm->l2cap->acl),p,n) ||
+       !bt_range_disjoint(q->rfcomm->l2cap->acl->hci,sizeof(*q->rfcomm->l2cap->acl->hci),p,n) ||
+       !bt_range_disjoint(h->binding.uart,sizeof(*h->binding.uart),p,n))return 0;
+    for(unsigned i=0;i<h->count;++i)if(!bt_range_disjoint(h->records[i].storage.bytes,h->records[i].storage.capacity,p,n))return 0;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->registry->session[i] && !bt_range_disjoint(q->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
     return 1;
 }
 int bt_hfp_ag_init_codecs(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t deadline,uint64_t timeout,unsigned codecs)
 {
-    if((codecs&&codecs!=6) || !q || !r || !p || overlap(q,sizeof(*q),r,sizeof(*r)) || overlap(q,sizeof(*q),p,7) ||
+    if((codecs&&codecs!=6) || !q || !r || !p || !bt_range_disjoint(q,sizeof(*q),r,sizeof(*r)) || !bt_range_disjoint(q,sizeof(*q),p,7) ||
        q->rfcomm || q->phase!=BT_HFP_AG_OFF || r->phase!=BT_RFCOMM_OPEN || !r->registry || !r->l2cap ||
        (r->incoming ? r->service_uuid!=0x111f : r->service_uuid!=0x111e) || !timeout || timeout>60000000 ||
        !values(p) || deadline<=r->l2cap->acl->hci->transport.now)return -1;
@@ -97,7 +96,10 @@ static void response(struct bt_hfp_ag *q)
             if(at==n)break;if(p[at++]!=','||at==n){ok=0;break;}
         }while(at<n);
         if(!(mask&2))ok=0;
-        if(ok){q->pending_codecs=mask;q->pending_codec=0;q->offered_codec=0;q->codec_deadline=0;}
+        /* HFP lets the HF resend its list at any time. A selection that the
+         * new list still contains survives; otherwise reselection is required. */
+        if(ok){q->pending_codecs=mask;q->pending_codec=mask&(1u<<q->selected_codec)?q->selected_codec:0;
+            q->offered_codec=0;q->codec_deadline=0;}
     }else if(!q->discard && q->stage>=4 && q->offered_codec && prefix(p,n,"AT+BCS=",&at) &&
              decimal(p,n,&at,&value) && at==n && value==q->offered_codec && (q->peer_codecs&(1u<<value))){
         q->pending_codec=value;ok=1;

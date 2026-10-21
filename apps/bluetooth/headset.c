@@ -3,6 +3,7 @@
 #include "bt_security.h"
 #include "bt_sdp_server.h"
 #include "bt_sco.h"
+#include "bt_memory.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 #ifdef SUNSTONE_BLUETOOTH_MSBC
@@ -26,7 +27,7 @@ static struct {
     struct bluetooth_pcm_snapshot snapshot;
     struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
     uint8_t pcm[BLUETOOTH_PCM_BYTES],silence[254];
-    uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence;
+    uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence,silence_restarts;
     unsigned stage,auth_started,silence_bytes,configured,wideband,silence_offset,silence_ready;
     atomic_uint terminal;
     void *segment_consumer;
@@ -267,7 +268,8 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         }
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
-            if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}
+            if(r<0)return fail();
+            if(r==1)voice.next_silence=bluetooth_cadence(voice.next_silence,now,(voice.silence_bytes/2)*125,voice.capture_deadline,&voice.silence_restarts);}
         return 0;
     }
     if(voice.stage==CLOSE&&l->phase==BT_SCO_CLOSED){
@@ -280,18 +282,16 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     return 0;
 }
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_t offset,size_t bytes,
                           uint8_t out[1024],size_t *copied,struct bluetooth_pcm_snapshot *snapshot)
 {
     if(!a||a->self!=a||a->profile->version<2||kind>1||!bytes||bytes>1024||
-        !separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))||
-        !separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
+        !bt_range_disjoint(out,1024,copied,sizeof(*copied))||!bt_range_disjoint(out,1024,snapshot,sizeof(*snapshot))||
+        !bt_range_disjoint(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
     const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};
-    for(unsigned i=0;i<3;++i)if(!separate(buffers[i],sizes[i],&voice,sizeof(voice))||
-        !separate(buffers[i],sizes[i],a,sizeof(*a))||!separate(buffers[i],sizes[i],a->profile,sizeof(*a->profile))||
-        !separate(buffers[i],sizes[i],a->shared,sizeof(*a->shared)))return -1;
+    for(unsigned i=0;i<3;++i)if(!bt_range_disjoint(buffers[i],sizes[i],&voice,sizeof(voice))||
+        !bt_range_disjoint(buffers[i],sizes[i],a,sizeof(*a))||!bt_range_disjoint(buffers[i],sizes[i],a->profile,sizeof(*a->profile))||
+        !bt_range_disjoint(buffers[i],sizes[i],a->shared,sizeof(*a->shared)))return -1;
     *copied=0;memset(snapshot,0,sizeof(*snapshot));
     if(atomic_load_explicit(&a->failed,memory_order_acquire)||
         (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4))return -1;
@@ -326,9 +326,9 @@ int bluetooth_headset_segment_stop(struct bluetooth_application *a)
 {if(!segment_live(a))return -1;atomic_store_explicit(&voice.segment_stop,1,memory_order_release);return 1;}
 int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
 {
-    if(!segment_live(a)||!out||!separate(out,sizeof(*out),&voice,sizeof(voice))||
-       !separate(out,sizeof(*out),a,sizeof(*a))||!separate(out,sizeof(*out),a->profile,sizeof(*a->profile))||
-       !separate(out,sizeof(*out),a->shared,sizeof(*a->shared)))return -1;
+    if(!segment_live(a)||!out||!bt_range_disjoint(out,sizeof(*out),&voice,sizeof(voice))||
+       !bt_range_disjoint(out,sizeof(*out),a,sizeof(*a))||!bt_range_disjoint(out,sizeof(*out),a->profile,sizeof(*a->profile))||
+       !bt_range_disjoint(out,sizeof(*out),a->shared,sizeof(*a->shared)))return -1;
     /* Tail precedes head so concurrent publication/consumption cannot make the
      * observed consumer count exceed the observed producer count. */
     /* Acquire closure before its preceding publications, so a terminal empty
@@ -344,12 +344,12 @@ int bluetooth_headset_segment_copy(struct bluetooth_application *a,uint64_t tick
 {
     if(!segment_live(a)||!voice.segment_consumer||xTaskGetCurrentTaskHandle()!=voice.segment_consumer||
        !out||!copied||!snapshot||!bytes||bytes>1024||
-       !separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))||
-       !separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
+       !bt_range_disjoint(out,1024,copied,sizeof(*copied))||!bt_range_disjoint(out,1024,snapshot,sizeof(*snapshot))||
+       !bt_range_disjoint(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
     const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};
-    for(unsigned i=0;i<3;++i)if(!separate(buffers[i],sizes[i],&voice,sizeof(voice))||
-        !separate(buffers[i],sizes[i],a,sizeof(*a))||!separate(buffers[i],sizes[i],a->profile,sizeof(*a->profile))||
-        !separate(buffers[i],sizes[i],a->shared,sizeof(*a->shared)))return -1;
+    for(unsigned i=0;i<3;++i)if(!bt_range_disjoint(buffers[i],sizes[i],&voice,sizeof(voice))||
+        !bt_range_disjoint(buffers[i],sizes[i],a,sizeof(*a))||!bt_range_disjoint(buffers[i],sizes[i],a->profile,sizeof(*a->profile))||
+        !bt_range_disjoint(buffers[i],sizes[i],a->shared,sizeof(*a->shared)))return -1;
     *copied=0;memset(snapshot,0,sizeof(*snapshot));
     uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_relaxed);
     uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
@@ -468,13 +468,15 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
                 unsigned bytes=60-voice.silence_offset;if(bytes>voice.audio.mtu)bytes=voice.audio.mtu;
                 uint64_t serial;int r=bt_sco_send(&voice.audio,voice.stream,voice.silence+voice.silence_offset,bytes,voice.capture_deadline,&serial);
                 if(r<0)return fail();if(r==1){voice.silence_offset+=bytes;
-                    if(voice.silence_offset==60){voice.silence_offset=0;voice.silence_ready=0;voice.next_silence=cap(now,7500,voice.capture_deadline);}}
+                    if(voice.silence_offset==60){voice.silence_offset=0;voice.silence_ready=0;
+                        voice.next_silence=bluetooth_cadence(voice.next_silence,now,7500,voice.capture_deadline,&voice.silence_restarts);}}
             }
         }else
 #endif
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
-            if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}
+            if(r<0)return fail();
+            if(r==1)voice.next_silence=bluetooth_cadence(voice.next_silence,now,(voice.silence_bytes/2)*125,voice.capture_deadline,&voice.silence_restarts);}
         return 0;
     }
     if(voice.stage==CLOSE&&l->phase==BT_SCO_CLOSED){

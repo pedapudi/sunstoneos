@@ -21,7 +21,7 @@ p.add_argument('--output',type=pathlib.Path,required=True)
 a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1]
 a.output.mkdir(parents=True,exist_ok=False)
-files=['checks/bt-sco.c','checks/bt-sco.py','include/bt_sco.h','drivers/bluetooth/bt_sco.c','checks/bt-config-fixture.h','checks/bt-hfp-ag.c','checks/bt-hfp-ag.py','include/bt_hfp_ag.h','drivers/bluetooth/bt_hfp_ag.c','include/bt_sdp_server.h','drivers/bluetooth/bt_sdp_server.c','checks/bt-rfcomm-server.c','checks/bt-rfcomm-server.py','include/bt_rfcomm.h','drivers/bluetooth/bt_rfcomm.c','checks/bt-rfcomm.c','checks/bt-rfcomm.py','include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h',
+files=['checks/bt-sco.c','checks/bt-sco.py','include/bt_sco.h','drivers/bluetooth/bt_sco.c','checks/bt-config-fixture.h','checks/bt-hfp-ag.c','checks/bt-hfp-ag.py','include/bt_hfp_ag.h','drivers/bluetooth/bt_hfp_ag.c','include/bt_sdp_server.h','drivers/bluetooth/bt_sdp_server.c','checks/bt-rfcomm-server.c','checks/bt-rfcomm-server.py','include/bt_rfcomm.h','drivers/bluetooth/bt_rfcomm.c','checks/bt-rfcomm.c','checks/bt-rfcomm.py','include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h','include/bt_memory.h',
        'drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','checks/bt-l2cap.c','checks/bt-sdp.c','checks/bt-sdp.py','include/bt_sdp.h','drivers/bluetooth/bt_sdp.c','include/bt_l2cap.h','drivers/bluetooth/bt_l2cap.c','include/bt_acl.h','drivers/bluetooth/bt_acl.c']
 manifest={}
 for f in files:

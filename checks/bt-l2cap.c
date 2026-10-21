@@ -319,9 +319,30 @@ static void unknown_options_and_bounds(void)
     unsigned after=0;for(unsigned i=0;i<BT_L2CAP_REQUESTS;++i)after+=!!s.q.requests[i].length;
     assert(after==requests);
 }
+/* Peer data may precede Disconnection Complete after a local Disconnect.
+ * It is discarded with any partial PDU; the channel is confirmed at close. */
+static void local_disconnect_data(void)
+{
+    struct simulation s;setup(&s);uint64_t identity=open_channel(&s);uint16_t cid=s.q.channels[0].local_cid;
+    uint8_t all[24]={20,0,(uint8_t)cid,(uint8_t)(cid>>8)};for(unsigned i=4;i<sizeof(all);++i)all[i]=(uint8_t)i;
+    incoming_fragment(&s,2,all,6);poll(&s);assert(s.q.assembling[0]!=BT_L2CAP_PDUS);
+    assert(bt_acl_disconnect(&s.a,s.link,50000)==1);
+    /* The Disconnect command is not ACL data, so skip it in the wire log. */
+    for(unsigned i=0;i<3;++i){s.f.room=1024;++s.f.now;assert(bt_l2cap_step(&s.q,64,UINT64_MAX)==1);}
+    assert(s.a.links[0].state==BT_ACL_DISCONNECT_STATUS && s.f.tx[s.wire_cursor]==HCI_COMMAND_PKT);s.wire_cursor=s.f.tn;
+    incoming_fragment(&s,1,all+6,sizeof(all)-6);poll(&s);
+    assert(s.q.assembling[0]==BT_L2CAP_PDUS && s.q.channels[0].state==BT_L2CAP_QUARANTINED);
+    cs(&s.f,HCI_OP_DISCONNECT,1,0);poll(&s);assert(s.a.links[0].state==BT_ACL_DISCONNECTING);
+    incoming_fragment(&s,2,all,sizeof(all));poll(&s);
+    const uint8_t done[]={0,0x23,0,0x16};event(&s.f,HCI_EV_DISCONN_COMPLETE,done,sizeof(done));poll(&s);
+    assert(s.q.state==BT_L2CAP_ACTIVE && s.a.links[0].state==BT_ACL_CLOSED && !bt_l2cap_receive(&s.q));
+    assert(s.q.channels[0].state==BT_L2CAP_CLOSED && s.q.channels[0].completion==BT_L2CAP_CONFIRMED);
+    for(unsigned i=0;i<s.f.hci.transport.count;++i)assert(s.f.hci.transport.records[i].owner==BT_H4_FREE);
+    assert(bt_l2cap_release_channel(&s.q,identity)==1);
+}
 int main(void)
 {
-    data_and_close();incoming_and_duplicate();early_response_and_fault();unknown_options_and_bounds();
-    puts("Native UART/HCI/ACL/L2CAP: channel negotiation both directions, source-defined bytes, fragments/credits, duplicate/late signaling and retained faults passed.");
+    data_and_close();incoming_and_duplicate();early_response_and_fault();unknown_options_and_bounds();local_disconnect_data();
+    puts("Native UART/HCI/ACL/L2CAP: channel negotiation both directions, source-defined bytes, fragments/credits, duplicate/late signaling, peer data during local disconnect and retained faults passed.");
     return 0;
 }
