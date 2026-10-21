@@ -269,7 +269,7 @@ def host_case(host,bundle,p,store,grant,e):
             magic,sequence,command,n=struct.unpack_from('<4I',self.packet);assert (magic,command,n)==(0x53534f53,0x53555044,len(self.packet)-16)
             body=self.packet[16:];assert body[:32]==bytes.fromhex(grant['nonce'])
             seq,op,offset=struct.unpack_from('<IIQ',body,32);assert sequence==seq
-            data=api.grant_encode(grant) if op==1 else block if op==2 else b''
+            data=api.grant_encode(grant)+struct.pack('<I',8) if op==1 else block if op==2 else b''
             digest=hashlib.sha256(block).digest() if op in (2,3,5) else bytes(32)
             response=struct.pack('<IIQII',seq,0,offset,len(data),0)+digest+data
             events.append('IN');return b'x' if self.short else struct.pack('<4I',magic,seq,0xd3555044,len(response))+response

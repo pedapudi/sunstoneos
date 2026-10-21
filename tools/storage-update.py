@@ -18,7 +18,10 @@ import secrets
 import stat
 import struct
 
-READ_BLOCKS = 2  # BACKUP returns at most two sectors.
+# The INFO response names the BACKUP stride in sectors. It may not exceed the
+# MMC core's eight-sector request limit, which also bounds every response.
+MAX_READ_BLOCKS = 8
+RESPONSE_BYTES = 16 + 56 + MAX_READ_BLOCKS * 512
 # WRITE carries one sector, so one CMD24 busy period and its readback fit in
 # the native one-second operation deadline (docs/storage-update.md).
 WRITE_CHUNK = 512
@@ -227,6 +230,7 @@ class Client:
         self.grant = dict(grant)
         self.sequence = 0
         self.failed = False
+        self.read_blocks = None
 
     def call(self, command, offset=0, payload=b'', receipt=ZERO, following=None):
         require(not self.failed, 'An uncertain session cannot issue further requests.')
@@ -249,7 +253,14 @@ class Client:
 
     def identify(self):
         data, _ = self.call(1)
-        require(data == grant_encode(self.grant), 'Native card/session/range does not match the admitted launch.')
+        try:
+            require(len(data) == 260 and data[:256] == grant_encode(self.grant), 'Native card/session/range does not match the admitted launch.')
+            blocks, = struct.unpack_from('<I', data, 256)
+            require(0 < blocks <= MAX_READ_BLOCKS, 'Native BACKUP stride is outside the supported range.')
+        except BaseException:
+            self.failed = True
+            raise
+        self.read_blocks = blocks
 
 
 class USBExchange:
@@ -275,7 +286,7 @@ class USBExchange:
         try:
             require(self.access.identity(self.node) == self.identity, 'USB runtime instance changed.')
             require(self.device.write(0x02, packet, timeout=1500) == len(packet), 'Incomplete storage USB request.')
-            response = bytes(self.device.read(0x81, 4096, timeout=1500))
+            response = bytes(self.device.read(0x81, RESPONSE_BYTES, timeout=1500))
             require(len(response) >= 16 and struct.unpack_from('<4I', response) ==
                     (0x53534f53, sequence, 0xd3555044, len(response) - 16), 'Storage USB response framing differs.')
             return response[16:]
@@ -301,9 +312,9 @@ def backup(client, store):
     client.identify()
     fd = store.create('backup.bin')
     sha = hashlib.sha256()
-    for offset in range(0, client.grant['blocks'], READ_BLOCKS):
+    for offset in range(0, client.grant['blocks'], client.read_blocks):
         data, expected = client.call(2, offset)
-        require(len(data) == min(READ_BLOCKS, client.grant['blocks'] - offset) * 512 and digest(data) == expected, 'Backup chunk differs from native read.')
+        require(len(data) == min(client.read_blocks, client.grant['blocks'] - offset) * 512 and digest(data) == expected, 'Backup chunk differs from native read.')
         write_all(fd, data)
         sha.update(data)
     whole = sha.digest()
@@ -397,10 +408,10 @@ def apply(client, store):
     chain = store.open('chain.bin', ((size + WRITE_CHUNK - 1) // WRITE_CHUNK) * 32, bytes.fromhex(manifest['chain_sha256']))
     client.identify()
     sha = hashlib.sha256()
-    for offset in range(0, g['blocks'], READ_BLOCKS):
+    for offset in range(0, g['blocks'], client.read_blocks):
         data, expected = client.call(2, offset)
         require(digest(data) == expected and data == os.pread(prior, len(data), offset * 512) and
-                len(data) == min(READ_BLOCKS, g['blocks'] - offset) * 512, 'Current card differs from protected backup; writes refused.')
+                len(data) == min(client.read_blocks, g['blocks'] - offset) * 512, 'Current card differs from protected backup; writes refused.')
         sha.update(data)
     require(sha.hexdigest() == g['backup'], 'Complete current-card backup differs.')
     _, receipt = store.record('admission.json', dict(grant_sha256=manifest['grant_sha256'], backup_sha256=sha.hexdigest(), candidate_sha256=manifest['candidate_sha256']))
