@@ -36,7 +36,7 @@ softmax and context steps, and the hand-off of the next layer's input. The same
 queues carry these items, under the same owner, core and lifetime assertions.
 While an item is pending, the engine runs every `ParallelFor` on core 0, so the
 worker never holds a range and an item at once. A second record,
-`WORKERS async=N`, reports the item count. Defining `SUNSTONE_MIMUS_NO_ASYNC`
+`WORKERS async=N`, reports the item count; the `jobs` count includes them. Defining `SUNSTONE_MIMUS_NO_ASYNC`
 restores the previous range-only behavior.
 
 The engine's own estimate bounds the gain to the softmax and scalar attention
