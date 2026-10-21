@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Include after the SMP setup and npu.cmake; all generated files remain private.
 apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/dma-service-port.c" "${smp_build}/port.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-privileged.patch")
@@ -20,9 +21,7 @@ target_include_directories(dma-service-model PRIVATE platform/qemu-smp include r
 target_compile_definitions(dma-service-model PRIVATE
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
 target_compile_options(dma-service-model PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror -fstack-usage)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
 target_link_options(dma-service-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/dma-service-model.map")

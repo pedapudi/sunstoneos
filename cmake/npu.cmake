@@ -1,52 +1,39 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Offline NPU page-table construction. This target performs no hardware access.
 add_library(nbg-checksum OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_checksum.c)
 target_include_directories(nbg-checksum PRIVATE include)
 target_compile_options(nbg-checksum PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(nbg-assembly OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_assembly.c)
 target_include_directories(nbg-assembly PRIVATE include runtime/include)
 target_compile_options(nbg-assembly PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(nbg-model OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_model.c)
 target_include_directories(nbg-model PRIVATE include)
 target_compile_options(nbg-model PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(nbg-relocation OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_relocation.c)
 target_include_directories(nbg-relocation PRIVATE include)
 target_compile_options(nbg-relocation PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(a733-npu-mmu OBJECT EXCLUDE_FROM_ALL drivers/npu/a733_npu_mmu.c)
 target_include_directories(a733-npu-mmu PRIVATE include)
 target_compile_options(a733-npu-mmu PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(a733-npu-controller OBJECT EXCLUDE_FROM_ALL drivers/npu/a733_npu_controller.c)
 target_include_directories(a733-npu-controller PRIVATE include)
 target_compile_options(a733-npu-controller PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 add_library(a733-npu-memory OBJECT EXCLUDE_FROM_ALL drivers/npu/a733_npu_memory.c)
 target_include_directories(a733-npu-memory PRIVATE include)
 target_compile_options(a733-npu-memory PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 
 # Native CPU operations under FreeRTOS. QEMU supplies no A733 NPU device.
 add_executable(npu-native-model EXCLUDE_FROM_ALL
@@ -60,9 +47,7 @@ target_include_directories(npu-native-model PRIVATE
   include runtime/include "${FREERTOS_DIR}/include" "${PORT}")
 target_compile_definitions(npu-native-model PRIVATE GUEST=1)
 target_compile_options(npu-native-model PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 target_link_options(npu-native-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-virt/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-native-model.map")
@@ -91,9 +76,7 @@ target_include_directories(npu-service-model PRIVATE platform/qemu-smp include r
 target_compile_definitions(npu-service-model PRIVATE
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
 target_compile_options(npu-service-model PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra -Werror)
+  ${SUNSTONE_KERNEL_FLAGS} -Werror)
 target_link_options(npu-service-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-service-model.map")
