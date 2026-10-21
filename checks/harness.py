@@ -8,6 +8,7 @@ stops the check instead of letting removed assertions record a pass.
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import traceback
 
@@ -44,6 +45,40 @@ def refused(action, reason, kind=ValueError):
         assert reason in message, f'refused for another reason: {message!r}; expected {reason!r}'
         return message
     raise AssertionError(f'accepted; expected a refusal containing {reason!r}')
+
+
+def instruction_sites(parts, match):
+    """Addresses of the 32-bit words in loaded image parts for which match(word) is true.
+
+    parts holds (address, bytes) pairs. Data words that happen to match are
+    included too; code hooks on them never run.
+    """
+    return [base + index * 4 for base, data in parts
+            for index, (word,) in enumerate(struct.iter_unpack('<I', data[:len(data) & ~3])) if match(word)]
+
+
+def system_register_access(word):
+    """True for the AArch64 MRS, MSR (register), SYS and SYSL encodings.
+
+    SYS includes address translation (AT) and cache and TLB maintenance.
+    Hints such as WFE, barriers and MSR (immediate) do not match.
+    """
+    return word & 0xffd00000 == 0xd5100000 or word & 0xffd80000 == 0xd5080000
+
+
+def hook_addresses(uc, addresses, callback):
+    """Register callback as a Unicorn code hook on each address alone.
+
+    A code hook without a range calls into Python before every emulated
+    instruction. A model that acts only at known addresses, such as an end
+    sentinel, hooked symbols and system-register accesses, runs many times
+    faster when it hooks just those addresses. Return the hooked addresses.
+    """
+    from unicorn import UC_HOOK_CODE
+    addresses = set(addresses)
+    for address in sorted(addresses):
+        uc.hook_add(UC_HOOK_CODE, callback, begin=address, end=address)
+    return addresses
 
 
 def save(path, value):
