@@ -72,7 +72,7 @@ target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_FRAMEBUFFER=
 if(SUNSTONE_HDMI_AUDIO_USB)
  target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_A733_USB=1)
  target_include_directories(sunstone-a733-hdmi PRIVATE "${TINYUSB_DIR}/src"
-  "${hdmi_root}/platform/a733-storage-update" "${storage_build}/tinyusb")
+  "${hdmi_root}/platform/a733-storage-update" "${hdmi_root}/drivers/usb" "${storage_build}/tinyusb")
 endif()
 get_target_property(hdmi_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET sunstone-a733-hdmi PROPERTY COMPILE_OPTIONS "${hdmi_options}")
