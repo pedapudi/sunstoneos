@@ -95,8 +95,9 @@ retain the transport fault and unresolved input. The dispatcher never searches
 for a guessed next header. Per-record validation does not assert that later
 records in the aggregate are valid before their own processing.
 
-The diagnostic queue retains the first four complete unclaimed or unsupported
-records, each at most 4096 bytes. Later diagnostic records retire with a
+The diagnostic queue retains copies of the first four unclaimed or unsupported
+records. A copy holds at most the first 4,096 bytes of its record and marks a
+longer record as truncated; the record itself still retires. Later diagnostic records retire with a
 saturating overflow count so diagnostic backpressure cannot stop valid traffic.
 This policy applies only after active protocol and event ownership are excluded.
 Unsupported records do not count as delivered Ethernet frames or successful

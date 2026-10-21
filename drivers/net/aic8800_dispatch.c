@@ -75,8 +75,9 @@ static int diagnostic(struct aic8800_dispatch *d,const struct aic8800_sdio_respo
     struct aic8800_dispatch_record *out=&d->records[(d->record_head+d->record_count)%AIC8800_DISPATCH_RECORDS];
     uint64_t serial;if(!sequence(d,&serial))return 0;
     memset(out,0,sizeof(*out));out->sequence=serial;out->generation=generation(d);out->kind=kind;
-    out->bytes=(uint16_t)r->record_bytes;out->message_id=r->message_id;out->has_message=r->has_message;
-    out->transport_type=r->transport_type;memcpy(out->payload,r->record,r->record_bytes);++d->record_count;return 1;
+    size_t bytes=r->record_bytes>sizeof(out->payload)?sizeof(out->payload):r->record_bytes;
+    out->bytes=(uint16_t)bytes;out->truncated=bytes<r->record_bytes;out->message_id=r->message_id;out->has_message=r->has_message;
+    out->transport_type=r->transport_type;memcpy(out->payload,r->record,bytes);++d->record_count;return 1;
 }
 /* Return 1 when this step retired a provably unclaimed complete command record.
  * Partial/ambiguous headers remain with the original parser and terminal fault. */
