@@ -8,28 +8,22 @@ static void worker(void *);
 BaseType_t dma_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
 static int duration(uint64_t value) { return value && value <= INT64_MAX; }
-static int overlap(uint64_t a, uint64_t bytes, uint64_t b, uint64_t other)
-{ return a < b+other && b < a+bytes; }
 static int mapping_valid(const struct a733_dma_mapping *m, const struct dma_service *s)
 {
-    return m->cpu && m->bytes && !((uintptr_t)m->cpu & 63) && !(m->bus & 63) && !(m->bytes & 63) &&
-        m->bytes <= UINTPTR_MAX-(uintptr_t)m->cpu && m->bus < (UINT64_C(1)<<35) &&
-        m->bytes <= (UINT64_C(1)<<35)-m->bus && (unsigned)m->access <= A733_DMA_DESCRIPTORS &&
-        !overlap((uintptr_t)m->cpu,m->bytes,(uintptr_t)s,sizeof(*s));
+    return a733_dma_mapping_shape(m) && (unsigned)m->access <= A733_DMA_DESCRIPTORS &&
+        !a733_dma_overlap((uintptr_t)m->cpu,m->bytes,(uintptr_t)s,sizeof(*s));
 }
-static int mapping_overlap(const struct a733_dma_mapping *a,const struct a733_dma_mapping *b)
-{ return overlap((uintptr_t)a->cpu,a->bytes,(uintptr_t)b->cpu,b->bytes) || overlap(a->bus,a->bytes,b->bus,b->bytes); }
 static int conflict(const struct a733_dma_transfer *a,const struct a733_dma_transfer *b,int exclusive)
 {
-    if (mapping_overlap(&a->descriptors,&b->descriptors)) return 1;
+    if (a733_dma_mappings_overlap(&a->descriptors,&b->descriptors)) return 1;
     for (size_t i=0;i<a->mapping_count;++i) {
-        if (mapping_overlap(&a->mappings[i],&b->descriptors)) return 1;
+        if (a733_dma_mappings_overlap(&a->mappings[i],&b->descriptors)) return 1;
         for (size_t j=0;j<b->mapping_count;++j)
             if ((exclusive || a->mappings[i].access != A733_DMA_READ || b->mappings[j].access != A733_DMA_READ) &&
-                mapping_overlap(&a->mappings[i],&b->mappings[j])) return 1;
+                a733_dma_mappings_overlap(&a->mappings[i],&b->mappings[j])) return 1;
     }
     for (size_t j=0;j<b->mapping_count;++j)
-        if (mapping_overlap(&a->descriptors,&b->mappings[j])) return 1;
+        if (a733_dma_mappings_overlap(&a->descriptors,&b->mappings[j])) return 1;
     return 0;
 }
 static int job_valid(const struct dma_service_job *j,const struct dma_service *s,uint16_t channels)
@@ -47,7 +41,7 @@ static int job_valid(const struct dma_service_job *j,const struct dma_service *s
         t->descriptors.bytes/64 < t->count) return 0;
     if (j->kind == DMA_SERVICE_I2S_STREAM ?
         (!j->stream || sizeof(*j->stream)>UINTPTR_MAX-(uintptr_t)j->stream ||
-         overlap((uintptr_t)j->stream,sizeof(*j->stream),(uintptr_t)s,sizeof(*s)) ||
+         a733_dma_overlap((uintptr_t)j->stream,sizeof(*j->stream),(uintptr_t)s,sizeof(*s)) ||
          !a733_i2s_stream_valid(&j->stream->stream,t)) : j->stream != NULL) return 0;
     for (size_t i=0;i<t->mapping_count;++i)
         if (!mapping_valid(&t->mappings[i],s) || t->mappings[i].access == A733_DMA_DESCRIPTORS) return 0;
@@ -340,8 +334,8 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
             const struct dma_service_protected *g=&protected[n];
             for (size_t k=0;k<=t->mapping_count;++k) {
                 const struct a733_dma_mapping *m=k == t->mapping_count ? &t->descriptors : &t->mappings[k];
-                if (overlap((uintptr_t)m->cpu,m->bytes,g->cpu,g->bytes) ||
-                    overlap(m->bus,m->bytes,g->physical,g->bytes)) return 0;
+                if (a733_dma_overlap((uintptr_t)m->cpu,m->bytes,g->cpu,g->bytes) ||
+                    a733_dma_overlap(m->bus,m->bytes,g->physical,g->bytes)) return 0;
             }
         }
         if (jobs[i].kind == DMA_SERVICE_I2S_STREAM) {
@@ -445,15 +439,15 @@ int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,v
     unsigned slot;struct dma_service_client *client=caller(s,&slot);
     if(!client || client->pending || job>=s->job_count || !out || bytes!=4096 ||
        !(client->jobs&(UINT32_C(1)<<job)) || (uintptr_t)out>UINTPTR_MAX-bytes ||
-       overlap((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
+       a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
     struct dma_service_private_job *j=&s->jobs[job];
     struct dma_service_channel *ch=&s->channels[j->channel];
     if(j->kind!=DMA_SERVICE_I2S_STREAM || ch->owner!=slot || ch->profile!=job)return 0;
     for(unsigned n=0;n<s->job_count;++n) {
         const struct a733_dma_transfer *t=&s->jobs[n].transfer;
-        if(overlap((uintptr_t)out,bytes,(uintptr_t)t->descriptors.cpu,t->descriptors.bytes))return 0;
+        if(a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)t->descriptors.cpu,t->descriptors.bytes))return 0;
         for(size_t i=0;i<t->mapping_count;++i)
-            if(overlap((uintptr_t)out,bytes,(uintptr_t)t->mappings[i].cpu,t->mappings[i].bytes))return 0;
+            if(a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)t->mappings[i].cpu,t->mappings[i].bytes))return 0;
     }
     return a733_i2s_stream_copy(dma_service_i2s_stream(s,j->channel),ticket,out,bytes);
 }

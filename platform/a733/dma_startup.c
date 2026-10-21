@@ -1,11 +1,9 @@
 #include "a733_dma_startup.h"
 #include "a733_dma_platform_native.h"
+#include "a733_dma_controller.h"
 
 static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
+{return a733_dma_separate((uintptr_t)a,an,(uintptr_t)b,bn);}
 static int privileged(void)
 {
     uint64_t level;__asm__ volatile("mrs %0, CurrentEL" : "=r"(level));return level==4;

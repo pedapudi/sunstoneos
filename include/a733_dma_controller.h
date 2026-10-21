@@ -31,6 +31,31 @@ struct a733_dma_mapping {
     enum a733_dma_access access;
 };
 
+/* Shape every DMA0 mapping needs: nonempty 64-byte-aligned CPU and bus ranges,
+ * no CPU address wrap, and a bus range below 2^35. */
+static inline int a733_dma_mapping_shape(const struct a733_dma_mapping *m)
+{
+    return m->cpu && m->bytes && !((uintptr_t)m->cpu & 63) && !(m->bus & 63) &&
+        !(m->bytes & 63) && (uintptr_t)m->cpu <= UINTPTR_MAX - m->bytes &&
+        m->bus < (UINT64_C(1) << 35) && m->bytes <= (UINT64_C(1) << 35) - m->bus;
+}
+/* Callers must already have excluded wrap in both ranges. */
+static inline int a733_dma_overlap(uint64_t a, uint64_t a_bytes, uint64_t b, uint64_t b_bytes)
+{ return a < b + b_bytes && b < a + a_bytes; }
+/* Either the CPU or the bus ranges intersect; both mappings have valid shape. */
+static inline int a733_dma_mappings_overlap(const struct a733_dma_mapping *a,
+                                            const struct a733_dma_mapping *b)
+{
+    return a733_dma_overlap((uintptr_t)a->cpu, a->bytes, (uintptr_t)b->cpu, b->bytes) ||
+           a733_dma_overlap(a->bus, a->bytes, b->bus, b->bytes);
+}
+/* Two objects are disjoint. Refuses NULL, empty and wrapping ranges. */
+static inline int a733_dma_separate(uintptr_t a, size_t a_bytes, uintptr_t b, size_t b_bytes)
+{
+    return a && b && a_bytes && b_bytes && a_bytes <= UINTPTR_MAX - a &&
+           b_bytes <= UINTPTR_MAX - b && (a + a_bytes <= b || b + b_bytes <= a);
+}
+
 struct a733_dma_transfer {
     struct a733_dma_mapping descriptors;
     const struct a733_dma_segment *segments;

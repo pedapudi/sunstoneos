@@ -1,17 +1,20 @@
 #include "a733_dma_controller.h"
+#include "a733_dma_regs.h"
 #include <string.h>
 
-enum { ENABLE = 0, PAUSE = 4, DESCRIPTOR = 8, MODE = 0x28,
-       PACKAGES = 0x30, IRQ_ENABLE = 0x34, PENDING = 0x38, DESCRIPTOR_HIGH = 0x3c };
-enum { BUSY = 0x30, CPU_ROUTE = 0x34, MCU_ROUTE = 0x38 };
+enum { ENABLE = A733_DMA_REG_ENABLE, PAUSE = A733_DMA_REG_PAUSE, DESCRIPTOR = A733_DMA_REG_DESCRIPTOR,
+       DESTINATION = A733_DMA_REG_DESTINATION, REMAINING = A733_DMA_REG_REMAINING,
+       MODE = A733_DMA_REG_MODE, PACKAGES = A733_DMA_REG_PACKAGES, IRQ_ENABLE = A733_DMA_REG_IRQ_ENABLE,
+       PENDING = A733_DMA_REG_PENDING, DESCRIPTOR_HIGH = A733_DMA_REG_DESCRIPTOR_HIGH };
+enum { BUSY = A733_DMA_REG_BUSY, CPU_ROUTE = A733_DMA_REG_CPU_ROUTE, MCU_ROUTE = A733_DMA_REG_MCU_ROUTE };
 
 static uint32_t read_global(struct a733_dma_controller *c, unsigned offset)
 { return c->operations.read(c->cookie, c->base + offset); }
 static uint32_t read_channel(struct a733_dma_controller *c, unsigned channel, unsigned offset)
-{ return read_global(c, 0x100 + channel * 0x40 + offset); }
+{ return read_global(c, A733_DMA_REG_CHANNELS + channel * A733_DMA_REG_CHANNEL_STRIDE + offset); }
 static void write_channel(struct a733_dma_controller *c, unsigned channel,
                           unsigned offset, uint32_t value)
-{ c->operations.write(c->cookie, c->base + 0x100 + channel * 0x40 + offset, value); }
+{ c->operations.write(c->cookie, c->base + A733_DMA_REG_CHANNELS + channel * A733_DMA_REG_CHANNEL_STRIDE + offset, value); }
 static void barrier(struct a733_dma_controller *c)
 { c->operations.barrier(c->cookie); }
 static uint64_t ticks(struct a733_dma_controller *c)
@@ -20,14 +23,8 @@ static int valid_channel(const struct a733_dma_controller *c, unsigned channel)
 { return c && c->initialized && channel < A733_DMA_CHANNELS; }
 
 /* Every range passed here was checked for overflow. */
-static int overlaps(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
-{ return a < b + m && b < a + n; }
 static int cpu_overlap(const struct a733_dma_mapping *a, const void *b, size_t n)
-{ return overlaps((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
-static int mapping_overlap(const struct a733_dma_mapping *a, const struct a733_dma_mapping *b)
-{
-    return cpu_overlap(a, b->cpu, b->bytes) || overlaps(a->bus, a->bytes, b->bus, b->bytes);
-}
+{ return a733_dma_overlap((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
 static int metadata_overlap(const struct a733_dma_mapping *m, const struct a733_dma_transfer *t)
 {
     return cpu_overlap(m, t, sizeof(*t)) ||
@@ -37,11 +34,7 @@ static int metadata_overlap(const struct a733_dma_mapping *m, const struct a733_
 
 static int valid_mapping(struct a733_dma_controller *c, const struct a733_dma_mapping *m)
 {
-    if (!m->cpu || !m->bytes || ((uintptr_t)m->cpu & 63) ||
-        (m->bus & 63) || (m->bytes & 63) ||
-        (uintptr_t)m->cpu > UINTPTR_MAX - m->bytes ||
-        m->bus >= (UINT64_C(1) << 35) || m->bytes > (UINT64_C(1) << 35) - m->bus)
-        return 0;
+    if (!a733_dma_mapping_shape(m)) return 0;
     if (m->access != A733_DMA_READ && m->access != A733_DMA_WRITE &&
         m->access != A733_DMA_DESCRIPTORS) return 0;
     if (cpu_overlap(m, c, sizeof(*c))) return 0;
@@ -66,8 +59,8 @@ static int fifo_memory_conflict(const struct a733_dma_endpoint *e,
                                 const struct a733_dma_transfer *t)
 {
     for (size_t j = 0; j < t->mapping_count; ++j)
-        if (overlaps(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
-    return overlaps(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
+        if (a733_dma_overlap(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
+    return a733_dma_overlap(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
 }
 
 static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dma_transfer *b)
@@ -82,7 +75,7 @@ static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dm
                     /* Read and write FIFOs may share one MMIO address (UART RBR/
                      * THR). Each direction still needs independent native port
                      * admission; two readers or two writers remain exclusive. */
-                    if (e == o && other[o]->request && overlaps(ends[e]->address, ends[e]->width,
+                    if (e == o && other[o]->request && a733_dma_overlap(ends[e]->address, ends[e]->width,
                                                      other[o]->address, other[o]->width)) return 1;
             }
             if (fifo_memory_conflict(ends[e], b)) return 1;
@@ -111,9 +104,9 @@ static enum a733_dma_control_status validate_transfer(
     for (size_t i = 0; i < t->mapping_count; ++i) {
         const struct a733_dma_mapping *m = &t->mappings[i];
         if (!valid_mapping(c, m) || m->access == A733_DMA_DESCRIPTORS) return A733_DMA_INVALID;
-        if (metadata_overlap(m, t) || mapping_overlap(m, &t->descriptors)) return A733_DMA_CONFLICT;
+        if (metadata_overlap(m, t) || a733_dma_mappings_overlap(m, &t->descriptors)) return A733_DMA_CONFLICT;
         for (size_t j = 0; j < i; ++j)
-            if (mapping_overlap(m, &t->mappings[j])) return A733_DMA_CONFLICT;
+            if (a733_dma_mappings_overlap(m, &t->mappings[j])) return A733_DMA_CONFLICT;
     }
     for (size_t i = 0; i < t->count; ++i) {
         const struct a733_dma_segment *s = &t->segments[i];
@@ -136,17 +129,17 @@ static enum a733_dma_control_status validate_transfer(
         if (!other) continue;
         if (t == other || metadata_overlap(&t->descriptors, other) ||
             metadata_overlap(&other->descriptors, t) ||
-            mapping_overlap(&t->descriptors, &other->descriptors)) return A733_DMA_CONFLICT;
+            a733_dma_mappings_overlap(&t->descriptors, &other->descriptors)) return A733_DMA_CONFLICT;
         for (size_t i = 0; i < t->mapping_count; ++i) {
             const struct a733_dma_mapping *m = &t->mappings[i];
-            if (metadata_overlap(m, other) || mapping_overlap(m, &other->descriptors)) return A733_DMA_CONFLICT;
+            if (metadata_overlap(m, other) || a733_dma_mappings_overlap(m, &other->descriptors)) return A733_DMA_CONFLICT;
             for (size_t j = 0; j < other->mapping_count; ++j)
                 if ((m->access != A733_DMA_READ || other->mappings[j].access != A733_DMA_READ) &&
-                    mapping_overlap(m, &other->mappings[j])) return A733_DMA_CONFLICT;
+                    a733_dma_mappings_overlap(m, &other->mappings[j])) return A733_DMA_CONFLICT;
         }
         for (size_t j = 0; j < other->mapping_count; ++j)
             if (metadata_overlap(&other->mappings[j], t) ||
-                mapping_overlap(&t->descriptors, &other->mappings[j])) return A733_DMA_CONFLICT;
+                a733_dma_mappings_overlap(&t->descriptors, &other->mappings[j])) return A733_DMA_CONFLICT;
         if (fifo_conflict(t, other) || fifo_conflict(other, t)) return A733_DMA_CONFLICT;
     }
     return A733_DMA_CONTROL_OK;
@@ -323,8 +316,8 @@ static int rx_position(struct a733_dma_controller *c,unsigned channel)
     struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
     uint32_t before=read_channel(c,channel,PACKAGES);
     uint32_t link=read_channel(c,channel,DESCRIPTOR);
-    uint32_t destination=read_channel(c,channel,0x14);
-    uint32_t remaining=read_channel(c,channel,0x18);
+    uint32_t destination=read_channel(c,channel,DESTINATION);
+    uint32_t remaining=read_channel(c,channel,REMAINING);
     uint32_t again=read_channel(c,channel,DESCRIPTOR);
     uint32_t after=read_channel(c,channel,PACKAGES);
     if(before!=after || link!=again || after!=s->package_last)return 0;

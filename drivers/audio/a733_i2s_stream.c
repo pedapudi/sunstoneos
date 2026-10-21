@@ -59,18 +59,6 @@ static int control(struct a733_i2s_stream *s,unsigned bits)
     v=(v&~(own|1u))|(bits&own)|(gen||(v&other)?1u:0u);
     return wr(s,CTL,v);
 }
-static int mapping(const struct a733_dma_mapping *m)
-{
-    return m->cpu && m->bytes && !((uintptr_t)m->cpu&63) && !(m->bus&63) && !(m->bytes&63) &&
-        m->bytes<=UINTPTR_MAX-(uintptr_t)m->cpu && m->bus<(UINT64_C(1)<<35) &&
-        m->bytes<=(UINT64_C(1)<<35)-m->bus;
-}
-static int overlaps(const struct a733_dma_mapping *a,const struct a733_dma_mapping *b)
-{
-    return ((uintptr_t)a->cpu<(uintptr_t)b->cpu+b->bytes &&
-        (uintptr_t)b->cpu<(uintptr_t)a->cpu+a->bytes) ||
-        (a->bus<b->bus+b->bytes && b->bus<a->bus+a->bytes);
-}
 int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a733_dma_transfer *t)
 {
     struct a733_i2s_plan plan;
@@ -79,7 +67,7 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
         !p->operations.io.acquire || !p->operations.io.acquire_poll || !p->operations.io.release ||
         !p->operations.io.read || !p->operations.io.write || !p->operations.io.now_us ||
         !t || t->count<2 || t->count>A733_I2S_STREAM_PERIODS || t->mapping_count!=t->count ||
-        !t->segments || !t->mappings || !mapping(&t->descriptors) ||
+        !t->segments || !t->mappings || !a733_dma_mapping_shape(&t->descriptors) ||
         t->descriptors.access!=A733_DMA_DESCRIPTORS || t->descriptors.bytes<t->count*64 ||
         t->descriptors.bus>UINT32_C(0xfffff800)-t->count*64 ||
         (p->direction==A733_I2S_TRANSMIT && p->format.first_slot))return 0;
@@ -88,15 +76,15 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
         const struct a733_dma_mapping *m=&t->mappings[i];
         const struct a733_dma_endpoint *fifo=p->direction==A733_I2S_RECEIVE?&g->source:&g->destination;
         const struct a733_dma_endpoint *ram=p->direction==A733_I2S_RECEIVE?&g->destination:&g->source;
-        if(!mapping(m) || m->access!=(p->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ) ||
+        if(!a733_dma_mapping_shape(m) || m->access!=(p->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ) ||
             !g->bytes || g->bytes>A733_DMA_MAX_SEGMENT_BYTES || g->bytes!=t->segments[0].bytes ||
             g->bytes%plan.frame_bytes || g->bytes%(plan.dma_width*8) || g->bytes>m->bytes || ram->address!=m->bus || ram->request ||
             fifo->address!=(p->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO) ||
             fifo->request!=3 || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
-            fifo->burst!=8 || ram->burst!=8 || overlaps(m,&t->descriptors) ||
+            fifo->burst!=8 || ram->burst!=8 || a733_dma_mappings_overlap(m,&t->descriptors) ||
             (p->cyclic && (g->bytes!=m->bytes || (p->direction==A733_I2S_RECEIVE &&
              (g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
-        for(size_t k=0;k<i;++k)if(overlaps(m,&t->mappings[k]))return 0;
+        for(size_t k=0;k<i;++k)if(a733_dma_mappings_overlap(m,&t->mappings[k]))return 0;
     }
     return 1;
 }
