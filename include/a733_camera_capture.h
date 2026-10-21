@@ -113,7 +113,7 @@ int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
  * parser capture bits clear, scan IOMMU faults, and perform fresh DMA status
  * and CPU cache synchronization. No packet-quiet/drain/close/release callback
  * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
- * Only the307200-byte payload per plane may be read, without mutation or reuse.
+ * Only the 307,200-byte payload per plane may be read, without mutation or reuse.
  * A privileged const view cannot be revoked: its consumer must serialize use
  * with this owner and stop on a later fault. Only a completed separate copy
  * remains independently usable. This API does not authorize EL0 aliases. */

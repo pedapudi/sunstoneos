@@ -91,7 +91,7 @@ int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
  * must authenticate self-cleared SCAP, no rearm, source/error observations and
  * the same retained mappings. Fresh DMA status and CPU synchronization still
  * execute. No disable, drain, status acknowledgement or release occurs.
- * READABLE keeps DEVICE ownership; only the307200-byte payload of each plane
+ * READABLE keeps DEVICE ownership; only the 307,200-byte payload of each plane
  * may be read. Neither padding nor guards are image data. No second request,
  * close/release, CPU write or mapping/buffer reuse is authorized. */
 int a733_camera_dma_readout(struct a733_camera_dma *,uint64_t deadline_us);

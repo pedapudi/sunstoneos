@@ -10,7 +10,7 @@ struct model {
     unsigned calls, writes, reads, line_calls, receiver_calls, release_calls;
     int acquire_pending, receiver_pending, release_pending;
     int fail_write, fail_line, late_write, wrong_read, fail_release, change_token;
-    int receiver_ready, fault_time;
+    int receiver_ready, fault_time, pwdn_only;
 };
 static int now(void *p, uint64_t *n) {
     struct model *m=p; if(m->fault_time) return -1; *n=m->now; return 1;
@@ -25,17 +25,22 @@ static int line(void *p,uint64_t token,enum ov5640_line l,int asserted,uint64_t 
     struct model *m=p; assert(token==71 && !asserted && m->now<d);
     ++m->calls; ++m->line_calls;
     if(l==OV5640_PWDN_LINE) { assert(m->now>=m->acquired+5000); m->pwdn=m->now; }
-    else { assert(m->pwdn && m->now>=m->pwdn+1000); m->reset=m->now; }
+    else { assert(!m->pwdn_only && m->pwdn && m->now>=m->pwdn+1000); m->reset=m->now; }
     return m->fail_line ? -1 : 1;
+}
+/* Without a RESET line, PWDN release still precedes the bus by 1 ms + 20 ms. */
+static int bus_ready(const struct model *m) {
+    return m->pwdn_only ? m->pwdn && !m->reset && m->now>=m->pwdn+21000 :
+        m->reset && m->now>=m->reset+20000;
 }
 static int read_reg(void *p,uint64_t token,uint8_t a,uint16_t r,uint8_t *v,uint64_t d) {
     struct model *m=p; assert(token==71 && a==0x3c && m->now<d);
-    assert(m->reset && m->now>=m->reset+20000); ++m->calls; ++m->reads;
+    assert(bus_ready(m)); ++m->calls; ++m->reads;
     *v=m->reg[r]; if(m->wrong_read && r==0x3036) *v^=1; return 1;
 }
 static int write_reg(void *p,uint64_t token,uint8_t a,uint16_t r,uint8_t v,uint64_t d) {
     struct model *m=p; assert(token==71 && a==0x3c && m->now<d);
-    assert(m->reset && m->now>=m->reset+20000);
+    assert(bus_ready(m));
     if(m->delay_start) { assert(m->now>=m->delay_start+300000); m->delay_start=0; }
     if(r==0x3c00 && m->writes<300) m->delay_start=m->now;
     if(r==0x4202 && v==0) assert(m->receiver_ready);
@@ -61,12 +66,16 @@ static int release(void *p,uint64_t token,uint64_t d) {
     return m->fail_release ? -1 : 1;
 }
 static const struct ov5640_ops ops={now,acquire,line,read_reg,write_reg,receiver,release};
-static void setup(struct ov5640 *s,struct model *m,int pattern) {
+static void setup_profile(struct ov5640 *s,struct model *m,int pattern,int pwdn_only) {
     memset(s,0,sizeof(*s)); memset(m,0,sizeof(*m)); memset(m->reg,0x80,sizeof(m->reg));
-    m->reg[0x300a]=0x56; m->reg[0x300b]=0x40; m->now=1;
+    m->reg[0x300a]=0x56; m->reg[0x300b]=0x40; m->now=1; m->pwdn_only=pwdn_only;
+    assert(ov5640_pwdn_only(s)==-1);
     assert(ov5640_init(s,&ops,m,pattern)==1);
+    if(pwdn_only) assert(ov5640_pwdn_only(s)==1);
     assert(ov5640_open(s,2000000)==1);
+    if(!pwdn_only) assert(ov5640_pwdn_only(s)==-1 && !s->pwdn_only);
 }
+static void setup(struct ov5640 *s,struct model *m,int pattern) { setup_profile(s,m,pattern,0); }
 static int step(struct ov5640 *s,struct model *m) {
     unsigned n=m->calls; int r=ov5640_poll(s); assert(m->calls-n<=1);
     if(s->wait_until>m->now) m->now=s->wait_until; else ++m->now;
@@ -106,6 +115,14 @@ int main(int argc,char **argv) {
     assert(ov5640_close(&s,m->now+10000)==1); m->release_pending=2;
     assert(complete(&s,m)==1 && s.state==OV5640_CLOSED && !s.token);
     n=m->calls; assert(ov5640_poll(&s)==1 && n==m->calls);
+    /* PWDN-only modules make no RESET call and program the same register image. */
+    unsigned char *image=malloc(65536); assert(image);
+    setup(&s,m,1); ready(&s,m); memcpy(image,m->reg,65536);
+    setup_profile(&s,m,1,1); ready(&s,m);
+    assert(m->line_calls==1 && !m->reset && !memcmp(image,m->reg,65536));
+    free(image);
+    setup_profile(&s,m,0,1); m->fail_line=1;
+    assert(complete(&s,m)==-1 && m->line_calls==1 && !m->reads); quiet_fault(&s,m);
     /* Identify a different sensor before writing any registers. */
     setup(&s,m,0); m->reg[0x300a]=0x55;
     assert(complete(&s,m)==-1 && !m->writes && s.token==71); quiet_fault(&s,m);

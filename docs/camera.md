@@ -19,9 +19,11 @@ The link clock is 192 MHz, corresponding to 384 Mbit/s per data lane.
 The 48 MHz timing rate divided by 1,600 clocks per line and 1,000 lines per frame
 gives a nominal 30 frames/s. The physical clock and frame rate have not been measured.
 The sensor handles automatic exposure, gain and white balance. The initial
-anti-flicker setting is 50 Hz. Initialization selects ordinary images or static
-color bars. Additional modes, runtime exposure controls, autofocus and orientation
-controls remain to be implemented.
+anti-flicker setting is 50 Hz. Initialization selects ordinary images or the
+sensor's color-bar test pattern, which register `0x503d` = `0x84` enables as in
+the Linux driver. The [native binding](camera-native.md) takes this selection
+from its boot record. Additional modes, runtime exposure controls, autofocus and
+orientation controls remain to be implemented.
 
 The reference sensor driver is
 [Linux `drivers/media/i2c/ov5640.c`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c),
@@ -42,12 +44,17 @@ spins nor allocates memory.
 The platform acquire callback must reserve the sensor, bus, pins, clocks and
 power resources. It publishes a nonzero lease before any change that could
 require recovery. Successful admission proves stable 24 MHz XCLK, suitable
-module rails, PWDN asserted, and RESETB asserted. Module-specific circuitry may
-combine these controls; its adapter must prove equivalent timing and electrical
-behavior. Neither connector voltage nor a matching connector establishes this.
+module rails, PWDN asserted, and RESETB asserted when RESETB has its own control.
+Module-specific circuitry may combine these controls; its adapter must prove
+equivalent timing and electrical behavior. Neither connector voltage nor a
+matching connector establishes this.
 
 After admission, the driver waits at least 5 ms, deasserts PWDN, waits at least
 1 ms, deasserts RESETB, and waits at least 20 ms before reading the chip identity.
+A module whose RESETB has no separate control, such as one that ties RESETB to a
+pull-up, selects the power-down-only sequence before open. That sequence omits
+only the RESETB step and keeps both waits. The Linux driver uses the same
+sequence when no reset GPIO is supplied.
 It requires `0x5640`. Sensor I2C uses 7-bit address `0x3c`, a 16-bit big-endian
 register address, and one data byte. This address is distinct from an 8-bit
 address byte containing the read/write bit. An I2C read sends the register
@@ -187,9 +194,12 @@ No runtime performance was measured. Raw command logs,
 source hashes, extracted reference functions, binary identities and target
 metadata are under `~/.cache/sunstoneos/evidence/ov5640-20261016/`.
 
-The next implementation is the shared camera platform binding and CSI receiver
-with bounded frame capture. Physical validation requires an electrically matched
-OV5640 module, independent watchdog recovery, and a coordinator-owned board test.
-A color-bar frame with verified dimensions, ordering, transport error handling
-and repeated stop/start is the first sensor-to-memory acceptance result.
+The [native capture path](camera-native.md) captures one retained still image
+from CAM1. Rearm and continuous capture, the CAM2 connector and wider modes
+remain to be implemented. Physical validation requires an electrically matched
+OV5640 module, independent recovery and a coordinator-owned board test.
+The first sensor-to-memory acceptance result is a color-bar frame with verified
+dimensions and plane ordering, followed by transport error handling and repeated
+stop/start. `apps/camera/observe.py --image <frame> --color-bars --ppm <file>`
+checks a saved frame for vertical-bar structure and writes a review image.
 No board request or physical camera test has run for this component.

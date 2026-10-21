@@ -32,7 +32,7 @@ struct ov5640_ops {
     /* Acquire reserves clocks, rails, GPIO, sensor and I2C ownership. Before
      * any hardware change it publishes a nonzero token, retained on failure.
      * READY means stable 24 MHz XCLK, correct module rails, physical PWDN high
-     * and RESETB low. The module adapter must establish the actual pinout and
+     * and, unless ov5640_pwdn_only was called, RESETB low. The module adapter must establish the actual pinout and
      * voltage levels; the board's connector 3.3 V is not a bare-sensor rail.
      * Subsequent calls continue the same token. No changing token on retry.
      */
@@ -69,11 +69,15 @@ struct ov5640 {
     uint64_t token, receiver_token, deadline, now, wait_until;
     enum ov5640_state state;
     uint16_t index;
-    uint8_t phase, saved, test_pattern, initialized;
+    uint8_t phase, saved, test_pattern, pwdn_only, initialized;
 };
 /* All invalid requests return ERROR without callbacks or changes. */
 int ov5640_init(struct ov5640 *, const struct ov5640_ops *, void *context,
                 int color_bars);
+/* Before open, select a module whose RESETB has no separate control. The
+ * driver then never drives the RESET line; the 1 ms and 20 ms waits after PWDN
+ * release are unchanged. Linux uses the same sequence without a reset GPIO. */
+int ov5640_pwdn_only(struct ov5640 *);
 int ov5640_open(struct ov5640 *, uint64_t deadline);
 int ov5640_start(struct ov5640 *, uint64_t receiver_token, uint64_t deadline);
 int ov5640_stop(struct ov5640 *, uint64_t deadline);

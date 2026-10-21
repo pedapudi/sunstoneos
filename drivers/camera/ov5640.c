@@ -107,6 +107,12 @@ int ov5640_init(struct ov5640 *s, const struct ov5640_ops *ops, void *context,
                           .test_pattern = (uint8_t)color_bars, .initialized = 1 };
     return 1;
 }
+int ov5640_pwdn_only(struct ov5640 *s)
+{
+    if (!s || !s->initialized || s->state != OV5640_NEW) return -1;
+    s->pwdn_only = 1;
+    return 1;
+}
 static int begin(struct ov5640 *s, enum ov5640_state state, uint64_t deadline)
 {
     if (!deadline || deadline <= s->now) return -1;
@@ -226,8 +232,11 @@ int ov5640_poll(struct ov5640 *s)
         s->state = OV5640_RESET;
         return 0;
     case OV5640_RESET:
-        r = s->ops.line(s->context, s->token, OV5640_RESET_LINE, 0, s->deadline);
-        if (r != 1 || time_ok(s) != 1) return fault(s);
+        if (!s->pwdn_only) {
+            r = s->ops.line(s->context, s->token, OV5640_RESET_LINE, 0,
+                            s->deadline);
+            if (r != 1 || time_ok(s) != 1) return fault(s);
+        }
         s->state = OV5640_BUS_WAIT;
         return delay(s, 20000);
     case OV5640_BUS_WAIT:

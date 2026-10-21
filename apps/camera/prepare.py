@@ -108,7 +108,7 @@ def session_profile(raw,layout,identity):
           'camera.version','camera.bytes','camera.owner','camera.epoch','camera.generation','camera.lease',
           'camera.deadline_us','camera.proof','camera.origin','camera.excluded_masters','camera.powered_masters',
           'camera.raw_trim','camera.parameter_guard_bytes','camera.plane_guard_bytes','camera.apb1','camera.apb1_hz',
-          'camera.settle','camera.deskew','camera.reset_bank','camera.reset_pin',
+          'camera.settle','camera.deskew','camera.reset_bank','camera.reset_pin','camera.test_pattern','camera.pwdn_only',
           'media.owner','media.handoff','media.deadline_us','media.groups','media.camera_mclk_mask']
     values={k:number(raw,layout,k) for k in keys}
     epoch,generation,lease=(values[k] for k in ('epoch','generation','lease'))
@@ -130,9 +130,15 @@ def session_profile(raw,layout,identity):
         values['camera.excluded_masters']==values['camera.powered_masters']==0xfcf and
         values['camera.raw_trim']==0xb00 and values['camera.parameter_guard_bytes']==values['camera.plane_guard_bytes']==4096 and
         1<=values['camera.settle']<=255 and 1<=values['camera.deskew']<=31,'Camera native admission profile differs')
-    bank,pin=values['camera.reset_bank'],values['camera.reset_pin']
-    require(1<=bank<=10 and pin<(0,11,17,24,16,7,15,20,17,28,26)[bank] and not(bank==4 and 5<=pin<=8) and not(bank==10 and pin<10),'Camera reset wiring conflicts')
-    inherited=field(raw,layout,'camera.inherited');require(inherited[11*3]==inherited[14*3]==1,'Camera inherited reset/powerdown GPIO must be asserted')
+    # 0 is the ordinary image, 1 the OV5640 color bars; a PWDN-only module names no reset GPIO.
+    require(values['camera.test_pattern'] in (0,1) and values['camera.pwdn_only'] in (0,1),'Camera test pattern or module profile differs')
+    bank,pin=values['camera.reset_bank'],values['camera.reset_pin'];inherited=field(raw,layout,'camera.inherited')
+    if values['camera.pwdn_only']:
+        require(bank==pin==0 and inherited[14*3:15*3]==bytes(3),'PWDN-only camera module names reset wiring')
+        require(inherited[11*3]==1,'Camera inherited powerdown GPIO must be asserted')
+    else:
+        require(1<=bank<=10 and pin<(0,11,17,24,16,7,15,20,17,28,26)[bank] and not(bank==4 and 5<=pin<=8) and not(bank==10 and pin<10),'Camera reset wiring conflicts')
+        require(inherited[11*3]==inherited[14*3]==1,'Camera inherited reset/powerdown GPIO must be asserted')
     rails=struct.unpack('<3I',field(raw,layout,'camera.rails'));uv=struct.unpack('<3I',field(raw,layout,'camera.programmed_uv'))
     require(len(set(rails))==3 and set(rails)<={0,1,3,7,16,19,20,24,38} and all(uv),'Unsupported camera supply profile')
     apb=values['camera.apb1'];parent=600000000 if apb>>24==3 else 24000000;div=(apb&31)+1

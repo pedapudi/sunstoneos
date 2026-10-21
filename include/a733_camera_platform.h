@@ -49,7 +49,7 @@ struct a733_camera_platform_ops {
      * cannot grant either delegation. Unrelated local writers stay excluded.
      * This callback must not configure common analog registers or change IOMMU
      * mappings. Pin/clock/power managers and the actual evidence provider remain
-     * platform responsibilities. No current native provider is implemented.
+     * platform responsibilities. a733_camera_native.c is the current native provider.
      */
     int (*admit)(void *,uint64_t deadline,struct a733_camera_admission *);
     /* Ordered aligned 32-bit Device accesses relative to COMMON_BASE; read
