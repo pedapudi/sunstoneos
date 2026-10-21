@@ -47,6 +47,14 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
     if(msbc_refuse){for(unsigned n=0;n<2000&&!atomic_load(&app.failed);++n)if(pump()<0)break;
         assert(atomic_load(&app.failed)&&msbc_setups==1&&!atomic_load(&voice.segment_disconnected));puts("PASS command refusal retains without speculative fallback");return 0;}
     until(CAPTURE);assert(stream()->codec==(msbc_no_cap||msbc_fallback?1u:2u));
+    if(!strcmp(argv[1],"cadence")){
+        /* mSBC silence follows the 7.5 ms eSCO frame period on a jittered poll grid. */
+        uint64_t start=wire.now,before=sco_bytes;jittered(900000);
+        uint64_t frames=(sco_bytes-before)/60,expected=(wire.now-start)/7500;
+        fprintf(stderr,"mSBC silence %llu frames over %llu us, expected %llu\n",(unsigned long long)frames,(unsigned long long)(wire.now-start),(unsigned long long)expected);
+        assert(frames<=expected+1&&frames+1>=expected&&!voice.silence_restarts);
+        puts("PASS mSBC silence cadence anchored to its frame period");return 0;
+    }
     if(!strcmp(argv[1],"bac")){
         /* HFP lets the HF resend AT+BAC during audio. A list that keeps mSBC
          * keeps the selection; one that drops it requires reselection only. */

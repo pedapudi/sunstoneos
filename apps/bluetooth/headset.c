@@ -27,7 +27,7 @@ static struct {
     struct bluetooth_pcm_snapshot snapshot;
     struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
     uint8_t pcm[BLUETOOTH_PCM_BYTES],silence[254];
-    uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence;
+    uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence,silence_restarts;
     unsigned stage,auth_started,silence_bytes,configured,wideband,silence_offset,silence_ready;
     atomic_uint terminal;
     void *segment_consumer;
@@ -268,7 +268,8 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         }
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
-            if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}
+            if(r<0)return fail();
+            if(r==1)voice.next_silence=bluetooth_cadence(voice.next_silence,now,(voice.silence_bytes/2)*125,voice.capture_deadline,&voice.silence_restarts);}
         return 0;
     }
     if(voice.stage==CLOSE&&l->phase==BT_SCO_CLOSED){
@@ -467,13 +468,15 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
                 unsigned bytes=60-voice.silence_offset;if(bytes>voice.audio.mtu)bytes=voice.audio.mtu;
                 uint64_t serial;int r=bt_sco_send(&voice.audio,voice.stream,voice.silence+voice.silence_offset,bytes,voice.capture_deadline,&serial);
                 if(r<0)return fail();if(r==1){voice.silence_offset+=bytes;
-                    if(voice.silence_offset==60){voice.silence_offset=0;voice.silence_ready=0;voice.next_silence=cap(now,7500,voice.capture_deadline);}}
+                    if(voice.silence_offset==60){voice.silence_offset=0;voice.silence_ready=0;
+                        voice.next_silence=bluetooth_cadence(voice.next_silence,now,7500,voice.capture_deadline,&voice.silence_restarts);}}
             }
         }else
 #endif
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
-            if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}
+            if(r<0)return fail();
+            if(r==1)voice.next_silence=bluetooth_cadence(voice.next_silence,now,(voice.silence_bytes/2)*125,voice.capture_deadline,&voice.silence_restarts);}
         return 0;
     }
     if(voice.stage==CLOSE&&l->phase==BT_SCO_CLOSED){

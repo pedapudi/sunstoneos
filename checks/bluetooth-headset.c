@@ -9,7 +9,7 @@ void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine
 #endif
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss;
-static uint16_t local_cid;static unsigned handoff,speech,informational;
+static uint16_t local_cid;static unsigned handoff,speech,informational;static uint64_t sco_bytes;
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -126,6 +126,7 @@ static void wire_outputs(void)
         if(wire.tn-output_cursor<head+n)return;
         if(p[0]==1)command_reply(get16(p+1),p+4,n);
         else {uint8_t credits[]={1,p[1],(uint8_t)(p[2]&15),1,0};
+            if(p[0]==3)sco_bytes+=n;
 #ifdef BLUETOOTH_CHECK_PLAYBACK
             if(p[0]==3)playback_observe(p+4,n);
             if(p[0]!=3||!playback_hold_credits)
@@ -143,6 +144,14 @@ static int pump(void)
 {wire.room=1024;++wire.now;int r=bluetooth_application_poll(&app);wire_outputs();return r;}
 static void until(unsigned phase)
 {for(unsigned i=0;i<2000&&voice.stage!=phase;++i){int r=pump();if(r<0)fprintf(stderr,"failure phase=%u HCI=%u acl=%u sec=%u config=%u now=%llu\n",voice.stage,app.hci.state,voice.acl.state,voice.security.fatal,voice.security.configuration_stage,(unsigned long long)wire.now);assert(r>=0);}assert(voice.stage==phase);}
+/* Owner polls on a jittered 1 ms tick: each gap is 700..1000 us, never past
+ * the profile's receive-latency bound. */
+static void jittered(uint64_t duration)
+{
+    uint64_t end=wire.now+duration;unsigned seed=12345;
+    while(wire.now<end){seed=seed*1103515245u+12345u;wire.now+=999-(seed>>16)%300;assert(pump()>=0);
+        if(output_cursor==wire.tn)output_cursor=wire.tn=0;} /* Bound the modeled TX log. */
+}
 static unsigned owned_records(void)
 {unsigned n=0;for(unsigned i=0;i<app.hci.transport.count;++i)n+=app.hci.transport.records[i].owner==BT_H4_OWNED;return n;}
 static void setup(void)
@@ -228,6 +237,19 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     const uint8_t connect[]={3,0,0x61,0};sig_in(2,50,connect,4);until(AG);
     assert(rf_stage);const char *at="AT+BRSF=0\rAT+CIND=?\rAT+CIND?\rAT+CMER=3,,,1\r";rf_in(14,0xef,(const uint8_t *)at,(unsigned)strlen(at),-1);at_sent=1;
     until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY);
+    if(!strcmp(argv[1],"cadence")){
+        /* CVSD silence follows its 3750 us packet period, not the 4 ms poll
+         * grid that rounding up from each serving poll would produce. */
+        uint64_t start=wire.now,before=sco_bytes,restarts=0;jittered(900000);
+        uint64_t sent=sco_bytes-before,expected=16*(wire.now-start)/1000;
+        fprintf(stderr,"CVSD silence %llu bytes over %llu us, expected %llu\n",(unsigned long long)sent,(unsigned long long)(wire.now-start),(unsigned long long)expected);
+        assert(voice.silence_bytes==60&&sent<=expected+60&&sent+60>=expected&&!voice.silence_restarts);
+        assert(bluetooth_cadence(1000,1500,7500,UINT64_MAX,&restarts)==8500&&!restarts);
+        assert(bluetooth_cadence(1000,8500+14999,7500,UINT64_MAX,&restarts)==8500&&!restarts);
+        assert(bluetooth_cadence(1000,8500+15000,7500,UINT64_MAX,&restarts)==23500&&restarts==1);
+        assert(bluetooth_cadence(1000,1500,7500,5000,&restarts)==5000&&bluetooth_cadence(UINT64_MAX-1,0,7500,UINT64_MAX,&restarts)==UINT64_MAX);
+        puts("PASS CVSD silence cadence anchored to its period on a jittered poll grid");return 0;
+    }
     if(informational){const uint8_t request[]={1,2,3,4,5,6,4,4,0x24,2};event(&wire,4,request,sizeof(request));}
     if(speech){
         assert(argc==4);FILE *input=fopen(argv[2],"rb");assert(input);

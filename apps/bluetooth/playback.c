@@ -15,7 +15,7 @@ static struct {
     atomic_ullong accepted,acknowledged,silence,rx_packets,rx_bytes,rx_loss;
     atomic_ullong silence_uart,silence_released,silence_flushed,silence_not_sent;
     atomic_uint sealed,cancelled,closed;
-    uint64_t next_owner,next_frame;
+    uint64_t next_owner,next_frame,frame_restarts;
     unsigned upload_bytes,pcm_offset,frame_offset,ready,started;
     uint8_t frame[60];
     struct {uint64_t serial,ticket;unsigned sent;} packets[BT_SCO_PACKETS];
@@ -140,6 +140,7 @@ int bluetooth_playback_step(struct bluetooth_application *a,struct bt_sco *q,uin
         else if(atomic_load_explicit(&playback.sealed,memory_order_acquire))return 1;
         else pcm=zero;
         if(bluetooth_msbc_encode(pcm,playback.frame)!=1)return -1;
+        if(!playback.next_frame)playback.next_frame=now;
         if(pcm!=zero){playback.pcm_offset+=240;playback.slots[slot].result.encoded_samples+=120;}
         else atomic_fetch_add_explicit(&playback.silence,1,memory_order_release);
         playback.ready=1;playback.frame_offset=0;
@@ -152,7 +153,8 @@ int bluetooth_playback_step(struct bluetooth_application *a,struct bt_sco *q,uin
         int r=bt_sco_send(q,audio,playback.frame+playback.frame_offset,bytes,deadline,&serial);if(r<0)return -1;
         if(r==1){uint64_t owner=playback.started==2?ticket:0;playback.packets[i].serial=serial;playback.packets[i].ticket=owner;
             if(owner)playback.slots[slot].result.submitted_bytes+=bytes;playback.frame_offset+=bytes;
-            if(playback.frame_offset==60){playback.ready=0;playback.frame_offset=0;playback.next_frame=now>UINT64_MAX-7500?UINT64_MAX:now+7500;}}
+            if(playback.frame_offset==60){playback.ready=0;playback.frame_offset=0;
+                playback.next_frame=bluetooth_cadence(playback.next_frame,now,7500,UINT64_MAX,&playback.frame_restarts);}}
     }
     return 1;
 }

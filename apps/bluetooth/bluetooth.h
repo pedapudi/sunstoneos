@@ -76,6 +76,17 @@ struct bluetooth_application {
     struct bt_hci_identity identity;
     uint64_t discarded_records;
 };
+/* Next slot of a fixed-period synchronous TX stream. It advances from the
+ * previous slot rather than from the 1 ms poll that served it, so poll rounding
+ * cannot stretch the period below the eSCO consumption rate. Up to two periods
+ * of lag are caught up back to back, within the SCO packet pool; a longer stall
+ * restarts the schedule at now once and counts it. The result is capped. */
+static inline uint64_t bluetooth_cadence(uint64_t slot,uint64_t now,uint64_t period,uint64_t limit,uint64_t *restarts)
+{
+    uint64_t next=slot>UINT64_MAX-period?UINT64_MAX:slot+period;
+    if(now>next&&now-next>=2*period){next=now;++*restarts;}
+    return next<limit?next:limit;
+}
 int bluetooth_profile_valid(const struct bluetooth_profile *,const uint8_t[32]);
 int bluetooth_application_init(struct bluetooth_application *,const struct bluetooth_profile *,
     struct a733_native_usb *,const struct board_radio_chip_id *,TaskHandle_t,atomic_uint *,uint64_t start_us,uint64_t end_us,

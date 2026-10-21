@@ -54,6 +54,15 @@ int main(int argc,char **argv)
         snprintf(path,sizeof(path),"%s.admission.json",getenv("SUNSTONE_DUPLEX_PCM"));f=fopen(path,"w");assert(f);
         fprintf(f,"{\"acl\":%llu,\"audio\":%llu,\"security\":%llu,\"capacity\":%u,\"mtu\":%u,\"handle\":%u,\"codec\":%u,\"firmware\":%llu,\"uart\":%llu}\n",(unsigned long long)voice.link,(unsigned long long)voice.stream,(unsigned long long)stream()->security.generation,voice.audio.capacity,voice.audio.mtu,stream()->handle,stream()->codec,(unsigned long long)app.firmware_generation,(unsigned long long)app.uart_generation);assert(!fclose(f));
     }
+    if(!strcmp(argv[1],"pcm-cadence")){
+        /* Before caller PCM arrives, encoded silence frames leave at the exact
+         * 7.5 ms eSCO period even though the owner polls on a jittered 1 ms grid. */
+        uint64_t start=wire.now,before=sco_bytes;jittered(3000000);
+        uint64_t frames=(sco_bytes-before)/60,expected=(wire.now-start)/7500;
+        fprintf(stderr,"Playback %llu frames over %llu us, expected %llu\n",(unsigned long long)frames,(unsigned long long)(wire.now-start),(unsigned long long)expected);
+        assert(frames<=expected+1&&frames+1>=expected&&!playback.frame_restarts);
+        current_task=reader;assert(bluetooth_playback_end(&app,1)==1);current_task=owner;finish_close();
+        puts("PASS playback frame cadence anchored to the eSCO period");return 0;}
     if(!strcmp(argv[1],"pcm-partial")){
         current_task=reader;uint8_t hash[32];storage_digest_bytes(caller,2400,hash);
         assert(bluetooth_playback_write(&app,1,0,caller,1024)==1&&bluetooth_playback_commit(&app,1,hash)==-1&&!atomic_load(&playback.accepted));
