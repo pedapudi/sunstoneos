@@ -183,6 +183,7 @@ static int reconnect_poll(struct a733_radio_session *s)
         }
         break;
     case 6:
+        /* A second loss from here on is not retried: the deadline retains all. */
         if(aic8800_network_resume(&s->sockets.network))s->reconnect_phase=7;
         break;
     case 7:

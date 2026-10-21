@@ -200,6 +200,12 @@ Recovery reuses the reconnect phases with three differences:
   the deadline. Each attempt starts a new association generation. Rearm therefore
   accepts any association later than the retired one, not only the next one.
 
+Only that reassociation step is retried. A second loss after reassociation
+succeeds is terminal. During the WPA2 4-way handshake it leaves the network
+adapter without authority to resume. After the adapter resumes, it leaves the
+address unassigned. In both cases recovery cannot finish, and when the recovery
+deadline passes the session faults and retains the complete graph.
+
 During recovery the session keeps servicing socket requests, so their timeouts
 and CLOSE still complete. After the address returns, the same IP interface
 resumes and socket submission reopens. Firmware key and port state after a
