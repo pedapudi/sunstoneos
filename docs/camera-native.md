@@ -1,6 +1,6 @@
 # Native reference camera capture
 
-The native camera binding prepares one OV5640 exposure and copies its completed
+The native camera binding prepares OV5640 exposures and copies the completed
 640 × 480 NV16 image into an application-owned memory reservation. NV16 stores
 307,200 luminance bytes followed by 307,200 interleaved chroma bytes in separate
 planes. The sensor sends two-lane UYVY; the pass-through route and camera DMA
@@ -20,8 +20,13 @@ build, boot epoch, generation, lease and deadline to reviewed physical evidence.
 The record includes inherited pin configurations, the module's reset wiring,
 supply identities and programmed voltages, APB1 configuration, analog trim,
 receiver timing and mapped guard requirements. Its test-pattern byte selects
-the ordinary sensor image (0) or the OV5640 color bars (1). Nonzero identifiers
-or matching fields alone cannot establish the required authority.
+the ordinary sensor image (0) or the OV5640 color bars (1). Its discard count,
+from 0 to 15, sets how many images are captured and discarded unread before the
+image that becomes readable, for example while sensor automatic exposure
+settles. Each discarded image is a complete sensor stop and start. The count
+occupies the alignment gap before the supply list, so existing field offsets
+are unchanged and zero keeps the single exposure. Nonzero identifiers or
+matching fields alone cannot establish the required authority.
 
 The boot coordinator must establish these conditions before constructing the
 binding:
@@ -97,14 +102,16 @@ A 16 KiB-aligned parent reservation contains 32 KiB of IOMMU tables, 8 KiB of
 parameter memory and two 311,296-byte plane allocations. Each plane includes
 307,200 payload bytes and a 4 KiB guard. The 663,552-byte parent uses 162 pages
 and one allocator record. Every address is an identity CPU/physical/IOVA address
-below 4 GiB. These spans fit at most two of the IOMMU builder's four 4 MiB windows.
-The native constructor refuses insufficient capacity; it does not shrink the mode.
-Before the parent becomes DEVICE-owned, the constructor fills both planes and
-their guards with `0xa5`. DMA admission cleans and invalidates that range, so
-bytes the DMA never writes hold the fill instead of earlier DRAM contents such
-as a previous image. The retained path does not read guards, so it cannot check
-them; the DMA status check remains the device-side detector of short frames and
-address errors. The host decoder reports rows that still hold the fill.
+below 4 GiB. These spans fit at most two of the IOMMU builder's four 4 MiB
+windows. The native constructor refuses insufficient capacity; it does not
+shrink the mode. Before the parent becomes DEVICE-owned, the constructor fills
+both planes and their guards with `0xa5`. DMA admission cleans and invalidates
+that range, so bytes the DMA never writes hold the fill instead of earlier DRAM
+contents such as a previous image. Each rearm fills both planes again before the
+same clean and invalidate, after DMA status is acknowledged and capture is
+inactive. The retained path does not read guards, so it cannot check them; the
+DMA status check remains the device-side detector of short frames and address
+errors. The host decoder reports rows that still hold the fill.
 
 The parent becomes DEVICE-owned before preparation and remains reserved after
 success or failure. Tables and parameter memory are immutable after publication.
@@ -128,10 +135,13 @@ A failed copy can leave partial destination bytes, which remain untrusted. The
 caller serializes use, pins the destination and exposes it only after success.
 This privileged interface does not authorize arbitrary EL0 addresses.
 
-Source buffers, IOMMU tables, clocks, rails and pins remain reserved. There is no
-rearm or disposal operation for this profile. Completion permits access to this
-still image; it does not prove that every system transaction and page walk has
-drained. Existing close-and-release APIs retain their separate drain requirements.
+Source buffers, IOMMU tables, clocks, rails and pins remain reserved. A
+discarded image is rearmed through the coordinator's
+[retained rearm sequence](camera-capture.md) before it becomes visible, so no
+view of it can exist. The readable image has no rearm or disposal operation.
+Completion permits access to this still image; it does not prove that every
+system transaction and page walk has drained. Existing close-and-release APIs
+retain their separate drain requirements.
 
 ## Sources and focused verification
 
@@ -142,19 +152,27 @@ is in §16.1.14.37. Both still-image branches of the pinned BSP's
 `bsp/drivers/vin/vin-video/vin_core.c` publish a completed buffer on this event.
 Existing camera component documents retain their register and table provenance.
 
-The focused native composition fixture executes the actual resource managers
-and camera controllers with modeled MMIO, task identity, cache visibility and
+The focused native composition fixture executes the actual resource managers and
+camera controllers with modeled MMIO, task identity, cache visibility and
 physical admission. It covers completed payload copying, bus arbitration loss,
 DMA errors, incomplete single-image capture, cache failure, late clock-authority
 failure, pin-manager failure and IOMMU faults. A color-bar case checks that the
 modeled sensor register `0x503d` reads `0x84`. A power-down-only case claims
 fourteen pins and waits at least 21 ms from power-down release to the identity
 read. Two cases hold both registries BUSY: capture succeeds when the hold ends
-before the deadline and faults when it does not. A short frame without DMA
-error status leaves fill bytes in the unwritten rows. A separate short case
-covers S_TWI1 register width and retained cancellation. Models do not qualify wiring, prefetch, timing, coherence,
-reset, camera output or physical recovery.
+before the deadline and faults when it does not. A short frame without DMA error
+status leaves fill bytes in the unwritten rows. Every nominal case sends the
+sensor configuration in 36 block writes of up to 40 bytes. A discard case
+captures three images with distinct payloads, checks that each previous image
+stays in the planes until the rearm refills them, that every image starts from
+the fill, and that SCAP is rewritten only after both quiet intervals. It then
+copies only the third image. Three rearm faults, from changed DMA status, a
+packet during the quiet interval and a lost SCAP write, each keep every lease
+and leave SCAP clear. A separate short case covers S_TWI1 register width and
+retained cancellation. Models do not qualify wiring, prefetch, timing,
+coherence, reset, camera output or physical recovery.
 
-Wider resolutions, continuous capture, alternate sensors, ISP processing,
-interrupt-driven service, buffer reclamation and a general application service
-remain required hardware capabilities outside this reference capture profile.
+Wider resolutions, continuous capture, the CAM2 connector, alternate sensors,
+ISP processing, interrupt-driven service, buffer reclamation and a general
+application service remain required hardware capabilities outside this reference
+capture profile.

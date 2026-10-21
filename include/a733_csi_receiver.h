@@ -14,7 +14,7 @@ enum a733_csi_state {
     A733_CSI_NEW, A733_CSI_ADMIT, A733_CSI_PRECHECK, A733_CSI_CONFIGURE,
     A733_CSI_ARMED, A733_CSI_SAMPLE, A733_CSI_PRODUCER_STOP,
     A733_CSI_DISABLE, A733_CSI_DRAIN, A733_CSI_RELEASE,
-    A733_CSI_CLOSED, A733_CSI_FAULT
+    A733_CSI_CLOSED, A733_CSI_FAULT, A733_CSI_REARM
 };
 struct a733_csi_config {
     /* CAM1=port/parser 0, CAM2=1. Native routing must verify this mapping.
@@ -71,6 +71,14 @@ int a733_csi_open(struct a733_csi_receiver *, uint64_t deadline);
  * ARMED. SCAP captures one frame and self-clears; never re-arm automatically.
  */
 int a733_csi_open_image(struct a733_csi_receiver *, uint64_t deadline);
+/* Explicit SCAP rearm for the next image, only from ARMED in image mode while
+ * the caller keeps the producer stopped. Packet-port and parser status must
+ * hold no flag at all since the last sample acknowledged them, so no packet
+ * arrived in between, and a fresh parser read must show every capture field
+ * clear. SCAP is then written and read back. Any other observation faults
+ * without acknowledgement; the caller supplies the quiet interval.
+ */
+int a733_csi_rearm_image(struct a733_csi_receiver *, uint64_t deadline);
 /* One status sample latches observed packet/parser flags. Any documented
  * packet error (including corrected ECC warning) or parser error faults.
  * A frame-end flag alone does not count or complete a DMA frame.

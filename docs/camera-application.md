@@ -1,9 +1,10 @@
 # Native OV5640 capture and supervised observation
 
 The dedicated `sunstone-a733-camera` image connects the existing OV5640 binding,
-shared providers and USB0 device transport. It retains one 640 × 480 NV16 frame:
-307,200 luminance bytes followed by 307,200 interleaved chroma bytes. No MIPI
-camera is connected; physical capture waits for the accessory and remains unqualified.
+shared providers and USB0 device transport. It retains one readable 640 × 480
+NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma
+bytes. No MIPI camera is connected; physical capture waits for the accessory and
+remains unqualified.
 
 The default image preserves its qualified watchdog admission requirements.
 `SUNSTONE_CAMERA_SUPERVISED=ON` selects a separate session and launch ABI for
@@ -29,7 +30,10 @@ existing sensor, CSI, route and camera DMA controllers. The PMIC provider and
 USB0 run independently. Only the camera owner uses the cached singleton
 allocator during preparation.
 
-The camera task copies both completed planes through the native copy interface.
+When the session's camera record requests discarded images, the native binding
+captures and rearms over them before the readable image; the application sees
+only that image. The camera task copies both completed planes through the native
+copy interface.
 It publishes output only after both copies succeed and the deadline remains
 live. USB reads the immutable output without accessing allocator metadata.
 Failed or cancelled capture retains every resource. Partial copies are
@@ -79,7 +83,7 @@ framework. Build `sunstone-a733-camera` with the pinned FreeRTOS/TinyUSB sources
 and existing AArch64 toolchain. The [native camera contract](camera-native.md)
 retains the device ownership and completed-frame requirements. Continuous
 capture, wider modes, interrupts and general reclamation remain outside this
-single-frame application and still require implementation and qualification.
+application and still require implementation and qualification.
 
 ## Retained launch session
 

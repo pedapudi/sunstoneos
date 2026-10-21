@@ -168,6 +168,12 @@ int a733_camera_capture_open_retained(struct a733_camera_capture *s,uint64_t d){
     if(a733_camera_capture_open(s,d)!=1)return -1;
     s->retained_readout=1;return 1;
 }
+int a733_camera_capture_rearm(struct a733_camera_capture *s,uint64_t d){
+    if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_READABLE ||
+       !s->retained_readout || !s->quiet_from || !d || d<=s->now)return -1;
+    s->deadline=d;s->sampled=s->fenced=s->scanned=0;s->started=0;
+    s->state=A733_CAPTURE_REARM_QUIET;return 1;
+}
 static void next(struct a733_camera_capture *s,enum a733_capture_state n){
     if(s->state!=A733_CAPTURE_FAULT){s->state=n;s->started=0;}
 }
@@ -220,7 +226,20 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         if(r==1){s->quiet=1;next(s,A733_CAPTURE_SAMPLE);}break;
     case A733_CAPTURE_SAMPLE:
         RUN(a733_csi_sample(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_FENCE);
-        if(r==1)s->sampled=1;break;
+        if(r==1){s->sampled=1;s->quiet_from=s->receiver.now;}break;
+    /* The sensor stays stopped from here until the next packet handoff. */
+    case A733_CAPTURE_REARM_QUIET:
+    case A733_CAPTURE_REARM_WAIT:
+        if(s->now-s->quiet_from>=A733_CAPTURE_QUIET_US)
+            next(s,s->state==A733_CAPTURE_REARM_QUIET?A733_CAPTURE_REARM_SAMPLE:A733_CAPTURE_REARM_RECEIVER);
+        break;
+    case A733_CAPTURE_REARM_SAMPLE:
+        RUN(a733_csi_sample(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_REARM_DMA);
+        if(r==1)s->quiet_from=s->receiver.now;break;
+    case A733_CAPTURE_REARM_DMA:
+        RUN(a733_camera_dma_rearm(&s->dma,s->deadline),a733_camera_dma_poll(&s->dma),A733_CAPTURE_REARM_WAIT);break;
+    case A733_CAPTURE_REARM_RECEIVER:
+        RUN(a733_csi_rearm_image(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_PACKET_HANDOFF);break;
     case A733_CAPTURE_FENCE:
         r=csi_read(s,s->receiver.token,A733_CSI_PARSER,0xc,&v,s->deadline);
         if(r==1){if(v&0x03030303){r=-1;break;}s->fenced=1;

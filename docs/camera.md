@@ -206,12 +206,25 @@ No runtime performance was measured. Raw command logs,
 source hashes, extracted reference functions, binary identities and target
 metadata are under `~/.cache/sunstoneos/evidence/ov5640-20261016/`.
 
-The [native capture path](camera-native.md) captures one retained still image
-from CAM1. Rearm and continuous capture, the CAM2 connector and wider modes
-remain to be implemented. Physical validation requires an electrically matched
-OV5640 module, independent recovery and a coordinator-owned board test.
-The first sensor-to-memory acceptance result is a color-bar frame with verified
-dimensions and plane ordering, followed by transport error handling and repeated
-stop/start. `apps/camera/observe.py --image <frame> --color-bars --ppm <file>`
-checks a saved frame for vertical-bar structure and writes a review image.
-No board request or physical camera test has run for this component.
+The [native capture path](camera-native.md) captures retained still images from
+CAM1. Its boot record can request up to fifteen discarded images before the
+readable one. Each discarded image is a complete sensor stop and start through
+the [retained rearm sequence](camera-capture.md). Continuous capture and wider
+modes remain to be implemented.
+
+CAM2 has no native binding. The receiver, route and capture coordinator accept
+port and parser one, and the media clock provider can prepare MCLK2 at
+`0x02003808`. A CAM2 profile still needs a native TWI9 controller at
+`0x02519000` with its own clock-registry entry, because the TWI engine and the
+clock registry provide only TWI11 for the camera. It also needs a qualified
+deskew count for port one. The pinned device tree places CAM2 data on
+PK10–PK19, MCLK2 on PE9 and the module control on PE10.
+
+Physical validation requires an electrically matched OV5640 module,
+independent recovery and a coordinator-owned board test. The first
+sensor-to-memory acceptance result is a color-bar frame with verified
+dimensions and plane ordering, followed by transport error handling and
+repeated stop/start through discarded images.
+`apps/camera/observe.py --image <frame> --color-bars --ppm <file>` checks a
+saved frame for vertical-bar structure and writes a review image. No board
+request or physical camera test has run for this component.

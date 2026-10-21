@@ -11,7 +11,8 @@
 #define A733_CAMERA_NATIVE_PLANE_BYTES 307200u
 #define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
 #define A733_CAMERA_NATIVE_BYTES 663552u /* Tables 8 + parameters 2 + two 76-page planes. */
-#define A733_CAMERA_NATIVE_FILL 0xa5u /* Plane payload/guard fill before device ownership. */
+#define A733_CAMERA_NATIVE_FILL 0xa5u /* Plane payload/guard fill before each device write. */
+#define A733_CAMERA_NATIVE_DISCARD_LIMIT 15u
 /* Protected image/launch record, authenticated by the actual boot coordinator.
  * A nonzero identity, matching digest or these fields alone is not evidence.
  * Host policy must bind the complete record to the linked module profile,
@@ -24,6 +25,9 @@
  * color bars (register 0x503d = 0x84). pwdn_only 1 admits a module whose
  * RESETB has no separate GPIO: PE6 power-down is its only control, reset_bank,
  * reset_pin and inherited[14] are zero, and only fourteen pins are claimed.
+ * discard_frames (at most A733_CAMERA_NATIVE_DISCARD_LIMIT) images are captured
+ * and rearmed over, unread, before the image that becomes readable; zero keeps
+ * the single exposure. Each is a complete stop/start cycle of the sensor.
  */
 struct a733_camera_boot_record {
     uint64_t version,bytes,owner,epoch,generation,lease,deadline_us;
@@ -33,6 +37,7 @@ struct a733_camera_boot_record {
     uint32_t apb1,apb1_hz;
     uint8_t settle,deskew,reset_bank,reset_pin,test_pattern,pwdn_only;
     struct a733_pin_config inherited[A733_CAMERA_NATIVE_PIN_COUNT];
+    uint8_t discard_frames; /* Fills the alignment gap before rails. */
     enum a733_rail rails[3];
     uint32_t programmed_uv[3];
 };
@@ -68,7 +73,7 @@ struct a733_camera_native {
     struct device_memory_lease memory;
     struct device_memory_extent extent;
     uint64_t last_now;
-    unsigned snapshot,index,held,entered,started;
+    unsigned snapshot,index,held,entered,started,discarded;
     enum a733_camera_native_state state;
 };
 /* Actual singleton allocation during serialized primary preparation, before

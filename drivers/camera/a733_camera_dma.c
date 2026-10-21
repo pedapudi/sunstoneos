@@ -90,6 +90,12 @@ int a733_camera_dma_readout(struct a733_camera_dma *s,uint64_t d)
        s->owner!=A733_CAMERA_DEVICE || !(s->events&1) || !d || d<=s->now)return -1;
     s->retained_readout=1;s->deadline=d;s->index=0;s->phase=0;return 1;
 }
+int a733_camera_dma_rearm(struct a733_camera_dma *s,uint64_t d)
+{
+    if(!s || !s->initialized || s->state!=A733_CAM_DMA_READABLE || !s->retained_readout ||
+       s->owner!=A733_CAMERA_DEVICE || !(s->saved&1) || (s->saved&~NORMAL))return -1;
+    return begin(s,A733_CAM_DMA_REARM,d);
+}
 static int read_reg(struct a733_camera_dma *s,uint16_t off,uint32_t *v)
 {
     if(s->ops.read(s->context,s->token,off,v,s->deadline)!=1 || tick(s)!=1)return fail(s);
@@ -211,6 +217,33 @@ int a733_camera_dma_poll(struct a733_camera_dma *s)
         if(s->state==A733_CAM_DMA_READABLE)return 1;
         if(s->state==A733_CAM_DMA_READY) { s->owner=A733_CAMERA_CALLER;return 1; }
         return r;
+    case A733_CAM_DMA_REARM:
+        if(s->index==0) {
+            /* Nothing may have changed since the final status observation. */
+            if(read_reg(s,0x254,&v)!=1)return -1;
+            if(v!=s->saved)return fail(s);
+        } else if(s->index==1) {
+            if(write_reg(s,0x254,s->saved)!=1)return -1;
+        } else if(s->index==2) {
+            if(read_reg(s,0x254,&v)!=1)return -1;
+            if(v)return fail(s);
+        } else if(s->index==3) {
+            if(read_reg(s,0x24c,&v)!=1)return -1;
+            if(v&1)return fail(s);
+        } else if(s->index==4) {
+            if(read_reg(s,0x000,&v)!=1)return -1;
+            if((v&setup[0].mask)!=setup[0].value)return fail(s);
+        } else if(s->index==5) {
+            if(read_reg(s,0x200,&v)!=1)return -1;
+            if((v&0x183)!=1)return fail(s);
+        } else {
+            token=s->token;r=s->ops.admit(s->context,&s->config,s->deadline,&token);
+            if(token!=s->token || r<0 || r>1 || tick(s)!=1)return fail(s);
+            if(!r)return 0;
+            s->events=0;s->saved=0;s->retained_readout=0;
+            s->state=A733_CAM_DMA_ARMED;return 1;
+        }
+        ++s->index;return 0;
     case A733_CAM_DMA_RELEASE:
         r=s->ops.release(s->context,s->token,s->deadline);
         if(r==1)s->token=0;

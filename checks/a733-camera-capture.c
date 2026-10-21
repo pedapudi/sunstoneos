@@ -20,9 +20,17 @@ struct model {
     enum a733_capture_state fault_state;
     unsigned fail_emit,stuck_capture,stuck_fence,receiver_error,route_error,iommu_error;
     unsigned fail_sync,late_release,failed_global,changed_global,ready_clock_fault;
+    unsigned retained,rearm_admits,quiet_checked;
 };
 static struct model model;
 static struct a733_camera_capture capture;
+/* Each frame has its own payload, so a stale or mixed image is visible. */
+static uint8_t pixel(unsigned frame,unsigned plane,unsigned i){
+    return plane?(uint8_t)(i*7+9+frame*101):(uint8_t)(i*17+3+frame*101);
+}
+static void expect_cpu(unsigned frame){
+    for(unsigned i=0;i<PLANE;i++)assert(y_cpu[i]==pixel(frame,0,i) && uv_cpu[i]==pixel(frame,1,i));
+}
 static int operation(struct model *m){
     ++m->calls;
     if(!m->injected && m->fault_kind && m->capture->state==m->fault_state){
@@ -53,7 +61,7 @@ static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a
     assert(s->iommu.admission.token==202 && s->iommu.state==A733_IOMMU_ACTIVE);
     assert(s->iommu.admission.excluded_masters==A733_IOMMU_REAL_MASTERS);
     assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==OV5640_READY);
-    assert(m->table_published && m->parameters_published && m->device_prepared && !m->frames);
+    assert(m->table_published && m->parameters_published && m->device_prepared && m->frames==m->rearm_admits);
     int r=operation(m);if(r!=1)return r;
     if(h==A733_CAPTURE_LOCAL){
         assert(s->dma.state==A733_CAM_DMA_ARMED && s->receiver.state==A733_CSI_NEW);
@@ -133,7 +141,7 @@ static void emit(struct model *m){
         assert(a733_iommu_translate(&s->tables,address+PLANE-1,A733_IOMMU_WRITE,&physical)==1);
         assert(physical==s->config.memory[i+1].physical+PLANE-1);
     }
-    for(unsigned i=0;i<PLANE;i++){y_device[i]=(uint8_t)(i*17+3);uv_device[i]=(uint8_t)(i*7+9);}
+    for(unsigned i=0;i<PLANE;i++){y_device[i]=pixel(m->frames,0,i);uv_device[i]=pixel(m->frames,1,i);}
     ++m->frames;
     if(!m->stuck_fence)m->parser[port][3]&=~1u;
     m->parser[port][0x44/4]=1;
@@ -191,6 +199,15 @@ static int csi_read(void *p,uint64_t t,enum a733_csi_region r,uint16_t o,uint32_
 }
 static int csi_write(void *p,uint64_t t,enum a733_csi_region r,uint16_t o,uint32_t v,uint64_t d){
     struct model *m=p;assert(t==206 && m->now<d && m->local && r!=A733_CSI_TOP);
+    /* SCAP is rewritten only after both quiet intervals, a clear fence and
+     * no packet or parser flag, with the sensor stopped. */
+    if(m->retained && m->frames && r==A733_CSI_PARSER && o==0xc){
+        unsigned port=m->capture->config.receiver.port;
+        assert(m->capture->state==A733_CAPTURE_REARM_RECEIVER && v==1);
+        assert(!(m->parser[port][3]&3) && !m->parser[port][0x44/4] && !m->common[(0x1118+port*0x400)/4]);
+        assert(m->now-m->capture->quiet_from>=A733_CAPTURE_QUIET_US && m->sensor[0x4202]==15);
+        ++m->quiet_checked;
+    }
     uint32_t *reg=csi_reg(m,r,o);
     if((r==A733_CSI_PORT && o==0x118)||(r==A733_CSI_PARSER && o==0x44))*reg&=~v;
     else *reg=v;++m->writes;return operation(m);
@@ -204,7 +221,13 @@ static int csi_release(void *p,uint64_t t,uint64_t d){
     struct model *m=p;assert(t==206 && m->now<d && m->receiver_drains && m->global_held);++m->releases;return operation(m);
 }
 static int dma_admit(void *p,const struct a733_camera_dma_config *c,uint64_t d,uint64_t *t){
-    struct model *m=p;assert(c->block==0 && c->frame_id==19 && m->now<d && !m->packets);
+    struct model *m=p;assert(c->block==0 && c->frame_id==19 && m->now<d);
+    if(m->packets){
+        /* Rearm: the previous image is still untouched and status is clear. */
+        assert(m->retained && m->capture->state==A733_CAPTURE_REARM_DMA && *t==205);
+        assert(m->capture->sensor.state==OV5640_READY && !m->dma[0x254/4] && m->cache_syncs==m->frames);
+        expect_cpu(m->frames-1);++m->rearm_admits;
+    }
     *t=205;m->device_prepared=1;return operation(m);
 }
 static int dma_read(void *p,uint64_t t,uint16_t o,uint32_t *v,uint64_t d){
@@ -215,6 +238,8 @@ static int dma_read(void *p,uint64_t t,uint16_t o,uint32_t *v,uint64_t d){
 }
 static int dma_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){
     struct model *m=p;assert(t==205 && o<4096 && m->now<d);
+    /* After an image, status acknowledgement covers exactly what was observed. */
+    if(m->retained && m->frames && o==0x254)assert(m->capture->state==A733_CAPTURE_REARM_DMA && v==m->dma[o/4] && v==3);
     if(m->frames && (o==0 || o==0x200))assert(m->quiet && m->capture->fenced);
     if(o==0x254)m->dma[o/4]&=~v;else m->dma[o/4]=v;++m->writes;return operation(m);
 }
@@ -227,7 +252,15 @@ static int dma_drain(void *p,uint64_t t,uint64_t d){
     ++m->frame_drains;if(m->iommu_error)m->mmu[0xb0/4]=1;return 1;
 }
 static int dma_sync(void *p,uint64_t t,uint64_t d){
-    struct model *m=p;assert(t==205 && m->now<d && m->frame_drains==1 && m->capture->scanned);
+    struct model *m=p;
+    if(m->retained){
+        assert(t==205 && m->now<d && m->capture->scanned && m->capture->fenced && m->capture->sampled);
+        assert(m->capture->iommu.fault.complete && m->dma[0x254/4]==3 && m->frames==m->cache_syncs+1);
+        if(m->cache_syncs)expect_cpu(m->frames-2);else assert(y_cpu[0]==0xcc && uv_cpu[PLANE-1]==0xcc);
+        ++m->cache_syncs;int r=operation(m);if(r!=1)return r;
+        memcpy(y_cpu,y_device,SPAN);memcpy(uv_cpu,uv_device,SPAN);return 1;
+    }
+    assert(t==205 && m->now<d && m->frame_drains==1 && m->capture->scanned);
     assert(m->capture->iommu.fault.complete && m->capture->iommu.state==A733_IOMMU_ACTIVE);
     assert(!m->dma[0x254/4] && m->capture->state!=A733_CAPTURE_READY);
     for(unsigned i=0;i<SPAN;i++)assert(y_cpu[i]==0xcc && uv_cpu[i]==0xcc);
@@ -239,7 +272,8 @@ static int dma_release(void *p,uint64_t t,uint64_t d){
     ++m->releases;if(m->late_release)m->now=d;return operation(m);
 }
 static void setup(unsigned port){
-    memset(&model,0,sizeof(model));memset(&capture,0,sizeof(capture));model.capture=&capture;model.now=1;
+    unsigned retained=model.retained;
+    memset(&model,0,sizeof(model));model.retained=retained;memset(&capture,0,sizeof(capture));model.capture=&capture;model.now=1;
     model.common[0]=0x360500;model.common[1]=0xa5;
     for(unsigned i=1;i<=3;i++)model.common[i*0x100/4]=0x40000;
     model.sensor[0x300a]=0x56;model.sensor[0x300b]=0x40;
@@ -258,13 +292,16 @@ static void setup(unsigned port){
         .dma={.admit=dma_admit,.read=dma_read,.write=dma_write,.drain=dma_drain,.sync_cpu=dma_sync,.release=dma_release}
     };
     assert(a733_camera_capture_init(&capture,&c)==1);
-    assert(a733_camera_capture_open(&capture,10000000)==1);
+    if(model.retained)assert(a733_camera_capture_open_retained(&capture,10000000)==1);
+    else assert(a733_camera_capture_open(&capture,10000000)==1);
 }
 static int drive(void){
     int r=0;
     for(unsigned i=0;i<11000 && !r;i++){
         unsigned n=model.calls;r=a733_camera_capture_poll(&capture);assert(model.calls-n<=1);
         if(!model.cache_syncs)assert(y_cpu[0]==0xcc && uv_cpu[PLANE-1]==0xcc);
+        /* The producer stays stopped through both rearm quiet intervals. */
+        if(capture.state>=A733_CAPTURE_REARM_QUIET)assert(model.sensor[0x4202]==15 && model.sensor[0x300e]==0x40);
         model.now+=1000;
     }
     assert(r);unsigned n=model.calls;uint64_t time=model.now;
@@ -273,7 +310,39 @@ static int drive(void){
     assert(a733_camera_capture_open(&capture,model.now+10000000)==-1);
     return r;
 }
+/* Retained images on either port: two rearms reuse the same planes and leases. */
+static void rearm_cases(void){
+    for(unsigned port=0;port<2;port++){
+        model.retained=1;setup(port);
+        assert(drive()==1 && capture.state==A733_CAPTURE_READABLE && model.frames==1);expect_cpu(0);
+        assert(a733_camera_capture_rearm(&capture,0)==-1 && capture.state==A733_CAPTURE_READABLE);
+        for(unsigned frame=1;frame<3;frame++){
+            assert(a733_camera_capture_rearm(&capture,model.now+10000000)==1);
+            assert(a733_camera_capture_rearm(&capture,model.now+10000000)==-1);
+            assert(drive()==1 && capture.state==A733_CAPTURE_READABLE);
+            assert(model.frames==frame+1 && model.rearm_admits==frame && model.cache_syncs==frame+1);
+            assert(model.quiet_checked==frame);expect_cpu(frame);
+        }
+        assert(model.attempts==4 && !model.releases && !model.route_drains && !model.frame_drains);
+        assert(capture.dma.owner==A733_CAMERA_DEVICE && capture.dma.token==205 && capture.receiver.token==206);
+        assert(capture.route.token==204 && capture.sensor.token==203 && capture.iommu.admission.token==202);
+    }
+    /* A fault at each rearm step keeps every lease and the previous image. */
+    const enum a733_capture_state steps[]={A733_CAPTURE_REARM_SAMPLE,A733_CAPTURE_REARM_DMA,A733_CAPTURE_REARM_RECEIVER};
+    for(unsigned k=1;k<=3;k++)for(unsigned i=0;i<3;i++){
+        model.retained=1;setup(0);model.fault_kind=k;model.fault_state=steps[i];
+        assert(drive()==1 && !model.injected);
+        assert(a733_camera_capture_rearm(&capture,model.now+10000000)==1);
+        assert(drive()==-1 && model.injected && capture.state==A733_CAPTURE_FAULT);
+        assert(model.frames==1 && model.cache_syncs==1 && !model.quiet_checked && !model.releases);
+        assert(capture.dma.token==205 && capture.receiver.token==206 && capture.sensor.token==203);
+        expect_cpu(0);
+    }
+    model.retained=0;
+    puts("PASS: retained images rearm on both ports into the same planes after stopped-producer quiet intervals; rearm faults retain all leases");
+}
 int main(int argc,char **argv){
+    if(argc==2 && !strcmp(argv[1],"rearm")){rearm_cases();return 0;}
     if(argc==2 && !strcmp(argv[1],"publication")){
         for(unsigned k=1;k<=2;k++){
             setup(0);model.ready_clock_fault=k;assert(drive()==-1);
@@ -288,7 +357,7 @@ int main(int argc,char **argv){
         assert(model.frames==1 && model.attempts==2 && model.cache_syncs==1 && model.releases==4);
         assert(capture.analog.admission.token==201 && capture.iommu.admission.token==202);
         assert(!capture.sensor.token && !capture.receiver.token && !capture.route.token && !capture.dma.token);
-        for(unsigned i=0;i<PLANE;i++){assert(y_cpu[i]==(uint8_t)(i*17+3));assert(uv_cpu[i]==(uint8_t)(i*7+9));}
+        expect_cpu(0);
         for(unsigned i=PLANE;i<SPAN;i++)assert(y_cpu[i]==0xa5 && uv_cpu[i]==0xa5);
         for(unsigned i=1024;i<4096;i++)assert(parameters[i]==0xcc);
     }
@@ -311,5 +380,6 @@ int main(int argc,char **argv){
     setup(0);model.late_release=1;assert(drive()==-1 && !capture.dma.token && capture.iommu.admission.token==202);
     setup(0);assert(a733_camera_capture_poll(&capture)==0);model.now=0;assert(drive()==-1 && !model.writes);
     puts("PASS: both camera routes execute all native controllers; one SCAP frame, mapped NV16 bytes, deferred CPU cache ownership, shared leases and composition fault retention");
+    rearm_cases();
     return 0;
 }
