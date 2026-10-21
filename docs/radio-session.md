@@ -111,13 +111,12 @@ not qualify WPA2, TCP sequence unpredictability or a secure physical network.
 ## Explicit healthy reconnect preserves the existing service
 
 `a733_radio_session_reconnect` requests one bounded reconnect to the same access
-point with fixed IPv4 settings. The recorded owner task supplies the target,
+point with fixed IPv4 settings or DHCP. The recorded owner task supplies the target,
 fresh security configuration or explicit OPEN authority, disconnect reason and
 absolute deadline inside the current runtime lease. The session must still be
 healthy and associated. Clients must first complete every socket CLOSE and
 consume every reply; listener, accept and DNS handoffs must also be finished.
-Admission refuses DHCP, unresolved transitions, expired deadlines and live client
-work. It never clears a terminal failure or reloads firmware.
+Admission refuses unresolved transitions, expired deadlines and live client work. It never clears a terminal failure or reloads firmware.
 
 The owner closes socket submission and network output, then waits for the IP
 task to complete the pinned stack's down processing. That task appends a private
@@ -134,10 +133,23 @@ confirmed retirement, an empty key ledger, no RSN object, timers or actions, and
 successful detach. Fresh configuration constructs new RSN state for the next
 association generation. No faulted or uncertain worker can be rearmed.
 
+For DHCP, the IP task stops the old DHCP socket and timer during down processing,
+then parks the state machine before acknowledging the offline epoch. A queued
+old timer event cannot restart acquisition. The old lease grants no authority
+while offline; its elapsed time does not become the new acquisition deadline.
+After fresh radio authorization, the owner requests resume for that same epoch.
+The IP task clears old address and lease publication, resets acquisition timing,
+and sends the existing stack's NetworkDown event. The stack creates its new
+transaction and socket. Clients remain closed until a fresh valid ACK publishes
+address authority for the new association. A new address is permitted at this
+explicit boundary because old sockets were disposed before admission. Terminal
+address failures are never cleared; an expiry already in progress may
+conservatively retain the operation.
+
 The existing disconnect worker requires both confirmation and indication. Only
 ordinary DOWN permits the next connect request. After fresh association and
 packet authorization, the owner publishes the new generation and restarts the
-same fixed-address interface. Socket submission reopens only after a new address
+same IP interface. Socket submission reopens only after a new address
 publication. Old handles remain invalid because their actual disposal preceded
 the request and the handle counter never resets. Any deadline, protocol or
 platform failure retains the complete graph.
@@ -153,8 +165,7 @@ This operation does not recover an unsolicited lost connection. The pinned
 [disconnect handler](radio-association.md#disconnection-events-preserve-ordering-and-ownership)
 invalidates the old station, while native port closure still needs that station's
 index. The inspected source does not establish safe port/key cleanup afterward.
-Unexpected loss therefore retains the existing terminal outcome. DHCP reconnect
-also remains unsupported pending its IP-task-owned address and lease lifecycle.
+Unexpected loss therefore retains the existing terminal outcome.
 Physical reconnect, RF behavior and entropy quality remain unqualified.
 
 The focused AArch64 composition in [checks/radio-reconnect.c](../checks/radio-reconnect.c)
@@ -188,6 +199,13 @@ Four distinct linked images cover the OPEN result and these WPA2 attempts; the
 101 production objects were reused unchanged for each WPA2 image. Frozen inputs,
 images, attempt history and terminal classification are under
 `~/.cache/sunstoneos/evidence/radio-reconnect-20261020/`.
+
+The later [DHCP extension](radio-network.md#address-acquisition-and-dns-ownership)
+passed its two changed IP-task boundary cases without repeating radio or WPA2
+reconnection. A separate native `sunstone-a733-board` build covers the actual
+board caller, session and changed network structure layout. That image was not
+executed. These results and exact compiled closures are retained under
+`~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
 
 ## Faults close admission and preserve outstanding work
 

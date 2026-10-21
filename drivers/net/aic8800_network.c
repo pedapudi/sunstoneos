@@ -45,10 +45,10 @@ int aic8800_network_ready(const struct aic8800_network *n)
 {return n&&n->initialized&&!atomic_load(&n->offline)&&!atomic_load(&n->failed)&&atomic_load(&n->ready);}
 static int address_expired(const struct aic8800_network *n)
 {
-    if(!n->config.dhcp)return 0;
+    if(!n->config.dhcp||atomic_load_explicit(&n->offline,memory_order_acquire))return 0;
     unsigned first=atomic_load(&n->address_sequence);if(first&1)return -1;
     TickType_t start=atomic_load(&n->lease_started),limit=atomic_load(&n->lease_ticks);
-    if(!atomic_load(&n->address_ready)){start=n->address_started;limit=n->config.address_timeout;}
+    if(!atomic_load(&n->address_ready)){start=atomic_load(&n->address_started);limit=n->config.address_timeout;}
     int expired=(TickType_t)(xTaskGetTickCount()-start)>=limit;
     return first==atomic_load(&n->address_sequence)?expired:-1;
 }
@@ -79,7 +79,7 @@ void aic8800_network_ip_step(void)
 eDHCPCallbackAnswer_t xApplicationDHCPHook_Multi(eDHCPCallbackPhase_t phase,NetworkEndPoint_t *endpoint,IP_Address_t *address)
 {
     (void)phase;(void)address;struct aic8800_network *n=stack_owner;
-    if(!n||endpoint!=&n->endpoint||!n->config.dhcp||atomic_load(&n->failed)||atomic_load(&n->address_failed))return eDHCPStopNoChanges;
+    if(!n||endpoint!=&n->endpoint||!n->config.dhcp||atomic_load(&n->offline)||atomic_load(&n->failed)||atomic_load(&n->address_failed))return eDHCPStopNoChanges;
     if(address_expired(n)==1)address_revoke(n);
     if(phase==eDHCPPhasePreRequest)endpoint->xDHCPData.ulLeaseTime=0;
     return atomic_load(&n->address_failed)?eDHCPStopNoChanges:eDHCPContinue;
@@ -183,7 +183,7 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
     n->interface=(NetworkInterface_t){.pcName="wifi",.pvArgument=n,.pfInitialise=link_status,.pfOutput=output,.pfGetPhyLinkStatus=link_status};
     FreeRTOS_AddNetworkInterface(&n->interface);
     FreeRTOS_FillEndPoint(&n->interface,&n->endpoint,c->address,c->netmask,c->gateway,c->dns,c->transport->wifi->mac);
-    n->endpoint.bits.bWantDHCP=c->dhcp;n->address_started=xTaskGetTickCount();
+    n->endpoint.bits.bWantDHCP=c->dhcp;atomic_store(&n->address_started,xTaskGetTickCount());
     stack_owner=n;atomic_store(&n->ready,1);
     if(FreeRTOS_IPInit_Multi()!=pdPASS){aic8800_network_fault(n);return 0;}n->stack_started=1;return 1;
 }
@@ -243,6 +243,24 @@ void aic8800_network_ip_event(unsigned event,void *data)
     struct aic8800_network *n=stack_owner;if(!n||!atomic_load(&n->offline))return;
     configASSERT(xIsCallingFromIPTask());
     unsigned epoch=atomic_load_explicit(&n->offline_request,memory_order_acquire);
+    if(n->config.dhcp&&atomic_load_explicit(&n->resume_request,memory_order_acquire)==epoch&&
+       atomic_load(&n->offline_ack)==epoch){
+        /* Only the IP task retires the old lease and starts acquisition timing.
+         * A concurrently recorded terminal failure must survive this request. */
+        if(atomic_load(&n->failed)||atomic_load(&n->address_failed))return;
+        atomic_fetch_add(&n->address_sequence,1);
+        n->leased_address=0;atomic_store(&n->address_started,xTaskGetTickCount());
+        atomic_store(&n->lease_started,0);atomic_store(&n->lease_ticks,0);
+        atomic_store(&n->address_ready,0);atomic_store(&n->address_value,0);
+        atomic_store(&n->mask_value,0);atomic_store(&n->gateway_value,0);atomic_store(&n->dns_value,0);
+        memset(&n->endpoint.ipv4_settings,0,sizeof(n->endpoint.ipv4_settings));
+        n->endpoint.xDHCPData.ulLeaseTime=0;
+        atomic_fetch_add(&n->address_sequence,1);
+        atomic_store(&n->ready,1);atomic_store_explicit(&n->offline,0,memory_order_release);
+        /* The normal stack event performs vDHCPProcess(pdTRUE), including
+         * fresh transaction ID, socket creation and offer/server reset. */
+        FreeRTOS_NetworkDown(&n->interface);return;
+    }
     if(n->offline_queued==epoch&&event==eNoEvent&&data==&n->offline_marker){
         atomic_store(&n->address_ready,0);
         atomic_store_explicit(&n->offline_ack,epoch,memory_order_release);return;
@@ -250,17 +268,22 @@ void aic8800_network_ip_event(unsigned event,void *data)
     if(n->offline_queued==epoch)return;
     n->interface.bits.bInterfaceUp=pdFALSE;
     prvProcessNetworkDownEvent(&n->interface);
+    if(n->config.dhcp){
+        /* Down processing stopped the timer and closed its socket. Park both
+         * states before the fence so an already queued DHCP event is inert. */
+        n->endpoint.xDHCPData.eDHCPState=eNotUsingLeasedAddress;
+        n->endpoint.xDHCPData.eExpectedState=eNotUsingLeasedAddress;
+    }
     IPStackEvent_t marker={eNoEvent,&n->offline_marker};
     if(xSendEventStructToIPTask(&marker,0)==pdPASS)n->offline_queued=epoch;
 }
 int aic8800_network_offline(struct aic8800_network *n)
 {
-    if(!n||n!=stack_owner||n->config.dhcp||!aic8800_network_address(n,NULL)||
+    if(!n||n!=stack_owner||!aic8800_network_address(n,NULL)||
        atomic_load(&n->offline)||atomic_load(&n->address_failed)||
        atomic_load(&n->offline_request)==UINT_MAX||n->active)return 0;
-    atomic_store(&n->ready,0);atomic_store(&n->address_ready,0);
-    atomic_fetch_add(&n->offline_request,1);
-    atomic_store_explicit(&n->offline,1,memory_order_release);
+    atomic_store(&n->ready,0);atomic_fetch_add(&n->offline_request,1);
+    atomic_store_explicit(&n->offline,1,memory_order_release);atomic_store(&n->address_ready,0);
     IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return 1;
 }
 int aic8800_network_offline_ready(struct aic8800_network *n)
@@ -275,12 +298,20 @@ int aic8800_network_offline_ready(struct aic8800_network *n)
 }
 int aic8800_network_resume(struct aic8800_network *n)
 {
-    if(!aic8800_network_offline_ready(n)||n->config.dhcp||atomic_load(&n->address_failed)||
+    if(!aic8800_network_offline_ready(n)||atomic_load(&n->address_failed)||
        !authority_for(n->config.transport,n->config.transport->wifi->association_generation)||
        !aic8800_transport_attachment_ready(n->config.transport))return 0;
     /* No IP callback can still hold an old ready=true observation across the
      * acknowledged FIFO fence. No new callback reads generation while offline. */
     n->generation=n->config.transport->wifi->association_generation;
+    if(n->config.dhcp){
+        unsigned epoch=atomic_load(&n->offline_request);
+        if(atomic_load(&n->resume_request)!=epoch){
+            atomic_store_explicit(&n->resume_request,epoch,memory_order_release);
+            IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);
+        }
+        return 1;
+    }
     atomic_store(&n->ready,1);atomic_store_explicit(&n->offline,0,memory_order_release);
     FreeRTOS_NetworkDown(&n->interface);return 1;
 }

@@ -118,10 +118,10 @@ its placeholder result cannot authorize an outgoing SYN after that closure.
 The composition's deterministic providers are test inputs only.
 
 The [retained session](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
-supports explicit healthy reconnect with fixed addressing after all socket
+supports explicit healthy reconnect with fixed addressing or DHCP after all socket
 receipts and an IP-task offline fence. It keeps this stack instance and disposes
 old handles before changing association generation. Automatic recovery after
-unsolicited loss, DHCP reconnect, stack retirement and full radio power modes
+unsolicited loss, stack retirement and full radio power modes
 remain unimplemented.
 
 ## Composition and external proof limits
@@ -172,6 +172,42 @@ sockets remain retained and require explicit close. Address loss returns
 `SUNSTONE_NET_ADDRESS_LOST`, while association or provider failure returns
 `SUNSTONE_NET_LINK_LOST`. DHCP control packets may pass during acquisition;
 ordinary queued packets cannot enter SDIO without current address authority.
+
+An explicitly admitted healthy reconnect retires the old DHCP lifetime in the
+same IP task. Its processed offline epoch follows actual down processing, DHCP
+socket closure and timer stop. The adapter parks the DHCP state machine before
+acknowledging that epoch. After new radio authorization, an epoch-bound resume
+request lets the IP task clear old address, DNS, gateway and lease publication
+and start a fresh acquisition interval. It uses the existing NetworkDown/reset
+path; it does not create DHCP sockets from the radio task. Only the new ACK
+reopens client admission. Offline suppresses lease publication, and no failed
+address or provider lifetime is reset.
+
+This follows pinned FreeRTOS+TCP
+[`prvProcessNetworkDownEvent`](https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/FreeRTOS_IP_Utils.c#L819-L955)
+and [`vDHCPStop` and initialization](https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/FreeRTOS_DHCP.c#L319-L325).
+The DHCP initialization at lines 959–975 chooses a new transaction ID and clears
+the old offered address and server. A queued event in the parked state only
+disables its timer (lines 798–801). The existing transaction-ID checks protect
+against an old ACK; the DHCP wire format carries no native association epoch.
+
+The focused [DHCP reconnect check](../checks/radio-dhcp-reconnect.c) passed two
+cases on one AArch64 image with actual FreeRTOS IP-task and owned socket-service
+execution. The healthy case checks the processed offline epoch, closed DHCP
+socket and stopped timer, an event processed while parked, old lease expiry
+during offline, a fresh transaction that rejects an old ACK, a changed address,
+and a new UDP exchange followed by CLOSE. The acquisition-timeout case restores
+the same pre-offline checkpoint and suppresses only the modeled server replies;
+clients stay closed and failed address authority cannot be restored. Initial
+DORA is setup for the healthy case and is not repeated by the timeout case.
+
+Firmware and both authorized association generations are modeled checkpoints;
+this check does not repeat WPA2 handshakes or execute board startup, the radio
+session loop, or `board_radio_poll`. The previously completed reconnect evidence
+covers those separate radio/security boundaries. Wire responses, SDIO hardware
+and entropy remain modeled; physical DHCP reconnection remains unqualified.
+Exact image, source/tool closure, setup stops and checkpoint-bound results are in
+`~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
 
 `SUNSTONE_NET_ADDRESS` waits for address authority and copies sixteen bytes:
 IPv4 address, netmask, gateway, and DNS server, each in network byte order.

@@ -330,7 +330,7 @@ int a733_radio_session_reconnect(struct a733_radio_session *s,const struct aic88
     int ok=outside(s,target,sizeof(*target))&&s->stage==NETWORK&&admission(s,deadline)&&reason&&
         w->state==AIC8800_WIFI_READY&&w->link==
             (w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED)&&
-        !s->sockets.network.config.dhcp&&aic8800_network_address(&s->sockets.network,NULL)&&
+        aic8800_network_address(&s->sockets.network,NULL)&&
         w->association_generation!=UINT64_MAX&&target->security==w->target.security&&
         target->channel_index==w->target.channel_index&&target->ssid_bytes==w->target.ssid_bytes&&
         target->connection_authority&&target->beacon_evidence&&

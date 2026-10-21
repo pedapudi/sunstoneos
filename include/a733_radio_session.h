@@ -66,10 +66,10 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
 /* Serialized owner task only. Each admission directly authenticates the real
  * platform borrow. Deadlines must fit the current runtime lease. RF, association
  * and open-port authority remain explicit lower-layer inputs. */
-/* Healthy, same-AP fixed-address reconnect. All sockets must have completed
+/* Healthy, same-AP reconnect with fixed IPv4 or DHCP. All sockets must have completed
  * CLOSE and every copied reply must be consumed. New submissions stay closed
  * until the same IP interface publishes a fresh address. Fault/unsolicited loss
- * and DHCP are refused. Security config is required only for existing WPA2.
+ * is refused. DHCP restarts in the IP task; security config is required for WPA2.
  * Success admits bounded work; poll returns PENDING until NETWORK is restored. */
 int a733_radio_session_reconnect(struct a733_radio_session *,const struct aic8800_wifi_target *,
     const struct aic8800_supplicant_config *,uint64_t open_authority,uint16_t reason,uint64_t deadline);
