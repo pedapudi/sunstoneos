@@ -1,7 +1,10 @@
 #include "a733_dma_copy_application.h"
 #include "platform.h"
 #include "boot.h"
-#include "result.h"
+
+/* The only observer entry used here. Declaring it keeps the cached-entry
+ * check compile, which has no observer include path, buildable. */
+void a733_observe_service_start(void);
 
 static struct a733_counter_clock clock_source;
 static struct a733_clock_leases registry;

@@ -283,3 +283,8 @@ option(SUNSTONE_A733_DEINTERLACE "Build supervised native DI301 offline weave" O
 if(SUNSTONE_A733_DEINTERLACE)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-deinterlace.cmake")
 endif()
+
+option(SUNSTONE_A733_STAGE2 "Build the cold-entry monitor with the stage-2 slot loader" OFF)
+if(SUNSTONE_A733_STAGE2)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-standalone-boot.cmake")
+endif()
