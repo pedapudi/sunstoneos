@@ -17,14 +17,15 @@ import threading
 import unicodedata
 from urllib.parse import parse_qs, quote, urlsplit
 
-DEFAULT_QUEUE = Path.home() / '.cache/sunstoneos/board-tests.sqlite3'
+# Each attached board has its own queue; docs/board-test-queue.md lists them.
+DEFAULT_QUEUES = {'3-1': Path.home() / '.cache/sunstoneos/board-tests.sqlite3',
+                  '3-3': Path.home() / '.cache/sunstoneos/board-tests-3-3.sqlite3'}
 SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md',
            'docs/hardware-dependencies.md')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/index.html': ('index.html', 'text/html; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
-          '/app.css': ('app.css', 'text/css; charset=utf-8'),
-          '/favicon.svg': ('favicon.svg', 'image/svg+xml')}
+          '/app.css': ('app.css', 'text/css; charset=utf-8')}
 MAX_DOCUMENT = 2 * 1024 * 1024
 # These aliases join prose updates to inventory rows. They contain no status.
 ALIASES = {
@@ -53,9 +54,10 @@ ALIASES = {
 PHYSICAL_SCOPES = {
     'boot rom': '**tested** for identity, SRAM transfer',
     'cpu': '**tested** for instruction execution on the boot A55',
-    'ddr': '**tested** for initialization and distinct transfers to two 4 KiB pages',
+    'ddr': '**tested** independently on both attached boards for initialization and distinct transfers',
     'memory mappings, interrupt dispatch, and task scheduling': '**tested** on the boot CPU for the physical kernel check',
     'timers and recovery': '**tested** for the nonsecure tick and an EL3 secure-timer timeout',
+    'rtc and watchdog': '**tested** coherent RTC reads in inherited normal RC mode',
     'cpu clock diagnostics': '**tested** for read-only reporting of the boot A55 clock configuration',
     'storage': 'Controller access, pin/clock restoration, and ROM return are **tested**',
     'i2c and pmic': '**tested** single-byte reads on the inherited always-on bus',
@@ -286,6 +288,11 @@ def parse_hardware(markdown):
     unmatched = [item for item in updates if normalized(item['title']) not in matched]
     if unmatched:
         warnings.append('Some prose updates have no inventory alias; see unmatched_updates.')
+    # A reworded physical bullet must not silently demote its row.
+    for title, anchor in PHYSICAL_SCOPES.items():
+        if not any(normalized(item['title']) == title and normalized(anchor) in normalized(item['markdown'])
+                   for item in updates):
+            warnings.append('Physical-result anchor no longer matches its update: ' + title)
     status = 'ok' if rows and known_unqualified and not any('unsupported format' in w for w in warnings) else 'unsupported'
     return hardware, {'status': status, 'warnings': warnings, 'unmatched_updates': unmatched}
 
@@ -416,10 +423,27 @@ def queue_summary(path):
         return empty
 
 
+def combined_queue(summaries):
+    """Fold the per-board summaries into the single queue view the page shows."""
+    available = [(port, value) for port, value in summaries if value['available']]
+    notes = ' '.join(f'Port {port}: {value["note"]}' for port, value in summaries)
+    if not available:
+        return {'available': False, 'halted': False, 'reason': '', 'counts': {}, 'items': [], 'note': notes}
+    counts = Counter()
+    for _, value in available:
+        counts.update(value['counts'])
+    items = sorted(({**item, 'title': f'{port}: {item["title"]}'} for port, value in available
+                    for item in value['items']), key=lambda item: item['updated_at'], reverse=True)
+    halted = [f'Port {port} halted by {value["reason"]}.' for port, value in available if value['halted']]
+    return {'available': True, 'halted': bool(halted), 'reason': ' '.join(halted), 'counts': dict(counts),
+            'items': items[:100], 'note': notes}
+
+
 class Progress:
-    def __init__(self, repository, queue=DEFAULT_QUEUE):
+    def __init__(self, repository, queues=None):
         self.repository = Path(repository).expanduser().resolve()
-        self.queue = Path(queue).expanduser().absolute()
+        self.queues = {port: Path(path).expanduser().absolute()
+                       for port, path in (DEFAULT_QUEUES if queues is None else queues).items()}
         self.local_git, self.common_git = git_paths(self.repository)
         self._lock = threading.Lock()
         self._signature = None
@@ -435,7 +459,8 @@ class Progress:
     def signature(self):
         self.local_git, self.common_git = git_paths(self.repository)
         paths = [self.repository / name for name in SOURCES]
-        paths.extend([self.queue, Path(str(self.queue) + '-wal'), Path(str(self.queue) + '-journal')])
+        for queue in self.queues.values():
+            paths.extend([queue, Path(str(queue) + '-wal'), Path(str(queue) + '-journal')])
         paths.extend([self.repository / '.git'])
         if self.local_git is not None:
             paths.extend([self.local_git / 'HEAD', self.local_git / 'logs/HEAD', self.local_git / 'commondir',
@@ -469,6 +494,7 @@ class Progress:
                                 'updated_at': iso(source_stat[0] / 1e9) if source_stat else None,
                                 'url': '/api/document?path=' + quote(name, safe='')})
             hardware, parser = parse_hardware(texts['docs/hardware.md'])
+            queues = [(port, queue_summary(path)) for port, path in self.queues.items()]
             parser['warnings'].extend(warnings)
             if not texts['docs/hardware.md']:
                 parser['status'] = 'unavailable'
@@ -498,7 +524,8 @@ class Progress:
                 'handoff': parse_handoff(texts['docs/handoff.md']),
                 'mimus': {'summary': mimus_summary, 'markdown': texts['docs/mimus.md'],
                           'url': '/api/document?path=docs%2Fmimus.md', 'links': links(texts['docs/mimus.md'], 'docs/mimus.md')},
-                'git': git_metadata(self.local_git, self.common_git), 'queue': queue_summary(self.queue)}
+                'git': git_metadata(self.local_git, self.common_git), 'queue': combined_queue(queues),
+                'queues': [{'port': port, **value} for port, value in queues]}
             self._body = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')).encode()
             self._etag = '"' + hashlib.sha256(self._body).hexdigest() + '"'
             self._signature = signature
@@ -575,11 +602,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--queue', type=Path, default=DEFAULT_QUEUE)
+    parser.add_argument('--queue', action='append', metavar='[USB-PORT=]PATH',
+                        help='queue to display; repeat for each board (default: the 3-1 and 3-3 queues; '
+                             'a path without a port is the 3-1 queue)')
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error('--port must be in 1..65535')
-    progress = Progress(args.repository, args.queue)
+    queues = None
+    if args.queue:
+        queues = {}
+        for value in args.queue:
+            port, separator, path = value.rpartition('=')
+            port = port if separator else '3-1'
+            if not re.fullmatch(r'[0-9]+-[0-9]+(?:\.[0-9]+)*', port) or port in queues:
+                parser.error('--queue needs a distinct USB port, for example 3-3=/path/to/queue.sqlite3')
+            queues[port] = Path(path)
+    progress = Progress(args.repository, queues)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler(progress))
     print(f'Development dashboard: http://127.0.0.1:{args.port}', flush=True)
     try:
