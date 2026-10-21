@@ -133,12 +133,14 @@ class Check(unittest.TestCase):
         self.assertEqual(changed['hardware'], [])
         self.assertNotIn('No subsystem', changed['summary']['detail'])
 
-    def create_queue(self, path=None, halted='test-1'):
+    def create_queue(self, path=None, halted='test-1', port=None):
         with sqlite3.connect(path or self.queue) as db:
             db.executescript('CREATE TABLE settings(key TEXT,value TEXT); '
                              'CREATE TABLE tests(id TEXT,submission TEXT,state TEXT,owner TEXT,created TEXT);')
             db.execute('INSERT INTO settings VALUES(?,?)', ('coordinator', 'DO-NOT-EXPOSE-SECRET'))
             db.execute('INSERT INTO settings VALUES(?,?)', ('halted', halted))
+            if port:
+                db.execute('INSERT INTO settings VALUES(?,?)', ('port', port))
             db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',
                        ('test-1', json.dumps({'component': 'Watchdog expiry',
                                              'artifacts': [{'path': '/private/artifact'}]}),
@@ -179,8 +181,8 @@ class Check(unittest.TestCase):
 
     def test_each_board_queue_is_visible(self):
         second = self.root / 'queue-3-3.sqlite3'
-        self.create_queue(halted='')
-        self.create_queue(second, halted='test-3-3')
+        self.create_queue(halted='', port='3-1')
+        self.create_queue(second, halted='test-3-3', port='3-1')
         view = progress.Progress(self.root, {'3-1': self.queue, '3-3': second})
         data = json.loads(view.snapshot()[0])
         self.assertEqual([(q['port'], q['halted']) for q in data['queues']], [('3-1', False), ('3-3', True)])
@@ -190,9 +192,23 @@ class Check(unittest.TestCase):
                          ['3-1: Watchdog expiry', '3-3: Watchdog expiry'])
         self.assertEqual(data['queue']['counts'], {'pending': 2})
         self.assertNotIn('SECRET', json.dumps(data))
+        notes = {q['port']: q['note'] for q in data['queues']}
+        self.assertNotIn('bound to', notes['3-1'])
+        self.assertIn('bound to USB port 3-1, not 3-3', notes['3-3'])
+        unbound = self.root / 'unbound.sqlite3'
+        self.create_queue(unbound)
+        self.assertIn('records no USB port', progress.queue_summary(unbound, '3-1')['note'])
         missing = json.loads(progress.Progress(self.root, {'3-3': self.root / 'absent'}).snapshot()[0])
         self.assertFalse(missing['queue']['available'])
         self.assertFalse((self.root / 'absent').exists())
+
+    def test_queue_arguments(self):
+        self.assertEqual(progress.parse_queues(['/q/a=b.sqlite3', '3-3=/q/c=d.sqlite3']),
+                         {'3-1': Path('/q/a=b.sqlite3'), '3-3': Path('/q/c=d.sqlite3')})
+        self.assertEqual(progress.parse_queues(['x=/q/e.sqlite3']), {'3-1': Path('x=/q/e.sqlite3')})
+        for values in (['/q/a', '3-1=/q/b'], ['3-3=']):
+            with self.assertRaises(ValueError):
+                progress.parse_queues(values)
 
     def test_git_worktree_metadata(self):
         git = self.root / 'metadata'

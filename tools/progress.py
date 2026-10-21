@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 # Each attached board has its own queue; docs/board-test-queue.md lists them.
 DEFAULT_QUEUES = {'3-1': Path.home() / '.cache/sunstoneos/board-tests.sqlite3',
                   '3-3': Path.home() / '.cache/sunstoneos/board-tests-3-3.sqlite3'}
+PORT_PATTERN = r'[0-9]+-[0-9]+(?:\.[0-9]+)*'
 SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md',
            'docs/hardware-dependencies.md')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
@@ -387,7 +388,7 @@ def git_metadata(local, common):
         return empty
 
 
-def queue_summary(path):
+def queue_summary(path, port=None):
     empty = {'available': False, 'halted': False, 'reason': '', 'counts': {}, 'items': [],
              'note': 'Existing board-test queue unavailable; no database is created.'}
     # SQLite read-only mode cannot create the database. Reject symlink endpoints.
@@ -405,6 +406,7 @@ def queue_summary(path):
             db.execute('PRAGMA query_only=ON')
             db.execute('PRAGMA trusted_schema=OFF')
             halt = db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()
+            recorded = db.execute("SELECT value FROM settings WHERE key='port'").fetchone()
             counts = dict(db.execute('SELECT state,COUNT(*) FROM tests GROUP BY state'))
             items = []
             for test_id, submission, state, owner, created in db.execute(
@@ -416,9 +418,14 @@ def queue_summary(path):
             after = tuple(file_signature(Path(str(path) + suffix)) for suffix in ('', '-wal', '-journal'))
             if after != before or any(item and item[1] for item in after[1:]):
                 return empty | {'note': 'Queue changed while reading; the next refresh will retry.'}
+            note = 'Read-only queue state. A claim does not authorize device access; item times are submission times.'
+            # Supervised runners refuse claims from a queue bound to no port or another port.
+            if port is not None and not (recorded and recorded[0] == port):
+                note += (f' The queue is bound to USB port {str(recorded[0])[:32]}, not {port}.' if recorded and recorded[0]
+                         else ' The queue records no USB port; supervised runners refuse its claims.')
             return {'available': True, 'halted': bool(halt and halt[0]),
                     'reason': str(halt[0]) if halt and halt[0] else '', 'counts': counts,
-                    'items': items, 'note': 'Read-only queue state. A claim does not authorize device access; item times are submission times.'}
+                    'items': items, 'note': note}
     except (sqlite3.Error, OSError, ValueError, TypeError, AttributeError):
         return empty
 
@@ -494,7 +501,7 @@ class Progress:
                                 'updated_at': iso(source_stat[0] / 1e9) if source_stat else None,
                                 'url': '/api/document?path=' + quote(name, safe='')})
             hardware, parser = parse_hardware(texts['docs/hardware.md'])
-            queues = [(port, queue_summary(path)) for port, path in self.queues.items()]
+            queues = [(port, queue_summary(path, port)) for port, path in self.queues.items()]
             parser['warnings'].extend(warnings)
             if not texts['docs/hardware.md']:
                 parser['status'] = 'unavailable'
@@ -598,6 +605,19 @@ def handler(progress):
     return Handler
 
 
+def parse_queues(values):
+    """Map each [USB-PORT=]PATH value to its port; a path alone is the 3-1 queue."""
+    queues = {}
+    for value in values:
+        port, separator, path = value.partition('=')
+        if not (separator and re.fullmatch(PORT_PATTERN, port)):
+            port, path = '3-1', value
+        if port in queues or not path:
+            raise ValueError('--queue needs a distinct USB port and a path, for example 3-3=/path/to/queue.sqlite3')
+        queues[port] = Path(path)
+    return queues
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', type=Path, default=Path(__file__).resolve().parents[1])
@@ -610,13 +630,10 @@ def main():
         parser.error('--port must be in 1..65535')
     queues = None
     if args.queue:
-        queues = {}
-        for value in args.queue:
-            port, separator, path = value.rpartition('=')
-            port = port if separator else '3-1'
-            if not re.fullmatch(r'[0-9]+-[0-9]+(?:\.[0-9]+)*', port) or port in queues:
-                parser.error('--queue needs a distinct USB port, for example 3-3=/path/to/queue.sqlite3')
-            queues[port] = Path(path)
+        try:
+            queues = parse_queues(args.queue)
+        except ValueError as error:
+            parser.error(str(error))
     progress = Progress(args.repository, queues)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler(progress))
     print(f'Development dashboard: http://127.0.0.1:{args.port}', flush=True)
