@@ -9,7 +9,6 @@
 #define DE A733_MEDIA_DE
 #define VO A733_MEDIA_VO0
 #define MM A733_MEDIA_IOMMU
-#define MODULE UINT32_C(0x8700001f)
 enum { ACQUIRE, AUTHORIZE, BASELINE, PROGRAM, COMPLETE, FAULTED };
 struct change { uint16_t offset; uint8_t group, mclk; uint32_t mask,value; };
 /* Source order: domain/bus reset deassertion, disabled module configuration,

@@ -80,7 +80,7 @@ static void compatibility_and_capacity(void)
     _Static_assert(sizeof(a733_clock_mask_t)==16 && sizeof(struct a733_clock_token)==48,"private token width");
     assert(a733_clock_acquire(&r,1,0,A733_CLOCK_AUDIO_CHANGE,10,&t)==A733_CLOCK_OK);
     assert(t.shared==(A733_CLOCK_REF|A733_CLOCK_OSC));
-    assert(a733_clock_publish_audio(&r,&t,10,&u)==A733_CLOCK_OK && r.audio_profile==1);
+    assert(a733_clock_publish_audio(&r,&t,10,&u)==A733_CLOCK_OK && !u.exclusive);
     assert(u.shared==(A733_CLOCK_AUDIO5|A733_CLOCK_AUDIO1|A733_CLOCK_REF|A733_CLOCK_OSC));
     assert(a733_clock_release(&r,&u,10)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&r,1,A733_CLOCK_PERI0,A733_CLOCK_DMA0,10,&t)==A733_CLOCK_OK);

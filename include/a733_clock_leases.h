@@ -105,7 +105,6 @@ struct a733_clock_leases {
     void *context;
     uint32_t initialized;
     atomic_uint failed; /* Acquire-load permitted under permanent exact leases. */
-    uint32_t audio_profile;
 };
 /* Private platform object, zero once and initialize before concurrent use.
  * now returns exactly 1, uses monotonic microseconds, and must be bounded and
