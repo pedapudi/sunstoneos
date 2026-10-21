@@ -2,6 +2,9 @@
 #ifdef SUNSTONE_PCIE_EPF_TEST
 #include "a733_pcie_epf_test.h"
 #endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+#include "a733_pcie_function.h"
+#endif
 #include "a733_platform_locks.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
@@ -95,6 +98,9 @@ static int allowed(struct a733_pcie_native *n,uintptr_t a,unsigned width,unsigne
 #ifdef SUNSTONE_PCIE_EPF_TEST
     address=address||a733_pcie_epf_native_address(n->port,a,width,writing);
 #endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+    address=address||a733_pcie_function_native_address(n->port,a,width,writing);
+#endif
     return current(n)&&address&&
         !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
@@ -112,15 +118,27 @@ static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
     if((width==1&&v>255)||(width==2&&v>65535))return 0;
     if(a==0x03400194&&v!=0x0300ff00)return 0;
     if(a==0x06000004&&v!=0x102){
+#if defined(SUNSTONE_PCIE_EPF_TEST) || defined(SUNSTONE_PCIE_FUNCTION)
+        int client=0;
 #ifdef SUNSTONE_PCIE_EPF_TEST
-        if(!a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+        client=client||a733_pcie_epf_native_write(n->port,a,width,v);
+#endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+        client=client||a733_pcie_function_native_write(n->port,a,width,v);
+#endif
+        if(!client)return 0;
 #else
         return 0;
 #endif
     }
 #ifdef SUNSTONE_PCIE_EPF_TEST
-    if((n->port->test||!a733_pcie_native_address(a,width,1))&&
+    if((n->port->test||(!n->port->function&&!a733_pcie_native_address(a,width,1)))&&
        !a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+#endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+    /* A claimed function client's exact policy covers every later write. */
+    if((n->port->function||(!n->port->test&&!a733_pcie_native_address(a,width,1)))&&
+       !a733_pcie_function_native_write(n->port,a,width,v))return 0;
 #endif
     /* Outbound iATU writes must match the owned region's recorded window. */
     if(a>=0x06300000&&a<0x06302000&&!a733_pcie_atu_write_allowed(n->port,a,v))return 0;
