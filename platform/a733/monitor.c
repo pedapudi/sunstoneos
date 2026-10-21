@@ -1,6 +1,7 @@
 #include "boot.h"
 
-// State is outside the BSS cleared by EL1 startup and never written by EL1.
+// State is outside the BSS cleared by EL1 startup. EL1 does not write it, but
+// it can: cleanup re-checks the values it uses as bounds.
 static struct {
     uint32_t ready, banks, ctlr, group, modifier, enabled, configuration;
     uint32_t priorities, spi_enabled[32];
@@ -124,8 +125,18 @@ static _Noreturn void finish(unsigned status)
         mmio_write(GICR_SGI + 0xc04, saved.configuration);
         mmio_write(GICR_SGI + 0x41c, saved.priorities);
         mmio_write(GICR_SGI + 0x100, saved.enabled);
-        for (unsigned i = 1; i < saved.banks; ++i)
-            mmio_write(GICD_BASE + 0x100 + 4 * i, saved.spi_enabled[i]);
+        // EL1 can write this image block, so re-derive the bank count from
+        // the live distributor instead of trusting the saved loop bound.
+        // ISENABLER only sets bits: clear SPIs enabled during the run first.
+        unsigned banks = (mmio_read(GICD_BASE + 4) & 31) + 1;
+        if (banks == saved.banks) {
+            for (unsigned i = 1; i < banks; ++i)
+                mmio_write(GICD_BASE + 0x180 + 4 * i, 0xffffffffU);
+            deadline = counter() + COUNTER_HZ / 10;
+            while ((mmio_read(GICD_BASE) & (1U << 31)) && counter() < deadline) {}
+            for (unsigned i = 1; i < banks; ++i)
+                mmio_write(GICD_BASE + 0x100 + 4 * i, saved.spi_enabled[i]);
+        }
         // QEMU may enable ARE from cold state; cleanup must never clear it.
         mmio_write(GICD_BASE, saved.ctlr | (live_ctlr & 0x30U));
     }
