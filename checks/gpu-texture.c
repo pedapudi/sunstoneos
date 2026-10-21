@@ -105,18 +105,8 @@ static int texture_kick(void *ctx,uint32_t off,uint32_t value)
         if(gpu_render_case==2 && frame==2)put((void *)(base()+l.depth),4,0);
         __atomic_store_n((uint32_t *)(shared+1348),graphics.submission.fragment.cursor,__ATOMIC_RELEASE);
         __atomic_store_n((uint32_t *)(shared+1412),frame*2,__ATOMIC_RELEASE);
-    } else if(type==(PVR_CCB_MAGIC|106)) {
-        /* CLOSE cleans both render contexts, then the compute context, then the
-         * recorded targets and free lists; each must name the expected record. */
-        unsigned index=service.graphics_cleanup_index;
-        int context=compute.compute.phase==PVR_COMPUTE_SERVICE_CLEANUP && index==2;
-        configASSERT(service.phase==PVR_GPU_SERVICE_GRAPHICS_CLEANUP && service.graphics_events_retired &&
-            !word(resource(2)+slot*4,4) && !word(command+4,4));
-        configASSERT(context?!word(command+8,4) && word(command+12,4)==compute.config.firmware_address[0]:
-            word(command+8,4)==service.graphics_cleanup_type[index] &&
-            word(command+12,4)==service.graphics_cleanup_address[index]);
-        for(unsigned i=16;i<88;++i)configASSERT(!command[i]);
-    } else configASSERT(type==PVR_CCB_HEALTH);
+    } else if(type==(PVR_CCB_MAGIC|106))cleanup_record(command,slot);
+    else configASSERT(type==PVR_CCB_HEALTH);
     put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);return 1;
 }
 static struct pvr_gpu_service_reply texture(struct pvr_render_texture_request *q,const void *data,uint64_t *ticket)

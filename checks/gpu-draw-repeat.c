@@ -89,7 +89,8 @@ static int draw_kick(void *ctx,uint32_t off,uint32_t value)
         __atomic_store_n((uint32_t *)(shared+1344+4),graphics.submission.fragment.cursor,__ATOMIC_RELEASE);
         __atomic_store_n((uint32_t *)(shared+1408),frame,__ATOMIC_RELEASE);
         __atomic_store_n((uint32_t *)(shared+1412),frame,__ATOMIC_RELEASE);
-    } else configASSERT(type==PVR_CCB_HEALTH);
+    } else if(type==(PVR_CCB_MAGIC|106))cleanup_record(command,slot);
+    else configASSERT(type==PVR_CCB_HEALTH);
     put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);return 1;
 }
 static void make_vertices(unsigned count)
