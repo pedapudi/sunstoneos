@@ -13,8 +13,11 @@ static inline int update_write_fifo(void *,uintptr_t,const uint32_t *,unsigned);
 #undef main
 static struct a733_storage_update service;
 static struct a733_storage_channel channel;
-/* Media holds exactly the granted range of an SD card with the granted capacity. */
-static uint8_t *media;static uint64_t media_base,media_bytes;
+/* Card media holds exactly the granted range, sectors 2-3 by default. Checks that
+ * reuse this model without main() fill the fixed array directly; main points
+ * card_media at a larger buffer when a grant covers another range. */
+static uint8_t media[1024];
+static uint8_t *card_media=media;static uint64_t media_base=1024,media_bytes=sizeof(media);
 static unsigned issued,fifo_writes,uncertain,loss_during_write;
 /* Card programming time after each CMD24; CMD13 reports PRG until it ends. */
 static uint64_t program_us,programmed_until;
@@ -26,7 +29,7 @@ static int update_read(void *v,uintptr_t address,uint32_t *out)
         accessible(s);++s->accesses;++c->calls;assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS);
         uint64_t at=(uint64_t)c->reg[0x1c/4]*512+c->fifo_pos;
         assert(at>=media_base&&at+4<=media_base+media_bytes&&c->fifo_pos+4<=c->fifo_total);
-        *out=0;for(unsigned i=0;i<4;++i)*out|=(uint32_t)media[at-media_base+i]<<(8*i);
+        *out=0;for(unsigned i=0;i<4;++i)*out|=(uint32_t)card_media[at-media_base+i]<<(8*i);
         c->fifo_pos+=4;return 1;
     }
     return storage_read(v,address,out);
@@ -45,7 +48,7 @@ static int update_write(void *v,uintptr_t address,uint32_t value)
         ++s->accesses;++c->calls;++fifo_writes;assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS);
         uint64_t at=(uint64_t)c->reg[0x1c/4]*512+c->fifo_pos;
         assert(at>=media_base&&at+4<=media_base+media_bytes&&c->fifo_pos+4<=512);
-        for(unsigned i=0;i<4;++i)media[at-media_base+i]=(uint8_t)(value>>(8*i));
+        for(unsigned i=0;i<4;++i)card_media[at-media_base+i]=(uint8_t)(value>>(8*i));
         c->fifo_pos+=4;
         if(loss_during_write&&fifo_writes==1)a733_storage_channel_lost(&channel);
         return !(uncertain&&fifo_writes==1);
@@ -110,15 +113,17 @@ int main(int argc,char **argv)
     assert(argc==5);uint8_t raw[256];load_file(argv[1],raw,sizeof(raw));
     struct a733_storage_grant g;assert(a733_storage_grant_decode(&g,raw,sizeof(raw)));
     assert(g.kind==SUNXI_MMC_SD&&g.blocks<=(1u<<20)&&g.sectors%1024==0&&g.sectors/1024<=(1u<<22));
-    media_base=g.first*512;media_bytes=g.blocks*512;media=malloc(media_bytes);assert(media);
-    load_file(argv[2],media,media_bytes);
+    if(g.first*512!=media_base||g.blocks*512!=media_bytes) {
+        media_base=g.first*512;media_bytes=g.blocks*512;card_media=malloc(media_bytes);assert(card_media);
+    }
+    load_file(argv[2],card_media,media_bytes);
     storage_setup_selected((enum sunxi_mmc_kind)g.kind,(enum a733_mmc_emmc_host)g.host);
     field(m.card.csd,84,12,21);field(m.card.csd,22,4,9);
     field(m.card.csd,48,22,(uint32_t)(g.sectors/1024-1));ready_storage();
     a733_storage_channel_init(&channel);
     unsigned before=m.accesses;
     int initialized=a733_storage_update_init(&service,&m.platform,&g,1000000);
-    if(!strcmp(argv[4],"wrong-card")){assert(!initialized&&!issued);save_file(argv[3],media,media_bytes);return 0;}
+    if(!strcmp(argv[4],"wrong-card")){assert(!initialized&&!issued);save_file(argv[3],card_media,media_bytes);return 0;}
     assert(initialized&&m.accesses>before&&m.platform.update==&service);
     struct sunxi_mmc_card blocked;
     before=m.accesses;
@@ -164,7 +169,7 @@ int main(int argc,char **argv)
         }
         assert(bytes);n=(uint32_t)bytes;assert(fwrite(&n,1,4,stdout)==4&&fwrite(response,1,bytes,stdout)==bytes&&!fflush(stdout));
     }
-    save_file(argv[3],media,media_bytes);fprintf(stderr,"commands=%u fifo_words=%u programming_polls=%u retained=%u model_us=%llu\n",issued,fifo_writes,
+    save_file(argv[3],card_media,media_bytes);fprintf(stderr,"commands=%u fifo_words=%u programming_polls=%u retained=%u model_us=%llu\n",issued,fifo_writes,
         programming_polls,service.state==A733_STORAGE_RETAINED,(unsigned long long)m.power.now);
     return 0;
 }
