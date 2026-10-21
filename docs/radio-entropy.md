@@ -78,10 +78,12 @@ callback returns 1 or 0; the supplicant treats every refusal as a failure.
 The network service treats a temporary word refusal as the failure of one
 FreeRTOS+TCP random-number call and keeps output open. A permanent refusal,
 or any refusal from the sequence callback, closes output. The TCP
-initial-sequence hook cannot report failure, so ordinary word requests leave
-the last 16 reservoir bytes for it. Those bytes cover four connection attempts
-between refills. Reservoir capacity does not establish a sustainable network
-rate or scheduling bound; that depends on actual consumers and CE service time.
+initial-sequence hook cannot report failure, so supplicant byte requests and
+ordinary word requests leave the last 16 reservoir bytes for it. A supplicant
+request that would reach into those bytes is refused, as during exhaustion.
+Those bytes cover four connection attempts between refills. Reservoir capacity
+does not establish a sustainable network rate or scheduling bound; that depends
+on actual consumers and CE service time.
 
 ## Faults preserve resources and discard private copies
 
@@ -109,10 +111,9 @@ mutex dispatch, the counter, MMIO and DMA-produced bytes are explicit model inpu
 
 The selected cases cover refill and circular-buffer consumption, copied and
 wrong-task refusal, output aliases, exhaustion, mutex contention, final-token
-contention, late authority loss and deadline retention. That refill fixture
-currently fails at its first refill: the CE controller model it reuses no longer
-starts a request, and the CE entropy check that owns the model fails at the same
-point.
+contention, late authority loss and deadline retention. They also check that
+supplicant byte requests stop at the sequence reserve and that only the
+sequence hook drains it.
 
 A separate [contention fixture](../checks/a733-radio-entropy-contention.c),
 selected with `--fixture contention`, does not run a CE request. The owner
