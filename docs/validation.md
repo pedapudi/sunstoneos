@@ -192,6 +192,15 @@ directory. A failed snapshot can leave an incomplete directory without a manifes
 Select a fresh output after resolving the failure. Snapshotting does not prove
 execution or complete dependency coverage, and does not justify repeating a test.
 
+Toolchains and shared libraries repeat across snapshots; one LLVM library is
+138 MB. `--reuse <earlier snapshot>`, repeatable, hard-links a file instead of
+copying it when an earlier snapshot recorded the same SHA-256 and that file's
+current bytes still match. The manifest row then records `linked_from`. A file
+on another file system, or one whose earlier copy no longer matches its record,
+is copied as before. Linked files share their bytes, so never edit a snapshot
+file in place. `checks/audit-build-harness-snapshot.py --output <new dir>`
+checks this behavior on a temporary repository.
+
 Build once per changed target. Flash only when the required running image differs.
 Run hardware cases in one controlled session when practical. Do not rebuild or
 reflash between cases that use the same artifact.
