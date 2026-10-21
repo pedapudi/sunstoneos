@@ -1,10 +1,8 @@
 #include "a733_ce_hash.h"
 enum { OPEN,REQUEST,WAIT,DONE };
 static void zero(void *p,size_t n) {volatile uint8_t *b=p;while (n--) *b++=0;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);}
 static int outside(const struct a733_ce_hash *h,const void *p,size_t n)
-{return separate(h,sizeof(*h),p,n) && a733_ce_session_outside(h->bound_engine,p,n);}
+{return a733_ce_separate(h,sizeof(*h),p,n) && a733_ce_session_outside(h->bound_engine,p,n);}
 static enum a733_ce_hash_result finish(struct a733_ce_hash *h,enum a733_ce_hash_result r)
 {atomic_store_explicit(&h->busy,0,memory_order_release);return r;}
 static enum a733_ce_hash_result retain(struct a733_ce_hash *h)
@@ -61,7 +59,7 @@ enum a733_ce_hash_result a733_ce_hash_update(struct a733_ce_hash *h,uint64_t gen
     if (h->fault || !bound(h)) return retain(h);
     if (!generation || generation!=h->generation || !bytes || bytes>2048 || !accepted ||
         !outside(h,input,bytes) || !outside(h,accepted,sizeof(*accepted)) ||
-        !separate(input,bytes,accepted,sizeof(*accepted)) || h->finalizing || !h->active)
+        !a733_ce_separate(input,bytes,accepted,sizeof(*accepted)) || h->finalizing || !h->active)
         return finish(h,A733_CE_HASH_INVALID);
     if (!active(h)) return retain(h);
     if (h->phase!=OPEN) return finish(h,A733_CE_HASH_BUSY);

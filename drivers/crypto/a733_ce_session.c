@@ -19,13 +19,8 @@ SAME_OFFSET(self);SAME_OFFSET(binding);SAME_OFFSET(controller);SAME_OFFSET(clien
 SAME_OFFSET(client_bytes);SAME_OFFSET(generation);SAME_OFFSET(next_generation);
 SAME_OFFSET(initialized);SAME_OFFSET(kind);SAME_OFFSET(fault);SAME_OFFSET(terminal);
 #undef SAME_OFFSET
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static int outside(const struct device_memory_pool *p,const void *a,size_t n)
-{return separate(a,n,(const void *)p->backing.cpu,p->backing.bytes) && separate(a,n,p,sizeof(*p));}
+{return a733_ce_separate(a,n,(const void *)p->backing.cpu,p->backing.bytes) && a733_ce_separate(a,n,p,sizeof(*p));}
 static int token_equal(const struct a733_clock_token *a,const struct a733_clock_token *b)
 {return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}
 int a733_ce_session_bound(struct a733_ce_session *s)
@@ -57,7 +52,7 @@ int a733_ce_session_bind(struct a733_ce_session *s,struct device_memory_pool *po
     const size_t sizes[]={sizeof(*s),sizeof(*pool),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*token)};
     for (unsigned i=0;i<6;++i) {
         if (i!=1 && !outside(pool,objects[i],sizes[i])) return 0;
-        for (unsigned j=i+1;j<6;++j) if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        for (unsigned j=i+1;j<6;++j) if (!a733_ce_separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     }
     struct device_memory_extent e;enum device_memory_state state;
     if (!device_memory_describe(pool,lease,&e,&state) || state!=DEVICE_MEMORY_CPU || e.bytes!=DEVICE_MEMORY_PAGE) return 0;
@@ -73,8 +68,8 @@ int a733_ce_session_bind(struct a733_ce_session *s,struct device_memory_pool *po
 }
 
 int a733_ce_session_outside(const struct a733_ce_session *s,const void *p,size_t n)
-{return s && s->initialized && separate(s,sizeof(*s),p,n) && outside(s->binding.pool,p,n) &&
-    separate(s->binding.registry,sizeof(*s->binding.registry),p,n);}
+{return s && s->initialized && a733_ce_separate(s,sizeof(*s),p,n) && outside(s->binding.pool,p,n) &&
+    a733_ce_separate(s->binding.registry,sizeof(*s->binding.registry),p,n);}
 enum a733_ce_result a733_ce_session_retain(struct a733_ce_session *s)
 {
     if (!s || !s->initialized) return A733_CE_INVALID;

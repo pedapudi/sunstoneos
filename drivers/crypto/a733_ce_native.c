@@ -127,11 +127,6 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 
 #include "a733_ce_entropy.h"
 #include "a733_memory_reservations.h"
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_ce_session_native_init(struct a733_ce_session *s,const struct a733_ce_config *c,
     const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
     const struct a733_clock_token *token)
@@ -157,12 +152,12 @@ int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_c
 {
     if (!s || s->initialized || !c || !platform || !registry || !token ||
         !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
-        !separate(s,sizeof(*s),c,sizeof(*c)) || !separate(s,sizeof(*s),platform,sizeof(*platform)) ||
-        !separate(s,sizeof(*s),registry,sizeof(*registry)) || !separate(s,sizeof(*s),token,sizeof(*token))) return 0;
+        !a733_ce_separate(s,sizeof(*s),c,sizeof(*c)) || !a733_ce_separate(s,sizeof(*s),platform,sizeof(*platform)) ||
+        !a733_ce_separate(s,sizeof(*s),registry,sizeof(*registry)) || !a733_ce_separate(s,sizeof(*s),token,sizeof(*token))) return 0;
     /* Check attach's pool placement first, so a refusal binds nothing. */
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if (!pool || !separate(s,sizeof(*s),pool,sizeof(*pool)) ||
-        !separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
+    if (!pool || !a733_ce_separate(s,sizeof(*s),pool,sizeof(*pool)) ||
+        !a733_ce_separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
     if (!a733_ce_session_native_init(&s->owned_session,c,platform,cookie,registry,token)) return 0;
     if (a733_ce_entropy_attach(s,&s->owned_session)) return 1;
     /* The page is DEVICE and the controller bound; keep both retained. */
