@@ -115,7 +115,9 @@ def main(argv=None):
     parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release HDMI audio resources.')
-    args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
+    args=parser.parse_args(argv)
+    require(args.evidence.parent.is_dir(),'HDMI audio evidence parent must already exist.')
+    bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['source-session.bin'];pcm=frozen['input.pcm']
     entry={path:frozen['entry-evidence-'+str(i)+'.bin'] for i,path in enumerate(json.loads(frozen['entry-index.bin']))}
     def validate_entry(identity,port):

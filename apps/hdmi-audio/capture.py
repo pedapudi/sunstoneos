@@ -110,6 +110,10 @@ def capture_copied(exchange,session,pcm,evidence,record,save,deadline,*,now=None
     import time
     now=time.monotonic if now is None else now;pause=time.sleep if pause is None else pause
     preparation.session_check(session,pcm);request_bytes(1,session)
+    # The supervisor creates this archive; persist its entry before replies.
+    parent=os.open(evidence.parent,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(parent)
+    finally:os.close(parent)
     record.update(hdmi_audio_result='unobserved',hdmi_audio_retention='whole-board-power-removal',
         physical_qualified=False,hdmi_audio_session_sha256=hashlib.sha256(session).hexdigest())
     save();native_deadline=None;last_now=0
