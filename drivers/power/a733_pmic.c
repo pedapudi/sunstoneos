@@ -3,6 +3,8 @@
 #include "a733_clock_reference.h"
 #define TWI UINT32_C(0x07083000)
 #define BIT(n) (UINT32_C(1)<<(n))
+#define POLL_STEPS 256u /* Phase attempts per poll, including repeated flag reads. */
+#define POLL_US 500u /* Bus time per poll, about half of a 1 kHz tick. */
 enum { S_CLOCK,S_BASELINE,S_PINS,S_VERIFY,S_READY };
 enum { FREE,QUEUED,ACTIVE,DONE,EXPIRED };
 enum { P_START,P_WAIT_START,P_ADDRESS,P_WAIT_ADDRESS,P_REGISTER,P_WAIT_REGISTER,
@@ -237,7 +239,7 @@ static int await_status(struct a733_pmic *p,unsigned expected)
     if(!rd(p,TWI+0x10,&p->last_status) || p->last_status!=expected)return -1;
     return 1;
 }
-static enum a733_pmic_status transfer(struct a733_pmic *p)
+static enum a733_pmic_status phase(struct a733_pmic *p)
 {
     struct a733_pmic_slot *s=&p->slots[p->active];struct profile f;profile(s->snapshot.rail,&f);
     const uint8_t regs[]={0xff,0x0e,0x0f,f.enable,f.selector,0xff};
@@ -281,6 +283,27 @@ static enum a733_pmic_status transfer(struct a733_pmic *p)
        p->phase!=P_WAIT_RECEIVE))return fault(p);
     if(ok>0)++p->phase;
     return A733_PMIC_PENDING;
+}
+/* One poll advances several bus phases while the I2C mutex stays held, so a
+ * snapshot no longer costs one scheduler tick per phase. A wait phase whose
+ * flag is still clear is read again until the per-poll budget is spent.
+ * Authority is checked again before each further phase; BUSY there ends the
+ * poll before any access. Every access keeps its own deadline check, and the
+ * step count bounds the loop even if the clock does not advance. */
+static enum a733_pmic_status transfer(struct a733_pmic *p)
+{
+    const uint64_t start=p->last_now;
+    for(unsigned n=1;;++n) {
+        unsigned before=p->phase,index=p->byte_index;
+        enum a733_pmic_status r=phase(p);
+        if(r!=A733_PMIC_PENDING || n==POLL_STEPS || p->last_now-start>=POLL_US)return r;
+        if(p->phase==before && p->byte_index==index)continue;
+        int live=clock_live(p);
+        if(live!=1)return live==0 ? A733_PMIC_PENDING : fault(p);
+        enum a733_rail_result rail=a733_rail_borrow_status(p->rails,&p->slots[p->active].borrow);
+        if(rail==A733_RAIL_BUSY)return A733_PMIC_PENDING;
+        if(rail!=A733_RAIL_READY)return fault(p);
+    }
 }
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
 {

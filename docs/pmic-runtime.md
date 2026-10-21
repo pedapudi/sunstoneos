@@ -77,9 +77,14 @@ One snapshot reads AXP8191 address `0x36` in this order:
 The provider holds the common I2C mutex across all six byte reads. Each read
 uses START, write address, register index, repeated START, read address, final
 NACK and STOP. Sending the register index does not write PMIC register data.
-The worker advances one bounded state per poll; it does not wait in a hardware
-polling loop. A caller deadline bounds the complete snapshot, including mutex
-acquisition and result publication.
+One worker poll advances several bus phases while the I2C mutex stays held.
+A wait phase whose completion flag is still clear reads it again until the poll
+has spent 500 microseconds of counter time or 256 phase attempts. Clock and rail
+authority are checked again before each further phase; BUSY there ends the poll
+before any access. With 90 microseconds per bus event and one poll per 1 ms
+tick, a snapshot completes in 9 polls instead of 92
+([poll-count check](../checks/a733-pmic-polls.c)). A caller deadline bounds the
+complete snapshot, including mutex acquisition and result publication.
 
 A successful result contains raw bytes, enable state and a decoded programmed
 voltage where supported. Reaping the result ends its rail borrow. The copied
