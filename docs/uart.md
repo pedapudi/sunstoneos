@@ -9,7 +9,9 @@ local gate/reset control and a native adapter for polling or deferred IRQ servic
 The [finite DMA application](uart-application.md#finite-dma-transfers) uses DMA0
 request 16 with bounded caller inputs up to 1024 bytes. Software checks execute
 the actual driver, native MMIO policy, DMA service/controller and copied result.
-Physical UART DMA remains unqualified.
+Physical UART DMA remains unqualified. DMA release is terminal for the
+controller object: after release only drain and close are accepted, because
+interrupt enables stay cleared and the FIFO stays in DMA mode.
 This document is for driver and platform developers.
 
 ## Controller profiles follow the manual
@@ -53,6 +55,21 @@ FIFOs, configures flow control and verifies line/modem controls.
 It then enables receive, line-error and, when applicable, modem-status interrupts.
 The forced-configuration selection remains enabled as in the published driver.
 
+Every FIFO control write uses one fixed receive trigger per port. UART1–6 have
+256-byte FIFOs and trigger at half full (FCR 0x81, or 0x87 with both FIFO
+resets). UART0 and S_UART0–1 have 64-byte FIFOs and keep the one-character
+trigger (FCR 0x01 or 0x07). The pinned Linux driver also uses the half-full
+trigger above 9600 baud. With automatic flow control, the controller deasserts
+RTS when the receive FIFO reaches the trigger level. A one-character trigger
+would therefore stop the Bluetooth module after almost every byte at
+1,500,000 baud. In interrupt mode a burst shorter than the trigger level ends
+with a receive-timeout interrupt (IIR cause 12), which the driver services as
+received data. The native binding accepts only the planned values for the
+port, plus the UART2 DMA-mode value 0x09. The trigger behavior of this
+controller instance has not been measured on the board. Bluetooth receive
+throughput also remains bounded by its 64-byte drain budget per 1 ms poll,
+about 64 KB/s.
+
 `exchange` services FIFO status directly. `interrupt` handles one interrupt
 cause: received data, receive timeout, line status, transmitter empty or modem
 status. Each call moves at most its specified budget of receive bytes and the
@@ -65,10 +82,14 @@ The controller stores no buffer pointers and has no internal transmit queue.
 Transmit counts indicate bytes accepted into the FIFO within the deadline.
 They do not establish transmission on the wire. The driver arms the transmitter
 interrupt while the supplied span remains and disables it when that span is
-consumed. A failed or late access may already have transferred its final byte;
+consumed. A failed access or a late batch may already have transferred its final byte;
 the fault prevents automatic retransmission of uncertain data.
 
-Receive processing captures line status before reading each byte. Returned
+Receive processing captures line status before reading each byte. Each receive
+or transmit FIFO batch checks the deadline once before and once after the batch
+rather than around every register access; a failed access still faults at once.
+The register filter has no access to the receive FIFO level register, so the
+driver still reads line status once per received byte. Returned
 bytes retain parity, framing, break and overrun flags; the operation and controller
 also retain aggregate flags. Reading line status and modem status clears hardware
 indications, so every reader must share the same exclusive ownership.
@@ -88,8 +109,9 @@ Neither state restores an inherited console configuration.
 ## Platform ownership must precede register access
 
 The controller takes ordered 32-bit register callbacks and a monotonic
-microsecond clock. Each access checks the absolute deadline before and after
-the callback. Configuration and drain keep their original deadline across polls.
+microsecond clock. Each configuration and status access checks the absolute
+deadline before and after the callback; FIFO data batches check it around the
+batch. Configuration and drain keep their original deadline across polls.
 Clock reversal, expired deadlines, unexpected busy interrupts and uncertain
 accesses cause a sticky fault. Further operations perform no register accesses.
 A deadline cannot interrupt a stalled bus transaction; independent hardware

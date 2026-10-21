@@ -5,18 +5,19 @@
 
 struct model {
     uint32_t regs[64], dll, dlh, cause, lsr_error;
-    unsigned accesses, writes, fail_access, rx, tx_space, tx_count, update_pending;
+    unsigned accesses, writes, reads, clocks, fail_access, rx, tx_space, tx_count, update_pending;
     unsigned trace_offset[64], trace_value[64], trace_count;
     uint64_t now;
     int backwards, late, shift_busy;
 };
 static int now(void *p, uint64_t *t)
-{ struct model *m=p; *t=m->backwards ? m->now-1 : m->now; return 1; }
+{ struct model *m=p; ++m->clocks; *t=m->backwards ? m->now-1 : m->now; return 1; }
 static int read32(void *p, uintptr_t addr, uint32_t *v)
 {
     struct model *m=p; unsigned o=(unsigned)(addr-0x02501000u);
     assert(!(o&3) && o<=0xa4);
     if (++m->accesses == m->fail_access) return 0;
+    ++m->reads;
     if (o==0) { assert(!(m->regs[3]&128) && m->rx); *v=0x80u + --m->rx; }
     else if (o==8) *v=m->cause;
     else if (o==0x14) { *v=(m->shift_busy ? 0x20u : 0x60u) | (m->rx ? 1u : 0u) | m->lsr_error; m->lsr_error=0; }
@@ -64,6 +65,7 @@ static void plan_cases(void)
         f.port=port;f.auto_flow=0; assert(a733_uart_plan(&f,&p)==1);
         assert(p.base==(port<7 ? 0x02500000u+port*4096 : 0x07080000u+(port-7)*4096));
         assert(p.fifo_bytes==(port && port<7 ? 256u : 64u));
+        assert(p.fcr==(port && port<7 ? 0x81u : 1u) && p.fcr==a733_uart_fcr(port));
         f.auto_flow=1;
         assert(a733_uart_plan(&f,&p)==(port && port<7 ? 1 : -1));
     }
@@ -127,6 +129,18 @@ int main(int argc, char **argv)
     assert(a733_uart_interrupt(&u,rx,4,0,0,1,1000,&r)==A733_UART_READY && r.modem==0x11);
     m.cause=1;n=m.accesses;
     assert(a733_uart_interrupt(&u,rx,4,0,0,1,1000,&r)==A733_UART_READY && m.accesses==n+1);
+    /* A clean 64-byte burst keeps per-byte line status but checks the
+     * deadline only around the batch. */
+    {
+        struct a733_uart_byte burst[64];
+        m.rx=64;m.reads=0;m.clocks=0;
+        assert(a733_uart_exchange(&u,burst,64,0,0,64,1000,&r)==A733_UART_READY);
+        assert(r.received==64 && !m.rx && m.reads==128 && m.clocks<=4);
+        for (unsigned i=0;i<64;++i) assert(burst[i].value==0x80u+63u-i && !burst[i].status);
+        m.rx=2;m.reads=0;m.clocks=0;
+        assert(a733_uart_exchange(&u,burst,64,0,0,64,1000,&r)==A733_UART_READY);
+        assert(r.received==2 && m.reads==5 && m.clocks<=4);
+    }
     assert(a733_uart_drain(&u,1000)==A733_UART_DRAINING);
     assert(a733_uart_poll(&u)==A733_UART_DRAINED);
     ready(&u,&m);m.rx=1;

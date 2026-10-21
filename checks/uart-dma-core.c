@@ -23,9 +23,15 @@ int main(void)
  regs[0x14/4]=0x20;assert(a733_uart_dma_release(&u,1,100)==0);
  regs[0x14/4]=0x60;regs[0x7c/4]=7;assert(a733_uart_dma_release(&u,1,100)==0);
  regs[0x7c/4]=6;assert(a733_uart_dma_release(&u,1,100)==A733_UART_READY&&!u.dma_owned);
+ /* Release is terminal: IER stays 0, so only drain and close may follow. */
+ before=writes;
+ assert(a733_uart_exchange(&u,NULL,0,&tx,1,1,100,&out)==-1&&a733_uart_interrupt(&u,NULL,0,&tx,1,1,100,&out)==-1);
+ assert(a733_uart_tx_irq(&u,1,100)==-1&&a733_uart_dma_prepare(&u,100)==-1&&writes==before&&!regs[4/4]);
+ assert(a733_uart_drain(&u,100)==A733_UART_DRAINING);
+ u.state=A733_UART_READY;u.dma_released=0;
  assert(a733_uart_platform_native_address(2,0x02502088,1));
  assert(a733_uart_platform_native_address(2,0x0250208c,0));
  assert(!a733_uart_platform_native_address(1,0x02501088,1));
  bad_write=1;assert(a733_uart_dma_prepare(&u,100)==A733_UART_FAULT&&u.dma_owned);
- puts("PASS DMA lease exclusion; request-disable, true TEMT, RX-empty, idle and uncertainty retention");
+ puts("PASS DMA lease exclusion; terminal release; request-disable, true TEMT, RX-empty, idle and uncertainty retention");
 }
