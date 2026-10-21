@@ -77,8 +77,9 @@ least 100 ms after successful PHY initialization before raising PERST. After
 raising PERST, it waits at least another 100 ms before the first configuration
 request. The pinned U-Boot `pcie_sunxi_rc.c` (SHA-256
 `15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
-lines 375–379) has the same two 100 ms delays, around the PERST release. No running inherited endpoint is converted into a cold endpoint by an
-unapproved reset.
+lines 375–379) has the same two 100 ms delays, around the PERST release. No
+running inherited endpoint is converted into a cold endpoint by an unapproved
+reset.
 
 Every register operation uses the actual common FreeRTOS register mutex. Pin
 operations and resource health checks occur outside that mutex, avoiding nested
@@ -130,10 +131,11 @@ the native write filter refuses Root Control writes.
 
 Absolute operation and lifetime deadlines use the common monotonic clock.
 One poll writes the 91-entry COMB1 PHY sequence under a single register-mutex
-hold, then returns until the PHY PLL reports lock at least 100 µs later. The
-next poll writes the four finishing entries. Each access keeps its own deadline
-check. Link observation and endpoint readiness advance through repeated
-bounded polls.
+hold and returns. Later polls, at least 100 µs apart, read the PHY PLL lock bit
+(bit 0 of 0x06c02900). The first later poll that observes PLL lock writes the
+four finishing entries in the same mutex hold. Each access keeps its own
+deadline check. Link observation and endpoint readiness advance through
+repeated bounded polls.
 A deadline bounds software progress; it cannot bound a hung physical MMIO
 transaction. Qualified independent recovery is required before physical use.
 An uncertain access, late result, resource fault or failed invariant retains
