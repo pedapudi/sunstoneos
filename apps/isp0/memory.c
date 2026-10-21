@@ -18,14 +18,23 @@ int isp0_upload_allocate(void)
  }
  storage_digest_bytes(&isp0.session,sizeof(isp0.session),isp0.session_digest);return 1;
 }
+/* Uncached guard bytes cost one bus access per load: compare aligned words. */
+static int filled(uintptr_t a,size_t n)
+{
+ const volatile uint8_t *p=(const void *)a;size_t j=0;
+ for(;j<n&&((a+j)&7);j++)if(p[j]!=0xa5)return 0;
+ for(;n-j>=8;j+=8)if(*(const volatile uint64_t *)(a+j)!=UINT64_C(0xa5a5a5a5a5a5a5a5))return 0;
+ for(;j<n;j++)if(p[j]!=0xa5)return 0;
+ return 1;
+}
 int isp0_guards(void)
 {
  for(unsigned i=1;i<ISP0_EXTENTS;i++){struct device_memory_extent e;enum device_memory_state state;
   if(!device_memory_describe(isp0.pool,isp0.leases[i],&e,&state)||state!=DEVICE_MEMORY_DEVICE||
      e.physical!=e.cpu||e.bytes!=rounded(isp0.sizes[i])+8192||e.cpu+4096!=(uintptr_t)isp0.memory[i])return 0;
-  const volatile uint8_t *p=(const void *)e.cpu;size_t n=rounded(isp0.sizes[i]);
-  for(unsigned j=0;j<4096;j++)if(p[j]!=0xa5||p[4096+n+j]!=0xa5)return 0;
-  for(size_t j=isp0.sizes[i];j<n;j++)if(isp0.memory[i][j]!=0xa5)return 0;
+  size_t n=rounded(isp0.sizes[i]);
+  if(!filled(e.cpu,4096)||!filled(e.cpu+4096+n,4096)||
+     !filled((uintptr_t)isp0.memory[i]+isp0.sizes[i],n-isp0.sizes[i]))return 0;
  }
  for(unsigned i=0;i<64;i++)if(isp0.memory[ISP0_RAW][A733_ISP0_INPUT_BYTES+i])return 0;
  return 1;

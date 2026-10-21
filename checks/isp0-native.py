@@ -74,6 +74,9 @@ class Machine:
   if self.started and self.variant=='micro-fault' and a==0x03900838:self.inject('micro');self.regs[a]=1
   if self.started and self.variant=='global-fault' and a==0x03900088:self.inject('global');self.regs[a]=1
   if self.variant=='late-fault' and self.get(self.base+self.f['copied']) and a==0x03900838:self.inject('late');self.regs[a]=1
+  # One guard byte changes between copy chunks; only the final stage-6 scan sees it.
+  if self.variant=='copy-guard' and self.get(self.base+self.f['copied'])==8192 and a==0x05830254 and 'copy-guard' not in self.injections:
+   self.inject('copy-guard');self.put(self.memory(3)+307200+100,0,1)
   if 0x03900000<=a<0x03920000:self.events.append(['iommu-read',a-0x03900000])
   self.put(a,self.regs.get(a,0),size)
  def write_mmio(self,u,access,a,size,value,unused):
@@ -171,13 +174,18 @@ class Machine:
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for k in ('image','session','contract','input','output'):p.add_argument('--'+k,type=Path,required=True)
- p.add_argument('--resume',type=Path);p.add_argument('--cases',default='nominal,missing-save,dma-error,micro-fault,global-fault,late-fault,guard,stale-status')
+ p.add_argument('--resume',type=Path);p.add_argument('--cases',default='nominal,missing-save,dma-error,micro-fault,global-fault,late-fault,guard,stale-status,copy-guard')
  a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False);im=helper.Image(a.image);m=Machine(im,a.session.read_bytes(),a.contract.read_bytes(),a.input.read_bytes());m.image_path=a.image;m.output=a.output
  # Resolve native boundaries and ordinary pool geometry before executing cases.
  for n in ['isp0_upload_allocate','isp0_allocate','isp0_task','a733_isp0_poll','a733_camera_dma_poll','a733_iommu_poll']:im.address(n)
  assert im.address('__device_pool_end')-im.address('__device_pool_start')==2097152
  assert im.address('__uncached_pool_end')-im.address('__uncached_pool_start')==2097152
  results={}
+ # Count guard scans in the copy stage; earlier stages keep their own scans.
+ stage_address=m.base+m.f['stage']
+ def scan(u,pc,size,unused):
+  if m.get(stage_address,4)==6:m.guard_scans+=1
+ guards=im.address('isp0_guards');m.u.hook_add(UC_HOOK_CODE,scan,begin=guards,end=guards)
  if a.resume:
   state=pickle.loads(gzip.decompress(a.resume.read_bytes()));m.restore(state)
  else:
@@ -198,7 +206,7 @@ def main():
   m.restore(state)
   m.variant=variant
   assert m.started==0 and not m.failed and m.get(m.base+m.f['stage'],4)==1 and m.get(m.base+m.f['result'],4)==0 and m.get(m.base+m.f['copied'])==0
-  m.injections={}
+  m.injections={};m.guard_scans=0
   if variant=='stale-status':m.regs[0x0590002c]=0xf
   m.run();result=m.get(m.base+m.f['result'],4)
   assert result==(1 if variant=='nominal' else 2),(variant,result)
@@ -207,6 +215,7 @@ def main():
   if variant=='nominal':
    assert m.started==1 and m.get(m.base+m.f['copied'])==614400 and bytes(m.u.mem_read(m.get(m.base+m.f['payload']),614400))==m.expected
    m.checkpoint(a.output/'copied.pkl.gz');(a.output/'modeled-pixels.nv16').write_bytes(m.expected)
+   assert m.guard_scans==2,m.guard_scans
   else:
    assert not m.get(m.base+m.f['complete'],4) and m.failed
    assert len(m.injections)==1 and sum(m.injections.values())==1,(variant,m.injections)
@@ -217,11 +226,12 @@ def main():
    elif variant=='global-fault':assert m.get(io+iff['state'],4)==7 and m.get(fault+ff['bank_status'],4)==1
    elif variant=='guard':assert stage==4 and m.get(dma+df['state'],4)==15 and m.get(m.memory(2)-1,1)==0
    elif variant=='stale-status':assert m.get(m.base+m.f['engine']+im.layouts['a733_isp0']['fault'],4)==1
-   if variant=='late-fault':assert m.get(m.base+m.f['copied'])==614400
+   elif variant=='copy-guard':assert stage==6 and m.guard_scans==2 and m.get(m.memory(3)+307200+100,1)==0
+   if variant in ('late-fault','copy-guard'):assert m.get(m.base+m.f['copied'])==614400
    else:assert m.get(m.base+m.f['copied'])==0
    m.checkpoint(a.output/(variant+'.pkl.gz'))
    if variant=='guard':assert m.call('isp0_guards')==0
-  results[variant]=dict(passed=True,result=result,triggers=m.started,bytes_copied=m.get(m.base+m.f['copied']),device_extents_retained=True,injections=m.injections,native_stage=m.get(m.base+m.f['stage'],4))
+  results[variant]=dict(passed=True,result=result,triggers=m.started,copy_guard_scans=m.guard_scans,bytes_copied=m.get(m.base+m.f['copied']),device_extents_retained=True,injections=m.injections,native_stage=m.get(m.base+m.f['stage'],4))
   (a.output/'progress.json').write_text(json.dumps(results,indent=2)+'\n')
  (a.output/'result.json').write_text(json.dumps(dict(status='pass',cases=results,image_sha256=m.image_hash(),physical_access=False,numerical_qualified=False,scope=__doc__),indent=2)+'\n')
 if __name__=='__main__':main()

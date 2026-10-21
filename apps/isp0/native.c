@@ -151,11 +151,12 @@ static int setup(void)
    a733_iommu_open(&isp0.iommu,deadline())!=1)return -1;
  return 1;
 }
-static int stable(void)
+static int settled(void)
 {
- uint32_t status;return live()&&isp0_guards()&&a733_isp0_complete(&isp0.engine)==1&&
+ uint32_t status;return live()&&a733_isp0_complete(&isp0.engine)==1&&
   load(0x05830254,&status)&&(status&1)&&!(status&~0xa3u)&&status==isp0.dma.events;
 }
+static int stable(void){return settled()&&isp0_guards();}
 static int step(void)
 {
  int r;
@@ -178,13 +179,15 @@ static int step(void)
      a733_iommu_scan(&isp0.iommu,deadline())!=1)return -1;isp0.stage=5;return 0;}
  if(isp0.stage==5){r=a733_iommu_poll(&isp0.iommu);if(r!=1)return r;
   if(isp0.iommu.fault.scanned_masters!=6||!stable())return -1;isp0.stage=6;return 0;}
+ /* Guard corruption persists, so one scan before the first chunk and one after
+  * the last detect it; completion and DMA status are still checked per chunk. */
  if(isp0.stage==6){
-  if(!stable())return -1;
+  if(!(isp0.copied?settled():stable()))return -1;
   if(isp0.copied<isp0.bytes){size_t n=isp0.bytes-isp0.copied;if(n>4096)n=4096;
    unsigned plane=isp0.copied>=A733_ISP0_PLANE_BYTES?ISP0_UV:ISP0_Y;
    size_t offset=isp0.copied%A733_ISP0_PLANE_BYTES;
    memcpy(isp0.payload+isp0.copied,isp0.memory[plane]+offset,n);isp0.copied+=n;
-   if(!stable())return -1;return 0;}
+   if(!settled())return -1;return 0;}
   storage_digest_bytes(isp0.payload,isp0.bytes,isp0.digest);
   if(!stable()||a733_iommu_scan(&isp0.iommu,deadline())!=1)return -1;isp0.stage=7;return 0;
  }
