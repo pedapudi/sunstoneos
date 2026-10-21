@@ -9,8 +9,14 @@
  *
  * The case word at 0x47fff000 selects: 0 polled completion with fixed job
  * credits, 1 completion through the interrupt path, 2 a coefficient change
- * after admission, which must retain every session. */
-#include "npu_session.h"
+ * after admission, which must retain every session.
+ *
+ * Built with NPU_SESSION_RESERVED_CHECK, the check adds the published
+ * ShuffleNet graph with its external working pool, takes the parent from the
+ * reservation constructor and a 48 MiB stand-in for the platform pool, and
+ * requires a parent larger than the 4 MiB image-RAM window. Case 3 offers a
+ * 4 MiB pool, which must refuse the reservation and leave the pool unused. */
+#include "a733_npu_session_reserved.h"
 #include "aarch64_device_memory.h"
 #include "platform.h"
 #include "npu_session_fixtures.h"
@@ -20,11 +26,32 @@
 #define IDLE 0x7fffffffu
 #define JOBS 3u
 #define REGISTER_CPU 0x09000000u
-_Static_assert(FIXTURES == 3, "three catalogue models");
+#define WINDOW_BYTES (4u << 20)
 
+#if defined(NPU_SESSION_RESERVED_CHECK)
+_Static_assert(FIXTURES == 4, "four catalogue models");
+static struct a733_npu_session_reserved reserved;
+#define sessions (reserved.sessions)
+#define POOL_BASE 0x44000000u
+static struct device_memory_pool pool;
+/* Stand-in for the platform pool: 48 MiB of identity-mapped QEMU RAM. */
+struct device_memory_pool *a733_memory_reservations_init(void)
+{
+    if (!pool.initialized)
+        configASSERT(device_memory_pool_init(&pool, POOL_BASE, POOL_BASE, npu_case == 3 ? WINDOW_BYTES : 48u << 20));
+    return &pool;
+}
+#define PARENT_CPU (reserved.extent.cpu)
+#define PARENT_BYTES (reserved.extent.bytes)
+#else
+_Static_assert(FIXTURES == 3, "three catalogue models");
 static struct npu_sessions sessions, refused;
 static _Alignas(4096) uint8_t parent[3u << 20];
 static uint8_t mutated[4096];
+#define PARENT_CPU ((uintptr_t)parent)
+#define PARENT_BYTES sizeof(parent)
+#endif
+static uint8_t inputs_storage[FIXTURES][2][FIXTURE_MAX_TENSOR], output_storage[FIXTURES][FIXTURE_MAX_TENSOR];
 static struct a733_npu_startup startup;
 static StaticTask_t tasks[FIXTURES + 1];
 static StackType_t stacks[FIXTURES + 1][4096];
@@ -74,25 +101,41 @@ static unsigned tensor_index(const struct npu_session *n, uint32_t va, unsigned 
 {
     for (unsigned i = 0; i < count; ++i)
         if (n->buffers[NBG_ALLOC_INPUT + first + i].device == va) return i;
-    platform_panic("descriptor address outside the session's tensors", va);
+    return UINT32_MAX;
 }
 static uint8_t expected(unsigned m, unsigned output, uint8_t input)
 { return (uint8_t)(input + 17 * (m + 1) + 5 * output); }
-/* Execute the triggered command: every NN descriptor's output from its input. */
+/* Execute the triggered command. Each NN descriptor whose output is a model
+ * output writes it from the model input it reads, or from zero when it reads
+ * intermediate memory. A working pool must arrive cleared through the device
+ * view; the device then dirties all of it, as a graph's intermediates would. */
 static void execute(uint32_t command)
 {
     for (unsigned m = 0; m < sessions.count; ++m) {
         const struct npu_session *n = &sessions.session[m];
         if (n->buffers[NBG_ALLOC_COMMAND].device != command) continue;
+        const struct a733_npu_buffer *pool_buffer = &n->buffers[NBG_ALLOC_POOL];
+        for (uint32_t at = 0; at < pool_buffer->bytes; at += 4096) {
+            uint8_t *page = walk(pool_buffer->device + at, 1);
+            for (unsigned x = 0; x < 4096; ++x) configASSERT(!page[x]);
+            memset(page, 0xee, 4096);
+        }
         for (unsigned k = 0; k < n->layout.nn_operations; ++k) {
             const uint8_t *descriptor = walk(n->buffers[NBG_ALLOC_NN].device + k * 192, 0);
             uint32_t in_va = word(descriptor + 24), out_va = word(descriptor + 28);
             unsigned i = tensor_index(n, in_va, 0, n->layout.inputs);
             unsigned j = tensor_index(n, out_va, n->layout.inputs, n->layout.outputs);
-            uint32_t in_bytes = n->layout.buffers[NBG_ALLOC_INPUT + i].payload_bytes;
+            if (j == UINT32_MAX) continue;
             uint32_t out_bytes = n->layout.buffers[NBG_ALLOC_INPUT + n->layout.inputs + j].payload_bytes;
-            const uint8_t *in = walk(in_va, 0);
             uint8_t *out = walk(out_va, 1);
+            configASSERT(out_bytes <= 4096 - (out_va & 4095));
+            if (i == UINT32_MAX) {
+                for (uint32_t x = 0; x < out_bytes; ++x) out[x] = expected(m, j, 0);
+                continue;
+            }
+            uint32_t in_bytes = n->layout.buffers[NBG_ALLOC_INPUT + i].payload_bytes;
+            configASSERT(in_bytes <= 4096 - (in_va & 4095));
+            const uint8_t *in = walk(in_va, 0);
             for (uint32_t x = 0; x < out_bytes; ++x) out[x] = expected(m, j, in[x % in_bytes]);
         }
         return;
@@ -240,7 +283,8 @@ static void client(void *argument)
     struct nbg_tensor unused;
     configASSERT(!npu_session_tensor(&sessions, m, NBG_INPUT, f->inputs, &unused));
     /* Client refusals change nothing. */
-    uint8_t inputs[2][256], output[256];
+    uint8_t (*inputs)[FIXTURE_MAX_TENSOR] = inputs_storage[m], *output = output_storage[m];
+    int pooled = sessions.session[m].buffers[NBG_ALLOC_POOL].bytes != 0;
     struct nbg_span spans[2];
     uint64_t ticket = 77;
     for (unsigned i = 0; i < f->inputs; ++i) spans[i] = (struct nbg_span){inputs[i], f->tensor_bytes[i]};
@@ -249,7 +293,7 @@ static void client(void *argument)
     spans[0].bytes++;
     configASSERT(!npu_session_send(&sessions, m, NPU_SERVICE_SUBMIT, spans, f->inputs, 1000000, 100, &ticket));
     spans[0].bytes--;
-    spans[0].data = (const unsigned char *)parent;
+    spans[0].data = (const unsigned char *)PARENT_CPU;
     configASSERT(!npu_session_send(&sessions, m, NPU_SERVICE_SUBMIT, spans, f->inputs, 1000000, 100, &ticket));
     spans[0].data = inputs[0];
     configASSERT(!npu_session_send(&sessions, (m + 1) % FIXTURES, NPU_SERVICE_STATUS, NULL, 0, 0, 100, &ticket));
@@ -286,12 +330,13 @@ static void client(void *argument)
         configASSERT(r.result == NPU_SERVICE_OK && r.state == A733_NPU_DONE &&
                      r.job_ticket == submitted.ticket);
         for (unsigned j = 0; j < f->outputs; ++j) {
-            /* Output j of every catalogue graph is computed from input j. */
+            /* Output j of every pool-free catalogue graph is computed from
+             * input j; a pooled graph's output comes from its intermediates. */
             size_t bytes = f->tensor_bytes[f->inputs + j];
             configASSERT(!npu_session_output(&sessions, m, j, output, bytes + 1));
             configASSERT(npu_session_output(&sessions, m, j, output, bytes));
             for (size_t x = 0; x < bytes; ++x)
-                configASSERT(output[x] == expected(m, j, inputs[j][x % f->tensor_bytes[j]]));
+                configASSERT(output[x] == expected(m, j, pooled ? 0 : inputs[j][x % f->tensor_bytes[j]]));
         }
         configASSERT(!npu_session_output(&sessions, m, f->outputs, output, 1));
         r = call(m, NPU_SERVICE_REAP, NULL, 0, 0);
@@ -336,10 +381,14 @@ static void bootstrap_run(void *unused)
              * round-robin choice among all models but the one that finished. */
             for (unsigned m = 0; m < FIXTURES; ++m)
                 if (get(&done[m]) < JOBS) wait_flag(&queued[m], get(&done[m]) + 1);
-            uint32_t before = get(&done[0]) + get(&done[1]) + get(&done[2]);
+            uint32_t before = 0, after;
+            for (unsigned m = 0; m < FIXTURES; ++m) before += get(&done[m]);
             credit();
             TickType_t start = xTaskGetTickCount();
-            while (get(&done[0]) + get(&done[1]) + get(&done[2]) == before) {
+            for (after = before; after == before;) {
+                after = 0;
+                for (unsigned m = 0; m < FIXTURES; ++m) after += get(&done[m]);
+                if (after != before) break;
                 configASSERT(xTaskGetTickCount() - start < 3000); vTaskDelay(1);
             }
         }
@@ -357,9 +406,13 @@ static void bootstrap_run(void *unused)
                      irq_delivered == 1 + FIXTURES * JOBS && npu_service_irq_stopped(&sessions.service));
     configASSERT(sessions.service.controller.state == A733_NPU_CLOSED);
     configASSERT(npu_session_stop_poll(&sessions) == A733_NPU_PLATFORM_READY && stops == 1);
+#if defined(NPU_SESSION_RESERVED_CHECK)
+    platform_puts("PASS NPU sessions: four models in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
+#else
     platform_puts(npu_case == 1 ?
         "PASS NPU sessions: three models, interrupt completion, copied multi-tensor outputs, close and stop\n" :
         "PASS NPU sessions: three models, round-robin jobs, copied multi-tensor outputs through NPU tables, close and stop\n");
+#endif
     platform_exit(0);
 }
 BaseType_t npu_session_task_privileged(TaskFunction_t entry, void *argument)
@@ -378,8 +431,8 @@ static void layout_checks(void)
         /* Sorted by device address: one unmapped guard page between allocations. */
         configASSERT(!i || b->device >= end + 4096);
         end = (uint64_t)b->device + b->bytes;
-        configASSERT(b->device >= NPU_SESSION_DEVICE_BASE && b->cpu >= (uintptr_t)parent &&
-                     b->cpu + b->bytes <= (uintptr_t)parent + sizeof(parent));
+        configASSERT(b->device >= NPU_SESSION_DEVICE_BASE && b->cpu >= PARENT_CPU &&
+                     b->cpu + b->bytes <= PARENT_CPU + PARENT_BYTES);
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) configASSERT(!memory->groups[i]);
     }
     for (unsigned m = 0; m < FIXTURES; ++m) {
@@ -398,11 +451,34 @@ static void layout_checks(void)
 void kernel_main(void)
 {
     platform_init();
-    configASSERT(npu_case <= 2);
-    struct npu_session_model models[FIXTURES + 2];
+    struct npu_session_model models[NPU_SESSION_MODELS + 1];
     for (unsigned m = 0; m < FIXTURES; ++m) models[m] = (struct npu_session_model){fixtures[m].model, fixtures[m].bytes};
     size_t bytes = npu_session_requirements(models, FIXTURES);
-    configASSERT(bytes && !(bytes & 4095) && bytes <= sizeof(parent));
+    configASSERT(bytes && !(bytes & 4095));
+#if defined(NPU_SESSION_RESERVED_CHECK)
+    configASSERT((npu_case == 0 || npu_case == 3) && bytes > WINDOW_BYTES);
+    configASSERT(!a733_npu_session_reserve(&reserved, 0, models, FIXTURES, REGISTER_CPU, fatal, NULL));
+    configASSERT(!a733_npu_session_reserve(&reserved, 7, models, 0, REGISTER_CPU, fatal, NULL));
+    configASSERT(!a733_npu_session_reserve(&reserved, 7, models, FIXTURES, REGISTER_CPU, NULL, NULL));
+    struct npu_sessions *prepared = a733_npu_session_reserve(&reserved, 7, models, FIXTURES,
+                                                             REGISTER_CPU, fatal, NULL);
+    if (npu_case == 3) {
+        /* The parent does not fit: nothing is admitted or allocated. */
+        configASSERT(!prepared && !reserved.admitted && !sessions.prepared && !atomic_load(&sessions.failed));
+        for (unsigned i = 0; i < DEVICE_MEMORY_MAX_ALLOCATIONS; ++i)
+            configASSERT(pool.allocations[i].state == DEVICE_MEMORY_FREE);
+        platform_puts("PASS NPU sessions: a reservation larger than the pool is refused with the pool unchanged\n");
+        platform_exit(0);
+    }
+    enum device_memory_state state;
+    struct device_memory_extent extent;
+    configASSERT(prepared == &sessions && reserved.admitted && reserved.extent.bytes == bytes &&
+                 reserved.extent.cpu >= POOL_BASE && reserved.extent.cpu + bytes <= POOL_BASE + (48u << 20) &&
+                 device_memory_describe(&pool, reserved.lease, &extent, &state) &&
+                 state == DEVICE_MEMORY_DEVICE && extent.bytes == bytes);
+    configASSERT(!a733_npu_session_reserve(&reserved, 7, models, FIXTURES, REGISTER_CPU, fatal, NULL));
+#else
+    configASSERT(npu_case <= 2 && bytes <= sizeof(parent));
     /* Absent catalogue identity, count limits and size mismatch are refused. */
     configASSERT(fixtures[0].bytes <= sizeof(mutated));
     memcpy(mutated, fixtures[0].model, fixtures[0].bytes); mutated[fixtures[0].bytes - 1] ^= 1;
@@ -420,13 +496,13 @@ void kernel_main(void)
     bad = config; bad.bytes -= 4096;
     configASSERT(!npu_session_prepare(&refused, &bad) && atomic_load(&refused.failed));
     bad = config; bad.models[1] = wrong[0];
-    struct npu_sessions *again = &refused;
-    memset(again, 0, sizeof(*again));
-    configASSERT(!npu_session_prepare(again, &bad) && atomic_load(&again->failed));
+    memset(&refused, 0, sizeof(refused));
+    configASSERT(!npu_session_prepare(&refused, &bad) && atomic_load(&refused.failed));
     configASSERT(!npu_session_prepare(&sessions, &config)); /* A fatal callback is required. */
     memset(&sessions, 0, sizeof(sessions));
     config.fatal = fatal;
     configASSERT(npu_session_prepare(&sessions, &config) && !npu_session_prepare(&sessions, &config));
+#endif
     layout_checks();
 
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
@@ -442,7 +518,9 @@ void kernel_main(void)
                                                   stacks[m], &tasks[m], m == 1 ? 2 : 1);
         configASSERT(clients[m]);
     }
-    TaskHandle_t duplicate[FIXTURES] = {clients[0], clients[0], clients[2]};
+    TaskHandle_t duplicate[FIXTURES];
+    memcpy(duplicate, clients, sizeof(duplicate));
+    duplicate[1] = clients[0];
     configASSERT(!npu_session_bind(&sessions, &startup, duplicate, 4, 1));
     duplicate[1] = bootstrap;
     configASSERT(!npu_session_bind(&sessions, &startup, duplicate, 4, 1));

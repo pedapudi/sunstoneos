@@ -254,6 +254,62 @@
    "state_patches": 2,
    "command_body_bytes": 104,
    "compiler": "tools/npu-dual-pipeline.sh, perchannel_symmetric_affine int8"
+  },
+  {
+   "name": "shufflenet-v2-published",
+   "model": {
+    "bytes": 964224,
+    "sha256": "fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      224,
+      224,
+      3,
+      1
+     ],
+     "logical_bytes": 150528,
+     "name": "input[0]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 998277249,
+     "fixed_position": -127,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 150528,
+      "sha256": "d38c22c2007db314572c9ddfeb513a9f3d11ec99e8deec0f65bc91481502f1b9"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      2,
+      1
+     ],
+     "logical_bytes": 2,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 987041363,
+     "fixed_position": 83,
+     "zero_point": 128,
+     "reference": {
+      "bytes": 2,
+      "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8"
+     }
+    }
+   ],
+   "vip_sram_bytes": 518144,
+   "pool_bytes": 1092352,
+   "nn_operations": 125,
+   "descriptor_patches": 534,
+   "state_patches": 125,
+   "command_body_bytes": 3056,
+   "compiler": "published A733 SDK example (examples/vpm_run/operator/v3), not the pinned compiler"
   }
  ]
 }
