@@ -6,9 +6,12 @@ CMD53 block and every 1 KiB image chunk as a padded 1,536-byte transfer. This
 check counts those transfers from the pinned artifacts, adds the smallest
 SD-protocol framing for each command and its confirmation, and converts the
 clock cycles to time at the admitted one-bit SDIO clock. The result is a lower
-bound: it excludes controller and task latency, card busy time, power-up,
-card setup and the time spent polling between transfers. It fails when that
-lower bound does not fit before the board profile's bootstrap deadline.
+bound: it excludes controller and task latency, card busy time, card setup,
+boot work before the radio platform starts and the time spent polling between
+transfers. The fixed platform power-up waits (supply, module settle and reset)
+are subtracted from the board profile's bootstrap offset. The check fails when
+the bus lower bound does not fit in the time that remains. A pass shows only
+that this bound fits; it does not show that the bootstrap meets its deadline.
 """
 import argparse
 import hashlib
@@ -73,6 +76,10 @@ def main():
     bootstrap_us = int(source("apps/board/radio_profile.c",
                               r"#define BOARD_RADIO_BOOTSTRAP_US (\d+)u").group(1))
     bus_hz = module_hz // 2   # sunxi_sdio selects the SDR divide-by-two path, one data line.
+    # Minimum waits the radio platform holds before the first card command.
+    power_up_us = sum(int(source("drivers/net/a733_radio_platform.c",
+                                 r"p->last_now-p->wait_since>=(\d+)\)p->stage=" + stage).group(1))
+                      for stage in ("ENABLE_MODULE", "BUS_GATE", "RESET_RELEASE"))
 
     spec = importlib.util.spec_from_file_location("radio_patch", ROOT / "tools/inspect-radio-patch.py")
     patch = importlib.util.module_from_spec(spec)
@@ -102,21 +109,23 @@ def main():
                           "payload_only_seconds": round(tx_bytes * 8 / bus_hz, 3),
                           "lower_bound_cycles": cycles, "lower_bound_seconds": round(seconds, 3)}
     worst = max(r["lower_bound_seconds"] for r in results.values())
-    budget = bootstrap_us / 1e6
+    budget = (bootstrap_us - power_up_us) / 1e6
     report = {"module_hz": module_hz, "bus_hz": bus_hz, "data_lines": 1, "patch_table_pairs": pairs,
+              "bootstrap_offset_seconds": bootstrap_us / 1e6, "power_up_wait_seconds": power_up_us / 1e6,
               "bootstrap_budget_seconds": budget, "images": results,
               "lower_bound_seconds": worst, "within_budget": worst < budget,
-              "excludes": ["power-up and card setup", "controller and task latency",
-                           "card busy time", "polling between transfers"]}
+              "excludes": ["card setup", "boot work before radio platform start",
+                           "controller and task latency", "card busy time", "polling between transfers"]}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if worst >= budget:
         print(f"FAIL radio bootstrap: at least {worst:.1f} s of SDIO bus time at {bus_hz} Hz "
-              f"exceeds the {budget:.0f} s bootstrap bound")
+              f"exceeds the {budget:.3f} s left of the bootstrap bound after power-up waits")
         raise SystemExit(1)
-    print(f"PASS radio bootstrap: lower bound {worst:.1f} s within {budget:.0f} s")
+    print(f"PASS radio bootstrap bus bound: {worst:.1f} s fits in the {budget:.3f} s left after "
+          f"power-up waits; card setup and latency are not counted")
 
 
 if __name__ == "__main__":
