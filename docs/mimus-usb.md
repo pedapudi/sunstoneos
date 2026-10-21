@@ -19,14 +19,26 @@ The runtime uses a recognition task at priority 3, a USB task at priority 4, and
 a recovery task at priority 5. The paced capture task also runs at priority 4
 and blocks between replay requests. A static queue transfers one recognition request
 from USB to the recognition task. Atomic state publication releases ownership
-only after recognition and destruction of its temporary objects finish.
+only after recognition finishes and its temporary objects are destroyed.
 
 USB refuses asset writes, commits, and another start while recognition owns the
-buffers. Each start constructs the engine from the committed model files. Model
-loading verifies tensor checksums. The engine releases its temporary heap objects
-before accepting the next recording; the arena is reset for each invocation.
+buffers. The first start loads the model from the committed model files,
+verifying tensor checksums, and creates the recognizer. The recognition task
+keeps both for later starts of either command, so those starts skip loading.
+An accepted `0x11` for slot 0 or slot 1 marks the retained model stale before
+any `0x12` can rewrite its buffer. The next start destroys the stale objects
+and loads the newly committed files. A failed request also marks them stale.
+Each request releases its result and other temporary heap objects before the
+next recording is accepted, and the arena is reset for each invocation.
 Each recording starts a separate formatting sequence and flushes it at the end.
 Cross-recording sentence continuity is not implemented.
+
+A start that loads the model logs `LOAD load_us=<time> verify_crc=1`. A
+whole-recording result adds `TIMING total_us=<time> compute_us=<time>`.
+`total_us` runs from WAV parsing through the final formatting flush, so it is the
+PCM-to-formatted-text time without model loading. `compute_us` covers recognition
+alone. Its `MEMORY` record also reports `yields`, the number of times the yield
+hook gave up the processor during that recording.
 
 The recovery paths have separate deadlines:
 
@@ -148,13 +160,18 @@ input identities, and reference comparison.
 The host fixture `checks/mimus-service.cc` executes the actual asset service with
 queue stubs and fixed RAM mappings. It checks length and offset rejection, CRC
 failure, ownership during recognition, two generations, and readable success and
-error results. The physical session covers actual USB transfers, scheduler
+error results. It also requires an accepted model-slot replacement to mark the
+retained engine stale, and a refused or WAV-slot replacement to leave it.
+`checks/mimus-warm.py` runs the actual recorded engine on the bench bundle. Two
+retained-engine requests load once and both match the host reference. Marking
+the engine stale, other model buffers, a failed request and a cold request each
+cause a new load. The physical session covers actual USB transfers, scheduler
 preemption, recognition, and reconnect access. Arithmetic-kernel evidence from
 the NEON port remains applicable; this integration does not change those kernels.
 
 Host-reported request latency starts after the WAV upload and ends after result
-retrieval. It includes model loading, recognition, polling, and USB result
-transfer. It excludes WAV transfer, capture, and host reference comparison, so it
+retrieval. It includes model loading when the request loads the model,
+recognition, polling, and USB result transfer. It excludes WAV transfer, capture, and host reference comparison, so it
 does not measure live speech-to-text latency.
 
 ## Physical integration evidence
@@ -214,6 +231,9 @@ that comparison, so another physical run was unnecessary.
 This establishes recorded-audio parity for the physical image identified above.
 The current image also includes the unqualified native paced-replay path.
 That evidence covers the single-core runtime, native transfers, and recovery.
+That image loaded the model at every start. The retained engine, the `LOAD` and
+`TIMING` records and the rate-limited yield have passed only host and emulator
+checks.
 Other models, multicore
 execution, physical paced/live input, accelerated backends, power transitions, forced
 USB-task stalls, and long-duration or arbitrary-fault qualification remain open.

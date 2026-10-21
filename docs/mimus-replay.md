@@ -49,7 +49,11 @@ whole-recording command `0x14`. [The USB protocol](mimus-usb.md) defines framing
 
 Each `SEGMENT` record contains its sample interval, speech interval, publication
 time, completion time, and completion latency from speech end. Times use the
-replay start as their origin; model loading finishes before this origin.
+replay start as their origin; model loading finishes before this origin. A
+request that loads the model logs `LOAD load_us=<time> verify_crc=1` before the
+first segment. A later USB request that reuses the retained model and recognizer
+has no `LOAD` record; [the USB application](mimus-usb.md#task-ownership-and-recovery)
+defines when they are reloaded.
 `RESULT`, `TEXT`, `MARKS`, `CAPS`, and `FORMATTED` describe that utterance.
 `FLUSH` contains the held punctuation released after the final utterance.
 
