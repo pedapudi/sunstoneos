@@ -7,6 +7,8 @@ volatile unsigned camera_check_result;
 void vTaskDelay(TickType_t ticks)
 {camera_check_result=100+(unsigned)ticks;__asm__ volatile("brk #0");for(;;){}}
 int camera_live(void *v){(void)v;return 1;}
+/* The USB failure path must not run in these cases. */
+void camera_fail(void *v){(void)v;camera_check_result=90;__asm__ volatile("brk #0");for(;;){}}
 uint32_t tud_vendor_n_available(uint8_t i){return i?0:input_read<5?5-input_read:12-input_read;}
 uint32_t tud_vendor_n_read(uint8_t i,void *out,uint32_t n)
 {if(i||n>12-input_read)return 0;memcpy(out,input+input_read,n);input_read+=n;return n;}
