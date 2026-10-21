@@ -190,15 +190,33 @@ component of full board support.
 
 The optional replay operation uses a fixed ring of `n` page-rounded frames
 followed by `n` 4 KiB command pages, where `n` is 2, 3 or 4. The surface
-mapping must equal `n` times the frame size plus 4 KiB; the driver derives `n`
-from that size and refuses any other mapping. The two-frame case is the
-original replay bank, with an unchanged layout. Every frame has the same
-format, pitch and dimensions. Each command page contains an aligned pair of
-16-byte RCQ headers and a 32-byte-aligned source word. One header copies the
-selected frame's low address into UCH3 layer0 at DE offset `0x221010`; the
-second is inactive. The ring stays below a 4 GiB IOVA boundary, so the
-unchanged high address is zero. No caller supplies an arbitrary register
-destination or command stream.
+mapping must equal `n` times the sum of the frame size and 4 KiB. Every frame
+has the same format, pitch and dimensions. Each command page contains an
+aligned pair of 16-byte RCQ headers and a 32-byte-aligned source word. One
+header copies the selected frame's low address into UCH3 layer0 at DE offset
+`0x221010`; the second is inactive. The ring stays below a 4 GiB IOVA
+boundary, so the unchanged high address is zero. No caller supplies an
+arbitrary register destination or command stream.
+
+One mapping size can satisfy that equation for more than one frame size. For
+example, four frames of size `f` fill the same bytes as two frames of size
+`2f + 4096`. Under the wrong reading, a frame slot would cover command pages,
+or a command header address would point into pixel data. The configuration
+therefore fixes the frame size before the engine starts:
+
+- A nonzero `ring_frame_bytes` in `struct a733_de_config` is the frame size.
+  `a733_de_init()` derives `n` from the mapping and refuses the configuration
+  unless the frame is page aligned, covers the padded surface, and fills the
+  mapping with 2, 3 or 4 slots. The configuration must also supply RCQ
+  submission.
+- Zero selects the original two-frame bank, whose layout is unchanged. The
+  frame size is then the mapping size minus 8 KiB, divided by two.
+
+`a733_de_replay_request()` and `a733_de_replay_writable()` accept only that
+frame size and refuse every other reading of the mapping. The engine has no CPU
+view of the ring, so the owner's admission callback must check the published
+command pages with `a733_de_ring_valid()` for the configured frame size before
+`START`.
 
 `a733_de_ring_build()` constructs the command pages before publication, and
 `a733_de_ring_valid()` checks every command-page byte for a given slot count.
@@ -231,14 +249,18 @@ that never clears ends at the request deadline as a time fault.
 
 `a733_de_replay_writable()` reports whether the owner may write new pixels
 into a slot. It returns 1 only when the DE is `ARMED`, no request is pending,
-the frame size describes the ring, and the slot differs from the scanned slot.
-After `START` the scanned slot is slot 0. A replay changes the scanned slot
-only when it completes: RCQ finish, a readback of the new layer address, and a
-frame-end latched after a later clear. That frame-end ends a frame whose
-fetches began after the address change, so the previous slot is outside the
-current frame. A producer can therefore stream by writing a slot that the
-function reports as writable, publishing it, and requesting its replay. With
-three or four slots, one slot can be filled while another waits to be shown.
+the frame size equals the configured frame size, and the slot differs from the
+scanned slot. After `START` the scanned slot is slot 0. A replay changes the
+scanned slot only when it completes: RCQ finish, a readback of the new layer
+address, and a frame-end latched after a later clear. The DE either applies
+the new address at once or latches it at the frame boundary that this
+frame-end marks. In both cases every frame after the frame-end fetches from
+the new address, so the previous slot is no longer read. A producer can
+therefore stream by writing a slot that the function reports as writable,
+publishing it, and requesting its replay. Only one replay can be pending, and
+no slot is writable while it is pending. Between presentations, a ring of
+three or four slots lets the producer fill more than one slot ahead, so the
+next frame is ready when a presentation completes.
 
 Publication is the writer's duty. An uncached mapping needs a completed
 barrier before the replay request; the replay's own barrier precedes RCQ
@@ -246,8 +268,8 @@ submission. A cached alias needs a clean to the point of coherency.
 
 Recycling covers pixel contents only. The command pages stay immutable, and
 the ring stays mapped READ, owned and retained after `STOP` and after every
-fault. `STOP`, a pending request, any fault and a frame size that describes a
-different ring all make every slot unwritable. The retirement condition
+fault. `STOP`, a pending request, any fault and a frame size other than the
+configured one all make every slot unwritable. The retirement condition
 assumes that the DE latches the layer address at a frame boundary or applies
 it at once. Both cases leave the old slot unread after the observed frame-end,
 but physical qualification of that assumption is pending. A wrong condition
@@ -266,8 +288,16 @@ with hashes in `sources.lock.json`. Failed admission, uncertain submission,
 readback mismatch, stale completion or deadline retains the bank and resources.
 The host model in `checks/a733-display-engine.c` streams new contents through
 two-, three- and four-slot rings and checks slot retirement after each
-completed replay. It also covers refusal of slot counts, ring geometry,
-pending requests, `STOP`, deadline and stale-completion faults. No application
-yet writes recycled slots: the GPU-to-HDMI and DSI applications still present
-sealed two-frame banks. A streaming producer, physical scanout and the
-retirement assumption above remain unqualified.
+completed replay. It also checks these refusals:
+
+- invalid slot counts and ring geometry at initialization;
+- `START` over command pages that do not match the configured ring;
+- a four-slot ring read as two slots, and a two-slot bank read as four slots,
+  before and after the first replay;
+- requests while a replay is pending, after `STOP`, and after deadline and
+  stale-completion faults.
+
+No application yet writes recycled slots: the GPU-to-HDMI and DSI
+applications still present sealed two-frame banks with a zero
+`ring_frame_bytes`. A streaming producer, physical scanout and the retirement
+assumption above remain unqualified.

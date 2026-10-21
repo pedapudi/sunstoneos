@@ -16,6 +16,8 @@ static struct model {
     /* Ring model: the content stamp a producer last wrote into each slot and
      * the stamp of the slot the RCQ selected. */
     uint32_t stamp[A733_DE_RING_SLOTS], shown;
+    /* Published command pages that admission checks before START. */
+    const void *ring_pages;
 } m;
 static int op(void)
 {
@@ -30,6 +32,10 @@ static int admit(void *ctx,const struct a733_de_config *c,enum a733_de_action a)
     assert(ctx==&m && c->lease==87 && c->surface.owner==97);
     unsigned permit=m.admitted;
     if(a==A733_DE_PREPARE || a==A733_DE_START)permit&=m.inactive;
+    if(a==A733_DE_START && c->ring_frame_bytes){
+        uint64_t f=c->ring_frame_bytes;
+        permit&=a733_de_ring_valid(m.ring_pages,c->surface.device_address,f,(unsigned)(c->surface.mapped_bytes/(f+4096)));
+    }
     if(a==A733_DE_STOP)permit&=m.dsi_stopped;
     return op() && permit;
 }
@@ -171,17 +177,27 @@ static void faults(void)
     assert(a733_de_request(&d,A733_DE_STOP,m.now+10000));drive(&d);
     assert(d.error==A733_DE_AUTHORITY && m.regs[0x8140/4]==1);
 }
-static void ring_setup(struct a733_de *d,uint64_t mapped)
+static _Alignas(4096) uint8_t ring_pages[A733_DE_RING_SLOTS*4096];
+/* TV0 initialization over a mapping with a declared ring frame size, or the
+ * two-slot bank when frame is zero. A declared ring publishes its pages. */
+static int ring_init(struct a733_de *d,uint64_t mapped,uint64_t frame,int (*submit)(void *))
 {
     setup(d,0);memset(d,0,sizeof(*d));m.regs[0x8010/4]=0xa132;
-    struct a733_de_config c={.ops={admit,read32,write32,barrier,now,rcq_submit},.context=&m,.lease=87,
+    struct a733_de_config c={.ops={admit,read32,write32,barrier,now,submit},.context=&m,.lease=87,
         .surface={.device_address=0x50000000,.mapped_bytes=mapped,.owner=97,.pitch=2560},
-        .output=A733_DE_TV0_RGB565};
-    assert(a733_de_init(d,&c,100000));drive(d);assert(d->state==A733_DE_READY);
+        .output=A733_DE_TV0_RGB565,.ring_frame_bytes=frame};
+    memset(ring_pages,0x5a,sizeof(ring_pages));m.ring_pages=ring_pages;
+    if(frame && mapped%(frame+4096)==0 && mapped/(frame+4096)<=A733_DE_RING_SLOTS)
+        (void)a733_de_ring_build(ring_pages,0x50000000,frame,(unsigned)(mapped/(frame+4096)));
+    return a733_de_init(d,&c,100000);
+}
+static void ring_setup(struct a733_de *d,uint64_t mapped,uint64_t frame)
+{
+    assert(ring_init(d,mapped,frame,rcq_submit));drive(d);assert(d->state==A733_DE_READY);
     assert(a733_de_request(d,A733_DE_START,m.now+10000));drive(d);assert(d->state==A733_DE_ARMED);
     m.inactive=0;m.replay=1;
 }
-static void replay_setup(struct a733_de *d){ring_setup(d,2*2560*720+8192);}
+static void replay_setup(struct a733_de *d){ring_setup(d,2*2560*720+8192,0);}
 static void replays(void)
 {
     struct a733_de d;uint64_t f=2560*720;
@@ -223,9 +239,9 @@ static void rings(void)
 {
     /* f is the page-rounded 1280x720 RGB565 frame. */
     const uint64_t f=1843200,base=0x50000000;
-    static _Alignas(4096) uint8_t pages[A733_DE_RING_SLOTS*4096];
+    uint8_t *pages=ring_pages;
     for(unsigned n=2;n<=A733_DE_RING_SLOTS;n++){
-        memset(pages,0x5a,sizeof(pages));
+        memset(pages,0x5a,sizeof(ring_pages));
         assert(a733_de_ring_build(pages,base,f,n) && a733_de_ring_valid(pages,base,f,n));
         const uint32_t *w=(const uint32_t *)(pages+(n-1)*4096);
         assert(w[0]==base+n*f+(n-1)*4096+32 && w[3]==0x221010 && w[8]==base+(n-1)*f);
@@ -234,7 +250,7 @@ static void rings(void)
     }
     assert(a733_de_replay_build(pages,base,f) && a733_de_ring_valid(pages,base,f,2) && a733_de_replay_valid(pages,base,f));
     /* Slot counts, alignment and the 4 GiB queue boundary are refused. */
-    memset(pages,0x5a,sizeof(pages));
+    memset(pages,0x5a,sizeof(ring_pages));
     assert(!a733_de_ring_build(pages,base,f,1) && !a733_de_ring_build(pages,base,f,A733_DE_RING_SLOTS+1));
     assert(!a733_de_ring_build(pages,base+4,f,3) && !a733_de_ring_build(pages,base,f+4,3));
     assert(!a733_de_ring_build(pages+64,base,f,3) && !a733_de_ring_build(pages,0,f,3));
@@ -242,8 +258,11 @@ static void rings(void)
     assert(a733_de_ring_build(pages,UINT64_C(0x100000000)-3*(f+4096),f,3));
 
     struct a733_de d;
-    for(unsigned n=2;n<=A733_DE_RING_SLOTS;n++){
-        ring_setup(&d,n*(f+4096));m.frame_period=3;
+    /* The two-slot bank fixed by its mapping, and declared rings of two to
+     * four slots. */
+    for(unsigned k=1;k<=A733_DE_RING_SLOTS;k++){
+        unsigned n=k<2?2:k;
+        ring_setup(&d,n*(f+4096),k<2?0:f);m.frame_period=3;
         /* START scans slot 0; every other slot is free and none beyond n. */
         assert(d.scanout_slot==0 && !d.presented && writable(&d,f)==((1u<<n)-1)-1);
         assert(!writable(&d,f+4096) && !writable(&d,f-4096) && !writable(&d,2560*720-4096));
@@ -279,16 +298,41 @@ static void rings(void)
         assert(a733_de_request(&d,A733_DE_STOP,m.now+10000));drive(&d);
         assert(d.state==A733_DE_DISABLED_RETAINED && !writable(&d,f) && !a733_de_replay_request(&d,0,f,m.now+10000));
     }
-    /* Five slots, a mapping that is not a whole ring, and a frame smaller
-     * than the padded surface are refused. */
-    ring_setup(&d,5*(f+4096));assert(!writable(&d,f) && !a733_de_replay_request(&d,1,f,m.now+10000));
-    ring_setup(&d,3*(f+4096)+4096);assert(!writable(&d,f) && !a733_de_replay_request(&d,1,f,m.now+10000));
-    ring_setup(&d,3*(f+4096));assert(!writable(&d,2560*720-4096) && !a733_de_replay_request(&d,1,2560*720-4096,m.now+10000));
+    /* Initialization refuses a declared ring with one or five slots, a
+     * mapping that is not a whole ring, a frame smaller than the padded
+     * surface, a frame that is not page aligned, or no RCQ submission. */
+    assert(!ring_init(&d,f+4096,f,rcq_submit) && !ring_init(&d,5*(f+4096),f,rcq_submit));
+    assert(!ring_init(&d,3*(f+4096)+4096,f,rcq_submit) && !ring_init(&d,3*f,f-4096,rcq_submit));
+    assert(!ring_init(&d,3*(f+4100),f+4,rcq_submit) && !ring_init(&d,3*(f+4096),f,0));
+    /* Admission refuses START over command pages that do not match the
+     * declared ring. */
+    assert(ring_init(&d,3*(f+4096),f,rcq_submit));drive(&d);ring_pages[4096+64]=1;
+    assert(a733_de_request(&d,A733_DE_START,m.now+10000));drive(&d);
+    assert(d.state==A733_DE_FAULT_RETAINED && d.error==A733_DE_AUTHORITY && !writable(&d,f));
+    /* One mapping has several arithmetic readings: four slots of f fill the
+     * same bytes as two slots of 2f+4096. Only the configured reading is
+     * accepted, before and after the first replay. A four-slot ring refuses
+     * the two-slot reading, whose slot 0 would cover command pages. */
+    const uint64_t g=2*f+4096;
+    ring_setup(&d,4*(f+4096),f);
+    assert(writable(&d,f)==14 && !writable(&d,g));
+    for(unsigned slot=0;slot<2;slot++)assert(!a733_de_replay_request(&d,slot,g,m.now+10000));
+    /* A two-slot bank refuses the four-slot reading, whose command pages
+     * would lie inside frame 1, whether the bank is declared or fixed by
+     * its mapping. */
+    for(unsigned declared=0;declared<2;declared++){
+        ring_setup(&d,4*(f+4096),declared?g:0);
+        assert(!writable(&d,f) && writable(&d,g)==2);
+        for(unsigned slot=0;slot<4;slot++)assert(!a733_de_replay_request(&d,slot,f,m.now+10000));
+        m.frame_period=3;assert(a733_de_replay_request(&d,1,g,m.now+10000));drive(&d);
+        assert(d.state==A733_DE_ARMED && d.replay_slots==2 && m.regs[0x221010/4]==(uint32_t)(base+g));
+        assert(writable(&d,g)==1 && !writable(&d,f) && !a733_de_replay_request(&d,2,f,m.now+10000));
+    }
     /* An uncertain replay retains every slot: the old slot never retires. */
-    ring_setup(&d,3*(f+4096));m.frame_period=1;
+    ring_setup(&d,3*(f+4096),f);m.frame_period=1;
     assert(a733_de_replay_request(&d,1,f,m.now+1000));drive(&d);
     assert(d.state==A733_DE_FAULT_RETAINED && d.error==A733_DE_TIME && !d.presented && d.scanout_slot==0 && !writable(&d,f));
-    ring_setup(&d,3*(f+4096));m.frame_period=3;
+    ring_setup(&d,3*(f+4096),f);m.frame_period=3;
     assert(a733_de_replay_request(&d,1,f,m.now+10000));drive(&d);assert(d.presented==1);
     m.stuck_clear=1;m.regs[0x8144/4]|=4;
     assert(a733_de_replay_request(&d,2,f,m.now+10000));drive(&d);
@@ -299,6 +343,6 @@ int main(void)
     images();puts("four full source image/lifecycle comparisons and address/timing rejection cases passed");
     faults();puts("ownership, active RCQ, bypass, uncertain write, readback, deadline and reentry cases passed");
     replays();puts("replay with free-running frame-end, persistent frame-end, ignored clear and stale RCQ_FINISH cases passed");
-    rings();puts("two- to four-slot ring streaming, slot retirement and ring geometry/fault/stop refusal cases passed");
+    rings();puts("two- to four-slot ring streaming, slot retirement, configured ring geometry, alternative-reading and fault/stop refusal cases passed");
     return 0;
 }
