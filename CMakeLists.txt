@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 project(sunstoneos LANGUAGES C ASM)
+# Documented code generation and the board images' compiler identities assume
+# the Clang 21 driver selected by cmake/aarch64-clang.cmake.
+if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_VERSION VERSION_LESS 21)
+  message(FATAL_ERROR "Clang 21 or later is required; found ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
+endif()
 option(SUNSTONE_A733_PWM "Supervised native PWM0 fan application" OFF)
 if(SUNSTONE_A733_PWM)
  set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
@@ -13,6 +18,37 @@ set(FREERTOS_DIR "" CACHE PATH "Pinned FreeRTOS kernel source directory")
 if(NOT EXISTS "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE/port.c")
   message(FATAL_ERROR "Set FREERTOS_DIR to the kernel fetched by tools/fetch-sources.py")
 endif()
+# Storage-derived targets are configured unconditionally and patch TinyUSB.
+set(TINYUSB_DIR "" CACHE PATH "Pinned TinyUSB source directory")
+if(NOT EXISTS "${TINYUSB_DIR}/src/tusb.c")
+  message(FATAL_ERROR "Set TINYUSB_DIR to the TinyUSB source fetched by tools/fetch-sources.py; "
+    "the central build needs it even for kernel-only targets")
+endif()
+# Patches still apply to a different checkout with fuzz, so check the files the
+# build compiles against the lock, and recheck when one of them changes.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+foreach(pinned "freertos|${FREERTOS_DIR}" "tinyusb|${TINYUSB_DIR}")
+  string(REPLACE "|" ";" parts "${pinned}")
+  list(GET parts 0 name)
+  list(GET parts 1 directory)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/fetch-sources.py"
+    "${name}" --verify "${directory}" RESULT_VARIABLE verify_status OUTPUT_VARIABLE verified_files)
+  if(NOT verify_status EQUAL 0)
+    message(FATAL_ERROR "${directory} does not match the ${name} files pinned in sources.lock.json")
+  endif()
+  string(REPLACE "\n" ";" verified_files "${verified_files}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${verified_files})
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS sources.lock.json tools/fetch-sources.py)
+# Map checkout, build and fetched-source paths to fixed names in every target.
+# An interface library keeps the maps out of the COMPILE_OPTIONS that image
+# identities hash, because those maps contain the very paths being removed.
+sunstone_path_maps(path_maps)
+add_library(sunstone-path-maps INTERFACE)
+foreach(map IN LISTS path_maps)
+  target_compile_options(sunstone-path-maps INTERFACE "-ffile-prefix-map=${map}")
+endforeach()
+link_libraries(sunstone-path-maps)
 
 set(PORT "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
 function(apply_build_patch output source patch_file)
@@ -95,42 +131,39 @@ set_source_files_properties(platform/a733/monitor.c PROPERTIES COMPILE_OPTIONS "
 target_compile_definitions(a733-kernel-model PRIVATE MONITOR_QEMU=1)
 target_compile_definitions(a733-monitor-model PRIVATE MONITOR_QEMU=1 SUNSTONE_USB_RUNTIME=1)
 
-set(TINYUSB_DIR "" CACHE PATH "Pinned TinyUSB source directory")
-if(TINYUSB_DIR)
-  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733")
-  foreach(pair "dcd_sunxi_musb.c|tinyusb-a733-dcd.patch" "musb_def.h|tinyusb-a733-registers.patch")
-    string(REPLACE "|" ";" parts "${pair}")
-    list(GET parts 0 source)
-    list(GET parts 1 patch_file)
-    apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/${source}"
-      "${TINYUSB_DIR}/src/portable/sunxi/${source}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/patches/${patch_file}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-      "${TINYUSB_DIR}/src/portable/sunxi/${source}" "patches/${patch_file}")
-  endforeach()
-  add_executable(a733-usb-runtime
-    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
-    arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S runtime/memory.c
-    drivers/usb/a733_usb.c drivers/usb/diagnostic.c
-    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
-    "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S"
-    "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
-    "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
-    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/dcd_sunxi_musb.c")
-  target_include_directories(a733-usb-runtime PRIVATE include runtime/include platform/a733
-    drivers/usb "${FREERTOS_DIR}/include" "${PORT}" "${TINYUSB_DIR}/src")
-  target_compile_definitions(a733-usb-runtime PRIVATE
-    GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_A733_USB=1)
-  target_compile_options(a733-usb-runtime PRIVATE
-    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-    -fno-unwind-tables -fno-asynchronous-unwind-tables
-    -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra)
-  target_link_options(a733-usb-runtime PRIVATE -nostdlib -static -Wl,--gc-sections
-    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld"
-    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-usb-runtime.map")
-  set_target_properties(a733-usb-runtime PROPERTIES SUFFIX ".elf"
-    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
-endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733")
+foreach(pair "dcd_sunxi_musb.c|tinyusb-a733-dcd.patch" "musb_def.h|tinyusb-a733-registers.patch")
+  string(REPLACE "|" ";" parts "${pair}")
+  list(GET parts 0 source)
+  list(GET parts 1 patch_file)
+  apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/${source}"
+    "${TINYUSB_DIR}/src/portable/sunxi/${source}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/${patch_file}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${TINYUSB_DIR}/src/portable/sunxi/${source}" "patches/${patch_file}")
+endforeach()
+add_executable(a733-usb-runtime
+  platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+  arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S runtime/memory.c
+  drivers/usb/a733_usb.c drivers/usb/diagnostic.c
+  "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+  "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S"
+  "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
+  "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
+  "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/dcd_sunxi_musb.c")
+target_include_directories(a733-usb-runtime PRIVATE include runtime/include platform/a733
+  drivers/usb "${FREERTOS_DIR}/include" "${PORT}" "${TINYUSB_DIR}/src")
+target_compile_definitions(a733-usb-runtime PRIVATE
+  GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_A733_USB=1)
+target_compile_options(a733-usb-runtime PRIVATE
+  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
+  -fno-unwind-tables -fno-asynchronous-unwind-tables
+  -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra)
+target_link_options(a733-usb-runtime PRIVATE -nostdlib -static -Wl,--gc-sections
+  "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld"
+  "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-usb-runtime.map")
+set_target_properties(a733-usb-runtime PROPERTIES SUFFIX ".elf"
+  LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
 
 include(cmake/cxx-runtime.cmake)
 include(cmake/mimus.cmake)
