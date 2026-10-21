@@ -107,7 +107,10 @@ int gpu_application_lifecycle(unsigned operation)
     if(old!=atomic_load_explicit(&app.runtime_epoch,memory_order_acquire))return -1;
     uint64_t now=a733_smp_counter()/24;
     if(now>=app.session.deadline_us)retained();
-    uint64_t timeout=operation==5?15000000:1000000;
+    /* Disposal advances at most 16 WB pages per worker tick. The admitted
+     * texture/depth allocations require fewer than 2000 such steps at 1 kHz;
+     * fifteen seconds bounds the operation within the original session. */
+    uint64_t timeout=operation>=4?15000000:1000000;
     if(timeout>app.session.deadline_us-now)timeout=app.session.deadline_us-now;
     struct pvr_gpu_service_request q={operation==3?PVR_GPU_SERVICE_CLOSE:
         operation==4?PVR_GPU_SERVICE_DISPOSE:PVR_GPU_SERVICE_OPEN,timeout};
