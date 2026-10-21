@@ -70,7 +70,7 @@ def main():
         'usb':providers+['drivers/storage/storage_digest.c','drivers/storage/storage_update_usb.c','checks/a733-storage-native-usb.c']}
     if a.only=='usb-native':cases={'usb':cases['usb']}
     native_sources=['platform/a733-storage-update/bootstrap.c','platform/a733-storage-update/worker.c',
-        'platform/a733-storage-update/usb.c','drivers/storage/a733_mmc_platform_native.c']
+        'platform/a733-storage-update/usb.c','platform/a733/native_usb.c','drivers/storage/a733_mmc_platform_native.c']
     native=[compiler,'--target=aarch64-none-elf','-std=c11','-O2','-ffreestanding','-fno-builtin','-Wall','-Wextra','-Werror','-fstack-usage','-Iruntime/include']+inc+defines
     commands=[]
     def run(cmd,name):
