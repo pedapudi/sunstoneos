@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Check CPU clock tables against pinned sources and run the transition model."""
+"""Check CPU clock tables against pinned sources and run the transition model.
+
+It also runs the native cycle-counter code against modeled system registers."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import re
+import struct
 import subprocess
 import sys
 
@@ -18,9 +21,15 @@ BINS = ['vf0000', 'vf0100', 'vf0200', 'vf0300', 'vf0400', 'vf0500', 'vf0600', 'v
 UNITS = ['drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_pmic.c',
          'drivers/power/a733_rail_leases.c', 'drivers/clock/a733_clock_leases.c',
          'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
-         'drivers/pinctrl/a733_pin_tables.c']
+         'drivers/pinctrl/a733_pin_tables.c', 'drivers/thermal/a733_thermal.c']
 CHANGED = ['drivers/clock/a733_cpu_clock.c', 'drivers/power/a733_pmic.c',
-           'drivers/clock/a733_clock_leases.c']
+           'drivers/clock/a733_clock_leases.c', 'drivers/thermal/a733_thermal.c',
+           'drivers/clock/a733_cpu_cycles_native.c']
+# System registers the native cycle code may access: (op0, op1, CRn, CRm, op2).
+SYSREGS = {(3, 3, 9, 12, 0): 'pmcr', (3, 3, 9, 12, 1): 'pmcntenset', (3, 3, 9, 13, 0): 'pmccntr',
+           (3, 3, 14, 15, 7): 'pmccfiltr', (3, 3, 14, 0, 1): 'cntpct', (3, 0, 0, 0, 0): 'midr',
+           (3, 0, 0, 0, 5): 'mpidr', (3, 3, 4, 2, 1): 'daif', (3, 0, 4, 2, 2): 'el'}
+DAIFSET_I = 0xd50342df  # msr daifset, #2
 
 
 def node(text, label):
@@ -63,6 +72,118 @@ def linux_best(rate, nmin, nmax):
                 best = (tmp, n, p)
             p <<= 1
     return best
+
+
+def native_call(code, entry, state, out=None):
+    """Run one native function under Unicorn with modeled system registers.
+
+    state maps register names to values and is updated by writes. PMCR P and C
+    are write-only resets and must never be written as 1; PMCNTENSET writes
+    set bits. With out, x0 points at those bytes. Returns the 32-bit result,
+    the ordered register events and the bytes at x0 afterwards."""
+    from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INSN, UC_HOOK_CODE
+    from unicorn.arm64_const import (UC_ARM64_INS_MRS, UC_ARM64_INS_MSR, UC_ARM64_REG_LR, UC_ARM64_REG_PC,
+                                     UC_ARM64_REG_X0)
+    base, data, end = 0x10000, 0x20000, 0x10ffc
+    uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    uc.mem_map(base, 0x1000)
+    uc.mem_write(base, code)
+    uc.mem_map(data, 0x1000)
+    events = []
+
+    def key(cp):
+        return SYSREGS[(cp.op0, cp.op1, cp.crn, cp.crm, cp.op2)]
+
+    def mrs(machine, reg, cp, user):
+        name = key(cp)
+        if name in ('cntpct', 'pmccntr'):
+            assert state['daif'] & 0x80, 'counter read with IRQs unmasked'
+        events.append(('read', name))
+        machine.reg_write(reg, state[name])
+        return True
+
+    def msr(machine, reg, cp, user):
+        name, value = key(cp), cp.val
+        assert name in ('pmcr', 'pmcntenset', 'pmccfiltr', 'daif'), name
+        if name == 'pmcr':
+            assert not value & 6, 'counter reset written'
+            if not state.get('drop'):
+                state['pmcr'] = value
+        elif name == 'pmcntenset':
+            state[name] |= value
+        else:
+            state[name] = value
+        events.append(('write', name, value))
+        return True
+
+    def code_hook(machine, address, size, user):
+        if struct.unpack('<I', machine.mem_read(address, 4))[0] == DAIFSET_I:
+            state['daif'] |= 0x80
+            events.append(('mask',))
+
+    uc.hook_add(UC_HOOK_INSN, mrs, None, 1, 0, UC_ARM64_INS_MRS)
+    uc.hook_add(UC_HOOK_INSN, msr, None, 1, 0, UC_ARM64_INS_MSR)
+    uc.hook_add(UC_HOOK_CODE, code_hook, begin=base, end=base + len(code))
+    if out is not None:
+        uc.mem_write(data, out)
+    uc.reg_write(UC_ARM64_REG_X0, data if out is not None else 0)
+    uc.reg_write(UC_ARM64_REG_LR, end)
+    uc.emu_start(base + entry, end, count=1000)
+    assert uc.reg_read(UC_ARM64_REG_PC) == end, 'function did not return'
+    return uc.reg_read(UC_ARM64_REG_X0) & 0xffffffff, events, bytes(uc.mem_read(data, 32))
+
+
+def cycles_model(obj):
+    """Nominal and refusal cases for a733_cpu_cycles_enable and _sample."""
+    from elftools.elf.elffile import ELFFile
+    with obj.open('rb') as f:
+        elf = ELFFile(f)
+        assert not elf.get_section_by_name('.rela.text'), 'native cycle code needs no relocations'
+        code = elf.get_section_by_name('.text').data()
+        entry = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols() if s.name}
+    enable, sample = entry['a733_cpu_cycles_enable'], entry['a733_cpu_cycles_sample']
+    reset = {'el': 4, 'pmcr': 0x41002008, 'pmcntenset': 1, 'pmccfiltr': 0x80000000, 'pmccntr': 123456789,
+             'cntpct': 987654, 'midr': 0x410fd055, 'mpidr': 0x81000000, 'daif': 0}
+    cases = []
+    # Enable sets E and LC, clears D, preserves other counters, never resets.
+    state = dict(reset)
+    result, events, _ = native_call(code, enable, state)
+    assert result == 1 and state['pmcr'] == 0x41002041 and state['pmcntenset'] == 0x80000001
+    assert state['pmccfiltr'] == 0 and state['pmccntr'] == 123456789
+    assert [e for e in events if e[0] == 'write'] == [('write', 'pmccfiltr', 0), ('write', 'pmcntenset', 0x80000000),
+                                                      ('write', 'pmcr', 0x41002041)]
+    cases.append('enable')
+    enabled = dict(state)
+    for name, change in [('enable at EL0', {'el': 0}), ('enable at EL2', {'el': 8})]:
+        state = {**reset, **change}
+        result, events, _ = native_call(code, enable, state)
+        assert result == 0 and events == [('read', 'el')], name
+        cases.append(name)
+    state = {**reset, 'drop': True}
+    result, events, _ = native_call(code, enable, state)
+    assert result == 0, 'ignored PMCR write accepted'
+    cases.append('enable with an ignored PMCR write')
+    # Sample: both counters read together with IRQs masked, DAIF restored.
+    state = dict(enabled)
+    result, events, out = native_call(code, sample, state, bytes(32))
+    assert result == 1 and out == struct.pack('<4Q', 0x410fd055, 0x81000000, 123456789, 987654)
+    assert state['daif'] == 0
+    order = [events.index(e) for e in [('mask',), ('read', 'cntpct'), ('read', 'pmccntr'), ('write', 'daif', 0)]]
+    assert order == sorted(order) and order[2] + 1 == order[3], events
+    cases.append('sample')
+    fill = bytes([0xa5]) * 32
+    for name, change in [('sample with E clear', {'pmcr': 0x41002040}), ('sample with D set', {'pmcr': 0x41002049}),
+                         ('sample with the cycle counter disabled', {'pmcntenset': 1}),
+                         ('sample with EL1 filtered', {'pmccfiltr': 0x80000000}), ('sample at EL0', {'el': 0})]:
+        state = {**enabled, **change}
+        result, events, out = native_call(code, sample, state, fill)
+        assert result == 0 and out == fill and state['daif'] == 0, name
+        cases.append(name)
+    state = dict(enabled)
+    result, events, _ = native_call(code, sample, state)
+    assert result == 0 and events == [], 'null output'
+    cases.append('sample to a null output')
+    return cases
 
 
 def blob(path):
@@ -181,6 +302,14 @@ def main():
     for rail in ['dcdc3', 'dcdc5']:
         assert 'regulator-ramp-delay = <250>;' in node(dts, 'reg_' + rail + ': ' + rail)
     assert '#define RAMP_UV_US 250u' in driver
+    # The throttle ceiling needs 800 mV in every column of both clusters.
+    header = read(ROOT / 'include/a733_cpu_clock.h')
+    assert '#define A733_CPU_CLOCK_THROTTLE_MHZ 1014u' in header
+    for table in ['little', 'big']:
+        assert dict(c_rows(driver, table))[1014] == [800] * len(BINS), table
+    # Sensor channels in the thermal header's physical order: CPUB, DDR, NPU, CPUL, GPU.
+    assert 'Physical channel order: CPUB, DDR, NPU, CPUL, GPU.' in read(ROOT / 'include/a733_thermal.h')
+    assert 'static const unsigned sensor[2]={3,0}; /* Physical channels CPUL and CPUB. */' in driver
 
     # Transition model with sanitizers, then AArch64 compilation of changed units.
     for path in UNITS + ['checks/cpu-clock-model.c', 'checks/a733-pmic.c']:
@@ -192,15 +321,21 @@ def main():
     run('host-build', [*common, '-O1', '-g', *SANITIZE, 'checks/cpu-clock-model.c', *UNITS, '-o', model])
     result = run('model', [model])
     for unit in CHANGED:
+        read(ROOT / unit)
         run('native-' + Path(unit).stem, [*common, '--target=aarch64-none-elf', '-march=armv8-a',
             '-mstrict-align', '-ffreestanding', '-fno-builtin', '-O2', '-c', unit,
             '-o', out / (Path(unit).stem + '.o')])
+    native = out / 'a733_cpu_cycles_native.o'
+    cycles = cycles_model(native)
     (out / 'results.json').write_text(json.dumps({
         'status': 'PASS', 'inputs': inputs, 'model': result.strip(),
         'model_sha256': hashlib.sha256(model.read_bytes()).hexdigest(),
-        'limits': 'Host model only. No physical clock, voltage, settling, lock time or frequency measurement.'},
+        'cycles_native_sha256': hashlib.sha256(native.read_bytes()).hexdigest(), 'cycles_cases': cycles,
+        'limits': 'Host and instruction models only. No physical clock, voltage, settling, lock time, '
+                  'PMU access or frequency measurement.'},
         indent=2) + '\n')
-    print('PASS: tables, bin map, SID, PLL fields, Linux N/P choice, PMIC profile, board rails; ' + result.strip())
+    print('PASS: tables, bin map, SID, PLL fields, Linux N/P choice, PMIC profile, board rails; ' + result.strip() +
+          '; native cycle code: %d instruction-model cases' % len(cycles))
 
 
 if __name__ == '__main__':

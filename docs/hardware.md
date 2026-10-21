@@ -513,10 +513,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel without a valid reading throttles after 1 s and is critical after
   5 s. The thermal application and the thermal service of the
   [integrated OS image](os-image.md) end their session at the critical level;
-  no consumer reduces load at the throttle level yet. Host checks pass. The
-  policy reads temperatures whose physical acquisition is unqualified, and it
-  changes no clock or voltage. Rate changes and regulator control remain
-  outstanding.
+  no image reduces load at the throttle level yet. Host checks pass. The
+  policy reads temperatures whose physical acquisition is unqualified.
+  A [CPU clock driver](cpu-clock.md) is **implemented** and host-modeled. It
+  changes CPU-L and CPU-B among the pinned operating points. It raises the
+  DCDC5 or DCDC3 voltage before a frequency increase and lowers it after a
+  decrease. Its thermal coupling
+  admits a raise only at NORMAL after a reading from that cluster's sensor,
+  lowers raised clusters to 1014 MHz at THROTTLE and returns them at NORMAL.
+  Every transition needs a grant, which a defined session record carries with
+  the hash of the user's approval; no image carries one or calls the driver.
+  Its cycle timing reports the measured and configured rate of the core that
+  ran timed work. Host and instruction models pass. Physical rate changes,
+  rail settling, lock time and PMU access remain unqualified.
   A separate [finite returning application](../apps/thermal-returning/README.md)
   gathers two sets with the actual driver and disables configured acquisition.
   Thirteen linked cases and Astra review pass; all 46 compiled inputs match
