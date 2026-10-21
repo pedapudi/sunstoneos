@@ -29,7 +29,7 @@ class Replay:
         self.rows=[(artifact(row['request'],base),artifact(row['response'],base),
                     artifact(row['body'],base) if 'body' in row else b'') for row in fixture['exchanges']]
         self.cursor=0;self.header=None;self.body=b'';self.body_offset=0;self.injected=False;self.requests=[]
-        self.first_epoch=None;self.expected_retained=[];pages={};opened=set();initial_epoch=None
+        self.injected_operation=None;self.first_epoch=None;self.expected_retained=[];pages={};opened=set();initial_epoch=None
         for request,response,body in self.rows:
             op=struct.unpack_from('<I',request,8)[0];state=struct.unpack_from('<I',response,8)[0]
             epoch=struct.unpack_from('<Q',response,64 if self.texture else 40)[0]
@@ -60,8 +60,8 @@ class Replay:
                 struct.pack_into('<Q',raw,offset,epoch+7);self.injected=True
             elif self.case=='open-epoch' and state==1 and self.first_epoch is not None and epoch>self.first_epoch:
                 struct.pack_into('<Q',raw,offset,epoch+1);self.injected=True
-            elif self.case=='open-status-closed' and self.texture and op==0 and state==1 and self.first_epoch is not None and epoch>self.first_epoch:
-                struct.pack_into('<I',raw,44,1);self.injected=True
+            elif self.case=='open-closed' and self.texture and op in (0,7) and state==1 and self.first_epoch is not None and epoch>self.first_epoch:
+                struct.pack_into('<I',raw,44,1);self.injected=True;self.injected_operation=op
         return bytes(raw)
 
     def accept(self,request):
@@ -160,14 +160,15 @@ def run_case(fixture,base,case):
         if case in ('late-output','late-receipt'):assert isinstance(caught,TimeoutError)
         if case.startswith('interrupt-'):assert isinstance(caught,KeyboardInterrupt)
     return {'case':case,'requests':len(wire.requests),'retained':[row[0] for row in retained],
-            'stopped':client.failure is not None,'partial_bytes':len(client.failure['partial']) if client.failure else 0}
+            'stopped':client.failure is not None,'partial_bytes':len(client.failure['partial']) if client.failure else 0,
+            'injected_operation':wire.injected_operation}
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--baseline',type=Path,help='Preserved matching healthy result for negative-only continuation')
-    parser.add_argument('--case',action='append',choices=('healthy','session-epoch','queue-epoch','open-epoch','open-status-closed',
+    parser.add_argument('--case',action='append',choices=('healthy','session-epoch','queue-epoch','open-epoch','open-closed',
         'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','late-receipt','partial-stream','epoch-wrap'))
     args=parser.parse_args();fixture_raw=args.fixture.read_bytes();fixture=json.loads(fixture_raw);base=args.fixture.parent
     if fixture.get('schema')!='pvr-gpu-lifecycle-host-fixture-v1' or fixture.get('physical_authority') is not False or fixture.get('modeled') is not True:

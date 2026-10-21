@@ -581,3 +581,19 @@ Transport, identity, persistence or deadline uncertainty stops the instance.
 Its failure record, partial bytes, copied outputs and lifecycle receipts remain
 available; no retry, reconnect or relaunch follows. DISPOSED is a native disposal
 receipt, not independent physical drain or memory lease qualification.
+
+The 2026-10-20 depth-mode software checks use fourteen actual producer
+exchanges from native image SHA-256
+`780d954475aba09f7823cfb9559e379834818d746c30d513b3d625d00c6fbea5`.
+One healthy lifecycle and twelve modeled failure cases passed. They compare
+complete output, lifecycle receipts and interrupted stream prefixes with the
+frozen producer bytes. The failures cover session/queue epochs, contradictory
+OPEN state, persistence, interruption, deadline expiry and epoch exhaustion.
+No prior arithmetic or pixel matrix was repeated.
+
+The producer executed the native mailbox/client and TinyUSB path with modeled
+GPU/service completion effects tied to a separate native reconstruction record.
+End-to-end GPU/firmware execution remains unqualified. Its OPEN receipt is
+synchronous; pending OPEN publication through STATUS remains source-reviewed.
+Triangle and version-8 texture producer-backed runtime coverage remain pending.
+Physical disposal, memory reuse, visibility and timing remain unqualified.

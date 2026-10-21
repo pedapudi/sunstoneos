@@ -456,3 +456,8 @@ Transport, identity, persistence or deadline uncertainty stops the client.
 identity, partial copied bytes and complete output even if publication failed.
 The stopped instance refuses further transport operations. A completed output
 or lifecycle receipt arriving late is retained before the deadline error.
+
+The shared lifecycle and durability paths have producer-backed depth-mode
+coverage described in [the render evidence](gpu-render.md#copy-frames-across-explicit-disposal-and-reopening).
+The compute-specific paged decoder has source-review coverage; an actual
+compute lifecycle producer transcript remains pending.
