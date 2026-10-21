@@ -19,11 +19,11 @@ static int pwm_read(void *v,uintptr_t a,uint32_t *out)
 static int pwm_write(void *v,uintptr_t a,uint32_t value)
 {
  struct pwm_model *s=v;assert(s->power.register_held&&!s->retained&&s->admitted);++s->writes;
- if(a==A733_PWM_BASE+0x240)assert(!(value&(1u<<10))&&value==0x100);
+ if(a==A733_PWM_BASE+0x240)assert(!(value&(1u<<10))&&value==s->pwm.plan.pcr);
  if(a==0x03400188){assert(value==8);*pmic_model_word(&s->power,0x03400108)&=~value;return 1;}
  if(a==0x03400288){assert(value==8);*pmic_model_word(&s->power,0x03400208)&=~value;return 1;}
  if(a==A733_PWM_BASE+0x80&&value){
-  assert(*pmic_model_word(&s->power,A733_PWM_BASE+0x240)==0x100);
+  assert(*pmic_model_word(&s->power,A733_PWM_BASE+0x240)==s->pwm.plan.pcr);
   *pmic_model_word(&s->power,a)=value;return !s->fail_start;
  }
  if(a==A733_PWM_BASE+4){assert(value==(1u<<5));*pmic_model_word(&s->power,a)&=~value;}
@@ -38,7 +38,13 @@ static int pin_write(void *v,uintptr_t a,uint32_t value)
  if(a==0x07025010&&m.fail_led)return 0;
  return r;
 }
-static void setup_pwm(void)
+static struct a733_pwm_config profile(uint32_t period_ns,uint32_t duty_ns,uint32_t pulses,uint32_t active_high)
+{
+ return (struct a733_pwm_config){.owner=42,.handoff=200,.deadline_us=900000,.apb0=0,.apb0_hz=24000000,
+  .period_ns=period_ns,.duty_ns=duty_ns,.pulses=pulses,.active_high=active_high,.expected={0,0,0},.desired={7,0,1},
+  .led_enabled=1,.led_expected={0,0,0},.apbs0=0,.apbs0_hz=24000000};
+}
+static void setup_profile(uint32_t period_ns,uint32_t duty_ns,uint32_t active_high)
 {
  memset(&m,0,sizeof(m));pmic_model_setup(&m.power);
  struct a733_pins_operations po=m.power.pins.operations;po.write=pin_write;
@@ -49,12 +55,13 @@ static void setup_pwm(void)
  *pmic_model_word(&m.power,0x02002000)=0xf8000000u|(99u<<16)|(99u<<8);
  *pmic_model_word(&m.power,0x03400088)=1u<<3;
  *pmic_model_word(&m.power,0x03400440)=0xd8000000;
- struct a733_pwm_config c={.owner=42,.handoff=200,.deadline_us=900000,.apb0=0,.apb0_hz=24000000,
-  .period_ns=25000,.duty_ns=12500,.pulses=0,.active_high=1,.expected={0,0,0},.desired={7,0,1},.led_enabled=1,.led_expected={0,0,0},.apbs0=0,.apbs0_hz=24000000};
+ struct a733_pwm_config c=profile(period_ns,duty_ns,0,active_high);
  const struct a733_pwm_ops ops={pwm_now,pwm_current,pwm_admit,pwm_enter,pwm_leave,pwm_retain,pwm_read,pwm_write,pwm_outside};
  assert(a733_pwm_init(&m.pwm,&c,&ops,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
- assert(m.pwm.plan.pcr==0x100&&m.pwm.plan.ppr==0x0257012c&&m.pwm.plan.duration_us==0&&!m.writes);
+ assert(m.pwm.plan.duration_us==0&&!m.writes);
 }
+static void setup_pwm(void)
+{setup_profile(25000,12500,1);assert(m.pwm.plan.pcr==0x100&&m.pwm.plan.ppr==0x0257012c);}
 static enum a733_pwm_result step_pwm(unsigned notice)
 {m.power.now+=100;assert(pmic_model_step(&m.power)!=A733_PMIC_RETAINED);return a733_pwm_poll(&m.pwm,notice);}
 static void armed(void)
@@ -88,7 +95,7 @@ int main(void)
  assert(*pmic_model_word(&m.power,0x07025010)==(1u<<6));
  command(300,0);command(1,1);command(300,0);
  assert(m.pwm.pin.id==pin&&m.pwm.clock.id==clock&&m.pwm.rail.id==rail&&!m.pwm.fault);
- assert(a733_pwm_control(&m.pwm,600,1,m.power.now+50000)==A733_PWM_INVALID);
+ assert(a733_pwm_control(&m.pwm,601,1,m.power.now+50000)==A733_PWM_INVALID);
  command(300,1);m.fail_led=1;assert(a733_pwm_led(&m.pwm,1,m.power.now+50000)==A733_PWM_RETAINED);
  assert(!m.pwm.report.gpio_low&&*pmic_model_word(&m.power,A733_PWM_BASE+0x80)==32&&m.pwm.pin.id==pin);
  setup_pwm();armed();command(300,0);
@@ -101,5 +108,27 @@ int main(void)
  enum a733_pwm_result r=A733_PWM_PENDING;
  for(unsigned i=0;i<10&&r!=A733_PWM_RETAINED;++i)r=step_pwm(0);
  assert(r==A733_PWM_RETAINED&&m.retained&&!m.pwm.report.gpio_low);
- puts("PASS: actual reusable cycle/LED providers, stop-duty-restart with permanent leases, LED neighbor preservation and retained failures");
+ /* Constant endpoints at the fan rate: zero holds inactive, 600 holds active. */
+ setup_pwm();armed();command(0,1);assert(m.pwm.plan.ppr==(599u<<16));
+ command(600,1);assert(m.pwm.plan.ppr==(599u<<16|600)&&*pmic_model_word(&m.power,A733_PWM_BASE+0x244)==m.pwm.plan.ppr);
+ assert(a733_pwm_control(&m.pwm,601,1,m.power.now+50000)==A733_PWM_INVALID);command(300,0);
+ /* A 100Hz active-low profile needs prescale4: 60000 ticks, PCR K field3, ACT_STA clear. */
+ setup_profile(10000000,5000000,0);assert(m.pwm.plan.pcr==3&&m.pwm.plan.ticks==60000&&m.pwm.plan.ppr==(59999u<<16|30000));
+ armed();command(30000,1);assert(*pmic_model_word(&m.power,A733_PWM_BASE+0x240)==3);
+ command(0,1);command(60000,1);assert(m.pwm.plan.ppr==(59999u<<16|60000));
+ assert(a733_pwm_control(&m.pwm,60001,1,m.power.now+50000)==A733_PWM_INVALID);command(1,0);
+ assert(m.pwm.report.gpio_low&&!m.pwm.fault);
+ /* A 1kHz active-low profile stays at prescale1 with 24000 ticks. */
+ setup_profile(1000000,250000,0);assert(m.pwm.plan.pcr==0&&m.pwm.plan.ppr==(23999u<<16|6000));
+ armed();command(6000,1);command(24000,1);command(0,0);
+ /* Planning refusals: periods above10ms in cycle mode, duty inexact at the chosen
+  * prescale and periods needing more than256x prescale. Finite pulses may use
+  * the longer period inside their one-second bound. */
+ struct a733_pwm_plan plan;a733_clock_mask_t shared;struct a733_pwm_config c=profile(20000000,10000000,0,1);
+ assert(!a733_pwm_plan(&c,&plan,&shared));c.pulses=10;
+ assert(a733_pwm_plan(&c,&plan,&shared)&&plan.pcr==((9u<<16)|(1u<<9)|(1u<<8)|7)&&plan.ticks==60000&&plan.duration_us==200000);
+ c=profile(10000000,125,0,1);assert(!a733_pwm_plan(&c,&plan,&shared));
+ c=profile(1000000000,0,1,1);assert(!a733_pwm_plan(&c,&plan,&shared));
+ c=profile(25000,12500,0,2);assert(!a733_pwm_plan(&c,&plan,&shared));
+ puts("PASS: actual reusable cycle/LED providers, stop-duty-restart with permanent leases, LED neighbor preservation and retained failures; constant endpoints, prescaled rates and active-low polarity");
 }

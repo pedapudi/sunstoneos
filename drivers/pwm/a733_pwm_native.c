@@ -61,7 +61,7 @@ static int write32(void *v,uintptr_t a,uint32_t value)
  case 0x02527000:case 0x02527040:case 0x02527080:if(value&&value!=(1u<<5))return 0;break;
  case 0x02527004:if(value!=(1u<<5))return 0;break;
  case 0x02527240:if(value!=n->plan.pcr&&(!n->plan.duration_us||value!=(n->plan.pcr|(1u<<10))))return 0;break;
- case 0x02527244:if(n->plan.duration_us?value!=n->plan.ppr:((value>>16)!=599||!(value&65535)||(value&65535)>=600))return 0;break;
+ case 0x02527244:if(n->plan.duration_us?value!=n->plan.ppr:((value>>16)!=n->plan.ticks-1||(value&65535)>n->plan.ticks))return 0;break;
  case 0x03400108:case 0x03400188:case 0x03400288:if(n->plan.duration_us||value!=8)return 0;break;
  case 0x02527248:if(value)return 0;break;
  default:return 0;
