@@ -1,17 +1,10 @@
 #ifndef SUNSTONE_A733_NPU_RESERVED_H
 #define SUNSTONE_A733_NPU_RESERVED_H
 #include "a733_memory_reservations.h"
-#include "npu_convolution.h"
+#include "npu_convolution_layout.h"
 
-#define A733_NPU_RESERVED_TABLE_BYTES 20480u
-#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
-#define A733_NPU_RESERVED_BYTES 3235840u
-#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
-#define A733_NPU_RESERVED_BYTES 2916352u
-#else
-#define A733_NPU_RESERVED_BYTES (2u * NPU_CONVOLUTION_COMMAND_BYTES + 4u * 4096u + A733_NPU_RESERVED_TABLE_BYTES)
-
-#endif
+#define A733_NPU_RESERVED_TABLE_BYTES NPU_CONVOLUTION_TABLE_BYTES
+#define A733_NPU_RESERVED_BYTES NPU_CONVOLUTION_RESERVED_BYTES
 
 /* Zero-initialize once. Private pre-scheduler session; keep it and the native
  * linker pool alive. Serialize this constructor with every pool allocation or
@@ -31,7 +24,9 @@ struct a733_npu_reserved {
     unsigned admitted;
 };
 /* Actual native preparation, no peripheral register access. The existing
- * native linker pool must provide a contiguous 1,085,440-byte allocation.
+ * native linker pool must provide one contiguous A733_NPU_RESERVED_BYTES
+ * allocation (1,085,440 bytes in the baseline profile, 2,916,352 in the SH/NT
+ * large profile and 3,235,840 in the NN-pool profile).
  * Inputs and session metadata must be outside that complete pool. The selected catalogue model is
  * copied and authenticated by npu_convolution_prepare. register_cpu must map
  * the NPU's physical Device page at 0x03600000. Caller provides valid pointers,
