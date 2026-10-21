@@ -19,6 +19,8 @@ def main():
     ap.add_argument('--evidence', type=Path, required=True)
     ap.add_argument('--freertos-port', type=Path, required=True)
     ap.add_argument('--pmic-source', type=Path, required=True)
+    ap.add_argument('--compile-commands', type=Path, action='append', required=True,
+                    help='compile_commands.json of a configured build of this tree; repeatable')
     a = ap.parse_args()
     out = a.evidence.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -35,8 +37,8 @@ def main():
             dest.write_bytes(data)
         records[str(path)] = digest
 
-    def run(name, argv):
-        r = subprocess.run(list(map(str, argv)), cwd=ROOT, text=True,
+    def run(name, argv, cwd=ROOT):
+        r = subprocess.run(list(map(str, argv)), cwd=cwd, text=True,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         (out / (name + '.json')).write_text(json.dumps({
             'argv': list(map(str, argv)), 'returncode': r.returncode,
@@ -77,6 +79,24 @@ def main():
         snapshot(path)
     for path in a.freertos_port.rglob('*.h'):
         snapshot(path)
+    # Network, TinyUSB, generated-header and SMP-configuration units compile
+    # only with their target's recorded flags; the generic flags lack them.
+    recorded = {}
+    for database in a.compile_commands:
+        snapshot(database)
+        matched = False
+        for entry in json.loads(database.read_text()):
+            unit = Path(entry['directory'], entry['file']).resolve()
+            if unit not in units:
+                continue
+            argv = entry.get('arguments') or shlex.split(entry['command'])
+            at = argv.index('-o')
+            command = (entry['directory'], tuple(argv[:at] + argv[at + 2:]))
+            if command not in recorded.setdefault(unit, []):
+                recorded[unit].append(command)
+            matched = True
+        if not matched:
+            raise SystemExit(f'{database} builds none of the affected units in {ROOT}')
     source = a.pmic_source.read_text()
     table = source.split('pmu_axp8191_ctrl_tbl[] = {', 1)[1].split('\n};', 1)[0]
     names = re.findall(r'\{\s*"([a-z0-9]+)"', table)
@@ -108,19 +128,24 @@ def main():
               '-DINCLUDE_xTaskGetSchedulerState=1']
     for inc in include + [freertos, a.freertos_port]:
         common.append('-I' + str(inc))
+    commands = 0
     for index, path in enumerate(units):
         stem = str(path.relative_to(ROOT)).replace('/', '_')
-        obj = out / 'artifacts' / (stem + '.o')
-        dep = out / 'artifacts' / (stem + '.d')
-        run(f'native-{index:02}', [*common, '-MMD', '-MF', dep, '-c', path, '-o', obj])
-        for name in shlex.split(dep.read_text().replace('\\\n', '').split(':', 1)[1]):
-            snapshot(Path(name) if Path(name).is_absolute() else ROOT / name)
+        # A unit that no configured target builds keeps the generic flags.
+        for variant, (directory, argv) in enumerate(recorded.get(path, [(ROOT, (*common, '-c', path))])):
+            obj = out / 'artifacts' / f'{stem}-{variant}.o'
+            dep = out / 'artifacts' / f'{stem}-{variant}.d'
+            run(f'native-{index:02}-{variant}', [*argv, '-Werror', '-MMD', '-MF', dep, '-o', obj], directory)
+            for name in shlex.split(dep.read_text().replace('\\\n', '').split(':', 1)[1]):
+                snapshot(Path(directory) / name)
+            commands += 1
     artifacts = {str(p.relative_to(out)): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in (out / 'artifacts').iterdir()}
     (out / 'manifest.json').write_text(json.dumps({'inputs': records, 'artifacts': artifacts,
         'native_units': [str(p.relative_to(ROOT)) for p in units],
+        'generic_flag_units': [str(p.relative_to(ROOT)) for p in units if p not in recorded],
         'scope': 'One new rail/bridge/borrow/fault sanitizer execution; affected native compilation only. No board or prior suite execution.'}, indent=2) + '\n')
-    print(f'PASS: focused rail batch and {len(units)} native units; {out}')
+    print(f'PASS: focused rail batch and {len(units)} native units in {commands} compilations; {out}')
 
 
 if __name__ == '__main__':

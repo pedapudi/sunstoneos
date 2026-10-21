@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """New monitor copied-output/session binding, durability and actual access routing."""
-import argparse,hashlib,importlib.util,json,struct,sys,time,types
+import argparse,hashlib,importlib.util,json,sqlite3,struct,sys,time,types
 from pathlib import Path
 from unittest.mock import patch
 from contextlib import ExitStack,nullcontext
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+def queue(path,port):
+    """Model a board queue bound to one physical port, as the launch port check requires."""
+    db=sqlite3.connect(path)
+    with db:db.execute('CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)');db.execute("INSERT INTO settings VALUES('port',?)",(port,))
+    db.close();return path
 def routing(host,bundle,out,session,frame):
     """Actual main and shared selector/lookup; target/transport authority is modeled."""
     import usb.core
@@ -22,7 +27,7 @@ def routing(host,bundle,out,session,frame):
     assert access.session_node(dict(port=admission['port'],sysfs=str(port.resolve())))==native
     assert 'ATTR{idProduct}=="efe8"' in access.session_rule('1-2',1000)
     guard=types.SimpleNamespace(__file__=ROOT/'tools/usb-access.py',check_health=lambda:None,reenumeration=lambda *a:nullcontext())
-    calls=[]
+    calls=[];fel=[]
     class Device:
         bcdDevice=0x0100
         def set_configuration(self,n):assert n==1
@@ -43,12 +48,18 @@ def routing(host,bundle,out,session,frame):
         stack.enter_context(patch.object(host,'claimed',lambda *a:None));stack.enter_context(patch.object(shared,'module',lambda *a:access))
         stack.enter_context(patch.dict(sys.modules,{'usb_guard':guard}));stack.enter_context(patch.object(shared,'digest',lambda *a:shared.base.FEL_HASH))
         stack.enter_context(patch.object(shared.shutil,'copy2',lambda *a:None));stack.enter_context(patch.object(shared.os,'access',lambda *a:True))
-        stack.enter_context(patch.object(shared.subprocess,'run',lambda *a,**k:types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')))
+        stack.enter_context(patch.object(shared.subprocess,'run',lambda *a,**k:fel.append(a) or types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')))
         stack.enter_context(patch.object(shared,'launch_once',launch));stack.enter_context(patch.object(shared,'finish_after_observation',lambda *a:None))
         stack.enter_context(patch.object(shared.base,'stop_after_failure',lambda *a:None));stack.enter_context(patch.object(usb.core,'find',find))
-        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--database',str(out/'MODEL-db'),'--claim','MODEL','--owner','MODEL','--supervised-manual-reconnect','--sample-seconds','.075']
+        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--database',str(queue(out/'MODEL-db',port.name)),'--claim','MODEL','--owner','MODEL','--supervised-manual-reconnect','--sample-seconds','.075']
+        # A queue bound to another port is refused before the first FEL request.
+        other=[x if x!=str(out/'routing-capture') else str(out/'other-port-capture') for x in args]
+        other[other.index('--database')+1]=str(queue(out/'other-port-db','0-0'))
+        try:host.main(other)
+        except ValueError as error:assert 'is not bound to locked USB port' in str(error) and not fel
+        else:raise AssertionError('Queue bound to another port accepted')
         assert host.main(args)==0
-    assert len(calls)==1
+    assert len(calls)==1 and len(fel)==1
 
 def status_frame(frame,status):
     raw=bytearray(frame[:128]);struct.pack_into('<2I',raw,8,status,0);raw[64:128]=bytes(64);return bytes(raw)
