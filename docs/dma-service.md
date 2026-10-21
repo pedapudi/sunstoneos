@@ -1,14 +1,14 @@
 # Privileged FreeRTOS DMA service
 
-The DMA service serializes DMA0 and I2S capture through one preemptible EL1
-worker. EL0 tasks submit copied requests through static FreeRTOS queues.
+The DMA service serializes DMA0 RAM, FIFO and I2S stream jobs through one
+preemptible EL1 worker. EL0 tasks submit copied requests through static FreeRTOS queues.
 Registered jobs contain bounded, private copies of transfer metadata. Buffer
 reservations persist through verified drain and remain held until explicit
 result reaping. Task abandonment and retained faults do not reclaim resources.
 
 One two-core FreeRTOS emulator session passes worker/client ownership,
 concurrent channels, late replies, autonomous completion and deadlines,
-retained results and faults, and I2S producer shutdown before DMA drain.
+retained results and faults, and I2S stream request shutdown before DMA drain.
 The fixture executes native CPU translation and cache operations while modeling
 device registers and microphone samples. Physical DMA and audio remain
 unqualified.
@@ -35,13 +35,14 @@ the chain. They use the same bounded controller completion, cancellation, held
 result and REAP contract. The sole peripheral owner gates requests and proves
 wire drain before releasing its peripheral. UART2 uses this path for simultaneous
 RX/TX; opposite read/write FIFOs may share an MMIO address, while two readers or
-two writers remain exclusive. An I2S job additionally
-supplies a trusted format and platform callback profile. Profiles for I2S0
-must use one DMA channel. Clients select job indices; they cannot supply
+two writers remain exclusive. An I2S stream job additionally supplies a trusted
+format, platform callback profile and period catalogue. Single-direction I2S0
+profiles must use one DMA channel; a duplex pair uses two distinct channels.
+Clients select job indices; they cannot supply
 addresses, callbacks, controller pointers or channel authority in requests.
 
 Initialization copies job records, segment arrays, mapping arrays and I2S
-profiles into private storage. Original metadata can then be discarded.
+stream profiles into private storage. Original metadata can then be discarded.
 The pointed-to DMA allocations, native adapter and callback contexts remain
 reserved and pinned for the service lifetime. An I2S profile's callback cookie
 is a lifetime reference to trusted platform state.
@@ -50,7 +51,10 @@ The initial software bounds are eight client tasks, sixteen jobs, eight
 segments and sixteen mappings per job. Up to sixteen DMA0 channels can be
 authorized. The protected-range table contains at most thirty-two entries.
 These bounds limit static storage and work per request; they are not hardware
-capacity claims. There is no general heap allocation or runtime job-table edit.
+capacity claims. The service holds two I2S stream contexts. Initialization binds
+one to each channel that I2S stream jobs use and never rebinds it, so a retained
+or duplex-paired stream keeps its address for the service lifetime. Channels
+without stream jobs carry no stream storage. There is no general heap allocation or runtime job-table edit.
 
 ## Protected storage and retained jobs constrain admission
 
@@ -86,16 +90,17 @@ The job selects its fixed channel. FreeRTOS supplies caller identity.
 
 | Operation | Behavior | Timeout field |
 | --- | --- | --- |
-| `OPEN` | Claim a channel session; for I2S, acquire clocks/pins and configure capture | I2S resource duration in microseconds; zero for RAM |
-| `SUBMIT` | Reserve the registered allocations and begin one transfer | Finite duration in DMA counter ticks |
+| `OPEN` | Claim a channel session; for I2S, reserve the period catalogue, acquire clocks/pins and configure the controller | I2S resource duration in microseconds; zero for RAM |
+| `SUBMIT` | Reserve the registered allocations and begin one transfer; for I2S, start the stream | Finite duration in DMA counter ticks; per period for I2S |
 | `STATUS` | Report phase, result, submitted ticket and ownership | Zero |
 | `CANCEL` | Stop a running transfer through its owning controller path | Zero; the configured drain timeout applies |
 | `REAP` | Return terminal result metadata and relinquish the buffer reservation | Zero |
 | `CLOSE` | Release a quiescent session after its result has been reaped | I2S resource duration in microseconds; zero for RAM |
 
 I2S resource durations become absolute monotonic microsecond deadlines in the
-capture core. DMA capture and drain use the existing controller's counter
-units. For the native adapter these are physical-counter ticks at
+stream driver. DMA period timeouts and drain use the existing controller's
+counter units. Stream jobs also accept the period operations described in
+[i2s-stream.md](i2s-stream.md). For the native adapter these are physical-counter ticks at
 `CNTFRQ_EL0`; callers must convert durations using that frequency.
 
 Sending copies the request into a queue. Queue success means enqueued;
@@ -122,20 +127,24 @@ is borrowed by the worker.
 
 The worker advances every active channel before receiving another request.
 While any transaction progresses, its queue wait is at most one FreeRTOS tick.
+A transfer can finish during that wait, so before answering `STATUS`,
+`PERIOD_GET` or `REAP` the worker advances the request's channel once more.
+The reply then reflects a completion that occurred while the worker waited.
 Scheduling and callback latency can extend that interval. Completion and
 controller deadlines advance without client requests, and queued status
 traffic cannot prevent the next round of channel polls.
 
-RAM jobs call the existing serialized DMA controller. I2S jobs call the
-[capture core](i2s.md), which controls FIFO preparation, producer enable,
-request shutdown, cancellation and drain. The service never independently
-polls an I2S-owned DMA channel. This preserves the requirement that receive
-DMA requests and reception stop before the DMA controller can release buffers.
+RAM and FIFO jobs call the existing serialized DMA controller. I2S jobs call the
+[stream driver](i2s-stream.md), which controls FIFO preparation, direction
+enable, request shutdown, cancellation and drain. The service never
+independently polls an I2S-owned DMA channel. This preserves the requirement
+that I2S DMA requests stop before the DMA controller can stop a channel or
+release buffers.
 Other FIFO peripherals require their own producer adapter before admission;
 raw FIFO requests are refused.
 
-I2S supports one capture per open. After reaping, close and reopen before
-submitting another I2S capture. Opening and closing can continue asynchronously
+A finite I2S stream permits one start per open. After reaping, close and reopen
+before starting it again. Opening and closing can continue asynchronously
 through worker polls. An unfinished open has no cancellation path; its bounded
 resource deadline can enter retained recovery with partial clock/pin tokens.
 Local close preserves the platform-lifetime audio parent leases described in
@@ -176,8 +185,10 @@ continues from the service's copies.
 The session checks a delayed reply, client authorization, concurrent channels,
 buffer conflicts before submission and after drain, autonomous completion,
 cancellation and expiry, and completed-result retention after a task suspends.
-An I2S capture checks producer-before-DMA-start and producer-before-DMA-stop
-ordering. A retained drain fault checks buffer/session retention and absence
+A two-period I2S receive stream checks that its DMA request is off whenever its
+channel starts or stops and whenever a captured period returns to the CPU. A
+transfer that completes while the worker is suspended is reported by the next
+`STATUS` without another worker tick. A retained drain fault checks buffer/session retention and absence
 of later failed-channel accesses. Startup refuses a physical alias of service
 storage and a raw FIFO job.
 

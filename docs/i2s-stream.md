@@ -26,8 +26,8 @@ and FIFO routes; access to the complete shared allocator pool is insufficient.
 Stream OPEN reserves the entire catalogue against every overlapping job,
 including DMA readers. Playback periods are writable by the application between
 GET and PUT, so ordinary read-only DMA sharing cannot apply to them.
-Single-direction profiles use the same service instance and fixed DMA channel
-as finite capture. A duplex service admits one compatible receive/transmit pair
+Single-direction receive and transmit profiles share one fixed DMA channel in
+the service instance. A duplex service admits one compatible receive/transmit pair
 on distinct DMA channels, with disjoint descriptor and payload allocations.
 Both profiles use the same format, callbacks and platform binding. The worker
 dispatches each channel exclusively through the stream core.
@@ -143,14 +143,15 @@ implementation.
 memory/cache adapter, audio lease adapter, pin manager and shared register mutex.
 Its device registers and sample data are modeled. The selected cases cover
 multi-period capture and playback, client-held period ownership, stale tickets,
-read-alias exclusion, stop ordering, cache publication, busy authority and late
-publication retention. Existing finite-capture and DMA cases supply unchanged
-lower-layer evidence; they are not replayed by this target.
+read-alias exclusion, stop ordering, cache publication, busy authority, late
+publication retention, cancellation of a never-started stream without GEN, and
+START refusal for a partly committed playback catalogue. The host fixture
+`checks/i2s.c` checks the same driver against the actual DMA controller under
+sanitizers, including retained faults; [i2s.md](i2s.md) lists its cases.
 
-The private CMake fragment adds the new service dependencies to the existing
-DMA service and startup targets. Those targets require recompilation because
-private service storage has grown; their established scenarios do not require
-another execution solely for that layout change.
+The private CMake fragment adds the stream driver to the existing DMA service
+and startup targets, because the service links stream dispatch even for images
+that register no stream job.
 
 The duplex compositions in `checks/i2s-stream.c` use the same real providers and
 modeled FIFO/DMA registers. They account for five completed periods in each

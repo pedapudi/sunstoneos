@@ -95,7 +95,7 @@ static struct a733_i2s_period cyclic_period(unsigned job)
     for(unsigned n=0;n<100;++n){struct dma_service_reply r=request(DMA_SERVICE_PERIOD_GET,job,0,0);
         if(r.result==DMA_SERVICE_OK)return r.period;
         if(r.result!=DMA_SERVICE_BUSY){platform_puts("cyclic period fault job=");platform_hex(job);
-            for(unsigned j=0;j<2;++j){struct a733_i2s_stream *q=&service.channels[j].stream;
+            for(unsigned j=0;j<2;++j){struct a733_i2s_stream *q=&service.streams[j];
                 platform_puts(" status/stage/frames/time/since/dma=");platform_hex(q->status);platform_hex(q->stage);platform_hex(q->frames);platform_hex(q->time);platform_hex(q->cyclic_since);platform_hex(service.controller.channels[j].status);}
             platform_puts("\n");configASSERT(0);}
         vTaskDelay(1);}

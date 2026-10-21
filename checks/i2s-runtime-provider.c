@@ -80,11 +80,11 @@ static void pcm_client(void *unused)
    configASSERT(request(DMA_SERVICE_PERIOD_END,0,0,ticket).result==DMA_SERVICE_INVALID);
    configASSERT(request(DMA_SERVICE_PERIOD_END,0,2049,ticket).result==DMA_SERVICE_INVALID);
    configASSERT(request(DMA_SERVICE_PERIOD_END,0,1,ticket+1).result==DMA_SERVICE_INVALID);
-   configASSERT(!service.channels[0].stream.input_ended);refusals=1;
+   configASSERT(!service.streams[0].input_ended);refusals=1;
   }
   if(r){configASSERT(r==1&&atomic_load(&app.result)==2&&atomic_load(&app.runtime.drained)==1);
    configASSERT(I2S_FILE_CHECK?(completed_pcm==3&&final_busy_reads>=5&&atomic_load(&app.runtime.consumed)==4097&&atomic_load(&app.runtime.committed)==4097&&atomic_load(&app.runtime.file_done)):(completed_pcm>=8 && atomic_load(&app.runtime.consumed)==8*2048));
-   if(I2S_FILE_CHECK){configASSERT(service.channels[0].stream.status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5&&fifo_emptied&&(ir[12/4]&0x40));
+   if(I2S_FILE_CHECK){configASSERT(service.streams[0].status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5&&fifo_emptied&&(ir[12/4]&0x40));
     configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY&&request(DMA_SERVICE_CLOSE,0,100000,0).result==DMA_SERVICE_BUSY);}
    configASSERT(bindings[0].pin_lease.id && service.channels[0].holds_buffers);
    platform_puts(I2S_FILE_CHECK?"PASS file PCM actual providers two full periods and one frame, exact memory/FIFO accounting and retained EOF\n":"PASS runtime caller PCM actual providers, distinct periods, exact completed refill and retained cancellation\n");platform_exit(0);}
