@@ -10,7 +10,8 @@
 #define A733_CAMERA_NATIVE_PIN_COUNT 15u
 #define A733_CAMERA_NATIVE_PLANE_BYTES 307200u
 #define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
-#define A733_CAMERA_NATIVE_BYTES 663552u /* Tables8 + parameters2 + two76-page planes. */
+#define A733_CAMERA_NATIVE_BYTES 663552u /* Tables 8 + parameters 2 + two 76-page planes. */
+#define A733_CAMERA_NATIVE_FILL 0xa5u /* Plane payload/guard fill before device ownership. */
 /* Protected image/launch record, authenticated by the actual boot coordinator.
  * A nonzero identity, matching digest or these fields alone is not evidence.
  * Host policy must bind the complete record to the linked module profile,
@@ -19,6 +20,10 @@
  * owner excludes remote firmware and every local master until this image ends.
  * Both IOMMU banks and all ten master's power domains remain accessible.
  * Current memory-only boot admission does NOT produce this authority.
+ * test_pattern 0 captures the ordinary sensor image; 1 selects the OV5640
+ * color bars (register 0x503d = 0x84). pwdn_only 1 admits a module whose
+ * RESETB has no separate GPIO: PE6 power-down is its only control, reset_bank,
+ * reset_pin and inherited[14] are zero, and only fourteen pins are claimed.
  */
 struct a733_camera_boot_record {
     uint64_t version,bytes,owner,epoch,generation,lease,deadline_us;
@@ -26,7 +31,7 @@ struct a733_camera_boot_record {
     uint32_t proof,origin,excluded_masters,powered_masters;
     uint32_t raw_trim,parameter_guard_bytes,plane_guard_bytes;
     uint32_t apb1,apb1_hz;
-    uint8_t settle,deskew,reset_bank,reset_pin;
+    uint8_t settle,deskew,reset_bank,reset_pin,test_pattern,pwdn_only;
     struct a733_pin_config inherited[A733_CAMERA_NATIVE_PIN_COUNT];
     enum a733_rail rails[3];
     uint32_t programmed_uv[3];
@@ -69,20 +74,23 @@ struct a733_camera_native {
 /* Actual singleton allocation during serialized primary preparation, before
  * any concurrent allocator user. One retained parent contains tables, immutable
  * parameters, both planes and guards. No new pool, alternate alias or fallback
- * range. Tables align16KiB; all spans are identity IOVA/PA below4GiB and cover
- * at most two4MiB windows. Failed construction retains acquired backing.
- * This does not qualify the4KiB guard policy; the boot evidence must do so.
+ * range. Tables align 16 KiB; all spans are identity IOVA/PA below 4 GiB and
+ * cover at most two 4 MiB windows. Both planes and their guards are filled with
+ * A733_CAMERA_NATIVE_FILL while CPU-owned, so bytes the DMA never writes cannot
+ * hold an earlier image. Failed construction retains acquired backing.
+ * This does not qualify the 4 KiB guard policy; the boot evidence must do so.
  * Parent/media/pin/rail/provider objects remain private and platform-lived. */
 int a733_camera_native_init(struct a733_camera_native *,const struct a733_camera_native_config *);
-/* Version2 boot record and exact SUPERVISED_PROOF; same retained providers and
+/* Version 2 boot record and exact SUPERVISED_PROOF; same retained providers and
  * controllers. Manual whole-board power removal replaces watchdog admission,
  * never actual reset/drain/exclusion, mapped guards or live ownership. */
 int a733_camera_native_supervised_init(struct a733_camera_native *,const struct a733_camera_native_config *);
 /* Designated EL1 task advances actual media-token delegation, rail borrows and
  * queued PMIC observations, checked pins, TWI, MCLK and the full capture path.
  * PMIC's existing provider task must run independently. Missing/faulted/late
- * prerequisites refuse before the dependent operation. No rollback/retry.
- * Returns0 pending,1 retained read-only frame ready,-1 retained fault. */
+ * prerequisites refuse before the dependent operation. No rollback/retry;
+ * only a registry status read that reports BUSY is repeated, until deadline.
+ * Returns 0 pending, 1 retained read-only frame ready, -1 retained fault. */
 int a733_camera_native_poll(struct a733_camera_native *);
 /* Serialized privileged consumer. Copies only admitted image payload into a
  * distinct actual CPU-owned lease from the same native singleton, registered
@@ -90,8 +98,9 @@ int a733_camera_native_poll(struct a733_camera_native *);
  * released, published to another device or mutated concurrently with the call.
  * No arbitrary pointer, metadata target or guard byte is accepted. Failure may leave a
  * partial destination, which is untrusted; source backing remains reserved.
- * The caller must not expose the destination until1. No EL0 address is accepted
- * merely because it translates; an EL0 service needs its own client admission. */
+ * The caller must not expose the destination until 1 is returned. No EL0
+ * address is accepted merely because it translates; an EL0 service needs its
+ * own client admission. */
 int a733_camera_native_copy(struct a733_camera_native *,unsigned plane,
     unsigned offset,struct device_memory_lease destination,size_t destination_offset,size_t bytes);
 #endif

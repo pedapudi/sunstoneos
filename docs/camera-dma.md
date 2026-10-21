@@ -8,8 +8,9 @@ The sensor and receiver carry UYVY packets; the DMA memory layout is NV16.
 The implementation is source-checked and host-tested. It has not captured a
 physical image. The [native camera route](camera-route.md) now configures a
 YUV pass-through path and identity scaling. The [receiver](csi-receiver.md)
-supports single-image parser capture. Complete platform composition, memory
-admission, bus drain and physical capture remain required.
+supports single-image parser capture. The [native capture path](camera-native.md)
+composes these controllers with platform providers and memory admission.
+Global bus drain and physical capture remain required.
 
 ## One admitted image owns both memory spans
 
@@ -81,7 +82,7 @@ precede CPU cache invalidation. The coordinator rechecks time and authority
 before publishing its result.
 
 This path reaches `READABLE`, keeps both planes device-owned, and never calls
-disable, drain, close or release. Only the 307200-byte image payload of each
+disable, drain, close or release. Only the 307,200-byte image payload of each
 plane may be read; guards and padding are excluded. Every table, parameter,
 frame, clock and hardware reservation remains retained. CPU writes, rearming,
 buffer reuse and global reclamation remain prohibited. The manual's still-frame
