@@ -201,27 +201,39 @@ static uint32_t forbidden_dma_read(void *cookie, uintptr_t address)
     assert(!"clock regression must stop before any DMA claim access");
     return 0;
 }
+static enum a733_i2s_resource_result ready_health(void *cookie, uint64_t deadline)
+{ (void)cookie; (void)deadline; return READY; }
 static void monotonic_core_case(void)
 {
     setup(0); ready_parent();
     /* A modeled DMA prerequisite; no DMA callback may execute in this case. */
     struct a733_dma_controller dma={.initialized=1,.base=0x04601000,
         .authorized_channels=1,.operations={.read=forbidden_dma_read}};
-    struct a733_i2s_capture capture={0};
-    assert(a733_i2s_open(&capture,&plan.format,&iops,&binding,&dma,0,900) == A733_I2S_OPENING);
-    assert(a733_i2s_poll(&capture) == A733_I2S_OPENING);
-    assert(a733_i2s_poll(&capture) == A733_I2S_OPENING && binding.pin_lease.id);
+    /* A valid two-period receive catalogue; no transfer is ever submitted. */
+    static _Alignas(64) unsigned char memory[3][128];
+    struct a733_dma_mapping maps[2];struct a733_dma_segment segments[2];
+    for (unsigned i=0;i<2;++i) {
+        maps[i]=(struct a733_dma_mapping){memory[i],0x41000100u+i*128,128,A733_DMA_WRITE};
+        segments[i]=(struct a733_dma_segment){{A733_I2S0_RXFIFO,3,4,8},{maps[i].bus,0,4,8},128};
+    }
+    const struct a733_dma_transfer catalogue={{memory[2],0x41000000,128,A733_DMA_DESCRIPTORS},segments,2,maps,2};
+    const struct a733_i2s_stream_profile profile={plan.format,{iops,ready_health},&binding,
+        A733_I2S_RECEIVE,100,0};
+    static struct a733_i2s_stream stream;
+    assert(a733_i2s_stream_open(&stream,&profile,&catalogue,&dma,0,900) == A733_I2S_OPENING);
+    assert(a733_i2s_stream_poll(&stream) == A733_I2S_OPENING);
+    assert(a733_i2s_stream_poll(&stream) == A733_I2S_OPENING && binding.pin_lease.id);
     now+=20; regress_after_enable=1;
-    uint64_t core_before=capture.resource_time;
-    assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY);
+    uint64_t core_before=stream.time;
+    assert(a733_i2s_stream_poll(&stream) == A733_I2S_RECOVERY);
     assert(regression_phase == 3 && now == 99 && parent.last_time == 100 && core_before < now);
-    assert(capture.platform_held && !capture.dma_held && binding.local.id && binding.pin_lease.id);
+    assert(stream.platform_held && !stream.dma_held && binding.local.id && binding.pin_lease.id);
     assert(binding.failed);
     unsigned io=reads+writes;
-    assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY);
-    assert(a733_i2s_close(&capture,900) == A733_I2S_RECOVERY && io == reads+writes);
+    assert(a733_i2s_stream_poll(&stream) == A733_I2S_RECOVERY);
+    assert(a733_i2s_stream_close(&stream,900) == A733_I2S_INVALID && io == reads+writes);
     failed_local_stays_quiet();
-    puts("I2S acquisition: core rejects time below parent's latest observation before DMA or controller access");
+    puts("I2S acquisition: stream core rejects time below parent's latest observation before DMA or controller access");
 }
 static void audio_gate_cases(void)
 {

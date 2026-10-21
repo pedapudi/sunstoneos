@@ -114,6 +114,8 @@ struct a733_iommu {
  * replaces enabled inherited mappings, acknowledges faults, or releases leases.
  * ACTIVE authorizes a higher-level global owner to admit CSI traffic; other
  * masters still require separately implemented admission and mapping policy.
+ * Every profile initializer below calls this function, so every profile's
+ * device spans must end at or below 4 GiB, inside the 34-bit hardware IOVA.
  */
 int a733_iommu_init(struct a733_iommu *, const struct a733_iommu_ops *,
                     void *, const struct a733_iommu_tables *);
@@ -132,9 +134,6 @@ int a733_iommu_init_camera_supervised(struct a733_iommu *,const struct a733_iomm
  * No later master admission, bank sharing, DMA reuse or release is authorized. */
 int a733_iommu_init_decoder(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
-/* Fixed display profile: translate/access master8 only, READ-only spans.
- * Same global initial isolation and retained manual-power-removal contract as
- * the decoder profile. No table changes, master sharing or release. */
 /* Fixed encoder profile translates/accesses master3 only. Same all-master
  * initial exclusion/drain and permanent retention as decoder; no reuse. */
 int a733_iommu_init_encoder(struct a733_iommu *,const struct a733_iommu_ops *,
@@ -152,6 +151,9 @@ int a733_iommu_init_g2d(struct a733_iommu *,const struct a733_iommu_ops *,
  * handoff/exclusion and permanent retained lifetime as G2D are required. */
 int a733_iommu_init_deinterlace(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
+/* Fixed display profile: translate/access master8 only, READ-only spans.
+ * Same global initial isolation and retained manual-power-removal contract as
+ * the decoder profile. No table changes, master sharing or release. */
 int a733_iommu_init_display(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
 int a733_iommu_open(struct a733_iommu *, uint64_t deadline_us);

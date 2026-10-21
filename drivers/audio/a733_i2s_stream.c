@@ -41,33 +41,23 @@ static int rd(struct a733_i2s_stream *s,unsigned a,uint32_t *v)
 {return now(s) && IO(s).read(COOKIE(s),A733_I2S0_BASE+a,v) && now(s);}
 static int wr(struct a733_i2s_stream *s,unsigned a,uint32_t v)
 {return now(s) && IO(s).write(COOKIE(s),A733_I2S0_BASE+a,v) && now(s);}
-static int checked(struct a733_i2s_stream *s,unsigned a,uint32_t v)
-{uint32_t got;return wr(s,a,v) && rd(s,a,&got) && got==v;}
-/* Only the serialized worker changes CTL/ICTL; preserve the peer's enable and
- * request bits at every start, handoff, cancellation and drain boundary. */
+/* io.write verifies its own readback (a733_i2s_stream.h), so writes are not
+ * read again here. Only the serialized worker changes CTL/ICTL; preserve the
+ * peer's enable and request bits at every start, handoff, cancellation and
+ * drain boundary. */
 static int requests(struct a733_i2s_stream *s,unsigned enabled)
 {
     uint32_t v;if(!rd(s,ICTL,&v))return 0;
-    return checked(s,ICTL,(v&~drq(s))|(enabled?drq(s):0));
+    return wr(s,ICTL,(v&~drq(s))|(enabled?drq(s):0));
 }
+enum { KEEP_GEN=8 };
+/* bits: GEN 1, RX 2, TX 4. KEEP_GEN leaves GEN as found instead of setting it. */
 static int control(struct a733_i2s_stream *s,unsigned bits)
 {
     uint32_t v;if(!rd(s,CTL,&v))return 0;
-    unsigned own=tx(s)?4u:2u,other=tx(s)?2u:4u;
-    v=(v&~(own|1u))|(bits&own)|((bits&1u)||(v&other)?1u:0u);
-    return checked(s,CTL,v);
-}
-static int mapping(const struct a733_dma_mapping *m)
-{
-    return m->cpu && m->bytes && !((uintptr_t)m->cpu&63) && !(m->bus&63) && !(m->bytes&63) &&
-        m->bytes<=UINTPTR_MAX-(uintptr_t)m->cpu && m->bus<(UINT64_C(1)<<35) &&
-        m->bytes<=(UINT64_C(1)<<35)-m->bus;
-}
-static int overlaps(const struct a733_dma_mapping *a,const struct a733_dma_mapping *b)
-{
-    return ((uintptr_t)a->cpu<(uintptr_t)b->cpu+b->bytes &&
-        (uintptr_t)b->cpu<(uintptr_t)a->cpu+a->bytes) ||
-        (a->bus<b->bus+b->bytes && b->bus<a->bus+a->bytes);
+    unsigned own=tx(s)?4u:2u,other=tx(s)?2u:4u,gen=(bits&KEEP_GEN)?v&1u:bits&1u;
+    v=(v&~(own|1u))|(bits&own)|(gen||(v&other)?1u:0u);
+    return wr(s,CTL,v);
 }
 int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a733_dma_transfer *t)
 {
@@ -77,7 +67,7 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
         !p->operations.io.acquire || !p->operations.io.acquire_poll || !p->operations.io.release ||
         !p->operations.io.read || !p->operations.io.write || !p->operations.io.now_us ||
         !t || t->count<2 || t->count>A733_I2S_STREAM_PERIODS || t->mapping_count!=t->count ||
-        !t->segments || !t->mappings || !mapping(&t->descriptors) ||
+        !t->segments || !t->mappings || !a733_dma_mapping_shape(&t->descriptors) ||
         t->descriptors.access!=A733_DMA_DESCRIPTORS || t->descriptors.bytes<t->count*64 ||
         t->descriptors.bus>UINT32_C(0xfffff800)-t->count*64 ||
         (p->direction==A733_I2S_TRANSMIT && p->format.first_slot))return 0;
@@ -86,15 +76,15 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
         const struct a733_dma_mapping *m=&t->mappings[i];
         const struct a733_dma_endpoint *fifo=p->direction==A733_I2S_RECEIVE?&g->source:&g->destination;
         const struct a733_dma_endpoint *ram=p->direction==A733_I2S_RECEIVE?&g->destination:&g->source;
-        if(!mapping(m) || m->access!=(p->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ) ||
+        if(!a733_dma_mapping_shape(m) || m->access!=(p->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ) ||
             !g->bytes || g->bytes>A733_DMA_MAX_SEGMENT_BYTES || g->bytes!=t->segments[0].bytes ||
             g->bytes%plan.frame_bytes || g->bytes%(plan.dma_width*8) || g->bytes>m->bytes || ram->address!=m->bus || ram->request ||
             fifo->address!=(p->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO) ||
             fifo->request!=3 || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
-            fifo->burst!=8 || ram->burst!=8 || overlaps(m,&t->descriptors) ||
+            fifo->burst!=8 || ram->burst!=8 || a733_dma_mappings_overlap(m,&t->descriptors) ||
             (p->cyclic && (g->bytes!=m->bytes || (p->direction==A733_I2S_RECEIVE &&
              (g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
-        for(size_t k=0;k<i;++k)if(overlaps(m,&t->mappings[k]))return 0;
+        for(size_t k=0;k<i;++k)if(a733_dma_mappings_overlap(m,&t->mappings[k]))return 0;
     }
     return 1;
 }
@@ -115,19 +105,19 @@ static enum a733_i2s_status configure(struct a733_i2s_stream *s)
         (fc&((1u<<31)|(3u<<24))))return fault(s);
     uint32_t cfg=s->duplex?(s->plan.chcfg|(s->profile.format.channels-1)):
         tx(s)?s->profile.format.channels-1:s->plan.chcfg;
-    if(!checked(s,CTL,s->plan.ctl) || !checked(s,FMT0,s->plan.fmt0) || !checked(s,FMT1,0) ||
-        !checked(s,CLK,s->plan.clkdiv) || !checked(s,CHCFG,cfg))return fault(s);
+    if(!wr(s,CTL,s->plan.ctl) || !wr(s,FMT0,s->plan.fmt0) || !wr(s,FMT1,0) ||
+        !wr(s,CLK,s->plan.clkdiv) || !wr(s,CHCFG,cfg))return fault(s);
     if(tx(s) || s->duplex) {
         /* DOUT0 slots 0/1 map to contiguous FIFO channels 0/1. */
         unsigned channels=s->profile.format.channels;
-        if(!checked(s,TXSEL,(1u<<20)|((channels-1)<<16)|((1u<<channels)-1)) ||
-            !checked(s,TXMAP0,0) || !checked(s,TXMAP1,channels==2?0x10:0))return fault(s);
+        if(!wr(s,TXSEL,(1u<<20)|((channels-1)<<16)|((1u<<channels)-1)) ||
+            !wr(s,TXMAP0,0) || !wr(s,TXMAP1,channels==2?0x10:0))return fault(s);
     }
-    if((!tx(s) || s->duplex) && (!checked(s,RXSEL,s->plan.rxchsel) || !checked(s,RXMAP0,0) ||
-        !checked(s,RXMAP1,0) || !checked(s,RXMAP2,0) || !checked(s,RXMAP3,s->plan.rxmap3)))return fault(s);
+    if((!tx(s) || s->duplex) && (!wr(s,RXSEL,s->plan.rxchsel) || !wr(s,RXMAP0,0) ||
+        !wr(s,RXMAP1,0) || !wr(s,RXMAP2,0) || !wr(s,RXMAP3,s->plan.rxmap3)))return fault(s);
     /* Trigger levels: RX >= 8 entries; TX empty space >= 64 entries. TXIM=1, RXOM=1.
      * Both 16-bit and 32-bit sample words use the source-defined packing. */
-    if(!checked(s,FCTL,(fc&~UINT32_C(0x7f3f7))|(64u<<12)|(7u<<4)|5u) ||
+    if(!wr(s,FCTL,(fc&~UINT32_C(0x7f3f7))|(64u<<12)|(7u<<4)|5u) ||
         !now(s))return fault(s);
     s->deadline=0;return s->status=A733_I2S_READY;
 }
@@ -174,7 +164,9 @@ enum a733_i2s_status a733_i2s_stream_duplex_open(struct a733_i2s_stream *s,
 static int requests_off(struct a733_i2s_stream *s) {return requests(s,0);}
 static enum a733_i2s_status stop(struct a733_i2s_stream *s,enum a733_i2s_status outcome)
 {
-    if(!requests_off(s) || !control(s,1))return fault(s);
+    /* A started stream already has GEN set. A READY stream never started the
+     * bit clocks, so its cancellation must not start them either. */
+    if(!requests_off(s) || !control(s,KEEP_GEN))return fault(s);
     s->outcome=outcome;s->stage=STOP;s->status=A733_I2S_STOPPING;
     if(a733_dma_owns(s->dma,&s->active)) {
         enum a733_dma_control_status d=a733_dma_cancel(s->dma,s->channel);
@@ -228,14 +220,15 @@ enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *s,uint64_t ti
     if(!valid(s) || s->status!=A733_I2S_READY || !timeout || timeout>INT64_MAX)return A733_I2S_INVALID;
     if(s->duplex && (!s->peer || (s->peer->status!=A733_I2S_READY &&
         s->peer->status!=A733_I2S_ACTIVE && s->peer->status!=A733_I2S_PREPARING)))return A733_I2S_CONFLICT;
-    if(tx(s) && (s->slots[0].state!=QUEUED || (s->slots[1].state!=QUEUED&&!(s->input_ended&&s->end_slot==0))))return A733_I2S_CONFLICT;
-    if(tx(s) && s->profile.cyclic)for(unsigned n=0;n<s->count;++n)
+    /* After START, GET leases only consumed playback periods, so every period
+     * up to the end of input must already be committed. */
+    if(tx(s))for(unsigned n=0;n<s->count && !(s->input_ended && n>s->end_slot);++n)
         if(s->slots[n].state!=QUEUED)return A733_I2S_CONFLICT;
     int h=health(s);if(h<0)return fault(s);if(!h)return A733_I2S_CONFLICT;
     s->timeout=timeout;s->outcome=A733_I2S_FAILED;s->priming=tx(s);
     uint32_t fc;
     if(!control(s,1) || !rd(s,FCTL,&fc) || !wr(s,FCTL,fc|flush(s)) ||
-        !checked(s,tx(s)?TXCNT:RXCNT,0) || !wr(s,ISTA,errors(s)))return fault(s);
+        !wr(s,tx(s)?TXCNT:RXCNT,0) || !wr(s,ISTA,errors(s)))return fault(s);
     s->stage=FLUSH;s->status=A733_I2S_PREPARING;
     /* Keep this deadline until the self-clearing FIFO operation completes. */
     return s->status;
@@ -259,10 +252,13 @@ static enum a733_i2s_status publish(struct a733_i2s_stream *s)
     if(final){
         /* DMA's existing completion/drain contract has returned this allocation.
          * Leave the serial direction running. FIFO space is an observation,
-         * not a serializer fence, and does not authorize release. */
-        if(s->time>UINT64_MAX-s->profile.operation_us)return fault(s);
+         * not a serializer fence, and does not authorize release. The FIFO
+         * drains at most 128 samples at the frame rate. */
+        uint64_t drain=(128*UINT64_C(1000000)+s->profile.format.rate_hz*s->profile.format.channels-1)/
+            (s->profile.format.rate_hz*s->profile.format.channels);
+        if(s->time>UINT64_MAX-s->profile.operation_us-drain)return fault(s);
         if(s->priming){if(!control(s,1|4))return fault(s);s->priming=0;}
-        s->fifo_deadline=s->time+s->profile.operation_us;s->stage=EOF_FIFO;
+        s->fifo_deadline=s->time+drain+s->profile.operation_us;s->stage=EOF_FIFO;
         return s->status;
     }
     return arm(s);
@@ -354,8 +350,12 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
     if(s->stage==EOF_FIFO){
         uint32_t status,fs;
         if(s->time>=s->fifo_deadline||a733_dma_owns(s->dma,&s->active))return fault(s);
-        if(!rd(s,ISTA,&status)||!rd(s,FSTA,&fs)||!now(s))return fault(s);
-        if((status&errors(s))||s->time>=s->fifo_deadline)return fault(s);
+        /* publish() found no FIFO error after the final DMA completion, and no
+         * sample enters the FIFO afterwards. A later TXU therefore only reports
+         * that the serializer emptied it; TXO remains a fault. INPUT_ENDED still
+         * requires FSTA itself to report an empty FIFO. */
+        if(!rd(s,FSTA,&fs)||!rd(s,ISTA,&status)||!now(s))return fault(s);
+        if((status&errors(s)&~0x40u)||s->time>=s->fifo_deadline)return fault(s);
         unsigned free=(fs>>16)&255;if(free>128)return fault(s);
         s->deadline=0;
         if(free==128)return s->status=A733_I2S_INPUT_ENDED;
@@ -370,13 +370,11 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
             s->priming=0;
         }
         if(s->profile.cyclic)return cyclic_active(s);
-        struct a733_dma_channel *channel=&s->dma->channels[s->channel];
-        if(channel->transfer!=&s->active)return fault(s);
-        uint32_t pending=s->dma->operations.read(s->dma->cookie,s->dma->base+0x138+s->channel*0x40);
-        uint64_t ticks=s->dma->operations.ticks(s->dma->cookie);
+        enum a733_dma_control_status d=a733_dma_finite_state(s->dma,s->channel,&s->active);
         if(!now(s))return fault(s);
-        if(!(pending&~3u) && ticks-channel->started<channel->timeout){s->deadline=0;return s->status;}
-        if((pending&~7u) || ticks-channel->started>=channel->timeout)return stop(s,A733_I2S_FAILED);
+        if(d==A733_DMA_ACTIVE){s->deadline=0;return s->status;}
+        if(d==A733_DMA_FAILED)return stop(s,A733_I2S_FAILED);
+        if(d!=A733_DMA_COMPLETE)return fault(s);
         if(!requests_off(s))return fault(s);
         /* Occupancy sampled after DRQ is disabled. One sample is withheld as
          * margin; status flags still govern actual FIFO discontinuities. */

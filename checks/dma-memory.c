@@ -1,4 +1,5 @@
 #include "dma_memory.h"
+#include "aarch64_device_memory.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -79,10 +80,10 @@ int main(void)
     assert(!dma_memory_init(&rejected, &window, 1, &port, 1, translate, ram));
     assert(!memcmp(&rejected, &empty, sizeof(rejected)));
 
-    assert(dma_cache_stride(UINT64_C(0x8444c004)) == 64);
-    assert(dma_cache_stride((4u << 24) | (3u << 16)) == 32);
-    assert(!dma_cache_stride(4u << 16)); /* Unknown writeback granule. */
-    assert(!dma_cache_stride((5u << 24) | (4u << 16))); /* A 128-byte writeback can damage neighbors. */
-    assert(!dma_cache_stride((4u << 24) | (5u << 16)));
+    assert(aarch64_cache_stride_from_ctr(UINT64_C(0x8444c004)) == 64);
+    assert(aarch64_cache_stride_from_ctr((4u << 24) | (3u << 16)) == 32);
+    assert(!aarch64_cache_stride_from_ctr(4u << 16)); /* Unknown writeback granule. */
+    assert(!aarch64_cache_stride_from_ctr((5u << 24) | (4u << 16))); /* A 128-byte writeback can damage neighbors. */
+    assert(!aarch64_cache_stride_from_ctr((4u << 24) | (5u << 16)));
     puts("PASS DMA memory: page permissions, attributes, high addresses, canonical ranges, FIFO admission, and cache geometry.");
 }

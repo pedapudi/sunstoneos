@@ -18,7 +18,9 @@ static StackType_t stacks[3][2048];
 static struct dma_service_job jobs[6];
 static struct a733_dma_segment segments[6];
 static struct a733_dma_mapping mappings[6][2];
-static struct dma_service_i2s_profile profile;
+static struct a733_dma_segment stream_segments[2];
+static struct a733_dma_mapping stream_mappings[2];
+static struct dma_service_i2s_stream_profile profile;
 static const struct a733_dma_operations *native_ops=&a733_dma_native_operations;
 static uint32_t get(const uint32_t *p) { return __atomic_load_n(p,__ATOMIC_ACQUIRE); }
 static void set(uint32_t *p,uint32_t v) { __atomic_store_n(p,v,__ATOMIC_RELEASE); }
@@ -48,8 +50,10 @@ static void advance(void)
             configASSERT(t && t->count == 1);
             const struct a733_dma_segment *s=t->segments;
             if (ch == 2) {
+                /* Each request completes exactly one stream period. */
                 configASSERT(i2s_acquired && (ir[0]&2) && ir[28/4] == 8);
                 for (unsigned k=0;k<s->bytes;k+=4) *(uint32_t *)(uintptr_t)(s->destination.address+k)=0x12345600u+k;
+                set(&complete[2],0);
             } else memcpy((void *)(uintptr_t)s->destination.address,(void *)(uintptr_t)s->source.address,s->bytes);
             regs[index_of(ch,0x38)] |= 4; live[ch]=0;
         }
@@ -71,14 +75,11 @@ static void write32(void *cookie,uintptr_t address,uint32_t value)
     configASSERT(offset >= 0x100 && offset < 0x200);
     unsigned ch=(offset-0x100)/0x40,r=(offset-0x100)%0x40;
     __atomic_fetch_add(&accesses[ch],1,__ATOMIC_RELEASE);
-    if (r == 0 && value) {
-        if (ch == 2) configASSERT(!(ir[0]&2) && !ir[28/4]);
-        regs[0x30/4] |= 1u<<ch; live[ch]=1; launched[ch]=counter();
-    }
-    if (r == 0 && !value) {
-        if (ch == 2) configASSERT(!(ir[0]&2) && !ir[28/4]);
-        live[ch]=0;
-    }
+    /* The receiver may keep running across periods, but its DMA request is
+     * always off when the channel starts or stops. */
+    if (r == 0 && ch == 2) configASSERT(!ir[28/4]);
+    if (r == 0 && value) { regs[0x30/4] |= 1u<<ch; live[ch]=1; launched[ch]=counter(); }
+    if (r == 0 && !value) live[ch]=0;
     if (r == 0x38) regs[offset/4] &= ~value;
     else regs[offset/4]=value;
 }
@@ -91,7 +92,7 @@ static void cache(void *cookie,enum a733_dma_cache op,void *cpu,size_t bytes)
             if (!t) continue;
             for (size_t n=0;n<t->mapping_count;++n) if (t->mappings[n].cpu == cpu) {
                 configASSERT(!(regs[0x30/4]&(1u<<ch)) && !regs[index_of(ch,0)]);
-                if (ch == 2) configASSERT(!(ir[0]&2) && !ir[28/4]);
+                if (ch == 2) configASSERT(!ir[28/4]);
                 __atomic_fetch_add(&finished[ch],1,__ATOMIC_RELEASE);
             }
         }
@@ -120,6 +121,11 @@ static enum a733_i2s_resource_result release(void *cookie,uint64_t deadline)
     configASSERT(i2s_acquired && !(ir[0]&7) && !ir[28/4] && !(regs[0x30/4]&4));
     i2s_acquired=0; return A733_I2S_RESOURCE_READY;
 }
+static enum a733_i2s_resource_result health(void *cookie,uint64_t deadline)
+{
+    configASSERT(cookie == &profile && i2s_acquired && microseconds() < deadline);
+    privileged(); return A733_I2S_RESOURCE_READY;
+}
 static int now_us(void *cookie,uint64_t *out)
 { configASSERT(cookie == &profile); privileged(); *out=microseconds(); return 1; }
 static int i2s_read(void *cookie,uintptr_t address,uint32_t *out)
@@ -131,17 +137,28 @@ static int i2s_write(void *cookie,uintptr_t address,uint32_t value)
 {
     configASSERT(cookie == &profile && i2s_acquired && address >= A733_I2S0_BASE && address < A733_I2S0_BASE+sizeof(ir));
     privileged(); unsigned offset=address-A733_I2S0_BASE;
-    if (offset == 28 && value == 8) configASSERT(regs[index_of(2,0)] && (ir[0]&2));
+    if (offset == 28 && value == 8) configASSERT(regs[index_of(2,0)] && (ir[0]&1));
+    if (offset == 12) { ir[3] &= ~value; return 1; }
     if (offset == 20) value &= ~(1u<<24);
     ir[offset/4]=value; return 1;
 }
-static struct dma_service_reply request(enum dma_service_operation op,unsigned job,uint64_t timeout)
+static struct dma_service_reply exchange(enum dma_service_operation op,unsigned job,uint64_t timeout,uint64_t period)
 {
     configASSERT(task_level() == 0);
-    struct dma_service_request r={op,job,timeout,0}; struct dma_service_reply reply; uint64_t ticket;
+    struct dma_service_request r={op,job,timeout,period}; struct dma_service_reply reply; uint64_t ticket;
     configASSERT(dma_service_send(&service,&r,100,&ticket));
     configASSERT(dma_service_collect(&service,ticket,&reply,100));
     configASSERT(reply.ticket == ticket && task_level() == 0); return reply;
+}
+static struct dma_service_reply request(enum dma_service_operation op,unsigned job,uint64_t timeout)
+{ return exchange(op,job,timeout,0); }
+static struct dma_service_reply wait_phase(unsigned job,enum dma_service_phase phase)
+{
+    TickType_t start=xTaskGetTickCount(); struct dma_service_reply r;
+    while ((r=request(DMA_SERVICE_STATUS,job,0)).phase != phase) {
+        configASSERT(xTaskGetTickCount()-start < 500); vTaskDelay(1);
+    }
+    return r;
 }
 static void wait_flag(const uint32_t *p,uint32_t value)
 {
@@ -212,15 +229,37 @@ static void client(void *unused)
     configASSERT(request(DMA_SERVICE_REAP,0,0).result == DMA_SERVICE_BUSY);
     set(&drain_allowed[0],1); wait_finished(0,3);
     reply=request(DMA_SERVICE_REAP,0,0); configASSERT(reply.outcome == DMA_SERVICE_CANCELED && !reply.holds_buffers);
+
+    /* A transfer that completes while the worker blocks is reported by the
+     * next STATUS without another worker tick. */
+    set(&complete[0],1);
+    configASSERT(request(DMA_SERVICE_SUBMIT,0,frequency/2).result == DMA_SERVICE_OK);
+    vTaskSuspend(service.worker); vTaskDelay(2);
+    r=(struct dma_service_request){DMA_SERVICE_STATUS,0,0,0};
+    configASSERT(dma_service_send(&service,&r,0,&ticket));
+    vTaskResume(service.worker);
+    configASSERT(dma_service_collect(&service,ticket,&reply,100));
+    configASSERT(reply.phase == DMA_SERVICE_RESULT && reply.outcome == DMA_SERVICE_COMPLETE && get(&finished[0]) == 4);
+    reply=request(DMA_SERVICE_REAP,0,0); configASSERT(reply.outcome == DMA_SERVICE_COMPLETE);
     configASSERT(request(DMA_SERVICE_CLOSE,0,0).result == DMA_SERVICE_OK);
 
+    /* The I2S stream producer enables DRQ only after its DMA channel and stops
+     * DRQ before every DMA stop and cache acquisition. */
     configASSERT(request(DMA_SERVICE_OPEN,3,100000).result == DMA_SERVICE_OK);
     vTaskDelay(2);
     reply=request(DMA_SERVICE_STATUS,3,0); configASSERT(reply.phase == DMA_SERVICE_READY && !i2s_pending);
     configASSERT(request(DMA_SERVICE_SUBMIT,3,frequency/2).result == DMA_SERVICE_OK);
     set(&complete[2],1); wait_finished(2,1);
-    reply=request(DMA_SERVICE_REAP,3,0); configASSERT(reply.outcome == DMA_SERVICE_COMPLETE);
+    struct dma_service_reply period;
+    for (unsigned n=0;(period=exchange(DMA_SERVICE_PERIOD_GET,3,0,0)).result != DMA_SERVICE_OK;++n) {
+        configASSERT(n < 100 && period.result == DMA_SERVICE_BUSY); vTaskDelay(1);
+    }
+    configASSERT(period.period.kind == A733_I2S_CAPTURED && !period.period.slot && period.period.frames == 16);
     configASSERT(*(uint32_t *)(pool+8192+128) == 0x12345600);
+    configASSERT(exchange(DMA_SERVICE_PERIOD_PUT,3,0,period.period.ticket).result == DMA_SERVICE_OK);
+    configASSERT(request(DMA_SERVICE_CANCEL,3,0).result == DMA_SERVICE_OK);
+    reply=wait_phase(3,DMA_SERVICE_RESULT); configASSERT(reply.outcome == DMA_SERVICE_CANCELED);
+    configASSERT(request(DMA_SERVICE_REAP,3,0).result == DMA_SERVICE_OK);
     configASSERT(request(DMA_SERVICE_SUBMIT,3,frequency/2).result == DMA_SERVICE_BUSY);
     configASSERT(request(DMA_SERVICE_CLOSE,3,100000).result == DMA_SERVICE_OK && !i2s_acquired);
 
@@ -248,8 +287,8 @@ void kernel_main(void)
     struct dma_memory_window window={(uintptr_t)pool,(uintptr_t)pool,sizeof(pool),7};
     struct dma_fifo_port port={A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ};
     configASSERT(a733_dma_native_init(&native,0x09000000,0x09000000,&window,1,&port,1,fatal,NULL));
-    profile=(struct dma_service_i2s_profile){{24576000,16000,0,32,32,1,0},
-        {acquire,acquire_poll,release,now_us,i2s_read,i2s_write},&profile};
+    profile=(struct dma_service_i2s_stream_profile){{{24576000,16000,0,32,32,1,0},
+        {{acquire,acquire_poll,release,now_us,i2s_read,i2s_write},health},&profile,A733_I2S_RECEIVE,10000,0},0};
     const unsigned channels[]={0,1,1,2,3,0},destinations[]={0,0,64,128,192,64};
     for (unsigned j=0;j<6;++j) {
         unsigned ch=channels[j];
@@ -258,11 +297,15 @@ void kernel_main(void)
         segments[j]=(struct a733_dma_segment){{(uintptr_t)pool+4096,0,4,8},
             {(uintptr_t)pool+8192+destinations[j],0,4,8},64};
         jobs[j]=(struct dma_service_job){DMA_SERVICE_RAM,ch,
-            {{pool+ch*64,(uintptr_t)pool+ch*64,64,A733_DMA_DESCRIPTORS},&segments[j],1,mappings[j],2},NULL,NULL};
+            {{pool+ch*64,(uintptr_t)pool+ch*64,64,A733_DMA_DESCRIPTORS},&segments[j],1,mappings[j],2},NULL};
     }
-    jobs[3].kind=DMA_SERVICE_I2S; jobs[3].i2s=&profile;
-    jobs[3].transfer.mappings=&mappings[3][1]; jobs[3].transfer.mapping_count=1;
-    segments[3].source=(struct a733_dma_endpoint){A733_I2S0_RXFIFO,3,4,8};
+    /* Two-period receive catalogue with its own descriptor slots. */
+    for (unsigned i=0;i<2;++i) {
+        stream_mappings[i]=(struct a733_dma_mapping){pool+8192+128+i*128,(uintptr_t)pool+8192+128+i*128,64,A733_DMA_WRITE};
+        stream_segments[i]=(struct a733_dma_segment){{A733_I2S0_RXFIFO,3,4,8},{stream_mappings[i].bus,0,4,8},64};
+    }
+    jobs[3]=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=2,.stream=&profile,
+        .transfer={{pool+256,(uintptr_t)pool+256,128,A733_DMA_DESCRIPTORS},stream_segments,2,stream_mappings,2}};
     const struct a733_dma_operations ops={read32,write32,cache,barrier,ticks,mapping,fifo};
     struct dma_service_protected protected[]={
         {(uintptr_t)&service,(uintptr_t)&service,sizeof(service)},
@@ -278,6 +321,7 @@ void kernel_main(void)
     configASSERT(dma_service_init(&service,&ops,NULL,0x04601000,15,frequency/100,jobs,6,protected,3,3,3));
     /* Private copies must survive destruction of every caller-owned table. */
     memset(jobs,0,sizeof(jobs)); memset(segments,0,sizeof(segments)); memset(mappings,0,sizeof(mappings));
+    memset(stream_segments,0,sizeof(stream_segments)); memset(stream_mappings,0,sizeof(stream_mappings));
     TaskHandle_t a=xTaskCreateStaticAffinitySet(client,"client",2048,NULL,2,stacks[0],&tasks[0],1);
     TaskHandle_t b=xTaskCreateStaticAffinitySet(peer,"peer",2048,NULL,2,stacks[1],&tasks[1],2);
     TaskHandle_t c=xTaskCreateStaticAffinitySet(observer,"observer",2048,NULL,2,stacks[2],&tasks[2],2);

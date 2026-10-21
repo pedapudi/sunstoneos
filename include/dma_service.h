@@ -3,7 +3,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "dma_service_i2s.h"
 #include "dma_service_i2s_stream.h"
 #include <stdatomic.h>
 
@@ -13,8 +12,10 @@
 #define DMA_SERVICE_MAPPINGS 16u
 #define DMA_SERVICE_STACK_WORDS 4096u
 #define DMA_SERVICE_NO_JOB DMA_SERVICE_JOBS
+/* I2S0 stream jobs use one channel, or two for a duplex pair. */
+#define DMA_SERVICE_STREAMS 2u
 
-enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S, DMA_SERVICE_I2S_STREAM, DMA_SERVICE_FIFO };
+enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S_STREAM, DMA_SERVICE_FIFO };
 enum dma_service_operation { DMA_SERVICE_STATUS, DMA_SERVICE_OPEN, DMA_SERVICE_SUBMIT,
     DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE,
     DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT,
@@ -46,7 +47,8 @@ struct dma_service_reply {
  * FIFO jobs require one fixed FIFO endpoint and direction throughout a finite
  * transfer; native port policy authenticates its request, width and burst.
  * FIFO producer request gating and final wire drain belong to its sole client.
- * I2S profiles for one physical controller must use one fixed DMA channel. */
+ * Single-direction I2S stream profiles must use one fixed DMA channel; a
+ * duplex pair uses two distinct channels. */
 struct dma_service_protected {
     uintptr_t cpu;
     uint64_t physical;
@@ -59,7 +61,6 @@ struct dma_service_job {
     enum dma_service_kind kind;
     unsigned channel;
     struct a733_dma_transfer transfer;
-    const struct dma_service_i2s_profile *i2s;
     const struct dma_service_i2s_stream_profile *stream;
 };
 struct dma_service_private_job {
@@ -68,7 +69,6 @@ struct dma_service_private_job {
     struct a733_dma_transfer transfer;
     struct a733_dma_segment segments[DMA_SERVICE_SEGMENTS];
     struct a733_dma_mapping mappings[DMA_SERVICE_MAPPINGS];
-    struct dma_service_i2s_profile i2s;
     struct dma_service_i2s_stream_profile stream;
 };
 struct dma_service_message { struct dma_service_request request; uint64_t ticket; unsigned client; };
@@ -82,11 +82,10 @@ struct dma_service_client {
 };
 struct dma_service_channel {
     unsigned owner,profile,job,holds_buffers;
+    unsigned stream; /* Index in streams, or DMA_SERVICE_STREAMS. */
     uint64_t job_ticket;
     enum dma_service_phase phase;
     enum dma_service_outcome outcome;
-    struct a733_i2s_capture capture;
-    struct a733_i2s_stream stream;
 };
 /* Trusted private bootstrap configuration, copied before scheduling starts.
  * prepared is bounded and performs no device operations. It authenticates the
@@ -107,6 +106,8 @@ struct dma_service {
     atomic_uint activation_state;
     struct dma_service_activation activation;
     struct dma_service_channel channels[A733_DMA_CHANNELS];
+    /* Bound to channels at initialization; never reassigned. */
+    struct a733_i2s_stream streams[DMA_SERVICE_STREAMS];
     struct dma_service_client clients[DMA_SERVICE_CLIENTS];
     QueueHandle_t requests;
     StaticQueue_t request_queue;
@@ -160,9 +161,11 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * and PUT returns RX storage or commits TX data. REAP requires all client-held
  * periods returned after a terminal stop. TX completion means DMA consumed
  * memory, not wire playback. No automatic reclamation after task abandonment.
- * I2S permits one capture per open; after REAP, CLOSE and OPEN before reuse.
- * Worker polls all active channels between requests. Each I2S channel dispatches
- * only through capture APIs, never through an independent generic DMA poll. */
+ * A finite stream permits one START per open; after REAP, CLOSE and OPEN
+ * before reuse. The worker polls all active channels between requests, and
+ * polls the request's channel before answering STATUS, PERIOD_GET or REAP.
+ * Each I2S channel dispatches only through stream APIs, never through an
+ * independent generic DMA poll. */
 int dma_service_send(struct dma_service *, const struct dma_service_request *, TickType_t wait, uint64_t *ticket);
 int dma_service_collect(struct dma_service *, uint64_t ticket, struct dma_service_reply *, TickType_t wait);
 /* Copy only a collected CAPTURED_COPY staging lease for this task/job/ticket.
