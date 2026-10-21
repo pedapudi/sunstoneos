@@ -32,10 +32,14 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             for sequence in range(2400):
                 require(now()<deadline,'HEVC copied-output deadline expired.')
                 frame=exchange(decoder.query(ordinal),min(500,max(1,int((deadline-now())*1000))))
-                path=evidence/f'picture-{ordinal}-{sequence:04}.bin'
-                supervisor.durable_frame(path,frame)
-                entry=dict(path=path.name,sha256=hashlib.sha256(frame).hexdigest())
-                record.setdefault('hevc_frames',[]).append(entry);save()
+                frames=record.setdefault('hevc_frames',[]);digest=hashlib.sha256(frame).hexdigest()
+                if frames and frames[-1]['sha256']==digest and frames[-1].get('ordinal')==ordinal and frames[-1].get('status')==0:
+                    # An identical pending reply is already durable; count it instead.
+                    entry=frames[-1];entry['repeats']=entry.get('repeats',0)+1
+                else:
+                    path=evidence/f'picture-{ordinal}-{sequence:04}.bin'
+                    supervisor.durable_frame(path,frame)
+                    entry=dict(path=path.name,sha256=digest);frames.append(entry);save()
                 result=decoder.decode(frame,session,ordinal);entry.update(result)
                 require(now()<deadline,'HEVC result arrived after deadline.')
                 if result['status']==0:
@@ -73,20 +77,33 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
 def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
                    now=time.monotonic,pause=time.sleep):
     def send(data,label):
+        # The immutable upload already exists in the frozen bundle. One durable
+        # intent binds each buffer; per-write progress stays in memory and is
+        # saved on completion or by capture's failure path. A repeated identical
+        # pending query extends its completed entry. This avoids thousands of
+        # journal fsyncs inside the fixed native session lifetime.
+        # Later identical queries count as repeats; last_* describe the latest.
+        writes=record.setdefault('hevc_writes',[]);digest=hashlib.sha256(data).hexdigest()
+        entry=writes[-1] if writes else None
+        repeat=(label=='query' and entry is not None and entry['kind']=='query' and
+                entry['sha256']==digest and entry['accepted_bytes']==len(data))
+        if repeat:entry['repeats']=entry.get('repeats',0)+1
+        else:
+            entry=dict(kind=label,bytes=len(data),sha256=digest,accepted_bytes=0)
+            writes.append(entry);save()
         for first in range(0,len(data),512):
             same();require(now()<deadline,'HEVC write deadline expired.')
             packet=data[first:first+512]
-            entry=dict(kind=label,offset=first,bytes=len(packet),sha256=hashlib.sha256(packet).hexdigest())
-            record.setdefault('hevc_writes',[]).append(entry);save()
-            same();remaining=int((deadline-now())*1000)
+            entry.update(attempt_offset=first,attempt_bytes=len(packet),last_write_completed=False)
+            remaining=int((deadline-now())*1000)
             require(remaining>0,'HEVC write journal exceeded deadline.')
             count=device.write(0x02,packet,timeout=min(500,remaining))
-            entry['accepted_bytes']=count
+            entry.update(last_write_completed=True,last_accepted_bytes=count)
+            if not repeat:entry['accepted_bytes']+=count
             require(count==len(packet),'Incomplete HEVC write.')
-            # A completed ACK write remains recorded if later publication fails.
-            if label=='ack':
-                record['hevc_outputs'][-1]['ack_sent']=True
-                save()
+        # A completed ACK write remains recorded if later publication fails.
+        if label=='ack':record['hevc_outputs'][-1]['ack_sent']=True
+        if not repeat:save()
     def exchange(packet,timeout):
         send(packet,'query')
         frame=bytearray();expected=None
@@ -95,9 +112,14 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
             require(remaining>0,'HEVC response deadline expired.')
             maximum=min((decoder.HEADER if expected is None else expected)-len(frame),16384)
             fragment=bytes(device.read(0x81,maximum,timeout=min(timeout,remaining)))
-            path=evidence/f"fragment-{len(record.get('hevc_fragments',[]))+1:04}.bin"
-            supervisor.durable_frame(path,fragment)
-            record.setdefault('hevc_fragments',[]).append(dict(path=path.name,bytes=len(fragment),sha256=hashlib.sha256(fragment).hexdigest()));save()
+            fragments=record.setdefault('hevc_fragments',[]);digest=hashlib.sha256(fragment).hexdigest()
+            if fragments and fragments[-1]['sha256']==digest:
+                # Consecutive identical fragments are run-length counted.
+                fragments[-1]['repeats']=fragments[-1].get('repeats',0)+1
+            else:
+                path=evidence/f"fragment-{len(fragments)+1:04}.bin"
+                supervisor.durable_frame(path,fragment)
+                fragments.append(dict(path=path.name,bytes=len(fragment),sha256=digest));save()
             require(0<len(fragment)<=maximum,'Empty or oversized HEVC response fragment.')
             frame.extend(fragment)
             if expected is None and len(frame)==decoder.HEADER:

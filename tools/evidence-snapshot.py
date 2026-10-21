@@ -32,13 +32,51 @@ def copy_file(source, destination):
             "sha256": digest.hexdigest()}
 
 
+# Ordinary driver and linker flags. Their values remain bound by the hashed
+# link.txt itself; any other token type stops collection.
+LINK_FLAGS=('--target=','--ld-path=','-Wl,--gc-sections','-nostdlib','-static',
+            '-Wl,--defsym=','-Wl,--wrap=','-Wl,--undefined=','-Wl,-Map,')
+
+
 def collect_dependencies(build,target):
-    """Recover every object actually linked into this image, including ASM."""
+    """Recover every object actually linked into this image, including ASM.
+
+    In-tree CMake archives expand to the objects their own link.txt archived.
+    External archives, linker scripts and every link.txt are opaque hashed inputs.
+    """
     import re
     build=Path(build).resolve()
     cmake_root=next((p for p in (build,*build.parents) if (p/'CMakeCache.txt').is_file()),build)
-    link=build/f'CMakeFiles/{target}.dir/link.txt'
-    objects=[(build/name).resolve() for name in shlex.split(link.read_text()) if name.endswith(('.obj','.o'))]
+    hashes={}
+    def sha(path):
+        if path not in hashes:hashes[path]=hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashes[path]
+    errors=[];objects=[];opaque=[];pending=[(build/f'CMakeFiles/{target}.dir/link.txt',build)]
+    while pending:
+        link,directory=pending.pop()
+        if link in opaque:continue
+        opaque.append(link)
+        lines=[line for line in link.read_text().splitlines() if line.strip()]
+        tokens=shlex.split(lines[0])
+        archive=Path(tokens[0]).name.startswith('llvm-ar') or Path(tokens[0]).name=='ar'
+        # An executable links in one command; an archive may add only ranlib.
+        if len(lines)!=1 and not (archive and len(lines)==2 and shlex.split(lines[1])[1:]==tokens[2:3]):
+            errors.append('Unhandled link record commands: '+str(link))
+        index=1+(2 if archive else 0)  # Archive records are: ar qc <library> <members>.
+        while index<len(tokens):
+            token=tokens[index];index+=1
+            if token.endswith(('.obj','.o')):objects.append((directory/token).resolve())
+            elif token=='-o' and not archive:index+=1
+            elif token.startswith('-Wl,-T,') and not archive:opaque.append((directory/token[len('-Wl,-T,'):]).resolve())
+            elif token.startswith(LINK_FLAGS) and not archive:pass
+            elif token.endswith('.a') and not archive:
+                library=(directory/token).resolve()
+                record=library.parent/'CMakeFiles'/(library.name.removeprefix('lib').removesuffix('.a')+'.dir')/'link.txt'
+                if record.is_file():pending.append((record,library.parent))
+                elif not Path(token).is_absolute():errors.append('In-tree archive has no CMake record: '+token)
+                opaque.append(library)
+            else:errors.append('Unhandled link token in '+str(link)+': '+token)
+    objects=list(dict.fromkeys(objects))
     commands=json.loads((cmake_root/'compile_commands.json').read_text())
     # CMake's output field can be top-build-relative even when directory is a
     # subdirectory. The actual compiler -o argument uses the recorded cwd.
@@ -48,7 +86,7 @@ def collect_dependencies(build,target):
         output=args[args.index('-o')+1] if '-o' in args else command['output']
         by_object[(Path(command['directory'])/output).resolve()]=command
     commands=by_object
-    errors=[];dependencies={};actual=[];records={};asm={}
+    dependencies={};actual=[];records={};asm={}
     def internal_record(obj):
         directory=next(p for p in obj.parents if p.name.endswith('.dir') and p.parent.name=='CMakeFiles')
         return directory/'depend.internal'
@@ -81,8 +119,11 @@ def collect_dependencies(build,target):
             paths+= [(cwd/name).resolve() for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
         for path in paths:
             if not path.is_file():errors.append('Missing dependency: '+str(path))
-            else:dependencies[str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
-        records[str(obj)]={'record':str(dep),'record_sha256':hashlib.sha256(dep.read_bytes()).hexdigest(),'source':str(source)}
+            else:dependencies[str(path)]=sha(path)
+        records[str(obj)]={'record':str(dep),'record_sha256':sha(dep),'source':str(source)}
+    for path in opaque:
+        if not path.is_file():errors.append('Missing link input: '+str(path))
+        else:dependencies[str(path)]=sha(path)
     if not objects or not dependencies:errors.append('Empty linked-object/dependency discovery')
     if len(records)!=len(objects):errors.append('Incomplete linked-object dependency coverage')
     if errors:raise RuntimeError(target+' dependency setup failed:\n'+'\n'.join(errors))

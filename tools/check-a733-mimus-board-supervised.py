@@ -28,12 +28,16 @@ host = preparation.host
 require, digest = supervisor.require, supervisor.digest
 PRODUCT, SERIAL = 'sunstoneos native board', 'sunstoneos-a733-board'
 PREREQUISITES = {'supervised-ram-recovery', 'mimus-board-supervised-software'}
-MAX_GENERATIONS = 32
+# All generations share the native 60-second session. The one recorded physical
+# recognition took 4.41 times the audio duration, about 16 s for this 3.59 s
+# recording, so about three fit; four leaves margin for a faster image.
+MAX_GENERATIONS = 4
 
 
 def generation_count(count, workload):
     require(type(count) is int and 1 <= count <= MAX_GENERATIONS,
-            'Recognition count must be between one and 32.')
+            f'Recognition count must be between one and {MAX_GENERATIONS}; '
+            'all generations share the 59-second capture window.')
     require(workload == 4 or workload == 0 and count == 1,
             'Repeated capture requires keyboard workload four.')
 

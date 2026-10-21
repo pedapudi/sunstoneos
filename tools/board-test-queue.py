@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,16 @@ from datetime import datetime, timezone
 DEFAULT = Path.home() / '.cache/sunstoneos/board-tests.sqlite3'
 RECOVERY = 'independent-watchdog-rom-return'
 SUPERVISED_RECOVERY = 'supervised-ram-recovery'
+
+
+def port_name(port):
+    """Validate a physical USB port with the same rule as its board lock."""
+    spec = importlib.util.spec_from_file_location(
+        'queue_usb_access', Path(__file__).resolve().parent / 'usb-access.py')
+    access = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(access)
+    access.board_lock_path(port)
+    return port
 
 
 def require(condition, message):
@@ -165,7 +176,11 @@ def main(argv=None):
     parser.add_argument('--database', type=Path, default=DEFAULT)
     parser.add_argument('--token-file', type=Path)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('init')
+    init = commands.add_parser('init')
+    init.add_argument('--port', type=port_name, required=True,
+                      help='physical USB port of the board this queue schedules, for example 3-1')
+    bind = commands.add_parser('bind-port')
+    bind.add_argument('--port', type=port_name, required=True)
     submit = commands.add_parser('submit')
     submit.add_argument('specification', type=Path)
     commands.add_parser('list')
@@ -210,14 +225,15 @@ def main(argv=None):
                 db.executescript(SCHEMA)
                 db.execute('INSERT INTO settings VALUES(?,?)', ('coordinator', digest(token)))
                 db.execute('INSERT INTO settings VALUES(?,?)', ('halted', ''))
-                event(db, None, 'initialized', {})
+                db.execute('INSERT INTO settings VALUES(?,?)', ('port', args.port))
+                event(db, None, 'initialized', {'port': args.port})
                 db.commit()
             finally:
                 db.close()
         except BaseException:
             path.unlink()
             raise
-        return {'database': str(path), 'token_file': str(args.token_file)}
+        return {'database': str(path), 'token_file': str(args.token_file), 'port': args.port}
     with database(path) as db:
         if args.command == 'submit':
             value = load(args.specification)
@@ -234,7 +250,9 @@ def main(argv=None):
                 event(db, test_id, 'submitted', {})
             return {'id': test_id, 'state': get(db, test_id)['state']}
         if args.command == 'list':
-            return {'halted': db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],
+            port = db.execute("SELECT value FROM settings WHERE key='port'").fetchone()
+            return {'port': port[0] if port else None,
+                    'halted': db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],
                     'tests': [{key: row[key] for key in ('id', 'state', 'owner', 'created')} |
                               {'component': json.loads(row['submission'])['component'],
                                'prerequisites': json.loads(row['submission'])['prerequisites']}
@@ -247,6 +265,13 @@ def main(argv=None):
                 'SELECT * FROM events WHERE test_id=? ORDER BY sequence', (args.id,))]
             return row
         authorize(db, args.token_file)
+        if args.command == 'bind-port':
+            # Queues created before port binding record it once; it never changes.
+            require(not db.execute("SELECT 1 FROM settings WHERE key='port'").fetchone(),
+                    'Queue is already bound to a USB port.')
+            db.execute('INSERT INTO settings VALUES(?,?)', ('port', args.port))
+            event(db, None, 'port-bound', {'port': args.port})
+            return {'port': args.port}
         if args.command == 'resume':
             require(text(args.note), 'Recovery note is required.')
             require(not db.execute("SELECT 1 FROM tests WHERE state='claimed'").fetchone(),

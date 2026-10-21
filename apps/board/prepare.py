@@ -124,13 +124,28 @@ def profile_spans(data,session,payload_spans=None):
     if payload_spans is not None:require(list(payload_spans)==spans,'Exactly the four authenticated profile spans must be uploaded.')
     return spans
 
+# The base deadline expression appears in the overflow guard, the diagnostic
+# deadline and the expiry; every other launcher anchor appears once.
+LAUNCHER_ANCHOR_COUNTS={'20*A733_SMP_COUNTER_HZ':3}
+
+def adapt_launcher(text,changes,counts=LAUNCHER_ANCHOR_COUNTS):
+    """Apply ordered edits to the shared supervised launcher source.
+
+    Each anchor must occur exactly as often as expected. A missed edit would
+    otherwise build a launcher whose contract every image admission refuses.
+    """
+    for old,new in changes.items():
+        require(text.count(old)==counts.get(old,1),'Shared supervised launcher anchor changed: '+old)
+        text=text.replace(old,new)
+    return text
+
 def build_launcher(output,clang,lld):
     shutil.copy2(ROOT/'apps/board/launch.c',output/'launch.c')
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (output/'base-supervised-launch.c').write_text(text)
-    text=text.replace('0x4153373353554c33','0x4153373342534c32').replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
-    text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_board_session)')
-    text=text.replace('20*A733_SMP_COUNTER_HZ','A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ')
+    text=adapt_launcher(text,{'0x4153373353554c33':'0x4153373342534c32','REQUEST[1]==3':'REQUEST[1]==2','CONTRACT->version==3':'CONTRACT->version==2',
+        'CONTRACT->reserved[0] && !CONTRACT->reserved[1]':'CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_board_session)',
+        '20*A733_SMP_COUNTER_HZ':'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ'})
     (output/'board-launch-base.c').write_text(text)
     for name,source in [('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),
                         ('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h')]:shutil.copy2(source,output/name)

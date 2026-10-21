@@ -225,11 +225,14 @@ python3 -B tools/check-a733-mimus-board-supervised.py \
   --generations 2 --supervised-manual-reconnect
 ```
 
-`--generations` defaults to one and accepts one through 32. Only keyboard
+`--generations` defaults to one and accepts one through four. Only keyboard
 workload four accepts multiple generations; workload zero remains one-shot.
 Each workload-four generation requires a new keyboard trigger. All captures share the
 existing absolute 59-second window from launch, within the native 60-second
-session lifetime. The count bounds host work and never extends native admission.
+session lifetime. The only recorded physical recognition took 4.41 times the
+audio duration, about 16 seconds for the 3.59-second recording, so about three
+generations fit in that window; the limit of four leaves room for a faster
+image. The count bounds host work and never extends native admission.
 An incomplete count fails capture while preserving completed earlier results.
 
 The existing claim must bind the outer and inner preparation metadata, image,
