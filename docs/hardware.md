@@ -826,7 +826,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
-- G2D: **implemented** one retained ARGB8888 fill, source-copy or source-over-solid operation per
+- G2D: **implemented** one retained ARGB8888 fill, source-copy, source-over-solid or exact 2× enlargement operation per
   session through the [native application](g2d.md). Caller geometry is bounded
   to 1280×720 with byte stride at most 5120. Authenticated source input, RCQ
   commands and destination use guarded allocations. Typed global IOMMU admission
@@ -873,7 +873,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and mixer AHB reset pulse before output reads, including retained TASK_APPLY.
   It verifies acknowledgment and both reset writes while preserving configuration
   status, rotation reset and neighboring fields. Fresh fault/guard/status checks
-  surround copying. Final image `01b71b3f…` passes six completion forks from one
+  surround copying. Normal-success image `01b71b3f…` passes six completion forks from one
   submitted-job checkpoint, with no resubmission. One image was built. Normal
   completion copies 16,384 bytes; refusals permit no output read. Root verifies
   all 187 compiled repository inputs and 202 declared sources at `6f39897` under
@@ -884,12 +884,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   session-digest offset immediate. No repeated transport matrix is claimed.
   Neither reset nor task-end proves physical visibility, drain or safe reuse;
   all resources stay retained.
+  Operation 4 now enlarges a half-sized source crop exactly 2× into a positive,
+  even-sized destination rectangle, using the existing ARGB8888 buffers, API and retained lifetime.
+  Current image `f77be8b2…` passes three pinned register geometries, five changed
+  native geometry refusals and one linked submission/retained copy. One high-speed
+  C/TinyUSB delivery/ACK resumes that copied checkpoint; three new SRAM cases pass
+  separately. Host geometry/authentication checks and exact capture pass, including
+  refusal of digest-valid nonzero padding before ACK. Pixels outside the destination
+  and row padding must remain zero; interpolation, filtered alpha and rounding
+  are unchecked. Root matches all 187 compiled repository inputs under
+  `g2d-scale-20261020/root-integration.json`; the sole declared native difference
+  is a separately frozen host refusal fix, with all 23 final host sources matching.
+  One native build and one launcher are preserved, without an old-matrix replay.
   The [host coordinator](g2d-preparation.md) uses one 19-second window within
   native 20-second admission, durably saves output before delivery-gated
   generation/digest ACK. Source-over CPU comparison is diagnostic, without a
   qualified hardware-rounding oracle. Every allocation,
   mapping and provider identity remains retained; timeout or ACK establishes no
-  reclamation or drain. Scaling, image-over-image/translucent blending, rotation, color conversion and further
+  reclamation or drain. Other ratios/downscaling, image-over-image/translucent
+  blending, rotation, color conversion and further
   formats remain required. Physical pixels, DMA confinement/visibility, IRQ
   delivery, startup, recovery and performance remain unqualified.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
