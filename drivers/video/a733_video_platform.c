@@ -354,6 +354,78 @@ const struct a733_h264_ops *a733_video_platform_h264_ops(void)
     static const struct a733_h264_ops ops={h264_clock,h264_acquire,h264_prepare,h264_read,h264_write,h264_copied};
     return &ops;
 }
+/* HEVC binding. Writes cover the H.265 engine registers programmed by the
+ * controller and the top-level output format registers it shares with H.264. */
+static int hevc_write_allowed(uint32_t off)
+{
+    switch(off){
+    case 0xc4:case 0xc8:case 0xcc:case 0xe8:case 0xec:
+    case 0x500:case 0x504:case 0x508:case 0x50c:case 0x510:case 0x514:case 0x518:
+    case 0x520:case 0x524:case 0x528:case 0x52c:case 0x530:case 0x534:case 0x538:case 0x53c:
+    case 0x540:case 0x544:case 0x548:case 0x54c:case 0x550:case 0x554:case 0x558:case 0x55c:
+    case 0x560:case 0x564:case 0x568:case 0x56c:case 0x580:case 0x5e0:case 0x5e4:return 1;
+    default:return 0;
+    }
+}
+static int hevc_admit(void *v,const struct a733_video_platform_config *c,const void *j,uint64_t d,uint64_t *t)
+{struct a733_hevc_platform *p=v;return p->ops.admit(p->cookie,c,j,d,t);}
+static int hevc_memory(void *v,uint64_t t,const void *j,uint64_t d)
+{struct a733_hevc_platform *p=v;return p->ops.memory(p->cookie,t,j,d);}
+int a733_hevc_platform_init(struct a733_hevc_platform *p,const struct a733_video_platform_config *c,
+ const struct a733_hevc_platform_ops *o,void *cookie)
+{
+    if(!p||!o||!o->admit||!o->memory||!o->copied)return 0;
+    const struct a733_video_unit_ops unit={o->now_us,o->enter,o->leave,o->read,o->write};
+    const struct a733_hevc_platform_ops ops=*o;
+    if(!decoder_init(&p->decoder,c,&unit,cookie,hevc_admit,hevc_memory,p))return 0;
+    p->ops=ops;p->cookie=cookie;p->bound=p->copy_picture=0;
+    return 1;
+}
+static int hevc_same_job(const struct a733_hevc_job *a,const struct a733_hevc_job *b)
+{
+    /* The plan holds only uint32_t fields. */
+    const uint32_t *x=(const uint32_t *)&a->plan,*y=(const uint32_t *)&b->plan;
+    if(a->input!=b->input||a->input_bytes!=b->input_bytes)return 0;
+    for(unsigned i=0;i<sizeof(a->plan)/sizeof(*x);++i)if(x[i]!=y[i])return 0;
+    for(unsigned i=0;i<HEVC_BUFFERS;++i)if(a->buffers[i].iova!=b->buffers[i].iova||
+        a->buffers[i].bytes!=b->buffers[i].bytes)return 0;
+    return 1;
+}
+static int hevc_clock(void *v,uint64_t *n)
+{struct a733_hevc_platform *p=v;return p?a733_video_unit_now(&p->decoder.unit,n):-1;}
+static int hevc_acquire(void *v,const struct a733_hevc_job *j,uint64_t d,uint64_t *t)
+{
+    struct a733_hevc_platform *p=v;
+    if(!p||!j)return -1;
+    if(p->bound&&!hevc_same_job(&p->job,j))return fail(&p->decoder.unit);
+    if(!p->bound){p->job=*j;p->bound=1;}
+    return acquire(&p->decoder,&p->job,d,t);
+}
+/* Decoder mode 4 selects the H.265 engine (Cedrus VE_MODE_DEC_H265). */
+static int hevc_prepare(void *v,uint64_t t,const struct a733_hevc_job *j,uint64_t d)
+{
+    struct a733_hevc_platform *p=v;
+    if(!p||!j||!p->bound||!hevc_same_job(&p->job,j))return -1;
+    return prepare(&p->decoder,t,&p->job,d,4);
+}
+static int hevc_read(void *v,uint64_t t,uint32_t off,uint32_t *x,uint64_t d)
+{struct a733_hevc_platform *p=v;return codec_read(&p->decoder,t,off,x,d,off==0x538||off==0x53c);}
+static int hevc_write(void *v,uint64_t t,uint32_t off,uint32_t x,uint64_t d)
+{struct a733_hevc_platform *p=v;return codec_write(&p->decoder,t,off,4,x,d,hevc_write_allowed(off));}
+static int hevc_copy(void *v,uint64_t t,uint64_t d)
+{struct a733_hevc_platform *p=v;return p->ops.copied(p->cookie,t,p->copy_picture,d);}
+static int hevc_copied(void *v,uint64_t t,unsigned picture,uint64_t d)
+{
+    struct a733_hevc_platform *p=v;
+    if(!p||picture>1)return -1;
+    p->copy_picture=picture;
+    return retained_copy(&p->decoder,t,d,hevc_copy,p);
+}
+const struct a733_hevc_ops *a733_video_platform_hevc_ops(void)
+{
+    static const struct a733_hevc_ops ops={hevc_clock,hevc_acquire,hevc_prepare,hevc_read,hevc_write,hevc_copied};
+    return &ops;
+}
 static int readable(uintptr_t a)
 {
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
@@ -370,7 +442,7 @@ static int readable(uintptr_t a)
     if(a>=VE&&a<VE+0x1000) switch(a-VE) {
     case 0:case 4:case 0x1c:case 0x50:case 0x54:case 0xc4:case 0xc8:case 0xcc:
     case 0xe0:case 0xe4:case 0xe8:case 0xec:case 0xf0:case 0x11c:case 0x804:
-    case 0xb0:case 0x228:case 0x22c:case 0x5c:return 1;
+    case 0xb0:case 0x228:case 0x22c:case 0x5c:case 0x538:case 0x53c:return 1;
     default:return 0;
     }
     return 0;
@@ -396,7 +468,7 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
     int allowed=(mask||delay)&&width==4;
     if(a>=VE&&a<VE+0x1000) {
         uint32_t off=(uint32_t)(a-VE);
-        allowed=jpeg_write_allowed(off,width)||(width==4&&(h264_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
+        allowed=jpeg_write_allowed(off,width)||(width==4&&(h264_write_allowed(off)||hevc_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
     }
     if(!allowed)return -1;
     return a733_video_unit_native_write(a,width,mask,value);
