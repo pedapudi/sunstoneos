@@ -407,3 +407,50 @@ in a separate session and runs two changed inputs through the existing runtime
 host consumer. The arithmetic and GPU writes are modeled. Focused correctness
 review found no remaining substantive issue; physical execution remains
 unqualified.
+
+## Copy output across explicit disposal and reopening
+
+The opt-in compute lifecycle client in `apps/gpu-program/lifecycle.py` uses
+protocol version 6. Its queue epoch identifies one GPU queue lifetime within
+the original sealed session epoch. STATUS discovers that queue epoch; every
+mutation and copied-output read binds it. Successful OPEN advances it by one,
+executes the sealed initial input and publishes sequence one. Epoch wrap is
+refused. The legacy runtime client continues to use its existing protocol.
+
+The coordinator supplies its validated, locked device handle, the original
+absolute monotonic session deadline, and a durable callback. The callback takes
+`retain(kind, identity, payload)` and returns only after the bytes and their
+identity are durable. Use the coordinator's existing file synchronization and
+metadata publication helpers. Identity includes profile, sealed session epoch,
+queue epoch, sequence and observed state.
+
+```python
+client = lifecycle.Compute.for_device(
+    device, sealed_epoch, output_words,
+    deadline=session_deadline, retain=retain_gpu_copy)
+initial = client.read()
+replacement = client.submit(input_bytes)
+client.close()
+```
+
+CLOSE retains GPU allocations. Reclamation and reuse require explicit calls:
+
+```python
+client.dispose()
+client.open()
+reopened_initial = client.read()
+client.close()
+```
+
+Each complete output is durable before another submission or CLOSE can
+invalidate it. CLOSE, DISPOSE and OPEN receipts become durable before their
+methods return. Pending STATUS replies require no separate durable write.
+DISPOSED reports native child disposal completion; it does not independently
+qualify physical drain or a memory lease generation. Reopening keeps the same
+session deadline and sealed input. It does not relaunch the application.
+
+Transport, identity, persistence or deadline uncertainty stops the client.
+`client.failure`, `client.outputs` and `client.receipts` preserve observed
+identity, partial copied bytes and complete output even if publication failed.
+The stopped instance refuses further transport operations. A completed output
+or lifecycle receipt arriving late is retained before the deadline error.

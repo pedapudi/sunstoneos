@@ -532,3 +532,50 @@ shader selection, the remaining texture and render modes, synchronization across
 workloads, display presentation and allocation reclamation remain required. Compute
 remains an independent capability. Performance work follows functional hardware
 qualification.
+
+## Copy frames across explicit disposal and reopening
+
+`apps/gpu-render/lifecycle.py` supplies opt-in `Triangle` and `Texture` clients.
+Triangle uses protocol version 7; texture and depth use versions 8 and 9.
+They reuse the existing vertex and texture input builders. A queue epoch binds
+all requests to one queue lifetime within the original sealed session epoch.
+CLOSE retains resources; DISPOSE and OPEN require explicit calls.
+
+Create the client with the coordinator's validated, locked device handle, its
+original absolute monotonic deadline and a durable callback:
+
+```python
+client = lifecycle.Triangle.for_device(
+    device, sealed_epoch, deadline=session_deadline, retain=retain_gpu_copy)
+pixels = client.submit(draw.vertices(rows))
+client.close()
+client.dispose()
+client.open()
+new_pixels = client.submit(draw.vertices(new_rows))
+client.close()
+```
+
+For textured output, use `Texture.for_device(device, sealed_epoch, width,
+height, deadline=session_deadline, retain=retain_gpu_copy, profile=2)`.
+The width and height must match the authenticated framebuffer geometry.
+Pass `profile=3` for depth/blend. Submit the tuple returned by the existing
+`texture.input_bytes()` builder with the same profile.
+
+The callback receives `retain(kind, identity, payload)` and confirms durable
+bytes and metadata using the coordinator's existing persistence helpers.
+Identity includes profile, sealed session epoch, queue epoch, frame and,
+for texture, upload generation and framebuffer geometry. Complete copied
+frames and terminal lifecycle receipts are durable before further mutations.
+Pending STATUS replies require no separate durable write.
+
+OPEN advances the queue epoch by one and resets frame and upload generation
+to zero. No previous framebuffer remains readable; each reopened texture or
+depth frame requires fresh BEGIN, WRITE and COMMIT. The client accepts a
+72-byte texture response header separately from its streamed body. Existing
+bounded body publications and terminating USB packets remain in use.
+
+The original session deadline covers every operation, including reopening.
+Transport, identity, persistence or deadline uncertainty stops the instance.
+Its failure record, partial bytes, copied outputs and lifecycle receipts remain
+available; no retry, reconnect or relaunch follows. DISPOSED is a native disposal
+receipt, not independent physical drain or memory lease qualification.
