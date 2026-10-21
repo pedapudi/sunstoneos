@@ -63,6 +63,9 @@ static const struct step disable[] = {
     {0x000,A733_CSI_PHY,0,1,0},
     {0x034,A733_CSI_PHY,0,1,0}
 };
+static const struct step stop_video[] = {
+    {0x00c,A733_CSI_PARSER,0,0x03030303,0}
+};
 /* The platform supplies reset defaults. These checks reject active local
  * engines, unexpected modes, trigger extensions and local interrupt enables.
  * Stable global power/reference settings are checked without modifying them.
@@ -135,6 +138,11 @@ int a733_csi_sample(struct a733_csi_receiver *s,uint64_t d)
 {
     if (!s || !s->initialized || s->state!=A733_CSI_ARMED) return -1;
     return begin(s,A733_CSI_SAMPLE,d);
+}
+int a733_csi_stop_video(struct a733_csi_receiver *s,uint64_t d)
+{
+    if (!s || !s->initialized || s->state!=A733_CSI_ARMED || s->image_mode) return -1;
+    return begin(s,A733_CSI_VIDEO_STOP,d);
 }
 int a733_csi_close(struct a733_csi_receiver *s,uint64_t d)
 {
@@ -245,6 +253,10 @@ int a733_csi_poll(struct a733_csi_receiver *s)
             s->state=A733_CSI_ARMED;return 1;
         }
         ++s->index;return 0;
+    case A733_CSI_VIDEO_STOP:
+        r=program(s,stop_video,COUNT(stop_video));
+        if(r!=1)return r;
+        s->state=A733_CSI_ARMED;return 1;
     case A733_CSI_PRODUCER_STOP:
         r=s->ops.producer_stop(s->context,s->token,s->deadline);
         if(r<0 || r>1 || tick(s)!=1)return fault(s);

@@ -37,8 +37,9 @@ static int sensor_write_block(void *p,uint64_t t,uint8_t a,uint16_t r,const uint
 static int sensor_receiver(void *p,uint64_t t,uint64_t rt,const struct ov5640_mode *m,uint64_t d){
     BEGIN;
     if(!s->packets_granted || rt!=s->receiver.token || s->receiver.state!=A733_CSI_ARMED ||
-       !s->receiver.image_mode || s->route.state!=A733_ROUTE_ARMED ||
-       s->dma.state!=A733_CAM_DMA_START || s->iommu.state!=A733_IOMMU_ACTIVE)return -1;
+       s->receiver.image_mode==s->streaming || s->route.state!=A733_ROUTE_ARMED ||
+       s->dma.state!=(s->streaming?A733_CAM_DMA_STREAM_START:A733_CAM_DMA_START) ||
+       s->iommu.state!=A733_IOMMU_ACTIVE)return -1;
     return CALL(sensor,receiver,t,rt,m,d);
 }
 SIMPLE(sensor_release,sensor,release)
@@ -74,7 +75,20 @@ static int dma_read(void *p,uint64_t t,uint16_t o,uint32_t *v,uint64_t d){BEGIN;
 static int dma_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){BEGIN;return CALL(dma,write,t,o,v,d);}
 static int dma_start(void *p,uint64_t t,uint64_t d){
     BEGIN;(void)d;
-    return t==s->dma.token && s->packets_granted && s->sensor.state==OV5640_STREAMING?1:-1;
+    return !s->streaming && t==s->dma.token && s->packets_granted &&
+        s->sensor.state==OV5640_STREAMING?1:-1;
+}
+static int dma_stream_start(void *p,uint64_t t,uint64_t d){
+    BEGIN;(void)d;
+    return s->streaming && t==s->dma.token && s->packets_granted &&
+        s->sensor.state==OV5640_STREAMING?1:-1;
+}
+/* Only a complete slot that no address register can name is invalidated. */
+static int dma_sync_slot(void *p,uint64_t t,unsigned slot,uint64_t d){
+    BEGIN;
+    if(!s->streaming || t!=s->dma.token || s->dma.state!=A733_CAM_DMA_STREAMING ||
+       slot>=s->dma.ring.count || s->dma.ring.state[slot]!=A733_SLOT_SYNC)return -1;
+    return CALL(dma,sync_slot,t,slot,d);
 }
 static int stopped(void *p,uint64_t t,uint64_t d){
     BEGIN;(void)t;(void)d;
@@ -83,8 +97,9 @@ static int stopped(void *p,uint64_t t,uint64_t d){
         s->receiver.image_mode && s->route.state==A733_ROUTE_ARMED &&
         s->iommu.state==A733_IOMMU_ACTIVE && s->iommu.fault.complete &&
         (s->dma.events&1)?1:-1;
+    /* Continuous capture ends without a CAPTURE_DONE requirement. */
     return s->quiet && s->sampled && s->fenced && s->sensor.state==OV5640_READY &&
-        (s->dma.events&1)?1:-1;
+        (s->streaming || (s->dma.events&1))?1:-1;
 }
 static int dma_drained(void *p,uint64_t t,uint64_t d){
     BEGIN;(void)d;
@@ -121,7 +136,10 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         (uint8_t)(mode && mode->format==OV5640_YUYV?A733_CAMERA_YUYV:A733_CAMERA_UYVY)};
     if(!s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
        (mode->format!=OV5640_UYVY && mode->format!=OV5640_YUYV) ||
-       !mode->pixel_hz || !a733_camera_format_valid(&format) ||
+       !mode->pixel_hz || !a733_camera_format_valid(&format) || c->slots>A733_CAMERA_DMA_SLOTS ||
+       (c->slots && (c->slots<2 || !c->dma.sync_slot || (c->slot_bytes&4095) ||
+        c->slot_bytes<a733_camera_plane_bytes(&format) ||
+        c->slot_bytes>c->memory[1].bytes/c->slots || c->slot_bytes>c->memory[2].bytes/c->slots)) ||
        a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
        (c->context && a733_camera_overlap(s,sizeof(*s),c->context,1)) ||
        !callbacks(c) || !c->frame_id || !c->table_words || ((uintptr_t)c->table_words&16383) ||
@@ -156,7 +174,8 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         c->sensor.write_block?sensor_write_block:NULL};
     struct a733_route_ops r={clock_read,route_admit,route_publish,route_read,route_write,stopped,route_drain,route_release};
     struct a733_csi_ops v={clock_read,csi_admit,csi_read,csi_write,stopped,csi_drain,csi_release};
-    struct a733_camera_dma_ops d={clock_read,dma_admit,dma_read,dma_write,dma_start,stopped,dma_drained,dma_sync,dma_release};
+    struct a733_camera_dma_ops d={clock_read,dma_admit,dma_read,dma_write,dma_start,stopped,dma_drained,dma_sync,dma_release,
+        dma_stream_start,c->dma.sync_slot?dma_sync_slot:NULL};
     struct a733_route_config rc={c->memory[0].iova,c->memory[0].bytes,c->receiver.parser};
     struct a733_camera_dma_config dc={
         {c->memory[1].iova,c->memory[1].bytes},{c->memory[2].iova,c->memory[2].bytes},c->frame_id,0};
@@ -178,6 +197,29 @@ int a733_camera_capture_open(struct a733_camera_capture *s,uint64_t d){
 int a733_camera_capture_open_retained(struct a733_camera_capture *s,uint64_t d){
     if(a733_camera_capture_open(s,d)!=1)return -1;
     s->retained_readout=1;return 1;
+}
+int a733_camera_capture_open_stream(struct a733_camera_capture *s,uint64_t d){
+    if(!s || !s->initialized || !s->config.slots || a733_camera_capture_open(s,d)!=1)return -1;
+    s->streaming=1;return 1;
+}
+int a733_camera_capture_take(struct a733_camera_capture *s,unsigned *slot,uint32_t *sequence,
+                             const uint8_t **y,const uint8_t **uv){
+    if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_STREAMING || !y || !uv)return -1;
+    int r=a733_camera_dma_take(&s->dma,slot,sequence);
+    if(r==1){
+        *y=(const uint8_t *)s->config.memory[1].cpu+(size_t)*slot*s->config.slot_bytes;
+        *uv=(const uint8_t *)s->config.memory[2].cpu+(size_t)*slot*s->config.slot_bytes;
+    }
+    return r;
+}
+int a733_camera_capture_give(struct a733_camera_capture *s,unsigned slot){
+    if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_STREAMING)return -1;
+    return a733_camera_dma_give(&s->dma,slot);
+}
+int a733_camera_capture_stop(struct a733_camera_capture *s,uint64_t d){
+    if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_STREAMING ||
+       !d || d<=s->now || a733_camera_dma_stop_stream(&s->dma,d)!=1)return -1;
+    s->deadline=d;s->started=0;s->state=A733_CAPTURE_SENSOR_STOP;return 1;
 }
 int a733_camera_capture_rearm(struct a733_camera_capture *s,uint64_t d){
     if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_READABLE ||
@@ -217,10 +259,12 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         r=s->config.ops.handoff(s->config.context,s->token,A733_CAPTURE_LOCAL,s,s->deadline);
         if(r==1){s->local_granted=1;next(s,A733_CAPTURE_RECEIVER_OPEN);}break;
     case A733_CAPTURE_RECEIVER_OPEN:
-        RUN(a733_csi_open_image(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_PACKET_HANDOFF);break;
+        RUN(s->streaming?a733_csi_open(&s->receiver,s->deadline):a733_csi_open_image(&s->receiver,s->deadline),
+            a733_csi_poll(&s->receiver),A733_CAPTURE_PACKET_HANDOFF);break;
     case A733_CAPTURE_PACKET_HANDOFF:
         if(!s->started){
-            if(a733_camera_dma_capture(&s->dma,s->deadline)!=1){r=-1;break;}s->started=1;
+            if((s->streaming?a733_camera_dma_stream(&s->dma,s->config.slots,s->config.slot_bytes,s->deadline):
+                a733_camera_dma_capture(&s->dma,s->deadline))!=1){r=-1;break;}s->started=1;
         }
         r=s->config.ops.handoff(s->config.context,s->token,A733_CAPTURE_PACKETS,s,s->deadline);
         if(r==1){s->packets_granted=1;next(s,A733_CAPTURE_SENSOR_START);}break;
@@ -228,7 +272,13 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         RUN(ov5640_start(&s->sensor,s->receiver.token,s->deadline),ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
     case A733_CAPTURE_DMA_RUN:
         r=a733_camera_dma_poll(&s->dma);
-        if(s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_FRAME_STATUS);break;
+        if(!s->streaming && s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_FRAME_STATUS);
+        if(s->streaming && s->dma.state==A733_CAM_DMA_STREAMING){r=1;next(s,A733_CAPTURE_STREAMING);}
+        break;
+    case A733_CAPTURE_STREAMING:
+        r=a733_camera_dma_poll(&s->dma);
+        if(r==1 && s->dma.state!=A733_CAM_DMA_STREAMING)r=-1;
+        break;
     /* Record receiver status as the captured frame left it, before the
      * sensor stop can add anything. Nothing is acknowledged; the sample
      * after the stop still decides whether the capture faults. */
@@ -244,8 +294,11 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         r=s->config.ops.packets_quiet(s->config.context,s->token,s->deadline);
         if(r==1){s->quiet=1;next(s,A733_CAPTURE_SAMPLE);}break;
     case A733_CAPTURE_SAMPLE:
-        RUN(a733_csi_sample(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_FENCE);
+        RUN(a733_csi_sample(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),
+            s->streaming?A733_CAPTURE_VIDEO_STOP:A733_CAPTURE_FENCE);
         if(r==1){s->sampled=1;s->quiet_from=s->receiver.now;}break;
+    case A733_CAPTURE_VIDEO_STOP:
+        RUN(a733_csi_stop_video(&s->receiver,s->deadline),a733_csi_poll(&s->receiver),A733_CAPTURE_FENCE);break;
     /* The sensor stays stopped from here until the next packet handoff. */
     case A733_CAPTURE_REARM_QUIET:
     case A733_CAPTURE_REARM_WAIT:
@@ -297,6 +350,7 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
 out:
     s->entered=0;
     return s->state==A733_CAPTURE_FAULT?-1:
-        (s->state==A733_CAPTURE_READY || s->state==A733_CAPTURE_READABLE)?1:0;
+        (s->state==A733_CAPTURE_READY || s->state==A733_CAPTURE_READABLE ||
+         s->state==A733_CAPTURE_STREAMING)?1:0;
 }
 #undef RUN

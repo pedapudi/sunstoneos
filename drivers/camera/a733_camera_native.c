@@ -439,7 +439,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
-        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain}};
+        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,NULL}};
     if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1 ||
        (n->boot.pwdn_only && ov5640_pwdn_only(&n->capture.sensor)!=1))return fail(n);
     return 1;

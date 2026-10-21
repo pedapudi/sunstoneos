@@ -15,7 +15,7 @@ enum a733_csi_state {
     A733_CSI_NEW, A733_CSI_ADMIT, A733_CSI_PRECHECK, A733_CSI_CONFIGURE,
     A733_CSI_ARMED, A733_CSI_SAMPLE, A733_CSI_PRODUCER_STOP,
     A733_CSI_DISABLE, A733_CSI_DRAIN, A733_CSI_RELEASE,
-    A733_CSI_CLOSED, A733_CSI_FAULT, A733_CSI_REARM
+    A733_CSI_CLOSED, A733_CSI_FAULT, A733_CSI_REARM, A733_CSI_VIDEO_STOP
 };
 struct a733_csi_config {
     /* CAM1=port/parser 0, CAM2=1. Native routing must verify this mapping.
@@ -92,6 +92,10 @@ int a733_csi_rearm_image(struct a733_csi_receiver *, uint64_t deadline);
  * A frame-end flag alone does not count or complete a DMA frame.
  */
 int a733_csi_sample(struct a733_csi_receiver *, uint64_t deadline);
+/* Video capture end, as the source's capture stop: from ARMED in video mode
+ * with the producer stopped, clear every channel's capture field with read,
+ * write and verification polls. The receiver stays ARMED with capture off. */
+int a733_csi_stop_video(struct a733_csi_receiver *, uint64_t deadline);
 int a733_csi_close(struct a733_csi_receiver *, uint64_t deadline);
 /* At most one read/write/platform callback per poll plus pre/post time checks.
  * Every configuration RMW uses read, write and verification polls.
