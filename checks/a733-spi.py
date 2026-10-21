@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One focused SPI source, host-transfer/native-admission, and object batch."""
+"""One focused SPI source, host-transfer and object batch."""
 import argparse
 import hashlib
 import json
@@ -17,18 +17,16 @@ def digest(p):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--steps', nargs='+', choices=['reference','host','native','compile'],
-                        default=['reference','host','native','compile'])
-    parser.add_argument('--compile-units', nargs='+', choices=['a733_spi','a733_spi_native'],
-                        default=['a733_spi','a733_spi_native'])
+    parser.add_argument('--steps', nargs='+', choices=['reference','host','compile'],
+                        default=['reference','host','compile'])
+    parser.add_argument('--compile-units', nargs='+', choices=['a733_spi'], default=['a733_spi'])
     parser.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    inputs = [root/p for p in ['include/a733_spi.h', 'include/a733_spi_native.h',
-        'drivers/spi/a733_spi.c', 'drivers/spi/a733_spi_native.c',
-        'checks/a733-spi.c', 'checks/a733-spi-native.c', 'checks/a733-spi.py']]
+    inputs = [root/p for p in ['include/a733_spi.h', 'drivers/spi/a733_spi.c',
+        'checks/a733-spi.c', 'checks/a733-spi.py']]
     refs = [args.sources/p for p in ['spi/ng/spi-sunxi.h', 'spi/ng/spi-sunxi.c',
         'board-kernel/ccu-sun60iw2.c', 'board-kernel/ccu-sun60iw2-r.c',
         'board-kernel/sun60iw2p1.dtsi', 'board-kernel/sun60i-a733-orangepi-zero3w.dts',
@@ -40,7 +38,7 @@ def main():
         snapshots.append(dict(path=str(p),archive=target.name,sha256=digest(target)))
     (out/'inputs.json').write_text(json.dumps(snapshots,indent=2)+'\n')
     if 'reference' in args.steps:
-        runtime=inputs[2].read_text();reference=refs[0].read_text()
+        runtime=inputs[1].read_text();reference=refs[0].read_text()
         offsets={'GCR':'GC','TCR':'TC','IER':'INT_CTL','ISR':'INT_STA','FCR':'FIFO_CTL',
                  'FSR':'FIFO_STA','WCR':'WAIT_CNT','MBC':'MBC','MTC':'MTC','BCC':'BCC',
                  'TXD':'TXDATA','RXD':'RXDATA','BSR':'BUF_STA'}
@@ -80,25 +78,15 @@ def main():
     run('toolchain',[clang,'--version'])
     flags=[clang,'-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize=address,undefined','-I'+str(root/'include')]
     if 'host' in args.steps:
-        run('host-build',flags+[str(inputs[2]),str(inputs[4]),'-o',str(out/'host')])
+        run('host-build',flags+[str(inputs[1]),str(inputs[2]),'-o',str(out/'host')])
         run('host',[str(out/'host')])
-    if 'native' in args.steps:
-        original=inputs[3].read_text()
-        assembly='__asm__ volatile("dsb sy" ::: "memory")'
-        assert original.count(assembly)==4 and original.count('__asm__')==4
-        transformed=original.replace(assembly,'__asm__ volatile("" ::: "memory")')
-        (out/'native-host.c').write_text(transformed)
-        run('native-host-build',flags+[str(inputs[2]),str(out/'native-host.c'),str(inputs[5]),'-o',str(out/'native-host')])
-        run('native-host',[str(out/'native-host')])
     if 'compile' in args.steps:
         for name in args.compile_units:
             run(name+'-compile',[clang,'--target=aarch64-none-elf','-mcpu=cortex-a55','-ffreestanding',
                 '-std=c11','-Wall','-Wextra','-Werror','-O2','-fstack-usage','-I'+str(root/'include'),
                 '-c',str(root/'drivers/spi'/(name+'.c')),'-o',str(out/(name+'.o'))])
-    results=dict(result='pass',steps=args.steps,compile_units=args.compile_units if 'compile' in args.steps else [],scope='source comparison, host wire/FIFO/fault model, native C admission guards, AArch64 objects',
-        physical=False,barrier_execution=False,native_host_transform='Only four dsb sy statements become compiler memory barriers.',
-        native_original_sha256=digest(inputs[3]),native_host_sha256=digest(out/'native-host.c') if (out/'native-host.c').exists() else None,
-        artifacts={p.name:digest(p) for p in out.iterdir() if p.is_file() and not p.name.startswith('input-')})
+    results=dict(result='pass',steps=args.steps,compile_units=args.compile_units if 'compile' in args.steps else [],scope='source comparison, host wire/FIFO/fault model, AArch64 objects',
+        physical=False,artifacts={p.name:digest(p) for p in out.iterdir() if p.is_file() and not p.name.startswith('input-')})
     (out/'results.json').write_text(json.dumps(results,indent=2)+'\n')
     print(json.dumps(dict(result='pass',evidence=str(out))))
 

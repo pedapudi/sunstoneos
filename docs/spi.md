@@ -41,12 +41,14 @@ approximately 24193.548 Hz. A maximum of 24000 Hz is refused because the next
 available divisor would produce 23437.5 Hz, below the documented operating range.
 Old normal sampling is used throughout this range.
 
-The [native binding](../include/a733_spi_native.h) requires an authenticated,
-privileged platform reservation. It compares every requested format and clock
-field with that reservation, then reads the actual clock, reset and GIC state.
-The interrupt must be masked and inactive. The reservation must also cover the
-parent source, selected pins, rail, recovery and exclusion of remote users.
-A production reservation provider remains to be implemented.
+The [platform binding](spi-platform.md) supplies the core's admission callback.
+Under the common register mutex, that callback compares every requested format
+field and the clock plan with the platform configuration, then reads the actual
+oscillator, reference, clock, reset and GIC state. The interrupt must be masked
+and inactive. The platform also owns the pins and clock lease, and its native
+adapter checks the FreeRTOS owner task and register-mutex ownership on every
+access. A privileged boot handoff must establish recovery, electrical safety and
+exclusion of remote users.
 
 The caller programs the clock under the common register mutex before beginning.
 The driver soft-resets only an exclusively owned, disabled, idle controller.
@@ -60,8 +62,10 @@ must establish the peripheral's inactive CS level before controller ownership.
 A transaction borrows disjoint TX and RX buffers until explicit completion
 reaping. Command-response transfers hold CS across both parts. Software controls
 CS and observes minimum setup and hold times. Each poll moves at most 64 received
-bytes and 64 transmitted bytes; smaller budgets are accepted. FIFO starvation
-can stretch the clock.
+bytes and 64 transmitted bytes; smaller budgets are accepted. The FIFO status
+read bounds each receive and transmit batch, and the deadline is checked before
+and after each batch rather than around every byte. FIFO starvation can stretch
+the clock.
 
 The receive count includes both FIFO and internal buffer contents. The manual
 permits 192 bytes; Linux's 128-byte receive size controls its software thresholds
@@ -91,19 +95,13 @@ Evidence is stored under `~/.cache/sunstoneos/evidence/spi-20261016/`:
 - `batch1` preserves the passing register-offset comparison and sanitized host model.
   Cases cover wire data, repeated transfers, CS timing, full receive capacity,
   combined completion/error status, uncertain accesses and retained ownership.
-- `native-correction` preserves passing native authorization, CCU/GIC admission
-  and access-allowlist checks, plus both AArch64 objects. The initial native
-  harness had an unsigned-loop overflow; only the corrected check and previously
-  unrun compilation were executed afterward.
 - `ccu-base-correction` verifies absolute clock/reset addresses against the
-  device tree, native admission at those addresses and the corrected AArch64
-  core object. The main CCU base is `0x02002000`. Wire-transfer evidence and
-  the unchanged native access object are reused.
+  device tree and the corrected AArch64 core object. The main CCU base is
+  `0x02002000`.
 
-The native C check uses anonymous host mappings and replaces four `dsb sy`
-statements with compiler memory barriers. Its archive records both source
-identities. It establishes C admission behavior, without executing physical
-MMIO or validating Arm barrier effects. The original sources compile for AArch64.
+The `native-correction` and `ccu-base-correction` directories also archive a
+standalone native binding that no image linked. That binding has been removed;
+the [platform binding](spi-platform.md) and its evidence replace it.
 
 ## Remaining required support
 

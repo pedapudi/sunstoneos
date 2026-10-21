@@ -13,7 +13,7 @@ static int pcie_pins_init(struct a733_pins *,const struct a733_pins_operations *
 static struct pmic_model model;
 static struct a733_pcie port;
 static struct { uintptr_t address; unsigned width; uint32_t value; } trace[2048];
-static unsigned trace_count,reg_retained,stall_phy,stall_atu,bad_caps,late_fault,raise_before_adopt;
+static unsigned trace_count,reg_retained,stall_phy,stall_atu,bad_caps,late_fault,raise_before_adopt,not_ready,phy_polls;
 static uint64_t phy_done,reset_rise;
 static int pcie_gpu_read(void *v,uintptr_t a,uint32_t *out)
 {struct pmic_model *m=v;*out=*pmic_model_word(m,a);return 1;}
@@ -71,6 +71,11 @@ static int pcie_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
     *out=word>>((a&3)*8);
     if(width==1)*out&=255;if(width==2)*out&=65535;
     if(a==0x20000070&&bad_caps)*out=0x00707010;
+    /* PCIe Base 6.6.1: configuration requests wait 100 ms after PERST release. */
+    if(a==0x20000000) {
+        assert(reset_rise&&m->now-reset_rise>=100000);
+        if(not_ready){*out=UINT32_MAX;if(not_ready!=UINT32_MAX)--not_ready;}
+    }
     if(late_fault&&a==0x02003b28&&port.endpoint.vendor) {
         atomic_store_explicit(&m->clocks.failed,1,memory_order_release);late_fault=0;
     }
@@ -97,7 +102,7 @@ static int pcie_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 }
 static void setup(void)
 {
-    memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=0;
+    memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=not_ready=phy_polls=0;
     phy_done=reset_rise=0;pmic_model_setup(&model);
     model.pmic[0x20]=0x40;model.pmic[0x2a]=13;
     *pmic_model_word(&model,0x02002000)=0xf8636300;
@@ -131,13 +136,14 @@ static void setup(void)
 }
 static enum a733_pcie_result step(void)
 {
+    if(port.phase==9)++phy_polls; /* PHY */
     enum a733_pcie_result r=a733_pcie_poll(&port);
     if(r!=A733_PCIE_RETAINED)assert(pmic_model_step(&model)!=A733_PMIC_RETAINED);
     model.now+=100;return r;
 }
 static enum a733_pcie_result complete(void)
 {
-    for(unsigned i=0;i<10000;++i) {
+    for(unsigned i=0;i<40000;++i) {
         enum a733_pcie_result r=step();
         if(r==A733_PCIE_RETAINED)fprintf(stderr,"retained phase=%u value=%08x now=%llu writes=%u pins=%llu\n",
             port.phase,port.last_value,(unsigned long long)model.now,trace_count,(unsigned long long)port.pin.id);
@@ -167,7 +173,7 @@ static void scopes(void)
     assert(a733_clock_leases_init(&m,pmic_model_now,&model));
     assert(a733_clock_acquire(&m,1,A733_CLOCK_PCIE0,0,10000000,&a)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&m,1,A733_CLOCK_COMB1,0,10000000,&a)==A733_CLOCK_INVALID);
-    assert(a733_clock_acquire(&m,1,0,A733_CLOCK_BIT(67),10000000,&a)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&m,1,0,A733_CLOCK_ALL+1,10000000,&a)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&m,1,A733_CLOCK_SERDES_COMMON|A733_CLOCK_USB_PCIE_DOMAIN,
         A733_CLOCK_PCIE0|A733_CLOCK_COMB1|A733_CLOCK_SDC3,10000000,&a)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&m,2,A733_CLOCK_SERDES_COMMON|A733_CLOCK_USB_PCIE_DOMAIN,0,10000000,&b)==A733_CLOCK_OK);
@@ -198,6 +204,7 @@ int main(int argc,char **argv)
     setup();assert(complete()==A733_PCIE_READY);
     assert(port.supplies[1].rail==A733_RAIL_BLDO1&&port.supplies[1].programmed_uv==1800000);
     assert(port.supplies[0].programmed_uv==800000&&reset_rise-phy_done>=100000);
+    assert(phy_polls<=3);
     if(argc==2&&!strcmp(argv[1],"--trace")) {
         for(unsigned i=0;i<trace_count;++i)if(a733_pcie_phy_address(trace[i].address,trace[i].width,1)||
             (trace[i].address>=0x06300000&&trace[i].address<=0x06300018))
@@ -212,6 +219,16 @@ int main(int argc,char **argv)
     assert(!a733_pcie_native_address(0x20000000,4,1)&&!a733_pcie_native_address(0x020033c4,4,1)&&
         !a733_pcie_native_address(0x07067000,4,1)&&!a733_pcie_native_address(0x06300104,4,1));
     decode();scopes();pin_conditions();
+    /* Not-ready endpoints inside the 1 s window after PERST release. */
+    setup();not_ready=50;assert(complete()==A733_PCIE_READY&&!not_ready&&port.endpoint.vendor==0x1234);
+    setup();port.config.deadline=3000000;not_ready=UINT32_MAX;retained();
+    assert(port.last_now-port.perst_since>=1000000&&port.last_now<3000000);
+    setup();*pmic_model_word(&model,0x20000000)=0x56780001;retained();
+    /* A valid 26 MHz SYS24M pair is still refused: the PHY table is 24 MHz only.
+     * APBS1 moves to SYS24M so the PMIC TWI divider stays in range. */
+    setup();*pmic_model_word(&model,0x07090160)=0x983fb0f7;*pmic_model_word(&model,0x02002000)=0xf8675f00;
+    *pmic_model_word(&model,0x07010010)=0x04000000;
+    retained();assert(!phy_done&&!trace_count);
     setup();model.pmic[0x20]=0;retained();assert(!phy_done&&!port.pin.id);
     setup();*pmic_model_word(&model,0x02000210)=1u<<22;retained();assert(!phy_done&&!port.pin.id);
     setup();raise_before_adopt=1;retained();
@@ -222,6 +239,6 @@ int main(int argc,char **argv)
     setup();bad_caps=1;retained();
     setup();stall_atu=1;retained();
     setup();late_fault=1;retained();assert(!late_fault);
-    puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/config and retained failures");
+    puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/readiness/config and retained failures");
     return 0;
 }

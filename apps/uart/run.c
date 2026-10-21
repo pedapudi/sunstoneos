@@ -96,7 +96,9 @@ int uart_step(void)
  default:return failure();
  }
 }
+/* The ISR notification wakes service early; the one-tick timeout still paces
+ * startup, IRQ synchronization and close stages. */
 void uart_task(void *context)
-{(void)context;for(;;){uart_step();vTaskDelay(1);}}
+{(void)context;for(;;){uart_step();(void)ulTaskNotifyTake(pdTRUE,1);}}
 
 #endif

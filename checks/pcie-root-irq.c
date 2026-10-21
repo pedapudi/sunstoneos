@@ -40,6 +40,8 @@ int main(void)
  enable_result=0;assert(pcie_test_irq_arm()==0);assert(pcie_test_irq_event(&count)==0);
  enable_result=1;assert(pcie_test_irq_arm()==1);
  pcie_test_application_irq();assert(masks==1);assert(pcie_test_irq_event(&count)==1&&count==1);
+ /* Level re-delivery before the disable propagates is re-masked, not counted. */
+ pcie_test_application_irq();assert(masks==2);assert(pcie_test_irq_event(&count)==1&&count==1);
  assert(pcie_test_irq_arm()==-1);assert(pcie_test_irq_stop());assert(pcie_test_irq_arm()==-1);
  assert(pcie_test_irq_event(&count)==1&&count==1);
  pcie_test_application_irq();assert(pcie_test_irq_event(&count)==-1&&count==2);
@@ -51,5 +53,7 @@ int main(void)
  fresh();enable_result=-1;assert(pcie_test_irq_arm()==-1);assert(pcie_test_irq_event(&count)==-1);
  fresh();assert(pcie_test_irq_arm()==1);mask_result=0;pcie_test_application_irq();
  assert(pcie_test_irq_event(&count)==-1&&count==1);assert(!pcie_test_irq_stop());
- puts("PASS pending arm, one event, owner refusal, permanent stop, unexpected/duplicate IRQ and mask/enable faults");
+ fresh();assert(pcie_test_irq_arm()==1);pcie_test_application_irq();mask_result=0;pcie_test_application_irq();
+ assert(pcie_test_irq_event(&count)==-1&&count==2);
+ puts("PASS pending arm, one event, owner refusal, permanent stop, benign level re-delivery, unexpected IRQ and mask/enable faults");
 }

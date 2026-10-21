@@ -38,6 +38,12 @@ a permanent mask after the first event and publishes metadata. The owner polls
 that event, reads and acknowledges the exact controller MSI status under its
 normal mutex, and checks the endpoint result. There is no successful rearm.
 A GIC disable command does not prove propagation, endpoint shutdown or DMA drain.
+The ISR does not wait for the disable to propagate before end of interrupt, so
+the still-asserted level can be delivered again after the first event. That
+repeat delivery re-issues the mask and is neither counted nor treated as a
+fault. A GIC delivery cannot distinguish it from a second MSI; the owner detects
+a duplicate MSI from the controller MSI status instead. A delivery before the
+route is armed, a delivery after stop, or a failed mask still faults.
 
 ## Completion preserves all memory and resource ownership
 
@@ -70,7 +76,7 @@ visibility before status/MSI, for the actual endpoint implementation. Neither
 COMMAND clear, a delay, MSI alone nor link-down establishes these conditions.
 Those endpoint-specific proofs are unavailable without an identified endpoint.
 
-Timeout, missing/duplicate MSI, bad status, damaged guards, link/resource failure
+Timeout, a missing MSI, a duplicate MSI in the controller status, bad status, damaged guards, link/resource failure
 or uncertainty closes output admission. Every page, translation window, pin,
 PCK, rail and clock lease remains owned until reviewed whole-board and endpoint
 recovery. Successful copy also retains allocations permanently. The owner keeps

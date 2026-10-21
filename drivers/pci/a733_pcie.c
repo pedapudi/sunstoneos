@@ -1,4 +1,5 @@
 #include "a733_pcie.h"
+#include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define DBI UINT32_C(0x06000000)
 #define APP UINT32_C(0x06400000)
@@ -146,11 +147,12 @@ static int lock(struct a733_pcie *p)
 static int parent_profile(struct a733_pcie *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
-    if(!rd(p,0x07090160,&osc)||(osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
-        (((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||!rd(p,CCU,&ref)||
-        (ref&0xf8000000u)!=0xf8000000u)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if(n<80||n>116||n!=m)return 0;
+    /* Fabric and AUX parents use the normalized SYS_CLK24M reference output.
+     * The COMB1 PHY also takes raw DCXO through DCXO_SERDES1, and its fixed
+     * table is qualified only at 24 MHz. */
+    if(!rd(p,0x07090160,&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref)||
+        a733_clock_dcxo_hz(osc)!=24000000)return 0;
+    unsigned n;
     for(unsigned i=0;i<3;++i)
         if(!check(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
     if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
@@ -231,10 +233,21 @@ static int root_setup(struct a733_pcie *p)
         if(!wr(p,DBI+0x828+12*i,0)||!wr(p,DBI+0x82c+12*i,UINT32_MAX))return 0;
     return 1;
 }
+/* PCIe Base 6.6.1 allows an endpoint up to 1 s after PERST release to answer
+ * configuration requests. Inside that window, vendor ID FFFFh (no successful
+ * completion) or 0001h (CRS with software visibility) means not ready yet. */
+static int ready(struct a733_pcie *p)
+{
+    uint32_t v;
+    if(!rd(p,CFG,&v))return -1;
+    v&=65535;
+    if(v==65535||v==1)return p->last_now-p->perst_since<1000000?0:-1;
+    return v?1:-1;
+}
 static int endpoint(struct a733_pcie *p)
 {
     uint32_t v;
-    if(!rd(p,CFG,&v)||(v&65535)==65535||!(v&65535))return 0;
+    if(!rd(p,CFG,&v)||(v&65535)==65535||(v&65535)==1||!(v&65535))return 0;
     p->endpoint.vendor=(uint16_t)v;p->endpoint.device=(uint16_t)(v>>16);
     if(!a733_pcie_read(p,CFG+4,2,&v)||(v&4))return 0;p->endpoint.command=(uint16_t)v;
     if(!rd(p,CFG+8,&p->endpoint.class_revision)||!a733_pcie_read(p,CFG+14,1,&v)||(v&0x7f))return 0;
@@ -311,7 +324,8 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
     } else if(p->phase==RESET_RELEASE) {
         enum a733_pins_result r=a733_pins_write_outputs(p->pins,&p->pin,A733_PIN_D,BIT(22),BIT(22),p->deadline);
         if(r==A733_PINS_BUSY)return finish(p,A733_PCIE_PENDING);
-        if(r!=A733_PINS_OK||!timely(p))return finish(p,fault(p));++p->phase;
+        if(r!=A733_PINS_OK||!timely(p))return finish(p,fault(p));
+        p->perst_since=p->last_now;++p->phase; /* Taken after the release write. */
     } else {
         int l=lock(p);if(l<0)return finish(p,fault(p));if(!l)return finish(p,A733_PCIE_PENDING);
         int ok=1;
@@ -341,10 +355,15 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
             else if((p->last_value&3)==3){ok=atu_start(p,0);if(ok)++p->phase;}
             break;
         case IDENTIFY:
+            /* No configuration request until 100 ms after PERST release. */
+            if(p->last_now-p->perst_since<100000)break;
             if(!rd(p,ATU+4,&p->last_value))ok=0;
             else if(p->last_value&BIT(31)) {
-                ok=link(p)&&endpoint(p)&&parent_profile(p)&&masked(p)&&link(p)&&check(p,CFG+4,4,0);
-                if(ok)++p->phase;
+                int r=link(p)?ready(p):-1;ok=r>=0;
+                if(r>0) {
+                    ok=endpoint(p)&&parent_profile(p)&&masked(p)&&link(p)&&check(p,CFG+4,4,0);
+                    if(ok)++p->phase;
+                }
             }
             break;
         case READY:ok=parent_profile(p)&&masked(p)&&link(p)&&check(p,CFG+4,4,0);break;
