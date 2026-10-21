@@ -74,27 +74,29 @@ static void irq_cases(void)
     puts("PASS interrupt table: thermal INTID 71 on CPU0; 994 other INTIDs and 7 other cores refused; route programmed");
 }
 
-/* One supervision run in 1 ms steps. Every service reports at its own period
- * until stall_at, when service `stalled` stops. Returns the expiry time of the
+/* One supervision run in 1 ms steps. The supervisor runs every 20 ms from
+ * time 0, as at scheduler start. Every service first reports at 0.3 s, except
+ * service `late`, which first reports at late_at, and then at its own period
+ * until stall_at, when service `stalled` stops. Records the expiry time of the
  * modeled watchdog (0 if it never expired before `end`). */
-struct run { uint64_t expired,refused,reloads,max_gap; };
-static struct run supervise(int stalled,uint64_t stall_at,uint64_t end,int never)
+struct run { uint64_t expired,refused,reloads,max_gap,first_reload; };
+static struct run supervise(int stalled,uint64_t stall_at,uint64_t end,int never,int late,uint64_t late_at)
 {
     static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
-    struct run r={0,0,0,0};
+    struct run r={0,0,0,0,0};
     uint64_t start=HZ*3/10,previous=0;int parked=0;
     ticks=0;expires=4*HZ;reloads=0;last_reload=0;
     for(uint64_t ms=0;ticks<end;++ms){
         ticks=ms*(HZ/1000);
         if(ticks>=expires){r.expired=ticks;break;}
-        if(ticks<start)continue;
         for(int s=0;s<OS_SERVICES;++s){
-            if(s==stalled&&(never||ticks>=stall_at))continue;
+            if(ticks<(s==late?late_at:start)||(s==stalled&&(never||ticks>=stall_at)))continue;
             if(ms%period_ms[s]==0)board_service_progress((unsigned)s);
         }
         if(!parked&&ms%20==0){
-            if(board_resident_renew(&ticks)!=1){parked=1;r.refused=ticks;}
+            if(board_resident_renew(&ticks,4*HZ)!=1){parked=1;r.refused=ticks;}
             if(last_reload!=previous){
+                if(!previous)r.first_reload=last_reload;
                 if(previous&&last_reload-previous>r.max_gap)r.max_gap=last_reload-previous;
                 previous=last_reload;
             }
@@ -104,21 +106,33 @@ static struct run supervise(int stalled,uint64_t stall_at,uint64_t end,int never
 }
 static void supervision_cases(void)
 {
+    enum { USB0=1 };
+    assert(!strcmp(os_services[USB0].name,"board-usb0"));
     /* Healthy for 120 modeled seconds: renewal every second, no expiry. */
     pid_t child=fork();
     if(!child){
-        struct run r=supervise(-1,0,120*HZ,0);
+        struct run r=supervise(-1,0,120*HZ,0,-1,0);
         assert(!r.expired&&!r.refused&&r.reloads>=115&&r.max_gap<=OS_RENEW_US*24+HZ/50);
         _exit(0);
     }
     int status;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
+    /* USB0 first reports at 1.5 s, after the supervisor has run for 1.5 s and
+     * the other services for 1.2 s: no close, the first renewal follows the
+     * first full set of reports, and renewal continues. */
+    child=fork();
+    if(!child){
+        struct run r=supervise(-1,0,30*HZ,0,USB0,HZ*3/2);
+        assert(!r.expired&&!r.refused&&r.first_reload>=HZ*3/2&&r.first_reload<=HZ*3/2+HZ/50&&r.reloads>=28);
+        _exit(0);
+    }
+    assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
     /* Each service stalling after 70 s stops renewal within its window and
      * lets the watchdog expire within four seconds of the last renewal. */
     for(int s=0;s<OS_SERVICES;++s){
         child=fork();
         if(!child){
             uint64_t at=70*HZ;
-            struct run r=supervise(s,at,90*HZ,0);
+            struct run r=supervise(s,at,90*HZ,0,-1,0);
             static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
             uint64_t window=(uint64_t)os_services[s].window_us*24,period=period_ms[s]*(HZ/1000);
             /* The last report came at most one period before the stall. */
@@ -131,20 +145,34 @@ static void supervision_cases(void)
         printf("stalled %s: renewal stopped within its %u ms window, watchdog expired\n",
             os_services[s].name,(unsigned)(os_services[s].window_us/1000));
     }
-    /* A service that never reports permits no renewal: the first window expires. */
+    /* A service that never reports permits no renewal and no early close: the
+     * loader's first expiry resets the board at four seconds. */
+    for(int s=0;s<OS_SERVICES;++s){
+        child=fork();
+        if(!child){struct run r=supervise(s,0,10*HZ,1,-1,0);
+            assert(!r.reloads&&!r.refused&&r.expired==4*HZ);
+            /* Were the watchdog not to reset, the first pass at the expiry closes. */
+            expires=UINT64_MAX;ticks=4*HZ-1;assert(board_resident_renew(&ticks,4*HZ)==1);
+            ticks=4*HZ;assert(!board_resident_renew(&ticks,4*HZ)&&!reloads);
+            _exit(0);}
+        assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
+    }
+    /* A reported service that stalls before another first reports closes at
+     * once: thermal reports from 0.3 s and stops at 0.5 s, USB0 never reports. */
     child=fork();
-    if(!child){struct run r=supervise(OS_SERVICE_THERMAL,0,10*HZ,1);
-        assert(!r.reloads&&r.expired==4*HZ);_exit(0);}
+    if(!child){struct run r=supervise(OS_SERVICE_THERMAL,HZ/2,10*HZ,0,USB0,UINT64_MAX);
+        assert(!r.reloads&&r.refused>HZ/2-HZ/40+HZ&&r.refused<=HZ/2+HZ+HZ/50&&r.expired==4*HZ);_exit(0);}
     assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
     /* A refused reload ends supervision. */
     child=fork();
-    if(!child){reload_fails=1;struct run r=supervise(-1,0,10*HZ,0);
+    if(!child){reload_fails=1;struct run r=supervise(-1,0,10*HZ,0,-1,0);
         assert(!r.reloads&&r.refused&&r.expired==4*HZ);_exit(0);}
     assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
     /* Resident board_live: deadline_us = UINT64_MAX/24 exceeds every counter/24. */
     const uint64_t deadline_us=UINT64_MAX/24;
     assert(61*HZ/24<deadline_us&&(UINT64_MAX-1)/24<deadline_us+1&&deadline_us-10000<deadline_us);
-    puts("PASS resident supervision: 120 s renewed; each of 7 stalled services ends renewal; missing service and refused reload expire");
+    puts("PASS resident supervision: 120 s renewed; late first report renews; each of 7 stalled services ends renewal; "
+        "each missing service expires at 4 s without an early close; stall before full startup closes; refused reload expires");
 }
 
 #define SESSION ((struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS)

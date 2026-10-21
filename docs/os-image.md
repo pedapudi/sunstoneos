@@ -71,11 +71,17 @@ each loop exists yet.
 
 The board's supervising task runs every 20 ms. While the board is live and
 every service has reported within its window, it renews WDT0 at most once per
-second (`apps/os/services.c`). A service that has not yet reported prevents
-any renewal. When a window expires, a renewal is refused, or the board stops
-being live, the task closes admission (`board_fail`), revokes the Type-C
-attachment and parks. The watchdog then resets the board within four seconds
-of the last renewal.
+second (`apps/os/services.c`). The supervising task starts with the scheduler,
+before the services have finished their own startup; USB0, for example,
+reports only after its supply rails are ready and TinyUSB has started. Until
+every service has made its first report, the task neither renews nor closes,
+and the loader's first expiry, four seconds after arming, bounds startup. The
+first renewal follows the first complete set of reports. If a service is
+still silent at that expiry and the watchdog has not reset the board, the
+task closes as below. When a reported service's window expires, a renewal
+is refused, or the board stops being live, the task closes admission
+(`board_fail`), revokes the Type-C attachment and parks. The watchdog then
+resets the board within four seconds of the last renewal.
 
 The renewal (`apps/os/watchdog.c`) takes the register mutex, checks that WDT0
 is in the four-second mode with reset output, and that the ROM redirect words
@@ -187,12 +193,19 @@ supervision and admission sources on the host, once for each lifetime:
 - every INTID from 32 to 1019 is delivered; only INTID 71 on CPU0 reaches the
   thermal handler, and route programming and an inherited-pending refusal are
   checked against a modeled distributor;
-- with every service reporting, the watchdog is renewed about once per second
-  for 120 modeled seconds and never expires;
+- the supervising task runs every 20 ms from time zero and the services first
+  report at 0.3 s; with every service reporting, the watchdog is renewed about
+  once per second for 120 modeled seconds and never expires;
+- when USB0 first reports at 1.5 s, nothing closes, the first renewal follows
+  within 20 ms of that report, and renewal continues;
 - each of the seven services stalling at 70 s stops renewal within its window,
   and the watchdog expires four seconds after the last renewal;
-- a service that never reports, or a refused renewal, leads to expiry at four
-  seconds;
+- for each of the seven services, never reporting leads to expiry at four
+  seconds with no earlier close, and the task closes at that expiry if the
+  watchdog has not reset the board;
+- a service that reports and then stalls before another service's first
+  report closes the task when its window expires;
+- a refused renewal leads to expiry at four seconds;
 - the nominal session and contract are admitted, with 26 resident and 24
   supervised refusals of single changed fields.
 

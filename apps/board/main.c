@@ -160,9 +160,12 @@ static void supervise(void *unused)
 {
     (void)unused;for(;;){
         /* The armed watchdog bounds every hang. A failure, an expired service
-         * window or a refused renewal closes admission and stops renewal; the
-         * watchdog then resets the board into a cold boot. */
-        if(!board_live(NULL)||board_resident_renew(board.handles[7])!=1){
+         * window, a service still silent at the loader's first expiry or a
+         * refused renewal closes admission and stops renewal; the watchdog
+         * then resets the board into a cold boot. session_start_ticks is the
+         * contract's armed_at, so the first expiry is four seconds later. */
+        if(!board_live(NULL)||board_resident_renew(board.handles[7],
+           board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
             board_fail(NULL);
             if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
             park();

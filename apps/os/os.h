@@ -40,7 +40,8 @@ extern const struct os_service os_services[OS_SERVICES];
 /* Interval between watchdog renewals while every service is in its window. */
 #define OS_RENEW_US 1000000u
 /* 1 when every service reported progress no more than its window before
- * now_us (counter microseconds); 0 otherwise, including before a first report. */
+ * now_us (counter microseconds); 0 when any record is older than its window;
+ * -1 when no record is stale but some service has not yet reported. */
 int os_services_healthy(uint64_t now_us);
 /* Resident WDT0 renewal from the supervising task (watchdog.c); 1 renewed. */
 int os_watchdog_reload(void *supervisor);

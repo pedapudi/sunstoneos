@@ -1,6 +1,7 @@
 /* Resident service supervision. Each listed service records the counter time
  * of its latest bounded loop iteration; the supervising task renews the armed
- * watchdog only while every record is within its service's window. A failed
+ * watchdog only while every record is within its service's window, and makes
+ * no renewal before every service has reported once. A failed
  * service parks or suspends without recording, so its window expires, renewal
  * stops and the watchdog resets the board within four seconds of the last
  * renewal. */
@@ -23,19 +24,26 @@ void board_service_progress(unsigned service)
 }
 int os_services_healthy(uint64_t now)
 {
+    int pending=0;
     for(unsigned i=0;i<OS_SERVICES;++i){
         uint64_t t=atomic_load_explicit(&seen[i],memory_order_acquire);
+        if(!t){pending=1;continue;}
         /* A record newer than now comes from another core's later read. */
-        if(!t||(t<now&&now-t>os_services[i].window_us))return 0;
+        if(t<now&&now-t>os_services[i].window_us)return 0;
     }
-    return 1;
+    return pending?-1:1;
 }
 /* Supervising task only. */
-int board_resident_renew(void *supervisor)
+int board_resident_renew(void *supervisor,uint64_t first_expiry)
 {
     static uint64_t renewed;
-    uint64_t now=a733_smp_counter()/24;
-    if(!os_services_healthy(now))return 0;
+    uint64_t ticks=a733_smp_counter(),now=ticks/24;
+    int healthy=os_services_healthy(now);
+    /* Services start after the supervisor's first pass. Until each has
+     * reported once, renewal waits and the loader's first expiry bounds
+     * startup. Records never return to zero, so this precedes any renewal. */
+    if(healthy<0)return ticks<first_expiry;
+    if(!healthy)return 0;
     if(renewed&&now-renewed<OS_RENEW_US)return 1;
     if(os_watchdog_reload(supervisor)!=1)return 0;
     renewed=now;return 1;
