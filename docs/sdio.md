@@ -132,7 +132,7 @@ requiring informational status bits to be zero.
 | --- | --- |
 | CMD52 | One function register byte; optional read-after-write for writes |
 | CMD53 byte mode | 4–512 bytes, in whole words; count zero encodes 512 bytes |
-| CMD53 block mode | 1–511 counted blocks, each 4–512 bytes in whole words; total at most 4,096 bytes |
+| CMD53 block mode | 1–511 counted blocks, each 4–512 bytes in whole words; at most 261,632 bytes |
 | Fixed address | Repeated FIFO access to the same card address |
 | Incrementing address | Reject transfers crossing the 17-bit card address space |
 

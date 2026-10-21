@@ -49,7 +49,8 @@ void sdio_card_poll(struct sdio_card *);
  * or change function enable/block-size registers. RAW readback only for writes.
  * CMD53 requires caller-verified function enable and block size; max_block_bytes
  * is a capability, not evidence that the card has been programmed to that size.
- * Whole-word transfers of 4..4096 bytes only. Byte mode <=512; block count 1..511.
+ * Whole-word transfers of 4..SUNXI_SDIO_MAX_BYTES only. Byte mode <=512; block
+ * count 1..511.
  * Buffers remain caller-owned until admitted by sunxi_sdio_submit.
  */
 int sdio_card_cmd52(const struct sdio_card *, unsigned function, uint32_t address,
