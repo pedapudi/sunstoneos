@@ -34,6 +34,8 @@ def main():
     assert request['received'] == 2064 and request['packets'] == 5 and request['ticks'] <= 2, request
     frame = cases['response-1160']
     assert frame['transferred'] == 1160 and frame['ticks'] == 1, frame  # previously 3 ticks
+    short = cases['response-256']
+    assert short['transferred'] == 256 and short['ticks'] == 1, short  # 2 ticks without armed-IN progress
     slow = cases['slow-host']
     assert slow['transferred'] == 4096 and slow['ticks'] <= 9, slow
     idle = cases['idle']

@@ -16,16 +16,18 @@
  *
  * The service burst repeats one pass of TinyUSB, controller polling and the
  * application exchange while a pass makes progress: a queued controller event,
- * or a changed vendor RX/TX FIFO level. After progress it keeps polling for one
- * high-speed microframe so the host can collect a written packet or send the
- * next one. A burst stops after 200 us of counter time or 64 passes and then
- * yields one tick, so same-core work keeps its share and an idle or abandoned
- * host costs one pass per tick. The response protocol and its incremental
- * write/transfer accounting stay in the application. */
+ * a changed vendor RX/TX FIFO level, or an IN transfer armed by the pass. After
+ * progress it keeps polling for one high-speed microframe so the host can
+ * collect a written packet or send the next one. A burst stops after 200 us of
+ * counter time or 64 passes and then yields one tick, so same-core work keeps
+ * its share and an idle or abandoned host costs one pass per tick. The
+ * response protocol and its incremental write/transfer accounting stay in the
+ * application. */
 #ifndef SUNSTONE_USB0_SERVICE_H
 #define SUNSTONE_USB0_SERVICE_H
 #include "tusb.h"
 #include "device/dcd.h"
+#include "device/usbd_pvt.h"
 #include <stdint.h>
 #include <string.h>
 #ifndef USB0_BCD
@@ -60,13 +62,17 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
     for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;
 }
 
-/* One pass reports progress when it consumed or produced controller events or
- * moved bytes through either vendor FIFO. */
+/* One pass reports progress when it consumed or produced controller events,
+ * moved bytes through either vendor FIFO or armed the IN endpoint. A write of
+ * one packet or less that the same pass flushes leaves the TX FIFO level
+ * unchanged, so the armed endpoint is what shows it. */
 static inline int usb0_service_progress(void (*pass)(void))
 {
     int pending=tud_task_event_ready();uint32_t rx=tud_vendor_available(),tx=tud_vendor_write_available();
+    bool armed=usbd_edpt_busy(0,0x81);
     pass();
-    return pending||tud_task_event_ready()||rx!=tud_vendor_available()||tx!=tud_vendor_write_available();
+    return pending||tud_task_event_ready()||rx!=tud_vendor_available()||tx!=tud_vendor_write_available()||
+           (!armed&&usbd_edpt_busy(0,0x81));
 }
 static inline void usb0_service_burst(void (*pass)(void))
 {

@@ -201,8 +201,12 @@ in the GPU display, HDMI audio, NPU large-graph and accelerator owners. Moving
 them to the shared header first requires adding the header to the build
 identity inputs of every image that compiles them.
 
-The shared loop uses the same burst rules as the diagnostics runtime and
-rechecks application liveness and provider health on every pass. The board image's failure path parks only
+The shared loop uses the same burst rules as the diagnostics runtime, with one
+more progress condition: a pass that arms the IN endpoint counts as progress.
+A response of 512 bytes or less that the same pass writes and flushes leaves
+the TX FIFO level unchanged, so without this condition its completion would
+wait for the next tick. The loop also rechecks application liveness and
+provider health on every pass. The board image's failure path parks only
 USB0. An image that reuses the board's USB0 source can add its own revocation
 by defining `BOARD_USB0_STOP()`; the mimus board image uses it to fail the
 board and revoke Type-C.
@@ -210,8 +214,9 @@ board and revoke Type-C.
 `checks/usb0-service-burst.py` runs the actual service loop against a modeled
 vendor stream, controller and host. With a 20 µs host turnaround it moves a
 64 KiB response in 13 ticks, a 1,160-byte board frame within one tick and a
-2,064-byte request within two ticks. A one-pass loop needs one tick per
-packet: 128 ticks for the 64 KiB response. The model also checks that idle
+2,064-byte request within two ticks. A 256-byte response completes within
+one tick; it takes two ticks if armed-endpoint progress is not counted. A
+one-pass loop needs one tick per packet: 128 ticks for the 64 KiB response. The model also checks that idle
 and abandoned hosts cost one pass per tick and that no burst exceeds its
 budget. `checks/usb0-service-descriptors.py` runs the descriptor callbacks of
 two linked images under Unicorn and compares their bytes; it confirms that

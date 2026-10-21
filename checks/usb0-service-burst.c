@@ -66,6 +66,7 @@ static void arm_in(void)
 uint32_t tud_vendor_n_write(uint8_t i, const void *p, uint32_t n)
 { (void)i; (void)p; if (n > FIFO - tx_fifo) n = FIFO - tx_fifo; tx_fifo += n; now_ns += 200; return n; }
 uint32_t tud_vendor_n_write_flush(uint8_t i) { (void)i; arm_in(); return 0; }
+bool usbd_edpt_busy(uint8_t rhport, uint8_t ep) { (void)rhport; return ep == 0x81 && tx_armed; }
 /* The polled controller notices a collected IN packet or a delivered OUT one. */
 void dcd_int_handler(uint8_t rhport)
 {
@@ -139,6 +140,9 @@ int main(void)
     run("response-64k", 65536, 0, 20000, 1, 1000);
     run("request-2064", 0, 2064, 20000, 1, 1000);
     run("response-1160", 1160, 0, 20000, 1, 1000);
+    /* A one-packet response is flushed in the pass that writes it, so only the
+     * armed IN endpoint shows that pass made progress. */
+    run("response-256", 256, 0, 20000, 1, 1000);
     /* A host slower than the post-progress window still advances one packet per tick. */
     run("slow-host", 4096, 0, 400000, 1, 1000);
     /* Idle and abandoned hosts cost one pass per tick. */
