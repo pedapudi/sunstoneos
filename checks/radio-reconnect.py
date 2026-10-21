@@ -39,7 +39,10 @@ set_property(TARGET radio-session-model PROPERTY LINK_OPTIONS "${{link_options}}
 target_link_options(radio-session-model PRIVATE "-Wl,--undefined=board_radio_reconnect")
 ''')
         toolchain=out/'toolchain.cmake'
-        toolchain.write_text('set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER /usr/bin/clang-21)\nset(CMAKE_ASM_COMPILER /usr/bin/clang-21)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path=/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21")\n')
+        # The repository toolchain also defines the path-map helpers its CMakeLists uses.
+        toolchain.write_text('set(CMAKE_C_COMPILER /usr/bin/clang-21)\nset(CMAKE_ASM_COMPILER /usr/bin/clang-21)\n'
+                             'set(SUNSTONE_LLD /home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21)\n'
+                             f'include("{ROOT}/cmake/aarch64-clang.cmake")\n')
         result={'accepted_lower_evidence':str(args.accepted.resolve()),'accepted_result_sha256':sha(args.accepted/'results.json'),'commands':[]}
         commands=[['cmake','-G','Unix Makefiles','-S',str(project),'-B',str(out/'build'),f'-DCMAKE_TOOLCHAIN_FILE={toolchain}','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',*options],
                   ['cmake','--build',str(out/'build'),'--target','radio-session-model','-j4']]
