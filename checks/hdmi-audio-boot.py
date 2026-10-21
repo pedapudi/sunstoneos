@@ -12,14 +12,14 @@ p.add_argument('--session',type=Path,required=True)
 p.add_argument('--contract',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--usb',action='store_true',help='Check only the copied-USB profile and its new interrupt guard')
-a=p.parse_args();P=a.image;O=a.output;O.mkdir(parents=True,exist_ok=False)
-session=a.session.read_bytes();contract=a.contract.read_bytes()
+args=p.parse_args();P=args.image;O=args.output;O.mkdir(parents=True,exist_ok=False)
+session=args.session.read_bytes();contract=args.contract.read_bytes()
 assert len(contract) in (224,4096) and not any(contract[224:])
 contract=contract[:224]
-expected=(2,816) if a.usb else (1,656)
+expected=(2,816) if args.usb else (1,656)
 assert len(contract)==224 and len(session)==expected[1] and struct.unpack_from('<3Q',session)==(0x4153373348444131,*expected)
 spec=importlib.util.spec_from_file_location('hdmi_audio_irq_image',R/'checks/storage-read-native.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n);e=n.Image(P,layout_names=('a733_smp_contract',))
-if a.usb:
+if args.usb:
  address=e.address('a733_hdmi_audio_geometry')
  geometry=next(data[address-base:address-base+96] for base,data in e.parts if base<=address and address+96<=base+len(data))
  assert struct.unpack('<12Q',geometry)==(2,816,440,216,0x41f10000,192000,48000,2,16,32,656,160)
@@ -39,7 +39,7 @@ for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','-
  if m:ops[int(m[1],16)]=(int(m[2]),m[3].lower())
 assert ops
 results={}
-cases=('usb-quiet-with-neighboring-interrupts','usb-enabled','usb-pending','usb-active') if a.usb else ('quiet-with-neighboring-interrupts','dma-enabled','dma-pending','dma-active')
+cases=('usb-quiet-with-neighboring-interrupts','usb-enabled','usb-pending','usb-active') if args.usb else ('quiet-with-neighboring-interrupts','dma-enabled','dma-pending','dma-active')
 for case in cases:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.reg_write(UC_ARM64_REG_PSTATE,13);u.reg_write(UC_ARM64_REG_TPIDR_EL1,0)
  for a,z in [(0x41000000,0x1200000),(0x90000000,0x200000),(0x03400000,0x10000),(0x02050000,0x1000),(0x07050000,0x1000)]:u.mem_map(a,z)
@@ -82,5 +82,7 @@ for case in cases:
  else:
   assert terminal==['a733_smp_stop'] and writes==[],(case,terminal,writes)
   assert (u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X1))==(3,0x30b)
- results[case]=dict(passed=True,terminal=terminal,register_writes=len(writes));print('PASS',case,flush=True)
-(O/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,usb_profile=a.usb,image_sha256=hashlib.sha256(P.read_bytes()).hexdigest(),cases=results,scope='Actual HDMI audio inherited-interrupt refusals before GIC writes; neighboring bits do not cause refusal. USB selection is bound to linked profile metadata. Session validation, cache prep, system registers and GIC effects modeled. Stops before CPU start constructor; no secondary, USB controller or physical execution. Existing HDMI startup and video-only evidence remain separately scoped without replay.'),indent=2)+'\n')
+ results[case]=dict(passed=True,terminal=terminal,register_writes=len(writes))
+ (O/'cases.json').write_text(json.dumps(results,indent=2)+'\n')
+ print('PASS',case,flush=True)
+(O/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,usb_profile=args.usb,image_sha256=hashlib.sha256(P.read_bytes()).hexdigest(),cases=results,scope='Actual HDMI audio inherited-interrupt refusals before GIC writes; neighboring bits do not cause refusal. USB selection is bound to linked profile metadata. Session validation, cache prep, system registers and GIC effects modeled. Stops before CPU start constructor; no secondary, USB controller or physical execution. Existing HDMI startup and video-only evidence remain separately scoped without replay.'),indent=2)+'\n')
