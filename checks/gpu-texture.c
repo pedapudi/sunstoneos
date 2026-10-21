@@ -105,6 +105,17 @@ static int texture_kick(void *ctx,uint32_t off,uint32_t value)
         if(gpu_render_case==2 && frame==2)put((void *)(base()+l.depth),4,0);
         __atomic_store_n((uint32_t *)(shared+1348),graphics.submission.fragment.cursor,__ATOMIC_RELEASE);
         __atomic_store_n((uint32_t *)(shared+1412),frame*2,__ATOMIC_RELEASE);
+    } else if(type==(PVR_CCB_MAGIC|106)) {
+        /* CLOSE cleans both render contexts, then the compute context, then the
+         * recorded targets and free lists; each must name the expected record. */
+        unsigned index=service.graphics_cleanup_index;
+        int context=compute.compute.phase==PVR_COMPUTE_SERVICE_CLEANUP && index==2;
+        configASSERT(service.phase==PVR_GPU_SERVICE_GRAPHICS_CLEANUP && service.graphics_events_retired &&
+            !word(resource(2)+slot*4,4) && !word(command+4,4));
+        configASSERT(context?!word(command+8,4) && word(command+12,4)==compute.config.firmware_address[0]:
+            word(command+8,4)==service.graphics_cleanup_type[index] &&
+            word(command+12,4)==service.graphics_cleanup_address[index]);
+        for(unsigned i=16;i<88;++i)configASSERT(!command[i]);
     } else configASSERT(type==PVR_CCB_HEALTH);
     put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);return 1;
 }
@@ -145,8 +156,10 @@ static void invalid_drafts(void)
     for(unsigned i=0;i<filled;++i)configASSERT(xQueueReceive(service.requests,&message,0)==pdTRUE);
     vTaskResume(service.worker);
     /* A fresh valid draft still cannot overwrite backing without both acquired
-     * previous timelines. Repairing an invalid draft uses a new generation. */
-    put(source+100,2,3);r=texture(&q,NULL,&ticket);configASSERT(r.result==PVR_GPU_SERVICE_OK);generation=r.texture_generation;
+     * previous timelines. Repairing an invalid draft uses a new generation.
+     * Its short bound lets the held draft expire before CLOSE below. */
+    put(source+100,2,3);configASSERT(pvr_gpu_service_texture(&service,1,&q,NULL,200000,0,&ticket));
+    configASSERT(pvr_gpu_service_collect(&service,ticket,&r,1000) && r.result==PVR_GPU_SERVICE_OK);generation=r.texture_generation;
     q=(struct pvr_render_texture_request){.operation=PVR_TEXTURE_WRITE,.previous=1,.generation=generation,.bytes=116};
     r=texture(&q,source,&ticket);configASSERT(r.result==PVR_GPU_SERVICE_OK);
     uintptr_t timeline=a733_gpu_graphics_memory_render_shared(&graphics)+1412;
@@ -160,6 +173,12 @@ static void invalid_drafts(void)
     configASSERT(pvr_gpu_service_texture_output(&service,read_ticket,&data,&bytes) && bytes==4 && word(data,4)==result_pixel(1,0));
     q=(struct pvr_render_texture_request){.operation=PVR_TEXTURE_RELEASE,.previous=1,.generation=read_ticket,.offset=0};
     r=texture(&q,NULL,&ticket);configASSERT(r.result==PVR_GPU_SERVICE_OK);
+    /* The held draft keeps CLOSE busy. After its deadline, the next request
+     * naming it observes the expiry and discards it without using its bytes. */
+    r=request(PVR_GPU_SERVICE_CLOSE,1000000);configASSERT(r.result==PVR_GPU_SERVICE_BUSY && !stopping);
+    vTaskDelay(250);
+    q=(struct pvr_render_texture_request){.operation=PVR_TEXTURE_WRITE,.previous=1,.generation=generation,.offset=116,.bytes=4};
+    r=texture(&q,source,&ticket);configASSERT(r.result==PVR_GPU_SERVICE_INVALID && !graphics.submission.texture_draft);
 }
 static void texture_client(void *unused)
 {
