@@ -156,3 +156,14 @@ The focused checks are `checks/deinterlace-tnr-preparation.py` and
 continues to cover unchanged code. Their model fixture preserves the allocated
 template's identities through fixture-only deterministic entropy. Production
 preparation still chooses fresh identities and rejects modeled authority.
+
+TNR preparation and capture passed on 20 October 2026 against the exact final
+native image and shared allocated session. Five mode-specific preparation
+refusals covered legacy flag sizes, a shortened flag allocation, the old output
+IOVA, a missing final flag page and a pre-TNR geometry marker. One capture
+consumed the actual native copied response and ACK receipt, preserved planar
+output and metadata before ACK, and refused a mode2 result header. It reused
+existing USB and durability coverage. Native device effects and authority were
+modeled; numerical TNR behavior and physical operation remain unqualified.
+Results and frozen inputs are retained beneath
+`~/.cache/sunstoneos/evidence/deinterlace-tnr-host-20261020/`.
