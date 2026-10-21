@@ -9,9 +9,11 @@
 #undef dma_read
 #undef dma_write
 #define cyclic_case (*(volatile unsigned *)UINT64_C(0x47fff000))
-static _Alignas(4096) unsigned char cyclic_pool[10*4096];
-static unsigned char cyclic_device[2][4][4096],copied[4096];
+/* Pages: RX and TX descriptors, eight RX slots, four TX slots. */
+static _Alignas(4096) unsigned char cyclic_pool[14*4096];
+static unsigned char cyclic_device[2][8][4096],copied[4096];
 static uint32_t amounts[2],range_invalidations,copy_inject,copied_inject,link_transition,final_packet;
+static unsigned rx_periods=4;
 static void cycle(unsigned,unsigned);
 static unsigned start_delay;
 static int clock_now(void *context,uint64_t *out)
@@ -22,18 +24,32 @@ static int clock_now(void *context,uint64_t *out)
  }
  *out=__atomic_add_fetch(&us,1,__ATOMIC_SEQ_CST);return 1;
 }
+/* Destination writes for package m relative to its count, within one
+ * package minus one 32-byte burst. Case 13 completes all but the first burst
+ * only while the next package is written. Cases 14 and 15 have already
+ * written all but the last burst of package m+2 when package m is counted. */
+static unsigned tail_pending,tail_slot;
+static void rx_write(unsigned slot,uint32_t package,size_t from,size_t to)
+{memset(cyclic_device[0][slot]+from,0x20+(package&63),to-from);}
 static void cycle(unsigned ch,unsigned amount)
 {
     const struct a733_dma_transfer *t=service.controller.channels[ch].transfer;
-    configASSERT(t && t->count==4);
+    unsigned periods=ch?4:rx_periods;
+    configASSERT(t && t->count==periods);
     for(unsigned n=0;n<amount;++n){
-        uint32_t count=dma[di(ch,0x30)];unsigned slot=count%4;
-        if(!ch)memset(cyclic_device[ch][slot],0x20+(count&63),4096);
-        else for(unsigned i=0;i<4096;++i)configASSERT(cyclic_device[ch][slot][i]==0x60+slot);
+        uint32_t count=dma[di(ch,0x30)];unsigned slot=count%periods;
+        if(ch)for(unsigned i=0;i<4096;++i)configASSERT(cyclic_device[ch][slot][i]==0x60+slot);
+        else if(cyclic_case==13){
+            if(tail_pending)rx_write(tail_slot,count-1,32,4096);
+            rx_write(slot,count,0,32);tail_pending=1;tail_slot=slot;
+        }else if(cyclic_case==14 || cyclic_case==15){
+            if(!count)rx_write(0,0,0,4096);
+            rx_write((count+1)%periods,count+1,0,4096);rx_write((count+2)%periods,count+2,0,4096-32);
+        }else rx_write(slot,count,0,4096);
         ++dma[di(ch,0x30)];ir[(ch?40:44)/4]+=1024;
     }
-    unsigned current=dma[di(ch,0x30)]%4;
-    dma[di(ch,8)]=(uint32_t)(t->descriptors.bus+((current+1)%4)*64);
+    unsigned current=dma[di(ch,0x30)]%periods;
+    dma[di(ch,8)]=(uint32_t)(t->descriptors.bus+((current+1)%periods)*64);
     dma[di(ch,0x14)]=(uint32_t)(ch?A733_I2S0_TXFIFO:t->mappings[current].bus);
     dma[di(ch,0x18)]=4096;dma[di(ch,0x38)]|=2;
 }
@@ -75,8 +91,8 @@ static void cyclic_cache(void *context,enum a733_dma_cache op,void *cpu,size_t b
     (void)context;privileged();a733_dma_native_operations.cache(&native,op,cpu,bytes);
     uintptr_t at=(uintptr_t)cpu,base=(uintptr_t)cyclic_pool;
     for(unsigned ch=0;ch<2;++ch){
-        uintptr_t first=base+(2+ch*4)*4096;
-        if(at<first || at>=first+4*4096)continue;
+        uintptr_t first=base+(2+ch*8)*4096;
+        if(at<first || at>=first+(ch?4:8)*4096)continue;
         unsigned slot=(unsigned)((at-first)/4096);configASSERT(bytes==4096);
         if(op==A733_DMA_CLEAN){configASSERT(ch && !(live&(1u<<ch)));memcpy(cyclic_device[ch][slot],cpu,bytes);}
         if(op==A733_DMA_INVALIDATE){
@@ -109,7 +125,7 @@ static void start_pair(void)
 {
     open_stream(0);open_stream(1);
     for(unsigned i=0;i<4;++i){struct a733_i2s_period p=cyclic_period(1);configASSERT(p.kind==A733_I2S_TX_FILL && p.slot==i);
-        memset(cyclic_pool+(6+i)*4096,0x60+i,4096);configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,p.ticket).result==DMA_SERVICE_OK);}
+        memset(cyclic_pool+(10+i)*4096,0x60+i,4096);configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,p.ticket).result==DMA_SERVICE_OK);}
     for(unsigned j=0;j<(cyclic_case==10?1u:2u);++j)configASSERT(request(DMA_SERVICE_SUBMIT,j,frequency,0).result==DMA_SERVICE_OK);
     vTaskDelay(3);
 }
@@ -145,19 +161,19 @@ static void cyclic_client(void *unused)
             platform_puts("PASS cyclic I2S rejected counter origin retained without progress\n");platform_exit(0);
         }
         configASSERT(get(&submissions)==2);
-        for(unsigned j=0;j<2;++j){uint32_t next;memcpy(&next,cyclic_pool+j*4096+3*64+20,4);configASSERT(next==(uintptr_t)cyclic_pool+j*4096);}
+        for(unsigned j=0;j<2;++j){uint32_t next;memcpy(&next,cyclic_pool+j*4096+((j?4:rx_periods)-1)*64+20,4);configASSERT(next==(uintptr_t)cyclic_pool+j*4096);}
         if(cyclic_case==11){
-            struct a733_i2s_period p=cyclic_period(0);configASSERT(start_delay && p.frames==1024);
+            inject(1,1,0);struct a733_i2s_period p=cyclic_period(0);configASSERT(start_delay && p.frames==1024);
             configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,p.ticket).result==DMA_SERVICE_OK);finish_pair(0);
         }else if(cyclic_case==12){
             __atomic_fetch_add(&us,1000000,__ATOMIC_SEQ_CST);vTaskDelay(3);
             struct dma_service_reply r=request(DMA_SERVICE_STATUS,0,0,0);
             configASSERT(r.phase==DMA_SERVICE_RECOVERY && r.holds_buffers && bindings[0].pin_lease.id);
         }else if(cyclic_case==3){inject(1,4,0);finish_pair(1);}
-        else if(cyclic_case==4 || cyclic_case==5){copy_inject=cyclic_case==4?1:2;inject(1,1,0);
+        else if(cyclic_case==4 || cyclic_case==5){copy_inject=cyclic_case==4?1:2;inject(1,2,0);
             struct dma_service_reply r=wait_phase(0,DMA_SERVICE_RESULT);configASSERT(r.outcome==DMA_SERVICE_FAILED);
             configASSERT(request(DMA_SERVICE_PERIOD_GET,0,0,0).result==DMA_SERVICE_BUSY);finish_pair(1);}
-        else if(cyclic_case==7){inject(1,1,0);struct a733_i2s_period p=cyclic_period(0);
+        else if(cyclic_case==7){inject(1,2,0);struct a733_i2s_period p=cyclic_period(0);
             configASSERT(p.kind==A733_I2S_CAPTURED_COPY);inject(1,4,0);wait_phase(0,DMA_SERVICE_RESULT);
             configASSERT(dma_service_copy_period(&service,0,p.ticket,copied,4096) && copied[0]==0x20);
             configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,p.ticket).result==DMA_SERVICE_OK);finish_pair(1);}
@@ -166,9 +182,20 @@ static void cyclic_client(void *unused)
             configASSERT(t.kind==A733_I2S_TX_REPEAT_PROGRESS && t.frames==11*1024 && !t.first_frame);
             configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,t.ticket).result==DMA_SERVICE_INVALID);
             configASSERT(get(&submissions)==2);finish_pair(0);
+        }else if(cyclic_case==15){
+            /* Counted period 2 is beyond the copy window of period 0, whose
+             * slot the writer has already reused: stop without copying. */
+            inject(1,3,0);struct dma_service_reply r=wait_phase(0,DMA_SERVICE_RESULT);
+            configASSERT(r.outcome==DMA_SERVICE_FAILED && !range_invalidations);
+            configASSERT(request(DMA_SERVICE_PERIOD_GET,0,0,0).result==DMA_SERVICE_BUSY);finish_pair(1);
         }else {
             if(cyclic_case==6)link_transition=2;
-            for(unsigned n=0;n<12;++n){inject(3,1,1);struct a733_i2s_period p=cyclic_period(0),t=cyclic_period(1);
+            unsigned periods=3*rx_periods;
+            /* Period 0 is not copied while period 1 is still in progress. */
+            inject(1,1,0);
+            configASSERT(request(DMA_SERVICE_PERIOD_GET,0,0,0).result==DMA_SERVICE_BUSY);
+            configASSERT(service.controller.channels[0].packages==1 && !range_invalidations);
+            for(unsigned n=0;n<periods;++n){inject(3,1,1);struct a733_i2s_period p=cyclic_period(0),t=cyclic_period(1);
                 configASSERT(p.kind==A733_I2S_CAPTURED_COPY && p.first_frame==(uint64_t)n*1024);
                 configASSERT(dma_service_copy_period(&service,0,p.ticket,copied,4096));
                 for(unsigned i=0;i<4096;++i)configASSERT(copied[i]==0x20+n);
@@ -177,9 +204,19 @@ static void cyclic_client(void *unused)
                 configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,t.ticket).result==DMA_SERVICE_INVALID);
                 configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,p.ticket).result==DMA_SERVICE_OK);
             }
-            configASSERT(get(&submissions)==2 && range_invalidations==12);
+            configASSERT(get(&submissions)==2 && range_invalidations==periods);
+            if(cyclic_case==16){
+                /* Eight periods tolerate four periods of consumer lag. */
+                inject(1,4,0);
+                for(unsigned n=periods;n<periods+4;++n){struct a733_i2s_period p=cyclic_period(0);
+                    configASSERT(p.kind==A733_I2S_CAPTURED_COPY && p.first_frame==(uint64_t)n*1024);
+                    configASSERT(dma_service_copy_period(&service,0,p.ticket,copied,4096));
+                    for(unsigned i=0;i<4096;++i)configASSERT(copied[i]==0x20+n);
+                    configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,p.ticket).result==DMA_SERVICE_OK);}
+                configASSERT(range_invalidations==periods+4);
+            }
             final_packet=1;__atomic_fetch_add(&us,64000,__ATOMIC_SEQ_CST);finish_pair(0);
-            configASSERT(service.controller.channels[1].packages==13);
+            configASSERT(service.controller.channels[1].packages==periods+1);
         }
     }
     platform_puts("PASS cyclic I2S actual providers, fixed rings, checked readonly RX staging, immutable TX progress, wrap/backpressure and retained drain\n");platform_exit(0);
@@ -202,13 +239,15 @@ void kernel_main(void)
     struct dma_memory_window window={(uintptr_t)cyclic_pool,(uintptr_t)cyclic_pool,sizeof(cyclic_pool),7};
     struct dma_fifo_port ports[]={{A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ},{A733_I2S0_TXFIFO,3,1u<<4,1u<<8,A733_DMA_WRITE}};
     configASSERT(a733_dma_native_init(&native,0x09000000,0x09000000,&window,1,ports,2,fatal,NULL));
-    struct dma_service_job jobs[2];struct a733_dma_segment segments[2][4];struct a733_dma_mapping maps[2][4];
-    for(unsigned j=0;j<2;++j){for(unsigned i=0;i<4;++i){uintptr_t at=(uintptr_t)cyclic_pool+(2+j*4+i)*4096;
+    rx_periods=cyclic_case==16?8:4;
+    struct dma_service_job jobs[2];struct a733_dma_segment segments[2][8];struct a733_dma_mapping maps[2][8];
+    for(unsigned j=0;j<2;++j){unsigned periods=j?4:rx_periods;
+        for(unsigned i=0;i<periods;++i){uintptr_t at=(uintptr_t)cyclic_pool+(2+j*8+i)*4096;
         maps[j][i]=(struct a733_dma_mapping){(void *)at,at,4096,j?A733_DMA_READ:A733_DMA_WRITE};
         struct a733_dma_endpoint ram={at,0,4,8},fifo={j?A733_I2S0_TXFIFO:A733_I2S0_RXFIFO,3,4,8};
         segments[j][i]=(struct a733_dma_segment){j?ram:fifo,j?fifo:ram,4096};}
         jobs[j]=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=j,.stream=&profiles[j],
-            .transfer={{cyclic_pool+j*4096,(uintptr_t)cyclic_pool+j*4096,4096,A733_DMA_DESCRIPTORS},segments[j],4,maps[j],4}};}
+            .transfer={{cyclic_pool+j*4096,(uintptr_t)cyclic_pool+j*4096,4096,A733_DMA_DESCRIPTORS},segments[j],periods,maps[j],periods}};}
     const struct a733_dma_operations ops={dma_read,dma_write,cyclic_cache,barrier,ticks,mapping,fifo};
     struct dma_service_protected protected[]={{(uintptr_t)&service,(uintptr_t)&service,sizeof(service)},
         {(uintptr_t)&native,(uintptr_t)&native,sizeof(native)},{(uintptr_t)&audio,(uintptr_t)&audio,sizeof(audio)},

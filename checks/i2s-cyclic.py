@@ -5,7 +5,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--elf',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-p.add_argument('--cases',default='0,3,4,5,6,7,8,9')
+p.add_argument('--cases',default='0,3,4,5,6,7,8,9,13,14,15,16')
 p.add_argument('--qemu',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/bin/qemu-system-aarch64')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True);result=a.output/'cyclic-result.json'
 values=json.loads(result.read_text()) if result.exists() else {'physical_access':False,'cases':{}}
@@ -13,7 +13,9 @@ image_sha256=hashlib.sha256(a.elf.read_bytes()).hexdigest()
 for name, saved in values['cases'].items():
     if saved.get('passed') and saved.get('image_sha256') != image_sha256:
         p.error(f'existing passed case {name} belongs to another image; use a separate output directory')
-labels={0:'duplex-rings-three-wraps-final-drain-count',3:'RX-overrun-before-copy',4:'RX-reused-during-first-invalidate',5:'RX-reused-after-copy-before-postcheck',6:'cursor-transition-defers-copy',7:'held-staging-survives-raw-overrun',8:'cancel-priming-preserves-client-lease',9:'TX-coalesced-multiple-wrap-progress',10:'untrusted-initial-counter-retained',11:'start-demand-timestamp-precedes-delayed-readback',12:'unobserved-counter-history-retained'}
+labels={0:'duplex-rings-three-wraps-final-drain-count',3:'RX-overrun-before-copy',4:'RX-reused-during-first-invalidate',5:'RX-reused-after-copy-before-postcheck',6:'cursor-transition-defers-copy',7:'held-staging-survives-raw-overrun',8:'cancel-priming-preserves-client-lease',9:'TX-coalesced-multiple-wrap-progress',10:'untrusted-initial-counter-retained',11:'start-demand-timestamp-precedes-delayed-readback',12:'unobserved-counter-history-retained',
+        13:'RX-writes-complete-after-count',14:'RX-writer-ahead-of-count',15:'RX-writer-ahead-overrun-stops-before-copy',
+        16:'RX-eight-period-ring-three-wraps-and-lag'}
 with a.elf.open('rb') as stream:
     elf=ELFFile(stream)
     assert not any(s['p_vaddr']<=0x47fff000<s['p_vaddr']+s['p_memsz'] for s in elf.iter_segments() if s['p_type']=='PT_LOAD')

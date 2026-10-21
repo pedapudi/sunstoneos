@@ -193,7 +193,9 @@ complete. `TX_REPEAT_PROGRESS` reports cumulative completed memory transfers,
 possibly several periods at once. It grants no CPU lease and needs no PUT.
 This plays the embedded recording repeatedly; it does not support live refills.
 
-Capture keeps all four raw periods reserved for DMA. Each period occupies
+The stream driver accepts four to eight periods for a cyclic capture ring,
+because the copy window described below is empty with fewer than four.
+Capture keeps every raw period reserved for DMA. Each period occupies
 separate cache lines. Initial publication cleans and invalidates them; later CPU
 access only reads them. The worker copies a completed period into a private
 4,096-byte staging buffer. It invalidates the raw range and issues a barrier
@@ -209,12 +211,32 @@ staging copy until its exact ticket is returned. The application copies staging
 into its existing four USB slots before returning it.
 
 For absolute period `k`, extended completed-package count `C` and ring length
-`N`, acquisition requires `k+1 <= C < k+N`. After acquisition it again requires
-`C < k+N`. Stable counter, next-descriptor and destination/remaining-byte readings
-must agree with the current period. A transition defers acquisition; reuse or an
-ambiguous postcheck discards staging and stops the stream. A held staging copy
+`N`, acquisition requires `k+2 <= C <= k+N-2`. After the copy it again requires
+`C <= k+N-2`. Each bound keeps one whole period between the copy and the DMA
+writer:
+
+- The lower bound waits until period `k+1` has also completed, so destination
+  writes of period `k` may finish up to one period after the counter reports
+  them.
+- The upper bound refuses once period `k+N-2` has completed. The writer may
+  then be up to one period ahead of the counter and cursor without entering
+  slot `k`.
+
+Stable counter, next-descriptor and destination/remaining-byte readings must
+agree with the current period. A transition defers acquisition; reuse or an
+ambiguous postcheck discards staging and stops the stream. The stream stops on
+overrun once `C > k+N-2` without requesting the copy. A held staging copy
 survives raw-ring overrun. A full USB ring stops capture without overwriting any
 unread copy. USB slots still require complete transfer delivery and exact ACK.
+
+The guard costs one period of capture latency and one period of consumer
+tolerance. Native session directions 3 and 5 use four periods, which leaves
+the single value `C == k+2`: the client must return each staging copy within
+one period, 128 ms for 2,048 16-bit mono frames at 16 kHz. An eight-period
+ring would leave five values, so the client could fall four periods behind.
+The driver and the DMA pool already accept eight periods, but the session
+shares its period count with the finite directions and the USB transfer sizes,
+so an eight-period receive ring needs a period count of its own there.
 
 The worker extends the 32-bit package counter with checked arithmetic. Progress
 observations must remain less than one second apart. The configured sample rate
@@ -247,30 +269,61 @@ transferred range to be complete before CPU access. ALSA stops on overrun rather
 than preserving data through unlimited consumer delays.
 
 No inspected source explicitly orders destination-write completion, package-count
-increment and next-descriptor/destination-cursor updates. The checked-copy path
-infers that a completed package has finished its destination writes and that
-reuse appears in the jointly consistent counter/cursor state before reused writes
-can escape observation. These are unqualified device assumptions. Manual section
+increment and next-descriptor/destination-cursor updates. Manual section
 13.1.7.12 warns that remaining-byte data can precede destination arrival; cursor
 consistency is not a completion fence. CPU barriers and invalidation do not close
 this device-ordering gap.
 
-Cyclic RX physical admission remains false until that ordering contract is
-established. The existing launch evidence requires the additional
+The one-period guard replaces exact ordering with a bounded-margin assumption.
+A checked copy is correct when both of these lags stay below one period:
+
+- the time from a package-count increment until every destination write of
+  that package is visible in memory;
+- the distance by which the DMA writer runs ahead of the package counter and
+  the destination cursor.
+
+At 16 kHz one period lasts 64 ms to 128 ms, depending on the frame size, while
+a bus write completes in microseconds. The margin remains an unqualified device
+assumption until a board test measures it.
+
+Cyclic RX physical admission remains false until that measurement exists. The
+existing launch evidence requires the
 `cyclic-rx-completion-and-reuse-ordering-established` condition for directions
-3 and 5. No qualifying record exists. Physical cache visibility, continuous
-capture/playback, underrun/overrun behavior, cancellation bus quiescence and final
-serial wire drain remain unqualified. DMA idle does not establish wire drain.
+3 and 5, which a record of the measured margin would satisfy. No qualifying
+record exists. A board test could measure the margin with the I2S loopback
+mode (`I2S/PCM_CTL` bit 3, manual section 17.1.8.1), which connects DOUT to
+DIN. Cyclic playback of distinct known periods then makes every captured period
+predictable. Reading raw slot `k` without the guard, at the instant `C` first
+reaches `k+1` and again just before it reaches `k+N`, would show how far
+destination writes trail the counter and how far the writer leads it. Physical
+cache visibility, continuous capture/playback, underrun/overrun behavior,
+cancellation bus quiescence and final serial wire drain remain unqualified. DMA
+idle does not establish wire drain.
 
 ### Offline evidence
 
 `~/.cache/sunstoneos/evidence/i2s-hardware-cyclic-20261019/` preserves descriptor
 checks, the actual native link, actual FreeRTOS/provider composition checks and
-producer-derived native client cases. The provider cases cover three ring wraps,
+producer-derived native client cases. That evidence predates the copy guard.
+The [cyclic provider check](../checks/i2s-cyclic.c), run by
+[its runner](../checks/i2s-cyclic.py), covers the guarded window. Its cases
+cover three ring wraps,
 coalesced progress, reuse during the invalidation and after the copy, cursor transitions, retained
 staging, held fill leases, untrusted initial counts, delayed start readback and
-ambiguous observation history. Modeled registers, DMA writes and cache effects
-do not establish physical device ordering. Earlier finite, duplex and USB
+ambiguous observation history. Three further cases model the margin
+assumption with lags of one period minus one 32-byte burst:
+
+- Destination writes that finish only while the next period is written. The
+  guarded copies are complete; the unguarded window would copy a period whose
+  data has not all arrived.
+- A writer that runs ahead of the counter and cursor. Copies at `C == k+2`
+  are complete, and a jump to `C == k+3` stops the stream without a copy.
+  The unguarded window would copy slot `k` after the writer had reused it.
+- An eight-period capture ring completes three wraps and then tolerates four
+  periods of consumer lag.
+
+Modeled registers, DMA writes and cache effects do not establish physical
+device ordering or the margin. Earlier finite, duplex and USB
 transfer/ACK evidence remains applicable. Root's CPU maintenance review and the
 focused device review are preserved with the compiled inputs.
 
