@@ -10,9 +10,9 @@ struct model {
     uint8_t transmitted[4096];
     uint64_t now;
     unsigned accesses, words, ready_requests, command_count;
-    unsigned bytes, position;
+    unsigned bytes, position, status_reads, module_divisor, module_calls;
     int write, active, irq_level, allow_irq_ack, stall_fifo, hold_data_over;
-    int no_cmd_done, hold_reset, r5_error, late_completion, fail_fifo;
+    int no_cmd_done, hold_reset, r5_error, late_completion, fail_fifo, report_level, fail_module;
 };
 static struct model m;
 static struct sunxi_sdio host;
@@ -23,14 +23,24 @@ static int now_cb(void *context, uint64_t *out)
     struct model *x = context; ++x->accesses; *out = x->now; return 1;
 }
 static int barrier_cb(void *context) { ++((struct model *)context)->accesses; return 1; }
+static int module_cb(void *context, unsigned divisor)
+{
+    struct model *x = context; ++x->accesses; ++x->module_calls;
+    assert(x->regs[0x04 / 4] == 0 && !(x->regs[0x18 / 4] & (1u << 31))); /* Card clock stopped. */
+    x->module_divisor = divisor; return !x->fail_module;
+}
 static int read_cb(void *context, uint32_t offset, uint32_t *out)
 {
     struct model *x = context; ++x->accesses; assert(offset < 0x400 && !(offset & 3));
     if (offset == 0 && !x->hold_reset) x->regs[0] &= ~7u;
     if (offset == 0x38 && x->irq_level) x->regs[offset / 4] |= 1u << 16;
     if (offset == 0x3c) {
+        ++x->status_reads;
         *out = x->active && !x->write && (x->stall_fifo || x->position == x->bytes) ? 4u : 0;
         if (x->active && x->write && x->stall_fifo) *out |= 8u;
+        /* Optional fill level: all remaining read words are already buffered. */
+        if (x->report_level && x->active && !x->write && !x->stall_fifo)
+            *out |= ((x->bytes - x->position) / 4) << 17;
         return 1;
     }
     if (offset == 0x200) {
@@ -65,6 +75,7 @@ static int write_cb(void *context, uint32_t offset, uint32_t value)
     if (offset != 0x18) return 1;
     if (value & (1u << 21)) { x->regs[offset / 4] &= ~(1u << 31); return 1; }
     assert(!(value & (1u << 12))); /* No automatic CMD12 on counted CMD53. */
+    x->regs[offset / 4] &= ~(1u << 31); /* The controller has loaded the command. */
     unsigned command = value & 63;
     uint32_t arg = x->regs[0x1c / 4];
     assert(command == 3 || command == 5 || command == 7 || command == 52 || command == 53);
@@ -120,7 +131,7 @@ static void reset_model(void)
     m.regs[0x5c / 4] = 0x81710000;
     cis(0, 1); cis(1, 0); cis(2, 1);
     m.card[0][0] = 0x43; m.card[0][1] = 3; m.card[0][8] = 2;
-    struct sunxi_sdio_config cfg = { .ops = {read_cb, write_cb, barrier_cb, now_cb},
+    struct sunxi_sdio_config cfg = { .ops = {read_cb, write_cb, barrier_cb, now_cb, module_cb},
         .context = &m, .module_hz = 750000 };
     assert(sunxi_sdio_init(&host, &cfg));
 }
@@ -128,7 +139,7 @@ static void tick_host(void)
 {
     ++m.now; unsigned before = m.words;
     sunxi_sdio_poll(&host);
-    assert(m.words - before <= SUNXI_SDIO_FIFO_BUDGET);
+    assert(m.words - before <= (host.wide ? SUNXI_SDIO_FIFO_BUDGET_WIDE : SUNXI_SDIO_FIFO_BUDGET));
 }
 static void prepare(void)
 {
@@ -156,14 +167,18 @@ static void enumerate(void)
     }
     assert(card.functions[1].enable_timeout_ms == 500 && card.skipped_tuples == 3);
 }
-static void complete(struct sunxi_sdio_request *request)
+static void complete_after(struct sunxi_sdio_request *request)
 {
-    assert(sunxi_sdio_submit(&host, request, m.now + 100));
     for (unsigned i = 0; i < 90 && host.state != SUNXI_SDIO_DONE && host.state != SUNXI_SDIO_FAULT; ++i) tick_host();
     assert(host.state == SUNXI_SDIO_DONE);
     struct sunxi_sdio_result result;
     assert(sunxi_sdio_take_result(&host, &result));
     assert(!result.error && result.transferred == request->bytes);
+}
+static void complete(struct sunxi_sdio_request *request)
+{
+    assert(sunxi_sdio_submit(&host, request, m.now + 100));
+    complete_after(request);
 }
 static void success(void)
 {
@@ -265,6 +280,32 @@ static void select_and_io_fault(void)
     assert(bytes[0] == 0 && bytes[3] == 3 && bytes[4] == 0x5a);
     assert(host.request.data == bytes); retained();
 }
+/* Four-bit default speed after the owner's CCCR write; level-sized bursts. */
+static void widen(void)
+{
+    reset_model(); prepare(); enumerate();
+    assert(!sunxi_sdio_widen(&host, 7, m.now + 100) && !sunxi_sdio_widen(&host, 33, m.now + 100));
+    assert(sunxi_sdio_widen(&host, 8, m.now + 100) && !sunxi_sdio_widen(&host, 8, m.now + 100));
+    for (unsigned i = 0; i < 20 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
+    assert(host.state == SUNXI_SDIO_READY && host.wide && host.card_hz == 25000000 && !host.deadline);
+    assert(m.module_calls == 1 && m.module_divisor == 8 && m.regs[0x0c / 4] == 1);
+    assert(m.regs[0x04 / 4] == 1u << 16 && ((m.regs[0x140 / 4] >> 16) & 3) == 1);
+    assert(!(m.regs[0x5c / 4] & 0x80000330u) && !sunxi_sdio_widen(&host, 8, m.now + 100));
+    uint8_t bytes[1024]; struct sunxi_sdio_request request;
+    assert(sdio_card_cmd53(&card, 1, 0x0f, 0, 0, 512, bytes, sizeof(bytes), &request));
+    m.report_level = 1; unsigned reads = m.status_reads;
+    assert(sunxi_sdio_submit(&host, &request, m.now + 100));
+    while (host.state == SUNXI_SDIO_QUEUED) tick_host(); /* FIFO reset, then issue. */
+    reads = m.status_reads; tick_host(); /* Response plus one level-sized 128-word burst. */
+    assert(m.words == 128 && m.status_reads - reads == 1);
+    complete_after(&request);
+    for (unsigned i = 0; i < sizeof(bytes); ++i) assert(bytes[i] == (uint8_t)i);
+    /* An uncertain module change is terminal and retains the stopped controller. */
+    reset_model(); prepare(); m.fail_module = 1;
+    assert(sunxi_sdio_widen(&host, 8, m.now + 100));
+    for (unsigned i = 0; i < 4 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
+    assert(host.result.error == SUNXI_SDIO_IO_ERROR && !host.wide && host.card_hz == 375000); retained();
+}
 static void cis_shape(void)
 {
     const uint8_t payloads[][3] = {{0x22, 0, 0}, {0x22, 1, 1}, {0x22, 1, 4}};
@@ -308,12 +349,14 @@ int main(int argc, char **argv)
         reinit_refusal(); puts("SDIO model: active and fault reinitialization refused without mutation or I/O");
     } else if (argc == 2 && strcmp(argv[1], "select-io") == 0) {
         select_and_io_fault(); puts("SDIO model: CMD7 status and partial FIFO I/O failure passed");
+    } else if (argc == 2 && strcmp(argv[1], "widen") == 0) {
+        widen(); puts("SDIO model: four-bit widening, level-sized bursts and module failure passed");
     } else if (argc == 2 && strcmp(argv[1], "cis-shape") == 0) {
         cis_shape(); puts("SDIO model: malformed function-extension tuple shapes rejected");
     } else {
         assert(argc == 1);
-        success(); faults(); select_and_io_fault(); cis_shape(); reinit_refusal();
-        puts("SDIO model: enumeration, identity transfer, byte/block PIO, IRQ ownership and retained faults passed");
+        success(); faults(); select_and_io_fault(); cis_shape(); reinit_refusal(); widen();
+        puts("SDIO model: enumeration, identity transfer, byte/block PIO, IRQ ownership, four-bit widening and retained faults passed");
     }
     return 0;
 }

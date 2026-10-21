@@ -102,6 +102,9 @@ admitted module clock and the profile's bootstrap offset. It fails for the
 current profile. Do not queue the radio board test with this profile until a
 faster or wider SDIO mode is qualified or the engine sends fewer bytes. A later
 deadline cannot help, because the supervised session itself ends at 60 seconds.
+With `--four-bit`, the check evaluates the radio platform's optional four-bit
+25 MHz profile instead; its bus lower bound is about 0.2 seconds. The board does
+not request that profile, and it has no physical qualification.
 
 The transport counts only consumed successful CMD53 transactions that moved
 nonzero bytes. The counter saturates and never wraps. The radio owner publishes

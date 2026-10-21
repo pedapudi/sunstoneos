@@ -31,6 +31,19 @@ The output clock is therefore at most 400 kHz. The [pinned bootloader timing
 implementation][timing] establishes that divider relationship and the version
 condition for clearing the selection bit.
 
+After enumeration, an owner may request four-bit default speed with
+`sunxi_sdio_widen`. The owner first sets the card's bus-interface register
+(CCCR address 7) to four bits. The controller then waits for an idle command
+path and card, stops the card clock and calls the platform's module callback.
+That callback selects the 400 MHz PERI0 parent with a linear divisor of 8 to 32.
+The controller applies the pinned v5p3x phases for clocks up to 26 MHz: command
+drive at 180 degrees, data drive at 90 degrees and both sample phases at zero.
+It sets four-bit width, restarts the clock and verifies clock, width and phase
+readback before READY. With divisor 8 the module runs at 50 MHz and the card
+clock at 25 MHz, the default-speed maximum for a full-speed SDIO card. A failed
+step is terminal; the card keeps its four-bit setting and there is no one-bit
+fallback. High-speed (50 MHz) timing is not implemented.
+
 Preparation resets the local controller, selects CPU FIFO access, disables DMA
 and controller interrupt delivery, applies initial delay settings, and performs
 the clock-update commands. It waits across calls for reset and update completion.
@@ -69,8 +82,17 @@ callback contexts, faults, or hardware access remain owned.
 
 Initialization copies the configuration without I/O. Preparation and request
 submission admit work without touching registers. Each poll performs a bounded
-step; FIFO work is limited to 16 words. A condition that has not completed
-returns control to the worker instead of spinning.
+step. A condition that has not completed returns control to the worker instead
+of spinning. Each poll that changes the controller state or moves FIFO words
+increments `progress`, which lets an owner repeat polls while work advances.
+
+At one bit, a poll reads the status register before each FIFO word and moves at
+most 16 words. At four bits, one status sample sizes each burst, as in the
+SD/eMMC core: a read takes the FIFO fill level, or one word when the level reads
+zero but FIFO-empty is clear, and a write takes the free space. A poll moves at
+most 128 words, one 512-byte block, at four bits. The level interpretation is
+taken from the manual and has not been confirmed on the board. An overstated
+level would raise the raw FIFO underrun/overflow error, which is terminal.
 
 A request remains owned until its completion result is taken. CMD53 buffers
 borrow caller storage and may be unaligned, but their length must be a multiple
@@ -126,7 +148,10 @@ success result.
 
 PIO uses no DMA descriptors or cache-maintenance operations. Its eventual worker
 must service the FIFO frequently enough to avoid overrun or underrun at the
-selected clock. The register model does not qualify that scheduling behavior.
+selected clock. At 25 MHz with four lines, a 1,024-byte FIFO fills or drains in
+about 80 microseconds. The register model does not qualify that scheduling
+behavior, and the manual does not state whether the controller stops the card
+clock when the FIFO is full or empty.
 
 ## SDIO interrupt acknowledgement belongs to the function owner
 
@@ -203,6 +228,11 @@ and valid tuples remain accepted. The initialization guard preserves the
 first initialization path; its refusal check confirms retained state and
 callback counts remain unchanged.
 
+A later case, selected with `--case widen`, covers four-bit widening: refusal of
+out-of-range divisors and repeated requests, the module callback with the card
+clock stopped, width/phase/clock readback, a level-sized 128-word read burst
+from one status sample, and a terminal fault when the module change fails.
+
 Raw evidence is under `~/.cache/sunstoneos/evidence/sdio-controller-20261016/`.
 `results.json` identifies the initial successful direct build/run;
 `select-io/results.json`, `cis-shape/results.json`, and `reinit/results.json`
@@ -221,9 +251,9 @@ python3 checks/sdio-controller.py \
 No physical board operations or performance measurements were performed.
 No board executable exists for the test queue. Physical qualification requires
 shared-resource admission, the board binding, watchdog protection, and a worker
-that can sustain the FIFO's service requirements. Four-bit/high-speed operation,
-DMA, arbitrary CMD53 tails, function setup, radio firmware upload, and native
-network/HCI integration remain outstanding.
+that can sustain the FIFO's service requirements. Physical four-bit operation,
+high-speed timing, DMA, arbitrary CMD53 tails, function setup, radio firmware
+upload, and native network/HCI integration remain outstanding.
 
 ## Reference identities
 
