@@ -446,7 +446,17 @@ static int receive_acl(struct bt_l2cap *q,const struct bt_h4_record *record)
     if((flags&0xc000) || (pb!=1 && pb!=2) || n!=record->length-4)return fault(q,BT_L2CAP_PROTOCOL);
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->acl->links[i].handle==h &&
        q->acl->links[i].state==BT_ACL_CONNECTED && !q->acl->links[i].flush_seen){li=i;break;}
-    if(li==BT_ACL_LINKS)return fault(q,BT_L2CAP_OWNERSHIP);
+    if(li==BT_ACL_LINKS) {
+        /* Peer data may precede Disconnection Complete after a local Disconnect.
+         * The link's channels are already quarantined, so discard the frame and
+         * any partial PDU; a later continuation on a restored link then faults. */
+        for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->acl->links[i].handle==h &&
+           q->acl->links[i].state>=BT_ACL_DISCONNECT_QUEUED && q->acl->links[i].state<=BT_ACL_DISCONNECTING) {
+            if(q->assembling[i]!=BT_L2CAP_PDUS){q->rx[q->assembling[i]].state=BT_L2CAP_FREE;q->assembling[i]=BT_L2CAP_PDUS;}
+            return bt_acl_receive_release(q->acl,record->serial)==1 ? 1 : fault(q,BT_L2CAP_LOWER);
+        }
+        return fault(q,BT_L2CAP_OWNERSHIP);
+    }
     if(!n)return bt_acl_receive_release(q->acl,record->serial);
     struct bt_l2cap_pdu *r;
     if(pb==2) {
