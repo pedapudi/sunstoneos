@@ -49,6 +49,7 @@ static void pmic(void *unused)
         if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
             atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
         else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY){board_fail(NULL);park();}
+        BOARD_PROGRESS(BOARD_SERVICE_PMIC);
         /* Advance an owned transaction without sleeping after each I2C state.
          * Other ready tasks still run; faults above park with ownership held. */
         if(providers.shared.pmic.held)taskYIELD();else vTaskDelay(1);
@@ -65,6 +66,7 @@ static void typec(void *unused)
             started=1;
         }
         if(started)(void)a733_typec_poll(&board.typec.provider);
+        BOARD_PROGRESS(BOARD_SERVICE_TYPEC);
         /* Advance an owned I2C transfer without sleeping after each state.
          * Attached monitoring reads status only once per REFRESH_US, so
          * every other poll sleeps one tick, inside SERVICE_GAP_US. */
@@ -79,6 +81,7 @@ static void power(void *unused)
         if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
             a733_typec_revoke(&board.typec.provider);
         (void)a733_typec_native_power_poll(&board.typec);
+        BOARD_PROGRESS(BOARD_SERVICE_POWER);
         /* Retained or failed USB work never suspends this task. */
         vTaskDelay(1);
     }
@@ -148,6 +151,21 @@ static void supervise(void *unused)
                     seen_progress=progress;
                 }
             }
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+#elif defined(SUNSTONE_BOARD_RESIDENT)
+static void supervise(void *unused)
+{
+    (void)unused;for(;;){
+        /* The armed watchdog bounds every hang. A failure, an expired service
+         * window or a refused renewal closes admission and stops renewal; the
+         * watchdog then resets the board into a cold boot. */
+        if(!board_live(NULL)||board_resident_renew(board.handles[7])!=1){
+            board_fail(NULL);
+            if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+            park();
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -232,6 +250,9 @@ void a733_smp_diagnostic_start(void)
 #ifdef SUNSTONE_BOARD_SUPERVISED
     board.admitted_session=board.session;
     board.session.session_start_ticks=a733_cached_runtime[0].startup_deadline-A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ;
+    /* Resident: UINT64_MAX/24 us, beyond any counter value, so board_live and
+     * the service deadlines derived from it never expire; drivers only
+     * subtract from or compare with it. */
     board.session.deadline_us=a733_cached_runtime[0].diagnostic_deadline/24;
 #endif
     struct a733_board_session *s=&board.session;

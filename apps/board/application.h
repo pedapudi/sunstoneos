@@ -63,6 +63,21 @@ extern struct board_application board;
 extern struct board_provider providers;
 int board_live(void *);
 void board_fail(void *);
+/* Resident lifetime. Each listed service calls board_service_progress after
+ * every bounded iteration of its loop; recording is one atomic store, safe at
+ * EL0. The supervising task calls board_resident_renew every 20 ms; it renews
+ * the armed watchdog only while every listed service has made progress within
+ * its window, and returns 0 once any has not or a renewal fails. The image
+ * supplies both functions and numbers its own services after BOARD_SERVICES. */
+enum { BOARD_SERVICE_PMIC, BOARD_SERVICE_USB0, BOARD_SERVICE_TYPEC, BOARD_SERVICE_POWER,
+       BOARD_SERVICE_USB2, BOARD_SERVICES };
+#ifdef SUNSTONE_BOARD_RESIDENT
+void board_service_progress(unsigned);
+int board_resident_renew(void *supervisor);
+#define BOARD_PROGRESS(service) board_service_progress(service)
+#else
+#define BOARD_PROGRESS(service) ((void)0)
+#endif
 void board_usb0_task(void *);
 void board_host_task(void *);
 #ifdef SUNSTONE_BOARD_APPLICATION

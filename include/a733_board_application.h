@@ -17,6 +17,28 @@
 #define A733_BOARD_SESSION_VERSION 1u
 #define A733_BOARD_CONTRACT_VERSION 1u
 #endif
+/* Resident lifetime (docs/os-image.md). The session keeps the supervised
+ * layout with zero time fields. The contract has its own magic number, arms
+ * the four-second watchdog, and has no FEL return and no diagnostic deadline.
+ * A supervising task renews the watchdog while every listed service makes
+ * progress. */
+#define A733_BOARD_RESIDENT_CONTRACT_MAGIC UINT64_C(0x4153373342524332)
+#ifdef SUNSTONE_BOARD_RESIDENT
+#ifndef SUNSTONE_BOARD_SUPERVISED
+#error The resident lifetime uses the supervised session layout
+#endif
+#undef A733_BOARD_CONTRACT_MAGIC
+#define A733_BOARD_CONTRACT_MAGIC A733_BOARD_RESIDENT_CONTRACT_MAGIC
+#endif
+/* The integrated OS image (apps/os) extends the board session to
+ * A733_OS_SESSION_BYTES and has its own contract and result magic numbers
+ * for each lifetime. The stage-2 loader produces only the resident contract. */
+#define A733_OS_SESSION_MAGIC UINT64_C(0x415337334f534131)
+#define A733_OS_CONTRACT_MAGIC UINT64_C(0x415337334f534331)
+#define A733_OS_RESULT_MAGIC UINT64_C(0x415337334f535231)
+#define A733_OS_RESIDENT_CONTRACT_MAGIC UINT64_C(0x415337334f524331)
+#define A733_OS_RESIDENT_RESULT_MAGIC UINT64_C(0x415337334f525231)
+#define A733_OS_SESSION_BYTES 808u
 #ifndef A733_BOARD_SUPERVISED_SECONDS
 #define A733_BOARD_SUPERVISED_SECONDS 60u
 #endif
@@ -25,6 +47,9 @@
 #endif
 #if A733_BOARD_STARTUP_SECONDS < 1 || A733_BOARD_STARTUP_SECONDS >= A733_BOARD_SUPERVISED_SECONDS
 #error Invalid supervised board startup interval
+#endif
+#if defined(SUNSTONE_BOARD_RESIDENT) && A733_BOARD_STARTUP_SECONDS >= 4
+#error Resident startup must end before the first watchdog expiry
 #endif
 /* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
  * odd selections include radio. Supervised4 requires both USB leaf classes
