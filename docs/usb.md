@@ -24,8 +24,19 @@ unqualified. This channel uses USB0; the separate DWC3 controller at
 `0x06a00000` requires another driver.
 
 The runtime enters nonsecure EL1 through the [EL3 monitor](a733-kernel.md).
-Each USB task iteration renews the two-second secure recovery timer through
-SMC operation `0x734`. A stalled task stops renewing that deadline. Boot mode 2
+The USB task renews the two-second secure recovery timer through SMC
+operation `0x734` once per 1 ms tick, before each service burst. A stalled
+task stops renewing that deadline.
+
+Each tick runs one service burst and then yields for one tick. A pass of the
+burst polls the controller, runs TinyUSB and services the protocol. The burst
+repeats passes while a pass handles controller events or moves bytes through
+either vendor FIFO. After the last such progress it continues for 125 µs, one
+high-speed microframe, so the host can collect a written packet or send the
+next one. A burst ends after 200 µs of counter time or 64 passes. An idle
+host, or a host that abandons a response, therefore costs one pass per tick,
+while an active transfer moves several 512-byte packets per tick. The
+sustained transfer rate has not been measured on the board. Boot mode 2
 also imposes an eight-second application deadline, so a failed host check
 returns independently to ROM. Boot mode 3 implements a resident loop without
 that application deadline; it has no physical qualification yet. The mimus
@@ -47,19 +58,40 @@ Only one request may be outstanding.
 
 Each message starts with four little-endian 32-bit words: magic `0x53534f53`,
 sequence, command, and payload length. Payloads contain at most 2,048 bytes.
-A response preserves the sequence and sets bit 31 of the command.
+A response preserves the sequence and sets bit 31 of the command. An unknown
+command receives command `0xffffffff` with an empty payload.
 
 | Command | Value | Response payload |
 | --- | --- | --- |
 | Status | 1 | Five little-endian 64-bit values: tick count, CurrentEL, command count, TinyUSB speed, hardware counter |
 | Echo | 2 | The request payload |
-| Log | 3 | Up to 2,048 bytes of the runtime log |
+| Log | 3 | Up to 2,048 bytes of the runtime log, starting at the byte offset given by an optional 4-byte little-endian payload; an offset at or beyond the log end returns no bytes |
 | Recover | 4 | Empty acknowledgment, followed by disconnect and ROM return |
 
 Application commands `0x10` through `0x15` add [asset loading and transcription](mimus-usb.md#application-commands).
 
-This is a development protocol. Malformed-message handling, reset during a
-transfer, cancellation, and concurrent clients need further implementation and
+A header with the wrong magic or a payload length above 2,048 bytes cannot
+delimit its body. The device discards every byte queued in the receive FIFO
+and replies with the received sequence, command `0xfffffffe` and an empty
+payload. It does not return to ROM. Bytes of the same request that arrive
+later are parsed as new headers. Most of them are rejected in the same way,
+but a well-formed frame inside the discarded body, such as one embedded in an
+echo payload, is dispatched like any other request, including Recover and the
+application commands. The host therefore sends the reset request described
+below and drains the IN endpoint before it relies on the channel again.
+
+The host resynchronizes with a vendor control request: request type `0x40`
+(host to device, vendor, device recipient), request `0x01`, value 0, index 0
+and no data stage.
+The device discards a partial request and any unsent response, clears both
+vendor FIFOs and cancels a pending recovery command. A packet the controller
+has already loaded can still reach the host, so the host reads the IN
+endpoint until a short timeout before it sends the next request. A bus reset
+clears the same state. The device stalls other vendor control requests,
+including request `0x01` addressed to the interface (request type `0x41`).
+
+This is a development protocol. Rejection and the reset request are checked
+only in a host model. Physical resynchronization and concurrent clients need
 qualification before use as a general application transport.
 
 ## Build and check
@@ -94,6 +126,14 @@ reset the board after a failure. Inspect host USB metadata to establish that
 ROM returned independently before using `tools/read-returned-result.py` to
 retrieve retained diagnostics. Pass the failed session's evidence directory
 and the same `--fel` executable. That reader refuses an active native service.
+
+The host model in `checks/usb-diagnostic-protocol/check.py` compiles the
+actual `drivers/usb/diagnostic.c` for AArch64 and runs it under Unicorn with
+a modeled TinyUSB vendor stream, controller and host. It covers status, a
+2,048-byte echo serviced within one tick, log reads at several offsets, both
+rejected header forms, recovery from a truncated request and from an
+abandoned response through the reset request, and one recovery-timer renewal
+per tick. It models no controller registers.
 
 The compiled-driver check in `checks/usb-zlp.py` uses Unicorn to verify that
 zero-length IN submission arms the transmit register. It resolves that specific
@@ -133,3 +173,57 @@ This result establishes one bounded diagnostic session from a ROM-initialized
 board. It does not establish sustained throughput, long-duration stability,
 full-speed operation, suspend/resume, other USB classes, or arbitrary fault
 recovery. Those checks remain part of the USB qualification issue.
+
+## Native application USB0 service
+
+Supervised native applications own USB0 through the board providers and
+expose a vendor result channel on the same endpoints. Most applications
+derived from the board image include the shared header
+`apps/board/usb0_service.h`.
+It supplies their device, configuration, qualifier and string descriptors
+from a per-image identity: product ID, device revision and product, serial and
+interface strings. It also supplies the TinyUSB platform hooks, the provider
+startup and the service loop. Each application keeps its own failure policy,
+exchange and transmit accounting.
+
+Each image has a build ID: a SHA-256 digest of its listed source, header and
+patch inputs, which evidence and fixture records use to name the binary. A
+change to the shared header must change the build ID of every image that
+compiles it, so only images whose build identity hashes every `apps/board/*.h`
+file may include it. The board image and the images that inherit its board
+inputs qualify, as do the board, storage-read and eMMC single-core images.
+The images that use the header are the board image and the ADC, SPI, UART,
+PCIe, PCIe test, monitor, storage read, JPEG decode and encode, H.264 decode
+and encode, G2D, ISP0, deinterlace, HEVC, DisplayPort, Bluetooth and mimus
+board images.
+
+The camera, I2S, GPU render, GPU display, HDMI audio, accelerator, NPU
+runtime, NPU large-graph and DSI scanout images do not hash `apps/board/*.h`.
+Neither do the PWM, RTC, thermal and crypto single-core images, which compile
+the same USB source files as their multicore images. All of these application
+USB sources therefore keep their own copies of the descriptors, hooks and
+service loop. Those loops service one pass per tick, or eight passes per tick
+in the GPU display, HDMI audio, NPU large-graph and accelerator owners. Moving
+them to the shared header first requires adding the header to the build
+identity inputs of every image that compiles them.
+
+The shared loop uses the same burst rules as the diagnostics runtime, with one
+more progress condition: a pass that arms the IN endpoint counts as progress.
+A response of 512 bytes or less that the same pass writes and flushes leaves
+the TX FIFO level unchanged, so without this condition its completion would
+wait for the next tick. The loop also rechecks application liveness and
+provider health on every pass. The board image's failure path parks only
+USB0. An image that reuses the board's USB0 source can add its own revocation
+by defining `BOARD_USB0_STOP()`; the mimus board image uses it to fail the
+board and revoke Type-C.
+
+`checks/usb0-service-burst.py` runs the actual service loop against a modeled
+vendor stream, controller and host. With a 20 µs host turnaround it moves a
+64 KiB response in 13 ticks, a 1,160-byte board frame within one tick and a
+2,064-byte request within two ticks. A 256-byte response completes within
+one tick; it takes two ticks if armed-endpoint progress is not counted. A
+one-pass loop needs one tick per packet: 128 ticks for the 64 KiB response. The model also checks that idle
+and abandoned hosts cost one pass per tick and that no burst exceeds its
+budget. `checks/usb0-service-descriptors.py` runs the descriptor callbacks of
+two linked images under Unicorn and compares their bytes; it confirms that
+the shared descriptors match the earlier per-application copies.

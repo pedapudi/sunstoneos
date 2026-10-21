@@ -46,6 +46,4 @@ s=replace(s,'}else if(r==A733_USB2_READY&&!issued){','}else if(r==A733_USB2_READ
 s=replace(s,'if(done==1){\n                if(board.session.workload==12','if(done==1){\n                mimus_board_storage_completed(1);\n                if(board.session.workload==12')
 (a.output/'mimus-client.c').write_text(s)
 s=(a.root/'apps/board/usb0.c').read_text().replace('#include "application.h"','#include "../board/application.h"')
-s=replace(s,'static _Noreturn void stop(void){for(;;)vTaskDelay(1);}',
-    'static _Noreturn void stop(void){board_fail(NULL);a733_typec_revoke(&board.typec.provider);for(;;)vTaskDelay(1);}')
 (a.output/'mimus-usb-base.c').write_text(s)

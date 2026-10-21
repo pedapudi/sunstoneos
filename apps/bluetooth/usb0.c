@@ -21,7 +21,7 @@
 #endif
 extern struct bluetooth_application bluetooth;
 const uint8_t *tud_descriptor_device_cb(void)
-{static tusb_desc_device_t descriptor;descriptor=device;descriptor.idProduct=0xefe8;return (const uint8_t *)&descriptor;}
+{static tusb_desc_device_t descriptor;descriptor=usb0_device;descriptor.idProduct=0xefe8;return (const uint8_t *)&descriptor;}
 const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 {(void)language;static uint16_t value[64];static const char *const names[]={"","sunstoneos","sunstoneos Bluetooth HCI","sunstoneos-a733-bluetooth","Capture"};
  if(!i){value[0]=0x0304;value[1]=0x0409;return value;}if(i>=5)return NULL;
@@ -162,10 +162,9 @@ identification:;
 }
 void board_usb0_task(void *unused)
 {
-    (void)unused;for(;;){if(!board_live(NULL))stop();int r=a733_native_usb_step(&providers.shared);
-        if(r<0)stop();if(r==1)break;vTaskDelay(1);}
-    tusb_rhport_init_t init={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_HIGH};if(!tusb_init(0,&init))stop();
-    for(;;){if(!board_live(NULL))stop();tud_task();a733_usb_prepare();if(polling)dcd_int_handler(0);identity_exchange();vTaskDelay(1);}
+    (void)unused;
+    usb0_service_start();
+    usb0_service_run(identity_exchange);
 }
 
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
