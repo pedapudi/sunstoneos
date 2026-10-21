@@ -20,13 +20,27 @@ static void hid_append(uint8_t batch[512],const struct a733_usb2_hid_report *rep
     memcpy(entry+16,report->data,report->bytes);put32(batch+8,reports+1);
 }
 /* Final attachment check before publication. A busy provider observation is
- * repeated; the lifetime deadline bounds it, and refusal ends the session. */
+ * repeated for at most 2 ms, as inside the host drivers, and never past the
+ * lifetime deadline; refusal or a longer BUSY ends the session. */
 static int attached(struct a733_usb2_native *n)
 {
-    int r;
-    while(!(r=n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline))){}
+    uint64_t start,now;int r;
+    if(n->core.ops.now(n->core.context,&start)!=1)return 0;
+    while(!(r=n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)))
+        if(n->core.ops.now(n->core.context,&now)!=1||now<start||now-start>=2000)return 0;
     return r==1;
 }
+#ifndef SUNSTONE_BOARD_USB2_IRQ
+/* Owner-visible progress of one poll: platform startup, core state, consumed
+ * controller events, mount state and this task's request state. */
+struct host_progress { unsigned platform,supply,core,event,cycle,mounted,issued,reports; };
+static struct host_progress host_progress(unsigned issued,unsigned reports)
+{
+    const struct a733_usb2_native *n=&board.host;
+    return (struct host_progress){n->platform.phase,n->platform.supply_index,n->core.phase,
+        n->core.event_index,n->core.event_cycle,n->mounted,issued,reports};
+}
+#endif
 static int dual_step(unsigned *issued,unsigned *reports,unsigned *sector_done)
 {
     struct a733_usb2_native *n=&board.host;uint8_t *p=board.dual_result;
@@ -65,7 +79,7 @@ void board_host_task(void *unused)
 {
     (void)unused;unsigned issued=0,reports=0,sector_done=0;
 #ifndef SUNSTONE_BOARD_USB2_IRQ
-    unsigned burst=0;
+    unsigned burst=0,idle=0;
 #endif
     board.host.dual_leaf=board.session.workload==4;
     for(;;){
@@ -73,6 +87,8 @@ void board_host_task(void *unused)
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         int irq_ready=board_host_irq_before();if(irq_ready<0)break;
         if(!irq_ready){board_host_irq_wait();continue;}
+#else
+        const struct host_progress before=host_progress(issued,reports);
 #endif
         enum a733_usb2_result r=a733_usb2_native_poll(&board.host);
         if(r==A733_USB2_RETAINED||r==A733_USB2_INVALID)break;
@@ -130,9 +146,14 @@ void board_host_task(void *unused)
         board_host_irq_wait();
 #else
         /* While setup or a transfer is outstanding, poll again without
-         * sleeping, up to the interrupt profile's 32-poll batch. Each poll
-         * still checks the provider at every controller access. */
-        if((r==A733_USB2_PENDING||issued==1)&&++burst<32)continue;
+         * sleeping, up to the interrupt profile's 32-poll batch, until four
+         * consecutive polls make no progress. Those polls give a request
+         * issued by a progressing poll time to complete before the task
+         * sleeps. Work that stays idle, such as a HID transfer waiting for
+         * input or a PMIC supply result, costs one poll per tick. */
+        const struct host_progress after=host_progress(issued,reports);
+        idle=memcmp(&before,&after,sizeof(after)) ? 0 : idle<4 ? idle+1 : 4;
+        if((r==A733_USB2_PENDING||issued==1)&&idle<4&&++burst<32)continue;
         burst=0;vTaskDelay(1);
 #endif
     }

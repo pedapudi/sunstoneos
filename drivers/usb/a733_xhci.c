@@ -7,6 +7,7 @@
 #define TYPE(n) ((uint32_t)(n)<<10)
 #define IOC BIT(5)
 #define MAX_OFFSET UINT32_C(0x8000)
+#define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
 enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_SET_DEQUEUE=16 };
@@ -56,11 +57,17 @@ static int guard(struct a733_xhci *x,uint64_t deadline)
     if(x->ops.now(x->context,&now)!=1||now<x->last_now||now>=deadline||now>=x->lifetime_deadline)return -1;
     x->last_now=now;return live;
 }
-/* Repeat a BUSY observation without MMIO; guard() refuses once the deadline
- * passes, which bounds the retry. Submission and configuration calls use it
- * too, because their callers treat refusal as a lost session. */
+/* Repeat a BUSY observation without MMIO for at most BUSY_US of counter time
+ * and never past the deadline, which guard() enforces. A provider can stay
+ * BUSY while it waits for a lock this caller holds, so a longer BUSY fails
+ * like a refusal. Submission and configuration calls use it too, because
+ * their callers treat refusal as a lost session. */
 static int settled(struct a733_xhci *x,uint64_t deadline)
-{int live;while(!(live=guard(x,deadline))){}return live;}
+{
+    int live=guard(x,deadline);const uint64_t start=x->last_now;
+    while(!live&&x->last_now-start<BUSY_US)live=guard(x,deadline);
+    return live;
+}
 /* Every access still needs a fresh observation. */
 static int checked(struct a733_xhci *x)
 {if(settled(x,x->deadline)!=1)return fault(x);return 1;}
