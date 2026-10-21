@@ -9,6 +9,7 @@ struct a733_uart_platform_native {
     int (*admit)(void *,const struct a733_uart_platform_config *,
         const struct a733_clock_token *,enum a733_uart_admission);
     unsigned port,initialized;
+    uint32_t mcr,lcr; /* Last accepted MCR and LCR writes, for the THR policy. */
 };
 /* Pure address admission for the selected controller, its clock/reset bits,
  * source observations and GIC mask/pending words. Parent writes are excluded. */

@@ -27,6 +27,10 @@
 /* sunxi-uart-ng hardware 9-bit configuration: half duplex (DUPLEX, bit 4)
  * and RXBFA (bit 3, reserved in the manual); RCM 0 selects 9-bit receive. */
 #define RS485_HALF_9BIT 0x18u
+/* Readback compares the defined control bits and leaves out bits 6 and 5
+ * (write-one-to-clear address-detect status) and bit 3, whose reserved
+ * definition in the manual may read back zero. */
+#define RS485_CHECKED 0x97u
 #define ERRORS 0x9eu
 
 static int span(const void *p, size_t n)
@@ -282,12 +286,11 @@ int a733_uart_mode(struct a733_uart *u, enum a733_uart_mode mode, uint64_t deadl
     /* Leave RS-485 before changing MCR; enter it after MCR selects it. */
     if (u->mode == A733_UART_MODE_RS485 && !ctl &&
         (!write_reg(u, RS485_CTL, 0) || !read_reg(u, RS485_CTL, &v))) return u->state;
-    if (u->mode == A733_UART_MODE_RS485 && !ctl && (v & 0x9fu)) { fault(u); return u->state; }
+    if (u->mode == A733_UART_MODE_RS485 && !ctl && (v & RS485_CHECKED)) { fault(u); return u->state; }
     if (!write_reg(u, MCR, mcr) || !read_reg(u, MCR, &v)) return u->state;
     if ((v & 255u) != mcr) { fault(u); return u->state; }
     if (ctl && (!write_reg(u, RS485_CTL, ctl) || !read_reg(u, RS485_CTL, &v))) return u->state;
-    /* Bits 6 and 5 are write-one-to-clear address-detect status. */
-    if (ctl && (v & 0x9fu) != ctl) { fault(u); return u->state; }
+    if (ctl && (v & RS485_CHECKED) != (ctl & RS485_CHECKED)) { fault(u); return u->state; }
     u->mode = mode;
     return u->state;
 }

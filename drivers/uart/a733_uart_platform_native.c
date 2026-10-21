@@ -80,15 +80,20 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     if (a>=base && a<=base+0xc0) {
         /* FCR accepts only the port's planned trigger, with or without the
          * FIFO reset bits, and the DMA mode value. MCR accepts the planned
-         * flow control alone or with loopback, IrDA SIR and RS-485 9-bit;
-         * THR alone takes a ninth (RS-485 address) bit. */
+         * flow control alone or with loopback, IrDA SIR and RS-485 9-bit.
+         * Offset 0 takes a ninth (RS-485 address) bit only as THR: after the
+         * last MCR write selected RS-485 and while the last LCR write left
+         * DLAB clear, so DLL never takes it. */
         uint32_t fcr=a733_uart_fcr(n->port);
         uint32_t mcr=v&~0x10u;
-        if (v>(a==base ? 0x1ffu : 255u) || (a==base+0xa4 && (v&~7u) && v!=0xc2) ||
+        unsigned ninth=a==base && n->mcr==0xa2 && !(n->lcr&0x80);
+        if (v>(ninth ? 0x1ffu : 255u) || (a==base+0xa4 && (v&~7u) && v!=0xc2) ||
             (a==base+8 && v!=fcr && v!=(fcr|6u) && v!=9) ||
             (a==base+0x10 && mcr!=0 && mcr!=0x22 && v!=0x40 && v!=0xa2) ||
             (a==base+0x88 && v!=0xe5) || (a==base+0x8c && v!=0 && v!=3) ||
             (a==base+0xc0 && v!=0 && v!=0x18)) return 0;
+        if (a==base+0x10) n->mcr=v;
+        else if (a==base+0xc) n->lcr=v;
     } else if (a>=UINT32_C(0x03400000) && a<UINT32_C(0x03410000)) {
         unsigned intid=n->port<7 ? 34+n->port : 233+n->port-7;
         if (v!=(UINT32_C(1)<<(intid%32))) return 0;
@@ -110,6 +115,7 @@ int a733_uart_platform_native_init(struct a733_uart_platform_native *n,
 {
     if (!n || n->initialized || !locks || !locks->initialized || !owner_task || port>8 || !admit) return 0;
     n->locks=locks;n->owner_task=owner_task;n->port=port;n->admit=admit;n->admission_cookie=admission_cookie;
+    n->mcr=n->lcr=0;
     n->operations=(struct a733_uart_platform_ops){now,current,authorize,enter,leave,retain,read32,write32};
     n->initialized=1;return 1;
 }

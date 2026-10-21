@@ -154,7 +154,10 @@ external reset at close.
   RS-485 control `0x18`: half duplex (bit 4) and the driver's RXBFA bit
   (bit 3). This is the pinned `sunxi-uart-ng` hardware 9-bit configuration. It requires
   UART1–6 with RTS/CTS routed, eight data bits and parity. The RTS output
-  drives the transceiver enable. The parity select supplies the ninth transmit
+  drives the transceiver enable. The readback compares bits 7, 4 and 2–0 of
+  the RS-485 control register. It leaves out the write-one-to-clear
+  address-detect status bits 6 and 5 and the reserved bit 3, which may read
+  back zero on silicon. The parity select supplies the ninth transmit
   bit: even parity writes THR bit 8 set, odd parity leaves it clear, as the
   pinned driver does. Received bytes return RBR bit 8 in status bit 0
   (`A733_UART_NINTH_BIT`).
@@ -234,10 +237,12 @@ A line-mode model covers RS-485 with both parity selects, the ninth bit in
 both directions, the return to UART mode, loopback, IrDA at 115200 baud, every
 refusal and a busy line, and readback faults. The DMA lease model runs on UART1,
 UART2 and S_UART1. The controller compiles as freestanding AArch64 C. The
-linked native write policy is checked separately on the UART DMA image by
-[uart-native-fcr.py](../checks/uart-native-fcr.py). That evidence and the
-runner output are under `~/.cache/sunstoneos/build/audit-serial-buses/checks/`
-(`uart/` and `uart-native-policy/`).
+linked native write policy, including the ninth-bit rule that follows the last
+modem control and line control writes, is checked separately on the UART DMA
+image by [uart-native-fcr.py](../checks/uart-native-fcr.py). The
+[platform composition check](uart-platform.md#validation-composes-the-real-software-components)
+runs the line modes and the DMA lease on UART1 and S_UART0 through the
+binding's register filter.
 
 Evidence and exact inputs are under
 `~/.cache/sunstoneos/evidence/uart-20261016/`. Physical qualification requires

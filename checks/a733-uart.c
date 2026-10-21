@@ -9,7 +9,7 @@ struct model {
     unsigned trace_offset[64], trace_value[64], trace_count;
     uint64_t now;
     int backwards, late, shift_busy;
-    unsigned ninth, last_tx, stuck_offset;
+    unsigned ninth, last_tx, stuck_offset, reserved_zero;
     uintptr_t base; /* Zero selects UART1. */
 };
 static int now(void *p, uint64_t *t)
@@ -42,6 +42,7 @@ static int write32(void *p, uintptr_t addr, uint32_t v)
     if (o==0 && (m->regs[3]&128)) m->dll=v;
     else if (o==4 && (m->regs[3]&128)) m->dlh=v;
     else if (o==0) { assert(m->tx_space); --m->tx_space; ++m->tx_count; m->last_tx=v; }
+    else if (o==0xc0 && m->reserved_zero) m->regs[o/4]=v&~8u;
     else m->regs[o/4]=v;
     return 1;
 }
@@ -136,6 +137,18 @@ static void modes(void)
     assert(a733_uart_mode(&u,A733_UART_MODE_RS485,1000)==A733_UART_READY && !u.mode && m.regs[4]==0x22);
     m.shift_busy=0;m.stuck_offset=0xc0;
     assert(a733_uart_mode(&u,A733_UART_MODE_RS485,1000)==A733_UART_FAULT);
+    /* Reserved RS-485 control bit 3 may read back zero in either direction. */
+    configured(&u,&m,&f);m.reserved_zero=1;
+    assert(a733_uart_mode(&u,A733_UART_MODE_RS485,1000)==A733_UART_READY && m.regs[0xc0/4]==0x10);
+    assert(a733_uart_mode(&u,A733_UART_MODE_UART,1000)==A733_UART_READY && !u.mode);
+    configured(&u,&m,&f);
+    assert(a733_uart_mode(&u,A733_UART_MODE_RS485,1000)==A733_UART_READY);
+    m.regs[0xc0/4]=0x8;m.stuck_offset=0xc0;
+    assert(a733_uart_mode(&u,A733_UART_MODE_UART,1000)==A733_UART_READY && !u.mode);
+    configured(&u,&m,&f);
+    assert(a733_uart_mode(&u,A733_UART_MODE_RS485,1000)==A733_UART_READY);
+    m.regs[0xc0/4]=0x10;m.stuck_offset=0xc0;
+    assert(a733_uart_mode(&u,A733_UART_MODE_UART,1000)==A733_UART_FAULT);
     configured(&u,&m,&f);m.stuck_offset=0x10;
     assert(a733_uart_mode(&u,A733_UART_MODE_LOOPBACK,1000)==A733_UART_FAULT);
 }
