@@ -12,7 +12,7 @@ static struct dsi_session input;
 static struct device_memory_pool memory_pool;
 static void *backing;
 static uint32_t iommu_words[0x20000/4];
-static unsigned owner_token,calls,fail_mode,injected;
+static unsigned owner_token,calls,fail_mode,injected,pll_yields,pll_ticks;
 static jmp_buf done;
 const struct dsi_session *dsi_admitted_session(void){return &input;}
 uint64_t a733_smp_counter(void){return pm.now*24;}
@@ -52,6 +52,9 @@ int a733_media_clock_native_write(void *v,uintptr_t a,uint32_t value){assert(v==
 struct device_memory_pool *a733_memory_uncached_init(void){return &memory_pool;}
 void vTaskDelay(TickType_t ticks)
 {
+ /* A zero delay is a yield while the PLL holds the register mutex. */
+ if(!ticks){assert(dsi.stage==4&&dsi.pll.held&&pm.register_held);++pll_yields;return;}
+ pll_ticks+=dsi.pll.held;
  assert(ticks==1);pm.now+=1000;
  if(!injected&&fail_mode==1&&dsi.stage==6){injected=1;dsi.iommu.tables.spans[0].physical+=4096;}
  if(!injected&&fail_mode==2&&dsi.stage==10){injected=1;iommu_words[0x10088/4]=1;}
@@ -97,6 +100,7 @@ static void application_setup(void)
 }
 
 #ifndef DSI_NATIVE_REUSE
+int a733_display_native_rcq_submit(void){assert(!"version-1 sessions never replay");return -1;}
 int main(int argc,char **argv)
 {
  assert(argc==4);FILE *f=fopen(argv[1],"rb");assert(f&&fread(&input,1,sizeof(input),f)==sizeof(input)&&!fclose(f));assert(dsi_profile_valid(&input));
@@ -105,6 +109,8 @@ int main(int argc,char **argv)
  application_setup();if(!setjmp(done))dsi_task(0);
  if(fail_mode){assert(atomic_load(&dsi.result)==2);assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_RETAINED&&device_memory_lookup(&memory_pool,dsi.tables)->state==DEVICE_MEMORY_RETAINED);}
  else {assert(atomic_load(&dsi.result)==1&&dsi.native.binding.transferred&&dsi.iommu.state==A733_IOMMU_ACTIVE&&dsi.iommu.fault.scanned_masters==0x100);
+ /* No tick passes while the PLL holds the common register mutex. */
+ assert(pll_yields>100&&!pll_ticks);
  assert(dsi.media.config.groups==(A733_MEDIA_DE|A733_MEDIA_VO0|A733_MEDIA_IOMMU));assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_DEVICE);
  f=fopen(argv[3],"wb");assert(f&&fwrite(dsi.observation,1,256,f)==256&&!fclose(f));}
  printf("PASS native application %s %ux%u; actual producers/PMIC/pins/IOMMU/scanout; callbacks%u; physical authority modeled\n",argv[2],input.values[3],input.values[4],calls);free(backing);return 0;

@@ -57,7 +57,8 @@ def run(command):
 
 binary = a.evidence/'check'
 run([compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-     '-Wno-unused-function', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Iinclude',
+     # The reused scanout fixtures predate the optional rcq_submit provider field.
+     '-Wno-unused-function', '-Wno-missing-field-initializers', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Iinclude',
      'checks/display-native.c', *compiled, '-o', binary])
 result = run([binary])
 for name in ['drivers/display/a733_display_native.c']:
