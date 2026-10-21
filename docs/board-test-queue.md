@@ -39,22 +39,37 @@ The original board is reserved for direct multicore investigation; the second
 can run independent device work after its own recovery and platform admission.
 
 Queue and token files are under `~/.cache/sunstoneos/`. Use the matching
-`--database` and `--token-file` arguments. A failure halts that board's queue;
+`--database` and `--token-file` arguments. Each database records the physical
+USB port of its board. Immediately before native entry, a supervised runner
+refuses the launch when the `--database` it was given records a port other
+than the one it has locked. A claim in one board's queue therefore cannot
+authorize a launch on the other board. A failure halts that board's queue;
 recovery evidence and admission never transfer between boards. Do not copy a
 live device identity, RAM reservation or electrical qualification to the second
 board. USB enumeration numbers change; the physical port identifies ownership.
 
 ## Initialize once and submit immutable proposals
 
-The coordinator initializes the shared database and retains the token file:
+The coordinator initializes the shared database for one board port and
+retains the token file:
 
 ```sh
 python3 tools/board-test-queue.py \
-  --token-file ~/.cache/sunstoneos/board-test-coordinator.token init
+  --token-file ~/.cache/sunstoneos/board-test-coordinator.token init --port 3-1
 ```
 
-Initialization refuses to overwrite either the database or token file. The token
-controls coordinator operations through this CLI. Files use owner-only access,
+Initialization refuses to overwrite either the database or token file. The
+port uses the same format check as the board lock. A database created before
+ports were recorded has no port, and supervised runners refuse its claims. The
+coordinator records the port once; the tool refuses to change it afterwards:
+
+```sh
+python3 tools/board-test-queue.py \
+  --database ~/.cache/sunstoneos/board-tests-3-3.sqlite3 \
+  --token-file ~/.cache/sunstoneos/board-test-coordinator-3-3.token bind-port --port 3-3
+```
+
+The token controls coordinator operations through this CLI. Files use owner-only access,
 but agents running under the same host user can read them. This mechanism
 prevents accidental role confusion; it is not an isolation boundary against an
 agent that ignores its assignment. Workers receive the database path and submit
@@ -92,7 +107,7 @@ The submission ID is the SHA-256 of the canonical JSON object. Submitting the
 same proposal returns the existing ID and state. Submission contents are
 immutable. Changes require another proposal; terminal records retain their
 results and event history. The list reports states, owners, prerequisites, and
-whether a failure has halted claims. `show` includes the complete proposal,
+whether a failure has halted claims. It also reports the queue's port. `show` includes the complete proposal,
 review evidence, and history.
 
 ## Review prerequisites and claim one test
@@ -180,14 +195,19 @@ the queue halt.
 ## Host evidence covers scheduling and state retention
 
 `python3 checks/board-test-queue.py` uses a temporary database, synthetic artifacts,
-and separate host processes. It checks submission deduplication, coordinator
+and separate host processes. It checks port recording and one-time binding,
+refusal of a claim from a queue bound to another port, submission deduplication, coordinator
 access, prerequisite completeness, artifact changes, and concurrent claims.
 It also checks retained ownership after the claiming process exits, explicit
 release, failure halt, recovery review, terminal states, and immutable proposals.
 
+The development dashboard (`tools/progress.py`) reads both queues listed above
+and shows each queue's halt state with its port.
+
 The focused check passed on 2026-10-16. Its log and input hashes are retained in
-`~/.cache/sunstoneos/evidence/board-test-queue-20261016/`. No physical device or
-emulator was accessed. This evidence establishes scheduling behavior; physical
+`~/.cache/sunstoneos/evidence/board-test-queue-20261016/`. That record predates
+the port cases, which pass in the current check without evidence of their own.
+No physical device or emulator was accessed. This evidence establishes scheduling behavior; physical
 recovery and hardware qualification remain separate requirements.
 
 ## Supervised recovery admission check

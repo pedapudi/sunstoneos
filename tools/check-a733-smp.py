@@ -6,6 +6,7 @@ channel survives the independent watchdog reset under the current contract.
 """
 import argparse
 from contextlib import contextmanager
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -27,10 +28,63 @@ CONTRACT = 0x42004000
 REGIONS = [('launcher', 0x52000, 0xc00), ('request', 0x52c00, 128),
            ('report', 0x52d00, 128), ('stack', 0x53000, 0x1000), ('scratch', 0x71000, 128)]
 PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel', 'ddr-reservation', 'smp-launcher-software'}
+# One sunxi-fel call writes a whole extent and reads it back. The recorded
+# full-speed link moved about 0.57 MB/s; budget less than half of that for each
+# byte written or read, on top of the fixed limit for small requests.
+FEL_REQUEST_SECONDS = 15
+FEL_BYTES_PER_SECOND = 250000
+FEL_TIMEOUT_LIMIT = 300
 
 
 def require(ok, message):
     if not ok: raise ValueError(message)
+
+
+def fel_timeout(arguments):
+    """Bound one request by the bytes it moves; refuse one that cannot finish."""
+    arguments = [str(x) for x in arguments]; moved = 0
+    for index, value in enumerate(arguments):
+        if value == 'write': moved += Path(arguments[index + 2]).stat().st_size
+        elif value == 'read': moved += int(arguments[index + 2])
+    timeout = FEL_REQUEST_SECONDS + -(-moved // FEL_BYTES_PER_SECOND)
+    require(timeout <= FEL_TIMEOUT_LIMIT, 'FEL request exceeds the bounded transfer time.')
+    return timeout
+
+
+def fel_request(fel, node, arguments, entry, pass_fds=()):
+    """Run one sunxi-fel request; journal its bound and monotonic start and end."""
+    timeout = fel_timeout(arguments)
+    entry.update(timeout_seconds=timeout, started_monotonic=time.monotonic())
+    try:
+        result = subprocess.run([str(fel), '-d', f'{int(node.parent.name)}:{int(node.name)}', *map(str, arguments)],
+                                capture_output=True, text=True, timeout=timeout, pass_fds=pass_fds)
+    finally:
+        entry['finished_monotonic'] = time.monotonic()
+    entry.update(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
+    require(result.returncode == 0, 'FEL request failed.')
+    return result
+
+
+def present_instance(access, config):
+    """Return the port's FEL node and identity from one lstat, or (None, None).
+
+    session_node maps the expected disconnect to absence, but the node can still
+    disappear before a second lstat. Treat only that absence as an absent node.
+    """
+    candidate = access.session_node(config)
+    if candidate is None: return None, None
+    try: return candidate, access.identity(candidate)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ENODEV): return None, None
+        raise
+
+
+def require_queue_port(database, port):
+    """A board queue authorizes only the physical port recorded at its creation."""
+    db = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True)
+    try: row = db.execute("SELECT value FROM settings WHERE key='port'").fetchone()
+    finally: db.close()
+    require(row is not None and row[0] == port, f'Queue {database} is not bound to locked USB port {port}.')
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -343,6 +397,7 @@ def main(argv=None):
     with access.board_lock() as node:
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
+        require_queue_port(args.database,port.name)
         validate_qualification(qualification,port.name,str(port.resolve()))
         require(input_record.get('complete') is True and input_record.get('asserted') is True and input_record.get('workspace_restored') is True and input_record.get('identity')==identity and input_record.get('port')==port.name and input_record.get('rom_sha256')==ROM_HASH, 'Stable low-input evidence does not cover this live instance.')
         require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port.name and ddr.get('image_sha256')==prepared['image_sha256'] and ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x41000000,0x42200000]], 'DDR reservation/publication contract is incomplete.')
@@ -358,9 +413,7 @@ def main(argv=None):
             record['transactions'].append(entry); save()
             try:
                 require(access.identity(node)==identity,'USB identity changed before a request.')
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
-                require(result.returncode==0,'FEL request failed.')
+                result=fel_request(args.fel,node,arguments,entry,pass_fds)
             except (OSError,ValueError,subprocess.TimeoutExpired) as error:
                 failed=True; entry['failure']=str(error); save(); raise
             save(); return result.stdout
@@ -368,21 +421,15 @@ def main(argv=None):
             nonlocal node,identity
             old=identity; deadline=time.monotonic()+20; departure=False
             while time.monotonic()<deadline:
-                candidate=access.session_node(port_config)
-                if candidate is None:
-                    departure=True
-                else:
-                    try:
-                        new=access.identity(candidate)
-                        if new!=old: departure=True
-                        if new!=old and os.access(candidate,os.R_OK|os.W_OK):
-                            access.require_session(candidate); access.require_rom(candidate); node,identity=candidate,new
-                            record.update(returned_node=str(node),returned_identity=identity); save()
-                            require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.'); return
-                    except FileNotFoundError: departure=True
+                candidate,new=present_instance(access,port_config)
+                if candidate is None or new!=old: departure=True
+                if candidate is not None and new!=old and os.access(candidate,os.R_OK|os.W_OK):
+                    access.require_session(candidate); access.require_rom(candidate); node,identity=candidate,new
+                    record.update(returned_node=str(node),returned_identity=identity); save()
+                    require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.'); return
                 time.sleep(.05)
-            candidate=access.session_node(port_config)
-            if not departure and candidate is not None and access.identity(candidate)==old and os.access(candidate,os.R_OK|os.W_OK):
+            candidate,current=present_instance(access,port_config)
+            if not departure and candidate is not None and current==old and os.access(candidate,os.R_OK|os.W_OK):
                 access.require_session(candidate); access.require_rom(candidate)
                 return observe_refusal(transaction,args.evidence,prepared,record,save)
             raise ValueError('No distinct accessible ROM instance in 20 seconds; ownership remains held.')

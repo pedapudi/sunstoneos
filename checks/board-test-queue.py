@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check board-test scheduling with concurrent host processes and no USB access."""
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sqlite3
@@ -9,6 +10,15 @@ import sys
 import tempfile
 
 TOOL = Path(__file__).resolve().parents[1] / 'tools/board-test-queue.py'
+BASE = Path(__file__).resolve().parents[1] / 'tools/check-a733-smp.py'
+
+
+def port_refused(base, db, port):
+    try:
+        base.require_queue_port(db, port)
+    except ValueError:
+        return True
+    return False
 
 
 def main():
@@ -26,11 +36,33 @@ def main():
         def record(path):
             return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
-        run(admin + ['init'])
-        original = token.read_bytes()
         run(admin + ['init'], False)
+        run(admin + ['init', '--port', '../3-3'], False)
+        assert not db.exists() and not token.exists()
+        run(admin + ['init', '--port', '3-3'])
+        original = token.read_bytes()
+        run(admin + ['init', '--port', '3-3'], False)
         assert token.read_bytes() == original
         assert token.stat().st_mode & 0o777 == 0o600
+        assert run(base + ['list'])['port'] == '3-3'
+        # Supervised runners compare the queue's port with the locked board port.
+        spec = importlib.util.spec_from_file_location('queue_check_base', BASE)
+        smp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smp)
+        assert port_refused(smp, db, '3-1') and not port_refused(smp, db, '3-3')
+        run(admin + ['bind-port', '--port', '3-1'], False)
+        # A queue created before binding records its port once, by the coordinator.
+        legacy, legacy_token = root / 'legacy.sqlite3', root / 'legacy-coordinator'
+        legacy_admin = [sys.executable, str(TOOL), '--database', str(legacy),
+                        '--token-file', str(legacy_token)]
+        run(legacy_admin + ['init', '--port', '3-1'])
+        with sqlite3.connect(legacy) as connection:
+            connection.execute("DELETE FROM settings WHERE key='port'")
+        assert port_refused(smp, legacy, '3-1')
+        run([sys.executable, str(TOOL), '--database', str(legacy), 'bind-port', '--port', '3-1'], False)
+        run(legacy_admin + ['bind-port', '--port', '3-1'])
+        run(legacy_admin + ['bind-port', '--port', '3-3'], False)
+        assert not port_refused(smp, legacy, '3-1') and port_refused(smp, legacy, '3-3')
         binary = root / 'image.bin'
         binary.write_bytes(b'bounded fake test artifact')
         proof = root / 'proof.json'
@@ -105,7 +137,7 @@ def main():
         for test_id in (first, second, retry):
             saved = run(base + ['show', test_id])
             assert saved['events'] and saved['submission']['sources'][0]['revision'] == 'a' * 40
-        print('PASS: submission identities, authorization, prerequisite review, artifact changes,')
+        print('PASS: port binding, submission identities, authorization, prerequisite review, artifact changes,')
         print('concurrent claims, retained ownership, failure halt, recovery review, terminal history.')
 
 

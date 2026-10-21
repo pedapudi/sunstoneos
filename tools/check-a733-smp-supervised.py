@@ -278,9 +278,13 @@ def finish_after_observation(record,save,quarantine,hold=base.hold_ownership):
 def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
     # A frozen snapshot does not stop CPUs or restore ROM. Reuse the existing
     # coordinator hold on every post-entry outcome, including observed success.
+    # hold() never returns, so report the durable result before quarantine.
     try:
         record['manual_reconnect_required']=True
-        save();quarantine()
+        save()
+        print('Diagnostic: '+str(record.get(record.get('result_key'),'unobserved'))+
+              '. Manual reconnection required. Queue claim remains with coordinator.',flush=True)
+        quarantine()
     finally:
         hold()
 
@@ -308,7 +312,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     sys.path.insert(0,str(Path.home()/'git/mimus/tools')); import usb_guard
     usb_guard.check_health()
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
-            'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,result_key:'unobserved'}
+            'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,
+            'result_key':result_key,result_key:'unobserved'}
     def save(): save_json(args.evidence/'session.json',record)
     with access.board_lock() as node:
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
@@ -318,6 +323,12 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
         save()
+        def ready_on_port():
+            # The final claim check before entry also binds the claim's queue to
+            # this locked physical port. Launch parsers require --database;
+            # offline transport fixtures omit it.
+            ready()
+            if getattr(args,'database',None) is not None: base.require_queue_port(args.database,port.name)
         def transaction(*arguments,pass_fds=()):
             nonlocal failed
             require(not failed,'A transport failure forbids all further requests.')
@@ -330,10 +341,7 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
             try:
                 require(access.identity(node)==identity,'USB instance changed before FEL request.')
                 access.require_rom(node)
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],
-                                      capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
-                entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
-                require(result.returncode==0,'FEL request failed.')
+                result=base.fel_request(args.fel,node,arguments,entry,pass_fds)
             except (OSError,ValueError,subprocess.TimeoutExpired) as error:
                 failed=True;entry['failure']=str(error);save();raise
             save();return result.stdout
@@ -343,14 +351,14 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
             # Enumeration is passive. A sole nonce-bound report probe is allowed
             # only if this window ends with the original instance unchanged.
             while time.monotonic()<deadline:
-                candidate=access.session_node(port_config)
-                if candidate is None or access.identity(candidate)!=old:original_stayed=False
-                if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):
+                candidate,current=base.present_instance(access,port_config)
+                if candidate is None or current!=old:original_stayed=False
+                if candidate is not None and current!=old and os.access(candidate,os.R_OK|os.W_OK):
                     access.require_session(candidate)
                     require((port/'bcdDevice').read_text().strip()==f'{bcd_device:04x}' and
                             (port/'product').read_text().strip()==product and
                             (port/'serial').read_text().strip()==serial, 'Unexpected target service.')
-                    node,identity=candidate,access.identity(candidate)
+                    node,identity=candidate,current
                     import usb.core
                     device=usb.core.find(idVendor=0x1f3a,idProduct=0xefe8,bus=int(node.parent.name),address=int(node.name))
                     require(device is not None and device.bcdDevice==bcd_device, 'Observer handle differs.')
@@ -366,8 +374,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                     except BaseException:
                         failed=True;raise
                 time.sleep(.01)
-            candidate=access.session_node(port_config)
-            same_original=original_stayed and candidate is not None and access.identity(candidate)==old
+            candidate,current=base.present_instance(access,port_config)
+            same_original=original_stayed and candidate is not None and current==old
             if same_original and not failed:
                 access.require_session(candidate);access.require_rom(candidate)
                 probe_clean_refusal(transaction,args.evidence,prepared,record,save,
@@ -377,7 +385,7 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733',description,1):
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key)
+                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready_on_port,result_key=result_key)
                 finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:
@@ -385,10 +393,11 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
             base.stop_after_failure(record,save,
                 lambda:access.quarantine_instance(node,'Observer attempt stopped; no requests or automatic retry.',identity),error)
             raise
+    # In operation only a clean refusal returns, with status 2: every other
+    # outcome holds ownership in retain_after_capture or stop_after_failure.
+    # Offline fixtures inject returning holds and also use the status below.
     if record.get('clean_refusal'):
         print('Clean pre-entry refusal '+str(record['refusal_reason'])+'. SRAM restored; ROM usable. Queue claim remains with coordinator for review.')
-    else:
-        print('Diagnostic: '+record[result_key]+'. Manual reconnection required. Queue claim remains with coordinator.')
     return 0 if record['complete'] else 2
 
 
