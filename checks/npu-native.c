@@ -43,6 +43,11 @@ static void worker(void *argument)
     unsigned id = (unsigned)(uintptr_t)argument;
     for (unsigned round = 0; round < 4; ++round) {
         configASSERT(xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE);
+        /* A job publication requires an earlier bootstrap publication. */
+        if (id && !adapter.memory.booted) {
+            configASSERT(xSemaphoreGive(mutex) == pdTRUE);
+            vTaskDelay(1); --round; continue;
+        }
         translations();
         memset(data + 4096, (int)(id * 31 + round), 4096);
         uint64_t before = ops->microseconds(&adapter);
