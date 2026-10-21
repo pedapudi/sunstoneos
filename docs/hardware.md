@@ -2069,12 +2069,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [SHA-256 streaming](crypto-hash.md) shares the same retained controller and page
   with entropy. Host checks compare modeled results with independent digests;
   source/native checks and a relocatable composition link pass. SHA-only sessions
-  require no entropy-quality assertion. [AES-128 block transforms](crypto-cipher.md)
-  use the same retained session for encryption and decryption, with private output
-  staging and successful-task key cleanup. Host checks, independent vectors and
-  native composition pass. Physical hashing/cipher operation, authenticated and
-  wider cipher modes, other hashes, asymmetric operations and secure key handling
-  remain outstanding. Internal hardware key erasure is unproven.
+  require no entropy-quality assertion. The same streams provide SHA-1, SHA-224,
+  SHA-384, SHA-512 and HMAC over all five hashes on the engine.
+  [AES transforms](crypto-cipher.md) use the same retained session for
+  128/192/256-bit keys in ECB, CBC, CTR and GCM, with private output staging,
+  software IV chaining, software GHASH, constant-time tag verification and
+  successful-task cleanup of key, IV and counter lines. Host models compare
+  every mode and hash with NIST vectors, OpenSSL and Python `hashlib`/`hmac`;
+  the board image builds. A host calculator derives SP 800-90B health cutoffs
+  from an assessed entropy, which still does not exist. Physical hashing/cipher
+  operation, the engine's other modes and native GCM, MD5/SM3, asymmetric
+  operations, hardware key selection and key ladders remain outstanding.
+  Internal hardware key erasure is unproven.
   A boot-CPU-only SHA/AES application is integrated under
   `crypto-single-core-20261018/`, with twelve startup groups and six host groups
   passing. This permits independent device validation; physical CE operation and
