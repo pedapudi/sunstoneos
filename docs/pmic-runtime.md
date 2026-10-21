@@ -2,7 +2,8 @@
 
 The runtime PMIC provider owns the always-on I2C controller and PL0/PL1 once
 for the platform lifetime. Clients submit bounded rail snapshots to its
-designated task and retrieve copied results. Independent review, focused host
+designated task and retrieve copied results. The CPU clock driver can also
+submit a selector write for the CPU rails DCDC3 and DCDC5, described below. Independent review, focused host
 and source checks, and native compilation passed. A returning physical test
 also completes provider initialization, one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks through the production native adapter.
@@ -59,8 +60,8 @@ There is no cold bus reset, clock retuning, recovery pulse or teardown API.
 The finite queue contains eight copied requests. Each request has an exact
 provider identity, owner and monotonically allocated request ID. Its rail
 ledger ticket stays at a fixed address and prevents the parent rail lease
-from being released. Only an authenticated shared lease for the selected
-rail permits submission. The provider revalidates the ticket before access
+from being released. Only an authenticated shared or exclusive lease for
+the selected rail permits submission. The provider revalidates the ticket before access
 and publication.
 
 One snapshot reads AXP8191 address `0x36` in this order:
@@ -119,8 +120,8 @@ snapshot remains meaningful only while the same parent rail lease remains
 live. It proves neither physical wiring nor measured voltage or settling.
 Radio must select its supply mapping from separately admitted board topology.
 
-The provider reads DCDC1/2/4/8/9, BLDO1/2/5, CLDO1/2/3/5, ELDO6 and DC1SW2.
-DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4 through 87;
+The provider reads DCDC1/2/3/4/5/8/9, BLDO1/2/5, CLDO1/2/3/5, ELDO6 and DC1SW2.
+DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/3/4/5 through 87;
 BLDO1/2/5 and CLDO1/2/3/5 through 29. DCDC8 and DCDC9 decoding stop at
 selector 101. The pinned bootloader getter
 uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
@@ -160,6 +161,36 @@ register `0x21` bit7 and selector `0x33` bits4:0, covering 0.5–3.4 V in
 100 mV steps. Enable status is independent of selector validity. Out-of-range
 selectors retain their raw bytes with `decoded=0` and no programmed voltage.
 The rail ledger protects DC1SW2 through its DCDC1/DC1SW alias group.
+
+## CPU rail selector writes
+
+DCDC3 supplies the Cortex-A76 cluster and DCDC5 supplies the Cortex-A55
+cluster and the DSU, according to the board device tree. DCDC3 reads enable
+register `0x10` bit2 and selector `0x14`; DCDC5 reads bit4 and selector
+`0x16`. Both use bits6:0 with the DCDC2 ranges: 500 mV plus 10 mV per step
+through selector 70, then 20 mV steps to 1,540 mV at selector 87. These
+profiles come from the pinned bootloader table entries for `dcdc3` and
+`dcdc5`.
+
+`a733_pmic_submit_write` is the provider's only regulator data write. It
+admits only DCDC3 or DCDC5, only under an exclusive rail lease, and only a
+target selector that decodes to 800–1,050 mV, the range of the pinned CPU
+operating points. The caller also supplies the selector code it last read.
+Under one I2C mutex hold the request performs these transactions:
+
+1. The six snapshot reads. The output must be enabled and its selector code
+   must equal the caller's code.
+2. One write: START, address `0x6c`, the selector register, the data byte
+   with bit7 preserved, each acknowledged with status `0x28`, then STOP. This
+   is the order of the bootloader's `sunxi_i2c_write`.
+3. One read of the selector, which must equal the written byte.
+
+The result snapshot carries the readback selector. A mismatch before the
+write retains the request without writing. A fault after the data byte, or a
+readback that differs, retains the request, the I2C mutex when held and the
+leases, because the programmed voltage is then uncertain. The result proves a
+programmed selector only. The caller waits for the output to settle; the CPU
+clock driver uses the board's 250 µV/µs ramp delay ([cpu-clock.md](cpu-clock.md)).
 
 ## Failure retains ownership
 
@@ -230,7 +261,9 @@ reported no errors in actual shared-manager composition. The cases cover all
 six rail snapshots, borrow retention, two client owners, stale request refusal,
 autonomous/DMA/IRQ exclusion, arbitration loss, queued and active expiry,
 failed STOP, aliased outputs and replacement of a caller token during a callback.
-The reference getter matched all 1,268 supported raw-selector cases. Both
+The reference getter matched all 1,268 supported raw-selector cases in that
+batch. With DCDC3 and DCDC5 included, the comparison matches 1,620 cases and
+also checks the bootloader's write-helper order against the selector write. Both
 provider translation units compiled for AArch64 against the real FreeRTOS
 headers. Native task checks and actual MMIO effects remain unexecuted.
 

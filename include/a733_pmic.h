@@ -46,7 +46,8 @@ struct a733_pmic_slot {
     struct a733_rail_borrow borrow;
     struct a733_pmic_snapshot snapshot;
     uint64_t deadline;
-    unsigned state;
+    unsigned state, write;
+    uint8_t expected, target; /* Selector codes for a write request. */
 };
 struct a733_pmic {
     struct a733_pmic *self;
@@ -63,7 +64,7 @@ struct a733_pmic {
     uint64_t last_now, next_id, deadline;
     uint32_t divider, last_status, apbs1, apbs0, dcxo_hz;
     unsigned stage, held, retained, failed, active, phase, byte_index;
-    uint8_t values[6];
+    uint8_t values[8]; /* Six snapshot bytes, written selector, readback. */
 };
 /* Zero private, disjoint storage once; all arguments/callback metadata and
  * shared managers have platform lifetime. No MMIO. All clocks use the same
@@ -78,16 +79,18 @@ int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
 enum a733_pmic_status a733_pmic_identity(struct a733_pmic *,struct a733_pmic_lifetime *);
 enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_lifetime *);
 /* One designated task advances one bounded state per call. No busy waits,
- * retries, PMIC data writes, clock/reset writes or bus-recovery pulses. An
+ * retries, clock/reset writes or bus-recovery pulses. The only PMIC data
+ * write is an admitted selector write (a733_pmic_submit_write). An
  * accepted transaction retains the common I2C mutex across worker calls.
  * Failure retains any still-owned mutex, request ticket and all leases. A
  * client-detected fault is latched immediately; the provider task must poll
  * once more to mark its own mutex retained. No client unlocks another task.
  */
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
-/* Nonblocking client metadata. Supports DCDC1/2/4/8/9, BLDO1/2/5,
+/* Nonblocking client metadata. Supports DCDC1/2/3/4/5/8/9, BLDO1/2/5,
  * CLDO1/2/3/5, ELDO6 and DC1SW2. Snapshot
- * reads ff/0e/0f/enable/selector/ff at address36 under one mutex. The ledger
+ * reads ff/0e/0f/enable/selector/ff at address36 under one mutex. A shared or
+ * exclusive lease of the rail admits a snapshot. The ledger
  * borrow prevents parent release until reap. A snapshot remains meaningful
  * only under the same still-live parent rail lease. It proves programmed
  * values, never wiring, measured voltage or settling. Public fields read-only.
@@ -95,6 +98,18 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
  */
 enum a733_pmic_status a733_pmic_submit(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint64_t deadline,struct a733_pmic_request *);
+/* Selector write for the CPU rails DCDC3 and DCDC5 only, under an exclusive
+ * lease of that rail. target must decode to 800-1050 mV, the range of the
+ * pinned CPU operating points. Under one mutex the request reads the six
+ * snapshot bytes, requires the output enabled and its selector code equal to
+ * expected, writes target while preserving bit7, then reads the selector back.
+ * A mismatch, a readback other than the written byte or any later fault
+ * retains the request: the programmed voltage is then uncertain. The result
+ * snapshot carries the readback selector. It proves a programmed value only;
+ * the caller waits for the output to settle. */
+enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *,uint64_t owner,
+    const struct a733_rail_token *,enum a733_rail,uint8_t expected,uint8_t target,
+    uint64_t deadline,struct a733_pmic_request *);
 enum a733_pmic_status a733_pmic_result(struct a733_pmic *,const struct a733_pmic_request *,
     struct a733_pmic_snapshot *);
 enum a733_pmic_status a733_pmic_reap(struct a733_pmic *,const struct a733_pmic_request *);

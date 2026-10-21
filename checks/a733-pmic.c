@@ -23,6 +23,8 @@ struct pmic_model {
     unsigned probe_live,live_busy;
     unsigned worker,register_held,i2c_held,retained,wire,selected,reads,writes;
     unsigned fail_phase,fail_status,stall_phase,stop_stall;
+    /* Optional observer of each PMIC register data write. */
+    void (*pmic_written)(void *,uint8_t reg,uint8_t value);void *observer;
     struct a733_rail_token *replace_parent;
     struct a733_rail_token replacement;
     uint8_t pmic[256];
@@ -85,6 +87,10 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
         switch(m->wire) {
         case 1:assert(data==0x6c);status=0x18;break;
         case 2:m->selected=data;status=0x28;break;
+        case 3: /* Data byte after the register index: a register write. */
+            m->pmic[m->selected]=(uint8_t)data;status=0x28;m->wire=5;
+            if(m->pmic_written)m->pmic_written(m->observer,(uint8_t)m->selected,(uint8_t)data);
+            break;
         case 4:assert(data==0x6d);status=0x40;break;
         case 5:*pmic_model_word(m,0x07083008)=m->pmic[m->selected];status=0x58;break;
         default:assert(0);
@@ -177,9 +183,9 @@ static struct pmic_model m;
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--decode")) {
-        const enum a733_rail ids[]={A733_RAIL_DCDC1,A733_RAIL_DCDC2,A733_RAIL_DCDC4,A733_RAIL_DCDC8,A733_RAIL_BLDO5,A733_RAIL_CLDO1};
-        const char *names[]={"dcdc1","dcdc2","dcdc4","dcdc8","bldo5","cldo1"};
-        for(unsigned i=0;i<6;++i)for(unsigned code=0;code<256;++code){struct a733_pmic_snapshot s;
+        const enum a733_rail ids[]={A733_RAIL_DCDC1,A733_RAIL_DCDC2,A733_RAIL_DCDC3,A733_RAIL_DCDC4,A733_RAIL_DCDC5,A733_RAIL_DCDC8,A733_RAIL_BLDO5,A733_RAIL_CLDO1};
+        const char *names[]={"dcdc1","dcdc2","dcdc3","dcdc4","dcdc5","dcdc8","bldo5","cldo1"};
+        for(unsigned i=0;i<8;++i)for(unsigned code=0;code<256;++code){struct a733_pmic_snapshot s;
             assert(a733_pmic_decode(ids[i],255,code,&s));if(s.decoded)printf("%s %u %u\n",names[i],code,s.programmed_uv/1000);}
         return 0;
     }
