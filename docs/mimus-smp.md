@@ -42,7 +42,7 @@ restores the previous range-only behavior.
 The engine's own estimate bounds the gain to the softmax and scalar attention
 work, about 3 to 5 percent of the 19.5-second physical bench. Emulator timing
 does not measure it. The two-core emulator run matches the host reference for
-the bench recording with 2,631 jobs and 2,428 asynchronous items:
+the bench recording with 2,631 worker jobs, 2,428 of them asynchronous items:
 features, log probabilities, frame count, words, punctuation, capitals and
 formatted text. The engine caps workers at two (`kMaxWorkers` in the pinned
 mimus source), so a change there is required to use more cores.
