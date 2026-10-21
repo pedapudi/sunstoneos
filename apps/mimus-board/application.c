@@ -31,6 +31,7 @@ int mimus_board_export_live(void)
 /* Only the privileged USB2 owner accesses its mutable controller state. */
 void mimus_board_host_observed(int ready)
 {
+    BOARD_PROGRESS(BOARD_SERVICE_USB2);
     if(ready&&a733_usb2_device_kind(&board.host)!=(board.session.workload==4?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC)){board_fail(NULL);return;}
     if(!ready)return;
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
@@ -44,9 +45,14 @@ void mimus_board_host_observed(int ready)
     atomic_store_explicit(&observed_until,board.host.platform.attachment.observed_us+A733_TYPEC_FRESH_US,memory_order_release);
 }
 void mimus_board_fail(void){board_fail(NULL);}
-int board_application_task_privileged(void (*entry)(void *),void *context)
+/* EL0-safe: one atomic store. A resident image lists the recognizer as its
+ * first service after the board's own. */
+void mimus_board_progress(void){BOARD_PROGRESS(BOARD_SERVICES);}
+/* Named entries for the integrated OS start list (apps/os/start.c); this
+ * image alone binds them to the single board application hooks below. */
+int mimus_board_task_privileged(void (*entry)(void *),void *context)
 {(void)entry;(void)context;return 0;}
-int board_application_pins(struct a733_pin_handoff *pins)
+int mimus_board_pins(struct a733_pin_handoff *pins)
 {
     if(!pins||(board.session.workload!=0&&board.session.workload!=4))return 0;
     for(unsigned i=0;i<3;++i)for(uintptr_t page=mimus_asset_address[i]&~(uintptr_t)4095;
@@ -60,7 +66,13 @@ int board_application_pins(struct a733_pin_handoff *pins)
     }
     return 1;
 }
-int board_application_start(void){return (board.session.workload==0||board.session.workload==4)&&mimus_board_start();}
+int mimus_board_application_start(void){return (board.session.workload==0||board.session.workload==4)&&mimus_board_start();}
+#ifndef SUNSTONE_A733_OS
+int board_application_task_privileged(void (*entry)(void *),void *context)
+{return mimus_board_task_privileged(entry,context);}
+int board_application_pins(struct a733_pin_handoff *pins){return mimus_board_pins(pins);}
+int board_application_start(void){return mimus_board_application_start();}
+#endif
 
 int mimus_board_keyboard(void){return board.session.workload==4;}
 int mimus_board_trigger_step(void)

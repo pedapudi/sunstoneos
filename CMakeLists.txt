@@ -289,3 +289,5 @@ option(SUNSTONE_A733_STAGE2 "Build the cold-entry monitor with the stage-2 slot 
 if(SUNSTONE_A733_STAGE2)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-standalone-boot.cmake")
 endif()
+
+include(cmake/a733-os.cmake)

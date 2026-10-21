@@ -1,11 +1,16 @@
 /* Stage-2 slot loader for the cold-entry monitor; docs/boot-slots.md.
  * It reads two fixed slot headers through the polled SD core, copies and
  * hashes the newest valid slot in place and publishes a report. It never
- * writes storage or enables caches, and it never enters the loaded image:
- * no cold launch contract or remote-writer exclusion exists yet. Every
- * reported outcome requests the ROM forced-FEL return of the RAM monitor. */
+ * writes storage or enables caches. Entering the loaded image needs the
+ * entry prerequisites in admission.c, which refuse until remote-writer
+ * exclusion exists; with them, the loader arms the watchdog, builds the
+ * integrated OS image's resident contract and branches to the image entry.
+ * Every other reported outcome requests the ROM forced-FEL return of the RAM
+ * monitor. */
 #include "sunxi_mmc.h"
 #include "a733_storage_digest.h"
+#include "a733_board_application.h"
+#include "../../../platform/a733-smp-cached/boot.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -25,7 +30,8 @@
 
 #define COUNTER_SAMPLES 4096u /* Far longer than one 24 MHz tick with caches off. */
 
-enum { LOADED = 1, CARD = 2, NO_SLOT = 3, LOAD_FAILED = 4, COUNTER = 5 };
+enum { LOADED = 1, CARD = 2, NO_SLOT = 3, LOAD_FAILED = 4, COUNTER = 5, ENTERED = 6,
+       ENTRY_REFUSED = 7, WATCHDOG = 8 };
 enum { HEADER_UNREAD, HEADER_VALID, HEADER_READ, HEADER_ABSENT, HEADER_DIGEST,
        HEADER_FIELDS };
 enum { LOAD_NONE, LOAD_DONE, LOAD_READ, LOAD_DIGEST };
@@ -80,6 +86,8 @@ static uint64_t counter(void)
  * (admission.c). */
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
+/* Separate unit: prerequisites for entering a verified image (admission.c). */
+int a733_stage2_entry_admission(void);
 
 static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t module_hz)
 {
@@ -284,7 +292,7 @@ static _Noreturn void rom_return(void)
     __asm__ volatile("dsb sy\n msr rmr_el3, %0\n isb" :: "r"(UINT64_C(2)) : "memory");
     for (;;) __asm__ volatile("wfi");
 }
-static _Noreturn void finish(uint64_t status, uint64_t detail)
+static void publish(uint64_t status, uint64_t detail)
 {
     a733_stage2_report.status = status;
     a733_stage2_report.detail = detail;
@@ -292,7 +300,113 @@ static _Noreturn void finish(uint64_t status, uint64_t detail)
     __asm__ volatile("dsb sy" ::: "memory");
     a733_stage2_report.magic = REPORT_MAGIC;
     __asm__ volatile("dsb sy" ::: "memory");
+}
+static _Noreturn void finish(uint64_t status, uint64_t detail)
+{
+    publish(status, detail);
     rom_return();
+}
+
+static uint32_t rd(uintptr_t address)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    uint32_t value = *(volatile const uint32_t *)address;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return value;
+}
+static void wr(uintptr_t address, uint32_t value)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    *(volatile uint32_t *)address = value;
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+/* The FEL launcher's WDT0 sequence (platform/a733-smp/launch.c) without the
+ * ROM redirect and RTC FEL flag: output reset, the four-second
+ * configuration, then mode enable and one restart. Refuses a watchdog,
+ * redirect or flag that another owner already set. */
+static int arm(uint64_t *armed)
+{
+    if ((rd(0x02050014) & 1) || (rd(0x02050010) & 0x100) || rd(0x070501c0) ||
+        rd(0x070501c4) || rd(0x070501d4) || rd(0x07090108) || (rd(0x03000024) & 0x100))
+        return 0;
+    wr(0x02050018, 0x16aa0002);
+    wr(0x02050010, 0x16aa0001);
+    if ((rd(0x02050018) & 0xffff) != 2 || (rd(0x02050010) & 0xffff) != 1 ||
+        (rd(0x02050014) & 1)) return 0;
+    *armed = counter();
+    wr(0x02050014, 0x16aa0041);
+    wr(0x0205000c, 0x14af);
+    return (rd(0x02050014) & 0xffff) == 0x41 && (rd(0x02050010) & 0xffff) == 1 &&
+        (rd(0x02050018) & 0xffff) == 2 && counter() - *armed < A733_SMP_COUNTER_HZ / 1000;
+}
+static const struct slot_extent *session_extent(const struct slot_header *h)
+{
+    for (unsigned i = 1; i < h->count; ++i)
+        if (h->extent[i].load == A733_BOARD_SESSION_ADDRESS) return &h->extent[i];
+    return 0;
+}
+/* Resident contract for the integrated OS image (docs/os-image.md). The slot
+ * supplies the session page as an asset; the slot header's extent digest
+ * already authenticated it. The loader stamps a fresh epoch into the session,
+ * binds its new digest and the image build ID that the session names, and
+ * publishes the contract magic last. Deadlines count from arming. */
+static _Noreturn void enter(const struct slot_header *h)
+{
+    const struct slot_extent *e = session_extent(h);
+    struct a733_board_session *s = (struct a733_board_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS;
+    volatile struct a733_smp_contract *c =
+        (volatile struct a733_smp_contract *)(uintptr_t)A733_SMP_CONTRACT_ADDRESS;
+    volatile uint64_t *result = (volatile uint64_t *)(uintptr_t)A733_SMP_RESULT_ADDRESS;
+    if (!e || e->bytes != A733_OS_SESSION_BYTES) finish(ENTRY_REFUSED, 1);
+    if (s->magic != A733_BOARD_SUPERVISED_SESSION_MAGIC || s->version != 2 ||
+        s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease)
+        finish(ENTRY_REFUSED, 2);
+    /* The image refuses a contract whose generation a retained result already
+     * holds. Each boot of a slot repeats its generation, so a result left by
+     * the previous boot moves into this report before it is cleared. */
+    if (result[0] == A733_OS_RESIDENT_RESULT_MAGIC) {
+        for (unsigned i = 0; i < 16; ++i) a733_stage2_report.reserved1[i] = result[i];
+        result[0] = 0;
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+    /* A zero detail means WDT0 mode was never written. A nonzero detail means
+     * the mode write happened and a readback or the timing check failed: WDT0
+     * stays armed, so the forced-FEL return ends in a cold reset within four
+     * seconds. */
+    uint64_t armed = 0;
+    if (!arm(&armed) || !armed) finish(WATCHDOG, armed);
+    s->epoch = armed;
+    uint64_t digest[4];
+    storage_digest_bytes(s, (size_t)e->bytes, (uint8_t *)digest);
+    c->magic = 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    c->version = 2;
+    c->bytes = sizeof(struct a733_smp_contract);
+    c->epoch = armed;
+    c->generation = h->generation;
+    c->inverse_generation = ~h->generation;
+    for (unsigned i = 0; i < 32; ++i) c->build_id[i] = s->image[i];
+    c->armed_at = armed;
+    c->startup_deadline = armed + A733_BOARD_STARTUP_SECONDS * A733_SMP_COUNTER_HZ;
+    c->diagnostic_deadline = A733_SMP_NO_DEADLINE;
+    c->expires_at = armed + 4 * A733_SMP_COUNTER_HZ;
+    c->lease = s->lease;
+    c->watchdog_mode = 0x41;
+    c->watchdog_configuration = 1;
+    c->watchdog_output = 2;
+    c->fel_flag = c->redirect_flag = c->redirect_entry = c->alternate_flag = 0;
+    c->reserved[0] = A733_BOARD_SESSION_ADDRESS;
+    c->reserved[1] = e->bytes;
+    for (unsigned i = 0; i < 4; ++i) c->reserved[2 + i] = digest[i];
+    __asm__ volatile("dsb sy" ::: "memory");
+    c->magic = A733_OS_RESIDENT_CONTRACT_MAGIC;
+    a733_stage2_report.reserved0[0] = armed;
+    a733_stage2_report.reserved0[1] = A733_SMP_CONTRACT_ADDRESS;
+    publish(ENTERED, h->entry);
+    /* Caches and translation stay off; the image's entry checks EL3, the
+     * primary core and SCTLR_EL3 itself. */
+    __asm__ volatile("msr daifset, #15\n ic iallu\n dsb sy\n isb\n br %0" :: "r"(h->entry) : "memory");
+    __builtin_unreachable();
 }
 
 /* Entered from cold-entry.S after an admitted capture, on a fresh stack with
@@ -327,9 +441,10 @@ _Noreturn void a733_stage2_main(void)
         if (r == LOAD_DONE) {
             a733_stage2_report.selected = s;
             a733_stage2_report.generation = headers[s].generation;
-            /* Boundary: entry needs a cold launch contract and remote-writer
-             * exclusion; neither exists, so the verified image is not entered. */
-            finish(LOADED, headers[s].entry);
+            /* Boundary: entry needs remote-writer exclusion, which does not
+             * exist yet, so the verified image is normally not entered. */
+            if (a733_stage2_entry_admission() != 1) finish(LOADED, headers[s].entry);
+            enter(&headers[s]);
         }
     }
     finish(LOAD_FAILED, a733_stage2_report.mmc_error);
