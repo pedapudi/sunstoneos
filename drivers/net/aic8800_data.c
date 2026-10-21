@@ -2,6 +2,7 @@
  * in docs/radio-data.md. No allocation, Linux code, retry loop or key handling. */
 #include "aic8800_data.h"
 #include "aic8800_security.h"
+#include <string.h>
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0]|(uint16_t)p[1]<<8); }
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0]<<8|p[1]); }
 static uint32_t le32(const uint8_t *p) { return le16(p)|(uint32_t)le16(p+2)<<16; }
@@ -64,14 +65,14 @@ int aic8800_data_send(struct aic8800_data *d,const void *owner,const uint8_t *p,
     }else if(!port_open(d)||be16(p+12)<1536)return 0;
     d->result=(struct aic8800_data_result){.generation=d->wifi->association_generation,.eapol=(uint8_t)control};
     if(control)d->result.sequence=d->next_sequence++;
-    for(unsigned i=0;i<sizeof(d->request);++i)d->request[i]=0;
+    memset(d->request,0,sizeof(d->request));
     uint8_t *q=d->request;size_t payload=n-14,length=28+payload;
     put16(q,(uint16_t)length);q[2]=1;q[3]=aic8800_sdio_header_crc(q);
     put16(q+4,(uint16_t)payload);if(control)put32(q+8,0x80000000u|d->result.sequence);
-    for(unsigned i=0;i<14;++i)q[12+i]=p[i];
+    memcpy(q+12,p,14);
     q[26]=1; /* AC_BE */ q[27]=d->wifi->peer_qos?0:0xff;
     q[28]=d->wifi->vif;q[29]=d->wifi->ap_index;
-    for(size_t i=0;i<payload;++i)q[32+i]=p[14+i];
+    memcpy(q+32,p+14,payload);
     size_t bytes=(4+length+3)&~(size_t)3;
     if(bytes%512)bytes+=4;
     d->request_bytes=(bytes+511)&~(size_t)511;
@@ -139,7 +140,7 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
     else if(!port_open(d)||be16(m+header+6)<1536||
         (d->wifi->target.security==AIC8800_WIFI_WPA2_PSK_CCMP&&!encrypted))return AIC8800_CODEC_UNRELATED;
     for(unsigned i=0;i<6;++i){d->ethernet[i]=m[4+i];d->ethernet[6+i]=m[16+i];}
-    for(size_t i=0;i<bytes-12;++i)d->ethernet[12+i]=m[header+6+i];
+    memcpy(d->ethernet+12,m+header+6,bytes-12);
     d->frame=(struct aic8800_data_frame){.generation=d->wifi->association_generation,.ethernet=d->ethernet,
         .bytes=(uint16_t)bytes,.eapol=(uint8_t)control,.encrypted=(uint8_t)encrypted,.vif=d->wifi->vif,.ap_index=d->wifi->ap_index};
     if(encrypted)aic8800_security_rx_commit(d->security,key_slot,tid,pn);

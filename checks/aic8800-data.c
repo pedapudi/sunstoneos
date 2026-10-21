@@ -19,6 +19,7 @@ static int data_write(void *ctx,uint32_t off,uint32_t value)
     int ok=write_cb(ctx,off,value);
     if(off==0x200&&m.write&&m.position==m.bytes) {
         ++sent_data;assert(m.bytes==data.request_bytes&&!memcmp(m.transmitted,data.request,m.bytes));
+        assert(host.request.data==data.request); /* CMD53 borrows the worker's packet. */
         assert(!memcmp(m.transmitted,expected[data.result.eapol?0:1],m.bytes));
     }
     return ok;

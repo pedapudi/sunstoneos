@@ -7,6 +7,7 @@
 #include "aic8800_data.h"
 #include "aic8800_security.h"
 #include "aic8800_supplicant.h"
+#include <string.h>
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
@@ -123,7 +124,7 @@ int aic8800_transport_setup(struct aic8800_sdio_transport *t, uint64_t deadline)
 static void encode(struct aic8800_sdio_transport *t)
 {
     t->tx_bytes = 512;
-    for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = 0;
+    memset(t->tx, 0, t->tx_bytes);
     if (t->expected == SETUP_OPERATION)
         t->codec_result = aic8800_sdio_encode_bootstrap_setup(t->tx, sizeof(t->tx));
     else t->codec_result = aic8800_sdio_encode_identity_read(
@@ -353,7 +354,7 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if (t->firmware->state == AIC8800_FW_REQUEST) {
             t->tx_bytes = t->firmware->request_bytes;
             if (!t->tx_bytes || t->tx_bytes > sizeof(t->tx) || t->tx_bytes % 512) return 0;
-            for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->firmware->request[i];
+            memcpy(t->tx, t->firmware->request, t->tx_bytes);
             t->phase = CREDIT;
         }
         return 1;
@@ -371,22 +372,24 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if (t->runtime->state == AIC8800_RUNTIME_FAULT) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); return 1; }
         if (t->runtime->state == AIC8800_RUNTIME_REQUEST) {
             t->tx_bytes = sizeof(t->runtime->request);
-            for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->runtime->request[i];
+            memcpy(t->tx, t->runtime->request, t->tx_bytes);
             t->phase = CREDIT;
         } else if (t->runtime->state == AIC8800_RUNTIME_RECEIVING && t->wifi) {
             aic8800_wifi_step(t->wifi, t, now);
             if (t->wifi->state == AIC8800_WIFI_FAULT) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); return 1; }
             if (t->wifi->state == AIC8800_WIFI_REQUEST) {
                 t->tx_bytes = sizeof(t->wifi->request);
-                for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->wifi->request[i];
+                memcpy(t->tx, t->wifi->request, t->tx_bytes);
                 t->phase = CREDIT;
             } else if(t->security && t->security->state == AIC8800_SECURITY_REQUEST) {
                 t->tx_bytes=sizeof(t->security->request);
-                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->security->request[i];
+                memcpy(t->tx,t->security->request,t->tx_bytes);
                 t->security_tx=1;t->phase=CREDIT;
             } else if(t->data && t->data->state == AIC8800_DATA_REQUEST) {
+                /* The data worker's request stays unchanged until aic8800_data_sent,
+                 * so CMD53 borrows it directly instead of copying it into tx. */
                 t->tx_bytes=t->data->request_bytes;
-                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->data->request[i];
+                if(!t->tx_bytes||t->tx_bytes>sizeof(t->data->request)||t->tx_bytes%512)return 0;
                 t->data_tx=1;t->phase=CREDIT;
             } else t->phase = RX_STATUS;
         } else if (t->runtime->state != AIC8800_RUNTIME_VERIFYING) t->phase = RX_STATUS;
@@ -394,7 +397,8 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     case CREDIT: ok = cmd52(t, 1, 3, 0, 0, &r); break;
     case RX_STATUS: ok = cmd52(t, 1, 4, 0, 0, &r); break;
     case RX_LENGTH: ok = cmd52(t, 1, 5, 0, 0, &r); break;
-    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->tx, t->tx_bytes, &r); break;
+    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->data_tx ? t->data->request : t->tx,
+                     t->tx_bytes, &r); break;
     case RX: ok = sdio_card_cmd53(t->card, 1, 0x0f, 0, 0,
                      t->rx_bytes > 512 ? 512 : 0, t->rx, t->rx_bytes, &r); break;
     default: return 0;
