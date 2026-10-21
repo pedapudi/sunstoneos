@@ -1890,7 +1890,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
-- DI301 deinterlacer: **implemented** retained [offline WEAVE and initial motion processing](deinterlace-native.md)
+- DI301 deinterlacer: **implemented** retained [offline WEAVE, initial motion and fixed-strength TNR](deinterlace-native.md)
   for caller 640×480 NV12 combined-field frames, top field first and 640-byte
   strides. Pinned GPL DI301 configuration from Linux revision `2ac08e8…` runs
   against a private CPU register image; whitelisted masked writes configure the
@@ -1899,9 +1899,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   USB output preserve exclusive ownership. Matched finish/nonbusy, IOMMU and
   guard checks precede immutable output publication. Delivery-gated ACK permits
   neither reuse nor another job; all resources remain retained.
-  The earlier WEAVE image has thirteen linked native cases, one actual full-speed
-  TinyUSB case and separate
-  boot/SRAM checks pass with device, scheduling and memory-authority effects modeled.
+  The earlier WEAVE image passes thirteen linked native cases, one actual full-speed
+  TinyUSB case and separate boot/SRAM checks, with device, scheduling and
+  memory-authority effects modeled.
   The [host path](deinterlace-preparation.md) passes thirteen capture cases,
   five allocation refusals and supervisor readiness without device access.
   Root accepts frozen image `a472162b…`, 172 objects and 460 compiled inputs at
@@ -1913,7 +1913,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   current frames and zero history, producing one copied frame. Dedicated DI reset
   must be asserted with local bus/module gates off before the source-defined
   initialization sequence; no confidence defaults are invented from CPU-shadow zeros.
-  Current image `2cff56ab…` passes one native operation, six refusals and copied
+  Motion image `2cff56ab…` passes one native operation, six refusals and copied
   serializer/ACK checks, plus scoped host allocation/input/result/capture checks.
   Synthetic device writes establish neither motion arithmetic nor physical reset,
   DMA visibility or numerical output. Two new SRAM cases are separate; earlier
@@ -1922,8 +1922,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `deinterlace-motion-20261020/root-integration.json`; declared differences affect
   future metadata wording and final host documentation only. The retained
   descriptive WEAVE label does not replace mode-2 session/geometry admission.
-  Steady-state history/feedback, TNR, film detection, crop/scale, additional formats
-  and repeated jobs remain required.
+  Fixed-strength mode 3 now consumes two 640×480 NV12 frames and copies one
+  460,800-byte planar YUV420 output. Each zeroed flag buffer is 307,200 bytes,
+  with separate guarded master-9 mappings. Reset-held/gates-off entry precedes
+  one initial operation with source-fixed strength and no adaptive feedback. Actual compiled source-plan,
+  allocation/mapping, resumed completion, flag-boundary refusal and serializer/ACK
+  checks pass; host capture, five admission refusals and two SRAM cases pass.
+  Completion and pixel data, services, cache/translation, authority and timing
+  remain modeled, without numerical filtering or physical qualification.
+  The first allocation fixture omitted its continuation checkpoint. One affected
+  allocation replay after the serialization repair reproduced proof/table bytes
+  identically; completion resumed the saved full state without further allocation
+  or provider replay. One successful native image and one launcher are preserved.
+  Root matches all 185 compiled repository inputs under
+  `deinterlace-tnr-20261020/root-integration.json`; three external host-file differences
+  are separately frozen, with all nine final host sources matching. Earlier
+  WEAVE/motion/power/USB matrices retain their original scopes without replay.
+  Adaptive feedback, other strengths/shapes/formats, film detection, crop/scale and
+  repeated jobs remain required. All buffers/providers stay retained; no drain,
+  reclamation or physical reuse is qualified.
 
 - Crypto, random, identity and secure storage: **implemented** bounded
   [hardware random-number requests](entropy.md) through the native crypto engine.
