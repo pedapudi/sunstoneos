@@ -46,6 +46,36 @@ The toolchain preserves explicitly supplied `CMAKE_C_COMPILER`,
 selection into its compiler checks. Use a fresh build directory when changing
 toolchains, because CMake caches compiler and linker flags.
 
+## Build patches apply exactly
+
+Many images compile sources that the build generates by applying a reviewed
+patch to a repository or upstream file, often to the output of an earlier
+patch. `apply_build_patch` in [cmake/patch.cmake](../cmake/patch.cmake) runs
+GNU patch with `--fuzz=0`, so every hunk must match its recorded context lines
+exactly. GNU patch would otherwise accept up to two mismatched context lines,
+and a change to a base file could move a hunk beside code that it was never
+reviewed against. Configuration stops with the patch report when a hunk does
+not match. A hunk whose exact context sits a few lines away from its recorded
+line is still accepted. No reject file is written.
+
+Four patches in the boot-CPU PWM and crypto applications were written against
+an earlier `apps/board/main.c` and `apps/storage-read-single-core/runtime.c`
+and still need fuzz. `cmake/patch.cmake` lists each with the SHA-256 of the
+output that was checked to place every hunk at its intended location. Such a
+patch is applied with fuzz only while its output keeps that digest. Any further
+change to its base or to the patch stops configuration; regenerate the patch
+against its current base and remove its entry.
+
+The central `CMakeLists.txt` uses this function for every profile it includes.
+The standalone projects under `apps/` and `platform/` still define their own
+copy, which accepts fuzz. A host check exercises exact, offset and fuzzy
+application, the pinned outputs and the board-mode rule described below:
+
+```sh
+PATH="$HOME/.cache/sunstoneos/host/usr/lib/llvm-21/bin:$PATH" \
+  python3 checks/audit-build-safety-configure.py --output "$cache/build/patch-check"
+```
+
 ## Reproducible images
 
 The central build gives every target `-ffile-prefix-map` options through the
@@ -190,6 +220,15 @@ startup. The default mode requires qualified hardware-watchdog admission.
 disabled and retains resources until manual power removal. Both modes require
 real memory and power admission before physical execution; see the
 [supervised board procedure](board-application.md).
+
+The application profiles built from the supervised board, such as
+`SUNSTONE_A733_PWM`, `SUNSTONE_A733_STORAGE_READ` and `SUNSTONE_A733_THERMAL`,
+require `SUNSTONE_BOARD_SUPERVISED=ON` on the command line. Configuration stops
+before the board target is created when one of them is enabled without it,
+and the profile does not change the mode in the cache. Disabling the profile
+therefore leaves the requested board mode unchanged. A build directory
+configured before this rule may still hold the mode that an earlier profile
+set; pass the mode explicitly or use a fresh directory.
 
 The `sunstone-a733-camera` target connects native OV5640 capture to USB0 output.
 The separate `a733-smp-supervised` target runs the all-core observer with the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared host-check policy: assertions, sanitizer flags, host tools and resumable steps.
+"""Shared host-check policy: assertions, sanitizer flags, host tools, refusals and resumable steps.
 
 Import this module before a check makes any pass/fail decision. Checks rely on
 Python assert statements, so importing it under `python3 -O` or PYTHONOPTIMIZE
@@ -14,7 +14,7 @@ import traceback
 if not __debug__:
     raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 
-CACHE = Path.home() / '.cache/sunstoneos'
+CACHE = Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos'))
 # UBSan and ASan both stop at the first report; without -fno-sanitize-recover,
 # UBSan prints 'runtime error:' and the check still exits 0. Clang and GCC accept it.
 SANITIZE = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer']
@@ -27,6 +27,23 @@ LLD = Path(os.environ.get('SUNSTONE_HOST_LLD', CACHE / 'host/usr/bin/ld.lld-21')
 def environment():
     """Child environment: no bytecode files in source snapshots, halting sanitizers."""
     return {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', **SANITIZER_ENV}
+
+
+def refused(action, reason, kind=ValueError):
+    """Run a negative case and return its refusal message.
+
+    The case passes only when action() raises `kind` with `reason` in its
+    message. An accepted input fails the case. Any other exception propagates,
+    so a fixture error or an unrelated earlier refusal cannot stand in for the
+    check that the case exercises. `kind` may be a tuple of exception types.
+    """
+    try:
+        action()
+    except kind as error:
+        message = str(error)
+        assert reason in message, f'refused for another reason: {message!r}; expected {reason!r}'
+        return message
+    raise AssertionError(f'accepted; expected a refusal containing {reason!r}')
 
 
 def save(path, value):
