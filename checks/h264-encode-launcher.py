@@ -7,12 +7,12 @@ import json
 from pathlib import Path
 import struct
 import subprocess
+import sys
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
-from unicorn.arm_const import UC_CPU_ARM_CORTEX_A15, UC_ARM_REG_R0, UC_ARM_REG_PC, UC_ARM_REG_CPSR, UC_ARM_REG_SP, UC_ARM_REG_LR
 ROOT=Path(__file__).resolve().parents[1]
-SESSION,CONTRACT,REQUEST,REPORT=0x41f00000,0x42004000,0x52c00,0x52d00
-MODE,CONFIG,FLAG,ALT,RVBAR=0x02050014,0x02050010,0x070501c0,0x070501d4,0x08001004
+sys.path.insert(0,str(ROOT/'checks'))
+import harness
+import sram_launcher
 
 def digest(data):return hashlib.sha256(data).hexdigest()
 def main():
@@ -22,8 +22,8 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--reuse-launcher',type=Path)
     p.add_argument('--skip-positive',action='store_true')
-    p.add_argument('--clang',default='/usr/bin/clang-21')
-    p.add_argument('--lld',default='/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+    p.add_argument('--clang',default=str(harness.CLANG))
+    p.add_argument('--lld',default=str(harness.LLD))
     a=p.parse_args();a.output.mkdir(exist_ok=False)
     native=a.image.read_bytes();image=a.image
     template=a.session.read_bytes()
@@ -46,59 +46,9 @@ def main():
             contract=bytearray(contract);contract[mutation]^=1;contract=bytes(contract)
         folder=a.output/name;folder.mkdir()
         for label,data in [('session',session),('request',request),('contract',contract)]: (folder/(label+'.bin')).write_bytes(data)
-        cpu=Uc(UC_ARCH_ARM,UC_MODE_ARM);cpu.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_A15)
-        for base,size in [(0x50000,0x30000),(0x41000000,0x1200000),(0x02050000,4096),
-                (0x07050000,4096),(0x08001000,4096)]:cpu.mem_map(base,size)
-        for segment in segments:
-            if segment['data']:cpu.mem_write(segment['address'],segment['data'])
-        cpu.mem_write(0x52000,code);cpu.mem_write(REQUEST,request);cpu.mem_write(CONTRACT,contract);cpu.mem_write(SESSION,bytes(session))
-        cpu.mem_write(0x52ff0,b'A'*16)
-        cpu.reg_write(UC_ARM_REG_CPSR,0xa80f0053)
-        saved={UC_ARM_REG_R0+i:0x12340000+i*0x101 for i in range(13)}
-        saved.update({UC_ARM_REG_SP:0x70000,UC_ARM_REG_LR:0x60000,UC_ARM_REG_CPSR:cpu.reg_read(UC_ARM_REG_CPSR)})
-        for reg,value in saved.items():cpu.reg_write(reg,value)
-        system={0xee110f10:0,0xee100fb0:0x81000000,0xee1e0f10:24000000,0xee1c0f50:0}
-        mmio={MODE:0,CONFIG:0,FLAG:0,ALT:0,RVBAR:0,RVBAR+4:0};reads=[];writes=[];ticks=[];stop=[]
-        def read(uc,access,address,size,value,unused):
-            if address<0x02000000 or address>=0x41000000:return
-            assert address in mmio and size==4,(name,hex(address),size)
-            reads.append(address);uc.mem_write(address,struct.pack('<I',mmio[address]))
-        def write(uc,access,address,size,value,unused):
-            if address<0x02000000:
-                assert REPORT<=address<REPORT+128 or 0x53000<=address<0x54000 or 0x70000-60<=address<0x70000
-            elif address>=0x41000000:
-                assert CONTRACT<=address<CONTRACT+8 or CONTRACT+80<=address<CONTRACT+112
-            else:
-                assert address in (RVBAR,RVBAR+4) and size==4
-                assert struct.unpack('<Q',uc.mem_read(CONTRACT,8))[0]==prepare.CONTRACT_MAGIC
-                writes.append((address,value));mmio[address]=value
-        def instruction(uc,address,size,unused):
-            if address==0x60000:stop.append('return');uc.emu_stop();return
-            word=struct.unpack('<I',uc.mem_read(address,4))[0]
-            if word&0xffff0fff in system:
-                uc.reg_write(UC_ARM_REG_R0+((word>>12)&15),system[word&0xffff0fff]);uc.reg_write(UC_ARM_REG_PC,address+4)
-            elif word&0xfff00fff==0xec500f0e:
-                value=100000000+100*len(ticks);ticks.append(value)
-                uc.reg_write(UC_ARM_REG_R0+((word>>12)&15),value&0xffffffff)
-                uc.reg_write(UC_ARM_REG_R0+((word>>16)&15),value>>32);uc.reg_write(UC_ARM_REG_PC,address+4)
-            elif word==0xee0c0f50:
-                assert uc.reg_read(UC_ARM_REG_R0)==3 and mmio[RVBAR]==0x41000000 and mmio[RVBAR+4]==0
-                stop.append('handoff');uc.emu_stop()
-            elif word==0xe320f003:raise AssertionError(name+' unexpectedly parked')
-        cpu.hook_add(UC_HOOK_MEM_READ,read);cpu.hook_add(UC_HOOK_MEM_WRITE,write);cpu.hook_add(UC_HOOK_CODE,instruction)
-        cpu.emu_start(0x52000,0x52c00,count=20000)
-        report=struct.unpack('<16Q',cpu.mem_read(REPORT,128));published=bytes(cpu.mem_read(CONTRACT,288))
-        assert report[0]==expected_reason,(name,report[0],stop)
-        assert bytes(cpu.mem_read(SESSION,len(session)))==session and bytes(cpu.mem_read(0x52ff0,16))==b'A'*16
-        if expected_reason==12:
-            assert stop==['handoff'] and writes==[(RVBAR,0x41000000),(RVBAR+4,0)] and len(ticks)==4
-            assert struct.unpack_from('<Q',published)[0]==prepare.CONTRACT_MAGIC
-            assert struct.unpack_from('<4Q',published,80)==(ticks[0],ticks[0]+24000000,ticks[0]+1440000000,ticks[0]+1440000000)
-            assert published[8:80]==contract[8:80] and published[112:]==contract[112:288]
-        else:
-            assert stop==['return'] and not writes and not ticks and published==contract[:288]
-            assert report[1:7]==(0,0,31,37,41,0x4153373352454631) and not any(report[7:])
-            for reg,value in saved.items():assert cpu.reg_read(reg)==value,(name,reg)
+        launch=sram_launcher.execute([(s['address'],s['data']) for s in segments],code,request,contract,session,prepare.CONTRACT_MAGIC,288,name)
+        sram_launcher.verify(launch,expected_reason,contract,prepare.CONTRACT_MAGIC,60,(31,37,41))
+        report,stop,reads,writes,ticks=launch.report,launch.stop,launch.reads,launch.writes,launch.ticks
         cases.append({'case':name,'session_version':version,'reason':report[0],'stop':stop[0],
             'mmio_reads':[hex(x) for x in reads],'mmio_writes':writes,'counter_reads':ticks})
     if not a.skip_positive:check('encoder-version1',template,1,12)

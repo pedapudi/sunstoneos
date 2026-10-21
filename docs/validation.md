@@ -87,6 +87,28 @@ follow:
   the same command is skipped. A retried step appends its command to the existing
   command log and writes `<label>-attempt<N>.log` beside the earlier log. Its
   earlier record moves into the step's `history`.
+- **One reader supplies ELF layouts.** `Image(path, layout_names)` returns an
+  image's loadable segments, symbol addresses, DWARF function addresses and
+  structure member offsets. Checks and the returning-image builders use it;
+  the builders copy `checks/harness.py` beside each image as
+  `layout-helper.py`. `checks/storage-read-native.py` re-exports it for the
+  checks that load that module.
+- **Emulation hooks only the addresses a model handles.** A Unicorn code hook
+  without an address range calls into Python before every emulated
+  instruction. `hook_addresses(uc, addresses, callback)` registers one ranged
+  hook per address. `instruction_sites(parts, match)` finds instruction
+  addresses in loaded image segments, and `system_register_access(word)`
+  matches MRS, MSR, SYS and SYSL. A model that acts only at symbols, a
+  sentinel and system-register accesses hooks just those. A model that
+  advances state on every instruction keeps the unranged hook.
+
+The SRAM launchers that admit a prepared session share one AArch32 model,
+[checks/sram_launcher.py](../checks/sram_launcher.py). Its `execute` runs the
+actual launcher instructions with modeled system registers, counter and
+reset registers, and its `verify` requires the published deadlines on
+admission and an unchanged contract with restored registers on refusal. The
+per-device `*-launcher.py` checks supply the session and contract formats,
+the supervision deadline and the mutation cases.
 
 ## Find the checks that cover a change
 
@@ -169,6 +191,15 @@ records the repository revision and dirty state, and refuses an existing output
 directory. A failed snapshot can leave an incomplete directory without a manifest.
 Select a fresh output after resolving the failure. Snapshotting does not prove
 execution or complete dependency coverage, and does not justify repeating a test.
+
+Toolchains and shared libraries repeat across snapshots; one LLVM library is
+138 MB. `--reuse <earlier snapshot>`, repeatable, hard-links a file instead of
+copying it when an earlier snapshot recorded the same SHA-256 and that file's
+current bytes still match. The manifest row then records `linked_from`. A file
+on another file system, or one whose earlier copy no longer matches its record,
+is copied as before. Linked files share their bytes, so never edit a snapshot
+file in place. `checks/audit-build-harness-snapshot.py --output <new dir>`
+checks this behavior on a temporary repository.
 
 Build once per changed target. Flash only when the required running image differs.
 Run hardware cases in one controlled session when practical. Do not rebuild or

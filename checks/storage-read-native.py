@@ -1,35 +1,16 @@
 #!/usr/bin/env python3
 """Focused actual-image SD0 task/controller/native trace with modeled board services."""
-import argparse,hashlib,importlib.util,json,struct
+import argparse,hashlib,importlib.util,json,struct,sys
 from pathlib import Path
-from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'checks'))
+import harness
+# Many checks and builders load this module for its layout reader.
+Image=harness.Image
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-class Image:
- def __init__(self,path,layout_names=None):
-  # Select only layouts consumed by a fixture. Unrelated translation units
-  # may legally declare different private structures with the same name.
-  with path.open('rb') as f:
-   e=ELFFile(f);self.parts=[(int(p['p_vaddr']),p.data()) for p in e.iter_segments() if p['p_type']=='PT_LOAD'];self.symbols={};self.functions={};self.layouts={}
-   for s in e.get_section_by_name('.symtab').iter_symbols():self.symbols.setdefault(s.name,set()).add(int(s['st_value']))
-   for cu in e.get_dwarf_info().iter_CUs():
-    unit=cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
-    for d in cu.iter_DIEs():
-     if 'DW_AT_name' not in d.attributes:continue
-     n=d.attributes['DW_AT_name'].value.decode()
-     if d.tag=='DW_TAG_subprogram' and 'DW_AT_low_pc' in d.attributes:self.functions.setdefault((unit,n),set()).add(int(d.attributes['DW_AT_low_pc'].value))
-     if d.tag=='DW_TAG_structure_type' and (layout_names is None or n in layout_names):
-      fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
-      if fields:
-       if n in self.layouts:assert self.layouts[n]==fields,n
-       self.layouts[n]=fields
- def address(self,n,unit=None):
-  values=self.symbols.get(n,set())-{0}
-  if unit:values=set().union(*(v for (u,name),v in self.functions.items() if name==n and u.endswith(unit)))
-  assert len(values)==1,(n,unit,values);return next(iter(values))
 class Machine:
  def __init__(self,image,session,variant):
   self.image=image;self.session=session;self.variant=variant;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.reg_write(UC_ARM64_REG_PSTATE,5)

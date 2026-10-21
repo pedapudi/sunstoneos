@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Include after dma-service.cmake and dma-startup.cmake. The service ABI adds
 # stream dispatch even for finite-only callers, so close those existing links.
 set(i2s_stream_runtime drivers/audio/a733_i2s_stream.c drivers/dma/dma_service_i2s_stream.c)
@@ -23,9 +24,7 @@ target_include_directories(i2s-stream-model PRIVATE platform/qemu-smp include ru
   "${FREERTOS_DIR}/include" "${smp_build}")
 target_compile_definitions(i2s-stream-model PRIVATE INCLUDE_xTaskGetSchedulerState=1
   INCLUDE_xTaskGetCurrentTaskHandle=1 INCLUDE_xSemaphoreGetMutexHolder=1)
-target_compile_options(i2s-stream-model PRIVATE -march=armv8-a -mstrict-align -ffreestanding
-  -fno-builtin -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables
-  -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra -Werror -fstack-usage)
+target_compile_options(i2s-stream-model PRIVATE ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
 target_link_options(i2s-stream-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/i2s-stream-model.map")

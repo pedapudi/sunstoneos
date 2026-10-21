@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # The SMP port is kept in an emulator-only target until A733 recovery and
 # secondary-core power sequencing are qualified.
 set(smp_port "${FREERTOS_DIR}/portable/GCC/ARM_CR82")
@@ -26,9 +27,7 @@ foreach(target IN ITEMS smp-kernel-model smp-context-model)
   target_include_directories(${target} PRIVATE platform/qemu-smp include runtime/include
     "${FREERTOS_DIR}/include" "${smp_build}")
   target_compile_options(${target} PRIVATE
-    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-    -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-    -O2 -g -Wall -Wextra)
+    ${SUNSTONE_KERNEL_FLAGS})
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/${target}.map")
@@ -46,9 +45,7 @@ target_include_directories(smp8-soak-model PRIVATE platform/qemu-smp include run
   "${FREERTOS_DIR}/include" "${smp_build}")
 target_compile_definitions(smp8-soak-model PRIVATE SUNSTONE_SMP_CORES=8)
 target_compile_options(smp8-soak-model PRIVATE
-  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-  -O2 -g -Wall -Wextra)
+  ${SUNSTONE_KERNEL_FLAGS})
 target_link_options(smp8-soak-model PRIVATE -nostdlib -static -Wl,--gc-sections
   -Wl,--defsym=SUNSTONE_SMP_STACKS=8
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"

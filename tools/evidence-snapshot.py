@@ -32,6 +32,54 @@ def copy_file(source, destination):
             "sha256": digest.hexdigest()}
 
 
+def file_digest(path):
+    """Hash a file; refuse one that changes while it is read."""
+    digest = hashlib.sha256()
+    with path.open("rb") as incoming:
+        before = os.fstat(incoming.fileno())
+        while block := incoming.read(1024 * 1024):
+            digest.update(block)
+        after = os.fstat(incoming.fileno())
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if identity(before) != identity(after) or identity(after) != identity(path.stat()):
+        raise RuntimeError(f"File changed while hashed: {path}")
+    return digest.hexdigest(), before.st_size
+
+
+def reusable_files(snapshots):
+    """Map SHA-256 to a file recorded by one of the earlier snapshot directories."""
+    found = {}
+    for snapshot in snapshots:
+        manifest = json.loads((snapshot / "manifest.json").read_text())
+        for row in list(manifest["sources"].values()) + manifest["artifacts"] + manifest["tools"]:
+            found.setdefault(row["sha256"], snapshot / row["snapshot"])
+    return found
+
+
+def preserve(source, destination, reusable):
+    """Copy source to destination, or hard-link an identical earlier snapshot file.
+
+    A recorded file is linked only when its current bytes still have the
+    source's digest and it lies on the same file system. Linked files share
+    their bytes, so a snapshot file must never be edited in place.
+    """
+    candidate = None
+    if reusable:
+        digest, size = file_digest(source)
+        candidate = reusable.get(digest)
+    if candidate is not None and candidate.is_file() and file_digest(candidate) == (digest, size):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(candidate, destination)
+        except OSError:
+            pass
+        else:
+            if file_digest(source) != (digest, size):
+                raise RuntimeError(f"Source changed during snapshot: {source}")
+            return {"original": str(source), "bytes": size, "sha256": digest, "linked_from": str(candidate)}
+    return copy_file(source, destination)
+
+
 # Ordinary driver and linker flags. Their values remain bound by the hashed
 # link.txt itself; any other token type stops collection.
 LINK_FLAGS=('--target=','--ld-path=','-Wl,--gc-sections','-nostdlib','-static',
@@ -142,6 +190,8 @@ def main():
                         help="Tool executable to preserve and hash; does not execute it")
     parser.add_argument("--note", required=True,
                         help="Describe the recorded check and any evidence limitations")
+    parser.add_argument("--reuse", type=Path, action="append", default=[],
+                        help="Earlier snapshot directory whose identical files are hard-linked instead of copied")
     args = parser.parse_args()
     root = Path(git(args.repository.resolve(), "rev-parse", "--show-toplevel").strip()).resolve()
     output = args.output.resolve()
@@ -164,6 +214,12 @@ def main():
         if path == output or output in path.parents:
             parser.error("Snapshot inputs cannot be inside its output directory")
 
+    reuse = [p.resolve() for p in args.reuse]
+    for snapshot in reuse:
+        if not (snapshot / "manifest.json").is_file():
+            parser.error(f"Not a snapshot directory: {snapshot}")
+    reusable = reusable_files(reuse)
+
     revision = git(root, "rev-parse", "HEAD").strip()
     status = git(root, "status", "--porcelain=v1", "--untracked-files=all")
     output.mkdir(parents=True, exist_ok=False)
@@ -171,13 +227,13 @@ def main():
     for path in dict.fromkeys(sources):
         relative = path.relative_to(root)
         destination = output / "sources" / relative
-        row = copy_file(path, destination)
+        row = preserve(path, destination, reusable)
         row["snapshot"] = str(destination.relative_to(output))
         records["sources"][str(relative)] = row
     for category, paths in [("artifacts", artifacts), ("tools", tools)]:
         for index, path in enumerate(dict.fromkeys(paths)):
             destination = output / category / str(index) / path.name
-            row = copy_file(path, destination)
+            row = preserve(path, destination, reusable)
             row["snapshot"] = str(destination.relative_to(output))
             records[category].append(row)
     if git(root, "rev-parse", "HEAD").strip() != revision:

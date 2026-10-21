@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Execute admitted single-core storage startup; hardware effects remain modeled."""
-import argparse, hashlib, importlib.util, json, re, struct, subprocess
+import argparse, hashlib, importlib.util, json, re, struct, subprocess, sys
 from pathlib import Path
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'checks'))
+import harness
+HARDWARE=r'(?:icc_\S+|cntfrq_el0|cntps_\S+|cntp_\S+|scr_el3|hcr_el2|sctlr_el1|mair_el1|tcr_el1|ttbr0_el1|par_el1|cnthctl_el2|cntvoff_el2|cptr_el[23]|esr_el3|elr_el3|far_el3)'
+READ=re.compile(r'mrs\s+x(\d+),\s*('+HARDWARE+r')$',re.I)
+WRITE=re.compile(r'msr\s+('+HARDWARE+r'),\s*x(\d+|zr)$',re.I)
+TRANSLATION=re.compile(r'at\s+s1e1([rw]),\s*x(\d+)$',re.I)
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
@@ -35,7 +41,23 @@ class Machine:
         if variant=='secondary-active':self.write(0x07053008,8)
         if variant=='secondary-control':self.write(0x07050204,1)
         if variant=='secondary-mode':self.write(0x07050224,1)
-        self.cpu.hook_add(UC_HOOK_CODE,self.hook)
+        self._stop_at=None
+        if type(self).hook is Machine.hook:
+            # hook acts only at the end sentinel, two symbols, the stop
+            # address, system-register accesses and WFE, so hook just those.
+            self.hooked=harness.hook_addresses(self.cpu,[0x43fff000,image.address('platform_panic'),
+              image.address('a733_cpu_coherence_publish'),*harness.instruction_sites(image.parts,
+              lambda word:harness.system_register_access(word) or word==0xd503205f)],self.hook)
+        else:
+            # A subclass hook may act at further addresses.
+            self.hooked=None;self.cpu.hook_add(UC_HOOK_CODE,self.hook)
+    @property
+    def stop_at(self):return self._stop_at
+    @stop_at.setter
+    def stop_at(self,address):
+        self._stop_at=address
+        if self.hooked is not None and address not in self.hooked:
+            self.hooked|=harness.hook_addresses(self.cpu,[address],self.hook)
     def write(self,a,v,n=4):self.cpu.mem_write(a,int(v).to_bytes(n,'little'))
     def read(self,a,n=8):return int.from_bytes(self.cpu.mem_read(a,n),'little')
     def ret(self,v=0):
@@ -47,9 +69,8 @@ class Machine:
             pointer=cpu.reg_read(UC_ARM64_REG_X0);text=bytes(cpu.mem_read(pointer,160)).split(b'\0',1)[0]
             raise AssertionError(('Actual native startup panic',text,cpu.reg_read(UC_ARM64_REG_X1)))
         text=self.e.ops.get(a,'')
-        hardware=r'(?:icc_\S+|cntfrq_el0|cntps_\S+|cntp_\S+|scr_el3|hcr_el2|sctlr_el1|mair_el1|tcr_el1|ttbr0_el1|par_el1|cnthctl_el2|cntvoff_el2|cptr_el[23]|esr_el3|elr_el3|far_el3)'
-        read=re.match(r'mrs\s+x(\d+),\s*('+hardware+r')$',text,re.I)
-        write=re.match(r'msr\s+('+hardware+r'),\s*x(\d+|zr)$',text,re.I)
+        read=READ.match(text)
+        write=WRITE.match(text)
         if read:
             key=read[2].lower();assert key in self.sysregs,key
             cpu.reg_write(UC_ARM64_REG_X0+int(read[1]),self.sysregs[key])
@@ -58,7 +79,7 @@ class Machine:
             key=write[1].lower();value=0 if write[2].lower()=='zr' else cpu.reg_read(UC_ARM64_REG_X0+int(write[2]))
             self.sysregs[key]=value&0xf0 if key=='icc_pmr_el1' else value
             cpu.reg_write(UC_ARM64_REG_PC,a+4);return
-        translation=re.match(r'at\s+s1e1([rw]),\s*x(\d+)$',text,re.I)
+        translation=TRANSLATION.match(text)
         if translation:
             va=cpu.reg_read(UC_ARM64_REG_X0+int(translation[2]))
             self.sysregs['par_el1']=self.translate(va,translation[1].lower()=='w')
@@ -77,7 +98,7 @@ class Machine:
             self.ret(0 if self.variant=='publication-failure' else 1);return
         if instruction==0xd503205f:
             self.parked=True;cpu.emu_stop();return
-        if getattr(self,'stop_at',None)==a:self.finished=True;cpu.emu_stop()
+        if self.stop_at==a:self.finished=True;cpu.emu_stop()
     def translate(self,va,write):
         # Model the architecture's hardware walk over the descriptors actually
         # written by platform_init, never a fabricated identity/attribute tuple.
@@ -112,8 +133,7 @@ class Machine:
         return self.cpu.reg_read(UC_ARM64_REG_X0)
 def run(image,session,out):
     out.mkdir(parents=True,exist_ok=False)
-    native=module('sd_single_core_image',ROOT/'checks/storage-read-native.py')
-    e=native.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
+    e=harness.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
     disassembly=subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True)
     for line in disassembly.splitlines():
         match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)

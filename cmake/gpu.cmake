@@ -1,3 +1,4 @@
+include("${CMAKE_CURRENT_LIST_DIR}/kernel-flags.cmake")
 # Firmware is an external, pinned build input, never a tracked generated array.
 set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware for the service emulator check")
 if(SUNSTONE_GPU_FIRMWARE)
@@ -65,9 +66,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   target_compile_definitions(gpu-service-model PRIVATE
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
   target_compile_options(gpu-service-model PRIVATE
-    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
-    -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
-    -O2 -g -Wall -Wextra -Werror -fstack-usage)
+    ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
   target_link_options(gpu-service-model PRIVATE -nostdlib -static -Wl,--gc-sections
     "-Wl,-T,${gpu_service_linker}"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-service-model.map")

@@ -55,58 +55,21 @@ def freeze_bundle(bundle):
 
 
 def reference_bytes(value):
-    require(isinstance(value,dict) and set(value)=={'path','sha256'},'Invalid HDMI audio review reference.')
-    path=Path(value['path']);require(path.is_absolute(),'HDMI audio review path must be absolute.')
-    data=path.read_bytes()
-    require(hashlib.sha256(data).hexdigest()==value['sha256'],'HDMI audio review reference changed.')
-    return path.resolve(),data
+    return supervisor.reviewed_reference(value,'HDMI audio')
 
 
 def software_sources():
-    paths=dict(source_files())
-    paths.update({'supervised-host-tool.py':Path(supervisor.__file__),
-                  'base-host-tool.py':Path(supervisor.base.__file__),
-                  'observer-host-tool.py':Path(supervisor.observer.__file__)})
-    return paths
+    return supervisor.device_software_sources(source_files())
 
 
 def validate_software(value,prepared):
-    require(value.get('schema')=='a733-hdmi-audio-supervised-software-v1' and value.get('physical_access') is False and
-            all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','native_composition')),
-            'HDMI audio software evidence is incomplete.')
-    for key,name in [('image','image.elf'),('launcher','launch.bin')]:
-        _,data=reference_bytes(value[key])
-        require(hashlib.sha256(data).hexdigest()==prepared['files'][name],
-                'Software evidence covers different initially admitted executable bytes.')
-    require(set(value.get('sources',{}))==set(prepared['_source_hashes']),'Software source identities are incomplete.')
-    for name,expected in prepared['_source_hashes'].items():
-        _,data=reference_bytes(value['sources'][name])
-        require(hashlib.sha256(data).hexdigest()==expected,'Software evidence covers another implementation: '+name)
-    require(value.get('evidence'),'Software result evidence is missing.')
-    for item in value['evidence']:reference_bytes(item)
+    supervisor.validate_device_software(value,prepared,'a733-hdmi-audio-supervised-software-v1',('admission_cases','launcher_cases','host_capture','native_composition'),
+        'HDMI audio',reference_bytes)
 
 
 def claimed(database,test_id,owner,bundle,prepared):
-    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'HDMI audio queue is halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner,'Matching coordinator claim is required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,'HDMI audio prerequisites differ.')
-        refs=review['prerequisites']
-        path,data=reference_bytes(refs['supervised-ram-recovery'])
-        require(path==(bundle/'admission.json').resolve() and hashlib.sha256(data).hexdigest()==prepared['files']['admission.json'],
-                'Reviewed entry differs from the initially admitted HDMI audio entry.')
-        _,data=reference_bytes(refs['hdmi-audio-supervised-software']);validate_software(json.loads(data),prepared)
-        covered={}
-        for value in submission['artifacts']:
-            path,data=reference_bytes(value);covered[path]=hashlib.sha256(data).hexdigest()
-        expected={'prepared.json':prepared['_prepared_sha256'],'image.elf':prepared['files']['image.elf'],
-                  'launch.bin':prepared['files']['launch.bin']}
-        require(all(covered.get((bundle/name).resolve())==h for name,h in expected.items()),
-                'Queue does not cover the initially admitted prepared image.')
-    finally:db.close()
+    supervisor.device_claim(database,test_id,owner,bundle,prepared,'HDMI audio','hdmi-audio-supervised-software',PREREQUISITES,
+        reference_bytes,validate_software)
 
 
 def main(argv=None):
