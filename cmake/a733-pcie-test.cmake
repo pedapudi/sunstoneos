@@ -41,18 +41,7 @@ set(pt_inputs ${pcie_inputs} ${pt_sources} ${pt_headers}
  "${pt_root}/include/a733_pcie_epf_test.h" "${pt_root}/apps/pcie-test/source.json" "${pt_root}/apps/pcie-test/boot.patch"
  "${pt_root}/apps/pcie-test/platform.patch" "${pt_root}/sources.lock.json" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES pt_inputs)
-set(pt_identity "native-pcie-epf-test1;one-copy4096;msi-one-shot;guards;retained;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION}")
-foreach(input IN LISTS pt_inputs)
- file(SHA256 "${input}" hash)
- string(APPEND pt_identity "${hash}")
-endforeach()
-string(SHA256 pt_build_id "${pt_identity}")
-string(REGEX REPLACE "(..)" "0x\\1," pt_bytes "${pt_build_id}")
-file(WRITE "${pt_build}/build-id.c" "const unsigned char a733_smp_build_id[32]={${pt_bytes}};\n")
-file(WRITE "${pt_build}/build-id.txt" "${pt_build_id}\n")
-target_sources(sunstone-a733-pcie-test PRIVATE "${pt_build}/build-id.c")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${pt_inputs})
 set_target_properties(sunstone-a733-pcie-test PROPERTIES SUFFIX ".elf")
-file(WRITE "${pt_build}/finish.cmake" "file(SHA256 \"\${IMAGE}\" hash)\nfile(WRITE \"${pt_build}/manifest.json\" \"{\\\"target\\\":\\\"sunstone-a733-pcie-test\\\",\\\"execution_profile\\\":\\\"pcie-test-supervised-v1\\\",\\\"build_id\\\":\\\"${pt_build_id}\\\",\\\"final_elf\\\":\\\"\${hash}\\\"}\\n\")\n")
-add_custom_command(TARGET sunstone-a733-pcie-test POST_BUILD COMMAND "${CMAKE_COMMAND}"
- "-DIMAGE=$<TARGET_FILE:sunstone-a733-pcie-test>" -P "${pt_build}/finish.cmake" VERBATIM)
+sunstone_build_identity(sunstone-a733-pcie-test BUILD_DIR "${pt_build}" INPUTS ${pt_inputs}
+ TAG "native-pcie-epf-test1;one-copy4096;msi-one-shot;guards;retained"
+ TARGETS a733-board-usb2-host PROFILE pcie-test-supervised-v1 RESULT pt_build_id)
