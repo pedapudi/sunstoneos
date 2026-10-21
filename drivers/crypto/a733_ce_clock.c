@@ -38,10 +38,8 @@ static int parents(struct a733_ce_clock *p)
     uint32_t osc,ref,pll;
     if(!read32(p,UINT32_C(0x07090160),&osc)||!read32(p,CCU,&ref)||
        !a733_clock_ref24_valid(osc,ref)||!read32(p,CCU+0xa0,&pll)||
-       (pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
+       !a733_clock_peri0_valid(pll)||
        !bits(p,CCU+0xa8,BIT(31),0)||!bits(p,CCU+0xac,0x8e000000,0))return 0;
-    unsigned n=((pll>>8)&255)+1;
-    if(n<53||n>105||24u*n!=1200u*(((pll>>20)&7)+1))return 0;
     static const unsigned offset[]={0x500,0x580,0x588};
     static const uint32_t masks[]={0x0300001f,0x8700001f,0x8700001f};
     static const unsigned mhz[3][8]={{24,0,0,600,0,0,0,0},

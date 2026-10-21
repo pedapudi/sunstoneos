@@ -73,8 +73,10 @@ unsupported sources and divisors are refused.
 
 Native reads validate the oscillator, reference PLL, selected APB1 parent and
 APB1 divider. When PERI0 is selected, its integer factors, software gates,
-No-Auto controls and effective output status must match. Reserved PERI0 bit 24
-does not select a source. Parent and APB1
+No-Auto controls and effective output status must match. The PLL factor check
+is the shared `a733_clock_peri0_valid` rule in
+`include/a733_clock_reference.h`, also used by the ADC and CE drivers.
+Reserved PERI0 bit 24 does not select a source. Parent and APB1
 registers remain read-only. The driver enables the ADC clock before deasserting
 THS reset and enabling its bus gate at CCU `0x0fe4`.
 

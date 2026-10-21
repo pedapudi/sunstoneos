@@ -324,6 +324,11 @@ enables, clears an observed stale DATA0 flag and verifies a clear boundary.
 It then enables channel-0 normal sampling last. A copied observation requires
 a newly pending DATA0 flag. After copying, the task acknowledges only that flag
 and verifies another clear boundary before accepting a later observation.
+Because the converter keeps sampling, the next conversion can set DATA0 again
+between the acknowledgement and its readback. The driver acknowledges one such
+reassertion and then requires a clear readback. Two conversions cannot complete
+within those microseconds, so a flag that stays set after the second
+acknowledgement is treated as an ignored write and retains resources.
 The power-on data value 63 alone is not a conversion. These observations are
 not lossless conversion counts.
 

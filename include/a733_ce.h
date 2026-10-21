@@ -44,7 +44,7 @@ struct a733_ce_config {
     unsigned configure_health; /* 0 adopt; 1 program with both tests initially disabled. */
 };
 enum a733_ce_sync { A733_CE_PUBLISH, A733_CE_ACQUIRE,
-    A733_CE_CIPHER_PUBLISH,A733_CE_CIPHER_ACQUIRE,A733_CE_KEY_CLEAN };
+    A733_CE_CIPHER_PUBLISH,A733_CE_CIPHER_ACQUIRE,A733_CE_KEY_CLEAN,A733_CE_SCRUB };
 struct a733_ce_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate owner, handoff, actual token and the complete memory mapping.
@@ -78,12 +78,15 @@ struct a733_ce_ops {
     void (*retain)(void *); /* Retain the common register mutex after uncertainty. */
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
-    /* Publish cleans descriptor and cleans/invalidates output before DMA.
-     * CIPHER_PUBLISH additionally cleans the key and complete input lines.
-     * CIPHER_ACQUIRE invalidates the complete cipher output. KEY_CLEAN cleans
-     * only the software key line after a consumed successful cipher task.
-     * Acquire invalidates output after successful completion. Exact 1 means
-     * completed cache maintenance and barriers, never memory drain or release. */
+    /* Publish cleans descriptor, IV and input and cleans/invalidates output
+     * before DMA. CIPHER_PUBLISH instead cleans the key and cleans/invalidates
+     * the complete cipher output. CIPHER_ACQUIRE invalidates the complete
+     * cipher output. Acquire invalidates output after successful completion.
+     * Scrubs follow a completed task whose result was copied, after software
+     * zeroed the lines: KEY_CLEAN cleans input, cipher output and key after a
+     * consumed AES task; SCRUB cleans output, IV and input after a TRNG or SHA
+     * task. Exact 1 means completed cache maintenance and barriers, never
+     * memory drain or release. */
     int (*sync)(void *,struct a733_ce_memory *,enum a733_ce_sync);
 };
 enum a733_ce_result { A733_CE_PENDING,A733_CE_BUSY,A733_CE_RANDOM,
@@ -145,9 +148,11 @@ enum a733_ce_result a733_ce_hash_request(struct a733_ce *,const uint8_t *,size_t
 enum a733_ce_result a733_ce_cipher_request(struct a733_ce *,const uint8_t key[16],
     const uint8_t *,size_t,unsigned decrypt,uint64_t deadline_us);
 enum a733_ce_result a733_ce_cipher_task_poll(struct a733_ce *,uint8_t *,size_t);
-/* Only a consumed successful AES task permits zeroing its software key line and
- * completing cache clean/barriers. Earlier faults retain secret DMA backing.
- * This does not prove internal CE key-register erasure or global engine drain. */
+/* Only a consumed successful AES task permits zeroing its key, input and cipher
+ * output lines and completing cache clean/barriers. Earlier faults retain
+ * secret DMA backing. A successful TRNG or SHA completion zeros output, IV and
+ * input the same way before returning its result. Neither proves internal CE
+ * key-register erasure or global engine drain. */
 enum a733_ce_result a733_ce_cipher_clear_key(struct a733_ce *);
 /* Callback-free completion boundary used by the retained session owner. */
 int a733_ce_idle(const struct a733_ce *);

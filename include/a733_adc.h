@@ -36,6 +36,8 @@ enum a733_adc_result a733_adc_poll(struct a733_adc *);
  * only its observed flag. Values are latest observations, not synchronized or
  * lossless conversions; flags may reassert while reading/W1C. Zero is valid.
  * Caller handles GIC mask/rearm/EOI. Output remains unchanged without SAMPLE.
+ * Calls before READY or with a zero deadline return INVALID without I/O; an
+ * expired deadline or non-owner caller still faults and retains.
  * Terminal fault retries retention metadata only, never healthy I/O. */
 enum a733_adc_result a733_adc_read(struct a733_adc *,uint64_t,struct a733_adc_sample *);
 /* Owner-task-only configured disable after READY. Caller masks its GIC IRQ

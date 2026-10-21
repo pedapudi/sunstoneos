@@ -56,11 +56,9 @@ static int clocks(struct a733_adc *p,int enabled,uint32_t *cold_source)
     unsigned direct24=a733_clock_dcxo_hz(oscillator)==24000000;
     if (cold_source) *cold_source=direct24?BIT(24):0;
     if (p->config.apb1>>24==3) {
-        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&BIT(1)) ||
+        if (!rd(p,CCU+0xa0,&v) || !a733_clock_peri0_valid(v) ||
             !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0) ||
             !bits(p,CCU+0x1908,0x0a000a00,0x0a000a00) || !bits(p,CCU+0x1988,0x0a000000,0x0a000000)) return 0;
-        unsigned n=((v>>8)&255)+1;
-        if (n<53 || n>105 || 24u*n!=600u*(((v>>20)&7)+1)*2) return 0;
     }
     if (!enabled && p->config.configure_adc_clock) return bits(p,CCU+0xfc0,BIT(31),0);
     if (!rd(p,CCU+0xfc0,&v)) return 0;
@@ -158,7 +156,8 @@ enum a733_adc_result a733_adc_read(struct a733_adc *p,uint64_t deadline,struct a
  !separate(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
  if(!claim(p))return A733_ADC_BUSY;if(p->stage==STOPPED) return finish(p,A733_ADC_STOPPED);
  if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
- if(p->ops.current(p->cookie)!=1||p->stage!=ACTIVE||!deadline)return fault(p);p->deadline=deadline;
+ if(p->stage!=ACTIVE||!deadline)return finish(p,A733_ADC_INVALID);
+ if(p->ops.current(p->cookie)!=1)return fault(p);p->deadline=deadline;
  enum a733_adc_result r=lock(p);if(r!=A733_ADC_READY)return r;
  uint32_t status;
  if(!clocks(p,1,NULL)||!bits(p,ADC,UINT32_MAX,0x5dbf095f)||!bits(p,ADC+0xd0,1,1)||!bits(p,ADC+4,0x008f0000,0x00890000)||!bits(p,ADC+8,0x007f007f,MASK)||

@@ -20,7 +20,9 @@ struct a733_lradc {
 int a733_lradc_init(struct a733_lradc *,const struct a733_adc_config *,const struct a733_adc_ops *,void *,struct a733_clock_leases *,const struct a733_clock_token *);
 enum a733_adc_result a733_lradc_poll(struct a733_lradc *);
 /* DATA0 is copied only after fresh DATA_PENDING. W1C is followed by a required
- * clear boundary. Output remains unchanged on AGAIN/BUSY/fault. These are latest
+ * clear boundary; one DATA0 reassertion by the next conversion is acknowledged
+ * once more before faulting. Calls before READY or with a zero deadline return
+ * INVALID. Output remains unchanged on AGAIN/BUSY/fault. These are latest
  * observations, not lossless conversion counts or simultaneous GPADC samples. */
 enum a733_adc_result a733_lradc_read(struct a733_lradc *,uint64_t,struct a733_adc_sample *);
 /* Configured EN/local IRQ disable only; no analog drain, reset, release/restart.

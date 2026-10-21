@@ -47,7 +47,8 @@ assert '"ce-sys", "dcxo", 0x0AC4, BIT(1)' in ccu
 assert '[RST_BUS_CE_SY] = { 0x0ac4, BIT(17) }' in ccu
 assert '"ce-mclk", "dcxo", 0x05E4, MBUS_GATE_KEY_VALUE, BIT(2)' in ccu
 assert 'iosc_clk, "iosc", "rc-16m", 0x160, BIT(0)' in rtc
-assembly = subprocess.check_output([a.objdump, '-d', str(a.object)], text=True).lower()
-for instruction in ['dsb\tsy', 'dc\tcvac', 'dc\tcivac', 'dc\tivac', 'ctr_el0']:
-    assert instruction in assembly, instruction
-print('PASS pinned A733 descriptor, status, health and clock source references; native MMIO/cache instructions')
+assembly = subprocess.check_output([a.objdump, '-dr', str(a.object)], text=True)
+# Ordered MMIO stays local; cache maintenance uses the shared helper, which
+# also refuses an unknown writeback granule, non-EL1 callers and a disabled MMU.
+assert 'dsb\tsy' in assembly and 'aarch64_device_cache' in assembly and 'dc\t' not in assembly
+print('PASS pinned A733 descriptor, status, health and clock source references; native MMIO and shared cache maintenance')
