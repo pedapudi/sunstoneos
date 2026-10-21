@@ -27,7 +27,7 @@ static void incoming_start_features(struct gateway *g,uint32_t brsf)
     struct hci_ev_conn_complete conn={0,0x23,{{1,2,3,4,5,6}},1,0};event(&s->f,HCI_EV_CONN_COMPLETE,&conn,sizeof(conn));astep(&s->a);
     assert(s->a.links[0].state==BT_ACL_CONNECTED && s->a.links[0].incoming);
     s->wire_cursor=s->f.tn;s->automatic_credits=1;
-    const struct bt_sdp_ag_profile profile={0x10001,brsf,0x109,(uint16_t)((brsf&31)|((brsf>>4)&32)),7,(uint8_t)((brsf>>5)&1)};
+    const struct bt_sdp_ag_profile profile={0x10001,brsf,0x109,(uint16_t)((brsf&31)|((brsf>>4)&32)),7,(uint8_t)((brsf>>5)&1),0,0};
     assert(bt_sdp_server_init(&g->sdp,&s->q,&profile,1000000,5000000,ag_policy,g)==1);
     assert(bt_rfcomm_registry_init(&g->rf.registry,&s->q,ag_route,ag_service,g)==1);
     assert(bt_l2cap_init(&s->q,&s->a,672,1000000,60000000,bt_rfcomm_admit,&g->rf.registry)==1);
