@@ -1,7 +1,8 @@
-# Prepare and capture one G2D fill, copy or source-over-solid
+# Prepare and capture one retained G2D operation
 
-The native application performs one caller-selected fill or source-copy operation
-and exports an immutable CPU-owned copy. The host path uses the existing
+The native application performs one caller-selected fill, source copy,
+solid-background blend or exact twofold enlargement. It exports an immutable
+CPU-owned copy. The host path uses the existing
 supervised board launcher, typed admission records and coordinator claim. All
 native DMA buffers, page tables and provider leases remain allocated after
 completion, ACK or failure. Recovery follows the admitted whole-board
@@ -11,13 +12,16 @@ Pixels use ARGB8888 stored as little-endian B, G, R, A bytes. Width is one throu
 1280 pixels; height is one through 720. The byte stride is a multiple of four,
 at least four times width and at most 5120. The complete source covers
 `stride * height` bytes, including padding, with a maximum of 3,686,400 bytes.
-Source bytes are supplied for both operations and authenticated by SHA-256.
+Source bytes are supplied for every operation and authenticated by SHA-256.
 
 Output starts at zero, including row padding. Fill writes the selected color
 inside the destination rectangle. Its source coordinates must be zero. Copy
 moves the selected rectangle from the separate source surface without alpha
 blending; its color field must be zero. Both rectangles must fit the declared
-surface. A 64×64 initial fixture does not restrict the public geometry.
+surface. Scaling requires a positive even destination width and height. The
+source window has half those dimensions at the supplied source origin, and its
+color field must be zero. A 64×64 initial fixture does not restrict the public
+geometry.
 
 ## Seal the operation
 
@@ -130,7 +134,7 @@ ACK. For fill and copy it compares every byte with an independent CPU reference,
 including zero pixels outside the rectangle and zero padding. A mismatch retains
 the actual output and stops before ACK. Blending retains its ideal reference
 comparison as an unqualified diagnostic; authenticated output may differ from
-that ideal without blocking ACK. An authenticated result receives one
+that ideal without blocking ACK. After the operation checks pass, an authenticated result receives one
 41-byte ACK bound to generation and output digest. One final query must return
 ACKed status with unchanged identity, digests and proofs. This observation ends
 capture; every native resource remains retained. Evidence failures after an
@@ -188,3 +192,63 @@ capture record states that limit. The arithmetic comparison is an unqualified di
 authenticated output or prevent its ACK. Session, digest, completion and durable
 output checks remain strict. Neither the comparison nor ACK authorizes another
 operation or releases retained resources.
+
+
+## Exact twofold enlargement
+
+Use `--operation scale2x` with zero color. The destination rectangle may range
+from 2×2 through 1280×720, with even width and height. Its source window ranges
+from 1×1 through 640×360. The destination and half-sized source windows must
+both fit the declared canvas at their separate origins. Canvas dimensions and
+origins need not be even. Source upload, stride, surface size and the 904-byte
+session and 192-byte result layouts retain their existing meanings. No separate
+scaled input or extra device mapping is introduced.
+
+For example, a 60×64 canvas with 256-byte stride can enlarge the 16×12 source
+window at (40,42) into a 32×24 destination at (9,17). The complete upload still
+contains 16384 bytes, including padding. These source coordinates fit the
+half-sized window even though a 32×24 source window would exceed the canvas.
+The CLI arguments for this geometry are:
+
+```text
+--operation scale2x --width 60 --height 64 --stride 256 \
+--dx 9 --dy 17 --w 32 --h 24 --sx 40 --sy 42 --color 0
+```
+
+The host has no qualified interpolation oracle. Capture records
+`matches_cpu_reference: null`, `reference_qualified: false` and an unchecked
+reference comparison. It independently requires zero bytes outside the selected
+destination rectangle, including row padding. A nonzero untouched byte causes
+host failure before ACK, after the actual response and copied output have been
+saved durably. Source authentication, complete-session and output digests,
+completion, master-10 scans, guards and ACK receipt remain strict. An accepted
+copy establishes no numerical interpolation or physical pixel qualification.
+
+The scaling host checks passed on 20 October 2026 with the actual native image,
+its exact sealed session and copied response and receipt. Five geometry
+boundaries include the minimum and maximum extents, asymmetric origins and
+source windows ending at the canvas edge. Twelve geometry refusals cover odd
+or zero destination extents, source and destination overflow, and nonzero color.
+Two source-authentication refusals confirm that an unchecked interpolation
+reference still requires the complete authenticated upload.
+
+One exact native copied result completed host capture with untouched bytes zero
+and the interpolation comparison unchecked. One altered row-padding byte, with
+a recomputed output digest, was retained and refused before ACK. The native
+output pixels are explicit model data; no interpolation model or physical
+arithmetic claim follows from their capture.
+
+Preparation derives its allocator rows and full page table from the actual
+saved native checkpoint for that exact session. It does not replace the proof's
+session identity or repeat construction. Production admission refuses the
+modeled records. Preparation compares all launcher source and header inputs and
+copies the entry's existing binary, objects and original compilation journals.
+There is one launcher compilation; the prepared session, request and contract
+match the entry bytes. Root's three new scaling SRAM cases pass separately.
+Earlier fill, copy, blend, completion, boot and transport evidence retains its
+recorded scope without matrix replay.
+
+Host sources and selected immutable artifacts are preserved at
+`~/.cache/sunstoneos/evidence/g2d-scale-host-20261020/frozen/manifest.json`.
+Native results are under `~/.cache/sunstoneos/evidence/g2d-scale-20261020/`.
+The preserved models do not authorize physical execution or resource reuse.
