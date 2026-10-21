@@ -7,7 +7,8 @@ It runs at EL1 on one emulated Cortex-A55 with a GICv3 interrupt controller,
 a physical generic timer, and 128 MiB RAM. It is not an Orange Pi boot image.
 
 Clang 21, LLD 21, CMake, GNU patch, Python 3.12 or later, and
-`qemu-system-aarch64` are required. Python verifies source archive hashes against
+`qemu-system-aarch64` are required. Configuration stops when the C compiler is
+not Clang 21 or later. Python verifies source archive hashes against
 [the dependency manifest](../sources.lock.json). Downloaded sources and build
 output stay in the user cache.
 
@@ -32,14 +33,86 @@ was required. Package versions were LLD `1:21.1.8-6ubuntu1` and QEMU
 `1:10.2.1+ds-1ubuntu3.2`.
 
 The central configuration also prepares storage targets that require TinyUSB.
-Supply its pinned source even when selecting a kernel or PMIC-only build target;
-those targets do not link USB code.
+Configuration therefore stops when `TINYUSB_DIR` is missing, even when only a
+kernel or PMIC target will be built; those targets do not link USB code.
+Configuration also compares the FreeRTOS and TinyUSB files that the build
+compiles with the digests in the dependency manifest, through
+`tools/fetch-sources.py <name> --verify <directory>`. A tree that differs is
+refused, and editing one of those files later triggers the comparison again.
 
 The toolchain preserves explicitly supplied `CMAKE_C_COMPILER`,
 `CMAKE_ASM_COMPILER` and `CMAKE_CXX_COMPILER` paths. Set `SUNSTONE_LLD` to the
 `ld.lld` driver when selecting a linker outside `PATH`; CMake propagates that
 selection into its compiler checks. Use a fresh build directory when changing
 toolchains, because CMake caches compiler and linker flags.
+
+## Reproducible images
+
+The central build gives every target `-ffile-prefix-map` options through the
+`sunstone-path-maps` interface library. Each option replaces one absolute root
+with a fixed name in `__FILE__` strings and debug information:
+
+| Root | Name |
+| --- | --- |
+| Repository checkout | `src` |
+| Build directory | `build` |
+| `FREERTOS_DIR`, `TINYUSB_DIR` | `freertos`, `tinyusb` |
+| `SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR`, `SUNSTONE_NETWORK_C_HEADERS` | `tcp`, `rsn`, `c-headers` |
+| `MIMUS_DIR`, `NEWLIB_ROOT`, `NEWLIB_SMP_ROOT` | `mimus`, `newlib`, `newlib-smp` |
+| `SUNSTONE_SOURCE_CACHE` (default `~/.cache/sunstoneos/sources`) and its parent | `sources`, `cache` |
+
+`configASSERT` passes `__FILE__` to `platform_panic`, so without these maps the
+loaded image bytes would contain the checkout and cache paths. With them,
+`kernel-check`, `sunstone-a733-board` and `sunstone-a733-storage-maintenance`
+built from two checkouts at different paths into two build directories produce
+identical ELF files, and their loadable segments contain no `/home` path. The
+maps are kept out of target `COMPILE_OPTIONS` because several image identities
+hash those options. Standalone projects under `apps/` and `platform/` do not
+use the central `CMakeLists.txt` and therefore do not receive the maps.
+
+The board and storage build identities hash their input files and their
+effective flags: `CMAKE_C_FLAGS`, `CMAKE_ASM_FLAGS`, the flags of the selected
+build type, and the compile options and definitions of the image targets. The
+board inputs include the private headers in `network/include`, `drivers/usb`
+and `drivers/usb/host`. Text recorded from flags uses the fixed names above, so
+moving the checkout or the build directory leaves an identity unchanged.
+`checks/build-identity.py` configures two copies of the repository and checks
+these properties; pass the usual cache options after `--`:
+
+```sh
+python3 checks/build-identity.py --work "$cache/build/identity-check" -- \
+  -DFREERTOS_DIR="$freertos" -DTINYUSB_DIR="$tinyusb" ...
+```
+
+The board resolves the pinned Cadence PHY source through its lock archive path
+under `SUNSTONE_SOURCE_CACHE`, as `tools/fetch-sources.py pcie-sunxi-cadence-combophy-c`
+stores it. Caches that only hold the extracted board-kernel tree at
+`pcie/kernel/bsp/drivers/phy/` are still accepted; either copy must match the
+pinned digest.
+
+Builders that link new units with objects accepted from earlier evidence, such
+as `apps/npu-returning/build.py`, compare each reused object's recorded header
+dependencies with the current files through `tools/returning_build.py`. They
+refuse to link when a header has changed, because the reused object still
+holds the earlier structure layouts. The reused objects must then be rebuilt
+from current source.
+
+The patched FEL recovery tool is built only on the host:
+
+```sh
+python3 tools/build-sunxi-fel.py --output "$cache/build/sunxi-fel-rebuild"
+```
+
+The script extracts the locked sunxi-tools archive, applies the four patches in
+the order recorded in [the source record](sources.md#local-compatibility-patches)
+without fuzz, runs `make sunxi-fel` and writes `build.json` with the tool's
+SHA-256. It never runs the tool. When the host lacks the libusb-1.0 and libfdt
+development packages, pass make variables that point at extracted headers, for
+example `LIBUSB_CFLAGS=-I<dir>/usr/include/libusb-1.0 LIBUSB_LIBS=-l:libusb-1.0.so.0`.
+With GCC 15.2.0 and the headers from `libusb-1.0-0-dev` `2:1.0.29-2build1` and
+`libfdt-dev` `1.7.2-2ubuntu1`, the result matches the tool used for the recorded
+DDR, AArch64 and model-readback evidence,
+`4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e`.
 
 ## What the check establishes
 

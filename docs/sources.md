@@ -42,6 +42,21 @@ scheduling, and hardware access. Use its source and current project instructions
 when implementing that port.
 
 Download identities and archive hashes are in [sources.lock.json](../sources.lock.json).
+`tools/fetch-sources.py` downloads each archive under a per-process temporary
+name and keeps it only when its SHA-256 matches. It extracts an archive into a
+temporary sibling directory, moves the complete tree into place and writes a
+`<directory>.sha256` stamp holding the archive digest. A tree without a matching
+stamp, such as one left by an interrupted extraction, is moved aside to
+`<directory>.unverified-<pid>` and replaced. The `freertos` and `tinyusb` entries
+also list a `files` digest for every `.c`, `.h` and `.S` file the build can
+compile, read from the verified archive: for FreeRTOS, the top-level kernel
+files, `include`, `portable/MemMang` and the `ARM_AARCH64_SRE` and `ARM_CR82`
+ports; for TinyUSB, everything under `src`. The fetch tool and the central CMake
+configuration refuse a tree whose listed files differ. Regenerate these lists
+from the new archive when changing either pin.
+The `board-dragonsecboot` entry pins the boot-package packer that
+`tools/prepare-microsd-boot.py` requires; the tool still carries its own copy of
+the same digest.
 The [board wiring record](board-wiring.md) identifies the relevant schematic
 sheets and manual pages. Documented wiring remains separate from physical
 population and functional qualification of the attached board.
@@ -211,7 +226,9 @@ replacement is not established by the current reverse-engineering evidence.
 
 The FEL patches retain the upstream tool's GPL licensing. The SRAM probe used
 the first two FEL patches; the argument-consumption fix was recorded afterward.
-DDR and AArch64 probes used all three patches. The DDR wrapper supplies its own
+DDR and AArch64 probes used all three patches. `tools/build-sunxi-fel.py` applies
+the SRAM, status, execute-argument and bounded-receive patches in that order;
+they change separate hunks, and the result matches the recorded patched sources. The DDR wrapper supplies its own
 SRAM layout instead of loading the full boot0 through the original SPL path.
 
 The monitor's interrupt grouping follows the [Trusted Firmware-A interrupt

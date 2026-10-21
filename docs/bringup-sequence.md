@@ -5,28 +5,32 @@ independently of mimus. The order below follows shared dependencies. Work on
 sources, firmware, interfaces, and host checks can continue when physical work
 is blocked. Missing accessories remain explicit qualification blockers.
 
-## Recovery precedes further peripheral probes
+## Recovery gates persistent writes and the UFS probe
 
-The UFS probe stalled without returning through the CPU secure timer. Before
-another new peripheral-access sequence, qualify an independent watchdog and
-a reset destination that cannot execute unknown storage software.
+Physical work starts with supervised RAM-only execution and reviewed return
+procedures. Stop device communication after the first transport failure,
+preserve its evidence, and require explicit recovery before the board is used
+again. Intentional watchdog expiry and USB power automation are deferred; they
+are not prerequisites for unrelated device work.
 
-The board has BOOT and GND test pads beside mini-HDMI. The documented recovery
-procedure uses a stable connection between those pads, attached with power
-disconnected. It does not require a boot pushbutton. The user's ordinary USB
-power cycle reached FEL with a microSD card inserted, but watchdog recovery
-remains unverified. Preserve the card and other storage contents.
+The UFS probe stalled without returning through the CPU secure timer. It stays
+disabled (`SUNSTONE_EXPERIMENTAL_UFS=OFF`) until that failure and its recovery
+are resolved.
 
-The [physical recovery procedure](board-wiring.md) identifies the pads and the
-prepared input checker. Confirm the connection, check the input, then conduct
-one bounded SRAM watchdog-expiry trial with retained results and automatic
-USB rediscovery. The passed configuration/restoration trial does not need repeating.
-Integrate the qualified recovery path into subsequent hardware probes.
+The board has BOOT and GND test pads beside mini-HDMI. The documented manual
+recovery procedure uses a stable connection between those pads, attached with
+power disconnected. It does not require a boot pushbutton. The procedure has
+not been qualified on the attached boards. The user's ordinary USB power cycle reached FEL with
+a microSD card inserted. The [physical recovery procedure](board-wiring.md)
+identifies the pads and the prepared input checker.
+
+Persistent writes require established recovery and a preserved copy of the
+existing contents. Preserve both microSD cards and other storage contents.
 
 ## Shared platform services enable device drivers
 
-After recovery, establish clocks, resets, regulators, power domains, pin
-ownership, and interrupt delivery. Extend RAM accounting, protection, cache
+Establish clocks, resets, regulators, power domains, pin ownership, and
+interrupt delivery. Extend RAM accounting, protection, cache
 coherence, and startup to all CPU cores. Qualify DMA and device address
 translation before peripheral drivers depend on them.
 
@@ -63,26 +67,13 @@ Controller implementation can proceed before those accessories are available.
 
 ## Functional coverage precedes performance optimization
 
-The GPU now has native [firmware decoding and staging](gpu.md) and
-[MIPS memory/boot preparation](gpu-mips.md) with host evidence.
-[Command transport](gpu-queues.md), [initialization records](gpu-fw-state.md),
-[GPU workload tables](gpu-vm.md), and [startup sequencing](gpu-start.md)
-also have host reference evidence. [Compatibility, health, and event service](gpu-control.md)
-have host integration evidence. [Shutdown](gpu-stop.md) has host handshake and
-idle/reset evidence; physical interrupt delivery and isolation remain outstanding.
-The [FreeRTOS lifecycle service](gpu-service.md) integrates these components and
-passes ownership, reopen, event, and failure checks in the two-core emulator.
-The [native memory adapter](gpu-memory.md), [power controller](gpu-power.md), and
-[interrupt delivery](gpu-interrupts.md) now have focused host/emulator evidence.
-The [resource manager](gpu-resources.md) verifies inherited clock/rail settings
-and arbitrates shared leases. The service supports bounded asynchronous power
-steps. Native power binding and shared scheduling locks have instruction-model
-and FreeRTOS evidence. Complete physical bindings, cold initialization, and
-device isolation remain required.
-GPU firmware boot, graphics/compute runtime, and physical identity remain
-unqualified. The NPU has implemented components with host/emulator evidence,
-but physical numerical execution remains outstanding. Neither accelerator is
-fully functional in SunstoneOS.
+The [integrated component status](handoff.md#integrated-component-status)
+lists the implemented GPU, NPU and other device paths with their host, emulator
+or model evidence. GPU firmware boot, graphics and compute runtime, physical
+identity, cold initialization and device isolation remain unqualified. NPU
+physical numerical execution remains outstanding. Neither accelerator is fully
+functional in SunstoneOS. Reproducible boot images, recovery and update
+procedures, and physical qualification also remain goal requirements.
 
 Once each hardware function works, qualify operational modes, concurrent
 workloads, cancellation, errors, recovery, and applicable power transitions.
