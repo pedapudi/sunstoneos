@@ -119,8 +119,66 @@ The service runs in task context under the common register mutex.
 
 An acknowledged status bit can reassert immediately. W1C success does not prove
 that the interrupt line is inactive. Alarm and critical-temperature events are
-reported to policy; neither automatic throttling nor a system shutdown policy is
-implemented. These are required follow-on work for complete thermal management.
+reported in each sample. The fixed board policy described below acts on the
+converted readings, not on these events.
+
+## A fixed board policy throttles and stops work
+
+`a733_thermal_policy_update` runs in the controller's owner task after every
+`a733_thermal_read`. It keeps the latest valid reading of each channel and
+publishes one of three levels:
+
+- **Normal.** No trip is active and every channel has a recent reading.
+- **Throttle.** A channel has reached its passive trip and has not yet cooled
+  below the trip minus its hysteresis, or a channel has had no valid reading
+  for more than 1 s. Consumers reduce load but keep making progress, so a
+  watchdog that is fed on progress keeps being fed. A workload scheduler would,
+  for example, run one worker instead of two.
+- **Critical.** A channel has reached its critical trip, a channel has had no
+  valid reading for more than 5 s, or supervision has failed. Supervision fails
+  when the controller returns a result other than a sample, `AGAIN` or `BUSY`,
+  when a sample repeats an earlier sequence number or carries an impossible
+  time, or when the supplied time moves backward. The consumer stops admitting
+  work and requests a supervised stop or board power-off. The level is terminal
+  until power removal.
+
+| Channel | Passive trip | Hysteresis | Critical trip |
+| --- | --- | --- | --- |
+| 0, CPUB | 90 °C | 2 °C | 110 °C |
+| 1, DDR | none | none | 110 °C |
+| 2, NPU | none | none | 110 °C |
+| 3, CPUL | 90 °C | 2 °C | 110 °C |
+| 4, GPU | 90 °C | 0 °C | 110 °C |
+
+The trips come from the `thermal-zones` node of the pinned `sun60iw2p1.dtsi`.
+Each CPU and GPU zone there has two passive trips. The second one is bound to a
+CPU or GPU cooling device and is the policy's passive trip. The first, at 70 °C
+for the CPUs (55 °C for CPUB in the board device tree) and 60 °C for the GPU,
+only starts fans and power accounting, which this board does not use. The GPU
+zone specifies no hysteresis, so its throttle can switch on and off at
+consecutive readings near 90 °C. The zones that refer to sensors 5–7 describe
+no hardware and are omitted. The 1 s staleness bound equals the zones'
+1000 ms polling delay. The 5 s bound limits how long throttled work continues
+without temperature data.
+
+Every trip lies in the code ≤ 1769 branch of the conversion formula, where
+temperature decreases strictly as the code increases. For example, code 1309
+converts to 90.034 °C and code 970 to 110.035 °C. The discontinuity at code 1769
+therefore cannot reorder a reading relative to a trip. The hardware alarm and
+critical thresholds are separate per-session raw codes. The thermal
+application requires all five alarm and critical interrupts, while the
+returning client disables them, so the policy cannot depend on either setting.
+
+Other tasks and cores read the level with `a733_thermal_policy_level`. The
+owner's `notify` callback runs once for each level change. Its result is
+ignored for normal and throttle. For critical, the callback returns 1 after it
+has refused new work and issued its stop request. A return of 0 repeats the
+request at the next update. Any other value records an uncertain outcome, and
+the policy does not repeat the request. The policy object keeps the channel
+masks that caused the critical level for reporting. The policy changes no
+clock, voltage, power or controller state. No DVFS exists yet; any future CPU
+PLL or voltage increase requires this policy to be running on a qualified
+controller first.
 
 ## Faults retain the controller
 
@@ -136,8 +194,9 @@ without accessing the controller and permits another attempt within the deadline
 
 Successful initialization keeps all leases and clocks live. The driver provides
 no release or power-down API. The finite application supplies deferred interrupt
-servicing; physical interrupt delivery remains unqualified. Sleep, thermal policy
-and physical accuracy qualification remain outstanding.
+servicing; physical interrupt delivery remains unqualified. Sleep and physical
+accuracy qualification remain outstanding. The policy acts on readings that
+are not yet physically qualified.
 
 ## References and focused validation
 
@@ -174,6 +233,17 @@ sampling. All four cases pass with sanitizers; the changed core compiles for
 AArch64. Inputs and results are under
 `~/.cache/sunstoneos/evidence/thermal-lease-wait-20261017/`. The earlier conversion
 and controller workloads were not repeated.
+
+The policy check at `checks/thermal-policy.c` drives the policy from the
+actual controller through modeled MMIO. It covers each passive trip and its
+hysteresis, channels without a passive trip, alarm and critical events that do
+not change the level, a stale channel and its recovery, a channel with no reading
+for 5 s, a critical trip, repeated and uncertain stop requests, a controller
+failure, replayed samples and backward time. A modeled consumer runs one worker
+while throttled and records continuing progress. The check passes with
+AddressSanitizer and UndefinedBehaviorSanitizer. The existing controller,
+lease-wait, clock-reference and configured-stop checks also pass with the
+policy code present.
 
 ## Detected reference-clock compatibility has focused evidence
 

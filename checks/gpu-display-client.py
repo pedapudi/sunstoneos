@@ -18,7 +18,8 @@ class Machine(n.Machine):
   assert state['session_sha256']==hashlib.sha256(raw).hexdigest() and state['contract_sha256']==hashlib.sha256(contract).hexdigest()
   for row in state['memory']:self.u.mem_write(row['address'],(folder/row['file']).read_bytes())
   self.tasks=state['tasks'];self.scheduler=2;self.task=self.get(self.app+self.af['handles']+16);self.stopped=False
-  self.put(self.app+self.af['pmic_ready'],1,4)
+  # USB supply publication is executed by the capture check; model it as done.
+  self.put(self.app+self.af['pmic_ready'],1,4);self.put(self.app+self.af['usb_ready'],1,4)
   self.service=self.app+self.af['gpu_service'];self.sl=image.layouts['pvr_gpu_service'];self.rl=image.layouts['pvr_render_service'];self.gl=image.layouts['a733_gpu_graphics_memory'];self.graphics=self.app+self.af['gpu_graphics'];self.submission=self.graphics+self.gl['submission']
   self.put(self.service+self.sl['owner'],0,4);self.put(self.service+self.sl['phase'],3,4)
   self.layout=0x43e00000;assert self.call('pvr_render_texture_layout_profile',1280,720,2,self.layout)==1
@@ -28,13 +29,20 @@ class Machine(n.Machine):
   for frame in range(2):
    self.shapes.append(bytes(self.u.mem_read(inputs+16+frame*64,20)))
    ofs,count=struct.unpack('<2I',self.u.mem_read(inputs+16+frame*64+20,8));self.canonical.append(bytes(self.u.mem_read(inputs+ofs,count)))
-  for name in ['pvr_gpu_service_send','pvr_gpu_service_texture','pvr_gpu_service_collect','vTaskDelay','vTaskSuspend']:
+  # The copied-output evidence hashes both frames; SHA compression is modeled,
+  # as in the capture check, to keep the render task within its budget.
+  self.sha={}
+  for name in ['pvr_gpu_service_send','pvr_gpu_service_texture','pvr_gpu_service_collect','vTaskDelay','vTaskSuspend','storage_digest_init','storage_digest_add','storage_digest_end','storage_digest_bytes']:
    at=image.address(name);self.hooks[at]=name;self.u.hook_add(UC_HOOK_CODE,self.service_code,begin=at,end=at)
  def service_code(self,cpu,at,size,unused):
   name=self.hooks[at];a=[self.u.reg_read(UC_ARM64_REG_X0+i) for i in range(8)]
   # Remove the base callback's unsupported-boundary dispatch at these sites.
   if name=='vTaskSuspend':self.stopped=True;self.u.emu_stop();return
   if name=='vTaskDelay':self.ret();return
+  if name=='storage_digest_init':self.sha[a[0]]=hashlib.sha256();self.ret();return
+  if name=='storage_digest_add':self.sha[a[0]].update(bytes(self.u.mem_read(a[1],a[2])));self.ret(1);return
+  if name=='storage_digest_end':self.u.mem_write(a[1],self.sha.pop(a[0]).digest());self.ret();return
+  if name=='storage_digest_bytes':self.u.mem_write(a[2],hashlib.sha256(bytes(self.u.mem_read(a[0],a[1]))).digest());self.ret();return
   if name=='pvr_gpu_service_collect':
    assert a[0]==self.service and a[1]==self.ticket
    self.u.mem_write(a[2],bytes(512))
@@ -71,7 +79,7 @@ class Machine(n.Machine):
   else:raise AssertionError(op)
   self.put(a[6],self.ticket);self.ret(1)
  def code(self,cpu,at,size,unused):
-  if self.hooks.get(at) in ('pvr_gpu_service_send','pvr_gpu_service_texture','pvr_gpu_service_collect','vTaskDelay','vTaskSuspend'):return
+  if self.hooks.get(at) in ('pvr_gpu_service_send','pvr_gpu_service_texture','pvr_gpu_service_collect','vTaskDelay','vTaskSuspend','storage_digest_init','storage_digest_add','storage_digest_end','storage_digest_bytes'):return
   super().code(cpu,at,size,unused)
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--checkpoint',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)

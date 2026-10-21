@@ -1,4 +1,5 @@
 // Host arithmetic/segmentation reference. No wall-clock pacing or OS emulation.
+#include "../apps/mimus/recorded.h"
 #include "../apps/mimus/replay_runtime.h"
 #include "boot.h"
 #include "mimus/asr/platform.h"
@@ -46,7 +47,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     for (auto [base, size] : {std::pair<uintptr_t, size_t>{RESULT_BASE, RESULT_SIZE},
-                              {0x46000000, 16 * 1024 * 1024}}) {
+                              {kMimusArenaBase, kMimusArenaBytes}}) {
         if (mmap(reinterpret_cast<void *>(base), size, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) != reinterpret_cast<void *>(base))
             return 2;

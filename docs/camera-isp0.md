@@ -68,7 +68,10 @@ the downstream DMA before starting one TOP input frame. Completion requires
 fresh ISP parameter load/save bits, VIPP load completion, DMA capture completion,
 and TOP START self-clear with its one-frame cycle field still zero. Two complete
 IOMMU scans cover masters 1 and 2, including a scan after the copied output is
-hashed. Guards and completion observations surround each bounded copy chunk.
+hashed. Completion and DMA status are checked around each bounded copy chunk.
+Guards are scanned once before the first chunk and once after the last chunk
+is copied and hashed. A changed guard byte stays changed, so the second scan
+detects a change made at any point during the copy.
 Neither status readback nor a deadline establishes transaction drain, so the
 application never releases or reuses device backing.
 

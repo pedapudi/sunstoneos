@@ -368,7 +368,16 @@ int hdmi_audio_step(void)
         if(reply.phase!=DMA_SERVICE_RUNNING||!reply.holds_buffers)return fail();audio.stage=7;return 0;
     case 7:
         if(!primed){r=producer(1);if(r<0)return fail();if(!r)return 0;primed=1;}
-        r=transmit();if(r<0)return fail();if(!r)return 0;
+        r=transmit();if(r<0)return fail();
+        if(!r){
+            /* A DMA fault before the FIFO holds samples ends the wait here
+             * rather than at stop_at. STATUS only observes, so stage 8 still
+             * sees a completed transfer. */
+            r=request(DMA_SERVICE_STATUS,0,&reply);if(r<0)return fail();if(!r)return 0;
+            if(reply.phase==DMA_SERVICE_RUNNING||reply.phase==DMA_SERVICE_DRAINING||
+               (reply.phase==DMA_SERVICE_RESULT&&reply.outcome==DMA_SERVICE_COMPLETE))return 0;
+            hdmi_audio_result.dma_result=reply.outcome;return fail();
+        }
         if(a733_hdmi_audio_mute(&audio.sampler,0)!=1)return fail();
         hdmi_audio_result.stage=HDMI_AUDIO_RUNNING;audio.stage=8;return 0;
     case 8:{

@@ -216,9 +216,16 @@ def allocate(args):
     return allocation
 
 
+def address(text):
+    value = int(text, 0)
+    if not 0 <= value <= MASK64:
+        raise ValueError('Address does not fit in 64 bits: ' + text)
+    return value
+
+
 def parse_load(text):
-    path, address = text.rsplit('@', 1)
-    return Path(path), int(address, 0)
+    path, load = text.rsplit('@', 1)
+    return Path(path), address(load)
 
 
 def container_writes(manifest_path):
@@ -252,8 +259,20 @@ def plan(args):
         current = inspect(fd, card_sectors)
         generation = max([r['generation'] for r in current['slots'].values()
                           if r['header'] == 'valid'] + [0]) + 1
+        if generation > MASK64:
+            raise ValueError('A valid header holds the last generation number')
         slot = 'B' if current['selected'] == 'A' else 'A'
         region = slots[slot]
+        # A valid header from another tool may place its extents anywhere
+        # beyond the boot area; writing such a region would destroy that slot.
+        for name, result in current['slots'].items():
+            if name == slot:
+                continue
+            for extent in (result['parsed'] or {'extents': []})['extents']:
+                if overlaps(extent['first_sector'], sectors(extent['bytes']),
+                            region['first'], region['blocks']):
+                    raise ValueError('Valid slot %s header has an extent in the slot %s region'
+                                     % (name, slot))
         loads = [(parse_load(args.image), IMAGE)] + [(parse_load(a), ASSET) for a in args.asset]
         if len(loads) > EXTENTS:
             raise ValueError('A slot holds one image and at most three assets')
@@ -270,6 +289,14 @@ def plan(args):
         header = pack_header(slot, generation, args.entry, extents)
         if check_header(header, slot, card_sectors)[0] != 'valid':
             raise ValueError('Slot contents violate the loader admission rules')
+        # After an interrupted apply that wrote its header, the new slot is
+        # selected and a fresh plan would overwrite the previous image.
+        active = current['slots'][current['selected']]['parsed'] if current['selected'] else None
+        same = lambda e: (e['bytes'], e['load'], e['kind'], e['sha256'])
+        if active and active['entry'] == args.entry and \
+                [same(e) for e in active['extents']] == [same(e) for e in extents]:
+            raise ValueError('Selected slot %s already holds these contents; if an earlier plan '
+                             'stopped, resume it with apply' % current['selected'])
         # The payload precedes its header; a new monitor follows a valid slot.
         writes = [('payload', region['first'], bytes(payload)),
                   ('header', HEADER_SECTORS[slot], header)]
@@ -382,7 +409,7 @@ def main(argv=None):
     p.add_argument('--allocation', required=True)
     p.add_argument('--card-image', required=True)
     p.add_argument('--image', required=True, metavar='PATH@LOAD')
-    p.add_argument('--entry', required=True, type=lambda v: int(v, 0))
+    p.add_argument('--entry', required=True, type=address)
     p.add_argument('--asset', action='append', default=[], metavar='PATH@LOAD')
     p.add_argument('--container', help='prepare-microsd-boot.py manifest to install after the slot')
     p.add_argument('--output', required=True, help='New plan directory')
@@ -399,7 +426,7 @@ def main(argv=None):
     try:
         result = {'allocate': allocate, 'plan': plan, 'apply': apply,
                   'verify': verify, 'rollback': rollback}[args.command](args)
-    except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
+    except (ValueError, OSError, KeyError, json.JSONDecodeError, struct.error) as error:
         parser.exit(1, 'boot-slots: %s\n' % error)
     print(json.dumps(result, indent=2))
     if args.command == 'verify' and not result['selected']:

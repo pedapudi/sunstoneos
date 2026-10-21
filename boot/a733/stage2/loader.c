@@ -23,7 +23,9 @@
 #define OPEN_US 2000000u
 #define READ_US 500000u /* 4 KiB at the 200 kHz 1-bit identification clock. */
 
-enum { LOADED = 1, CARD = 2, NO_SLOT = 3, LOAD_FAILED = 4 };
+#define COUNTER_SAMPLES 4096u /* Far longer than one 24 MHz tick with caches off. */
+
+enum { LOADED = 1, CARD = 2, NO_SLOT = 3, LOAD_FAILED = 4, COUNTER = 5 };
 enum { HEADER_UNREAD, HEADER_VALID, HEADER_READ, HEADER_ABSENT, HEADER_DIGEST,
        HEADER_FIELDS };
 enum { LOAD_NONE, LOAD_DONE, LOAD_READ, LOAD_DIGEST };
@@ -74,8 +76,10 @@ static uint64_t counter(void)
     return n;
 }
 
-/* Separate unit: admission evidence for a cold SD controller (admission.c). */
+/* Separate unit: admission and presence evidence for a cold SD controller
+ * (admission.c). */
 int a733_stage2_card_admission(uint32_t module_hz);
+int a733_stage2_card_present(void);
 
 static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t module_hz)
 {
@@ -84,16 +88,18 @@ static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint3
     admitted = a733_stage2_card_admission(module_hz) == 1;
     return admitted;
 }
-/* One owner and no scheduler; only a granted admission is retained. */
+/* One owner and no scheduler; only a granted admission is retained, and
+ * the card must still be present before every poll. */
 static int retained(void *context, uintptr_t token)
 {
     (void)context;
-    return admitted && token == (uintptr_t)&card;
+    return admitted && token == (uintptr_t)&card && a733_stage2_card_present() == 1;
 }
+/* FIFO data moves only through read_fifo. */
 static int read32(void *context, uint32_t offset, uint32_t *value)
 {
     (void)context;
-    if (!value || offset > 0x300 || (offset & 3)) return 0;
+    if (!value || offset > 0x300 || (offset & 3) || offset == 0x200) return 0;
     __asm__ volatile("dsb sy" ::: "memory");
     *value = *(volatile const uint32_t *)(uintptr_t)(SDC0 + offset);
     __asm__ volatile("dsb sy" ::: "memory");
@@ -118,13 +124,29 @@ static int write32(void *context, uint32_t offset, uint32_t value)
     __asm__ volatile("dsb sy" ::: "memory");
     return 1;
 }
+static int read_fifo(void *context, uint32_t *words, unsigned count)
+{
+    (void)context;
+    if (!words || !count || count > SUNXI_MMC_FIFO_WORDS) return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    for (unsigned i = 0; i < count; ++i)
+        words[i] = *(volatile const uint32_t *)(uintptr_t)(SDC0 + 0x200);
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 1;
+}
+static int write_fifo(void *context, const uint32_t *words, unsigned count)
+{
+    (void)context; (void)words; (void)count;
+    return 0;
+}
 static int barrier(void *context)
 {
     (void)context;
     __asm__ volatile("dsb sy" ::: "memory");
     return 1;
 }
-/* CNTFRQ_EL0 reads zero after boot0; the board counter runs at 24 MHz. */
+/* CNTFRQ_EL0 reads zero after boot0; the board counter runs at 24 MHz.
+ * counter_runs() has seen it advance before any deadline is taken. */
 static int now_us(void *context, uint64_t *value)
 {
     (void)context;
@@ -133,6 +155,16 @@ static int now_us(void *context, uint64_t *value)
     return 1;
 }
 
+/* Every SD deadline is a counter value. A counter that boot0 left stopped
+ * or disabled would never reach one, and a silent controller would then
+ * hold the polling loops forever. */
+static int counter_runs(void)
+{
+    uint64_t first = counter();
+    for (unsigned i = 0; i < COUNTER_SAMPLES; ++i)
+        if (counter() > first) return 1;
+    return 0;
+}
 static void record(void)
 {
     struct sunxi_mmc_result r;
@@ -145,7 +177,7 @@ static void record(void)
 static int card_open(void)
 {
     struct sunxi_mmc_config config = {
-        .ops = {read32, write32, barrier, now_us, admit, retained, 0},
+        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo},
         .token = (uintptr_t)&card, .kind = SUNXI_MMC_SD,
         .module_hz = 400000, .voltage_mask = 0x00300000,
     };
@@ -271,6 +303,7 @@ _Noreturn void a733_stage2_main(void)
     a733_stage2_report.bytes = sizeof(a733_stage2_report);
     a733_stage2_report.selected = UINT64_MAX;
     a733_stage2_report.start_counter = counter();
+    if (!counter_runs()) finish(COUNTER, 0);
     if (!card_open()) finish(CARD, a733_stage2_report.mmc_error);
     unsigned valid = 0;
     for (unsigned s = 0; s < 2; ++s) {

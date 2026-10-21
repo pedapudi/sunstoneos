@@ -28,7 +28,13 @@ def main():
  assert bytes(m.u.mem_read(bank,4194304))==before and m.get(m.app+m.af['copied'],4)==0
  # Same valid request succeeds when the fixture restores pre-publication CPU
  # ownership, proving the earlier rejection came from the ownership branch.
- m.put(ownership,1,4);assert m.call('gpu_display_bank_copy',0,1,0,output,4)==1
+ m.put(ownership,1,4)
+ # The copy also extends frame 0's copied-output evidence, which the client
+ # run closed; reopen it as the render task does before its first copy.
+ evidence=n.variables(a.image,'/apps/gpu-display/observation.c')['digest'][0]
+ with a.image.open('rb') as f:size=next(x['st_size'] for x in n.ELFFile(f).get_section_by_name('.symtab').iter_symbols() if x.name=='digest' and x['st_value']==evidence)
+ m.u.mem_write(evidence,bytes(size//2));assert m.call('gpu_display_evidence_begin',0,m.call('gpu_display_inputs_get')+16+32)==1
+ assert m.call('gpu_display_bank_copy',0,1,0,output,4)==1
  assert bytes(m.u.mem_read(bank+36864,2))==b'\x00\xf8' and m.get(m.app+m.af['copied'],4)==4
  (a.output/'retention.json').write_text(json.dumps(dict(passed=True,image_sha256=record['image_sha256'],scope=__doc__,physical_access=False,cases=['valid-borrow-refused-under-device-ownership','identical-valid-borrow-accepted-under-cpu-ownership']),indent=2)+'\n');print('PASS exact ownership rejection with valid CPU control')
 if __name__=='__main__':main()

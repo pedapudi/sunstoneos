@@ -72,7 +72,11 @@ primary CPU at EL3 with translation and both caches off. It identifies the card
 through the polled SD core in [sunxi_mmc.c](../drivers/storage/sunxi_mmc.c),
 using the 1-bit legacy profile at a 400 kHz module clock. Its register binding
 admits only read-only identification and transfer commands and refuses FIFO
-writes. Each operation has an absolute counter deadline.
+writes. Each operation has an absolute deadline in system counter ticks, so
+the loader first samples the counter up to 4,096 times and stops with status 5
+when the value never increases. A counter that boot0 left stopped would
+otherwise leave every deadline unreached while a silent controller holds the
+polling loop.
 
 1. Read both header sectors and check each header against the rules above.
 2. Order valid headers by generation, newest first. Equal generations try A
@@ -94,6 +98,7 @@ the header state, generation, load state and failing extent.
 | 2 | Card admission or identification failed | SD core error |
 | 3 | Neither header is valid | SD core error |
 | 4 | Every valid slot failed to load | SD core error |
+| 5 | The system counter does not advance; the card was not accessed | Zero |
 
 The SD core never retries after a fault, so a read failure during one slot
 also fails the other. An exception during the loader uses the cold-entry
@@ -124,7 +129,12 @@ Four prerequisites are missing, and each is outside this monitor:
   [admission.c](../boot/a733/stage2/admission.c) returns refusal until a
   fixed-board subset of the shared providers supplies that evidence. On a
   board the current loader therefore reports status 2 without touching the
-  controller.
+  controller. Before every poll the SD core also revalidates card presence
+  through the loader's `retained` callback, which calls
+  `a733_stage2_card_present` in the same file; that function also refuses.
+  An admission that accepts must replace both. Presence comes from the
+  active-low PF6 card-detect pin, read under the pin ownership that admission
+  retains ([SD presence](mmc.md)).
 - **Cold ROM return.** A forced-FEL return from a cold boot has not been
   observed. The FEL-launched watchdog path also writes an RTC FEL flag and a
   redirect flag that a cold boot never sets.
@@ -161,6 +171,8 @@ against and applies to.
    monitor is written only after a valid slot exists.
 4. Apply the plan to the working copy and run `boot-slots.py verify` on it.
    Only the verified plan's extents may be written to the card.
+   `storage-update.py plan` turns them into one bounded storage session per
+   changed extent ([planning a boot-card update](storage-update.md#a-boot-slot-plan-becomes-one-session-per-changed-range)).
 
 **Update.** Plan against a current image of the card. The tool selects the
 standby slot, the one the loader would not choose, and sets its generation one
@@ -170,6 +182,24 @@ remains selected. `apply` compares every target extent with the plan's
 recorded previous contents before writing anything. A card that changed since
 planning is refused, and a partly applied plan resumes by skipping extents
 that already match.
+
+An interrupted plan must be resumed by running `apply` again with the same
+plan directory. Once its header is written, the new slot is selected, so a
+fresh plan would choose the slot that holds the previous image as its standby
+and overwrite it. `plan` refuses when the selected slot already holds the
+requested image, assets and entry address. This covers an install that
+stopped after its header but before boot0 and the TOC1 package. The same
+check refuses a plan that copies the active image into the standby slot, so
+the two slots never hold the same image. `plan` also refuses in two other
+cases:
+
+- a valid header of the other slot has an extent inside the standby region,
+  as a header written by another tool may have;
+- a valid header holds the largest 64-bit generation, so no newer generation
+  exists.
+
+Entry and load addresses that do not fit in 64 bits are refused when the
+arguments are read.
 
 **Rollback.** `boot-slots.py rollback` plans one write: a zero sector over the
 active header. It refuses unless the other slot's header and payload verify.
@@ -186,29 +216,35 @@ full backup is the only way to restore it.
 loader through the pinned boot0 parser and cleanup model, then executes the
 linked AArch64 monitor from `0x47000000`. A Python SD controller and card model
 follows the existing C card model's register behavior and serves card images
-built by the host tool. Twelve cases cover:
+built by the host tool. Fourteen cases cover:
 
 - slot A alone, and a newer slot B;
 - slot B with a corrupt payload, a corrupt header, a load range reaching the
   monitor reservation, and an update interrupted before its header;
 - no valid header, both payloads corrupt, and a controller read fault;
-- the native admission refusal, with no controller access;
+- card-detect reporting no card after the first payload read;
+- the native admission refusal, and a stopped system counter, both without
+  controller access;
 - the unchanged entry gate refusing EL1, and an exception parking.
 
 Every case checks the report, the ROM-return request and the copied bytes. It
 also checks that data accesses stay naturally aligned, as Device memory
 requires, and that no store leaves the monitor storage, the load extents and
-the reset-vector registers. The loader never executes from the load window or
+the reset-vector registers. Once the loader starts, a store to the cold report
+also fails the case, and all 512 report bytes must match their values at
+loader entry. The loader never executes from the load window or
 writes the system control register. The host tool reproduces the loader's
 selection and per-slot states on every card image without a modeled card
 fault. System registers, the counter, the SD controller and card, and cold
-admission evidence are modeled.
+admission and card-detect evidence are modeled.
 
 [standalone-boot-slots.py](../checks/standalone-boot-slots.py) covers
 allocation refusals, the install order with container extents, an interrupted
-and resumed update, refusal of a changed image before any write, rollback and
-its refusal, plan refusals and the header rules. Both checks run on the
-development host:
+and resumed update, an interrupted install that refuses a new plan and then
+resumes, refusal of a changed image before any write, rollback and its
+refusal, plan refusals and the header rules. The plan refusals include a
+foreign header with an extent in the standby region and the 64-bit limits.
+Both checks run on the development host:
 
 ```sh
 cmake -S boot/a733/stage2 -B BUILD -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/aarch64-clang.cmake \

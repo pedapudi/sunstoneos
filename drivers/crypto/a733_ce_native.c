@@ -107,6 +107,7 @@ static const struct {
     {A733_CE_KEY_CLEAN,AARCH64_CACHE_CLEAN,FIELD(input),FIELD(key)+64-FIELD(input)},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
+    {A733_CE_RANDOM_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
 };
 #undef FIELD
 _Static_assert(offsetof(struct a733_ce_memory,input)+A733_CE_HASH_INPUT_BYTES==offsetof(struct a733_ce_memory,cipher_output) &&
@@ -115,7 +116,7 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 {
     (void)cookie;
     if (!m || ((uintptr_t)m&63) || sizeof(*m)>UINTPTR_MAX-(uintptr_t)m ||
-        mode>A733_CE_SCRUB || (int)mode<0) return 0;
+        mode>A733_CE_RANDOM_SCRUB || (int)mode<0) return 0;
     /* The shared helper refuses an unknown or larger-than-64-byte writeback
      * granule, a non-EL1 caller and a disabled MMU or data cache. */
     for (unsigned i=0;i<sizeof(ranges)/sizeof(ranges[0]);++i)
@@ -126,11 +127,6 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 
 #include "a733_ce_entropy.h"
 #include "a733_memory_reservations.h"
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_ce_session_native_init(struct a733_ce_session *s,const struct a733_ce_config *c,
     const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
     const struct a733_clock_token *token)
@@ -156,12 +152,12 @@ int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_c
 {
     if (!s || s->initialized || !c || !platform || !registry || !token ||
         !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
-        !separate(s,sizeof(*s),c,sizeof(*c)) || !separate(s,sizeof(*s),platform,sizeof(*platform)) ||
-        !separate(s,sizeof(*s),registry,sizeof(*registry)) || !separate(s,sizeof(*s),token,sizeof(*token))) return 0;
+        !a733_ce_separate(s,sizeof(*s),c,sizeof(*c)) || !a733_ce_separate(s,sizeof(*s),platform,sizeof(*platform)) ||
+        !a733_ce_separate(s,sizeof(*s),registry,sizeof(*registry)) || !a733_ce_separate(s,sizeof(*s),token,sizeof(*token))) return 0;
     /* Check attach's pool placement first, so a refusal binds nothing. */
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if (!pool || !separate(s,sizeof(*s),pool,sizeof(*pool)) ||
-        !separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
+    if (!pool || !a733_ce_separate(s,sizeof(*s),pool,sizeof(*pool)) ||
+        !a733_ce_separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
     if (!a733_ce_session_native_init(&s->owned_session,c,platform,cookie,registry,token)) return 0;
     if (a733_ce_entropy_attach(s,&s->owned_session)) return 1;
     /* The page is DEVICE and the controller bound; keep both retained. */

@@ -1,10 +1,8 @@
 #include "a733_ce_cipher.h"
 enum { REQUEST,WAIT,CLEAN,PUBLISH,DONE };
 static void zero(void *p,size_t n) {volatile uint8_t *b=p;while (n--) *b++=0;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);}
 static int outside(const struct a733_ce_cipher *s,const void *p,size_t n)
-{return separate(s,sizeof(*s),p,n) && a733_ce_session_outside(s->bound_engine,p,n);}
+{return a733_ce_separate(s,sizeof(*s),p,n) && a733_ce_session_outside(s->bound_engine,p,n);}
 static void private_clear(struct a733_ce_cipher *s)
 {zero(s->key,sizeof(s->key));zero(s->input,sizeof(s->input));zero(s->output,sizeof(s->output));}
 static enum a733_ce_cipher_result finish(struct a733_ce_cipher *s,enum a733_ce_cipher_result r)
@@ -41,7 +39,7 @@ enum a733_ce_cipher_result a733_ce_cipher_begin(struct a733_ce_cipher *s,const u
     if (s->fault || !bound(s)) return retain(s);
     if (!deadline || !generation || !bytes || bytes>A733_CE_CIPHER_MAX_BYTES || bytes%16 || decrypt>1 ||
         !outside(s,key,16) || !outside(s,input,bytes) || !outside(s,generation,sizeof(*generation)) ||
-        !separate(key,16,generation,sizeof(*generation)) || !separate(input,bytes,generation,sizeof(*generation)) ||
+        !a733_ce_separate(key,16,generation,sizeof(*generation)) || !a733_ce_separate(input,bytes,generation,sizeof(*generation)) ||
         !s->next_generation) return finish(s,A733_CE_CIPHER_INVALID);
     if (s->active) return finish(s,A733_CE_CIPHER_BUSY);
     uint64_t now;

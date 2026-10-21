@@ -81,13 +81,14 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
 {
     struct model *m=v;assert(m->held && mem==&m->memory);++m->syncs;
     if (op==A733_CE_PUBLISH) {assert(!m->starts);m->published=1;}
-    else if (op==A733_CE_SCRUB) {
-        /* After completion acknowledgement and task stop, before publication. */
+    else if (op==A733_CE_RANDOM_SCRUB) {
+        /* After completion acknowledgement and task stop, before publication.
+         * A TRNG task scrubs only the output it wrote. */
         assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
-        for (unsigned i=0;i<64;++i) assert(!mem->output[i] && !mem->iv[i]);
-        for (unsigned i=0;i<sizeof(mem->input);++i) assert(!mem->input[i]);
+        for (unsigned i=0;i<64;++i) assert(!mem->output[i]);
         ++m->scrubs;
     } else {
+        assert(op==A733_CE_ACQUIRE);
         assert(m->starts==1 && (*reg(m,NS+12)&0x30)==0x10);
         m->acquired=1;
         /* Deterministic bytes are a DMA model fixture, never entropy. */
@@ -139,11 +140,14 @@ int main(void)
 {
     struct model m;uint8_t out[32];memset(out,0xa5,sizeof(out));
     for (unsigned high=0;high<2;++high) {
-        setup(&m,high);submit(&m,out);
+        /* IV and input bytes are fixtures the TRNG task neither uses nor clears. */
+        setup(&m,high);memset(m.memory.iv,0x3c,sizeof(m.memory.iv));memset(m.memory.input,0x3c,sizeof(m.memory.input));
+        submit(&m,out);
         assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING);unchanged(out);
         *reg(&m,NS+12)=0x10;
         assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM);
         for (unsigned i=0;i<32;++i) assert(out[i]==17+i && !m.memory.output[i]);
+        for (unsigned i=0;i<sizeof(m.memory.input);++i) assert(m.memory.input[i]==0x3c && (i>=64 || m.memory.iv[i]==0x3c));
         assert(m.scrubs==1);
         assert((*reg(&m,NS+8))==0x10000000 && (*reg(&m,NS+4)&0xffffff00)==0xa5000000);
         unsigned reads=m.reads,writes=m.writes;

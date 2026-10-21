@@ -20,7 +20,7 @@
 #define A733_H264_OUTPUT_BYTES 2304u
 #define A733_H264_PICTURE_INFO_BYTES 0x20800u
 #define A733_H264_NEIGHBOR_BYTES 0xc000u
-/* H.264 pipeline8..15, intram20, transform21, bitstreamDMA22, writeback23.
+/* H.264 pipeline 8..15, intram 20, transform 21, bitstream DMA 22, writeback 23.
  * Pinned h264_hal.h FUNC_STATUS fields; VP8/AVS/startcode modes stay disabled. */
 #define A733_H264_BUSY_MASK UINT32_C(0x00f0ff00)
 enum a733_h264_buffer { A733_H264_INPUT, A733_H264_Y, A733_H264_C,
@@ -34,12 +34,12 @@ struct a733_h264_job {
     enum a733_h264_profile profile;
 };
 /* Bounded AnnexB mode: one SPS/PPS, one IDR I and optionally one P slice.
- * Baseline8-bit4:2:0, progressive macroblock-aligned16..64 by16..32,
- * CAVLC, IDR POC0/2, IDR+P POC2 and one retained short-term reference.
+ * Baseline 8-bit 4:2:0, progressive, macroblock-aligned 16..64 by 16..32,
+ * CAVLC, IDR POC 0/2, IDR+P POC 2 and one retained short-term reference.
  * No FMO, cropping, HRD, weighted P, list changes, MMCO or secondary outputs.
  * Macroblock prediction, residual transforms and entropy decoding run on VE.
  * Header validation does not establish that slice data forms a complete picture.
- * Provider acquisition freezes the CPU alias and reserves masters6/7, IRQ81,
+ * Provider acquisition freezes the CPU alias and reserves masters 6/7, IRQ 81,
  * clocks/reset/power and every physical alias before any device programming.
  */
 struct a733_h264_picture {
@@ -57,7 +57,7 @@ int a733_h264_parse_sequence(const uint8_t *,size_t,struct a733_h264_sequence *)
  * Adapted syntax/field order from pinned CedarC H264DecodeSps/Pps/SliceHeader;
  * bounded byte reader replaces its hardware GetBits callbacks. */
 int a733_h264_parse(const uint8_t *, size_t, struct a733_h264_picture *);
-/* VGA AUs repeat identical SPS/PPS before one IDR/P slice; frame_num0..15.
+/* VGA AUs repeat identical SPS/PPS before one IDR/P slice; frame_num 0..15.
  * config_bytes returns the immutable SPS/PPS prefix for exact comparison. */
 int a733_h264_parse_vga(const uint8_t *,size_t,unsigned,
     struct a733_h264_picture *,size_t *config_bytes);
@@ -66,18 +66,18 @@ int a733_h264_parse_stream(enum a733_h264_profile,const uint8_t *,size_t,unsigne
 struct a733_h264_ops {
     int (*now_us)(void *, uint64_t *);
     int (*acquire)(void *, const struct a733_h264_job *, uint64_t, uint64_t *);
-    /* Publish each encoded slice at its4096-byte INPUT slot, preserve NAL/EPB
+    /* Publish each encoded slice at its 4096-byte INPUT slot, preserve NAL/EPB
      * bytes and zero-pad the slot. Retain immutable CPU stream and DMA copies.
      * Pictures own separate output/MV slots; shared context scratch persists.
-     * Cedrus requires VLD_OFFSET0 to avoid offset corruption. */
+     * Cedrus requires VLD_OFFSET 0 to avoid offset corruption. */
     int (*prepare)(void *, uint64_t, const struct a733_h264_job *, uint64_t);
     int (*read)(void *, uint64_t, uint32_t, uint32_t *, uint64_t);
     int (*write)(void *, uint64_t, uint32_t, uint32_t, uint64_t);
     /* Verify owned private copied bytes; an optional qualification oracle,
      * fault/status/guard checks and live lifetime govern publication. Retain DMA;
      * successful CPU copying does not establish producer or transaction drain.
-     * acquire/prepare/copied return1 complete,0 pending,-1 failure.
-     * read/write return exactly1 after ordered access, otherwise failure.
+     * acquire/prepare/copied return 1 complete, 0 pending, -1 failure.
+     * read/write return exactly 1 after ordered access, otherwise failure.
      */
     int (*copied)(void *, uint64_t, uint64_t);
 };
@@ -102,16 +102,16 @@ struct a733_h264_run {
 };
 /* Fresh zeroed storage, single privileged serialized caller, no reentry.
  * Stream headers are parsed after acquisition. Inclusive VLD end is the
- * padded4096-byte slot; slice length is parsed and VLD offset remains zero.
+ * padded 4096-byte slot; slice length is parsed and VLD offset remains zero.
  * Minimum scratch extents
  * are source-derived; they do not prove physical burst bounds. All spans
- * below4GiB, page-aligned and disjoint; neighbor base aligned16KiB.
+ * below 4 GiB, page-aligned and disjoint; neighbor base aligned to 16 KiB.
  * Terminal failure/success never authorizes unmapping, reset, reuse or release.
  */
 int a733_h264_begin(struct a733_h264_run *, const struct a733_h264_ops *, void *,
                    const struct a733_h264_job *, uint64_t deadline_us);
 /* At most one external operation per poll, plus monotonic time checks.
- * Returns0 pending,1 immutable verified private copy,-1 retained failure. */
+ * Returns 0 pending, 1 immutable verified private copy, -1 retained failure. */
 int a733_h264_poll(struct a733_h264_run *);
 /* Fixed VGA pool. Input capacity is immutable; frame_bytes is the current
  * authenticated AU length. Only COPIED permits a healthy next-frame submission.

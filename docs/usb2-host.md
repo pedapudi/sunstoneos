@@ -81,17 +81,21 @@ A busy observation is momentary metadata contention, such as another core
 holding the PMIC object, a lease registry or the Type-C publication lock. The
 xHCI core and the USB2 platform repeat it without any access until it succeeds,
 is refused, lasts 2 ms of counter time or reaches the operation deadline. Only
-success lets the access proceed; the other outcomes fault the session. A poll
-that observes BUSY before its first access still returns BUSY.
+success lets the access proceed. The other outcomes fault the session, except
+for the USB2 platform case described next. A poll that observes BUSY before its
+first access still returns BUSY.
 
-The 2 ms limit matters because the PMIC poll keeps its object busy while it
-waits for the I2C mutex or for REGISTER_LOCK. The USB2 platform observes the
-PMIC while it holds REGISTER_LOCK for its register phases. If the PMIC poll
-waits for that lock at the same time, neither side can progress. The platform
-access then faults after 2 ms instead of spinning until the startup deadline.
-Like any platform fault after the lock is taken, it retains REGISTER_LOCK, so
-the waiting PMIC poll later expires. The host check covers this case and a BUSY
-that never clears inside an xHCI access; both fault after about 2 ms.
+The PMIC poll releases its object while it waits for REGISTER_LOCK or the I2C
+mutex ([PMIC runtime](pmic-runtime.md)). A PMIC BUSY that lasts 2 ms therefore
+means a stalled holder. The USB2 platform holds REGISTER_LOCK for its register
+phases and observes the providers before the first register access of each
+phase. If that first observation stays BUSY for 2 ms, the platform releases
+REGISTER_LOCK and returns PENDING; a later poll repeats the phase, and the
+startup deadline bounds the repetitions. A BUSY that lasts 2 ms after a
+register access faults the session. Like any platform fault after the lock is
+taken, that fault retains REGISTER_LOCK. The host check covers both platform
+cases and a BUSY that never clears inside an xHCI access; each ends after about
+2 ms.
 Loss permanently revokes the host session; a new attachment is not adopted.
 
 Type-C service and its independent power task must continue when the USB worker

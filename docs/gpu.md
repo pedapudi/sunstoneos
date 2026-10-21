@@ -6,11 +6,15 @@ reservations, free-list management, and a fixed numerical compute submission.
 The GPU has not booted firmware or executed a graphics or compute workload in
 SunstoneOS. Physical qualification remains outstanding.
 
-Native reservation admission currently rejects the second compute submission
-because it still requires NEW client/job state. Component repeated-job checks
-used a substituted admission callback. A correction using actual completed-job
-ownership is in progress; the frozen two-job candidate must be replaced before
-hardware testing. Its publication and host-capture evidence remain valid within
+Native reservation admission accepts another compute submission after the
+previous job completes. The admission callback checks service ownership,
+matching epochs and command serials, and the completed job and transport
+identities. It also requires the uncached firmware timeline to match the
+completed job, as described in [compiled programs](gpu-compiled-programs.md).
+Repeated execution on hardware remains unqualified. The frozen two-job
+returning image predates this callback and still rejects its second
+submission, so a corrected image must be built and qualified before hardware
+testing. That image's publication and host-capture evidence remain valid within
 their recorded scope.
 
 | Implemented component | Evidence and remaining boundary |

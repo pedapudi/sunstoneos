@@ -80,12 +80,12 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
     assert(m->held && mem==(void *)m->pages);
     assert(device_memory_describe(&m->pool,m->lease,&e,&state) && state==DEVICE_MEMORY_DEVICE);
     if (op==A733_CE_PUBLISH) {assert(!m->pending);++m->published;}
-    else if (op==A733_CE_SCRUB) {
-        /* The copied task result and hash state leave the retained page. */
+    else if (op==A733_CE_RANDOM_SCRUB) {
+        /* The copied random block leaves the retained page. */
         assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
-        for (size_t i=offsetof(struct a733_ce_memory,output);i<offsetof(struct a733_ce_memory,cipher_output);++i) assert(!((uint8_t *)mem)[i]);
+        for (unsigned i=0;i<sizeof(mem->output);++i) assert(!mem->output[i]);
         ++m->scrubs;
-    } else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
+    } else {assert(op==A733_CE_ACQUIRE && m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
     return 1;
 }
 static const struct a733_ce_ops ops={now,authorize,enter,leave,retain,read_reg,write_reg,sync_memory};

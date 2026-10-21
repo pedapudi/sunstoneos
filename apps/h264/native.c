@@ -118,6 +118,8 @@ static int vga(void){return h264.session.version==H264_STREAM_SESSION_VERSION;}
 typedef uint64_t h264_word __attribute__((may_alias));
 static int h264_pattern(const volatile uint8_t *p,size_t i,size_t end)
 {
+    /* A reversed span means the geometry invariant broke: refuse it. */
+    if(i>end)return 0;
     for(;i<end&&((uintptr_t)(p+i)&7);++i)if(p[i]!=0xa5)return 0;
     for(;end-i>=8;i+=8)if(*(const volatile h264_word *)(p+i)!=UINT64_C(0xa5a5a5a5a5a5a5a5))return 0;
     for(;i<end;++i)if(p[i]!=0xa5)return 0;
@@ -174,8 +176,8 @@ static int h264_fullhd_copied(struct h264_stream_output *out,uint64_t deadline)
     if(h264.copy_step==1){
         h264.copy_plane=h264.copy_row=0;storage_digest_init(&h264.copy_hash);h264.copy_step=3;
     }
-    /* At most32rows (61440bytes), including oracle/hash work, per callback.
-     * Cr uses coded544-row Cb storage, not the visible540-row copy extent. */
+    /* At most 32 rows (61,440 bytes), including oracle/hash work, per callback.
+     * Cr uses coded 544-row Cb storage, not the visible 540-row copy extent. */
     unsigned plane=h264.copy_plane,row=h264.copy_row;
 #ifdef SUNSTONE_H264_HIGH
     unsigned visible_width=h264_stream.picture.visible_width,visible_height=h264_stream.picture.visible_height;
@@ -352,7 +354,9 @@ static int h264_setup(void)
 /* The controller performs at most one register operation per poll. Repeat
  * polls while each one advances its state or index, so programming sequences
  * finish in one wake. Waiting for hardware, a copy step or a busy resource
- * makes no progress and sleeps a tick; the budget bounds one wake's work. */
+ * makes no progress and sleeps a tick; the budget bounds one wake's work.
+ * A stream failure flagged by the USB task also ends the wake, so the next
+ * wake handles it before any further controller operation. */
 #define H264_POLL_BUDGET 1024u
 static int h264_advance(void)
 {
@@ -361,7 +365,8 @@ static int h264_advance(void)
         int r=a733_h264_poll(&h264.run);
         /* A completed legacy picture is published by the caller first. */
         if(r||(h264.run.state==state&&h264.run.index==index)||h264.run.picture_index!=picture||
-           ++n==H264_POLL_BUDGET||!board_live(NULL))return r;
+           ++n==H264_POLL_BUDGET||!board_live(NULL)||
+           (vga()&&atomic_load_explicit(&h264_stream.failed,memory_order_acquire)))return r;
     }
 }
 static void h264_vga_failure(void)

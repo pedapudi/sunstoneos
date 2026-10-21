@@ -5,10 +5,12 @@
 #include "a733-pmic.c"
 #include "../platform/a733-storage-update/bootstrap.c"
 #include "../platform/a733-storage-update/usb.c"
+#include "../platform/a733/native_usb.c"
 #include <setjmp.h>
 #include <stdlib.h>
 static struct pmic_model power;
 static struct a733_storage_native state;
+static struct a733_native_usb *const u=&state.providers;
 static jmp_buf stopped;
 static uint64_t clock_now=100,clock_next;
 static unsigned delays,revoked,io_calls,dcd_calls;
@@ -20,7 +22,7 @@ void vTaskDelay(TickType_t ticks)
 {
     (void)ticks;
     if(atomic_load(&state.failed))longjmp(stopped,1);
-    ++delays;atomic_store(&state.clocks.busy,0);
+    ++delays;atomic_store(&u->clocks.busy,0);
 }
 int a733_counter_clock_now(void *c,uint64_t *out)
 {(void)c;*out=clock_now;if(clock_next){clock_now=clock_next;clock_next=0;}return 1;}
@@ -52,30 +54,31 @@ void a733_storage_native_worker_task(void *p){(void)p;abort();}
 static void setup(void)
 {
     pmic_model_setup(&power);
-    assert(a733_clock_leases_init(&state.clocks,pmic_model_now,&power));
+    assert(a733_clock_leases_init(&u->clocks,pmic_model_now,&power));
     const struct a733_gpu_resource_ops go={pmic_model_now,pmic_model_gpu_read,pmic_model_gpu_write,pmic_model_gpu_rail};
-    assert(a733_gpu_resources_init(&state.gpu,&go,&power));
-    const struct a733_rail_binding rb={&state.clocks,&state.gpu,900,pmic_model_now,&power};
-    assert(a733_rail_leases_init(&state.rails,&rb));
+    assert(a733_gpu_resources_init(&u->gpu,&go,&power));
+    const struct a733_rail_binding rb={&u->clocks,&u->gpu,900,pmic_model_now,&power};
+    assert(a733_rail_leases_init(&u->rails,&rb));
     const struct a733_pins_operations po={pmic_model_pin_enter,pmic_model_pin_leave,pmic_model_now,pmic_model_pin_read,pmic_model_pin_write};
     struct a733_pin_handoff handoff={0};
     for(unsigned b=1;b<A733_PIN_BANKS;++b)handoff.authorized[b]=a733_pin_bank_mask(b);
     for(unsigned i=0;i<2;++i)handoff.latch[i]=(struct a733_pin_latch_handoff){100+i,900,a733_pin_bank_mask(A733_PIN_L+i),0};
-    assert(a733_pins_init_banks(&state.pins,&po,&power,&handoff));
-    assert(a733_pmic_init(&state.pmic,&power.provider.config,&power.provider.ops,&power,&state.clocks,&state.rails,&state.pins));
-    assert(a733_pmic_identity(&state.pmic,&state.usb_power)==A733_PMIC_READY);
-    for(unsigned i=0;i<16&&a733_pmic_live(&state.pmic,&state.usb_power)!=A733_PMIC_READY;++i){power.worker=1;assert(a733_pmic_poll(&state.pmic)!=A733_PMIC_RETAINED);power.worker=0;}
-    assert(a733_pmic_live(&state.pmic,&state.usb_power)==A733_PMIC_READY);
+    assert(a733_pins_init_banks(&u->pins,&po,&power,&handoff));
+    assert(a733_pmic_init(&u->pmic,&power.provider.config,&power.provider.ops,&power,&u->clocks,&u->rails,&u->pins));
+    assert(a733_pmic_identity(&u->pmic,&u->usb_power)==A733_PMIC_READY);
+    for(unsigned i=0;i<16&&a733_pmic_live(&u->pmic,&u->usb_power)!=A733_PMIC_READY;++i){power.worker=1;assert(a733_pmic_poll(&u->pmic)!=A733_PMIC_RETAINED);power.worker=0;}
+    assert(a733_pmic_live(&u->pmic,&u->usb_power)==A733_PMIC_READY);
     a733_rail_mask_t rails=A733_RAIL_BIT(A733_RAIL_DCDC1)|A733_RAIL_BIT(A733_RAIL_DC1SW2)|A733_RAIL_BIT(A733_RAIL_DCDC9)|A733_RAIL_BIT(A733_RAIL_ELDO6);
-    assert(a733_rail_acquire(&state.rails,1001,rails,0,1000000,&state.usb_rail)==A733_RAIL_PENDING);
-    enum a733_rail_result r=A733_RAIL_PENDING;for(unsigned i=0;i<16&&r!=A733_RAIL_READY;++i)r=a733_rail_poll(&state.rails,&state.usb_rail);assert(r==A733_RAIL_READY);
-    assert(a733_clock_acquire(&state.clocks,1001,A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_CLOCK_USB01_REF,A733_CLOCK_USB0,1000000,&state.usb.token)==A733_CLOCK_OK);
-    state.usb_rail_index=4;state.boot.usb.owner=1001;state.usb.config=state.boot.usb;
+    assert(a733_rail_acquire(&u->rails,1001,rails,0,1000000,&u->usb_rail)==A733_RAIL_PENDING);
+    enum a733_rail_result r=A733_RAIL_PENDING;for(unsigned i=0;i<16&&r!=A733_RAIL_READY;++i)r=a733_rail_poll(&u->rails,&u->usb_rail);assert(r==A733_RAIL_READY);
+    assert(a733_clock_acquire(&u->clocks,1001,A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_CLOCK_USB01_REF,A733_CLOCK_USB0,1000000,&u->usb.token)==A733_CLOCK_OK);
+    u->usb_rail_index=4;state.boot.usb.owner=1001;u->boot.usb=state.boot.usb;u->usb.config=u->boot.usb;
+    u->live=providers_live;u->fail=providers_fail;u->context=&state;u->usb_task=(void *)3;
     /* Guard-only fixture: model the platform's final publication; do not claim
      * that this fixture executes USB reset/PHY preparation or boot admission. */
-    state.usb.self=(uintptr_t)&state.usb;state.usb.initialized=1;
-    atomic_init(&state.usb_prepared,1);atomic_init(&state.active,1);atomic_init(&state.failed,0);
-    atomic_init(&state.locks.retained,0);state.task_handle[2]=(void *)3;
+    u->usb.self=(uintptr_t)&u->usb;u->usb.initialized=1;
+    atomic_init(&u->usb_prepared,1);atomic_init(&state.active,1);atomic_init(&state.failed,0);
+    atomic_init(&u->locks.retained,0);state.task_handle[2]=(void *)3;
     state.boot.grant.deadline_us=1000000;memset(state.boot.grant.nonce,1,32);
     a733_storage_channel_init(&state.channel);runtime=&state;polling=1;
 }
@@ -83,17 +86,18 @@ int main(void)
 {
     setup();uint32_t value;
     state.boot.mmc.owner=1001;state.mmc.config=state.boot.mmc;
-    assert(mmc_admit(&state,&state.mmc.config,&state.usb.token)==1);
-    atomic_store(&state.clocks.busy,1);assert(mmc_admit(&state,&state.mmc.config,&state.usb.token)==0);atomic_store(&state.clocks.busy,0);
-    assert(usb_authorize(&state,&state.usb.config,&state.usb.token)==1);
-    assert(usb_read(&state,0x02000000,&value)&&usb_write(&state,0x02000000,0)&&io_calls==2);
-    atomic_store(&state.clocks.busy,1);assert(usb_authorize(&state,&state.usb.config,&state.usb.token)==0);atomic_store(&state.clocks.busy,0);
-    atomic_store(&state.rails.busy,1);assert(usb_authorize(&state,&state.usb.config,&state.usb.token)==0);atomic_store(&state.rails.busy,0);
-    atomic_store(&state.pmic.busy,1);assert(usb_authorize(&state,&state.usb.config,&state.usb.token)==0);atomic_store(&state.pmic.busy,0);
-    atomic_store(&state.clocks.busy,1);a733_usb_poll();assert(delays==1&&dcd_calls==1);
+    assert(mmc_admit(&state,&state.mmc.config,&u->usb.token)==1);
+    atomic_store(&u->clocks.busy,1);assert(mmc_admit(&state,&state.mmc.config,&u->usb.token)==0);atomic_store(&u->clocks.busy,0);
+    assert(usb_authorize(u,&u->usb.config,&u->usb.token)==1);
+    assert(usb_read(u,0x02000000,&value)&&usb_write(u,0x02000000,0)&&io_calls==2);
+    atomic_store(&u->clocks.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->clocks.busy,0);
+    atomic_store(&u->rails.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->rails.busy,0);
+    atomic_store(&u->pmic.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->pmic.busy,0);
+    atomic_store(&u->clocks.busy,1);a733_usb_poll();assert(delays==1&&dcd_calls==1);
     /* Fault published before the callback's post-mutex check. */
-    assert(a733_clock_retain(&state.clocks,&state.usb.token)==A733_CLOCK_FAULT);
-    assert(!usb_read(&state,0x02000000,&value)&&!usb_write(&state,0x02000000,0)&&io_calls==2);
+    assert(a733_clock_retain(&u->clocks,&u->usb.token)==A733_CLOCK_FAULT);
+    assert(!usb_read(u,0x02000000,&value)&&!usb_write(u,0x02000000,0)&&io_calls==2);
+    assert(u->usb_io_denial==A733_NATIVE_USB_DENIAL_PROVIDER&&u->usb_provider_denial==A733_NATIVE_USB_PROVIDER_CLOCK);
     if(!setjmp(stopped)){a733_usb_poll();assert(0);}assert(dcd_calls==1&&revoked==1);
     /* Only guard fixture state is reset; actual provider lifetime stays failed.
      * The remaining cases exercise callbacks that do not access providers. */

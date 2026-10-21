@@ -95,6 +95,9 @@ board-admission flag. Its `card_writes` list names the two extents that carry
 container data, boot0 and the TOC1 package, with offset, length and hash.
 A card install writes only those extents; the
 [boot-slot layout](boot-slots.md) keeps slot headers in the container's zero gaps.
+`storage-update.py plan` turns those extents, after a boot-slot plan, into
+bounded storage sessions that never write the backup package unit at sector
+24576 ([card update planning](storage-update.md#a-boot-slot-plan-becomes-one-session-per-changed-range)).
 
 | Container extent | Contents |
 | --- | --- |

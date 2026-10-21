@@ -39,6 +39,9 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
 }
 void thermal_cancel(void)
 {atomic_store_explicit(&thermal.failed,1,memory_order_release);atomic_store_explicit(&thermal.result,2,memory_order_release);}
+/* Observation is this image's only work: a critical level ends it, retained. */
+static int policy(void *v,enum a733_thermal_level level)
+{if(v!=&thermal)return -1;if(level==A733_THERMAL_CRITICAL)thermal_cancel();return 1;}
 /* IRQ callbacks share the SMP kernel critical section with task rearm. They
  * never inspect driver fields, touch THS status or enter the platform mutex. */
 void thermal_application_irq(void)
@@ -94,6 +97,8 @@ int thermal_step(void)
  if(!thermal.active){
   enum a733_thermal_result r=a733_thermal_poll(&thermal.driver);
   if(thermal.driver.fault){thermal_cancel();thermal.retaining=1;(void)mask();return -1;}
+  uint64_t t;
+  if(r==A733_THERMAL_READY&&(!a733_counter_clock_now(&providers.shared.counter,&t)||!a733_thermal_policy_init(&thermal.policy,t,policy,&thermal))){thermal_cancel();thermal.retaining=1;(void)mask();return -1;}
   if(r==A733_THERMAL_READY){thermal.active=1;memcpy(thermal.payload,&thermal.driver.calibration,sizeof(thermal.driver.calibration));}
   else if(r!=A733_THERMAL_PENDING&&r!=A733_THERMAL_BUSY){thermal_cancel();thermal.retaining=1;return -1;}
  }
@@ -103,7 +108,8 @@ int thermal_step(void)
   if(notified||n>=thermal.next_read){
    struct a733_thermal_sample sample;
    enum a733_thermal_result r=a733_thermal_read(&thermal.driver,deadline(),&sample);
-   if(thermal.driver.fault){thermal_cancel();thermal.retaining=1;(void)mask();return -1;}
+   uint64_t t;
+   if(thermal.driver.fault||!a733_counter_clock_now(&providers.shared.counter,&t)||a733_thermal_policy_update(&thermal.policy,t,r,&sample)==A733_THERMAL_CRITICAL){thermal_cancel();thermal.retaining=1;(void)mask();return -1;}
    thermal.next_read=n+25000;
    if(r==A733_THERMAL_SAMPLE){if(!thermal_collect(&sample)){thermal_cancel();thermal.retaining=1;return -1;}}
    else if(r!=A733_THERMAL_AGAIN&&r!=A733_THERMAL_BUSY){thermal_cancel();thermal.retaining=1;return -1;}

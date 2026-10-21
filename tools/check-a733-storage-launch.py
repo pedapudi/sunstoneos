@@ -60,7 +60,8 @@ def storage_inputs(store):
                 'Prepared writer extent differs.')
         store.open('backup.bin',manifest['bytes'],bytes.fromhex(manifest['backup_sha256']))
         store.open('candidate.bin',manifest['bytes'],bytes.fromhex(manifest['candidate_sha256']))
-        store.open('chain.bin',((manifest['bytes']+1023)//1024)*32,bytes.fromhex(manifest['chain_sha256']))
+        chunk=store_api.WRITE_CHUNK
+        store.open('chain.bin',((manifest['bytes']+chunk-1)//chunk)*32,bytes.fromhex(manifest['chain_sha256']))
         require(manifest['backup_sha256']==grant['backup'],'Backup identity differs from the grant.')
     return raw,grant,sha(store_api.canonical(manifest))
 

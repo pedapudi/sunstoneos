@@ -96,6 +96,20 @@ struct dma_service_activation {
     int (*prepared)(void *, uintptr_t controller, uint16_t channels);
     void *context;
 };
+/* Optional single-owner DMA0 interrupt binding (GIC SPI 111, INTID 143). The
+ * platform ISR masks the SPI, never reads DMA registers, and then calls
+ * dma_service_irq_notify_from_isr. The worker keeps all register work and
+ * acknowledges pending events by polling before it calls rearm. rearm runs
+ * only in the worker inside the kernel critical section, never clears a
+ * pending SPI, and returns 1 enabled, 0 deferred or -1 retained failure.
+ * fallback (1..configTICK_RATE_HZ/4 kernel ticks) bounds each wait while the
+ * SPI is enabled; fallback_ticks is the same interval in DMA ticks. */
+struct dma_service_irq {
+    int (*rearm)(void *);
+    void *cookie;
+    TickType_t fallback;
+    uint64_t fallback_ticks;
+};
 /* Private static storage. Public layout permits reservation without a heap.
  * Applications must not modify/read these fields. Only this service's worker
  * calls the controller, native adapter or I2S callbacks after initialization. */
@@ -112,6 +126,10 @@ struct dma_service {
     QueueHandle_t requests;
     StaticQueue_t request_queue;
     uint8_t request_storage[DMA_SERVICE_CLIENTS*sizeof(struct dma_service_message)];
+    struct dma_service_irq irq;
+    atomic_uint irq_pending;
+    unsigned irq_bound,irq_armed,irq_spurious,irq_retained;
+    uint32_t irq_events; /* Controller event count when the SPI was rearmed. */
     TaskHandle_t worker;
     StaticTask_t worker_state;
     StackType_t worker_stack[DMA_SERVICE_STACK_WORDS];
@@ -120,6 +138,7 @@ struct dma_service {
  * performs no MMIO. One service instance owns DMA0 and authorized channels.
  * Prerequisites: pinned reserved RAM and native memory/FIFO policy, prepared
  * stable DMA clocks/reset/CPU routing, masked DMA IRQ and watchdog recovery.
+ * Only dma_service_bind_irq may later unmask that IRQ, through its rearm.
  * Every admitted mapping must exclude ALL privileged state, including adapter,
  * page tables and callback state. Init additionally rejects the complete service
  * allocation and copied metadata overlapping registered DMA allocations.
@@ -148,6 +167,18 @@ int dma_service_init_deferred(struct dma_service *, const struct a733_dma_operat
  * unauthorized or duplicate calls do not invoke prepared or change readiness. */
 enum dma_service_result dma_service_activate(struct dma_service *);
 int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t job_mask);
+/* Optional, once, after init and before scheduling; the SPI starts masked.
+ * Without a binding the worker polls every tick while any channel progresses.
+ * With one it waits for the interrupt, for at most fallback ticks, only while
+ * every progressing channel is an ACTIVE transfer whose deadline is more than
+ * twice fallback_ticks away and, for an I2S stream, has no pending register,
+ * health, priming or RX copy work; otherwise it still polls every tick. After
+ * an interrupt that acknowledged no event since the rearm, it polls every tick
+ * until a poll acknowledges one. A failed mask or rearm permanently returns
+ * the service to tick polling; channel state and buffers are unaffected. */
+int dma_service_bind_irq(struct dma_service *, const struct dma_service_irq *);
+/* ISR only, after the platform has masked the SPI; mask_ok is its result. */
+void dma_service_irq_notify_from_isr(struct dma_service *, int mask_ok, BaseType_t *woken);
 /* Task-only. Identity comes from FreeRTOS. send copies the request, never
  * retains a caller stack pointer. A queued SUBMIT freezes its registered
  * buffers until refusal or terminal completion. Consume successful payloads
@@ -164,6 +195,7 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * A finite stream permits one START per open; after REAP, CLOSE and OPEN
  * before reuse. The worker polls all active channels between requests, and
  * polls the request's channel before answering STATUS, PERIOD_GET or REAP.
+ * With an interrupt binding, send also notifies the worker.
  * Each I2S channel dispatches only through stream APIs, never through an
  * independent generic DMA poll. */
 int dma_service_send(struct dma_service *, const struct dma_service_request *, TickType_t wait, uint64_t *ticket);

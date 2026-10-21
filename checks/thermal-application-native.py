@@ -114,7 +114,7 @@ def run(image,session_path,out,resume=None):
  session=session_path.read_bytes();elf=Image(image);decoder=module('thermal_native_decoder',ROOT/'apps/thermal/observe.py')
  # Resolve all case hooks/CUs before starting any behavior.
  for name in ('thermal_construct','thermal_step','thermal_application_irq','thermal_response','thermal_output_ready','board_usb0_task'):elf.address(name)
- for variant in ('unsealed-consumer','prefix-mismatch-consumer','success-partial-irq','cancel-before-work','uncertain-start','startup-busy-fault','read-busy-fault','pending-during-read','rearm-busy','rearm-fault','deadline-revokes','snapshot-revokes','queued-revokes'):
+ for variant in ('unsealed-consumer','prefix-mismatch-consumer','success-partial-irq','cancel-before-work','uncertain-start','startup-busy-fault','read-busy-fault','pending-during-read','rearm-busy','rearm-fault','deadline-revokes','snapshot-revokes','queued-revokes','critical-stops'):
   if variant in results:continue
   m=Machine(elf,session,variant)
   if variant in ('unsealed-consumer','prefix-mismatch-consumer'):
@@ -140,6 +140,10 @@ def run(image,session_path,out,resume=None):
    assert r==0xffffffff and m.field('result')==2 and m.field('masked')==1
    assert not any(x[0]=='write' and x[1]==0x03400108 for x in m.trace);results[variant]={'pass':True};continue
   assert r==0 and m.field('active')==1
+  if variant=='critical-stops':
+   # Channel 0 reads code 970, 110.035 C: the policy's critical trip ends the observation.
+   m.time+=25000;m.conversions(31,-1430);assert m.call('thermal_step')==0xffffffff and m.field('result')==2 and m.field('masked')==1 and not m.held
+   before=len(m.trace);m.call('thermal_step');assert len(m.trace)==before and not m.retained;results[variant]={'pass':True};continue
   if variant=='read-busy-fault':
    m.time+=25000;m.read_irq=True;m.conversions(31);assert m.call('thermal_step')==0xffffffff and m.field('result')==2 and m.field('masked')==1
    before=len(m.trace);m.call('thermal_step');assert len(m.trace)==before;results[variant]={'pass':True};continue

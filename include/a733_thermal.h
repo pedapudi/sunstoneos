@@ -10,8 +10,8 @@ enum a733_thermal_result { A733_THERMAL_PENDING, A733_THERMAL_BUSY,
     A733_THERMAL_RETAINED, A733_THERMAL_INVALID, A733_THERMAL_STOPPED };
 /* Physical channel order: CPUB, DDR, NPU, CPUL, GPU. Thresholds use calibrated
  * 12-bit hardware codes. Lower codes indicate hotter temperatures within each branch. The source
- * temperature formula has a discontinuity at code 1769; no smooth inverse or
- * automatic throttling policy is implied by this interface. */
+ * temperature formula has a discontinuity at code 1769; no smooth inverse is
+ * implied by this interface. The board policy below compares converted readings. */
 struct a733_thermal_limits { uint16_t hot, hysteresis, critical; };
 struct a733_thermal_config {
     uint64_t owner, handoff, startup_deadline_us;
@@ -89,7 +89,7 @@ enum a733_thermal_result a733_thermal_poll(struct a733_thermal *);
  */
 enum a733_thermal_result a733_thermal_read(struct a733_thermal *,uint64_t deadline,
     struct a733_thermal_sample *);
-/* No release, voltage change, automatic shutdown policy or throttling API. Faults keep
+/* No release or voltage change API. Faults keep
  * all authority, with metadata-only retry if registry retention returns BUSY.
  * Terminal fault polls/read calls perform no callbacks or hardware access. */
 /* Owner-task-only configured disable after READY. Caller masks its GIC IRQ
@@ -100,4 +100,42 @@ enum a733_thermal_result a733_thermal_read(struct a733_thermal *,uint64_t deadli
  * BUSY requires checking the owner-only fault latch before retry. Repeated
  * STOPPED calls and later poll/read calls perform no callbacks or MMIO. */
 enum a733_thermal_result a733_thermal_stop(struct a733_thermal *,uint64_t deadline);
+/* Fixed board thermal policy over a733_thermal_read results. Trips are the
+ * pinned sun60iw2p1 thermal zones: CPUB, CPUL and GPU throttle at 90 C (CPU
+ * hysteresis 2 C, GPU none) and every channel is critical at 110 C. All trips
+ * lie in the code<=1769 branch, so the conversion discontinuity cannot reorder
+ * them. Hardware alarm/critical events are not inputs: their raw thresholds
+ * are per-session configuration. A channel with no valid reading for 1 s
+ * throttles and for 5 s is critical. Controller failure, an unexpected result,
+ * a replayed sample or backward time is critical. CRITICAL is terminal until
+ * power removal. The policy changes no clock, voltage, power or THS state. */
+enum a733_thermal_level { A733_THERMAL_NORMAL, A733_THERMAL_THROTTLE, A733_THERMAL_CRITICAL };
+struct a733_thermal_policy {
+    /* Owner task, once per level change. THROTTLE asks for reduced load that
+     * still makes watchdog-credited progress; NORMAL lifts it. Both are hints
+     * and the result is ignored. For CRITICAL return 1 once new work is refused
+     * and a stop or power-off request is issued, 0 to be asked again on the
+     * next update, or any other value for an uncertain outcome, which is
+     * retained and never asked again (request 1 pending, 2 done, 3 uncertain). */
+    int (*notify)(void *,enum a733_thermal_level);
+    void *cookie;
+    atomic_uint level;
+    uint64_t start_us,last_us,seen_us[A733_THERMAL_SENSORS];
+    int32_t millicelsius[A733_THERMAL_SENSORS];
+    uint32_t sequence;
+    /* Channel masks: valid reading seen, at passive trip, without a reading
+     * for 1 s, critical (trip reached or no reading for 5 s). Frozen at CRITICAL. */
+    uint8_t seen,passive,stale,critical,sensor;
+    unsigned initialized,request;
+};
+/* Zeroed storage once; now_us starts every channel's staleness window. */
+int a733_thermal_policy_init(struct a733_thermal_policy *,uint64_t now_us,
+    int (*notify)(void *,enum a733_thermal_level),void *cookie);
+/* Owner task only, after each a733_thermal_read, with now_us from the driver's
+ * clock read after that call. The sample is read only for SAMPLE. Bounded: at
+ * most one notify call. Returns the level now in force. */
+enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *,uint64_t now_us,
+    enum a733_thermal_result,const struct a733_thermal_sample *);
+/* Any task or core, for example a scheduler choosing its worker count. */
+enum a733_thermal_level a733_thermal_policy_level(const struct a733_thermal_policy *);
 #endif

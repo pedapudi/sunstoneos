@@ -113,6 +113,7 @@ void tud_umount_cb(void)
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *setup)
 {
     if (setup->bmRequestType_bit.direction != TUSB_DIR_OUT ||
+        setup->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR ||
         setup->bmRequestType_bit.recipient != TUSB_REQ_RCPT_DEVICE || setup->bRequest != RESET_REQUEST ||
         setup->wValue || setup->wIndex || setup->wLength)
         return false;

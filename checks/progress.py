@@ -122,6 +122,9 @@ class Check(unittest.TestCase):
         self.assertEqual(self.view.rebuilds, 1)
         data = json.loads(one)
         self.assertGreater(len(data['handoff']['next_actions']), 0)
+        sample = progress.parse_handoff('## Continuation and evidence reuse\n\nProse.\n\n'
+                                        '1. First\n   continued.\n2. Second.\n\nTrailing paragraph.\n')
+        self.assertEqual([item['text'] for item in sample['next_actions']], ['First\n   continued.', 'Second.'])
         self.assertEqual(data['summary']['qualified'], 0)
         path = self.root / 'docs/hardware.md'
         path.write_text('# Replaced inventory format\n')

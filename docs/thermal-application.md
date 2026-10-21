@@ -103,8 +103,15 @@ alarm interrupt delivery. After success, failure or lost transport, retain the
 claim and all backing until confirmed full board power removal. Do not retry a
 failed instance or treat cable reconnection alone as resource recovery.
 
-Automatic throttling, shutdown policy and physical accuracy require later work;
-this finite observation path does not implement thermal policy.
+The owner task passes every controller read to the fixed board
+[thermal policy](thermal.md#a-fixed-board-policy-throttles-and-stops-work).
+Observation is the image's only work, so the throttle level changes nothing.
+A critical level ends the observation through the same cancellation and
+retention path as a failed read: interrupt 71 stays masked, copied output is
+revoked, and every resource stays held. The linked check includes a case in
+which a CPUB reading of 110.035 °C ends the observation this way; the other
+thirteen linked cases and the thirteen single-core startup cases pass unchanged.
+Physical accuracy remains unqualified.
 
 ## Boot-CPU startup preserves the five-sensor service
 

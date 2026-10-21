@@ -11,6 +11,9 @@ static uint32_t probe_lock,probe_count,probe_arrived[8],probe_finished[8],probe_
 struct a733_smp_core_result a733_smp_core_results[8] __attribute__((aligned(128)));
 extern uint64_t a733_smp_diagnostic_deadline(void);
 extern void FreeRTOS_SGI_Handler(void);
+#ifdef SUNSTONE_A733_IRQ_TABLE
+#include "irq_table.h"
+#endif
 extern void a733_smp_diagnostic_start(void);
 static unsigned core(void)
 {uint64_t c;__asm__ volatile("mrs %0, tpidr_el1":"=r"(c));return (unsigned)c;}
@@ -138,6 +141,9 @@ void vApplicationIRQHandler(uint64_t interrupt)
     } else if(interrupt==0 && c<8) {
         __atomic_add_fetch(&a733_smp_core_results[c].sgis,1,__ATOMIC_RELAXED);
         FreeRTOS_SGI_Handler();
+#ifdef SUNSTONE_A733_IRQ_TABLE
+    } else if(interrupt<1020 && a733_irq_table_dispatch((unsigned)interrupt,c)) {
+#endif
     } else if(interrupt<1020)a733_smp_exit_privileged(4,interrupt+0x100);
 }
 

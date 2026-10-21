@@ -20,6 +20,8 @@ STOP=0x7afff000
 OPS=0x7af00000
 STUB=0x7af10000
 POOL=0x7ae00000
+# High capacities of the six guarded spans in apps/h264/native.c.
+CAPACITY=(4194304,6266880,3133440,0x35000,786432,0xc000)
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
@@ -67,6 +69,7 @@ def main():
         def device_read(m,access,address,size,value,unused):
             datum=0x10007 if address in (0x0200258c,0x020025b4) else mmio[0x228]
             if address==0x01c0e228 and copy_fail_at[0]==get(streambase+streamtype['active'],4) and get(base+app['copy_step'],4)==3 and get(base+app['copy_row'],4)>=64:datum=2
+            if address==0x01c0e228:corrupt()
             m.mem_write(address,struct.pack('<I',datum));guard_reads.append(datum)
         cpu.hook_add(UC_HOOK_MEM_READ,device_read,begin=0x01c0e228,end=0x01c0e22b)
         for address,data in segments:
@@ -77,12 +80,15 @@ def main():
         cpu.mem_write(syms['providers']+types['board_provider']['shared']+types['a733_native_usb']['pmic_ready'],struct.pack('<I',1))
         cpu.mem_write(base+app['iommu']+types['a733_iommu']['fault']+types['a733_iommu_fault']['scanned_masters'],struct.pack('<H',0xc0))
         def get(address,n=8):return int.from_bytes(cpu.mem_read(address,n),'little')
+        def corrupt():
+            # One byte of device memory changes after the guard scan of the copy chunk that starts at row 64.
+            if corrupt_at[0] and get(base+app['copy_step'],4)==3 and get(base+app['copy_row'],4)>=64:cpu.mem_write(corrupt_at[0],b'\x5a');corrupt_at[0]=None
         def setfield(address,type_name,field,value,size=8):cpu.mem_write(address+types[type_name][field],value.to_bytes(size,'little'))
         def returned(value):cpu.reg_write(UC_ARM64_REG_X0,value);cpu.reg_write(UC_ARM64_REG_PC,cpu.reg_read(UC_ARM64_REG_LR))
         planbase=streambase+streamtype['plan'];slots_live={}
         def pf(name):return get(planbase+plan_type[name],4)
         fifo=bytearray();time=[1000];mmio={0:1,0x1c:0,0xb0:0,0xec:0,0x228:0,0x5c:0,0x804:0,0xf0:0,0xe0:0x33310,0xe4:0x21320}
-        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];parked=[];guard_reads=[];wakes=[0]
+        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];corrupt_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];parked=[];guard_reads=[];wakes=[0]
         def buffers():return list(struct.unpack('<6Q',cpu.mem_read(base+app['buffers'],48)))
         def hook(m,address,size,unused):
             if address==STOP:parked.append('return');m.emu_stop();return
@@ -163,6 +169,7 @@ def main():
             elif name=='h264_load':
                 value=0x10007 if m.reg_read(REGS[0]) in (0x0200258c,0x020025b4) else mmio[0x228] if not active[0] else 0
                 if copy_fail_at[0]==get(streambase+streamtype['active'],4) and get(base+app['copy_step'],4)==3 and get(base+app['copy_row'],4)>=64:value=2
+                corrupt()
                 m.mem_write(m.reg_read(REGS[1]),struct.pack('<I',value));guard_reads.append(value);returned(1)
             elif name=='a733_iommu_scan':
                 returned(-1 if scan_fail_at[0]==get(streambase+streamtype['active'],4) else 1)
@@ -204,7 +211,7 @@ def main():
             return [bytes(cpu.mem_read(0x41000000,0x800000)),bytes(cpu.mem_read(0x7a000000,0x1000000)),bytes(cpu.mem_read(0x48000000,0x2000000)),bytes(cpu.mem_read(0x78000000,0x1000000)),time[0],dict(slots_live)]
         def restore(saved):
             cpu.mem_write(0x41000000,saved[0]);cpu.mem_write(0x7a000000,saved[1]);cpu.mem_write(0x48000000,saved[2]);cpu.mem_write(0x78000000,saved[3]);time[0]=saved[4];slots_live.clear();slots_live.update(saved[5])
-            fifo.clear();tx.clear();delivered[0]=0;active[0]=False;status_reads[0]=0;fail_at[0]=None;scan_fail_at[0]=None;copy_fail_at[0]=None
+            fifo.clear();tx.clear();delivered[0]=0;active[0]=False;status_reads[0]=0;fail_at[0]=None;scan_fail_at[0]=None;copy_fail_at[0]=None;corrupt_at[0]=None
         if resumed:
             restore(resumed['memory']);mmio.clear();mmio.update(resumed['mmio']);sram[:]=resumed['sram'];calls[:]=resumed['calls'];triggers[:]=resumed['triggers'];tables[:]=resumed['tables'];snapshots=resumed['snapshots'];branches=resumed['branches'];backpressure=[resumed['backpressure']]
             for present,raw in snapshots.items():(args.output/f'{variant}-frame{present}.bin').write_bytes(raw)
@@ -242,6 +249,24 @@ def main():
                             (args.output/f'retained-present{present}.bin').write_bytes(raw)
                         failed=query(descs[2]['presentation']);assert observe.decode(failed,session,manifest,descs[2]['presentation'],pixels)['status']==2
                         (args.output/'failed-B.bin').write_bytes(failed);branches.append(dict(case='failed-B-copy-after64rows',prior_completed_results=2,reorder_private_results=1,committed_DPB_unchanged=True));restore(saved)
+                    elif ordinal==2 and variant=='hd-qualification':
+                        # A guard-page byte is caught by the next per-call scan; a byte
+                        # in the unused capacity beyond the admitted reference slots
+                        # is caught only by the full scan after the last copied row.
+                        tail=pf('slots')*pf('y_step');assert tail+4097<CAPACITY[1],'HD geometry leaves no unused Y capacity'
+                        lease_size=sizes['device_memory_lease'];lease=types['device_memory_lease'];allocation=types['device_memory_allocation']
+                        for case,a,offset,row,plane,step in [('guard-page-corrupted-mid-copy',4,CAPACITY[4]+123,96,0,3),('unused-capacity-corrupted-mid-copy',1,tail+4097,0,3,2)]:
+                            saved=checkpoint();address=buffers()[a]+offset;assert cpu.mem_read(address,1)==b'\xa5'
+                            usb(packet);corrupt_at[0]=address;advance(2)
+                            assert corrupt_at[0] is None and cpu.mem_read(address,1)==b'\x5a',(case,corrupt_at[0],get(base+app['result'],4),get(base+app['copy_row'],4),get(base+app['copy_plane'],4),get(base+app['copy_step'],4),get(streambase+streamtype['next'],4))
+                            assert get(base+app['result'],4)==2 and get(streambase+streamtype['next'],4)==2
+                            assert (get(base+app['copy_row'],4),get(base+app['copy_plane'],4),get(base+app['copy_step'],4))==(row,plane,step),case
+                            pool=get(base+app['pool'])
+                            for i in range(7):
+                                l=base+app['leases']+i*lease_size;slot=get(l+lease['slot'],4)
+                                assert get(pool+types['device_memory_pool']['allocations']+slot*sizes['device_memory_allocation']+allocation['state'],4)==3,(case,i)
+                            failed=query(descs[2]['presentation']);assert observe.decode(failed,session,manifest,descs[2]['presentation'],pixels)['status']==2
+                            branches.append(dict(case=case,buffer=a,offset=offset,copy_row=row,copy_plane=plane,copy_step=step,allocations_retained=7));restore(saved)
                     usb(packet)
                 if ordinal==0:
                     for _ in range(20):

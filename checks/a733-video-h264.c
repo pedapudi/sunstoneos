@@ -7,7 +7,7 @@
 #undef main
 #pragma clang diagnostic pop
 #include "a733_video_h264.h"
-struct h264_model {struct model common;unsigned variant,status_reads,copies,flush,decode,ack,header_bits;
+struct h264_model {struct model common;unsigned variant,status_reads,copies,flush,decode,ack,header_bits,macroblocks;
     uint32_t sram[1024],sram_offset;};
 static int admit_h264(void *v,const struct a733_video_platform_config *c,
  const struct a733_h264_job *j,uint64_t d,uint64_t *t)
@@ -35,6 +35,8 @@ static int read_h264(void *v,uintptr_t address,uint32_t *out)
         }else *out=1;
         return 1;
     }
+    /* Completion requires the decoded macroblock count of the whole picture. */
+    if(address==VE+0x22c&&m->decode){*out=m->macroblocks;return 1;}
     return read_reg(v,address,out);
 }
 static int write_h264(void *v,uintptr_t address,unsigned width,uint32_t value)
@@ -49,6 +51,8 @@ static int write_h264(void *v,uintptr_t address,unsigned width,uint32_t value)
     if(address==VE+0x2e4){assert(m->sram_offset<1024);m->sram[m->sram_offset++]=value;}
     return write_reg(v,address,width,value);
 }
+/* argv[1] is a single-picture Annex B stream (SPS, PPS and one IDR slice), such
+ * as the fixture input.h264; argv[2] receives the nominal register and SRAM image. */
 int main(int argc,char **argv)
 {
     assert(argc==3);uint8_t bytes[A733_H264_INPUT_BYTES];FILE *f=fopen(argv[1],"rb");assert(f);
@@ -56,6 +60,7 @@ int main(int argc,char **argv)
     for(unsigned variant=0;variant<9;++variant){
         struct h264_model m={.variant=variant};setup(&m.common,UINT64_C(0x3331000021320));
         struct a733_h264_picture picture;assert(a733_h264_parse(bytes,count,&picture));m.header_bits=picture.header_bits;
+        m.macroblocks=(picture.width/16)*(picture.height/16);
         m.common.ve[0xb0/4]=variant==1?0x80000000:0;m.common.ve[0x228/4]=0;
         if(variant==8)m.common.ve[0x5c/4]|=0x10;
         if(variant==6)m.common.ve[0xe0/4]=0xdead;
@@ -71,7 +76,7 @@ int main(int argc,char **argv)
         struct a733_h264_platform_ops ops={now,admit_h264,memory_h264,copied_h264,enter,leave,read_h264,write_h264};
         struct a733_h264_platform platform={0};assert(a733_h264_platform_init(&platform,&c,&ops,&m));
         const uint64_t bases[]={0x10001000,0x10010000,0x10014000,0x10020000,0x10044000,0x10048000};
-        const uint64_t caps[]={4096,4096,4096,0x21000,4096,0xc000};
+        const uint64_t caps[]={8192,8192,8192,0x21000,8192,0xc000};
         struct a733_h264_job job={.input=bytes,.input_bytes=count};
         for(unsigned i=0;i<A733_H264_BUFFERS;++i)job.buffers[i]=(struct a733_h264_span){bases[i],caps[i]};
         struct a733_h264_run run={0};

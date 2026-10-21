@@ -104,11 +104,16 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
     assert(device_memory_describe(&m->pool,m->lease,&e,&state) && state==DEVICE_MEMORY_DEVICE);
     if (op==A733_CE_PUBLISH) {assert(!m->pending);memcpy(m->visible,mem,sizeof(*mem));++m->published;}
     else if (op==A733_CE_SCRUB) {
-        /* The copied task result and hash state leave the retained page. */
-        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        /* The copied digest and hash state leave the retained page. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4) && le(m->visible+4,4)==3);
         for (size_t i=offsetof(struct a733_ce_memory,output);i<offsetof(struct a733_ce_memory,cipher_output);++i) assert(!((uint8_t *)mem)[i]);
         ++m->scrubs;
-    } else {assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
+    } else if (op==A733_CE_RANDOM_SCRUB) {
+        /* A TRNG task scrubs only the random block it wrote. */
+        assert(m->acquired && !(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4) && le(m->visible+4,4)==0x203);
+        for (unsigned i=0;i<sizeof(mem->output);++i) assert(!mem->output[i]);
+        ++m->scrubs;
+    } else {assert(op==A733_CE_ACQUIRE && m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;}
     return 1;
 }
 static const struct a733_ce_ops ops={now,authorize,enter,leave,retain,read_reg,write_reg,sync_memory};
@@ -289,6 +294,13 @@ int main(void)
         retained(&m,g,out);uint64_t e=0;
         assert(a733_ce_entropy_request(&m.service,32,20000,&e)==A733_CE_ENTROPY_RETAINED);
     }
+    /* A TRNG request replacing an unadmitted SHA request clears its input and
+     * IV, because the TRNG completion scrubs only the output. */
+    setup(&m,0,0);struct a733_ce *controller=&m.engine->controller;
+    assert(a733_ce_hash_request(controller,input,64,0,0,512,10000)==A733_CE_PENDING && controller->stage==0);
+    assert(m.pages[offsetof(struct a733_ce_memory,input)]==0x7c);
+    assert(a733_ce_request(controller,10000)==A733_CE_PENDING && !m.starts);
+    zeroed(m.pages+offsetof(struct a733_ce_memory,iv),offsetof(struct a733_ce_memory,cipher_output)-offsetof(struct a733_ce_memory,iv));
     /* Uncertain launch keeps its reservation and produces no digest. */
     setup(&m,1,0);uint64_t g=hash_begin(&m);assert(a733_ce_hash_final(&m.hash,g)==A733_CE_HASH_PENDING);
     m.fail_next_start=1;assert(hash_poll(&m,g,out)==A733_CE_HASH_RETAINED);retained(&m,g,out);

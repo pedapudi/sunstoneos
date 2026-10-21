@@ -13,6 +13,7 @@ static struct device_memory_pool memory_pool;
 static void *backing;
 static uint32_t iommu_words[0x20000/4];
 static unsigned owner_token,calls,fail_mode,injected,pll_yields,pll_ticks;
+static uint64_t first_yield,last_yield;
 static jmp_buf done;
 const struct dsi_session *dsi_admitted_session(void){return &input;}
 uint64_t a733_smp_counter(void){return pm.now*24;}
@@ -53,7 +54,7 @@ struct device_memory_pool *a733_memory_uncached_init(void){return &memory_pool;}
 void vTaskDelay(TickType_t ticks)
 {
  /* A zero delay is a yield while the PLL holds the register mutex. */
- if(!ticks){assert(dsi.stage==4&&dsi.pll.held&&pm.register_held);++pll_yields;return;}
+ if(!ticks){assert(dsi.stage==4&&dsi.pll.held&&pm.register_held);if(!pll_yields++)first_yield=pm.now;last_yield=pm.now;return;}
  pll_ticks+=dsi.pll.held;
  assert(ticks==1);pm.now+=1000;
  if(!injected&&fail_mode==1&&dsi.stage==6){injected=1;dsi.iommu.tables.spans[0].physical+=4096;}
@@ -104,10 +105,14 @@ int a733_display_native_rcq_submit(void){assert(!"version-1 sessions never repla
 int main(int argc,char **argv)
 {
  assert(argc==4);FILE *f=fopen(argv[1],"rb");assert(f&&fread(&input,1,sizeof(input),f)==sizeof(input)&&!fclose(f));assert(dsi_profile_valid(&input));
- if(!strcmp(argv[2],"mapping"))fail_mode=1;else if(!strcmp(argv[2],"iommu"))fail_mode=2;else if(!strcmp(argv[2],"late"))fail_mode=3;else assert(!strcmp(argv[2],"success"));
+ if(!strcmp(argv[2],"mapping"))fail_mode=1;else if(!strcmp(argv[2],"iommu"))fail_mode=2;else if(!strcmp(argv[2],"late"))fail_mode=3;else if(!strcmp(argv[2],"nolock"))fail_mode=4;else assert(!strcmp(argv[2],"success"));
  board.admitted_session=input.board;board.session=input.board;board.session.session_start_ticks=0;board.session.deadline_us=60000000;
- application_setup();if(!setjmp(done))dsi_task(0);
- if(fail_mode){assert(atomic_load(&dsi.result)==2);assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_RETAINED&&device_memory_lookup(&memory_pool,dsi.tables)->state==DEVICE_MEMORY_RETAINED);}
+ application_setup();if(fail_mode==4)m.phy[0xe0/4]=0;if(!setjmp(done))dsi_task(0);
+ /* A PLL that never locks keeps the mutex until the deadline, but the task
+  * yields only for the first 5 ms of the hold and then sleeps a tick per poll. */
+ if(fail_mode==4){assert(atomic_load(&dsi.result)==2&&!dsi.pool&&pm.register_held&&dsi.stage==4);
+ assert(pll_yields>100&&last_yield-first_yield<5000&&pll_ticks>1000);}
+ else if(fail_mode){assert(atomic_load(&dsi.result)==2);assert(device_memory_lookup(&memory_pool,dsi.frame)->state==DEVICE_MEMORY_RETAINED&&device_memory_lookup(&memory_pool,dsi.tables)->state==DEVICE_MEMORY_RETAINED);}
  else {assert(atomic_load(&dsi.result)==1&&dsi.native.binding.transferred&&dsi.iommu.state==A733_IOMMU_ACTIVE&&dsi.iommu.fault.scanned_masters==0x100);
  /* No tick passes while the PLL holds the common register mutex. */
  assert(pll_yields>100&&!pll_ticks);

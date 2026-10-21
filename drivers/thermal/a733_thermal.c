@@ -264,3 +264,66 @@ enum a733_thermal_result a733_thermal_stop(struct a733_thermal *p,uint64_t deadl
      !unlock(p)) return fault(p);
  p->stage=STOPPED;return finish(p,A733_THERMAL_STOPPED);
 }
+
+/* sun60iw2p1.dtsi thermal-zones: the second passive trip of each CPU/GPU zone
+ * is the one bound to a CPU or GPU cooling device; the first only starts fans
+ * and power accounting. NPU and DDR zones have critical trips only. */
+static const struct { int32_t passive,hysteresis,critical; } trips[A733_THERMAL_SENSORS]={
+    {90000,2000,110000},{0,0,110000},{0,0,110000},{90000,2000,110000},{90000,0,110000}};
+#define STALE_US UINT64_C(1000000) /* The zones' 1000 ms polling delay. */
+#define LOST_US UINT64_C(5000000)
+int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,
+    int (*notify)(void *,enum a733_thermal_level),void *cookie)
+{
+    if (!p || p->initialized || !notify) return 0;
+    *p=(struct a733_thermal_policy){.notify=notify,.cookie=cookie,.start_us=now,.last_us=now,.initialized=1};
+    atomic_init(&p->level,A733_THERMAL_NORMAL);return 1;
+}
+enum a733_thermal_level a733_thermal_policy_level(const struct a733_thermal_policy *p)
+{
+    if (!p || !p->initialized) return A733_THERMAL_CRITICAL;
+    return (enum a733_thermal_level)atomic_load_explicit(&p->level,memory_order_acquire);
+}
+enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *p,uint64_t now,
+    enum a733_thermal_result r,const struct a733_thermal_sample *s)
+{
+    if (!p || !p->initialized) return A733_THERMAL_CRITICAL;
+    unsigned old=atomic_load_explicit(&p->level,memory_order_relaxed);
+    if (old!=A733_THERMAL_CRITICAL) {
+        if (now<p->last_us || (r==A733_THERMAL_SAMPLE ? !s || (s->valid&~MASK) ||
+            s->sequence<=p->sequence || s->observed_us<p->last_us || s->observed_us>now :
+            r!=A733_THERMAL_AGAIN && r!=A733_THERMAL_BUSY)) p->sensor=1;
+        else {
+            p->last_us=now;
+            if (r==A733_THERMAL_SAMPLE) {
+                p->sequence=s->sequence;
+                for (unsigned i=0;i<A733_THERMAL_SENSORS;++i) if (s->valid&BIT(i)) {
+                    p->millicelsius[i]=s->millicelsius[i];p->seen_us[i]=s->observed_us;p->seen|=(uint8_t)BIT(i);
+                }
+            }
+            for (unsigned i=0;i<A733_THERMAL_SENSORS;++i) {
+                uint8_t bit=(uint8_t)BIT(i);
+                uint64_t age=now-((p->seen&bit) ? p->seen_us[i] : p->start_us);
+                int32_t t=p->millicelsius[i];
+                p->stale=(uint8_t)(age>STALE_US ? p->stale|bit : p->stale&~bit);
+                if (age>LOST_US || ((p->seen&bit) && t>=trips[i].critical)) p->critical|=bit;
+                if (!trips[i].passive || !(p->seen&bit)) continue;
+                if (t>=trips[i].passive) p->passive|=bit;
+                else if (t<trips[i].passive-trips[i].hysteresis) p->passive&=(uint8_t)~bit;
+            }
+        }
+        unsigned level=p->sensor || p->critical ? A733_THERMAL_CRITICAL :
+            p->passive || p->stale ? A733_THERMAL_THROTTLE : A733_THERMAL_NORMAL;
+        if (level==old) return (enum a733_thermal_level)level;
+        atomic_store_explicit(&p->level,level,memory_order_release);
+        if (level!=A733_THERMAL_CRITICAL) {
+            (void)p->notify(p->cookie,(enum a733_thermal_level)level);return (enum a733_thermal_level)level;
+        }
+        p->request=1;
+    }
+    if (p->request==1) {
+        int ok=p->notify(p->cookie,A733_THERMAL_CRITICAL);
+        p->request=ok==1 ? 2 : ok==0 ? 1 : 3;
+    }
+    return A733_THERMAL_CRITICAL;
+}

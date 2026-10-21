@@ -102,8 +102,9 @@ int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
     uint32_t rd,rh,pending,en,irq,output;
     /* A one-second delay can elapse while the target is written. The alarm is
      * still disabled and its registers hold only this owner's values, so
-     * retarget once from the later read. The calendar advances once per
-     * second; a second miss within this short sequence is not that race. */
+     * retarget once from the later read. A longer delay reached during this
+     * short sequence, or a second miss, means the sequence stalled; the RTC
+     * is then retained. */
     for(unsigned attempt=0;;++attempt){
         uint64_t target=seconds(&now)+delay;
         if(target/86400>65535)return fail(r);
@@ -118,7 +119,7 @@ int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
            !read_reg(r,IRQEN,&irq)||!read_reg(r,0x50,&output)||((pending|en|irq|output)&1)||
            !coherent(r,&latest))return fail(r);
         if(seconds(&latest)<target)break;
-        if(attempt)return fail(r);
+        if(attempt||delay!=1)return fail(r);
         now=latest;
     }
     atomic_store_explicit(&r->owned,1,memory_order_release);
