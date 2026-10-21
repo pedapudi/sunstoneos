@@ -36,6 +36,19 @@ backend ownership to the DMA worker, which alone advances the I2S controller and
 DMA channel. The PMIC provider and USB0 tasks run independently. Both clock and
 pin operations use the existing common resource managers and register mutex.
 
+The image binds the DMA0 interrupt (INTID 143) to the DMA service, so a
+finite period's queue end wakes the worker at once instead of at its next
+one-millisecond tick. The image's interrupt table (`apps/i2s/irq.c`) has this
+one entry, routed to core 0, where the DMA worker runs, at GIC priority `0xd8`.
+The EL3 boot patch programs the route while both distributor groups are
+disabled and stops with status 3, detail `0x310`, if routing is refused. The
+handler, `drivers/audio/dma_service_i2s_irq.c`, masks the SPI and notifies the
+worker; the worker acknowledges the DMA events by polling and only then
+re-enables the SPI. The worker's fallback wait is one tick, so a late, missing
+or masked interrupt leaves the period bridge with the same bound as tick
+polling. Every other interrupt still takes the status-4 stop. Physical
+interrupt delivery and routing have not been observed on the board.
+
 The original receive mode copies four successful periods into an immutable
 application result. Optional transcription mode copies a longer finite utterance.
 Playback uses the first 8,192 samples of the existing recorded development WAV,

@@ -151,20 +151,12 @@ static int construct(const struct os_session *s)
     struct a733_thermal_ops ops={now,authorize,enter,leave,retain,read_register,write_register};
     return a733_thermal_init(&thermal.driver,&thermal.config,&ops,&thermal,&providers.shared.clocks,&thermal.token);
 }
-/* The complete sealed session must extend exactly the board prefix that
- * main.c admitted, for this image. */
-static const struct os_session *admitted(void)
-{
-    const struct os_session *s=os_session();
-    return s&&!memcmp(&s->board,&board.admitted_session,sizeof(s->board))&&os_session_valid(s)&&
-        !memcmp(s->board.image,a733_smp_build_id,32)?s:NULL;
-}
 int os_thermal_task_privileged(void (*entry)(void *),void *context)
 {return !context&&entry==os_thermal_task;}
-int os_thermal_pins(struct a733_pin_handoff *pins){return pins&&admitted();}
+int os_thermal_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 int os_thermal_start(void)
 {
-    const struct os_session *s=admitted();
+    const struct os_session *s=os_session_admitted();
     if(!s||!construct(s))return 0;
     thermal.handle=xTaskCreateStatic(os_thermal_task,"os-thermal",2048,NULL,4,thermal.stack,&thermal.task);
     return thermal.handle!=NULL;

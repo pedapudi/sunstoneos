@@ -3,6 +3,7 @@
 #include "session.h"
 #include "boot.h"
 #include "a733_audio_leases.h"
+#include "dma_service_i2s_irq.h"
 #include "repeated.h"
 #include "runtime.h"
 struct i2s_application {
@@ -11,6 +12,7 @@ struct i2s_application {
  struct i2s_runtime runtime;
  struct a733_native_usb shared;
  struct a733_dma_pool_session dma;
+ struct dma_service_i2s_irq dma_irq;
  struct a733_audio_leases leases;
  struct a733_audio_parent parent;
  struct a733_i2s_platform binding;

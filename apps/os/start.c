@@ -7,6 +7,8 @@
 #include "../board/application.h"
 #include "../board/session.h"
 #include "../mimus-board/application.h"
+#include "boot.h"
+#include <string.h>
 _Static_assert(OS_SERVICE_MIMUS==BOARD_SERVICES,"recognizer service follows the board services");
 struct os_application {
     const char *name;
@@ -19,6 +21,9 @@ struct os_application {
 __attribute__((used,retain)) const struct os_application os_applications[]={
     {"mimus",mimus_board_task_privileged,mimus_board_pins,mimus_board_application_start},
     {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},
+#ifdef SUNSTONE_A733_OS_AUDIO
+    {"audio",os_audio_task_privileged,os_audio_pins,os_audio_start},
+#endif
 };
 #define OS_APPLICATIONS (sizeof(os_applications)/sizeof(os_applications[0]))
 int board_application_task_privileged(void (*entry)(void *),void *context)
@@ -40,3 +45,9 @@ int board_application_start(void)
 /* The OS contract admission accepted only a sealed span of exactly
  * sizeof(struct os_session) bytes (admission.c). */
 const struct os_session *os_session(void){return board_session_sealed();}
+const struct os_session *os_session_admitted(void)
+{
+    const struct os_session *s=os_session();
+    return s&&!memcmp(&s->board,&board.admitted_session,sizeof(s->board))&&os_session_valid(s)&&
+        !memcmp(s->board.image,a733_smp_build_id,32)?s:NULL;
+}

@@ -5,7 +5,7 @@
  *
  *   clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
  *     -Iinclude -Iplatform/a733-smp-cached -Iapps/os -DSUNSTONE_BOARD_SUPERVISED=1 \
- *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1] \
+ *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1 | -DSUNSTONE_A733_OS_AUDIO=1] \
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
@@ -31,8 +31,14 @@ static void gicd_write64(uint64_t o,uint64_t v){memcpy(gicd+o,&v,8);}
 static void gicd_barrier(void){}
 #include "../platform/a733-smp-cached/irq_table.c"
 #include "../apps/os/irq.c"
-static unsigned thermal_calls;
+static unsigned thermal_calls,audio_calls;
 void os_thermal_irq(void){++thermal_calls;}
+#ifdef SUNSTONE_A733_OS_AUDIO
+void os_audio_irq(void){++audio_calls;}
+#define ROUTES 2u
+#else
+#define ROUTES 1u
+#endif
 
 /* Modeled counter and WDT0 for apps/os/services.c. */
 static uint64_t ticks;
@@ -48,30 +54,48 @@ int os_watchdog_reload(void *supervisor)
 }
 #include "../apps/os/services.c"
 
-/* Admission compiled with this build's lifetime. */
-const unsigned char a733_smp_build_id[32]={0x4f,0x53,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
-    17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32};
+/* Admission compiled with this build's lifetime. checks/os-image-launch.py
+ * sets OS_MODEL_BUILD_ID to a linked image's identity, so that --admit judges
+ * that image's prepared session. */
+#ifndef OS_MODEL_BUILD_ID
+#define OS_MODEL_BUILD_ID 0x4f,0x53,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32
+#endif
+const unsigned char a733_smp_build_id[32]={OS_MODEL_BUILD_ID};
 #include "../apps/os/admission.c"
 
+/* The DMA0 interrupt of the audio build. */
+#define DMA0_INTID 143u
+static int routed(unsigned id){return id==A733_THERMAL_INTID||(ROUTES==2&&id==DMA0_INTID);}
 static void irq_cases(void)
 {
-    assert(a733_irq_table_valid()&&a733_irq_route_count==1);
-    /* The thermal interrupt runs its handler on CPU0 only. Every other INTID,
-     * and the thermal INTID on another core, returns 0: the shared handler
-     * then takes the status-4 stop. */
-    assert(a733_irq_table_dispatch(A733_THERMAL_INTID,0)&&thermal_calls==1);
-    for(unsigned core=1;core<8;++core)assert(!a733_irq_table_dispatch(A733_THERMAL_INTID,core));
-    for(unsigned id=32;id<1020;++id)if(id!=A733_THERMAL_INTID)assert(!a733_irq_table_dispatch(id,0));
-    assert(thermal_calls==1);
-    /* EL3 route programming: Group1NS, level, priority 0xd8, CPU0 affinity. */
+    assert(a733_irq_table_valid()&&a733_irq_route_count==ROUTES);
+    /* Each table interrupt runs its handler on CPU0 only. Every other INTID,
+     * and a table INTID on another core, returns 0: the shared handler then
+     * takes the status-4 stop. */
+    assert(a733_irq_table_dispatch(A733_THERMAL_INTID,0)&&thermal_calls==1&&!audio_calls);
+    if(ROUTES==2)assert(a733_irq_table_dispatch(DMA0_INTID,0)&&audio_calls==1&&thermal_calls==1);
+    for(unsigned core=1;core<8;++core)
+        assert(!a733_irq_table_dispatch(A733_THERMAL_INTID,core)&&!a733_irq_table_dispatch(DMA0_INTID,core));
+    for(unsigned id=32;id<1020;++id)if(!routed(id))assert(!a733_irq_table_dispatch(id,0));
+    assert(thermal_calls==1&&audio_calls==ROUTES-1);
+    /* EL3 route programming: Group1NS, level, priority 0xd8, CPU0 affinity,
+     * every source left disabled. */
     memset(gicd,0,sizeof(gicd));gicd_write(0,0x30);gicd_write(4,10);
     ticks=0;assert(a733_irq_table_route(HZ,a733_smp_counter));
     assert(gicd_read(0x88)&(1u<<7)&&!(gicd_read(0xd08)&(1u<<7))&&!(gicd_read(0xc10)&(3u<<14)));
     assert((gicd_read(0x444)>>24)==0xd8&&gicd_read64(0x6000+8*71)==0&&!gicd_read(0x108));
-    /* An inherited pending thermal interrupt refuses the route. */
-    memset(gicd,0,sizeof(gicd));gicd_write(0,0x30);gicd_write(4,10);gicd_write(0x208,1u<<7);
-    assert(!a733_irq_table_route(HZ,a733_smp_counter)&&!gicd_read(0x88));
-    puts("PASS interrupt table: thermal INTID 71 on CPU0; 994 other INTIDs and 7 other cores refused; route programmed");
+    if(ROUTES==2){
+        assert(gicd_read(0x90)&(1u<<15)&&!(gicd_read(0xd10)&(1u<<15))&&!(gicd_read(0xc20)&(3u<<30)));
+        assert((gicd_read(0x48c)>>24)==0xd8&&gicd_read64(0x6000+8*DMA0_INTID)==0&&!gicd_read(0x110));
+    }
+    /* An inherited pending table interrupt refuses the route. */
+    for(unsigned i=0;i<ROUTES;++i){
+        unsigned id=i?DMA0_INTID:A733_THERMAL_INTID;
+        memset(gicd,0,sizeof(gicd));gicd_write(0,0x30);gicd_write(4,10);gicd_write(0x200+4*(id/32),1u<<(id%32));
+        assert(!a733_irq_table_route(HZ,a733_smp_counter)&&!gicd_read(0x88)&&!gicd_read(0x90));
+    }
+    printf("PASS interrupt table: %s on CPU0; %u other INTIDs and 7 other cores refused; routes programmed\n",
+        ROUTES==2?"thermal INTID 71 and DMA0 INTID 143":"thermal INTID 71",988u-ROUTES);
 }
 
 /* One supervision run in 1 ms steps. The supervisor runs every 20 ms from
@@ -196,6 +220,14 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     memset(s->thermal_clocks,3,32);memset(s->thermal_supervision,4,32);
     s->apb1=0;s->apb1_hz=24000000;s->alarm_mask=31;s->critical_mask=31;
     for(unsigned i=0;i<5;++i){s->limits[i][0]=1500;s->limits[i][1]=1600;s->limits[i][2]=1400;}
+#ifdef SUNSTONE_A733_OS_AUDIO
+    struct os_audio_session *a=&s->audio;
+    a->magic=OS_AUDIO_SESSION_MAGIC;a->version=OS_AUDIO_SESSION_VERSION;a->bytes=sizeof(*a);
+    memset(a->evidence,5,32);a->dma.owner=17;a->dma.handoff=a->dma_evidence=b->lease;
+    memcpy(a->dma.fabric,b->fabric,sizeof(b->fabric));memcpy(a->dma.rate_hz,b->fabric_hz,sizeof(b->fabric_hz));
+    a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_SUPERVISED;
+    a->dma_owned_channels=0xffff;a->dma_service_channels=1;a->capture_samples=48000;
+#endif
 }
 /* The contract this lifetime's producer writes: the stage-2 loader for the
  * resident image, the FEL host for the supervised one. */
@@ -256,12 +288,38 @@ static void admission_cases(void)
     SESSION_REFUSED(SESSION->apb1=0x03000003;SESSION->apb1_hz=0);
     SESSION_REFUSED(SESSION->reserved[5]=1);
     SESSION_REFUSED(SESSION->board.deadline_us=1);
+#ifdef SUNSTONE_A733_OS_AUDIO
+    struct os_audio_session *a=&SESSION->audio;
+    SESSION_REFUSED(a->magic^=1);
+    SESSION_REFUSED(a->version=2);
+    SESSION_REFUSED(a->bytes=sizeof(*a)-8);
+    SESSION_REFUSED(memset(a->evidence,0,32));
+    SESSION_REFUSED(a->dma.owner=0);
+    SESSION_REFUSED(a->dma.owner=SESSION->thermal_owner);
+    SESSION_REFUSED(a->dma.owner=SESSION->board.usb0_owner);
+    SESSION_REFUSED(a->dma.handoff^=1);
+    SESSION_REFUSED(a->dma_evidence^=1);
+    SESSION_REFUSED(a->dma.deadline_us=1);
+    SESSION_REFUSED(a->dma_established=0x5e);
+    SESSION_REFUSED(a->dma_owned_channels=0xfffe);
+    SESSION_REFUSED(a->dma_service_channels=3);
+    SESSION_REFUSED(a->dma_controller=0x04602000);
+    SESSION_REFUSED(a->dma.rate_hz[1]^=1);
+    SESSION_REFUSED(a->audio_cold=2);
+    SESSION_REFUSED(a->capture_samples=OS_AUDIO_MIN_SAMPLES-1);
+    SESSION_REFUSED(a->capture_samples=OS_AUDIO_MAX_SAMPLES+1);
+    SESSION_REFUSED(a->reserved[6]=1);
+    /* A contract for the 808-byte session cannot admit the audio image. */
+    CONTRACT_REFUSED(c.reserved[1]=A733_OS_SESSION_BYTES);
+#endif
     /* A start after the startup deadline is refused. */
     nominal_session(SESSION,9);c=nominal_contract(SESSION,armed);
     assert(!a733_smp_contract_valid(&c,armed+HZ));++refused;
     printf("PASS %s OS admission: nominal contract and session accepted, %u refusals\n",
 #ifdef SUNSTONE_BOARD_RESIDENT
         "resident",
+#elif defined(SUNSTONE_A733_OS_AUDIO)
+        "supervised audio",
 #else
         "supervised",
 #endif

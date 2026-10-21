@@ -7,6 +7,8 @@ volatile unsigned i2s_check_result;
 void vTaskDelay(TickType_t ticks)
 {i2s_check_result=100+(unsigned)ticks;__asm__ volatile("brk #0");for(;;){}}
 int i2s_live(void *v){(void)v;return 1;}
+/* Only the file upload path reads the counter; these modes never reach it. */
+uint64_t a733_smp_counter(void){return 0;}
 /* This framing fixture treats any terminal USB path as failure. The separate
  * cutoff fixture executes the actual metadata revocation implementation. */
 void i2s_fail(void *v){(void)v;i2s_check_result=90;}
