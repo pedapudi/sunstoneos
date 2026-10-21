@@ -17,6 +17,7 @@ struct thermal_application {
  uint64_t next_read;
  uint8_t payload[THERMAL_OUTPUT_BYTES],digest[32],session_digest[32];
  uint8_t working[96];
+ struct a733_thermal_policy policy;
 };
 extern struct thermal_application thermal;
 void thermal_task(void *);
