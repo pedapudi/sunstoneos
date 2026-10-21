@@ -238,7 +238,7 @@ static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, voi
     s->activation=activation ? *activation : (struct npu_service_activation){0};
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     atomic_init(&s->irq_pending,0);atomic_init(&s->irq_stopped,0);atomic_init(&s->irq_completions,0);
-    s->initialized = 1; instance = s; creating_worker = 1;
+    s->initialized = 1; s->affinity = affinity; instance = s; creating_worker = 1;
 #if configNUMBER_OF_CORES > 1
     s->worker = xTaskCreateStaticAffinitySet(worker, "npu-service", NPU_SERVICE_STACK_WORDS,
         s, priority, s->worker_stack, &s->worker_state, affinity);
@@ -289,10 +289,12 @@ int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, ui
     s->clients[slot].task = task; s->clients[slot].commands = commands;
     return 1;
 }
-int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops *ops,void *cookie)
+int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops *ops,void *cookie,
+    UBaseType_t route)
 {
     if(!s || s!=instance || !s->initialized || s->irq_bound || !ops ||
        !ops->mask || !ops->rearm || !ops->stop || !cookie ||
+       !route || (route&(route-1)) || route!=s->affinity ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     s->irq_ops=*ops;s->irq_cookie=cookie;s->irq_bound=1;return 1;
 }

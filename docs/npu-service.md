@@ -171,6 +171,15 @@ scheduling through `npu_service_bind_irq`. The existing unbound service remains
 polled. The binding and worker remain pinned; successful terminal CLOSE cannot
 reopen an interrupt binding. Requests and replies retain their existing layout.
 
+The callbacks run in the worker task and must act on the CPU that receives
+interrupt 97. The caller therefore passes the affinity mask of that one CPU,
+and binding is refused unless the worker was created pinned to exactly that
+CPU. The board binding passes CPU0, where the EL3 installer routes the
+interrupt and the only CPU on which its callbacks run. An all-core profile
+that pins the worker to core 1 therefore cannot bind the interrupt and keeps
+polled completion. Routing the interrupt to another core would also require
+the EL3 installer, its restore path and the callbacks to target that core.
+
 The platform ISR masks interrupt 97 and calls
 `npu_service_irq_notify_from_isr`. This latches an event notification or a sticky
 mask failure and wakes the worker. The ISR performs no NPU register read, output
@@ -212,7 +221,9 @@ and cache adapter with modeled register effects and IRQ notifications. They
 cover pending notification during rearm, three completions and output acquisition,
 deferred mask/stop, missing IRQ deadlines, mask/rearm/device/stop failures,
 diagnostic replies after a deferred-mask timeout and cancellation without an
-event IRQ. Changed controller cases also pass address/undefined-behavior
+event IRQ. They also refuse binding with a route of no CPU, two CPUs or a CPU
+other than the worker's, and complete bootstrap plus two jobs with the worker
+and the modeled route both on core 1. Changed controller cases also pass address/undefined-behavior
 sanitizers. Results and exact inputs reside under
 `~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`. Physical delivery,
 cache visibility, numerical execution and recovery remain unqualified.

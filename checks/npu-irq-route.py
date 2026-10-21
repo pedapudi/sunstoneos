@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
-from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PSTATE
+from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PSTATE
 
 D=0x03400000
 STOP=0x50fff000
@@ -99,6 +99,7 @@ def main():
             if address==syms['npu_service_bind_irq']:
                 assert uc.reg_read(UC_ARM64_REG_X0)==SERVICE
                 assert uc.reg_read(UC_ARM64_REG_X2)==locals['binding']
+                assert uc.reg_read(UC_ARM64_REG_X3)==1  # Route and worker on CPU0 only.
                 ops=uc.reg_read(UC_ARM64_REG_X1)
                 assert [int.from_bytes(uc.mem_read(ops+i*8,8),'little') for i in range(3)]==[locals[n] for n in ['mask','rearm','stop']]
                 ret(1);return

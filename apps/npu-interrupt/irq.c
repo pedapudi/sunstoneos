@@ -87,7 +87,9 @@ int npu_application_irq_bind(struct npu_service *service)
      * to the already-configured Nonsecure interrupt. */
     static const struct npu_service_irq_ops ops={mask,rearm,stop};
     binding.masked=1;
-    if(!npu_service_bind_irq(service,&ops,&binding))return 0;
+    /* The EL3 installer routes INTID97 to CPU0 and every callback refuses off
+     * CPU0, so the service worker must be pinned to CPU0 alone. */
+    if(!npu_service_bind_irq(service,&ops,&binding,1))return 0;
     binding.service=service;return 1;
 }
 void npu_application_irq(void)

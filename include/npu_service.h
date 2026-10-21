@@ -87,6 +87,7 @@ struct npu_service {
     uint8_t request_storage[NPU_SERVICE_CLIENTS * sizeof(struct npu_service_message)];
     struct npu_service_client clients[NPU_SERVICE_CLIENTS];
     TaskHandle_t worker;
+    UBaseType_t affinity;
     StaticTask_t worker_state;
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
 };
@@ -125,8 +126,13 @@ int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t
 /* Optional private binding after init, before scheduling. The route/cookie and
  * worker remain pinned. ISR entry follows root-owned mask of INTID97; it never
  * reads NPU registers. mask_ok failure is sticky. Pre-binding IRQ dispatch must
- * be retained by the platform. */
-int npu_service_bind_irq(struct npu_service *,const struct npu_service_irq_ops *,void *);
+ * be retained by the platform. route is the affinity mask of the one CPU the
+ * interrupt is routed to; binding is refused unless the worker was created
+ * pinned to exactly that CPU, because the callbacks run in the worker and the
+ * route owner must mask, rearm and stop the source on its own CPU. The worker
+ * affinity must not change after binding. */
+int npu_service_bind_irq(struct npu_service *,const struct npu_service_irq_ops *,void *,
+    UBaseType_t route);
 void npu_service_irq_notify_from_isr(struct npu_service *,int mask_ok,BaseType_t *woken);
 int npu_service_irq_stopped(const struct npu_service *);
 unsigned npu_service_irq_completions(const struct npu_service *);

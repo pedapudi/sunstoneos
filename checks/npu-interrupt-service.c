@@ -6,9 +6,12 @@
 /* Fixture selector is outside the ELF load/BSS interval and remains in QEMU RAM. */
 #define npu_irq_case (*(volatile unsigned *)UINT64_C(0x47fff000))
 static unsigned mask_calls,rearm_calls,stop_calls,masked,delivered,critical_rearm;
+/* Case 9 pins the worker and the modeled route to core 1 instead of core 0. */
+static UBaseType_t irq_route;
+static void routed(void){configASSERT((UBaseType_t)1<<portGET_CORE_ID()==irq_route);}
 static int irq_mask(void *cookie)
 {
-    configASSERT(cookie==&service);privileged();++mask_calls;
+    configASSERT(cookie==&service);privileged();routed();++mask_calls;
     if(npu_irq_case==4)return -1;
     if(npu_irq_case==7 && mask_calls>=3)return 0;
     if(mask_calls==1)return 0;
@@ -16,7 +19,7 @@ static int irq_mask(void *cookie)
 }
 static int irq_rearm(void *cookie)
 {
-    configASSERT(cookie==&service && masked);privileged();++rearm_calls;
+    configASSERT(cookie==&service && masked);privileged();routed();++rearm_calls;
     uint64_t pmr;__asm__ volatile("mrs %0,ICC_PMR_EL1":"=r"(pmr));
     configASSERT(pmr==portMAX_API_PRIORITY_MASK);++critical_rearm;
     if(npu_irq_case==5)return -1;
@@ -32,7 +35,7 @@ static int irq_rearm(void *cookie)
 }
 static int irq_stop(void *cookie)
 {
-    configASSERT(cookie==&service && masked);privileged();++stop_calls;
+    configASSERT(cookie==&service && masked);privileged();routed();++stop_calls;
     configASSERT(service.controller.state==A733_NPU_CLOSED && !model.regs[0x14/4] &&
         model.regs[1]==IDLE && service.owner==0 && (stop_calls==1 || service.has_deferred));
     if(npu_irq_case==6)return -1;
@@ -58,7 +61,7 @@ static struct npu_service_reply irq_wait(enum a733_npu_state wanted)
 }
 static void irq_owner(void *unused)
 {
-    (void)unused;configASSERT(npu_irq_case<=8);
+    (void)unused;configASSERT(npu_irq_case<=9);
     struct npu_service_reply r=irq_request(NPU_SERVICE_OPEN,0,100000);
     if(npu_irq_case==4)configASSERT(r.result==NPU_SERVICE_FAULT);
     else configASSERT(r.result==NPU_SERVICE_OK);
@@ -66,7 +69,7 @@ static void irq_owner(void *unused)
         r=irq_request(NPU_SERVICE_CANCEL,0,100000);configASSERT(r.result==NPU_SERVICE_OK);
         r=irq_wait(A733_NPU_CANCELED);configASSERT(r.state==A733_NPU_CANCELED);
         r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK && r.canceled);
-    }else if(npu_irq_case==0 || npu_irq_case==6){
+    }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9){
         r=irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
         for(unsigned j=0;j<2;++j){
             r=irq_request(NPU_SERVICE_SUBMIT,1,100000);configASSERT(r.result==NPU_SERVICE_OK);
@@ -107,8 +110,14 @@ void kernel_main(void)
     for(unsigned i=0;i<3;++i)configASSERT(a733_npu_memory_command(&native.memory,buffers[i].device,&commands[i]));
     model.regs[0x20/4]=0x9000;model.regs[0x24/4]=0x9202;model.regs[0x30/4]=0x1000003b;
     model.regs[0x28/4]=0x20240101;model.regs[1]=IDLE;
-    configASSERT(npu_service_init(&service,&model_ops,NULL,&native.memory.image,commands,3,4,1));
-    configASSERT(npu_service_bind_irq(&service,&irq_ops,&service));
+    irq_route=npu_irq_case==9 ? 2 : 1;
+    configASSERT(npu_service_init(&service,&model_ops,NULL,&native.memory.image,commands,3,4,irq_route));
+    /* The route must name exactly the one CPU the worker is pinned to. */
+    configASSERT(!npu_service_bind_irq(&service,&irq_ops,&service,0));
+    configASSERT(!npu_service_bind_irq(&service,&irq_ops,&service,3));
+    configASSERT(!npu_service_bind_irq(&service,&irq_ops,&service,irq_route^3));
+    configASSERT(!service.irq_bound);
+    configASSERT(npu_service_bind_irq(&service,&irq_ops,&service,irq_route));
     TaskHandle_t client=xTaskCreateStaticAffinitySet(irq_owner,"irq-owner",4096,NULL,5,stacks[0],&tasks[0],1);
     configASSERT(client && npu_service_bind(&service,0,client,2));
     vTaskStartScheduler();platform_panic("scheduler returned",0);
