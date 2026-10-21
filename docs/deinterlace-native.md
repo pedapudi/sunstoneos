@@ -1,8 +1,8 @@
 # Native offline deinterlacing
 
 `sunstone-a733-deinterlace` accepts an authenticated fixed-geometry NV12 job,
-submits one offline WEAVE, initial motion-adaptive or fixed-strength temporal
-noise reduction (TNR) operation to A733 DI301, and exposes an immutable
+submits one offline WEAVE, initial motion-adaptive or temporal noise
+reduction (TNR) operation to A733 DI301, and exposes an immutable
 copied output through USB0. It retains the controller, buffers, IOMMU tables,
 clock/power ownership and copied result until whole-board power removal.
 Successful output delivery does not authorize another job or resource reuse.
@@ -13,7 +13,8 @@ strides. The Y plane contains 480 lines and the UV plane 240 lines, totaling
 field patterns and caller-supplied frames are valid inputs; no media permission
 or preknown output oracle is required. Weave preserves those fields without
 motion-adaptive interpolation. Mode 2 adds initial motion-adaptive processing;
-mode 3 adds fixed-strength TNR. Film detection, crop, scale, additional input
+mode 3 adds TNR at the source's fixed strength or a selected strength. Adaptive
+gain feedback between frames, film detection, crop, scale, additional input
 formats and repeated jobs remain unsupported.
 
 ## Selected implementation and configuration
@@ -168,7 +169,7 @@ guard pages and checked tail padding. Both input frames are checked against the
 retained authenticated upload before output publication. The same one-attempt,
 retained-result and USB ACK rules apply.
 
-## Fixed-strength temporal noise reduction
+## Temporal noise reduction at a fixed or selected strength
 
 Mode 3 submits one TNR-only operation with two combined-field NV12 frames,
 previous then current, totaling 921,600 bytes. Output is planar YUV420:
@@ -178,10 +179,24 @@ input geometry; mode 3 identifies the output format in the copied result.
 
 The effective single-file selector in pinned `di_client.c` enables MD and TNR,
 routes previous/current inputs and the TNR output, and requires planar output.
-The adapter uses `DI_TNR_MODE_FIX`. Fixed setup in `di301.c` programs strength
-58 for each channel. On the first sequence, per-frame setup skips CPU feedback
-but still enables TNR and programs its parameters. No source branch bypasses
-TNR for this initial operation. Numerical filtering remains unqualified.
+With session strength 0, the adapter uses `DI_TNR_MODE_FIX`, and fixed setup
+in `di301.c` programs strength 58 (`0x3a`) for each channel. On the first
+sequence, per-frame setup skips CPU feedback but still enables TNR and programs
+its parameters. No source branch bypasses TNR for this initial operation.
+Numerical filtering remains unqualified.
+
+Session strength 1, 2 or 3 selects the source's adaptive TNR mode at level
+LOW, MIDDLE or HIGH. The word occupies the last geometry word, which earlier
+sessions kept zero, and must be zero in modes 1 and 2. The algorithm
+parameters stay enabled for this operation, so `di_alg_fixed_para` sets the
+level's initial gain and `di_dev_set_tnr_para` writes it to all three channel
+strengths: 38 (`0x26`) for LOW, 48 (`0x30`) for MIDDLE and 62 (`0x3e`) for HIGH.
+Sequence zero runs no CPU algorithm, so no gain adjustment from hardware
+statistics follows. Among the submitted TNR words only the strength word
+changes; the enabled algorithm also changes two DIT words that stay in the CPU
+image. Plan validation accepts only the four source strengths and requires the
+one the session selects. The linked geometry marker reports revision 4, and
+host preparation refuses a selected strength for an older image.
 
 Each zeroed flag buffer follows the source's TNR allocation of width times
 height, totaling 307,200 bytes. The source retains stride 160 despite this
@@ -246,3 +261,18 @@ checkpoint; one affected replay repaired serialization and reproduced the
 original allocation proof and page table byte for byte. Completion resumes the
 saved context with an identical final session. The fixture models its prepared
 board deadline and counter before allocation; it excludes bootstrap timing.
+
+Selectable strength is checked by `checks/deinterlace-strength.py`. Host plan
+generation under ASan/UBSan produces all four strengths with the pinned DI301
+code, confirms that only the strength word differs among submitted TNR words,
+and refuses strength 4, strength outside mode 3 and an unknown strength word.
+The linked AArch64 image, SHA-256
+`5cdd400fa6b10f0c2c63d783971ba5485af03874a873864b0cf2c128591d130c`, produces
+identical register plans for strengths 0 to 3 and refuses strengths 4 and 5.
+Host preparation mirrors the strength rule for every mode, refuses a selected
+strength for the accepted revision-3 image and labels each captured mode. A
+rebuilt 2536-byte SRAM launcher admits strengths 0 to 3 and refuses an
+out-of-range strength and strength outside TNR in the shared AArch32 model,
+using an earlier TNR bundle's identities. The earlier WEAVE, motion and TNR
+launcher cases, plan checks and TNR host capture pass with the changed code.
+No device effect, filtering arithmetic or physical operation is modeled.

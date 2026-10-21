@@ -898,8 +898,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
-- G2D: **implemented** one retained ARGB8888 fill, source-copy, source-over-solid or exact 2× enlargement operation per
-  session through the [native application](g2d.md). Caller geometry is bounded
+- G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
+  image-over-image operation per session through the [native application](g2d.md), with copy and scaling
+  converting between the eight 32-bit RGB channel orders. Caller geometry is bounded
   to 1280×720 with byte stride at most 5120. Authenticated source input, RCQ
   commands and destination use guarded allocations. Typed global IOMMU admission
   excludes other masters while master 10 alone translates; shared DE_SYS/PCK,
@@ -973,9 +974,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   generation/digest ACK. Source-over CPU comparison is diagnostic, without a
   qualified hardware-rounding oracle. Every allocation,
   mapping and provider identity remains retained; timeout or ACK establishes no
-  reclamation or drain. Other ratios/downscaling, image-over-image/translucent
-  blending, rotation, color conversion and further
-  formats remain required. Physical pixels, DMA confinement/visibility, IRQ
+  reclamation or drain. General scaling at any other ratio, including reduction with
+  the pinned coarse decimation, image-over-image blending with per-pixel and plane alpha,
+  and RGB order conversion reuse the same buffers, mappings and lifetime. Image
+  `2cb92b67…` passes register-image comparisons with the pinned setters, the linked
+  AArch64 validator and builder, a rebuilt 3008-byte SRAM launcher model and host
+  sealing/ACK-policy checks; earlier operations emit identical commands. Rotation and
+  mirroring (the pinned set lacks `g2d_rotate.c`), YUV color-space conversion, other
+  pixel sizes and a translucent solid background remain required. Physical pixels, DMA confinement/visibility, IRQ
   delivery, startup, recovery and performance remain unqualified.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
@@ -2006,7 +2012,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
-- DI301 deinterlacer: **implemented** retained [offline WEAVE, initial motion and fixed-strength TNR](deinterlace-native.md)
+- DI301 deinterlacer: **implemented** retained [offline WEAVE, initial motion and fixed or selected-strength TNR](deinterlace-native.md)
   for caller 640×480 NV12 combined-field frames, top field first and 640-byte
   strides. Pinned GPL DI301 configuration from Linux revision `2ac08e8…` runs
   against a private CPU register image; whitelisted masked writes configure the
@@ -2054,8 +2060,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `deinterlace-tnr-20261020/root-integration.json`; three external host-file differences
   are separately frozen, with all nine final host sources matching. Earlier
   WEAVE/motion/power/USB matrices retain their original scopes without replay.
-  Adaptive feedback, other strengths/shapes/formats, film detection, crop/scale and
-  repeated jobs remain required. All buffers/providers stay retained; no drain,
+  TNR strength 1–3 now selects the pinned adaptive mode's LOW, MIDDLE or HIGH initial
+  gain (38, 48 or 62) for the one operation; strength 0 keeps the fixed 58. Image
+  `5cdd400f…` reports geometry revision 4 and passes host and linked-image plan
+  generation, host predicate and capture-label checks and a rebuilt SRAM launcher
+  model. Gain feedback between frames, other shapes/formats, film detection,
+  crop/scale and repeated jobs remain required. All buffers/providers stay retained; no drain,
   reclamation or physical reuse is qualified.
 
 - Crypto, random, identity and secure storage: **implemented** bounded
