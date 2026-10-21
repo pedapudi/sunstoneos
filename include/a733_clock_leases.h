@@ -91,7 +91,10 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_VE_ENC A733_CLOCK_BIT(71) /* Encoder clocks, reset, routes and domain 3; exclusive. */
 #define A733_CLOCK_LRADC A733_CLOCK_BIT(72) /* Complete LRADC0 controller, CCU1024 gate/reset and IRQ69; exclusive. */
 #define A733_CLOCK_RTC32K A733_CLOCK_BIT(73) /* Stable RTC32K source/mux/divider/gates; legacy RTC writers also require explicit exclusion. */
-#define A733_CLOCK_ALL     (A733_CLOCK_BIT(74)-1) /* Bits0–73 assigned; higher bits refused. */
+#define A733_CLOCK_CPU_L A733_CLOCK_BIT(74) /* PLL_CPU_L and CPU-L mux/P at 0x08871000/0x0887101c. */
+#define A733_CLOCK_CPU_B A733_CLOCK_BIT(75) /* PLL_CPU_B and CPU-B mux/P at 0x08872000/0x0887201c. */
+#define A733_CLOCK_CPU_DSU A733_CLOCK_BIT(76) /* PLL_CPU_DSU and DSU mux/P at 0x08873000/0x0887301c. */
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(77)-1) /* Bits0–76 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -221,6 +224,10 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * DCDC2 shared/exclusive rail authority also uses this registry. Every PMIC
  * voltage/enable writer must acquire its exclusive scope; a mutex alone only
  * serializes transactions. DCDC2 has no clock ancestors or audio-profile effect.
+ * CPU_L, CPU_B and CPU_DSU each own one CPU PLL, its update/lock fields and
+ * the matching cluster mux and P divider. Each reserves OSC: its PLL runs
+ * from the DCXO, and a rate change parks the mux on the DCXO. Shared holds a
+ * stable rate; exclusive admits a change. Rail voltage is a separate lease.
  * Granting a token precedes all caller hardware operations. An uncertain
  * operation requires retain(), never release(). All refusal outputs unchanged.
  */
