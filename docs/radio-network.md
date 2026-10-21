@@ -122,11 +122,25 @@ change, link loss or network fault. Each request's own timeout still applies.
 Production configuration requires cryptographic random-number and TCP sequence
 providers plus an admission record identifying their qualification. A
 random-number provider returns 0 for a temporary shortage or lock contention.
-The FreeRTOS+TCP random-number hook then fails only that call; the stack handles
-the failure at each use, for example by retrying a DHCP transmission later or
-not sending a DNS query. Any other random-number failure, and every TCP sequence
-failure, closes output synchronously. The TCP sequence hook has no error return;
-its placeholder result cannot authorize an outgoing SYN after that closure.
+The FreeRTOS+TCP random-number hook then fails only that call. In the pinned
+stack, with IPv6 and link-local fallback disabled, the effect depends on the
+call site:
+
+- A DHCP discover retransmission is skipped. The retransmission period still
+  doubles, so a later check tries again until the period passes the discover
+  limit and DHCP gives up, as it would without an offer.
+- A DHCP request keeps the previous transaction identifier and is still sent.
+- At DHCP start, no DHCP socket or timer is created, so address acquisition
+  ends when the adapter's address timeout reports failure.
+- A DNS lookup registers no callback and sends no query, so the resolve request
+  ends at its own timeout.
+- Automatic local port selection fails, so that bind or connect returns
+  `-pdFREERTOS_ERRNO_EADDRNOTAVAIL`.
+
+Each outcome is bounded. Any other random-number failure, and every TCP
+sequence failure, closes output synchronously. The TCP sequence hook has no
+error return; its placeholder result cannot authorize an outgoing SYN after
+that closure.
 The composition's deterministic providers are test inputs only.
 
 The [retained session](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
