@@ -83,7 +83,7 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
             fifo->request!=3 || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
             fifo->burst!=8 || ram->burst!=8 || a733_dma_mappings_overlap(m,&t->descriptors) ||
             (p->cyclic && (g->bytes!=m->bytes || (p->direction==A733_I2S_RECEIVE &&
-             (g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
+             (t->count<4 || g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
         for(size_t k=0;k<i;++k)if(a733_dma_mappings_overlap(m,&t->mappings[k]))return 0;
     }
     return 1;
@@ -284,8 +284,10 @@ static enum a733_i2s_status cyclic_active(struct a733_i2s_stream *s)
     if(!tx(s)) {
         unsigned frames=s->catalogue->segments[0].bytes/s->plan.frame_bytes;
         uint64_t count=s->frames/frames;
-        if(s->raw_next>UINT64_MAX-s->count || count>=s->raw_next+s->count)return stop(s,A733_I2S_FAILED);
-        if(s->snapshot_state==FREE && count>s->raw_next) {
+        /* The window a733_dma_cyclic_rx_copy accepts: stop on overrun here
+         * rather than asking for a copy it would refuse. */
+        if(s->raw_next>UINT64_MAX-s->count || count>s->raw_next+s->count-2)return stop(s,A733_I2S_FAILED);
+        if(s->snapshot_state==FREE && count>=s->raw_next+2) {
             uint64_t before=s->time;
             int copied=a733_dma_cyclic_rx_copy(s->dma,s->channel,s->raw_next,s->snapshot,4096);
             if(copied<0)return stop(s,A733_I2S_FAILED);

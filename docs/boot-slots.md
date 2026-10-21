@@ -11,12 +11,15 @@ previous slot selectable.
 Status: the card layout, the host tool [boot-slots.py](../tools/boot-slots.py)
 and the loader in [boot/a733/stage2](../boot/a733/stage2) are implemented and
 pass host checks. No card has been written and no board has run the loader.
+The loader admits the SD controller state that boot0 leaves after reading the
+card. It checks that state against the pinned boot0 and the A733 manual; host
+models cover the check.
 The loader's entry path, which arms the watchdog, builds the resident contract
 of the [integrated OS image](os-image.md) and branches to it, is implemented
-and host-modeled. Its native entry prerequisites refuse, so the loader does not
-enter the loaded image, and its native SD admission refuses before any
-controller access. The [boundary section](#the-loader-stops-before-entering-the-image)
-lists what each of these needs.
+and host-modeled. Its three native entry prerequisites refuse, so the loader
+does not enter the loaded image. The
+[boundary section](#the-loader-stops-before-entering-the-image) lists what each
+prerequisite needs.
 
 ## Card layout
 
@@ -73,7 +76,9 @@ Within one header, extents may not overlap on the card or in memory.
 The loader runs after the [cold-entry gate](cold-entry.md) has admitted the
 primary CPU at EL3 with translation and both caches off. It identifies the card
 through the polled SD core in [sunxi_mmc.c](../drivers/storage/sunxi_mmc.c),
-using the 1-bit legacy profile at a 400 kHz module clock. Its register binding
+using the 1-bit legacy profile at a 400 kHz module clock, after the
+[cold SD admission](#cold-sd-admission-starts-from-boot0s-controller-state)
+below. Its register binding
 admits only read-only identification and transfer commands and refuses FIFO
 writes. Each operation has an absolute deadline in system counter ticks, so
 the loader first samples the counter up to 4,096 times and stops with status 5
@@ -105,7 +110,7 @@ the header state, generation, load state and failing extent.
 | 4 | Every valid slot failed to load | SD core error |
 | 5 | The system counter does not advance; the card was not accessed | Zero |
 | 6 | The resident contract was published and the image entered | Entry address |
-| 7 | Entry refused: no 808-byte session extent at `0x41f00000` (1), or its board magic, version, size, generation or lease differs (2) | 1 or 2 |
+| 7 | Entry refused: no session extent of 808 or 992 bytes at `0x41f00000` (1), or its board magic, version, size, generation or lease, or its OS magic, version or size field differs (2) | 1 or 2 |
 | 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Zero when the loader did not enable WDT0 mode; otherwise the arming counter value |
 
 The SD core never retries after a fault, so a read failure during one slot
@@ -117,43 +122,114 @@ The loader never writes the card. Fallback therefore covers a slot that fails
 to read or verify; it cannot detect a runtime image that verifies and then
 fails while running. That case needs the rollback procedure below.
 
+## Cold SD admission starts from boot0's controller state
+
+boot0 reads the monitor package from the card through SDC0 immediately before
+the cold entry. No SDC0 teardown was found on boot0's handoff path: its call
+at `0x5e35c` reaches a stub at `0x49bbc` that returns 0. The controller, its
+clock and its pins are therefore expected to remain in boot0's transfer
+state. Admission does not depend on that observation, because it reads the
+bus and clock registers and refuses a closed bus or a gated clock.
+`a733_stage2_card_admission` in
+[admission.c](../boot/a733/stage2/admission.c) runs once, before the SD core's
+first controller access, and compares that state with the pinned boot0 and the
+A733 manual. It refuses unless every check below holds.
+
+| Checked state | Expected value | Source |
+| --- | --- | --- |
+| SMHC0 bus register `0x02002d0c` | Gate passing (bit 0) and reset deasserted (bit 16) | boot0 resource setup at `0x5d60c`; manual 4.1.6.129 |
+| SMHC0 clock register `0x02002d00` | Running (bit 31), a documented source, reserved bits zero | boot0 clock setup; manual 4.1.6.128 |
+| PF0..PF5 | Function 2 (SDC0) with pull-up | boot0 header storage pin list |
+| PF6 | IO-disabled reset value, or an input; no pull or pull-up | Manual 18.14.6.68; boot0 does not configure PF6 |
+| PF bank voltage | 3.3 V in `GPIO_POW_MOD_SEL`, `GPIO_POW_VAL` and `GPIO_POW_VAL_SET_CTL` | Manual 18.14.6.1 to 18.14.6.3; same rule as the native SD platform |
+| SDC0 controller | No command start bit, no busy state, internal DMA disabled | Manual 11.3.8 |
+
+The SD core assumes a 400 kHz module clock during identification, and
+boot0 leaves the module at its faster transfer rate. PF6 is IO-disabled, so it
+cannot report card detection. Admission therefore makes two kinds of write,
+both to registers that serve only SDC0:
+
+1. PF6 receives its pull-up, then becomes an input.
+2. The module clock is gated, set to the 24 MHz oscillator divided by N = 2
+   and M = 30, then enabled again. The native SD platform changes this clock
+   in the same order. Each write is read back, and a mismatch refuses.
+
+Admission then waits 1 ms for the pull-up to settle and requires PF6 to read
+low, the active-low card-detect level ([SD presence](mmc.md)). The card sees
+a pause and a slower clock while its bus is idle; the SD core's first command
+is CMD0.
+
+Before every SD core poll, `a733_stage2_card_present` repeats the bus, clock,
+PF0..PF6 configuration and bank voltage checks against the selected values,
+then samples PF6. Any change, or a card that leaves, freezes the SD core with
+an admission fault.
+
+Two conditions have no register to check, and neither is verified.
+
+- **Card supply.** Reading the PMIC needs bus transactions, so the supply has
+  no read-only observation. The only evidence is that its rails served
+  boot0's read of this card. boot0 is configured for the AXP2202 PMIC and may
+  program its rails. The pinned boot0 header holds `power_mode` 1. The pinned
+  board configuration (`sys_config.fex`, `[target]` comment) reads the low
+  three bits of that byte as `axp_id`, where 1 selects the AXP2202, while
+  U-Boot's older generic `private_boot0.h` reads 1 as no PMIC. The boot0
+  binary contains PMU driver code for the DCDC, ALDO and CLDO rails. The card
+  rail state after boot0 needs a board observation.
+- **Exclusive use of SDC0.** The cold path starts only one application core:
+  the cold-entry gate requires zero U-Boot and OP-TEE pointers, and the
+  monitor package holds no other image. No other agent, such as the E902
+  core, is known to use SDC0, but that is not established; it depends on the
+  [remote-writer exclusion](#the-loader-stops-before-entering-the-image)
+  prerequisite.
+
+A board run is also needed to confirm the boot0 module clock value, which the
+models represent with an assumed transfer rate.
+
+A board run of the cold path must account for two properties of admission.
+First, admission writes the PF6 configuration and the SMHC0 module clock, so
+it changes hardware state before any card access. The writes reach only
+SDC0 registers, every write is read back, and SD commands stay read-only.
+Second, once admission accepts, the loader reads each
+slot at the 400 kHz identification module clock, which gives a 200 kHz
+card clock on a 1-bit bus, about 25 KB/s. A cold boot with a valid slot
+therefore reads the full image and its assets before the forced-FEL return:
+about 40 seconds per megabyte, or several minutes for a multi-megabyte
+slot.
+
 ## The loader stops before entering the image
 
-`a733_stage2_entry_admission` in [admission.c](../boot/a733/stage2/admission.c)
-returns refusal, because three prerequisites are missing. A fourth blocks the
-SD controller access itself.
+Three prerequisites in [admission.c](../boot/a733/stage2/admission.c) must each
+return 1 before the loader enters a verified image. Each is a separate
+function, so later work can supply its evidence alone. All three return
+refusal.
 
-- **Remote-writer exclusion.** No stop or drain procedure exists for the E902
+- **Remote-writer exclusion** (`a733_stage2_remote_writers_excluded`). No stop
+  or drain procedure exists for the E902
   core or for other DMA-capable agents
   ([cold-entry record](cold-entry.md#remote-processor-exclusion-needs-the-effective-a733-register-map)).
   Ownership of the `0x42e00000` boot0 staging area is also undecided.
-- **Watchdog recovery.** A watchdog expiry after a cold boot has not been
+- **Watchdog recovery** (`a733_stage2_watchdog_recovery`). A watchdog expiry
+  after a cold boot has not been
   shown to restart the board into this monitor with both cards preserved. A
   forced-FEL return from a cold boot has not been observed either; the
   FEL-launched watchdog path writes an RTC FEL flag and a redirect flag that a
   cold boot never sets.
-- **Entry state.** The CPU, GIC and timer state that boot0 leaves at EL3 has
-  not been compared with the reset state that FEL-launched images see.
-- **Cold SD admission.** The SD core requires evidence of settled controller
-  clocks, pins, card supplies, presence and exclusive ownership.
-  `a733_stage2_card_admission` in the same file returns refusal until a
-  fixed-board subset of the shared providers supplies that evidence. On a
-  board the current loader therefore reports status 2 without touching the
-  controller. Before every poll the SD core also revalidates card presence
-  through the loader's `retained` callback, which calls
-  `a733_stage2_card_present`; that function also refuses. An admission that
-  accepts must replace both. Presence comes from the active-low PF6
-  card-detect pin, read under the pin ownership that admission retains
-  ([SD presence](mmc.md)).
+- **Entry state** (`a733_stage2_entry_state`). The CPU, GIC and timer state
+  that boot0 leaves at EL3 has not been compared with the reset state that
+  FEL-launched images see.
 
 ## The entry path builds the resident contract
 
 With the prerequisites granted, the loader enters only the integrated OS
-image. Its slot carries the 808-byte OS session as an asset loaded at
-`0x41f00000`; the slot header's extent digest has already authenticated it.
+image. Its slot carries the OS session as an asset loaded at `0x41f00000`;
+the slot header's extent digest has already authenticated it. The session is
+808 bytes, or 992 bytes in the microphone build, which appends the I2S
+receive facts.
 
-1. Refuse with status 7 unless that extent exists, and the session's board
-   magic, version 2, size, nonzero lease and generation equal the slot's.
+1. Refuse with status 7 unless that extent exists with one of these two
+   sizes, the session's board magic, version 2, size, nonzero lease and
+   generation equal the slot's, and its OS magic, version and size field
+   match, the size field being equal to the extent.
 2. If the image result record at `0x42000000` holds the resident OS result
    magic, copy its 128 bytes into report bytes 192..319 and clear its magic.
    Each boot of a slot repeats its generation, and the image refuses a
@@ -168,8 +244,8 @@ image. Its slot carries the 808-byte OS session as an asset loaded at
    status 8 with the arming counter value as its detail. WDT0 then stays
    armed with no ROM redirect, so the board leaves the ROM's FEL mode with a
    cold reset within four seconds.
-4. Write `armed_at` into the session as its fresh epoch and hash the 808
-   session bytes.
+4. Write `armed_at` into the session as its fresh epoch and hash every
+   session byte.
 5. Clear the contract magic at `0x42004000`. Write version 2, the epoch, the
    slot generation and its inverse, the build ID named by the session and the
    session lease. Write `armed_at`, a startup deadline one second later, no
@@ -263,19 +339,34 @@ full backup is the only way to restore it.
 loader through the pinned boot0 parser and cleanup model, then executes the
 linked AArch64 monitor from `0x47000000`. A Python SD controller and card model
 follows the existing C card model's register behavior and serves card images
-built by the host tool. Fourteen cases cover:
+built by the host tool. A register model holds the SMHC0 clock and bus
+registers and the PF bank in the state boot0 leaves, with an assumed transfer
+clock of `PERI0_400M` divided by four. The actual cold SD admission runs
+against it. Twenty-five cases cover:
 
 - slot A alone, and a newer slot B;
 - slot B with a corrupt payload, a corrupt header, a load range reaching the
   monitor reservation, and an update interrupted before its header;
 - no valid header, both payloads corrupt, and a controller read fault;
-- card-detect reporting no card after the first payload read;
-- the native admission refusal, and a stopped system counter, both without
-  controller access;
+- a PF6 already configured as an input with pull-up, which needs only the
+  clock writes;
+- six boot0 states that admission refuses before any write or controller
+  access: a gated module clock, an asserted reset, PF3 in another function, a
+  missing PF pull-up, PF6 as an output, and a 1.8 V PF bank;
+- a pending controller command and enabled internal DMA, refused before any
+  controller write;
+- card detection reading high, refused after the admission writes;
+- a module clock that does not read back, refused at that write;
+- card detection reporting no card, and another writer restoring a transfer
+  clock, each after the first payload read;
+- a stopped system counter, without controller access;
 - the unchanged entry gate refusing EL1, and an exception parking.
 
 Every case checks the report, the ROM-return request and the copied bytes.
-The native entry prerequisites refuse in every case. It
+Every admitted case checks that admission writes only PF_PUL0, PF_CFG0 and
+the SMHC0 clock register, in the documented order and values, and that the
+first card-detect sample comes at least 1 ms after PF6 becomes an input. The
+native entry prerequisites refuse in every case. It
 also checks that data accesses stay naturally aligned, as Device memory
 requires, and that no store leaves the monitor storage, the load extents and
 the reset-vector registers. Once the loader starts, a store to the cold report
@@ -283,8 +374,9 @@ also fails the case, and all 512 report bytes must match their values at
 loader entry. The loader never executes from the load window or
 writes the system control register. The host tool reproduces the loader's
 selection and per-slot states on every card image without a modeled card
-fault. System registers, the counter, the SD controller and card, and cold
-admission and card-detect evidence are modeled.
+fault. System registers, the counter, the SD controller and card, and the
+clock and PF registers are modeled; the boot0 module clock value and the card
+supply are not observed.
 
 [standalone-boot-slots.py](../checks/standalone-boot-slots.py) covers
 allocation refusals, the install order with container extents, an interrupted
@@ -292,18 +384,27 @@ and resumed update, an interrupted install that refuses a new plan and then
 resumes, refusal of a changed image before any write, rollback and its
 refusal, plan refusals and the header rules. The plan refusals include a
 foreign header with an extent in the standby region and the 64-bit limits.
-[os-image-stage2.py](../checks/os-image-stage2.py) runs the same monitor with
-the entry prerequisites, card admission and card presence modeled as granted,
-and with WDT0, the redirect words, the RTC FEL flag and CCU word `0x24`
-modeled. Its slot holds an image, the OS session and an asset. Nine cases
-cover entry with and without a retained result, refused prerequisites, a
-missing session extent, a session generation that differs from the slot's,
-an enabled watchdog, a ROM redirect or an RTC FEL flag left by another
-owner, and a WDT0 mode write that does not read back. The entry cases check
-the four arming writes, every contract field,
-the stamped session epoch and digest and the branch to the entry, then pass
-the contract and session to the OS image's resident admission
-([os-image-model.c](../checks/os-image-model.c)), which must accept them.
+[os-image-stage2.py](../checks/os-image-stage2.py) runs the same monitor and
+cold SD admission with the three entry prerequisites modeled as granted
+unless a case refuses one, and with WDT0, the redirect words, the RTC FEL flag
+and CCU word `0x24` modeled. Its slot holds an image, the OS session and an
+asset. Fifteen cases cover:
+
+- entry with and without a retained result, and entry with the 992-byte
+  microphone session;
+- all three prerequisites refused, and each one refused alone;
+- a missing session extent, an extent of another size, an 808-byte session
+  whose size field claims 992 bytes, and a session generation that differs
+  from the slot's;
+- an enabled watchdog, a ROM redirect or an RTC FEL flag left by another
+  owner, and a WDT0 mode write that does not read back.
+
+The entry cases check the four arming writes, every contract field, the
+stamped session epoch and digest and the branch to the entry, then pass the
+contract and session to the OS image's resident admission
+([os-image-model.c](../checks/os-image-model.c)), which must accept them. The
+check compiles that model a second time for the resident microphone build and
+uses it for the 992-byte session.
 The refusal cases check that no contract is published. The mode readback
 case checks the four arming writes and a nonzero detail; every other refusal
 case checks that no register write happens and, for status 8, a zero detail.

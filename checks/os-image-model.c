@@ -5,7 +5,7 @@
  *
  *   clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
  *     -Iinclude -Iplatform/a733-smp-cached -Iapps/os -DSUNSTONE_BOARD_SUPERVISED=1 \
- *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1 | -DSUNSTONE_A733_OS_AUDIO=1] \
+ *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1] [-DSUNSTONE_A733_OS_AUDIO=1] \
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
@@ -98,6 +98,13 @@ static void irq_cases(void)
         ROUTES==2?"thermal INTID 71 and DMA0 INTID 143":"thermal INTID 71",988u-ROUTES);
 }
 
+/* Report periods: the board owners and the capture client every tick, the
+ * recognizer every 5 ms and the thermal reader every 25 ms. */
+static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25,
+#ifdef SUNSTONE_A733_OS_AUDIO
+    1,
+#endif
+};
 /* One supervision run in 1 ms steps. The supervisor runs every 20 ms from
  * time 0, as at scheduler start. Every service first reports at 0.3 s, except
  * service `late`, which first reports at late_at, and then at its own period
@@ -106,7 +113,6 @@ static void irq_cases(void)
 struct run { uint64_t expired,refused,reloads,max_gap,first_reload; };
 static struct run supervise(int stalled,uint64_t stall_at,uint64_t end,int never,int late,uint64_t late_at)
 {
-    static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
     struct run r={0,0,0,0,0};
     uint64_t start=HZ*3/10,previous=0;int parked=0;
     ticks=0;expires=4*HZ;reloads=0;last_reload=0;
@@ -157,7 +163,6 @@ static void supervision_cases(void)
         if(!child){
             uint64_t at=70*HZ;
             struct run r=supervise(s,at,90*HZ,0,-1,0);
-            static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
             uint64_t window=(uint64_t)os_services[s].window_us*24,period=period_ms[s]*(HZ/1000);
             /* The last report came at most one period before the stall. */
             assert(r.refused>at-period+window&&r.refused<=at+window+HZ/50);
@@ -195,8 +200,9 @@ static void supervision_cases(void)
     /* Resident board_live: deadline_us = UINT64_MAX/24 exceeds every counter/24. */
     const uint64_t deadline_us=UINT64_MAX/24;
     assert(61*HZ/24<deadline_us&&(UINT64_MAX-1)/24<deadline_us+1&&deadline_us-10000<deadline_us);
-    puts("PASS resident supervision: 120 s renewed; late first report renews; each of 7 stalled services ends renewal; "
-        "each missing service expires at 4 s without an early close; stall before full startup closes; refused reload expires");
+    printf("PASS resident supervision: 120 s renewed; late first report renews; each of %u stalled services ends renewal; "
+        "each missing service expires at 4 s without an early close; stall before full startup closes; refused reload expires\n",
+        (unsigned)OS_SERVICES);
 }
 
 #define SESSION ((struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS)
@@ -225,7 +231,7 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     a->magic=OS_AUDIO_SESSION_MAGIC;a->version=OS_AUDIO_SESSION_VERSION;a->bytes=sizeof(*a);
     memset(a->evidence,5,32);a->dma.owner=17;a->dma.handoff=a->dma_evidence=b->lease;
     memcpy(a->dma.fabric,b->fabric,sizeof(b->fabric));memcpy(a->dma.rate_hz,b->fabric_hz,sizeof(b->fabric_hz));
-    a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_SUPERVISED;
+    a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_ESTABLISHED;
     a->dma_owned_channels=0xffff;a->dma_service_channels=1;a->capture_samples=48000;
 #endif
 }
@@ -301,6 +307,8 @@ static void admission_cases(void)
     SESSION_REFUSED(a->dma_evidence^=1);
     SESSION_REFUSED(a->dma.deadline_us=1);
     SESSION_REFUSED(a->dma_established=0x5e);
+    /* The other lifetime's handoff: supervised 0x5f against resident 0x3f. */
+    SESSION_REFUSED(a->dma_established=OS_AUDIO_DMA_ESTABLISHED^0x60);
     SESSION_REFUSED(a->dma_owned_channels=0xfffe);
     SESSION_REFUSED(a->dma_service_channels=3);
     SESSION_REFUSED(a->dma_controller=0x04602000);
@@ -316,7 +324,9 @@ static void admission_cases(void)
     nominal_session(SESSION,9);c=nominal_contract(SESSION,armed);
     assert(!a733_smp_contract_valid(&c,armed+HZ));++refused;
     printf("PASS %s OS admission: nominal contract and session accepted, %u refusals\n",
-#ifdef SUNSTONE_BOARD_RESIDENT
+#if defined(SUNSTONE_BOARD_RESIDENT) && defined(SUNSTONE_A733_OS_AUDIO)
+        "resident audio",
+#elif defined(SUNSTONE_BOARD_RESIDENT)
         "resident",
 #elif defined(SUNSTONE_A733_OS_AUDIO)
         "supervised audio",

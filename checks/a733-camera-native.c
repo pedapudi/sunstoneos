@@ -370,7 +370,7 @@ int main(int argc,char **argv)
         assert(!pm.worker);
         if(camera.state==A733_CAMERA_NATIVE_TWI && !camera.twi_native.self){
             struct a733_twi_native_config c={&pm.clocks,camera.twi_clock,&pm.pins,camera.pin,
-                &pm.rails,&camera.rail,&locks,camera_task,boot.apb1,boot.apb1_hz};
+                &pm.rails,&camera.rail,&locks,camera_task,boot.apb1,boot.apb1_hz,A733_TWI_MAIN11};
             assert(a733_twi_native_init(&camera.twi_native,&c));
             pm.worker=1;assert(a733_twi_native_prepare(&camera.twi_native,boot.deadline_us)==-1 && !camera.twi_native.deadline);pm.worker=0;
         }

@@ -170,7 +170,6 @@ def main():
     args = parser.parse_args()
     audio = args.audio == '1'
     try:
-        assert not (audio and args.lifetime == 'resident'), 'audio builds are supervised only'
         result = check(args.image, args.assets, args.recognizer, args.loader, audio)
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)

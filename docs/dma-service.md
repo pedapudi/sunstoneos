@@ -177,8 +177,9 @@ active transfer whose next progress is an enabled DMA event:
   channel that approaches its deadline is polled every tick, so expiry is
   detected as without a binding.
 - An I2S stream is active, with no pending health or register operation, no
-  transmit priming and no completed receive period waiting for its checked
-  copy.
+  transmit priming and no receive period ready for its checked copy. A
+  cyclic receive period becomes ready once the following period has also
+  completed, as the [stream document](i2s-stream.md) describes.
 
 In that state the worker sleeps until the interrupt, a client request or the
 fallback interval, whichever comes first. Stop and drain, stream open and
@@ -277,9 +278,11 @@ handler are modeled. The modeled handler runs in a privileged task, so the
 check does not exercise exception entry. The binding uses a fallback of 200 ticks, so an interrupt wake is
 distinguishable from a fallback or tick wake.
 
-- Package-end wake: four receive and transmit periods each wake the worker
-  through the interrupt and produce the receive copy within 20 ticks without
-  any client request. Between events the worker reads no DMA register for 10
+- Package-end wake: a first receive period wakes the worker, which waits
+  for the next interrupt without copying it. Four further receive and
+  transmit periods each wake the worker through the interrupt and produce
+  the copy of the preceding receive period within 20 ticks without any
+  client request. Between events the worker reads no DMA register for 10
   to 30 ticks. Every rearm happens with no enabled event pending, and each
   interrupt is followed by one rearm.
 - Spurious interrupt: an interrupt without a pending event leaves the SPI

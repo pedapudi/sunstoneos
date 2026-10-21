@@ -336,14 +336,19 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
 {
     if(!out || !bytes || !valid_channel(c,channel))return -1;
     struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
-    if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t ||
+    if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t || t->count<4 ||
        period>UINT64_MAX-t->count || bytes!=t->segments[0].bytes ||
        (uintptr_t)out>UINTPTR_MAX-bytes || cpu_overlap(&t->descriptors,out,bytes))return -1;
     for(size_t i=0;i<t->mapping_count;++i)if(cpu_overlap(&t->mappings[i],out,bytes))return -1;
     if(cpu_overlap(&(struct a733_dma_mapping){c,0,sizeof(*c),A733_DMA_READ},out,bytes))return -1;
     if(!cyclic_progress(c,channel))return -1;
-    if(s->packages<=period)return 0;
-    if(s->packages>=period+t->count)return -1;
+    /* One whole period of guard on each side: period+1 must also have
+     * completed, and at most period+count-2 may have completed, so a writer
+     * up to one period ahead of the counter is still outside this slot. A
+     * copy then depends only on write completion and counter/cursor lag
+     * staying below one period, not on their exact device ordering. */
+    if(s->packages<period+2)return 0;
+    if(s->packages>period+t->count-2)return -1;
     if(!rx_position(c,channel))return 0;
     const struct a733_dma_mapping *m=&t->mappings[period%t->count];
     /* The first barrier orders the copy after invalidation. The second
@@ -354,7 +359,7 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
      * so no maintenance follows the copy. */
     c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
     memcpy(out,m->cpu,bytes);barrier(c);
-    if(!cyclic_progress(c,channel) || s->packages>=period+t->count ||
+    if(!cyclic_progress(c,channel) || s->packages>period+t->count-2 ||
        !rx_position(c,channel) || (read_channel(c,channel,PENDING)&~3u))return -1;
     return 1;
 }

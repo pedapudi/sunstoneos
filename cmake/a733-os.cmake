@@ -4,16 +4,13 @@
 # builds use the FEL-launched 60 s contract; resident builds use the stage-2
 # loader's contract and renew the watchdog from service progress. The audio
 # option adds I2S0 microphone receive through the DMA service and feeds each
-# capture to the recognizer; it extends the session past the 808 bytes that
-# the stage-2 loader admits, so it is supervised only.
+# capture to the recognizer; it extends the session to 992 bytes, which the
+# stage-2 loader also admits, and works in either lifetime.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OFF)
 if(NOT SUNSTONE_A733_OS)
   return()
-endif()
-if(SUNSTONE_A733_OS_AUDIO AND SUNSTONE_A733_OS_RESIDENT)
-  message(FATAL_ERROR "The stage-2 loader admits only the 808-byte OS session; audio is supervised only")
 endif()
 if(NOT TARGET sunstone-a733-mimus-board)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-mimus-board.cmake")

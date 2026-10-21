@@ -236,7 +236,7 @@ are capability claims, not SunstoneOS qualification results.
 | H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Bounded native VGA Baseline IDR/P path modeled; broader profiles/rates/resolutions remain required; manual's level/resolution combination needs clarification |
 | H.265 encode | Main, level 5 Main Tier, 4K at 30 fps | Encoder libraries present; native unsupported |
 | MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | First narrow JPEG profile implemented; physical execution unqualified |
-| H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | `libawh265.so`; no native decode. [A partial native proposal](hevc-native.md) is not integrated |
+| H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | [Native 640-by-480 Main IDR and P build](hevc-native.md); modeled against the effective `libawh265.so` trace, preparation awaits physical allocation evidence, physical decoding unqualified; wider modes remain required |
 | VP9 decode | Profiles 0/2, level 6.1, 8192 by 8192 at 24 fps | `libawvp9HwAL.so`; native unsupported |
 | AVS2 decode | 8192 by 4608 at 24 fps | `libawavs2.so`; native unsupported |
 | H.264 decode | Baseline/Main/High, level 5.1, 4096 by 2304 at 30 fps | [Native Baseline 48-by-32, VGA and full-HD streaming builds and a High-profile CABAC I/P/B build with up to four references](h264-native.md); implemented and modeled, physical decoding unqualified; long-term references and wider modes remain required |

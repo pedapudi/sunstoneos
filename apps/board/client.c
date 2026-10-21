@@ -100,6 +100,10 @@ void board_host_task(void *unused)
            ((board.session.workload==8&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed!=4||board.host.hid.protocol!=1))||
             ((board.session.workload==6||board.session.workload==12)&&kind!=A733_USB2_DEVICE_MSC)||
             (board.session.workload==10&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed>3||board.host.hid.protocol!=1))))break;
+        /* Removing the single device ends its request without output. Start
+         * again when a later attachment mounts. The two-leaf workload still
+         * ends, because the other leaf's request may remain outstanding. */
+        if(board.session.workload!=4&&issued==1&&r!=A733_USB2_READY){issued=0;reports=0;}
         if(board.session.workload==4){
             if(!dual_step(&issued,&reports,&sector_done))break;
         }else if(r==A733_USB2_READY&&!issued){

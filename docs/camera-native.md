@@ -76,8 +76,8 @@ referenced providers and leases remain private and valid for the image lifetime.
 
 ## Sensor bus and capture ownership
 
-The bounded byte-transfer engine supports TWI11 at `0x0251b000` and S_TWI1 at
-`0x07084000`. CAM1 uses seven-bit address `0x3c` and two-byte big-endian
+The bounded byte-transfer engine supports TWI11 at `0x0251b000`, TWI9 at
+`0x02519000` and S_TWI1 at `0x07084000`. CAM1 uses seven-bit address `0x3c` and two-byte big-endian
 register addresses. Reads and single writes carry one data byte; the sensor's
 block writes carry up to 40 bytes to consecutive registers in one transaction. A
 40-byte block takes about 4 ms at 100 kHz, within the 10 ms limit for one
@@ -85,11 +85,20 @@ transaction. The Type-C controller uses the same engine with one-byte register
 addresses and its separate native provider. S_TWI1 does not use the extra PMU
 registers documented only for S_TWI0.
 
-The native TWI11 provider authenticates real clock, pin and rail leases. It
-observes the leased APB1 source and divider, releases the initially asserted
-local reset, opens the gate and selects a source-defined rate at or below
-100 kHz. It excludes legacy interrupts, autonomous driver and DMA operation.
-The common I2C mutex remains owned from START through acknowledged STOP and
+The native camera-bus provider drives TWI11 for CAM1 (pins PE7/PE8) or TWI9 for
+CAM2 (pins PE14/PE15, function 8 in the pinned manual and device tree). One
+instance exists per image, and its transactions hold the camera bus mutex
+`A733_PLATFORM_I2C11_LOCK` on either controller. The camera binding selects
+TWI11; no CAM2 binding exists yet. On modeled registers, `checks/twi-busy.c`
+runs the same prepare, write and read through a TWI9 binding and finds the
+same store sequence at the TWI9 controller and gate word. No board run covers
+TWI9.
+
+The provider authenticates real clock, pin and rail leases. It observes the
+leased APB1 source and divider, releases the initially asserted local reset,
+opens the gate and selects a source-defined rate at or below 100 kHz. It
+excludes legacy interrupts, autonomous driver and DMA operation. The camera bus
+mutex remains owned from START through acknowledged STOP and
 final idle validation. NACK, arbitration loss, timeout or uncertain MMIO retains
 the transaction without issuing STOP, resetting the controller or retrying.
 Explicit cancellation has the same retained outcome and cannot unlock the bus.

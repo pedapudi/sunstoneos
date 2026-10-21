@@ -3,6 +3,7 @@
 #define SUNSTONE_A733_VIDEO_PLATFORM_H
 #include "a733_video_jpeg_run.h"
 #include "a733_video_h264.h"
+#include "a733_video_hevc.h"
 #include "a733_video_unit.h"
 
 /* Privileged immutable configuration. Borrow exact live tokens from the ONE
@@ -134,4 +135,30 @@ struct a733_h264_platform {
 int a733_h264_platform_init(struct a733_h264_platform *,const struct a733_video_platform_config *,
                             const struct a733_h264_platform_ops *,void *);
 const struct a733_h264_ops *a733_video_platform_h264_ops(void);
+
+/* One fixed HEVC consumer of the same decoder sequencing and leases, with its
+ * own typed job and H.265 register allowlist. memory supplies the eight
+ * explicit HEVC spans. copied receives the picture whose output it verifies;
+ * the retained-copy contract above applies unchanged.
+ */
+struct a733_hevc_platform_ops {
+    int (*now_us)(void *,uint64_t *);
+    int (*admit)(void *,const struct a733_video_platform_config *,const struct a733_hevc_job *,uint64_t,uint64_t *);
+    int (*memory)(void *,uint64_t,const struct a733_hevc_job *,uint64_t);
+    int (*copied)(void *,uint64_t,unsigned,uint64_t);
+    int (*enter)(void *,uint64_t);
+    int (*leave)(void *);
+    int (*read)(void *,uintptr_t,uint32_t *);
+    int (*write)(void *,uintptr_t,unsigned,uint32_t);
+};
+struct a733_hevc_platform {
+    struct a733_video_decoder decoder;
+    struct a733_hevc_platform_ops ops;
+    struct a733_hevc_job job;
+    void *cookie;
+    unsigned bound,copy_picture;
+};
+int a733_hevc_platform_init(struct a733_hevc_platform *,const struct a733_video_platform_config *,
+                            const struct a733_hevc_platform_ops *,void *);
+const struct a733_hevc_ops *a733_video_platform_hevc_ops(void);
 #endif

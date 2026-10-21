@@ -530,7 +530,8 @@ int a733_camera_native_poll(struct a733_camera_native *n)
         r=pin_acquire(n);if(r==1){n->state=A733_CAMERA_NATIVE_TWI;r=0;}break;
     case A733_CAMERA_NATIVE_TWI: {
         struct a733_twi_native_config c={n->config.clocks,n->twi_clock,n->config.pins,n->pin,
-            n->config.rails,&n->rail,n->config.locks,n->config.task,n->boot.apb1,n->boot.apb1_hz};
+            n->config.rails,&n->rail,n->config.locks,n->config.task,n->boot.apb1,n->boot.apb1_hz,
+            A733_TWI_MAIN11};
         if(!n->twi_native.self && !a733_twi_native_init(&n->twi_native,&c)){r=-1;break;}
         int ready=a733_twi_native_prepare(&n->twi_native,n->boot.deadline_us);
         if(!ready)break;

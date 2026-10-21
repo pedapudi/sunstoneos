@@ -1,18 +1,26 @@
 /* The integrated OS image's capture client (apps/os/audio.c) against a modeled
  * DMA service, audio parent and board. Its own state machine, request
- * protocol, WAV publication and generation handoff run unchanged; the
- * runner (checks/os-image-audio.py) executes each mode under unicorn. */
+ * protocol, WAV publication, generation handoff and resident progress
+ * reports run unchanged; the runner (checks/os-image-audio.py) executes each
+ * mode under unicorn. */
 #include "../apps/os/audio.c"
 struct board_application board;
 struct board_provider providers;
 volatile unsigned os_check_result;
-static unsigned board_up=1,board_failed,parent_polls,mode,phase,produced,puts_done,reaps,closes;
+static unsigned board_up=1,board_failed,parent_polls,mode,phase,produced,puts_done,reaps,closes,silent,reports;
 static uint64_t sent,held_ticket;
 static struct dma_service_request queued;
 static uint8_t memory[PERIODS][PERIOD_BYTES];
 static char log[64];static unsigned logged;
 int board_live(void *v){(void)v;return board_up;}
 void board_fail(void *v){(void)v;board_failed=1;}
+static void check(int ok,unsigned code);
+#ifdef SUNSTONE_BOARD_RESIDENT
+void board_service_progress(unsigned service){check(service==OS_SERVICE_AUDIO,80);++reports;}
+#define REPORTS(n) (n)
+#else
+#define REPORTS(n) 0u /* The supervised lifetime keeps no progress record. */
+#endif
 _Noreturn void platform_panic(const char *file,unsigned line)
 {(void)file;os_check_result=200+line;__asm__ volatile("brk #0");for(;;){}}
 void vTaskDelay(TickType_t ticks){(void)ticks;}
@@ -30,6 +38,7 @@ int dma_service_send(struct dma_service *s,const struct dma_service_request *r,T
 int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)
 {
     check(s==&audio.pool.service&&ticket==sent&&!wait,11);
+    if(silent)return 0; /* The worker has not answered yet. */
     memset(out,0,sizeof(*out));out->ticket=ticket;out->result=DMA_SERVICE_OK;
     switch(queued.operation){
     case DMA_SERVICE_OPEN:check(phase==DMA_SERVICE_CLOSED&&queued.timeout,12);phase=DMA_SERVICE_OPENING;produced=0;break;
@@ -82,6 +91,21 @@ void os_check_run(unsigned selected)
     for(unsigned i=0;i<PERIODS;++i)audio.pool.stream_mappings[i].cpu=memory[i];
     atomic_store(&audio.pool.state,A733_DMA_POOL_READY);
     const uint8_t *wav;size_t bytes;
+    if(mode==4){
+        /* Each task pass without an unanswered request reports progress; a
+         * pass waiting for the worker or after a failure reports none. */
+        for(unsigned n=0;n<10;++n)pass();
+        check(audio.stage==IDLE&&reports==REPORTS(10),70);
+        check(!os_audio_capture(1,&wav,&bytes),71);
+        pass();check(audio.stage==OPEN&&!audio.pending&&reports==REPORTS(11),72);
+        silent=1;pass();pass();
+        check(audio.stage==OPEN&&audio.pending&&reports==REPORTS(11),73);
+        silent=0;pass();
+        check(audio.stage==OPENING&&!audio.pending&&reports==REPORTS(12),74);
+        board_up=0;pass();pass();
+        check(board_failed&&atomic_load(&audio.failed)&&reports==REPORTS(12),75);
+        os_check_result=1;return;
+    }
     if(mode==3){
         check(os_audio_capture(0,&wav,&bytes)<0&&os_audio_capture(1,NULL,&bytes)<0,40);
         check(!os_audio_capture(2,&wav,&bytes)&&os_audio_capture(1,&wav,&bytes)<0,41);
