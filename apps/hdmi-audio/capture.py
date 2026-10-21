@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode supplied retained-RAM HDMI audio evidence; no live capture transport."""
+"""Decode retained RAM or durably capture admitted copied USB HDMI audio evidence."""
 import hashlib
 import importlib.util
 import json
@@ -52,7 +52,7 @@ def capture(image,session,pcm,result,ready,output,*,save=durable):
     Caller-provided files do not establish a coherent read from a running board.
     The full admitted-session digest binds image, epoch, generation and proofs.
     """
-    _,_,identity,metadata=preparation.image_metadata(image)
+    _,_,identity,metadata=preparation.image_metadata(image,session_size=len(session))
     require(session[48:80]==identity,
         'HDMI audio session names another linked image.')
     decoded=decode(result,ready,session,pcm)
@@ -69,3 +69,92 @@ def capture(image,session,pcm,result,ready,output,*,save=durable):
         session_sha256=hashlib.sha256(session).hexdigest())
     save(output/'observation.json',(json.dumps(record,indent=2)+'\n').encode())
     return record
+
+
+# Optional copied USB observation. The 656-byte format has no live caller.
+def request_bytes(request_id,session):
+    require(len(session)==816 and struct.unpack_from('<3Q',session)==
+        (preparation.base.SESSION_MAGIC,2,816),'Copied USB requires the version2 session.')
+    require(type(request_id) is int and 1<=request_id<=200,'Copied USB request budget exceeded.')
+    epoch,generation=struct.unpack_from('<2Q',session,24)
+    require(epoch and generation,'Copied USB requires live session identities.')
+    return struct.pack('<4I2Q',0x4f414748,1,request_id,32,epoch,generation)
+
+
+def decode_observation(frame,request_id,session,pcm):
+    preparation.session_check(session,pcm);request_bytes(request_id,session)
+    require(len(frame)==512,'HDMI audio copied response must be512 bytes.')
+    magic,version,size,received,epoch,generation,lease,state,flags,now_us,remaining_us=struct.unpack_from('<4I3Q2I2Q',frame)
+    require((magic,version,size,received)==(0x52414748,1,512,request_id) and state in (0,1,2) and
+        not flags&~15 and (state==2 or not flags&8),'HDMI audio copied response header differs.')
+    require((epoch,generation,lease)==struct.unpack_from('<3Q',session,24) and
+        frame[64:96]==session[48:80] and frame[96:128]==hashlib.sha256(session).digest(),
+        'HDMI audio copied response belongs to another request/session/image.')
+    require(not any(frame[288:]),'HDMI audio copied reserved bytes differ.')
+    require(now_us>0 and 0<remaining_us<=20000000 and now_us<(1<<64)-remaining_us,
+        'HDMI audio copied response lifetime differs.')
+    audio=None
+    if flags&1:audio=decode(frame[128:288],struct.pack('<I',1),session,pcm)
+    else:require(not any(frame[128:288]),'Unpublished HDMI audio result carries bytes.')
+    if state==0 and audio is not None:
+        require(audio['stage']=='input-ended-retained','Pending copied response carries failed audio.')
+    if state==1:
+        require(flags==7 and audio is not None and audio['stage']=='input-ended-retained',
+            'HDMI audio success requires completed audio, stopped HDMI and ready USB.')
+    return dict(state=state,flags=flags,now_us=now_us,remaining_us=remaining_us,
+        native_deadline_us=now_us+remaining_us,audio=audio,physical_qualified=False,
+        wire_drained=False,retention='whole-board-power-removal')
+
+
+def capture_copied(exchange,session,pcm,evidence,record,save,deadline,*,now=None,pause=None):
+    import time
+    now=time.monotonic if now is None else now;pause=time.sleep if pause is None else pause
+    preparation.session_check(session,pcm);request_bytes(1,session)
+    record.update(hdmi_audio_result='unobserved',hdmi_audio_retention='whole-board-power-removal',
+        physical_qualified=False,hdmi_audio_session_sha256=hashlib.sha256(session).hexdigest())
+    save();native_deadline=None;last_now=0
+    try:
+        for sequence in range(1,201):
+            require(now()<deadline,'HDMI audio capture deadline expired.')
+            packet=request_bytes(sequence,session)
+            entry=dict(request_id=sequence,request_sha256=hashlib.sha256(packet).hexdigest())
+            record.setdefault('hdmi_audio_requests',[]).append(entry);save()
+            exchange_deadline=min(deadline,now()+1)
+            frame=exchange(packet,min(1000,max(1,int((exchange_deadline-now())*1000))))
+            path=evidence/f'hdmi-audio-{sequence:03}.bin';durable(path,frame)
+            entry.update(path=path.name,sha256=hashlib.sha256(frame).hexdigest(),bytes=len(frame));save()
+            require(now()<exchange_deadline,'HDMI audio response exceeded exchange deadline.')
+            result=decode_observation(frame,sequence,session,pcm);entry.update(result)
+            require(now()<deadline,'HDMI audio copied response persisted after deadline.')
+            require((native_deadline is None or result['native_deadline_us']==native_deadline) and
+                result['now_us']>=last_now,'HDMI audio native deadline changed or counter regressed.')
+            native_deadline=result['native_deadline_us'];last_now=result['now_us']
+            if result['state']==0:save();pause(min(.025,max(0,deadline-now())));continue
+            if result['audio'] is not None:
+                output=evidence/'copied-audio-result.bin';durable(output,frame[128:288])
+                record['hdmi_audio_output']=dict(path=output.name,sha256=hashlib.sha256(frame[128:288]).hexdigest())
+            require(now()<deadline,'HDMI audio copied result persisted after deadline.')
+            record['hdmi_audio_result']='observed-success' if result['state']==1 else 'observed-failure'
+            record['durable_result']=entry.copy();save()
+            return result
+        raise ValueError('HDMI audio copied pending-query budget exhausted.')
+    except BaseException as error:
+        record['hdmi_audio_result']='unobserved';record.pop('durable_result',None)
+        record['hdmi_audio_capture_failure']=dict(type=type(error).__name__,message=str(error))
+        save();raise
+
+
+def capture_device(device,same,deadline,session,pcm,evidence,record,save,*,now=None,pause=None):
+    import time
+    now=time.monotonic if now is None else now
+    def exchange(packet,timeout):
+        exchange_deadline=min(deadline,now()+min(1000,timeout)/1000)
+        def remaining():
+            same();left=int((exchange_deadline-now())*1000)
+            require(left>0,'HDMI audio copied exchange exceeded its deadline.');return min(1000,left)
+        require(device.write(0x02,packet,timeout=remaining())==len(packet),'Incomplete HDMI audio copied request.')
+        # A read larger than512 cannot finish at an exact packet boundary until
+        # the device supplies its terminal ZLP. A missing ZLP is a transport fault.
+        raw=bytes(device.read(0x81,513,timeout=remaining()))
+        return raw
+    return capture_copied(exchange,session,pcm,evidence,record,save,deadline,now=now,pause=pause)
