@@ -3,9 +3,9 @@
 
 The actual boot0 parser and cleanup produce the inherited header. The linked
 AArch64 monitor then runs from 0x47000000: cold-entry gate, stage-2 loader,
-SD core, SHA-256 and the ROM-return request. System registers, the counter,
-the SD controller and card, and cold SD admission and card-detect
-evidence are modeled.
+cold SD admission and card detection, SD core, SHA-256 and the ROM-return
+request. System registers, the counter, the SD controller and card, and the
+SMHC0 clock and PF bank registers that boot0 leaves are modeled.
 Card images come from tools/boot-slots.py.
 """
 import argparse
@@ -37,6 +37,21 @@ slots = module('boot_slots', 'tools/boot-slots.py')
 cold = module('cold_entry_check', 'checks/cold-entry.py')
 
 SDC0, RVBAR = 0x04020000, 0x08001000
+CCU, PIO = 0x02002000, 0x02000000
+SMHC0_CLK, SMHC0_BGR = CCU + 0xd00, CCU + 0xd0c
+POW_MOD_SEL, POW_VAL, POW_VAL_SET_CTL = PIO + 0x40, PIO + 0x48, PIO + 0x70
+PF_CFG0, PF_DAT, PF_PUL0 = PIO + 0x300, PIO + 0x310, PIO + 0x330
+# The state boot0 leaves after reading the monitor package: SMHC0 bus open and
+# its module clock running at a transfer rate (PERI0_400M / 4 here; the exact
+# rate is not modeled), PF0..PF5 SDC0 function 2 with pull-up from the boot0
+# header, PF6 at its IO-disabled reset value, and the PF bank at 3.3 V.
+BOOT0_STATE = {SMHC0_CLK: 0x81000003, SMHC0_BGR: 0x00010001, POW_MOD_SEL: 0,
+               POW_VAL: 0x01155950, POW_VAL_SET_CTL: 1, PF_CFG0: 0x0f222222, PF_PUL0: 0x555}
+# Admission's writes: PF6 pull-up, PF6 input, then the module clock gated,
+# moved to SYS_CLK24M / (2 * 30) and enabled.
+SELECTED = [(PF_PUL0, 0x1555), (PF_CFG0, 0x00222222), (SMHC0_CLK, 0x01000003),
+            (SMHC0_CLK, 0x0000011d), (SMHC0_CLK, 0x8000011d)]
+SETTLE_TICKS = 24000
 RAM, RAM_END = 0x41000000, 0x47400000
 REPORT_MAGIC = int.from_bytes(b'AS73STG2', 'big')
 COLD_MAGIC = 0x41533733434f4c44
@@ -58,7 +73,7 @@ class Card:
 
     def __init__(self, image, fail_sector=None):
         assert len(image) == CARD_SECTORS * 512
-        self.image, self.fail_sector = image, fail_sector
+        self.image, self.fail_sector, self.writes = image, fail_sector, 0
         self.reg = [0] * (0x304 // 4)
         for offset, value in ((0x300, 0x03050530), (0x5c, 0x81710331), (0x10c, 0x80001234),
                               (0x54, 0x12345676), (0x58, 0xffff), (0x104, 7), (0x140, 0xa5a40000)):
@@ -90,6 +105,7 @@ class Card:
     def write(self, uc, offset, size, value, user):
         assert size == 4 and offset <= 0x300 and not offset & 3 and offset != 0x200, hex(offset)
         self.accesses += 1
+        self.writes += 1
         if offset == 0x38:
             assert not value & 0xffff0000
             self.reg[0x38 // 4] &= ~value
@@ -155,6 +171,42 @@ class Card:
                 self.reg[0x38 // 4] |= 1 << 7  # Response CRC error.
         else:
             raise AssertionError('unsupported card command %d' % number)
+
+
+class Board:
+    """SMHC0 clock and bus registers and the PF bank, starting from `changes` over BOOT0_STATE.
+
+    PF6 reads low while the card is present. After the card model has served
+    `removed_after_reads` reads the card is gone; after `changed_after_reads`
+    reads, as (count, address, value), another writer changes a register."""
+
+    def __init__(self, card, counter, changes=None, stuck=(), present=True,
+                 removed_after_reads=None, changed_after_reads=None):
+        self.values = {**BOOT0_STATE, **(changes or {})}
+        self.card, self.counter, self.stuck, self.present = card, counter, stuck, present
+        self.removed_after_reads, self.changed_after_reads = removed_after_reads, changed_after_reads
+        self.writes, self.detect_reads = [], []
+
+    def page(self, base):
+        def read(uc, offset, size, user):
+            address = base + offset
+            assert size == 4 and (address in self.values or address == PF_DAT), hex(address)
+            reads = len(self.card.reads)
+            if self.changed_after_reads and reads >= self.changed_after_reads[0]:
+                self.values[self.changed_after_reads[1]] = self.changed_after_reads[2]
+            if address == PF_DAT:
+                self.detect_reads.append(self.counter())
+                gone = self.removed_after_reads is not None and reads >= self.removed_after_reads
+                return 0 if self.present and not gone else 1 << 6
+            return self.values[address]
+
+        def write(uc, offset, size, value, user):
+            address = base + offset
+            assert size == 4 and address in (SMHC0_CLK, PF_CFG0, PF_PUL0), hex(address)
+            self.writes.append((address, value, self.counter()))
+            if address not in self.stuck:
+                self.values[address] = value
+        return read, write
 
 
 def symbols(path):
@@ -242,13 +294,19 @@ def main():
     windows = [(e['load'], e['load'] + e['bytes']) for s in 'AB' for e in headers[s]['extents']]
     cases = []
 
-    def run(name, card_bytes, expected, admitted=True, fail_sector=None, registers=None, vector=False,
-            counter_step=2400, removed_after_reads=None):
+    def run(name, card_bytes, expected, fail_sector=None, registers=None, vector=False,
+            counter_step=2400, expect_writes='all', sdc0=None, **board_state):
         card = Card(card_bytes, fail_sector)
+        for offset, value in (sdc0 or {}).items():
+            card.reg[offset // 4] = value
+        board = Board(card, lambda: values['cntpct_el0'], **board_state)
         cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         cpu.mem_map(RAM, RAM_END - RAM)
         cpu.mem_map(RVBAR, 0x1000)
         cpu.mmio_map(SDC0, 0x1000, card.read, None, card.write, None)
+        for base in (PIO, CCU):
+            read, write = board.page(base)
+            cpu.mmio_map(base, 0x1000, read, None, write, None)
         cpu.mem_write(0x47000000, inherited)
         cpu.mem_write(0x47008000, b'\xa5' * (table['a733_stage2_stack_top'] - 0x47008000))
         values = {'currentel': 12, 'mpidr_el1': 0x81000000, 'midr_el1': 0x412fd050,
@@ -277,16 +335,6 @@ def main():
                                  u.reg_read(getattr(a64, 'UC_ARM64_REG_' + second_operand.upper()))])
             u.reg_write(a64.UC_ARM64_REG_PC, address + 4)
 
-        def admission(u, address, size, context):
-            u.reg_write(a64.UC_ARM64_REG_X0, 1)
-            u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
-
-        # Modeled PF6 card-detect: the card leaves after the given number of reads.
-        def present(u, address, size, context):
-            gone = removed_after_reads is not None and len(card.reads) >= removed_after_reads
-            u.reg_write(a64.UC_ARM64_REG_X0, 0 if gone else 1)
-            u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
-
         # The cold report is final once the loader starts; keep its bytes.
         def stage2(u, address, size, context):
             cold_at_entry.append(bytes(u.mem_read(0x47008000, 512)))
@@ -310,16 +358,12 @@ def main():
             elif not (storage <= address and end <= table['a733_stage2_stack_top']
                       or 0x08001004 <= address and end <= 0x0800100c
                       or SDC0 <= address and end <= SDC0 + 0x1000
+                      or address in (SMHC0_CLK, PF_CFG0, PF_PUL0) and size == 4
                       or any(lo <= address and end <= hi for lo, hi in windows)):
                 foreign.append(hex(address))
 
         for address in system:
             cpu.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
-        if admitted:
-            cpu.hook_add(UC_HOOK_CODE, admission, begin=table['a733_stage2_card_admission'],
-                         end=table['a733_stage2_card_admission'])
-            cpu.hook_add(UC_HOOK_CODE, present, begin=table['a733_stage2_card_present'],
-                         end=table['a733_stage2_card_present'])
         cpu.hook_add(UC_HOOK_CODE, stage2, begin=table['a733_stage2_main'], end=table['a733_stage2_main'])
         cpu.hook_add(UC_HOOK_CODE, loaded, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
@@ -332,8 +376,21 @@ def main():
         assert not any(c[0] == 'sctlr_el3' for c in controls)
         cold_report = bytes(cpu.mem_read(0x47008000, 512))
         report = bytes(cpu.mem_read(0x47008200, 512))
+        # Admission writes only PF6 and the SMHC0 module clock, in order, and
+        # samples card detection only after the PF6 pull-up has settled.
+        if isinstance(expect_writes, list):
+            assert [w[:2] for w in board.writes] == expect_writes and board.detect_reads, (name, board.writes)
+        elif expect_writes:
+            assert [w[:2] for w in board.writes] == SELECTED[:len(board.writes)], (name, board.writes)
+            if expect_writes == 'all':
+                assert len(board.writes) == len(SELECTED) and board.detect_reads, (name, board.writes)
+                assert board.detect_reads[0] - board.writes[1][2] >= SETTLE_TICKS, name
+        else:
+            assert not board.writes and not board.detect_reads, (name, board.writes)
         result = {'case': name, 'stops': stops, 'controls': controls, 'card_accesses': card.accesses,
-                  'card_reads': len(card.reads),
+                  'card_writes': card.writes, 'card_reads': len(card.reads),
+                  'board_writes': [[hex(a), hex(v)] for a, v, _ in board.writes],
+                  'detect_samples': len(board.detect_reads),
                   'counter_samples': (values['cntpct_el0'] - 24000123) // counter_step if counter_step else None}
         if expected is None:  # Refused before stage-2 storage or the loader.
             status = struct.unpack_from('<Q', cold_report, 24)[0]
@@ -399,23 +456,50 @@ def main():
     faulted = run('read-fault', image(both), (4, None, False),
                   fail_sector=extent('B', 0)['first_sector'])
     assert faulted['mmc_error'] == 6 and faulted['slots']['B']['load'] == 'read'
-    refused = run('admission-refused', image(both), (2, None, False), admitted=False)
-    assert refused['card_accesses'] == 0 and refused['mmc_error'] == SUNXI_MMC_ADMISSION
+    # A PF6 left as an input with pull-up needs only the clock writes.
+    run('pf6-already-input', image(both), (1, 'B', True), expect_writes=SELECTED[2:],
+        changes={PF_CFG0: 0x00222222, PF_PUL0: 0x1555})
+    # boot0 state that admission refuses before any write or SD command.
+    for case, change in (('module-clock-gated', {SMHC0_CLK: 0x01000003}),
+                         ('bus-reset-asserted', {SMHC0_BGR: 0x00000001}),
+                         ('pf3-not-sdc0', {PF_CFG0: 0x0f223222}),
+                         ('pf-pull-missing', {PF_PUL0: 0x551}),
+                         ('pf6-output', {PF_CFG0: 0x01222222}),
+                         ('pf-bank-1v8', {POW_VAL_SET_CTL: 0})):
+        refused = run(case, image(both), (2, None, False), expect_writes=False, changes=change)
+        assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and refused['card_accesses'] == 0, case
+    for case, registers in (('controller-command-pending', {0x18: 1 << 31}),
+                            ('internal-dma-enabled', {0x80: 1 << 7})):
+        refused = run(case, image(both), (2, None, False), expect_writes=False, sdc0=registers)
+        assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and not refused['card_writes'], case
+    # No card: the writes happen, then card detection refuses.
+    nocard = run('no-card', image(both), (2, None, False), present=False)
+    assert nocard['mmc_error'] == SUNXI_MMC_ADMISSION and not nocard['card_writes']
+    # A gated module clock that does not read back stops admission at that write.
+    stuck = run('module-clock-not-read-back', image(both), (2, None, False), expect_writes=True,
+                stuck=(SMHC0_CLK,))
+    assert stuck['mmc_error'] == SUNXI_MMC_ADMISSION and len(stuck['board_writes']) == 3
+    assert not stuck['card_writes']
     # Two header reads and the first slot B chunk, then card-detect reports no card.
     removed = run('card-removed', image(both), (4, None, False), removed_after_reads=3)
     assert removed['mmc_error'] == SUNXI_MMC_ADMISSION and removed['card_reads'] == 3
     assert removed['slots']['B']['load'] == 'read' and removed['slots']['A']['load'] == 'read'
-    stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0)
+    # Another writer restores a transfer clock after the same reads.
+    changed = run('module-clock-changed', image(both), (4, None, False),
+                  changed_after_reads=(3, SMHC0_CLK, 0x81000003))
+    assert changed['mmc_error'] == SUNXI_MMC_ADMISSION and changed['card_reads'] == 3
+    stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0, expect_writes=False)
     assert stopped['card_accesses'] == 0
-    run('wrong-el-parks', image(both), None, registers={'currentel': 4})
-    run('exception-parks', image(both), None, vector=True)
+    run('wrong-el-parks', image(both), None, registers={'currentel': 4}, expect_writes=False)
+    run('exception-parks', image(both), None, vector=True, expect_writes=False)
     assert cases[-1]['cold_status'] == 3 and cases[-2]['cold_status'] is None
     result = {'passed': True, 'physical_access': False, 'physical_boot_qualified': False,
               'monitor_sha256': hashlib.sha256(raw).hexdigest(),
               'inherited_monitor_sha256': hashlib.sha256(inherited).hexdigest(),
               'predecessor': predecessor, 'cases': cases,
               'limitations': [
-                  'System registers, the 24 MHz counter, the SD controller and card, and cold SD admission and card-detect evidence are modeled; the native admission and presence callbacks refuse.',
+                  'System registers, the 24 MHz counter, the SD controller and card, and the SMHC0 clock, bus and PF bank registers left by boot0 are modeled; the boot0 module clock value is representative, not measured.',
+                  'The card supply is not modeled: admission relies on boot0 having read this card, which no model establishes.',
                   'No launch contract is built and the loaded image is never entered; remote-writer exclusion, memory ownership and the cold ROM return remain unqualified.',
                   'Card images are sparse ordinary files written by tools/boot-slots.py; no card or block device was opened.']}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
