@@ -59,8 +59,20 @@ static int healthy(struct a733_twi_native *n)
     if(c==A733_CLOCK_BUSY || r==A733_RAIL_BUSY)return 0;
     return c==A733_CLOCK_OK && r==A733_RAIL_READY?pin_health(n):-1;
 }
+/* Registry or ledger BUSY is momentary metadata contention, not lost
+ * authority. Once an access sequence has begun, repeat the observation in
+ * place, without another register access, until the deadline. Only refusal,
+ * failed time or expiry ends the sequence. */
+static int settled(struct a733_twi_native *n,uint64_t d)
+{
+    for(;;) {
+        int h=healthy(n);uint64_t t;
+        if(h)return h;
+        if(now(n,&t)!=1 || t>=d)return -1;
+    }
+}
 static int authenticate(void *v)
-{struct a733_twi_native *n=v;return n->prepared?healthy(n):-1;}
+{struct a733_twi_native *n=v;return !n->prepared?-1:n->held?settled(n,n->until):healthy(n);}
 static int current_task(void *v){return current(v);}
 static int held(struct a733_twi_native *n,unsigned which)
 {
@@ -78,7 +90,7 @@ static int enter(void *v,uint64_t deadline)
     if(p==A733_PINS_BUSY)return 0;
     if(p!=A733_PINS_OK || !owned)return -1;
     if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C_LOCK,deadline))return 0;
-    n->held=2;return 1;
+    n->held=2;n->until=deadline;return 1;
 }
 static void leave(void *v)
 {
@@ -123,14 +135,17 @@ static void store(uintptr_t a,uint32_t v)
 }
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
-    if(!out || !held(v,A733_PLATFORM_I2C_LOCK) || !address(a,0) || healthy(v)!=1)return 0;
-    *out=load(a);return healthy(v)==1;
+    struct a733_twi_native *n=v;
+    if(!out || !held(n,A733_PLATFORM_I2C_LOCK) || !address(a,0) || settled(n,n->until)!=1)return 0;
+    *out=load(a);return settled(n,n->until)==1;
 }
 static int write32(void *v,uintptr_t a,uint32_t x)
 {
-    if(!held(v,A733_PLATFORM_I2C_LOCK) || !address(a,1) || healthy(v)!=1 || x>255 ||
-       (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68))return 0;
-    store(a,x);return healthy(v)==1;
+    struct a733_twi_native *n=v;
+    if(!held(n,A733_PLATFORM_I2C_LOCK) || !address(a,1) || x>255 ||
+       (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68) ||
+       settled(n,n->until)!=1)return 0;
+    store(a,x);return settled(n,n->until)==1;
 }
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
@@ -161,9 +176,14 @@ int a733_twi_native_init(struct a733_twi_native *n,const struct a733_twi_native_
     n->operations=(struct a733_twi_ops){now,authenticate,enter,leave,retain,read32,write32,current_task};
     instance=n;return 1;
 }
+/* Before the first store, BUSY makes prepare leave the register mutex and
+ * stay pending. After it, the observation is repeated in place until d. */
 static int before(struct a733_twi_native *n,uint64_t d)
 {
-    uint64_t t;return held(n,A733_PLATFORM_REGISTER_LOCK) && healthy(n)==1 && now(n,&t)==1 && t<d;
+    if(!held(n,A733_PLATFORM_REGISTER_LOCK))return 0;
+    int h=n->stored?settled(n,d):healthy(n);
+    if(!h)n->busy=1;
+    uint64_t t;return h==1 && now(n,&t)==1 && t<d;
 }
 static int observed(struct a733_twi_native *n,uintptr_t a,uint32_t mask,uint32_t value,uint64_t d)
 {return before(n,d) && (load(a)&mask)==value && before(n,d);}
@@ -172,7 +192,7 @@ static int update(struct a733_twi_native *n,uintptr_t a,uint32_t mask,uint32_t v
     if(!before(n,d))return 0;
     uint32_t old=load(a),next=(old&~mask)|(value&mask);
     if(!before(n,d))return 0;
-    store(a,next);return observed(n,a,UINT32_MAX,next,d);
+    n->stored=1;store(a,next);return observed(n,a,UINT32_MAX,next,d);
 }
 int a733_twi_native_prepare(struct a733_twi_native *n,uint64_t d)
 {
@@ -218,8 +238,13 @@ int a733_twi_native_prepare(struct a733_twi_native *n,uint64_t d)
        !update(n,A733_TWI11_BASE+0xc,0xfd,0x40,d))goto fault;
     a733_platform_lock_leave(n->config.locks,A733_PLATFORM_REGISTER_LOCK);n->held=0;
     uint64_t t;
-    if(healthy(n)!=1 || now(n,&t)!=1 || t>=d)goto fault;
+    if(settled(n,d)!=1 || now(n,&t)!=1 || t>=d)goto fault;
     n->prepared=1;return 1;
 fault:
+    if(n->busy && !n->stored && n->held==1) {
+        /* No register was written; retry the whole sequence later. */
+        a733_platform_lock_leave(n->config.locks,A733_PLATFORM_REGISTER_LOCK);
+        n->held=0;n->busy=0;return 0;
+    }
     retain(n);return -1;
 }

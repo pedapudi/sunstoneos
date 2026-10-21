@@ -16,6 +16,11 @@ struct pmic_model {
     struct a733_pmic_lifetime lifetime;
     struct pmic_model_word words[256];unsigned word_count;
     uint64_t now;
+    /* Optional bus timing: now advances by now_step per call, and each wire
+     * event sets its flag wire_us after the write. Zero keeps instant flags. */
+    uint64_t now_step,wire_us,flag_at;uint32_t flag_value;
+    /* Optional concurrent consumer: each bus access also calls live(). */
+    unsigned probe_live,live_busy;
     unsigned worker,register_held,i2c_held,retained,wire,selected,reads,writes;
     unsigned fail_phase,fail_status,stall_phase,stop_stall;
     struct a733_rail_token *replace_parent;
@@ -35,7 +40,7 @@ static int pmic_model_now(void *v,uint64_t *out)
 {
     struct pmic_model *m=v;
     if(m->replace_parent){*m->replace_parent=m->replacement;m->replace_parent=0;}
-    *out=m->now;return 1;
+    *out=m->now;m->now+=m->now_step;return 1;
 }
 static int pmic_model_current(void *v){return ((struct pmic_model *)v)->worker==1;}
 static int pmic_model_outside(void *v,const void *p,size_t n)
@@ -56,15 +61,20 @@ static void pmic_model_leave(void *v)
 {struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);m->i2c_held=0;}
 static void pmic_model_retain(void *v)
 {struct pmic_model *m=v;assert(m->worker && m->i2c_held);m->retained=1;}
+static void pmic_model_probe(struct pmic_model *m)
+{
+    if(m->probe_live && a733_pmic_live(&m->provider,&m->lifetime)==A733_PMIC_BUSY)++m->live_busy;
+}
 static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);
+    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m);
     assert(a733_pmic_native_address(address,0));++m->reads;
+    if(address==0x0708300c && m->flag_at && m->now>=m->flag_at){*pmic_model_word(m,address)=m->flag_value;m->flag_at=0;}
     *out=*pmic_model_word(m,address);return 1;
 }
 static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);
+    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m);
     assert(a733_pmic_native_address(address,1) && value<=255);++m->writes;
     assert(m->trace_count<4096);m->trace[m->trace_count++]=(struct pmic_model_word){address,value};
     if(address==0x07083008){*pmic_model_word(m,address)=value;return 1;}
@@ -83,9 +93,14 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
     } else {
         assert(value==0x58 && m->wire==6);
         if(m->stop_stall){*pmic_model_word(m,address)=0x58;return 1;}
-        m->wire=0;*pmic_model_word(m,address)=0x40;*pmic_model_word(m,0x07083010)=0xf8;return 1;
+        m->wire=0;*pmic_model_word(m,0x07083010)=0xf8;
+        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+m->wire_us;m->flag_value=0x40;}
+        else *pmic_model_word(m,address)=0x40;
+        return 1;
     }
-    *pmic_model_word(m,address)=m->wire==m->stall_phase ? 0x40 : 0x48;
+    uint32_t done=m->wire==m->stall_phase ? 0x40 : 0x48;
+    if(m->wire_us){*pmic_model_word(m,address)=0x40;m->flag_at=m->now+m->wire_us;m->flag_value=done;}
+    else *pmic_model_word(m,address)=done;
     *pmic_model_word(m,0x07083010)=m->wire==m->fail_phase ? m->fail_status : status;return 1;
 }
 static int pmic_model_pin_enter(void *v,uint64_t deadline)
@@ -202,6 +217,8 @@ int main(int argc,char **argv)
     assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,200,&q)==A733_PMIC_PENDING);
     m.now=200;assert(pmic_model_step(&m)==A733_PMIC_EXPIRED && !m.writes);
     assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
+    /* The bus is still busy when the active transfer expires. */
+    m.wire_us=1000;
     assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,300,&q)==A733_PMIC_PENDING);
     assert(pmic_model_step(&m)==A733_PMIC_PENDING);assert(pmic_model_step(&m)==A733_PMIC_PENDING);
     m.now=300;assert(pmic_model_step(&m)==A733_PMIC_RETAINED && m.retained);

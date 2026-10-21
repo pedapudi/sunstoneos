@@ -66,6 +66,26 @@ static void observe_role(void)
      * requalified here. Exercise its actual public observation and revocation. */
     if(!atomic_load(&role.revoked))role.published=(struct a733_typec_token){(uintptr_t)&role,70,71,m.now,ss_reverse?2:1};
 }
+/* busy-read: momentary provider BUSY in the middle of register sequences.
+ * Platform accesses see the PMIC object's flag held for one observation.
+ * Every third xHCI access sees one busy live() observation right after it;
+ * the first observation after an access is always the core's own check. */
+static unsigned busy_inject,busy_pending,platform_calls,platform_busy,live_calls,live_busy,accessed;
+/* busy-stuck: provider BUSY that never clears, as when the PMIC poll waits for
+ * REGISTER_LOCK held by this caller. Each observation advances time 10 us; the
+ * access must fail after the BUSY budget, long before the deadline. */
+static unsigned busy_stuck;static uint64_t stuck_at;
+static int platform_now(void *v,uint64_t *out)
+{
+    if(busy_stuck==2&&n.platform.held){unsigned zero=0;assert(atomic_compare_exchange_strong(&m.provider.busy,&zero,1));busy_stuck=4;stuck_at=m.now;}
+    if(busy_stuck==4)m.now+=10;
+    else if(busy_pending){atomic_store(&m.provider.busy,0);busy_pending=0;}
+    else if(busy_inject&&n.platform.held&&++platform_calls%4==2){
+        unsigned zero=0;
+        if(atomic_compare_exchange_strong(&m.provider.busy,&zero,1)){busy_pending=1;++platform_busy;}
+    }
+    return pmic_model_now(v,out);
+}
 static void setup(void)
 {
     pmic_model_setup(&m);
@@ -91,7 +111,7 @@ static void setup(void)
     struct a733_usb2_platform_config c={.owner=99,.identity=88,.topology=12,.deadline=2000000,.lifetime_deadline=10000000,
         .superspeed=ss_mode,.companion_root=companion_mode,.topology_mode=ss_mode?(topology_fault==6?1u:topology_fault==7?2u:hub_mode?2u:1u):0,.pck_client=2,.fabric={0,0x83000002,0x84000001},.fabric_hz={24000000,200000000,200000000},
         .supply_uv={3300000,3300000,800000,800000,1800000},.revision=0x3139302a};
-    const struct a733_usb2_platform_ops o={pmic_model_now,current,admit,lock,unlock,retain,read_reg,write_reg,pmic_model_outside,read_half,write_half};
+    const struct a733_usb2_platform_ops o={platform_now,current,admit,lock,unlock,retain,read_reg,write_reg,pmic_model_outside,read_half,write_half};
     n.self=&n;n.initialized=1;
     int initialized=a733_usb2_platform_init(&n.platform,&c,&o,&m,&m.clocks,&m.rails,&m.provider,&m.gpu,&role);
     assert(initialized==!(ss_mode&&ss_bad==6));
@@ -340,11 +360,17 @@ static void wire(void)
     }
 }
 static int cn(void *v,uint64_t *out){(void)v;*out=m.now;return 1;}
-static int live(void *v,uint64_t g,uint64_t d){(void)v;return a733_usb2_platform_live(&n.platform,g,d);}
-static int rr(void *v,uint32_t off,uint32_t *out){(void)v;assert(off<0x8000&&!(off&3));*out=registers[off/4];return 1;}
+static int live(void *v,uint64_t g,uint64_t d)
+{
+    (void)v;if(busy_stuck==1&&accessed){busy_stuck=3;stuck_at=m.now;}
+    if(busy_stuck==3){m.now+=10;++live_busy;return 0;}
+    if(accessed){accessed=0;if(++live_calls%3==0){++live_busy;return 0;}}
+    return a733_usb2_platform_live(&n.platform,g,d);
+}
+static int rr(void *v,uint32_t off,uint32_t *out){(void)v;assert(off<0x8000&&!(off&3));accessed=busy_inject||busy_stuck;*out=registers[off/4];return 1;}
 static int ww(void *v,uint32_t off,uint32_t value)
 {
-    (void)v;assert(off<0x8000&&!(off&3));
+    (void)v;assert(off<0x8000&&!(off&3));accessed=busy_inject||busy_stuck;
     if(irq_model&&off==0x44){assert(value==8);registers[off/4]&=~value;return 1;}
     if(irq_model&&off==0x1020){
         if(value&1)assert(!(registers[0x44/4]&8));
@@ -468,7 +494,15 @@ int main(int argc,char **argv)
     }
     unsigned burst=!strcmp(mode,"burst"),overflow=!strcmp(mode,"overflow"),gate=!strcmp(mode,"gate");
     if(!strcmp(mode,"race")){irq_race=1;mode="read";}
+    if(!strcmp(mode,"busy-read")){busy_inject=1;mode="read";}
     if(burst||overflow||gate)mode="read";if(!strcmp(mode,"admission")){usb2_native_mapping_check();puts("PASS exact native NC mapping admission accepts shareability2/3 and rejects invalid spans");return 0;}setup();
+    if(!strcmp(mode,"busy-stuck-platform")){
+        while(n.platform.phase<8){observe_role();assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;}
+        /* The stuck BUSY starts once the platform holds REGISTER_LOCK. */
+        busy_stuck=2;for(unsigned i=0;i<100&&!n.platform.failed;++i){observe_role();(void)a733_usb2_platform_poll(&n.platform);m.now+=20;}
+        assert(busy_stuck==4&&n.platform.failed&&!n.platform.held);busy_stuck=0;atomic_store(&m.provider.busy,0);
+        printf("PASS register access under REGISTER_LOCK fails after %llu us of PMIC BUSY, before the deadline\n",(unsigned long long)(m.now-stuck_at));
+        assert(m.now-stuck_at>=2000&&m.now-stuck_at<3000&&m.now<n.platform.config.deadline);return 0;}
     if(!strcmp(mode,"mutex-loss")){
         while(n.platform.phase<8){observe_role();assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;}
         lose_on_lock=1;assert(a733_usb2_platform_poll(&n.platform)==A733_USB2_RETAINED);
@@ -716,6 +750,13 @@ int main(int argc,char **argv)
         hold_bulk=1;for(unsigned i=0;i<10;++i)assert(poll()>=0);
         assert(a733_xhci_abort(&n.core,n.address,2));assert(n.core.failed);
     }else if(!strcmp(mode,"detach")){a733_typec_revoke(&role);assert(a733_usb2_host_poll(&n)<0);}
+    else if(!strcmp(mode,"busy-stuck")){
+        /* The stuck BUSY starts at the first observation after an access. */
+        busy_stuck=1;accessed=0;for(unsigned i=0;i<100&&!n.failed;++i)(void)poll();
+        assert(busy_stuck==3&&n.failed&&n.core.failed);
+        printf("controller access fails after %llu us of provider BUSY; ",(unsigned long long)(m.now-stuck_at));
+        assert(m.now-stuck_at>=2000&&m.now-stuck_at<3000&&m.now<n.read_deadline);
+    }
     else for(unsigned i=0;i<10000&&!n.read_complete&&!n.failed;++i)poll();
     if(strcmp(mode,"read")){
         (void)a733_usb2_host_poll(&n);assert(n.failed&&n.core.failed);
@@ -726,6 +767,10 @@ int main(int argc,char **argv)
     for(unsigned j=0;j<512;++j)assert(result[j]==(uint8_t)(j*17+3));
     if(irq_model)assert(irq_begins&&irq_releases&&!(registers[0x1020/4]&1));
     assert(n.core.devices[hub_mode?1:0].endpoints[0].cycle==0); /* Enumeration crosses the control Link TRB. */
+    if(busy_inject){
+        assert(platform_busy>10&&live_busy>100);
+        printf("PASS %u platform and %u xHCI BUSY observations mid-sequence; ",platform_busy,live_busy);
+    }
     printf("PASS actual PMIC/clock/role observation, xHCI%u commands/%u transfers, TinyUSB MSC enumeration and sector read\n",commands,transfers);
     return 0;
 }

@@ -72,7 +72,11 @@ The encoder owns this scope exclusively and separately reserves its selected
 parent, fabric and rail. IOMMU preparation excludes encoder ownership before
 register access, including the private JPEG, H.264 and HDMI preparation paths.
 A scope reservation does not establish encoder initialization
-or completed DMA. Bits 72–127 remain invalid.
+or completed DMA. LRADC uses bit 72 for the complete LRADC0 controller, its CCU
+gate and reset, and interrupt 69. Its exclusive lease also holds FABRIC and
+RTC32K stable as shared parents. RTC32K uses bit 73 for the RTC 32 kHz source,
+mux, divider and gates. Legacy RTC writers also require explicit exclusion,
+because they do not use this registry. Bits 74–127 remain invalid.
 The focused `checks/a733-media-clock.c --encoder-ownership` case passes
 encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
 directions before register access. Time and hardware callbacks are modeled.

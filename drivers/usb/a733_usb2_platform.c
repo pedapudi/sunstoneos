@@ -11,6 +11,7 @@
 #define CCU UINT32_C(0x02002000)
 #define DWC UINT32_C(0x06a00000)
 #define PHY UINT32_C(0x06b00000)
+#define BUSY_US 2000u /* Longest provider BUSY repeated inside one access. */
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,PCK,SUPPLY,ATTACH,BASELINE,CLOCKS,PHY_SETUP,SS_SETUP,GLOBAL,READY };
 static const enum a733_rail supplies[A733_USB2_SUPPLIES+1]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,
     A733_RAIL_DCDC9,A733_RAIL_ELDO6,A733_RAIL_CLDO5,A733_RAIL_DCDC2};
@@ -65,8 +66,21 @@ static int timely(struct a733_usb2_platform *p)
 {uint64_t n;if(p->ops.now(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->deadline&&n<p->config.lifetime_deadline;}
 static int health(struct a733_usb2_platform *);
 static int attachment(struct a733_usb2_platform *);
+/* Each access needs a fresh observation. Provider or publication BUSY is
+ * metadata contention: repeat the observation without MMIO for at most BUSY_US
+ * of counter time and never past the deadline, which timely() enforces. The
+ * PMIC object can stay BUSY while its poll waits for REGISTER_LOCK, which the
+ * register phases here hold, so a longer BUSY fails the access like a
+ * refusal. */
 static int permitted(struct a733_usb2_platform *p)
-{return timely(p)&&health(p)==1&&attachment(p)==1&&timely(p);}
+{
+    if(!timely(p))return 0;
+    for(const uint64_t start=p->last_now;;) {
+        int r=health(p);if(r==1)r=attachment(p);
+        if(r==1)return timely(p);
+        if(r<0||!timely(p)||p->last_now-start>=BUSY_US)return 0;
+    }
+}
 static int rd(struct a733_usb2_platform *p,uintptr_t a,uint32_t *v)
 {return permitted(p)&&p->ops.read(p->cookie,a,v)==1&&permitted(p);}
 static int ck(struct a733_usb2_platform *p,uintptr_t a,uint32_t m,uint32_t v)

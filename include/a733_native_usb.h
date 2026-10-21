@@ -30,7 +30,7 @@ struct a733_native_usb {
     struct a733_usb_platform usb;
     struct a733_rail_token usb_rail;
     struct a733_pmic_lifetime usb_power;
-    struct a733_pmic_request usb_request;
+    struct a733_pmic_request usb_request[4];
     struct a733_pmic_snapshot usb_snapshot[4];
     TaskHandle_t pmic_task,usb_task;
     int (*live)(void *);

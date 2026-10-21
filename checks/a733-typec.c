@@ -29,6 +29,7 @@ volatile unsigned typec_block_only;
 volatile unsigned typec_fault_case,typec_mmio_count,typec_translation_count,typec_checkpoint_id;
 volatile unsigned typec_wire_fault,typec_partner_cc=1,typec_external_vbus,typec_delay_stop;
 volatile uint64_t typec_monitor_request;
+volatile unsigned typec_steady_polls,typec_steady_reads,typec_steady_mmio,typec_steady_old_loop;
 BaseType_t xTaskGetSchedulerState(void)
 {return scheduler?taskSCHEDULER_RUNNING:taskSCHEDULER_NOT_STARTED;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)current_task;}
@@ -127,7 +128,7 @@ unsigned typec_native_check(void)
             safe_saved=1;typec_checkpoint(2);
             if(typec_fault_case==2)typec_external_vbus=1;
         }
-        if(port.provider.state==A733_TYPEC_MONITOR&&port.provider.step==1&&!port.provider.transaction){
+        if(port.provider.state==A733_TYPEC_MONITOR&&port.provider.step==0&&!port.provider.transaction){
             typec_monitor_request=typec_test_time+25;typec_delay_stop=1;
         }
         int r=service(1);
@@ -172,6 +173,25 @@ unsigned typec_native_check(void)
     if(typec_fault_case==5){
         ++token.generation;assert(a733_typec_validate(&port.provider,&token,typec_test_time+1000)==-1);
         service(0);retained();return 0;
+    }
+    if(typec_fault_case==8){
+        /* Board cadence for 100 ms of attached monitoring: yield while an I2C
+         * transfer is in flight, otherwise sleep one 1 ms tick. Every
+         * published token stays fresh and the service gap holds. The old
+         * loop also yielded after each changed monitoring step. */
+        uint64_t end=typec_test_time+100000;unsigned mmio=typec_mmio_count,progress=0;
+        while(typec_test_time<end){
+            if((port.bus.state<A733_TWI_BEGIN||port.bus.state>A733_TWI_COMPLETE)&&!progress)typec_test_time+=975;
+            unsigned idle=!port.provider.transaction,step=port.provider.step;
+            assert(service(1)>=0&&!atomic_load(&port.provider.revoked));++typec_steady_polls;
+            progress=typec_steady_old_loop&&!port.provider.pd_turn&&port.provider.step&&port.provider.step!=step;
+            if(idle&&port.provider.transaction&&port.bus.reg==0x40)++typec_steady_reads;
+            struct a733_typec_token t;
+            assert(a733_typec_snapshot(&port.provider,&t,typec_test_time+1000)==1);
+            assert(typec_test_time-t.observed_us<A733_TYPEC_FRESH_US);
+        }
+        typec_steady_mmio=typec_mmio_count-mmio;
+        assert(port.provider.state==A733_TYPEC_MONITOR&&typec_steady_reads);return 0;
     }
     if(typec_fault_case==6){
         atomic_store(&clocks.busy,1);current_task=3;

@@ -16,7 +16,6 @@ OFFSET(a733_clock_leases,busy,0); OFFSET(a733_clock_leases,next_id,8);
 OFFSET(a733_clock_leases,last_now,16); OFFSET(a733_clock_leases,slots,32);
 OFFSET(a733_clock_leases,now,6176); OFFSET(a733_clock_leases,context,6184);
 OFFSET(a733_clock_leases,initialized,6192); OFFSET(a733_clock_leases,failed,6196);
-OFFSET(a733_clock_leases,audio_profile,6200);
 #undef OFFSET
 
 static int separate(const void *a,size_t an,const void *b,size_t bn)
@@ -100,8 +99,6 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
     if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
     struct a733_clock_token t={m->next_id++,owner,shared,exclusive};
-    if(exclusive&(A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5))
-        m->audio_profile=0;
     m->slots[free]=t;*out=t;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_release(struct a733_clock_leases *m,
@@ -127,7 +124,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
     if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
     struct a733_clock_token t={m->next_id++,token->owner,parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5,0};
-    m->audio_profile=1;m->slots[slot]=t;*out=t;return leave(m,A733_CLOCK_OK);
+    m->slots[slot]=t;*out=t;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     const struct a733_clock_token *token,a733_clock_mask_t stable,uint64_t deadline,struct a733_clock_token *out)
