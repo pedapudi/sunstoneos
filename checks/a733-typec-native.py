@@ -226,8 +226,8 @@ def execute(name,start):
  global panic,instruction_allowance
  panic=[];error=None;u.reg_write(UC_ARM64_REG_PC,start)
  for chunk in range(35):
-  # Nine cases share one budget. A PMIC wait phase repeats its flag read
-  # within one poll, and modeled time stands still during a call.
+  # Nine cases share one budget; together they use about 660 million
+  # instructions.
   if instruction_allowance>=900000000 or time.monotonic()-start_wall>=600:break
   try:u.emu_start(u.reg_read(UC_ARM64_REG_PC),0x407fe000,timeout=max(1,int(min(10,600-(time.monotonic()-start_wall))*1000000)),count=10000000)
   except Exception as exc:error=str(exc)
