@@ -13,6 +13,9 @@ static int live=1;
 int i2s_live(void *unused){(void)unused;return live;}
 int i2s_prepare_audio(void){atomic_store(&app.audio_ready,1);return 1;}
 void i2s_recognition_poll(void){}
+/* Finite capture (direction 0) never reaches the repeated or runtime paths. */
+int i2s_repeated_step(void){abort();}
+int i2s_runtime_step(void){abort();}
 void vTaskDelay(TickType_t ticks){(void)ticks;}
 int dma_service_send(struct dma_service *s,const struct dma_service_request *r,TickType_t wait,uint64_t *ticket)
 {(void)s;assert(!wait);queued=*r;*ticket=++sent;return 1;}

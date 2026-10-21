@@ -96,6 +96,7 @@ if(SUNSTONE_I2S_TRANSCRIBE)
   "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
  list(APPEND i2s_inputs ${i2s_asr_sources} ${i2s_model_headers}
   "${i2s_root}/apps/mimus/recorded.h" "${i2s_root}/apps/mimus/timing.h"
+  "${i2s_root}/cmake/mimus.cmake" "${i2s_root}/cmake/mimus-smp.cmake"
   "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
   "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")

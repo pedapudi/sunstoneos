@@ -102,6 +102,7 @@ endif()
       "${bluetooth_root}/apps/bluetooth/recognition-models.json" "${bluetooth_root}/apps/mimus/recorded.h"
       "${bluetooth_root}/apps/mimus/source.json" "${bluetooth_root}/apps/mimus/link.patch"
       "${bluetooth_build}/recognition-models.h" "${bluetooth_build}/recognition-link.ld"
+      "${bluetooth_root}/cmake/mimus.cmake" "${bluetooth_root}/cmake/mimus-smp.cmake"
       "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
       "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a" "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
   endif()
