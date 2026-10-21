@@ -81,17 +81,37 @@ One worker poll advances consecutive bus phases while the I2C mutex stays held.
 The poll ends at the first phase that waits for a completion flag that is still
 clear, and after at most eight phases. Clock and rail authority are checked
 again before each further phase; BUSY there ends the poll before any access.
-With 90 microseconds per bus event and one poll per 1 ms tick, a snapshot
-completes in 44 polls instead of 92.
+
+The [poll-count and BUSY check](../checks/a733-pmic-polls.c) models bus timing
+in software. Its clock advances 1 microsecond for each time read, and each
+completion flag sets 90 microseconds after the write that starts its bus event.
+That is about one byte with acknowledgment at 100 kHz. The provider task polls
+once per 1 ms tick. In this model a snapshot completes in 44 polls instead of
+92. These modeled figures compare poll designs and have not been measured on
+hardware.
 
 A poll holds the provider object, so a concurrent `a733_pmic_live()` caller
-observes BUSY for the duration of the poll. The HDMI and Type-C users treat that
-BUSY as a fault, so a poll must stay short. In the same model, the longest poll
-is the one that also checks the bus baseline; it holds the provider for 58
-modeled microseconds. A complete snapshot holds it for about 600 microseconds in
-total, the same as with one phase per poll ([poll-count and BUSY
-check](../checks/a733-pmic-polls.c)). A caller deadline bounds the complete
-snapshot, including mutex acquisition and result publication.
+observes BUSY while the poll runs. The HDMI and Type-C users treat that BUSY as
+a fault, so a poll must stay short. In the model, the longest poll is the one
+that also checks the bus baseline; it lasts 58 modeled microseconds. The polls
+of one snapshot last about 600 modeled microseconds in total, the same as with
+one phase per poll. The check counts each complete poll as BUSY time, so these
+figures are upper bounds. A caller deadline bounds the complete snapshot,
+including mutex acquisition and result publication.
+
+Request admission waits for two locks: the private pin-lease check waits for
+REGISTER_LOCK, and the bus access waits for the I2C mutex. The poll releases
+the provider object before these waits and takes it back afterwards. Consumers
+such as the USB2 platform call `a733_pmic_live()` while they hold
+REGISTER_LOCK. If the poll kept the object during its wait, each side would
+wait for the other until a deadline. When another caller holds the object as
+the poll returns from the waits, the poll releases the I2C mutex without any
+bus access and returns BUSY, and the next poll repeats admission. A client
+fault latched during the waits also releases the unused mutex and retains the
+request. [The lock-wait check](../checks/a733-pmic-waits.c) covers these
+three cases. Startup still holds the object while it acquires the pins and the
+I2C mutex. Before startup completes, `a733_pmic_live()` never reports READY,
+so no consumer proceeds on a provider observation during that time.
 
 A successful result contains raw bytes, enable state and a decoded programmed
 voltage where supported. Reaping the result ends its rail borrow. The copied

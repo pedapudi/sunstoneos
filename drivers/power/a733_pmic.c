@@ -348,13 +348,25 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
     if(selected==A733_PMIC_REQUESTS)return leave(p,A733_PMIC_READY);
     struct a733_pmic_slot *s=&p->slots[selected];p->deadline=s->deadline;
     if(p->last_now>=p->deadline){s->state=EXPIRED;return leave(p,A733_PMIC_EXPIRED);}
-    int held=0;enum a733_pins_result pins=a733_pins_held_banked(p->pins,&p->pin,&held,p->deadline);
-    if(pins==A733_PINS_BUSY)return leave(p,A733_PMIC_BUSY);
-    if(pins!=A733_PINS_OK || !held)return leave(p,fault(p));
     enum a733_rail_result r=a733_rail_borrow_status(p->rails,&s->borrow);
     if(r==A733_RAIL_BUSY)return leave(p,A733_PMIC_BUSY);
     if(r!=A733_RAIL_READY)return leave(p,fault(p));
-    if(p->ops.enter(p->cookie,p->deadline)!=1)return leave(p,A733_PMIC_BUSY);p->held=1;
+    /* The pin check waits for REGISTER_LOCK and the bus for the I2C mutex.
+     * Both waits run without the provider object, so a live() caller that
+     * holds either lock never waits for this poll. Only this task changes the
+     * pin lease, the deadline and a queued slot. The poll takes the object
+     * back before it uses either result; if another caller holds it then, the
+     * poll releases the untouched mutex and returns BUSY. */
+    const uint64_t deadline=p->deadline;leave(p,A733_PMIC_BUSY);
+    int held=0;enum a733_pins_result pins=a733_pins_held_banked(p->pins,&p->pin,&held,deadline);
+    int bus=pins==A733_PINS_OK && held && p->ops.enter(p->cookie,deadline)==1;
+    if(!enter(p)){if(bus)p->ops.leave(p->cookie);return A733_PMIC_BUSY;}
+    if(bus && p->failed){p->ops.leave(p->cookie);bus=0;}
+    if(p->failed)return leave(p,fault(p));
+    if(pins==A733_PINS_BUSY)return leave(p,A733_PMIC_BUSY);
+    if(pins!=A733_PINS_OK || !held)return leave(p,fault(p));
+    if(!bus)return leave(p,A733_PMIC_BUSY);
+    p->held=1;
     if(!baseline(p))return leave(p,fault(p));
     p->active=selected;s->state=ACTIVE;p->byte_index=0;p->phase=P_START;
     return leave(p,A733_PMIC_PENDING);

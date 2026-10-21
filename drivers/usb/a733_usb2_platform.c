@@ -68,19 +68,21 @@ static int health(struct a733_usb2_platform *);
 static int attachment(struct a733_usb2_platform *);
 /* Each access needs a fresh observation. Provider or publication BUSY is
  * metadata contention: repeat the observation without MMIO for at most BUSY_US
- * of counter time and never past the deadline, which timely() enforces. The
- * PMIC object can stay BUSY while its poll waits for REGISTER_LOCK, which the
- * register phases here hold, so a longer BUSY fails the access like a
- * refusal. */
-static int permitted(struct a733_usb2_platform *p)
+ * of counter time and never past the deadline, which timely() enforces.
+ * Returns 1 when permitted, 0 when BUSY lasted the whole budget and -1 on
+ * refusal or lateness. A holder that keeps BUSY longer has stalled, so after
+ * an access the platform treats it like a refusal. */
+static int observe(struct a733_usb2_platform *p)
 {
-    if(!timely(p))return 0;
+    if(!timely(p))return -1;
     for(const uint64_t start=p->last_now;;) {
         int r=health(p);if(r==1)r=attachment(p);
-        if(r==1)return timely(p);
-        if(r<0||!timely(p)||p->last_now-start>=BUSY_US)return 0;
+        if(r==1)return timely(p)?1:-1;
+        if(r<0||!timely(p))return -1;
+        if(p->last_now-start>=BUSY_US)return 0;
     }
 }
+static int permitted(struct a733_usb2_platform *p){return observe(p)==1;}
 static int rd(struct a733_usb2_platform *p,uintptr_t a,uint32_t *v)
 {return permitted(p)&&p->ops.read(p->cookie,a,v)==1&&permitted(p);}
 static int ck(struct a733_usb2_platform *p,uintptr_t a,uint32_t m,uint32_t v)
@@ -212,7 +214,10 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
     case ATTACH:h=attachment(p);if(h<0)return finish(p,fault(p));if(h==1)++p->phase;break;
     case READY:return finish(p,A733_USB2_READY);
     default:{int l=p->ops.enter(p->cookie,p->deadline);if(!l)break;
-        if(l!=1)return finish(p,fault(p));p->held=1;if(!permitted(p))return finish(p,fault(p));
+        if(l!=1)return finish(p,fault(p));p->held=1;
+        /* No register has been touched in this poll, so a BUSY that lasts the
+         * whole budget releases the lock and the phase is retried. */
+        int o=observe(p);if(o<0)return finish(p,fault(p));if(!o)return finish(p,A733_USB2_PENDING);
         int ok=parents(p)&&masked(p);
         if(ok)switch(p->phase){
         case BASELINE:ok=ck(p,CCU+0x1348,B(31),0)&&ck(p,CCU+0x1350,B(31),0)&&
