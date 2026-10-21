@@ -1,0 +1,259 @@
+{
+ "compiler_lock": "tools/npu-compiler.lock.json",
+ "models": [
+  {
+   "name": "conv8",
+   "model": {
+    "bytes": 1928,
+    "sha256": "db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      3,
+      1
+     ],
+     "logical_bytes": 192,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1015054465,
+     "fixed_position": 0,
+     "zero_point": 127,
+     "reference": {
+      "bytes": 192,
+      "sha256": "976fdde5d777fd2b60d5146fa9acde1f2a4340c758555c9393f48c09cb1abf12"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      6,
+      6,
+      2,
+      1
+     ],
+     "logical_bytes": 72,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1017521702,
+     "fixed_position": 0,
+     "zero_point": 108,
+     "reference": {
+      "bytes": 72,
+      "sha256": "899612ebf5d62b2bebba2926ef68af8b63cf0050b2dd67fa2d3a5d759a5b9c9b"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101120,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "tools/npu-conv-pipeline.sh, asymmetric_affine uint8"
+  },
+  {
+   "name": "dual-u8",
+   "model": {
+    "bytes": 2912,
+    "sha256": "f1a1aa4b6973a72093c5a2c6a1fcdb7408a54d308898ed9c38b7c9a21ab360c8"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      3,
+      1
+     ],
+     "logical_bytes": 192,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1015054465,
+     "fixed_position": 0,
+     "zero_point": 127,
+     "reference": {
+      "bytes": 192,
+      "sha256": "976fdde5d777fd2b60d5146fa9acde1f2a4340c758555c9393f48c09cb1abf12"
+     }
+    },
+    {
+     "dimensions": [
+      6,
+      6,
+      1,
+      1
+     ],
+     "logical_bytes": 36,
+     "name": "input/output[1]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1012981985,
+     "fixed_position": 0,
+     "zero_point": 127,
+     "reference": {
+      "bytes": 36,
+      "sha256": "ef58fdfd8c0e051de7edfd60a22c071c9a13341fbd98b9e1ff3a3059e2bba322"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      6,
+      6,
+      2,
+      1
+     ],
+     "logical_bytes": 72,
+     "name": "uid_3_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1017521702,
+     "fixed_position": 0,
+     "zero_point": 108,
+     "reference": {
+      "bytes": 72,
+      "sha256": "899612ebf5d62b2bebba2926ef68af8b63cf0050b2dd67fa2d3a5d759a5b9c9b"
+     }
+    },
+    {
+     "dimensions": [
+      4,
+      4,
+      2,
+      1
+     ],
+     "logical_bytes": 32,
+     "name": "uid_2_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1008244889,
+     "fixed_position": 0,
+     "zero_point": 99,
+     "reference": {
+      "bytes": 32,
+      "sha256": "cbf7022e7f6da0bb83ade14c17364038e8a2b96891519206a851a17f3b2fff1f"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101120,
+   "pool_bytes": 0,
+   "nn_operations": 2,
+   "descriptor_patches": 6,
+   "state_patches": 2,
+   "command_body_bytes": 104,
+   "compiler": "tools/npu-dual-pipeline.sh, asymmetric_affine uint8"
+  },
+  {
+   "name": "dual-i8",
+   "model": {
+    "bytes": 2912,
+    "sha256": "19f3aa1c36189be6ce10426d44ea4dfb253d5dd65bddd4e1eac3abf7891a09a5"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      3,
+      1
+     ],
+     "logical_bytes": 192,
+     "name": "uid_30000_out_0",
+     "buffer_type": 0,
+     "format": 3,
+     "quantization": 2,
+     "scale_bits": 1015054465,
+     "fixed_position": 0,
+     "zero_point": -1,
+     "reference": {
+      "bytes": 192,
+      "sha256": "608601af362c8cb362ef30533b5fd3ecfaabc62706be38940fe8869a26815298"
+     }
+    },
+    {
+     "dimensions": [
+      6,
+      6,
+      1,
+      1
+     ],
+     "logical_bytes": 36,
+     "name": "uid_30001_out_0",
+     "buffer_type": 0,
+     "format": 3,
+     "quantization": 2,
+     "scale_bits": 1012981985,
+     "fixed_position": 0,
+     "zero_point": -1,
+     "reference": {
+      "bytes": 36,
+      "sha256": "a14eb1eb087a52af321f47a1fad4dfb6527958d44d89e95f330ab3e03842ed1d"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      6,
+      6,
+      2,
+      1
+     ],
+     "logical_bytes": 72,
+     "name": "uid_3_out_0ut_0",
+     "buffer_type": 0,
+     "format": 3,
+     "quantization": 2,
+     "scale_bits": 1017521702,
+     "fixed_position": 0,
+     "zero_point": -20,
+     "reference": {
+      "bytes": 72,
+      "sha256": "dcc52ce899cfb0b708d6816b15cf8a83db796e78559b2a2b74196fe3f9a4081e"
+     }
+    },
+    {
+     "dimensions": [
+      4,
+      4,
+      2,
+      1
+     ],
+     "logical_bytes": 32,
+     "name": "uid_2_out_0ut_0",
+     "buffer_type": 0,
+     "format": 3,
+     "quantization": 2,
+     "scale_bits": 1008244889,
+     "fixed_position": 0,
+     "zero_point": -29,
+     "reference": {
+      "bytes": 32,
+      "sha256": "72c59510b6b473f8ada481b10f089bfa2f6c2f4defec48ec6573abe134b9b3ec"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101120,
+   "pool_bytes": 0,
+   "nn_operations": 2,
+   "descriptor_patches": 6,
+   "state_patches": 2,
+   "command_body_bytes": 104,
+   "compiler": "tools/npu-dual-pipeline.sh, perchannel_symmetric_affine int8"
+  }
+ ]
+}
