@@ -43,8 +43,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   identity forwarding supplies no hostile-endpoint isolation. Success and faults
   both retain all resources. Physical endpoint power/link, DMA visibility and
   confinement, MSI, all-core startup/scheduling and recovery remain unqualified.
-  General endpoint drivers/enumeration, embedded root DMA, INTx/MSI-X, Gen2/Gen3,
-  power transitions and shutdown remain required.
+  The core now programs both outbound iATU regions through one helper that
+  validates and records each request; the native write filter admits an iATU
+  write only when it repeats that record. A configuration field selects a 2.5, 5
+  or 8 GT/s target, and above 2.5 GT/s the port follows the board kernel's
+  directed speed change after training. Host-model checks pass; both
+  applications still select 2.5 GT/s, and no board test ran. BAR assignment and
+  MSI setup stay in the endpoint test driver until a second endpoint driver
+  exists. General endpoint drivers/enumeration, embedded root DMA, INTx/MSI-X,
+  physical Gen2/Gen3 links, power transitions and shutdown remain required.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
@@ -173,8 +180,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   actual monitor. Evidence is under `cold-entry-20261020/frozen/manifest.json`
   and `instructions/result.json`. It does not enter FreeRTOS or establish
   remote-writer exclusion, memory ownership/publication, physical reset/boot,
-  media loading/writes or recovery. Standalone OS boot remains incomplete;
-  packer licensing and exact source equivalence remain unresolved.
+  media loading/writes or recovery.
+  A [stage-2 loader and two-slot card layout](boot-slots.md) are **implemented**.
+  The loader verifies both slot headers and their SHA-256 extent hashes, loads
+  the newest valid slot and reports the outcome; the host tool plans installs,
+  updates and rollback as one storage session per changed card range. With its
+  entry prerequisites granted, the loader arms WDT0, builds the resident
+  contract of the [integrated OS image](os-image.md) and branches to it. Host
+  and instruction-model checks pass. On a board, entry admission and cold SD
+  admission both refuse, so the loader stops before touching the SD
+  controller. Remote-writer exclusion, watchdog recovery after a cold boot, a
+  comparison of the boot0 entry state and fixed-board SD admission are missing.
+  No card has been written and no board has run the loader. Standalone OS boot
+  therefore remains incomplete; packer licensing and exact source equivalence
+  remain unresolved.
   The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
   separately executes the actual parser enable/clean-disable wrappers and all
   twenty expected set/way operations for one synthetic hierarchy. Earlier parser
@@ -197,7 +216,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
   A separate [two-core emulator target](smp.md) tests concurrent scheduling.
-  [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons there.
+  An [eight-core emulator soak](smp.md#eight-emulated-cores-pass-a-scheduling-soak)
+  passes ten trials of cross-core queue traffic, shared-mutex exclusion,
+  migration through all cores and preemption of non-yielding tasks on every
+  core. QEMU models identical Cortex-A55 cores with sequentially consistent
+  memory, so the soak establishes no A733 timing, A55/A76 or coherence result.
+  [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons
+  in the two-core target, with the engine's asynchronous jobs running on the
+  second core.
   One focused [runtime cleanup case](smp-runtime.md) passes actual FreeRTOS/newlib
   task reclamation after migration in both directions, private stream closure,
   heap restoration and static task storage reuse. Evidence under
@@ -380,6 +406,24 @@ implementation is **planned**. Partial results apply only to the stated scope:
   bounded validation before publishing either pool. Its native publication and
   refusal checks pass. Physical range ownership and device reachability remain
   unqualified; external pools still need application-specific mapping access.
+  A [fixed interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners)
+  is **implemented** for images with several device owners. EL3 programs the
+  route of each listed shared peripheral interrupt once and reads it back, and the shared handler dispatches
+  each interrupt only on its routed core. A host model covers validation,
+  dispatch, route programming and nine refusals. Existing single-device images
+  keep their per-device patches.
+  The [integrated OS image](os-image.md) is **implemented**. It runs the mimus
+  board application (USB0 device service, USB2 host with keyboard and read-only
+  storage, Type-C and PMIC owners, EL0 recognition) together with a continuous
+  thermal service, using that table and one fixed start list. It builds in two
+  lifetimes. The supervised lifetime keeps the bounded FEL contract with WDT0
+  disabled. The resident lifetime runs after a cold boot from the stage-2
+  loader and renews the armed WDT0 only while every listed service reports
+  progress within its window. A link check and host models of interrupt
+  delivery, supervision and admission pass in both lifetimes. No board has run
+  either lifetime: the supervised image has no FEL launcher yet, and the
+  resident image depends on the stage-2 entry prerequisites. I2S capture, radio,
+  CE, display, camera, GPU and NPU are not part of the image.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -462,8 +506,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `thermal-sid-shadow-20261018/runtime/`, followed by successful ROM return.
   This proves access to the calibration words, not temperature acquisition.
   Existing calibration and controller evidence was reused. Physical acquisition,
-  accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
-  policy, rate changes and regulator control remain outstanding.
+  accuracy, interrupt delivery and recovery remain unqualified.
+  A fixed board [thermal policy](thermal.md#a-fixed-board-policy-throttles-and-stops-work)
+  is **implemented**. Its trips come from the pinned device tree. The CPU and
+  GPU channels throttle at 90 °C, and every channel is critical at 110 °C. A
+  channel without a valid reading throttles after 1 s and is critical after
+  5 s. The thermal application and the thermal service of the
+  [integrated OS image](os-image.md) end their session at the critical level;
+  no consumer reduces load at the throttle level yet. Host checks pass. The
+  policy reads temperatures whose physical acquisition is unqualified, and it
+  changes no clock or voltage. Rate changes and regulator control remain
+  outstanding.
   A separate [finite returning application](../apps/thermal-returning/README.md)
   gathers two sets with the actual driver and disables configured acquisition.
   Thirteen linked cases and Astra review pass; all 46 compiled inputs match
@@ -500,7 +553,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   cutoff and permanent-loss checks. The native tasks and USB binding
   are implemented. Focused supply, native MMC admission and USB callback checks
   pass. The complete [maintenance image and launcher](storage-maintenance-launch.md)
-  are integrated; focused instruction and host checks pass. The separate
+  are integrated; focused instruction and host checks pass. A session word now
+  lets the maintenance image select the four-bit default-speed or high-speed SD
+  profile; zero keeps one data line at 400 kHz. Backup reads take up to eight
+  sectors per request, while writes stay at one sector per request because the
+  one-second operation deadline must cover SD programming busy time. Connected
+  host checks pass, including a high-speed backup, update and restoration of 20
+  sectors against modeled media. No profile has written physical media. The separate
   [supervised read-only SD service](storage-read-application.md) identifies the
   card and serves repeated ranges of one to eight sectors to two native clients.
   One controller owner copies results into separate client slots; matching
@@ -699,6 +758,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Hardware reset and FEL return](watchdog.md) remain untested; physical
   qualification is deferred. Supervised RAM-only tests use their own reviewed
   recovery plan. Unattended recovery and the failed UFS probe remain restricted.
+  The stage-2 loader arms WDT0 in its four-second mode, without the FEL
+  redirect, before entry. The resident lifetime of the [integrated OS image](os-image.md)
+  renews it only while every listed service makes progress, through its own
+  reload with the register mutex and mode readback. Host models cover renewal,
+  each service stalling or never reporting, and a refused renewal. Watchdog
+  expiry after a cold boot has not run on a board.
 - DMA: **tested** finite descriptor encoding in a host execution model, including
   memory/FIFO streams, 35-bit addresses, and invalid-chain refusal.
   The polled controller core also passes host checks for noncoherent transfers,
@@ -708,6 +773,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [privileged FreeRTOS service](dma-service.md) passes a two-core emulator
   session for copied requests, task ownership, retained buffers and I2S producer
   shutdown ordering. Its root build target links successfully.
+  An optional [DMA0 interrupt binding](dma-service.md#an-optional-dma0-interrupt-replaces-tick-polling-between-dma-events)
+  (GIC shared peripheral interrupt 111, INTID 143) is **implemented** in the
+  service. While every
+  progressing channel waits for an enabled DMA event, the worker sleeps until the
+  interrupt, a request or a fallback interval instead of polling every tick;
+  failures fall back to tick polling. Emulator checks pass. No platform binds
+  the interrupt yet, so every image still polls once per tick.
   [DMA0 platform preparation](dma-platform.md) now validates inherited fabric
   clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
   Host/reference checks and native compilation pass. Selected parent branches
@@ -1243,6 +1315,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   unqualified. Arbitrary new-frame streaming, old-buffer recycling, successful STOP,
   release/retry, composition and wider display modes remain required. The generated
   single-frame profile retains its separate accepted evidence.
+  The HDMI framebuffer, DisplayPort and GPU display images now share one
+  retained DE1 framebuffer source. Its DE_SYS domain-1 step uses the domain-ON
+  provider that G2D uses: a domain that is already ON is adopted without a
+  command write, and an OFF domain receives the existing power-up sequence.
+  Host checks pass, including a run from an inherited ON domain. The DSI image
+  requires PCK domains 0, 1, 2, 3, 8 and 9 to be ON at entry and powers none of
+  them; no qualified VO0 or IOMMU domain sequence exists. Deinterlace also fails
+  setup on an unpowered DE_SYS domain. Physical domain power-up remains
+  untested.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
@@ -1312,6 +1393,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Response and extended-response timers, independent caller deadlines, opaque
   channel generations and confirmed-slot reuse pass focused composed checks.
   Wire identifiers and lower link quarantine still impose finite lifetimes.
+  A rejected request, or an attempt that closed before the controller assigned
+  a handle, now frees its ACL slot. The headset application retries a page
+  timeout or failed accept, at most three times, until the connection deadline.
+  Host checks pass. A link that connected and then closed still ends the
+  session; reconnect after a confirmed disconnect remains required.
   [Service discovery](bluetooth-sdp.md) now opens actual L2CAP channels,
   assembles bounded continuation responses and exposes service attributes and
   advertised RFCOMM endpoints. Host checks and native compilation pass.
@@ -1410,7 +1496,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
-  one data line at 400 kHz. The [native radio session](radio-session.md) keeps
+  one data line at 400 kHz. An optional four-bit 25 MHz SDIO profile is
+  **implemented** with the bootloader's default-speed delays and verified
+  readback; host checks pass. No image requests it until a physical identity
+  read qualifies it, so radio bootstrap still exceeds the 40 s supervised bound.
+  The radio owner now repeats session polls while the transport or session
+  advances, and receive accepts reorder-flagged MPDUs and validated A-MSDU
+  subframes; neither form occurs until an HT profile exists. The [native radio session](radio-session.md) keeps
   platform startup, transport, receive dispatch and socket polling on one task.
   Emulator checks pass for actual provider ownership, bounded renewal, a TCP
   exchange and retained failure. Firmware upload and association checkpoints
@@ -1471,9 +1563,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   this adds no WPA2 handshake, radio session-loop or board-poll execution.
   Root verifies all 43 model, 168 native-build and 181 declared repository inputs
   at `3d363f1` under `radio-dhcp-reconnect-20261020/root-integration.json`.
-  The native board consumer was built only, not executed. Physical reconnection,
-  unexpected-loss recovery, IPv6, broader server operation and wider security
-  modes remain unqualified or required.
+  The native board consumer was built but not executed.
+  Recovery from a clean unsolicited link loss is **implemented**. An AP
+  deauthentication, beacon loss or AP restart may arrive while no transfer,
+  command, security or supplicant work is outstanding. The adapter then takes
+  the interface offline through the IP-task fence, and existing sockets stay
+  open. The owner reassociates with the admitted target and credentials until
+  the recovery deadline. A host composition covers loss, a failed and a successful
+  reassociation, socket survival and a new TCP exchange. Loss with outstanding
+  work, and a second loss during recovery, still retain the radio. Firmware key
+  state after the loss indication needs hardware observation. Physical
+  reconnection and loss recovery, IPv6, broader server operation and wider
+  security modes remain unqualified or required.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
 
@@ -1514,6 +1615,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   buffers, tables and hardware leases remain reserved. Complete image admission,
   module electrical binding, physical DMA/coherence and drain, additional modes
   and physical qualification remain outstanding.
+  Repeated capture is **implemented**. The coordinator rearms a retained,
+  readable capture into the same planes, mappings and leases with the sensor
+  stopped, after two 100 ms quiet intervals and checked receiver and DMA status.
+  The boot record can request up to fifteen discarded images before the
+  readable one, so automatic exposure can settle. Sensor configuration now
+  uses block writes of up to 40 bytes, 125 transactions instead of 308, and the
+  camera image serves USB0 through the shared board service. Host-model checks
+  pass. Register auto-increment, the quiet intervals and exposure behavior
+  while packets are disabled need a module on the board.
   No MIPI camera is connected; physical capture qualification awaits a module.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
   640×480 BGGR12 frame and produces an immutable copied NV16 frame through
@@ -1742,8 +1852,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [High-profile H.264 build](h264-native.md#high-profile-runtime-clips-and-presentation-ordering)
   is implemented for progressive profile 100, 8-bit 4:2:0, with CABAC, scaling
   matrices, weighted prediction and I/P/B pictures including reference B pictures.
-  Fixed storage admits two short-term references at full HD or four at HD, with
-  at most four active entries per list. Authenticated 128-byte picture descriptors
+  Fixed storage now holds four full-HD picture slots, which admit three
+  short-term references at full HD, or four at HD, with at most four active
+  entries per list. Each coded picture may use up to 2 MiB of device input, and
+  the pool stays inside the shared 16 MiB uncached reservation. The parser,
+  controller, layout and host limits use these capacities, and the bounds check
+  admits a three-reference full-HD clip in host models. The frozen evidence
+  described next records the earlier two-reference full-HD layout; the current
+  layout needs a new evidence freeze. Authenticated 128-byte picture descriptors
   bind decode/presentation order; five copied-output slots support reorder and
   ACK backpressure. Copy acknowledgment, reference retirement and healthy input
   refill remain separate. Uncertain completion retains all allocations.
@@ -2109,7 +2225,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
   physical admission record exists. Physical link operation, source capacity,
   DMA, interrupt delivery and recovery remain unqualified. Wider HID profiles,
-  Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
+  Gen2, streams, wider classes, power budgets, adapter use of detach and drain
+  remain required.
   [Direct Gen1 keyboard reports](usb2-host.md#direct-gen1-keyboard-reports-use-an-explicit-workload)
   are implemented under explicit supervised workload 8. One boot keyboard with
   a zero-burst companion and 1–64-byte packets supplies four copied raw reports;
@@ -2147,9 +2264,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `usb-msc-stall-20261020/root-integration.json`. Frozen image `70e32112…`
   retains the older clock-scope header; it links no encoder or media-IOMMU
   preparation and does not establish the newer encoder exclusion.
-  Full startup, physical power/switch qualification, actual
-  transfers and report timing, DMA drain, CPU interrupt delivery, repeated
-  attachment, safe detach/reuse, bus-powered budgets, deeper hubs/more leaves,
+  Detach and reattach are **implemented** in the xHCI core. A root-port
+  disconnect or hub port change sends REMOVE, stops or resets each endpoint and
+  issues Disable Slot, children before their hub. Only the Disable Slot
+  completion clears the slot's contexts, rings and bounce pages, after which the
+  port can enumerate a new device on the same pages. A transaction error holds
+  its endpoint for at most 1 s. A modeled controller passes root and hub-child
+  detach followed by a second enumeration and bulk read. The TinyUSB adapter
+  does not call this path yet and still treats REMOVE as session loss, so no
+  image reuses a port after a detach. Full startup, physical power/switch
+  qualification, actual transfers and report timing, DMA drain, CPU interrupt
+  delivery, repeated physical attachment, adapter use of detach, bus-powered budgets, deeper hubs/more leaves,
   wider classes, isochronous transfers, wider SuperSpeed modes, role
   swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
 
