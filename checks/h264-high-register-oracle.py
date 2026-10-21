@@ -50,7 +50,7 @@ def main():
    assert r[0x20c]>>24&31==max(0,counts[0]-1) and r[0x20c]>>16&31==max(0,counts[1]-1)
    for x in refs+[dict(slot=slot,poc=poc)]:
     k=x['slot'];assert ram[256+8*k:258+8*k]==[x['poc']&0xffffffff]*2,(name,i,x,ram[256+8*k:258+8*k])
-    assert ram[259+8*k:263+8*k]==[0x10401000+k*ystep,0x109fc000+k*cstep,0x10d30000+k*mvstep,0x10d30000+k*mvstep+field]
+    assert ram[259+8*k:263+8*k]==[0x10201000+k*ystep,0x109fa000+k*cstep,0x10e30000+k*mvstep,0x10e30000+k*mvstep+field]
    assert r[0xc8]==w|(w//2<<16) and r[0xc4]==w*h//4
    implicit=kind==1 and parameters['weighted_bipred_idc']==2
    explicit=(kind==0 and parameters['weighted_pred_flag']) or (kind==1 and parameters['weighted_bipred_idc']==1)

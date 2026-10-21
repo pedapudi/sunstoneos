@@ -41,7 +41,7 @@ else()
 endif()
 list(APPEND h264_sources "${h264_build}/boot.c")
 foreach(source IN ITEMS apps/h264/main.c apps/h264/input.c apps/h264/stream.c apps/h264/stream-storage.c apps/h264/stream-usb.c apps/h264/native.c apps/h264/usb0.c apps/h264/admission.c apps/h264/snapshot.c
- drivers/video/a733_video_h264.c drivers/video/a733_video_platform.c
+ drivers/video/a733_video_h264.c drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c
  drivers/iommu/a733_iommu.c)
  list(APPEND h264_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
@@ -82,7 +82,7 @@ endif()
 file(GLOB h264_headers "${SUNSTONE_SOURCE_ROOT}/apps/h264/*.h")
 set(h264_inputs ${h264_sources} ${h264_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_application.h" "${CMAKE_CURRENT_LIST_FILE}"
- "${SUNSTONE_SOURCE_ROOT}/include/a733_video_h264.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_video_platform.h"
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_h264.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_video_platform.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_video_unit.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/sources.json"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/fullhd-boot.patch" "${SUNSTONE_SOURCE_ROOT}/apps/h264/fullhd-link.patch"

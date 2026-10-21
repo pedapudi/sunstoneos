@@ -30,7 +30,7 @@ static int manifest_valid(struct h264_stream *s)
     if(h264_stream_u32(m)!=0x34484d48||h264_stream_u32(m+4)!=1||h264_stream_u32(m+8)!=128||h264_stream_u32(m+12)!=128||h264_stream_u32(m+16)!=s->count||mode>1||!w||w>1920||!h||h>1088||(w|h)&15||!vw||vw>1920||!vh||vh>1080||(vw|vh)&1||vw>w||vh>h||h264_stream_u32(m+40)>w-vw||h264_stream_u32(m+44)>h-vh||h264_stream_u32(m+48)!=w-vw-h264_stream_u32(m+40)||h264_stream_u32(m+52)!=h-vh-h264_stream_u32(m+44)||!h264_stream_u32(m+56)||h264_stream_u32(m+56)>4||h264_stream_u32(m+60)>2||!h264_stream_u32(m+64)||h264_stream_u32(m+64)>4||h264_stream_u32(m+68)||!present(m+72,32)||present(m+104,24))return 0;
     uint8_t ordinals[256]={0};
     for(unsigned i=0;i<s->count;++i){const uint8_t *d=h264_stream_descriptor(s,i);unsigned display=h264_stream_u32(d+84);
-        if(!h264_stream_u32(d)||h264_stream_u32(d)>4194304||h264_stream_u32(d+4)!=(mode?vw*vh*3/2:0)||h264_stream_u32(d+8)>65535||!present(d+16,32)||present(d+48,32)!=(mode!=0)||h264_stream_u32(d+80)!=i||display>=s->count||ordinals[display]++||h264_stream_u32(d+92)>2||h264_stream_u32(d+96)>3||h264_stream_u32(d+100)>1||present(d+104,24))return 0;
+        if(!h264_stream_u32(d)||h264_stream_u32(d)>H264_STREAM_INPUT_BYTES||h264_stream_u32(d+4)!=(mode?vw*vh*3/2:0)||h264_stream_u32(d+8)>65535||!present(d+16,32)||present(d+48,32)!=(mode!=0)||h264_stream_u32(d+80)!=i||display>=s->count||ordinals[display]++||h264_stream_u32(d+92)>2||h264_stream_u32(d+96)>3||h264_stream_u32(d+100)>1||present(d+104,24))return 0;
     }
 #else
     unsigned previous=0;

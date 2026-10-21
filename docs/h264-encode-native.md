@@ -101,7 +101,7 @@ The selected linker profile retains WB 0x48000000–0x78000000 and
 NC 0x78000000–0x79000000. No CPU startup or shared memory reservation changes are
 introduced. Actual linked allocator execution uses 6,254,592 NC bytes and
 3,022,848 WB bytes. Application metadata, including its 32 KiB task stack, occupies
-36,960 bytes outside those allocations.
+37,088 bytes outside those allocations.
 
 | Allocation | Retained bytes | Ownership |
 | --- | ---: | --- |

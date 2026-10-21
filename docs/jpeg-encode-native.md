@@ -59,7 +59,7 @@ second job, including after copied-output ACK.
 The actual compact allocation uses 1,560,576 NC bytes for 32 KiB tables,
 page-rounded input/output and two guard pages around each buffer. WB upload and
 copied JPEG use 1,511,424 bytes. Actual application metadata, including its 32 KiB
-task stack, occupies 35,952 bytes within the 64 KiB budget. The allocator validates
+task stack, occupies 36,192 bytes within the 64 KiB budget. The allocator validates
 exact capacities/alignment before exposing spans. Master 3 maps input read-only
 and output read/write, with no external device scratch observed in the traced
 profile. These minimum extents do not establish physical DMA burst bounds.

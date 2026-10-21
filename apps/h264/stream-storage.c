@@ -5,7 +5,7 @@
 #include <string.h>
 const uint64_t h264_fullhd_geometry[8]={UINT64_C(0x4844464844323634),1,1920,1088,1920,1080,H264_STREAM_INPUT_BYTES,H264_STREAM_OUTPUT_BYTES};
 #ifdef SUNSTONE_H264_HIGH
-const uint64_t h264_high_geometry[8]={UINT64_C(0x4847494844323634),1,1920,1088,5,5,14749696,1048576};
+const uint64_t h264_high_geometry[8]={UINT64_C(0x4847494844323634),1,1920,1088,5,5,16044032,1048576};
 #endif
 static struct device_memory_pool *pool;
 static struct device_memory_lease leases[2+H264_STREAM_COPIES

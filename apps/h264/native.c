@@ -87,7 +87,7 @@ static const unsigned slots[]={2,2,2,1,2,1};
 static const uint32_t used[]={4096,2048,1024,A733_H264_PICTURE_INFO_BYTES,2048,0xc000};
 static const uint32_t prefix[]={4096,4096,4096,4096,4096,16384};
 #ifdef SUNSTONE_H264_HIGH
-static const uint32_t vga_capacity[]={4194304,6266880,3133440,0x35000,786432,0xc000};
+static const uint32_t vga_capacity[]={A733_H264_HIGH_INPUT_BYTES,A733_H264_HIGH_Y_BYTES,A733_H264_HIGH_C_BYTES,0x35000,A733_H264_HIGH_MV_BYTES,0xc000};
 static uint32_t high_step[6],high_used[6],high_slots[6];
 #define vga_slot_capacity high_step
 #define vga_used high_used
@@ -95,8 +95,8 @@ static uint32_t high_step[6],high_used[6],high_slots[6];
 static void high_geometry(void)
 {
     const struct h264_high_plan *p=&h264_stream.plan;
-    uint32_t step[]={4194304,p->y_step,p->c_step,0x35000,p->mv_step,0xc000};
-    uint32_t used[]={4194304,p->picture.width*p->picture.height,p->picture.width*p->picture.height/2,p->picture_used,p->mv_field*2,0xc000};
+    uint32_t step[]={A733_H264_HIGH_INPUT_BYTES,p->y_step,p->c_step,0x35000,p->mv_step,0xc000};
+    uint32_t used[]={A733_H264_HIGH_INPUT_BYTES,p->picture.width*p->picture.height,p->picture.width*p->picture.height/2,p->picture_used,p->mv_field*2,0xc000};
     uint32_t count[]={1,p->slots,p->slots,1,p->slots,1};
     memcpy(high_step,step,sizeof(step));memcpy(high_used,used,sizeof(used));memcpy(high_slots,count,sizeof(count));
 }
@@ -286,7 +286,7 @@ static int h264_allocate(void)
         {0x10000000,0x10100000,0x10200000,0x10300000,0x10400000,0x10500000}};
 #ifdef SUNSTONE_H264_FULLHD
 #ifdef SUNSTONE_H264_HIGH
-    static const uint32_t hd_addresses[]={0x10000000,0x10401000,0x109fc000,0x10cfa000,0x10d30000,0x10df4000};
+    static const uint32_t hd_addresses[]={0x10000000,0x10201000,0x109fa000,0x10df7000,0x10e30000,0x10f34000};
 #else
     static const uint32_t hd_addresses[]={0x10000000,0x10401000,0x10801000,0x10a00000,0x10a36000,0x10abc000};
 #endif

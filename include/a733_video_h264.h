@@ -15,6 +15,13 @@
 #define A733_H264_FULLHD_OUTPUT_BYTES 3110400u
 #define A733_H264_FULLHD_MV_FIELD_BYTES 131072u
 #define A733_H264_FULLHD_MV_SLOT_BYTES 262144u
+/* High pool: one coded picture of at most 2 MiB and four 1920x1088 Y, chroma
+ * and motion-vector slots, enough for three references plus the destination.
+ * The 16 MiB uncached pool and the four 4 MiB IOMMU windows bound the total. */
+#define A733_H264_HIGH_INPUT_BYTES 2097152u
+#define A733_H264_HIGH_Y_BYTES 8355840u
+#define A733_H264_HIGH_C_BYTES 4177920u
+#define A733_H264_HIGH_MV_BYTES 1048576u
 /* Historical PCM fixture length, not a stream admission bound. */
 #define A733_H264_SLICE_BYTES 2320u
 #define A733_H264_OUTPUT_BYTES 2304u

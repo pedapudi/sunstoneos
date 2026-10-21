@@ -147,30 +147,30 @@ int main(int argc,char**argv)
         if(fail==11)m.ccu[0x1988/4]&=~(1u<<25);
         if(fail==12)m.ccu[0x1b10/4]|=1;
         if(fail==13)m.ccu[0x1b10/4]=0x10000;
-        if(fail==9)++p.config.clock.id; /* Forged token must fail before MMIO. */
+        if(fail==9)++p.decoder.unit.config.clock.id; /* Forged token must fail before MMIO. */
         struct a733_video_jpeg_job job={bytes,(uint32_t)n,0x81000000,65536,0x82000000,2048,0x83000000,1024};
         struct a733_video_jpeg_run run={0};
         assert(a733_video_jpeg_begin(&run,a733_video_platform_jpeg_ops(),&p,&job,100000));
         int result=0;unsigned polls=0,saved=0,before=m.reads;
         while(!result&&++polls<2000) {
             result=a733_video_jpeg_poll(&run);
-            if(!fail&&p.prepared&&!saved) {
+            if(!fail&&p.decoder.prepared&&!saved) {
                 char path[1024];assert(snprintf(path,sizeof(path),"%s/%u.bin",argv[2],test)>0);
                 f=fopen(path,"wb");assert(f);assert(fwrite(m.events,sizeof(m.events[0]),m.writes,f)==m.writes);fclose(f);saved=1;
             }
         }
-        assert(polls<2000&&run.token==42&&p.token==42);
+        assert(polls<2000&&run.token==42&&p.decoder.unit.token==42);
         if(!test){nominal_writes=m.writes;memcpy(nominal,m.events,sizeof(nominal));}
         if(test==17||test==18)assert(m.writes==nominal_writes&&!memcmp(m.events,nominal,sizeof(nominal)));
         if(test==18)assert(m.busy_seen==2&&!m.busy_hold);
-        if(!fail)assert(result==1&&m.drain==2&&m.trigger&&!m.lock&&saved&&!p.failed);
+        if(!fail)assert(result==1&&m.drain==2&&m.trigger&&!m.lock&&saved&&!p.decoder.unit.failed);
         else {
             assert(result==-1);
             if(fail<=4||fail==9||(fail>=10&&fail<17))assert(!m.memory&&!m.writes);
             if(fail==1||fail==2||fail==4||fail==9||(fail>=10&&fail<17))assert(!m.vereads);
-            if(fail==17)assert(m.busy_seen==1&&m.writes==100&&!m.lock&&!p.locked&&p.failed);
+            if(fail==17)assert(m.busy_seen==1&&m.writes==100&&!m.lock&&!p.decoder.unit.locked&&p.decoder.unit.failed);
             if(fail==5)assert(m.memory&&!m.writes);
-            if(fail==6||fail==7)assert(m.lock&&p.locked&&!m.trigger);
+            if(fail==6||fail==7)assert(m.lock&&p.decoder.unit.locked&&!m.trigger);
             if(fail==8)assert(m.trigger&&m.drain==1);
             if(fail==9)assert(m.reads==before);
             unsigned accesses=m.reads+m.writes;
