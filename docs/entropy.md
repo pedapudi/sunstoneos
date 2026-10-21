@@ -44,6 +44,20 @@ is the selected false-alarm probability and `W` is the test window length.
 169-bit samples with inconsistent values for entropy and window length. Those
 examples are insufficient to characterize this board and are not used as defaults.
 
+`checks/crypto-health-cutoffs.py` evaluates both formulas with exact integer
+and 80-digit decimal arithmetic. Given an assessed `H`, `alpha = 2^-k` with
+`20 <= k <= 40` and the source type, it prints the four register words in the
+form the controller accepts: the two cutoffs, a zero delay for continuous
+testing and both enables with `W` of 1024 for a binary source or 512
+otherwise. For example, a binary source assessed at 0.5 bits per sample with
+`alpha = 2^-20` gives `{0x29, 0x319, 0x0, 0x30400}`. Each run first reproduces
+the adaptive-proportion cutoffs in SP 800-90B Table 2 for `alpha = 2^-20`
+(941, 840, 748, 664 and 589 for binary sources at `H` from 0.2 to 1, and 410,
+311, 177, 62 and 13 for non-binary sources at `H` of 0.5, 1, 2, 4 and 8) and
+the standard's repetition-count example. The script never chooses `H`. The
+values it prints are only as valid as the raw-source assessment that supplies
+`H`, and no such assessment of this silicon exists.
+
 [NIST SP 800-90B](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90B.pdf)
 describes raw-source assessment and health testing before conditioning. Its
 startup requirement covers at least 1024 raw samples. The A733 command returns
@@ -139,5 +153,5 @@ Exact executed inputs, objects and logs are preserved in
 Production use still requires raw-source characterization, a valid assessed
 profile, successful startup testing for each enable epoch, actual secure access,
 clock/supply/mapping authority, recovery qualification and physical CE operation.
-The engine's cipher, hash, asymmetric, key-ladder and secure-key APIs remain
-separate hardware coverage requirements.
+The engine's remaining cipher modes and its asymmetric, key-ladder and
+secure-key APIs remain separate hardware coverage requirements.
