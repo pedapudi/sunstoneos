@@ -678,7 +678,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   unqualified.
   It requires a passive PB0/PB1 loopback and electrical admission; inherited
   multicore startup remains physically unqualified. Physical serial and interrupt
-  operation and DMA remain unqualified; advanced modes remain required.
+  operation and DMA remain unqualified.
+  The driver permits the DMA lease on all nine controllers, using DMA0
+  requests 14–20 and 50–51, and selects IrDA SIR, RS-485 9-bit (UART1–6) or
+  internal loopback on a quiet line. Host models and the linked native write
+  policy pass; no application uses these modes or DMA beyond UART2. The board
+  device tree's `uart-v100` driver data disables hardware RS-485 and 9-bit
+  mode, which conflicts with the manual, so RS-485 needs physical resolution.
+  Runtime format changes and suspend/resume remain required.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,
@@ -686,8 +693,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [native platform binding](spi-platform.md) composes real clock/pin leases,
   reset/GIC handling, inactive chip-select preparation and bounded restoration.
   Focused host checks and native compilation pass. SPI4 route activation refuses
-  its unproven package signal mapping. Board admission, physical peers, DMA,
-  advanced modes and SPIF remain outstanding.
+  its unproven package signal mapping. The driver also implements dual and quad
+  data phases after a single-lane prefix, and DMA transfers on requests 23–26
+  and 53 with verified request gating and abandonment; host and platform
+  models pass. Routes lack IO2/IO3 pins, so the platform refuses quad, and
+  SPI4 has no DMA request in the manual. No application uses these modes.
+  Board admission, physical peers, three-wire and bit-aligned modes and SPIF
+  remain outstanding.
   The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
   supports polling version 1 and deferred-IRQ version 2 for one authenticated
   FIFO-sized WRITE_READ exchange on the 1.8 V PE0–3 route. CPU0 INTID59 masks
@@ -702,7 +714,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is in a later Type-C task body, not created for SPI workload 2; no hypothetical
   rebuilt-image equivalence is claimed. SPI/GIC, PMIC, scheduling and transport
   effects are modeled. Physical exchange, IRQ delivery, signal timing, electrical
-  compatibility and recovery remain unqualified; DMA and broader modes remain required.
+  compatibility and recovery remain unqualified; application DMA and broader modes remain required.
 - PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
   The complete application has a boot-CPU-only profile under
   `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and
