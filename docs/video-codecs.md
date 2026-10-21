@@ -5,7 +5,8 @@ register executor for the A733 video decoder. The executor compiles for native
 AArch64 and matches instruction traces from an A733/T736 runtime package.
 The [native JPEG application](jpeg-application.md) integrates the executor with
 clock/reset providers, decoder IOMMU mappings, guarded buffers and copied USB
-output. Its central image links and focused software checks pass. Physical
+output, and decodes sequences of up to eight images in one session. Its central
+image links and focused software checks pass. Physical
 decoding, memory confinement, completion and numerical conformance remain
 unqualified. The [native JPEG encoder](jpeg-encode-native.md) now implements a
 one-job VGA NV12/quality75 path with authenticated upload and retained copied
@@ -235,7 +236,7 @@ are capability claims, not SunstoneOS qualification results.
 | JPEG encode | Baseline, 64-megapixel snapshots, 4K at 15 fps; 4:2:0/4:2:2/4:4:4, grayscale | Native one-job VGA NV12/quality75; modeled path tested, physical unqualified |
 | H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Bounded native VGA Baseline IDR/P path modeled; broader profiles/rates/resolutions remain required; manual's level/resolution combination needs clarification |
 | H.265 encode | Main, level 5 Main Tier, 4K at 30 fps | Encoder libraries present; native unsupported |
-| MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | First narrow JPEG profile implemented; physical execution unqualified |
+| MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | Baseline YCbCr420 up to 640-by-480 planes, one image or a sequence of up to eight per session; modeled, physical execution unqualified |
 | H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | [Native 640-by-480 Main IDR and P build](hevc-native.md); modeled against the effective `libawh265.so` trace, preparation awaits physical allocation evidence, physical decoding unqualified; wider modes remain required |
 | VP9 decode | Profiles 0/2, level 6.1, 8192 by 8192 at 24 fps | `libawvp9HwAL.so`; native unsupported |
 | AVS2 decode | 8192 by 4608 at 24 fps | `libawavs2.so`; native unsupported |

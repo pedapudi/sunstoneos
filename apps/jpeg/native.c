@@ -63,7 +63,7 @@ static int jpeg_authority(void *v,const struct a733_video_platform_config *c,
        j->luma_iova!=JPEG_LUMA_IOVA||j->luma_bytes!=jpeg_input_mapped(&jpeg.supplied,1)||
        j->chroma_iova!=JPEG_CHROMA_IOVA||j->chroma_bytes!=jpeg_input_mapped(&jpeg.supplied,2))return -1;
     uint8_t hash[32];storage_digest_bytes(j->input,jpeg.supplied.input_bytes,hash);
-    if(memcmp(hash,jpeg.session.fixture,32))return -1;
+    if(memcmp(hash,jpeg.supplied.input_hash,32))return -1;
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!jpeg_device(p))return -1;
     for(uintptr_t p=0x01c0e000;p<0x01c0f000;p+=4096)if(!jpeg_device(p))return -1;
     uint32_t gate;
@@ -151,8 +151,9 @@ static int jpeg_copied(void *v,uint64_t token,uint64_t d)
 }
 static int jpeg_retained(void *v,uint64_t t,uint64_t d)
 {return a733_video_platform_retained_copy(v,t,d,jpeg_copied,&jpeg);}
-/* Sized from the committed geometry: each buffer maps only its rounded pages,
- * between two physical guard pages. */
+/* Sized from the committed geometry, or for a sequence from its largest
+ * entries: each buffer maps only its rounded pages, between two physical
+ * guard pages. */
 static int jpeg_allocate(void)
 {
     jpeg.pool=a733_memory_uncached_init();if(!jpeg.pool)return 0;
@@ -177,6 +178,12 @@ static int jpeg_allocate(void)
         a->state=DEVICE_MEMORY_DEVICE;
     }
     return 1;
+}
+static struct a733_video_jpeg_job jpeg_job(void)
+{
+    return (struct a733_video_jpeg_job){jpeg.input,(uint32_t)jpeg.supplied.input_bytes,
+        JPEG_INPUT_IOVA,jpeg_input_mapped(&jpeg.supplied,0),JPEG_LUMA_IOVA,jpeg_input_mapped(&jpeg.supplied,1),
+        JPEG_CHROMA_IOVA,jpeg_input_mapped(&jpeg.supplied,2)};
 }
 static int jpeg_setup(void)
 {
@@ -210,10 +217,26 @@ static int jpeg_setup(void)
     c->pck=(struct a733_gpu_resource_lease){jpeg.power_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE};
     struct a733_video_platform_ops ops={jpeg_now,jpeg_authority,jpeg_memory,jpeg_no_drain,jpeg_enter,jpeg_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!jpeg_allocate()||!a733_video_platform_init(&jpeg.platform,c,&ops,&jpeg))return -1;
-    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg.supplied.input_bytes,
-        JPEG_INPUT_IOVA,jpeg_input_mapped(&jpeg.supplied,0),JPEG_LUMA_IOVA,jpeg_input_mapped(&jpeg.supplied,1),
-        JPEG_CHROMA_IOVA,jpeg_input_mapped(&jpeg.supplied,2)};
+    struct a733_video_jpeg_job job=jpeg_job();jpeg.decoded=1;
     return a733_video_jpeg_begin_retained(&jpeg.run,a733_video_platform_jpeg_ops(),&jpeg.platform,&job,jpeg_deadline(),jpeg_retained)?1:-1;
+}
+/* A sequence image is published only after the previous result was
+ * delivered, so the previous copy was verified: guards intact, no IOMMU
+ * fault and no codec error. Under the same retained mappings the next job
+ * rewrites the input and restores the poison that the guard and tail checks
+ * expect, as H.264 refills its input after a healthy completion. Nothing is
+ * unmapped, released or reset. */
+static int jpeg_next(void)
+{
+    if(jpeg_input_ready(&jpeg.supplied)!=jpeg.decoded+1||jpeg.run.state!=A733_VIDEO_JPEG_COPIED)return -1;
+    uint32_t input=jpeg_input_mapped(&jpeg.supplied,0);
+    memset(jpeg.input,0,input);memcpy(jpeg.input,jpeg.supplied.bytes,jpeg.supplied.input_bytes);
+    memset(jpeg.luma,0xa5,jpeg_input_mapped(&jpeg.supplied,1));memset(jpeg.chroma,0xa5,jpeg_input_mapped(&jpeg.supplied,2));
+    jpeg.copy_step=0;jpeg.copy_row=0;
+    __asm__ volatile("dsb sy":::"memory");
+    struct a733_video_jpeg_job job=jpeg_job();
+    if(!board_live(NULL)||!a733_video_jpeg_next(&jpeg.run,&job))return -1;
+    ++jpeg.decoded;return 0;
 }
 /* The controller performs at most one register operation per poll. Repeat
  * polls while each one advances its state or index, so programming sequences
@@ -235,7 +258,9 @@ void jpeg_task(void *unused)
         if(!board_live(NULL)){atomic_store_explicit(&jpeg.result,2,memory_order_release);vTaskDelay(1);continue;}
         if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&jpeg.result,memory_order_acquire)){
             if(!jpeg_input_ready(&jpeg.supplied)){vTaskDelay(1);continue;}
-            int r=jpeg.stage?jpeg_advance():jpeg_setup();
+            /* COPIED with a pending result means the USB task published the
+             * next sequence image after delivering this one. */
+            int r=!jpeg.stage?jpeg_setup():jpeg.run.state==A733_VIDEO_JPEG_COPIED?jpeg_next():jpeg_advance();
             if(r<0)atomic_store_explicit(&jpeg.result,2,memory_order_release);
             else if(!jpeg.stage&&r==1)jpeg.stage=1;
             else if(jpeg.stage&&r==1&&jpeg.run.state==A733_VIDEO_JPEG_COPIED)atomic_store_explicit(&jpeg.result,1,memory_order_release);

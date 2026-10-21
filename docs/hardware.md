@@ -1843,8 +1843,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   acquisition, and returns copied pixels with parsed dimensions. Optional
   independent reference pixels support qualification. Partial-block geometry,
   immutable input, native copy and fragmented host capture checks pass under
-  `jpeg-runtime-input-20261018/`. Each retained session decodes one image;
-  repeated operation and physical conformance remain outstanding.
+  `jpeg-runtime-input-20261018/`. A version 3 session decodes a manifest of up
+  to eight images in order, refilling the retained buffers after each delivered
+  healthy result; sanitized input and linked-image checks with modeled device
+  effects pass. The supervised capture tool and bundle still carry one image.
+  Repeated encoding and physical conformance remain outstanding.
   The complete JPEG session is now copied and verified against its admitted
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
