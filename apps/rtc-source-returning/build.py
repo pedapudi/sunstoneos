@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build source-only or alarm RTC operation with frozen returning objects."""
-import argparse,hashlib,json,shlex,shutil,subprocess
+import argparse,hashlib,json,shlex,shutil,subprocess,sys
 from pathlib import Path
+sys.dont_write_bytecode=True;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
+from returning_build import object_closure,require_unchanged_headers
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--operation',choices=('source','alarm'),default='source');p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/pmic-provider-probe-20261018')
 a=p.parse_args();r=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();app=r/f'apps/rtc-{a.operation}-returning';b=e/'build';o=b/'objects';o.mkdir(parents=True,exist_ok=True)
@@ -20,6 +22,8 @@ for i,source in enumerate(sources):
 items=json.loads((base/'reused-objects.json').read_text())
 for name in ('02-counter_clock.obj','13-tasks.obj','14-queue.obj'):
  path=base/'build/objects'/name;pin=next(x for x in accepted['new_objects'] if x['path']==str(path));items.append(pin)
+# Accepted objects keep the layouts of the headers they were compiled with.
+headers=require_unchanged_headers([object_closure(x['path'],x.get('original')) for x in items],old[-2][0])
 reused=[]
 for i,item in enumerate(items):
  path=Path(item['path']);assert sha(path)==item['sha256'];dest=o/f'reused-{i}.obj';shutil.copy2(path,dest);objects.append(dest)
@@ -41,6 +45,6 @@ for command in commands:
   path=Path(value.split('=',1)[-1])
   if path.is_absolute() and path.is_file() and (value==command[0] or value.startswith('--ld-path=')):
    assert sha(path)==accepted['tools'][str(path)]['sha256'];tools[str(path)]={'sha256':sha(path),'resolved':str(path.resolve())}
-save('input-identities.json',{'operation':a.operation,'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'compiler_inputs':closure,'toolchain':tools,'baseline_inputs_sha256':sha(base/'input-identities.json'),'elf_sha256':sha(b/'probe.elf'),'binary_sha256':sha(e/'probe.bin'),'wraps':wraps,'physical_access':False})
+save('input-identities.json',{'operation':a.operation,'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'compiler_inputs':closure,'toolchain':tools,'reused_object_headers':headers,'baseline_inputs_sha256':sha(base/'input-identities.json'),'elf_sha256':sha(b/'probe.elf'),'binary_sha256':sha(e/'probe.bin'),'wraps':wraps,'physical_access':False})
 shutil.copy2(base/'input-identities.json',e/'baseline-input-identities.json');shutil.copy2(r/'checks/storage-read-native.py',e/'layout-helper.py')
 print(f'Built {a.operation} returning RTC image; four target units,15 accepted unchanged objects.')

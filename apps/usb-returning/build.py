@@ -7,11 +7,17 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
+
+sys.dont_write_bytecode=True;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
+from returning_build import image_object_closures,object_closure,require_unchanged_headers
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/pmic-provider-probe-20261018')
 p.add_argument('--transport',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-transport-only-20261018')
+# Per-object compiler dependencies of the accepted TinyUSB objects.
+p.add_argument('--transport-records',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-integration-20261018/frozen/image-objects.json')
 a=p.parse_args();r=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();transport=a.transport.resolve()
 b=e/'build';o=b/'objects';o.mkdir(parents=True,exist_ok=True)
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -43,6 +49,9 @@ for item in usb:
  if any(Path(item['path']).name.endswith(name) for name in ('dcd_sunxi_musb.c.obj','tusb.c.obj','tusb_fifo.c.obj','usbd.c.obj','vendor_device.c.obj')):
   items.append(item)
 assert len(items)==31,len(items)
+# Accepted objects keep the layouts of the headers they were compiled with.
+recorded=image_object_closures(a.transport_records,'apps/gpu-render/main.c')
+headers=require_unchanged_headers([('accepted' in x and recorded.get(x['sha256'])) or object_closure(x['path'],x.get('original')) for x in items],old[-2][0])
 for i,item in enumerate(items):
  source=Path(item['path']);assert digest(source)==item['sha256'],source
  dest=o/f'reused-{i}.obj';shutil.copy2(source,dest);objects.append(dest)
@@ -67,7 +76,7 @@ for command in commands:
   if path.is_absolute() and path.is_file() and (value.startswith('--ld-path=') or value==command[0]):
    assert digest(path)==accepted['tools'][str(path)]['sha256'],path
    tools[str(path)]={'sha256':digest(path),'resolved':str(path.resolve())}
-save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'transport_input_records_sha256':digest(transport/'input-identities.json'),'toolchain':tools,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'physical_access':False})
+save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'transport_input_records_sha256':digest(transport/'input-identities.json'),'toolchain':tools,'reused_object_headers':headers,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'physical_access':False})
 for root,name in [(base,'baseline'),(transport,'transport')]:
  for source in ['input-identities.json','reused-objects.json']:
   shutil.copy2(root/source,e/(name+'-'+source))
