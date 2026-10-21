@@ -61,9 +61,12 @@ def run(image,out,source,compiler,command,steps,steps_path):
         (launch/'session.bin').write_bytes(raw);(launch/'identity.bin').write_bytes(identity)
         (launch/'prepared.json').write_text(json.dumps({'segments':[{'name':'session.bin','address':0x41f00000},{'name':'identity.bin','address':identity_address}]}))
     model=(source/'checks/a733-smp-supervised-launch.py').read_text()
-    model=model.replace('0x4153373353554333','0x4153373342534332').replace('480000000','1440000000')
-    model=model.replace('reason in (1,2,3,4,5,6,13)','reason in (1,2,3,4,5,6,13,14)')
-    first=model.index('    if args.frequency_only:');last=model.index('    result =',first)
+    # Count-checked edits: both 20-second deadlines become the board's 60 seconds.
+    model=prepare.adapt_launcher(model,{'0x4153373353554333':'0x4153373342534332','480000000':'1440000000',
+        'reason in (1,2,3,4,5,6,13)':'reason in (1,2,3,4,5,6,13,14)'},{'480000000':2})
+    selection='    if args.accelerator_profile:\n        cases'
+    assert model.count(selection)==1 and model.count('    result =')==1, 'Launcher model case selection changed.'
+    first=model.index(selection);last=model.index('    result =',first)
     model=model[:first]+'''    cases=[check('board60second supervised handoff',12,sysreg={0xee1e0f10:0}),
         check('nonzero uploaded timer deadline refused',14,mutation=(0x41f00000+160,1)),
         check('armed contract cannot enter supervised board',3,mutation=(CONTRACT+8,1))]

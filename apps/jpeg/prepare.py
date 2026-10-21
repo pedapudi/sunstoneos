@@ -68,9 +68,9 @@ def request_bytes(address,identity,raw,epoch,generation,lease):
 def build_launcher(out,clang,lld):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
-    text=text.replace('0x4153373353554c33','0x415337334a504c32').replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
-    text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_jpeg_session)')
-    text=text.replace('20*A733_SMP_COUNTER_HZ','60*A733_SMP_COUNTER_HZ')
+    text=board.adapt_launcher(text,{'0x4153373353554c33':'0x415337334a504c32','REQUEST[1]==3':'REQUEST[1]==2','CONTRACT->version==3':'CONTRACT->version==2',
+        'CONTRACT->reserved[0] && !CONTRACT->reserved[1]':'CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_jpeg_session)',
+        '20*A733_SMP_COUNTER_HZ':'60*A733_SMP_COUNTER_HZ'})
     (out/'jpeg-launch-base.c').write_text(text)
     for name,path in [('launch.c',ROOT/'apps/jpeg/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('a733_jpeg_application.h',ROOT/'include/a733_jpeg_application.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h')]:shutil.copy2(path,out/name)
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]

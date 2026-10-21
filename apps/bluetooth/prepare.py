@@ -108,9 +108,9 @@ def build_launcher(output, clang, lld, execute=None):
     # Generate the same reviewed supervisor base; only this image's tiny entry
     # validation differs. No timer/reset writes or hardware operation occurs.
     text = (ROOT / 'platform/a733-smp-supervised/launch.c').read_text()
-    text = text.replace('0x4153373353554c33', '0x4153373342534c32').replace('REQUEST[1]==3', 'REQUEST[1]==2').replace('CONTRACT->version==3', 'CONTRACT->version==2')
-    text = text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]', 'CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_board_session)')
-    text = text.replace('20*A733_SMP_COUNTER_HZ', 'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ')
+    text = board.adapt_launcher(text, {'0x4153373353554c33': '0x4153373342534c32', 'REQUEST[1]==3': 'REQUEST[1]==2', 'CONTRACT->version==3': 'CONTRACT->version==2',
+        'CONTRACT->reserved[0] && !CONTRACT->reserved[1]': 'CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_board_session)',
+        '20*A733_SMP_COUNTER_HZ': 'A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ'})
     (output / 'board-launch-base.c').write_text(text)
     for name, source in [('launch.c', ROOT / 'apps/bluetooth/launch.c'), ('launch.S', ROOT / 'platform/a733-smp-observe/launch.S'),
                          ('launch.ld', ROOT / 'platform/a733-smp-observe/launch.ld'), ('boot.h', ROOT / 'platform/a733-smp-cached/boot.h'),
