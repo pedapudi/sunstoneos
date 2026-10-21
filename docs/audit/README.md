@@ -30,9 +30,19 @@ cannot be reconnected, so the audit did not issue any command to it.
 | [redesign.md](redesign.md) | Design changes and cleanup: duplicated mechanisms, composition by textual patches, stale documentation |
 | [latent-issues.md](latent-issues.md) | Confirmed defects, ordered by severity, each with a failure scenario, a fix and a verification method |
 | [bringup-gaps.md](bringup-gaps.md) | Work still needed to meet the accepted goal: bootable images, persistent boot, recovery, multicore qualification and missing device features |
+| [board-test-plan.md](board-test-plan.md) | RAM-only board tests ranked by the risk of losing the USB connection; none may run until the board can be reconnected |
+
+Five recognition-speed changes belong in the mimus engine rather than in
+SunstoneOS. They are tracked as mimus issues:
+
+- [32-bit accumulation and four-row weight reuse in the AArch64 packed matrix kernel](https://github.com/pedapudi/mimus/issues/61)
+- [`SDOT` dot-product kernel for int8-weight linear layers with exact int16 activations](https://github.com/pedapudi/mimus/issues/62)
+- [More than two parallel workers and uneven splits across cores of different speeds](https://github.com/pedapudi/mimus/issues/63)
+- [NEON activation quantization and max-abs scans on AArch64](https://github.com/pedapudi/mimus/issues/64)
+- [Table-driven or hardware CRC32 for model verification](https://github.com/pedapudi/mimus/issues/65)
 
 Each finding has an identifier made of the audited area and a number, such as
-`storage-3`. All four reports and the tables below use these identifiers.
+`storage-3`. The four audit reports and the tables below use these identifiers.
 
 ## Terms
 
