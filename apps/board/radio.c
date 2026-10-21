@@ -95,6 +95,25 @@ static enum board_radio_result publish(struct board_radio *r,enum board_radio_re
     }
     return result;
 }
+static uint64_t later(uint64_t now,uint64_t span)
+{return span>UINT64_MAX-now?UINT64_MAX:now+span;}
+/* Admit recovery after a clean link loss; 0 once admission is overdue. The
+ * recovery bound covers reassociation, the 4-way handshake and, with DHCP, the
+ * configured address acquisition; the session lease also caps it. */
+static int recover(struct board_radio *r,uint64_t now)
+{
+    uint64_t association=later(r->config.association_timeout_us,r->config.security_timeout_us);
+    if(!r->loss_deadline)r->loss_deadline=later(now,association);
+    if(now>=r->loss_deadline)return 0;
+    uint64_t span=association;
+    if(r->config.network.network.dhcp)
+        span=later(span,(uint64_t)r->config.network.network.address_timeout*(1000000u/configTICK_RATE_HZ));
+    uint64_t deadline=later(now,span);if(deadline>r->session.deadline)deadline=r->session.deadline;
+    if(a733_radio_session_recover(&r->session,&r->config.target,&r->config.security,0,deadline)){
+        r->recovering=1;r->loss_deadline=0;if(r->recoveries!=UINT64_MAX)++r->recoveries;
+    }
+    return 1;
+}
 struct progress {uint64_t host,transport;unsigned platform,session;};
 static struct progress progress(const struct board_radio *r)
 {return (struct progress){r->platform.host.progress,r->session.transport.progress,r->platform.stage,r->session.stage};}
@@ -133,13 +152,19 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
     if(r->session.dispatcher.initialized){
-        if(r->stage!=ONLINE&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
-            r->startup_events!=UINT64_MAX)++r->startup_events;
+        /* Station events of a reconnect or recovery would otherwise fill the
+         * event queue and stop receive parsing. */
+        if((r->stage!=ONLINE||r->recovering)&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
+            r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
-    if(r->stage==ONLINE)return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
-        BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    if(r->stage==ONLINE){
+        if(result==A733_SESSION_LOST&&!recover(r,now))return retain(r);
+        if(result==A733_SESSION_NETWORK)r->recovering=0;
+        return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
+            BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    }
     if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
     if(r->stage==STARTING){
@@ -169,11 +194,13 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
 }
 int board_radio_reconnect(struct board_radio *r,uint64_t deadline)
 {
-    return r&&r->self==r&&r->constructed&&r->stage==ONLINE&&r->config.recovery_state&&
+    int ok=r&&r->self==r&&r->constructed&&r->stage==ONLINE&&r->config.recovery_state&&
         xTaskGetCurrentTaskHandle()==r->config.session.owner_task&&
         !atomic_load_explicit(&r->failed,memory_order_acquire)&&
         !(atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)&&
         a733_radio_session_reconnect(&r->session,&r->config.target,&r->config.security,0,3,deadline);
+    if(ok)r->recovering=1;
+    return ok;
 }
 int board_radio_submit(struct board_radio *r,const struct sunstone_net_request *request,uint64_t *ticket)
 {

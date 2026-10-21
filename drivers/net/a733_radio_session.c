@@ -134,6 +134,9 @@ static int reconnect_poll(struct a733_radio_session *s)
 {
     struct aic8800_sdio_transport *t=&s->transport;uint64_t current;
     if(!now(s,&current)||current>=s->reconnect_deadline)return 0;
+    /* Sockets survive a loss: keep servicing their requests and timeouts. The
+     * offline adapter does not poll the dispatcher, so this cannot race below. */
+    if(s->reconnect_lost&&s->reconnect_phase<7&&!sunstone_net_poll_owned(&s->sockets))return 0;
     if(s->reconnect_phase==0){
         if(!aic8800_network_offline_ready(&s->sockets.network))return 1;
         s->reconnect_phase=1;
@@ -143,16 +146,18 @@ static int reconnect_poll(struct a733_radio_session *s)
         int discarded=discard_data(s);
         if(discarded)return discarded>0; /* Offline old-generation RX is deliberately discarded. */
     }
-    if(s->reconnect_phase<=2&&s->wifi.link!=
-       (s->reconnect_target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED))return 0;
+    /* After a clean loss the link is already down: there is nothing to disconnect. */
+    unsigned after_retire=s->reconnect_lost?4:3;
+    if(s->reconnect_phase<=2&&s->wifi.link!=(s->reconnect_lost?AIC8800_WIFI_LINK_DOWN:
+       s->reconnect_target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED))return 0;
     switch(s->reconnect_phase){
     case 1:
         if(t->supplicant){
             if(aic8800_transport_retire_security(t,s->reconnect_deadline))s->reconnect_phase=2;
-        }else s->reconnect_phase=3;
+        }else s->reconnect_phase=after_retire;
         break;
     case 2:
-        if(t->supplicant->state==AIC8800_SUPPLICANT_RETIRED&&aic8800_transport_finish_security(t))s->reconnect_phase=3;
+        if(t->supplicant->state==AIC8800_SUPPLICANT_RETIRED&&aic8800_transport_finish_security(t))s->reconnect_phase=after_retire;
         break;
     case 3:
         if(aic8800_transport_disconnect(t,s->reconnect_reason,s->reconnect_deadline))s->reconnect_phase=4;
@@ -165,6 +170,8 @@ static int reconnect_poll(struct a733_radio_session *s)
     case 5:
         if(s->wifi.link==AIC8800_WIFI_LINK_UNRESOLVED)return 0;
         if(s->wifi.state!=AIC8800_WIFI_READY||!aic8800_transport_attachment_ready(t))break;
+        /* A refused or failed reassociation after loss is retried until the deadline. */
+        if(s->reconnect_lost&&s->wifi.link==AIC8800_WIFI_LINK_DOWN){s->reconnect_phase=4;break;}
         if(s->reconnect_target.security==AIC8800_WIFI_OPEN){
             if(s->wifi.link!=AIC8800_WIFI_ASSOCIATED_OPEN)return 0;
             if(aic8800_transport_authorize_open_data(t,s->reconnect_open))s->reconnect_phase=6;
@@ -180,7 +187,7 @@ static int reconnect_poll(struct a733_radio_session *s)
         break;
     case 7:
         if(!sunstone_net_poll_owned(&s->sockets))return 0;
-        if(sunstone_net_resume(&s->sockets)){s->stage=NETWORK;s->reconnect_phase=0;}
+        if(sunstone_net_resume(&s->sockets)){s->stage=NETWORK;s->reconnect_phase=0;s->reconnect_lost=0;}
         break;
     default:return 0;
     }
@@ -258,6 +265,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
     }
     if(t->state==AIC8800_TRANSPORT_FAULT||s->dispatcher.faulted||
         (s->sockets.initialized&&atomic_load(&s->sockets.network.failed)))return leave(s,fail(s));
+    if(s->stage==NETWORK&&aic8800_network_lost(&s->sockets.network))return leave(s,A733_SESSION_LOST);
     return leave(s,s->stage==NETWORK?A733_SESSION_NETWORK:s->stage==MANAGEMENT?A733_SESSION_MANAGEMENT:A733_SESSION_PENDING);
 }
 static int admission(struct a733_radio_session *s,uint64_t deadline)
@@ -331,6 +339,36 @@ int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_d
 int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
 {if(!enter(s))return 0;return done(s,outside(s,out,sizeof(*out))&&admission(s,s->deadline)&&aic8800_transport_take_scan(&s->transport,out));}
 
+/* The same admitted target as the lost association, with its credentials. */
+static int same_target(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
+    const struct aic8800_supplicant_config *security,uint64_t open)
+{
+    const struct aic8800_wifi *w=&s->wifi;
+    return outside(s,target,sizeof(*target))&&w->association_generation!=UINT64_MAX&&
+        target->security==w->target.security&&target->channel_index==w->target.channel_index&&
+        target->ssid_bytes==w->target.ssid_bytes&&target->connection_authority&&target->beacon_evidence&&
+        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
+         (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
+          security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)));
+}
+int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
+    const struct aic8800_supplicant_config *security,uint64_t open,uint64_t deadline)
+{
+    if(!enter(s))return 0;
+    uint64_t current;
+    if(!now(s,&current)||deadline<=current)return done(s,0);
+    int ok=s->stage==NETWORK&&aic8800_network_lost(&s->sockets.network)&&admission(s,deadline)&&
+        s->wifi.state==AIC8800_WIFI_READY&&s->wifi.link==AIC8800_WIFI_LINK_DOWN&&
+        s->data.state==AIC8800_DATA_IDLE&&same_target(s,target,security,open)&&
+        (!security||s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED||s->supplicant.state==AIC8800_SUPPLICANT_HANDSHAKE);
+    if(ok){
+        s->reconnect_target=*target;if(security)s->reconnect_security=*security;
+        s->reconnect_deadline=deadline;s->reconnect_open=open;s->reconnect_reason=0;
+        s->reconnect_lost=1;s->reconnect_phase=0;s->stage=RECONNECT;
+    }
+    return done(s,ok);
+}
 int a733_radio_session_reconnect(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
     const struct aic8800_supplicant_config *security,uint64_t open,uint16_t reason,uint64_t deadline)
 {

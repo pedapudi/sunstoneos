@@ -82,10 +82,20 @@ an in-flight command usually ends the loop, so the main saving is the removed
 tick waits between small steps such as credit, status and length reads and
 record parsing.
 
-Before sockets exist, each iteration consumes at most one copied dispatcher
-event and one diagnostic record. The application retains the latest copies and
-counts; this prevents station-event backpressure from blocking startup. Socket
-clients consume later event copies through the existing EVENT request.
+Before sockets exist, and while a reconnect or link recovery runs, each
+iteration consumes at most one copied dispatcher event and one diagnostic record.
+The application retains the latest copies and counts; this prevents
+station-event backpressure from blocking startup or reassociation. Otherwise
+socket clients consume event copies through the existing EVENT request.
+
+When the session reports a clean link loss, the owner calls
+`a733_radio_session_recover` with the profile's target and WPA2 credentials. The
+recovery deadline is the association and security timeouts plus, with DHCP, the
+address acquisition timeout, capped by the runtime lease. If recovery cannot be
+admitted within the association and security timeouts after the loss is first
+reported, the owner retains the radio. The board's single TCP client treats any
+non-OK reply as terminal, so a loss during its exchange still ends the
+application; recovery serves a client that has finished or is idle.
 
 Application tasks submit requests and receive results through the existing
 bounded copied socket queues. Network publication uses a release/acquire flag

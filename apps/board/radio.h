@@ -40,13 +40,18 @@ struct board_radio {
     unsigned client_stage,client_pending,client_error;
     struct sunstone_net_request client_request;
     struct sunstone_net_reply client_reply;
-    /* Owner-task diagnostic copies. Startup events drain before socket clients
-     * exist; only the latest copy is kept, with explicit consumed counts. */
+    /* Owner-task diagnostic copies. Events drain before socket clients exist
+     * and during link recovery; only the latest copy is kept, with explicit
+     * consumed counts (startup events are counted before ONLINE only). */
     struct aic8800_dispatch_event startup_event;
     struct aic8800_dispatch_record diagnostic;
     uint64_t startup_events,diagnostic_records;
     unsigned stage,constructed;
     uint64_t operation_deadline;
+    /* Link recovery: owner-drained events while reassociating, and the bound
+     * for admitting recovery after a clean loss is first reported. */
+    unsigned recovering;
+    uint64_t loss_deadline,recoveries;
 };
 /* Pointer-free immutable boot profile, authenticated by the board session.
  * Evidence describes actual external qualification; no field qualifies CE.
@@ -133,7 +138,10 @@ enum board_radio_result board_radio_external_failure(struct board_radio *);
 /* Serialized boot, after shared providers, CE client and real task handles.
  * Fresh retained storage; failed construction consumes this lifetime. */
 int board_radio_init(struct board_radio *,const struct board_radio_config *);
-/* Same actual radio owner each iteration; existing PMIC task polls its provider. */
+/* Same actual radio owner each iteration; existing PMIC task polls its provider.
+ * ONLINE recovers from a clean unsolicited link loss with the admitted target
+ * and credentials, bounded by the association, security and DHCP address
+ * timeouts; PENDING is reported until the address returns. */
 enum board_radio_result board_radio_poll(struct board_radio *);
 /* Existing copied bounded socket queues; call from configured client tasks. */
 /* Existing radio owner task only. Quiescent sockets, healthy IPv4

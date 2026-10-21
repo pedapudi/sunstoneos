@@ -227,8 +227,16 @@ int aic8800_supplicant_retire(struct aic8800_supplicant *s,uint64_t now,uint64_t
     if(!s||!s->owner||s->state==AIC8800_SUPPLICANT_FAULT||s->state==AIC8800_SUPPLICANT_RETIRED||
         s->state==AIC8800_SUPPLICANT_RETIRING||s->count||s->action_active||s->port_pending||s->deferred_bytes||
         s->data->state!=AIC8800_DATA_IDLE||s->security->state!=AIC8800_SECURITY_IDLE||deadline<=now||
-        now<s->last_now||deadline>s->owner->deadline)return 0;
+        now<s->last_now||deadline>s->owner->deadline||s->wifi->link==AIC8800_WIFI_LINK_UNRESOLVED)return 0;
     s->last_now=now;s->deadline=deadline;s->security->authorized=0;s->security->retiring=1;
+    if(s->wifi->link==AIC8800_WIFI_LINK_DOWN) {
+        /* The disconnection indication already removed the firmware station.
+         * As in the reference host path, nothing closes its port, and the pairwise
+         * delete is refused for the invalidated station; only the interface's
+         * group keys are deleted with KEY_DEL. */
+        s->retire_closed=1;s->security->port_confirmed=0;
+        aic8800_security_zero(&s->security->keys[0],sizeof(s->security->keys[0]));
+    }
     s->state=AIC8800_SUPPLICANT_RETIRING;return 1;
 }
 
@@ -240,7 +248,7 @@ int aic8800_supplicant_rearm(struct aic8800_supplicant *s,struct aic8800_securit
        overlap(s,sizeof(*s),cfg,sizeof(*cfg))||overlap(sec,sizeof(*sec),cfg,sizeof(*cfg))||
        s->owner!=t||s->security!=sec||sec->owner!=t||sec->supplicant!=s||
        s->data!=t->data||s->wifi!=t->wifi||sec->wifi!=t->wifi||
-       s->generation!=sec->generation||s->generation==UINT64_MAX||t->wifi->association_generation!=s->generation+1||
+       s->generation!=sec->generation||s->generation==UINT64_MAX||t->wifi->association_generation<=s->generation||
        s->state!=AIC8800_SUPPLICANT_RETIRED||!s->retire_closed||!sec->retired||
        sec->state!=AIC8800_SECURITY_IDLE||sec->authorized||sec->port_confirmed||
        s->entered||s->rsn||s->count||s->action_active||s->port_pending||s->deferred_bytes||

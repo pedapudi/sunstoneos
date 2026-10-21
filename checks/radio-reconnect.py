@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build or execute only the affected retained-session reconnect composition."""
+"""Build or execute only the affected retained-session reconnect composition,
+or with --fixture loss the clean link-loss recovery composition."""
 import argparse
 import hashlib
 import json
@@ -17,7 +18,10 @@ def main():
     parser.add_argument('--evidence',type=Path,required=True)
     parser.add_argument('--accepted',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/radio-session-20261016/initial')
     parser.add_argument('--phase',choices=['build','run'],required=True)
+    parser.add_argument('--fixture',choices=['reconnect','loss'],default='reconnect')
     args=parser.parse_args();out=args.evidence.resolve();out.mkdir(parents=True,exist_ok=True)
+    fixture={'reconnect':'checks/radio-reconnect.c','loss':'checks/radio-recovery-loss.c'}[args.fixture]
+    passed={'reconnect':'PASS fixed-address healthy reconnect','loss':'PASS clean link loss'}[args.fixture]
     prior=json.loads((args.accepted/'results.json').read_text())
     if args.phase=='build':
         assert not (out/'build').exists(),'Preserve an existing build before changing executable inputs'
@@ -31,8 +35,8 @@ add_subdirectory("{ROOT}" base)
 get_target_property(inputs radio-session-model SOURCES)
 list(FILTER inputs EXCLUDE REGEX "/checks/a733-radio-session[.]c$")
 set_property(TARGET radio-session-model PROPERTY SOURCES "${{inputs}}")
-target_sources(radio-session-model PRIVATE "{ROOT}/checks/radio-reconnect.c" "{ROOT}/apps/board/radio.c")
-set_source_files_properties("{ROOT}/checks/radio-reconnect.c" "{ROOT}/apps/board/radio.c" TARGET_DIRECTORY radio-session-model PROPERTIES COMPILE_OPTIONS "-include;stdint.h")
+target_sources(radio-session-model PRIVATE "{ROOT}/{fixture}" "{ROOT}/apps/board/radio.c")
+set_source_files_properties("{ROOT}/{fixture}" "{ROOT}/apps/board/radio.c" TARGET_DIRECTORY radio-session-model PROPERTIES COMPILE_OPTIONS "-include;stdint.h")
 get_target_property(link_options radio-session-model LINK_OPTIONS)
 list(FILTER link_options EXCLUDE REGEX "--wrap=(FreeRTOS_accept|prvHandleListen_IPV4)$")
 set_property(TARGET radio-session-model PROPERTY LINK_OPTIONS "${{link_options}}")
@@ -95,5 +99,5 @@ target_link_options(radio-session-model PRIVATE "-Wl,--undefined=board_radio_rec
         result={'command':command,'elf_sha256':sha(elf),'returncode':returncode,'stdout':stdout.read_text(),'stderr':stderr.read_text(),
                 'scope':'Actual native FreeRTOS/provider/session/offline/reconnect/socket paths; MMIO, firmware initial completion, initial association and entropy modeled. OPEN/fixed address reconnect, not complete WPA2 handshake or hardware qualification.'}
         (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(result['stdout'],end='');print(result['stderr'],end='')
-        assert returncode==0 and 'PASS fixed-address healthy reconnect' in result['stdout']
+        assert returncode==0 and passed in result['stdout']
 if __name__=='__main__':main()

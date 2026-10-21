@@ -191,6 +191,33 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
     stack_owner=n;atomic_store(&n->ready,1);
     if(FreeRTOS_IPInit_Multi()!=pdPASS){aic8800_network_fault(n);return 0;}n->stack_started=1;return 1;
 }
+static void close_link(struct aic8800_network *n)
+{
+    atomic_store(&n->ready,0);atomic_fetch_add(&n->offline_request,1);
+    atomic_store_explicit(&n->offline,1,memory_order_release);atomic_store(&n->address_ready,0);
+    IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);
+}
+/* Take a finished ordinary transmission; 0 when its result is not plain bus completion. */
+static int collect(struct aic8800_network *n,struct aic8800_sdio_transport *t)
+{
+    struct aic8800_data_result result;
+    if(!n->active||t->data->state!=AIC8800_DATA_DONE||!aic8800_transport_take_data_result(t,&result))return 1;
+    if(result.eapol||!result.bus_transferred)return 0;
+    n->active=0;n->owns_current=0;++n->tx_bus_completions;return 1;
+}
+/* The firmware dropped the station and no transfer, command, CFM deadline or
+ * security operation is outstanding, so no completion remains uncertain. */
+static int lost_cleanly(const struct aic8800_network *n,const struct aic8800_sdio_transport *t)
+{
+    const struct aic8800_supplicant *s=t->supplicant;
+    return !n->active&&t->wifi->state==AIC8800_WIFI_READY&&!t->wifi->command_deadline&&
+        t->data->state==AIC8800_DATA_IDLE&&!t->data_tx&&!t->security_tx&&
+        (!t->security||t->security->state==AIC8800_SECURITY_IDLE)&&
+        (!s||(s->state!=AIC8800_SUPPLICANT_FAULT&&!s->count&&!s->action_active&&!s->port_pending))&&
+        atomic_load(&n->offline_request)!=UINT_MAX;
+}
+int aic8800_network_lost(const struct aic8800_network *n)
+{return n&&n->initialized&&!atomic_load(&n->failed)&&atomic_load(&n->lost);}
 void aic8800_network_poll(struct aic8800_network *n)
 {
     if(!n||!n->initialized)return;
@@ -200,15 +227,14 @@ void aic8800_network_poll(struct aic8800_network *n)
     if(atomic_load(&n->offline))return;
     aic8800_dispatch_poll(n->receive);
     if(n->receive->faulted||t->state==AIC8800_TRANSPORT_FAULT||!t->wifi||t->wifi->association_generation!=n->generation||
-        t->wifi->link==AIC8800_WIFI_LINK_DOWN||t->wifi->link==AIC8800_WIFI_LINK_UNRESOLVED){aic8800_network_fault(n);return;}
-    atomic_store(&n->ready,authority_for(t,n->generation));
-    if(n->active&&t->data->state==AIC8800_DATA_DONE){
-        struct aic8800_data_result result;
-        if(aic8800_transport_take_data_result(t,&result)){
-            if(result.eapol||!result.bus_transferred){aic8800_network_fault(n);return;}
-            n->active=0;n->owns_current=0;++n->tx_bus_completions;
-        }
+        t->wifi->link==AIC8800_WIFI_LINK_UNRESOLVED){aic8800_network_fault(n);return;}
+    if(t->wifi->link==AIC8800_WIFI_LINK_DOWN){
+        if(collect(n,t)&&lost_cleanly(n,t)){atomic_store(&n->lost,1);close_link(n);}
+        else aic8800_network_fault(n);
+        return;
     }
+    atomic_store(&n->ready,authority_for(t,n->generation));
+    if(!collect(n,t)){aic8800_network_fault(n);return;}
     if(t->held){
         struct aic8800_data_frame frame;
         if(!aic8800_dispatch_peek_data(n->receive,&frame))return; /* Other dispatcher retains raw/control ownership. */
@@ -286,9 +312,7 @@ int aic8800_network_offline(struct aic8800_network *n)
     if(!n||n!=stack_owner||!aic8800_network_address(n,NULL)||
        atomic_load(&n->offline)||atomic_load(&n->address_failed)||
        atomic_load(&n->offline_request)==UINT_MAX||n->active)return 0;
-    atomic_store(&n->ready,0);atomic_fetch_add(&n->offline_request,1);
-    atomic_store_explicit(&n->offline,1,memory_order_release);atomic_store(&n->address_ready,0);
-    IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return 1;
+    close_link(n);return 1;
 }
 int aic8800_network_offline_ready(struct aic8800_network *n)
 {
@@ -314,8 +338,9 @@ int aic8800_network_resume(struct aic8800_network *n)
             atomic_store_explicit(&n->resume_request,epoch,memory_order_release);
             IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);
         }
-        return 1;
+        atomic_store(&n->lost,0);return 1;
     }
+    atomic_store(&n->lost,0);
     atomic_store(&n->ready,1);atomic_store_explicit(&n->offline,0,memory_order_release);
     FreeRTOS_NetworkDown(&n->interface);return 1;
 }

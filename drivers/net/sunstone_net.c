@@ -368,6 +368,8 @@ static void service_step(struct sunstone_net *s)
 {
     if(atomic_load(&s->failed))aic8800_network_fault(&s->network);
     aic8800_network_poll(&s->network);
+    /* Clean link loss closes new submissions until sunstone_net_resume. */
+    if(aic8800_network_lost(&s->network))atomic_store(&s->offline,1);
     struct sunstone_net_message message;
     if(xQueueReceive(s->requests,&message,0)==pdPASS){
         struct sunstone_net_pending *p=&s->pending[message.client];configASSERT(!p->active);
