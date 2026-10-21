@@ -171,6 +171,8 @@ against and applies to.
    monitor is written only after a valid slot exists.
 4. Apply the plan to the working copy and run `boot-slots.py verify` on it.
    Only the verified plan's extents may be written to the card.
+   `storage-update.py plan` turns them into one bounded storage session per
+   changed extent ([planning a boot-card update](storage-update.md#a-boot-slot-plan-becomes-one-session-per-changed-range)).
 
 **Update.** Plan against a current image of the card. The tool selects the
 standby slot, the one the loader would not choose, and sets its generation one

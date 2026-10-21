@@ -10,8 +10,10 @@ This implementation is not physically qualified. Independent watchdog recovery,
 protected ROM return, the native maintenance launcher and actual card startup
 admission remain prerequisites for physical use. A prepared bundle does not
 satisfy those prerequisites. No storage writes have been performed by this work.
-Persistent boot image layout, boot selection, power-loss durability and wider
-storage modes remain required work.
+The persistent boot layout and slot selection are specified in
+[boot-slots.md](boot-slots.md); host planning for them exists, and no card has
+been written. Power-loss durability and wider storage modes remain required
+work.
 
 ## Trusted bootstrap grants an exact card range
 
@@ -33,6 +35,69 @@ The host is part of the trusted bootstrap. Native firmware cannot observe an
 Hashes identify bytes; they do not establish either property. The production
 host preparation path checks the existing independent-reset evidence and its
 referenced artifact bytes. No signature requirement is introduced.
+
+## A boot-slot plan becomes one session per changed range
+
+A grant covers one contiguous range, so a boot-card install or update that
+changes several ranges needs one backup and one write session for each.
+`tools/storage-update.py plan` produces those sessions. It reads four inputs:
+
+- a plan from `boot-slots.py plan` or `boot-slots.py rollback`, with its files;
+- the boot-slot allocation record that assigns the slot regions;
+- an ordinary-file image of the card's current contents;
+- a card record that identifies the card and the board that holds it.
+
+The card record is a JSON object with `kind` 1 (SD), `host` 0 (SDC0), `cid`
+as four 32-bit words, `sectors` equal to the image size, and `target` with the
+`port` and `sysfs` strings that the recovery qualification names. The planner
+never opens a device. It writes a new private directory with mode 0700 whose
+files are sealed read-only.
+
+SunstoneOS owns these regions of a microSD boot card:
+
+| Sectors | Region | Assigned by |
+| --- | --- | --- |
+| 16..495 | Pinned boot0 | Fixed layout |
+| 8192 | Slot A header | Fixed layout |
+| 16384 | Slot B header | Fixed layout |
+| 32800..40959 | Monitor TOC1 package | Fixed layout |
+| Slot A and slot B regions, at or beyond 40960 | Slot payloads | Boot-slot allocation record |
+
+No session writes any other sector. In particular, sectors 0..15 hold the
+partition table, and the 4 MiB unit at sectors 24576..32767 holds the backup
+package sector that the stock U-Boot header names. Whether a stock backup
+package exists there is a property of each card, so `plan.json` records the
+hash of that unit in the card image and whether it is all zero.
+
+Each write of the boot-slot plan must lie inside its own region, or planning
+stops. A range whose card bytes already equal the planned bytes is listed as
+skipped. Every other range must still hold the bytes that the boot-slot plan
+recorded as its previous contents; a card image that changed since planning
+is refused. The remaining ranges become sessions in the boot-slot plan's
+order: slot payload, slot header, boot0, then the TOC1 package. Each session
+lists:
+
+- its card range, including the hash of its allocation record;
+- a candidate file holding the planned bytes;
+- an allocation record that assigns that one range to SunstoneOS and
+  names its region, the board target and the hashes of the boot-slot plan and
+  allocation;
+- the hash that a read-only backup of the range must produce.
+
+A session runs in three steps. A read-only capture with a mode-0 grant over
+the session's card range produces the backup. `storage-update.py prepare`
+then takes that backup, the session's candidate and allocation, and
+`--plan DIR/plan.json --session N`. It refuses unless the card range, the
+backup hash and the candidate hash all equal the session's values. A
+connected `apply` performs the writes.
+
+The order does not make an interrupted install bootable. The container's
+boot0 is the pinned stock boot0, and the monitor package replaces the stock
+TOC1 at the same sector, so a card left between sessions can hold a boot0
+and a TOC1 package that were not packaged together. Recovery uses the explicit restoration below: each session's read-only
+backup is the restoration source for its range. After an uncertain session,
+capture that range again, then restore it or make a new card image and plan
+again.
 
 ## Backup bytes precede write admission
 
@@ -150,6 +215,15 @@ commitment, uncertain writes, transport loss and host durability failures. A
 card model that stays in programming state for 500 ms after each CMD24 completes
 a two-sector update; one that stays busy for one second retains the first write
 as uncertain.
+The card model holds only the granted range of an SD card whose capacity
+equals the grant's. Planning cases build a 64 MiB card image with a partition
+table, boot0, a nonzero backup package unit and a TOC1, then plan a slot A
+install with a synthetic container. They check the four planned sessions and
+their sectors, run a connected backup and update for each, and require slot
+A to verify with every other sector unchanged. Planning again on the result
+skips every range. Further cases refuse a changed card, a write outside its
+region, a card record for another kind, and preparation against another
+session's range.
 Software results do not qualify the physical board.
 
 The connected core/host batch passes under AddressSanitizer and

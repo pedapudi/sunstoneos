@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One connected storage/host integration batch; no physical access or old suites."""
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -10,6 +11,98 @@ import shutil
 import struct
 import subprocess
 import sys
+
+
+def pattern(size,seed):
+    return bytes((i*131+seed*17+i//251)&255 for i in range(size))
+
+
+def refused(action):
+    try:action()
+    except ValueError:return
+    raise AssertionError('Planning or preparation admitted a mismatch')
+
+
+def planned_card_update(host,fixture,base,Session,passed):
+    """Plan a boot-card install from a boot-slot plan, then run each session."""
+    slots=host.tool_module('boot_slots','boot-slots.py')
+    work=fixture/'card-plan';work.mkdir()
+    sectors=131072
+    def tool(*argv):
+        with (work/'boot-slots.log').open('a') as log,contextlib.redirect_stdout(log):slots.main([str(v) for v in argv])
+    # Stock card: MBR partition, boot0, a nonzero backup package unit and a TOC1.
+    card=bytearray(sectors*512)
+    struct.pack_into('<4xB3xII',card,446,0x83,65536,65536);card[510:512]=b'\x55\xaa'
+    card[16*512:496*512]=pattern(480*512,1);card[24576*512:24640*512]=pattern(64*512,2)
+    card[32800*512:32834*512]=pattern(34*512,3)
+    original=bytes(card);image=work/'card.img';image.write_bytes(original)
+    allocation=work/'allocation.json'
+    tool('allocate','--backup',image,'--slot-a','40960:8192','--slot-b','49152:8192','--output',allocation)
+    boot0,package=pattern(245760,4),pattern(16384+1024,5)
+    container=bytearray(20<<20);container[8192:8192+len(boot0)]=boot0;container[16793600:16793600+len(package)]=package
+    (work/'synthetic.microsd-monitor-container.bin').write_bytes(container)
+    (work/'synthetic.manifest.json').write_text(json.dumps({'kind':'a733-microsd-monitor-container',
+        'files':{'microsd-monitor-container.bin':{'bytes':len(container),'sha256':hashlib.sha256(container).hexdigest()}},
+        'card_writes':[{'name':'boot0','offset':8192,'bytes':len(boot0),'sha256':hashlib.sha256(boot0).hexdigest()},
+                       {'name':'monitor-package','offset':16793600,'bytes':len(package),'sha256':hashlib.sha256(package).hexdigest()}]}))
+    (work/'image').write_bytes(pattern(6000,6));(work/'asset').write_bytes(pattern(3000,7))
+    tool('plan','--allocation',allocation,'--card-image',image,'--image',f'{work/"image"}@0x41000000','--entry','0x41000000',
+         '--asset',f'{work/"asset"}@0x44000000','--container',work/'synthetic.manifest.json','--output',work/'slot-plan')
+    slot_plan=work/'slot-plan'/'plan.json'
+    record=dict(kind=1,host=0,cid=base['cid'],sectors=sectors,target=dict(port='model',sysfs='model'))
+    refused(lambda:host.plan(slot_plan,allocation,image,dict(record,kind=2),work/'refused-card'))
+    planned=host.plan(slot_plan,allocation,image,record,work/'update-plan')
+    sessions=planned['sessions']
+    assert [s['name'] for s in sessions]==['payload','header','boot0','monitor-package'] and not planned['skipped']
+    assert [(s['first'],s['blocks']) for s in sessions[2:]]==[(16,480),(32800,34)]
+    assert all(not slots.overlaps(s['first'],s['blocks'],*host.STOCK_BACKUP_UNIT) for s in sessions)
+    unit=planned['stock_backup_unit']
+    assert not unit['zero'] and unit['sha256']==hashlib.sha256(original[24576*512:32768*512]).hexdigest()
+    passed.append('boot-slot plan with container becomes four single-range sessions; gaps and the stock backup unit stay unplanned')
+    # A changed card, a write outside its region and a foreign session refuse.
+    changed=work/'changed.img';changed.write_bytes(original[:8192*512]+b'x'+original[8192*512+1:])
+    refused(lambda:host.plan(slot_plan,allocation,changed,record,work/'refused-changed'))
+    forged=work/'forged-plan';shutil.copytree(work/'slot-plan',forged)
+    value=json.loads((forged/'plan.json').read_text());value['writes'][3]['first_sector']=24576
+    (forged/'plan.json').write_text(json.dumps(value))
+    refused(lambda:host.plan(forged/'plan.json',allocation,image,record,work/'refused-region'))
+    store=host.ProtectedDirectory(work/'update-plan')
+    try:
+        for index,session in enumerate(sessions):
+            first,blocks=session['first'],session['blocks']
+            media=work/f'session-{index}.bin';media.write_bytes(card[first*512:(first+blocks)*512])
+            read=dict(base,nonce=f'{0xc0+2*index:02x}'*32,sectors=sectors,first=first,blocks=blocks,
+                      allocation=session['allocation_sha256'])
+            assert host.card_range(read)==session['card_range']
+            run=Session(read,media)
+            with host.ProtectedDirectory(work/f'session-{index}-backup',True) as backup:
+                _,manifest=host.backup(host.Client(run.exchange,read),backup)
+            run.close();assert manifest['sha256']==session['backup_sha256']
+            write=dict(read,mode=1,nonce=f'{0xc1+2*index:02x}'*32)
+            assert host.allocation_assigns(store.json(session['allocation']),write)
+            if index==1:
+                other=sessions[0]
+                with host.ProtectedDirectory(work/f'session-{index}-backup') as old,host.ProtectedDirectory(work/'refused-session',True) as out:
+                    refused(lambda:host._prepare_files(out,old,store.path/session['candidate'],write,other))
+            with host.ProtectedDirectory(work/f'session-{index}-backup') as old,host.ProtectedDirectory(work/f'session-{index}-update',True) as out:
+                update=host._prepare_files(out,old,store.path/session['candidate'],write,session)
+            run=Session(update['grant'],media)
+            with host.ProtectedDirectory(work/f'session-{index}-update') as out:host.apply(host.Client(run.exchange,update['grant']),out)
+            run.close();card[first*512:(first+blocks)*512]=run.output.read_bytes()
+            assert hashlib.sha256(run.output.read_bytes()).hexdigest()==session['candidate_sha256']
+    finally:store.close()
+    expected=bytearray(original)
+    for item in json.loads(slot_plan.read_text())['writes']:
+        expected[item['first_sector']*512:(item['first_sector']+item['sectors'])*512]=(work/'slot-plan'/item['file']).read_bytes()
+    assert card==expected and card[24576*512:32768*512]==original[24576*512:32768*512]
+    image.write_bytes(card)
+    fd,count=slots.open_image(image)
+    try:assert slots.public(slots.inspect(fd,count))['selected']=='A'
+    finally:os.close(fd)
+    passed.append('each planned session runs a connected backup and update; slot A verifies and no other sector changes')
+    again=host.plan(slot_plan,allocation,image,record,work/'repeat-plan')
+    assert not again['sessions'] and [s['name'] for s in again['skipped']]==['payload','header','boot0','monitor-package']
+    passed.append('ranges that already hold their planned bytes are skipped')
 
 
 def main():
@@ -69,7 +162,7 @@ def main():
         run(flags+['-M','-MF',evidence/f'host-{i}.d',source],f'host-dependencies-{i}.log')
     for i, source in enumerate(native_sources):
         run(native+['-M','-MF',evidence/f'native-{i}.d',source],f'native-dependencies-{i}.log')
-    paths = {root/s for s in sources+native_sources+['checks/a733-mmc-sdc3.c','checks/sunxi-mmc-write.c','checks/a733-mmc-platform.py','checks/a733-mmc-sdc3.py','checks/sunxi-mmc-write.py']+['checks/a733-storage-update.py','tools/storage-update.py','tools/check-a733-smp.py','checks/sunxi-mmc.c','checks/a733-mmc-platform.c']}
+    paths = {root/s for s in sources+native_sources+['checks/a733-mmc-sdc3.c','checks/sunxi-mmc-write.c','checks/a733-mmc-platform.py','checks/a733-mmc-sdc3.py','checks/sunxi-mmc-write.py']+['checks/a733-storage-update.py','tools/storage-update.py','tools/boot-slots.py','tools/check-a733-smp.py','checks/sunxi-mmc.c','checks/a733-mmc-platform.c']}
     paths.add(Path(compiler).resolve())
     for dep in evidence.glob('*.d'):
         paths.update((root/p).resolve() for p in dep.read_text().replace('\\\n',' ').split(':',1)[1].split())
@@ -218,6 +311,7 @@ def main():
             try:store.open('backup.bin',1024,host.digest(initial));assert False
             except (OSError,ValueError):pass
     passed.append('actual protected-file symlink, corruption and truncation refusal')
+    planned_card_update(host,fixture,base,Session,passed)
     for i,source in enumerate(['checks/a733-mmc-platform.c','checks/a733-mmc-sdc3.c','checks/sunxi-mmc-write.c']):
         run(flags+['-c',source,'-o',evidence/f'embedding-{i}.o'],f'embedding-{i}.log')
     for i,source in enumerate(native_sources):run(native+['-c',source,'-o',evidence/(Path(source).stem+'.o')],f'native-build-{i}.log')

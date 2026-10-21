@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preserve card bytes and prepare bounded native updates under trusted host control.
 
-Preparation does not launch the board. A write-capable session additionally needs
+Planning and preparation do not launch the board. A write-capable session additionally needs
 an independently qualified maintenance watchdog and reviewed native launch. The
 host is trusted to preserve its fsynced files; hashes do not prove physical reset.
 """
@@ -23,6 +23,14 @@ READ_BLOCKS = 2  # BACKUP returns at most two sectors.
 # the native one-second operation deadline (docs/storage-update.md).
 WRITE_CHUNK = 512
 ZERO = bytes(32)
+# SunstoneOS regions of a microSD boot card as (first sector, sectors), beside
+# the slot headers and slot regions of the boot-slot allocation
+# (docs/storage-update.md). No session may write the stock backup package unit.
+BOOT0_REGION = (16, 480)
+PACKAGE_REGION = (32800, 8160)
+STOCK_BACKUP_UNIT = (24576, 8192)
+PLAN_KIND = 'a733-storage-update-plan'
+ALLOCATION_KIND = 'a733-storage-update-allocation'
 
 
 def require(value, message):
@@ -311,15 +319,23 @@ def backup(client, store):
     return sealed, manifest
 
 
-def prepare(store, original, candidate, launch, qualification, allocation):
-    """A trusted bootstrap preparation, with actual protected backup bytes."""
+def allocation_assigns(allocation, g):
+    return (digest(canonical(allocation)).hex() == g['allocation'] and allocation.get('owner') == 'SunstoneOS' and
+            allocation.get('card_range') == {k: g[k] for k in ('kind', 'host', 'cid', 'sectors', 'first', 'blocks')})
+
+
+def prepare(store, original, candidate, launch, qualification, allocation, session=None):
+    """A trusted bootstrap preparation, with actual protected backup bytes.
+
+    session is an optional record from a `plan` result; its expected backup,
+    candidate and allocation must then match.
+    """
     before = original.json('backup.json')
     original.json('backup-complete.json')
     g = dict(launch)
     require(g['mode'] == 1 and g['nonce'] != before['grant']['nonce'] and card_range(g) == card_range(before['grant']),
             'Write launch must name a fresh session and the backed-up card/range.')
-    require(digest(canonical(allocation)).hex() == g['allocation'] and allocation.get('owner') == 'SunstoneOS' and
-            allocation.get('card_range') == {k: g[k] for k in ('kind', 'host', 'cid', 'sectors', 'first', 'blocks')},
+    require(allocation_assigns(allocation, g),
             'Trusted allocation does not assign this exact card extent to SunstoneOS.')
     # Existing validation checks actual evidence file hashes, not just qualified:true.
     module_path = Path(__file__).with_name('check-a733-smp.py')
@@ -330,17 +346,24 @@ def prepare(store, original, candidate, launch, qualification, allocation):
     require(digest(canonical(qualification)).hex() == g['recovery'], 'Recovery artifact differs from immutable grant.')
     store.record('qualification.json', qualification)
     store.record('allocation.json', allocation)
-    return _prepare_files(store, original, candidate, g)
+    return _prepare_files(store, original, candidate, g, session)
 
 
-def _prepare_files(store, original, candidate, grant):
+def _prepare_files(store, original, candidate, grant, session=None):
     """Artifact construction only; callers must separately admit physical launch."""
     before = original.json('backup.json')
     g = dict(grant)
     require(g['mode'] == 1 and card_range(g) == card_range(before['grant']), 'Prepared range differs from backup.')
+    # A planned session names the bytes it expects on the card; a card that
+    # changed since planning needs a new plan.
+    require(session is None or (session['card_range'] == card_range(g) and
+                                session['backup_sha256'] == before['sha256']),
+            'Backed-up range differs from the planned session.')
     prior = original.open('backup.bin', before['bytes'], bytes.fromhex(before['sha256']))
     g['backup'] = hash_fd(prior).hex()
     image, image_hash = snapshot(store, 'candidate.bin', candidate, before['bytes'])
+    require(session is None or image_hash.hex() == session['candidate_sha256'],
+            'Candidate differs from the planned session.')
     _, root, chain_hash = make_chain(store, image, before['bytes'])
     g['candidate'] = root.hex()
     # The new job owns a complete independent durable copy of the original backup.
@@ -412,16 +435,143 @@ def prepare_restore(store, current_backup, original_backup, launch, qualificatio
     return result
 
 
+def tool_module(name, filename):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def card_record(card, sectors):
+    """An identified SD card on SDC0 and the board target that holds it."""
+    words = card.get('cid')
+    target = card.get('target')
+    require(set(card) == {'kind', 'host', 'cid', 'sectors', 'target'} and card['kind'] == 1 and card['host'] == 0 and
+            isinstance(words, list) and len(words) == 4 and
+            all(isinstance(w, int) and 0 <= w <= 0xffffffff for w in words) and card['sectors'] == sectors and
+            isinstance(target, dict) and set(target) == {'port', 'sysfs'} and
+            all(isinstance(v, str) and v for v in target.values()),
+            'Card record must name one SD card on SDC0 with this image capacity and a board target.')
+    return card
+
+
+def plan_region(name, slot):
+    """The owned region that a boot-slot plan write belongs to."""
+    if name == 'payload':
+        return 'slot-' + slot
+    if name == 'header':
+        return 'header-' + slot
+    if name in ('invalidate-A', 'invalidate-B'):
+        return 'header-' + name[-1]
+    require(name in ('boot0', 'monitor-package'), 'Unknown boot-slot plan write: ' + name)
+    return name
+
+
+def plan(slot_plan_path, allocation_path, card_image, card, output):
+    """Turn a boot-slot plan into ordered single-range sessions.
+
+    Reads only ordinary files and writes a new private plan directory. Each
+    write the card image does not already hold becomes one session with its
+    own allocation and candidate; prepare consumes them after a read-only
+    backup of that exact range.
+    """
+    slots = tool_module('boot_slots', 'boot-slots.py')
+    slot_plan_path = Path(slot_plan_path)
+    plan_raw = slot_plan_path.read_bytes()
+    slot_plan = json.loads(plan_raw)
+    allocation_raw = Path(allocation_path).read_bytes()
+    slot_allocation = json.loads(allocation_raw)
+    require(slot_plan.get('kind') == slots.PLAN_KIND, 'Not a boot-slot plan.')
+    require(slot_plan.get('allocation_sha256', slots.sha(allocation_raw)) == slots.sha(allocation_raw),
+            'Boot-slot plan was made with another allocation.')
+    fd, sectors = slots.open_image(card_image)
+    try:
+        require(sectors == slot_plan['card_sectors'], 'Card image size differs from the boot-slot plan.')
+        regions = slots.check_allocation(slot_allocation, sectors, slots.read_at(fd, 0, 1))
+        card = card_record(card, sectors)
+        owned = {'boot0': BOOT0_REGION, 'monitor-package': PACKAGE_REGION}
+        for s in 'AB':
+            owned['header-' + s] = (slots.HEADER_SECTORS[s], 1)
+            owned['slot-' + s] = (regions[s]['first'], regions[s]['blocks'])
+        stock = slots.read_at(fd, *STOCK_BACKUP_UNIT)
+        sessions, skipped = [], []
+        for record in slot_plan['writes']:
+            data = (slot_plan_path.parent / record['file']).read_bytes()
+            first, blocks, name = record['first_sector'], record['sectors'], record['name']
+            require(len(data) == blocks * 512 and slots.sha(data) == record['sha256'],
+                    'Boot-slot plan file identity mismatch: ' + name)
+            region = plan_region(name, slot_plan['slot'])
+            low, count = owned[region]
+            require(low <= first and first + blocks <= low + count and
+                    not slots.overlaps(first, blocks, *STOCK_BACKUP_UNIT),
+                    'Write %s leaves the SunstoneOS %s region.' % (name, region))
+            current = slots.read_at(fd, first, blocks)
+            if current == data:
+                skipped.append(dict(name=name, first=first, blocks=blocks))
+                continue
+            require(slots.sha(current) == record['previous_sha256'],
+                    'Card image differs from the boot-slot plan at ' + name + '.')
+            index = len(sessions) + 1
+            card_range_value = dict(kind=card['kind'], host=card['host'], cid=card['cid'],
+                                    sectors=sectors, first=first, blocks=blocks)
+            allocation = dict(schema=1, kind=ALLOCATION_KIND, owner='SunstoneOS', card_range=card_range_value,
+                              target=card['target'], region=region,
+                              boot_slot_allocation_sha256=slots.sha(allocation_raw),
+                              boot_slot_plan_sha256=slots.sha(plan_raw))
+            allocation_hash = digest(canonical(allocation)).hex()
+            sessions.append((dict(index=index, name=name, region=region, first=first, blocks=blocks,
+                                  candidate=f'{index:02d}-{name}.candidate.bin', candidate_sha256=record['sha256'],
+                                  backup_sha256=slots.sha(current),
+                                  allocation=f'{index:02d}-{name}.allocation.json',
+                                  allocation_sha256=allocation_hash,
+                                  card_range=dict(card_range_value, allocation=allocation_hash)),
+                             data, allocation))
+    finally:
+        os.close(fd)
+    result = dict(schema=1, kind=PLAN_KIND, boot_slot_plan_sha256=slots.sha(plan_raw),
+                  boot_slot_allocation_sha256=slots.sha(allocation_raw), card=card,
+                  stock_backup_unit=dict(first=STOCK_BACKUP_UNIT[0], blocks=STOCK_BACKUP_UNIT[1],
+                                         sha256=slots.sha(stock), zero=not any(stock)),
+                  sessions=[session for session, _, _ in sessions], skipped=skipped)
+    with ProtectedDirectory(output, create=True) as store:
+        for session, data, allocation in sessions:
+            fd = store.create(session['candidate'])
+            write_all(fd, data)
+            store.seal(session['candidate'], fd, len(data), digest(data))
+            store.record(session['allocation'], allocation)
+        store.record('plan.json', result)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='operation', required=True)
+    planner = sub.add_parser('plan', help='Turn a boot-slot plan into single-range sessions')
+    for name in ('slot-plan', 'allocation', 'card-image', 'card', 'output'):
+        planner.add_argument('--' + name, type=Path, required=True)
     prep = sub.add_parser('prepare')
     for name in ('backup', 'candidate', 'launch', 'qualification', 'allocation', 'output'):
         prep.add_argument('--' + name, type=Path, required=True)
+    prep.add_argument('--plan', type=Path, help='plan.json whose session this preparation carries out')
+    prep.add_argument('--session', type=int, help='session index in --plan')
     args = parser.parse_args(argv)
+    if args.operation == 'plan':
+        result = plan(args.slot_plan, args.allocation, args.card_image,
+                      json.loads(args.card.read_text()), args.output)
+        print(json.dumps(result, indent=2))
+        return 0
+    if (args.plan is None) != (args.session is None):
+        parser.error('--plan and --session go together')
+    session = None
+    if args.plan:
+        planned = json.loads(args.plan.read_text())
+        require(planned.get('kind') == PLAN_KIND, 'Not a storage update plan.')
+        session = next((s for s in planned['sessions'] if s['index'] == args.session), None)
+        require(session is not None, 'Plan has no such session.')
     with ProtectedDirectory(args.backup) as backup_store, ProtectedDirectory(args.output, create=True) as output:
         result = prepare(output, backup_store, args.candidate, json.loads(args.launch.read_text()),
-                         json.loads(args.qualification.read_text()), json.loads(args.allocation.read_text()))
+                         json.loads(args.qualification.read_text()), json.loads(args.allocation.read_text()),
+                         session)
     print(json.dumps(result, indent=2))
     return 0
 
