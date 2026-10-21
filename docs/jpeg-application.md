@@ -68,7 +68,8 @@ endpoint accepts a 32-byte upload header followed by the JPEG and optional
 oracle. The header contains little-endian 32-bit magic `0x5547504a`, version 1,
 JPEG length and oracle length, followed by 64-bit epoch and generation.
 
-The JPEG capacity is 4,096 bytes and the optional oracle capacity is 6,144 bytes.
+The JPEG capacity is 524,288 bytes (512 KiB) and the optional oracle capacity
+is 460,800 bytes, the active output of a 640-by-480 image.
 The native producer copies bounded fragments into private CPU arrays. It checks
 hashes, the actual parser result, plane capacities and oracle extent before
 publishing completion with a release store. The owner task acquires that store
@@ -85,19 +86,29 @@ resource acquisition.
 
 ## Parsed geometry determines guarded planes and the copied payload
 
-The application retains a 32 KiB aligned IOMMU table and three guarded 12 KiB
-Normal Non-cacheable allocations. Only the central 4 KiB page of each allocation
-is mapped: input read-only, luma and chroma write-only. Physical guard pages and
-unmapped neighboring IOVA pages remain reserved. Input is zero-padded through
-its mapped page; the codec's inclusive input end is that page's final byte.
-
 Luma stride and padded rows round the parsed width and height up to multiples
 of 32. Luma requires `stride * rows` bytes; contiguous Cb and Cr together require
-half that count. Each plane allocation must fit its 4 KiB page. The active
-payload contains `width * height` Y bytes and two chroma planes of
-`ceil(width/2) * ceil(height/2)` bytes. The active payload must fit 6,144 bytes.
-The arithmetic first bounds each dimension to 128. Accepted shapes include
-64-by-64 and 128-by-32; 65-by-65 exceeds the padded-plane capacity.
+half that count. The padded luma plane must fit 307,200 bytes, the size of a
+640-by-480 plane, and each dimension must be within the decoder's 1920-by-1080
+limit. Accepted shapes therefore include 640-by-480, 1920-by-160 and every
+smaller image; 641-by-480, 640-by-481 and 1920-by-1080 are refused at upload.
+The active payload contains `width * height` Y bytes and two chroma planes of
+`ceil(width/2) * ceil(height/2)` bytes, at most 460,800 bytes.
+
+After the upload commits, the application retains a 32 KiB aligned IOMMU table
+and three Normal Non-cacheable allocations sized from that geometry. Each
+allocation is a guard page, the buffer rounded up to whole 4 KiB pages, and a
+second guard page. Only the rounded buffer is mapped: input read-only at IOVA
+`0x10001000`, luma write-only at `0x10100000` and chroma write-only at
+`0x10180000`. Unmapped IOVA pages separate the largest spans, and all three lie
+in one 4 MiB translation-table window. The largest job uses about 1 MiB of the
+2 MiB uncached pool. Input is zero-padded through its last mapped page; the
+codec's inclusive input end is that page's final byte. A 64-by-64 image still
+maps one page per buffer.
+
+Full-HD decoding needs about 5 MiB of planes and input, which exceeds the
+2 MiB uncached pool that `cmake/a733-jpeg.cmake` links into this image. It
+requires an extended memory profile like the one the H.264 full-HD image uses.
 
 The copy uses parsed dimensions, padded strides and the driver's padded Cb/Cr
 plane offset. It includes the final partial JPEG minimum coded unit's (MCU's) active pixels, including
@@ -106,8 +117,11 @@ change. The unused mapped tails and physical guard pages must retain their
 poison values.
 
 The retained-copy path checks IOMMU faults, codec errors and guards before
-copying. It then copies active pixels into private CPU output, optionally compares
-the independent oracle, scans faults again and rechecks codec errors and guards.
+copying. It then copies active pixels into private CPU output in whole rows,
+luma first, at most 64 KiB per call; the task sleeps one tick between calls, so
+a 640-by-480 image takes eight calls. After the last row it rechecks guards,
+optionally compares the independent oracle, scans faults again and rechecks
+codec errors and guards.
 Only that owned copy is published. COPIED does not establish transaction drain,
 DMA ownership transfer or permission to reset or reuse device memory. Every
 allocation, token and mapping remains retained after success or failure.
@@ -140,8 +154,16 @@ assembles bounded response fragments and preserves copied output durably.
 
 ## Offline evidence does not qualify physical operation
 
-Focused evidence is under
-`~/.cache/sunstoneos/evidence/jpeg-runtime-input-20261018/`.
+Focused evidence for the earlier 4 KiB capacities is under
+`~/.cache/sunstoneos/evidence/jpeg-runtime-input-20261018/`. The same checks
+cover the current capacities: `checks/jpeg-runtime-input.py` adds 640-by-480
+images with and without an oracle and a 1920-by-160 image, and
+`checks/jpeg-runtime-input.c` refuses padded planes beyond 307,200 bytes.
+`checks/jpeg-runtime-native.py` copies those images through the chunked native
+path and serializes their results, `checks/jpeg-runtime-host.py` prepares and
+captures the 640-by-480 oracle case, and `checks/jpeg-application-iommu.c`
+builds and translates the largest spans. These results have not yet been
+frozen into the evidence store.
 Sanitizer checks use actual Python upload packets and the unchanged parser. They
 cover fragmented input, ordinary and oracle modes, odd dimensions, maximum plane
 capacity, identity and digest refusal, clock bounds and immutable publication.
