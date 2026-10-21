@@ -148,7 +148,10 @@ transition. An association indication cannot substitute for those operations.
 Required follow-on work includes the supplicant and EAPOL path, cryptographic
 handshakes, validated key installation/deletion and lifetime, replay handling,
 controlled-port authorization, protected management frames, supported WPA3 and
-enterprise profiles, roaming, and the network data stack. Credentials and key
+enterprise profiles, firmware-initiated roaming and fast transition, and the
+network data stack. The [radio session](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
+moves between access points of one network with an ordinary disconnection and
+a new association. Credentials and key
 material are absent from the present API and evidence.
 
 ## Focused source and host evidence
