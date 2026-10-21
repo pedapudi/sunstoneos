@@ -87,6 +87,22 @@ follow:
   the same command is skipped. A retried step appends its command to the existing
   command log and writes `<label>-attempt<N>.log` beside the earlier log. Its
   earlier record moves into the step's `history`.
+- **Emulation hooks only the addresses a model handles.** A Unicorn code hook
+  without an address range calls into Python before every emulated
+  instruction. `hook_addresses(uc, addresses, callback)` registers one ranged
+  hook per address. `instruction_sites(parts, match)` finds instruction
+  addresses in loaded image segments, and `system_register_access(word)`
+  matches MRS, MSR, SYS and SYSL. A model that acts only at symbols, a
+  sentinel and system-register accesses hooks just those. A model that
+  advances state on every instruction keeps the unranged hook.
+
+The SRAM launchers that admit a prepared session share one AArch32 model,
+[checks/sram_launcher.py](../checks/sram_launcher.py). Its `execute` runs the
+actual launcher instructions with modeled system registers, counter and
+reset registers, and its `verify` requires the published deadlines on
+admission and an unchanged contract with restored registers on refusal. The
+per-device `*-launcher.py` checks supply the session and contract formats,
+the supervision deadline and the mutation cases.
 
 ## Find the checks that cover a change
 
