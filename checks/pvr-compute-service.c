@@ -347,7 +347,8 @@ static void compute_owner(void *unused)
             }
         }
         configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);
-        r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_COMPLETE);
+        /* Compute-only CLOSE cleans the firmware context before shutdown. */
+        r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_CLEANED);
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; native package publication and paged copied output with modeled GPU writes\n");platform_exit(0);
     }
