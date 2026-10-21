@@ -74,15 +74,21 @@ A header with the wrong magic or a payload length above 2,048 bytes cannot
 delimit its body. The device discards every byte queued in the receive FIFO
 and replies with the received sequence, command `0xfffffffe` and an empty
 payload. It does not return to ROM. Bytes of the same request that arrive
-later are rejected in the same way.
+later are parsed as new headers. Most of them are rejected in the same way,
+but a well-formed frame inside the discarded body, such as one embedded in an
+echo payload, is dispatched like any other request, including Recover and the
+application commands. The host therefore sends the reset request described
+below and drains the IN endpoint before it relies on the channel again.
 
 The host resynchronizes with a vendor control request: request type `0x40`
-(host to device, vendor), request `0x01`, value 0, index 0 and no data stage.
+(host to device, vendor, device recipient), request `0x01`, value 0, index 0
+and no data stage.
 The device discards a partial request and any unsent response, clears both
 vendor FIFOs and cancels a pending recovery command. A packet the controller
 has already loaded can still reach the host, so the host reads the IN
 endpoint until a short timeout before it sends the next request. A bus reset
-clears the same state. The device stalls other vendor control requests.
+clears the same state. The device stalls other vendor control requests,
+including request `0x01` addressed to the interface (request type `0x41`).
 
 This is a development protocol. Rejection and the reset request are checked
 only in a host model. Physical resynchronization and concurrent clients need

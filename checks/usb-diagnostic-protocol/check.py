@@ -6,8 +6,9 @@ modeled TinyUSB vendor stream, controller, host and clock. The run covers
 status, a full 2,048-byte echo, log reads at offsets 0 to 6,000, rejected
 headers (bad magic and oversized length), resynchronization of a truncated
 request and of an abandoned response through the reset control request, a
-misaligned stream, and refusal of other control requests. It also counts the
-recovery-timer SMCs. No hardware is accessed."""
+misaligned stream, and refusal of other control requests, including the reset
+request addressed to the interface. It also counts the recovery-timer SMCs. No
+hardware is accessed."""
 import argparse, hashlib, json, struct, subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile

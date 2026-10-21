@@ -173,6 +173,7 @@ static void host(void)
     case 12: /* Other vendor control requests stall. */
         { tusb_control_request_t other = reset_setup; other.bRequest = 2; CHECK(!tud_vendor_control_xfer_cb(0, CONTROL_STAGE_SETUP, &other)); }
         { tusb_control_request_t in = reset_setup; in.bmRequestType = 0xc0; CHECK(!tud_vendor_control_xfer_cb(0, CONTROL_STAGE_SETUP, &in)); }
+        { tusb_control_request_t interface = reset_setup; interface.bmRequestType = 0x41; CHECK(!tud_vendor_control_xfer_cb(0, CONTROL_STAGE_SETUP, &interface)); }
         next();
         break;
     default:
