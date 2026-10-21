@@ -10,9 +10,10 @@ Physical randomness, health-test efficacy and board operation are unqualified.
 
 The implementation is in `drivers/crypto/a733_ce.c` and
 `drivers/crypto/a733_ce_native.c`. The interfaces are `include/a733_ce.h` and
-`include/a733_ce_native.h`. These files provide the common command controller. The [SHA-256 stream
-interface](crypto-hash.md) shares its actual retained session with entropy.
-Cipher, other hash and key APIs remain required.
+`include/a733_ce_native.h`. These files provide the common command controller. The [SHA and HMAC stream
+interface](crypto-hash.md) and the [AES mode interface](crypto-cipher.md)
+share its actual retained session with entropy. Hardware key selection and
+asymmetric APIs remain required.
 
 ## Hardware path and memory ownership
 
@@ -159,6 +160,7 @@ for the A733 command format.
 Cold clock provisioning, production platform authority, startup and entropy
 qualification, interrupt service and physical qualification remain required.
 Provisioning and repeated-request evidence is recorded in [entropy.md](entropy.md).
-Full engine coverage still requires cipher modes beyond AES-128 ECB, other
-hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
+Full engine coverage still requires the engine's remaining symmetric modes
+(CTS, OFB, CFB, CBC-MAC, OCB, XTS and its native GCM), DES, 3DES and SM4, MD5
+and SM3, asymmetric algorithms, key ladders and secure-key operations.
 The first TRNG command does not satisfy those remaining hardware requirements.
