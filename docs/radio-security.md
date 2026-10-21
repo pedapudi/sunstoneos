@@ -36,6 +36,37 @@ frames, fast transition, multi-link operation and offloaded PMKSA cache selectio
 are not enabled. PMKSA is cached authentication state; the adapter keeps one network
 context and disables fast reauthentication.
 
+## WPA3 personal needs three missing parts
+
+WPA3 personal authenticates with Simultaneous Authentication of Equals (SAE)
+and requires protected management frames (PMF). It is not implemented. Each
+of the following parts is missing:
+
+- **Elliptic-curve arithmetic.** The pinned wpa_supplicant 2.12 release
+  implements SAE in `src/common/sae.c` and `src/common/dragonfly.c`. Both call
+  the `crypto_ec_*` and `crypto_bignum_*` interfaces, which that release
+  provides only in its OpenSSL and wolfSSL back ends. The internal crypto
+  library used here has neither interface. SAE therefore needs a pinned
+  elliptic-curve library adapted to FreeRTOS, with its license recorded;
+  none is in the source cache. Mandatory group 19 uses the NIST P-256 curve.
+- **External authentication.** The pinned full-MAC driver refuses SAE unless
+  the host performs authentication. The firmware reports
+  `SM_EXTERNAL_AUTH_REQUIRED_IND` with the BSSID, SSID and AKM suite. The host
+  then exchanges SAE commit and confirm authentication frames through
+  management-frame transmission and reception, and answers with
+  `SM_EXTERNAL_AUTH_REQUIRED_RSP` and a status. The native data worker sends
+  only Ethernet data descriptors and leaves received management frames
+  opaque, so neither direction exists.
+- **Protected management frames.** The association must set the source's
+  `MFP_IN_USE` connection flag and advertise PMF capability in its RSN
+  element, and the firmware must report `MM_FEAT_MFP_BIT` (bit 13). The
+  supplicant must also install the integrity group key for BIP-CMAC-128. The
+  security worker installs only CCMP pairwise and group keys.
+
+After those parts, the RSN supplicant would run the four-way handshake with
+the SAE AKM and the PMK that SAE derives. Physical qualification would also
+need a WPA3 access point.
+
 ## Firmware actions complete in order
 
 The upstream state machine computes and checks message authentication codes,
