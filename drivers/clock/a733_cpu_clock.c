@@ -1,0 +1,415 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#include "a733_cpu_clock.h"
+#include "a733_clock_reference.h"
+#include <stddef.h>
+#define BIT(n) (UINT32_C(1)<<(n))
+#define CPUPLL UINT32_C(0x08870000)
+#define OSC UINT32_C(0x07090160)
+#define SID_DVFS UINT32_C(0x0300624c)
+#define PLL_ON UINT32_C(0xf8000000) /* Enable, LDO, lock enable, lock, output. */
+#define UPDATE BIT(26)
+#define LOCK BIT(28)
+#define MUX (UINT32_C(7)<<24)
+#define DIVP (UINT32_C(3)<<16)
+#define FIELD_N (UINT32_C(255)<<8)
+#define MUX_PLL 3u
+#define UPDATE_US 10000u  /* Pinned driver: update bit clears within 10 ms. */
+#define LOCK_US 70000u    /* Pinned driver: lock within 70 ms. */
+#define RAMP_UV_US 250u   /* Board DTS regulator-ramp-delay of DCDC3/DCDC5. */
+#define RELEASE_US 100000u
+#define THERMAL_US 500000u
+#define LEVEL_UNKNOWN 3u
+enum { S_IDLE,S_CLOCK,S_RAIL,S_INSPECT,S_READ,S_VOLTAGE,S_WRITTEN,S_SETTLE,S_PARK,S_UPDATE,
+    S_LOCK,S_UNPARK,S_RELEASE };
+
+/* opp-microvolt-26m-vf* rows of sun60iw2p1-cpu-vf.dtsi V0.9, in millivolts. */
+static const struct a733_cpu_opp little[]={
+    {416,{800,800,800,800,800,800,800,800,800}},
+    {728,{800,0,0,0,0,0,0,0,0}},
+    {780,{0,800,800,800,800,800,800,800,800}},
+    {1014,{800,800,800,800,800,800,800,800,800}},
+    {1092,{0,800,0,0,0,0,0,0,0}},
+    {1196,{800,850,800,800,800,800,800,800,800}},
+    {1300,{0,900,800,0,0,0,0,0,0}},
+    {1404,{800,950,850,860,840,800,840,800,800}},
+    {1508,{0,1000,900,0,880,820,0,820,820}},
+    {1586,{900,0,0,0,0,0,0,0,0}},
+    {1612,{0,1050,950,0,920,860,0,860,840}},
+    {1716,{0,0,1000,0,960,900,0,900,860}},
+    {1794,{1000,0,1050,0,1000,950,0,950,900}},
+};
+static const struct a733_cpu_opp big[]={
+    {416,{800,800,800,800,800,800,800,800,800}},
+    {728,{800,0,0,0,0,0,0,0,0}},
+    {780,{0,800,800,800,800,800,800,800,800}},
+    {1014,{800,800,800,800,800,800,800,800,800}},
+    {1196,{800,800,800,800,800,800,800,800,800}},
+    {1300,{0,800,0,0,0,0,0,0,0}},
+    {1404,{800,850,800,820,800,800,800,800,800}},
+    {1508,{800,900,800,860,820,800,800,800,800}},
+    {1586,{850,0,0,0,0,0,0,0,0}},
+    {1612,{0,950,850,900,840,820,850,820,820}},
+    {1690,{900,0,0,0,0,0,0,0,0}},
+    {1716,{0,1000,900,0,870,850,0,850,840}},
+    {1794,{950,1050,950,0,920,900,0,900,870}},
+    {1898,{1000,0,1000,0,970,940,0,940,900}},
+    {1950,{0,0,0,0,1000,970,0,970,930}},
+    {1976,{1050,0,0,0,0,0,0,0,0}},
+    {2002,{0,0,1050,0,1050,1000,0,1000,960}},
+};
+static const struct a733_cpu_opp dsu[]={
+    {312,{800,800,800,800,800,800,800,800,800}},
+    {546,{800,0,0,0,0,0,0,0,0}},
+    {598,{0,800,800,800,800,800,800,800,800}},
+    {780,{800,800,800,800,800,800,800,800,800}},
+    {832,{0,800,0,0,0,0,0,0,0}},
+    {910,{800,850,800,800,800,800,800,800,800}},
+    {988,{0,900,800,0,0,0,0,0,0}},
+    {1066,{800,950,850,860,840,800,840,800,800}},
+    {1144,{0,1000,900,0,880,820,0,820,820}},
+    {1196,{900,0,0,0,0,0,0,0,0}},
+    {1222,{0,1050,950,0,920,860,0,860,840}},
+    {1248,{0,0,1000,0,960,900,0,900,860}},
+    {1274,{0,0,1050,0,1000,950,0,950,900}},
+    {1352,{1000,0,0,0,0,0,0,0,0}},
+};
+const struct a733_cpu_opp *a733_cpu_clock_opps(enum a733_cpu_domain d,unsigned *count)
+{
+    static const struct { const struct a733_cpu_opp *rows; unsigned count; } tables[]={
+        {little,sizeof(little)/sizeof(*little)},{big,sizeof(big)/sizeof(*big)},{dsu,sizeof(dsu)/sizeof(*dsu)}};
+    if(!count || (unsigned)d>=A733_CPU_DOMAINS)return 0;
+    *count=tables[d].count;return tables[d].rows;
+}
+uint32_t a733_cpu_clock_opp_mv(const struct a733_cpu_opp *o,unsigned bin)
+{
+    if(!o || bin>A733_CPU_VF_ENVELOPE)return 0;
+    if(bin<A733_CPU_VF_BINS)return o->mv[bin];
+    uint32_t mv=0;
+    for(unsigned i=0;i<A733_CPU_VF_BINS;++i){if(!o->mv[i])return 0;if(o->mv[i]>mv)mv=o->mv[i];}
+    return mv;
+}
+int a733_cpu_clock_bin(uint32_t word,unsigned *bin)
+{
+    /* vf_mapping_table code -> column; 0x11 and 0x12 have no column. */
+    static const uint8_t codes[]={0x01,0x02,0x03,0x04,0x05,0x06,0x14,0x15};
+    unsigned code=(word>>16)&255;if(!code)code=(word>>8)&255;
+    if(!bin)return 0;
+    if(!code){*bin=A733_CPU_VF_ENVELOPE;return 1;}
+    for(unsigned i=0;i<sizeof(codes);++i)if(codes[i]==code){*bin=i+1;return 1;}
+    return 0;
+}
+static uintptr_t pll_word(unsigned d){return CPUPLL+UINT32_C(0x1000)*(d+1);}
+static uintptr_t select_word(unsigned d){return pll_word(d)+0x1c;}
+void a733_cpu_clock_decode(uint32_t dcxo,uint32_t pll,uint32_t select,struct a733_cpu_clock_domain *out)
+{
+    if(!out)return;
+    *out=(struct a733_cpu_clock_domain){.pll=pll,.select=select,.n=(pll>>8)&255,
+        .p=(select>>16)&3,.source=(select>>24)&7};
+    if(out->source<=2){out->hz=dcxo;out->decoded=1;}
+    else if(out->source==MUX_PLL && out->n && (pll&PLL_ON)==PLL_ON) {
+        out->hz=((uint64_t)dcxo*out->n)>>out->p;out->decoded=1;
+    }
+}
+int a733_cpu_clock_report(int (*read)(void *,uintptr_t,uint32_t *),void *cookie,struct a733_cpu_clock_report *out)
+{
+    uint32_t words[2*A733_CPU_DOMAINS];
+    if(!read || !out)return 0;
+    *out=(struct a733_cpu_clock_report){0};
+    if(read(cookie,OSC,&out->oscillator)!=1 || read(cookie,SID_DVFS,&out->sid_word)!=1)return 0;
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d)
+        if(read(cookie,pll_word(d),&words[2*d])!=1 || read(cookie,select_word(d),&words[2*d+1])!=1)return 0;
+    out->dcxo_hz=a733_clock_dcxo_hz(out->oscillator);
+    out->binned=a733_cpu_clock_bin(out->sid_word,&out->bin);
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d)
+        a733_cpu_clock_decode(out->dcxo_hz,words[2*d],words[2*d+1],&out->domain[d]);
+    return 1;
+}
+int a733_cpu_clock_address(uintptr_t a,int write)
+{
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d)
+        if((a==pll_word(d) || a==select_word(d)) && (!write || d!=A733_CPU_DSU))return 1;
+    return !write && (a==OSC || a==SID_DVFS);
+}
+
+static int separate(const void *a,size_t n,const void *b,size_t k)
+{
+    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
+    return a && b && n<=UINTPTR_MAX-x && k<=UINTPTR_MAX-y && (x+n<=y || y+k<=x);
+}
+int a733_cpu_clock_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,
+    const struct a733_cpu_clock_ops *ops,void *cookie,struct a733_clock_leases *clocks,
+    struct a733_rail_leases *rails,struct a733_pmic *pmic)
+{
+    if(!c || c->self || !config || !ops || !ops->now || !ops->read || !ops->write || !config->owner ||
+       !clocks || !clocks->initialized || !rails || rails->self!=rails || rails->binding.clocks!=clocks ||
+       !pmic || pmic->self!=pmic || pmic->rails!=rails || (config->grant.clusters&~UINT32_C(3)) ||
+       !separate(c,sizeof(*c),config,sizeof(*config)) || !separate(c,sizeof(*c),ops,sizeof(*ops)) ||
+       !separate(c,sizeof(*c),clocks,sizeof(*clocks)) || !separate(c,sizeof(*c),rails,sizeof(*rails)) ||
+       !separate(c,sizeof(*c),pmic,sizeof(*pmic)))return 0;
+    *c=(struct a733_cpu_clock){.self=c,.config=*config,.ops=*ops,.cookie=cookie,.clocks=clocks,
+        .rails=rails,.pmic=pmic,.changes=config->grant.changes};
+    atomic_init(&c->level,LEVEL_UNKNOWN);return 1;
+}
+int a733_cpu_clock_thermal(struct a733_cpu_clock *c,enum a733_thermal_level level)
+{
+    if(!c || c->self!=c || (unsigned)level>A733_THERMAL_CRITICAL)return 0;
+    unsigned old=atomic_load_explicit(&c->level,memory_order_acquire);
+    do if(old==A733_THERMAL_CRITICAL)return level==A733_THERMAL_CRITICAL;
+    while(!atomic_compare_exchange_weak_explicit(&c->level,&old,(unsigned)level,
+        memory_order_acq_rel,memory_order_acquire));
+    return 1;
+}
+static int permitted(struct a733_cpu_clock *c,uint32_t mhz)
+{
+    unsigned level=atomic_load_explicit(&c->level,memory_order_acquire);
+    return level==A733_THERMAL_NORMAL || (level==A733_THERMAL_THROTTLE && mhz<=A733_CPU_CLOCK_THROTTLE_MHZ);
+}
+static const struct a733_cpu_opp *row(unsigned d,uint32_t mhz)
+{
+    unsigned count;const struct a733_cpu_opp *t=a733_cpu_clock_opps(d,&count);
+    for(unsigned i=0;t && i<count;++i)if(t[i].mhz==mhz)return &t[i];
+    return 0;
+}
+/* Lowest DSU point at or above the inherited DSU rate that the bin supports. */
+static uint32_t dsu_mv(uint64_t hz,unsigned bin)
+{
+    for(unsigned i=0;i<sizeof(dsu)/sizeof(*dsu);++i) {
+        uint32_t mv=a733_cpu_clock_opp_mv(&dsu[i],bin);
+        if(mv && (uint64_t)dsu[i].mhz*1000000u>=hz)return mv;
+    }
+    return 0;
+}
+static int time_now(struct a733_cpu_clock *c)
+{
+    uint64_t now;
+    if(c->ops.now(c->cookie,&now)!=1 || now<c->last_now)return 0;
+    c->last_now=now;return 1;
+}
+static enum a733_rail rail_of(unsigned cluster){return cluster==A733_CPU_LITTLE ? A733_RAIL_DCDC5 : A733_RAIL_DCDC3;}
+/* Uncertain state: keep both leases. Retention is metadata and is retried
+ * while either manager reports BUSY. The PMIC provider retains its own. */
+static enum a733_cpu_clock_status fault(struct a733_cpu_clock *c)
+{
+    c->failed=1;
+    if(c->rail.id && !(c->retained&1) && a733_rail_retain(c->rails,&c->rail)!=A733_RAIL_BUSY)c->retained|=1;
+    if(c->clock.id && !(c->retained&2) && a733_clock_retain(c->clocks,&c->clock)!=A733_CLOCK_BUSY)c->retained|=2;
+    return A733_CPU_CLOCK_RETAINED;
+}
+/* End a transition before or after its writes by releasing both leases. */
+static enum a733_cpu_clock_status finish(struct a733_cpu_clock *c,enum a733_cpu_clock_status result)
+{
+    c->result=result;c->state=S_RELEASE;c->timer=c->last_now+RELEASE_US;return A733_CPU_CLOCK_PENDING;
+}
+static int rd(struct a733_cpu_clock *c,uintptr_t a,uint32_t *v)
+{return a733_cpu_clock_address(a,0) && c->ops.read(c->cookie,a,v)==1;}
+static int put(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
+{return a733_cpu_clock_address(a,1) && c->ops.write(c->cookie,a,v)==1;}
+static int wr(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
+{uint32_t back;return put(c,a,v) && rd(c,a,&back) && back==v;}
+static enum a733_cpu_clock_status start(struct a733_cpu_clock *c,unsigned cluster,uint32_t mhz,
+    uint64_t deadline,unsigned thermal)
+{
+    c->cluster=cluster;c->target_mhz=mhz;c->deadline=deadline;c->thermal=thermal;
+    c->clock=(struct a733_clock_token){0};c->rail=(struct a733_rail_token){0};
+    c->request=(struct a733_pmic_request){0};c->after=S_IDLE;c->state=S_CLOCK;return A733_CPU_CLOCK_PENDING;
+}
+enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
+    enum a733_cpu_domain cluster,uint32_t mhz,uint64_t deadline)
+{
+    if(!c || c->self!=c || (cluster!=A733_CPU_LITTLE && cluster!=A733_CPU_BIG))return A733_CPU_CLOCK_INVALID;
+    if(c->failed)return A733_CPU_CLOCK_RETAINED;
+    if(c->state!=S_IDLE)return A733_CPU_CLOCK_BUSY;
+    const struct a733_cpu_clock_grant *g=&c->config.grant;
+    if(!g->session || !(g->clusters&BIT(cluster)) || !c->changes || mhz>g->max_mhz[cluster] ||
+       !row(cluster,mhz) || !permitted(c,mhz))return A733_CPU_CLOCK_REFUSED;
+    if(!time_now(c))return fault(c);
+    if(c->last_now>=deadline)return A733_CPU_CLOCK_EXPIRED;
+    --c->changes;return start(c,cluster,mhz,deadline,0);
+}
+/* Inherited state and the target point, checked before any write. */
+static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
+{
+    struct a733_cpu_clock_report *r=&c->report;
+    if(!a733_cpu_clock_report(c->ops.read,c->cookie,r))return fault(c);
+    const struct a733_cpu_clock_domain *d=&r->domain[c->cluster];
+    const struct a733_cpu_opp *o=row(c->cluster,c->target_mhz);
+    const unsigned nmax=c->cluster==A733_CPU_LITTLE ? 84u : 86u; /* 26 MHz VCO range. */
+    uint32_t mv=a733_cpu_clock_opp_mv(o,r->bin);
+    if(c->cluster==A733_CPU_LITTLE) {
+        const struct a733_cpu_clock_domain *s=&r->domain[A733_CPU_DSU];
+        uint32_t shared=s->decoded ? dsu_mv(s->hz,r->bin) : 0;
+        if(!shared)return finish(c,A733_CPU_CLOCK_REFUSED);
+        if(shared>mv)mv=shared;
+    }
+    c->p=c->target_mhz<676u ? 1u : 0u;
+    c->n=(c->target_mhz<<c->p)/26u;
+    if((r->oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002) || r->dcxo_hz!=26000000u ||
+       !r->binned || !o || !a733_cpu_clock_opp_mv(o,r->bin) || !permitted(c,c->target_mhz) ||
+       (d->pll&(PLL_ON|UPDATE))!=PLL_ON || d->source!=MUX_PLL || d->n<26u || d->n>nmax ||
+       c->n*26u!=c->target_mhz<<c->p || c->n<26u || c->n>nmax)return finish(c,A733_CPU_CLOCK_REFUSED);
+    c->to_uv=mv*1000u;c->raise=d->hz<(uint64_t)c->target_mhz*1000000u;c->select=d->select;
+    if(d->hz==(uint64_t)c->target_mhz*1000000u){c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);}
+    enum a733_pmic_status s=a733_pmic_submit(c->pmic,c->config.owner,&c->rail,rail_of(c->cluster),c->deadline,&c->request);
+    if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
+    if(s==A733_PMIC_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
+    if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+    c->state=S_READ;return A733_CPU_CLOCK_PENDING;
+}
+/* Wait for the current PMIC request. 1: result copied and reaped. 2: the
+ * request expired before bus admission, so it had no bus effects; reaped. */
+static int collect(struct a733_cpu_clock *c,enum a733_cpu_clock_status *out)
+{
+    enum a733_pmic_status s=a733_pmic_result(c->pmic,&c->request,&c->snapshot);
+    if(s==A733_PMIC_PENDING || s==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
+    if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){*out=fault(c);return 0;}
+    enum a733_pmic_status reaped=a733_pmic_reap(c->pmic,&c->request);
+    if(reaped==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
+    if(reaped!=A733_PMIC_COMPLETE){*out=fault(c);return 0;}
+    c->request=(struct a733_pmic_request){0};
+    if(s==A733_PMIC_EXPIRED)return 2;
+    if(c->snapshot.rail!=rail_of(c->cluster) || !c->snapshot.enabled || !c->snapshot.decoded){*out=fault(c);return 0;}
+    return 1;
+}
+static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
+{
+    struct a733_pmic_snapshot target;
+    uint8_t code=(uint8_t)((c->to_uv/1000u-500u)/10u);
+    if(!a733_pmic_decode(rail_of(c->cluster),0,code,&target) || target.programmed_uv!=c->to_uv)return fault(c);
+    enum a733_pmic_status s=a733_pmic_submit_write(c->pmic,c->config.owner,&c->rail,
+        rail_of(c->cluster),(uint8_t)(c->selector&127u),code,c->deadline,&c->request);
+    if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
+    if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+    c->state=S_WRITTEN;return A733_CPU_CLOCK_PENDING;
+}
+static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
+{
+    enum a733_cpu_clock_status out;
+    int k=collect(c,&out);
+    if(!k)return out;
+    /* Expired before the bus: the voltage is unchanged. A raise has not yet
+     * touched the PLL; a lowering keeps its lower rate at the higher voltage. */
+    if(k==2) {
+        if(c->after!=S_PARK)c->applied_mhz[c->cluster]=c->target_mhz;
+        return finish(c,A733_CPU_CLOCK_EXPIRED);
+    }
+    if(c->snapshot.programmed_uv!=c->to_uv)return fault(c);
+    uint32_t delta=c->to_uv>c->from_uv ? c->to_uv-c->from_uv : c->from_uv-c->to_uv;
+    c->timer=c->last_now+(delta+RAMP_UV_US-1)/RAMP_UV_US;c->state=S_SETTLE;
+    return A733_CPU_CLOCK_PENDING;
+}
+static enum a733_cpu_clock_status release(struct a733_cpu_clock *c)
+{
+    if(c->last_now>=c->timer)return fault(c);
+    if(c->rail.id) {
+        enum a733_rail_result r=a733_rail_release(c->rails,&c->rail,c->timer);
+        if(r==A733_RAIL_BUSY || r==A733_RAIL_PENDING)return A733_CPU_CLOCK_PENDING;
+        if(r!=A733_RAIL_READY)return fault(c);
+        c->rail=(struct a733_rail_token){0};
+    }
+    if(c->clock.id) {
+        enum a733_clock_result r=a733_clock_release(c->clocks,&c->clock,c->timer);
+        if(r==A733_CLOCK_BUSY)return A733_CPU_CLOCK_PENDING;
+        if(r!=A733_CLOCK_OK)return fault(c);
+        c->clock=(struct a733_clock_token){0};
+    }
+    c->state=S_IDLE;return c->result;
+}
+enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
+{
+    if(!c || c->self!=c)return A733_CPU_CLOCK_INVALID;
+    if(c->failed)return fault(c);
+    if(!time_now(c))return fault(c);
+    if(c->state==S_IDLE) {
+        unsigned level=atomic_load_explicit(&c->level,memory_order_acquire);
+        for(unsigned i=0;i<2;++i)if(level==A733_THERMAL_THROTTLE &&
+            c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ)
+            return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,1);
+        return A733_CPU_CLOCK_READY;
+    }
+    if(c->state==S_RELEASE)return release(c);
+    /* The PMIC provider bounds its requests with the same deadline. Once the
+     * PLL has been touched, expiry is a fault. Before that, any confirmed
+     * voltage covers the present rate, so expiry ends the transition. A
+     * lowering whose voltage write completed finishes its ramp wait. */
+    if(c->last_now>=c->deadline && c->state!=S_READ && c->state!=S_WRITTEN &&
+       (c->state!=S_SETTLE || c->after==S_PARK)) {
+        if(c->state==S_UPDATE || c->state==S_LOCK || c->state==S_UNPARK)return fault(c);
+        if(c->state==S_VOLTAGE && c->after==S_RELEASE)c->applied_mhz[c->cluster]=c->target_mhz;
+        return finish(c,A733_CPU_CLOCK_EXPIRED);
+    }
+    switch(c->state) {
+    case S_CLOCK: {
+        a733_clock_mask_t own=c->cluster==A733_CPU_LITTLE ? A733_CLOCK_CPU_L : A733_CLOCK_CPU_B;
+        enum a733_clock_result r=a733_clock_acquire(c->clocks,c->config.owner,
+            c->cluster==A733_CPU_LITTLE ? A733_CLOCK_CPU_DSU : 0,own,c->deadline,&c->clock);
+        if(r==A733_CLOCK_BUSY)return A733_CPU_CLOCK_PENDING;
+        if(r==A733_CLOCK_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
+        if(r!=A733_CLOCK_OK)return fault(c);
+        c->state=S_RAIL;return A733_CPU_CLOCK_PENDING;
+    }
+    case S_RAIL: {
+        enum a733_rail_result r;
+        if(!c->rail.id) {
+            r=a733_rail_acquire(c->rails,c->config.owner,0,A733_RAIL_BIT(rail_of(c->cluster)),c->deadline,&c->rail);
+            if(r==A733_RAIL_BUSY)return A733_CPU_CLOCK_PENDING;
+            if(r==A733_RAIL_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
+            if(r!=A733_RAIL_PENDING)return fault(c);
+        }
+        r=a733_rail_poll(c->rails,&c->rail);
+        if(r==A733_RAIL_BUSY || r==A733_RAIL_PENDING)return A733_CPU_CLOCK_PENDING;
+        if(r!=A733_RAIL_READY)return fault(c);
+        c->state=S_INSPECT;return A733_CPU_CLOCK_PENDING;
+    }
+    case S_INSPECT:return inspect(c);
+    case S_READ: {
+        enum a733_cpu_clock_status out;
+        int k=collect(c,&out);
+        if(!k)return out;
+        if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
+        c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
+        c->snapshot=(struct a733_pmic_snapshot){0};
+        /* Raise: voltage first. Lower: frequency first, then voltage unless
+         * the thermal path keeps it. Enough voltage needs no write. */
+        if(c->raise && c->to_uv>c->from_uv){c->state=S_VOLTAGE;c->after=S_PARK;}
+        else {c->state=S_PARK;c->after=!c->raise && !c->thermal && c->to_uv<c->from_uv ? S_VOLTAGE : S_RELEASE;}
+        return A733_CPU_CLOCK_PENDING;
+    }
+    case S_VOLTAGE:return voltage(c);
+    case S_WRITTEN:return written(c);
+    case S_SETTLE:
+        if(c->last_now<c->timer)return A733_CPU_CLOCK_PENDING;
+        c->snapshot=(struct a733_pmic_snapshot){0};
+        if(c->after==S_PARK){c->state=S_PARK;c->after=S_RELEASE;return A733_CPU_CLOCK_PENDING;}
+        c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);
+    case S_PARK: {
+        /* Park on the DCXO, then write N and request the update. */
+        uint32_t pll,select;
+        if(!rd(c,pll_word(c->cluster),&pll) || (pll&(PLL_ON|UPDATE))!=PLL_ON ||
+           !rd(c,select_word(c->cluster),&select) || select!=c->select ||
+           !wr(c,select_word(c->cluster),c->select&~MUX))return fault(c);
+        pll=(pll&~FIELD_N)|(c->n<<8);
+        if(!put(c,pll_word(c->cluster),pll) || !put(c,pll_word(c->cluster),pll|UPDATE))return fault(c);
+        c->timer=c->last_now+UPDATE_US;c->state=S_UPDATE;return A733_CPU_CLOCK_PENDING;
+    }
+    case S_UPDATE:
+    case S_LOCK: {
+        uint32_t pll;
+        if(!rd(c,pll_word(c->cluster),&pll) || ((pll>>8)&255)!=c->n)return fault(c);
+        if(c->state==S_UPDATE ? (pll&UPDATE)!=0 : (pll&LOCK)==0)
+            return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
+        if(c->state==S_UPDATE){c->timer=c->last_now+LOCK_US;c->state=S_LOCK;return A733_CPU_CLOCK_PENDING;}
+        c->state=S_UNPARK;return A733_CPU_CLOCK_PENDING;
+    }
+    case S_UNPARK: {
+        const uint32_t parked=(c->select&~(MUX|DIVP))|(c->p<<16);
+        uint32_t pll;struct a733_cpu_clock_domain d;
+        if(!wr(c,select_word(c->cluster),parked) || !wr(c,select_word(c->cluster),parked|(MUX_PLL<<24)) ||
+           !rd(c,pll_word(c->cluster),&pll))return fault(c);
+        a733_cpu_clock_decode(c->report.dcxo_hz,pll,parked|(MUX_PLL<<24),&d);
+        if(!d.decoded || d.hz!=(uint64_t)c->target_mhz*1000000u)return fault(c);
+        if(c->after==S_VOLTAGE){c->state=S_VOLTAGE;c->after=S_RELEASE;return A733_CPU_CLOCK_PENDING;}
+        c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);
+    }
+    default:return fault(c);
+    }
+}
