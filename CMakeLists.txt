@@ -58,16 +58,7 @@ endforeach()
 link_libraries(sunstone-path-maps)
 
 set(PORT "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
-function(apply_build_patch output source patch_file)
-  execute_process(COMMAND patch --silent --output "${output}.tmp" "${source}" "${patch_file}"
-    RESULT_VARIABLE patch_status)
-  if(NOT patch_status EQUAL 0)
-    message(FATAL_ERROR "Could not apply ${patch_file}")
-  endif()
-  # Preserve the generated source timestamp when patch output is unchanged.
-  configure_file("${output}.tmp" "${output}" COPYONLY)
-  file(REMOVE "${output}.tmp")
-endfunction()
+include(cmake/patch.cmake)
 apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/port.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-aarch64-clang.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -187,6 +178,9 @@ elseif(A733_NPU_HANDOFF_SOURCE)
   # before later profiles replace their directory variables.
   add_subdirectory(apps/npu-convolution native-npu EXCLUDE_FROM_ALL)
 endif()
+# The standalone NPU project defines its own apply_build_patch, which would
+# replace the exact one for every later profile.
+include(cmake/patch.cmake)
 include(cmake/a733-smp-cached-devices.cmake)
 include(cmake/a733-storage-maintenance.cmake)
 include(cmake/a733-camera-application.cmake)
