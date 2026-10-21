@@ -96,7 +96,8 @@ register access faults the session. Like any platform fault after the lock is
 taken, that fault retains REGISTER_LOCK. The host check covers both platform
 cases and a BUSY that never clears inside an xHCI access; each ends after about
 2 ms.
-Loss permanently revokes the host session; a new attachment is not adopted.
+Type-C attachment loss permanently revokes the host session; a new Type-C
+attachment generation is not adopted.
 
 Type-C service and its independent power task must continue when the USB worker
 fails. xHCI transfer accesses hold no shared register mutex, so a stalled USB
@@ -138,8 +139,9 @@ absolute deadline and under a fresh attachment observation.
 
 Abort, malformed completion, disconnect and expiry revoke caller destinations
 and retain all private DMA backing. Reset, power-off and a halted status are not
-claimed to block and drain all external transactions. There is no release,
-reattach or retry API. A failed command is not reported as a completed read.
+claimed to block and drain all external transactions. The application API has
+no release, reattach or retry call. A failed command is not reported as a
+completed read.
 
 The TinyUSB stack uses its single-context queue implementation inside the actual
 FreeRTOS owner task. No interrupt or second task may call the stack. Each host
@@ -208,7 +210,10 @@ Short transfers and zero-length packets retain their actual lengths. They are
 raw transfer records and do not imply valid boot keyboard or mouse semantics.
 One consumed result permits another receive. Failure, disconnect, expiry or
 active cancellation permanently closes admission and retains all DMA backing.
-There is no reattachment or endpoint-stall recovery path.
+A report transfer that ends with USB Transaction Error delivers no callback;
+the session is retained at most 1 s later, as described in
+[Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused).
+The application has no reattachment or endpoint-stall recovery path.
 
 The native board task preserves its storage behavior and selects HID by the
 actual enumerated class. It collects four reports into an immutable 512-byte
@@ -275,9 +280,15 @@ Hub interrupt status uses private bounce DMA and a validated one-byte copied
 completion. Port status binds the first connected port for the lifetime. Removal,
 a second connected port, suspend, overcurrent, failed transfers, an unexpected
 slot/TRB or malformed status prevents further callbacks and caller-output copy.
-Both slots and the whole DMA parent remain retained. Type-C VBUS shutdown does
-not prove that a self-powered hub or its downstream ports lost external power.
-There is no hub detach/reuse or device replacement path.
+Both slots and the whole DMA parent remain retained. A hub status transfer that
+ends with USB Transaction Error or Split Transaction Error is held without a
+callback for at most 1 s before that retention. The hub status transfer carries
+the session lifetime as its deadline, so this hold limit applies to it. Type-C
+VBUS shutdown does not prove that a self-powered hub or its downstream ports
+lost external power.
+The TinyUSB adapter does not yet use the xHCI child detach described in
+[Detach disables the slot before its pages are reused](#detach-disables-the-slot-before-its-pages-are-reused),
+so a hub child cannot be replaced within one session.
 
 The application continues to return one copied sector or four raw HID reports.
 Its wire/session layout and host decoding are unchanged. HID metadata identifies
@@ -650,6 +661,96 @@ the native application. Physical power, topology, DMA visibility, interrupt
 delivery and recovery remain unqualified. Nested hubs, simultaneous root
 enumeration and additional leaves remain unsupported in these profiles.
 
+## Detach disables the slot before its pages are reused
+
+The xHCI core tears down a device only when the controller state is certain,
+following xHCI 1.2 sections 4.4, 4.6.4 and 4.6.9. Two events start a teardown:
+
+- **Root port disconnect.** The root port reports Current Connect Status (CCS)
+  clear together with Connect Status Change (CSC). The core acknowledges the
+  change bits, sends one REMOVE notice with result 0 and tears down every bound
+  device, hub children before the hub. A CCS loss without CSC is uncertain
+  and retains the session.
+- **Hub child detach.** `a733_xhci_detach` starts teardown of one hub child,
+  for example after its hub port reports a disconnect. It returns 1 when the
+  teardown is accepted, already running or nothing is bound to that address.
+  It refuses the root device, which follows its port.
+
+Teardown revokes every caller destination immediately and admits no new setup,
+transfer or endpoint opening for that device. Each poll then issues at most one
+command and waits for its completion:
+
+1. Stop Endpoint for each endpoint whose output context is Running. The
+   controller's Stopped Transfer Event ends any TD on that ring; a forced
+   Stopped event naming another TRB of the same ring is accepted.
+2. Reset Endpoint for each endpoint that is Halted, so that every endpoint is
+   Stopped before the slot is disabled.
+3. Disable Slot.
+
+A TD still outstanding after its endpoint stops or halts must be addressed by
+the endpoint's TR Dequeue Pointer; the controller then no longer executes it.
+Only the Disable Slot completion clears the device's DCBAA entry and zeroes its
+input and output contexts, ring and bounce pages, including the extra bulk
+pair when that device held it. The device record keeps its fixed page
+addresses, and the 128 KiB parent remains DEVICE-owned. After the last root
+teardown the port is unannounced; a later connection sends a new ATTACH notice
+and enumerates again on the same pages and slot numbers. A cleared child record
+can be bound again by `a733_xhci_bind_child`.
+
+A transfer completing with USB Transaction Error or Split Transaction Error
+retires its TD and halts the endpoint. A disconnect can report this error before
+its port change. The core therefore revokes the caller destination and holds
+that endpoint without a class completion. A detach that follows resets the
+endpoint. Otherwise the session is retained 1 s after the error, or earlier at
+the TD's own deadline. The 1 s limit covers a hub status interval of up to
+256 ms and the port status request that follows it.
+
+Teardown waits for an Address Device command that is still in flight. A
+successful completion, or a USB Transaction Error completion after teardown has
+started, lets teardown continue with Endpoint 0; no TD exists for that command.
+A Transaction Error completion that arrives before the detach retains the
+session.
+
+Every other outcome retains the controller, contexts, rings and DMA parent.
+These outcomes include:
+
+- a failed or missing command completion;
+- an endpoint in the Error state;
+- a TD whose dequeue pointer has moved without a completion;
+- a transfer event for a disabled slot;
+- Type-C attachment loss;
+- a teardown that has not finished 5 s after it started. This bound matches
+  the pinned Linux `XHCI_CMD_DEFAULT_TIMEOUT`.
+
+The TinyUSB adapter still treats REMOVE notices, device close, endpoint close
+and class unmount as session loss. Application sessions therefore still end on
+any disconnect. Using the detach path from the adapter, adopting a new Type-C
+attachment generation after VBUS removal and BOT reset recovery for storage
+remain required work. VBUS removal alone does not establish that a self-powered
+hub lost power, so hub topologies need separate evidence before reuse.
+
+`checks/a733-xhci-detach.py` runs the actual core against a modeled controller
+with address and undefined-behavior sanitizers. Successful cases detach and
+reattach a direct device with a bulk read on each attachment, replace a hub
+child while the hub status TD stays outstanding, and detach a hub with its
+child. Further successful cases cover a stop that races a halt, a held
+transaction error before disconnect, and a child detach while its Address
+Device command is in flight, with either a successful or a Transaction Error
+completion. Retention cases cover a missing CSC, Type-C loss, a stop that never
+completes, a failed Disable Slot, a transfer event for a disabled slot, and a
+held error without disconnect on a bulk TD and on a hub status TD whose deadline
+is the session lifetime. In each held-error case, retention follows 1 s after
+the error. The model checks that contexts and rings keep their contents until
+Disable Slot completes.
+
+The composed USB2 check covers the adapter side of a root disconnect. With a TD
+outstanding on a high-speed storage device, a HID device or a storage device
+behind a hub, the root port reports CCS clear with CSC. The core sends REMOVE
+with result 0 and starts teardown. TinyUSB then closes the device, and the
+adapter retains the session. No transfer callback or caller copy follows the
+REMOVE notice, and the DMA parent is RETAINED. Controller timing, DMA
+visibility and physical disconnect behavior remain unqualified.
+
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
@@ -666,8 +767,9 @@ cannot support those modes.
 Further required work includes wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
-negotiation where electrically supported, safe shutdown/drain and repeated
-attachment. DisplayPort lane ownership must be coordinated with display users.
+negotiation where electrically supported, safe shutdown/drain, adoption of a
+new Type-C attachment generation and use of the xHCI detach path by the
+TinyUSB adapter. DisplayPort lane ownership must be coordinated with display users.
 USB0 host capability requires an electrically valid route; USB1 needs a physical
 route before it can be considered usable on this board revision.
 
@@ -756,7 +858,7 @@ VBUS shutdown, device enumeration, report timing and observed report contents
 remain physically unqualified. Both microSD cards remain preserved. Broader
 speed/class support, broader hub topologies and power budgets, isochronous
 transfers, SuperSpeed, physical CPU
-interrupt delivery and safe detach/reuse remain required work.
+interrupt delivery and application-level device replacement remain required work.
 
 ## Offline Gen1 evidence
 

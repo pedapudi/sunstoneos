@@ -38,6 +38,7 @@ static unsigned dual_mode,dual_reverse,dual_duplicate,dual_changes[8],dual_reset
 static int is_hid(unsigned j){return dual_mode?j&&(dual_duplicate||j==(dual_reverse?2u:1u)):hid_mode;}
 static unsigned speed_for(unsigned j){return dual_mode?(is_hid(j)?device_speed:3):hub_mode&&!j?(ss_hub?4:3):device_speed;}
 static uint8_t request[8],cbw[31];
+static unsigned root_unplug,root_unplugged,removals,remove_result,after_remove;
 static unsigned busy_stuck,platform_reads;
 static int gpu_read(void *v,uintptr_t a,uint32_t *out){*out=*pmic_model_word(v,a);return 1;}
 static int gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t d)
@@ -231,6 +232,8 @@ static void wire(void)
 {
     struct a733_xhci *x=&n.core;
     if(x->command_kind&&x->command_pointer!=last_command){
+        /* Teardown commands stay outstanding, so only the adapter can end the session. */
+        if(root_unplugged&&(x->command_kind==10||x->command_kind==14||x->command_kind==15))return;
         unsigned j=x->command_device-1;assert(j<A733_XHCI_DEVICES);
         struct a733_xhci_device *d=&x->devices[j];unsigned speed=ss_mode&&!companion_mode?4:speed_for(j);
         if(stall_seen&&(x->command_kind==14||x->command_kind==16)){
@@ -382,7 +385,7 @@ static int ww(void *v,uint32_t off,uint32_t value)
     }
     registers[off/4]=value;
     if(off==0x40){if(value&2){registers[off/4]=0;registers[0x44/4]=1;}else if(value&1)registers[0x44/4]=0;}
-    if(off==0x440){registers[off/4]=1|(1u<<9);if(value&(1u<<4))registers[off/4]|=2|((hub_mode?3:device_speed)<<10);}
+    if(off==0x440){registers[off/4]=(root_unplugged?0:1)|(1u<<9);if(value&(1u<<4))registers[off/4]|=2|((hub_mode?3:device_speed)<<10);}
     return 1;
 }
 static int w64(void *v,uint32_t off,uint64_t value){
@@ -403,12 +406,17 @@ static int w64(void *v,uint32_t off,uint64_t value){
 }
 static int barrier(void *v){(void)v;return 1;}
 static int out(void *v,const void *p,size_t z){(void)v;return pmic_model_outside(&m,p,z);}
+static void notice(void *v,const struct a733_xhci_notice *e)
+{
+    if(e->kind==A733_XHCI_REMOVE){++removals;remove_result=e->result;}else if(removals)++after_remove;
+    a733_usb2_host_notice(v,e);
+}
 static void start_core(void)
 {
     struct device_memory_extent e;
     assert(device_memory_pool_init(&n.private_pool,(uintptr_t)dma,0x79000000,sizeof(dma)));
     assert(device_memory_acquire(&n.private_pool,99,sizeof(dma),&n.memory,&e));
-    const struct a733_xhci_ops ops={cn,current,live,rr,ww,w64,barrier,out,a733_usb2_host_notice};
+    const struct a733_xhci_ops ops={cn,current,live,rr,ww,w64,barrier,out,notice};
     registers[0]=0x01100040;registers[1]=((ss_mode?2u:1u)<<24)|(1u<<8)|(dual_mode?3:hub_mode?2:1);
     registers[4]=(0x20u<<16)|1|4|8;registers[5]=0x2000;registers[6]=0x1000;
     registers[0x80/4]=0x02000002;registers[0x84/4]=0x20425355;registers[0x88/4]=0x101;
@@ -435,12 +443,29 @@ static int poll(void)
     }
     return result;
 }
+/* A real root disconnect clears CCS together with CSC while a leaf TD is
+ * outstanding. The core sends REMOVE result 0 and starts teardown; TinyUSB
+ * then closes the device, which ends the session and retains the DMA parent. */
+static void unplug_root(void)
+{
+    hold_bulk=1;for(unsigned i=0;i<10;++i)assert(poll()>=0&&!n.failed);
+    struct a733_xhci_device *leaf=&n.core.devices[hub_mode?1:0];unsigned outstanding=0;
+    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)outstanding+=leaf->endpoints[i].pending==2&&leaf->endpoints[i].pending_trb;
+    assert(outstanding==1&&!removals);
+    root_unplugged=1;registers[0x440/4]=(registers[0x440/4]&~(1u|2u|(15u<<10)))|(1u<<17);event(34,UINT64_C(1)<<24,1,0,0,0);
+    unsigned polls=0;for(;polls<100&&!n.failed;++polls)poll();
+    assert(n.failed&&n.core.failed&&polls<100&&removals==1&&!remove_result&&!after_remove&&n.core.devices[0].detach);
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j)for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)assert(!n.core.devices[j].endpoints[i].caller);
+    enum device_memory_state state;struct device_memory_extent extent;
+    assert(device_memory_describe(&n.private_pool,n.memory,&extent,&state)&&state==DEVICE_MEMORY_RETAINED);
+}
 static void mounted(void)
 {for(unsigned i=0;i<10000&&!n.mounted&&!n.failed;++i)poll();if(!n.mounted||n.failed||commands!=(hub_mode?8u:4u))fprintf(stderr,"mount failed mounted%u failed%u phase%u now%llu cmds%u xfers%u kind%u hub addr%u ports%u power%u local%u mask%x port%u defer%u requested%u root slot%u addr%u ready%u hubcfg%u ep0%u ctl%u child slot%u addr%u ready%u\n",n.mounted,n.failed,n.core.phase,(unsigned long long)m.now,commands,transfers,n.kind,n.hub.address,n.hub.ports,n.hub.device_power,n.hub.local_power,n.hub.powered_mask,n.hub.selected_port,n.hub.status_deferred,n.hub.status_requested,n.core.devices[0].slot,n.core.devices[0].address,n.core.devices[0].port_ready,n.core.devices[0].hub_configured,n.core.devices[0].endpoints[0].pending,n.core.devices[0].control_stage,n.core.devices[1].slot,n.core.devices[1].address,n.core.devices[1].port_ready);
  assert(n.mounted&&!n.failed&&n.blocks==128&&n.block_bytes==512&&commands==(hub_mode?8u:4u));}
 int main(int argc,char **argv)
 {
     const char *mode=argc>1?argv[1]:"read";
+    root_unplug=strstr(mode,"unplug")!=NULL;
     if(!strncmp(mode,"irq-",4)){irq_model=1;mode+=4;}
     if(!strncmp(mode,"companion-",10)){companion_mode=ss_mode=1;topology_fault=strstr(mode,"required-hub")?7:0;mode+=10;}
     if(!strncmp(mode,"ss-hub-",7)){
@@ -682,6 +707,11 @@ int main(int argc,char **argv)
         if(strstr(mode,"detach"))a733_typec_revoke(&role);
         if(strstr(mode,"timeout")){hold_bulk=1;m.now+=5000001;}
         if(strstr(mode,"cancel")){hold_bulk=1;for(unsigned i=0;i<10;++i)assert(poll()>=0);assert(a733_xhci_abort(&n.core,n.address,0x81));}
+        if(root_unplug){
+            unplug_root();assert(!n.hid.complete&&a733_usb2_hid_result(&n,&result)<0);
+            for(unsigned j=0;j<sizeof(result);++j)assert(((const uint8_t *)&result)[j]==0x5a);
+            puts("PASS HID root disconnect with CSC sends REMOVE, then the adapter retains without callback or report copy");return 0;
+        }
         unsigned failure=failed_hid_event||wrong_hid_pointer||wrong_leaf_slot||strstr(mode,"detach")||strstr(mode,"timeout")||strstr(mode,"cancel");
         for(unsigned i=0;i<10000&&!n.hid.complete&&!n.failed;++i)poll();
         if(failure){assert(n.failed&&n.core.failed&&!n.hid.complete&&a733_usb2_hid_result(&n,&result)<0);
@@ -761,6 +791,11 @@ int main(int argc,char **argv)
         puts("PASS IRQ event-ring full retains DMA before class completion/caller copy");return 0;
     }
     assert(a733_usb2_read_sector(&n,7,m.now+500000));
+    if(root_unplug){
+        unplug_root();assert(!n.read_complete&&a733_usb2_read_result(&n,result)<0);
+        for(unsigned j=0;j<512;++j)assert(result[j]==0x5a);
+        printf("PASS %s root disconnect with CSC sends REMOVE, then the adapter retains without callback or sector copy\n",hub_mode?"hub":"MSC");return 0;
+    }
     if(!strcmp(mode,"bad-status"))bad_status=1;
     if(!strcmp(mode,"short-data"))short_data=1;
     if(!strcmp(mode,"cancel")){

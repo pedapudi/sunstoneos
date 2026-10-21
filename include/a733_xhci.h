@@ -39,7 +39,7 @@ struct a733_xhci_endpoint {
     uint8_t *bounce,*caller;
     uint64_t ring_pa,bounce_pa,pending_trb,deadline;
     unsigned number,address,packet,index,cycle,opened,configured,pending;
-    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery. */
+    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error. */
 };
 /* One root device and up to two children behind an admitted HS hub retain
  * own EP0, contexts and data rings; command/event rings remain controller-owned. */
@@ -50,12 +50,14 @@ struct a733_xhci_device {
     unsigned control_stage,control_length,control_in,evaluate_pending,address_status;
     unsigned configure_pending,command_mask,zero_retired,parent,parent_port;
     unsigned hub,hub_ports,hub_ttt,hub_mtt,hub_configured;
+    unsigned detach,stopping; /* detach:1 stopping endpoints,2 disabling slot; stopping:endpoint index+1. */
     uint8_t setup[8];
     struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
 };
 /* Each device has EP0 and two bulk or interrupt endpoints. Only the owning
  * task calls this API. The private NC parent and every object stay at their
- * original addresses; no reinitialization or memory release exists.
+ * original addresses and the parent is never released. A device record's own
+ * pages are cleared for reuse only after its Disable Slot completion.
  * Control stages use independent actual Setup/Data/Status TD completions.
  */
 struct a733_xhci {
@@ -69,7 +71,7 @@ struct a733_xhci {
     uint8_t *dcbaa,*erst,*scratch;
     uint64_t command_pa,event_pa,dcbaa_pa,erst_pa;
     uint64_t generation,deadline,lifetime_deadline,last_now,command_deadline,command_pointer;
-    unsigned phase,failed,announced,removed,operational,runtime,doorbell;
+    unsigned phase,failed,announced,removed,detaching,operational,runtime,doorbell;
     unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
     unsigned command_index,command_cycle,event_index,event_cycle,command_kind,command_device,default_device;
     unsigned port_reset,connected,extra_endpoint_owner,require_ss,usb3_port,usb3_slot_type,usb3_seen;
@@ -127,10 +129,20 @@ int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_
 int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
     uint8_t *,unsigned bytes,uint64_t deadline);
 /* Immediately revoke caller destinations. Aborting an actual pending operation
- * permanently retains the complete session; no Stop Endpoint/reclamation path
- * is implied. Absent or idle endpoints have nothing to cancel and return1.
- * Private storage and slot ownership never return to the pool, even on success.
+ * permanently retains the complete session; use detach to end a device.
+ * Absent, idle or detaching endpoints have nothing to cancel and return1.
+ * Private storage never returns to the pool, even on success.
  */
 int a733_xhci_abort(struct a733_xhci *,unsigned address,unsigned endpoint);
+/* Orderly removal of one hub child, for example after its hub port reports a
+ * disconnect. Revokes caller destinations at once; later polls stop each
+ * Running endpoint, disable the slot and then clear the record's pages for a
+ * new child. Every step needs its matched completion within 5 s; otherwise the
+ * session is retained. Returns1 when accepted, already in progress or nothing
+ * is bound, and0 on refusal. The root device is torn down only after its port
+ * reports a connect-status change; a REMOVE notice with result0 starts that,
+ * and the next ATTACH follows its completion. A Type-C generation change still
+ * retains the whole session. */
+int a733_xhci_detach(struct a733_xhci *,unsigned address);
 void a733_xhci_lost(struct a733_xhci *);
 #endif
