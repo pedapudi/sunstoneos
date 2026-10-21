@@ -139,14 +139,19 @@ def check_constructor(a,out,image,inputs,outputs,bad=False):
  m.hooks.pop(image.address('npu_convolution_send'));m.scheduler=2
  m.put(c+cl['bound'],1,4);m.put(c+cl['client'],m.task);m.put(c+cl['opened'],1,4);m.put(c+cl['ready'],1,4)
  command=c+cl['commands']+image.layouts['a733_npu_command']['token']+8
+ # A job publication follows a bootstrap publication, which maintains every
+ # buffer including the CONSTANT shader; jobs maintain only input and outputs.
+ boot=c+cl['commands'];m.cache=[]
+ assert m.call('a733_npu_memory_publish',memory,image_at,boot,1)==1
+ assert [0,cpus[7],sizes[7]] in m.cache and [1,cpus[6],sizes[6]] in m.cache
+ assert m.call('a733_npu_memory_finish',memory,boot,0)==1
  for index,data in enumerate(inputs):
   m.u.mem_write(cpus[6],bytes([0xa5+index])*sizes[6]);m.u.mem_write(0x43010000,data)
   assert m.call('npu_convolution_send',c,2,0x43010000,len(data),5000000,5,0x43e00100)==0
   assert m.data(cpus[6],sizes[6])==bytes(sizes[6]) and m.data(cpus[3],len(data))==data
   m.cache=[]
   assert m.call('a733_npu_memory_publish',memory,image_at,command,0)==1
-  assert [1,cpus[6],sizes[6]] in m.cache and [1,cpus[4],sizes[4]] in m.cache
-  assert [0,cpus[7],sizes[7]] in m.cache
+  assert sorted(m.cache)==sorted([[0,cpus[3],sizes[3]],[1,cpus[4],sizes[4]],[1,cpus[6],sizes[6]]]),m.cache
   assert m.call('a733_npu_memory_finish',memory,command,0)==1
   assert [2,cpus[6],sizes[6]] in m.cache and [2,cpus[4],sizes[4]] in m.cache
  (out/'tables.bin').write_bytes(m.data(tables,20480))

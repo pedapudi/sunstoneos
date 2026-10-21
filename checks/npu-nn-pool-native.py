@@ -62,13 +62,18 @@ def constructor(a,out,image,inputs,outputs):
  m.hooks.pop(image.address('npu_convolution_send'));m.scheduler=2
  for field,value in [('bound',1),('client',m.task),('opened',1),('ready',1)]:m.put(c+cl[field],value,8 if field=='client' else 4)
  command=c+cl['commands']+image.layouts['a733_npu_command']['token']+8
+ # The bootstrap publication cleans the CONSTANT descriptors and coefficients;
+ # a job publication maintains only the input, pool and output.
+ boot=c+cl['commands'];m.cache=[]
+ assert m.call('a733_npu_memory_publish',memory,image_at,boot,1)==1
+ for i in (0,1):assert [0,cpus[i],sizes[i]] in m.cache
+ assert m.call('a733_npu_memory_finish',memory,boot,0)==1
  for index,data in enumerate(inputs):
   m.u.mem_write(cpus[6],bytes([0xa5+index])*sizes[6]);m.u.mem_write(0x43010000,data)
   assert m.call('npu_convolution_send',c,2,0x43010000,len(data),5000000,5,0x43e00100)==0
   assert m.data(cpus[6],sizes[6])==bytes(sizes[6]) and m.data(cpus[3],len(data))==data
   m.cache=[];assert m.call('a733_npu_memory_publish',memory,image_at,command,0)==1
-  for i in (6,4):assert [1,cpus[i],sizes[i]] in m.cache
-  assert [0,cpus[1],sizes[1]] in m.cache
+  assert sorted(m.cache)==sorted([[0,cpus[3],sizes[3]],[1,cpus[4],sizes[4]],[1,cpus[6],sizes[6]]]),m.cache
   assert m.call('a733_npu_memory_finish',memory,command,0)==1
   for i in (6,4):assert [2,cpus[i],sizes[i]] in m.cache
  # Coefficient integrity is rechecked at the actual wrapper publication boundary.
