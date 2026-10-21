@@ -64,7 +64,7 @@ sha = [line.split() for line in a.model_log.read_text().splitlines() if line.sta
 assert sha == [['digest', '0', hashlib.sha256(b'').hexdigest()]]
 assembly = subprocess.check_output([a.objdump, '-dr', str(a.native_object)], text=True)
 # Cache maintenance goes through the shared CWG/EL/MMU-checked helper.
-assert 'aarch64_device_cache' in assembly and 'dc\t' not in assembly and 'dsb\tsy' in assembly
+assert 'aarch64_device_cache' in assembly and '\tdc\t' not in assembly and 'dsb\tsy' in assembly
 for symbol in ['a733_ce_session_native_claim', 'a733_memory_reservations_init',
                'device_memory_acquire', 'a733_ce_session_bind']:
     assert symbol in assembly, symbol
