@@ -1,9 +1,14 @@
 # Camera DMA retains buffers until capture and memory writes finish
 
-The native camera DMA controller configures DMA140 channel 0 for one 640×480
-NV16 image. NV16 stores luminance in one plane and interleaved U/V chroma in
-another. Each plane has 480 rows of 640 bytes, for 614,400 image bytes in total.
-The sensor and receiver carry UYVY packets; the DMA memory layout is NV16.
+The native camera DMA controller configures DMA140 channel 0 for NV16 images of
+one configured size, either one image at a time or continuously into a ring of
+frame slots. NV16 stores luminance in one plane and interleaved U/V chroma in
+another. Each plane has one row of width bytes per image line: at 640 × 480,
+480 rows of 640 bytes, for 614,400 image bytes in total. The sensor and
+receiver carry UYVY or YUYV packets; the DMA memory layout is NV16.
+`a733_camera_dma_init` selects 640 × 480, and `a733_camera_dma_init_format`
+accepts any width that is a multiple of 16 up to 2,592 and any even height up
+to 1,944.
 
 The implementation is source-checked and host-tested. It has not captured a
 physical image. The [native camera route](camera-route.md) now configures a
@@ -19,7 +24,8 @@ Global bus drain and physical capture remain required.
 4 KiB at `0x05830000 + block * 0x1000`. The controller reserves the entire block
 and programs channel 0. It refuses active channels or enabled interrupts.
 
-Each image plane needs 307,200 bytes. The caller supplies the complete mapping
+Each image plane needs width × height bytes, 307,200 at 640 × 480. The caller
+supplies the complete mapping
 span, including any guard space required by bus access or prefetch behavior.
 Both spans must be disjoint, start on 64-byte boundaries and fit within the
 34-bit register encoding. The 64-byte alignment is a conservative API policy;
@@ -39,13 +45,15 @@ transfer or the explicit retained-readout completion below. Admission also estab
 
 - Exclusive DMA registers, stable clocks and reset state, and independent recovery.
 - A configured route through the camera crossbar and video scaler.
-- Progressive YUV422 input at 640×480, without scaling, cropping or overlays.
+- Progressive YUV422 input at the configured size, without scaling, cropping
+  or overlays.
 - Cache preparation for device writes, with no conflicting cache-line aliases.
 - A quiet producer and a fence that permits one complete frame and prevents any
   part of a second frame from reaching the DMA.
 
 The controller programs automatic buffer length, online channel 0, NV16 format,
-640-byte strides, image dimensions, plane addresses and disabled compression.
+width-byte strides, image dimensions, a flip size of two bytes per pixel, plane
+addresses and disabled compression.
 It leaves interrupts disabled and polls completion. Every configuration write
 has masked readback verification. Stale completion flags are cleared and checked
 while the producer remains quiet; capture enable is the last configuration write.
@@ -82,7 +90,7 @@ precede CPU cache invalidation. The coordinator rechecks time and authority
 before publishing its result.
 
 This path reaches `READABLE`, keeps both planes device-owned, and never calls
-disable, drain, close or release. Only the 307,200-byte image payload of each
+disable, drain, close or release. Only the width × height image payload of each
 plane may be read; guards and padding are excluded. Every table, parameter,
 frame, clock and hardware reservation remains retained. CPU writes and global
 reclamation remain prohibited. The manual's still-frame completion definition
@@ -114,6 +122,36 @@ A successful release cannot be undone if its final time check fails. In that
 case the controller records a fault with no resource token, and the caller
 retains the image it already owned. There is no cancellation path from `ARMED`;
 interruption before capture requires coordinator recovery.
+
+## Continuous capture rotates frame slots at each frame start
+
+`a733_camera_dma_stream` starts continuous capture from `ARMED` with the
+parser in video capture mode. It needs the optional `start_stream` and
+`sync_slot` operations, 2–4 slots and a slot size that is a multiple of 4096,
+covers one plane and fits both spans that many times. Slot k's planes start
+k × slot size into the Y and UV spans. Configuration has already programmed
+slot 0. Every slot stays device-owned until it is delivered.
+
+In `STREAMING` each poll performs one operation: a pending slot invalidation,
+a status read, the acknowledgement of the observed flags only, one of the
+two address writes, or a status read after them. Frame-done (bit 1) marks the
+active frame complete. A frame start (bit 7) activates the programmed slot,
+delivers the previous slot if its frame completed, and programs the next free
+slot; the reference driver's frame-start handler relies on the same latching
+of the address registers. When no slot is free the active slot repeats and its
+frame is lost. When the status read after the address writes shows another
+frame start, the write may have missed it: the controller acknowledges only
+that flag, delivers nothing, and does not deliver the active slot at the next
+start either. The [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
+describes the delivery rules and the frame counts.
+
+`a733_camera_dma_take` hands the oldest delivered slot to the caller with its
+frame-start count; `a733_camera_dma_give` returns it to the device. Neither
+performs MMIO. `a733_camera_dma_stop_stream` refuses while a slot is held and
+otherwise enters `STOP`; the producer must be stopped and fenced before the next
+poll. The disable, drain and final-status sequence of a still image follows,
+except that the final status needs no capture-done flag. `READY` returns both
+complete spans to the caller.
 
 ## Native routing connects the parser to the frame DMA
 
@@ -164,6 +202,15 @@ An AArch64 freestanding compile passed. These results establish configuration
 agreement and modeled ownership behavior; they do not qualify capture hardware.
 Raw commands, input identities and artifacts are outside Git under
 `~/.cache/sunstoneos/evidence/camera-dma-20261016/`.
+
+The reference check also compares the complete register image of block 0 at
+320 × 240, 1280 × 720, 2592 × 1944 and 176 × 144 with the pinned functions,
+using the NV16 lengths of the reference driver's video path. The fixture
+refuses plane spans one byte short and widths that are not multiples of 16.
+Ring admission refuses missing stream operations, one or five slots, slots
+smaller than a plane, not page multiples or larger than the spans, and a
+second start. Ring operation is exercised through the
+[capture coordinator's model](camera-capture.md#composition-evidence-reuses-the-leaf-checks).
 
 The completion fixture and AArch64 object have evidence for the image-mode
 completion condition. The unchanged source reference executable and register

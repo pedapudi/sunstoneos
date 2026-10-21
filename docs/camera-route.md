@@ -28,12 +28,16 @@ PHY admission, DMA mappings, cache maintenance and independent recovery.
 
 VIPP, the video image postprocessor, sits before DMA0. The controller reserves
 all of physical VIPP0 at `0x05910000`, including its four channels, and uses
-channel 0 in online mode. Input and output are progressive 640×480 YUV422.
+channel 0 in online mode. Input and output are progressive YUV422 of one
+configured size: `a733_camera_route_init` selects 640 × 480, and
+`a733_camera_route_init_format` accepts the sizes the receiver and DMA accept.
 Scaling preserves both dimensions. Chroma downsampling, color conversion and
 overlays remain disabled.
 
 The controller constructs a complete 1,024-byte little-endian parameter image.
-The image contains these nonzero words; every other byte is zero:
+At 640 × 480 the image contains these nonzero words; every other byte is
+zero. Other sizes change only the width and height fields at `0x208` and
+`0x234`:
 
 | Byte offset | Value | Meaning |
 | --- | --- | --- |
@@ -165,7 +169,11 @@ The credible changed risks are incorrect routing or parameter bytes, premature
 parameter release, and accidental continuous capture. The focused check compares
 complete TOP/VIPP register and parameter images for both parsers. It compares
 complete receiver images for SCAP and VCAP on both camera ports and verifies
-that sampling a completed image does not rearm capture.
+that sampling a completed image does not rearm capture. It then compares route
+and parameter images at 320 × 240, 1280 × 720, 2592 × 1944 and 176 × 144,
+alternating parsers, and single-image receiver images for both ports at the
+same sizes in UYVY and YUYV order. Widths that are not multiples of 16, odd or
+excessive sizes and unknown byte orders are refused before any callback.
 
 The ownership fixture passed AddressSanitizer and UndefinedBehaviorSanitizer.
 It covers publication failure, delayed disable, missing parameter load, raw

@@ -1,29 +1,68 @@
 # Native OV5640 control and camera integration
 
 The [OV5640 driver](../drivers/camera/ov5640.c) implements sensor power sequencing,
-identity checks, one MIPI CSI-2 mode, stream start/stop, and bounded shutdown.
-Host checks and AArch64 compilation pass. Physical sensor control, frame capture,
-receiver/D-PHY operation, and A733 image processing remain unqualified.
-The driver has no Linux runtime dependency.
+identity checks, the reference driver's ten output sizes in three CSI-2 pixel
+formats, stream start/stop, and bounded shutdown. Host checks and AArch64
+compilation pass. Physical sensor control, frame capture, receiver/D-PHY
+operation, and A733 image processing remain unqualified. The driver has no
+Linux runtime dependency.
 
-## The first sensor mode is two-lane VGA UYVY
+## Modes follow the reference driver's mode table
 
-The fixed profile uses the Linux OV5640 initialization table, low-resolution table,
-clock calculation, crop/timing definitions, and image controls. It requires a
-24 MHz external sensor clock and emits 640 × 480 UYVY pixels over two CSI-2 data
-lanes. The virtual channel is zero and the CSI-2 data type is YUV422 8-bit, `0x1e`.
-Each active line carries 1,280 image bytes; a tightly packed frame occupies
-614,400 bytes before any receiver stride or allocation padding.
+Every mode uses two CSI-2 data lanes, virtual channel 0 and a 24 MHz external
+sensor clock. `ov5640_mode_get` derives a mode from an output size, a pixel
+format and an optional frame length, and `ov5640_select` installs it before
+open; without a selection the driver uses 640 × 480 UYVY. The derivation
+repeats the reference driver's calculations:
 
-The link clock is 192 MHz, corresponding to 384 Mbit/s per data lane.
-The 48 MHz timing rate divided by 1,600 clocks per line and 1,000 lines per frame
-gives a nominal 30 frames/s. The physical clock and frame rate have not been measured.
+- the crop rectangle, line length and default vertical blanking of each size;
+- the starting pixel rate of each size and the link rate it implies for the
+  format's bits per pixel, halved in the lanes when it exceeds 490 MHz;
+- the PLL multiplier and system divider, chosen as the first PLL output at or
+  above the required rate with the smallest excess;
+- the timing clock the sensor derives from those dividers, and the 50 Hz and
+  60 Hz automatic-exposure band steps for the default frame length.
+
+The formats are UYVY and YUYV, both CSI-2 data type `0x1e` with 16 bits per
+pixel, and 8-bit raw Bayer starting with a blue/green row (`SBGGR8`), data type
+`0x2a`. A raw frame carries 8 bits per pixel, so the reference link rate for
+the low-resolution sizes halves and so does the frame rate.
+
+| Size | Output | Timing clock | Link clock | Frames/s, YUV422 | Frames/s, raw |
+| --- | --- | ---: | ---: | ---: | ---: |
+| QQVGA | 160 × 120 | 48 MHz | 192 MHz | 30.06 | 15.03 |
+| QCIF | 176 × 144 | 48 MHz | 192 MHz | 30.06 | 15.03 |
+| QVGA | 320 × 240 | 48 MHz | 192 MHz | 30.00 | 15.00 |
+| VGA | 640 × 480 | 48 MHz | 192 MHz | 30.00 | 15.00 |
+| NTSC | 720 × 480 | 96 MHz | 384 MHz | 30.03 | 15.02 |
+| PAL | 720 × 576 | 96 MHz | 384 MHz | 30.03 | 15.02 |
+| XGA | 1024 × 768 | 96 MHz | 384 MHz | 30.03 | 15.02 |
+| 720p | 1280 × 720 | 62 MHz | 248 MHz | 30.27 | 30.27 |
+| 1080p | 1920 × 1080 | 74 MHz | 296 MHz | 30.00 | 30.00 |
+| QSXGA | 2592 × 1944 | 84 MHz | 336 MHz | 15.01 | 15.01 |
+
+The timing and link clocks are those of the YUV422 formats; for the raw format
+the four lowest sizes use 24 MHz and 96 MHz, and NTSC, PAL and XGA use 48 MHz
+and 192 MHz. A frame takes `htotal × vtotal` timing-clock periods. The frame
+length `vtotal` may be set between the output height plus 24 lines and 3,375
+lines, the range of the reference vertical-blanking control. For example, VGA
+with 2,000 lines runs at 15 frames/s. The automatic-exposure limits and band
+steps stay those of the reference frame length, as they do in the reference
+driver after its blanking control changes the frame length.
+
+For VGA UYVY the link clock is 192 MHz, 384 Mbit/s per data lane, and the
+48 MHz timing clock divided by 1,600 clocks per line and 1,000 lines per frame
+gives a nominal 30 frames/s. Each active line carries 1,280 image bytes; a
+tightly packed frame occupies 614,400 bytes before any receiver stride or
+allocation padding. No physical clock or frame rate has been measured.
+
 The sensor handles automatic exposure, gain and white balance. The initial
 anti-flicker setting is 50 Hz. Initialization selects ordinary images or the
 sensor's color-bar test pattern, which register `0x503d` = `0x84` enables as in
 the Linux driver. The [native binding](camera-native.md) takes this selection
-from its boot record. Additional modes, runtime exposure controls, autofocus and
-orientation controls remain to be implemented.
+from its boot record and uses the VGA UYVY mode. Runtime exposure controls,
+autofocus, orientation controls and the JPEG and RGB formats remain to be
+implemented. The A733 receiver driver has no RGB565 input format.
 
 The reference sensor driver is
 [Linux `drivers/media/i2c/ov5640.c`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c),
@@ -70,7 +109,7 @@ address byte containing the read/write bit. An I2C read sends the register
 address and uses a repeated start for the data byte.
 
 Initialization disables frame transmission before the reference table exits
-software standby. It preserves the table's 300 ms delay, programs the VGA mode,
+software standby. It preserves the table's 300 ms delay, programs the selected mode,
 configures the lanes to enter the low-power LP11 idle state, and waits at least
 500 microseconds. Readback verifies the clock, dimensions, format, virtual
 channel, packet-disable state and selected test pattern. Ready means the sensor
@@ -152,10 +191,15 @@ acknowledgement. Capture needs admitted buffers, IOMMU/cache visibility, stride
 and format handling, frame ownership, cancellation and verified drain.
 The camera DMA block is distinct from the general-purpose DMA controller.
 
-UYVY sensor output permits an initial capture path using the sensor's own image
-processing. Native A733 ISP support still requires raw formats, scaling,
-statistics, exposure/white-balance integration, tuning and applicable concurrent
-sensor modes. No ISP functionality is established by the OV5640 host checks.
+YUV422 sensor output permits a capture path using the sensor's own image
+processing, through the pass-through ISP1. The sensor driver also produces
+8-bit raw Bayer, but no receiver, ISP0 or DMA path accepts raw frames from the
+sensor yet. Processing live sensor frames in ISP0 still requires raw receiver
+input, parser-to-ISP0 routing, ISP0 operation on a live input with a stop and
+drain sequence, the ISP's second IOMMU master in the capture coordinator,
+scaling, statistics, exposure/white-balance integration and tuning. The
+[recorded-image ISP0 application](camera-isp0.md) processes a frame from memory
+instead. No ISP functionality is established by the OV5640 host checks.
 The receiver must establish the real connector-to-parser route; device-tree
 sensor numbers are not sufficient proof of physical lane routing.
 
@@ -199,18 +243,40 @@ sensor image matches the native driver for the selected color-bar profile.
 The reference harness supplies transport and Linux-type stubs; it does not
 execute a Linux kernel or simulate sensor electronics.
 
-The AArch64 freestanding object compiles with Clang 21 and contains 5,364 bytes
-of code and read-only data, with no writable static data. Its largest reported
-direct stack frame is 64 bytes. It requires the runtime `memmove` implementation.
-No runtime performance was measured. Raw command logs,
-source hashes, extracted reference functions, binary identities and target
-metadata are under `~/.cache/sunstoneos/evidence/ov5640-20261016/`.
+A second harness checks every mode against the reference driver itself:
+
+```sh
+python3 checks/ov5640-modes-reference.py \
+  --source "$HOME/.cache/sunstoneos/sources/camera/drivers/media/i2c/ov5640.c" \
+  --evidence <output directory>
+```
+
+It compiles the pinned driver's mode table, format table, pixel-rate selection
+and its `ov5640_set_mode` path with the default frame length, then applies the
+same controls and frame length as the native driver. For each of 36 modes,
+covering all ten sizes in all three formats and six frame lengths including
+both ends of the admitted range, the complete 65,536-byte register image at
+`READY` and the derived link clock, timing clock, line length and frame length
+must match. The native side also replays each mode with block writes, which must
+reproduce the single-write access sequence, starts and stops the stream, and
+checks that the receiver callback receives the selected mode. Invalid sizes,
+formats and frame lengths, selection after open and a mode with altered derived
+values are refused without changing the driver.
+
+The AArch64 freestanding object compiles with Clang 21 and contains 9,612 bytes
+of code and read-only data, with no writable static data. It requires the
+runtime `memmove`, `memcpy` and `memset` implementations. No runtime performance was
+measured. The VGA evidence is under `~/.cache/sunstoneos/evidence/ov5640-20261016/`;
+the multi-mode results are under
+`~/.cache/sunstoneos/build/audit-camera-streaming/dev/ov5640-modes/`.
 
 The [native capture path](camera-native.md) captures retained still images from
-CAM1. Its boot record can request up to fifteen discarded images before the
-readable one. Each discarded image is a complete sensor stop and start through
-the [retained rearm sequence](camera-capture.md). Continuous capture and wider
-modes remain to be implemented.
+CAM1 in the VGA UYVY mode. Its boot record can request up to fifteen discarded
+images before the readable one. Each discarded image is a complete sensor stop
+and start through the [retained rearm sequence](camera-capture.md). The
+[capture coordinator](camera-capture.md) accepts any UYVY or YUYV mode and also
+streams frames continuously into a ring of buffers; the native application
+does not yet use either.
 
 CAM2 has no native binding. The receiver, route and capture coordinator accept
 port and parser one, and the media clock provider can prepare MCLK2 at
