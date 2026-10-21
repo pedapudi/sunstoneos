@@ -150,3 +150,13 @@ The monitor hash and execution location are documented in
 The local `remote-source-assessment.json` and `monitor-e902-start.txt` preserve
 the compared file hashes, exact instructions and unresolved requirement.
 This assessment adds no MMIO operation to the cold-entry recorder.
+
+[Remote-writer exclusion](remote-writers.md) records which bus masters the
+board ROM and boot0 start and provides a read-only check for the stage-2
+loader. boot0 copies an `scp` item to DRAM without starting the E902, and
+neither boot0 nor the board ROM contains a literal address of the E902 start
+registers. The check accepts the E902 only when `0x0701021c`, `0x07010210` and
+`0x07050008` hold their reset values; it never reads the gated block at
+`0x07032000`. The OR100 processor and the crypto engine, which the
+board ROM takes out of reset, remain unproven, so the check refuses on every
+board until further evidence exists. The loader does not call it yet.
