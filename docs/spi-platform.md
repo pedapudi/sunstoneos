@@ -104,7 +104,10 @@ register at offset `0x88`.
 `a733_spi_platform_dma_stop` abandons an active DMA transfer under the register
 mutex with a fresh deadline. It returns RETAINED in every accepted case: the
 controller, pins, clock and register mutex stay retained. `spi.dma_requests`
-reports whether both FIFO requests were confirmed off.
+reports whether both FIFO requests were confirmed off. After a poll fault,
+including a detected controller error, the binding has already retained these
+resources; the stop then returns RETAINED without register access and the
+requests stay enabled.
 
 ## Evidence and remaining work
 

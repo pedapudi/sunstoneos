@@ -103,8 +103,10 @@ int a733_spi_poll(struct a733_spi *, unsigned budget);
 /* DMA transfer in SETUP, ACTIVE or HOLD: disable both FIFO requests, verify
  * the readback and enter FAULT with every lease retained; dma_requests is then
  * zero and the caller may cancel its DMA channels. Call this instead of poll
- * once the caller abandons a transfer: an expired poll faults first and leaves
- * the requests enabled, which requires external recovery. -1 when invalid. */
+ * once the caller abandons a transfer. Every poll fault leaves the requests
+ * enabled and needs external recovery: an expired deadline or failed access,
+ * and also a detected controller error (an RX overflow from a slow channel or
+ * an invalid SS), although its register access succeeded. -1 when invalid. */
 int a733_spi_dma_stop(struct a733_spi *, uint64_t deadline);
 /* COMPLETE -> READY, releasing borrowed buffers. No automatic retry or abort.
  * A fault needs platform recovery; never reset an active transaction here. */

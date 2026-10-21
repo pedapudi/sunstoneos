@@ -16,6 +16,9 @@ struct model {
     /* DMA channels: active when FCR enables their request. */
     const uint8_t *dma_src;uint8_t *dma_dst;
     unsigned dma_tx_i,dma_tx_n,dma_rx_i,dma_rx_lag,bcc_at_start,fcr_stuck;
+    /* A TX channel longer than the transfer: one extra byte arrives at the
+     * next buffer status read while the TX request is enabled. */
+    unsigned late_push;
 };
 static void tick(struct model *m)
 {
@@ -48,7 +51,10 @@ static int rd(void *p,uintptr_t a,uint32_t *v)
     struct model *m=p;assert(a>=m->base&&a-m->base<=0x400);
     unsigned o=(unsigned)(a-m->base);
     if(o==0x1c)*v=(m->tn<<16)|(m->corrupt_rx?193:m->rn);
-    else if(o==0x400)*v=m->buffer_held?0x1000000:0;
+    else if(o==0x400) {
+        if(m->late_push&&(m->r[6]&0x01000000u)){m->tx[(m->ti+m->tn)%64]=0xee;m->tn++;m->late_push=0;}
+        *v=m->buffer_held?0x1000000:0;
+    }
     else *v=m->r[o/4];
     return 1;
 }
@@ -267,6 +273,22 @@ static void dma(void)
         assert(k==2?s.dma_requests==0x100u&&m.r[6]==0x00200101u:!s.dma_requests&&m.r[6]==0x00200001u);
         assert(a733_spi_dma_stop(&s,200000)==-1&&a733_spi_reap(&s)==-1&&!m.cs_completed);
     }
+    /* HOLD gates the requests before its final idle check, so a longer TX
+     * channel cannot leave a byte behind CS deassertion. */
+    start_format(&s,&m,&f);m.dma_src=src;m.dma_tx_n=16;
+    struct a733_spi_transfer l={A733_SPI_WRITE,0,0,16,0,0,0,1};
+    assert(a733_spi_submit(&s,&l,100000)==A733_SPI_SETUP);
+    for(unsigned i=0;i<4000&&s.state!=A733_SPI_HOLD;i++)a733_spi_poll(&s,7);
+    assert(s.state==A733_SPI_HOLD);m.late_push=1;finish(&s);
+    assert(m.late_push&&!m.tn&&m.cs_completed==1&&!s.dma_requests&&a733_spi_reap(&s)==A733_SPI_READY);
+    /* A detected controller error faults with the requests still enabled;
+     * stop then refuses and the channels need external recovery. */
+    start_format(&s,&m,&f);m.dma_dst=dst;m.dma_rx_lag=1000;
+    struct a733_spi_transfer e={A733_SPI_READ,0,0,0,200,0,0,1};
+    assert(a733_spi_submit(&s,&e,100000)==A733_SPI_SETUP);m.r[5]|=0x200u;
+    for(unsigned i=0;i<16&&s.state!=A733_SPI_FAULT;i++)a733_spi_poll(&s,7);
+    assert(s.state==A733_SPI_FAULT&&s.errors==0x200u&&s.dma_requests==0x100u&&m.r[6]==0x00200101u);
+    assert(a733_spi_dma_stop(&s,200000)==-1&&!m.cs_completed);
     /* CPU transfers have no DMA stop, and close refuses an enabled request. */
     start(&s,&m,3,0,0,0);uint8_t tx[4]={1,2,3,4};
     struct a733_spi_transfer w={A733_SPI_WRITE,tx,0,4,0,0,0,0};

@@ -112,17 +112,23 @@ and a FIFO control word without requests. It enables the TX request (trigger
 level 32) and RX request (trigger level 1) that the transfer needs and checks
 the readback. Completion requires the transfer interrupt, XCH clear and empty
 FIFO and internal buffers, so the RX channel must have emptied the FIFO. The
-hold interval then disables both requests, checks the readback and deasserts
-CS. The controller's byte counts stay zero for DMA transfers; the DMA service's
+hold interval then disables both requests and checks the readback. Only
+after that does it check the error status and the empty FIFO and buffers again
+and deassert CS, so a DMA channel programmed longer than the transfer cannot
+leave a TX byte in the FIFO. The controller's byte counts stay zero for DMA transfers; the DMA service's
 completion and quiescence establish the moved data. Close refuses a FIFO
 control word that still enables a request.
 
 An abandoned DMA transfer calls `a733_spi_dma_stop` with a fresh cleanup
 deadline instead of polling. It disables both requests, checks the readback
 and enters the terminal fault state with CS, buffers and leases retained.
-`dma_requests` then reads zero, and the caller may cancel its DMA channels. A
-poll after the transfer deadline faults first and leaves the requests enabled;
-those channels then need external recovery. No application uses SPI DMA or
+`dma_requests` then reads zero, and the caller may cancel its DMA channels.
+Every fault during polling leaves the requests enabled, and those channels then
+need external recovery. This covers a poll after the transfer deadline, a failed
+register access, and a detected controller error such as an RX overflow from a
+slow channel or an invalid SS. After a detected error the register access
+itself succeeded, but the platform binding has already retained the register
+lock, so no further register write follows. No application uses SPI DMA or
 multi-lane transfers yet.
 
 ## Sources and focused evidence
@@ -149,10 +155,9 @@ Dual, quad and DMA cases run in the same host model and in the
 each transfer start, dual command-response, quad read and quad write data,
 refused lane combinations, DMA transfers of every kind with the FIFO request
 words before and after, a delayed RX channel, handshake mismatch, abandonment
-with and without a successful request readback, and close with an enabled
-request. Evidence is under
-`~/.cache/sunstoneos/build/audit-serial-buses/checks/spi/` and
-`checks/spi-platform/` in the same directory.
+with and without a successful request readback, a TX channel that would push a
+byte after the hold interval, a detected error that leaves the requests
+enabled, and close with an enabled request.
 
 The `native-correction` and `ccu-base-correction` directories also archive a
 standalone native binding that no image linked. That binding has been removed;

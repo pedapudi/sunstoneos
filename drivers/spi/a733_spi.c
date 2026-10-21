@@ -227,7 +227,9 @@ int a733_spi_poll(struct a733_spi *s,unsigned budget)
         s->wait_since=s->last_now;s->state=A733_SPI_HOLD;break;
     case A733_SPI_HOLD:
         if(s->last_now-s->wait_since<s->format.hold_us)break;
-        if(!errors(s,&v)||!idle(s)||(s->transfer.dma&&!requests_off(s))||
+        /* Gate DMA requests before the final error and idle checks, so a
+         * channel longer than the transfer cannot refill the TX FIFO. */
+        if((s->transfer.dma&&!requests_off(s))||!errors(s,&v)||!idle(s)||
            !wr(s,TCR,s->tcr)||!wr(s,ISR,DONE))break;
         s->state=A733_SPI_COMPLETE;break;
     default:fault(s);break;
