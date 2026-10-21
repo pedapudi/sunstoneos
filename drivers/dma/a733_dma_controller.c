@@ -1,4 +1,5 @@
 #include "a733_dma_controller.h"
+#include <string.h>
 
 enum { ENABLE = 0, PAUSE = 4, DESCRIPTOR = 8, MODE = 0x28,
        PACKAGES = 0x30, IRQ_ENABLE = 0x34, PENDING = 0x38, DESCRIPTOR_HIGH = 0x3c };
@@ -349,14 +350,29 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
     if(s->packages>=period+t->count)return -1;
     if(!rx_position(c,channel))return 0;
     const struct a733_dma_mapping *m=&t->mappings[period%t->count];
+    /* The barrier orders the copy after invalidation. The CPU only reads the
+     * raw range and never dirties it; the next copy of this period invalidates
+     * it again, so no maintenance follows the copy. */
     c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
-    const volatile unsigned char *source=m->cpu;unsigned char *destination=out;
-    for(size_t i=0;i<bytes;++i)destination[i]=source[i];
-    /* CPU only read the raw range; never write back device-written bytes. */
-    c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
+    memcpy(out,m->cpu,bytes);
     if(!cyclic_progress(c,channel) || s->packages>=period+t->count ||
        !rx_position(c,channel) || (read_channel(c,channel,PENDING)&~3u))return -1;
     return 1;
+}
+
+enum a733_dma_control_status a733_dma_finite_state(struct a733_dma_controller *c, unsigned channel,
+                                                   const struct a733_dma_transfer *t)
+{
+    if (!valid_channel(c, channel) || !c->channels[channel].claimed) return A733_DMA_INVALID;
+    struct a733_dma_channel *s = &c->channels[channel];
+    if (s->status != A733_DMA_ACTIVE || s->cyclic || !t || s->transfer != t) return A733_DMA_INVALID;
+    if (!routed(c, channel) || read_channel(c, channel, MODE) ||
+        read_channel(c, channel, DESCRIPTOR_HIGH)) return recovery(s);
+    /* Bits 0/1 (half/package end) do not terminate a finite chain. */
+    uint32_t pending = read_channel(c, channel, PENDING);
+    if (pending & ~15u) return recovery(s);
+    if ((pending & 8) || ticks(c) - s->started >= s->timeout) return A733_DMA_FAILED;
+    return (pending & 4) ? A733_DMA_COMPLETE : A733_DMA_ACTIVE;
 }
 
 enum a733_dma_control_status a733_dma_cancel(struct a733_dma_controller *c, unsigned channel)

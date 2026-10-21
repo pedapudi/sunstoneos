@@ -25,7 +25,7 @@ static _Alignas(4096) unsigned char pool[8*4096];
 static unsigned char device[6][256];
 static uint32_t ccu[0x2000/4],pio[0x200/4],ir[0x80/4],dma[0x300/4];
 static uint32_t requested,drain_enabled=1,invalidations,submissions,io_count,peer_stage;
-static uint32_t late_drain,fail_clock,pause_open,pause_close,paused;
+static uint32_t late_drain,fail_clock,pause_open,pause_close,paused,gen_writes;
 static uint64_t us=1,frequency;
 static unsigned creating_bootstrap,tx_mode,live;
 static TaskHandle_t bootstrap_task;
@@ -86,6 +86,7 @@ static int write_reg(void *context,uintptr_t a,uint32_t v)
 {
     (void)context;locked();inc(&io_count);
     if(a==A733_I2S0_BASE+12){ir[3]&=~v;return 1;}
+    if(a==A733_I2S0_BASE && (v&1))inc(&gen_writes);
     if(a==A733_I2S0_BASE+20)v&=~(3u<<24);
     if(a==A733_I2S0_BASE+28 && v){
         configASSERT(ir[0]&1);
@@ -310,6 +311,13 @@ static void client(void *unused)
     configASSERT(request(DMA_SERVICE_PERIOD_PUT,0,0,b.ticket).result==DMA_SERVICE_OK);
     configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_OK);
     set(&pause_close,1);close_stream(0);
+    /* Canceling a never-started stream turns DRQ off but never sets GEN, so
+     * no bit clock or frame clock reaches the external device. */
+    open_stream(0);unsigned gen=get(&gen_writes);
+    configASSERT(request(DMA_SERVICE_CANCEL,0,0,0).result==DMA_SERVICE_OK);
+    r=wait_phase(0,DMA_SERVICE_RESULT);configASSERT(r.outcome==DMA_SERVICE_CANCELED);
+    configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_OK);
+    configASSERT(get(&gen_writes)==gen && !(ir[0]&7) && !ir[28/4]);close_stream(0);
 
     tx_mode=1;
     /* RAM job retains the TX source: stream OPEN must reject READ/READ alias. */
@@ -323,6 +331,8 @@ static void client(void *unused)
     configASSERT(request(DMA_SERVICE_SUBMIT,2,frequency,0).result==DMA_SERVICE_BUSY);
     configASSERT(request(DMA_SERVICE_CLOSE,2,0,0).result==DMA_SERVICE_OK);
     for(unsigned i=0;i<3;++i) {
+        /* START refuses a partly committed playback catalogue. */
+        if(i==2)configASSERT(request(DMA_SERVICE_SUBMIT,1,frequency,0).result==DMA_SERVICE_BUSY);
         struct a733_i2s_period p=period(1);configASSERT(p.slot==i && p.kind==A733_I2S_TX_FILL);
         memset(pool+4096+i*256,0x30+i,256);
         configASSERT(request(DMA_SERVICE_PERIOD_PUT,1,0,p.ticket).result==DMA_SERVICE_OK);

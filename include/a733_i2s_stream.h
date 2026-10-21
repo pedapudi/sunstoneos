@@ -18,6 +18,10 @@ struct a733_i2s_period {
     enum a733_i2s_period_kind kind;
 };
 struct a733_i2s_stream_operations {
+    /* io.write succeeds only after reading the register back under the same
+     * register lock and matching every written bit, except ISTA (write-one-
+     * to-clear) and the self-clearing FCTL flush bits. A mismatch retains
+     * failure. The stream therefore never reads a written value back. */
     struct a733_i2s_operations io;
     /* Authenticate actual clock and pin leases, without holding any device
      * register mutex. READY proves live authority; BUSY has no device effects.
@@ -76,6 +80,8 @@ enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,
 enum a733_i2s_status a733_i2s_stream_duplex_open(struct a733_i2s_stream *,
     const struct a733_i2s_stream_profile *,const struct a733_dma_transfer *,
     struct a733_dma_controller *,unsigned,uint64_t,struct a733_i2s_stream *);
+/* TX requires every catalogue period committed by PUT, or every period up to
+ * and including a committed END. After START, GET leases only consumed periods. */
 enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *, uint64_t period_timeout_ticks);
 enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *);
 enum a733_i2s_status a733_i2s_stream_cancel(struct a733_i2s_stream *);

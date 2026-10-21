@@ -9,7 +9,7 @@
 struct i2s_application app;
 static _Alignas(4096) uint8_t pcm_pool[5*4096];
 static uint8_t pcm_device[4][4096],fragment[512];
-static unsigned completed_pcm,final_busy_reads;
+static unsigned completed_pcm,final_busy_reads,fifo_emptied;
 int i2s_live(void *p){(void)p;return 1;}
 void i2s_fail(void *p){(void)p;configASSERT(0);}
 int i2s_request(enum dma_service_operation op,uint64_t timeout,uint64_t ticket)
@@ -51,7 +51,10 @@ static void pcm_cache(void *p,enum a733_dma_cache op,void *cpu,size_t bytes)
 static int pcm_read_reg(void *p,uintptr_t at,uint32_t *out)
 {
  if(I2S_FILE_CHECK&&at==A733_I2S0_BASE+24&&completed_pcm==3&&!(dma[0x30/4]&1)){
-  (void)p;locked();inc(&io_count);*out=128u<<16;return 1;
+  /* The first sample still holds eight entries. The serializer then empties the
+   * FIFO and latches TXU, so later ISTA reads report the expected underrun. */
+  (void)p;locked();inc(&io_count);*out=(fifo_emptied?128u:120u)<<16;
+  if(!fifo_emptied){fifo_emptied=1;ir[12/4]|=0x40;}return 1;
  }
  return read_reg(p,at,out);
 }
@@ -81,7 +84,7 @@ static void pcm_client(void *unused)
   }
   if(r){configASSERT(r==1&&atomic_load(&app.result)==2&&atomic_load(&app.runtime.drained)==1);
    configASSERT(I2S_FILE_CHECK?(completed_pcm==3&&final_busy_reads>=5&&atomic_load(&app.runtime.consumed)==4097&&atomic_load(&app.runtime.committed)==4097&&atomic_load(&app.runtime.file_done)):(completed_pcm>=8 && atomic_load(&app.runtime.consumed)==8*2048));
-   if(I2S_FILE_CHECK){configASSERT(service.channels[0].stream.status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5);
+   if(I2S_FILE_CHECK){configASSERT(service.channels[0].stream.status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5&&fifo_emptied&&(ir[12/4]&0x40));
     configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY&&request(DMA_SERVICE_CLOSE,0,100000,0).result==DMA_SERVICE_BUSY);}
    configASSERT(bindings[0].pin_lease.id && service.channels[0].holds_buffers);
    platform_puts(I2S_FILE_CHECK?"PASS file PCM actual providers two full periods and one frame, exact memory/FIFO accounting and retained EOF\n":"PASS runtime caller PCM actual providers, distinct periods, exact completed refill and retained cancellation\n");platform_exit(0);}

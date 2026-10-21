@@ -115,6 +115,14 @@ int a733_dma_cyclic_progress(const struct a733_dma_controller *,unsigned,uint64_
  * ambiguous history. A failed copy remains unpublished. Serialized worker only. */
 int a733_dma_cyclic_rx_copy(struct a733_dma_controller *,unsigned,uint64_t,
     void *,size_t);
+/* Observe the channel's finite transfer t without acknowledging PENDING, so a
+ * FIFO producer can disable its requests before poll() stops the channel.
+ * ACTIVE: still running. COMPLETE: queue end observed. FAILED: error event or
+ * expired timeout; the caller still stops the channel. RECOVERY: routing, mode
+ * or high-address state is inconsistent and the channel is retained as poll()
+ * retains it. INVALID: t is not this channel's active finite transfer. */
+enum a733_dma_control_status a733_dma_finite_state(struct a733_dma_controller *, unsigned channel,
+                                                   const struct a733_dma_transfer *t);
 enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *, unsigned channel);
 enum a733_dma_control_status a733_dma_cancel(struct a733_dma_controller *, unsigned channel);
 int a733_dma_owns(const struct a733_dma_controller *, const struct a733_dma_transfer *);
