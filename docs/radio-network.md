@@ -117,9 +117,12 @@ failure closes output synchronously. The TCP sequence hook has no error return;
 its placeholder result cannot authorize an outgoing SYN after that closure.
 The composition's deterministic providers are test inputs only.
 
-Automatic reconnection, stack retirement, packet handling across a replacement
-association, and full radio power modes remain unimplemented. They must preserve
-these ownership rules before a service can recover without restarting its image.
+The [retained session](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
+supports explicit healthy reconnect with fixed addressing after all socket
+receipts and an IP-task offline fence. It keeps this stack instance and disposes
+old handles before changing association generation. Automatic recovery after
+unsolicited loss, DHCP reconnect, stack retirement and full radio power modes
+remain unimplemented.
 
 ## Composition and external proof limits
 

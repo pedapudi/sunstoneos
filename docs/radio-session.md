@@ -108,6 +108,87 @@ The hardware entropy source has not completed production security qualification.
 Deterministic fixture entropy establishes only software control flow. It does
 not qualify WPA2, TCP sequence unpredictability or a secure physical network.
 
+## Explicit healthy reconnect preserves the existing service
+
+`a733_radio_session_reconnect` requests one bounded reconnect to the same access
+point with fixed IPv4 settings. The recorded owner task supplies the target,
+fresh security configuration or explicit OPEN authority, disconnect reason and
+absolute deadline inside the current runtime lease. The session must still be
+healthy and associated. Clients must first complete every socket CLOSE and
+consume every reply; listener, accept and DNS handoffs must also be finished.
+Admission refuses DHCP, unresolved transitions, expired deadlines and live client
+work. It never clears a terminal failure or reloads firmware.
+
+The owner closes socket submission and network output, then waits for the IP
+task to complete the pinned stack's down processing. That task appends a private
+marker to its FIFO queue and acknowledges the requested offline epoch only when
+it receives that marker. The receipt covers earlier receive and output events,
+including an endpoint that was already down. Offline gates suppress subsequent
+output and address publication. The owner then discards only unsent queued
+packets; the retained data worker and its sequence counter survive.
+
+For WPA2, retirement completes controlled-port closure and every key deletion
+while the old station is still associated. The existing transport detaches the
+retired workers only at its drained boundary. A narrowly admitted rearm requires
+confirmed retirement, an empty key ledger, no RSN object, timers or actions, and
+successful detach. Fresh configuration constructs new RSN state for the next
+association generation. No faulted or uncertain worker can be rearmed.
+
+The existing disconnect worker requires both confirmation and indication. Only
+ordinary DOWN permits the next connect request. After fresh association and
+packet authorization, the owner publishes the new generation and restarts the
+same fixed-address interface. Socket submission reopens only after a new address
+publication. Old handles remain invalid because their actual disposal preceded
+the request and the handle counter never resets. Any deadline, protocol or
+platform failure retains the complete graph.
+
+The native board owner calls `board_radio_reconnect` with an absolute deadline
+at a drained transport boundary, before polling can start another SDIO operation.
+A busy attachment refuses the request without changing the session. Its existing
+`board_radio_poll` advances an accepted operation using the admitted WPA2
+profile and reports PENDING until the address is usable. Socket clients continue
+to use the existing copied request/reply APIs. No USB command is added.
+
+This operation does not recover an unsolicited lost connection. The pinned
+[disconnect handler](radio-association.md#disconnection-events-preserve-ordering-and-ownership)
+invalidates the old station, while native port closure still needs that station's
+index. The inspected source does not establish safe port/key cleanup afterward.
+Unexpected loss therefore retains the existing terminal outcome. DHCP reconnect
+also remains unsupported pending its IP-task-owned address and lease lifecycle.
+Physical reconnect, RF behavior and entropy quality remain unqualified.
+
+The focused AArch64 composition in [checks/radio-reconnect.c](../checks/radio-reconnect.c)
+passed once with actual FreeRTOS tasks, providers, session workers, disconnect and
+connect parsing, socket disposal, an IP-task FIFO receipt and a new TCP exchange.
+It refused expired admission, unread replies and live sockets, then rejected the
+disposed old handle after reconnect. Separate cases in that image refused rearm
+with a live key, fault or attached worker; they exercised fresh RSN creation and
+controlled-port retirement without resetting the data sequence. Their initial
+retired pair is modeled. That OPEN composition links the board owner wrapper
+without executing it.
+
+A separate WPA2 composition in
+[checks/radio-reconnect-wpa.c](../checks/radio-reconnect-wpa.c) executed the actual
+`board_radio_reconnect` wrapper and session polling. Preserved terminal RAM shows
+confirmed old port closure, two key deletions, detach, disconnect, reassociation,
+fresh RSN rearm, M1–M4 processing against cached peer vectors, two new keys and
+port authorization, generation-two address restoration and a new TCP exchange.
+The client suspended only after its successful receive and CLOSE assertions.
+The borrowed generation still equals the retained platform clock token.
+Board startup and `board_radio_poll` were not executed by this fixture. Firmware
+upload, initial association and the old authorized security state are explicit
+modeled checkpoints; register, peer firmware, entropy and RF effects remain modeled.
+
+The WPA2 fixture reached its loop assertion because its readiness publication
+overwrote the client's completion value. It emitted no PASS. The operation's
+completion was instead verified from the saved terminal RAM, exact executable
+and client suspension; the corrected reporting source has not been executed.
+Earlier vector-format setup and request-after-poll refusals remain preserved.
+Four distinct linked images cover the OPEN result and these WPA2 attempts; the
+101 production objects were reused unchanged for each WPA2 image. Frozen inputs,
+images, attempt history and terminal classification are under
+`~/.cache/sunstoneos/evidence/radio-reconnect-20261020/`.
+
 ## Faults close admission and preserve outstanding work
 
 A failed actual platform guard stops the host and protocol workers, closes

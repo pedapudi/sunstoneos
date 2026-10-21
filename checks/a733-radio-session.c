@@ -8,7 +8,11 @@
 #define main session_platform_unused_main
 #include "a733-radio-platform.c"
 #undef main
+#ifdef SUNSTONE_RADIO_SESSION_OBJECT
+#define session SUNSTONE_RADIO_SESSION_OBJECT
+#else
 static struct a733_radio_session session;
+#endif
 static TaskHandle_t session_task,client_task;
 static StaticTask_t session_task_storage,client_task_storage;
 static StackType_t session_stack[8192],client_stack[4096];

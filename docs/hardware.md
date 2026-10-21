@@ -1346,8 +1346,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   selection, as classified in `bringup-impact.json`. Root verifies 431 compiled
   dependencies and 161 objects under `root-integration.json`; do not mix current
   objects into that image. Physical networking, entropy quality and RF/wire drain remain
-  unqualified. IPv6, broader server operation, reconnection and wider Wi-Fi
-  security modes remain open.
+  unqualified. [Explicit healthy reconnect](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
+  now preserves the retained session and IP stack; the fixed-address OPEN path
+  and separate WPA2 retirement/rearm boundaries pass one native composition.
+  Complete WPA2 reconnect handshakes, recovery after unexpected loss, DHCP
+  reconnect, IPv6, broader server operation and wider Wi-Fi security modes remain
+  open.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
 
