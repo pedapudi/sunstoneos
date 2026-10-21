@@ -94,8 +94,9 @@ connected `apply` performs the writes.
 The order does not make an interrupted install bootable. The container's
 boot0 is the pinned stock boot0, and the monitor package replaces the stock
 TOC1 at the same sector, so a card left between sessions can hold a boot0
-and a TOC1 package that were not packaged together. Recovery uses the explicit restoration below: each session's read-only
-backup is the restoration source for its range. After an uncertain session,
+and a TOC1 package that were not packaged together. Recovery uses the
+explicit restoration below: each session's read-only backup is the
+restoration source for its range. After an uncertain session,
 capture that range again, then restore it or make a new card image and plan
 again.
 

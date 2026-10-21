@@ -50,10 +50,11 @@ Most A733 boot images link `runtime/memory.c` and `runtime/memmove.c` for
 applications; the SMP diagnostic, supervised, observation and storage
 maintenance images; the kernel checks; the USB runtime, power and storage
 probe images; and the newlib images for native mimus recognition
-(`sunstone-a733-mimus-native`), the mimus board application, I2S transcription and Bluetooth recognition. In the newlib
-images the linker resolves these symbols from the project objects, so it
-never extracts newlib's AArch64 copy and fill routines from `libc.a`. The same
-holds for `memcmp`, `strlen`, `strcmp`, `strchr`, `strcpy`, `strncpy` and
+(`sunstone-a733-mimus-native`), the mimus board application, I2S
+transcription and Bluetooth recognition. In the newlib images the linker
+resolves these symbols from the project objects, so it never extracts
+newlib's AArch64 copy and fill routines from `libc.a`. The same holds for
+`memcmp`, `strlen`, `strcmp`, `strchr`, `strcpy`, `strncpy` and
 `strcasecmp`, which `runtime/memory.c` also defines.
 The radio network model links only `runtime/memmove.c`.
 
