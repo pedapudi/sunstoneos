@@ -124,12 +124,10 @@ int gpu_application_lifecycle(unsigned operation)
     while(r.phase!=terminal){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
     if(r.epoch!=(operation==5?old+1:old))retained();
     app.last=r;
+    uint64_t next_epoch=old;
+    uint32_t next_sequence=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
     if(operation==5) {
-        atomic_store_explicit(&app.runtime_epoch,r.epoch,memory_order_release);
-        atomic_store_explicit(&app.runtime_sequence,0,memory_order_release);
-#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
-        app.texture_generation=0;
-#endif
+        next_epoch=r.epoch;next_sequence=0;
 #ifdef SUNSTONE_GPU_RUNTIME_INPUT
         r=request(PVR_GPU_SERVICE_COMPUTE,1000000);
         while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
@@ -142,19 +140,44 @@ int gpu_application_lifecycle(unsigned operation)
                 r.compute_word_count!=n || r.compute_total_words!=total)retained();
             memcpy(app.pixels+first,r.compute_words,n*4);
         }
-        atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
+        next_sequence=1;
 #endif
-        atomic_store_explicit(&app.runtime_closed,0,memory_order_release);
-    } else atomic_store_explicit(&app.runtime_closed,1,memory_order_release);
+    }
+    /* Keep OPEN's pending identity unchanged through its first compute/copy.
+     * USB snapshots these fields under the same single-core exclusion. */
+    taskENTER_CRITICAL();
+    atomic_store_explicit(&app.runtime_epoch,next_epoch,memory_order_release);
+    atomic_store_explicit(&app.runtime_sequence,next_sequence,memory_order_release);
+    atomic_store_explicit(&app.runtime_closed,operation==5?0:1,memory_order_release);
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    if(operation==5)app.texture_generation=0;
+#else
+    atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+#endif
     atomic_store_explicit(&app.result,operation==3?3:operation==4?5:1,memory_order_release);
+    taskEXIT_CRITICAL();
     return 1;
 }
+#ifndef SUNSTONE_GPU_RUNTIME_TEXTURE
+static void runtime_complete(unsigned result,uint32_t sequence)
+{
+    taskENTER_CRITICAL();
+    atomic_store_explicit(&app.runtime_sequence,sequence,memory_order_release);
+    atomic_store_explicit(&app.result,result,memory_order_release);
+    atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+    taskEXIT_CRITICAL();
+}
+#endif
 #endif
 #ifdef SUNSTONE_GPU_RUNTIME_INPUT
 static void runtime_inputs(void)
 {
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    runtime_complete(1,1);
+#else
     atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
     atomic_store_explicit(&app.result,1,memory_order_release);
+#endif
     for(;;) {
         while(atomic_load_explicit(&app.runtime_state,memory_order_acquire)!=1) {
             if(!gpu_application_live(NULL))retained();
@@ -163,8 +186,8 @@ static void runtime_inputs(void)
         #ifdef SUNSTONE_GPU_LIFECYCLE
         if(app.runtime_operation>=3){
             if(gpu_application_lifecycle(app.runtime_operation)<0)
-                atomic_store_explicit(&app.result,4,memory_order_release);
-            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
+                runtime_complete(4,atomic_load_explicit(&app.runtime_sequence,memory_order_acquire));
+            continue;
         }
 #else
         if(app.runtime_operation==3)break;
@@ -178,14 +201,22 @@ static void runtime_inputs(void)
 #endif
             app.runtime_expected,app.runtime_input,
             app.runtime_bytes,1000000,1,&ticket)) {
+#ifdef SUNSTONE_GPU_LIFECYCLE
+            runtime_complete(1,atomic_load_explicit(&app.runtime_sequence,memory_order_acquire));
+#else
             atomic_store_explicit(&app.result,1,memory_order_release);
-            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
+            atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+#endif
+            continue;
         }
         while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
         if(r.result==PVR_GPU_SERVICE_FAULT)retained();
+        uint32_t sequence=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
         if(r.result==PVR_GPU_SERVICE_OK) {
-            uint32_t sequence=r.compute_sequence;
+            sequence=r.compute_sequence;
+#ifndef SUNSTONE_GPU_LIFECYCLE
             atomic_store_explicit(&app.runtime_sequence,sequence,memory_order_release);
+#endif
             while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
             unsigned total=gpu_application_package()->output_bytes/4;
             for(unsigned first=0;first<total;first+=32) {
@@ -197,8 +228,12 @@ static void runtime_inputs(void)
                 memcpy(app.pixels+first,r.compute_words,n*4);
             }
         }
+#ifdef SUNSTONE_GPU_LIFECYCLE
+        runtime_complete(1,sequence);
+#else
         atomic_store_explicit(&app.result,1,memory_order_release);
         atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+#endif
     }
 }
 #endif
@@ -213,8 +248,8 @@ static void runtime_draw(void)
         #ifdef SUNSTONE_GPU_LIFECYCLE
         if(app.runtime_operation>=3){
             if(gpu_application_lifecycle(app.runtime_operation)<0)
-                atomic_store_explicit(&app.result,4,memory_order_release);
-            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
+                runtime_complete(4,atomic_load_explicit(&app.runtime_sequence,memory_order_acquire));
+            continue;
         }
 #else
         if(app.runtime_operation==3)return;
@@ -233,10 +268,13 @@ static void runtime_draw(void)
             if(r.result==PVR_GPU_SERVICE_FAULT)retained();
             sent=r.result==PVR_GPU_SERVICE_OK;
         }
+        uint32_t frame=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
         if(sent) {
-            uint32_t frame=r.render_sequence;
+            frame=r.render_sequence;
             if(frame!=app.runtime_expected+1)retained();
+#ifndef SUNSTONE_GPU_LIFECYCLE
             atomic_store_explicit(&app.runtime_sequence,frame,memory_order_release);
+#endif
             while(r.render_phase!=PVR_RENDER_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
             for(unsigned first=0;first<4096;first+=64) {
                 if(!pvr_gpu_service_render_read_sequence(&app.service,frame,first,1,&ticket))retained();
@@ -245,8 +283,12 @@ static void runtime_draw(void)
                 memcpy(app.pixels+first,r.render_pixels,256);
             }
         }
-        atomic_store_explicit(&app.result,sent || atomic_load_explicit(&app.runtime_sequence,memory_order_acquire)?1:4,memory_order_release);
+#ifdef SUNSTONE_GPU_LIFECYCLE
+        runtime_complete(sent || frame?1:4,frame);
+#else
+        atomic_store_explicit(&app.result,sent || frame?1:4,memory_order_release);
         atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+#endif
     }
 }
 #endif

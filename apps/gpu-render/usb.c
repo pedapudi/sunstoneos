@@ -94,8 +94,17 @@ static void runtime_exchange(void)
         if(runtime_received<runtime_length)return;
     }
     unsigned op=get32(runtime_header+8),expected=get32(runtime_header+12),first=get32(runtime_header+24);
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    taskENTER_CRITICAL();
+#endif
     unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
     unsigned sequence=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
+    unsigned closed=atomic_load_explicit(&app.runtime_closed,memory_order_acquire);
+    unsigned mailbox=atomic_load_explicit(&app.runtime_state,memory_order_acquire);
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    uint64_t current_epoch=atomic_load_explicit(&app.runtime_epoch,memory_order_acquire);
+    taskEXIT_CRITICAL();
+#endif
     unsigned count=0,posted=0;
 #ifdef SUNSTONE_GPU_RUNTIME_DRAW
     unsigned total=4096,version=3,page=64;
@@ -106,7 +115,6 @@ static void runtime_exchange(void)
     #ifdef SUNSTONE_GPU_LIFECYCLE
     version+=4;
     uint64_t queue_epoch=(uint64_t)get32(runtime_header+32)|(uint64_t)get32(runtime_header+36)<<32;
-    uint64_t current_epoch=atomic_load_explicit(&app.runtime_epoch,memory_order_acquire);
 #endif
     int valid=get32(runtime_header)==0x49525047&&get32(runtime_header+4)==version&&epoch==app.session.epoch;
 #ifdef SUNSTONE_GPU_LIFECYCLE
@@ -118,7 +126,7 @@ static void runtime_exchange(void)
     else if(op==0&&!runtime_length&&!first&&!expected) {count=0;}
 #endif
     else if(op==1&&!runtime_length&&first<total&&!(first&(page-1))) {
-        if(!sequence || atomic_load_explicit(&app.runtime_closed,memory_order_acquire) ||
+        if(!sequence || closed ||
            (expected!=sequence&&!(result==0&&expected==sequence+1)))result=4;
         else if(result==1)count=total-first<page?total-first:page;
     }
@@ -126,12 +134,12 @@ static void runtime_exchange(void)
     else if(op==2&&runtime_reserved&&runtime_length<=PVR_RENDER_DRAW_BYTES&&first==0&&expected==sequence&&
         sequence<PVR_RENDER_DRAW_MAX_FRAMES&&(sequence?result==1:result!=2)&&
         pvr_render_draw_vertices_valid(app.runtime_input,runtime_length,runtime_length/32)&&
-        !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
+        !closed) {
 #else
     else if(op==2&&runtime_reserved&&runtime_length==gpu_application_package()->input_bytes&&
               get32(app.runtime_input)==gpu_application_package()->count&&first==0&&
               result==1&&sequence&&sequence!=UINT32_MAX&&expected==sequence&&
-              !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
+              !closed) {
         #endif
         app.runtime_operation=2;app.runtime_expected=expected;app.runtime_bytes=runtime_length;
 #ifdef SUNSTONE_GPU_LIFECYCLE
@@ -141,8 +149,8 @@ static void runtime_exchange(void)
         atomic_store_explicit(&app.runtime_state,1,memory_order_release);
         runtime_reserved=0;result=0;posted=1;
     } else if(op==3&&!runtime_length&&!first&&result==1&&expected==sequence&&
-              !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)&&
-              !atomic_load_explicit(&app.runtime_state,memory_order_acquire)) {
+              !closed&&
+              !mailbox) {
         app.runtime_operation=3;
 #ifdef SUNSTONE_GPU_LIFECYCLE
         app.runtime_request_epoch=queue_epoch;
@@ -151,7 +159,7 @@ static void runtime_exchange(void)
         atomic_store_explicit(&app.runtime_state,1,memory_order_release);result=0;posted=1;
 #ifdef SUNSTONE_GPU_LIFECYCLE
     } else if((op==4 || op==5)&&!runtime_length&&!first&&expected==sequence&&
-        (op==4?result==3:result==5)&&!atomic_load_explicit(&app.runtime_state,memory_order_acquire)) {
+        (op==4?result==3:result==5)&&!mailbox) {
         app.runtime_operation=op;app.runtime_request_epoch=queue_epoch;
         atomic_store_explicit(&app.result,0,memory_order_release);
         atomic_store_explicit(&app.runtime_state,1,memory_order_release);result=0;posted=1;
@@ -159,7 +167,7 @@ static void runtime_exchange(void)
     } else result=4;
     if(runtime_reserved)atomic_store_explicit(&app.runtime_state,0,memory_order_release);
     #ifndef SUNSTONE_GPU_LIFECYCLE
-    if(!posted&&atomic_load_explicit(&app.runtime_closed,memory_order_acquire)&&result!=4&&result!=2){result=3;count=0;}
+    if(!posted&&closed&&result!=4&&result!=2){result=3;count=0;}
 #endif
     put32(response,0x50555047);put32(response+4,version);put32(response+8,result);put32(response+12,first/page);
     put32(response+16,count);put32(response+20,total);put32(response+24,sequence);
