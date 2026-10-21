@@ -7,7 +7,17 @@ if(NOT NEWLIB_ROOT)
 endif()
 option(MIMUS_AARCH64_NEON "Use AArch64 NEON integer dot products" ON)
 add_subdirectory("${MIMUS_DIR}/firmware/components/asr" mimus-asr)
+# Recognition compute options, placed after the shared kernel options so they
+# override them for the mimus libraries only. The library runs only after the
+# MMU maps its code, heap, models and arena as Normal memory with SCTLR.A clear,
+# so it needs no strict alignment, and C++ compute may use compiler builtins.
+# Every A733 core is a Cortex-A55 or A76 and implements ARMv8.2-A. LSE atomics
+# stay off like the rest of the system; dot product waits for ID-register
+# evidence and an int8 kernel. The shared -ffp-contract=off keeps float parity.
+set(MIMUS_COMPUTE_OPTIONS -march=armv8.2-a+nolse -mtune=cortex-a55 -mno-strict-align
+  "$<$<COMPILE_LANGUAGE:CXX>:-fbuiltin>")
 sunstone_cxx_compile(mimus_asr)
+target_compile_options(mimus_asr PRIVATE ${MIMUS_COMPUTE_OPTIONS})
 target_compile_definitions(mimus_asr PRIVATE MIMUS_EXTERNAL_PLATFORM=1)
 set(mimus_targets a733-mimus a733-mimus-model a733-mimus-replay-model)
 if(TINYUSB_DIR)
