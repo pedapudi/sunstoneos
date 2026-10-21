@@ -41,8 +41,10 @@ static int fault(struct a733_xhci *x)
     if(x->announced&&!x->removed){x->removed=1;notify(x,A733_XHCI_REMOVE,x->devices[0].address,0,0,2);}
     return 0;
 }
-/* BUSY is retryable only before a bounded operation begins. A failed guard
- * after an I/O or publication retains its uncertain externally visible state. */
+/* BUSY is metadata contention: before a bounded operation begins, the poll
+ * returns it. Inside the operation, checked() repeats the observation without
+ * MMIO until the deadline. A refused or expired guard after an I/O or
+ * publication retains its uncertain externally visible state. */
 static int guard(struct a733_xhci *x,uint64_t deadline)
 {
     uint64_t now;struct device_memory_extent e;enum device_memory_state s;
@@ -54,8 +56,14 @@ static int guard(struct a733_xhci *x,uint64_t deadline)
     if(x->ops.now(x->context,&now)!=1||now<x->last_now||now>=deadline||now>=x->lifetime_deadline)return -1;
     x->last_now=now;return live;
 }
+/* Repeat a BUSY observation without MMIO; guard() refuses once the deadline
+ * passes, which bounds the retry. Submission and configuration calls use it
+ * too, because their callers treat refusal as a lost session. */
+static int settled(struct a733_xhci *x,uint64_t deadline)
+{int live;while(!(live=guard(x,deadline))){}return live;}
+/* Every access still needs a fresh observation. */
 static int checked(struct a733_xhci *x)
-{if(guard(x,x->deadline)!=1)return fault(x);return 1;}
+{if(settled(x,x->deadline)!=1)return fault(x);return 1;}
 static int rd(struct a733_xhci *x,uint32_t offset,uint32_t *out)
 {return offset<MAX_OFFSET&&!(offset&3)&&checked(x)&&x->ops.read32(x->context,offset,out)==1&&checked(x);}
 static int wr(struct a733_xhci *x,uint32_t offset,uint32_t v)
@@ -512,7 +520,7 @@ failed:fault(x);return A733_XHCI_RETAINED;
 int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_number,unsigned speed,uint64_t deadline)
 {
     if(!owner(x)||x->failed||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>4||
-       deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+       deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     struct a733_xhci_device *hub=&x->devices[0];
     if((hub->speed==4?speed!=4:speed>3)||hub->address!=parent||!hub->hub_configured||port_number>hub->hub_ports||(hub->speed!=3&&hub->speed!=4)||!hub->zero_retired)return 0;
     for(unsigned j=1;j<A733_XHCI_DEVICES&&j<x->cap_slots;++j){
@@ -537,7 +545,7 @@ int a733_xhci_mark_hub(struct a733_xhci *x,unsigned address)
 int a733_xhci_hub_configure(struct a733_xhci *x,unsigned address,unsigned ports,unsigned ttt,unsigned mtt)
 {
     struct a733_xhci_device *d=device_address(x,address);
-    if(!owner(x)||x->failed||!d||!d->hub||!address||!ports||ports>7||ttt>3||mtt>1||(d->speed==4&&(ttt||mtt))||d->hub_ports||guard(x,x->deadline)!=1)return 0;
+    if(!owner(x)||x->failed||!d||!d->hub||!address||!ports||ports>7||ttt>3||mtt>1||(d->speed==4&&(ttt||mtt))||d->hub_ports||settled(x,x->deadline)!=1)return 0;
     d->hub_ports=ports;d->hub_ttt=ttt;d->hub_mtt=mtt;return 1;
 }
 int a733_xhci_retire_zero(struct a733_xhci *x)
@@ -556,9 +564,9 @@ unsigned a733_xhci_device_speed(const struct a733_xhci *x,unsigned address)
 int a733_xhci_reset_port(struct a733_xhci *x,uint64_t deadline)
 {
     struct a733_xhci_device *d=x?&x->devices[0]:NULL;
-    if(x&&x->require_ss)return owner(x)&&!x->failed&&x->connected&&x->speed==4&&guard(x,deadline)==1;
+    if(x&&x->require_ss)return owner(x)&&!x->failed&&x->connected&&x->speed==4&&settled(x,deadline)==1;
     if(!owner(x)||x->failed||x->phase!=P_ACTIVE||!x->connected||x->port_reset||d->slot||
-       deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+       deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     x->port_reset=1;x->reset_deadline=deadline;return 1;
 }
 int a733_xhci_port_connected(const struct a733_xhci *x)
@@ -566,7 +574,7 @@ int a733_xhci_port_connected(const struct a733_xhci *x)
 int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned type,unsigned packet,uint64_t deadline)
 {
     struct a733_xhci_device *d=device_address(x,address);
-    if(!owner(x)||!d||x->failed||!x->connected||address!=d->address||ep&~0x8fu||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+    if(!owner(x)||!d||x->failed||!x->connected||address!=d->address||ep&~0x8fu||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     if(!(ep&15)) {
         if(type||ep||d->endpoints[0].pending||d->evaluate_pending||
            (d->speed==4&&packet!=512)||(d->speed==2&&packet!=8)||(d->speed==3&&packet!=8&&packet!=64)||
@@ -604,7 +612,7 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     struct a733_xhci_device *d=device_address(x,address);
     if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
        ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(d->speed==2?8u:64u)||
-       (d->speed<1||d->speed>4)||!interval||interval>(d->speed>=3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+       (d->speed<1||d->speed>4)||!interval||interval>(d->speed>=3?16u:255u)||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
     unsigned encoded;
     if(d->speed>=3)encoded=interval-1;
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
@@ -622,7 +630,7 @@ int a733_xhci_setup(struct a733_xhci *x,unsigned address,const uint8_t setup[8],
     if(!owner(x)||!d||x->failed||!outside(x,setup,8)||address!=d->address||!d->endpoints[0].opened||
        d->control_stage!=CONTROL_IDLE||d->endpoints[0].pending||deadline>x->lifetime_deadline)return 0;
     uint8_t copied[8];memcpy(copied,setup,8);unsigned length=copied[6]|(unsigned)copied[7]<<8;
-    if(length>A733_XHCI_TRANSFER_BYTES||guard(x,deadline)!=1)return 0;
+    if(length>A733_XHCI_TRANSFER_BYTES||settled(x,deadline)!=1)return 0;
     unsigned set_address=copied[0]==0&&copied[1]==5;
     if(set_address&&(address||length||copied[3]||copied[4]||copied[5]||!copied[2]||copied[2]>127||d->pending_address))return 0;
     /* No other form of SET_ADDRESS may reach the physical setup ring. */
@@ -638,7 +646,7 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
     if(!owner(x)||!d||x->failed||address!=d->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||
        (bytes&&!outside(x,buffer,bytes))||deadline>x->lifetime_deadline)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
-    if(!e||!e->opened||e->pending||e->aborted||guard(x,deadline)!=1)return 0;
+    if(!e||!e->opened||e->pending||e->aborted||settled(x,deadline)!=1)return 0;
     unsigned direction=!!(ep&128),kind=T_NORMAL;
     if(!(ep&15)) {
         if(d->control_stage==CONTROL_DATA) {

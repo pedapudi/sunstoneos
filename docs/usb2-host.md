@@ -77,6 +77,11 @@ The actual Type-C provider owns FUSB302, source-role classification and PL8 VBUS
 control. The host pins one provider identity, attachment generation and polarity.
 Every controller operation requires a fresh observation from that provider.
 A busy publication permits no new MMIO, DMA publication or caller-output copy.
+A busy observation is momentary metadata contention, such as another core
+holding the PMIC object, a lease registry or the Type-C publication lock. The
+xHCI core and the USB2 platform repeat it without any access until it succeeds,
+is refused or reaches the operation deadline; only refusal or expiry faults the
+session. A poll that observes BUSY before its first access still returns BUSY.
 Loss permanently revokes the host session; a new attachment is not adopted.
 
 Type-C service and its independent power task must continue when the USB worker
@@ -125,6 +130,9 @@ reattach or retry API. A failed command is not reported as a completed read.
 The TinyUSB stack uses its single-context queue implementation inside the actual
 FreeRTOS owner task. No interrupt or second task may call the stack. Each host
 poll advances at most one xHCI event/state and two TinyUSB queue iterations.
+In the default polled profile, the board owner polls again without sleeping
+while setup or a transfer is outstanding, up to 32 polls per tick; the
+interrupt profile uses the same batch size.
 All control calls are asynchronous. The optional interrupt handler masks its
 source and notifies this same task; it never calls TinyUSB. The native image
 must schedule this task within operation deadlines and keep the independent Type-C tasks runnable.

@@ -65,8 +65,18 @@ static int timely(struct a733_usb2_platform *p)
 {uint64_t n;if(p->ops.now(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->deadline&&n<p->config.lifetime_deadline;}
 static int health(struct a733_usb2_platform *);
 static int attachment(struct a733_usb2_platform *);
+/* Each access needs a fresh observation. Provider or publication BUSY is
+ * metadata contention: repeat the observation without MMIO until the deadline,
+ * which timely() enforces. Refusal still fails the access. */
 static int permitted(struct a733_usb2_platform *p)
-{return timely(p)&&health(p)==1&&attachment(p)==1&&timely(p);}
+{
+    for(;;) {
+        if(!timely(p))return 0;
+        int r=health(p);if(r==1)r=attachment(p);
+        if(r==1)return timely(p);
+        if(r<0)return 0;
+    }
+}
 static int rd(struct a733_usb2_platform *p,uintptr_t a,uint32_t *v)
 {return permitted(p)&&p->ops.read(p->cookie,a,v)==1&&permitted(p);}
 static int ck(struct a733_usb2_platform *p,uintptr_t a,uint32_t m,uint32_t v)
