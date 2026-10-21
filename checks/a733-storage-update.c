@@ -22,23 +22,71 @@ static unsigned issued,fifo_writes,uncertain,loss_during_write;
 /* Card programming time after each CMD24; CMD13 reports PRG until it ends. */
 static uint64_t program_us,programmed_until;
 static unsigned bursting,programming_polls;
+/* Mode "hs" runs the session at SD profile two. The card then also answers
+ * ACMD51, ACMD6 and CMD6 after selection, as in checks/sunxi-mmc-sd-modes.c,
+ * and the controller runs at the module rate the platform programmed. */
+static unsigned sd_profile,sd_width;
+static uint8_t sd_scr[8]={2,5},sd_switch[64];
+static void reachable(struct storage_model *s)
+{
+    if(!sd_profile){accessible(s);return;}
+    assert(s->admitted&&s->power.register_held&&s->platform.pin.id&&!s->power.pins.failed);
+    assert(a733_rail_status(&s->power.rails,&s->platform.rail)==A733_RAIL_READY);
+    assert((*pmic_model_word(&s->power,s->platform.module)&0x87001f1f)==s->platform.running_module);
+    assert((*pmic_model_word(&s->power,s->platform.bus)&0x10001)==0x10001);
+}
+static int controller(struct storage_model *s,uintptr_t address)
+{
+    return sd_profile&&address>=s->platform.base&&address<=s->platform.base+0x300&&
+        s->power.register_held&&a733_mmc_platform_native_address_selected(s->platform.config.kind,s->platform.config.emmc_host,address,0);
+}
+static int mode_read(struct storage_model *s,uintptr_t address,uint32_t *out)
+{
+    struct model *c=&s->card;unsigned command=c->data_command&63;
+    ++s->accesses;reachable(s);
+    if(address==s->platform.base+0x200&&(command==51||command==6)) {
+        assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS&&c->fifo_pos<c->fifo_total);*out=0;
+        for(unsigned b=0;b<4;++b,++c->fifo_pos)*out|=(uint32_t)(command==51?sd_scr[c->fifo_pos]:sd_switch[c->fifo_pos])<<(8*b);
+        return 1;
+    }
+    return read32(c,(uint32_t)(address-s->platform.base),out);
+}
+static int mode_write(struct storage_model *s,uintptr_t address,uint32_t value)
+{
+    struct model *c=&s->card;unsigned command=value&63;uint32_t argument=c->reg[0x1c/4];
+    ++s->accesses;++s->writes;reachable(s);
+    if(address!=s->platform.base+0x18||(value&(1u<<21))||!c->selected||(command!=55&&command!=51&&command!=6))
+        return write32(c,(uint32_t)(address-s->platform.base),value);
+    assert(!(value&(1u<<10)));c->commands[c->command_count]=command;c->args[c->command_count++]=argument;
+    c->reg[0x18/4]=value&~(1u<<31);c->reg[0x38/4]=4;c->reg[0x20/4]=0x900;c->data_command=0;c->fifo_total=c->fifo_pos=0;
+    if(command==55){c->app=1;c->reg[0x20/4]|=1u<<5;}
+    else if(command==51){assert(c->app&&!argument&&c->reg[0x10/4]==8);c->app=0;c->data_command=value;c->fifo_total=8;}
+    else if(!(value&(1u<<9))){assert(c->app&&argument==2);c->app=0;sd_width=4;}
+    else {
+        assert(!c->app&&sd_width==4&&c->reg[0xc/4]==1&&c->reg[0x10/4]==64);
+        assert(argument==0x00fffff1||argument==0x80fffff1);c->data_command=value;c->fifo_total=64;
+        memset(sd_switch,0,sizeof(sd_switch));sd_switch[13]=2;if(argument>>31)sd_switch[16]=1;
+    }
+    return 1;
+}
 static int update_read(void *v,uintptr_t address,uint32_t *out)
 {
     struct storage_model *s=v;struct model *c=&s->card;
     if(address==s->platform.base+0x200&&((c->data_command&63)==17||(c->data_command&63)==18)) {
-        accessible(s);++s->accesses;++c->calls;assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS);
+        reachable(s);++s->accesses;++c->calls;assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS);
         uint64_t at=(uint64_t)c->reg[0x1c/4]*512+c->fifo_pos;
         assert(at>=media_base&&at+4<=media_base+media_bytes&&c->fifo_pos+4<=c->fifo_total);
         *out=0;for(unsigned i=0;i<4;++i)*out|=(uint32_t)card_media[at-media_base+i]<<(8*i);
         c->fifo_pos+=4;return 1;
     }
+    if(controller(s,address))return mode_read(s,address,out);
     return storage_read(v,address,out);
 }
 static int update_write(void *v,uintptr_t address,uint32_t value)
 {
     struct storage_model *s=v;struct model *c=&s->card;
     if(address==s->platform.base+0x200) {
-        accessible(s);
+        reachable(s);
         if(!bursting) {
             assert(a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,&service,address,value));
             assert(!a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,NULL,address,value));
@@ -54,21 +102,23 @@ static int update_write(void *v,uintptr_t address,uint32_t value)
         return !(uncertain&&fifo_writes==1);
     }
     if(address==s->platform.base+0x18&&(value&63)==24) {
-        accessible(s);assert(a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,&service,address,value));
+        reachable(s);assert(a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,&service,address,value));
         assert(!a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,NULL,address,value));
         assert(!a733_mmc_platform_native_transfer_allowed(SUNXI_MMC_EMMC,A733_MMC_EMMC_SDC3,&service,address,value));
         assert(!a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,&service,address+0x1000,value));
         ++s->accesses;++c->calls;++issued;assert(c->selected&&c->reg[0x14/4]==512);
+        if(sd_profile)assert(sd_width==4&&c->reg[0xc/4]==1&&s->platform.running_module==0x81000003u);
         c->reg[0x18/4]=value&~(1u<<31);c->reg[0x38/4]=4;c->reg[0x20/4]=0x900;
         c->data_command=value;c->fifo_pos=0;c->fifo_total=512;programmed_until=m.power.now+program_us;return 1;
     }
     if(address==s->platform.base+0x18&&(value&63)==13&&!(value&(1u<<21))&&issued&&m.power.now<programmed_until) {
         /* CMD13 completes with PRG state; repeated polls stay out of the
          * card model's bounded command log. */
-        accessible(s);++s->accesses;++c->calls;++programming_polls;assert(c->selected);
+        reachable(s);++s->accesses;++c->calls;++programming_polls;assert(c->selected);
         c->reg[0x18/4]=value&~(1u<<31);c->reg[0x38/4]=4;c->reg[0x20/4]=7u<<9;
         c->data_command=0;c->fifo_pos=c->fifo_total=0;return 1;
     }
+    if(controller(s,address))return mode_write(s,address,value);
     return storage_write(v,address,value);
 }
 /* The native adapter admits a FIFO burst once, then stores every word. */
@@ -119,7 +169,22 @@ int main(int argc,char **argv)
     load_file(argv[2],card_media,media_bytes);
     storage_setup_selected((enum sunxi_mmc_kind)g.kind,(enum a733_mmc_emmc_host)g.host);
     field(m.card.csd,84,12,21);field(m.card.csd,22,4,9);
-    field(m.card.csd,48,22,(uint32_t)(g.sectors/1024-1));ready_storage();
+    field(m.card.csd,48,22,(uint32_t)(g.sectors/1024-1));
+    sd_profile=!strcmp(argv[4],"hs")?SUNXI_MMC_SD_HIGH_SPEED4:SUNXI_MMC_SD_LEGACY;
+    if(sd_profile) {
+        /* Switch class, 25 MHz TRAN_SPEED, PERI0 400 MHz output and PF0-5 routing. */
+        field(m.card.csd,84,12,21|(1u<<10));field(m.card.csd,96,8,0x32);
+        *pmic_model_word(&m.power,0x020020a0)=0xfe000000u|(99u<<8)|(1u<<20);
+        *pmic_model_word(&m.power,0x02003908)=((1u<<11)|(1u<<2)|(1u<<1))*0x10001;
+        *pmic_model_word(&m.power,0x02003988)=((1u<<11)|(1u<<2)|(1u<<1))<<16;
+        struct a733_mmc_platform_config c=m.platform.config;c.sd_profile=SUNXI_MMC_SD_HIGH_SPEED4;
+        for(unsigned i=0;i<7;++i)c.desired[i].function=i<6?2:0;
+        struct a733_mmc_platform_ops ops=m.platform.ops;memset(&m.platform,0,sizeof(m.platform));
+        assert(a733_mmc_platform_init(&m.platform,&c,&ops,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
+    }
+    ready_storage();
+    if(sd_profile)assert(m.platform.running_module==0x81000003u&&m.platform.core.card.bus_width==4&&
+        m.platform.core.card.card_hz==50000000u&&(m.platform.clock.shared&A733_CLOCK_PERI0));
     a733_storage_channel_init(&channel);
     unsigned before=m.accesses;
     int initialized=a733_storage_update_init(&service,&m.platform,&g,1000000);
@@ -129,7 +194,7 @@ int main(int argc,char **argv)
     before=m.accesses;
     assert(a733_mmc_platform_card(&m.platform,&blocked,1000000)==A733_MMC_INVALID&&m.accesses==before);
     assert(!a733_storage_update_mmio(&service,m.platform.base+0x200,1));
-    uint8_t refused[88]={0};size_t no_response=0;uint8_t ignored[1152];
+    uint8_t refused[88]={0};size_t no_response=0;uint8_t ignored[A733_STORAGE_BODY];
     m.power.worker=1;before=m.accesses;
     assert(!a733_storage_update_request(&service,refused,sizeof(refused)));
     a733_storage_update_poll(&service);
@@ -149,7 +214,7 @@ int main(int argc,char **argv)
             /* Use the host's existing INFO response; no extra card lifecycle. */
             assert(a733_storage_update_request(&service,request,n)&&service.response_ready);
             before=m.accesses;
-            assert(!a733_storage_update_response(&service,(void *)&m.power.words[64],1152,&no_response));
+            assert(!a733_storage_update_response(&service,(void *)&m.power.words[64],A733_STORAGE_BODY,&no_response));
             assert(!a733_storage_update_response(&service,response,sizeof(response),(void *)&m.power.words[64]));
             assert(service.response_ready&&m.accesses==before);
             assert(a733_storage_update_response(&service,response,sizeof(response),&bytes)&&!service.response_ready);

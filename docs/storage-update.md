@@ -103,7 +103,7 @@ again.
 ## Backup bytes precede write admission
 
 The service reads the granted range through the actual MMC platform in chunks
-of at most 1,024 bytes. It hashes the complete stream while the platform retains
+of at most eight sectors (4,096 bytes). It hashes the complete stream while the platform retains
 exclusive controller ownership. Each response binds its sequence and range
 offset and includes a chunk digest.
 
@@ -156,6 +156,31 @@ operation deadline within each request, so the readback does not receive a
 separate restarted deadline. The maintenance watchdog may renew only from completed storage
 work and completed USB exchanges under its actual lease. Host filesystem stalls
 must fail within that lease; they cannot cause indefinite feeding.
+
+## The session profile and request sizes set transfer time
+
+The maintenance session record selects the SD bus profile, as described in
+[storage-maintenance-launch.md](storage-maintenance-launch.md). Profile zero,
+the default, uses one data line at 400 kHz. Profile one uses four data lines at
+the card's default speed, at most 25 MHz. Profile two uses four data lines at
+50 MHz high speed. An eMMC session stays at profile zero. Every profile uses the
+same CMD24 writes, CMD13 status polling and readback comparison. No profile has
+been used with physical media.
+
+A BACKUP request reads up to eight sectors, the MMC core's request limit. At
+profile zero, eight sectors take about 85 ms of bus time, well inside the
+one-second request deadline. The INFO response carries the encoded grant
+followed by this sector count as a little-endian 32-bit word. The host takes
+its BACKUP stride from that word and refuses a missing or zero count, or one
+above eight. With its 16-byte USB frame, no response length is a multiple of
+512 bytes, so every USB read ends with a short packet.
+
+A WRITE request carries one sector at every profile. A conforming SDXC card may
+stay busy programming one block for 500 ms, and the maintenance watchdog fixes
+the request deadline at one second, so a second sector in the same request
+could exceed the deadline. At profile two, one sector occupies the bus for tens
+of microseconds; the USB round trip and the two synchronized host records per
+sector then set the write rate.
 
 ## Uncertainty retains ownership
 
@@ -216,6 +241,11 @@ commitment, uncertain writes, transport loss and host durability failures. A
 card model that stays in programming state for 500 ms after each CMD24 completes
 a two-sector update; one that stays busy for one second retains the first write
 as uncertain.
+A profile-two case extends the card model with the SD capability and switch
+commands. It runs a 20-sector backup in chunks of eight, eight and four
+sectors, then an update and a restoration of the same range. Host cases check
+that the BACKUP stride comes from INFO and that a zero, oversized or missing
+count refuses.
 The card model holds only the granted range of an SD card whose capacity
 equals the grant's. Planning cases build a 64 MiB card image with a partition
 table, boot0, a nonzero backup package unit and a TOC1, then plan a slot A

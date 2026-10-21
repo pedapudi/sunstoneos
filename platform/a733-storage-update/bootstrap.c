@@ -27,7 +27,7 @@ static int mmc_admit(void *p,const struct a733_mmc_platform_config *c,const stru
     const struct a733_mmc_platform_config *b=&n->boot.mmc;
     if(!a733_storage_native_live(n)||c!=&n->mmc.config||c->owner!=b->owner||c->handoff!=b->handoff||
        c->topology!=b->topology||c->deadline_us!=b->deadline_us||c->lifetime_deadline_us!=b->lifetime_deadline_us||
-       c->kind!=b->kind||c->emmc_host!=b->emmc_host||c->voltage_mask!=b->voltage_mask||
+       c->kind!=b->kind||c->emmc_host!=b->emmc_host||c->sd_profile!=b->sd_profile||c->voltage_mask!=b->voltage_mask||
        memcmp(c->fabric,b->fabric,sizeof(c->fabric))||memcmp(c->fabric_hz,b->fabric_hz,sizeof(c->fabric_hz))||
        memcmp(c->expected,b->expected,sizeof(c->expected))||memcmp(c->desired,b->desired,sizeof(c->desired))||
        t->owner!=c->owner)return -1;

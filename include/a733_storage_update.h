@@ -2,10 +2,14 @@
 #define SUNSTONE_A733_STORAGE_UPDATE_H
 #include "a733_mmc_platform.h"
 #include "a733_storage_digest.h"
-#define A733_STORAGE_CHUNK 1024u /* BACKUP reads up to two sectors. */
+/* BACKUP reads up to the core's eight-sector limit; INFO reports the count. */
+#define A733_STORAGE_READ_BLOCKS SUNXI_MMC_MAX_BLOCKS
+#define A733_STORAGE_CHUNK (A733_STORAGE_READ_BLOCKS*512u)
 #define A733_STORAGE_WRITE_BYTES 512u /* WRITE carries exactly one sector. */
 #define A733_STORAGE_GRANT_BYTES 256u
-#define A733_STORAGE_BODY 1152u
+/* Largest message: a full BACKUP response. A WRITE request is 632 bytes.
+ * With the 16-byte USB frame, no message length is a multiple of 512. */
+#define A733_STORAGE_BODY (56u+A733_STORAGE_CHUNK)
 /* This grant belongs to trusted bootstrap memory, never to an application USB
  * request. Host bootstrap authenticates actual protected backup bytes and
  * physical qualification artifacts. Hashes identify those artifacts; a hash
@@ -36,7 +40,7 @@ struct a733_storage_update {
     uint64_t read_blocks,written_blocks,last_now,operation_deadline;
     uint32_t sequence,active_command;
     unsigned sealed,finished,response_ready,response_size,chunk_bytes;
-    uint8_t input[A733_STORAGE_CHUNK],readback[A733_STORAGE_CHUNK];
+    uint8_t input[A733_STORAGE_WRITE_BYTES],readback[A733_STORAGE_CHUNK];
     uint8_t response[A733_STORAGE_BODY],backup_hash[32],receipt[32],chain[32],next_chain[32];
     struct sunxi_mmc_result result;
 };
@@ -53,7 +57,9 @@ void a733_storage_grant_encode(const struct a733_storage_grant *,uint8_t[256]);
  * before its payload. The immutable grant commits the complete ordered image. All integers little endian.
  * Exactly one request may be pending; a duplicate is a fault, never a replay.
  * Response: sequence u32, status u32, offset u64, bytes u32, reserved u32,
- * digest32, payload. Status0 completes; status1 is retained failure. */
+ * digest32, payload. Status0 completes; status1 is retained failure.
+ * The INFO payload is the encoded grant followed by A733_STORAGE_READ_BLOCKS
+ * as u32, which sets the host's BACKUP stride. */
 int a733_storage_update_request(struct a733_storage_update *,const uint8_t *,size_t);
 void a733_storage_update_poll(struct a733_storage_update *);
 int a733_storage_update_response(struct a733_storage_update *,uint8_t *,size_t,size_t *);
