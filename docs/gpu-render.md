@@ -651,7 +651,7 @@ No prior arithmetic or pixel matrix was repeated.
 
 The producer executed the native mailbox/client and TinyUSB path with modeled
 GPU/service completion effects tied to a separate native reconstruction record.
-End-to-end GPU/firmware execution remains unqualified. Its OPEN receipt is
-synchronous; pending OPEN publication through STATUS remains source-reviewed.
+End-to-end GPU/firmware execution remains unqualified. Its depth OPEN receipt is
+synchronous; pending texture OPEN publication through STATUS remains source-reviewed.
 Triangle and version-8 texture producer-backed runtime coverage remain pending.
 Physical disposal, memory reuse, visibility and timing remain unqualified.

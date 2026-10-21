@@ -418,6 +418,8 @@ the original sealed session epoch. STATUS discovers that queue epoch; every
 mutation and copied-output read binds it. Successful OPEN advances it by one,
 executes the sealed initial input and publishes sequence one. Epoch wrap is
 refused. The legacy runtime client continues to use its existing protocol.
+Read-only STATUS sends request sequence zero and validates the returned current
+sequence and queue epoch.
 
 The coordinator supplies its validated, locked device handle, the original
 absolute monotonic session deadline, and a durable callback. The callback takes
@@ -459,5 +461,17 @@ or lifecycle receipt arriving late is retained before the deadline error.
 
 The shared lifecycle and durability paths have producer-backed depth-mode
 coverage described in [the render evidence](gpu-render.md#copy-frames-across-explicit-disposal-and-reopening).
-The compute-specific paged decoder has source-review coverage; an actual
-compute lifecycle producer transcript remains pending.
+The compute client passed one healthy seventeen-exchange lifecycle and four
+tail-page refusal cases using native image SHA-256
+`06315568dcea521e3cbae72388cf4d0300d408401814b2d2eabde62d7974fa41`.
+The accepted 65-word package supplies pages of 32, 32 and one word. Both copied
+results match the actual producer bytes. The four faults change page index,
+tail count, result sequence or acquired extent; each preserves the exact
+256-byte preceding prefix and stops further requests.
+
+The actual pending OPEN STATUS retains the old queue and sequence until READY
+publishes the next queue; an immediate READ then succeeds. Shared depth failure
+evidence remains valid and was not replayed. GPU/service completion is modeled
+and tied to a separate three-child native disposal/reconstruction record.
+End-to-end GPU/firmware execution, physical drain, visibility and timing remain
+unqualified.
