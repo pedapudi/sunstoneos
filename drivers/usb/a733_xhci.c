@@ -13,6 +13,7 @@ enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
 enum { C_ENABLE=9,C_DISABLE=10,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_STOP=15,C_SET_DEQUEUE=16 };
 #define DETACH_US 5000000u /* Teardown bound; pinned Linux XHCI_CMD_DEFAULT_TIMEOUT. */
 #define HOLD_US 1000000u /* Error hold: a hub status interval (at most 256 ms) and a port status request. */
+#define ISOCH_US 100000u /* Bound between isochronous ring events while TDs are on the ring. */
 #define PRESERVE (UINT32_C(0xe000000)|UINT32_C(0xc000)|BIT(9)|UINT32_C(0x1e0)) /* PORTSC RWS fields. */
 enum { T_NORMAL=1,T_SETUP=2,T_DATA=3,T_STATUS=4,T_ADDRESS_STATUS=5 };
 enum { CONTROL_IDLE,CONTROL_SETUP,CONTROL_DATA,CONTROL_STATUS };
@@ -99,6 +100,12 @@ static int detaching(const struct a733_xhci *x,unsigned address)
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].detach&&x->devices[i].address==address)return 1;
     return 0;
 }
+/* The record that owns a slot, including one under teardown. */
+static struct a733_xhci_device *slot_record(struct a733_xhci *x,unsigned slot)
+{
+    for(unsigned i=0;slot&&i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)return &x->devices[i];
+    return NULL;
+}
 static struct a733_xhci_endpoint *endpoint(struct a733_xhci_device *d,unsigned address)
 {
     if(!(address&15))return &d->endpoints[0];
@@ -151,6 +158,7 @@ static int reclaim(struct a733_xhci *x,unsigned j)
     memset(p+16384+8192*j,0,8192);
     for(unsigned i=0;i<2;++i){memset(p+40960+4096*(j*2+i),0,4096);memset(p+69632+4096*(j*2+i),0,4096);}
     if(x->extra_endpoint_owner==j+1){memset(p+65536,0,4096);memset(p+94208,0,4096);x->extra_endpoint_owner=0;}
+    if(x->isoch.device==j+1)memset(&x->isoch,0,sizeof(x->isoch));
     memset(d,0,sizeof(*d));pages(x,j);
     if(x->default_device==j)x->default_device=0;
     return barrier(x);
@@ -162,11 +170,34 @@ static void detach(struct a733_xhci *x,struct a733_xhci_device *d)
 {
     d->detach=1;d->deadline=x->lifetime_deadline-x->last_now>DETACH_US?x->last_now+DETACH_US:x->lifetime_deadline;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
-        struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;if(e->pending!=2||!e->pending_trb)e->pending=0;
+        struct a733_xhci_endpoint *e=&d->endpoints[i];e->caller=NULL;
+        if((e->pending!=2||!e->pending_trb)&&e->pending!=6)e->pending=0;
+    }
+    if(x->isoch.device==(unsigned)(d-x->devices)+1)x->isoch.requested=0;
+}
+/* A hub's teardown includes every device below it, at any tier. */
+static void detach_tree(struct a733_xhci *x,struct a733_xhci_device *d)
+{
+    detach(x,d);
+    for(unsigned more=1;more;){
+        more=0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            struct a733_xhci_device *c=&x->devices[j],*p=c->parent?slot_record(x,c->parent):NULL;
+            if(c->port_ready&&!c->detach&&p&&p->detach){detach(x,c);more=1;}
+        }
     }
 }
-/* Publish payload before the cycle bit. The last entry is an owned Link TRB;
- * each ring has one outstanding TD, so a completed slot is not reused early. */
+/* No bound record names this record's slot as its parent hub. */
+static int childless(const struct a733_xhci *x,unsigned j)
+{
+    const struct a733_xhci_device *d=&x->devices[j];
+    for(unsigned k=0;d->slot&&k<A733_XHCI_DEVICES;++k)
+        if(k!=j&&x->devices[k].port_ready&&x->devices[k].parent==d->slot)return 0;
+    return 1;
+}
+/* Publish payload before the cycle bit. The last entry is an owned Link TRB.
+ * A ring holds one outstanding TD, or at most A733_XHCI_ISOCH_TDS one-TRB
+ * isochronous TDs, so a slot is reused only after its completion. */
 static int ring(struct a733_xhci *x,struct a733_xhci_trb *trbs,uint64_t pa,unsigned *index,unsigned *cycle,
     uint64_t parameter,uint32_t status,uint32_t control,uint64_t *published)
 {
@@ -195,20 +226,23 @@ static int command(struct a733_xhci *x,struct a733_xhci_device *d,unsigned kind,
 static void ep_context(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
 {
     uint8_t *p=d->input+(e->number+1)*x->context_bytes;
-    unsigned type=e->number==1?4:e->transfer_type==3?7:e->direction?6:2;
-    if(e->transfer_type==3)put32(p,e->interval<<16);
-    put32(p+4,(e->packet<<16)|(e->burst<<8)|(type<<3)|(3u<<1));
+    /* Isoch IN has type 5 and CErr 0; its Max ESIT Payload is one packet. */
+    unsigned periodic=e->transfer_type==3||e->transfer_type==1;
+    unsigned type=e->number==1?4:e->transfer_type==3?7:e->transfer_type==1?5:e->direction?6:2;
+    if(periodic)put32(p,e->interval<<16);
+    put32(p+4,(e->packet<<16)|(e->burst<<8)|(type<<3)|(e->transfer_type==1?0:3u<<1));
     put64(p+8,(e->ring_pa+16*e->index)|e->cycle);
-    put32(p+16,e->number==1?8:e->transfer_type==3?(e->packet<<16)|e->packet:4096);
+    put32(p+16,e->number==1?8:periodic?(e->packet<<16)|e->packet:4096);
 }
 static void address_context(struct a733_xhci *x,struct a733_xhci_device *d)
 {
     memset(d->input,0,33*x->context_bytes);put32(d->input+4,3);
     uint8_t *slot=d->input+x->context_bytes;
-    put32(slot,(1u<<27)|(d->speed<<20)|d->parent_port);put32(slot+4,x->usb2_port<<16);
+    put32(slot,(1u<<27)|(d->speed<<20)|d->route);put32(slot+4,x->usb2_port<<16);
     if(d->parent&&d->speed<3){
-        struct a733_xhci_device *parent=&x->devices[0];
-        put32(slot,get32(slot)|(parent->hub_mtt?BIT(25):0));
+        /* Only high-speed USB2 hubs are admitted, so the parent is the TT hub. */
+        const struct a733_xhci_device *parent=slot_record(x,d->parent);
+        put32(slot,get32(slot)|(parent&&parent->hub_mtt?BIT(25):0));
         put32(slot+8,d->parent|(d->parent_port<<8));
     }
     d->endpoints[0].number=1;d->endpoints[0].packet=d->speed==4?512:d->speed==3?64:8;ep_context(x,d,&d->endpoints[0]);
@@ -267,6 +301,59 @@ static int finished(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_x
     if((state!=2&&state!=3)||dequeue!=e->pending_trb)return 0;
     e->pending=0;e->pending_trb=0;return 1;
 }
+/* After a stop, the TDs still on an isochronous ring end without completions
+ * when the dequeue pointer addresses the oldest of them, or the enqueue
+ * position when none remains. */
+static int isoch_finished(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
+{
+    struct a733_xhci_isoch *s=&x->isoch;
+    const uint8_t *c=d->device+e->number*x->context_bytes;
+    uint64_t dequeue=((uint64_t)get32(c+8)|((uint64_t)get32(c+12)<<32))&~UINT64_C(15);
+    uint64_t expected=s->done<s->count?s->trb[(s->head+s->done)%A733_XHCI_ISOCH_TDS]:e->ring_pa+16*e->index;
+    if((get32(c)&7)!=3||dequeue!=expected)return 0;
+    while(s->done<s->count){s->state[(s->head+s->done)%A733_XHCI_ISOCH_TDS]=3;++s->done;}
+    e->pending=0;return 1;
+}
+/* One event for the oldest TD on the isochronous ring, in TD order. Success
+ * and short packets carry data; transaction, babble, split and missed-service
+ * errors end the TD without data and the stream continues (xHCI 1.2 sections
+ * 4.10.2.8, 4.10.3.2). Ring Overrun reports an empty ring at the enqueue
+ * position; the next queued TD rings the doorbell again (section 4.10.3.1). */
+static int isoch_event(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e,
+    unsigned code,unsigned residual,uint64_t pointer)
+{
+    struct a733_xhci_isoch *s=&x->isoch;
+    if(code==21){
+        if(s->done!=s->count||(pointer&&pointer!=e->ring_pa+16*e->index))return 0;
+        ++s->overruns;e->pending=0;return 1;
+    }
+    if(code>=26&&code<=28)
+        return d->detach&&d->stopping==2&&pointer>=e->ring_pa&&pointer<e->ring_pa+16*A733_XHCI_RING_TRBS;
+    unsigned i=(s->head+s->done)%A733_XHCI_ISOCH_TDS;
+    if(s->done==s->count||pointer!=s->trb[i]||s->state[i]!=1)return 0;
+    if(!d->detach&&code==1&&!residual){s->bytes[i]=e->packet;s->state[i]=2;}
+    else if(!d->detach&&code==13&&residual<=e->packet){s->bytes[i]=e->packet-residual;s->state[i]=2;}
+    else if(code==1||code==13||code==3||code==4||code==23||code==36){s->state[i]=3;++s->dropped;}
+    else return 0;
+    if(++s->done==s->count)e->pending=0;
+    else e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
+    return 1;
+}
+/* Queue one-packet Isoch TDs (ISP, IOC, Start Isoch ASAP) until every entry
+ * is in use, then ring the endpoint once. */
+static int isoch_refill(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
+{
+    struct a733_xhci_isoch *s=&x->isoch;
+    if(e->pending!=6)e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
+    while(s->count<A733_XHCI_ISOCH_TDS){
+        unsigned i=(s->head+s->count)%A733_XHCI_ISOCH_TDS;
+        if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,e->bounce_pa+i*A733_XHCI_ISOCH_PACKET,e->packet,
+           TYPE(5)|IOC|BIT(2)|BIT(31),&s->trb[i]))return 0;
+        s->state[i]=1;s->bytes[i]=0;++s->count;
+    }
+    e->pending=6;
+    return wr(x,x->doorbell+d->slot*4,e->number);
+}
 /* Under teardown, a TD may still finish by itself, by a halting error or by
  * the requested stop. No completion reaches the class. A forced stop event may
  * name another TRB of the stopped ring (pinned Linux handle_tx_event). */
@@ -290,6 +377,8 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     struct a733_xhci_device *d=NULL;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)d=&x->devices[i];
     if((event->control&BIT(2))||!slot||!d)return 0;
+    if(x->isoch.device==(unsigned)(d-x->devices)+1&&number&&d->endpoints[1].number==number)
+        return isoch_event(x,d,&d->endpoints[1],code,residual,pointer);
     if(d->detach)return detached_event(d,number,code,pointer);
     struct a733_xhci_endpoint *e=NULL;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].number==number&&d->endpoints[i].pending==2)e=&d->endpoints[i];
@@ -353,6 +442,7 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
         struct a733_xhci_endpoint *e=&d->endpoints[d->stopping-1];d->stopping=0;
         unsigned state=get32(d->device+e->number*x->context_bytes)&7;
         if(state!=3&&(code!=19||state!=2))return 0;
+        if(e->pending==6)return isoch_finished(x,d,e);
         return e->pending!=2||finished(x,d,e);
     }
     if(kind==C_DISABLE)return d->detach==2&&reclaim(x,(unsigned)(d-x->devices));
@@ -479,7 +569,7 @@ static int teardown(struct a733_xhci *x,unsigned j)
             if(state==1||state==2){
                 d->stopping=i+1;return command(x,d,state==1?C_STOP:C_RESET_ENDPOINT,(d->slot<<24)|(e->number<<16));
             }
-            if(state==4||(e->pending==2&&!finished(x,d,e)))return 0;
+            if(state==4||(e->pending==2&&!finished(x,d,e))||(e->pending==6&&!isoch_finished(x,d,e)))return 0;
         }
         d->detach=2;
     }
@@ -602,7 +692,20 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->failed)goto failed;
         if(!x->irq_mode||x->irq_service){int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
         if(x->command_kind)break;
-        for(unsigned j=A733_XHCI_DEVICES;j-->0;)if(x->devices[j].detach){if(!teardown(x,j))goto failed;goto done;}
+        {
+            /* Children before their hub; a detaching hub with a bound child
+             * that is not detaching is inconsistent. */
+            unsigned waiting=0;
+            for(unsigned j=A733_XHCI_DEVICES;j-->0;)if(x->devices[j].detach){
+                if(!childless(x,j)){waiting=1;continue;}
+                if(!teardown(x,j))goto failed;goto done;
+            }
+            if(waiting)goto failed;
+        }
+        if(x->isoch.requested&&x->isoch.count<A733_XHCI_ISOCH_TDS){
+            struct a733_xhci_device *d=&x->devices[x->isoch.device-1];struct a733_xhci_endpoint *e=&d->endpoints[1];
+            if(!d->detach&&d->port_ready==3&&e->configured&&!e->aborted){if(!isoch_refill(x,d,e))goto failed;goto done;}
+        }
         if(x->detaching){x->detaching=x->announced=x->removed=x->port_reset=x->speed=0;goto done;}
         for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
             struct a733_xhci_device *d=&x->devices[j];
@@ -644,26 +747,33 @@ int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_numbe
 {
     if(!owner(x)||x->failed||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>4||
        deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
-    struct a733_xhci_device *hub=&x->devices[0];
-    if((hub->speed==4?speed!=4:speed>3)||hub->address!=parent||!hub->hub_configured||port_number>hub->hub_ports||(hub->speed!=3&&hub->speed!=4)||!hub->zero_retired)return 0;
+    struct a733_xhci_device *hub=parent?device_address(x,parent):NULL;
+    if(!hub||(hub->speed==4?speed!=4:speed>3)||hub->address!=parent||!hub->hub||!hub->hub_configured||port_number>hub->hub_ports||
+       (hub->speed!=3&&hub->speed!=4)||!hub->zero_retired||hub->tier>=A733_XHCI_HUB_TIERS)return 0;
     for(unsigned j=1;j<A733_XHCI_DEVICES&&j<x->cap_slots;++j){
         struct a733_xhci_device *d=&x->devices[j];
-        if(d->detach)continue;
+        if(d->detach||d==hub)continue;
         if(d->port_ready){
-            if(d->parent_port!=port_number)continue;
-            return x->default_device==j&&!d->zero_retired&&d->parent==hub->slot&&d->speed==speed;
+            if(d->parent!=hub->slot||d->parent_port!=port_number)continue;
+            return x->default_device==j&&!d->zero_retired&&d->speed==speed;
         }
         /* TinyUSB serializes default-address enumeration. A live predecessor
          * must retire address0 before another child can claim that identity. */
         if(!x->devices[x->default_device].zero_retired)return 0;
-        d->parent=hub->slot;d->parent_port=port_number;d->speed=speed;d->deadline=deadline;d->port_ready=1;x->default_device=j;return 1;
+        d->parent=hub->slot;d->parent_port=port_number;d->route=hub->route|(port_number<<(4*hub->tier));d->tier=hub->tier+1;
+        d->speed=speed;d->deadline=deadline;d->port_ready=1;x->default_device=j;return 1;
     }
     return 0;
 }
 int a733_xhci_mark_hub(struct a733_xhci *x,unsigned address)
 {
     struct a733_xhci_device *d=device_address(x,address);
-    if(!owner(x)||x->failed||d!=&x->devices[0]||(d->speed!=3&&d->speed!=4)||d->hub_ports)return 0;
+    if(!owner(x)||x->failed||!d||(d->speed!=3&&d->speed!=4)||d->hub_ports||d->tier>=A733_XHCI_HUB_TIERS)return 0;
+    if(d!=&x->devices[0]){
+        /* A second tier is a USB2 high-speed hub below a high-speed hub. */
+        const struct a733_xhci_device *parent=slot_record(x,d->parent);
+        if(d->speed!=3||d->tier!=1||!parent||parent->speed!=3)return 0;
+    }
     d->hub=1;return 1;
 }
 int a733_xhci_hub_configure(struct a733_xhci *x,unsigned address,unsigned ports,unsigned ttt,unsigned mtt)
@@ -748,6 +858,47 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     }
     return 0;
 }
+int a733_xhci_open_isoch(struct a733_xhci *x,unsigned address,unsigned ep,
+    unsigned packet,unsigned interval,uint64_t deadline)
+{
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
+       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>A733_XHCI_ISOCH_PACKET||(d->speed!=1&&d->speed!=3)||
+       !interval||interval>(d->speed==3?4u:1u)||deadline>x->lifetime_deadline||settled(x,deadline)!=1)return 0;
+    unsigned encoded=d->speed==3?interval-1:3;
+    struct a733_xhci_endpoint *e=endpoint(d,ep);
+    if(e)return e->packet==packet&&e->transfer_type==1&&e->interval==encoded&&!e->aborted;
+    if(x->isoch.device||d->endpoints[1].opened)return 0;
+    e=&d->endpoints[1];e->opened=1;e->transfer_type=1;e->interval=encoded;
+    e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;
+    x->isoch=(struct a733_xhci_isoch){.device=(unsigned)(d-x->devices)+1};return 1;
+}
+static struct a733_xhci_endpoint *isoch_endpoint(struct a733_xhci *x,unsigned address,unsigned ep)
+{
+    struct a733_xhci_device *d=device_address(x,address);struct a733_xhci_endpoint *e=d?endpoint(d,ep):NULL;
+    if(!owner(x)||x->failed||!address||!e||address!=d->address||e->transfer_type!=1||e->aborted||
+       x->isoch.device!=(unsigned)(d-x->devices)+1)return NULL;
+    return e;
+}
+int a733_xhci_isoch_start(struct a733_xhci *x,unsigned address,unsigned ep)
+{
+    if(!isoch_endpoint(x,address,ep))return 0;
+    x->isoch.requested=1;return 1;
+}
+int a733_xhci_isoch_take(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t *out,unsigned capacity,unsigned *bytes)
+{
+    struct a733_xhci_endpoint *e=isoch_endpoint(x,address,ep);struct a733_xhci_isoch *s=&x->isoch;
+    if(!e||!bytes||capacity<e->packet||!outside(x,out,e->packet))return -1;
+    while(s->done){
+        unsigned i=s->head,state=s->state[i],n=s->bytes[i];
+        s->state[i]=0;s->head=(i+1)%A733_XHCI_ISOCH_TDS;--s->count;--s->done;
+        if(state==3)continue;
+        /* The completion event returned this packet's bounce bytes to software. */
+        if(state!=2||n>e->packet||!barrier(x)){fault(x);return -1;}
+        memcpy(out,e->bounce+i*A733_XHCI_ISOCH_PACKET,n);*bytes=n;return 1;
+    }
+    return 0;
+}
 int a733_xhci_setup(struct a733_xhci *x,unsigned address,const uint8_t setup[8],uint64_t deadline)
 {
     struct a733_xhci_device *d=device_address(x,address);
@@ -770,7 +921,7 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
     if(!owner(x)||!d||x->failed||address!=d->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||
        (bytes&&!outside(x,buffer,bytes))||deadline>x->lifetime_deadline)return 0;
     struct a733_xhci_endpoint *e=endpoint(d,ep);
-    if(!e||!e->opened||e->pending||e->aborted||settled(x,deadline)!=1)return 0;
+    if(!e||!e->opened||e->pending||e->aborted||e->transfer_type==1||settled(x,deadline)!=1)return 0;
     unsigned direction=!!(ep&128),kind=T_NORMAL;
     if(!(ep&15)) {
         if(d->control_stage==CONTROL_DATA) {
@@ -799,7 +950,7 @@ int a733_xhci_detach(struct a733_xhci *x,unsigned address)
     struct a733_xhci_device *d=device_address(x,address);
     if(!d||!d->port_ready)return 1; /* Already detaching, or no slot or context exists. */
     if(d==&x->devices[0])return 0; /* The root device follows its port. */
-    detach(x,d);return 1;
+    detach_tree(x,d);return 1;
 }
 void a733_xhci_lost(struct a733_xhci *x)
 {if(owner(x))fault(x);}

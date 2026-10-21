@@ -14,7 +14,36 @@ static struct a733_usb2_ss *ss_state(unsigned address)
 
 static void mounted_update(void)
 {
-    host->mounted=host->dual_leaf?(host->msc_mounted&&host->hid_mounted):(host->msc_mounted||host->hid_mounted);
+    host->mounted=host->dual_leaf?(host->msc_mounted&&host->hid_mounted):
+        (host->msc_mounted||host->hid_mounted||host->audio_mounted);
+}
+/* Hub state bound to a device record, to a logical address, or to the record
+ * that owns a parent slot. */
+static struct a733_usb2_hub *hub_record(unsigned record)
+{
+    for(unsigned i=0;i<A733_USB2_HUBS;++i)if(host->hubs[i].present&&host->hubs[i].record==record+1)return &host->hubs[i];
+    return NULL;
+}
+static struct a733_usb2_hub *hub_at(unsigned address)
+{
+    for(unsigned i=0;address&&i<A733_USB2_HUBS;++i)if(host->hubs[i].present&&host->hubs[i].address==address)return &host->hubs[i];
+    return NULL;
+}
+static struct a733_usb2_hub *parent_hub(unsigned record)
+{
+    unsigned slot=record<A733_XHCI_DEVICES?host->core.devices[record].parent:0;
+    for(unsigned i=0;slot&&i<A733_XHCI_DEVICES;++i)if(host->core.devices[i].slot==slot)return hub_record(i);
+    return NULL;
+}
+/* USB 2.0 section 7.2.1: a root or self-powered hub port supplies five unit
+ * loads (500 mA), a bus-powered hub port one. The root is also bounded by the
+ * qualified Type-C source. */
+static unsigned upstream_ma(unsigned record)
+{
+    const struct a733_usb2_hub *h=parent_hub(record);
+    unsigned source=host->platform.typec->config.source_ma;
+    if(!host->core.devices[record].parent)return source<500?source:500;
+    return !h?0:h->bus_powered?100:500;
 }
 static uint32_t le32(const uint8_t *p)
 {return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -61,10 +90,15 @@ static void withdraw_hid(void)
     struct a733_usb2_hid *h=&host->hid;host->hid_mounted=0;
     h->pending=h->complete=h->event_seen=h->event_bytes=h->requested=0;h->pending_buffer=NULL;
 }
+static void withdraw_audio(void)
+{
+    struct a733_usb2_audio *a=&host->audio;host->audio_mounted=0;
+    a->starting=a->started=0;a->pending_buffer=NULL;a->pending_bytes=0;
+}
 static void leaf_kind(void)
 {
     host->kind=host->msc_seen&&host->hid_seen?A733_USB2_DEVICE_DUAL:host->msc_seen?A733_USB2_DEVICE_MSC:
-        host->hid_seen?A733_USB2_DEVICE_HID:A733_USB2_DEVICE_NONE;
+        host->hid_seen?A733_USB2_DEVICE_HID:host->audio_seen?A733_USB2_DEVICE_AUDIO:A733_USB2_DEVICE_NONE;
     mounted_update();
 }
 /* Clear the adapter state that names a device whose slot teardown started.
@@ -76,6 +110,10 @@ static void forget(unsigned address)
     struct a733_usb2_native *n=host;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
         if(!n->core.devices[i].port_ready||n->core.devices[i].detach)memset(&n->descriptors[i],0,sizeof(n->descriptors[i]));
+    for(unsigned i=0;i<A733_USB2_HUBS;++i){
+        struct a733_usb2_hub *h=&n->hubs[i];const struct a733_xhci_device *d=h->record?&n->core.devices[h->record-1]:NULL;
+        if(h->present&&(!d||!d->port_ready||d->detach))memset(h,0,sizeof(*h));
+    }
     if(n->control_buffer&&n->control_address==address){n->control_buffer=NULL;n->control_bytes=0;}
     if(!address)return;
     if(n->msc_seen&&address==n->address){
@@ -88,8 +126,11 @@ static void forget(unsigned address)
         uint64_t sequence=n->hid.sequence;memset(&n->hid,0,sizeof(n->hid));n->hid.sequence=sequence;
         n->hid_seen=n->hid_mounted=n->hid_address=0;
     }
+    if(n->audio_seen&&address==n->audio.address){
+        uint64_t sequence=n->audio.sequence;memset(&n->audio,0,sizeof(n->audio));n->audio.sequence=sequence;
+        n->audio_seen=n->audio_mounted=0;
+    }
     if(address==n->address)n->address=0;
-    if(n->hub.present&&address==n->hub.address)memset(&n->hub,0,sizeof(n->hub));
     leaf_kind();
 }
 uint32_t tusb_time_millis_api(void)
@@ -108,26 +149,46 @@ int a733_usb2_host_poll(struct a733_usb2_native *n)
     if((!host->mounted&&host->mount_deadline&&now>=host->mount_deadline)||
         (host->read_pending&&now>=host->read_deadline)||
         (host->hid.pending&&now>=host->hid.deadline)){lost();return -1;}
-    if(host->hub.status_deferred&&now>=host->hub.power_good_deadline&&host->core.devices[0].hub_configured){
-        if(!a733_xhci_transfer(&host->core,host->hub.address,host->hub.endpoint,
-           host->hub.status_buffer,host->hub.status_bytes,host->platform.config.lifetime_deadline)){
-            lost();return -1;
+    if(host->audio.starting&&now>=host->audio.start_deadline){lost();return -1;}
+    for(unsigned i=0;i<A733_USB2_HUBS;++i){
+        struct a733_usb2_hub *h=&host->hubs[i];
+        if(h->present&&h->status_deferred&&now>=h->power_good_deadline&&host->core.devices[h->record-1].hub_configured){
+            if(!a733_xhci_transfer(&host->core,h->address,h->endpoint,h->status_buffer,h->status_bytes,
+               host->platform.config.lifetime_deadline)){
+                lost();return -1;
+            }
+            h->status_deferred=0;
         }
-        host->hub.status_deferred=0;
     }
     enum a733_xhci_result r=a733_xhci_poll(&host->core);
     if(r==A733_XHCI_RETAINED||r==A733_XHCI_INVALID){lost();return -1;}
     /* Notice validation records metadata only. Apply it after core callbacks
      * return, before the queued TinyUSB completion can issue another request. */
-    if(!host->failed&&host->hub.mark_pending){
-        if(!a733_xhci_mark_hub(&host->core,host->hub.mark_address))lost();
-        host->hub.mark_pending=0;
-    }
-    if(!host->failed&&host->hub.configure_pending){
-        if(!a733_xhci_hub_configure(&host->core,host->hub.address,host->hub.ports,host->hub.ttt,host->hub.alt_selected))lost();
-        host->hub.configure_pending=0;
+    for(unsigned i=0;i<A733_USB2_HUBS;++i){
+        struct a733_usb2_hub *h=&host->hubs[i];
+        if(!host->failed&&h->mark_pending){
+            if(!a733_xhci_mark_hub(&host->core,h->mark_address))lost();
+            h->mark_pending=0;
+        }
+        if(!host->failed&&h->configure_pending){
+            if(!a733_xhci_hub_configure(&host->core,h->address,h->ports,h->ttt,h->alt_selected))lost();
+            h->configure_pending=0;
+        }
     }
     if(!host->failed&&r!=A733_XHCI_BUSY)tuh_task_ext(0,false);
+#if CFG_TUH_AUDIO
+    /* Hand completed isochronous packets to the pending class request. Each
+     * completion lets the class queue its next request in the same poll. */
+    struct a733_usb2_audio *a=&host->audio;
+    for(unsigned k=0;k<A733_XHCI_ISOCH_TDS&&!host->failed&&a->pending_buffer;++k){
+        unsigned bytes=0;int got=a733_xhci_isoch_take(&host->core,a->address,a->endpoint,a->pending_buffer,a->pending_bytes,&bytes);
+        if(got<0){lost();break;}
+        if(!got)break;
+        a->pending_buffer=NULL;a->pending_bytes=0;
+        hcd_event_xfer_complete((uint8_t)a->address,(uint8_t)a->endpoint,bytes,XFER_RESULT_SUCCESS,false);
+        tuh_task_ext(0,false);
+    }
+#endif
     if(host->failed)a733_xhci_lost(&host->core);
     return host->failed?-1:host->mounted?1:0;
 }
@@ -167,6 +228,7 @@ static int bot_complete(const struct a733_xhci_notice *e)
     n->bot_stage=0;n->bot_buffer=NULL;return 1;
 }
 static unsigned le16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
+static uint32_t le24(const uint8_t *p){return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16;}
 static int ss_bos(struct a733_usb2_ss *ssdata,const uint8_t *p,unsigned bytes)
 {
     if(bytes<5||p[0]!=5||p[1]!=15||le16(p+2)<15||le16(p+2)>sizeof(ssdata->ss_bos)||!p[4])return 0;
@@ -198,7 +260,8 @@ bool a733_tinyusb_ss_enumerate(uint8_t address,unsigned stage,uint8_t *buffer,tu
     if(!ssdata||!owner()||a733_xhci_device_speed(&host->core,address)!=4||!address||!buffer||stage!=ssdata->ss_control||stage>3||
        host->core.ops.outside(host->core.context,buffer,256)!=1){lost();return false;}
     tusb_control_request_t request={0};request.bRequest=stage<2?6:stage==2?49:48;
-    request.bmRequestType=stage<2?0x80:0;request.wValue=stage<2?0x0f00:stage==2?(host->core.devices[descriptor_index(address)].parent?80+host->hub.delay_ns:40):0;
+    request.bmRequestType=stage<2?0x80:0;const struct a733_usb2_hub *parent=parent_hub(descriptor_index(address));
+    request.wValue=stage<2?0x0f00:stage==2?(parent?80+parent->delay_ns:40):0;
     request.wLength=stage==0?5:stage==1?(uint16_t)ssdata->ss_bos_bytes:stage==3?6:0;
     if(stage==3){
         unsigned u1=ssdata->ss_u1>host->core.root_u1?ssdata->ss_u1:host->core.root_u1;
@@ -212,13 +275,60 @@ bool a733_tinyusb_ss_enumerate(uint8_t address,unsigned stage,uint8_t *buffer,tu
     tuh_xfer_t xfer={.daddr=address,.ep_addr=0,.setup=&request,.buffer=request.wLength?buffer:NULL,.complete_cb=callback,.user_data=next};
     return tuh_control_xfer(&xfer);
 }
+/* One USB Audio Class 1 function: an Audio Control interface (optionally with
+ * its interrupt endpoint) followed by Audio Streaming interfaces whose alternate
+ * 0 has no endpoint. Every capture alternate setting uses the same isochronous
+ * IN data endpoint; playback interfaces may exist and are never opened. Only
+ * capture alternates with at most A733_XHCI_ISOCH_PACKET bytes per packet and
+ * a 1 ms or shorter service interval are recorded. TinyUSB's audio class
+ * parses the class-specific descriptors themselves. */
+static int audio_configuration(unsigned address,const uint8_t *p,unsigned total,unsigned speed)
+{
+    struct a733_usb2_audio a={0};
+    unsigned interfaces=0,control=0,current=0,alternate=0,subclass=0,expected=0,seen=0,open=0;
+    for(unsigned at=9;at<total;){
+        unsigned length=p[at],type=at+1<total?p[at+1]:0;
+        if(length<2||length>total-at)return 0;
+        if(type==4){
+            if(length!=9||(open&&seen!=expected))return 0;
+            current=p[at+2];alternate=p[at+3];expected=p[at+4];subclass=p[at+6];seen=0;open=1;
+            if(p[at+5]!=1||p[at+7]||current>=32)return 0;
+            if(subclass==1){
+                if(control||alternate||expected>1)return 0;
+                control=1;a.control_interface=current;++interfaces;
+            }else if(subclass==2){
+                if(!control||current==a.control_interface)return 0;
+                if(!alternate){if(expected||(a.streaming&(1u<<current)))return 0;a.streaming|=1u<<current;++interfaces;}
+                else if(!(a.streaming&(1u<<current))||!expected||expected>2)return 0;
+            }else return 0;
+        }else if(type==5){
+            if((length!=7&&length!=9)||!open||++seen>expected)return 0;
+            unsigned ep=p[at+2],attributes=p[at+3],size=le16(p+at+4),interval=p[at+6];
+            if(subclass==1){if((attributes&3)!=3||!(ep&128))return 0;}
+            else if((attributes&3)!=1||(ep&0x70)||!(ep&15))return 0;
+            /* UAC1 marks a data endpoint by a synchronization type; an IN
+             * endpoint without one is a playback feedback endpoint. */
+            else if((ep&128)&&(attributes&12)){
+                if(a.endpoint&&(a.endpoint!=ep||a.interface!=current))return 0;
+                a.endpoint=ep;a.interface=current;
+                if(!(size&~0x7ffu)&&size&&size<=A733_XHCI_ISOCH_PACKET&&interval&&interval<=(speed==3?4u:1u)){
+                    if(a.alternates==A733_USB2_AUDIO_ALTERNATES)return 0;
+                    a.alternate[a.alternates++]=(struct a733_usb2_audio_alternate){current,alternate,size,interval};
+                }
+            }
+        }else if(type!=0x24&&type!=0x25)return 0;
+        at+=length;
+    }
+    if(!control||(open&&seen!=expected)||interfaces!=p[4]||!a.alternates)return 0;
+    a.address=address;host->audio=a;return 1;
+}
 static int control_response(const struct a733_xhci_notice *e)
 {
     struct a733_usb2_native *n=host;
     if(n->control_device>=A733_XHCI_DEVICES||e->address!=n->control_address)return 0;
     struct a733_usb2_descriptor *desc=&n->descriptors[n->control_device];
     struct a733_xhci_device *device=&n->core.devices[n->control_device];
-    struct a733_usb2_hub *hub=&n->hub;
+    struct a733_usb2_hub *hub=hub_record(n->control_device);
     struct a733_usb2_ss *ssdata=&desc->ss;
     const uint8_t *p=n->control_buffer,*s=n->control_setup;unsigned bytes=n->control_bytes;
     if(e->result==1){
@@ -237,7 +347,7 @@ static int control_response(const struct a733_xhci_notice *e)
             if(s[1]==49){if(ssdata->ss_control!=2||ssdata->ss_request!=2)return 0;ssdata->ss_control=3;if(device->parent)ssdata->ss_ready=1;}
             if(s[1]==48){if(ssdata->ss_control!=3||ssdata->ss_request!=3)return 0;ssdata->ss_control=4;ssdata->ss_ready=1;}
         }
-        if(device->control_stage==0&&e->bytes==0&&e->endpoint==128&&desc->kind==A733_USB2_DEVICE_HUB){
+        if(device->control_stage==0&&e->bytes==0&&e->endpoint==128&&desc->kind==A733_USB2_DEVICE_HUB&&hub){
             uint64_t now;
             if(s[0]==1&&s[1]==11&&le16(s+2)==1)hub->alt_selected=1;
             if(s[0]==0x20&&s[1]==12&&device->speed==4)hub->depth_set=1;
@@ -262,6 +372,7 @@ static int control_response(const struct a733_xhci_notice *e)
     n->control_buffer=NULL;n->control_bytes=0;
     if(device->speed==4&&s[0]==0x80&&s[1]==6&&s[3]==15)return ss_bos(ssdata,p,bytes);
     if(desc->kind==A733_USB2_DEVICE_HUB){
+        if(!hub)return 0;
         if(s[0]==0xa0&&s[1]==6&&le16(s+2)==0x2a00){
             unsigned chars=bytes>=5?le16(p+3):0,rem=bytes==12?le16(p+10):0;
             if(device->speed!=4||bytes!=12||p[0]!=12||p[1]!=0x2a||!p[2]||p[2]>7||
@@ -275,14 +386,19 @@ static int control_response(const struct a733_xhci_notice *e)
             if(bytes!=9||p[0]!=9||p[1]!=0x29||!p[2]||p[2]>7||chars&~255u||
                (chars&3)>1||((chars>>3)&3)>1||p[7]&1||p[7]&~((2u<<p[2])-2)||p[8]!=255)return 0;
             if(hub->protocol==2&&!hub->alt_selected)return 0;
+            /* A bus-powered hub's configuration current excludes its ports,
+             * each of which may draw one unit load (USB 2.0 section 11.13). */
+            if(hub->bus_powered&&hub->max_power_ma+100u*p[2]>upstream_ma(n->control_device))return 0;
             hub->ports=p[2];hub->ttt=(chars>>5)&3;hub->power_good_2ms=p[5];
             hub->configure_pending=1;return 1;
         }
         if(s[1]==0&&s[0]==0x80){
-            if(bytes!=2||(le16(p)&~3u)||!(p[0]&1))return 0;hub->device_power=1;return 1;
+            if(bytes!=2||(le16(p)&~3u)||(p[0]&1)==hub->bus_powered)return 0;hub->device_power=1;return 1;
         }
         if(s[1]==0&&s[0]==0xa0){
-            if(bytes!=4||!hub->device_power||p[0]||p[1]||p[3]||(p[2]&~1u))return 0;
+            /* Local Power Source describes a local supply, which a
+             * bus-powered hub does not have; over-current must be clear. */
+            if(bytes!=4||!hub->device_power||(p[0]&~(hub->bus_powered?1u:0u))||p[1]||p[3]||(p[2]&~1u))return 0;
             hub->local_power=1;return 1;
         }
         if(s[1]==0&&s[0]==0xa3){
@@ -308,42 +424,64 @@ static int control_response(const struct a733_xhci_notice *e)
                 hub->connected_mask&=~(1u<<port);n->mount_deadline=0;return 1;
             }
             for(unsigned j=1;j<A733_XHCI_DEVICES;++j)
-                if(n->core.devices[j].parent_port==port&&n->core.devices[j].zero_retired&&
+                if(n->core.devices[j].parent==device->slot&&n->core.devices[j].parent_port==port&&n->core.devices[j].zero_retired&&
                    !n->core.devices[j].detach&&(!(status&2)||(changes&2)))return 0;
             return 1;
         }
     }
     if(s[0]==0xa1&&s[1]==0xfe)return desc->kind==A733_USB2_DEVICE_MSC&&bytes==1&&p[0]==0;
+    /* UAC1 Feature Unit GET_CUR/MIN/MAX/RES values; hcd_setup_send bounded
+     * the request and the length matched it exactly. */
+    if(s[0]==0xa1&&s[1]>=0x81&&s[1]<=0x84)return desc->kind==A733_USB2_DEVICE_AUDIO;
     if(s[0]==0x81&&s[1]==6&&s[3]==0x22)return desc->kind==A733_USB2_DEVICE_HID&&bytes==n->hid.descriptor_bytes;
     if(s[0]!=0x80||s[1]!=6||bytes<2||p[1]!=s[3])return 0;
     if(s[3]==1){
         unsigned speed=device->speed,is_hub=p[4]==9;
+        /* A second hub tier is a USB2 high-speed hub on a port of the root-port
+         * hub, admitted only when the session selects two tiers. */
+        unsigned nested=n->control_device&&n->hub_tiers>=2&&speed==3&&device->tier==1&&(p[6]==1||p[6]==2);
         if(!n->control_device&&n->platform.config.topology_mode&&
            is_hub!=(n->platform.config.topology_mode==2))return 0;
         if(speed==4&&(p[2]||p[3]!=3||p[7]!=9))return 0;
         if(p[0]!=18||p[5]||(!is_hub&&(p[4]||p[6]))||
-           (is_hub&&(n->control_device||(speed==4?p[6]!=3:(speed!=3||(p[6]!=1&&p[6]!=2)))))||
+           (is_hub&&!nested&&(n->control_device||(speed==4?p[6]!=3:(speed!=3||(p[6]!=1&&p[6]!=2)))))||
            (speed==2&&p[7]!=8)||(speed==3&&p[7]!=64)||
            (speed==1&&p[7]!=8&&p[7]!=16&&p[7]!=32&&p[7]!=64))return 0;
         if(bytes==8){
             if(desc->device_probe)return 0;memcpy(desc->device_prefix,p,8);desc->device_probe=1;
             if(is_hub){
-                hub->mark_pending=1;hub->mark_address=e->address;
-                desc->kind=A733_USB2_DEVICE_HUB;hub->present=1;hub->protocol=p[6];
+                for(unsigned i=0;!hub&&i<A733_USB2_HUBS;++i)if(!n->hubs[i].present)hub=&n->hubs[i];
+                if(!hub)return 0;
+                *hub=(struct a733_usb2_hub){.present=1,.record=n->control_device+1,.protocol=p[6],
+                    .mark_pending=1,.mark_address=e->address};
+                desc->kind=A733_USB2_DEVICE_HUB;
             }
             return 1;
         }
         if(bytes!=18||!desc->device_probe||memcmp(desc->device_prefix,p,8)||p[17]!=1)return 0;
-        if(is_hub)hub->address=e->address;return 1;
+        if(is_hub){if(!hub)return 0;hub->address=e->address;}
+        return 1;
     }
     if(s[3]==2){
         unsigned total=bytes>=4?le16(p+2):0,is_hub=desc->kind==A733_USB2_DEVICE_HUB,ss=device->speed==4;
+        /* Self power (bmAttributes 0xc0), or bus power (0x80) when admitted. */
+        unsigned powered=(p[7]&0xc0)==0xc0||(n->bus_powered_hubs&&!ss&&(p[7]&0xc0)==0x80);
+        unsigned audio=CFG_TUH_AUDIO&&n->audio_capture&&!is_hub&&(device->speed==1||device->speed==3)&&
+            bytes>=9&&p[4]>=2&&p[4]<=4&&total>9&&total<=CFG_TUH_ENUMERATION_BUFSIZE;
         if(ss&&(!ssdata->ss_ready||(p[8]*8u>900u||p[8]*8u>n->platform.typec->config.source_ma)))return 0;
-        if(bytes<9||p[0]!=9||p[4]!=1||p[5]!=1||!(p[7]&128)||p[8]>250||
-           (is_hub?(total!=(ss?31u:hub->protocol==2?41u:25u)||(p[7]&0xc0)!=0xc0||(p[7]&31)):(ss?(total!=40&&total!=44):(total!=32&&total!=34))))return 0;
+        if(!ss&&p[8]*2u>upstream_ma(n->control_device))return 0;
+        if(is_hub&&!hub)return 0;
+        if(bytes<9||p[0]!=9||(!audio&&p[4]!=1)||p[5]!=1||!(p[7]&128)||p[8]>250||
+           (is_hub?(total!=(ss?31u:hub->protocol==2?41u:25u)||!powered||(p[7]&31)):
+            audio?0:(ss?(total!=40&&total!=44):(total!=32&&total!=34))))return 0;
         if(bytes==9){if(desc->configuration_probe)return 0;memcpy(desc->configuration_prefix,p,9);desc->configuration_probe=1;return 1;}
         if(bytes!=total||!desc->configuration_probe||memcmp(desc->configuration_prefix,p,9)||p[9]!=9||p[10]!=4||p[11]||p[12])return 0;
+        if(audio){
+            if(n->audio_seen||n->msc_seen||n->hid_seen||!audio_configuration(e->address,p,total,device->speed))return 0;
+            n->audio_seen=1;desc->kind=A733_USB2_DEVICE_AUDIO;n->kind=A733_USB2_DEVICE_AUDIO;return 1;
+        }
         if(is_hub){
+            hub->bus_powered=!(p[7]&0x40);hub->max_power_ma=p[8]*2u;
             for(unsigned alt=0;alt<(hub->protocol==2?2u:1u);++alt){
                 unsigned at=9+16*alt;const uint8_t *q=p+at;
                 if(q[0]!=9||q[1]!=4||q[2]||q[3]!=alt||q[4]!=1||q[5]!=9||q[6]||q[7]!=(ss?0u:alt+1)||
@@ -363,7 +501,7 @@ static int control_response(const struct a733_xhci_notice *e)
                ep&~0x8fu||!(ep&128)||!(ep&15)||p[30]!=3||!packet||
                packet>(device->speed==2?8u:64u)||!interval||interval>(device->speed>=3?16u:255u))return 0;
             if(ss&&(p[15]!=1||p[16]!=1||p[34]!=6||p[35]!=0x30||p[36]||p[37]||le16(p+38)!=packet))return 0;
-            if(n->hid_seen||(n->msc_seen&&!n->dual_leaf))return 0;
+            if(n->hid_seen||n->audio_seen||(n->msc_seen&&!n->dual_leaf))return 0;
             n->hid_seen=1;n->hid_address=e->address;
             desc->kind=A733_USB2_DEVICE_HID;n->kind=n->msc_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_HID;n->hid.endpoint=ep;n->hid.packet=packet;n->hid.interval=interval;
             n->hid.subclass=p[15];n->hid.protocol=p[16];n->hid.descriptor_bytes=le16(p+25);return 1;
@@ -375,7 +513,7 @@ static int control_response(const struct a733_xhci_notice *e)
             if(ss){const uint8_t *c=p+at+7;if(c[0]!=6||c[1]!=0x30||c[2]>15||c[3]>16||le16(c+4))return 0;ssdata->ss_burst[!!(ep&128)]=c[2];}
             if(ep&128)n->msc_in=ep;else n->msc_out=ep;
             unsigned bit=1u<<((ep&15)+((ep&128)?16:0));if(seen&bit)return 0;seen|=bit;dirs|=(ep&128)?2:1;}
-        if(dirs!=3||n->msc_seen||(n->hid_seen&&!n->dual_leaf))return 0;
+        if(dirs!=3||n->msc_seen||n->audio_seen||(n->hid_seen&&!n->dual_leaf))return 0;
         n->msc_seen=1;n->address=e->address;desc->kind=A733_USB2_DEVICE_MSC;
         n->kind=n->hid_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC;return 1;
     }
@@ -395,21 +533,22 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
         /* The core announces a root attachment only with no slot bound, so no
          * device state from an earlier attachment can remain in use. */
         forget(0);if(n->msc_seen)forget(n->address);if(n->hid_seen)forget(n->hid_address);
-        memset(&n->hub,0,sizeof(n->hub));n->control_buffer=NULL;n->control_bytes=0;
+        if(n->audio_seen)forget(n->audio.address);
+        memset(n->hubs,0,sizeof(n->hubs));n->control_buffer=NULL;n->control_bytes=0;
         attaching();hcd_event_device_attach(0,false);
     }else if(event->kind==A733_XHCI_REMOVE){
         /* Result 0 is an orderly root disconnect: the core is tearing down
          * every slot and has revoked every caller destination. */
         if(event->result){lost();return;}
-        withdraw_msc();withdraw_hid();n->control_buffer=NULL;n->control_bytes=0;
+        withdraw_msc();withdraw_hid();withdraw_audio();n->control_buffer=NULL;n->control_bytes=0;
         mounted_update();n->mount_deadline=0;hcd_event_device_remove(0,false);
     }
     else if(event->kind==A733_XHCI_TRANSFER){
         uint64_t now,d=deadline();
         if(!d||!clock_now(&now)||host->core.ops.live(host->core.context,host->core.generation,d)!=1){lost();return;}
         if(event->endpoint&15){
-            if(n->hub.present&&event->address==n->hub.address){
-                struct a733_usb2_hub *h=&n->hub;
+            struct a733_usb2_hub *h=hub_at(event->address);
+            if(h){
                 if(event->endpoint!=h->endpoint||!h->status_requested||h->status_deferred||
                    !h->status_buffer||event->result||event->bytes!=1||
                    (h->status_buffer[0]&~((2u<<h->ports)-1))){lost();return;}
@@ -458,19 +597,30 @@ void hcd_device_close(uint8_t port,uint8_t address)
 bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
 {
     uint64_t d=deadline();if(port||!e||!d)return false;
-    if(!address&&host->hub.present&&host->core.devices[0].zero_retired){
-        tuh_bus_info_t bus;
-        if(!tuh_bus_info_get(0,&bus)||bus.rhport||bus.hub_addr!=host->hub.address||
-           !bus.hub_port||bus.hub_port>7||!(host->hub.connected_mask&(1u<<bus.hub_port))||
+    if(!address&&host->hubs[0].present&&host->core.devices[0].zero_retired){
+        tuh_bus_info_t bus;const struct a733_usb2_hub *parent;
+        if(!tuh_bus_info_get(0,&bus)||bus.rhport||!(parent=hub_at(bus.hub_addr))||
+           !bus.hub_port||bus.hub_port>7||!(parent->connected_mask&(1u<<bus.hub_port))||
            !a733_xhci_bind_child(&host->core,bus.hub_addr,bus.hub_port,
              bus.speed==TUSB_SPEED_SUPER?4:bus.speed==TUSB_SPEED_HIGH?3:bus.speed==TUSB_SPEED_LOW?2:bus.speed==TUSB_SPEED_FULL?1:0,d)){lost();return false;}
     }
     struct a733_usb2_ss *ssdata=ss_state(address);if(!ssdata)return false;
     unsigned speed=a733_xhci_device_speed(&host->core,address);
+    if(e->bmAttributes.xfer==TUSB_XFER_ISOCHRONOUS){
+        /* Only an admitted audio capture alternate setting, as TinyUSB's audio
+         * class opens it for the selected configuration. */
+        const struct a733_usb2_audio *a=&host->audio;unsigned packet=tu_edpt_packet_size(e);
+        if(!host->audio_mounted||address!=a->address||e->bEndpointAddress!=a->endpoint||!a->starting)return false;
+        for(unsigned i=0;i<a->alternates;++i)
+            if(a->alternate[i].interface==a->interface&&a->alternate[i].packet==packet&&a->alternate[i].interval==e->bInterval)
+                return a733_xhci_open_isoch(&host->core,address,e->bEndpointAddress,packet,e->bInterval,d);
+        return false;
+    }
     if(e->bmAttributes.xfer==TUSB_XFER_INTERRUPT){
-        if(host->hub.present&&address==host->hub.address)
-            return e->bEndpointAddress==host->hub.endpoint&&tu_unaligned_read16(&e->wMaxPacketSize)==host->hub.packet&&
-              e->bInterval==host->hub.interval&&a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hub.packet,e->bInterval,d);
+        const struct a733_usb2_hub *hub=hub_at(address);
+        if(hub)
+            return e->bEndpointAddress==hub->endpoint&&tu_unaligned_read16(&e->wMaxPacketSize)==hub->packet&&
+              e->bInterval==hub->interval&&a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,hub->packet,e->bInterval,d);
         return (speed!=4||ssdata->ss_ready)&&host->hid_seen&&address==host->hid_address&&e->bEndpointAddress==host->hid.endpoint&&
           tu_unaligned_read16(&e->wMaxPacketSize)==host->hid.packet&&e->bInterval==host->hid.interval&&
           a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hid.packet,e->bInterval,d);
@@ -495,10 +645,10 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
     uint64_t d=deadline();if(port||!d||!setup||host->control_buffer)return false;
     unsigned di=descriptor_index(address);if(di>=A733_XHCI_DEVICES)return false;
     struct a733_usb2_descriptor *desc=&host->descriptors[di];
-    struct a733_usb2_hub *hub=&host->hub;
+    struct a733_usb2_hub *hub=hub_record(di);const struct a733_usb2_hub *parent=parent_hub(di);
     struct a733_usb2_ss *ssdata=&desc->ss;
     unsigned speed=host->core.devices[di].speed;
-    unsigned iso=host->core.devices[di].parent?80+hub->delay_ns:40;
+    unsigned iso=parent?80+parent->delay_ns:40;
     unsigned len=le16(setup+6),value=le16(setup+2),index=le16(setup+4);int valid=0;
     if(setup[0]==0x80&&setup[1]==6){
         valid=(setup[3]==1&&!setup[2]&&!index&&(len==8||len==18))||
@@ -507,7 +657,7 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
             (setup[3]==3&&len>=2&&len<=254&&!(len&1));
     }else if(speed==4&&!setup[0]&&!index&&((setup[1]==49&&value==iso&&!len&&ssdata->ss_control==2)||(setup[1]==48&&!value&&len==6&&ssdata->ss_control==3)))valid=1;
     else if(!setup[0]&&!index&&!len)valid=(setup[1]==5&&value&&value<=127)||(setup[1]==9&&value==1&&(speed!=4||ssdata->ss_ready));
-    else if(desc->kind==A733_USB2_DEVICE_HUB&&address==hub->address){
+    else if(desc->kind==A733_USB2_DEVICE_HUB&&hub&&address==hub->address){
         valid=(setup[0]==1&&setup[1]==11&&!index&&value==1&&!len&&hub->protocol==2&&!hub->alt_selected)||
           (setup[0]==0xa0&&setup[1]==6&&value==(speed==4?0x2a00:0x2900)&&!index&&len==(speed==4?12u:9u)&&!hub->ports)||
           (speed==4&&setup[0]==0x20&&setup[1]==12&&!index&&!value&&!len&&hub->ports&&!hub->depth_set)||
@@ -520,6 +670,16 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
     }else if(desc->kind==A733_USB2_DEVICE_HID&&!index){
         valid=(setup[0]==0x81&&setup[1]==6&&value==0x2200&&len==host->hid.descriptor_bytes)||
           (setup[0]==0x21&&!len&&!value&&(setup[1]==0x0a||(setup[1]==0x0b&&host->hid.subclass==1)));
+    }else if(desc->kind==A733_USB2_DEVICE_AUDIO&&address==host->audio.address){
+        /* SET_INTERFACE to a streaming alternate, Feature Unit volume or mute
+         * GET requests (UAC1 section 5.2.2.4) and the endpoint sampling
+         * frequency SET_CUR (section 5.2.3.2.3.1). */
+        const struct a733_usb2_audio *a=&host->audio;unsigned alternate=0;
+        for(unsigned i=0;i<a->alternates;++i)alternate|=a->alternate[i].interface==index&&a->alternate[i].alternate==value;
+        valid=(setup[0]==1&&setup[1]==11&&!len&&index<32&&(a->streaming&(1u<<index))&&(!value||alternate))||
+          (setup[0]==0xa1&&setup[1]>=0x81&&setup[1]<=0x84&&(index&255)==a->control_interface&&(index>>8)&&
+            ((value>>8)==1||(value>>8)==2)&&(len==1||len==2))||
+          (setup[0]==0x22&&setup[1]==1&&value==0x0100&&index==a->endpoint&&len==3&&a->starting);
     }else valid=desc->kind==A733_USB2_DEVICE_MSC&&setup[0]==0xa1&&setup[1]==0xfe&&!value&&!index&&len==1;
     if(!valid){lost();return false;}
     if(!a733_xhci_setup(&host->core,address,setup,d))return false;
@@ -529,8 +689,8 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
 {
     uint64_t d=deadline();if(port||!d)return false;
     if(ep&15){
-        if(host->hub.present&&address==host->hub.address){
-            struct a733_usb2_hub *hub=&host->hub;
+        struct a733_usb2_hub *hub=hub_at(address);
+        if(hub){
             if(ep!=hub->endpoint||bytes!=1||!buffer||hub->status_requested||!hub->local_power||
                hub->powered_mask!=((2u<<hub->ports)-2)||
                host->core.ops.outside(host->core.context,buffer,1)!=1){lost();return false;}
@@ -540,8 +700,18 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
         if(host->hid_seen&&address==host->hid_address){
             if(!host->hid.pending||host->hid.pending_buffer||ep!=host->hid.endpoint||bytes!=host->hid.packet||!buffer){lost();return false;}
             host->hid.pending_buffer=buffer;host->hid.requested=bytes;
+        }else if(host->audio_seen&&address==host->audio.address){
+            /* One class request per packet; the poll copies the oldest
+             * completed packet into it. */
+            struct a733_usb2_audio *a=&host->audio;
+            if(!host->audio_mounted||(!a->starting&&!a->started)||a->pending_buffer||ep!=a->endpoint||bytes!=a->packet||
+               !buffer||host->core.ops.outside(host->core.context,buffer,bytes)!=1||
+               !a733_xhci_isoch_start(&host->core,address,ep)){lost();return false;}
+            a->pending_buffer=buffer;a->pending_bytes=bytes;return true;
         }else if(!host->msc_seen||address!=host->address||!bot_submit(ep,buffer,bytes)){lost();return false;}
     }
+    if(host->audio_seen&&address==host->audio.address&&ep==0&&bytes&&
+       (host->control_setup[0]!=0x22||bytes!=3||!buffer||le24(buffer)!=host->audio.rate)){lost();return false;}
     if(a733_xhci_device_speed(&host->core,address)==4&&ep==0&&bytes&&
        (host->control_setup[1]!=48||bytes!=6||!buffer||memcmp(buffer,host->descriptors[host->control_device].ss.ss_sel,6))){lost();return false;}
     int ok=a733_xhci_transfer(&host->core,address,ep,buffer,bytes,d);
@@ -653,3 +823,86 @@ int a733_usb2_hid_result(struct a733_usb2_native *n,struct a733_usb2_hid_report 
        n->core.ops.live(n->core.context,n->core.generation,n->hid.deadline)!=1){lost();return -1;}
     memcpy(out,&value,sizeof(value));n->hid.pending=n->hid.complete=n->hid.event_seen=0;return 1;
 }
+#if CFG_TUH_AUDIO
+/* The single audio function is TinyUSB audio index 0. */
+static unsigned capture_stream(void)
+{
+    for(unsigned i=0;i<tuh_audio_stream_count(0);++i)
+        if(tuh_audio_stream_direction(0,(uint8_t)i)==TUH_AUDIO_STREAM_CAPTURE)return i;
+    return 0xff;
+}
+void tuh_audio_mount_cb(uint8_t index)
+{
+    struct a733_usb2_audio *a=&host->audio;
+    if(!owner()||index||!host->audio_seen||host->audio_mounted||tuh_audio_get_dev_addr(0)!=a->address||
+       capture_stream()==0xff||host->core.ops.live(host->core.context,host->core.generation,mount_bound())!=1){lost();return;}
+    a->stream=capture_stream();host->audio_mounted=1;mounted_update();
+}
+void tuh_audio_umount_cb(uint8_t index)
+{
+    if(!owner()||index||!host->audio_seen){lost();return;}
+    withdraw_audio();mounted_update();
+}
+void tuh_audio_capture_cb(uint8_t index,uint8_t stream,uint16_t bytes)
+{
+    struct a733_usb2_audio *a=&host->audio;
+    if(!owner()||index||stream!=a->stream||!a->started||!a->channels){lost();return;}
+    a->written+=bytes/(2u*a->channels);
+}
+/* Start completes after SET_INTERFACE, the optional sampling-frequency
+ * SET_CUR and the first packet request. Any failure ends the session. */
+void tuh_audio_event_cb(uint8_t index,uint8_t stream,tuh_audio_event_t event,tusb_xfer_result_t result)
+{
+    struct a733_usb2_audio *a=&host->audio;
+    if(!owner()||index||stream!=a->stream||event!=TUH_AUDIO_EVENT_START_COMPLETE||
+       result!=XFER_RESULT_SUCCESS||!a->starting){lost();return;}
+    a->starting=0;a->started=1;
+}
+int a733_usb2_audio_start(struct a733_usb2_native *n,uint32_t rate,unsigned channels,uint64_t d)
+{
+    uint64_t now;struct a733_usb2_audio *a=&n->audio;
+    if(n!=host||!clock_now(&now)||!n->audio_mounted||a->starting||a->started||!rate||!channels||
+       d<=now||d>n->platform.config.lifetime_deadline||n->core.ops.live(n->core.context,n->core.generation,d)!=1)return 0;
+    unsigned config=0xff;
+    for(unsigned i=0;i<tuh_audio_config_count(0,(uint8_t)a->stream);++i){
+        tuh_audio_stream_config_t c;
+        if(tuh_audio_config_get(0,(uint8_t)a->stream,(uint8_t)i,&c)&&c.dir==TUH_AUDIO_STREAM_CAPTURE&&
+           c.format==TUH_AUDIO_FORMAT_S16_LE&&c.sample_rate==rate&&c.channels==channels){config=i;break;}
+    }
+    if(config==0xff)return 0;
+    a->rate=rate;a->channels=channels;a->start_deadline=d;a->starting=1;a->written=a->read=0;
+    if(!tuh_audio_configure(0,(uint8_t)a->stream,(uint8_t)config)){lost();return 0;}
+    a->packet=0;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i){
+        const struct a733_xhci_device *dev=&n->core.devices[i];
+        if(dev->address==a->address&&dev->endpoints[1].transfer_type==1)a->packet=dev->endpoints[1].packet;
+    }
+    if(!a->packet||!tuh_audio_start(0,(uint8_t)a->stream)){lost();return 0;}
+    return 1;
+}
+int a733_usb2_audio_read(struct a733_usb2_native *n,struct a733_usb2_audio_block *out)
+{
+    uint64_t now;struct a733_usb2_audio *a=&n->audio;
+    if(n!=host||!clock_now(&now)||!n->audio_mounted||!a->started)return -1;
+    if(!out||!a733_usb2_platform_outside(&n->platform,out,sizeof(*out)))return -1;
+    uint32_t available=tuh_audio_read_available(0,(uint8_t)a->stream),limit=A733_USB2_AUDIO_BLOCK_BYTES/(2u*a->channels);
+    if(!available)return 0;
+    int live=n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline);
+    if(live<0){lost();return -1;}if(!live)return 0;
+    memset(out,0,sizeof(*out));
+    uint32_t frames=tuh_audio_read(0,(uint8_t)a->stream,out->data,available<limit?available:limit);
+    if(!frames||frames>available){lost();return -1;}
+    a->read+=frames;
+    uint64_t held=a->read+tuh_audio_read_available(0,(uint8_t)a->stream),overwritten=a->written>held?a->written-held:0;
+    out->generation=n->core.generation;out->sequence=++a->sequence;out->rate=a->rate;out->frames=frames;
+    out->dropped=n->core.isoch.dropped;out->overruns=n->core.isoch.overruns;
+    out->overwritten=overwritten>UINT32_MAX?UINT32_MAX:(uint32_t)overwritten;
+    out->address=(uint8_t)a->address;out->interface=(uint8_t)a->interface;out->endpoint=(uint8_t)a->endpoint;
+    out->speed=(uint8_t)a733_xhci_device_speed(&n->core,a->address);out->channels=(uint8_t)a->channels;out->sample_bytes=2;
+    return 1;
+}
+#else
+int a733_usb2_audio_start(struct a733_usb2_native *n,uint32_t rate,unsigned channels,uint64_t d)
+{(void)n;(void)rate;(void)channels;(void)d;return 0;}
+int a733_usb2_audio_read(struct a733_usb2_native *n,struct a733_usb2_audio_block *out){(void)n;(void)out;return -1;}
+#endif

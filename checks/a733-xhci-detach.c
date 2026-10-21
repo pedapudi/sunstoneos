@@ -189,7 +189,7 @@ int main(int argc,char **argv)
     const struct a733_xhci_ops ops={cn,current,live,rd,wr,wr64,barrier,outside,notice};
     assert(a733_xhci_init(&x,&ops,&pool,&pool,lease,7,now+10000000,now+100000000));
     UNTIL(portsc&BIT(9)); /* Port power is the last startup phase. */
-    if(!strncmp(mode,"hub",3)||!strncmp(mode,"address-",8)){
+    if(!strncmp(mode,"hub",3)||!strncmp(mode,"address-",8)||is("tier-order")){
         attach(1);enumerate(3);
         assert(a733_xhci_mark_hub(&x,3)&&a733_xhci_hub_configure(&x,3,4,0,0)&&a733_xhci_open_interrupt(&x,3,0x81,1,12,now+1000000));
         UNTIL(x.devices[0].hub_configured&&x.devices[0].endpoints[1].configured);
@@ -208,6 +208,26 @@ int main(int argc,char **argv)
             retained();assert(now>=errored+HOLD&&now<errored+HOLD+1000&&now+HOLD<x.lifetime_deadline);
             assert(status==0x5a&&notice_count==base+1&&notices[base].kind==A733_XHCI_REMOVE&&notices[base].result==2);
             puts("PASS a held hub status error retains after the hold bound, long before the session lifetime");return 0;
+        }
+        if(is("tier-order")){
+            /* A second-tier hub can own a lower record than its child: a leaf
+             * on port 1 leaves record 1 free after the hub took record 2. */
+            assert(a733_xhci_bind_child(&x,3,1,3,now+1000000));UNTIL(x.devices[1].port_ready==3);enumerate(1);
+            assert(a733_xhci_bind_child(&x,3,2,3,now+1000000));UNTIL(x.devices[2].port_ready==3);enumerate(2);
+            assert(a733_xhci_mark_hub(&x,2)&&a733_xhci_hub_configure(&x,2,4,0,0)&&a733_xhci_open_interrupt(&x,2,0x81,1,12,now+1000000));
+            UNTIL(x.devices[2].hub_configured&&x.devices[2].endpoints[1].configured);
+            assert(!a733_xhci_bind_child(&x,1,1,3,now+1000000)); /* A leaf is not a hub. */
+            assert(a733_xhci_detach(&x,1)==1);UNTIL(!x.devices[1].port_ready);
+            assert(a733_xhci_bind_child(&x,2,3,3,now+1000000)&&x.devices[1].route==0x32&&x.devices[1].tier==2);
+            UNTIL(x.devices[1].port_ready==3);enumerate(4);
+            assert(!a733_xhci_mark_hub(&x,4)); /* No third tier. */
+            assert((get32(context(x.devices[1].slot))&0xfffff)==0x32);
+            unsigned leaf=x.devices[1].slot,hub=x.devices[2].slot,from=command_count;
+            assert(a733_xhci_detach(&x,2)==1&&x.devices[1].detach&&a733_xhci_detach(&x,4)==1);
+            UNTIL(!x.devices[1].port_ready&&!x.devices[2].port_ready);
+            unsigned order[2],k=0;for(unsigned i=from;i<command_count;++i)if(commands[i].kind==10)order[k++]=commands[i].slot;
+            assert(k==2&&order[0]==leaf&&order[1]==hub&&x.devices[0].hub_configured&&memory()==DEVICE_MEMORY_DEVICE);
+            puts("PASS a second-tier hub detach disables its child first even when the child holds a lower record");return 0;
         }
         if(!strncmp(mode,"address-",8)){
             /* The child detaches while its Address Device command is in flight. */

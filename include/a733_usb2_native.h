@@ -5,7 +5,11 @@
 #include "a733_xhci.h"
 struct a733_platform_locks;
 #define A733_USB2_HID_REPORT_BYTES 64u
-enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB,A733_USB2_DEVICE_DUAL };
+#define A733_USB2_HUBS 2u /* Hub states: the root-port hub and one hub below it. */
+#define A733_USB2_AUDIO_ALTERNATES 4u
+#define A733_USB2_AUDIO_BLOCK_BYTES 1024u
+enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB,
+    A733_USB2_DEVICE_DUAL,A733_USB2_DEVICE_AUDIO };
 /* Raw completed interrupt input, not a desktop keyboard/mouse event. Zero or
  * short reports retain their actual lengths; no boot-report semantics inferred. */
 struct a733_usb2_hid_report {
@@ -31,14 +35,39 @@ struct a733_usb2_descriptor {
     unsigned kind,device_probe,configuration_probe,string_bytes,string_id,string_language;
     uint8_t device_prefix[8],configuration_prefix[9];
 };
+/* record is the hub's xHCI device record index plus one. A bus-powered hub
+ * draws its configuration current plus one unit load (100 mA) per port. */
 struct a733_usb2_hub {
-    unsigned present,address,protocol,endpoint,packet,interval,ports,ttt,power_good_2ms;
+    unsigned present,record,bus_powered,max_power_ma;
+    unsigned address,protocol,endpoint,packet,interval,ports,ttt,power_good_2ms;
     unsigned mark_pending,mark_address,configure_pending;
     unsigned device_power,local_power,alt_selected,powered_mask,selected_port,connected_mask;
     unsigned status_deferred,status_requested,status_bytes;
     unsigned depth_set,hdr_latency,delay_ns,u1_disabled,u2_disabled;
     uint64_t power_good_deadline;
     uint8_t *status_buffer;
+};
+/* Copied PCM capture, not a decoded or resampled stream. Frames are whole
+ * interleaved S16_LE samples in the order received. dropped counts service
+ * intervals that delivered no data, overruns counts empty-ring reports and
+ * overwritten counts frames replaced in the class FIFO before a read; all
+ * three are totals since the stream started. */
+struct a733_usb2_audio_block {
+    uint64_t generation,sequence;
+    uint32_t rate,frames,dropped,overruns,overwritten;
+    uint8_t address,interface,endpoint,speed,channels,sample_bytes,reserved[2];
+    uint8_t data[A733_USB2_AUDIO_BLOCK_BYTES];
+};
+/* One admitted USB Audio Class 1 capture alternate setting. */
+struct a733_usb2_audio_alternate { unsigned interface,alternate,packet,interval; };
+struct a733_usb2_audio {
+    unsigned address,control_interface,streaming,endpoint,alternates;
+    struct a733_usb2_audio_alternate alternate[A733_USB2_AUDIO_ALTERNATES];
+    unsigned stream,interface,packet,channels,starting,started;
+    uint32_t rate;
+    uint64_t start_deadline,sequence,written,read;
+    uint8_t *pending_buffer;
+    unsigned pending_bytes;
 };
 struct a733_usb2_native {
     struct a733_usb2_native *self;
@@ -58,9 +87,16 @@ struct a733_usb2_native {
     uint64_t mount_deadline,mount_budget;
     enum a733_usb2_device_kind kind;
     struct a733_usb2_hid hid;
-    struct a733_usb2_hub hub;
+    struct a733_usb2_hub hubs[A733_USB2_HUBS];
+    struct a733_usb2_audio audio;
     struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
-    unsigned dual_leaf,msc_seen,hid_seen,msc_mounted,hid_mounted,hid_address,msc_in,msc_out;
+    /* Admission options set before the first poll. hub_tiers 2 admits a USB2
+     * high-speed hub below the root-port hub; bus_powered_hubs admits USB2 hubs
+     * without local power within the upstream current budget; audio_capture
+     * admits one USB Audio Class 1 capture device in images built with the
+     * TinyUSB audio class. */
+    unsigned hub_tiers,bus_powered_hubs,audio_capture;
+    unsigned dual_leaf,msc_seen,hid_seen,audio_seen,msc_mounted,hid_mounted,audio_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;
@@ -102,6 +138,13 @@ int a733_usb2_read_result(struct a733_usb2_native *,uint8_t out[512]);
 enum a733_usb2_device_kind a733_usb2_device_kind(struct a733_usb2_native *);
 int a733_usb2_hid_receive(struct a733_usb2_native *,uint64_t deadline);
 int a733_usb2_hid_result(struct a733_usb2_native *,struct a733_usb2_hid_report *);
+/* Select the capture configuration with S16_LE samples at rate and channels,
+ * open its isochronous endpoint and start the stream; completion must follow
+ * by deadline. Returns1 when started, 0 when no such configuration exists. */
+int a733_usb2_audio_start(struct a733_usb2_native *,uint32_t rate,unsigned channels,uint64_t deadline);
+/* Copy the captured frames available now, at most one block, after a fresh
+ * live attachment observation. Returns1 with frames, 0 with none, -1 failed. */
+int a733_usb2_audio_read(struct a733_usb2_native *,struct a733_usb2_audio_block *);
 void a733_usb2_native_lost(struct a733_usb2_native *);
 /* Internal TinyUSB composition; singleton static stack, one task and one host.
  * These entry points also permit the actual HCD/MSC stack in the host fixture. */

@@ -9,7 +9,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ['direct', 'hub', 'address-detach', 'address-error', 'stop-race', 'transaction-error', 'error-expiry',
-         'hub-error-expiry', 'no-csc', 'generation', 'stop-timeout', 'disable-fail', 'stale-event']
+         'hub-error-expiry', 'tier-order', 'no-csc', 'generation', 'stop-timeout', 'disable-fail', 'stale-event']
 
 
 def main():
