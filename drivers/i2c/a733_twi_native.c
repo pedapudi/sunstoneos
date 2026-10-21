@@ -105,11 +105,11 @@ static void retain(void *v)
         (enum a733_platform_lock)(n->held-1))==1);
     n->fault=1;
 }
-static int address(uintptr_t a,unsigned writing)
+static int address(const struct a733_twi_native *n,uintptr_t a,unsigned writing)
 {
-    if(writing)return a==A733_TWI11_BASE+8 || a==A733_TWI11_BASE+0xc;
-    if(a<A733_TWI11_BASE)return 0;
-    switch(a-A733_TWI11_BASE) {
+    if(writing)return a==n->base+8 || a==n->base+0xc;
+    if(a<n->base)return 0;
+    switch(a-n->base) {
     case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:case 0x20:
     case 0x200:case 0x210:case 0x214:case 0x218:case 0x21c:return 1;
     default:return 0;
@@ -136,14 +136,14 @@ static void store(uintptr_t a,uint32_t v)
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     struct a733_twi_native *n=v;
-    if(!out || !held(n,A733_PLATFORM_I2C11_LOCK) || !address(a,0) || settled(n,n->until)!=1)return 0;
+    if(!out || !held(n,A733_PLATFORM_I2C11_LOCK) || !address(n,a,0) || settled(n,n->until)!=1)return 0;
     *out=load(a);return settled(n,n->until)==1;
 }
 static int write32(void *v,uintptr_t a,uint32_t x)
 {
     struct a733_twi_native *n=v;
-    if(!held(n,A733_PLATFORM_I2C11_LOCK) || !address(a,1) || x>255 ||
-       (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68) ||
+    if(!held(n,A733_PLATFORM_I2C11_LOCK) || !address(n,a,1) || x>255 ||
+       (a==n->base+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68) ||
        settled(n,n->until)!=1)return 0;
     store(a,x);return settled(n,n->until)==1;
 }
@@ -162,17 +162,22 @@ int a733_twi_native_init(struct a733_twi_native *n,const struct a733_twi_native_
        !separate(n,sizeof(*n),c->pins,sizeof(*c->pins)) || !separate(n,sizeof(*n),c->rails,sizeof(*c->rails)) ||
        !separate(n,sizeof(*n),c->rail,sizeof(*c->rail)) || !separate(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
        !separate(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)))return 0;
+    if(c->controller!=A733_TWI_MAIN11 && c->controller!=A733_TWI_MAIN9)return 0;
+    /* Both controllers run from APB1 (manual 4.1.6.156/158). */
+    const unsigned nine=c->controller==A733_TWI_MAIN9,first=nine?14:7;
+    const a733_clock_mask_t local=nine?A733_CLOCK_TWI9:A733_CLOCK_TWI11;
     uint32_t parent=c->apb1>>24==3?600000000u:24000000u,div=(c->apb1&31)+1;
-    a733_clock_mask_t scopes=A733_CLOCK_TWI11|A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
+    a733_clock_mask_t scopes=local|A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
     if(c->apb1>>24==3)scopes|=A733_CLOCK_PERI0;
     if(parent%div || c->apb1_hz!=parent/div ||
-       (c->clock.exclusive&A733_CLOCK_TWI11)!=A733_CLOCK_TWI11 ||
+       (c->clock.exclusive&local)!=local ||
        ((c->clock.exclusive|c->clock.shared)&scopes)!=scopes ||
-       (c->pin.masks[A733_PIN_E]&0x180)!=0x180 || !c->pin.owner ||
+       (c->pin.masks[A733_PIN_E]&(3u<<first))!=(3u<<first) || !c->pin.owner ||
        c->pin.owner!=c->clock.owner || !c->rail->id)return 0;
     uint32_t divider,rate;
     if(!a733_twi_divider(c->apb1_hz,&divider,&rate))return 0;
-    *n=(struct a733_twi_native){.self=n,.config=*c,.divider=divider,.rate_hz=rate};
+    *n=(struct a733_twi_native){.self=n,.config=*c,.base=nine?A733_TWI9_BASE:A733_TWI11_BASE,
+        .bgr=nine?A733_TWI9_BGR:A733_TWI11_BGR,.first_pin=first,.divider=divider,.rate_hz=rate};
     n->operations=(struct a733_twi_ops){now,authenticate,enter,leave,retain,read32,write32,current_task};
     instance=n;return 1;
 }
@@ -206,10 +211,10 @@ int a733_twi_native_prepare(struct a733_twi_native *n,uint64_t d)
     if(p!=A733_PINS_OK || !owned)return -1;
     if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_REGISTER_LOCK,d))return 0;
     n->held=1;
-    if(!observed(n,A733_TWI11_BGR,0x10001,0,d) ||
+    if(!observed(n,n->bgr,0x10001,0,d) ||
        !observed(n,CCU+0x518,0x0300001f,n->config.apb1,d))goto fault;
     uint32_t v=load(0x07090160),ref=load(CCU),nn;
-    /* TWI11 uses APB1: SYS24M or PERI0, both normalized by PLL_REF. */
+    /* TWI11 and TWI9 use APB1: SYS24M or PERI0, both normalized by PLL_REF. */
     if(!a733_clock_ref24_valid(v,ref) || !before(n,d))goto fault;
     if(n->config.apb1>>24==3) {
         v=load(CCU+0xa0);nn=((v>>8)&255)+1;
@@ -219,23 +224,24 @@ int a733_twi_native_prepare(struct a733_twi_native *n,uint64_t d)
            !observed(n,CCU+0x1908,0x0a000a00,0x0a000a00,d) ||
            !observed(n,CCU+0x1988,0x0a000000,0x0a000000,d))goto fault;
     }
-    /* PE7/PE8 mux words are read under the common register lock. */
+    /* PE7/PE8 or PE14/PE15 mux words are read under the common register lock. */
     struct a733_pin_fields f;
-    for(unsigned p=7;p<=8;p++)if(!a733_pin_fields_banked(A733_PIN_E,p,&f) ||
+    for(unsigned p=n->first_pin;p<=n->first_pin+1;p++)if(!a733_pin_fields_banked(A733_PIN_E,p,&f) ||
         !observed(n,f.mux_address,15u<<f.mux_shift,8u<<f.mux_shift,d))goto fault;
-    if(!update(n,A733_TWI11_BGR,0x10000,0x10000,d) || !update(n,A733_TWI11_BGR,1,1,d) ||
-       !observed(n,A733_TWI11_BASE+0xc,0xfc,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x10,255,0xf8,d) ||
-       !observed(n,A733_TWI11_BASE+0x200,0x80000003,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x214,0x000f0000,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x218,0x01000100,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x210,3,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x21c,0x007f007f,0,d) ||
-       !observed(n,A733_TWI11_BASE+0x20,0x35,0x30,d) ||
-       !observed(n,A733_TWI11_BASE+0x18,1,0,d) ||
-       !update(n,A733_TWI11_BASE+0x14,0x1ff,n->divider,d) ||
-       !update(n,A733_TWI11_BASE+0x1c,3,0,d) ||
-       !update(n,A733_TWI11_BASE+0xc,0xfd,0x40,d))goto fault;
+    const uintptr_t b=n->base;
+    if(!update(n,n->bgr,0x10000,0x10000,d) || !update(n,n->bgr,1,1,d) ||
+       !observed(n,b+0xc,0xfc,0,d) ||
+       !observed(n,b+0x10,255,0xf8,d) ||
+       !observed(n,b+0x200,0x80000003,0,d) ||
+       !observed(n,b+0x214,0x000f0000,0,d) ||
+       !observed(n,b+0x218,0x01000100,0,d) ||
+       !observed(n,b+0x210,3,0,d) ||
+       !observed(n,b+0x21c,0x007f007f,0,d) ||
+       !observed(n,b+0x20,0x35,0x30,d) ||
+       !observed(n,b+0x18,1,0,d) ||
+       !update(n,b+0x14,0x1ff,n->divider,d) ||
+       !update(n,b+0x1c,3,0,d) ||
+       !update(n,b+0xc,0xfd,0x40,d))goto fault;
     a733_platform_lock_leave(n->config.locks,A733_PLATFORM_REGISTER_LOCK);n->held=0;
     uint64_t t;
     if(settled(n,d)!=1 || now(n,&t)!=1 || t>=d)goto fault;

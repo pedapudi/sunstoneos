@@ -5,12 +5,15 @@
 #include "a733_rail_leases.h"
 
 /* CAM1 uses main TWI11, PE7/PE8 function8, and a seven-bit SCCB address.
+ * CAM2 uses main TWI9, PE14/PE15 function8 (manual 4.1.6.156 and PE_CFG1).
  * This engine transfers one data byte at a one- or two-byte register address.
- * CAM1 uses the two-byte big-endian register form.
+ * The camera uses the two-byte big-endian register form.
  * It never changes the slave address into an eight-bit API convention. */
 #define A733_TWI11_BASE UINT32_C(0x0251b000)
 #define A733_TWI11_BGR UINT32_C(0x02002eac)
-enum a733_twi_controller { A733_TWI_MAIN11,A733_TWI_R1 };
+#define A733_TWI9_BASE UINT32_C(0x02519000)
+#define A733_TWI9_BGR UINT32_C(0x02002ea4)
+enum a733_twi_controller { A733_TWI_MAIN11,A733_TWI_R1,A733_TWI_MAIN9 };
 enum a733_twi_state { A733_TWI_NEW, A733_TWI_READY, A733_TWI_BEGIN,
     A733_TWI_SEND, A733_TWI_WAIT, A733_TWI_STOP, A733_TWI_STOP_WAIT,
     A733_TWI_COMPLETE, A733_TWI_FAULT };
@@ -45,8 +48,8 @@ struct a733_twi {
  * these register conditions; this initializer performs no hardware access. */
 int a733_twi_init(struct a733_twi *,const struct a733_twi_ops *,void *,uint32_t divider);
 /* Same byte engine for FUSB302 on S_TWI1, whose register map is identical to
- * TWI0 (manual18.11.7). Closed controller selection fixes0x0251b000/0x07084000;
- * address width is1 or2 bytes. Native S_TWI1 ownership/clock/pins and exclusion
+ * TWI0 (manual18.11.7). Closed controller selection fixes0x0251b000/0x07084000
+ * or0x02519000 for TWI9; address width is1 or2 bytes. Native S_TWI1 ownership/clock/pins and exclusion
  * of autonomous driver/DMA writers belong to its own platform adapter. */
 int a733_twi_init_controller(struct a733_twi *,const struct a733_twi_ops *,void *,
     uint32_t divider,enum a733_twi_controller,unsigned register_bytes);
@@ -86,19 +89,25 @@ struct a733_twi_native_config {
     struct a733_platform_locks *locks;
     void *task;
     uint32_t apb1,apb1_hz;
+    enum a733_twi_controller controller; /* MAIN11 (zero) or MAIN9. */
 };
 struct a733_twi_native {
     struct a733_twi_native *self;
     struct a733_twi_native_config config;
     struct a733_twi_ops operations;
+    uintptr_t base,bgr;
+    unsigned first_pin; /* SCK pin in bank E; SDA is the next pin. */
     uint32_t divider,rate_hz;
     uint64_t deadline,until; /* Prepare deadline; current transaction deadline. */
     unsigned prepared,held,fault,stored,busy;
 };
-/* One native TWI11 instance, constructed once during serialized platform boot.
- * Its real token has exclusive TWI11 and stable FABRIC/REF/OSC (plus PERI0
- * when selected). The private pin token includes PE7/PE8 function8; the rail
- * borrow stays pinned. No caller may release or mutate these borrowed objects.
+/* One native camera-bus instance, constructed once during serialized platform
+ * boot, for either TWI11 (CAM1) or TWI9 (CAM2). Its real token has the
+ * selected controller exclusively and stable FABRIC/REF/OSC (plus PERI0 when
+ * selected). The private pin token includes PE7/PE8 or PE14/PE15 function8;
+ * the rail borrow stays pinned. Transactions on either controller hold the
+ * camera bus mutex A733_PLATFORM_I2C11_LOCK; because only one instance exists,
+ * no other provider takes that mutex. No caller may release or mutate these borrowed objects.
  * Qualified boot ownership must exclude remote writers, IRQ/DMA/driver mode,
  * establish reset safety, Device mappings/security, electrical pullups/bank
  * voltage, and independent recovery. This function cannot discover that proof.

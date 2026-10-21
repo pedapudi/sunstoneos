@@ -5,6 +5,9 @@
  * runs in its own process because the adapter admits one instance. A final
  * scenario makes the target NACK its address and checks that the retained
  * fault covers only the TWI11 mutex, not the PMIC/S_TWI0 I2C mutex.
+ * The same adapter bound to TWI9 (CAM2) must issue the identical store
+ * sequence at the TWI9 controller and gate/reset word, check PE14/PE15, and
+ * refuse a TWI11 clock token.
  * Build with -DSUNSTONE_CAMERA_MODEL=1 and the FreeRTOS include paths. */
 #define _GNU_SOURCE
 #include "a733_twi.h"
@@ -34,7 +37,8 @@ static unsigned held[A733_PLATFORM_LOCK_COUNT];
  * BUSY. refuse_at makes one call report an invalid token. */
 static unsigned status_calls,busy_from,busy_count,refuse_at,busy_seen;
 static struct { uintptr_t address; uint32_t value; } words[64],trace[256];
-static unsigned word_count,trace_count,wire,stored_before_busy,nack;
+static unsigned word_count,trace_count,wire,stored_before_busy,nack,nine;
+static uintptr_t base=A733_TWI11_BASE;
 static uint8_t target[65536];
 static uint16_t selected;
 
@@ -81,10 +85,10 @@ void a733_camera_model_store(uintptr_t a,uint32_t v)
 {
     assert(!(a&3) && trace_count<256);
     trace[trace_count].address=a;trace[trace_count++].value=v;
-    if(a!=A733_TWI11_BASE+0xc || v==0x40){*word(a)=v;return;}
+    if(a!=base+0xc || v==0x40){*word(a)=v;return;}
     assert(held[A733_PLATFORM_I2C11_LOCK] && !held[A733_PLATFORM_REGISTER_LOCK]);
-    uint32_t data=*word(A733_TWI11_BASE+8),status=0;
-    if(v==0x58){wire=0;*word(a)=0x40;*word(A733_TWI11_BASE+0x10)=0xf8;return;}
+    uint32_t data=*word(base+8),status=0;
+    if(v==0x58){wire=0;*word(a)=0x40;*word(base+0x10)=0xf8;return;}
     if(v==0x68)status=wire?0x10:8;
     else switch(wire){
     case 1:assert(data==0x78);status=nack?0x20:0x18;break;
@@ -92,28 +96,39 @@ void a733_camera_model_store(uintptr_t a,uint32_t v)
     case 3:selected|=(uint16_t)data;status=0x28;break;
     case 4:target[selected]=(uint8_t)data;status=0x28;break;
     case 5:assert(data==0x79);status=0x40;break;
-    case 6:*word(A733_TWI11_BASE+8)=target[selected];status=v==0x4c?0x50:0x58;break;
+    case 6:*word(base+8)=target[selected];status=v==0x4c?0x50:0x58;break;
     default:assert(0);
     }
-    ++wire;*word(a)=(v&~UINT32_C(0x30))|8;*word(A733_TWI11_BASE+0x10)=status;
+    ++wire;*word(a)=(v&~UINT32_C(0x30))|8;*word(base+0x10)=status;
 }
-static void setup(void)
+static struct a733_twi_native_config config(void)
 {
+    struct a733_twi_native_config c={.clocks=&clocks,.pins=&pins,.rails=&rails,.rail=&borrow,
+        .locks=&locks,.task=TASK,.apb1=0,.apb1_hz=24000000,
+        .controller=nine?A733_TWI_MAIN9:A733_TWI_MAIN11};
+    c.clock=(struct a733_clock_token){.id=1,.owner=50,.exclusive=nine?A733_CLOCK_TWI9:A733_CLOCK_TWI11,
+        .shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC};
+    c.pin.id=2;c.pin.owner=50;c.pin.masks[A733_PIN_E]=nine?0xc000:0x180;
+    return c;
+}
+static void environment(void)
+{
+    base=nine?A733_TWI9_BASE:A733_TWI11_BASE;
     atomic_init(&counter.failed,0);counter.initialized=1;counter.frequency=24000000;
     for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;i++)locks.mutex[i]=(SemaphoreHandle_t)(uintptr_t)(0x100+i);
     atomic_init(&locks.retained,0);locks.now=a733_counter_clock_now;locks.context=&counter;locks.initialized=1;
     clocks.now=a733_counter_clock_now;clocks.context=&counter;clocks.initialized=1;
     *word(0x07090160)=0x10000002;*word(CCU)=0xf8000000u|(99u<<8)|(99u<<16);
-    for(unsigned p=7;p<=8;p++){
+    for(unsigned p=nine?14:7;p<=(nine?15u:8u);p++){
         struct a733_pin_fields f;assert(a733_pin_fields_banked(A733_PIN_E,p,&f));
         *word(f.mux_address)|=8u<<f.mux_shift;
     }
-    *word(A733_TWI11_BASE+0x10)=0xf8;*word(A733_TWI11_BASE+0x20)=0x30;
-    struct a733_twi_native_config c={.clocks=&clocks,.pins=&pins,.rails=&rails,.rail=&borrow,
-        .locks=&locks,.task=TASK,.apb1=0,.apb1_hz=24000000};
-    c.clock=(struct a733_clock_token){.id=1,.owner=50,.exclusive=A733_CLOCK_TWI11,
-        .shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC};
-    c.pin.id=2;c.pin.owner=50;c.pin.masks[A733_PIN_E]=0x180;
+    *word(base+0x10)=0xf8;*word(base+0x20)=0x30;
+}
+static void setup(void)
+{
+    environment();
+    struct a733_twi_native_config c=config();
     assert(a733_twi_native_init(&native,&c));
 }
 static int prepare(void)
@@ -140,7 +155,8 @@ static int scenario(void)
 {
     setup();
     int r=prepare();if(r!=1)return r;
-    if(!a733_twi_init(&engine,&native.operations,&native,native.divider))return -1;
+    if(!a733_twi_init_controller(&engine,&native.operations,&native,native.divider,
+        nine?A733_TWI_MAIN9:A733_TWI_MAIN11,2))return -1;
     uint8_t value=0x5a;if(transfer(0,&value)!=1)return -1;
     value=0;if(transfer(1,&value)!=1 || value!=0x5a || target[0x3820]!=0x5a)return -1;
     return 1;
@@ -172,6 +188,17 @@ static struct outcome child_run(unsigned from,unsigned count,unsigned refuse,uns
     }
     close(pipefd[0]);int status;assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && !WEXITSTATUS(status));
     return o;
+}
+static void setup_refusals(void)
+{
+    environment();
+    struct a733_twi_native_config c=config();
+    c.clock.exclusive=A733_CLOCK_TWI11;assert(!a733_twi_native_init(&native,&c));
+    c=config();c.pin.masks[A733_PIN_E]=0x180;assert(!a733_twi_native_init(&native,&c));
+    c=config();c.controller=A733_TWI_R1;assert(!a733_twi_native_init(&native,&c));
+    /* The unchanged binding is admitted, so the refusals above are specific. */
+    c=config();assert(a733_twi_native_init(&native,&c) && native.base==A733_TWI9_BASE &&
+        native.bgr==A733_TWI9_BGR && native.first_pin==14);
 }
 int main(void)
 {
@@ -216,9 +243,27 @@ int main(void)
     for(unsigned i=0;i<absent.trace_count;i++)
         if(a[i]==A733_TWI11_BASE+0xc && (v[i]&0x10))++stop;
     assert(!stop); /* No STOP after the unexpected status. */
+    /* TWI9 runs the same stores at its own controller and gate/reset word. */
+    nine=1;
+    struct outcome cam2=child_run(0,0,0,0,a,v);
+    assert(cam2.result==1 && !cam2.retained && !cam2.fault && cam2.trace_count==base.trace_count);
+    unsigned controller=0,gate=0;
+    for(unsigned i=0;i<cam2.trace_count;i++){
+        uintptr_t expected=base_a[i];
+        if(expected==A733_TWI11_BGR){expected=A733_TWI9_BGR;++gate;}
+        else if(expected>=A733_TWI11_BASE && expected<A733_TWI11_BASE+0x1000)
+            {expected=expected-A733_TWI11_BASE+A733_TWI9_BASE;++controller;}
+        assert(a[i]==expected && v[i]==base_v[i]);
+    }
+    assert(gate==2 && controller>10);
+    struct outcome cam2_absent=child_run(0,0,0,1,a,v);
+    assert(cam2_absent.result==-1 && cam2_absent.fault &&
+        cam2_absent.retained==(1u<<A733_PLATFORM_I2C11_LOCK));
+    /* A TWI9 binding refuses TWI11 clock authority and TWI11 pins. */
+    setup_refusals();
     printf("PASS TWI BUSY retry: %u injected cases, %u pending prepares without stores, %u stores unchanged; "
         "%u refusals retained, bounded BUSY faulted after %u observations; "
-        "address NACK retained only the TWI11 mutex\n",
+        "address NACK retained only the TWI11 mutex; TWI9 stores matched at its controller\n",
         cases,pending,base.trace_count,refused_retained,o.busy_seen);
     return 0;
 }

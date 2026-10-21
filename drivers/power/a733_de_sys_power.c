@@ -15,22 +15,26 @@ static int timely(struct a733_de_sys_power *p)
     p->last_now=t;return p->state!=WAIT||t<p->wait_deadline;
 }
 static int read32(struct a733_de_sys_power *p,unsigned off,uint32_t *v)
-{return timely(p)&&p->ops.read(p->context,A733_DE_SYS_PCK_BASE+off,v)==1&&timely(p);}
+{return timely(p)&&p->ops.read(p->context,p->base+off,v)==1&&timely(p);}
 static int write32(struct a733_de_sys_power *p,unsigned off,uint32_t v)
 {
     if(!timely(p))return 0;
     p->write_attempted=1;
-    return p->ops.write(p->context,A733_DE_SYS_PCK_BASE+off,v)==1&&timely(p);
+    return p->ops.write(p->context,p->base+off,v)==1&&timely(p);
 }
 static int release(struct a733_de_sys_power *p)
 {p->ops.leave(p->context);p->held=0;return timely(p);}
-int a733_de_sys_power_init(struct a733_de_sys_power *p,
-    const struct a733_de_sys_power_ops *o,void *v,uint64_t d)
+int a733_de_sys_power_init_domain(struct a733_de_sys_power *p,
+    const struct a733_de_sys_power_ops *o,void *v,uint64_t d,unsigned domain)
 {
     if(!p||p->self||!o||!o->authorize||!o->now||!o->enter||!o->leave||
-       !o->read||!o->write||!d)return 0;
-    p->self=p;p->ops=*o;p->context=v;p->deadline=d;return 1;
+       !o->read||!o->write||!d||(domain!=1&&domain!=9&&domain!=10))return 0;
+    p->self=p;p->ops=*o;p->context=v;p->deadline=d;
+    p->base=A733_PCK_DOMAIN_BASE(domain);return 1;
 }
+int a733_de_sys_power_init(struct a733_de_sys_power *p,
+    const struct a733_de_sys_power_ops *o,void *v,uint64_t d)
+{return a733_de_sys_power_init_domain(p,o,v,d,1);}
 int a733_de_sys_power_ready(const struct a733_de_sys_power *p)
 {return p&&p->self==p&&p->state==READY&&!p->held;}
 int a733_de_sys_power_poll(struct a733_de_sys_power *p)

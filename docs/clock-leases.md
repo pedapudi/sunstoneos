@@ -83,7 +83,9 @@ reserves OSC, because the PLL runs from the DCXO and a rate change parks the
 mux on it. A shared lease holds the rate stable; an exclusive lease admits a
 change. The [CPU clock driver](cpu-clock.md) holds its cluster exclusively and,
 for CPU-L, the DSU shared. Rail voltage remains a separate ledger lease.
-Bits 77–127 remain invalid.
+TWI9 uses bit 77 for the CAM2 sensor bus controller at `0x02519000` and its
+CCU+0xea4 gate0/reset16. Like TWI11, it is exclusive-only and holds FABRIC
+shared to prevent APB1 retuning. Bits 78–127 remain invalid.
 The focused `checks/a733-media-clock.c --encoder-ownership` case passes
 encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
 directions before register access. Time and hardware callbacks are modeled.
@@ -140,7 +142,7 @@ Tokens remain private runtime metadata and have no wire or persistent format.
 Historical evidence remains valid for its recorded sources and ABI; it does not
 establish execution of a rebuilt image.
 
-The focused `checks/clock-wide.c` check covers independent TWI11 and VO1
+The focused `checks/clock-wide.c` check covers independent TWI11, TWI9 and VO1
 ownership, FABRIC conflicts, upper-half token authentication, stable publication
 and retained faults. It also checks refusal of every unassigned high bit.
 The check passed once with AddressSanitizer and UndefinedBehaviorSanitizer.

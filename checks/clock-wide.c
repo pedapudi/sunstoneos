@@ -13,16 +13,24 @@ int main(void)
 {
     _Static_assert(A733_CLOCK_VO1==((a733_clock_mask_t)1<<63),"existing highest scope");
     _Static_assert(A733_CLOCK_TWI11==((a733_clock_mask_t)1<<64),"independent TWI11 scope");
+    _Static_assert(A733_CLOCK_TWI9==((a733_clock_mask_t)1<<77),"independent TWI9 scope");
     _Static_assert(A733_CLOCK_AUDIO_CHANGE==0x3ff8,"existing audio values");
     _Static_assert(sizeof(a733_clock_mask_t)==16 && sizeof(struct a733_clock_token)==48,"wide private ABI");
     struct a733_clock_leases registry={0};
-    struct a733_clock_token twi,vo1,out={.id=999},saved=out;
+    struct a733_clock_token twi,twi9,vo1,out={.id=999},saved=out;
     assert(a733_clock_leases_init(&registry,now,NULL));
     assert(a733_clock_acquire(&registry,1,0,A733_CLOCK_TWI11,10,&twi)==A733_CLOCK_OK);
     assert(twi.exclusive==A733_CLOCK_TWI11 && twi.shared==A733_CLOCK_FABRIC);
     assert(a733_clock_acquire(&registry,2,0,A733_CLOCK_VO1,10,&vo1)==A733_CLOCK_OK);
     assert(vo1.exclusive==A733_CLOCK_VO1 && !vo1.shared);
+    /* TWI9 is a second camera bus: independent of TWI11, sharing FABRIC. */
+    assert(a733_clock_acquire(&registry,6,0,A733_CLOCK_TWI9,10,&twi9)==A733_CLOCK_OK);
+    assert(twi9.exclusive==A733_CLOCK_TWI9 && twi9.shared==A733_CLOCK_FABRIC);
     unsigned before=observations;
+    assert(a733_clock_acquire(&registry,3,0,A733_CLOCK_TWI9,10,&out)==A733_CLOCK_BUSY);
+    same(&out,&saved);
+    assert(a733_clock_acquire(&registry,3,A733_CLOCK_TWI9,0,10,&out)==A733_CLOCK_INVALID);
+    same(&out,&saved);
     assert(a733_clock_acquire(&registry,3,0,A733_CLOCK_TWI11,10,&out)==A733_CLOCK_BUSY);
     same(&out,&saved);
     assert(a733_clock_acquire(&registry,3,0,A733_CLOCK_FABRIC,10,&out)==A733_CLOCK_BUSY);
@@ -58,6 +66,8 @@ int main(void)
     assert(a733_clock_token_status(&registry,&twi)==A733_CLOCK_OK);
     assert(a733_clock_release(&registry,&twi,10)==A733_CLOCK_OK);
     assert(a733_clock_release(&registry,&vo1,10)==A733_CLOCK_OK);
+    assert(a733_clock_token_status(&registry,&twi9)==A733_CLOCK_OK);
+    assert(a733_clock_release(&registry,&twi9,10)==A733_CLOCK_OK);
 
     /* Actual stable publication must preserve both halves of unrelated scopes. */
     const a733_clock_mask_t locals=A733_CLOCK_TWI11|A733_CLOCK_VO1;
@@ -87,5 +97,5 @@ int main(void)
         same(&registry.slots[i],&held);++occupied;
     }
     assert(occupied==1);
-    puts("PASS: independent TWI11/VO1 scopes, FABRIC conflicts, upper-half authentication, publication and retained fault");
+    puts("PASS: independent TWI11/TWI9/VO1 scopes, FABRIC conflicts, upper-half authentication, publication and retained fault");
 }
