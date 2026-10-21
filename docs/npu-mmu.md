@@ -134,8 +134,11 @@ cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-mmu
 ```
 
-The object target is excluded from default builds. It is not linked into a
-board image yet. The [controller core](npu-controller.md) supplies modeled register
+The object target is excluded from default builds. The builder is linked into
+the NPU board images: `a733-npu-convolution` and `a733-npu-convolution-supervised`
+from [apps/npu-convolution](../apps/npu-convolution/CMakeLists.txt), the
+`a733-npu-convolution-single-core` profiles, and the combined
+`sunstone-a733-accelerators` image from [apps/accelerators](../apps/accelerators/CMakeLists.txt). The [controller core](npu-controller.md) supplies modeled register
 sequences and ownership transitions. The [memory policy](npu-memory.md) validates
 private buffers and table contents before ordering cache operations through
 callbacks. The [native adapter](npu-native.md) supplies CPU translation and cache

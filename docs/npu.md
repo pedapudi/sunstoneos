@@ -301,8 +301,10 @@ owned internal SRAM; its physical confinement remains unqualified.
    routes, cache visibility and translation-cache behavior physically. The
    [memory policy](npu-memory.md) records the separate SRAM route; ordinary RAM
    page-table entries do not replace its ownership contract.
-3. **Qualify completion, errors and recovery.** The initial workload polls
-   completion. The corrected single-core USB path can report a terminal NPU
+3. **Qualify completion, errors and recovery.** The default fixed workload
+   polls completion once per worker tick. The single-core interrupt profile
+   wakes the worker from interrupt 97 on CPU0, and its runtime client receives
+   completion through a held WAIT reply. The corrected single-core USB path can report a terminal NPU
    failure only while the transport remains valid. Physical delivery remains
    untested. Keep buffers and hardware resources on timeout or fault until the
    reviewed recovery condition is met. Interrupt-driven completion, cancellation,

@@ -3,7 +3,11 @@
 The native controller core is **implemented** and passes a host register and
 buffer-ownership model. It compiles for AArch64. Physical initialization,
 translation, command execution, cancellation, and recovery remain untested.
-The core is excluded from default builds and is not linked into a board image.
+The default build compiles it only as an object target. It is linked into
+the NPU board images: `a733-npu-convolution` and `a733-npu-convolution-supervised`
+from [apps/npu-convolution](../apps/npu-convolution/CMakeLists.txt), the
+`a733-npu-convolution-single-core` profiles, and the combined
+`sunstone-a733-accelerators` image from [apps/accelerators](../apps/accelerators/CMakeLists.txt).
 
 The [interface](../include/a733_npu_controller.h) provides open, submit, poll,
 cancel, reap, and close operations. The
