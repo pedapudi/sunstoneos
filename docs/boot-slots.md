@@ -106,7 +106,7 @@ the header state, generation, load state and failing extent.
 | 5 | The system counter does not advance; the card was not accessed | Zero |
 | 6 | The resident contract was published and the image entered | Entry address |
 | 7 | Entry refused: no 808-byte session extent at `0x41f00000` (1), or its board magic, version, size, generation or lease differs (2) | 1 or 2 |
-| 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Arming counter value, or zero |
+| 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Zero when the loader did not enable WDT0 mode; otherwise the arming counter value |
 
 The SD core never retries after a fault, so a read failure during one slot
 also fails the other. An exception during the loader uses the cold-entry
@@ -163,7 +163,11 @@ image. Its slot carries the 808-byte OS session as an asset loaded at
    is set. Otherwise write the reset output and four-second configuration, read
    them back, read the counter as `armed_at`, enable the mode and restart it.
    The arming must read back within one millisecond. This is the FEL
-   launcher's sequence without the redirect and FEL flag.
+   launcher's sequence without the redirect and FEL flag. If the mode
+   readback or the timing check fails after the mode write, the report holds
+   status 8 with the arming counter value as its detail. WDT0 then stays
+   armed with no ROM redirect, so the board leaves the ROM's FEL mode with a
+   cold reset within four seconds.
 4. Write `armed_at` into the session as its fresh epoch and hash the 808
    session bytes.
 5. Clear the contract magic at `0x42004000`. Write version 2, the epoch, the
@@ -291,16 +295,18 @@ foreign header with an extent in the standby region and the 64-bit limits.
 [os-image-stage2.py](../checks/os-image-stage2.py) runs the same monitor with
 the entry prerequisites, card admission and card presence modeled as granted,
 and with WDT0, the redirect words, the RTC FEL flag and CCU word `0x24`
-modeled. Its slot holds an image, the OS session and an asset. Eight cases
+modeled. Its slot holds an image, the OS session and an asset. Nine cases
 cover entry with and without a retained result, refused prerequisites, a
 missing session extent, a session generation that differs from the slot's,
-and an enabled watchdog, a ROM redirect or an RTC FEL flag left by another
-owner. The entry cases check the four arming writes, every contract field,
+an enabled watchdog, a ROM redirect or an RTC FEL flag left by another
+owner, and a WDT0 mode write that does not read back. The entry cases check
+the four arming writes, every contract field,
 the stamped session epoch and digest and the branch to the entry, then pass
 the contract and session to the OS image's resident admission
 ([os-image-model.c](../checks/os-image-model.c)), which must accept them.
-The refusal cases check that no register write or contract publication
-happens.
+The refusal cases check that no contract is published. The mode readback
+case checks the four arming writes and a nonzero detail; every other refusal
+case checks that no register write happens and, for status 8, a zero detail.
 
 The checks run on the development host:
 

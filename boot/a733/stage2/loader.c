@@ -369,6 +369,10 @@ static _Noreturn void enter(const struct slot_header *h)
         result[0] = 0;
         __asm__ volatile("dsb sy" ::: "memory");
     }
+    /* A zero detail means WDT0 mode was never written. A nonzero detail means
+     * the mode write happened and a readback or the timing check failed: WDT0
+     * stays armed, so the forced-FEL return ends in a cold reset within four
+     * seconds. */
     uint64_t armed = 0;
     if (!arm(&armed) || !armed) finish(WATCHDOG, armed);
     s->epoch = armed;

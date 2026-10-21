@@ -54,8 +54,9 @@ ARM_WRITES = [(0x02050018, 0x16aa0002), (0x02050010, 0x16aa0001),
 class Registers:
     """WDT0 at 0x02050000, CCU word 0x03000024, R_CPUCFG redirect words and the RTC FEL flag."""
 
-    def __init__(self, preset):
+    def __init__(self, preset, stuck=()):
         self.values = dict(preset)
+        self.stuck = stuck
         self.writes = []
 
     def page(self, base):
@@ -69,7 +70,8 @@ class Registers:
             self.writes.append((address, value))
             if offset in (0x10, 0x14, 0x18):
                 assert value >> 16 == 0x16aa, hex(value)
-                self.values[address] = value & 0xffff
+                if address not in self.stuck:
+                    self.values[address] = value & 0xffff
             else:
                 assert offset == 0x0c and value == 0x14af, (hex(offset), hex(value))
         return read, write
@@ -132,8 +134,8 @@ def main():
 
     cases = []
 
-    def run(name, card_bytes, expected, entry_admitted=True, preset=None, retained=None):
-        registers = Registers(preset or {})
+    def run(name, card_bytes, expected, entry_admitted=True, preset=None, retained=None, stuck=()):
+        registers = Registers(preset or {}, stuck)
         model_card = Card(card_bytes)
         cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         cpu.mem_map(RAM, RAM_END - RAM)
@@ -249,7 +251,13 @@ def main():
         else:
             assert stops == ['wfi'] and not entered and controls[-1] == ['rmr_el3', 2]
             assert struct.unpack_from('<Q', contract)[0] != CONTRACT_MAGIC
-            assert not any(report[112:128]) and not registers.writes
+            assert not any(report[112:128])
+            if stuck:
+                # The mode write did not read back: WDT0 may run, and the
+                # detail is the nonzero arming counter value.
+                assert registers.writes == ARM_WRITES and 24000123 < detail < values['cntpct_el0']
+            else:
+                assert not registers.writes and (expected != 'watchdog' or detail == 0)
         cases.append(result)
         return result
 
@@ -265,6 +273,7 @@ def main():
     run('watchdog-already-enabled', nominal, 'watchdog', preset={0x02050014: 1})
     run('rom-redirect-present', nominal, 'watchdog', preset={0x070501c0: 0xfa50392f})
     run('rtc-fel-flag-present', nominal, 'watchdog', preset={0x07090108: 0x5aa5a55a})
+    run('mode-not-read-back', nominal, 'watchdog', stuck=(0x02050014,))
     result = {'passed': True, 'physical_access': False, 'physical_boot_qualified': False,
               'monitor_sha256': hashlib.sha256(raw).hexdigest(), 'cases': cases,
               'limitations': [
