@@ -19,8 +19,9 @@ struct a733_pmic_snapshot {
 /* Immutable privileged boot admission, authenticated before init. It excludes
  * every legacy reader, remote/secure owner, DMA/IRQ handler and autonomous PMU
  * writer. Device mappings, PL voltage/pullups and recovery must already be
- * established. The read-only provider may use supervised RAM recovery under
- * docs/a733-smp-supervised.md, retaining every lease until manual power removal.
+ * established. While it has issued no selector write, the provider may use
+ * supervised RAM recovery under docs/a733-smp-supervised.md, retaining every
+ * lease until manual power removal.
  * An identity or register read does not prove these facts. This first profile
  * adopts an enabled, idle APBS1 bus: source0 detected DCXO or source4
  * PLL_REF, divider0. PLL_REF must decode to exactly24MHz from the detected DCXO.
@@ -106,7 +107,9 @@ enum a733_pmic_status a733_pmic_submit(struct a733_pmic *,uint64_t owner,
  * A mismatch, a readback other than the written byte or any later fault
  * retains the request: the programmed voltage is then uncertain. The result
  * snapshot carries the readback selector. It proves a programmed value only;
- * the caller waits for the output to settle. */
+ * the caller waits for the output to settle. The CPU clock driver is the only
+ * permitted caller: it alone keeps the voltage covering the applied CPU-L,
+ * CPU-B and DSU rates, which an exclusive rail lease does not ensure. */
 enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint8_t expected,uint8_t target,
     uint64_t deadline,struct a733_pmic_request *);

@@ -175,7 +175,10 @@ profiles come from the pinned bootloader table entries for `dcdc3` and
 `a733_pmic_submit_write` is the provider's only regulator data write. It
 admits only DCDC3 or DCDC5, only under an exclusive rail lease, and only a
 target selector that decodes to 800–1,050 mV, the range of the pinned CPU
-operating points. The caller also supplies the selector code it last read.
+operating points. The CPU clock driver is its only permitted caller: an
+exclusive rail lease does not ensure that the new voltage covers the
+CPU-L, CPU-B and DSU rates, and only that driver keeps that relation.
+The caller also supplies the selector code it last read.
 Under one I2C mutex hold the request performs these transactions:
 
 1. The six snapshot reads. The output must be enabled and its selector code
