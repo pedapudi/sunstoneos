@@ -95,7 +95,10 @@ as `apps/npu-returning/build.py`, compare each reused object's recorded header
 dependencies with the current files through `tools/returning_build.py`. They
 refuse to link when a header has changed, because the reused object still
 holds the earlier structure layouts. The reused objects must then be rebuilt
-from current source.
+from current source. Recorded paths under the original worktree are mapped to
+the current tree. A recorded header that remains in another git checkout, such
+as a different worktree, is also refused, because comparing it with that
+checkout would not test the current tree.
 
 The patched FEL recovery tool is built only on the host:
 

@@ -98,11 +98,23 @@ def _current(path, roots, repository=ROOT):
     return path
 
 
+def _other_checkout(path, repository):
+    """Return the git checkout holding path when it is not the current repository."""
+    for parent in Path(path).parents:
+        if parent == repository:
+            return None
+        if (parent / '.git').exists():
+            return parent
+    return None
+
+
 def require_unchanged_headers(closures, compiler, repository=ROOT):
     """Refuse the build unless each reused object's headers match the current tree.
 
     Headers under the compiler's resource directory are part of the pinned
-    compiler when no digest was recorded for them. Return the checked headers
+    compiler when no digest was recorded for them. A header left in another git
+    checkout, such as a worktree no recorded root maps to the current tree, would
+    be compared against that checkout and is refused. Return the checked headers
     and their digests for the build's input record.
     """
     resource = subprocess.check_output([compiler, '-print-resource-dir'], text=True).strip()
@@ -111,6 +123,10 @@ def require_unchanged_headers(closures, compiler, repository=ROOT):
     for closure in closures:
         for original, recorded in closure['headers'].items():
             path = _current(original, closure['roots'], repository)
+            checkout = _other_checkout(path, Path(repository))
+            if checkout:
+                changed.setdefault((path, f'in other checkout {checkout}'), set()).add(Path(closure['object']).name)
+                continue
             current = digest(path) if Path(path).is_file() else None
             if recorded is None and current and path.startswith(resource.rstrip('/') + '/'):
                 recorded = current
