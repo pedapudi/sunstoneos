@@ -141,8 +141,8 @@ The application reports events that originate outside the headset through
 `bt_hfp_ag_call`:
 
 - `INCOMING` starts an incoming call with call setup 1. The caller may supply
-  a number of 1 to 32 dial characters (`0`–`9`, `*`, `#`, `+`) and a type from
-  128 through 175.
+  a number of 1 to 32 dial characters (`0`–`9`, `*`, `#`, `+` and the
+  uppercase DTMF letters `A`–`D`) and a type from 128 through 175.
 - `ALERTING` moves an outgoing call from setup 2 to setup 3.
 - `ACTIVE` answers an incoming call at the AG or connects an outgoing call.
 - `END` ends any call or call setup.
@@ -156,7 +156,8 @@ The headset drives the same call through these commands:
 - `ATA` answers an incoming call. `AT+CHUP` rejects an incoming call, cancels
   an outgoing setup or ends an active call.
 - `ATD<number>;` and `AT+BLDN` start an outgoing call with setup 2 and record
-  the last dialed number. Both require service indicator 1 and no existing call.
+  the last dialed number. An `ATD` number uses the same dial characters as an
+  incoming number. Both require service indicator 1 and no existing call.
   `ATD>` memory dialing always receives `ERROR` because the AG has no phone book.
 - `AT+VTS=<digit>` is accepted only during an active call. The engine counts
   the digit for the application, which owns any call audio.

@@ -81,7 +81,7 @@ int bt_hfp_ag_init(struct bt_hfp_ag *,struct bt_rfcomm *,const uint8_t indicator
 int bt_hfp_ag_init_calls(struct bt_hfp_ag *,struct bt_rfcomm *,const uint8_t indicators[7],
     uint64_t setup_deadline,uint64_t timeout_us,unsigned codecs,uint64_t ring_us);
 /* Application call events after READY: INCOMING (number NULL or1..32 of
- * 0-9*#+, type128..175) starts RING alerts every ring_us after the callsetup
+ * 0-9*#+A-D, type128..175) starts RING alerts every ring_us after the callsetup
  * report, with +CLIP after each RING when enabled. ALERTING follows a dialed
  * call; ACTIVE answers or connects; END ends any call or setup. Exact1 applied,
  * 0 while a response owns the serial stream, -1 invalid event or state. */
