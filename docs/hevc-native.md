@@ -1,203 +1,250 @@
-# Native A733 HEVC decode proposal
+# Native A733 HEVC decode
 
-HEVC decoding remains incomplete. Partial parser, input, storage, controller and
-provider-bridge source resides in the separate
-`/home/sunil/git/sunstoneos-worktrees/hevc-decode` worktree at commit `69c4eac`.
-It is not integrated into bringup's shared providers, has not completed review
-and has no native build. Application tasks, USB integration, allocation/table
-proof and hardware qualification remain unfinished. Configuring `apps/hevc`
-stops at the start of `cmake/a733-hevc.cmake` with an error that lists the
-missing parser, controller, application and source-generation files.
+The native HEVC application decodes one uploaded two-picture clip on the A733
+video engine (VE) decoder and returns copied NV12 pictures over USB0. It builds
+as `sunstone-a733-hevc` from `apps/hevc`. Host models check its parser, storage,
+controller, decoder binding and lowest native register policy. The image has not
+run on a board, and host preparation still refuses to produce a launch bundle
+because the physical allocation and page-table evidence it requires does not
+exist yet. There is no numerical or physical decode result.
 
-Bringup contains the typed session/startup/CMake foundations and source-only host
-preparation, producer, observer and coordinator. Runtime preparation explicitly
-refuses until an actual native allocation/page-table proof is available. The
-recorded C session-validator evidence covers two positive and eleven invalid
-range cases with UBSan only, using synthetic identities and no providers or
-pixels (`hevc-decode-20261020/root-session/result.json`). Host fixtures, launcher
-checks and native execution have not run. The source-only host audit verifies
-24 frozen files under `hevc-host-source-20261020/root-integration.json`; it does
-not establish runtime behavior. There is no native HEVC image.
+The A733 manual advertises Main and Main10 decoding at level 5.2, up to
+8192×4352 at 24 fps. The supported mode below is the first useful subset; the
+remaining modes stay required hardware scope.
 
-The A733 manual advertises Main/Main10, level 5.2, up to 8192×4352 at 24 fps.
-Published source and isolated instruction traces establish several A733 routing,
-register and buffer-layout details below. The completed traces stop before picture
-decoding. They establish neither numerical decode nor physical operation.
+## Supported mode
 
-## Reusable source and actual A733 routing
+The application accepts one immutable Annex B clip: a VPS, an SPS, a PPS, one
+IDR picture and one P picture that references it. The clip must be progressive
+Main profile, 8-bit 4:2:0, 640×480 with a 64×64 coding tree block (CTB), one
+layer, one temporal sub-layer and one independent slice per picture. The P
+picture's only reference is the IDR picture at picture order count (POC) 0, and
+its own POC is below half of the POC range. CABAC entropy decoding, prediction,
+transforms, sample adaptive offset and deblocking run on the VE.
 
-[The pinned source record](../apps/hevc/sources.json) identifies Linux Cedrus,
-GStreamer's standalone HEVC parser, older CedarC source and the effective A733
-runtime package. Cedrus control code is GPL-2.0-or-later; the GStreamer parser is
-LGPL version 2-or-later, and the CedarC reference source is LGPL version 2. Original notices and
-license records must remain. The opaque library is an offline instruction
-reference; the FreeRTOS image will not link or load it.
+The parser refuses tiles, wavefront parallel processing, dependent slices,
+B slices, long-term references, scaling lists, PCM, weighted prediction,
+reference list modification, conformance cropping, 10-bit samples, parameter
+set extensions and any additional NAL unit such as an access unit delimiter or
+SEI. Each picture holds at most 256 KiB of encoded input. Every NAL unit must
+contain only valid emulation-prevention sequences and end in a nonzero byte, so
+the parser and the VE's own escape removal read the same bytes.
 
-Linux revision 70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56 supplies
-`cedrus_h265.c` and register definitions. GStreamer revision
-d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202 supplies VPS/SPS/PPS/slice parsing.
-The existing H.264 integer/bitreader adaptation provides the standalone port;
-no GStreamer framework or Linux runtime is needed. CedarC revision
-d92ffcb082595f0fffda45ea481cec40fe5a3a8d supplies corroborating register,
-allocation and reference semantics, subject to effective A733 comparison.
+## Source provenance and execution location
 
-The effective package is the existing 953940-byte CedarC package with SHA-256
-ea2c62123466e233e5f358fffac10499a5ae3886d9fe340532907bba6f2f6d4e.
-Its `libawh265.so` has SHA-256
-6adc1bba9ca552e17f6bc8a5d4b28b6cba1a6268feebfded0fa99ed199457df1.
-The library's HevcDecInitContext at 0x31a4–0x31e8 requests register groups 5 and 0.
-The actual libVE map 3 table at 0x9130 routes group 5 to decoder+0x500 and decoder
-TOP to +0. VeGetGroupRegAddr 0x31e0 and its map function 0x2f10 select that table for
-creator decoder 1/encoder 0. The encoder branch that returns +0x100 is a separate
-routing path. These facts establish the window; they do not establish every
-Cedrus control bit for A733.
+[The pinned source record](../apps/hevc/sources.json) lists every third-party
+input with its revision and SHA-256. The adapted sources run on the A733 CPU;
+none of them runs on another processor.
 
-The application should reuse VE_DEC, PCK 2, IRQ 81, decoder MMIO 0x01c0e000 and the
-existing dual-master 6/7 IOMMU admission. No evidence yet permits narrowing that
-master mask. Decoder authority does not authorize the overlapping encoder window.
+- GStreamer `gsth265parser.c` and `gsth265parser.h` at revision
+  d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202, licensed LGPL version 2 or later,
+  supply VPS, SPS, PPS and slice header parsing. At configure time
+  `apps/hevc/gst-source.py` checks the pinned hashes and generates a standalone
+  copy that keeps the original notices. The copy narrows width, height, bit
+  depth, cropping, tiles and wavefront syntax to the supported mode, and records
+  the slice header length before `alignment_bit_equal_to_one`. GStreamer's NAL
+  reader, `nalutils.c` from the same revision, comes from the H.264 High source
+  cache and its `pins.json`. The existing integer port in `apps/h264/gst-port.h`
+  replaces GLib.
+- Linux Cedrus `cedrus_h265.c` and `cedrus_regs.h` at revision
+  70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56, licensed GPL-2.0 or later, supply
+  the H.265 register fields, programming order, bit-skipping procedure and
+  completion status rules. `drivers/video/a733_video_hevc.c` and
+  `apps/hevc/parse.c` carry the adapted code.
+- The older H6 CedarC HEVC sources, licensed LGPL version 2, and the effective
+  A733 CedarC runtime package are offline references only. The image does not
+  link or load them. The runtime package is the 953,940-byte `libcedarc-dev`
+  package with SHA-256
+  ea2c62123466e233e5f358fffac10499a5ae3886d9fe340532907bba6f2f6d4e; its
+  `libawh265.so` has SHA-256
+  6adc1bba9ca552e17f6bc8a5d4b28b6cba1a6268feebfded0fa99ed199457df1.
 
-## Initial complete path and ownership
+Configure the application with `SUNSTONE_HEVC_SOURCE` naming the directory that
+holds the GStreamer parser and Cedrus files, and `SUNSTONE_HEVC_READER_SOURCE`
+naming the directory that holds the NAL reader and its `pins.json`. In the
+shared cache these are `~/.cache/sunstoneos/sources/hevc-decode` and
+`~/.cache/sunstoneos/sources/h264-high`. Configuration stops with an error
+naming both variables when either is missing.
 
-The proposed first mode accepts one immutable AnnexB clip containing a VPS, SPS,
-PPS, one IDR picture and one following P picture. It supports progressive Main,
-8-bit 4:2:0, 640×480, one layer, CTB64, one short-term reference and one independent
-slice per picture. CABAC, ordinary prediction/transform content, SAO and deblocking
-remain real codec work. Tiles, wavefront parallel processing, dependent slices,
-B pictures, long-term references, custom scaling matrices, 10-bit output and
-compressed framebuffer output are initially refused. Broader HEVC modes remain
-required hardware scope.
+## Register programming
 
-Both pictures' syntax, geometry, reference relationships and input ranges must
-validate before the first device write. Each picture has at most 256 KiB of encoded
-input. Whole-clip digest and immutable per-picture descriptors bind the supplied
-bytes. The application decodes the IDR, copies visible NV12 pixels into owned WB
-RAM, publishes indexed output and waits for ACK0. It then decodes the P picture
-using the retained IDR reference and a separate destination. ACK does not retire
-a reference, refill input or release storage. A later failure preserves the first
-copied picture and retains every device allocation and provider lease.
+The decoder uses the VE_DEC clock, PCK power domain 2, interrupt 81, the decoder
+window at `0x01c0e000` and IOMMU masters 6 and 7. Group 5 of the effective
+`libVE.so` register map 3 places the H.265 engine at decoder offset `0x500`. The
+HEVC binding in `drivers/video/a733_video_platform.c` reuses the codec-neutral
+decoder sequencing shared with JPEG and H.264: admission, cold start from the
+NS-ROM, identity, memory, and reset with default top-level registers. It selects
+decoder mode 4, the H.265 engine. The controller additionally requires compound
+identity `0x0003331000021320`, the identity in the effective-library trace
+described below.
 
-The native controller requires finish without error/data request/timeout,
-source-defined CTB completion and source-defined idle conditions before copied
-output. Effective HevcVeStatusInfo 0x1a4e4–0x1a534 reads status+0x38 and CTB count
-+0x3c, handles fault bits and acknowledges observed status. The unbounded library
-wait at 0x1a480 is unsuitable for native use; the existing admitted deadline must
-bound every wait. Neither that wait nor copied output establishes fabric drain.
-All allocations remain retained through board power removal.
+For each picture the controller performs the following steps, one register
+access per poll:
 
-## Provisional fixed memory and interfaces
+1. Check that the H.265 status register at `0x538` shows no busy, error, data
+   request or timeout bit.
+2. Program the bitstream window from the start of the picture's input slot:
+   offset 0, length in bits, base address with the first, last and valid flags,
+   and the slot's last byte as end address. Clear the CTB origin, tile limits
+   and CTB count, clear the status bits and start software decoding (trigger 7).
+3. Skip the slice header with flush-bits triggers of at most 32 bits, waiting
+   for the VLD busy bit to clear after each. The count is the slice header
+   length in unescaped bits from the NAL header to just before
+   `alignment_bit_equal_to_one`, which is where Cedrus leaves the bit pointer.
+4. Write the NAL header, SPS, picture size, PCM, PPS, scaling-list default and
+   slice header words, and `0x80000007` to the engine control register. Then
+   write the linear NV12 output format, chroma length and strides, disabled
+   scaling and secondary output, and the entry-point and neighbor buffer
+   addresses. Finally write one 32-byte frame record per picture at SRAM
+   `0x400`, the output index and, for the P picture, a list0 entry naming
+   frame record 0.
+5. Trigger slice decoding (trigger 8). Completion requires the finish bit with
+   no error, data request, timeout or busy bit, and a CTB count of exactly 80.
+   The controller then disables the engine interrupt bits and clears the
+   observed status.
 
-The existing extended memory profile is sufficient without shared CPU or memory
-reservation changes. The proposed allocation budget is 3 MiB NC and 2 MiB WB, plus
-at most 1 MiB of CPU parser/controller metadata within the existing application
-BSS range. Actual linked allocation, metadata and stack bounds must be checked
-before composed cases.
+Frame record *n* belongs to picture *n* and its index is also the output index.
+Each record holds the POC twice, the motion-vector address twice, and the luma
+and chroma addresses, all addresses shifted right by 8. The P picture sets
+slice-header bit 21, which Cedrus and CedarC both set for a P or B slice whose
+references all precede it in output order. GStreamer leaves the unsignaled PCM
+fields zero, so the PCM word is zero while PCM is disabled.
 
-| Device allocation | Proposed retained capacity |
-| --- | ---: |
-| Two encoded-picture inputs |2×262,144 bytes |
-| Two decoded NV12 destinations |2×462,848 bytes |
-| Two motion-vector buffers |2×16,384 bytes |
-| Neighbor metadata |815,104 bytes |
-| Entry-point buffer |4,096 bytes |
-| Eight pairs of outer guard pages |65,536 bytes |
-| IOMMU tables |32,768 bytes |
-| Total NC allocation |2,400,256 bytes |
-| WB upload and two visible copied pictures |1,449,984 bytes |
+`checks/hevc-decode-model.py` compares the IDR picture's programming with the
+effective A733 `libawh265.so` instruction trace for the same clip,
+`~/.cache/sunstoneos/evidence/hevc-decode-20261020/stream-adapted-registers/result.json`.
+That trace ends at the library's first decode trigger. The comparison shows:
 
-The effective framebuffer allocator requests 460,800 bytes for NV12, rounded
-to 462,848 bytes per native retained extent. Its clean pre-overflow records have
-640-byte stride, 640×480 luma and chroma at offset 307,200. Both 10-bit and AFBC
-flags are zero. Explicit frame SRAM addresses must separate those planes. The source-derived motion-vector requirement is 160 bytes per CTB plus
-1024 alignment bytes: 80 CTBs require 13,824 bytes, rounded to 16,384. The actual
-A733 instruction sequence 0x9e0c–0x9e18 computes that formula. Init 0x3224–0x3230
-allocates 0xc6800 neighbor bytes, matching the older source's 813,056 bytes;
-0x3250 allocates 4096 entry-point bytes. Eight IOMMU spans cover the two inputs,
-two destinations, two motion-vector buffers, neighbor metadata and entry points.
-These are planning bounds, not an executed allocator proof.
+- Equal final values for the VE mode register, registers `0x500`–`0x528`
+  except `0x50c`, `0x530`, `0x53c`, `0x550`–`0x558`, `0x55c`, `0x580`, and the
+  top-level output registers `0xc4`, `0xc8`, `0xcc`, `0xe8` and `0xec`.
+- The same write order after trigger 7, once the library's cycle-counter
+  writes, the native controller's flush triggers and its entry-point address
+  are set aside.
+- The same bitstream position. The library sets the bitstream offset to 718
+  bits, which is 86 bytes to the IDR NAL plus 30 header bits; the native
+  controller flushes those 30 bits from the start of its slot.
+- The same frame record layout, with chroma 307,200 bytes after luma and equal
+  motion-vector addresses.
+- Different PCM words, `0x0` natively and `0x877` in the library. PCM is
+  disabled in both, so only unused sample fields differ.
 
-Proposed new leaves are `a733_video_hevc` parser/planner/controller interfaces,
-an HEVC binding of the decoder sequencing in `drivers/video/a733_video_platform.c`,
-`apps/hevc` input/copy/USB and host preparation/capture. That sequencing is
-codec-neutral: like the H.264 binding, an HEVC binding passes its own typed job
-through the decoder's `admit` and `memory` hooks and supplies its own register
-allowlists, while reusing the actual cold start, lock and VE_DEC lease. JPEG and
-H.264 structures and callbacks keep their types. Generic IOMMU policy changes
-are unnecessary.
+The native controller also writes the zero CTB origin and tile limits and the
+entry-point address, as Cedrus does, and omits the library's VE cycle-counter
+writes at decoder offset `0x8`. No reference trace covers the P picture; its
+registers follow Cedrus and CedarC and are checked against those rules.
 
-The integrated 856-byte private-session foundation keeps the 592-byte board prefix. Its extension
-contains 48 bytes of identity/owners, 128 bytes of evidence digests, a 32-byte
-stream digest, two 16-byte input descriptors and 24 bytes of clock/rail fields.
-An immutable compiled marker binds the fixed dimensions and capacities.
-The integrated 288-byte protected contract uses the existing extended-memory
-pattern. `include/a733_hevc_application.h` defines these foundations; they do not
-establish a native allocator or complete application. Source-only host framing
-defines indexed copied NV12 with validated geometry, strides, generation and digest. Independent reference pixels are an
-optional qualification input to the host, separate from normal decoder output.
+## Memory and ownership
 
-## Required source comparison before native programming
+All buffers come from the existing extended-memory profile, so the image needs
+no change to shared CPU or memory reservations. Device buffers are in the
+uncached pool at `0x78000000`; the CPU-only upload and copied pictures are in
+the write-back pool at `0x48000000`.
 
-The next prerequisite is a bounded isolated instruction trace using contexts
-constructed through actual initialization operations. It must resolve:
+| Uncached allocation | Mapped bytes | IOVA |
+| --- | ---: | --- |
+| IOMMU tables | 32,768 | not mapped |
+| IDR input | 262,144 | `0x10001000`, read only |
+| P input | 262,144 | `0x10043000`, read only |
+| IDR output | 462,848 | `0x10085000` |
+| P output | 462,848 | `0x100f8000` |
+| IDR motion vectors | 16,384 | `0x1016b000` |
+| P motion vectors | 16,384 | `0x10171000` |
+| Neighbor metadata | 815,104 | `0x10177000` |
+| Entry points | 4,096 | `0x10240000` |
 
-- A733-specific SPS/PPS/slice field layouts, output-format/stride controls and
-  frame SRAM/reference-list ordering against Cedrus, including bitstream
-  offsets and emulation-prevention handling.
-- Linear NV12 output with scaling, AFBC and LBC disabled, including every extra
-  A733 register write or allocation. A default from the older chip is insufficient.
-- Trigger, status, CTB count and all relevant busy fields for one completed
-  IDR/P sequence. Publication may require more than the interrupt finish bit.
-- Actual reconstruction/reference plane addresses, motion-vector extents and
-  initial table contents for both pictures.
+Each mapped buffer sits between two unmapped guard pages filled with `0xa5`,
+and unmapped IOVA gaps separate the spans inside one 4 MiB table window. With
+the guard pages, the uncached allocations total 2,400,256 bytes. The IOMMU
+tables use each allocation's physical address from the allocator. Each output
+holds 460,800 bytes of NV12 picture: 640-byte luma rows followed by interleaved
+chroma at offset 307,200. Its remaining 2,048 bytes keep the guard pattern.
+Motion-vector buffers hold the Cedrus requirement of 160 bytes per CTB plus
+1,024 alignment bytes, 13,824 bytes for 80 CTBs. The neighbor buffer covers the
+813,056 bytes that Cedrus, CedarC and the effective library all allocate.
 
-A focused source review confirms the SRAM frame records at 0x1b858–0x1b958
-contain progressive POC twice, motion-vector address twice, and Y/C addresses.
-Each record occupies 0x20 bytes at SRAM 0x400; addresses are shifted by eight.
-The source review also identifies effective TOP+0xe8 bit 30 and identity-dependent
-CTRL bit 31 differences. GStreamer consumes slice byte-alignment bits before
-reporting header size, while Cedrus positions hardware before that padding. The
-adaptation must preserve the earlier bit position, validate padding and reconcile
-emulation-prevention bytes. Copying the reported header size directly is unsafe.
+The write-back pool holds a 524,288-byte upload buffer and two 462,848-byte
+copies, 1,449,984 bytes in total. Their leases are retained at allocation. The
+parser's private 589,824-byte workspace is in the image's BSS.
 
-Unresolved fields must remain explicit blockers to native register code. Proven
-parser/source-port and private input/output preparation can proceed independently.
-After the source bridge is concrete, focused review should cover bitstream bounds,
-reference lifetime, speculative state commit, lowest native MMIO policy and copied
-output publication. Selected checks should use actual producer-built clips and an
-independent pixel/syntax reference, preserve successful checkpoints and avoid CPU
-startup replay or performance measurement.
+Startup allocates storage and builds the tables before the scheduler starts.
+After the upload is committed, the controller task checks its digest again,
+copies each slice NAL to the start of its zero-padded input slot, clears
+outputs and scratch, and marks every uncached allocation as device owned. A
+successful picture returns no allocation. A failure retains every allocation,
+mapping, clock and power lease and token until whole-board power removal, and
+later polls perform no device access.
 
-## Effective package metadata mismatch limits the picture trace
+## Copied output and USB protocol
 
-All seven runtime libraries match the same pinned published package. Its public
-320-byte `VideoPicture` layout agrees with the effective framebuffer accesses,
-including the metadata pointer at offset 192. The effective framebuffer allocator
-requests 64 bytes for that metadata at `libfbm.so` 0x56e8–0x5754. HEVC clears and
-copies 24,856 bytes through the same pointer at `libawh265.so` 0x9724–0x974c.
-The libraries therefore disagree about this metadata allocation.
+After a picture completes, the copy callback runs a fresh IOMMU fault scan and
+checks the guard pages and the idle status register. It then copies the 460,800
+output bytes to the picture's write-back copy in 64 KiB steps, one per task
+wake, and hashes the copy. A second fault scan, guard check and status check
+precede publication. The application publishes the IDR copy, waits for the
+host to acknowledge it, and only then programs the P picture.
 
-The isolated model now rejects that write before mutation. Its preserved
-`stream-bounds/refused.pkl.gz` snapshot and `pre-overflow-framebuffer.json` record
-frame allocation and format before the mismatch. An earlier trace reached the
-first HEVC trigger after crossing the allocation boundary; that trace is
-provisional and provides no later output-layout evidence. Both records remain in
-`~/.cache/sunstoneos/evidence/hevc-decode-20261020/`.
+USB0 carries the protocol that `apps/hevc/host.py` and `apps/hevc/observe.py`
+implement on the host:
 
-The native two-picture interface does not expose HDR or AFBC display metadata.
-A reviewed reference-model adjustment provided 24,856 bytes of backing only for
-the exact 64-byte metadata request. All other allocation bounds remained strict.
-The resulting trace, `stream-adapted-registers/result.json`, stops before the first
-decode trigger. It preserves the original failure and does not establish that
-the published library combination executes correctly without modification.
+- Upload: a 32-byte header (magic `0x55363235`, version 1, clip bytes, picture
+  count 2, session epoch and generation) followed by the clip. The device hashes
+  and parses the complete upload before the controller may use it.
+- Query: byte 0 followed by the picture ordinal. The reply is a 160-byte header
+  with status 0 (pending), 1 (copied) or 2 (failed), the session identity, the
+  clip digest, the copy digest, the picture geometry, slice type and a terminal
+  failure flag. Only status 1 appends the 460,800-byte copy.
+- Acknowledgment: byte 1, the 32-bit ordinal, the session generation and the
+  copy digest. Acknowledgments must arrive in order and name a copied picture
+  with its digest; any other byte sequence stops the board.
 
-An automated content-safety check stopped the analysis worker. A subsequent
-attempt to continue open-source native integration was also stopped. No further
-reference execution was attempted. Partial source and existing evidence are
-preserved on the local HEVC development branch. A complete IDR/P implementation,
-review, native build and selected validation remain outstanding.
+## Session, startup and preparation
 
-The final source review identified two outstanding corrections: retain the
-allocator's physical addresses in the page tables, or explicitly require identity
-mapping; and validate emulation-prevention bytes throughout each encoded unit.
-The partial controller already contains the requested integer-overflow, stable
-acquisition-token and copied-result lifetime corrections. None of these partial
-native paths has completed execution checks.
+`include/a733_hevc_application.h` defines the 856-byte immutable session: the
+592-byte supervised board session, identities and owners, digests of the four
+physical evidence records, the clip digest, the two picture ranges, and the
+clock, IOMMU gate and supply fields. The extended boot copies the 288-byte
+protected contract and the session before any provider starts, and the
+application starts only when the admitted board prefix and build ID match.
+
+`apps/hevc/prepare.py` derives the launcher, contract and session for a
+supervised run. It refuses at admission, before any bundle is written, because
+no record yet proves the physical allocation addresses and page tables of the
+mapped buffers. A run needs that record together with the initial-isolation,
+memory, electrical and supervision evidence that the admission schema lists.
+
+## Checks
+
+- `checks/hevc-decode-model.py` builds `checks/hevc-decode-model.c` under
+  AddressSanitizer and UBSan with the generated parser, `apps/hevc/parse.c`,
+  `apps/hevc/storage.c`, the controller, the real decoder binding and the real
+  clock and power lease managers. On the recorded clip
+  `hevc-decode-20261020/two-pictures.hevc` it checks header lengths, POCs and
+  slice fields against FFmpeg's `trace_headers` output, and makes the register
+  comparison above. Parser cases refuse invalid escapes, forbidden bits, wrong
+  layers, NAL order, ranges and workspace; a storage case maps physical
+  addresses that differ from CPU addresses. Controller cases cover the nominal
+  IDR then P sequence, error, data request, short CTB count, deadline,
+  unsupported identity, copy refusal, flush error and a busy P entry. Every
+  failure stays terminal with all leases retained.
+- `checks/hevc-native-access.py` runs the AArch64 build of the lowest native VE
+  access functions in Unicorn for every register write recorded by the model
+  and for both status reads. It also checks refusal of neighboring offsets,
+  byte writes and pages without a Device-nGnRnE identity mapping.
+- `checks/hevc-image.py` checks a built image and its manifest against the ELF
+  rules of `apps/hevc/prepare.py`.
+- `checks/hevc-session.c` checks session range admission with synthetic
+  provider identities.
+
+These checks model MMIO, translation and completion. They do not establish
+that the VE decodes the pictures correctly, that the A733 accepts every Cedrus
+control bit, or that copied output implies drained device transactions.
+
+## Remaining work
+
+- A physical allocation and page-table record for the mapped buffers, so that
+  preparation can admit a run, and the four physical evidence records.
+- A board run of the two-picture clip, with copied pictures compared against an
+  independent decoder's output for the same clip.
+- Main10, larger pictures, multiple slices, tiles, wavefront parallel
+  processing, B pictures, more references and compressed output.
