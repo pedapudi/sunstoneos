@@ -10,8 +10,10 @@ image section, and must lie in the stage-2 loader's load window. Their
 extents come from the generated input header and the recognizer header; the
 window comes from the loader source. The table, start list and lifetime must
 match the build's options: an audio build adds the DMA0 interrupt (INTID 143)
-and the audio start entry. The standard library suffices, so the build can run
-this check. Its output also serves the supervised preparation (apps/os/prepare.py)
+and the audio start entry, a radio build the radio entry and a headset build
+the headset entry. Radio and headset builds also keep the 1 MiB profile and
+firmware span at 0x43000000 clear of the image and the recognition regions.
+The standard library suffices, so the build can run this check. Its output also serves the supervised preparation (apps/os/prepare.py)
 as the image manifest.
 """
 import argparse
@@ -77,7 +79,11 @@ def number(text):
     return value
 
 
-def layout(elf, assets, recognizer, loader):
+# The radio or Bluetooth profile and its firmware (apps/board/main.c, apps/bluetooth).
+PROFILE_SPAN = (0x43000000, 0x43100000)
+
+
+def layout(elf, assets, recognizer, loader, profile=False):
     text = assets.read_text()
     addresses = [int(v, 0) for v in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', text).group(1).split(',')]
     sizes = [int(v, 0) for v in re.search(r'mimus_asset_bytes\[3\]=\{([^}]*)\}', text).group(1).split(',')]
@@ -89,6 +95,8 @@ def layout(elf, assets, recognizer, loader):
     regions = [{'name': name, 'start': a, 'end': a + n}
                for name, a, n in zip(('base-model', 'overlay-model', 'recorded-wav'), addresses, sizes)]
     regions.append({'name': 'recognizer-arena', 'start': arena[0], 'end': arena[0] + arena[1]})
+    if profile:
+        regions.append({'name': 'module-profile', 'start': PROFILE_SPAN[0], 'end': PROFILE_SPAN[1]})
     sections = [(name, s[3], s[3] + s[5]) for name, s in zip(elf.names, elf.sections)
                 if s[2] & 2 and s[5]]  # SHF_ALLOC
     for i, r in enumerate(regions):
@@ -102,7 +110,7 @@ def layout(elf, assets, recognizer, loader):
             'image_end': hex(max(end for _, _, end in sections))}
 
 
-def check(path, assets, recognizer, loader, audio=False):
+def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -150,11 +158,12 @@ def check(path, assets, recognizer, loader, audio=False):
     assert len(entries) == len(set(entries)), 'a start function is listed twice'
     hooks = {one(n)['value'] for n in HOOKS[:3]}
     assert not hooks & set(entries), 'a start entry is a board hook itself'
-    expected = ['mimus', 'thermal'] + (['audio'] if audio else [])
+    expected = (['mimus', 'thermal'] + (['audio'] if audio else []) + (['radio'] if radio else []) +
+                (['headset'] if headset else []))
     assert names == expected, 'start entries %s differ from %s' % (names, expected)
     assert ids == [71] + ([143] if audio else []), 'interrupt IDs %s differ from the build' % ids
     return {'interrupts': interrupts, 'applications': applications,
-            'layout': layout(elf, assets, recognizer, loader)}
+            'layout': layout(elf, assets, recognizer, loader, radio or headset)}
 
 
 def main():
@@ -166,22 +175,25 @@ def main():
     parser.add_argument('--loader', type=Path, required=True, help='boot/a733/stage2/loader.c')
     parser.add_argument('--lifetime', choices=('supervised', 'resident'), required=True)
     parser.add_argument('--audio', choices=('0', '1'), default='0')
+    parser.add_argument('--radio', choices=('0', '1'), default='0')
+    parser.add_argument('--headset', choices=('0', '1'), default='0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    audio = args.audio == '1'
+    audio, radio, headset = args.audio == '1', args.radio == '1', args.headset == '1'
     try:
-        result = check(args.image, args.assets, args.recognizer, args.loader, audio)
+        result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset)
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
     result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
+                   'radio': radio, 'headset': headset,
                    'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
     if args.build_id:
         result['build_id'] = args.build_id.read_text().strip()
     args.output.write_text(json.dumps(result, indent=2) + '\n')
     print('PASS integrated OS link check:', len(result['interrupts']), 'interrupts,',
           len(result['applications']), 'start entries,', len(result['layout']['regions']),
-          'fixed recognition regions')
+          'fixed input regions')
     return 0
 
 
