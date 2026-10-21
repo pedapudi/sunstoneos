@@ -39,10 +39,13 @@ bool model(unsigned i)
 }
 void infer(void *)
 {
- while(live()&&i2s_capture_valid()==0)vTaskDelay(1);
+ // The models are immutable for the session; hashing them during capture
+ // removes that work from the capture-to-transcript latency.
+ const bool models=model(0)&&model(1);
+ while(models&&live()&&i2s_capture_valid()==0)vTaskDelay(1);
  unsigned bytes=i2s_capture_bytes();bool success=false;
- if(i2s_capture_valid()==1&&bytes>=2*I2S_CAPTURE_MIN_SAMPLES&&bytes<=I2S_CAPTURE_MAX_BYTES&&
-    !(bytes&1)&&i2s_capture_copy(retained.wav+44,bytes)&&model(0)&&model(1)){
+ if(models&&i2s_capture_valid()==1&&bytes>=2*I2S_CAPTURE_MIN_SAMPLES&&bytes<=I2S_CAPTURE_MAX_BYTES&&
+    !(bytes&1)&&i2s_capture_copy(retained.wav+44,bytes)){
   auto *wav=retained.wav;std::memcpy(wav,"RIFF",4);put32(wav+4,36+bytes);
   std::memcpy(wav+8,"WAVEfmt ",8);put32(wav+16,16);put16(wav+20,1);put16(wav+22,1);
   put32(wav+24,16000);put32(wav+28,32000);put16(wav+32,2);put16(wav+34,16);
