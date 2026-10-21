@@ -2,6 +2,7 @@
 #define board_usb0_task mimus_unused_usb0_task
 #define exchange mimus_unused_exchange
 #define tud_vendor_tx_cb mimus_unused_tx
+#define BOARD_USB0_STOP() do{board_fail(NULL);a733_typec_revoke(&board.typec.provider);}while(0)
 #include "mimus-usb-base.c"
 #undef board_usb0_task
 #undef exchange
@@ -73,7 +74,6 @@ static void exchange(void)
 void board_usb0_task(void *unused)
 {
     (void)unused;
-    for(;;){if(!board_live(NULL))stop();int r=a733_native_usb_step(&providers.shared);if(r<0)stop();if(r==1)break;vTaskDelay(1);}
-    tusb_rhport_init_t init={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_HIGH};if(!tusb_init(0,&init))stop();
-    for(;;){if(!board_live(NULL))stop();tud_task();a733_usb_prepare();if(polling)dcd_int_handler(0);exchange();vTaskDelay(1);}
+    usb0_service_start();
+    usb0_service_run(exchange);
 }
