@@ -12,6 +12,8 @@ parser.add_argument('--output',type=Path,required=True)
 parser.add_argument('--dcxo26',action='store_true')
 parser.add_argument('--block-only',action='store_true')
 parser.add_argument('--mode',choices=['all','build','execute'],default='all')
+parser.add_argument('--steady-max-reads',type=int,default=21,help='STATUS0 reads allowed in 100 ms of attached monitoring')
+parser.add_argument('--steady-old-loop',action='store_true',help='Model the earlier board loop that yielded after each monitoring step')
 args=parser.parse_args();repo=args.repository.resolve();out=args.output.resolve()
 cache=Path.home()/'.cache/sunstoneos';source=cache/'sources'
 compiler=Path('/usr/lib/llvm-21/bin/clang').resolve()
@@ -224,7 +226,9 @@ def execute(name,start):
  global panic,instruction_allowance
  panic=[];error=None;u.reg_write(UC_ARM64_REG_PC,start)
  for chunk in range(35):
-  if instruction_allowance>=600000000 or time.monotonic()-start_wall>=600:break
+  # Nine cases share one budget. A PMIC wait phase repeats its flag read
+  # within one poll, and modeled time stands still during a call.
+  if instruction_allowance>=900000000 or time.monotonic()-start_wall>=600:break
   try:u.emu_start(u.reg_read(UC_ARM64_REG_PC),0x407fe000,timeout=max(1,int(min(10,600-(time.monotonic()-start_wall))*1000000)),count=10000000)
   except Exception as exc:error=str(exc)
   instruction_allowance+=10000000
@@ -258,11 +262,18 @@ if args.block_only:
  raise SystemExit(0)
 assert all(which in checkpoints for which in (1,2,3,4))
 for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal'),(3,3,'retained-i2c-independent-power-off'),
- (4,3,'provider-stall-power-off'),(5,3,'invalid-host-token'),(6,3,'registry-busy-pending-shutdown'),(7,4,'pre-pin-authority-loss')]:
+ (4,3,'provider-stall-power-off'),(5,3,'invalid-host-token'),(6,3,'registry-busy-pending-shutdown'),(7,4,'pre-pin-authority-loss'),
+ (8,3,'steady-monitor-100ms')]:
  mode=name;context,memory,hardware=checkpoints[point]
  for a,data in memory:u.mem_write(a,data)
  u.context_restore(context);state=copy.deepcopy(hardware);put(symbols['typec_fault_case'],fault)
+ if fault==8 and args.steady_old_loop:put(symbols['typec_steady_old_loop'],1)
  execute(name,u.reg_read(UC_ARM64_REG_PC))
+ if fault==8:
+  steady={'polls':variable('typec_steady_polls'),'status_reads':variable('typec_steady_reads'),'mmio':variable('typec_steady_mmio')}
+  print(json.dumps({'steady_monitor_100ms':steady}),flush=True)
+  (out/'steady-monitor.json').write_text(json.dumps(steady,indent=2)+'\n')
+  assert 0<steady['status_reads']<=args.steady_max_reads
 assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items())
-(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':7,'physical':False,
+(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':8,'physical':False,
  'inputs':len(inputs),'instruction_allowance_upper_bound':instruction_allowance,'scope':'actual native providers; modeled MMIO, scheduler and electrical qualification'},indent=2)+'\n')

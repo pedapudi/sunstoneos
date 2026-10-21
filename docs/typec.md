@@ -90,11 +90,18 @@ During debounce it also reads the latched comparator-change interrupt, so a
 change between samples restarts attachment. It rechecks the other CC pin and
 measures low VBUS before requesting the GPIO task to enable the switch.
 
-VBUS must rise within 275 ms. The provider then enables CC/VBUS and fault
-interrupts and periodically reads the actual CC/VBUS and fault status. A published
-token contains the provider address, owner, attachment generation, polarity and
-observation time. The timestamp is conservatively anchored to the STATUS0
-request, before any receive or STOP delay. Tokens expire after 10 ms. A short
+VBUS must rise within 275 ms. The provider then clears the interrupt registers
+and unmasks only the VBUSOK, comparator-change and overcurrent/temperature
+interrupts. Status reads do not clear them, so INT_N on PL9 stays low after any
+such change, and a low INT_N ends the attachment. Each attached poll samples
+INT_N. While it is high and the last STATUS0/STATUS1 read is younger than 5 ms,
+the provider publishes from the pin sample alone. Otherwise it reads both status
+registers again, chaining the second read into the poll that completes the
+first, and publishes from that read. The status registers therefore never
+remain unread for longer than 5 ms plus one refresh. A published token contains
+the provider address, owner, attachment generation, polarity and observation
+time. The timestamp is the poll's clock sample, taken before the INT_N read or
+the STATUS0 request. Tokens expire after 10 ms. A short
 atomic publication lock and permanent revocation flag protect concurrent host
 snapshot/validation calls; the host never reads mutable service fields.
 
@@ -103,7 +110,10 @@ revokes admission when entry gaps exceed 2 ms, allowing headroom around a 1 ms
 RTOS tick. This scheduling guard does not extend the 5 ms I2C deadline or 10 ms
 attachment and power-health bounds. An active CC or PD transaction requires
 continued polling with task yields; a one-tick sleep is permitted only between
-transactions. Physical scheduler latency remains unqualified. The GPIO task observes
+transactions. The board task sleeps one tick whenever no I2C transfer is in
+flight. In a modeled 100 ms of attached monitoring, it makes 1,194 polls with
+18 status refreshes, against 2,557 polls and 37 refreshes when it also yielded
+after every changed monitoring step and read status on every cycle. Physical scheduler latency remains unqualified. The GPIO task observes
 PL9 and checks deadlines renewed only by real provider progress and attachment
 observations. Host activity never extends them. Detach, expiry or failure closes
 host admission permanently. The GPIO task lowers PL8 independently of the I2C
