@@ -1,4 +1,4 @@
-# Retained HDMI audio preparation and offline observation
+# Retained HDMI audio preparation and observation
 
 The HDMI audio image sends a finite stereo PCM source through DMA0 and I2S3 to
 the HDMI controller while the existing TV0 hardware pattern supplies video.
@@ -7,8 +7,8 @@ slots. The source contains one to 48000 frames, or four to 192000 bytes.
 The fixed upload address is `0x41f10000`.
 
 `apps/hdmi-audio/prepare.py` extends the existing HDMI preparation mechanism.
-The 656-byte session contains the 440-byte pattern session and a 216-byte audio
-suffix. The suffix binds PCM, memory and electrical record digests, an audio
+The version-1 656-byte session contains the 440-byte pattern session and a
+216-byte audio suffix. It supports offline observation only. The suffix binds PCM, memory and electrical record digests, an audio
 authority, the frame count and the existing 104-byte DMA handoff. The packer
 requires the actual native image's geometry and result-publication symbols.
 It retains the shared HDMI clock profile and checks the expected raw reference
@@ -29,8 +29,9 @@ Admission also requires the shared [DMA0 Nonsecure access
 record](dma-pool-session.md) through `dma_nonsecure_access`. It binds the reviewed
 board identity and port, image, session IDs and complete 104-byte DMA handoff.
 The packer freezes the record and every digest-bound supporting observation.
-Repeated supporting references are refused. These prerequisites authorize no
-live capture transport or security-register probe.
+Repeated supporting references are refused. Copied USB capture additionally
+requires the USB entry authority described below. Admission does not authorize
+security-register probes.
 
 These records describe prerequisites; nonzero IDs and asserted flags do not
 establish physical facts. Production preparation rejects modeled authority.
@@ -62,8 +63,8 @@ python3 apps/hdmi-audio/observe.py --image /cache/audio.elf \
   --result /cache/result.bin --ready /cache/ready.bin --output /cache/observation
 ```
 
-The native result is 160 bytes, accompanied by a separately published four-byte
-ready value. Terminal stages distinguish input-ended retention from retained
+The native result contains 160 bytes. A separate four-byte ready value
+publishes its availability for RAM observation. Terminal stages distinguish input-ended retention from retained
 failure. Successful input consumption requires the complete PCM extent, DMA
 service completion and the observed empty I2S3 FIFO. The result records the
 admitted TMDS rate and 48 kHz audio rate. `wire_drained` must remain zero:
@@ -99,3 +100,71 @@ snapshot at `frozen/manifest.json`. Root's launcher result is
 The native run used instruction emulation and modeled device effects. These
 results establish software behavior; physical audio, clock, DMA visibility,
 serializer completion and recovery remain unqualified.
+
+
+## Optional copied USB observation
+
+The optional USB image uses a version-2 816-byte session. Its first 656 bytes
+retain the audio layout; a 160-byte suffix binds a separate USB owner and
+handoff, initial/electrical/supervision record digests, cold reference 1, four
+supply voltages and three shared fabric selections and rates. The USB owner must
+differ from the HDMI, PMIC, audio and DMA owners. ROM reference mode 2 is refused.
+The packer requires the corresponding revision-2 native geometry marker.
+
+Three additional typed records bind the board identity and port, exact image,
+session IDs and USB owner and handoff. They establish cold USB0/USB1 reset and
+gate ownership, exclusion of remote PHY consumers and DMA writers, prior USB DMA
+drain, owned quiet interrupts, and absence of concurrent ROM or firmware access.
+Electrical authority covers the exact rails and fabric profile, stable shared
+fabric and a dedicated sink with no VBUS drive. Supervision requires retention
+for the full 20-second lifetime, one attempt, no reuse after fault, and manual
+whole-board power removal. Existing HDMI, audio and DMA Nonsecure authority
+remains required.
+
+Version-2 admission also carries the existing shared `reservation`, `ddr`,
+`platform` and `recovery` fields. The packer applies the shared supervised entry
+checks for DDR initialization and exclusion, CPU publication and ownership,
+platform conditions and demonstrated manual recovery. It snapshots every
+referenced observation. The supervised caller checks those same frozen bytes
+again when binding the actual board identity and port.
+
+`tools/check-a733-hdmi-audio-supervised.py` uses the existing supervisor and its
+reviewed queue entry. It accepts only the version-2 copied-USB image. It never
+reads running native RAM through FEL. Each sequential 32-byte request names the
+epoch and generation. The 512-byte reply binds that request, the image build ID,
+the complete admitted-session digest, the remaining native lifetime and an
+optional immutable 160-byte audio result. All 224 reserved bytes must be zero.
+The host reads 513 bytes so the native terminal zero-length packet completes the
+512-byte response.
+
+The evidence directory must be new, and its parent must already exist. The
+caller synchronizes that parent before receiving replies. It allows at most 200
+requests, one second per exchange and 19 seconds for the whole capture. Every returned byte string is saved and synchronized
+before decoding or rejecting a late response. Success requires the published
+input-ended result, stopped HDMI, ready USB and no fatal application flag.
+Retained faults are archived without inventing absent source observations.
+There is no acknowledgment or resource-reclamation command; native replies and
+all audio and USB resources remain retained until whole-board power removal.
+Copied observation does not establish physical sound or serializer completion,
+and `wire_drained` remains zero.
+
+Copied USB preparation and host capture passed on 20 October 2026 using the
+actual final image, its exact 816-byte session and the native 512-byte terminal
+reply. The native mailbox and TinyUSB full-speed path produced that reply and
+its terminal zero-length packet. The native fixture seeded the previously
+accepted finite-audio disposition; these cases cover the new publication and
+transport without replaying PCM or DMA behavior.
+
+The focused host batch passed 33 framing and admission refusals. It also checked
+pending and retained-fault records, the 200-request bound, native deadline
+consistency, strict 513-byte reads, archive parent synchronization and failed
+archive writes. Stale and late replies remained available as durable raw files
+while successful completion was refused. Production admission rejected the
+modeled records. The actual supervisor readiness case passed and stopped before
+queue or device access.
+
+The copied-capture host results and selected immutable inputs are preserved at
+`~/.cache/sunstoneos/evidence/hdmi-audio-usb-host-corrected-20261020/frozen/manifest.json`.
+The source provenance record distinguishes the Python bytes included in the
+native image identity from the external producer and capture implementation.
+These software results do not qualify physical USB, HDMI audio or recovery.

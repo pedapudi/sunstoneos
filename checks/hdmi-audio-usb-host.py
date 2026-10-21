@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
 import shutil
@@ -94,8 +95,11 @@ def main():
         def write(self,endpoint,data,timeout):assert endpoint==2 and len(data)==32 and 0<timeout<=1000;return len(data)
         def read(self,endpoint,size,timeout):assert endpoint==0x81 and size==513 and 0<timeout<=1000;return actual
     folder=args.output/'device-terminal';folder.mkdir();record={}
-    host.capture_device(Device(),lambda:None,19.0,session,pcm,folder,record,lambda:None,now=lambda:0.0,pause=lambda delay:None)
-    assert record['hdmi_audio_result']=='observed-success'
+    fsync=os.fsync;synced=[]
+    def sync(fd):synced.append(os.fstat(fd).st_ino);return fsync(fd)
+    with patch.object(host.os,'fsync',sync):
+        host.capture_device(Device(),lambda:None,19.0,session,pcm,folder,record,lambda:None,now=lambda:0.0,pause=lambda delay:None)
+    assert record['hdmi_audio_result']=='observed-success' and synced[0]==folder.parent.stat().st_ino
     admission=json.loads(frozen['admission.bin']);cache={path:frozen['entry-evidence-'+str(i)+'.bin'] for i,path in enumerate(json.loads(frozen['entry-index.bin']))}
     for name,change in (
         ('entry-reservation',lambda record:record.update(reservation=0)),
