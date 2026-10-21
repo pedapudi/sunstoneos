@@ -35,8 +35,8 @@ def session_check(raw):
 
 def geometry_check(geometry):
     require(len(geometry)==8 and tuple(geometry[:5])==(640,480,640,640,0x3231564e) and
-        geometry[5] in (1,2) and tuple(geometry[6:])==(1,0),
-        'Deinterlace requires fixed top-first NV12 WEAVE or first-operation motion.')
+        geometry[5] in (1,2,3) and tuple(geometry[6:])==(1,0),
+        'Deinterlace requires fixed top-first NV12 WEAVE, first-operation motion or fixed-strength TNR.')
     return 460800 if geometry[5]==1 else 921600
 
 def embedded_reference(image,session):
@@ -294,7 +294,8 @@ def _image_parts(data,mode=None):
     _,geometry=immutable('deinterlace_geometry',88)
     compiled=struct.unpack('<11Q',geometry)
     require(compiled in [(0x4153373344494131,revision,888,288,0x41f00000,20,capacity,460800,192,640,480)
-        for revision,capacity in ((1,460800),(2,921600))] and (mode!=2 or compiled[1]==2),
+        for revision,capacity in ((1,460800),(2,921600),(3,921600))] and
+        (mode not in (2,3) or compiled[1]>=mode),
         'Deinterlace compiled input capacity or geometry differs.')
     address,identity=immutable('a733_smp_build_id',32)
     for p in parts:p.pop('flags')
