@@ -41,7 +41,9 @@ def extract(source, archive, directory, stamp):
             bundle.extractall(staging, filter="data")
         if [x.name for x in staging.iterdir()] != [directory.name]:
             raise SystemExit(f"{archive} does not hold exactly {directory.name}")
-        if stamp.is_file() and stamp.read_text().strip() == source["sha256"]:
+        # Another fetch may have finished meanwhile; a stamp alone is not a tree.
+        if (directory.is_dir() and stamp.is_file()
+                and stamp.read_text().strip() == source["sha256"]):
             return
         if directory.exists():
             # A tree without a stamp may be partial; keep it for inspection.

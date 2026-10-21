@@ -88,6 +88,13 @@ def main():
     kept = [x for x in cache.iterdir() if x.name.startswith("tree-1.unverified-")]
     assert len(kept) == 1 and not (kept[0] / "src/a.h").exists(), kept
 
+    # A deleted tree whose stamp remains is extracted again.
+    shutil.rmtree(directory)
+    for _ in range(2):
+        result = fetch("tree")
+        assert result.returncode == 0, result
+        assert all((directory / path).read_bytes() == data for path, data in files.items())
+
     # An edited pinned file is refused, by a fetch and by --verify.
     (directory / "src/a.c").write_bytes(b"int a = 1;\n")
     result = fetch("tree")
