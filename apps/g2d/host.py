@@ -30,7 +30,7 @@ def decode(raw,session):
     size=geometry[1]*geometry[2]
     require(count==(size if status==1 else 0) and len(raw)==HEADER+count,'G2D copied extent differs.')
     result=dict(status=status,bytes=count,width=geometry[0],height=geometry[1],stride=geometry[2],
-        format='ARGB8888-little-endian-BGRA',operation={1:'fill',2:'copy',3:'source-over-solid'}[geometry[4]],
+        format='ARGB8888-little-endian-BGRA',operation={1:'fill',2:'copy',3:'source-over-solid',4:'scale2x'}[geometry[4]],
         complete=complete,rcq_status=rcq,scanned_masters=scanned,guards=guards,physical_qualified=False)
     if status in (1,3):
         require(complete==1 and rcq&1 and scanned==0x400 and guards==1,'G2D completion or guard proof differs.')
@@ -38,18 +38,21 @@ def decode(raw,session):
             require(hashlib.sha256(raw[HEADER:]).digest()==raw[96:128],'G2D copied pixel digest differs.')
         result['sha256']=raw[96:128].hex()
     if geometry[4]==3:result['arithmetic_scope']='Ideal straight-alpha /255 nearest reference; hardware rounding unqualified.'
+    if geometry[4]==4:result['arithmetic_scope']='Scale2x interpolation unchecked; no qualified numerical oracle.'
     return result
 
 
 def expected_output(source,session):
-    """Fill/copy bytes and ideal source-over oracle, including zero padding.
+    """Fill/copy bytes, ideal source-over bytes, or None for scaling.
 
     Blending rounds the ideal /255 result to nearest. Hardware quantization is
-    unqualified; modeled pixels compared here do not qualify device arithmetic."""
+    unqualified; modeled pixels compared here do not qualify device arithmetic.
+    Scaling has no numerical oracle and must not imply a pixel comparison."""
     preparation.session_check(session)
     width,height,stride,format_,operation,dx,dy,w,h,sx,sy,color=struct.unpack_from('<12I',session,856)
     require(len(source)==height*stride and hashlib.sha256(source).digest()==session[768:800],
         'G2D reference source differs from sealed input.')
+    if operation==4:return None
     out=bytearray(len(source))
     row=struct.pack('<I',color)*w if operation==1 else None
     for y in range(h):
@@ -107,9 +110,13 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             require(result['status']==1,'Unexpected already-acknowledged G2D output.')
             output=evidence/'output.argb';supervisor.durable_frame(output,frame[HEADER:])
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
-                matches_cpu_reference=frame[HEADER:]==expected,wire_header_hex=frame[:HEADER].hex())
+                matches_cpu_reference=None if expected is None else frame[HEADER:]==expected,wire_header_hex=frame[:HEADER].hex())
             record['g2d_output']=copied;save()
-            if struct.unpack_from('<I',session,872)[0]==3:
+            if expected is None:
+                copied['reference_qualified']=False
+                copied['reference_comparison']='unchecked-no-interpolation-oracle'
+                save()
+            elif struct.unpack_from('<I',session,872)[0]==3:
                 copied['reference_qualified']=False
                 copied['reference_comparison']='matches-ideal' if copied['matches_cpu_reference'] else 'differs-from-ideal'
                 save()
@@ -137,6 +144,7 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
                 record['g2d_result']='unobserved';record.pop('durable_result',None);raise
             result.update(matches_cpu_reference=copied['matches_cpu_reference'],ack_observed=True)
             if 'reference_qualified' in copied:result['reference_qualified']=False
+            if expected is None:result['reference_comparison']=copied['reference_comparison']
             return result
         raise supervisor.CaptureWindowExpired('G2D exhausted its bounded pending-query budget.')
     except BaseException as error:
