@@ -122,6 +122,8 @@ static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
     if((n->port->test||!a733_pcie_native_address(a,width,1))&&
        !a733_pcie_epf_native_write(n->port,a,width,v))return 0;
 #endif
+    /* Outbound iATU writes must match the owned region's recorded window. */
+    if(a>=0x06300000&&a<0x06302000&&!a733_pcie_atu_write_allowed(n->port,a,v))return 0;
     if(a==0x0600000a&&v!=0x0604)return 0;
     if(a>=0x06000040&&a<=0x06000114&&
         (a!=0x06000000u+n->port->root_cap+0xcu&&a!=0x06000000u+n->port->root_cap+0x30u))return 0;

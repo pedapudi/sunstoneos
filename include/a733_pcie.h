@@ -22,6 +22,9 @@ struct a733_pcie_config {
     struct a733_pin_config inherited[4]; /* PD20..23; PD22 GPIO output low. */
     uint32_t fabric[3]; /* Exact AHB/NSI/MBUS selectors/divisors/gates. */
     uint32_t fabric_hz[3];
+    /* Advertised and target link speed: 1, 2 or 3 for 2.5, 5 or 8 GT/s. The
+     * board kernel DTS sets max-link-speed 3. The applications select 1. */
+    unsigned link_speed;
 };
 struct a733_pcie_ops {
     int (*now)(void *,uint64_t *);
@@ -39,6 +42,12 @@ struct a733_pcie_endpoint {
     uint32_t class_revision;
     uint8_t header_type, pcie_cap, msi_cap;
 };
+/* Unrolled outbound iATU region registers and the DTS 32-bit MEM aperture. */
+#define A733_PCIE_ATU_OUTBOUND(region) (UINT32_C(0x06300000)+UINT32_C(0x200)*(region))
+#define A733_PCIE_MEM UINT32_C(0x22000000)
+#define A733_PCIE_MEM_BYTES UINT32_C(0x06000000)
+/* Last programming of one owned outbound region; bytes is zero until first use. */
+struct a733_pcie_window { uint32_t type, cpu, pci, bytes; };
 /* Private fixed storage, immutable after initialization except through this
  * API. Every dependency has platform lifetime; no copy, rebind or reinit.
  * One designated task advances it. Application configuration reads serialize
@@ -69,7 +78,10 @@ struct a733_pcie {
     uint64_t deadline,last_now,wait_until;
     uint64_t perst_since; /* Start of the current PERST timing interval: hold start, PHY completion, then release. */
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
+    unsigned speed_change; /* Directed speed change requested above Gen1. */
     uint8_t root_cap;
+    /* Region 0: core CFG0 window. Region 1: the claimed test client's MEM window. */
+    struct a733_pcie_window windows[2];
     uint32_t last_value;
     struct a733_pcie_epf_test *test; /* One-way concrete test ownership. */
 };
@@ -83,6 +95,9 @@ int a733_pcie_init(struct a733_pcie *,const struct a733_pcie_config *,
     struct a733_rail_leases *,struct a733_pmic *,struct a733_gpu_resource_manager *);
 enum a733_pcie_result a733_pcie_poll(struct a733_pcie *);
 /* READY publishes copied direct endpoint0:0 identity with BME observed clear.
+ * Above Gen1 the link trains at 2.5 GT/s, then one directed speed change runs
+ * before configuration access; any x1 speed up to link_speed is accepted and
+ * every later identity check requires that same negotiated link status.
  * Cold endpoint compliance is trusted; disabled inbound iATU is NOT isolation.
  * No DMA, MSI activation, hotplug, bridge enumeration or memory reclamation is
  * authorized by this initial profile. Failures keep every lease and any held
@@ -109,6 +124,13 @@ enum a733_pcie_result a733_pcie_test_end(struct a733_pcie *,int);
 /* Internal driver interface: callers already own the common register mutex. */
 int a733_pcie_read(struct a733_pcie *,uintptr_t,unsigned,uint32_t *);
 int a733_pcie_write(struct a733_pcie *,uintptr_t,unsigned,uint32_t);
+/* Disable, observe clear, program and enable one outbound region. Region 0
+ * admits only the CFG0 window for bus 1 device 0; region 1 admits one identity
+ * MEM window inside the aperture after a test claim. The caller observes the
+ * enable bit. The recorded window is the region's native write permission. */
+int a733_pcie_atu_program(struct a733_pcie *,unsigned region,uint32_t type,
+    uint32_t cpu,uint32_t pci,uint32_t bytes);
+int a733_pcie_atu_write_allowed(const struct a733_pcie *,uintptr_t,uint32_t);
 int a733_pcie_phy_step(struct a733_pcie *); /* 1 complete,0 pending,-1 fault. */
 int a733_pcie_phy_address(uintptr_t,unsigned,unsigned writing);
 #endif
