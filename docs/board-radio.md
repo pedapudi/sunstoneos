@@ -71,6 +71,17 @@ IPv4 stack after the supplicant authorizes the controlled port. Startup,
 association and security retain fixed deadlines. Transient transport activity
 defers attachment before consuming supplicant or socket-service storage.
 
+Within one iteration, `board_radio_poll` repeats complete session polls while
+the SDIO controller, transport, platform or session reports progress. It stops
+at the first poll that only waits, on any non-pending result, or after 500
+microseconds of CPU time; the owner task then sleeps one tick. Each repeated
+session poll performs its own platform liveness and deadline checks. The budget
+covers the largest 4,096-byte receive at the optional four-bit 25 MHz clock and
+limits the time taken from other tasks on the same core. At one bit and 400 kHz
+an in-flight command usually ends the loop, so the main saving is the removed
+tick waits between small steps such as credit, status and length reads and
+record parsing.
+
 Before sockets exist, each iteration consumes at most one copied dispatcher
 event and one diagnostic record. The application retains the latest copies and
 counts; this prevents station-event backpressure from blocking startup. Socket
@@ -93,7 +104,7 @@ bus, although the four pinned blobs contain about 391,000 bytes. At the one-bit
 With the smallest command, polling and confirmation framing it takes at least
 46.7 seconds. The supervised profile allows 40 seconds from session start to its
 bootstrap deadline, so firmware loading cannot finish in time; power-up, card
-setup, controller latency and the one-transfer-step-per-tick cadence add more.
+setup and controller latency add more.
 A four-second watchdog window cannot cover cold startup either.
 
 [`checks/radio-bootstrap-budget.py`](../checks/radio-bootstrap-budget.py)

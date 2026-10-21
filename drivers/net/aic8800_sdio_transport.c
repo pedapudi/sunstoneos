@@ -402,6 +402,8 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     if (!ok || !sunxi_sdio_submit(t->card->host, &r, deadline)) return 0;
     t->pending = 1; return 1;
 }
+static void advanced(struct aic8800_sdio_transport *t)
+{ if (t->progress != UINT64_MAX) ++t->progress; }
 static void delay(struct aic8800_sdio_transport *t, uint64_t now, uint64_t ticks)
 {
     if (!later(now, ticks, &t->wait_until)) fail(t, AIC8800_TRANSPORT_TIMEOUT);
@@ -578,6 +580,10 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
         (t->state != AIC8800_TRANSPORT_SETUP && t->state != AIC8800_TRANSPORT_IDENTITY &&
          t->state != AIC8800_TRANSPORT_FIRMWARE && t->state != AIC8800_TRANSPORT_RUNTIME)) return;
     t->entered = 1;
+    enum aic8800_transport_state state = t->state;
+    uint8_t phase = t->phase, pending = t->pending, held = t->held;
+    size_t cursor = t->cursor;
+    uint64_t host_progress = t->card->host->progress;
     if (!observe(t, &now)) goto out;
     if (t->pending) {
         sunxi_sdio_poll(t->card->host);
@@ -601,6 +607,8 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
 post:
     if (t->state != AIC8800_TRANSPORT_FAULT) (void)observe(t, &now);
 out:
+    if (t->state != state || t->phase != phase || t->pending != pending || t->held != held ||
+        t->cursor != cursor || t->card->host->progress != host_progress) advanced(t);
     t->entered = 0;
 }
 int aic8800_transport_peek(const struct aic8800_sdio_transport *t, struct aic8800_sdio_response *out)
@@ -615,7 +623,7 @@ static int consume_receive(struct aic8800_sdio_transport *t,const void *owner)
     if(owner){t->entered=1;if(!observe(t,&now)){t->entered=0;return 0;}}
     if (t->data) aic8800_data_consumed(t->data, t, t->unrelated.record);
     if (t->wifi) aic8800_wifi_consumed(t->wifi, t, t->unrelated.record);
-    t->cursor += t->unrelated.consumed; t->held = 0;
+    t->cursor += t->unrelated.consumed; t->held = 0; advanced(t);
     if(owner){int ok=observe(t,&now);t->entered=0;return ok;}return 1;
 }
 
@@ -652,7 +660,7 @@ int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void 
     size_t expected=(record[2]&0x10)?4+((length+3)&~(size_t)3):((length+60+3)&~(size_t)3);
     if(consumed!=expected||consumed>available)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
-    if(ok){t->cursor+=consumed;ok=observe(t,&now);}
+    if(ok){t->cursor+=consumed;advanced(t);ok=observe(t,&now);}
     t->entered=0;return ok;
 }
 void aic8800_transport_fault_receive(struct aic8800_sdio_transport *t,const void *owner)

@@ -67,6 +67,9 @@ struct aic8800_sdio_transport {
     enum aic8800_codec_result codec_result;
     uint64_t deadline, wait_until, enable_deadline;
     uint64_t completed_transfers; /* Owner-only successful nonempty CMD53 count. */
+    /* Owner-only saturating count of calls that changed worker state, admitted
+     * or completed a host request, or advanced the receive cursor. */
+    uint64_t progress;
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
     const void *receive_owner;
@@ -169,6 +172,9 @@ int aic8800_transport_finish_security(struct aic8800_sdio_transport *);
 #endif
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
+ * A call that only waits (a pending host step without progress, a poll interval,
+ * held backpressure) leaves `progress` unchanged; owners may repeat calls while
+ * it advances and must yield when it does not.
  */
 void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining

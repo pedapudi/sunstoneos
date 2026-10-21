@@ -3,6 +3,9 @@
 #include "a733_storage_digest.h"
 #include <string.h>
 enum { STARTING,CONNECTING,SECURING,ONLINE };
+/* CPU time one owner poll may spend repeating session steps that advance. At
+ * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
+#define BOARD_RADIO_POLL_BUDGET_US 500u
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -92,6 +95,15 @@ static enum board_radio_result publish(struct board_radio *r,enum board_radio_re
     }
     return result;
 }
+struct progress {uint64_t host,transport;unsigned platform,session;};
+static struct progress progress(const struct board_radio *r)
+{return (struct progress){r->platform.host.progress,r->session.transport.progress,r->platform.stage,r->session.stage};}
+static int advanced(const struct board_radio *r,const struct progress *before)
+{
+    struct progress now=progress(r);
+    return now.host!=before->host||now.transport!=before->transport||
+        now.platform!=before->platform||now.session!=before->session;
+}
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
@@ -105,7 +117,19 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
     if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
-    enum a733_radio_session_result result=a733_radio_session_poll(&r->session);
+    /* Repeat whole session polls, each with its own platform and deadline
+     * checks, while a step advances. Yield on the first call that only waits:
+     * an in-flight bus operation without FIFO progress, a poll interval, an
+     * idle receive status or event backpressure. */
+    enum a733_radio_session_result result;
+    for(uint64_t start=now;;){
+        struct progress before=progress(r);
+        result=a733_radio_session_poll(&r->session);
+        if((result!=A733_SESSION_PENDING&&result!=A733_SESSION_MANAGEMENT&&result!=A733_SESSION_NETWORK)||
+            !advanced(r,&before))break;
+        if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
+        if(now-start>=BOARD_RADIO_POLL_BUDGET_US)break;
+    }
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
     if(r->session.dispatcher.initialized){
