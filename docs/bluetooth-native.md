@@ -188,7 +188,11 @@ initializer claims L2CAP once without discarding partial H4 framing or staged
 bytes. Its ordinary strict initializer retains its existing empty-input rule.
 Every service admission checks actual security again.
 
-The gateway advertises no telephony service or active call. After hands-free
+The gateway enables the AG's [call control](bluetooth-hfp.md#call-control-adds-the-mandatory-call-procedures),
+so the headset's call-status, operator, subscriber and error-reporting queries
+receive their defined answers. Its SDP record sets Network to 1 to match. The
+service and call indicators stay zero because no telephony exists: no call is
+ever reported and dialing is refused. After hands-free
 setup, it opens CVSD synchronous audio and collects signed 16-bit little-endian
 PCM at 8 kHz. Packet boundaries may split a sample. The application copies bytes
 across boundaries and preserves each packet's acquisition serial, source length,

@@ -110,8 +110,10 @@ static int upper_init(struct bluetooth_application *a)
     struct bt_security_policy sec={.allow_just_works=p->allow_just_works,.minimum_level=p->minimum_security,.deadline=a->deadline};
     memcpy(sec.peer,p->peer,6);memcpy(sec.pin,p->pin,17);
     voice.wideband=p->mode>=3&&(a->hci.identity.features[2]&8)&&(a->hci.identity.features[3]&0x80);
+    /* Call control answers the headset's mandatory call queries; with no
+     * telephony every call indicator stays zero and dialing is refused. */
     struct bt_sdp_ag_profile ag={.handle=0x10000,.version=0x0109,.rfcomm_channel=(uint8_t)p->server_channel,
-        .brsf_features=voice.wideband?512:0,.supported_features=voice.wideband?32:0};
+        .brsf_features=(voice.wideband?512u:0u)|BT_HFP_AG_CALL_FEATURES,.supported_features=voice.wideband?32:0,.network=1};
     voice.audio_binding=(struct bt_sco_binding){p->scheduling_authority,p->receive_latency_us,p->response_timeout_us,audio_current,audio_security,&context};
     if(bt_acl_init(&voice.acl,&a->hci)!=1||bt_security_init(&voice.security,&voice.acl,a->owner,a->recovery_state,&sec,a->profile->command_timeout_us)!=1||
         bt_rfcomm_registry_init(&voice.registry,&voice.l2cap,psm,service,&context)!=1||
@@ -221,7 +223,8 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(voice.stage==CONTROL){
         if(voice.rfcomm.phase!=BT_RFCOMM_OPEN)return 0;
         static const uint8_t no_telephony[7]={0};
-        if(bt_hfp_ag_init_codecs(&voice.ag,&voice.rfcomm,no_telephony,voice.operation_deadline,p->line_timeout_us,voice.wideband?6:0)!=1)return fail();
+        if(bt_hfp_ag_init_calls(&voice.ag,&voice.rfcomm,no_telephony,voice.operation_deadline,p->line_timeout_us,
+            voice.wideband?6:0,4000000)!=1)return fail();
         voice.stage=AG;return 0;
     }
     if(voice.stage==AG||voice.stage==FALLBACK){
