@@ -69,6 +69,19 @@ follow:
   with status 0. `SANITIZE` is the complete flag list for new checks.
   `environment()` adds `UBSAN_OPTIONS=halt_on_error=1` for child processes as a
   second guard.
+- **Negative cases name their refusal.** `refused(action, reason, kind)` passes
+  only when `action()` raises `kind` (by default `ValueError`) with `reason` in
+  its message. An accepted input fails the case, and any other exception
+  propagates. A fixture error, such as a `KeyError` while building the input,
+  or a refusal from an unrelated earlier check therefore cannot count as the
+  refusal that the case exercises. Pass the exception type that the validator
+  declares, or a tuple when an injected failure raises another type, such as
+  `OSError`.
+- **Host tools resolve in one place.** `CACHE`, `CLANG` and `LLD` come from
+  `SUNSTONE_CACHE`, `SUNSTONE_HOST_CLANG` and `SUNSTONE_HOST_LLD` when set.
+  Their defaults are `~/.cache/sunstoneos`, `/usr/bin/clang-21` and the
+  `ld.lld-21` link under the cache's `host/usr/bin`. New checks use these
+  values instead of literal paths.
 - **Reruns keep earlier attempts.** `Steps` records labelled commands in
   `steps.json` for checks that resume with `--run-only`. A step that passed with
   the same command is skipped. A retried step appends its command to the existing
