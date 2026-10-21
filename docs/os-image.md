@@ -2,7 +2,9 @@
 
 `sunstone-a733-os` is one FreeRTOS image that runs the
 [mimus board application](../apps/mimus-board/README.md) and a continuous
-thermal service together. The mimus board application already combines the
+thermal service together. An optional supervised build also captures each
+utterance from an I2S microphone and recognizes it in place of the recorded
+WAV. The mimus board application already combines the
 USB0 device service, the USB2 host with keyboard and read-only USB storage,
 the Type-C and PMIC owners and native mimus recognition at EL0. The OS image
 adds three fixed parts to it:
@@ -14,19 +16,21 @@ adds three fixed parts to it:
 - a resident lifetime, in which the armed hardware watchdog is renewed only
   while every listed service makes progress.
 
-Status: implemented, built and host-modeled in both lifetimes. No board has run
-the image. The sources are in [apps/os](../apps/os) and the build is
-[cmake/a733-os.cmake](../cmake/a733-os.cmake).
+Status: implemented, built and host-modeled in both lifetimes and with
+microphone recognition. No board has run the image. The sources are in
+[apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
 
 The build selects one of two lifetimes. Both use the 808-byte OS session
-described below and the same services.
+described below and the same services. The microphone build extends the
+session to 992 bytes and is supervised only, because the stage-2 loader
+admits only the 808-byte session.
 
 | | Supervised | Resident |
 | --- | --- | --- |
 | CMake option | `SUNSTONE_A733_OS=ON` | also `SUNSTONE_A733_OS_RESIDENT=ON` |
-| Contract producer | FEL host launcher; none exists yet for this image | Stage-2 loader ([boot slots](boot-slots.md)) |
+| Contract producer | FEL host launcher (`tools/check-a733-os-supervised.py`) | Stage-2 loader ([boot slots](boot-slots.md)) |
 | Contract magic | `0x415337334f534331` | `0x415337334f524331` |
 | Result magic | `0x415337334f535231` | `0x415337334f525231` |
 | WDT0 | Disabled, never renewed | Armed in the four-second mode by the loader |
@@ -67,7 +71,8 @@ A failed service parks or suspends without recording.
 | Thermal service | Each completed step, at least every 25 ms | 1 s |
 
 The windows are configuration. No board measurement of the longest pause of
-each loop exists yet.
+each loop exists yet. The microphone build has no resident lifetime, so its
+capture client reports no progress record.
 
 The board's supervising task runs every 20 ms. While the board is live and
 every service has reported within its window, it renews WDT0 at most once per
@@ -95,7 +100,8 @@ requires the FEL redirect and flag that the resident contract forbids.
 [irq.c](../apps/os/irq.c) defines the table used by the shared
 [interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners).
 It has one entry: the thermal sensor interrupt, INTID 71, on CPU0 with GIC
-priority `0xd8`. The OS boot patch ([boot.patch](../apps/os/boot.patch)) calls
+priority `0xd8`. The microphone build adds the DMA0 interrupt, INTID 143, on
+CPU0 with the same priority; CPU0 runs the DMA service worker. The OS boot patch ([boot.patch](../apps/os/boot.patch)) calls
 `a733_irq_table_route` after common boot has disabled every SPI and both
 groups, and stops with status 3, detail `0x310`, if routing is refused. The
 thermal service enables and masks its own source.
@@ -120,6 +126,7 @@ returns failure at the first refusal, so `main.c` keeps its panic codes 10 and
 | --- | --- | --- | --- |
 | `mimus` | None; the recognizer runs at EL0 | Validates the model, WAV and arena mappings for workload 0 or 4 | Starts the recognizer for workload 0 or 4 |
 | `thermal` | The thermal task | Validates the sealed OS session | Validates the sealed OS session, acquires its clocks and starts its task |
+| `audio` (microphone build) | The capture client, the DMA bootstrap task and the DMA worker | Validates the sealed OS session and adds PB5, PB6 and PB8 to the board pin authority | Starts the capture client, the audio clock and pin bindings, the DMA service and its interrupt |
 
 The mimus board image binds the same three named mimus functions directly to
 the board hooks, so its behavior is unchanged.
@@ -139,14 +146,15 @@ by the thermal owner's facts ([os.h](../apps/os/os.h)):
 | 768..771 | ADC clock flag, alarm mask 31, critical mask 31, zero |
 | 772..801 | Hot, hysteresis and critical codes for five channels |
 | 802..807 | Zero |
+| 808..991 | Microphone build only: the I2S receive facts below |
 
 The OS admission ([admission.c](../apps/os/admission.c)) requires the OS
-contract magic, `reserved[0] = 0x41f00000`, `reserved[1] = 808` and the SHA-256
-of all 808 bytes in `reserved[2..5]`. The thermal owner must differ from the
+contract magic, `reserved[0] = 0x41f00000`, `reserved[1]` equal to the session
+size and the SHA-256 of the whole session in `reserved[2..5]`. The thermal owner must differ from the
 PMIC, USB0, Type-C and USB2 owners, and the thermal fields follow the thermal
 application's rules. The unchanged board check then validates every other
-field against the board prefix. EL3 seals all 808 bytes; the thermal entry
-reads them through `board_session_sealed`.
+field against the board prefix. EL3 seals the whole session; each start
+entry reads it through `board_session_sealed`.
 
 ## Thermal service
 
@@ -159,13 +167,64 @@ its clock token and register mutex. THROTTLE and NORMAL are load hints; the
 image has no reduced-load mode, so it ignores them. USB0 output does not carry
 thermal readings; the mimus result frame has no free field for them.
 
+## Microphone recognition
+
+The `SUNSTONE_A733_OS_AUDIO` build adds receive from an I2S0 microphone on
+PB5 (BCLK), PB6 (LRCK) and PB8 (DIN) at 16 kHz, mono, 16-bit samples in 32-bit
+wire slots. [audio.c](../apps/os/audio.c) composes it as the
+[I2S image](i2s-application.md) does: the board's clock registry, pin manager,
+register mutex and counter serve a separate audio lease owner, an audio
+parent, the I2S0 receive binding and one DMA0 channel through the
+[DMA service](dma-service.md). The DMA0 interrupt wakes the DMA worker at each
+period's queue end, with a one-tick fallback; the
+[I2S stream](i2s-stream.md#fifo-occupancy-bounds-the-handoff) describes why
+that matters for the period bridge.
+
+The 184 bytes after the thermal facts carry the receive facts:
+
+| Bytes | Field |
+| --- | --- |
+| 808..831 | Magic `0x415337334f415531`, version 1, size 184 |
+| 832..863 | SHA-256 of the reviewed audio entry record |
+| 864..967 | Supervised DMA0 handoff: allowed clock configuration, controller, evidence, mode `0x5f`, owned and service channels |
+| 968..975 | Audio parent cold flag; capture length, 16,000 to 80,000 samples |
+| 976..984 | Inherited function, pull and drive of PB5, PB6 and PB8 |
+| 985..991 | Zero |
+
+The admission applies the I2S image's DMA rules to these fields: one service
+channel on the controller at `0x04601000`, every channel owned, the board's
+fabric clocks, the board lease as handoff and evidence identity, and no
+deadline in the session. The DMA owner differs from every board owner and
+from the thermal owner.
+
+Each recognition generation captures one utterance after its trigger: at
+startup for workload 0, after each keyboard Enter for workload 4. The
+recognizer requests the capture of its generation, waits for it, and passes
+the captured WAV to the unchanged `mimus_transcribe_recorded` in place of the
+recorded WAV. The OS build applies [recognition.patch](../apps/os/recognition.patch)
+to the mimus board recognizer for this; the models, the arena and the result
+frame are unchanged, and the captured PCM is not exported over USB0.
+
+The capture client follows the I2S transcription client. It opens the stream,
+submits it, copies each completed period into the WAV buffer and returns the
+period, and cancels once the capture length is complete, still holding the
+final period. It publishes the WAV only after the service reports CANCELED
+with its reservations held. The next generation's request releases that WAV:
+the client then returns the final period, reaps, closes and opens the stream
+again. A discontinuous or wrong period, a stream that stops by itself, a
+refused request or a failed board ends the session through `board_fail`. The
+stream, its periods, the leases and the masked interrupt then stay held until
+whole-board power removal.
+
 ## Build and checks
 
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  [-DSUNSTONE_A733_OS_RESIDENT=ON]
+  [-DSUNSTONE_A733_OS_RESIDENT=ON | -DSUNSTONE_A733_OS_AUDIO=ON]
 cmake --build BUILD --target sunstone-a733-os
 ```
+
+Configuration refuses the resident lifetime together with the microphone.
 
 The configuration needs the same inputs as the mimus board image. Each link
 runs [os-image-link.py](../checks/os-image-link.py), which reads the final ELF
@@ -178,6 +237,8 @@ and fails the build unless:
 - every table INTID is a distinct SPI with a valid core and priority, and its
   handler is a linked function;
 - every start entry has a distinct name and distinct linked functions;
+- the start list is `mimus`, `thermal` and, in the microphone build, `audio`,
+  and the table holds INTID 71 and, in the microphone build, INTID 143;
 - the base and overlay models, the recorded WAV and the recognizer arena do
   not overlap one another or any allocated image section, and lie inside the
   stage-2 loader's load window `0x41000000..0x47000000`, below the monitor
@@ -185,14 +246,18 @@ and fails the build unless:
   `assets.h`, the arena from `apps/mimus/recorded.h` and the window from
   `boot/a733/stage2/loader.c`.
 
-The result is written to `os-image/link-check.json` in the build directory.
+The result is written to `os-image/link-check.json` in the build directory,
+with the image hash, build identity, lifetime and microphone selection. The
+supervised preparation uses it as the image manifest.
 
 [os-image-model.c](../checks/os-image-model.c) compiles the image's table,
-supervision and admission sources on the host, once for each lifetime:
+supervision and admission sources on the host, once for each lifetime and
+once for the microphone build:
 
 - every INTID from 32 to 1019 is delivered; only INTID 71 on CPU0 reaches the
-  thermal handler, and route programming and an inherited-pending refusal are
-  checked against a modeled distributor;
+  thermal handler and, in the microphone build, only INTID 143 on CPU0 reaches
+  the DMA0 handler; route programming and an inherited-pending refusal of each
+  entry are checked against a modeled distributor;
 - the supervising task runs every 20 ms from time zero and the services first
   report at 0.3 s; with every service reporting, the watchdog is renewed about
   once per second for 120 modeled seconds and never expires;
@@ -206,23 +271,77 @@ supervision and admission sources on the host, once for each lifetime:
 - a service that reports and then stalls before another service's first
   report closes the task when its window expires;
 - a refused renewal leads to expiry at four seconds;
-- the nominal session and contract are admitted, with 26 resident and 24
-  supervised refusals of single changed fields.
+- the nominal session and contract are admitted, with 26 resident, 24
+  supervised and 44 microphone-build refusals of single changed fields.
 
 The command is in the file's header comment.
 [os-image-stage2.py](../checks/os-image-stage2.py) runs the stage-2 entry path
 and passes its contract to this model (see [boot slots](boot-slots.md#checks)).
 
+[os-image-audio.py](../checks/os-image-audio.py) compiles `apps/os/audio.c`
+with the microphone build's own flags, against modeled DMA service replies,
+and runs it under unicorn. Two generations each capture 32,000 bytes over
+eight periods and publish the exact WAV header and copied bytes; the second
+returns the held final period, reaps, closes and reopens the stream first. A
+discontinuous period and a stream that stops by itself are refused with the
+stream held, and the recognizer's request rules are checked. The build
+directory must export its compile commands (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
+
+## Supervised preparation and launch
+
+[prepare.py](../apps/os/prepare.py) freezes one supervised session offline.
+It requires the passed link check of the exact image, a reviewed session
+template of 808 or 992 bytes and a reviewed entry record
+(`a733-os-supervised-entry-v1`), and refuses to prepare without them. The
+record names the session identities and carries:
+
+- the board's supervised entry facts: target USB identity and port, DDR
+  reservation, platform conditions and one-attempt manual recovery;
+- the four thermal fact records, whose hashes the session holds;
+- the DDR reservation of the models, the recorded WAV and the arena;
+- in the microphone build, the audio entry record, whose hash the session
+  holds and which names the DMA handoff, the inherited pins, the capture
+  profile and the microphone, clock, DMA prior-drain and retention
+  conditions, and the DMA0 nonsecure-access authority for the session's
+  identities.
+
+The bundle holds the image, the session with the linked build identity, the
+board's SRAM launcher rebuilt for the OS request magic `0x415337334f534c31`,
+the OS contract magic and the session size, every evidence byte the record
+cites, and the three recognition inputs.
+
+[check-a733-os-supervised.py](../tools/check-a733-os-supervised.py) launches
+one bundle under an existing coordinator claim. It revalidates the frozen
+bundle and record, requires the `supervised-ram-recovery` and
+`os-supervised-software` prerequisites, and uses the shared supervised
+transport, which holds the `tools/usb-access.py` board lock and makes one
+attempt. Capture is the mimus board protocol over USB0; the microphone build
+allows at most two recognitions in the 59-second capture window.
+
+[os-image-launch.py](../checks/os-image-launch.py) checks both tools on a
+linked image with labeled synthetic records. The image's admission, compiled
+from `os-image-model.c` with the image's build identity, accepts the prepared
+session with the contract the launcher would complete, and refuses it with
+another session size or after the startup deadline. Preparation refuses a
+wrong or incomplete record, changed thermal or audio evidence, a link check of
+another configuration and out-of-rule session fields, each before writing any
+output. The launcher freezes the bundle without the original evidence files,
+refuses another USB instance and a changed session, and its read-only claim
+check accepts only the matching claim through a modeled database connection.
+No device, queue database or FEL program is opened.
+
 ## Not yet integrated
 
-- **I2S receive and the DMA0 interrupt service.** I2S capture is a separate,
-  non-board image with its own session, contract, DMA and interrupt patches.
-  Joining it needs a combined session extension, audio and DMA ownership in
-  the board providers, and a table entry for its interrupts.
+- **Resident microphone recognition.** The stage-2 loader admits only the
+  808-byte session. A resident microphone build needs the loader to admit the
+  992-byte session and a progress record from the capture client.
+- **Continuous recognition.** Each generation captures one finite utterance.
+  Streaming capture into the recognizer needs a pinned mimus change.
 - **Radio, CE, HDMI, camera, GPU and NPU.** The board image owns radio and CE
   for odd workloads, which the mimus board composition does not admit. The
   others are separate images.
-- **Physical use.** The supervised image needs a launcher and a reviewed
-  preparation record for the 808-byte session. The resident image also needs every stage-2 entry
-  prerequisite, a qualified watchdog-expiry recovery, and measured service
-  windows.
+- **Physical use.** The supervised image needs a reviewed entry record
+  from physical evidence and a queued board test; the microphone build also
+  needs a connected, reviewed microphone. The resident image needs every
+  stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
+  measured service windows.
