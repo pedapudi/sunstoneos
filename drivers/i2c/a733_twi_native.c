@@ -44,7 +44,7 @@ static int pin_health(struct a733_twi_native *n)
     /* A transaction holds immutable exclusive pin leases. No register mutex
      * may be nested under I2C. Inspect shared pin failure before acquisition
      * and again after releasing I2C, before any result can be taken. */
-    if(n->held==2)return 1;
+    if(n->held==A733_PLATFORM_I2C11_LOCK+1)return 1;
     if(n->held==1)return !n->config.pins->failed;
     if(!n->deadline ||
        !a733_platform_lock_enter(n->config.locks,A733_PLATFORM_REGISTER_LOCK,n->deadline))return 0;
@@ -89,14 +89,14 @@ static int enter(void *v,uint64_t deadline)
     enum a733_pins_result p=a733_pins_held_banked(n->config.pins,&n->config.pin,&owned,deadline);
     if(p==A733_PINS_BUSY)return 0;
     if(p!=A733_PINS_OK || !owned)return -1;
-    if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C_LOCK,deadline))return 0;
-    n->held=2;n->until=deadline;return 1;
+    if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C11_LOCK,deadline))return 0;
+    n->held=A733_PLATFORM_I2C11_LOCK+1;n->until=deadline;return 1;
 }
 static void leave(void *v)
 {
     struct a733_twi_native *n=v;
-    if(!held(n,A733_PLATFORM_I2C_LOCK)){n->fault=1;return;}
-    a733_platform_lock_leave(n->config.locks,A733_PLATFORM_I2C_LOCK);n->held=0;
+    if(!held(n,A733_PLATFORM_I2C11_LOCK)){n->fault=1;return;}
+    a733_platform_lock_leave(n->config.locks,A733_PLATFORM_I2C11_LOCK);n->held=0;
 }
 static void retain(void *v)
 {
@@ -136,13 +136,13 @@ static void store(uintptr_t a,uint32_t v)
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     struct a733_twi_native *n=v;
-    if(!out || !held(n,A733_PLATFORM_I2C_LOCK) || !address(a,0) || settled(n,n->until)!=1)return 0;
+    if(!out || !held(n,A733_PLATFORM_I2C11_LOCK) || !address(a,0) || settled(n,n->until)!=1)return 0;
     *out=load(a);return settled(n,n->until)==1;
 }
 static int write32(void *v,uintptr_t a,uint32_t x)
 {
     struct a733_twi_native *n=v;
-    if(!held(n,A733_PLATFORM_I2C_LOCK) || !address(a,1) || x>255 ||
+    if(!held(n,A733_PLATFORM_I2C11_LOCK) || !address(a,1) || x>255 ||
        (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68) ||
        settled(n,n->until)!=1)return 0;
     store(a,x);return settled(n,n->until)==1;

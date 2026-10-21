@@ -1,36 +1,5 @@
 #include "a733_pins.h"
 
-/* Pinned A733 types 4 and 10 share these mux/pull/drive/IRQ addresses. */
-enum { MUX0=0x100, MUX1=0x104, DRIVE0=0x120, DRIVE1=0x124, PULL=0x130,
-       DATA=0x110, IRQ_ENABLE=0x150, WORDS=5 };
-static const unsigned offsets[WORDS] = {MUX0, MUX1, DRIVE0, DRIVE1, PULL};
-struct plan { uint32_t mask[WORDS], old[WORDS], target[WORDS]; };
-
-int a733_pin_fields(unsigned pin, struct a733_pin_fields *out)
-{
-    if (!out || pin < 4 || pin > 8) return 0;
-    *out = (struct a733_pin_fields){A733_PINS_BASE + MUX0 + (pin/8)*4,
-        A733_PINS_BASE + PULL, A733_PINS_BASE + DRIVE0 + (pin/8)*4,
-        (pin%8)*4, pin*2, (pin%8)*4};
-    return 1;
-}
-int a733_pin_config_valid(unsigned pin, struct a733_pin_config c)
-{
-    /* Function 1 is GPIO output and 14 is EINT: both require further services. */
-    static const uint16_t functions[A733_PINS_COUNT] = {
-        0x81fdu, 0x81f9u, 0x80fdu, 0x81fdu, 0x81fdu
-    };
-    return pin >= 4 && pin <= 8 && c.function < 16 &&
-           (functions[pin-4] & (1u << c.function)) && c.pull <= 2 && c.drive <= 3;
-}
-int a733_pins_init(struct a733_pins *m, const struct a733_pins_operations *ops,
-                    void *cookie, uint32_t authorized)
-{
-    if (!authorized || (authorized & ~A733_PINS_PB_MASK)) return 0;
-    struct a733_pin_handoff handoff={0};
-    handoff.authorized[A733_PIN_B]=authorized;
-    return a733_pins_init_banks(m,ops,cookie,&handoff);
-}
 static int in_time(struct a733_pins *m, uint64_t deadline)
 {
     uint64_t now;
@@ -54,188 +23,12 @@ static enum a733_pins_result leave(struct a733_pins *m, enum a733_pins_result re
 { m->operations.leave(m->cookie); return result; }
 static enum a733_pins_result fault(struct a733_pins *m)
 { m->failed = 1; return A733_PINS_RECOVERY; }
-static int read_word(struct a733_pins *m, unsigned offset, uint32_t *v)
-{ return m->operations.read(m->cookie, A733_PINS_BASE + offset, v); }
-static int match(struct a733_pins *m, const struct a733_pin_lease *h)
-{
-    if (!h || !h->id || !h->owner || !h->pb_mask || (h->pb_mask & ~m->authorized_pb_mask)) return 0;
-    uint32_t found = 0;
-    for (unsigned bank=1; bank<A733_PIN_BANKS; ++bank)
-        for (unsigned pin=0; pin<32; ++pin)
-            if (m->pins[bank][pin].id==h->id && m->pins[bank][pin].owner==h->owner) {
-                if (bank!=A733_PIN_B || pin<4 || pin>8 || m->pins[bank][pin].banked) return 0;
-                found |= 1u<<pin;
-            }
-    return found == h->pb_mask;
-}
-static void add_fields(struct plan *p, unsigned pin, struct a733_pin_config initial,
-                       struct a733_pin_config target)
-{
-    unsigned word = pin/8, shift = (pin%8)*4;
-    p->mask[word] |= 15u<<shift; p->old[word] |= (uint32_t)initial.function<<shift;
-    p->target[word] |= (uint32_t)target.function<<shift;
-    p->mask[word+2] |= 15u<<shift; p->old[word+2] |= (uint32_t)initial.drive<<shift;
-    p->target[word+2] |= (uint32_t)target.drive<<shift;
-    p->mask[4] |= 3u<<(pin*2); p->old[4] |= (uint32_t)initial.pull<<(pin*2);
-    p->target[4] |= (uint32_t)target.pull<<(pin*2);
-}
-/* No writes. Matching bits establish configuration, never ownership by itself. */
-static enum a733_pins_result preflight(struct a733_pins *m, const struct plan *p,
-                                       uint32_t pins, uint64_t deadline)
-{
-    uint32_t value;
-    if (!in_time(m, deadline)) return A733_PINS_BUSY;
-    if (!read_word(m, IRQ_ENABLE, &value)) return fault(m);
-    if (value & pins) return A733_PINS_CONFLICT;
-    for (unsigned i=0; i<WORDS; ++i) if (p->mask[i]) {
-        if (!in_time(m, deadline)) return A733_PINS_BUSY;
-        if (!read_word(m, offsets[i], &value)) return fault(m);
-        if ((value & p->mask[i]) != p->old[i]) return A733_PINS_CONFLICT;
-    }
-    return A733_PINS_OK;
-}
-/* The mutex covers the full read-modify-write-readback sequence and all words.
- * A failed write may already have reached hardware; no compensating I/O follows. */
-static enum a733_pins_result update(struct a733_pins *m, unsigned word, uint32_t mask, uint32_t expected,
-                   uint32_t bits, uint64_t deadline, unsigned *attempted)
-{
-    uint32_t before, after;
-    if (!in_time(m, deadline)) return *attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY;
-    if (!read_word(m, offsets[word], &before) || (before & mask) != expected)
-        return A733_PINS_RECOVERY;
-    uint32_t value = (before & ~mask) | bits;
-    if (before == value) {
-        if (!in_time(m, deadline)) return *attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY;
-        return A733_PINS_OK;
-    }
-    if (!in_time(m, deadline)) return *attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY;
-    *attempted = 1;
-    if (!m->operations.write(m->cookie, A733_PINS_BASE+offsets[word], value) ||
-        !read_word(m, offsets[word], &after) || after != value) return A733_PINS_RECOVERY;
-    if (!in_time(m, deadline)) return A733_PINS_RECOVERY;
-    return A733_PINS_OK;
-}
-static enum a733_pins_result apply(struct a733_pins *m, const struct plan *p,
-                                    uint64_t deadline, unsigned *attempted)
-{
-    enum a733_pins_result result;
-    for (unsigned i=0; i<2; ++i) if (p->mask[i]) {
-        result=update(m,i,p->mask[i],p->old[i],p->mask[i],deadline,attempted);
-        if (result!=A733_PINS_OK) return result;
-    }
-    for (unsigned i=2; i<WORDS; ++i) if (p->mask[i]) {
-        result=update(m,i,p->mask[i],p->old[i],p->target[i],deadline,attempted);
-        if (result!=A733_PINS_OK) return result;
-    }
-    for (unsigned i=0; i<2; ++i) if (p->mask[i]) {
-        result=update(m,i,p->mask[i],p->mask[i],p->target[i],deadline,attempted);
-        if (result!=A733_PINS_OK) return result;
-    }
-    return A733_PINS_OK;
-}
 /* Output aliases could overwrite manager ownership or the operation's input. */
 static int overlap(const void *a, size_t n, const void *b, size_t k)
 {
     uintptr_t x=(uintptr_t)a, y=(uintptr_t)b;
     return n>UINTPTR_MAX-x || k>UINTPTR_MAX-y || (x<y+k && y<x+n);
 }
-enum a733_pins_result a733_pins_acquire(struct a733_pins *m, uint64_t owner,
-    const struct a733_pin_request *r, size_t count, struct a733_pin_lease *out, uint64_t deadline)
-{
-    if (!m || !r || !out || !owner || !count || count>A733_PINS_COUNT ||
-        out->id || out->owner || out->pb_mask ||
-        overlap(m,sizeof(*m),out,sizeof(*out)) || overlap(m,sizeof(*m),r,count*sizeof(*r)) ||
-        overlap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
-    struct plan p={0}; uint32_t mask=0;
-    for (size_t i=0; i<count; ++i) {
-        unsigned pin=r[i].pb_pin;
-        if (!a733_pin_config_valid(pin,r[i].expected) || !a733_pin_config_valid(pin,r[i].desired) ||
-            (mask & (1u<<pin))) return A733_PINS_INVALID;
-        mask |= 1u<<pin; add_fields(&p,pin,r[i].expected,r[i].desired);
-    }
-    enum a733_pins_result result=enter(m,deadline);
-    if (result!=A733_PINS_OK) return result;
-    if (m->failed) return leave(m,A733_PINS_RECOVERY);
-    if ((mask & ~m->authorized_pb_mask) || !m->next_id) return leave(m,A733_PINS_INVALID);
-    for (unsigned i=0; i<A733_PINS_COUNT; ++i)
-        if ((mask & (1u<<(i+4))) && m->pins[A733_PIN_B][i+4].id) return leave(m,A733_PINS_CONFLICT);
-    result=preflight(m,&p,mask,deadline);
-    if (result!=A733_PINS_OK) return leave(m,result);
-    if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
-    *out=(struct a733_pin_lease){m->next_id++,owner,mask};
-    for (size_t i=0; i<count; ++i)
-        m->pins[A733_PIN_B][r[i].pb_pin]=(struct a733_pin_state){.id=out->id,.owner=owner,.initial=r[i].expected,.current=r[i].desired};
-    unsigned attempted=0;
-    result=apply(m,&p,deadline,&attempted);
-    if (result==A733_PINS_BUSY) {
-        for (unsigned i=0; i<A733_PINS_COUNT; ++i)
-            if (mask & (1u<<(i+4))) m->pins[A733_PIN_B][i+4]=(struct a733_pin_state){0};
-        *out=(struct a733_pin_lease){0};
-        return leave(m,result);
-    }
-    if (result!=A733_PINS_OK) return leave(m,fault(m));
-    return leave(m,A733_PINS_OK);
-}
-enum a733_pins_result a733_pins_release(struct a733_pins *m, struct a733_pin_lease *h,
-                                        unsigned quiescent, uint64_t deadline)
-{
-    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
-    enum a733_pins_result result=enter(m,deadline);
-    if (result!=A733_PINS_OK) return result;
-    if (!match(m,h)) return leave(m,A733_PINS_CONFLICT);
-    if (m->failed) return leave(m,A733_PINS_RECOVERY);
-    struct plan p={0};
-    for (unsigned i=0; i<A733_PINS_COUNT; ++i) if (h->pb_mask & (1u<<(i+4)))
-        add_fields(&p,i+4,m->pins[A733_PIN_B][i+4].current,m->pins[A733_PIN_B][i+4].initial);
-    result=preflight(m,&p,h->pb_mask,deadline);
-    if (result==A733_PINS_BUSY) return leave(m,result);
-    if (result!=A733_PINS_OK) return leave(m,fault(m));
-    unsigned attempted=0;
-    result=apply(m,&p,deadline,&attempted);
-    if (result==A733_PINS_BUSY) return leave(m,result);
-    if (result!=A733_PINS_OK) return leave(m,fault(m));
-    for (unsigned i=0; i<A733_PINS_COUNT; ++i)
-        if (h->pb_mask & (1u<<(i+4))) m->pins[A733_PIN_B][i+4]=(struct a733_pin_state){0};
-    *h=(struct a733_pin_lease){0};
-    return leave(m,A733_PINS_OK);
-}
-enum a733_pins_result a733_pins_read_inputs(struct a733_pins *m, const struct a733_pin_lease *h,
-    uint32_t mask, uint32_t *levels, uint64_t deadline)
-{
-    if (!m || !h || !levels || !mask || (mask & ~h->pb_mask) ||
-        overlap(m,sizeof(*m),levels,sizeof(*levels)) || overlap(h,sizeof(*h),levels,sizeof(*levels)))
-        return A733_PINS_INVALID;
-    enum a733_pins_result result=enter(m,deadline);
-    if (result!=A733_PINS_OK) return result;
-    if (!match(m,h)) return leave(m,A733_PINS_CONFLICT);
-    if (m->failed) return leave(m,A733_PINS_RECOVERY);
-    struct plan p={0};
-    for (unsigned i=0; i<A733_PINS_COUNT; ++i) if (mask & (1u<<(i+4))) {
-        if (m->pins[A733_PIN_B][i+4].current.function!=0) return leave(m,A733_PINS_INVALID);
-        add_fields(&p,i+4,m->pins[A733_PIN_B][i+4].current,m->pins[A733_PIN_B][i+4].current);
-    }
-    result=preflight(m,&p,mask,deadline);
-    if (result==A733_PINS_BUSY) return leave(m,result);
-    if (result!=A733_PINS_OK) return leave(m,fault(m));
-    uint32_t value;
-    if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
-    if (!read_word(m,DATA,&value)) return leave(m,fault(m));
-    if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
-    *levels=value & mask;
-    return leave(m,A733_PINS_OK);
-}
-enum a733_pins_result a733_pins_held(struct a733_pins *m, const struct a733_pin_lease *h,
-                                   int *held, uint64_t deadline)
-{
-    if (!m || !h || !held || overlap(m,sizeof(*m),held,sizeof(*held)) ||
-        overlap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
-    enum a733_pins_result result=enter(m,deadline);
-    if (result!=A733_PINS_OK) return result;
-    *held=match(m,h);
-    return leave(m,A733_PINS_OK);
-}
-
-/* Expanded operations use the same state and mutex as the PB entry points. */
 #define DEBOUNCE_MASK UINT32_C(0x71)
 static uintptr_t bank_base(unsigned b)
 { return b<A733_PIN_L ? A733_PINS_BASE+0x80+b*0x80 : A733_PINS_R_BASE+(b-A733_PIN_L)*0x30; }
@@ -269,12 +62,12 @@ int a733_pins_init_banks(struct a733_pins *m,const struct a733_pins_operations *
     }
     /* The caller supplies zero-initialized private storage, as for the PB API. */
     m->operations=*ops; m->cookie=cookie; m->handoff=*h;
-    m->authorized_pb_mask=h->authorized[A733_PIN_B]&A733_PINS_PB_MASK;
     for (unsigned i=0;i<2;++i) m->banks[A733_PIN_L+i].latch=h->latch[i].value;
     m->next_id=1; m->initialized=1;
     return 1;
 }
-static int match_banked(struct a733_pins *m,const struct a733_pin_lease_banked *h)
+/* banked selects the token format: 1 for bank-qualified, 0 for PB leases. */
+static int match_kind(struct a733_pins *m,const struct a733_pin_lease_banked *h,unsigned banked)
 {
     if (!h || !h->id || !h->owner || h->masks[0]) return 0;
     uint32_t any=0;
@@ -282,7 +75,7 @@ static int match_banked(struct a733_pins *m,const struct a733_pin_lease_banked *
         uint32_t found=0;
         for (unsigned p=0;p<32;++p)
             if (m->pins[b][p].id==h->id && m->pins[b][p].owner==h->owner) {
-                if (!m->pins[b][p].banked) return 0;
+                if (m->pins[b][p].banked!=banked) return 0;
                 found|=1u<<p;
             }
         if (found!=h->masks[b] || (found & ~m->handoff.authorized[b])) return 0;
@@ -290,6 +83,8 @@ static int match_banked(struct a733_pins *m,const struct a733_pin_lease_banked *
     }
     return any!=0;
 }
+static int match_banked(struct a733_pins *m,const struct a733_pin_lease_banked *h)
+{ return match_kind(m,h,1); }
 static enum a733_pins_result field_match(struct a733_pins *m,uintptr_t a,
     unsigned shift,uint32_t mask,uint32_t expected,uint64_t deadline)
 {
@@ -462,7 +257,7 @@ static enum a733_pins_result apply_expanded(struct a733_pins *m,const struct exp
 static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
     const struct a733_pin_request_banked *r,size_t count,
     const struct a733_pin_output_condition *condition,
-    struct a733_pin_lease_banked *out,uint64_t deadline)
+    struct a733_pin_lease_banked *out,uint64_t deadline,unsigned banked)
 {
     if (!m || !r || !out || !owner || !count || count>A733_PIN_MAX_REQUESTS || !empty_banked(out) ||
         overlap(m,sizeof(*m),r,count*sizeof(*r)) || overlap(m,sizeof(*m),out,sizeof(*out)) ||
@@ -562,7 +357,7 @@ static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
         struct expanded_plan *q=&plan[i];
         m->pins[q->b][q->p]=(struct a733_pin_state){.id=out->id,.owner=owner,
             .initial=q->old,.current=q->target,.initial_output=old_output[i],.current_output=q->output,
-            .initial_irq=q->old_irq,.current_irq=q->irq,.banked=1};
+            .initial_irq=q->old_irq,.current_irq=q->irq,.banked=(uint8_t)banked};
     }
     unsigned attempted=0;
     result=apply_expanded(m,plan,count,deb_old,deb_new,deb_banks,deadline,&attempted);
@@ -581,7 +376,7 @@ static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
 enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owner,
     const struct a733_pin_request_banked *r,size_t count,struct a733_pin_lease_banked *out,uint64_t deadline)
 {
-    return acquire_banked(m,owner,r,count,0,out,deadline);
+    return acquire_banked(m,owner,r,count,0,out,deadline,1);
 }
 enum a733_pins_result a733_pins_acquire_banked_checked(struct a733_pins *m,uint64_t owner,
     const struct a733_pin_request_banked *r,size_t count,
@@ -589,12 +384,12 @@ enum a733_pins_result a733_pins_acquire_banked_checked(struct a733_pins *m,uint6
     struct a733_pin_lease_banked *out,uint64_t deadline)
 {
     if (!condition) return A733_PINS_INVALID;
-    return acquire_banked(m,owner,r,count,condition,out,deadline);
+    return acquire_banked(m,owner,r,count,condition,out,deadline,1);
 }
-static enum a733_pins_result subset(struct a733_pins *m,const struct a733_pin_lease_banked *h,
-    unsigned b,uint32_t mask,unsigned function,uint64_t deadline)
+static enum a733_pins_result subset_kind(struct a733_pins *m,const struct a733_pin_lease_banked *h,
+    unsigned b,uint32_t mask,unsigned function,uint64_t deadline,unsigned banked)
 {
-    if (!match_banked(m,h)) return A733_PINS_CONFLICT;
+    if (!match_kind(m,h,banked)) return A733_PINS_CONFLICT;
     if (m->failed) return A733_PINS_RECOVERY;
     if (!b || b>=A733_PIN_BANKS || !mask || (mask&~h->masks[b])) return A733_PINS_INVALID;
     for (unsigned p=0;p<32;++p) if (mask&(1u<<p)) {
@@ -604,13 +399,15 @@ static enum a733_pins_result subset(struct a733_pins *m,const struct a733_pin_le
     }
     return A733_PINS_OK;
 }
-enum a733_pins_result a733_pins_release_banked(struct a733_pins *m,
-    struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
+static enum a733_pins_result subset(struct a733_pins *m,const struct a733_pin_lease_banked *h,
+    unsigned b,uint32_t mask,unsigned function,uint64_t deadline)
+{ return subset_kind(m,h,b,mask,function,deadline,1); }
+static enum a733_pins_result release(struct a733_pins *m,
+    struct a733_pin_lease_banked *h,uint64_t deadline,unsigned banked)
 {
-    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
     enum a733_pins_result result=enter(m,deadline);
     if (result!=A733_PINS_OK) return result;
-    if (!match_banked(m,h)) return leave(m,A733_PINS_CONFLICT);
+    if (!match_kind(m,h,banked)) return leave(m,A733_PINS_CONFLICT);
     if (m->failed) return leave(m,A733_PINS_RECOVERY);
     struct expanded_plan plan[A733_PIN_MAX_REQUESTS]; size_t count=0;
     uint32_t deb_old[A733_PIN_BANKS]={0},deb_new[A733_PIN_BANKS]={0},deb_banks=0;
@@ -649,17 +446,23 @@ enum a733_pins_result a733_pins_release_banked(struct a733_pins *m,
     *h=(struct a733_pin_lease_banked){0};
     return leave(m,A733_PINS_OK);
 }
+enum a733_pins_result a733_pins_release_banked(struct a733_pins *m,
+    struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
+{
+    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
+    return release(m,h,deadline,1);
+}
 static int observation_arguments(struct a733_pins *m,const struct a733_pin_lease_banked *h,uint32_t *out)
 {
     return m && h && out && !overlap(m,sizeof(*m),out,sizeof(*out)) && !overlap(h,sizeof(*h),out,sizeof(*out));
 }
-enum a733_pins_result a733_pins_read_inputs_banked(struct a733_pins *m,
-    const struct a733_pin_lease_banked *h,unsigned b,uint32_t mask,uint32_t *levels,uint64_t deadline)
+static enum a733_pins_result read_inputs(struct a733_pins *m,
+    const struct a733_pin_lease_banked *h,unsigned b,uint32_t mask,uint32_t *levels,
+    uint64_t deadline,unsigned banked)
 {
-    if (!observation_arguments(m,h,levels)) return A733_PINS_INVALID;
     enum a733_pins_result r=enter(m,deadline);
     if (r!=A733_PINS_OK) return r;
-    r=subset(m,h,b,mask,0,deadline);
+    r=subset_kind(m,h,b,mask,0,deadline,banked);
     if (r!=A733_PINS_OK) return leave(m,r);
     uint32_t value;
     if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
@@ -667,6 +470,12 @@ enum a733_pins_result a733_pins_read_inputs_banked(struct a733_pins *m,
     if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
     *levels=value&mask;
     return leave(m,A733_PINS_OK);
+}
+enum a733_pins_result a733_pins_read_inputs_banked(struct a733_pins *m,
+    const struct a733_pin_lease_banked *h,unsigned b,uint32_t mask,uint32_t *levels,uint64_t deadline)
+{
+    if (!observation_arguments(m,h,levels)) return A733_PINS_INVALID;
+    return read_inputs(m,h,b,mask,levels,deadline,1);
 }
 enum a733_pins_result a733_pins_write_outputs(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,unsigned b,uint32_t mask,uint32_t levels,uint64_t deadline)
@@ -728,15 +537,20 @@ enum a733_pins_result a733_pins_irq_ack(struct a733_pins *m,
     /* A level or new edge may immediately reassert; zero readback is invalid. */
     return leave(m,r==A733_PINS_OK || r==A733_PINS_BUSY ? r : fault(m));
 }
+static enum a733_pins_result held_by(struct a733_pins *m,
+    const struct a733_pin_lease_banked *h,int *held,uint64_t deadline,unsigned banked)
+{
+    enum a733_pins_result r=enter(m,deadline);
+    if (r!=A733_PINS_OK) return r;
+    *held=match_kind(m,h,banked);
+    return leave(m,A733_PINS_OK);
+}
 enum a733_pins_result a733_pins_held_banked(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,int *held,uint64_t deadline)
 {
     if (!m || !h || !held || overlap(m,sizeof(*m),held,sizeof(*held)) ||
         overlap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
-    enum a733_pins_result r=enter(m,deadline);
-    if (r!=A733_PINS_OK) return r;
-    *held=match_banked(m,h);
-    return leave(m,A733_PINS_OK);
+    return held_by(m,h,held,deadline,1);
 }
 
 enum a733_pins_result a733_pins_pwm0_fan_low(struct a733_pins *m,
@@ -780,4 +594,77 @@ enum a733_pins_result a733_pins_pwm0_fan_resume(struct a733_pins *m,
     if(r!=A733_PINS_OK)return leave(m,r==A733_PINS_BUSY&&!attempted?r:fault(m));
     s->current=plan.target;s->current_output=0;
     return leave(m,A733_PINS_OK);
+}
+
+/* PB4..PB8 entry points. Each translates its pins and lease to bank B and runs
+ * the bank-qualified implementation, so both APIs share one validation,
+ * read-modify-write and deadline path. PB tokens and bank-qualified tokens
+ * keep separate formats: neither API accepts the other's token. */
+int a733_pin_fields(unsigned pin, struct a733_pin_fields *out)
+{ return pin >= 4 && pin <= 8 && a733_pin_fields_banked(A733_PIN_B,pin,out); }
+int a733_pin_config_valid(unsigned pin, struct a733_pin_config c)
+{
+    /* Function 1 is GPIO output and 14 is EINT: both require further services. */
+    return pin >= 4 && pin <= 8 && c.function != 1 && c.function != 14 &&
+           a733_pin_config_valid_banked(A733_PIN_B,pin,c);
+}
+int a733_pins_init(struct a733_pins *m, const struct a733_pins_operations *ops,
+                    void *cookie, uint32_t authorized)
+{
+    if (!authorized || (authorized & ~A733_PINS_PB_MASK)) return 0;
+    struct a733_pin_handoff handoff={0};
+    handoff.authorized[A733_PIN_B]=authorized;
+    return a733_pins_init_banks(m,ops,cookie,&handoff);
+}
+static struct a733_pin_lease_banked bank_b(const struct a733_pin_lease *h)
+{
+    struct a733_pin_lease_banked v={h->id,h->owner,{0}};
+    v.masks[A733_PIN_B]=h->pb_mask;
+    return v;
+}
+enum a733_pins_result a733_pins_acquire(struct a733_pins *m, uint64_t owner,
+    const struct a733_pin_request *r, size_t count, struct a733_pin_lease *out, uint64_t deadline)
+{
+    if (!m || !r || !out || !owner || !count || count>A733_PINS_COUNT ||
+        out->id || out->owner || out->pb_mask ||
+        overlap(m,sizeof(*m),out,sizeof(*out)) || overlap(m,sizeof(*m),r,count*sizeof(*r)) ||
+        overlap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
+    struct a733_pin_request_banked requests[A733_PINS_COUNT];
+    for (size_t i=0; i<count; ++i) {
+        if (!a733_pin_config_valid(r[i].pb_pin,r[i].expected) ||
+            !a733_pin_config_valid(r[i].pb_pin,r[i].desired)) return A733_PINS_INVALID;
+        requests[i]=(struct a733_pin_request_banked){.bank=A733_PIN_B,.pin=r[i].pb_pin,
+            .expected=r[i].expected,.desired=r[i].desired};
+    }
+    struct a733_pin_lease_banked lease={0};
+    enum a733_pins_result result=acquire_banked(m,owner,requests,count,0,&lease,deadline,0);
+    /* RECOVERY retains a populated token; every other failure leaves it empty. */
+    *out=(struct a733_pin_lease){lease.id,lease.owner,lease.masks[A733_PIN_B]};
+    return result;
+}
+enum a733_pins_result a733_pins_release(struct a733_pins *m, struct a733_pin_lease *h,
+                                        unsigned quiescent, uint64_t deadline)
+{
+    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
+    struct a733_pin_lease_banked lease=bank_b(h);
+    enum a733_pins_result result=release(m,&lease,deadline,0);
+    if (result==A733_PINS_OK) *h=(struct a733_pin_lease){0};
+    return result;
+}
+enum a733_pins_result a733_pins_read_inputs(struct a733_pins *m, const struct a733_pin_lease *h,
+    uint32_t mask, uint32_t *levels, uint64_t deadline)
+{
+    if (!m || !h || !levels || !mask || (mask & ~h->pb_mask) ||
+        overlap(m,sizeof(*m),levels,sizeof(*levels)) || overlap(h,sizeof(*h),levels,sizeof(*levels)))
+        return A733_PINS_INVALID;
+    struct a733_pin_lease_banked lease=bank_b(h);
+    return read_inputs(m,&lease,A733_PIN_B,mask,levels,deadline,0);
+}
+enum a733_pins_result a733_pins_held(struct a733_pins *m, const struct a733_pin_lease *h,
+                                   int *held, uint64_t deadline)
+{
+    if (!m || !h || !held || overlap(m,sizeof(*m),held,sizeof(*held)) ||
+        overlap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
+    struct a733_pin_lease_banked lease=bank_b(h);
+    return held_by(m,&lease,held,deadline,0);
 }
