@@ -168,17 +168,21 @@ busy slots, the wait before a start is at most
 
 (S − 1) × (G + max(D, W)) + P + G + C,
 
-and a held reply arrives within that wait plus D + P + G + H + 2C. A started
-post-job check finishes before any later preparation, so no further job's
-P + G can enter a reply. The order costs no steady-state throughput: the worker
+and a held reply arrives within that wait plus
+max(D, H + C) + P + G + H + 2C. Here H is the check time of the largest
+read-only region of any slot, because any catalogue model can be loaded. A
+started post-job check finishes before any later preparation, so no further
+job's P + G can enter a reply. The previous job's check can still delay one:
+it starts after this job's trigger, and the worker handles this job's
+completion only after that check ends, up to H + C after the trigger. The order costs no steady-state throughput: the worker
 does the same work in each period G + max(D, W), and a start that waits for the
 rest of one H stays inside that period because W > H. A LOAD with n steps
 completes within n × (G + max(D, W)) under steady load. For ShuffleNetV2 with
 W > D that is about 1,000 steps and 7.4 s portable, or about 290 steps and
 2.2 s with the SHA-2 instructions; with one slot, a load runs on an idle worker.
 Worker terms take the 1.25 factor where USB0 shares core 0. A host check
-computes the three bounds for each image and refuses one whose client collect
-timeout is shorter than the reply bound.
+computes the three bounds for each image, using these formulas and factors, and
+refuses an image whose client collect timeout is shorter than the reply bound.
 
 While W > D the NPU completes one job per G + W. Each step below applies while
 the measured W / D still exceeds 1, and each is a later change with its own
@@ -237,8 +241,9 @@ counters record the baseline against `npu_session.c`. New cases:
   past A's stream, then B: the END tail reaches the END mark;
 - three slots running while a fourth loads with jobs shorter than W: starts
   and the load stay within their bounds;
-- SUBMITs from two other slots as a job completes, with credits that make
-  D < H: the reply stays within the reply bound;
+- SUBMITs from two other slots as a job completes, where one slot's H exceeds
+  P + G + C + D, so its check delays the next job's completion handling: the
+  reply stays within the reply bound;
 - a dropped interrupt while bulk work is pending: completion within C of full
   idle; no `0x10` read while INTID 97 is unmasked; a late notification does
   not complete the next job; a mask deferral is retried;
