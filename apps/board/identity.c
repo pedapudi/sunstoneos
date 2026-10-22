@@ -1,6 +1,7 @@
 #include "identity.h"
 #include "session.h"
 #include "a733_board_application.h"
+#include "a733_mmio.h"
 #include "a733_cpu_coherence.h"
 #include "boot.h"
 /* Written once by admitted primary EL3 before SMP starts. */
@@ -17,10 +18,10 @@ int board_identity_prepare(uint64_t deadline)
     /* The session digest binds secure SID ownership/exclusion evidence. These
      * four source-defined read-only words are the entire admitted access. */
     for(unsigned i=0;i<4;++i){
-        __asm__ volatile("dsb sy":::"memory");
-        identity.words[i]=*(volatile const uint32_t *)(uintptr_t)(0x03006200+4*i);
+        a733_mmio_dsb_sy();
+        identity.words[i]=a733_mmio_read32(0x03006200+4*i);
     }
-    __asm__ volatile("dsb sy":::"memory");
+    a733_mmio_dsb_sy();
     if(a733_board_radio_workload(s->workload)&&
        (a733_cpu_coherence_publish(s->radio_profile_address,s->radio_profile_bytes,deadline)!=1||
         a733_cpu_coherence_publish(0x43010000,0xf0000,deadline)!=1))return 0;
