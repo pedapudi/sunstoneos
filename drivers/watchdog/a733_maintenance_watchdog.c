@@ -3,6 +3,7 @@
 #include "a733_storage_update_native.h"
 #include "a733_counter_clock.h"
 #include "a733_platform_locks.h"
+#include "a733_range.h"
 #include <string.h>
 
 struct a733_maintenance_lease {
@@ -42,8 +43,7 @@ static int bound(const struct a733_maintenance_transfer *t,uint64_t before,uint6
     uint64_t reserve=t->guard_us+A733_MAINTENANCE_OPERATION_US;
     if(reserve<t->guard_us || t->minimum_reload_us<=reserve ||
        t->storage->deadline_us<=t->guard_us ||
-       before>UINT64_MAX-(t->minimum_reload_us-reserve))return 0;
-    *until=before+t->minimum_reload_us-reserve;
+       !a733_deadline_after(before,t->minimum_reload_us-reserve,until))return 0;
     if(*until>t->storage->deadline_us-t->guard_us)*until=t->storage->deadline_us-t->guard_us;
     return 1;
 }

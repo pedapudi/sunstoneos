@@ -4,6 +4,7 @@
  * TypeA calendar/read/alarm operations adapted from pinned rtc-sunxi.c.
  * Native ownership/deadline integration is described in apps/rtc/sources.json. */
 #include "a733_rtc.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define DAY 0x10u
 #define HMS 0x14u
@@ -14,7 +15,7 @@
 #define STATUS 0x30u
 #define HMS_MASK UINT32_C(0x001f3f3f)
 static int timely(struct a733_rtc *r)
-{uint64_t n;return r->ops.now_us(r->context,&n)==1&&n>=r->last&&n<r->deadline?(r->last=n,1):0;}
+{uint64_t n;return r->ops.now_us(r->context,&n)==1&&a733_deadline_admit(n,&r->last,r->deadline);}
 static int read_reg(struct a733_rtc *r,uint32_t o,uint32_t *v)
 {return timely(r)&&r->ops.read(r->context,o,v)==1&&timely(r);}
 static int write_reg(struct a733_rtc *r,uint32_t o,uint32_t v)

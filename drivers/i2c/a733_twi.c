@@ -1,15 +1,11 @@
 #include "a733_twi.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define ENABLE 0x40u
 #define FLAG 8u
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_twi_divider(uint32_t hz,uint32_t *divider,uint32_t *rate)
 {
-    if(!hz || !divider || !rate || !separate(divider,sizeof(*divider),rate,sizeof(*rate)))return 0;
+    if(!hz || !divider || !rate || !a733_ranges_disjoint(divider,sizeof(*divider),rate,sizeof(*rate)))return 0;
     uint32_t best=0,word=0;
     for(unsigned n=0;n<8;n++)for(unsigned m=0;m<16;m++) {
         uint32_t d=(1u<<n)*(m+1u)*10u;
@@ -27,7 +23,7 @@ int a733_twi_init_controller(struct a733_twi *s,const struct a733_twi_ops *o,voi
     if(!s || s->self || s->state!=A733_TWI_NEW || !o || !ctx || divider>127 ||
        (controller!=A733_TWI_MAIN11 && controller!=A733_TWI_R1 && controller!=A733_TWI_MAIN9) ||
        (register_bytes!=1 && register_bytes!=2) ||
-       !separate(s,sizeof(*s),o,sizeof(*o)) || !separate(s,sizeof(*s),ctx,1) ||
+       !a733_ranges_disjoint(s,sizeof(*s),o,sizeof(*o)) || !a733_ranges_disjoint(s,sizeof(*s),ctx,1) ||
        !o->now || !o->authenticate || !o->enter || !o->leave || !o->retain || !o->read || !o->write || !o->current)return 0;
     *s=(struct a733_twi){.self=s,.ops=*o,.context=ctx,.divider=divider,.state=A733_TWI_READY,
         .base=controller==A733_TWI_MAIN11?A733_TWI11_BASE:
@@ -43,8 +39,7 @@ static int fail(struct a733_twi *s)
 static int tick(struct a733_twi *s)
 {
     uint64_t n;
-    if(s->ops.now(s->context,&n)!=1 || n<s->last_now || n>=s->deadline)return 0;
-    s->last_now=n;return 1;
+    return s->ops.now(s->context,&n)==1 && a733_deadline_admit(n,&s->last_now,s->deadline);
 }
 /* An observation after an access cannot replay that access. Repeat a BUSY
  * observation in place until the transaction deadline. */
@@ -64,7 +59,7 @@ int a733_twi_request_block(struct a733_twi *s,uint8_t address,uint16_t reg,
     unsigned reading,const uint8_t *data,unsigned length,uint64_t d)
 {
     if(!s || s->self!=s || s->state!=A733_TWI_READY || s->entered || reading>1 ||
-       !length || length>sizeof(s->block) || (!reading && (!data || !separate(s,sizeof(*s),data,length))) ||
+       !length || length>sizeof(s->block) || (!reading && (!data || !a733_ranges_disjoint(s,sizeof(*s),data,length))) ||
        address<8 || address>0x77 || (s->register_bytes==1 && reg>255) || !d || d<=s->last_now ||
        s->ops.current(s->context)!=1)return -1;
     s->deadline=d;s->address=address;s->reg=reg;s->reading=(uint8_t)reading;
@@ -163,7 +158,7 @@ fault:
 int a733_twi_take_block(struct a733_twi *s,uint8_t *value,unsigned length)
 {
     if(!s || s->self!=s || s->state!=A733_TWI_COMPLETE || s->entered || length!=s->length ||
-       (s->reading && (!value || !separate(s,sizeof(*s),value,length))) || s->ops.current(s->context)!=1)return -1;
+       (s->reading && (!value || !a733_ranges_disjoint(s,sizeof(*s),value,length))) || s->ops.current(s->context)!=1)return -1;
     if(!tick(s) || !authentic(s))return fail(s);
     if(s->reading)for(unsigned i=0;i<length;i++)value[i]=s->block[i];
     s->received=0;s->state=A733_TWI_READY;return 1;
