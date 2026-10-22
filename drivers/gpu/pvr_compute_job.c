@@ -117,11 +117,9 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
     }
     return 1;
 }
-/* Shared with pvr_compute_mimus.c; one out-of-line copy each, so images
- * without the mimus session do not grow. */
+/* Writes only the fields it names; the caller zeroes the command first. */
 __attribute__((noinline)) void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
 {
-    clear(compute,96);
     put64(compute,8,border>>2);
     put64(compute,40,cdm);
     put64(compute,48,resume);
@@ -164,6 +162,7 @@ __attribute__((noinline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,u
     put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,fence|(1u<<2)|(1u<<1));
     put32(cdm,36,fence+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
 }
+/* Two callers; inlining it into pvr_compute_job_build adds 2,644 bytes. */
 __attribute__((noinline)) static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
 {
     clear(out,sizeof(*out));

@@ -92,7 +92,8 @@ uint32_t pvr_mimus_job_rows(uint32_t k, uint32_t n_gpu);
  * job page and cleans both. Returns 1, or 0 with nothing written when the
  * configuration is malformed. */
 int pvr_mimus_session_open(struct pvr_mimus_session *, const struct pvr_mimus_session_config *);
-/* The 96-byte firmware compute command of every job of the session. */
+/* The 96-byte firmware compute command of every job of the session, into a
+ * buffer the caller has zeroed. */
 void pvr_mimus_session_command(const struct pvr_mimus_session *, unsigned char compute[96],
                                uint64_t border, uint64_t resume);
 /* Admission at open: K a multiple of 4 below 2^16, n_gpu below 2^16, the

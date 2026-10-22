@@ -274,6 +274,13 @@ board items replace them:
 
 - the USC issues one 32-lane instruction per clock at 400 MHz, at 1.75
   instructions per MAC;
+- memory latency adds a second bound: each 32-lane task waits L GPU clocks
+  after each of its 12 loads per pass of 4 K steps and after each of its 32
+  sum stores, and R tasks are resident to hide those waits, where R follows
+  from the program's temps and the unified store (8 at 106 temps). A task
+  takes `max(issue, chain / R)` clocks, with `chain` its own serial time.
+  The model prints issue-bound times and times for L of 50, 100, 200 and 400
+  clocks; the issue-bound times are lower bounds;
 - per job, firmware overhead (kick to start, end to interrupt, cache flush)
   is 25 µs, and submit to kick and completion to wake take 25 µs each;
 - a maintained cache line costs 20 cycles; handing a read-out half to core 7
@@ -291,7 +298,8 @@ the saving of each left-out change.
 | Copies per weight, code and sum byte | 1 weight expansion per call | 0, 0, 0 | Copy counter, same check |
 | Jobs per recording | Not possible: 3,968-byte output, 31 workgroups | 204, one per call | Same |
 | USC instructions per MAC; code bytes | None | At most 1.75; at most 4,000 | `checks/gpu-mimus-program` |
-| GPU compute, all channels | 14.894 s on the A55 | 0.574 s; 0.72 s or 0.90 s if an assumption fails | Time model; board |
+| Temps per instance | None | At most 112, which keeps 8 tasks resident | Same |
+| GPU compute, all channels | 14.894 s on the A55 | 0.574 s issue-bound; 0.72 s or 0.90 s if an instruction assumption fails; 1.66 s with 200-clock loads | Time model; board |
 | DRAM bytes read per MAC | None | 0.75 per lane; 0.156 per workgroup with cache reuse | `checks/gpu-mimus-layers` |
 | Lines maintained on core 6 per recording, GPU only | None | 597,601 cleaned; 988,060 cleaned and invalidated, tags included | `aarch64_device_cache` wrap counters, same check |
 | `DSB SY` per job | None | 6, from three helper calls, including a barrier after the join and after the completion read | Barrier wraps in `checks/pvr-compute-service` and `checks/gpu-mimus-layers` |
@@ -313,6 +321,14 @@ instructions: 1.75 instructions per MAC. That needs a single-instruction
 signed bitfield extract and a full-rate 32-bit multiply-add. Two-instruction
 extraction gives 2.19 per MAC (0.72 s); a half-rate multiply-add gives 2.75
 (0.90 s).
+
+**Latency and occupancy.** The time rows above are issue-bound and
+therefore lower bounds. Temps per instance limit occupancy as much as
+instruction count limits issue. The program keeps a lane's sums and load
+results in registers, and its temps set how many tasks can hide the
+per-load waits. Above 112 temps fewer than 8 tasks fit, and a pass of 4 K
+steps becomes latency-bound at a shorter load latency. With 8 tasks a pass
+is latency-bound above about 127 clocks.
 
 **Bandwidth.** Without cache reuse each lane reads 12 bytes per 16 MACs:
 3.1 GB per recording, 5.5 GB/s. Reusing a workgroup's 32 activation rows and
@@ -426,6 +442,17 @@ Also left out:
 - **Dispatch record:** it gains `wake=irq` or `wake=timed`, so that timing
   records can exclude timed wakes.
 
+## Responses to the performance and simplicity review
+
+- **Removing `noinline` from `image` in `pvr_compute_job.c`:** not adopted.
+  Without it the compiler inlines one of the function's two calls into
+  `pvr_compute_job_build`, and the object grows by 2,644 bytes; with it and
+  without the firmware command's redundant clear, the object keeps the
+  base's 19,156 bytes.
+- **About two resident tasks:** the model uses 8, from Mesa's formula for
+  the unified store, which counts 8 banks of 256 rows per instance; the
+  single-load latency probe settles the number.
+
 ## Changes needed from other owners
 
 - **mimus port:** `RunPackedI8Block` for AArch64 from `LinearProduced`,
@@ -455,8 +482,9 @@ Also left out:
 - After boot the tag area reads zero, and `DC CIVAC` at EL1 on the read-only
   output region completes without a fault.
 - From timeline timestamps: GPU time per layer shape (instructions per MAC,
-  multiply-add rate, bandwidth) and firmware latency per job (kick to start,
-  end to interrupt); and a job streaming 30 MiB through 2 MiB pages against
+  multiply-add rate, bandwidth) against a single-load latency probe, which
+  sets L and shows how many tasks stay resident; firmware latency per job
+  (kick to start, end to interrupt); and a job streaming 30 MiB through 2 MiB pages against
   one streaming 2 MiB, which bounds the TLB-miss cost.
 - On an A76 at each admitted clock: nanoseconds per cleaned and per
   invalidated line, per read-out output and per `ParallelFor` hand-off.

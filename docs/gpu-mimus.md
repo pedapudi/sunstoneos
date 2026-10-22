@@ -192,8 +192,11 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
   rule) and compares each output bit for bit with a float32 evaluation of
   mimus's order. It counts instructions per output.
 - **`gpu-mimus-time-model.py`** replays the call list on core 6, core 7 and
-  the GPU; `--program` and `--readout` replace its instruction assumptions
-  with the measured counts.
+  the GPU; `--program` and `--readout` replace its instruction and temp
+  assumptions with the measured counts. It prints issue-bound GPU times,
+  which are lower bounds, and times for load latencies given by
+  `--load-cycles` (default 50, 100, 200 and 400 GPU clocks) with the
+  resident tasks that the program's temps allow.
 
 ## What other owners provide
 
@@ -202,8 +205,8 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
   its heaps, the client ring), the worker on the recognition core, the kick,
   the completion record with `max_job_us` from the kick, the stop request and
   its acknowledgement, and SPI 63. It calls the session functions above and
-  submits `pvr_mimus_session_command`'s 96-byte command and a timeline UPDATE
-  per job. The image's GPU build must add `drivers/gpu/pvr_compute_mimus.c`
+  submits, per job, the 96-byte command that `pvr_mimus_session_command`
+  writes into a zeroed buffer and a timeline UPDATE. The image's GPU build must add `drivers/gpu/pvr_compute_mimus.c`
   and `pvr_compute_mimus_usc.c`. The program needs one more 4 KiB GPU leaf
   entry than the design planned: 18 in all.
 - **mimus port:** the hook that splits a call into jobs on 32-row
@@ -221,7 +224,9 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
   CPU path with no tag mismatch, while cores 6 and 7 rewrite codes at the same
   addresses.
 - A job with a lane removed from the grid reports a missing tag.
-- GPU time per layer shape gives the instruction rate per MAC and shows
-  whether the per-store data fences or the per-load waits limit the loop.
+- GPU time per layer shape, against a single-load latency probe, gives the
+  instruction rate per MAC, the load latency and the resident tasks, and
+  shows whether the per-store data fences or the per-load waits limit the
+  loop.
 - After boot the tag area reads zero, and DC CIVAC at EL1 on the read-only
   output region completes without a fault.

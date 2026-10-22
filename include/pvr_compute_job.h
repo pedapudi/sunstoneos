@@ -55,7 +55,7 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *,
 
 /* Encoders shared by profile three and the mimus linear session
  * (pvr_compute_mimus.h); each writes only the bytes it names. command: the
- * 96-byte firmware compute command. fence_pds: the five-instruction fence
+ * 96-byte firmware compute command, into a buffer the caller has zeroed. fence_pds: the five-instruction fence
  * program at byte 16 of a 64-byte region. grid_pds: the 18-word data block
  * with the task word at byte 0, the group counts at byte 48 and the two
  * pointer constants at bytes 80-111, and the 60-byte program at byte 128.

@@ -16,8 +16,15 @@ By default the model uses the 204 calls of the bench recording (8.87 s of
 audio, 222 encoder frames, subsampling in blocks of 224 rows). --calls reads another call list, one call per
 line as "rows K N accumulate", as checks/gpu-mimus-layers writes it.
 --program and --readout replace the instruction constants with the counts
-that checks/gpu-mimus-program and checks/gpu-mimus-readout record. No
-hardware is accessed."""
+that checks/gpu-mimus-program and checks/gpu-mimus-readout record.
+
+The GPU term is issue-bound unless a load latency is given. Issue-bound
+times are lower bounds: the pinned scheduler waits after each of a lane's 12
+loads per pass of 4 K steps, and after each of its 32 sum stores, so a task
+hides memory latency only behind other resident tasks, and the program's
+temps limit how many are resident. For each latency in --load-cycles (default
+50, 100, 200 and 400 GPU clocks) the model also prints the linear stage and
+n_gpu with that latency. No hardware is accessed."""
 import argparse, json, math
 
 # GPU: one 32-lane USC instruction per clock; instructions per MAC from the
@@ -42,6 +49,19 @@ JOB_WORD_LINES = 2                # argument record and CDM block, one per slot
 TAG_AREA = 64 * 1024
 REGION = 2 * 1024 * 1024
 MAX_JOB_MACS = 1 << 26
+# Latency and occupancy. A pass of 4 K steps does 64 MACs per lane with 12
+# loads, each followed by its own wait; after its last pass a lane does 32
+# fenced sum stores (4 rows x 4 channels x 2 words), each waited for. A task
+# of 32 lanes keeps TEMPS registers per lane, allocated in units of 8, in a
+# unified store of 256 rows x 8 banks per instance, less two reserved
+# 128-register lines, for 16 parallel instances (Mesa rogue_hw_utils.h and
+# the BXM-4-64 device info), at most 64 tasks (usc_slots).
+LOADS_PER_PASS = 12
+FENCED_STORES = 32
+TEMPS = 106
+STORE_TEMPS = (256 * 8 - 2 * 128) * 16
+USC_SLOTS = 64
+LOAD_CYCLES = 0       # 0: issue-bound
 
 BENCH = ([(224, 1584, 176, 0)] * 19 + [(184, 1584, 176, 0)] +
          [(32, 3520, 176, 0)] * 6 + [(30, 3520, 176, 0)] +
@@ -85,6 +105,18 @@ class Totals(dict):
         self[key] = self.get(key, 0) + value
 
 
+def resident_tasks():
+    return min(USC_SLOTS, STORE_TEMPS // (LANES * -(-TEMPS // 8) * 8))
+
+
+def gpu_seconds(wg, k):
+    """One job's USC time: max(issue, latency chain / resident tasks)."""
+    passes = k / 4
+    issue = passes * 64 * INSTR_PER_MAC
+    chain = passes * (64 * INSTR_PER_MAC + LOADS_PER_PASS * LOAD_CYCLES) + FENCED_STORES * LOAD_CYCLES
+    return wg * max(issue, chain / min(resident_tasks(), wg)) / USC_HZ
+
+
 def job_costs(rows, k, n, acc, hz, t):
     wg = workgroups(rows, n)
     code = rows * 2 * k
@@ -97,7 +129,7 @@ def job_costs(rows, k, n, acc, hz, t):
     t.add('tags', tags); t.add('readout_instr', readout)
     t.add('gpu_macs', rows * k * n)
     return {
-        'gpu': FW_US * 1e-6 + wg * 32 * 16 * k * INSTR_PER_MAC / (USC_HZ * LANES),
+        'gpu': FW_US * 1e-6 + gpu_seconds(wg, k),
         'clean': clean * LINE_CYCLES / hz + SUBMIT_US * 1e-6,
         'inval': inval * LINE_CYCLES / hz + tags * TAG_INSTR / (READOUT_IPC * hz),
         'readout': readout / (READOUT_IPC * hz),
@@ -202,11 +234,14 @@ def main():
                         help='A76 clock in MHz (default 494 and 2002)')
     parser.add_argument('--program', help='program-check.json of checks/gpu-mimus-program.py')
     parser.add_argument('--readout', help='readout-check.json of checks/gpu-mimus-readout.py')
+    parser.add_argument('--load-cycles', type=float, action='append',
+                        help='GPU load and store latency in GPU clocks (default 50, 100, 200, 400)')
     args = parser.parse_args()
-    global INSTR_PER_MAC
+    global INSTR_PER_MAC, TEMPS, LOAD_CYCLES
     if args.program:
         with open(args.program) as f:
-            INSTR_PER_MAC = json.load(f)['instructions_per_mac']
+            program = json.load(f)
+        INSTR_PER_MAC, TEMPS = program['instructions_per_mac'], program['temps']
     if args.readout:
         with open(args.readout) as f:
             per = json.load(f)['instructions_per_output']
@@ -219,15 +254,29 @@ def main():
             calls = [tuple(int(v) for v in line.split()) for line in f if line.strip()]
     macs = sum(r * k * n for r, k, n, _ in calls)
     outputs = {w: sum(r * n for r, k, n, _ in calls if width(k) == w) for w in (4, 8)}
+    def gpu_compute():
+        return sum(gpu_seconds(workgroups(r, n), k) for r, k, n, _ in calls)
     print(json.dumps({'calls': len(calls), 'macs': macs, 'instr_per_mac': INSTR_PER_MAC,
                       'readout_instr': READOUT_INSTR, 'accumulate_instr': ACCUMULATE_INSTR,
                       'int32_outputs': outputs[4],
                       'int64_outputs': outputs[8],
-                      'gpu_compute_all_channels_s': sum(
-                          workgroups(r, n) * 512 * k for r, k, n, _ in calls)
-                      * INSTR_PER_MAC / (USC_HZ * LANES)}))
+                      'temps': TEMPS, 'resident_tasks': resident_tasks(),
+                      'gpu_compute_all_channels_s': gpu_compute()}))
     for mhz in args.mhz or [494.0, 2002.0]:
         print(json.dumps({'mhz': mhz, **run(calls, mhz * 1e6)}, default=float))
+    for cycles in args.load_cycles or [50.0, 100.0, 200.0, 400.0]:
+        LOAD_CYCLES = cycles
+        row = {'load_cycles': cycles, 'gpu_compute_all_channels_s': gpu_compute()}
+        for mhz in args.mhz or [494.0, 2002.0]:
+            r = run(calls, mhz * 1e6)
+            row[f'{mhz:g}'] = {'gpu_only_s': r['gpu_only']['seconds'],
+                               'channel_split_s': r['channel_split']['seconds'],
+                               'gpu_share': r['channel_split']['gpu_share'],
+                               'n_gpu': r['channel_split']['n_gpu'],
+                               'savings': {name: r[f'channel_split_{name}']['saving']
+                                           for name in ('two_jobs', 'two_worker_readout',
+                                                        'core7_rebalance')}}
+        print(json.dumps(row, default=float))
 
 
 if __name__ == '__main__':

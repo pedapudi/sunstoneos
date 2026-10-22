@@ -1427,7 +1427,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   of the bench recording and in every refusal, fault and fallback case; the
   read-out runs under Unicorn. The program needs 3.39 USC instruction groups
   per multiply-accumulate against the budgeted 1.75, so the modeled linear
-  stage takes 0.535 s on the A76 pair against 0.396 s
+  stage takes at least 0.535 s on the A76 pair against 0.396 s, and 0.664 s
+  if GPU loads take 200 clocks
   ([measurements](designs/gpu-mimus-compute-measurements.md)). The GPU
   runtime's session, worker and interrupt, the mimus port's hook and GPU
   execution remain required.
