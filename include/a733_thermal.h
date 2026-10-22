@@ -127,6 +127,7 @@ struct a733_thermal_policy {
      * for 1 s, critical (trip reached or no reading for 5 s). Frozen at CRITICAL. */
     uint8_t seen,passive,stale,critical,sensor;
     unsigned initialized,request;
+    atomic_uint published_seen; /* seen, published after the level for other tasks. */
 };
 /* Zeroed storage once; now_us starts every channel's staleness window. */
 int a733_thermal_policy_init(struct a733_thermal_policy *,uint64_t now_us,
@@ -138,4 +139,9 @@ enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *,
     enum a733_thermal_result,const struct a733_thermal_sample *);
 /* Any task or core, for example a scheduler choosing its worker count. */
 enum a733_thermal_level a733_thermal_policy_level(const struct a733_thermal_policy *);
+/* Any task or core: the channels that have had at least one valid reading,
+ * as bits in physical channel order. A level read after this call reflects
+ * at least the update that published these channels. Zero before
+ * initialization. */
+unsigned a733_thermal_policy_seen(const struct a733_thermal_policy *);
 #endif
