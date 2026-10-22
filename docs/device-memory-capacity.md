@@ -197,8 +197,8 @@ the sources for writes to the cached tables outside their builder.
 | --- | --- | --- |
 | Translations to prepare both pools | 401,408 in 3,136 calls | 392 in one call |
 | Instructions to prepare both pools | 27,474,026 | 22,547 |
-| Translations to prepare local pools, 2 MiB write-back and uncached | 1,536 | 1,536 |
-| Translations to prepare local pools, large NPU graph | 2,048 | 2,048 |
+| Translations to prepare local pools, 2 MiB write-back and uncached | 1,536 | 1,024 |
+| Translations to prepare local pools, large NPU graph | 2,048 | 1,536 |
 | Record comparisons per acquire, worst replayed | 1,056 bound | 160; bound 1,056 |
 | GPU MMU entries for the replayed extents | one per 4 KiB page | 24 to 137 per image, against 354 to 4,568 |
 

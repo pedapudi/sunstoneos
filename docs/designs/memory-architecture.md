@@ -64,13 +64,11 @@ preparation calls `a733_mapping_check_stride()` with a 2 MiB step: one write
 translation per block, 392 in all. Both extended pool ranges start and end on
 2 MiB boundaries, so the stride covers every block once. A write translation
 that succeeds at EL1 implies the read translation of the same descriptor, so
-no read `AT` is made. By the same argument the read `AT` of the local uncached
-check is redundant; removing it would cut the local count for 2 MiB pools from
-1,536 to 1,024 translations, and that change is not yet made.
+no read `AT` is made. The same holds for the local pools.
 
-The local layout keeps its per-page check: one write `AT` per write-back page
-and a read and a write `AT` per uncached page, 1,536 translations for 2 MiB
-pools and 2,048 for the large NPU graph pool. No golden comparison covers the
+The local layout keeps its per-page check: one write `AT` per page of either
+pool, 1,024 translations for 2 MiB pools and 1,536 for the large NPU graph
+pool. No golden comparison covers the
 local tables, so the per-page check is the only proof that each local pool
 page has the expected attributes, and it stays.
 
@@ -339,7 +337,7 @@ provisional and unqualified.
 | Metric | Before stage 1 | Target | Measured | Method |
 | --- | --- | --- | --- | --- |
 | Extended pool check | 401,408 `AT` in 3,136 calls; 27,474,026 instructions | 392 `AT` in one call; at most 25,000 instructions; 78,400 A55 cycles | 392 `AT`; 22,547 instructions; cycles provisional | QEMU; board core 0 |
-| Local pool check | 1,536 `AT` (2 MiB pools), 2,048 (large NPU graph) | unchanged | 1,536 and 2,048 | callback count |
+| Local pool check | 1,536 `AT` (2 MiB pools), 2,048 (large NPU graph) | one write `AT` per page | 1,024 and 1,536 | callback count |
 | DRAM mapped at EL1; table memory | 910 MiB; 20 KiB | 910, 2,958, 12,174 MiB by stage; 20 KiB | 910 MiB; 20 KiB | QEMU golden comparison |
 | Slot comparisons per acquire | 1,056 bound | unchanged bound | 160 worst replayed | host replay |
 | Critical-section hold | no serialization | acquire at most 15,000 instructions; release and retain at most 100 | acquire 14,206 (31 occupied slots, 32 attempts); release 31; retain 24 | QEMU SMP fixture |

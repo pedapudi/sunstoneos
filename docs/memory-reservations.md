@@ -145,8 +145,8 @@ without a lock, and the clean watermark on write-back and Non-cacheable pools.
 A traced build of the pool confirms that every critical-section entry has its
 exit. A second host build links both local preparations with modeled
 translations at fixed linker addresses. With an unaligned 2 MiB write-back
-pool and the uncached pool, preparation makes 1,536 translations; with the
-large NPU graph pool it makes 2,048. A faulting block refuses its pool, and
+pool and the uncached pool, preparation makes 1,024 translations; with the
+large NPU graph pool it makes 1,536. A faulting block refuses its pool, and
 later getter calls make no further translation. Native AArch64 compilation
 covers the allocator, both preparations and the translation helper as a
 one-thread fixture, and confirms that the allocator does not compile for

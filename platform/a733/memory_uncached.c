@@ -12,7 +12,6 @@ static struct device_memory_pool uncached_pool;
 int a733_memory_uncached_prepare(void)
 {
     uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
-    if (uncached_pool.initialized) return 1;
     /* Normal-NC identity blocks, outer or inner shareable; one write
      * translation per 2 MiB block descriptor, as for the write-back pool. */
     static const struct a733_mapping_rule nc = {A733_MAPPING_WRITE, 1,
@@ -37,10 +36,11 @@ static int check_local(void)
     if (start == end) return 1; /* The image links no uncached pool. */
     if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
         (uintptr_t)__device_pool_end > start) return 0;
-    /* Normal-NC identity pages, readable and writable with one shareability,
-     * outer or inner; every page is checked. */
-    static const struct a733_mapping_rule nc = {A733_MAPPING_READ_WRITE, 1,
-        {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 1, 1};
+    /* Normal-NC identity pages, outer or inner shareable; one write
+     * translation per page, which also proves the read translation of the
+     * same descriptor at EL1. */
+    static const struct a733_mapping_rule nc = {A733_MAPPING_WRITE, 1,
+        {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 0, 1};
     return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
                                      DEVICE_MEMORY_PAGE, &nc);
 }

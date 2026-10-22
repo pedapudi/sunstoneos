@@ -9,12 +9,11 @@
  * Preparation and the getter behave as for the write-back pool. In the
  * extended layout a733_device_memory_prepare() runs preparation once. In the
  * local layout the first getter call runs it, at EL1, until platform_init()
- * calls it. The extended check makes one write translation per 2 MiB block;
- * the local check makes a read and a write translation per page and requires
- * equal shareability. Both accept identity, Normal non-cacheable, outer or
- * inner shareable, and initialize the pool as non-cacheable, so acquire runs
- * no clean. Preparation returns 1 when the image links no local uncached
- * pool.
+ * calls it. The extended check makes one write translation per 2 MiB block
+ * and the local check one per page. Both accept identity, Normal
+ * non-cacheable, outer or inner shareable, and initialize the pool as
+ * non-cacheable, so acquire runs no clean. Preparation returns 1 when the
+ * image links no local uncached pool.
  *
  * Both EL1 and EL3 tables map the pool non-cacheable from their first
  * installation, so no cacheable alias exists. No attribute change,
