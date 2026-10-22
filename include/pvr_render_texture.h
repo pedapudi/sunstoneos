@@ -31,18 +31,24 @@ struct pvr_render_texture_vertex { float position[4],uv[2]; };
 struct pvr_render_texture_input {
     uint32_t width,height,stride,vertex_count,index_count;
 };
+/* Payload offsets after the render payload: guarded output, texture area,
+ * vertex and index areas, the depth extent (profiles 3 and 4), the runtime's
+ * 64 KiB upload chunk and the 64 KiB read-back chunk. copy is the frame inside
+ * the output guards. The GPU neither loads nor stores depth, and no CPU code
+ * touches the depth extent; it remains only because the graphics owner still
+ * maps it at PVR_RENDER_DEPTH_ADDRESS, one page after depth. */
 struct pvr_render_texture_layout {
-    uint32_t output,image,geometry,draft,copy,upload,download,total;
+    uint32_t output,image,geometry,copy,upload,download,total;
     uint32_t output_bytes,output_allocation;
     uint32_t depth,depth_bytes;
 };
 enum pvr_render_texture_operation { PVR_TEXTURE_BEGIN, PVR_TEXTURE_WRITE,
     PVR_TEXTURE_SUBMIT, PVR_TEXTURE_READ, PVR_TEXTURE_RELEASE, PVR_TEXTURE_PRESENT };
-/* A presented frame lends the complete copied snapshot to one in-image
+/* A presented frame lends the GPU's output frame in place to one in-image
  * consumer. Rows are RGBA8 with stride pixels each, including padding. The
- * snapshot is clean to the point of coherency, so a non-coherent DMA reader
- * may fetch it from physical. It stays immutable until RELEASE: replacement,
- * READ and CLOSE are refused while it is lent. */
+ * CPU holds no dirty line of it, so a non-coherent DMA reader may fetch it
+ * from physical. It stays immutable until RELEASE: replacement, READ and
+ * CLOSE are refused while it is lent. */
 struct pvr_render_texture_frame {
     const void *cpu;
     uint64_t physical;
