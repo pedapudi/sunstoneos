@@ -1694,6 +1694,8 @@
   ],
   "docs": [
    "docs/bluetooth-native.md",
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
+   "docs/designs/bluetooth-voice-recognition.md",
    "docs/handoff.md"
   ],
   "library": false,
@@ -1818,7 +1820,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2113,7 +2117,8 @@
  "bt-hfp-ag.py": {
   "cache_areas": [],
   "docs": [
-   "docs/bluetooth-hfp.md"
+   "docs/bluetooth-hfp.md",
+   "docs/designs/bluetooth-voice-recognition.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3270,6 +3275,7 @@
    "docs/board-wiring.md",
    "docs/build.md",
    "docs/gpu.md",
+   "docs/radio-security.md",
    "docs/runtime.md",
    "docs/smp-runtime.md",
    "docs/sources.md",
@@ -6483,6 +6489,8 @@
    "host"
   ],
   "docs": [
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
+   "docs/designs/bluetooth-voice-recognition.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -7519,7 +7527,8 @@
  "radio-network.py": {
   "cache_areas": [],
   "docs": [
-   "docs/radio-network.md"
+   "docs/radio-network.md",
+   "docs/radio-security.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7864,6 +7873,17 @@
    "--output"
   ],
   "summary": "Differential and access check of runtime memcpy, memmove and memset.",
+  "usb": false
+ },
+ "sae-openssl.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-security.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Authenticate the pinned OpenSSL source; build its minimal host library and run the SAE cases.",
   "usb": false
  },
  "sdio-controller.py": {
@@ -8766,6 +8786,7 @@
  "usb0-service-burst.py": {
   "cache_areas": [],
   "docs": [
+   "docs/performance-architecture.md",
    "docs/usb.md"
   ],
   "library": false,

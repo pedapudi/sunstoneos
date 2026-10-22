@@ -75,7 +75,7 @@ def setup(out):
         assert all(n in variables for n in ('identity_frame','identity_bytes','identity_sent','identity_transferred','retained','terminal','stopped'))
         if 'finished' in variables:
             for name in ('bluetooth_recognition_segment_copy','bluetooth_recognition_segment_ack','bluetooth_recognition_finished',
-                         'bluetooth_headset_segment_status','bluetooth_headset_segment_stop'):
+                         'bluetooth_headset_segment_status','bluetooth_headset_segment_stop','xTaskGenericNotify'):
                 assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
         fields={'board_application':['session','fatal','watchdog_state','live_until'],
           'bluetooth_application':['self','profile','shared','failed','recovery_state'],'a733_native_usb':['clocks','rails','pmic','usb','usb.token','usb.token.id','usb_rail','usb_rail.id','boot.usb.owner','usb.token.owner','usb.registry','usb.self','usb.initialized','usb.stage','usb.fault','usb_rail.owner','usb_power.owner','usb_power.provider','live','fail','context','usb_task','usb_step','usb_rail_index','pmic_ready','usb_prepared','clocks.failed','locks.retained'],
@@ -115,6 +115,9 @@ class Machine:
         self.write(self.service+self.sf['used'],len((out/'transcript.bin').read_bytes()),4)
         self.write(self.service+self.sf['app'],self.s['bluetooth'],8)
         self.write(self.service+self.sf['deadline'],10000000,8)
+        # The recognizer task that a transcript acknowledgement wakes.
+        self.recognizer=0x567800;self.notified=[]
+        if 'owner' in self.sf:self.write(self.service+self.sf['owner'],self.recognizer,8)
         profile=(out/'profile.bin').read_bytes();self.cpu.mem_write(0x43000000,profile)
         a=self.s['bluetooth'];t=self.t['bluetooth_application']
         for name,value,n in [('self',a,8),('profile',0x43000000,8),('shared',self.usb,8),('recovery_state',self.s['board']+self.t['board_application']['watchdog_state'],8),('failed',0,4)]:self.write(a+t[name],value,n)
@@ -133,6 +136,9 @@ class Machine:
         if address==self.s['a733_smp_counter']:self.ret(self.time*24);return
         if address==self.s['_ZN5mimus3asr8platform14MonotonicNanosEv']:self.ret(self.time*1000);return
         if address==self.s['xTaskGetCurrentTaskHandle']:self.ret(self.task);return
+        if address==self.s.get('xTaskGenericNotify'):
+            # Scheduler boundary: one give on index 0 to the recognizer task.
+            assert (args(0),args(1),args(3),args(4))==(self.recognizer,0,2,0);self.notified.append(args(0));self.ret(1);return
         if address==self.s['a733_clock_token_status']:
             assert (args(0),args(1))==(self.usb+self.u['clocks'],self.usb+self.u['usb.token']);self.ret(0);return
         if address==self.s['a733_rail_status']:

@@ -2860,5 +2860,13 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_atomic_helper.c",
     "archive": "display-present-research/drm_atomic_helper.c",
     "sha256": "77a3a7c5d1a67efde5377501ecb9598ebaa557c4abe93d8dbd17da18b461593d"
+  },
+  "openssl": {
+    "revision": "3.5.9",
+    "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+    "archive": "radio/stacks/openssl-3.5.9.tar.gz",
+    "directory": "radio/stacks/openssl-3.5.9",
+    "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+    "license": "Apache-2.0"
   }
 }

@@ -115,7 +115,8 @@ struct a733_iommu {
  * ACTIVE authorizes a higher-level global owner to admit CSI traffic; other
  * masters still require separately implemented admission and mapping policy.
  * Every profile initializer below calls this function, so every profile's
- * device spans must end at or below 4 GiB, inside the 34-bit hardware IOVA.
+ * device spans must end at or below A733_IOMMU_IOVA_LIMIT (4 GiB), inside the
+ * 34-bit hardware IOVA space.
  */
 int a733_iommu_init(struct a733_iommu *, const struct a733_iommu_ops *,
                     void *, const struct a733_iommu_tables *);

@@ -40,9 +40,11 @@ enum a733_dma_result {
  * On error, output is unchanged. Capacity is in descriptor slots.
  * Input and output must remain exclusively accessible during this call.
  *
- * Data addresses fit 35 bits. Descriptor addresses must be below 0xfffff800;
- * wider descriptor addressing is unresolved. Source memory may be shared
- * among segments; destinations must not overlap any source or destination.
+ * Data ranges end at or below A733_DMA0_DATA_LIMIT (2^35). Linked descriptors
+ * end at or below A733_DMA0_DESCRIPTOR_LIMIT (0xfffff800), the end-of-chain
+ * marker; wider descriptor addressing is unverified (dma_address_width.h).
+ * Source memory may be shared among segments; destinations must not overlap
+ * any source or destination.
  * Fixed FIFO ports may be reused. Memory-to-memory, memory-to-FIFO, and
  * FIFO-to-memory segments are accepted. FIFO-to-FIFO transfers are rejected.
  *
