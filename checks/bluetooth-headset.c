@@ -9,7 +9,7 @@ void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine
 #endif
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss,retry,retry_limit,retried;
-static uint16_t local_cid;static unsigned handoff,speech,informational;static uint64_t sco_bytes;
+static uint16_t local_cid;static unsigned handoff,speech,informational,brsf;static uint64_t sco_bytes;
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -110,7 +110,8 @@ static void peer_acl(const uint8_t *p,unsigned n)
                 if(type==0x20){assert(!cr);rf_in(14,0x3f,NULL,0,-1);}
                 else if(type==0x38){const uint8_t msc[]={59,0x8d};if(cr){mcc_in(0x38,0,msc,2);mcc_in(0x38,1,msc,2);}else rf_in(14,0xff,NULL,0,100);}
                 else assert(0);
-            }else {assert(dlci==14);(void)count;
+            }else {assert(dlci==14);
+                for(unsigned i=0;i+9<count;++i)if(!memcmp(data+i,"+BRSF: ",7))for(unsigned j=i+7;data[j]>='0'&&data[j]<='9';++j)brsf=brsf*10+data[j]-'0';
 #ifdef BLUETOOTH_CHECK_MSBC
                 for(unsigned i=0;i+7<count;++i)if(!memcmp(data+i,"+BCS: ",6)){
                     msbc_selected=data[i+6]-'0';char response[20];snprintf(response,sizeof(response),"AT+BCS=%u\r",msbc_bad_bcs?3:msbc_selected);
@@ -251,7 +252,7 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     if(!strcmp(argv[1],"deadline")){wire.now=voice.operation_deadline;assert(pump()==-1);puts("PASS operation deadline retains entire native owner");return 0;}
     const uint8_t connect[]={3,0,0x61,0};sig_in(2,50,connect,4);until(AG);
     assert(rf_stage);const char *at="AT+BRSF=0\rAT+CIND=?\rAT+CIND?\rAT+CMER=3,,,1\r";rf_in(14,0xef,(const uint8_t *)at,(unsigned)strlen(at),-1);at_sent=1;
-    until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY);
+    until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY&&brsf==(BT_HFP_AG_CALL_FEATURES|(voice.wideband?512u:0u))&&voice.ag.calls);
     if(!strcmp(argv[1],"cadence")){
         /* CVSD silence follows its 3750 us packet period, not the 4 ms poll
          * grid that rounding up from each serving poll would produce. */

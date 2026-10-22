@@ -28,7 +28,9 @@ int bt_sdp_server_init(struct bt_sdp_server *s,struct bt_l2cap *l,const struct b
        !bt_range_disjoint_empty(s,sizeof(*s),l,sizeof(*l)) || !bt_range_disjoint_empty(s,sizeof(*s),p,sizeof(*p)) ||
        p->handle<0x10000 || !p->rfcomm_channel || p->rfcomm_channel>30 || p->version!=0x0109 ||
        p->supported_features>63 || p->supported_features!=((p->brsf_features&31)|((p->brsf_features>>4)&32)) ||
-       p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x3ffu))return -1;
+       p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x3ffu) ||
+       (p->sink_handle && (p->sink_handle<0x10000 || p->sink_handle==p->handle || !p->sink_features)) ||
+       p->sink_features>15 || (!p->sink_handle && p->sink_features))return -1;
     *s=(struct bt_sdp_server){.l2cap=l,.profile=*p,.policy=policy,.context=ctx,
         .response_us=response,.query_us=query,.next_query=1,.initialized=1};return 1;
 }
@@ -81,16 +83,19 @@ static int uuid(const uint8_t *p,struct de v,unsigned target)
     return v.type==3 && (v.length==2?b16(p+v.at)==target:
         b32(p+v.at)==target && (v.length==4 || eq(p+v.at+4,tail,12)));
 }
-/* All UUIDs actually contained in the two immutable records. */
-static unsigned matches(const uint8_t *p,unsigned n,unsigned *at)
+/* All UUIDs actually contained in the immutable records: bit0 server,
+ * bit1 AG, bit2 sink. MALFORMED is outside every record mask. */
+#define MALFORMED 8u
+static unsigned matches(const uint8_t *p,unsigned n,unsigned *at,unsigned sink)
 {
-    struct de list,v;if(!de(p,n,*at,&list) || list.type!=6 || !list.length)return 4;
-    unsigned mask=3,count=0;
+    struct de list,v;if(!de(p,n,*at,&list) || list.type!=6 || !list.length)return MALFORMED;
+    unsigned mask=sink?7:3,count=0;
     for(unsigned i=list.at;i<list.end;i=v.end) {
-        if(!de(p,list.end,i,&v) || v.type!=3 || ++count>12)return 4;
+        if(!de(p,list.end,i,&v) || v.type!=3 || ++count>12)return MALFORMED;
         unsigned found=0;if(uuid(p,v,0x1000))found|=1;
         if(uuid(p,v,0x111f)||uuid(p,v,0x1203)||uuid(p,v,0x0100)||uuid(p,v,3)||
            uuid(p,v,0x111e)||uuid(p,v,0x1002))found|=2;
+        if(uuid(p,v,0x110b)||uuid(p,v,0x0100)||uuid(p,v,0x0019)||uuid(p,v,0x110d)||uuid(p,v,0x1002))found|=4;
         mask&=found;
     }
     *at=list.end;return mask;
@@ -116,10 +121,21 @@ static void u16(struct enc *e,unsigned v){const uint8_t p[]={9,(uint8_t)(v>>8),(
 static void u32(struct enc *e,uint32_t v){uint8_t p[5]={10};p32(p+1,v);add(e,p,5);}
 static void attr(struct enc *e,const struct ranges *r,unsigned id,const uint8_t *p,unsigned n)
 {if(selected(r,id)){u16(e,id);add(e,p,n);}}
-static void record(struct enc *e,const struct ranges *r,const struct bt_sdp_ag_profile *p,unsigned ag)
+enum {SERVER,AG,SINK};
+static void record(struct enc *e,const struct ranges *r,const struct bt_sdp_ag_profile *p,unsigned kind)
 {
-    unsigned start=e->n;const uint8_t seq[]={0x35,0};add(e,seq,2);
-    if(selected(r,0)){u16(e,0);u32(e,ag?p->handle:0);}
+    unsigned start=e->n,ag=kind==AG;const uint8_t seq[]={0x35,0};add(e,seq,2);
+    if(selected(r,0)){u16(e,0);u32(e,kind==AG?p->handle:kind==SINK?p->sink_handle:0);}
+    if(kind==SINK) {
+        const uint8_t classes[]={0x35,3,0x19,0x11,0x0b};
+        const uint8_t protocol[]={0x35,16,0x35,6,0x19,1,0,9,0,0x19,0x35,6,0x19,0,0x19,9,1,3};
+        const uint8_t browse[]={0x35,3,0x19,0x10,2};
+        const uint8_t profile[]={0x35,8,0x35,6,0x19,0x11,0x0d,9,1,3};
+        const uint8_t features[]={9,0,(uint8_t)p->sink_features};
+        attr(e,r,1,classes,sizeof(classes));attr(e,r,4,protocol,sizeof(protocol));attr(e,r,5,browse,sizeof(browse));
+        attr(e,r,9,profile,sizeof(profile));attr(e,r,0x311,features,sizeof(features));
+        e->p[start+1]=(uint8_t)(e->n-start-2);return;
+    }
     const uint8_t server[]={0x35,3,0x19,0x10,0};
     const uint8_t classes[]={0x35,6,0x19,0x11,0x1f,0x19,0x12,3};
     attr(e,r,1,ag?classes:server,ag?sizeof(classes):sizeof(server));
@@ -152,9 +168,9 @@ static void request(struct bt_sdp_server *s,struct bt_sdp_server_session *q,
     if(kind==4) {
         if(n-at<4){error(q,tid,4);return;}
         uint32_t handle=b32(p+at);at+=4;
-        if(handle!=0 && handle!=s->profile.handle){error(q,tid,2);return;}
-        mask=handle?2:1;
-    } else {mask=matches(p,n,&at);if(mask==4){error(q,tid,3);return;}}
+        if(handle!=0 && handle!=s->profile.handle && (!s->profile.sink_handle || handle!=s->profile.sink_handle)){error(q,tid,2);return;}
+        mask=!handle?1:handle==s->profile.handle?2:4;
+    } else {mask=matches(p,n,&at,s->profile.sink_handle!=0);if(mask==MALFORMED){error(q,tid,3);return;}}
     if(n-at<2){error(q,tid,4);return;}maximum=b16(p+at);at+=2;
     if(maximum<(kind==2?1u:7u)){error(q,tid,3);return;}
     struct ranges r={0};if(kind!=2){unsigned e=ranges(p,n,&at,&r);if(e){error(q,tid,e);return;}}
@@ -173,10 +189,12 @@ static void request(struct bt_sdp_server *s,struct bt_sdp_server_session *q,
         if(kind==2) {
             if(mask&1){p32(e.p+e.n,0);e.n+=4;}
             if((mask&2) && e.n/4<maximum){p32(e.p+e.n,s->profile.handle);e.n+=4;}
+            if((mask&4) && e.n/4<maximum){p32(e.p+e.n,s->profile.sink_handle);e.n+=4;}
         } else {
             if(kind==6){e.p[e.n++]=0x35;e.p[e.n++]=0;}
-            if(mask&1)record(&e,&r,&s->profile,0);
-            if(mask&2)record(&e,&r,&s->profile,1);
+            if(mask&1)record(&e,&r,&s->profile,SERVER);
+            if(mask&2)record(&e,&r,&s->profile,AG);
+            if(mask&4)record(&e,&r,&s->profile,SINK);
             if(kind==6)e.p[1]=(uint8_t)(e.n-2);
         }
         q->result_length=e.n;
