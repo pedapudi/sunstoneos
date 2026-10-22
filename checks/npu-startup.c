@@ -40,7 +40,7 @@ int __wrap_a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t
     configASSERT(xTaskGetCurrentTaskHandle()==bootstrap_task);
     configASSERT(xSemaphoreGetMutexHolder(locks.mutex[0])==bootstrap_task);
     atomic_fetch_add(&platform_reads,1);
-    if(address==0x07090160)*out=0;
+    if(address==0x07090160)*out=0x10000002;
     else if(address==0x070101ac)*out=1;
     else if(address==PCK+8 && (pck[0]&15)==8)*out=8;
     else *out=*reg(address);
@@ -64,7 +64,7 @@ static int inherited_read(void *cookie,uintptr_t address,uint32_t *out)
     if(address==0x0708300c || address==0x07083010 || address==0x07083020) {
         configASSERT(xSemaphoreGetMutexHolder(locks.mutex[1])==bootstrap_task);
         *out=address==0x0708300c ? 0x40 : address==0x07083010 ? 0xf8 : 0x30;
-    } else if(address==0x07090160)*out=0;
+    } else if(address==0x07090160)*out=0x10000002;
     else if(address==0x070101ac)*out=1;
     else *out=*reg(address);
     return 1;

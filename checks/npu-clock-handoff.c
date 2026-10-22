@@ -51,7 +51,7 @@ static int pll_read(void *cookie,uintptr_t address,uint32_t *out)
 {
     configASSERT(cookie==&pll_authority && xSemaphoreGetMutexHolder(locks.mutex[0])==bootstrap_task);
     ++pll_reads;
-    if(address==0x07090160)*out=0;
+    if(address==0x07090160)*out=0x10000002;
     else *out=*reg(address);
     return 1;
 }
