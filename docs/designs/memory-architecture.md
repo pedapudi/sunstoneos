@@ -481,9 +481,12 @@ codec images and the results of the five rebound codec checks are under
 
 ## Changes the primary agent must make
 
-- **Context-switch barrier.** Confirm that the context switch in
-  `patches/freertos-smp-asm.patch` executes `DSB SY` before a task resumes on
-  another core, or add it. This is a precondition for every maintenance form.
+- **Context-switch barrier.** The context switch generated from
+  `patches/freertos-smp-asm.patch` executes no `DSB`, `DMB` or `ISB`; a task
+  that migrates is ordered only by the kernel's spinlock release and acquire.
+  Those order loads and stores but do not complete cache maintenance, so the
+  leading `DSB SY` in `aarch64_device_cache()` stays for every maintenance
+  form.
 - **Local preparation.** Call `a733_memory_reservations_prepare()` and
   `a733_memory_uncached_prepare()` from `platform_init()` after the identity
   map is installed and before `vTaskStartScheduler()`; both return 1 for a
@@ -501,10 +504,9 @@ codec images and the results of the five rebound codec checks are under
 - `platform/a733-smp-cached/memory.c` reads the layout header constants
   directly.
 - **Single preparation call.** `a733_device_memory_prepare()` returns 1 or
-  -1 and never 0. Replace the `do { ... } while (prepared == 0)` loops in
-  `platform/a733-smp-cached/continue.c`,
+  -1 and never 0. `platform/a733-smp-cached/continue.c`,
   `apps/storage-read-single-core/runtime.c` and
-  `apps/dsi-scanout/runtime.patch` with one call that requires 1.
+  `apps/dsi-scanout/runtime.patch` call it once and require 1.
 - Stage 2: EL1 level-1 entries 2 and 3 become
   `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP[2:1] = 0b00; EL3
   entries stay invalid. Stage 3 adds entries 4 to 12 the same way.

@@ -90,9 +90,7 @@ void kernel_main(void)
 #endif
     preparing=1;
 #ifdef SUNSTONE_GPU_SINGLE_CORE
-    int ready;
-    do{ready=a733_device_memory_prepare();}while(ready==0);
-    if(ready!=1)platform_panic("GPU single-core memory",1);
+    if(a733_device_memory_prepare()!=1)platform_panic("GPU single-core memory",1);
 #endif
     a733_smp_diagnostic_start();
     platform_panic("SD scheduler returned",2);
