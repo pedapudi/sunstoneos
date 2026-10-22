@@ -67,7 +67,11 @@ The [focused instruction fixture](../checks/cached-device-reservations.py) uses
 this linker, table constructor, cold enable helpers, actual eight-core barrier
 and actual NPU/GPU constructors. Its QEMU reset harness replaces A733 CPU release
 and power admission. It executes architectural address translations on every core
-and stops before scheduler or device activation. Preparation evidence does not
+and stops before scheduler or device activation. Constructors acquire and retain
+leases under the kernel critical section before the scheduler starts; the
+harness's EL1 vectors service its interrupt-mask and core-identifier supervisor
+calls (`SVC #107`, `#108` and `#109`) in place of the port's handler, which needs
+the GIC CPU interface the harness does not configure. Preparation evidence does not
 qualify physical cache coherence, watchdog recovery or device completion.
 
 The focused check passes with eight emulated Cortex-A53 CPUs. Every core executes

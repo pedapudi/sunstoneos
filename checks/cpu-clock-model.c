@@ -138,17 +138,31 @@ static enum a733_cpu_clock_status run(unsigned limit)
     }
     return A733_CPU_CLOCK_PENDING;
 }
+/* The build wraps a733_rail_floor: with floor_busy set, the next call returns
+ * BUSY as if another core held the ledger, and leaves the request it follows
+ * outstanding. */
+static unsigned floor_busy;
+enum a733_rail_result __real_a733_rail_floor(struct a733_rail_leases *,const struct a733_rail_token *,
+    enum a733_rail,uint32_t,uint32_t *);
+enum a733_rail_result __wrap_a733_rail_floor(struct a733_rail_leases *m,const struct a733_rail_token *t,
+    enum a733_rail rail,uint32_t observed_uv,uint32_t *floor_uv)
+{
+    if(floor_busy){floor_busy=0;assert(cpu.request.id);return A733_RAIL_BUSY;}
+    return __real_a733_rail_floor(m,t,rail,observed_uv,floor_uv);
+}
+static int ledger_failed(void)
+{return (atomic_load(&pm.rails.authority.word)&A733_POWER_LEDGER_FAULT)!=0;}
 static int released(void)
 {
     for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i)if(pm.clocks.slots[i].owner==4242)return 0;
-    for(unsigned i=0;i<A733_RAIL_CLIENTS;++i)if(pm.rails.slots[i].state!=A733_RAIL_FREE)return 0;
-    return !cpu.clock.id && !cpu.rail.id && !atomic_load(&pm.clocks.failed) && !pm.rails.failed;
+    for(unsigned i=0;i<A733_RAIL_CLIENTS;++i)if(pm.rails.slots[i].id)return 0;
+    return !cpu.clock.id && !cpu.rail.id && !atomic_load(&pm.clocks.failed) && !ledger_failed();
 }
 static unsigned first(unsigned pmic)
 {for(unsigned i=0;i<cm.count;++i)if(cm.events[i].pmic==pmic)return i;return cm.count;}
 static void retained(void)
 {
-    assert(cpu.failed && atomic_load(&pm.clocks.failed) && pm.rails.failed && cpu.clock.id && cpu.rail.id);
+    assert(cpu.failed && atomic_load(&pm.clocks.failed) && ledger_failed() && cpu.clock.id && cpu.rail.id);
     unsigned writes=cm.writes,count=cm.count;
     assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_RETAINED && cm.writes==writes && cm.count==count);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_RETAINED);
@@ -230,12 +244,26 @@ int main(void)
     assert(cm.events[first(1)].address==REG_DCDC3 && first(1)<first(0));
     assert(cm.events[first(0)].at-cm.events[first(1)].at>=400); /* 100 mV at 250 uV/us. */
 
-    /* DCDC5 also covers the DSU: at 988 MHz (vf0100, 900 mV) lowering stops at 900 mV. */
+    /* DCDC5 also covers the DSU, whose rate the driver never changes, so a
+     * valid boot voltage already covers it and the boot baseline below keeps
+     * covering it. */
+    /* The boot baseline is a floor: with DCDC5 inherited at 950 mV, lowering
+     * to a point that needs 900 mV keeps 950 mV. The ledger keeps the floor
+     * after the driver releases its rail token. */
     setup(0x00000100,1,45,30,38,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1014,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
-    assert(run(400)==A733_CPU_CLOCK_COMPLETE && first(1)==cm.count);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && first(1)==cm.count && pm.rails.floor_uv[1]==950000);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
-    assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==40 && released());
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==45 && first(1)==cm.count && released());
+    assert(pm.rails.floor_uv[1]==950000 && !pm.rails.floor_uv[0]);
+    /* Another core holding the ledger during the floor call leaves the read
+     * outstanding; the next poll repeats both steps and the transition
+     * completes with no fault. */
+    setup(0x00000100,1,45,30,38,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
+    floor_busy=1;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1014,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && !floor_busy && !cpu.failed && !ledger_failed());
+    assert(pm.rails.floor_uv[1]==950000 && released());
     /* Code 0 uses the envelope: 1196 MHz needs 850 mV even if the chip is vf0000. */
     setup(0,A733_CPU_VF_ENVELOPE,30,30,30,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_PENDING);

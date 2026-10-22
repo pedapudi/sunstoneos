@@ -2,13 +2,15 @@
 #define SUNSTONE_A733_CLOCK_LEASES_H
 #include <stdatomic.h>
 #include <stdint.h>
+#include "a733_power_authority.h"
 
 typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_BIT(n) ((a733_clock_mask_t)1 << (n))
 
 /* 128 simultaneous reservations, including shared and exclusive leases.
  * Exhaustion returns BUSY. Scope capacity and reservation capacity are separate.
- * The slot array occupies 6144 bytes; no dynamic allocation occurs.
+ * The slot array occupies 6144 bytes; no dynamic allocation occurs. A token
+ * identifier is never reused and names its slot: (id - 1) mod 128.
  * Tokens are private runtime metadata, not a persistent or wire ABI. All
  * producers and consumers must be rebuilt together when this layout changes. */
 #define A733_CLOCK_CLIENTS 128u
@@ -30,7 +32,7 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_DMA0     A733_CLOCK_BIT(15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
 #define A733_CLOCK_PLL_NPU  A733_CLOCK_BIT(16) /* Also selectable by MBUS, DRAM0 and video clocks. */
 #define A733_CLOCK_NPU      A733_CLOCK_BIT(17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
-#define A733_POWER_DCDC2    A733_CLOCK_BIT(18) /* Stable rail or exclusive change authority; no clock parent. */
+#define A733_POWER_DCDC2    A733_CLOCK_BIT(18) /* Legacy scope; the rail ledger owns DCDC2. No clock parent. */
 #define A733_CLOCK_PLL_VIDEO0 A733_CLOCK_BIT(19)
 #define A733_CLOCK_PLL_DE     A733_CLOCK_BIT(20)
 #define A733_CLOCK_VI         A733_CLOCK_BIT(21) /* All CSI/ISP/analog/MCLK and VI domain controls. */
@@ -109,6 +111,9 @@ struct a733_clock_leases {
     void *context;
     uint32_t initialized;
     atomic_uint failed; /* Acquire-load permitted under permanent exact leases. */
+    /* The rail ledger's state word, bound by a733_rail_leases_init; a registry
+     * fault also sets A733_POWER_CLOCK_FAULT there. */
+    struct a733_power_authority *authority;
 };
 /* Private platform object, zero once and initialize before concurrent use.
  * now returns exactly 1, uses monotonic microseconds, and must be bounded and
@@ -223,9 +228,9 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * scopes. Whole-domain power changes additionally require stable PCK ownership
  * and verified quiescence. PLL retuning excludes every selected consumer.
  * Stable PCK clock and DCDC2 rail ownership remain separate platform leases.
- * DCDC2 shared/exclusive rail authority also uses this registry. Every PMIC
- * voltage/enable writer must acquire its exclusive scope; a mutex alone only
- * serializes transactions. DCDC2 has no clock ancestors or audio-profile effect.
+ * POWER_DCDC2 is a legacy scope that grants no rail authority: the rail
+ * ledger (a733_rail_leases.h) is the only authority for DCDC2, and nothing
+ * writes DCDC2. DCDC2 has no clock ancestors or audio-profile effect.
  * CPU_L, CPU_B and CPU_DSU each own one CPU PLL, its update/lock fields and
  * the matching cluster mux and P divider. Each reserves OSC: its PLL runs
  * from the DCXO, and a rate change parks the mux on the DCXO. Shared holds a
@@ -267,8 +272,9 @@ enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *,
     const struct a733_clock_token *, a733_clock_mask_t parents, uint64_t deadline,
     struct a733_clock_token *);
 /* Read-only, nonblocking observation under the registry lock. OK requires an
- * exact live token in a healthy registry; BUSY admits no conclusion. No time
- * sample, state change, token release, or hardware access occurs. */
+ * exact live token in a healthy registry; BUSY admits no conclusion. One slot
+ * is compared. No time sample, state change, token release, or hardware
+ * access occurs. */
 enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *,const struct a733_clock_token *);
 /* Retain all reservations and prohibit later acquisition/release/publication.
  * BUSY means the caller must retry this metadata operation before relinquishing

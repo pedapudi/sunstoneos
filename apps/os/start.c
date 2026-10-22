@@ -30,6 +30,9 @@ __attribute__((used,retain)) const struct os_application os_applications[]={
 #ifdef SUNSTONE_A733_OS_HEADSET
     {"headset",os_headset_task_privileged,os_headset_pins,os_headset_start},
 #endif
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    {"gpu-linear",os_gpu_linear_task_privileged,os_gpu_linear_pins,os_gpu_linear_start},
+#endif
 };
 #define OS_APPLICATIONS (sizeof(os_applications)/sizeof(os_applications[0]))
 int board_application_task_privileged(void (*entry)(void *),void *context)

@@ -316,19 +316,28 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
     c->state=S_READ;return A733_CPU_CLOCK_PENDING;
 }
 /* Wait for the current PMIC request. 1: result copied and reaped. 2: the
- * request expired before bus admission, so it had no bus effects; reaped. */
-static int collect(struct a733_cpu_clock *c,enum a733_cpu_clock_status *out)
+ * request expired before bus admission, so it had no bus effects; reaped.
+ * With floor, a completed read of an enabled, decoded selector first records
+ * the rail's boot baseline in the ledger and returns it in *floor, before the
+ * request is reaped: a busy ledger leaves the request outstanding, so the
+ * next poll repeats both steps. */
+static int collect(struct a733_cpu_clock *c,uint32_t *floor,enum a733_cpu_clock_status *out)
 {
     enum a733_pmic_status s=a733_pmic_result(c->pmic,&c->request,&c->snapshot);
     if(s==A733_PMIC_PENDING || s==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
     if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){*out=fault(c);return 0;}
+    if(s==A733_PMIC_COMPLETE && c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
+    if(floor && s==A733_PMIC_COMPLETE && c->snapshot.enabled && c->snapshot.decoded) {
+        enum a733_rail_result f=a733_rail_floor(c->rails,&c->rail,rail_of(c->cluster),
+            c->snapshot.programmed_uv,floor);
+        if(f==A733_RAIL_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
+        if(f!=A733_RAIL_READY){*out=fault(c);return 0;}
+    }
     enum a733_pmic_status reaped=a733_pmic_reap(c->pmic,&c->request);
     if(reaped==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
     if(reaped!=A733_PMIC_COMPLETE){*out=fault(c);return 0;}
     c->request=(struct a733_pmic_request){0};
-    if(s==A733_PMIC_EXPIRED)return 2;
-    if(c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
-    return 1;
+    return s==A733_PMIC_EXPIRED ? 2 : 1;
 }
 static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
 {
@@ -344,7 +353,7 @@ static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
 static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
 {
     enum a733_cpu_clock_status out;
-    int k=collect(c,&out);
+    int k=collect(c,0,&out);
     if(!k)return out;
     /* Expired before the bus: the voltage is unchanged. A raise has not yet
      * touched the PLL; a lowering keeps its lower rate at the higher voltage. */
@@ -439,13 +448,17 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     }
     case S_INSPECT:return inspect(c);
     case S_READ: {
+        /* The rail's first reading is its boot baseline, kept by the ledger:
+         * the target never falls below it, whatever the operating point. */
         enum a733_cpu_clock_status out;
-        int k=collect(c,&out);
+        uint32_t floor=0;
+        int k=collect(c,&floor,&out);
         if(!k)return out;
         if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
         if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
+        if(c->to_uv<floor)c->to_uv=floor;
         /* Raise: voltage first. Lower: frequency first, then voltage unless
          * the thermal path keeps it. Enough voltage needs no write. */
         if(c->raise && c->to_uv>c->from_uv){c->state=S_VOLTAGE;c->after=S_PARK;}

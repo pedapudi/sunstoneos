@@ -7,6 +7,11 @@ from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,U
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC
 ROOT=Path(__file__).resolve().parents[1];STOP=0x7afff000;STACK=0x7affeff0;SCRATCH=0x7ae00000
 
+def pool_attributes(address):
+ # Modeled translations: the extended pools' MAIR attribute and inner
+ # shareability; other addresses keep the earlier attribute-free model.
+ return (0x44,3) if 0x78000000<=address<0x79000000 else (0xff,3) if 0x48000000<=address<0x78000000 else (0,2)
+
 def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
@@ -18,7 +23,7 @@ class Machine:
   for at,data in image.parts:self.u.mem_write(at,data)
   self.base=image.address('h264_encode');self.a=image.layouts['h264_encode_application'];self.s=self.base+self.a['supplied'];self.il=image.layouts['h264_encode_input'];self.done=False;self.now=1000;self.calls=[];self.tx=bytearray();self.incoming=bytearray();self.triggers=0;self.codec_writes=[];self.io=[];self.quant=[];self.status=0;self.count=0;self.variant='nominal';self.finish_reads=0;self.native_poll_result=None;self.busy=[0,0];self.busy_states=[];self.cursors=[]
   self.u.mem_write(self.base,session);self.u.mem_write(image.address('board'),session[:592]);self.put(image.address('board')+160,1000000,8)
-  self.hooks={image.address(n):n for n in ('a733_memory_reservations_init','a733_memory_uncached_init','board_live','a733_counter_clock_now','aarch64_device_translate','a733_clock_token_status','a733_gpu_resources_status','a733_platform_lock_enter','a733_platform_lock_leave','a733_native_usb_step','a733_native_usb_health','vTaskDelay','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush')}
+  self.hooks={image.address(n):n for n in ('a733_device_memory_ready','board_live','a733_counter_clock_now','aarch64_device_translate','a733_clock_token_status','a733_gpu_resources_status','a733_platform_lock_enter','a733_platform_lock_leave','a733_native_usb_step','a733_native_usb_health','vTaskDelay','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','vTaskEnterCritical','vTaskExitCritical')}
   self.u.hook_add(UC_HOOK_CODE,self.hook);self.u.hook_add(UC_HOOK_MEM_READ,self.mmread);self.u.hook_add(UC_HOOK_MEM_WRITE,self.mmwrite)
  def put(self,at,v,n=4):self.u.mem_write(at,int(v).to_bytes(n,'little'))
  def get(self,at,n=8):return int.from_bytes(self.u.mem_read(at,n),'little')
@@ -29,10 +34,9 @@ class Machine:
   if name is None:return
   x=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(8)];self.calls.append(name)
   if name=='vTaskDelay':self.done=True;u.emu_stop()
-  elif name=='a733_memory_reservations_init':self.ret(self.image.address('boot_pool'))
-  elif name=='a733_memory_uncached_init':self.ret(self.image.address('uncached_pool'))
+  elif name=='a733_device_memory_ready':self.ret(1) # Modeled READY: the actual getters return the prepared pools.
   elif name=='a733_counter_clock_now':self.now+=1;self.put(x[1],self.now,8);self.ret(1)
-  elif name=='aarch64_device_translate':u.mem_write(x[2],struct.pack('<QII',x[0],0,2));self.ret(1)
+  elif name=='aarch64_device_translate':u.mem_write(x[2],struct.pack('<QII',x[0],*pool_attributes(x[0])));self.ret(1)
   elif name in ('a733_clock_token_status','a733_gpu_resources_status'):
    # registry-busy: another task holds each registry for three nonblocking
    # observations, once in PROGRAM (clock) and once in COPY (GPU/PCK).
@@ -40,7 +44,7 @@ class Machine:
    if gpu and self.variant=='registry-busy' and state==23 and len(self.busy_states)==1:self.busy[1]=3;self.busy_states.append(state)
    if self.busy[gpu]:self.busy[gpu]-=1;self.ret(1 if not gpu else 2)
    else:self.ret(0)
-  elif name=='a733_platform_lock_leave':self.ret()
+  elif name in ('a733_platform_lock_leave','vTaskEnterCritical','vTaskExitCritical'):self.ret() # One emulated core: the device-memory ledger's critical section has no effect.
   elif name=='tud_vendor_n_available':self.ret(len(self.incoming))
   elif name=='tud_vendor_n_read':
    n=min(x[2],len(self.incoming));u.mem_write(x[1],bytes(self.incoming[:n]));del self.incoming[:n];self.ret(n)
@@ -84,7 +88,9 @@ class Machine:
  def pools(self):
   for pool,lo,hi in [('boot_pool','__device_pool_start','__device_pool_end'),('uncached_pool','__uncached_pool_start','__uncached_pool_end')]:
    start=self.image.address(lo);end=self.image.address(hi);assert end<=0x7a000000 or start>=0x7b000000,(pool,hex(start),hex(end))
-   assert self.call('device_memory_pool_init',self.image.address(pool),start,start,end-start)==1
+  # The actual extended preparations check each 2 MiB block's translation and
+  # type the pools: dma32 write-back and Normal non-cacheable.
+  assert self.call('a733_memory_reservations_prepare')==1 and self.call('a733_memory_uncached_prepare')==1
   assert self.call('h264_encode_storage_allocate')==1
  def upload(self,raw,variant='nominal',frames=2):
   session=bytes(self.u.mem_read(self.base,856));packet=struct.pack('<4I2Q',0x55454853,1,len(raw),frames,*struct.unpack_from('<2Q',session,24))+raw
@@ -170,7 +176,9 @@ def main():
     at=base+pt['allocations']+i*im.sizes['device_memory_allocation'];items.append(dict(first=m.get(at+alloc['first'],4),pages=m.get(at+alloc['pages'],4),state=m.get(at+alloc['state'],4)))
    rows[name]=items
   wb=max(x['first']+x['pages'] for x in rows['boot_pool'])*4096;nc=max(x['first']+x['pages'] for x in rows['uncached_pool'])*4096
-  assert wb==3022848 and nc==6254592 and im.sizes['h264_encode_application']<=65536
+  # dma32 places the two 1 MiB write-back extents at 64 KiB boundaries
+  # (pages 240 and 496); before the pool was typed they ended at 3,022,848.
+  assert wb==3080192 and nc==6254592 and im.sizes['h264_encode_application']<=65536,(wb,nc,rows)
   report=dict(nc_bytes=nc,wb_bytes=wb,cpu_metadata_bytes=im.sizes['h264_encode_application'],allocations=rows,device_writes=0)
   if not a.resume:checkpoint('allocated.pkl.gz')
   if a.case!='allocation':
