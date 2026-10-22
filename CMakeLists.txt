@@ -31,8 +31,8 @@ if(NOT EXISTS "${TINYUSB_DIR}/src/tusb.c")
   message(FATAL_ERROR "Set TINYUSB_DIR to the TinyUSB source fetched by tools/fetch-sources.py; "
     "the central build needs it even for kernel-only targets")
 endif()
-# Patches still apply to a different checkout with fuzz, so check the files the
-# build compiles against the lock, and recheck when one of them changes.
+# A patch can still apply to a different checkout at an offset, so check the
+# files the build compiles against the lock, and recheck when one changes.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 foreach(pinned "freertos|${FREERTOS_DIR}" "tinyusb|${TINYUSB_DIR}")
   string(REPLACE "|" ";" parts "${pinned}")

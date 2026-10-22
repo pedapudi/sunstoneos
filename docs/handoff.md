@@ -458,7 +458,6 @@ function returns the same result for every input. These copies remain:
 
 | Item | Reason it remains |
 | --- | --- |
-| The unused fuzzy-patch pins for the crypto and PWM `main.patch` and `runtime.patch` in `cmake/patch.cmake`; the paragraph in `docs/build.md` and the patch list in `docs/crypto-application.md` that still describe them; the fuzzy-pin case in `checks/audit-build-safety-configure.py`, which now uses an exact patch | The single-core package did not own these files. |
 | Hooks in `apps/board/main.c`, `session.c` and `identity.c` that replace the single-core session, main and identity patches (the rest of supervisor-apps-8) | The board owner holds these files. The patches now apply without fuzz. |
 | One shared patch function for the other standalone projects (the rest of build-system-13) | The remaining copies are in the root `CMakeLists.txt`, `platform/*` and other applications. |
 | Folding the board, thermal and RTC branches of the shared single-core monitor into one parameterized path | The DSI scanout image patches the shared monitor, runtime and board linker script. It must move to the shared recipe or to hooks first. |
