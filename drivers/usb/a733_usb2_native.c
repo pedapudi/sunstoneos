@@ -151,7 +151,8 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
     if(!device_memory_acquire(pool,c->owner,A733_XHCI_MEMORY_BYTES,&n->parent,&n->backing))return 0;
     if(!mappings(n->backing.cpu,n->backing.bytes,0x44)||n->backing.cpu!=n->backing.physical||
         !a733_ranges_disjoint(n,sizeof(*n),(void *)n->backing.cpu,n->backing.bytes)||
-        !device_memory_pool_init(&n->private_pool,n->backing.cpu,n->backing.physical,n->backing.bytes)||
+        !device_memory_pool_init_typed(&n->private_pool,n->backing.cpu,n->backing.physical,n->backing.bytes,
+            DEVICE_MEMORY_CLASS_NONE,DEVICE_MEMORY_NON_CACHEABLE)||
         !device_memory_acquire(&n->private_pool,c->owner,n->backing.bytes,&n->memory,&n->backing)){
         device_memory_retain(pool,n->parent);return 0;}
     struct device_memory_allocation *a=device_memory_lookup(pool,n->parent);

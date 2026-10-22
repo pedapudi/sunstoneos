@@ -47,8 +47,19 @@ static int enable(void *ctx)
     configASSERT(service.mappings[26].pages==graphics.render_pages && service.mappings[26].page_count==3);
     powered=1;return 1; /* Register/firmware model, never a physical power claim. */
 }
+/* Submission pacing: the worker calls the mode callback when it admits the
+ * RENDER request and the queue kick when the render is sent. Between them it
+ * must neither begin a timed wait nor block for a tick. */
+static uint32_t admitted_pauses;
+static uint64_t admitted_us,admission_to_kick_us;
+static uint32_t pauses(void)
+{ return service.ready_timed_waits+service.lifecycle_timed_waits+service.yield_blocks; }
 static int mode(void *ctx)
-{ callback(ctx);configASSERT(powered);return 1; /* Explicit model MC1 observation. */ }
+{
+    callback(ctx);configASSERT(powered);
+    admitted_pauses=pauses();configASSERT(now(ctx,&admitted_us));
+    return 1; /* Explicit model MC1 observation. */
+}
 static int publish(void *ctx)
 { callback(ctx);return a733_gpu_memory_publish(&firmware.memory); }
 static int started(void *ctx,uint32_t *out)
@@ -95,6 +106,8 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     uint32_t type=(uint32_t)word(command,4);
     if(type==(PVR_CCB_MAGIC|117)) {
         ++kicks;configASSERT(kicks==1);
+        uint64_t kicked;configASSERT(now(ctx,&kicked)&&pauses()==admitted_pauses);
+        admission_to_kick_us=kicked-admitted_us;
         uintptr_t shared=a733_gpu_graphics_memory_render_shared(&graphics);
         const struct pvr_render_job_image *im=&graphics.submission.image;
         struct pvr_cccb_command geom[]={
@@ -175,6 +188,7 @@ static void client(void *unused)
         if(r.phase==PVR_GPU_SERVICE_FAILED)break;
     }
     configASSERT(kicks==1 && r.phase==PVR_GPU_SERVICE_FAILED && r.error==PVR_GPU_SERVICE_GRAPHICS);
+    platform_puts("metric render-admission-to-kick-us ");platform_hex(admission_to_kick_us);platform_puts("\n");
     configASSERT(graphics.submission.phase==PVR_RENDER_SERVICE_FAILED);
     if(gpu_render_case==0)configASSERT(graphics.submission.error==PVR_RENDER_SERVICE_RESULT);
     if(gpu_render_case==1)configASSERT(graphics.submission.error==PVR_RENDER_SERVICE_CLOCK);

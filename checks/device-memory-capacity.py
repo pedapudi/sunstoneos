@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check large-pool placement, actual native mappings and bounded pool publication."""
+"""Check pool placement and class alignment, the EL1 map, and one-call pool preparation."""
 import argparse
 import hashlib
 import json
@@ -19,6 +19,32 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Writers of the cached EL1 and EL3 tables outside their builder. The golden
+# comparison sees the builder's tables; a later writer may only set the
+# outer-shareable field of level-1 entry 0 (MMIO), which leaves every pool
+# entry, and so the per-block pool check, unchanged.
+BUILDERS = {'platform/a733-smp-cached/memory.c'}
+LATER_WRITE = re.compile(r'a733_cached_el[13]_l1\[0\]\|=UINT64_C\(2\)<<8;')
+
+
+def later_table_writers():
+    files = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '*.c', '*.cc', '*.h', '*.S', '*.patch'],
+                           check=True, capture_output=True, text=True).stdout.split()
+    write = re.compile(r'a733_cached_el[13]_l[123]\s*\[[^]]*\]\s*([|&^+-]?=)(?!=)')
+    found = []
+    for name in files:
+        if name in BUILDERS or name.startswith('checks/'):
+            continue
+        for number, line in enumerate((ROOT / name).read_text(errors='replace').splitlines(), 1):
+            if name.endswith('.patch') and line.startswith('-'):
+                continue
+            if write.search(line):
+                if not LATER_WRITE.search(line.replace(' ', '')):
+                    raise RuntimeError(f'table write outside the builder touches more than l1[0] SH: {name}:{number}')
+                found.append(f'{name}:{number}')
+    return found
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
@@ -28,6 +54,7 @@ def main():
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
+    writers = later_table_writers()
     objects = out / 'objects'
     objects.mkdir()
     commands = []
@@ -131,8 +158,9 @@ def main():
         ROOT / 'cmake/a733-smp-cached-devices.cmake'])
     dependencies.update(Path(x) for x in json.loads(production_manifest.read_text())['inputs'])
     # The host links only pure layout predicates; admission still takes its real v2 branch.
-    host = [compile_source('checks/device-memory-capacity.c', 'host-check', True, False, ['-DCAPACITY_HOST=1']),
-            compile_source('runtime/device_memory_pool.c', 'host-pool', True, False),
+    host = [compile_source('checks/device-memory-capacity.c', 'host-check', True, False,
+                ['-DCAPACITY_HOST=1', '-DDEVICE_MEMORY_POOL_TRACE']),
+            compile_source('runtime/device_memory_pool.c', 'host-pool', True, False, ['-DDEVICE_MEMORY_POOL_TRACE']),
             compile_source('platform/a733/device_memory_layout.c', 'host-layout', True, False),
             compile_source('platform/a733-smp-cached/admission.c', 'host-admission', True)]
     executable = out / 'capacity-host'
@@ -147,10 +175,16 @@ def main():
                       'platform/a733/cpu_coherence.S', 'arch/aarch64/device_memory.c']
     native = [produced[(ROOT / source).resolve()] if (ROOT / source).resolve() in produced else
               compile_source(source, 'native-' + str(i)) for i, source in enumerate(native_sources)]
+    # The measured image calls the translation helper directly. A second
+    # image wraps the helper to count AT instructions; the wrapper's own
+    # instructions stay out of the measured image.
     elf_path = out / 'device-memory-capacity.elf'
-    run('link-native', [str(a.ld.resolve()), '-static', '--gc-sections', '-T',
-        str(ROOT / 'platform/a733-smp-cached/link-devices.ld'), '-Map=' + str(out / 'native.map'),
-        *map(str, native), '-o', str(elf_path)])
+    counting_path = out / 'device-memory-capacity-counting.elf'
+    for name, path, extra in (('link-native', elf_path, []),
+                              ('link-counting', counting_path, ['--wrap=aarch64_device_translate'])):
+        run(name, [str(a.ld.resolve()), '-static', '--gc-sections', *extra, '-T',
+            str(ROOT / 'platform/a733-smp-cached/link-devices.ld'), '-Map=' + str(path.with_suffix('.map')),
+            *map(str, native), '-o', str(path)])
     # Compile real startup callers and direct/transitive reservation consumers once.
     closure = ['platform/a733/gpu_reserved.c',
                'platform/a733/gpu_compute_reserved.c', 'platform/a733/npu_reserved.c',
@@ -164,26 +198,29 @@ def main():
             'platform/a733-smp-cached/memory.c', 'platform/a733-smp-cached/admission.c',
             'platform/a733-smp-cached/boot.c', 'platform/a733-smp-cached/continue.c']):
         compile_source(source, 'compact-' + str(i), extended=False)
-    with elf_path.open('rb') as f:
-        elf = ELFFile(f)
-        symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
-        expected = {'__device_memory_profile': 1, '__device_pool_start': 0x48000000,
-                    '__device_pool_end': 0x78000000, '__uncached_pool_start': 0x78000000,
-                    '__uncached_pool_end': 0x79000000}
-        assert all(symbols[k] == v for k, v in expected.items())
-        assert symbols['__bss_end'] < 0x42000000 and symbols['__tables_end'] <= 0x42200000
-        assert symbols['__tables_end'] - symbols['__tables_start'] == 5 * 4096
-        assert elf.get_section_by_name('.device_pool')['sh_type'] == 'SHT_NOBITS'
-        assert elf.get_section_by_name('.uncached_pool')['sh_type'] == 'SHT_NOBITS'
-        segments = []
-        for i, seg in enumerate(elf.iter_segments()):
-            if seg['p_type'] != 'PT_LOAD' or not seg['p_filesz']:
-                continue
-            assert 0x41000000 <= seg['p_paddr'] < seg['p_paddr'] + seg['p_filesz'] <= 0x42000000
-            path = out / ('segment-' + str(i) + '.bin')
-            path.write_bytes(seg.data())
-            segments.append((path, int(seg['p_paddr'])))
-        (out / 'layout.json').write_text(json.dumps({k: symbols[k] for k in expected}, indent=2) + '\n')
+    def load_segments(image, prefix):
+        with image.open('rb') as f:
+            elf = ELFFile(f)
+            symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            expected = {'__device_memory_profile': 1, '__device_pool_start': 0x48000000,
+                        '__device_pool_end': 0x78000000, '__uncached_pool_start': 0x78000000,
+                        '__uncached_pool_end': 0x79000000}
+            assert all(symbols[k] == v for k, v in expected.items())
+            assert symbols['__bss_end'] < 0x42000000 and symbols['__tables_end'] <= 0x42200000
+            assert symbols['__tables_end'] - symbols['__tables_start'] == 5 * 4096
+            assert elf.get_section_by_name('.device_pool')['sh_type'] == 'SHT_NOBITS'
+            assert elf.get_section_by_name('.uncached_pool')['sh_type'] == 'SHT_NOBITS'
+            segments = []
+            for i, seg in enumerate(elf.iter_segments()):
+                if seg['p_type'] != 'PT_LOAD' or not seg['p_filesz']:
+                    continue
+                assert 0x41000000 <= seg['p_paddr'] < seg['p_paddr'] + seg['p_filesz'] <= 0x42000000
+                path = out / (prefix + 'segment-' + str(i) + '.bin')
+                path.write_bytes(seg.data())
+                segments.append((path, int(seg['p_paddr'])))
+        return symbols, segments, {k: symbols[k] for k in expected}
+    images = {'measured': load_segments(elf_path, ''), 'counting': load_segments(counting_path, 'counting-')}
+    (out / 'layout.json').write_text(json.dumps(images['measured'][2], indent=2) + '\n')
     snapshots = {}
     for i, path in enumerate(sorted(dependencies)):
         target = out / 'inputs' / str(i) / path.name
@@ -194,8 +231,14 @@ def main():
     rom = out / 'reset-rom.bin'
     rom.write_bytes(struct.pack('<IIQ', 0x58000040, 0xd61f0000, 0x41000000))
     # Three distinct transitions: full publication, an interior mapping fault,
-    # and immutable-deadline refusal after one batch. No peripheral workloads.
-    for mode, label in enumerate(('publication', 'interior-fault', 'deadline-binding')):
+    # and a changed admitted deadline, then publication again in the counting
+    # image. No peripheral workloads. -icount makes the PMU instruction counter
+    # exact.
+    measurements = {}
+    cases = (('publication', 0, 'measured'), ('interior-fault', 1, 'measured'),
+             ('deadline-binding', 2, 'measured'), ('translation-count', 3, 'counting'))
+    for label, mode, image in cases:
+        symbols, segments, _ = images[image]
         loaders = []
         controls = 0
         for original, address in segments:
@@ -211,13 +254,21 @@ def main():
             loaders += ['-device', f"loader,file={path},addr={address},force-raw=on"]
         assert controls == 1
         run('native-' + label, [str(a.qemu.resolve()), '-machine', 'virt,secure=on,virtualization=on',
-            '-cpu', 'cortex-a53', '-smp', '8', '-m', '1024M', '-nographic', '-monitor', 'none',
+            '-cpu', 'cortex-a53', '-smp', '8', '-icount', 'shift=0', '-m', '1024M', '-nographic', '-monitor', 'none',
             '-serial', 'none', '-semihosting-config', 'enable=on,target=native', '-bios', str(rom),
-            *loaders])
+            *loaders], timeout=600)
+        for line in (out / ('native-' + label + '.log')).read_text().splitlines():
+            if line.startswith('MEASURE '):
+                key, value = line[8:].split('=')
+                measurements[key] = int(value, 16)
+    assert measurements['prepare_translations'] == 392 and measurements['prepare_instructions'] <= 25000
     (out / 'result.json').write_text(json.dumps({'passed': True,
         'elf_sha256': digest(elf_path), 'host_sha256': digest(executable),
         'qemu_sha256': digest(a.qemu.resolve()), 'clang_sha256': digest(a.clang.resolve()),
-        'ld_sha256': digest(a.ld.resolve()), 'native_cases': 3, 'cores': 8,
+        'ld_sha256': digest(a.ld.resolve()), 'counting_elf_sha256': digest(counting_path),
+        'native_cases': len(cases), 'cores': 8,
+        'later_table_writers': writers,
+        'measurements': measurements,
         'loaded_segments': {p.name: digest(p) for p in out.glob('*segment-*.bin')},
         'rom_sha256': digest(rom),
         'production_elf': str(production / 'sunstone-a733-smp-cached-devices.elf'),
