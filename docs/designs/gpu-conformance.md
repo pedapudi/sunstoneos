@@ -149,7 +149,7 @@ and later batches over it are opaque or write no colour.
 | --- | --- |
 | Clear, opaque nearest texel without sRGB, compute word | Exact |
 | Interpolated colour, one blended layer, sRGB decode | ±1 |
-| Linear filtering | ±(1 + ⌈2Δ(e_b + e_r)⌉): 9 in the profile 4 linear frames, 2 in the 1920 × 384 frame |
+| Linear filtering | ±(1 + ⌈2Δ(e_b + e_r) + 1/2⌉): 9 in the profile 4 linear frames, 2 in the 1920 × 384 frame |
 
 Δ is the largest channel difference between two texels that can be filtering
 neighbours under the scene's address modes, computed once per texture. A
@@ -166,15 +166,32 @@ within 2dΔ. The per-axis bound d is e_b + e_r:
   fp32. With |u| ≤ 4 and at most 256 texels, the texel coordinate is below
   1024 in magnitude, and four fp32 roundings bound its error by 2⁻¹¹ texel.
 
-The board's conversion adds less than 1. llvmpipe's adds at most 1: its
-integer path rounds each of its three lerps (`lp_build_lerp_simple`), and
-its fp32 path rounds once. The integer channels therefore differ by less
-than 2 + 2dΔ, which is at most 1 + ⌈2dΔ⌉.
+The board's final conversion adds less than 1. The board may also round
+its two inner lerps, the vertical interpolations between texel rows, to 8
+bits, as llvmpipe does; that adds up to 1/2 more. The confirmation scenes
+cannot show this rounding: texels 0 and 8, and texels 1 and 9, are equal
+pairs, so a rounded vertical lerp between them is exact. llvmpipe's
+rounding adds at most 1: its integer path rounds each of its three lerps
+(`lp_build_lerp_simple`), and its fp32 path rounds once. The integer
+channels therefore differ by less than 2 + 2dΔ + 1/2, which is at most
+1 + ⌈2dΔ + 1/2⌉. The 1/2 changes neither figure in the table:
+2dΔ is about 7.48 in the profile 4 linear frames and about 0.24 in the
+1920 × 384 frame.
 
-The confirmation scenes vary the texel coordinate along u only. The
-tolerance applies e_b to v as well, on the assumption that the sampler
-treats both axes alike. If the board's v weights are less accurate, the
-linear-filter comparison fails.
+The tolerance rests on two assumptions about the board's sampler that the
+confirmation scenes do not test:
+
+- **Both axes alike.** The scenes vary the texel coordinate along u only.
+  The tolerance applies e_b to v as well.
+- **Weight error independent of coordinate magnitude.** The scenes sample
+  texel coordinates between 0.5 and 1.5. The profile 4 frames reach about
+  ±16 texels and the 1920 × 384 frame about ±192, and the tolerance applies
+  e_b there too.
+
+If the board breaks either assumption, its weights are less accurate than
+e_b in the frames, and the linear-filter comparison fails although the
+confirmation passed. The output may still conform; a board scene that
+tests the broken assumption is then needed before the tolerance is revised.
 
 The last batch of each nearest and linear profile 4 frame holds confirmation
 scenes, whose pixels the comparator checks against exact rational values
@@ -196,21 +213,27 @@ so a passing pixel shows only that its weight lies within (bound + 1)/255
 of the exact value; that ramp figure is e_b. UNORM8 output cannot resolve a
 2⁻⁸ weight step against this conversion allowance, so the scenes do not
 establish the number of subtexel bits or the perspective-division error.
-The host self-check shows that 7-bit weights rounded to nearest and 8-bit
-weights after a 2⁻⁹ texel coordinate bias both pass the scenes, and that
-the linear tolerance accepts both against the reference. Weights truncated
-to 2⁻⁶ fail them.
+The host self-check shows that 7-bit weights rounded to nearest and 7-bit
+weights truncated both pass the scenes, and that the linear tolerance
+accepts both against the reference. Both differ from llvmpipe, which rounds
+to 8 bits. Truncation to 7 bits has a weight error approaching 2⁻⁷, the
+largest of the simple rounding rules that the scenes admit. Weights
+truncated to 2⁻⁶ fail the scenes.
 
 Each nearest frame's blended quad is the blending confirmation: each channel
 within 1 of the exact blended value. If any confirmation pixel fails, the
 profile 4 launch is reported as unconfirmed and none of its frames is
-compared until the tolerance is revised. The profile 3 source-over frames
-rest on the same blending assumption and the 1920 × 384 launch on the same
-filter bound. The comparison of either launch therefore requires the
+compared until the tolerance is revised. Every other launch with a
+linear-filtered or blended frame rests on the same assumptions: today the
+profile 3 source-over frames and the 1920 × 384 frame, and the 1920 × 1080
+frame once its launch is admitted. The comparator derives this requirement
+from each launch's frames. The comparison of such a launch requires the
 `comparison.json` of a passed profile 4 launch with no failed or uncaptured
 confirmation scene, whose plan digest matches the current plan. The plan
 digest is the SHA-256 over the profile 4 frames' planned input hashes and
-state words.
+state words. Before reading a capture, the comparator applies every plan
+check to the launch, timing included, so it refuses a launch that the plan
+refuses.
 
 An edge tie is a pixel centre whose edge function is exactly zero in the
 plan's arithmetic, so the implementation's tie-break rule decides coverage.
@@ -306,9 +329,8 @@ parameters are updated from the measured value before the next board session.
   confirmation bounds. Three modeled board filters, each a rule for the
   texel coordinate used in linear filtering, are evaluated in closed form:
   weights truncated to 2⁻⁶ must fail the confirmation in every linear frame.
-  7-bit weights rounded to nearest and 8-bit weights after a 2⁻⁹ texel
-  coordinate bias pass it, so each must stay within the linear tolerance of
-  the reference frame.
+  7-bit weights rounded to nearest and 7-bit weights truncated pass it, so
+  each must stay within the linear tolerance of the reference frame.
 - **Mutations.** Each must fail at least one scene. Five set one reference
   render parameter: a half-pixel viewport offset, the other filter, the other
   interpolation mode, mirrored repeat for mirror clamp to edge, and skipped
@@ -316,14 +338,17 @@ parameters are updated from the measured value before the next board session.
   must leave the profile 4 launch unconfirmed, stride padding read as pixels,
   one exact pixel changed by 2, one compute word changed, and a compute
   capture whose recorded job error is `PVR_JOB_RESULT`.
-- **Plan refusals.** One scene violating each plan check is refused.
+- **Plan refusals.** One scene violating each plan check is refused. The
+  inputs and compare commands both refuse the 1920 × 1080 launch through
+  the timing check.
 - **Capture comparison.** On synthesized captures, exact profile 4 frames
   pass, coarse filter weights leave the launch unconfirmed, a failed frame
   is recorded with its result, and a wrong input hash, state or sequence or
   a texture frame without its generation is refused. The profile 3
   comparison is unconfirmed without a profile 4 comparison, with one from
   another plan digest and with an unconfirmed one, and passes with the
-  passed one.
+  passed one. The 1920 × 384 comparison is unconfirmed without a profile 4
+  comparison.
 
 Transport and driver paths stay with their owners: `checks/gpu-draw-runtime.py`
 and `checks/gpu-texture-runtime.py` model the draw and 1920 × 1080 texture
@@ -373,7 +398,7 @@ reporting system.
 | Worst-case slot delivery and request upload | None | At most 0.5 s each; 0.26 s planned | Plan check |
 | Board wall time per launch and slot | Not recorded | At most the modeled worst case, else a model discrepancy | Board evidence |
 | Changes to board images | 0 | 0 | Review of the diff |
-| Reference processes per run | None | At most 5 | Counted |
+| Reference processes per run | None | At most 5 | Counted by the function that starts them |
 | Comparator time, 1920 × 384 frame | None | At most 50 ms | `clock_gettime` |
 | Host check wall time after the Mesa build | None | At most 60 s | Clock started after the build |
 | Mesa rebuilds with unchanged stamp | None | 0 | Stamp |

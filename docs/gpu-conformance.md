@@ -50,15 +50,16 @@ triangle that wrote it last:
 | --- | --- |
 | Clear, nearest texel without sRGB | Exact |
 | Interpolated colour, one blended layer, sRGB decode | ±1 |
-| Linear filtering | ±(1 + ⌈2Δ(e_b + e_r)⌉): 9 in the profile-4 linear frames, 2 in the 1920 × 384 frame |
+| Linear filtering | ±(1 + ⌈2Δ(e_b + e_r) + 1/2⌉): 9 in the profile-4 linear frames, 2 in the 1920 × 384 frame |
 
 Δ is the largest channel difference between two texels that can be bilinear
 neighbours under the frame's address modes, border colour included. e_b,
 just under 2⁻⁸ + 2⁻¹¹ + 2/255, is the per-axis filter weight error that the
 board's confirmation scenes admit, and e_r, 2⁻⁹ + 2⁻¹¹, bounds llvmpipe's
-own weight error; the [design](designs/gpu-conformance.md) derives both. A
-pixel
-centre lying exactly on a triangle edge, called an edge tie, passes when it
+own weight error. The 1/2 allows the board to round its inner lerps, which
+the confirmation scenes cannot observe; the
+[design](designs/gpu-conformance.md) derives all three terms. A pixel centre
+lying exactly on a triangle edge, called an edge tie, passes when it
 matches the reference at itself or one of its eight neighbours. A mismatched
 pixel equal to `PVR_RENDER_POISON` is counted as stale output.
 
@@ -87,6 +88,13 @@ Two tolerances rest on hardware behaviour that only the board can show:
   the exact value;
 - blending runs at destination precision or better, with one final rounding.
 
+The linear-filter tolerance also assumes two things the scenes below do not
+test: the v weights are as accurate as the u weights, and the weight error
+does not grow with the texel coordinate, which the scenes vary only between
+0.5 and 1.5 while the frames reach about ±16 and ±192 texels. A board that
+breaks either assumption fails the linear-filter comparison even though its
+confirmation passes.
+
 The last batch of each nearest and linear profile-4 frame holds confirmation
 scenes; the sRGB frames have none. The comparison checks their pixels
 against exact rational values computed in Python, independently of the
@@ -104,25 +112,27 @@ reference:
   conversion may move a pixel by up to 1, so a passing pixel shows that its
   weight lies within e_b of the exact value along u. The scenes cannot
   resolve the number of subtexel bits or the perspective-division error on
-  their own, and they do not vary v; the tolerance assumes that v behaves
-  as u, and a less accurate v weight makes the comparison fail.
+  their own.
 - **Blending.** The blended 32 × 32 quad of each nearest frame passes when
   every channel is within 1 of the exact blended value.
 
 If any confirmation pixel fails, or a frame holding confirmation scenes was
 not captured, the comparison reports the profile-4 launch as unconfirmed and
-compares none of its frames: the tolerances must be revised first. The
-profile-3 source-over frames rest on the same blending assumption, and the
-1920 × 384 launch on the same filter bound. Their comparisons require the
-`comparison.json` of a passed profile-4 launch whose recorded plan digest,
-the SHA-256 over the planned profile-4 input hashes and states, matches the
-current plan, and otherwise report the launch as unconfirmed.
+compares none of its frames: the tolerances must be revised first. Every
+other launch with a linear-filtered or blended frame rests on the same
+assumptions: the profile-3 source-over frames, the 1920 × 384 frame and,
+once admitted, the 1920 × 1080 frame. The comparator finds these launches
+from their frames. Their comparisons require the `comparison.json` of a
+passed profile-4 launch whose recorded plan digest, the SHA-256 over the
+planned profile-4 input hashes and states, matches the current plan, and
+otherwise report the launch as unconfirmed.
 
 The self-check evaluates three modeled board filters in closed form. Filter
 weights truncated to 2⁻⁶ fail the confirmation in every linear frame. 7-bit
-weights rounded to nearest and 8-bit weights after a 2⁻⁹ texel coordinate
-bias both pass it, and both stay within 1 of the reference, inside the
-linear tolerance of 9. The pinned llvmpipe reference meets the confirmation
+weights rounded to nearest and 7-bit weights truncated both pass it; they
+differ from the reference by at most 1 and 2, inside the linear tolerance
+of 9. llvmpipe rounds its weights to 8 bits, and truncation to 7 bits has a
+weight error approaching 2⁻⁷. The pinned llvmpipe reference meets the confirmation
 bounds.
 
 ### Closed-form scenes
@@ -223,7 +233,8 @@ throughout a stream.
    sequence, generation or result, or the frames captured before a failure,
    so this step waits for the change listed under Remaining work.
 3. `gpu-conformance.py compare --launch NAME --capture DIR --output DIR`
-   refuses a capture whose recorded hash or state differs from the plan,
+   applies every plan check to the launch, timing included, before reading
+   the capture, so it refuses the 1920 × 1080 launch. It refuses a capture whose recorded hash or state differs from the plan,
    whose sequences do not advance by one per frame, whose texture frames
    lack a generation, or that records frames after a failed one. It records a frame whose reply
    result is not 1 as failed with that result, and frames after it as not
@@ -232,9 +243,10 @@ throughout a stream.
    writes `comparison.json` with the launch status (passed, failed or
    unconfirmed), each frame's status, exact, tolerant, tie-accepted, failed
    and stale pixel counts and the first 16 failures; for profile 4 it also
-   records the plan digest. The comparisons of the profile-3 and 1920 × 384
-   launches take `--confirmation` with the `comparison.json` of the passed
-   profile-4 launch. The output directory is created only when
+   records the plan digest. The comparison of every other launch with a
+   linear-filtered or blended frame, today profile 3 and 1920 × 384, takes
+   `--confirmation` with the `comparison.json` of the passed profile-4
+   launch. The output directory is created only when
    `comparison.json` is written.
 
 A launch confirms conformance when its input hashes and states match, its
@@ -256,8 +268,8 @@ The check runs five reference processes and verifies the following:
   reference pixel lies within its tolerance of `PVR_RENDER_POISON`;
 - the reference and the exact frames meet the confirmation bounds; filter
   weights truncated to 2⁻⁶ fail them; 7-bit weights rounded to nearest and
-  8-bit weights after a 2⁻⁹ texel coordinate bias pass them and stay within
-  the linear tolerance of the reference;
+  7-bit weights truncated pass them and stay within the linear tolerance of
+  the reference;
 - the recorded stencil executions separate every stencil operation on every
   path, and every compare operation, from the other seven;
 - each of ten mutations fails at least one scene. Five change the reference:
@@ -266,8 +278,8 @@ The check runs five reference processes and verifies the following:
   decoding. Five change a capture: filter weights truncated to 2⁻⁶, stride
   padding read as pixels, one exact pixel changed by 2, one compute word
   changed, and a compute job error of `PVR_JOB_RESULT`;
-- one scene breaking each plan check is refused, and the inputs command
-  refuses the 1920 × 1080 launch through the plan's timing check;
+- one scene breaking each plan check is refused, and the inputs and compare
+  commands refuse the 1920 × 1080 launch through the plan's timing check;
 - the capture comparison passes exact profile-4 frames, reports the launch
   as unconfirmed when filter weights are truncated to 2⁻⁶, records a frame
   that failed with a reply result, and refuses a wrong input hash, state or
@@ -275,7 +287,8 @@ The check runs five reference processes and verifies the following:
   needs no generation;
 - the profile-3 comparison is unconfirmed without a profile-4 comparison,
   with one from another plan digest and with an unconfirmed one, and passes
-  with the passed one;
+  with the passed one; the 1920 × 384 comparison is unconfirmed without a
+  profile-4 comparison;
 - the twelve launches meet their budgets;
 - the comparator handles the 1920 × 384 frame within 50 ms;
 - every row of the coverage table below has a comparing scene;
@@ -342,7 +355,7 @@ Results are kept under `~/.cache/sunstoneos/evidence/gpu-conformance-20261022/`:
 | Edge-tie pixels | None | At most 5% of covered pixels; none in closed-form scenes | 2.1% in the 1920 × 384 frame; none elsewhere |
 | Reference processes per self-check | None | At most 5 | 5 |
 | Comparator time, 1920 × 384 frame | None | At most 50 ms | 2.0 ms |
-| Host check wall time after the Mesa build | None | At most 60 s | 13.8 s |
+| Host check wall time after the Mesa build | None | At most 60 s | 12.6 s |
 | Mesa rebuilds with unchanged stamp | None | 0 | 0 |
 | Texture image SHA-256 | `fc39d18f…` | Unchanged | `fc39d18f…` |
 

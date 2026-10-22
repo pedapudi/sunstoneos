@@ -65,12 +65,15 @@ LATTICE = 16
 # take either neighbouring UNORM8 value, so a pass admits a weight error just
 # below (bound + 1) / 255. llvmpipe rounds the texel coordinate to 1/256 on its
 # 8-bit path (lp_bld_sample_aos.c) and filters in fp32 otherwise, after fp32
-# coordinate arithmetic bounded by 2^-11 texel.
+# coordinate arithmetic bounded by 2^-11 texel. The scenes cannot see whether
+# the board rounds its inner lerps, which can add up to 1/2 more
+# (BOARD_LERP_ROUNDING).
 FILTER_STEP = Q(1, 256)
 PERSPECTIVE_ERROR = Q(1, 2048)
 RAMP_BOUND = 1 + 255 * (FILTER_STEP + PERSPECTIVE_ERROR)
 BOARD_WEIGHT_ERROR = (RAMP_BOUND + 1) / 255
 REFERENCE_WEIGHT_ERROR = Q(1, 512) + Q(1, 2048)
+BOARD_LERP_ROUNDING = Q(1, 2)
 
 
 def module(name, path):
@@ -146,8 +149,8 @@ class Frame:
     def closed_form(self):
         return all(isinstance(p, Quad) for b in self.batches for p in b.prims)
 
-    # A scene is fixed once built, so its device input and plan analysis are
-    # computed on first use and kept with the frame.
+    # A scene is fixed once built, so its device input, plan analysis and
+    # exact evaluation are computed on first use and kept with the frame.
     @functools.cached_property
     def expanded(self):
         """Draw-ordered (batch, triangle) pairs and the canonical device input."""
@@ -159,9 +162,24 @@ class Frame:
         return plan_checks(self)
 
     @functools.cached_property
+    def exact(self):
+        """One exact evaluation of a quad-only scene: its UNORM8 image, the
+        stencil executions it traces and its confirmation pixels."""
+        trace = set()
+        colours = closed_form_colours(self, trace=trace)
+        return Exact(unorm_image(self, colours), frozenset(trace), confirmation_pixels(self, colours))
+
+    @property
     def confirmation(self):
         """Exact values and bounds of the confirmation pixels."""
-        return confirmation_pixels(self)
+        return self.exact.confirmation
+
+
+@dataclass
+class Exact:
+    image: bytes                       # UNORM8 at the device stride
+    trace: frozenset                   # closed_form_colours() stencil trace
+    confirmation: list                 # confirmation_pixels()
 
 
 def pattern(n, seed, alpha=None):
@@ -925,10 +943,12 @@ def plan_checks(frame):
     if n_cov and n_tie > LIMITS['tie_fraction'] * n_cov:
         raise Refused(f'{frame.name}: {n_tie} edge-tie pixels exceed 5% of {n_cov} covered pixels')
     # A weight difference d on each of two axes moves a channel by at most
-    # 2 d delta. The board's conversion adds under 1 and llvmpipe's at most 1
-    # (three rounded lerps on its 8-bit path), so an integer channel
-    # difference is at most 1 + ceil(2 d delta).
-    tol = 1 + math.ceil(2 * texel_delta(frame) * (BOARD_WEIGHT_ERROR + REFERENCE_WEIGHT_ERROR)) if linear else 0
+    # 2 d delta. The board's conversion adds under 1, rounding of its inner
+    # lerps up to 1/2, and llvmpipe's rounding at most 1 (three rounded lerps
+    # on its 8-bit path), so an integer channel difference is at most
+    # 1 + ceil(2 d delta + 1/2).
+    tol = 1 + math.ceil(2 * texel_delta(frame) * (BOARD_WEIGHT_ERROR + REFERENCE_WEIGHT_ERROR) +
+                        BOARD_LERP_ROUNDING) if linear else 0
     tie_bits = bytearray((W * H + 7) // 8)
     for p in range(W * H):
         if ties[p]:
@@ -1022,10 +1042,16 @@ def closed_form_colours(frame, quantize=None, trace=None):
     return colour
 
 
-def closed_form(frame, quantize=None, trace=None):
+def closed_form(frame, quantize=None):
     """Expected frame for quad-only scenes, rounded to UNORM8 and laid out at
-    the device stride with PVR_RENDER_POISON in the padding."""
-    colour = closed_form_colours(frame, quantize, trace)
+    the device stride with PVR_RENDER_POISON in the padding; with quantize,
+    the frame a modeled board filter gives."""
+    if quantize is None:
+        return frame.exact.image
+    return unorm_image(frame, closed_form_colours(frame, quantize))
+
+
+def unorm_image(frame, colour):
     W, H = frame.width, frame.height
     pad = struct.pack('<I', POISON) * (frame.stride - W)
     out = bytearray()
@@ -1074,21 +1100,26 @@ def sample(frame, u, v, quantize=None):
             for c in range(4)]
 
 
-def confirmation_pixels(frame):
+def confirmation_quads(frame):
+    return [q for b in frame.batches for q in b.prims if isinstance(q, Quad) and q.confirm]
+
+
+def has_confirmation(frame):
+    return bool(confirmation_quads(frame))
+
+
+def confirmation_pixels(frame, exact):
     """(x, y, exact RGBA scaled to 0..255, bound) for every pixel of the
-    frame's confirmation quads, which are drawn last and not overdrawn.
+    frame's confirmation quads, which are drawn last and not overdrawn; exact
+    holds closed_form_colours(frame).
 
     Blended pixels pass within 1 of the exact value: one rounding at
     destination precision. Linear-filtered pixels sample the black and white
     texels 0 and 1 along u, so a filter weight error e moves a channel by
     255e. The constant-w bands pass within 1 + 255 x FILTER_STEP; the
     perspective ramp also allows PERSPECTIVE_ERROR."""
-    quads = [q for b in frame.batches for q in b.prims if isinstance(q, Quad) and q.confirm]
-    if not quads:
-        return []
-    exact = closed_form_colours(frame)
     out = []
-    for q in quads:
+    for q in confirmation_quads(frame):
         if not frame.state & 32:
             bound = Q(1)
         else:
@@ -1258,10 +1289,11 @@ def launches():
     return tuple(out)
 
 
+@functools.cache
 def refused_launches():
     """Launches the plan must refuse at the current USB rate."""
-    return [Launch('profile4-1080p', 'sunstone-a733-gpu-texture-single-core', 'texture envelope version 3',
-                   'texture', [wide_frame(1080)], profile=4, session=(1920, 1080))]
+    return (Launch('profile4-1080p', 'sunstone-a733-gpu-texture-single-core', 'texture envelope version 3',
+                   'texture', [wide_frame(1080)], profile=4, session=(1920, 1080)),)
 
 
 def packets(n):
@@ -1340,9 +1372,12 @@ def check_timing(launch, timing):
 
 
 def plan(launch_list=None):
-    """Check every launch; returns a JSON-serializable plan."""
+    """Check every launch; returns a JSON-serializable plan. Timing is checked
+    first, since it needs only the device input."""
     entries = []
     for launch in launch_list or launches():
+        timing = model(launch)
+        check_timing(launch, timing)
         entry = {'launch': launch.name, 'image': launch.image, 'envelope': launch.envelope}
         if launch.kind == 'compute':
             compute_plan(launch.kernel)
@@ -1354,8 +1389,6 @@ def plan(launch_list=None):
                 entry['frames'].append({'name': frame.name, 'input_sha256': input_sha256(frame), 'state': frame.state,
                                         'covered': a.covered, 'ties': a.tie_pixels, 'closed_form': frame.closed_form,
                                         'linear_tolerance': a.linear_tol})
-        timing = model(launch)
-        check_timing(launch, timing)
         entry['model'] = timing
         entries.append(entry)
     readback = sum(e['model']['readback'] for e in entries)
@@ -1462,8 +1495,12 @@ def launch_file(entries):
     return bytes(out)
 
 
+REFERENCE_PROCESSES = 0     # reference processes started by this Python process
+
+
 def reference(entries, work, build=BUILD, frames=False):
-    """Render and compare in one reference process.
+    """Render and compare in one reference process, counted in
+    REFERENCE_PROCESSES.
 
     Returns the renderer identity, the loaded libraries, the parsed comparison
     lines and, when frames is true, each entry's unmutated reference frame as
@@ -1478,6 +1515,8 @@ def reference(entries, work, build=BUILD, frames=False):
            'EGL_PLATFORM': 'surfaceless', 'LIBGL_ALWAYS_SOFTWARE': '1', 'GALLIUM_DRIVER': 'llvmpipe',
            'LP_NUM_THREADS': str(LP_NUM_THREADS), 'MESA_SHADER_CACHE_DISABLE': 'true', 'EGL_LOG_LEVEL': 'fatal'}
     cmd = [str(build / 'reference'), str(path)] + ([str(out)] if frames else [])
+    global REFERENCE_PROCESSES
+    REFERENCE_PROCESSES += 1
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         rendered = None
@@ -1525,7 +1564,8 @@ def check_sentinels(results, entries):
 
 def find_launch(name):
     """A launch by name, including those the plan refuses, so that inputs and
-    compare reach the plan's own refusal; None for the fixed clear."""
+    compare reach the plan's own refusal; None for the fixed clear. Raises
+    ValueError for an unknown name."""
     if name == 'fixed-clear':
         return None
     for launch in launches():
@@ -1591,13 +1631,18 @@ def plan_digest(launch):
     return h.hexdigest()
 
 
-def has_confirmation(frame):
-    return any(isinstance(q, Quad) and q.confirm for b in frame.batches for q in b.prims)
+def rests_on_confirmation(frame):
+    """Whether a frame's tolerance rests on what the profile 4 confirmation
+    scenes show: linear filtering or blending."""
+    if frame.profile == 3:
+        return bool(frame.state & 8)
+    return frame.profile == 4 and bool(frame.state & 32 or any((b.state >> 6) & 7 for b in frame.batches))
 
 
-# Launches whose tolerances rest on what the profile 4 confirmation scenes
-# show: source-over blending in profile 3 and linear filtering at 1920 x 384.
-CONFIRMED_BY_PROFILE4 = ('profile3', 'profile4-wide')
+def needs_confirmation(launch):
+    """Whether a launch other than profile 4 has a frame whose tolerance rests
+    on the profile 4 confirmation scenes."""
+    return launch.name != 'profile4' and any(rests_on_confirmation(f) for f in launch.frames)
 
 
 def profile4_confirmed(path):
@@ -1613,14 +1658,18 @@ def profile4_confirmed(path):
 def compare_capture(name, capture_dir, out, build=BUILD, confirmation=None):
     """Compare a recorded board capture with the plan and the reference.
 
-    A profile 4 launch counts only when its confirmation pixels match their
-    exact values. The launches in CONFIRMED_BY_PROFILE4 need, as
-    confirmation, the comparison.json of a profile 4 launch that passed
-    against the current plan. out is created only to write comparison.json."""
+    The launch must pass every plan check, timing included, before its
+    capture is read. A profile 4 launch counts only when its confirmation
+    pixels match their exact values. Any other launch with a linear-filtered
+    or blended frame needs, as confirmation, the comparison.json of a profile
+    4 launch that passed against the current plan. out is created only to
+    write comparison.json."""
     if out.exists():
         raise FileExistsError(f'{out} exists')
-    record = json.loads((capture_dir / 'capture.json').read_text())
     launch = find_launch(name)
+    if launch is not None:
+        plan([launch])
+    record = json.loads((capture_dir / 'capture.json').read_text())
     if launch is None:
         frames = record['frames']
         data = (capture_dir / frames[0]['file']).read_bytes()
@@ -1655,7 +1704,7 @@ def compare_capture(name, capture_dir, out, build=BUILD, confirmation=None):
                                       'not_captured': [n for n in scenes if n not in failed]}
             if any(report['confirmation'].values()):
                 unconfirmed = 'confirmation pixels differ from their exact values or were not captured'
-        elif launch.name in CONFIRMED_BY_PROFILE4 and not profile4_confirmed(confirmation):
+        elif needs_confirmation(launch) and not profile4_confirmed(confirmation):
             unconfirmed = 'needs the passed comparison of the profile 4 launch of the current plan'
         verdicts = {}
         if unconfirmed:
@@ -1695,8 +1744,8 @@ def main():
     c.add_argument('--launch', required=True)
     c.add_argument('--capture', type=Path, required=True)
     c.add_argument('--output', type=Path, required=True)
-    c.add_argument('--confirmation', type=Path, help='comparison.json of a passed profile 4 launch, '
-                   'required by ' + ' and '.join(CONFIRMED_BY_PROFILE4))
+    c.add_argument('--confirmation', type=Path, help='comparison.json of a passed profile 4 launch, required '
+                   'by every other launch with a linear-filtered or blended frame')
     a = p.parse_args()
     if a.command == 'build':
         print(json.dumps(build(a.build), indent=1))
@@ -1713,10 +1762,13 @@ def main():
               f"worst session {result['worst_session_s']:.2f} s")
     else:
         try:
+            launch = find_launch(a.launch)
+        except ValueError as error:
+            raise SystemExit(str(error))
+        if a.command == 'inputs' and launch is None:
+            raise SystemExit('the fixed clear has no input')
+        try:
             if a.command == 'inputs':
-                launch = find_launch(a.launch)
-                if launch is None:
-                    raise ValueError('the fixed clear has no input')
                 write_inputs(launch, a.output)
             else:
                 report = compare_capture(a.launch, a.capture, a.output, a.build, a.confirmation)
@@ -1725,8 +1777,6 @@ def main():
                 sys.exit(0 if report['passed'] else 1)
         except Refused as error:
             raise SystemExit(f'refused: {error}')
-        except ValueError as error:
-            raise SystemExit(str(error))
 
 
 if __name__ == '__main__':

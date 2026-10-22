@@ -10,8 +10,8 @@ is unchanged), then checks that:
 - the exact frames and the reference meet the profile 4 confirmation
   bounds; a modeled board filter with weights truncated to 2^-6 fails them,
   and two modeled board filters that pass them (7-bit weights rounded to
-  nearest, and 8-bit weights after a 2^-9 texel coordinate bias) stay within
-  the linear tolerance of the reference;
+  nearest, and 7-bit weights truncated) stay within the linear tolerance of
+  the reference;
 - the traced closed-form stencil executions tell every stencil operation on
   every path, and every compare operation, apart from the other seven;
 - each of the ten mutations fails at least one scene: five reference render
@@ -19,16 +19,17 @@ is unchanged), then checks that:
   altered compute captures;
 - one scene violating each plan check is refused;
 - the twelve launches meet their readback, frame-stream, session, slot and
-  upload budgets, and the inputs command refuses the 1920 x 1080 launch
-  through the plan's timing check;
+  upload budgets, and the inputs and compare commands refuse the
+  1920 x 1080 launch through the plan's timing check;
 - the capture comparison passes exact frames, reports coarse filter weights
   as unconfirmed, records a failed frame, refuses a wrong input hash, state
   or sequence and a texture frame without its generation, and compares the
-  profile 3 launch only with a passed profile 4 comparison of the current
-  plan;
+  profile 3 and 1920 x 384 launches only with a passed profile 4 comparison
+  of the current plan;
 - the comparator handles a 1920 x 384 frame within 50 ms;
 - every feature row in docs/gpu-conformance.md has an output comparison;
-- the checks after the Mesa build take at most 60 s.
+- the checks after the Mesa build take at most 60 s and start at most five
+  reference processes.
 
 The board is never touched; see docs/gpu-conformance.md.
 """
@@ -53,12 +54,14 @@ PARAMETER_MUTATIONS = {1: 'half-pixel viewport offset', 2: 'other filter', 4: 'o
                        8: 'mirrored repeat for mirror clamp to edge', 16: 'skipped sRGB decoding'}
 # Modeled board filters, as the texel coordinate each uses for linear
 # filtering. The first must fail the confirmation. The confirmation cannot
-# reject the others, so the linear tolerance must accept them.
+# reject the others, so the linear tolerance must accept them. llvmpipe rounds
+# to 8 bits; the truncated model's weight error approaches 2^-7, the largest
+# of these simple rules that the confirmation admits.
 COARSE = 'filter weights truncated to 2^-6'
 FILTER_MODELS = {
     COARSE: lambda t: Q(math.floor(t * 64), 64),
     '7-bit filter weights rounded to nearest': lambda t: Q(round(t * 128), 128),
-    '8-bit filter weights after a 2^-9 texel coordinate bias': lambda t: Q(math.floor((t + Q(1, 512)) * 256), 256),
+    '7-bit filter weights truncated': lambda t: Q(math.floor(t * 128), 128),
 }
 
 
@@ -141,7 +144,6 @@ def main():
     # The 60-second budget is defined with Mesa already built.
     start = time.monotonic()
     result['build_s'] = round(start - started, 2)
-    processes = 0
 
     # Plan, budgets and launch refusal, on the plan and on the inputs path.
     planned = gc.plan()
@@ -149,8 +151,12 @@ def main():
     assert planned['readback_bytes'] <= 8 << 20
     result['plan'] = planned
     result['refusals'] = {'timing: 1920 x 1080 launch': refused(
-        lambda: gc.write_inputs(gc.find_launch('profile4-1080p'), a.output / 'refused-inputs'), 'exceeds')}
-    assert not (a.output / 'refused-inputs').exists()
+        lambda: gc.write_inputs(gc.find_launch('profile4-1080p'), a.output / 'refused-inputs'), 'exceeds'),
+        'timing: 1920 x 1080 capture': refused(
+        lambda: gc.compare_capture('profile4-1080p', a.output / 'no-capture', a.output / 'refused-comparison'),
+        'exceeds')}
+    assert not (a.output / 'refused-inputs').exists() and not (a.output / 'refused-comparison').exists()
+    assert gc.needs_confirmation(gc.find_launch('profile4-1080p'))
 
     # Process A: closed-form scenes, reference mutations and capture mutations.
     launch_list = gc.launches()
@@ -162,7 +168,8 @@ def main():
     for frame in closed:
         analysis = frame.analysis
         assert analysis.tie_pixels == 0, f'{frame.name}: closed-form scene has edge ties'
-        images[frame.name] = gc.closed_form(frame, trace=trace)
+        images[frame.name] = gc.closed_form(frame)
+        trace |= frame.exact.trace
         entries.append((frame, analysis, images[frame.name], 31))
     copy = next(i for i, e in enumerate(entries) if e[0].name == 'p2-copy')
     frame, analysis, capture, _ = entries[copy]
@@ -172,7 +179,6 @@ def main():
     changed[pixel] = (changed[pixel] + 2) % 256
     entries.append((frame, analysis, bytes(changed), 0))
     info, libs, lines, rendered = gc.reference(entries, a.output, a.build, frames=True)
-    processes += 1
     result['renderer'] = info
     result['libraries'] = libs
     gc.check_sentinels(lines, entries)
@@ -273,7 +279,6 @@ def main():
     others = [f for f in board if not f.closed_form]
     entries = [(f, f.analysis, 'self', 0) for f in others]
     info, libs, lines, _ = gc.reference(entries, a.output, a.build)
-    processes += 1
     gc.check_sentinels(lines, entries)
     verdicts = gc.judge(lines, entries)
     assert all(v['passed'] for v in verdicts)
@@ -289,15 +294,13 @@ def main():
                      texels=(255, 129, bytes(poison)))
     entries = [(frame, frame.analysis, 'self', 0)]
     _, _, lines, _ = gc.reference(entries, a.output, a.build)
-    processes += 1
     result['refusals']['sentinel: reference pixel'] = refused(lambda: gc.check_sentinels(lines, entries), 'POISON')
 
     # Processes D and E: the capture comparison path, with synthesized
-    # profile 4 and profile 3 captures. Only the exact profile 4 frames and
-    # the confirmed profile 3 frames render; the other cases stop before the
-    # reference.
+    # profile 4, profile 3 and 1920 x 384 captures. Only the exact profile 4
+    # frames and the confirmed profile 3 frames render; the other cases stop
+    # before the reference.
     result['capture_comparison'] = capture_comparisons(a.output, a.build, images)
-    processes += 2
     clear = a.output / 'clear-capture'
     clear.mkdir()
     (clear / 'clear.rgba').write_bytes(struct.pack('<I', gc.CLEAR) * 4096)
@@ -313,8 +316,9 @@ def main():
     extra = [row for row in covered if row not in feature_rows()]
     assert not missing and not extra, f'coverage table differs: missing {missing}, undocumented {extra}'
     result['coverage'] = covered
+    processes = gc.REFERENCE_PROCESSES
     result['reference_processes'] = processes
-    assert processes <= 5
+    assert processes <= 5, f'{processes} reference processes'
     result['wall_s'] = round(time.monotonic() - start, 2)
     assert result['wall_s'] <= 60, f'host check took {result["wall_s"]} s after the build'
     (a.output / 'result.json').write_text(json.dumps(result, indent=1) + '\n')
@@ -328,11 +332,13 @@ def main():
 
 def synthesized_capture(directory, launch, images):
     """Write a capture of every frame of launch from images (frame name ->
-    RGBA8 bytes at the device stride); return its frame records."""
+    RGBA8 bytes at the device stride; a missing frame is written as zeros);
+    return its frame records."""
     directory.mkdir()
     frames = []
     for k, frame in enumerate(launch.frames):
-        (directory / f'frame-{k}.rgba').write_bytes(images[frame.name])
+        image = images.get(frame.name, bytes(4 * frame.stride * frame.height))
+        (directory / f'frame-{k}.rgba').write_bytes(image)
         frames.append({'input_sha256': gc.input_sha256(frame), 'state': frame.state, 'sequence': k + 1,
                        'generation': 1, 'result': 1, 'file': f'frame-{k}.rgba'})
     return frames
@@ -348,14 +354,11 @@ def capture_comparisons(output, build, images):
     launch unconfirmed; a failed frame is recorded with its result; a wrong
     input hash, state or sequence, or a missing generation, is refused.
     Profile 3: the comparison needs a passed profile 4 comparison of the
-    current plan. A triangle record needs no generation."""
+    current plan. 1920 x 384: the linear-filtered launch is unconfirmed
+    without one. A triangle record needs no generation."""
     launch = gc.find_launch('profile4')
-    inputs = output / 'profile4-inputs'
-    gc.write_inputs(launch, inputs)
-    planned = json.loads((inputs / 'inputs.json').read_text())
     capture = output / 'profile4-capture'
     frames = synthesized_capture(capture, launch, images)
-    assert [f['input_sha256'] for f in frames] == [f['input_sha256'] for f in planned['frames']]
 
     def compare(case, records):
         (capture / 'capture.json').write_text(json.dumps({'launch': 'profile4', 'frames': records}))
@@ -404,7 +407,17 @@ def capture_comparisons(output, build, images):
     report = gc.compare_capture('profile3', capture3, output / 'profile3-confirmed', build, passed4)
     assert report['passed'], report['status']
     statuses['profile 3 with the passed profile 4 comparison'] = report['status']
-    for path in (inputs, capture, capture3):
+
+    # The 1920 x 384 launch is linear-filtered, so it needs the same
+    # confirmation; its frame is not closed-form and is written as zeros.
+    wide = gc.find_launch('profile4-wide')
+    capture_wide = output / 'wide-capture'
+    records = synthesized_capture(capture_wide, wide, images)
+    (capture_wide / 'capture.json').write_text(json.dumps({'launch': wide.name, 'frames': records}))
+    report = gc.compare_capture(wide.name, capture_wide, output / 'wide-none', build)
+    assert report['status'].startswith('unconfirmed'), report['status']
+    statuses['1920 x 384 without confirmation'] = report['status']
+    for path in (capture, capture3, capture_wide):
         shutil.rmtree(path)
     stale.unlink()
     return statuses
