@@ -35,6 +35,10 @@ struct model {
     uint64_t late,late_frame,tail_at;
     unsigned pending,pending_frame;uint32_t pending_latched[2];
     uint64_t renew; /* Stream watchdog renewed on every poll when nonzero. */
+    /* A stalled owner: once this many starts are observed and one flag is
+     * owed, time jumps past the next two frame starts before the next poll. */
+    unsigned stall;
+    unsigned saturate; /* Owed count set one below its ceiling at the second start. */
 };
 static struct model model;
 static struct a733_camera_capture capture;
@@ -113,9 +117,9 @@ static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a
     struct model *m=p;assert(t==101 && m->now<d && s==m->capture);
     assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==OV5640_READY);
     if(h==A733_CAPTURE_LOCAL){assert(s->dma.state==A733_CAM_DMA_ARMED);m->local=1;return 1;}
-    /* Video capture mode and a streaming DMA ring precede packets. */
+    /* Video capture mode precedes packets; the DMA ring starts with the sensor. */
     assert(m->local && s->receiver.state==A733_CSI_ARMED && !s->receiver.image_mode);
-    assert(s->dma.state==A733_CAM_DMA_STREAM_START && (m->parser[s->config.receiver.port][3]&3)==2);
+    assert(s->dma.state==A733_CAM_DMA_ARMED && (m->parser[s->config.receiver.port][3]&3)==2);
     m->packets=1;return 1;
 }
 static int packet_quiet(void *p,uint64_t t,uint64_t d){
@@ -290,6 +294,12 @@ static void setup(unsigned port,enum ov5640_format format){
 static int poll(void){
     if(model.renew && capture.state==A733_CAPTURE_STREAMING)
         assert(a733_camera_capture_renew(&capture,model.now+model.renew)==1);
+    if(model.stall && capture.dma.ring.starts==model.stall && capture.dma.ring.owed==1){
+        model.now=model.next_start+model.period+500;model.stall=0;
+    }
+    if(model.saturate && capture.dma.ring.starts==2){
+        capture.dma.ring.owed=A733_CAMERA_DMA_OWED_UNKNOWN-1;model.saturate=0;
+    }
     int r=a733_camera_capture_poll(&capture);model.now+=1000;return r;
 }
 /* A delivered frame holds one complete frame, the one its sequence names. */
@@ -387,6 +397,21 @@ int main(void){
     setup(0,OV5640_UYVY);model.late=7500;model.late_frame=4;run(12,0,0);
     assert(model.checked_frames==3 && capture.dma.ring.dropped==8 && capture.dma.ring.owed>1);
     stop();
+    /* An owner that stalls across two frame starts lets both merge into one
+     * status read. The status interval, half of the 33.3 ms period here, is
+     * exceeded, so nothing is delivered after the stall. With every frame
+     * done late, a short count would otherwise let a late flag pay for the
+     * next frame and deliver slots the device still writes. */
+    setup(0,OV5640_UYVY);model.late=3000;model.stall=5;run(30,0,0);
+    assert(!model.stall && capture.status_us==model.period/2);
+    assert(capture.dma.ring.owed==A733_CAMERA_DMA_OWED_UNKNOWN);
+    assert(!model.checked_frames && !model.syncs && capture.dma.ring.dropped==capture.dma.ring.starts-1);
+    stop();
+    /* With frame done on time the frames before the stall are delivered. */
+    setup(0,OV5640_UYVY);model.stall=5;run(12,0,0);
+    assert(!model.stall && capture.dma.ring.owed==A733_CAMERA_DMA_OWED_UNKNOWN);
+    assert(model.checked_frames==4 && capture.dma.ring.delivered==4 && capture.dma.ring.dropped==7);
+    stop();
     /* The open deadline bounds preparation, which takes about one second
      * here, and then the stream until renewed. Renewal is refused outside
      * STREAMING and for a deadline already reached. A stream renewed on every
@@ -430,6 +455,10 @@ int main(void){
     setup(1,OV5640_UYVY);model.missing_done=1;run(8,0,0);
     assert(!model.checked_frames && !model.syncs && capture.dma.ring.dropped==7);
     stop();
+    /* The owed count saturates instead of wrapping to zero. */
+    setup(1,OV5640_UYVY);model.missing_done=1;model.saturate=1;run(8,0,0);
+    assert(capture.dma.ring.owed==A733_CAMERA_DMA_OWED_UNKNOWN && !model.checked_frames && !model.syncs);
+    stop();
     /* An error status, a failed invalidation or a stop with a held slot
      * keeps every lease; a fault ends all I/O. */
     setup(0,OV5640_UYVY);model.error_frame=3;
@@ -450,7 +479,7 @@ int main(void){
      * single-image configuration cannot stream. */
     assert(setup_mode(0,OV5640_UYVY,0,0,SPAN)==1 && a733_camera_capture_open_stream(&capture,1000000)==-1);
     puts("PASS camera streaming: ring delivery on both ports and orders, dropped-frame accounting, "
-         "start races, late and merged frame done, deadline renewal and expiry, derived quiet interval, "
-         "missing frame done, faults and refusals");
+         "start races, late and merged frame done, a stalled owner, deadline renewal and expiry, "
+         "derived quiet interval, missing frame done, owed-count saturation, faults and refusals");
     return 0;
 }

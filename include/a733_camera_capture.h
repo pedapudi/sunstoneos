@@ -109,6 +109,9 @@ struct a733_camera_capture {
     struct a733_csi_receiver receiver;
     struct a733_camera_dma dma;
     uint64_t token,deadline,now,quiet_from,quiet_us;
+    /* Longest time between two DMA status reads while streaming: half a
+     * frame period of the derived mode, rounded down. */
+    uint64_t status_us;
     /* Packet-port 0x118 and parser 0x44 status read after CAPTURE_DONE and
      * before the sensor stop, for each image. Diagnostic only: an error
      * found by the later sample but absent here arrived during the stop. */
@@ -151,13 +154,15 @@ int a733_camera_capture_open_retained(struct a733_camera_capture *,uint64_t dead
  * image; global, analog and IOMMU leases and mappings stay held throughout. */
 int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
 /* Continuous capture into the configured ring through the same preparation,
- * with the parser in video capture mode. Polls return 1 once STREAMING is
- * reached and after each further step; the owner must poll well within one
- * frame period, as each poll observes at most one frame start. DMA status
- * decides delivery: see a733_camera_dma_stream. The deadline bounds the
- * preparation and then the stream itself until renew replaces it; at the
- * deadline the stream faults. Faults retain every resource, as for still
- * images. */
+ * with the parser in video capture mode. The DMA enters its ring mode just
+ * before the sensor starts. Polls return 1 once STREAMING is reached and
+ * after each further step. DMA status decides delivery: see
+ * a733_camera_dma_stream. DMA status reads lie up to four polls apart.
+ * Once two of them are more than status_us apart, nothing more is delivered
+ * until the stream stops, so the owner must poll more often than every
+ * eighth of a frame period. The deadline bounds the preparation and then
+ * the stream itself until renew replaces it; at the deadline the stream
+ * faults. Faults retain every resource, as for still images. */
 int a733_camera_capture_open_stream(struct a733_camera_capture *,uint64_t deadline);
 /* From STREAMING only: replace the coordinator's and the DMA's deadline with
  * one later than the last clock reading, so the owner can keep a short

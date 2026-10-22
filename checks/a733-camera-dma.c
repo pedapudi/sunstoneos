@@ -176,21 +176,23 @@ int main(int argc,char **argv) {
             {1,311296},{5,311296},{4,303104},{4,311296+64},{4,311296+4096}};
         memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
         assert(a733_camera_dma_init(&s,&partial,&m,&c)==1 && a733_camera_dma_open(&s,10000)==1);
-        assert(a733_camera_dma_stream(&s,2,311296,10000)==-1);arm(&s,&m);
-        assert(a733_camera_dma_stream(&s,2,311296,10000)==-1);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);arm(&s,&m);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);
         memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
         assert(a733_camera_dma_init(&s,&full,&m,&c)==1 && a733_camera_dma_open(&s,10000)==1);
-        assert(a733_camera_dma_stream(&s,2,311296,10000)==-1);arm(&s,&m);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);arm(&s,&m);
         struct a733_camera_dma saved=s;
         for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++){
-            assert(a733_camera_dma_stream(&s,bad[i].slots,bad[i].bytes,10000)==-1);
+            assert(a733_camera_dma_stream(&s,bad[i].slots,bad[i].bytes,100,10000)==-1);
             assert(!memcmp(&saved,&s,sizeof(s)));
         }
         unsigned slot;uint32_t sequence;
         assert(a733_camera_dma_take(&s,&slot,&sequence)==-1 && a733_camera_dma_give(&s,0)==-1);
         assert(a733_camera_dma_stop_stream(&s,10000)==-1);
-        assert(a733_camera_dma_stream(&s,4,311296,10000)==1 && s.stream && s.ring.state[0]==A733_SLOT_NEXT);
-        assert(a733_camera_dma_stream(&s,4,311296,10000)==-1 && a733_camera_dma_capture(&s,10000)==-1);
+        assert(a733_camera_dma_stream(&s,4,311296,0,10000)==-1 && !memcmp(&saved,&s,sizeof(s)));
+        assert(a733_camera_dma_stream(&s,4,311296,100,10000)==1 && s.stream && s.ring.state[0]==A733_SLOT_NEXT);
+        assert(s.ring.interval==100 && s.ring.status_at==s.now && s.now==m.now && !s.ring.owed);
+        assert(a733_camera_dma_stream(&s,4,311296,100,10000)==-1 && a733_camera_dma_capture(&s,10000)==-1);
         assert(a733_camera_dma_take(&s,&slot,&sequence)==-1);
     }
     puts("PASS camera DMA mapping bounds, ownership, retained faults and bounded polling");return 0;

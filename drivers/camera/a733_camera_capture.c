@@ -186,6 +186,7 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
     mode=&s->sensor.mode;
     uint64_t three=((uint64_t)3*mode->htotal*mode->vtotal*1000000u+mode->pixel_hz-1)/mode->pixel_hz;
     s->quiet_us=three>A733_CAPTURE_QUIET_US?three:A733_CAPTURE_QUIET_US;
+    s->status_us=(uint64_t)mode->htotal*mode->vtotal*1000000u/(2u*(uint64_t)mode->pixel_hz);
     return 1;
 }
 int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)
@@ -270,13 +271,15 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
             a733_csi_poll(&s->receiver),A733_CAPTURE_PACKET_HANDOFF);break;
     case A733_CAPTURE_PACKET_HANDOFF:
         if(!s->started){
-            if((s->streaming?a733_camera_dma_stream(&s->dma,s->config.slots,s->config.slot_bytes,s->deadline):
-                a733_camera_dma_capture(&s->dma,s->deadline))!=1){r=-1;break;}s->started=1;
+            if(!s->streaming && a733_camera_dma_capture(&s->dma,s->deadline)!=1){r=-1;break;}s->started=1;
         }
         r=s->config.ops.handoff(s->config.context,s->token,A733_CAPTURE_PACKETS,s,s->deadline);
         if(r==1){s->packets_granted=1;next(s,A733_CAPTURE_SENSOR_START);}break;
+    /* The DMA's first status interval opens before the sensor can start a frame. */
     case A733_CAPTURE_SENSOR_START:
-        RUN(ov5640_start(&s->sensor,s->receiver.token,s->deadline),ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
+        RUN((!s->streaming || a733_camera_dma_stream(&s->dma,s->config.slots,s->config.slot_bytes,
+             s->status_us,s->deadline)==1)?ov5640_start(&s->sensor,s->receiver.token,s->deadline):-1,
+            ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
     case A733_CAPTURE_DMA_RUN:
         r=a733_camera_dma_poll(&s->dma);
         if(!s->streaming && s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_FRAME_STATUS);

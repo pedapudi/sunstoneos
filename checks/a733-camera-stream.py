@@ -41,6 +41,24 @@ run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
      '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
      '-Iinclude', 'checks/a733-camera-stream.c', *sources, '-o', str(binary)])
 result = run([str(binary)])
+# Without the status-interval check, the stalled owner's merged frame starts
+# leave the owed count short, and a late flag then lets the model deliver a
+# slot that the device is still writing.
+dma = (root / 'drivers/camera/a733_camera_dma.c').read_text()
+check = '    if(s->now-g->status_at>g->interval)g->owed=UNKNOWN;\n'
+assert dma.count(check) == 1
+mutant = a.evidence / 'mutant' / 'a733_camera_dma.c'
+mutant.parent.mkdir(parents=True, exist_ok=True)
+mutant.write_text(dma.replace(check, ''))
+mutant_binary = a.evidence / 'stream-model-without-interval'
+run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Iinclude',
+     'checks/a733-camera-stream.c', *[str(mutant) if s.endswith('/a733_camera_dma.c') else s
+                                      for s in sources], '-o', str(mutant_binary)])
+outcome = subprocess.run([str(mutant_binary)], cwd=root, capture_output=True, text=True)
+commands.append(dict(command=[str(mutant_binary)], returncode=outcome.returncode,
+                     stdout=outcome.stdout, stderr=outcome.stderr))
+(a.evidence / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
+assert outcome.returncode != 0 and ('device_owned' in outcome.stderr or 'check_frame' in outcome.stderr), commands[-1]
 objects = {}
 for source in changed:
     obj = a.evidence / (Path(source).stem + '.o')
@@ -59,7 +77,7 @@ for path in inputs:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
 (a.evidence / 'results.json').write_text(json.dumps(dict(
-    result=result, inputs=hashes, binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+    result=result, without_interval_check=outcome.stderr, inputs=hashes, binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
     objects=objects,
     qualification='Composition model only: modeled frame timing, address latching and memory. '
                   'Physical latching, frame-done timing and qualification remain outstanding.'

@@ -130,7 +130,9 @@ parser in video capture mode. It needs the optional `start_stream` and
 `sync_slot` operations, 2–4 slots and a slot size that is a multiple of 4096,
 covers one plane and fits both spans that many times. Slot k's planes start
 k × slot size into the Y and UV spans. Configuration has already programmed
-slot 0. Every slot stays device-owned until it is delivered.
+slot 0. Every slot stays device-owned until it is delivered. The call also
+takes a status interval and reads the clock; the producer must not start a
+frame before this call.
 
 In `STREAMING` each poll performs one operation: a pending slot invalidation,
 a status read, the acknowledgement of the observed flags only, one of the
@@ -138,9 +140,32 @@ two address writes, or a status read after them. The ring counts frame-done
 flags still owed: each observed frame start (bit 7) adds one, and each status
 read that shows frame done (bit 1) removes one. A frame start activates the
 programmed slot, delivers the previous slot only if no flag is then owed, and
-programs the next free slot. A late or merged frame-done flag therefore drops
-frames and never delivers a slot the device may still write; the reference driver's frame-start handler relies on the same latching
-of the address registers. When no slot is free the active slot repeats and its
+programs the next free slot. The reference driver's frame-start handler relies
+on the same latching of the address registers.
+
+The count is exact only while every frame start appears in a status read of
+its own. Two starts merge into one observation when both fall between two
+status reads, or when the second one falls between the read that saw the
+first and the acknowledgement of that read. Neither can happen while no two
+consecutive status reads are more than half the shortest time between frame
+starts apart, so the status interval must not exceed that half. The
+controller compares the clock reading after each status read with the one
+taken before the previous status read, or before the stream call for the
+first read. If the difference exceeds the status interval, the count may be
+short by an unknown number of starts. A short count would let an earlier
+frame's late flag pay for a later frame, which would then be delivered while
+the device still writes it. The count therefore becomes
+`A733_CAMERA_DMA_OWED_UNKNOWN`, which no flag reduces. Every later frame is
+dropped, its slot returns to the free pool unread, and only stopping the
+stream ends this state. Slots delivered before the gap stay valid, because
+merged starts shorten the count only for frames that start with or after
+them.
+
+While status reads stay within the interval, a late frame-done flag, or two
+flags merged into one observation, drops frames and never delivers a slot the
+device may still write. Two merged flags leave one flag owed for the rest of
+the stream. The count also saturates at `A733_CAMERA_DMA_OWED_UNKNOWN` instead
+of wrapping to zero. When no slot is free the active slot repeats and its
 frame is lost. When the status read after the address writes shows another
 frame start, the write may have missed it: the controller acknowledges only
 that flag, delivers nothing, and does not deliver the active slot at the next

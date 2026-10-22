@@ -15,6 +15,7 @@
 #define FRAME_DONE 2u
 #define FRAME_START 0x80u
 #define NONE 0xffu
+#define UNKNOWN A733_CAMERA_DMA_OWED_UNKNOWN
 struct step { uint16_t off; uint8_t kind; uint32_t mask, value; };
 /* kind 1: Y address, 2: UV address, 3: write-one-to-clear, 4: geometry. */
 static const struct step setup[] = {
@@ -102,15 +103,19 @@ int a733_camera_dma_rearm(struct a733_camera_dma *s,uint64_t d)
        s->owner!=A733_CAMERA_DEVICE || !(s->saved&1) || (s->saved&~NORMAL))return -1;
     return begin(s,A733_CAM_DMA_REARM,d);
 }
-int a733_camera_dma_stream(struct a733_camera_dma *s,unsigned slots,uint64_t slot_bytes,uint64_t d)
+int a733_camera_dma_stream(struct a733_camera_dma *s,unsigned slots,uint64_t slot_bytes,
+                           uint64_t interval,uint64_t d)
 {
     if(!s || !s->initialized || s->state!=A733_CAM_DMA_ARMED || s->stream ||
        !s->ops.start_stream || !s->ops.sync_slot || slots<2 || slots>A733_CAMERA_DMA_SLOTS ||
        slot_bytes<a733_camera_plane_bytes(&s->format) || (slot_bytes&4095) ||
        slot_bytes>s->config.y.mapped_bytes/slots || slot_bytes>s->config.uv.mapped_bytes/slots ||
+       !interval || !a733_camera_clock(s->ops.now_us,s->context,&s->now,d) ||
        begin(s,A733_CAM_DMA_STREAM_START,d)!=1)return -1;
-    /* Configuration already programmed slot 0's planes. */
-    s->ring=(struct a733_camera_ring){.slot_bytes=slot_bytes,.count=(uint8_t)slots,.next=0,.active=NONE};
+    /* Configuration already programmed slot 0's planes. No frame has started
+     * yet, so this clock reading opens the first status interval. */
+    s->ring=(struct a733_camera_ring){.slot_bytes=slot_bytes,.interval=interval,.status_at=s->now,
+        .count=(uint8_t)slots,.next=0,.active=NONE};
     s->ring.state[0]=A733_SLOT_NEXT;s->stream=1;return 1;
 }
 int a733_camera_dma_renew(struct a733_camera_dma *s,uint64_t d)
@@ -147,7 +152,8 @@ int a733_camera_dma_stop_stream(struct a733_camera_dma *s,uint64_t d)
  * of an earlier frame cannot pass for its own. Two flags merged into one
  * observation leave a debt, which drops frames instead of delivering them.
  * An uncertain start, seen after an address write, delivers nothing and marks
- * the active slot's contents as unattributable. */
+ * the active slot's contents as unattributable. The count saturates at
+ * UNKNOWN, which no flag pays. */
 static void frame_start(struct a733_camera_dma *s,int uncertain)
 {
     struct a733_camera_ring *g=&s->ring;
@@ -164,7 +170,8 @@ static void frame_start(struct a733_camera_dma *s,int uncertain)
         g->trusted=1;
     }
     if(!uncertain)g->sequence[g->active]=g->starts;
-    ++g->owed;g->dropped=g->starts-1-g->delivered;
+    if(g->owed!=UNKNOWN)++g->owed;
+    g->dropped=g->starts-1-g->delivered;
 }
 static int read_reg(struct a733_camera_dma *s,uint16_t off,uint32_t *v)
 {
@@ -175,6 +182,20 @@ static int write_reg(struct a733_camera_dma *s,uint16_t off,uint32_t v)
 {
     if(s->ops.write(s->context,s->token,off,v,s->deadline)!=1 || tick(s)!=1)return fail(s);
     return 1;
+}
+/* A streaming status read. Two frame starts merge into one observation only
+ * if they fall between two reads, or between a read and the acknowledgement
+ * of the start it saw, which precedes the next read. Neither can happen while
+ * consecutive reads lie within half the shortest frame-start spacing; beyond
+ * that the count of owed flags may be short, so it becomes UNKNOWN. */
+static int stream_status(struct a733_camera_dma *s,uint32_t *v)
+{
+    struct a733_camera_ring *g=&s->ring;
+    uint64_t at=s->now;
+    if(read_reg(s,0x254,v)!=1)return -1;
+    if(s->now-g->status_at>g->interval)g->owed=UNKNOWN;
+    g->status_at=at;s->events|=*v;
+    return *v&~NORMAL?fail(s):1;
 }
 static int program(struct a733_camera_dma *s,const struct step *p,size_t n)
 {
@@ -233,15 +254,13 @@ static int stream_poll(struct a733_camera_dma *s)
             if(r){g->state[k]=A733_SLOT_READY;g->queue[g->queued++]=(uint8_t)k;}
             return 1;
         }
-        if(read_reg(s,0x254,&v)!=1)return -1;
-        s->events|=v;
-        if(v&~NORMAL)return fail(s);
+        if(stream_status(s,&v)!=1)return -1;
         s->saved=v;
         if(v)s->index=1;
         return 1;
     case 1:
         if(write_reg(s,0x254,s->saved)!=1)return -1;
-        if((s->saved&FRAME_DONE) && g->owed)--g->owed;
+        if((s->saved&FRAME_DONE) && g->owed && g->owed!=UNKNOWN)--g->owed;
         s->index=0;
         if(!(s->saved&FRAME_START))return 1;
         frame_start(s,0);
@@ -258,9 +277,7 @@ static int stream_poll(struct a733_camera_dma *s)
             s->config.uv.bus_address)+g->next*g->slot_bytes)>>2))!=1)return -1;
         ++s->index;return 1;
     case 4:
-        if(read_reg(s,0x254,&v)!=1)return -1;
-        s->events|=v;
-        if(v&~NORMAL)return fail(s);
+        if(stream_status(s,&v)!=1)return -1;
         s->index=v&FRAME_START?5:0;
         return 1;
     default:
