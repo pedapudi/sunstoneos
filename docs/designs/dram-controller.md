@@ -1,7 +1,11 @@
 # DRAM controller and memory-bus priority
 
-Status: design for review. No code exists. Physical behavior stays
-unqualified until the board evidence in the last section exists.
+Status: the DDR trip is implemented and host-modeled in the thermal policy.
+The priority hook, the latency window and the copy load are implemented and
+host-modeled but not merged. Their code merges together with the framebuffer,
+gpu-display and build edits that call them and with the integration host
+cases listed under the changes outside this component. Physical behavior
+stays unqualified until the board evidence in the last section exists.
 
 The component has three parts:
 
@@ -54,9 +58,13 @@ inside boot0. The section on left-out items lists what else waits for evidence.
   words, makes zero NSI accesses and returns failure. For each field it then
   reads the word. Only a field that differs from the target is written, with
   the other bits kept, and read back under the field mask. The first mismatch
-  stops the hook with failure. The evidence holds each port's inherited and
-  final fields. Built with `SUNSTONE_DRAM_PRIORITY=1`, the hook makes the same
-  reads and writes nothing.
+  stops the hook with failure. The evidence holds the two CCU words, each
+  port's inherited and final fields and the stopping field (0, or 1 + 3 ×
+  port index + field index). Built with `SUNSTONE_DRAM_PRIORITY=1`, the hook
+  makes the same reads and writes nothing. The hook does not check its
+  arguments for NULL, because its one caller passes the framebuffer's own
+  pair and evidence member; the caller keeps the return value for the
+  evidence block.
 - **Register path.** The hook has no register path of its own. The
   framebuffer passes an `io` over its existing `raw_read` and `raw_write`,
   which check ownership, address, mapping (`a733_mapping_check`,
@@ -93,30 +101,43 @@ inside boot0. The section on left-out items lists what else waits for evidence.
     1, three presentations are done and the current phase has not ended. It
     reads the counter (t0) and makes 6 accesses in the vendor order: write the
     period P × `fabric_hz[2]`, clear enable bit 0, set clear bit 0 and write the
-    saved enable word with bit 0 set. Then `DSB SY` and a counter read give t1.
+    saved enable word with bit 0 set. Then a counter read gives t1.
   - *Collect* returns pending until the counter passes t1 + P. It then makes 6
     reads with the counters enabled, as the vendor driver does: the four
-    counts, the latency sum and the read data count again. A `DSB SY` and a
-    counter read give t_end.
+    counts, the latency sum and the read data count again. A counter read
+    gives t_end.
   - *Refusal.* Collect refuses a window in three cases. If t_end ≥ t0 + 2P,
     the reads came after the second period ended. If the two read data counts
     differ, the counter is free-running. If read requests are 0 or read data
     is below 1,024 units (16 KiB), DE fetched almost nothing; scan-out alone
     moves about 5.5 MB per window.
-  - *Free-running fallback.* If the first 8 windows are all refused as
+  - *Free-running fallback.* A counter that holds at the end of the period
+    cannot change between the two read data reads, so one difference proves
+    that the counters run past the period. After the first window refused as
     free-running, every later collect first writes the saved enable word with
     bit 0 clear and then makes its 6 reads. A result bit records the order.
-    The statistic is a ratio, so the longer counting interval does not bias it.
+    The two reads are about 1 µs apart, and DE fetches each 2,560-byte line
+    in one burst per 22.2 µs line time and nothing during vertical blanking,
+    so a free-running counter often reads equal; windows before the first
+    detection are accepted. The statistic is a ratio, so neither those
+    windows nor the longer counting interval after the fallback bias it.
   - *Stop and abandon.* No window starts after phase B ends, at stage 4 or in
     a state other than 1. A window in flight at `stop_at` or at `output_fault`
     is abandoned in software and counted. The next start disables the counters
-    first, and a counter left enabled affects no other master.
-- **DDR temperature.** The DDR entry of `trips[]` in `a733_thermal.c` becomes
+    first, and a counter left enabled affects no other master. An abandon
+    during phase B reads the counter once to record the end of phase B and
+    sets the result bit for phases ended early, so the phase B length in the
+    block is the time the copy load ran.
+- **DDR temperature.** The DDR entry of `trips[]` in `a733_thermal.c` is
   {85000, 2000, 110000}; the vendor zone has only the 110 °C critical trip.
   JEDEC specifies LPDDR5 standard refresh up to 85 °C die temperature, and no
   decoded field shows derated refresh. The input is the SoC THS "DDR" channel,
   a proxy with an unknown offset from the DRAM die. The trip raises the
-  existing global THROTTLE level, which caps both CPU clusters at 1014 MHz.
+  existing global THROTTLE level. THROTTLE has no consumer in the OS image
+  today: its thermal service acts only on CRITICAL. Connecting THROTTLE to the
+  CPU clock driver, which caps both clusters at 1014 MHz, waits for the DDR
+  trip row of the performance budgets, measured in the board session that
+  qualifies the throttle.
 
 ## Interrupts, memory, barriers and cores
 
@@ -130,9 +151,12 @@ and one compare, about 1,000 per second. Nothing blocks or busy-waits.
 Records and window state live in normal write-back memory that no device reads,
 so they need no cache maintenance. The hook adds no barrier. The framebuffer's
 `raw_read` and `raw_write` keep their existing `DSB SY` pair per access, at
-most 29 pairs once per framebuffer instance. The window adds one `DSB SY` per
-phase because the next action, a counter read, is not a memory access
-(section 1.2).
+most 29 pairs once per framebuffer instance. The window adds no barrier
+either. Performance architecture section 1.2 requires `DSB SY` before an
+action that is not a memory access, here the counter read that ends a phase.
+The accessor's `raw_write` and `raw_read` already end every access with
+`DSB SY`, so the last NSI access of a phase has completed before the counter
+read.
 
 Each port has one writer. The hook writes ports 2, 14 and 15; the window writes
 only port 2's counter words. Both run in the output task, which also fills the
@@ -189,12 +213,20 @@ no-table load images run in one board session.
   granted it. Each task copies between a 2 MiB source and a 2 MiB destination
   with a loop of two `LDP` and two `STP` of Q registers. Every task already
   saves Q0–Q31 (`configUSE_TASK_FPU_SUPPORT` is 2).
+- **Inherited fields.** Nothing in the OS resets the NSI or restores the port
+  fields, so a table written earlier in a board session persists. The session
+  therefore runs the no-table load image before any image that writes the
+  table. A no-table run counts only if its recorded inherited fields of ports
+  2, 14 and 15 differ from the table. If boot0 already sets the table values,
+  the scan-out row is recorded as not demonstrable.
+  `capture.py` enforces the field rule when it moves to reply version 2.
 - **Conclusiveness.** The no-table image must show contention: its phase B mean
   latency must exceed its phase A mean by more than 2 √(SE_A² + SE_B²). If it
   does not, the next load image raises the clusters through the existing CPU
   clock driver. If that run still shows no contention, the scan-out row is
   recorded as not demonstrable under CPU load and the table stays at the vendor
-  values. CPU bandwidth per core is passes × 4 MiB over the phase B time.
+  values. CPU bandwidth per core is passes × 4 MiB over the phase B time. A
+  run whose phase B was abandoned is inconclusive.
 - **Latency statistic.** For each accepted window, x is port 2's latency sum
   divided by its read requests, in MBUS cycles per request, Q8 fixed point. A
   window with x ≥ 2²⁴ counts as out of range, so Σx² over at most 360 windows
@@ -204,12 +236,16 @@ no-table load images run in one board session.
 - **Transport.** The gpu-display observation reply's `terminal.reserved[136]`,
   bytes 888..1023, becomes the evidence block and the reply version becomes 2.
   The 1,024-byte size and its static assert stay. `capture.py` accepts only
-  reply version 2 from gpu-display.
+  reply version 2 from gpu-display. `a733_dram_block()` in the hook object
+  fills the hook fields; the bits after the hook result come from the build
+  macro and the hook's return value. `a733_dram_window_block()` in the load
+  object adds the window and copy-slot fields, so images without the load
+  mode link no packing code for them.
 
   | Offset | Fields |
   | --- | --- |
   | 0 | `u16` ×8: windows started, accepted in phase A, accepted in phase B, refused late, refused idle, refused free-running, out of range, abandoned |
-  | 16 | `u16`: result bits (hook built, table written, hook result, collect disables first); `u16`: 0 |
+  | 16 | `u16`: result bits (hook built, table image, hook result, collect disables first, phases ended early); `u16`: stopping field of a failed hook (0, or 1 + 3 × port index + field index) |
   | 20 | `u16` ×6: inherited and final fields of ports 2, 14 and 15 (mode bits 1–0, priority bits 5–2, select bit 6) |
   | 32 | `u16` ×4: configured CPU-L, CPU-B and DSU MHz (0 when undecoded), 0 |
   | 40 | `u32` ×2: CCU `+0x580`, `+0x584` |
@@ -227,11 +263,11 @@ board.
 | --- | --- | --- | --- |
 | Hook | 2 CCU reads; per field 1 NSI access at target, else 3; at most 27 NSI accesses; 1 lock pair; once per framebuffer instance; 0 NSI accesses when the NSI is not running | Host model of the framebuffer prepare sequence | 0 OS accesses |
 | HDMI, DisplayPort and steady state | 0 added accesses, tasks, timers or interrupts | Linked-symbol check; host model | 0 |
-| Window | Init: 8 clock reads, once. Start: 6 NSI accesses, 1 lock pair, 1 DSB, 2 ISB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 DSB, 1 ISB. Abandon: 0 accesses. Pending: 1 ISB, 1 counter read. At most 10 µs per phase | Host model per phase; counter around each phase on the board | None |
+| Window | Init: 8 clock reads, once. Start: 6 NSI accesses, 1 lock pair, 2 ISB, no added DSB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 ISB, no added DSB. Abandon: 0 register accesses; 1 counter read in phase B. Pending: 1 ISB, 1 counter read. At most 10 µs per phase | Host model per phase; counter around each phase on the board | None |
 | Counter headroom | No 32-bit wrap in P | Arithmetic at 76.8 GB/s: port 2 ≤ 2.4 × 10⁸ units; period ≤ 3 × 10⁷ cycles at 600 MHz; latency sum below 2³² while DE averages under 143 reads outstanding | Not applicable |
 | Copy-load stop | No pass starts after the end phase or a state change is stored | Host model of the copy task loop | Not applicable |
 | Scan-out | HDMI stays `ACTIVE` without `A733_HDMI_UNDERFLOW`; m(no table) − m(table) in phase B > 2 √(SE₁² + SE₂²) | Both load images, under the conclusiveness rule | Not measured |
-| DDR trip | RTF ≤ 1.05 × without the trip; DDR ≥ 85 °C while CPUB < 90 °C for at most 60 s of 600 s | OS image recognizing recorded input for 10 min, 25 °C ambient, fan off, with and without the trip; also time at the 1014 MHz cap | Before the change: RTF, DDR − CPUB per sample, time each channel is ≥ 85 °C |
+| DDR trip | RTF ≤ 1.05 × without the trip; DDR ≥ 85 °C while CPUB < 90 °C for at most 60 s of 600 s | OS image recognizing recorded input for 10 min, 25 °C ambient, fan off, with and without the trip; also time at the 1014 MHz cap | Not measured: RTF, DDR − CPUB per sample, time each channel is ≥ 85 °C. Both runs belong in the board session that qualifies the throttle, before THROTTLE reaches the CPU clock driver |
 | Code size | ≤ 2 KiB text, ≤ 128 B data outside the load mode | `llvm-size` | 0 |
 
 RTF is recognition wall time divided by audio duration. If a conclusive run
@@ -259,10 +295,12 @@ shown.
 ## Changes outside this component
 
 No package in this wave owns `drivers/display/a733_display_framebuffer.c` or
-its header, `checks/thermal-policy.c` or `cmake/a733-gpu-display.cmake`. The
-coordinator assigns those edits before implementation. The gpu-graphics
+its header, or `cmake/a733-gpu-display.cmake`. The coordinator assigns those
+edits, and the hook and window code merge with them. The gpu-graphics
 package owns `apps/gpu-display/` and `checks/gpu-display*`, and the
-memory-architecture package owns `checks/device-memory-*`.
+memory-architecture package owns `checks/device-memory-*`. The
+`checks/thermal-policy.c` edit merges with the DDR trip, because the trip
+breaks its old DDR case.
 
 - Framebuffer: `dram_address()`, the stage 4 call and the evidence member
   under `SUNSTONE_DRAM_PRIORITY`, and the load accessor under
@@ -275,12 +313,18 @@ memory-architecture package owns `checks/device-memory-*`.
 - `cmake/a733-gpu-display.cmake`: the two flags for the three images.
 - `checks/device-memory-capacity.c`: a replay that acquires the load image's
   write-back leases, including the 32 MiB lease at 2 MiB alignment.
-- `checks/thermal-policy.c` line 114 sets DDR to code 1000 (108 °C); that
-  reading moves below 85 °C. The new `checks/a733-thermal-ddr-trip.c` expects
-  THROTTLE at code 1394 (85.02 °C), holds it at 1428 (83.01 °C) and releases
-  it at 1429 (82.95 °C).
+- `checks/thermal-policy.c` changes with the DDR trip. Its DDR reading in the
+  case without a passive trip is code 1395 (84.96 °C), and its
+  single-channel critical case uses the NPU channel. New cases expect
+  THROTTLE at code 1394 (85.02 °C), hold it at 1428 (83.01 °C), release it at
+  1429 (82.95 °C) and reach CRITICAL at 970 while throttled.
+- `checks/index.json`: `checks/dram-controller.py` enters the index in the
+  same merge as the hook.
 
-New host cases in `checks/dram-*`:
+New host cases in `checks/dram-*`. The cases that need the framebuffer and
+gpu-display edits are a merge condition for the change that first links
+`a733_dram.c` or `a733_dram_load.c` into an image, and the hook is not
+recorded as tested before they pass:
 
 - a full prepare sequence with `+0x580` bit 31 clear makes zero NSI accesses;
   with only reset bit 30 or a `+0x584` bit wrong, it reaches the stage 4
@@ -294,17 +338,19 @@ New host cases in `checks/dram-*`:
 - the period written is P × `fabric_hz[2]`; a start at stage 4, in state 2 or
   3 or after phase B makes zero accesses;
 - each refusal rule, including zero read requests, refuses as specified;
-  collect makes no write before the fallback and one after 8 free-running
-  refusals;
-- abandon at `stop_at` and at `output_fault` makes zero accesses;
+  collect makes no write before the fallback and one after the first
+  free-running refusal, including one refusal among held windows;
+- abandon at `stop_at` and at `output_fault` makes zero register accesses;
+  an abandon in phase B records the phase B end and the early-end bit;
 - no copy pass starts after the end phase or state 3 is stored.
 
 ## Board evidence that would confirm the design
 
 - Inherited and final fields and the two CCU words from the gpu-display images.
-- The scan-out row from both load images, with the CPU clocks, the copy passes
-  per core, the third presentation time and the collect order bit, which shows
-  whether the counters hold or run past the period.
+- The scan-out row from both load images, no-table image first, with the
+  inherited fields, the CPU clocks, the copy passes per core, the third
+  presentation time and the collect order bit, which shows whether the
+  counters hold or run past the period.
 - The DDR trip row with its baseline and capped-interval figures.
 - The offset between the THS DDR channel and the DRAM die: a thermocouple on
   the LPDDR5 package read alongside the channel during the DDR trip run.

@@ -424,6 +424,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   full capacity and stability remain untested. The second board also passes its
   returning platform survey with SRAM restoration under
   `second-board-20261018-3-3/platform-attempt1/`.
+  The thermal policy throttles at 85 °C on the DDR temperature channel; this is
+  **implemented** and host-modeled, and its board cost is unmeasured.
+  [Memory-bus priority for display scan-out](designs/dram-controller.md) and a
+  display-port latency window are **planned**; they land together with the
+  framebuffer and gpu-display edits that call them. DRAM training, frequency
+  scaling, voltage and the firewall remain boot0 dependencies, and the memory
+  configuration is not decoded.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
   boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
   storage work for this workload; full memory protection/coherence remains untested.
