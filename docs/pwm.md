@@ -24,8 +24,11 @@ command limit and session lifetime. The image fixes channel, frequency and
 polarity. Requests cannot select raw registers or arbitrary pins.
 
 The boot-CPU profile builds the same fan service and optional LED owner as
-`sunstone-a733-pwm-single-core`. It uses the accepted single-core monitor and
-FreeRTOS port through private build patches. EL3 verifies that secondary CPUs
+`sunstone-a733-pwm-single-core`. It is built like the other
+[boot-CPU-only board images](single-core-images.md): the shared single-core
+monitor, runtime and platform select their PWM branches with
+`SUNSTONE_PWM_SINGLE_CORE`, and the build patches only the board's session,
+main and admission sources. EL3 verifies that secondary CPUs
 remain off, seals both session copies and retains the runtime contract outside
 the BSS region cleared on EL1 entry. The image starts the real PMIC, USB and
 PWM tasks on the boot CPU. IRQ67 enters the single-core interrupt dispatcher;
