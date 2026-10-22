@@ -1,4 +1,5 @@
 #include "a733_i2s_stream.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { CTL=0,FMT0=4,FMT1=8,ISTA=12,FCTL=20,FSTA=24,ICTL=28,
@@ -30,8 +31,7 @@ static int health(struct a733_i2s_stream *s)
 {
     if(!now(s))return -1;
     if(!s->deadline) {
-        if(s->time>UINT64_MAX-s->profile.operation_us)return -1;
-        s->deadline=s->time+s->profile.operation_us;
+        if(!a733_deadline_after(s->time,s->profile.operation_us,&s->deadline))return -1;
     }
     enum a733_i2s_resource_result r=s->profile.operations.health(COOKIE(s),s->deadline);
     if(!now(s) || r==A733_I2S_RESOURCE_RETAINED)return -1;
@@ -389,8 +389,8 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         }else{
         if(available<2)return stop(s,A733_I2S_FAILED);
         uint64_t us=((uint64_t)(available-1)*1000000)/(s->profile.format.rate_hz*s->profile.format.channels);
-        if(!us || before>UINT64_MAX-us)return stop(s,A733_I2S_FAILED);
-        s->bridge_deadline=before+us;s->slots[s->current].result.observed_before_us=before;
+        if(!us || !a733_deadline_after(before,us,&s->bridge_deadline))return stop(s,A733_I2S_FAILED);
+        s->slots[s->current].result.observed_before_us=before;
         s->stage=DRAIN;
         }
     }

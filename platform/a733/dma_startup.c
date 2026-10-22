@@ -2,8 +2,6 @@
 #include "a733_dma_platform_native.h"
 #include "a733_dma_controller.h"
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{return a733_dma_separate((uintptr_t)a,an,(uintptr_t)b,bn);}
 static int privileged(void)
 {
     uint64_t level;__asm__ volatile("mrs %0, CurrentEL" : "=r"(level));return level==4;
@@ -78,12 +76,12 @@ static int initialize(struct a733_dma_startup *b,const struct a733_dma_handoff *
     a733_clock_mask_t shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !b || b->initialized ||
         !h || !clock || !registry || !locks || !clock->initialized || !registry->initialized || !locks->initialized ||
-        !separate(b,sizeof(*b),h,sizeof(*h)) || !separate(b,sizeof(*b),clock,sizeof(*clock)) ||
-        !separate(b,sizeof(*b),registry,sizeof(*registry)) || !separate(b,sizeof(*b),locks,sizeof(*locks)) ||
-        !separate(h,sizeof(*h),clock,sizeof(*clock)) || !separate(h,sizeof(*h),registry,sizeof(*registry)) ||
-        !separate(h,sizeof(*h),locks,sizeof(*locks)) ||
-        !separate(clock,sizeof(*clock),registry,sizeof(*registry)) || !separate(clock,sizeof(*clock),locks,sizeof(*locks)) ||
-        !separate(registry,sizeof(*registry),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint_nonempty(b,sizeof(*b),h,sizeof(*h)) || !a733_ranges_disjoint_nonempty(b,sizeof(*b),clock,sizeof(*clock)) ||
+        !a733_ranges_disjoint_nonempty(b,sizeof(*b),registry,sizeof(*registry)) || !a733_ranges_disjoint_nonempty(b,sizeof(*b),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint_nonempty(h,sizeof(*h),clock,sizeof(*clock)) || !a733_ranges_disjoint_nonempty(h,sizeof(*h),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint_nonempty(h,sizeof(*h),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint_nonempty(clock,sizeof(*clock),registry,sizeof(*registry)) || !a733_ranges_disjoint_nonempty(clock,sizeof(*clock),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint_nonempty(registry,sizeof(*registry),locks,sizeof(*locks)) ||
         registry->now!=a733_counter_clock_now || registry->context!=clock ||
         locks->now!=a733_counter_clock_now || locks->context!=clock ||
         h->controller!=0x04601000 || h->owned_channels!=0xffff || !h->service_channels ||
