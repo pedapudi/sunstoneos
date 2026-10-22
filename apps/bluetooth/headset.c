@@ -96,7 +96,7 @@ int bluetooth_headset_retain(struct bluetooth_application *a)
 }
 static int fail(void){return bluetooth_headset_retain(voice.app);}
 static uint64_t cap(uint64_t now,uint64_t duration,uint64_t limit)
-{uint64_t end=now>UINT64_MAX-duration?UINT64_MAX:now+duration;return end<limit?end:limit;}
+{uint64_t end=a733_deadline_after_saturating(now,duration);return end<limit?end:limit;}
 static uint64_t stage_deadline(const struct bluetooth_application *a,uint64_t duration)
 {
     /* Recognition reserves the final20s of the existing60s supervised session.

@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_BLUETOOTH_APPLICATION_H
 #define SUNSTONE_BLUETOOTH_APPLICATION_H
 #include "a733_radio_session.h"
+#include "a733_range.h"
 #include "a733_radio_platform_native.h"
 #include "a733_uart_platform_native.h"
 #include "a733_native_usb.h"
@@ -83,7 +84,7 @@ struct bluetooth_application {
  * restarts the schedule at now once and counts it. The result is capped. */
 static inline uint64_t bluetooth_cadence(uint64_t slot,uint64_t now,uint64_t period,uint64_t limit,uint64_t *restarts)
 {
-    uint64_t next=slot>UINT64_MAX-period?UINT64_MAX:slot+period;
+    uint64_t next=a733_deadline_after_saturating(slot,period);
     if(now>next&&now-next>=2*period){next=now;++*restarts;}
     return next<limit?next:limit;
 }

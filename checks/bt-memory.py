@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build and run the shared Bluetooth range-helper unit check under ASan/UBSan."""
+"""Build and run the shared Bluetooth range and deadline helper unit check under ASan/UBSan."""
 import argparse
 import hashlib
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 p=argparse.ArgumentParser()
@@ -18,6 +19,10 @@ exe=a.output/'bt-memory-model'
 commands=[[cc,'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g','-Iinclude',
            'checks/bt-memory.c','-o',str(exe)],[str(exe)],
           [cc,'--target=aarch64-none-elf','-std=c11','-Wall','-Wextra','-Werror','-ffreestanding','-fsyntax-only','-Iinclude','-include','bt_memory.h','-x','c','/dev/null']]
+# Every saturating deadline sum in the Bluetooth stack uses the shared helper.
+local=re.compile(r'UINT64_MAX\s*-[^;?]*\?\s*UINT64_MAX\s*:')
+for f in sorted([*root.glob('drivers/bluetooth/*.c'),*root.glob('apps/bluetooth/*.[ch]')]):
+    assert not local.search(f.read_text()),f'local saturating deadline sum in {f.relative_to(root)}'
 log=''.join(subprocess.check_output(c,cwd=root,stderr=subprocess.STDOUT,text=True) for c in commands)
 (a.output/'model.log').write_text(log)
 manifest['commands']=[[str(x) for x in c] for c in commands]

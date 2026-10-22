@@ -7,7 +7,6 @@ static void put16(uint8_t *p,unsigned x){p[0]=(uint8_t)x;p[1]=(uint8_t)(x>>8);}
 static void put32(uint8_t *p,unsigned x){put16(p,x);put16(p+2,x>>16);}
 static int equal(const uint8_t *a,const uint8_t *b)
 {for(unsigned i=0;i<6;++i)if(a[i]!=b[i])return 0;return 1;}
-static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static struct bt_sco_link *link(struct bt_sco *q,uint64_t id)
 {for(unsigned i=0;i<BT_SCO_LINKS;++i)if(id && q->links[i].generation==id)return &q->links[i];return 0;}
 static struct bt_sco_link *handle(struct bt_sco *q,unsigned h)
@@ -218,7 +217,7 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
             /* A refused reject means the controller already ended the request.
              * An accepted one waits a bounded time for its failed completion. */
             q->refuse=p[event==0x0f ? 2 : 5] ? 0 : 3;q->refuse_acknowledgement=r->serial;
-            q->refuse_deadline=after(q->now,q->binding.response_timeout_us);return release(q,r);
+            q->refuse_deadline=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);return release(q,r);
         }
         if(q->command_link>=BT_SCO_LINKS)return 0;
         struct bt_sco_link *l=&q->links[q->command_link];
@@ -265,12 +264,12 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
              * A repeat for an already requested link is not refused, since
              * the controller would apply the refusal to the pending request. */
             if(!q->refuse && !(l && l->listening && l->requested)){for(unsigned j=0;j<6;++j)q->refuse_address[j]=p[2+j];
-                q->refuse_deadline=after(q->now,q->binding.response_timeout_us);q->refuse=1;}
+                q->refuse_deadline=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);q->refuse=1;}
             return release(q,r);
         }
         if(bt_hci_incoming_bound(q->acl->hci,q->binding.response_timeout_us)!=1)return fault(q,BT_SCO_IDENTITY);
         l->requested=1;l->request_type=p[11];l->request_serial=r->serial;
-        l->request_deadline=after(q->now,q->binding.response_timeout_us);
+        l->request_deadline=a733_deadline_after_saturating(q->now,q->binding.response_timeout_us);
         if(l->deadline>l->request_deadline)l->deadline=l->request_deadline;
         if(l->phase==BT_SCO_LISTENING){
             l->profile=profile(q,l,p[11]);
@@ -391,7 +390,7 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
     if((q->refuse==1 || q->refuse==3) && q->now>=q->refuse_deadline)q->refuse=0;
     if(q->command_link==BT_SCO_LINKS && q->refuse==1){
         uint8_t p[7];for(unsigned j=0;j<6;++j)p[j]=q->refuse_address[j];p[6]=0x0d;
-        int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,after(q->now,q->binding.response_timeout_us));
+        int result=bt_hci_synchronous_request(q->acl->hci,q,0x042a,p,7,a733_deadline_after_saturating(q->now,q->binding.response_timeout_us));
         if(result<0)return fault(q,BT_SCO_LOWER);
         if(result==1){q->refuse=2;q->refuse_tag=q->acl->hci->command_tag;}
         return 1;
