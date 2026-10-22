@@ -93,6 +93,15 @@ static void checkpoint(void)
         .ticks_per_second=1000,.command_timeout=3000,.ap_rsn_bytes=(uint16_t)sizes[4]};
     memcpy(sc.pmk,vectors[0],32);memcpy(sc.ap_rsn,vectors[4],sizes[4]);
     assert(aic8800_security_init(&security));assert(aic8800_supplicant_init(&supplicant,&sc));
+#ifdef SUNSTONE_AIC8800_SAE
+    /* With the same owner, time and beacon evidence that admit the PSK
+     * supplicant below, claim refuses an SAE configuration. */
+    static struct aic8800_supplicant sae;struct aic8800_supplicant_config sae_config=sc;
+    memset(sae_config.pmk,0,sizeof(sae_config.pmk));sae_config.key_mgmt=AIC8800_SUPPLICANT_SAE;sae_config.ap_rsn[19]=8;
+    sae_config.sae_password_bytes=5;memcpy(sae_config.sae_password,"horse",5);
+    memset(&sae,0,sizeof(sae));assert(aic8800_supplicant_init(&sae,&sae_config));
+    assert(!aic8800_supplicant_claim(&sae,&transport,&security,m.now,m.now+50000)&&!sae.owner&&!security.owner);
+#endif
     assert(aic8800_transport_start_security(&transport,&security,&supplicant,m.now+50000));
     entropy_calls=key_adds=deletes=ports=eapol_tx=trace_n=0;entropy_return=1;reject_key=drop_reply=uncertain_tx=0;hold_response=0;expected_eapol=6;
 }
