@@ -20,9 +20,11 @@ and the module writes the per-core differences into a fixed 64-byte record.
 `platform/a733/cpu_pmu.c`:
 
 - `a733_cpu_pmu_begin(struct a733_cpu_pmu_region *)` runs on the core to be
-  measured. It configures the core's PMU if the configuration differs from the
-  table below. It then zeroes the six event counters, clears their overflow
-  flags and stores the core number, a per-core generation, `PMCCNTR_EL0` and
+  measured. It refuses unless the calling task's affinity mask,
+  `vTaskCoreAffinityGet(NULL)`, holds only the current core. It then masks IRQs and reads `PMCR_EL0`, and configures the
+  core's PMU only when the core's configured flag is clear or `PMCR_EL0.E`
+  reads 0. It zeroes the six event counters, clears their overflow flags and
+  stores the core number, a per-core generation, `PMCCNTR_EL0` and
   `CNTPCT_EL0` in the caller's region.
 - `a733_cpu_pmu_end(const struct a733_cpu_pmu_region *, struct a733_cpu_pmu_record *)`
   reads the counters and the overflow flags and writes one record.
@@ -33,15 +35,31 @@ counters used, supported-event mask, overflow mask, status, `MIDR_EL1`,
 event differences in the order `INST_RETIRED` (0x08), `L1D_CACHE_REFILL`
 (0x03), `L2D_CACHE_REFILL` (0x17), `BUS_ACCESS` (0x19), `DTLB_WALK` (0x34)
 and `ITLB_WALK` (0x35). The caller owns the region (on its stack) and the
-record (in its result buffer). A board-test bundle or the USB0 evidence
-channel copies the record once into its response, which is the copy those
-paths already make for every result. The module allocates nothing, touches no
-MMIO and does not involve the USB0 code.
+record (in its result buffer). The module allocates nothing, touches no MMIO
+and does not involve the USB0 code.
+
+Only an EL1t task calls begin and end: a task that the image's task-privilege
+hook (`npu_service_task_privileged` in
+[patches/freertos-smp-privileged.patch](../../patches/freertos-smp-privileged.patch))
+starts at EL1, as it starts the NPU, DMA and pool workers. At EL0 the first
+`DAIF` or PMU access in begin is UNDEFINED or traps (`PMUSERENR_EL0` is 0), so
+an EL0 call ends in the EL1 synchronous-exception panic. Interrupt handlers do
+not call begin, because `vTaskCoreAffinityGet` is a task-level kernel call.
+
+- **Board-test bundles.** In the board image
+  ([apps/board/main.c](../../apps/board/main.c)), a bundle measures in its own
+  workload task. `board_application_task_privileged` starts that task at EL1t,
+  and the bundle creates it on one core with `xTaskCreateStaticAffinitySet`.
+  `board_usb0_task`, also EL1t in that image, copies the record once into the
+  bundle's response, the copy that path already makes for every result.
+- **EL0 clients**, such as the USB task of the DMA copy observer, get a record
+  only from an EL1t worker they already call, such as the DMA or NPU service
+  worker. The worker measures its own job and returns the record in that job's
+  result, so the module adds no supervisor call.
 
 The counters count everything on the core, including other tasks and
-interrupt handlers that run inside the region. A measured task is therefore
-pinned with `xTaskCreateStaticAffinitySet` or `vTaskCoreAffinitySet`, and the
-A/B runs keep the measured core otherwise idle.
+interrupt handlers that run inside the region, so the A/B runs keep the
+measured core otherwise idle.
 
 ## Register sequence and sources
 
@@ -54,7 +72,14 @@ Pinned sources:
 - the vendor EL3 monitor `monitor.fex` from orangepi-build `a95129bf`, with
   its disassembly in `cpu-startup/monitor.disasm`.
 
-Configuration, once per core and again only when a readback differs:
+Configuration runs when begin finds the core's configured flag clear or
+`PMCR_EL0.E` equal to 0. The one event that makes a configured core stale is
+a warm reset of that core, which sets `PMCR_EL0.E` to 0 (TRM D5.4). No other
+code in an image that links this module writes `E` as 0 or writes the event
+counter registers, and `a733_cpu_cycles_enable` writes the same cycle-counter
+values. Begin's
+`PMCR_EL0` read therefore covers the stale case, and the configured path reads
+back no configuration register.
 
 1. Read `PMCR_EL0.N` and use counters `0 … min(N, 6) − 1`. TRM D5.4 gives
    N = 6 on the A55 and states that `MDCR_EL2.HPMN` limits the counters that
@@ -74,7 +99,23 @@ Configuration, once per core and again only when a readback differs:
    and `LC` and clear `D`, never writing `P` or `C`, and keep `DP` and `X`
    (TRM D5.4). The cycle counter is then configured as
    `a733_cpu_cycles_enable` configures it, so either call may come first. An
-   `ISB` follows, and the module reads the registers back.
+   `ISB` follows. The module reads back each register it wrote, once, and
+   sets the configured flag only when all match; otherwise begin refuses. It
+   also stores `MIDR_EL1` and `CNTFRQ_EL0` in the core's state line.
+
+The configured path makes 28 system-register accesses and 2 `ISB`, with six
+counters:
+
+- begin (14): `DAIF` read, `DAIFSet`, `TPIDR_EL1` (the port's logical core
+  index), `PMCR_EL0`, six `PMEVCNTR<n>_EL0` writes, `PMOVSCLR_EL0`, `ISB`,
+  `PMCCNTR_EL0`, `CNTPCT_EL0`, `DAIF` restore;
+- end (14): `DAIF` read, `DAIFSet`, `ISB`, `PMCCNTR_EL0`, `CNTPCT_EL0`, six
+  `PMEVCNTR<n>_EL0` reads, `PMOVSSET_EL0`, `PMCR_EL0`, `TPIDR_EL1`, `DAIF`
+  restore.
+
+End takes `MIDR_EL1`, `CNTFRQ_EL0`, the counters used and the supported mask
+from the core's state line. Begin reads no `CurrentEL`, because only EL1t
+tasks call it and the module never runs at EL2 or EL3.
 
 Each region uses `PMEVCNTR<n>_EL0` and `PMEVTYPER<n>_EL0` directly and never
 uses `PMSELR_EL0`, so an interrupt between a select and an access cannot
@@ -129,23 +170,35 @@ module waits for nothing).
 
 The module keeps one 64-byte-aligned state line per core in `.bss`, 512 bytes
 in all, in normal write-back memory. Each line holds the configured flag, the
-counters used, the supported mask, `CNTFRQ_EL0` and the generation, and only
-its own core writes it, with IRQs masked (section 2 item 6). PMU registers are
-per core. No data crosses cores inside the module, so it uses no lock, `DMB`
-or `DSB`. A caller that passes a record to another core uses a FreeRTOS queue,
+counters used, the supported mask, `MIDR_EL1`, `CNTFRQ_EL0` and the
+generation, and only its own core writes it, with IRQs masked (section 2 item
+6). PMU registers are per core. No data crosses cores inside the module, so it
+uses no lock of its own, `DMB` or `DSB`. A caller that passes a record to another core uses a FreeRTOS queue,
 a task notification or a release store, which order the record's bytes.
 
-Each begin increments the generation of its core. End refuses the region with
-a status code in these cases:
+Begin refuses unless the calling task's affinity mask holds only the current
+core. With that mask the scheduler runs the task on no other core, so the task
+cannot leave and return inside the region. `vTaskCoreAffinityGet` enters the
+kernel critical section once per begin, before any counter is zeroed; this is
+the module's only lock, and it falls outside the counted window. Each begin
+increments the generation of its core. End refuses the region with a status
+code in these cases:
 
-- the reading core differs from the beginning core (migration);
+- final-core mismatch: the reading core differs from the beginning core, which
+  happens only when another task changed the measured task's affinity;
 - the generation changed, meaning another region began on that core and reset
   its counters;
-- `PMCR_EL0.E` reads 0, as after a warm reset of the core (TRM D5.4).
+- `PMCR_EL0.E` reads 0, as after a warm reset of the core.
 
-Begin also refuses outside EL1. Every refusal happens before any device
-access and retains nothing (section 1.8 class 1). Nested regions on one core
-are refused through the generation check.
+A task that another task moves to a second core and back inside one region
+passes these checks and gets a wrong record, so no task changes a measured
+task's affinity during a region. In the tree, one task sets another's affinity
+only at creation (`apps/board/main.c`, `apps/spi/main.c`) and in scheduler
+migration checks.
+
+Every refusal happens before any device access and retains nothing (section
+1.8 class 1). Nested regions on one core are refused through the generation
+check.
 
 ## Reuse and removal
 
@@ -167,8 +220,8 @@ which would refuse measurements inside critical sections.
 | Metric | Baseline | Budget | Measured by |
 | --- | --- | --- | --- |
 | Instructions retired in an empty region (begin's counter writes to end's counter reads) | None for this module; the fixture's inline `ISB`, `MRS` pair is about 2 (counted) | At most 24 on the A55 and A76 models | QEMU `-icount shift=0`, `INST_RETIRED` of back-to-back begin and end on each core |
-| System-register accesses per begin and end, configured path | `a733_cpu_cycles_sample` pair: 22 accesses and 2 `ISB` for the cycle counter alone (counted) | At most 40 accesses and 2 `ISB`; no `DSB`, `DMB` or `SVC` | Unicorn access log in `checks/cpu-pmu.py`; QEMU `-d in_asm` trace |
-| Locks, allocations, MMIO, wake-ups per region | Not applicable | Zero | Unicorn memory log: only the stack, the record and the core's own state line |
+| System-register accesses per begin and end, configured path | `a733_cpu_cycles_sample` pair: 22 accesses and 2 `ISB` for the cycle counter alone (counted) | At most 28 accesses (the list above) and 2 `ISB`; no configuration readback, `CurrentEL`, `DSB`, `DMB` or `SVC` | Unicorn access log in `checks/cpu-pmu.py`; QEMU `-d in_asm` trace |
+| Locks, allocations, MMIO, wake-ups per region | Not applicable | One kernel critical section in begin's `vTaskCoreAffinityGet`, before the counted window; otherwise zero | Unicorn memory log: only the stack, the record and the core's own state line |
 | Lines written by more than one core | Not applicable | Zero | Unicorn address log; static assertion of 64-byte alignment |
 | Memory | Not applicable | Record 64 B; state 8 × 64 B; region at most 32 B | Static assertions; `nm` sizes in the host check |
 | Empty-region cycles on cores 0 and 6 | Not measured | Provisional: at most 150 on the A55 and 100 on the A76 (estimated) | Board session |
@@ -179,17 +232,28 @@ which would refuse measurements inside critical sections.
 system registers, as `checks/cpu-clock-check.py` does. It checks the event
 encodings and filters, the `PMCNTENSET`, `PMINTENCLR` and `PMCR` values, the
 absence of `P` and `C` writes, `N` below 6, unimplemented events, overflow
-marking and every refusal. It decodes the record layout and checks the
-`MDCR_EL2` write in both continuation sources.
+marking and every refusal. It checks that the configured path reads back no
+configuration register and that begin reconfigures when `PMCR_EL0.E` reads 0.
+It decodes the record layout and checks the `MDCR_EL2` write in both
+continuation sources.
 
 `checks/cpu-pmu-smp.py` builds `checks/cpu-pmu-smp.c` on
 `platform/qemu-smp` with two cores, once with `-cpu cortex-a55` and once with
-`-cpu cortex-a76`, under `-icount shift=0`. Each core runs a pinned task that
-measures a loop of K instructions while the other core measures its own loop.
-The check requires `INST_RETIRED` = K plus the empty-region count on both
-cores, a nonzero cycle difference, the correct core and MIDR, and a supported
-mask equal to QEMU's `PMCEID` bits. It also requires the migration and
-nested-region refusals.
+`-cpu cortex-a76`, under `-icount shift=0`. Like
+`checks/memory-architecture-smp.py`, it applies the SMP port patches and
+`patches/freertos-smp-privileged.patch`, and the fixture's
+`npu_service_task_privileged` starts its measuring tasks at EL1t. Each core
+runs a pinned task that measures a loop of K instructions while the other core
+measures its own loop. The check requires `INST_RETIRED` = K plus the
+empty-region count on both cores, a nonzero cycle difference, the correct core
+and MIDR, and a supported mask equal to QEMU's `PMCEID` bits. It also requires
+these refusals:
+
+- a task with a two-core affinity mask, which a peer moves from core 0 to
+  core 1 and back during the region, is refused at begin;
+- a pinned task that a peer moves to core 1 is refused at end with the
+  final-core mismatch;
+- a nested region on one core is refused through the generation check.
 
 ## Left out
 
