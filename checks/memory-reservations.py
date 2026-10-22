@@ -20,12 +20,12 @@ SOURCES = [
     'include/a733_device_memory_layout.h', 'checks/memory-reservations-local.c',
 ]
 # Local-layout preparation cases: pool range, extra definitions, and the
-# translations expected: one per write-back page, two per non-cacheable page.
+# translations expected: one write translation per page of either pool.
 LOCAL_CASES = {
-    'unaligned-2mib': (0x41500000, 0x41700000, [], 512 + 1024),
+    'unaligned-2mib': (0x41500000, 0x41700000, [], 512 + 512),
     'large-graph': (0x41600000, 0x41a00000, ['-DSUNSTONE_NPU_LARGE_GRAPH', '-DSUNSTONE_NPU_SINGLE_CORE',
                     '-DSUNSTONE_NPU_RUNTIME_INPUT', '-DSUNSTONE_NPU_INTERRUPT', '-DSUNSTONE_NPU_SUPERVISED'],
-                    1024 + 1024),
+                    1024 + 512),
 }
 
 

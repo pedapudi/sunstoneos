@@ -56,7 +56,7 @@ and `base-prepare.json` and `head-prepare.json` for the traced pool check.
 | Metric | Budget | Baseline | Change | Within budget |
 | --- | --- | --- | --- | --- |
 | Extended pool check | 392 `AT` in one call; at most 25,000 instructions | 401,410 `AT` in 3,136 calls; 18,466,209 instructions | 392 `AT` in one call; 22,547 instructions | Yes |
-| Local pool check (`AT` per preparation): 2 MiB pools, large NPU graph | Unchanged: 1,536 and 2,048 | No count in the baseline check | 1,536 and 2,048 | Yes |
+| Local pool check (`AT` per preparation): 2 MiB pools, large NPU graph | One write `AT` per page: 1,024 and 1,536 | 1,536 and 2,048 | 1,024 and 1,536 | Yes |
 | DRAM mapped at EL1; translation-table memory | 910 MiB; 20 KiB | 20,480-byte table region | 910 MiB by golden comparison; 20,480-byte table region | Yes |
 | Slot comparisons per acquire | At most 1,056 | Not replayed | 160 worst, in the high-profile H.264 replay | Yes |
 | Critical-section hold: acquire, release, retain (instructions) | Acquire at most 15,000; release and retain at most 100 | No serialization | 14,206 (31 occupied slots); 31; 24 | Yes |

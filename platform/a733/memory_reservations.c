@@ -11,7 +11,6 @@ static struct device_memory_pool boot_pool;
 int a733_memory_reservations_prepare(void)
 {
     uintptr_t start = (uintptr_t)__device_pool_start, end = (uintptr_t)__device_pool_end;
-    if (boot_pool.initialized) return 1;
     /* Write-back identity blocks, inner shareable. The range is whole 2 MiB
      * level-2 block descriptors, which the QEMU golden comparison of the EL1
      * tables fixes, so one write translation per block checks every page. */
