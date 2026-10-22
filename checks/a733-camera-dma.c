@@ -54,7 +54,8 @@ static int release(void *p,uint64_t t,uint64_t d) {
     struct model *m=p;assert(m->syncs && m->drained);++m->releases;
     int r=cb(m,5,t,d);if(m->late)m->now=d;return r;
 }
-static const struct a733_camera_dma_ops ops={now,admission,rd,wr,start,stop,drain,sync_cpu,release};
+static int slot_sync(void *p,uint64_t t,unsigned slot,uint64_t d) {(void)slot;return cb(p,4,t,d);}
+static const struct a733_camera_dma_ops ops={now,admission,rd,wr,start,stop,drain,sync_cpu,release,NULL,NULL};
 static struct a733_camera_dma_config cfg(unsigned block) {
     return (struct a733_camera_dma_config){.y={0x140000000,307264},
         .uv={0x140100000,307264},.frame_id=19,.block=(uint8_t)block};
@@ -101,6 +102,25 @@ int main(int argc,char **argv) {
         assert(s.state==A733_CAM_DMA_CLOSED && !s.token);
         assert(a733_camera_dma_open(&s,m.now+1000)==-1);
     }
+    /* Further sizes on block 0; each plane span covers exactly its bytes. */
+    static const struct a733_camera_format sizes[]={
+        {320,240,A733_CAMERA_UYVY},{1280,720,A733_CAMERA_YUYV},
+        {2592,1944,A733_CAMERA_UYVY},{176,144,A733_CAMERA_YUYV}
+    };
+    for(unsigned i=0;i<sizeof(sizes)/sizeof(sizes[0]);i++) {
+        uint64_t bytes=a733_camera_plane_bytes(&sizes[i]);
+        struct a733_camera_dma_config c={.y={0x140000000,bytes},.uv={0x141000000,bytes},
+            .frame_id=19,.block=0};
+        memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
+        m.reg[0]=0x80000000;m.reg[0x204/4]=0x40000000;m.reg[0x254/4]=0x2fe0e7;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&sizes[i])==1);
+        assert(a733_camera_dma_open(&s,10000)==1);arm(&s,&m);
+        if(f)assert(fwrite(m.reg,1,sizeof(m.reg),f)==sizeof(m.reg));
+        memset(&s,0,sizeof(s));c.uv.mapped_bytes=bytes-1;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&sizes[i])==-1);
+        struct a733_camera_format bad=sizes[i];bad.width+=8;c.uv.mapped_bytes=UINT64_C(1)<<24;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&bad)==-1 && !s.initialized);
+    }
     if(f)assert(!fclose(f));
     /* Full mapping spans, not only first addresses, must fit and be disjoint. */
     for(unsigned i=0;i<7;i++) {
@@ -145,5 +165,35 @@ int main(int argc,char **argv) {
     init(&s,&m,0);arm(&s,&m);done(&s,&m);m.late=1;
     assert(a733_camera_dma_close(&s,m.now+1000)==1 && complete(&s,&m)==-1);
     assert(s.state==A733_CAM_DMA_FAULT && !s.token && s.owner==A733_CAMERA_CALLER);
+    /* Continuous capture admission: ARMED only, both stream operations, a
+     * ring of 2..4 page-multiple slots that each cover one plane and fit
+     * both spans. Refusals change nothing. */
+    {
+        static const struct a733_camera_dma_ops partial={now,admission,rd,wr,start,stop,drain,sync_cpu,release,start,NULL};
+        struct a733_camera_dma_ops full=partial;full.sync_slot=slot_sync;
+        struct a733_camera_dma_config c={.y={0x140000000,4*311296},.uv={0x141000000,4*311296},.frame_id=19};
+        static const struct { unsigned slots;uint64_t bytes; } bad[]={
+            {1,311296},{5,311296},{4,303104},{4,311296+64},{4,311296+4096}};
+        memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
+        assert(a733_camera_dma_init(&s,&partial,&m,&c)==1 && a733_camera_dma_open(&s,10000)==1);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);arm(&s,&m);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);
+        memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
+        assert(a733_camera_dma_init(&s,&full,&m,&c)==1 && a733_camera_dma_open(&s,10000)==1);
+        assert(a733_camera_dma_stream(&s,2,311296,100,10000)==-1);arm(&s,&m);
+        struct a733_camera_dma saved=s;
+        for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++){
+            assert(a733_camera_dma_stream(&s,bad[i].slots,bad[i].bytes,100,10000)==-1);
+            assert(!memcmp(&saved,&s,sizeof(s)));
+        }
+        unsigned slot;uint32_t sequence;
+        assert(a733_camera_dma_take(&s,&slot,&sequence)==-1 && a733_camera_dma_give(&s,0)==-1);
+        assert(a733_camera_dma_stop_stream(&s,10000)==-1);
+        assert(a733_camera_dma_stream(&s,4,311296,0,10000)==-1 && !memcmp(&saved,&s,sizeof(s)));
+        assert(a733_camera_dma_stream(&s,4,311296,100,10000)==1 && s.stream && s.ring.state[0]==A733_SLOT_NEXT);
+        assert(s.ring.interval==100 && s.ring.status_at==s.now && s.now==m.now && !s.ring.owed);
+        assert(a733_camera_dma_stream(&s,4,311296,100,10000)==-1 && a733_camera_dma_capture(&s,10000)==-1);
+        assert(a733_camera_dma_take(&s,&slot,&sequence)==-1);
+    }
     puts("PASS camera DMA mapping bounds, ownership, retained faults and bounded polling");return 0;
 }

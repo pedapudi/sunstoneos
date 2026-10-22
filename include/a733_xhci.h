@@ -11,6 +11,9 @@
 #define A733_XHCI_ENDPOINTS 3u
 #define A733_XHCI_DEVICES 3u
 #define A733_XHCI_DMA_ENDPOINTS 7u
+#define A733_XHCI_HUB_TIERS 2u /* Hub tiers below the root port; leaves sit one tier lower. */
+#define A733_XHCI_ISOCH_TDS 8u /* Isochronous TDs kept on one ring. */
+#define A733_XHCI_ISOCH_PACKET 512u /* Bounce stride: eight packets fill one page. */
 
 enum a733_xhci_result { A733_XHCI_PENDING,A733_XHCI_READY,A733_XHCI_BUSY,
     A733_XHCI_INVALID,A733_XHCI_RETAINED };
@@ -39,20 +42,33 @@ struct a733_xhci_endpoint {
     uint8_t *bounce,*caller;
     uint64_t ring_pa,bounce_pa,pending_trb,deadline;
     unsigned number,address,packet,index,cycle,opened,configured,pending;
-    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error. */
+    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error,6 isochronous TDs on ring. */
 };
-/* One root device and up to two children behind an admitted HS hub retain
- * own EP0, contexts and data rings; command/event rings remain controller-owned. */
+/* One root device and up to two hub children retain own EP0, contexts and
+ * data rings; command/event rings remain controller-owned. A child of a
+ * USB2 hub at tier 1 sits at tier 2; parent is the parent hub's slot and
+ * route the xHCI route string (one port nibble per tier). */
 struct a733_xhci_device {
     uint8_t *input,*device;
     uint64_t input_pa,device_pa,deadline;
     unsigned slot,address,pending_address,hardware_address,port_ready,speed;
     unsigned control_stage,control_length,control_in,evaluate_pending,address_status;
-    unsigned configure_pending,command_mask,zero_retired,parent,parent_port;
+    unsigned configure_pending,command_mask,zero_retired,parent,parent_port,route,tier;
     unsigned hub,hub_ports,hub_ttt,hub_mtt,hub_configured;
     unsigned detach,stopping; /* detach:1 stopping endpoints,2 disabling slot; stopping:endpoint index+1. */
     uint8_t setup[8];
     struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
+};
+/* One isochronous IN stream per controller. Entries head..head+count-1
+ * (modulo A733_XHCI_ISOCH_TDS) are in TD order; the first done entries have
+ * completed and the rest are on the ring. Entry i always uses bounce bytes
+ * i*A733_XHCI_ISOCH_PACKET. state: 1 on ring, 2 data, 3 no data. skip is set
+ * by a missed-service report and lets the next event pass queued TDs. */
+struct a733_xhci_isoch {
+    unsigned device,requested,head,count,done,skip;
+    unsigned bytes[A733_XHCI_ISOCH_TDS],state[A733_XHCI_ISOCH_TDS];
+    uint64_t trb[A733_XHCI_ISOCH_TDS];
+    uint32_t dropped,overruns; /* Intervals without data; empty-ring reports. */
 };
 /* Each device has EP0 and two bulk or interrupt endpoints. Only the owning
  * task calls this API. The private NC parent and every object stay at their
@@ -80,15 +96,16 @@ struct a733_xhci {
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;
     struct a733_xhci_device devices[A733_XHCI_DEVICES];
+    struct a733_xhci_isoch isoch;
 };
 
 /* Called after the actual USB2 platform is prepared, before publishing DMA
  * pointers. The pre-scheduler constructor supplies its own CPU-state NC pool
  * lease; init validates it and permanently transfers the parent to DEVICE.
  * Capability limits are observed before populating any hardware context.
- * Initial support uses standard USB2 protocol speed IDs, one direct high-speed
- * device, directly attached FS/LS HID, or one HS hub with the admitted leaves.
- * Streams, deeper hubs and isochronous endpoints remain unsupported.
+ * Support uses standard USB2 protocol speed IDs, one direct device, or up to
+ * two tiers of USB2 high-speed hubs (one SuperSpeed hub tier) with the
+ * admitted leaves, and one isochronous IN stream. Streams remain unsupported.
  * Callbacks are bounded and non-reentrant; notice may enqueue a notification
  * but must not call any core API. All scalar offsets are relative to xHCI.
  */
@@ -110,7 +127,9 @@ int a733_xhci_interrupt_start(struct a733_xhci *);
 int a733_xhci_interrupt_begin(struct a733_xhci *);
 int a733_xhci_interrupt_finish(struct a733_xhci *);
 /* Owner supplies actual TinyUSB bus topology after hub reset/status. No child
- * can be bound before the parent hub Configure Endpoint completion. */
+ * can be bound before the parent hub Configure Endpoint completion. parent is
+ * the hub's logical address; a hub at tier 1 must be a USB2 high-speed hub
+ * below a high-speed hub. */
 int a733_xhci_bind_child(struct a733_xhci *,unsigned parent,unsigned port,unsigned speed,uint64_t deadline);
 int a733_xhci_mark_hub(struct a733_xhci *,unsigned address);
 int a733_xhci_hub_configure(struct a733_xhci *,unsigned address,unsigned ports,unsigned ttt,unsigned mtt);
@@ -125,6 +144,23 @@ int a733_xhci_open(struct a733_xhci *,unsigned address,unsigned endpoint,
 int a733_xhci_set_burst(struct a733_xhci *,unsigned address,unsigned endpoint,unsigned burst);
 int a733_xhci_open_interrupt(struct a733_xhci *,unsigned address,unsigned endpoint,
     unsigned packet,unsigned interval,uint64_t deadline);
+/* Isochronous IN for a USB2 full- or high-speed device with a service interval
+ * of at most 1 ms: FS bInterval 1, HS bInterval 1-4. One stream per
+ * controller uses the device's own data ring and bounce page. */
+int a733_xhci_open_isoch(struct a733_xhci *,unsigned address,unsigned endpoint,
+    unsigned packet,unsigned interval,uint64_t deadline);
+/* Start keeping A733_XHCI_ISOCH_TDS one-packet TDs (Start Isoch ASAP) on the
+ * ring once the endpoint is configured. When a poll finds the event ring empty
+ * 100 ms or more after the previous ring activity while TDs are queued, the
+ * session is retained. Events posted while the owner did not poll are
+ * consumed first, so a late poll alone does not retain the session. */
+int a733_xhci_isoch_start(struct a733_xhci *,unsigned address,unsigned endpoint);
+/* Copy the oldest completed packet into caller storage and free its entry;
+ * the next poll queues a replacement TD. Entries that carried no data are
+ * skipped and counted. Returns1 with *bytes set, 0 when none completed,
+ * -1 on refusal. No DMA address reaches the caller. */
+int a733_xhci_isoch_take(struct a733_xhci *,unsigned address,unsigned endpoint,
+    uint8_t *out,unsigned capacity,unsigned *bytes);
 int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_t deadline);
 int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
     uint8_t *,unsigned bytes,uint64_t deadline);
@@ -134,8 +170,9 @@ int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
  * Private storage never returns to the pool, even on success.
  */
 int a733_xhci_abort(struct a733_xhci *,unsigned address,unsigned endpoint);
-/* Orderly removal of one hub child, for example after its hub port reports a
- * disconnect. Revokes caller destinations at once; later polls stop each
+/* Orderly removal of one hub child and, for a hub, every device below it,
+ * for example after its hub port reports a disconnect. Children are torn
+ * down before their hub. Revokes caller destinations at once; later polls stop each
  * Running endpoint, disable the slot and then clear the record's pages for a
  * new child. Every step needs its matched completion within 5 s; otherwise the
  * session is retained. Returns1 when accepted, already in progress or nothing

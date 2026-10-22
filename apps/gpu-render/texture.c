@@ -15,6 +15,18 @@ static uint64_t get64(const uint8_t *p){uint64_t v;memcpy(&v,p,8);return v;}
 static void put32(uint8_t *p,uint32_t v){memcpy(p,&v,4);}
 static void put64(uint8_t *p,uint64_t v){memcpy(p,&v,8);}
 static _Noreturn void fault(void){gpu_application_fail(NULL);for(;;)vTaskDelay(1);}
+/* Wire versions 4, 5 and 6 select graphics profiles 2, 3 and 4; the optional
+ * lifecycle transport adds four to each. */
+static unsigned wire_version(void)
+{
+    unsigned profile=gpu_application_texture_profile();
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    return profile==PVR_RENDER_BATCH_PROFILE?PVR_GPU_LIFECYCLE_BATCH_VERSION:
+        profile==3?PVR_GPU_LIFECYCLE_DEPTH_VERSION:PVR_GPU_LIFECYCLE_TEXTURE_VERSION;
+#else
+    return profile==PVR_RENDER_BATCH_PROFILE?6u:profile==3?5u:4u;
+#endif
+}
 static void live(void){if(!gpu_application_live(NULL))fault();}
 static uint64_t budget(uint64_t maximum)
 {
@@ -26,13 +38,12 @@ static void response(unsigned operation,unsigned result,uint32_t bytes)
     uint32_t width,height,stride,total;
     if(!gpu_application_texture_geometry(&width,&height) || !pvr_render_texture_geometry(width,height,&stride,&total))fault();
     uint8_t *p=app.texture_header;memset(p,0,GPU_TEXTURE_HEADER_BYTES);
-    put32(p,0x4f585047);put32(p+4,gpu_application_texture_profile()==3?5:4);put32(p+8,result);put32(p+12,operation);
+    put32(p,0x4f585047);put32(p+4,wire_version());put32(p+8,result);put32(p+12,operation);
     put32(p+16,atomic_load_explicit(&app.runtime_sequence,memory_order_acquire));
     put32(p+20,width);put32(p+24,height);put32(p+28,stride);put32(p+32,total);
     put32(p+40,bytes);put32(p+44,atomic_load_explicit(&app.runtime_closed,memory_order_acquire));
     put64(p+48,app.session.epoch);put64(p+56,app.texture_generation);
 #ifdef SUNSTONE_GPU_LIFECYCLE
-    put32(p+4,gpu_application_texture_profile()==3?PVR_GPU_LIFECYCLE_DEPTH_VERSION:PVR_GPU_LIFECYCLE_TEXTURE_VERSION);
     put64(p+64,atomic_load_explicit(&app.runtime_epoch,memory_order_acquire));
 #endif
 }
@@ -184,9 +195,9 @@ void gpu_application_texture_usb(void)
         unsigned n=tud_vendor_available();if(n>payload_bytes-payload_received)n=payload_bytes-payload_received;
         payload_received+=tud_vendor_read(app.runtime_input+payload_received,n);if(payload_received<payload_bytes)return;
     }
-    unsigned version=gpu_application_texture_profile()==3?5u:4u,max_operation=5;
+    unsigned version=wire_version(),max_operation=5;
 #ifdef SUNSTONE_GPU_LIFECYCLE
-    version+=4;max_operation=7;
+    max_operation=7;
     uint64_t queue_epoch=get64(header+64),current_epoch=atomic_load_explicit(&app.runtime_epoch,memory_order_acquire);
 #endif
     unsigned operation=get32(header+8),valid=get32(header)==0x49585047 && get32(header+4)==version &&
@@ -197,7 +208,8 @@ void gpu_application_texture_usb(void)
     struct pvr_render_texture_request q={.previous=get32(header+12),.generation=get64(header+24),
         .offset=get32(header+32),.bytes=payload_bytes,
         .input={get32(header+40),get32(header+44),get32(header+48),get32(header+52),get32(header+56)},.state=get32(header+60)};
-    if((operation!=1 && q.state) || !pvr_render_texture_state_valid(gpu_application_texture_profile(),q.state))valid=0;
+    /* Only BEGIN carries state; profile 4 has no valid zero frame state. */
+    if(operation==1?!pvr_render_texture_state_valid(gpu_application_texture_profile(),q.state):q.state!=0)valid=0;
     if(operation!=2 && payload_bytes)valid=0;
     #ifdef SUNSTONE_GPU_LIFECYCLE
     unsigned closed=atomic_load_explicit(&app.runtime_closed,memory_order_acquire);

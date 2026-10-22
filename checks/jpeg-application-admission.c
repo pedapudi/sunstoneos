@@ -30,6 +30,9 @@ int main(int argc,char **argv)
     j.supply_rail=2;assert(!a733_jpeg_session_valid(&j));j.supply_rail=1;
     j.board.workload=3;assert(!a733_jpeg_session_valid(&j));j.board.workload=2;
     j.board.deadline_us=1;assert(!a733_jpeg_session_valid(&j));j.board.deadline_us=0;
+    /* A sequence session (version 3) carries oracles per image, never here. */
+    j.version=3;assert(!a733_jpeg_session_valid(&j));memset(j.reference,0,32);assert(a733_jpeg_session_valid(&j));
+    j.version=4;assert(!a733_jpeg_session_valid(&j));j.version=2;memset(j.reference,5,32);
     assert(argc==2);FILE*f=fopen(argv[1],"wb");assert(f&&fwrite(&j,1,sizeof(j),f)==sizeof(j)&&!fclose(f));
-    assert(!munmap(mapped,4096));puts("JPEG full-session extension/digest/rail/workload admission passed");return 0;
+    assert(!munmap(mapped,4096));puts("JPEG full-session extension/digest/rail/workload and sequence-version admission passed");return 0;
 }

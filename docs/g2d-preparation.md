@@ -1,14 +1,17 @@
 # Prepare and capture one retained G2D operation
 
 The native application performs one caller-selected fill, source copy,
-solid-background blend or exact twofold enlargement. It exports an immutable
+solid-background blend, exact twofold enlargement, general scaling or
+image-over-image blend. Copy and general scaling may convert between 32-bit RGB
+channel orders. It exports an immutable
 CPU-owned copy. The host path uses the existing
 supervised board launcher, typed admission records and coordinator claim. All
 native DMA buffers, page tables and provider leases remain allocated after
 completion, ACK or failure. Recovery follows the admitted whole-board
 power-removal plan.
 
-Pixels use ARGB8888 stored as little-endian B, G, R, A bytes. Width is one through
+Pixels use ARGB8888 stored as little-endian B, G, R, A bytes unless a copy or
+general scaling names another 32-bit order. Width is one through
 1280 pixels; height is one through 720. The byte stride is a multiple of four,
 at least four times width and at most 5120. The complete source covers
 `stride * height` bytes, including padding, with a maximum of 3,686,400 bytes.
@@ -27,10 +30,12 @@ geometry.
 
 `apps/g2d/producer.py` extends an existing 592-byte supervised board template to
 a 904-byte G2D session. It binds the source digest, twelve operation/geometry
-words, owner, authority, clock client and four reviewed physical evidence hashes.
-The existing board prefix binds epoch, generation, lease and native build identity.
-The reserved reference digest stays zero; no reference pixels enter the native
-protocol.
+words, eight operation-extension words, owner, authority, clock client and four
+reviewed physical evidence hashes. The existing board prefix binds epoch,
+generation, lease and native build identity. The extension words are the
+general-scaling source size, the image-over-image background origin and plane
+alpha, the output format and two reserved words; each word an operation does not
+use is zero. No reference pixels enter the native protocol.
 
 New images require the initial evidence record's `de_sys_power_profile` to equal
 `off-or-on-retained-v1`, with `de_sys_consumers_excluded` and
@@ -132,9 +137,10 @@ request history without adding thousands of fsyncs to the session window.
 The host preserves raw fragments, full responses and `output.argb` durably before
 ACK. For fill and copy it compares every byte with an independent CPU reference,
 including zero pixels outside the rectangle and zero padding. A mismatch retains
-the actual output and stops before ACK. Blending retains its ideal reference
-comparison as an unqualified diagnostic; authenticated output may differ from
-that ideal without blocking ACK. After the operation checks pass, an authenticated result receives one
+the actual output and stops before ACK. Blending and format-converting copies
+retain their ideal reference comparison as an unqualified diagnostic;
+authenticated output may differ from that ideal without blocking ACK. Scaling
+has no pixel reference and requires zero bytes outside the destination. After the operation checks pass, an authenticated result receives one
 41-byte ACK bound to generation and output digest. One final query must return
 ACKed status with unchanged identity, digests and proofs. This observation ends
 capture; every native resource remains retained. Evidence failures after an
@@ -252,3 +258,33 @@ Host sources and selected immutable artifacts are preserved at
 `~/.cache/sunstoneos/evidence/g2d-scale-host-20261020/frozen/manifest.json`.
 Native results are under `~/.cache/sunstoneos/evidence/g2d-scale-20261020/`.
 The preserved models do not authorize physical execution or resource reuse.
+
+
+## General scaling, image-over-image blending and format conversion
+
+These operations need an image whose geometry predicate admits operations 5
+and 6, and the launcher built from the same header. The earlier launchers refuse
+them. Source upload, stride, surface size and the 192-byte result layout keep
+their meanings; no second upload or mapping is added.
+
+- **General scaling.** Use `--operation scale` with `--sw` and `--sh` for the
+  source crop at `--sx`/`--sy`, and `--w`/`--h` for the destination. The crop
+  must fit the canvas and differ in size from the destination; color is zero.
+  For example, `--operation scale --width 60 --height 64 --stride 256 --sx 2
+  --sy 1 --sw 55 --sh 60 --dx 3 --dy 4 --w 13 --h 9` reduces a 55×60 crop to
+  13×9. Capture records no interpolation comparison and requires zero bytes
+  outside the destination rectangle, including padding.
+- **Image-over-image.** Use `--operation source-over-image` with the foreground
+  at `--sx`/`--sy`, the background at `--bx`/`--by` and plane alpha `--alpha`
+  1 to 255. Both rectangles have the destination size and must fit the canvas.
+  The host compares output with ideal straight-alpha source-over as an
+  unqualified diagnostic that does not block ACK.
+- **Format conversion.** Add `--source-format` and `--output-format` to a copy or
+  general scaling; each accepts ARGB8888, ABGR8888, RGBA8888, BGRA8888,
+  XRGB8888, XBGR8888, RGBX8888 or BGRX8888. A converting copy is compared with
+  an ideal channel reordering that treats X channels as 255. That comparison is
+  an unqualified diagnostic; a plain copy remains an exact, ACK-gating check.
+
+`checks/g2d-modes-host.py` exercises these rules with sessions resealed from an
+accepted earlier session and synthetic response frames. The register, linked
+image and launcher checks are described in [the component document](g2d.md).

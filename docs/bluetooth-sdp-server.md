@@ -1,7 +1,8 @@
 # Local Bluetooth service discovery for the Audio Gateway
 
 The native SDP server publishes the configured Hands-Free Audio Gateway (AG)
-service to an established Bluetooth peer. SDP is the Service Discovery Protocol;
+service, and optionally an Advanced Audio Distribution Profile (A2DP) sink, to
+an established Bluetooth peer. SDP is the Service Discovery Protocol;
 it describes services and their connection parameters. The server handles Service
 Search, Service Attribute, and combined Service Search Attribute requests over
 actual L2CAP PSM 1 channels. This document assumes familiarity with the
@@ -14,8 +15,9 @@ profile compliance, hands-free control, or a voice connection.
 
 ## Records describe an explicitly admitted profile
 
-The database contains the SDP server record at handle zero and one immutable AG
-record at a caller-selected handle of at least `0x10000`. The server record
+The database contains the SDP server record at handle zero, one immutable AG
+record at a caller-selected handle of at least `0x10000`, and an optional A2DP
+sink record at a second, distinct handle. The server record
 contains its service class and SDP version 1.0. The AG record contains:
 
 - Service classes Hands-Free Audio Gateway (`0x111f`) and Generic Audio (`0x1203`).
@@ -29,11 +31,24 @@ RFCOMM channel. The version is an explicit configuration input; the implementati
 does not supply a default compliance claim.
 
 Network indicates incoming-call rejection capability and equals BRSF feature
-bit 5. SDP feature bits 0–4 equal the corresponding BRSF bits. Current admission
-rejects higher SDP feature bits and BRSF bits beyond 8. Wide and super-wide speech,
-codec negotiation, and enhanced voice-recognition advertisements require further
-native owners and remain unsupported here. The initial AG control engine uses
-BRSF zero, SDP features zero and Network zero until its optional providers exist.
+bit 5. SDP feature bits 0–4 equal the corresponding BRSF bits, and SDP bit 5
+(wide band speech) equals BRSF bit 9 (codec negotiation). Admission rejects
+higher SDP feature bits and BRSF bits beyond 9. Super-wide speech and enhanced
+voice-recognition advertisements remain unsupported. The
+[AG engine](bluetooth-hfp.md) states which BRSF value each of its modes uses;
+with call control, Network must be 1.
+
+The sink record exists only when the caller sets `sink_handle`. It contains:
+
+- Service class Audio Sink (`0x110b`).
+- An L2CAP descriptor with PSM `0x0019` and an AVDTP descriptor with version 1.3.
+- Public Browse Group membership and the A2DP profile UUID `0x110d`, version 1.3.
+- SupportedFeatures with one or more of headphone (1), speaker (2), recorder (4)
+  and amplifier (8).
+
+The caller must run an [AVDTP sink](bluetooth-a2dp.md) that accepts PSM
+`0x0019` on every link the policy admits. The record makes no claim about
+audio rendering.
 
 ## Admission reserves only incoming SDP channel generations
 
@@ -70,7 +85,7 @@ A failed session does not discard records belonging to another session.
 
 Attribute replies obey the negotiated remote MTU and the requested maximum byte
 count. Encoded attribute data may split across any byte boundary. Sequence lengths
-refer to the complete result. The two fixed records fit within 256 assembled bytes;
+refer to the complete result. The three fixed records fit within 256 assembled bytes;
 no heap or dynamically registered record exists.
 
 A continuation contains an opaque query identity and byte offset. Its twelve
@@ -109,7 +124,8 @@ inputs. The model supplies an explicit policy for its synthetic peer; it does
 not create or qualify a pairing implementation.
 
 The composed check passes with address and undefined-behavior sanitizers. It
-compares both records with independent encoded bytes and exercises UUID forms,
+compares the records with independent encoded bytes, including the sink record
+and its absence when unconfigured, and exercises UUID forms,
 attribute selection, MTU segmentation, malformed requests, continuation replay,
 query expiry and channel replacement. Controller-credit backpressure retains
 pending work; close waits for actual credit retirement. A short request remains

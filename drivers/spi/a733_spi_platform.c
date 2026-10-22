@@ -120,7 +120,8 @@ static int core_admit(void *p,const struct a733_spi_format *f,const struct a733_
     struct a733_spi_platform *s=p;const struct a733_spi_format *c=&s->config.format;
     return !s->fault&&s->held&&s->core_call&&f->port==c->port&&f->cs==c->cs&&f->mode==c->mode&&
         f->lsb_first==c->lsb_first&&f->active_high==c->active_high&&f->max_hz==c->max_hz&&
-        f->setup_us==c->setup_us&&f->hold_us==c->hold_us&&plan==&s->spi.plan&&profile(s);
+        f->setup_us==c->setup_us&&f->hold_us==c->hold_us&&f->lanes==c->lanes&&f->dma==c->dma&&
+        plan==&s->spi.plan&&profile(s);
 }
 static int core_read(void *p,uintptr_t a,uint32_t *v)
 {struct a733_spi_platform *s=p;return s->held&&s->core_call&&!s->fault&&rd(s,a,v);}
@@ -149,6 +150,8 @@ int a733_spi_platform_init(struct a733_spi_platform *s,const struct a733_spi_pla
        !pins||!pins->initialized||!c->owner||!c->handoff||!c->deadline||
        !a733_spi_route_plan(c->route,c->format.cs,&route)||route.port!=c->format.port||
        c->format.mode>3||c->format.active_high>1||c->format.lsb_first>1||
+       /* Routes lease clock, MOSI, MISO and CS only; quad needs IO2/IO3. */
+       c->format.lanes>2||c->format.dma>1||(c->format.dma&&!a733_spi_dma_request(c->format.port))||
        a733_spi_plan(c->format.port,c->format.max_hz,&plan)||
        !separate(s,sizeof(*s),c,sizeof(*c))||!separate(s,sizeof(*s),o,sizeof(*o))||
        !separate(s,sizeof(*s),registry,sizeof(*registry))||!separate(s,sizeof(*s),pins,sizeof(*pins)))return 0;
@@ -287,7 +290,7 @@ enum a733_spi_platform_result a733_spi_platform_interrupt_start(struct a733_spi_
     if(!s||!s->initialized)return INVALID;if(!take(s))return BUSY;
     if(s->fault)return finish(s,fault(s));
     if(s->ops.current(s->context)!=1||s->stage!=S_READY||s->spi.state!=A733_SPI_ACTIVE||
-       s->interrupt_armed||s->interrupt_service||s->spi.sent!=s->spi.transfer.tx_bytes||
+       s->interrupt_armed||s->interrupt_service||s->spi.transfer.dma||s->spi.sent!=s->spi.transfer.tx_bytes||
        s->spi.transfer.tx_bytes>64||s->spi.transfer.rx_bytes>192)return finish(s,INVALID);
     int g=guard(s);if(g<=0)return finish(s,g==0?BUSY:fault(s));
     int held=lock(s);if(held<0)return finish(s,fault(s));if(!held)return finish(s,BUSY);
@@ -343,8 +346,9 @@ static enum a733_spi_platform_result command(struct a733_spi_platform *s,const s
 enum a733_spi_platform_result a733_spi_platform_submit(struct a733_spi_platform *s,const struct a733_spi_transfer *t,uint64_t deadline)
 {
     if(!s||!t||!separate(s,sizeof(*s),t,sizeof(*t)))return INVALID;
+    /* DMA transfers name no CPU buffers; the core refuses any pointer. */
     const void *buffers[]={t->tx,t->rx};size_t lengths[]={t->tx_bytes,t->rx_bytes};
-    for(unsigned i=0;i<2;i++)if(lengths[i]&&
+    for(unsigned i=0;i<2;i++)if(lengths[i]&&!t->dma&&
         (!separate(s,sizeof(*s),buffers[i],lengths[i])||
          !separate(s->registry,sizeof(*s->registry),buffers[i],lengths[i])||
          !separate(s->pins,sizeof(*s->pins),buffers[i],lengths[i])))return INVALID;
@@ -352,5 +356,19 @@ enum a733_spi_platform_result a733_spi_platform_submit(struct a733_spi_platform 
 }
 enum a733_spi_platform_result a733_spi_platform_reap(struct a733_spi_platform *s,uint64_t deadline)
 {return command(s,0,deadline,1);}
+enum a733_spi_platform_result a733_spi_platform_dma_stop(struct a733_spi_platform *s,uint64_t deadline)
+{
+    if(!s||!s->initialized||!deadline)return INVALID;if(!take(s))return BUSY;
+    if(s->fault)return finish(s,fault(s));
+    unsigned st=s->spi.state;
+    if(s->ops.current(s->context)!=1||s->stage!=S_READY||!s->spi.transfer.dma||
+       (st!=A733_SPI_SETUP&&st!=A733_SPI_ACTIVE&&st!=A733_SPI_HOLD))return finish(s,INVALID);
+    s->deadline=deadline;int g=guard(s);if(g<=0)return finish(s,g==0?BUSY:fault(s));
+    int held=lock(s);if(held<0)return finish(s,fault(s));if(!held)return finish(s,BUSY);
+    /* The core always ends in FAULT here. Gated requests still leave an
+     * abandoned transaction, so every lease is retained either way. */
+    s->core_call=1;(void)a733_spi_dma_stop(&s->spi,deadline);s->core_call=0;
+    return finish(s,fault(s));
+}
 enum a733_spi_platform_result a733_spi_platform_close(struct a733_spi_platform *s,uint64_t deadline)
 {return command(s,0,deadline,2);}

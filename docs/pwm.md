@@ -2,7 +2,7 @@
 
 The supervised PWM application retains one native owner for continuous fan
 operation, duty changes and clean stop/restart. It drives PWM0 channel 5 on PD5
-at 40 kHz, with requested active ticks from 1 through 599 in each 600-tick
+at 40 kHz, with requested active ticks from 1 through 600 in each 600-tick
 period. The optional fitted status LED uses PL7 as an active-high GPIO.
 Registers and copied USB diagnostics establish software state; waveform, gate
 voltage, discharge time, off-current and visible LED behavior need physical
@@ -66,11 +66,27 @@ application commands.
 
 ## Commands retain ownership across clean stops
 
-Cycle mode uses SYS_CLK24M at 24 MHz with pair divider and prescaler both one.
-A 25,000 ns period contains 600 ticks, so its period field is 599. Active ticks
-select duty in increments of 1/600. Zero output uses STOP; constant-high output
-is not part of this profile. The finite-pulse driver mode remains available
-for its separate frozen diagnostic image.
+The fan application uses SYS_CLK24M at 24 MHz with pair divider and prescaler
+both one. A 25,000 ns period contains 600 ticks, so its period field is 599.
+Active ticks select duty in increments of 1/600. A request for 600 ticks holds
+the output high for the whole period, which runs the fan at full speed. Zero
+output uses STOP, which drives PD5 low as a GPIO. The host supervision tool,
+`tools/check-a733-pwm-supervised.py`, still accepts only 1 through 599 ticks;
+the image and the packet builder in `apps/pwm/observe.py` accept 600.
+
+The driver plans other cycle-mode profiles without rounding. It selects the
+smallest PCR prescale from 1 to 256 that gives an exact period of at most
+65,536 SYS_CLK24M ticks, then requires the initial duty to be exact at that
+prescale. For example, a 10 ms period uses prescale 4 and 60,000 ticks.
+Cycle-mode periods are limited to 10 ms, so that period readiness and the first
+period interrupt fit inside the 100 ms command limit. `active_high` selects
+the PCR active level; with it clear, active ticks count low time. A command may
+request 0 to the full period in prescaled ticks. Zero holds the inactive level
+and the full period holds the active level. STOP always drives PD5 low as a
+GPIO, whatever the polarity. The fan application fixes its 40 kHz active-high
+profile; the other profiles are exercised by the driver host check only.
+The finite-pulse driver mode remains available for its separate frozen
+diagnostic image and uses the same prescale planning.
 
 Commands are START with active ticks, SET_DUTY with active ticks, STOP, and
 optional LED GPIO level. One owner task serializes a single pending request.
@@ -172,10 +188,27 @@ and its initial fixture failure remain archived. Existing PWM service and driver
 evidence is reused. Physical PWM waveform, interrupt delivery, USB timing and
 LED operation remain unqualified.
 
-Other routed channels, constant endpoints, broader frequency/polarity profiles,
+Constant endpoints, prescaled rates and active-low polarity are implemented
+in the driver and pass the host check described below; only the full-speed
+endpoint is reachable through the fan application. Other routed channels,
 S_PWM output, complementary/dead-zone/group operation, capture and input
-counting remain required modes. Controller support does not establish attached
-accessories, actual component population or physical qualification.
+counting remain required modes. S_PWM0 channel 5 can drive the fitted LED
+through PL7 function 6, but the common clock registry has no S_PWM scope for
+its R_CCU clock and bus gate, so no owner can reserve that controller yet.
+Capture and input counting have no board input to observe. Controller support
+does not establish attached accessories, actual component population or
+physical qualification.
+
+The driver host check, `checks/pwm-service.c`, links the actual PWM, PMIC,
+rail, pin and clock cores with modeled MMIO. It covers 0 and 600 ticks at
+40 kHz, a 100 Hz active-low profile at prescale 4 with 0, 30,000 and 60,000
+ticks, a 1 kHz active-low profile, and refusal of out-of-range ticks, cycle
+periods above 10 ms, inexact duty and periods that need more than 256x
+prescale. The native instruction-model check, `checks/pwm-service-native.py`,
+runs a rebuilt fan image with a 600-tick duty change and refuses 601 ticks in
+the image's own request check. The rebuilt image and its outputs are under
+`~/.cache/sunstoneos/build/audit-pwm-adc-rtc/`. These are software checks;
+waveform, polarity and constant-level behavior at the pin remain unqualified.
 
 ## Source adaptation
 

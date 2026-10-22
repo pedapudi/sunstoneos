@@ -91,6 +91,19 @@
   "summary": "Compare camera route, VIPP parameters and SCAP with pinned source functions.",
   "usb": false
  },
+ "a733-camera-stream.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/camera-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Run the continuous camera capture composition model and compile its units.",
+  "usb": false
+ },
  "a733-ce-cipher.py": {
   "cache_areas": [],
   "docs": [],
@@ -135,6 +148,23 @@
    "--native-object"
   ],
   "summary": "Authenticate streaming SHA references and compare modeled hardware with hashlib.",
+  "usb": false
+ },
+ "a733-ce-modes.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/crypto-cipher.md",
+   "docs/crypto-hash.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--sources",
+   "--manual",
+   "--model",
+   "--out"
+  ],
+  "summary": "Check CE hash methods, HMAC and AES modes against pinned sources and independent answers.",
   "usb": false
  },
  "a733-ce.py": {
@@ -1242,7 +1272,9 @@
  },
  "adc-application-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/adc-application.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1383,6 +1415,20 @@
    "--evidence"
   ],
   "summary": "Build a pinned BSD RSN composition with independent synthetic AP messages.",
+  "usb": false
+ },
+ "aic8800-wifi-power.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-wifi.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--reference-dir",
+   "--evidence"
+  ],
+  "summary": "Compare configured station power save with the pinned full-MAC ME_CONFIG ABI.",
   "usb": false
  },
  "aic8800-wifi.py": {
@@ -1811,7 +1857,9 @@
  },
  "board-radio.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-radio.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1975,6 +2023,23 @@
    "--output"
   ],
   "summary": "Build a focused ACL/link/UART model using wire structures from pinned Linux source.",
+  "usb": false
+ },
+ "bt-avdtp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/bluetooth-a2dp.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--source",
+   "--l2cap-source",
+   "--sdp-source",
+   "--sbc-source",
+   "--output"
+  ],
+  "summary": "Check the AVDTP SBC sink over the actual lower stack, SDP sink record and pinned libsbc.",
   "usb": false
  },
  "bt-config.py": {
@@ -2378,6 +2443,19 @@
   "summary": "Offline ELF/launcher/package binding; physical authority is explicitly modeled.",
   "usb": true
  },
+ "crypto-health-cutoffs.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/entropy.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Derive CE TRNG health-test register words from an assessed entropy per raw sample.",
+  "usb": false
+ },
  "crypto-runtime-host.py": {
   "cache_areas": [
    "evidence"
@@ -2574,6 +2652,24 @@
    "--output"
   ],
   "summary": "Execute linked DI301 allocation/task code; model hardware and external services explicitly.",
+  "usb": false
+ },
+ "deinterlace-strength.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--generated",
+   "--image",
+   "--previous-image",
+   "--bundle",
+   "--launcher",
+   "--output"
+  ],
+  "summary": "Check selectable DI301 TNR strength from plan generation to host capture labels.",
   "usb": false
  },
  "deinterlace-tnr-host.py": {
@@ -3044,6 +3140,21 @@
   "summary": "Reject final ELFs whose string routines or EL3 boot code can fault on Device memory.",
   "usb": false
  },
+ "fatfs-port.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/filesystem.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Read-only FatFs port: pinned sources, FAT16/FAT32/exFAT card images and AArch64 compile; no hardware.",
+  "usb": false
+ },
  "fel-input.py": {
   "cache_areas": [],
   "docs": [
@@ -3202,6 +3313,67 @@
    "--output"
   ],
   "summary": "Check the prepared G2D SRAM launcher without rebuilding or accessing hardware.",
+  "usb": false
+ },
+ "g2d-modes-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d-preparation.md",
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--session",
+   "--output"
+  ],
+  "summary": "Check host sealing, references and ACK policy for general scaling, image blending and conversion.",
+  "usb": false
+ },
+ "g2d-modes-launcher.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--launcher",
+   "--output"
+  ],
+  "summary": "Run a rebuilt G2D SRAM launcher on new operation sessions inside an earlier prepared bundle.",
+  "usb": false
+ },
+ "g2d-modes-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--reference",
+   "--output"
+  ],
+  "summary": "Execute the linked AArch64 G2D session validator and RCQ builder on every exported geometry case.",
+  "usb": false
+ },
+ "g2d-modes-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--reference",
+   "--output",
+   "--previous"
+  ],
+  "summary": "Compare general-scaling, image-over-image and format-conversion RCQ blocks with pinned setters.",
   "usb": false
  },
  "g2d-power-admission.py": {
@@ -3370,6 +3542,24 @@
    "elf"
   ],
   "summary": "Run native orderly stop and retained-failure composition.",
+  "usb": false
+ },
+ "gpu-batch.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tinyusb",
+   "--firmware",
+   "--qemu",
+   "--lld"
+  ],
+  "summary": "Check native profile-4 state batches, packed depth/stencil and presented output ownership.",
   "usb": false
  },
  "gpu-close-ordering.py": {
@@ -3760,7 +3950,9 @@
  },
  "gpu-resource-disposal.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3852,7 +4044,9 @@
  },
  "gpu-texture-runtime.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4166,6 +4360,20 @@
    "--output"
   ],
   "summary": "Exercise High host bundles and capture with native copied outputs and modeled USB.",
+  "usb": false
+ },
+ "h264-high-modes.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/h264-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--producer",
+   "--output"
+  ],
+  "summary": "High-build long-term references, MMCO5, POC/frame_num wrap and profiles.",
   "usb": false
  },
  "h264-high-native-access.py": {
@@ -5197,6 +5405,23 @@
   "summary": "Execute changed JPEG session-consumption and USB revocation paths only.",
   "usb": false
  },
+ "jpeg-sequence.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [
+   "docs/jpeg-application.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output",
+   "--executable"
+  ],
+  "summary": "Repeated JPEG decoding in one sequence session.",
+  "usb": false
+ },
  "jpeg-supervised-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -5614,6 +5839,22 @@
   "summary": "Compare a pinned compiled network with recorded SDK metadata and corruptions.",
   "usb": false
  },
+ "nbg-layout-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/nbg-assembly.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sdk",
+   "model",
+   "native",
+   "output"
+  ],
+  "summary": "Compare general-layout native assembly with the pinned SDK loader.",
+  "usb": false
+ },
  "nbg-loader-reference.py": {
   "cache_areas": [],
   "docs": [
@@ -5778,6 +6019,20 @@
    "--fixtures"
   ],
   "summary": "Prepare authenticated external inputs for the fixed convolution composition.",
+  "usb": false
+ },
+ "npu-dual-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/npu-compiler.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "fixture",
+   "report"
+  ],
+  "summary": "Compare saved compiler/simulator outputs of the two-input, two-output fixture.",
   "usb": false
  },
  "npu-finite-client.py": {
@@ -6002,6 +6257,24 @@
   "summary": "Actual linked runtime USB/mailbox/client; service and hardware replies modeled.",
   "usb": false
  },
+ "npu-session.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/npu-service.md",
+   "docs/npu-session.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "output",
+   "--mode"
+  ],
+  "summary": "Build and run the shared-service and model-session FreeRTOS checks in QEMU.",
+  "usb": false
+ },
  "npu-single-core-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -6093,6 +6366,36 @@
   "summary": "Run the integrated OS image's capture client against a modeled DMA service.",
   "usb": false
  },
+ "os-image-headset.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Run the integrated OS image's headset capture client against a modeled headset.",
+  "usb": false
+ },
+ "os-image-identity.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check the linked integrated OS image's EL3 publication hook for its workloads.",
+  "usb": false
+ },
  "os-image-launch.py": {
   "cache_areas": [
    "host"
@@ -6131,6 +6434,22 @@
   "summary": "Check the linked integrated OS image's fixed interrupt table, start list and layout.",
   "usb": false
  },
+ "os-image-radio.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Run the integrated OS image's radio entry against a modeled session and profile.",
+  "usb": false
+ },
  "os-image-stage2.py": {
   "cache_areas": [],
   "docs": [
@@ -6147,6 +6466,20 @@
    "--output"
   ],
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
+  "usb": false
+ },
+ "ov5640-modes-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/camera.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--source",
+   "--evidence"
+  ],
+  "summary": "Compare every native OV5640 mode with unchanged Linux mode functions.",
   "usb": false
  },
  "ov5640-reference.py": {
@@ -6393,6 +6726,40 @@
    "--output"
   ],
   "summary": "Exercise selected provider clock admissions on modeled register reads.",
+  "usb": false
+ },
+ "pvr-batch-producer.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-archive",
+   "--mesa-build",
+   "--evidence"
+  ],
+  "summary": "Compile the profile-4 batch programs with pinned Mesa sources.",
+  "usb": false
+ },
+ "pvr-batch.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-archive",
+   "--mesa-build",
+   "--producer",
+   "--firmware-headers",
+   "--output"
+  ],
+  "summary": "Compare native profile-4 batch encoders with pinned Mesa and firmware sources.",
   "usb": false
  },
  "pvr-ccb-reference.py": {
@@ -6876,7 +7243,9 @@
  },
  "pwm-service-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/pwm.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6933,7 +7302,8 @@
  "radio-bootstrap-budget.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-radio.md"
+   "docs/board-radio.md",
+   "docs/os-image.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6976,7 +7346,7 @@
    "--qemu",
    "--evidence"
   ],
-  "summary": "Build one AArch64 DHCP/DNS composition and execute only its new cases.",
+  "summary": "Build one AArch64 DHCP/DNS/SNTP composition and execute only its new cases.",
   "usb": false
  },
  "radio-network.py": {
@@ -7046,6 +7416,22 @@
    "--phase"
   ],
   "summary": "Build or execute only the affected retained-session reconnect composition,",
+  "usb": false
+ },
+ "radio-sntp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-network.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tcp",
+   "--headers"
+  ],
+  "summary": "Check SNTP reply validation, RTC conversion and the client sequence on the host.",
   "usb": false
  },
  "radio-transport-aggregate.py": {
@@ -7953,7 +8339,9 @@
  },
  "uart-native-fcr.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/uart.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7961,7 +8349,7 @@
    "--session",
    "--output"
   ],
-  "summary": "Execute the linked native UART write policy for FCR values on ports 0-2.",
+  "summary": "Execute the linked native UART write policy for FCR, MCR, THR and RS-485 control.",
   "usb": false
  },
  "usb-board-lock.py": {
@@ -7997,6 +8385,22 @@
    "--evidence"
   ],
   "summary": "Focused native USB first-fault and no-access BUSY cases; no hardware access.",
+  "usb": false
+ },
+ "usb-host-classes.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/usb2-host.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--port"
+  ],
+  "summary": "USB2 hub tiers, hub power budgets and audio capture against a ring-level model; no board access.",
   "usb": false
  },
  "usb-host-dual-native.py": {

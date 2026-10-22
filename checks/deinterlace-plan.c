@@ -14,7 +14,8 @@ int main(void)
  uint32_t layout[6];a733_deinterlace_bitfields(layout);
  assert(layout[0]==0x101&&layout[1]==0x80100010&&layout[2]==(1280u<<16)&&layout[3]==0x00020020);
  size_t n;const struct a733_deinterlace_word *w=a733_deinterlace_words(&n);
- assert(n==34);for(size_t i=0;i<n;i++){
+ /* WEAVE submits the first 34 rows; motion rows follow in the same list. */
+ assert(n>A733_DEINTERLACE_WEAVE_WORDS&&A733_DEINTERLACE_WEAVE_WORDS==34&&w[33].offset==0x2020);for(size_t i=0;i<n;i++){
   assert(w[i].offset>=0x20&&w[i].offset<=0x2020&&!(w[i].offset&3)&&w[i].mask);
   for(size_t j=0;j<i;j++)assert(w[i].offset!=w[j].offset);
  }

@@ -1,0 +1,24 @@
+{
+ "name": "FatFs R0.16 as distributed in ESP-IDF v6.1",
+ "revision": "fff9895c82d744c7237be8847347bdd1b07c6643",
+ "url": "https://github.com/espressif/esp-idf/tree/fff9895c82d744c7237be8847347bdd1b07c6643/components/fatfs/src",
+ "raw": "https://raw.githubusercontent.com/espressif/esp-idf/fff9895c82d744c7237be8847347bdd1b07c6643/components/fatfs/src/",
+ "directory": "fatfs-esp-idf-fff9895c82d744c7237be8847347bdd1b07c6643",
+ "license": "FatFs license (BSD-style, one clause), retained in the header of ff.c and ff.h",
+ "files": {
+  "ff.c": "b9b79c2c523b9d079b30c19157af15d6c60d0be02ab9ecba353a2e2cde9da253",
+  "ff.h": "0e2721a3a82693adf69aeccafeda25f1790be28cc6aa03c2e6966c7c4f6660f2",
+  "diskio.h": "9ad9ea857ea7752cb7dcf2f065899eee3abfeec5039598d28cc3cf2acebcbb86",
+  "ffunicode.c": "f2e03e97fccd9d7b0614b48ee02b7e49fb21c5196d3ff77ba5d8e4558a064d5d",
+  "00readme.txt": "55ee13fe1d2abcf6c6a11aaa0a2eba5aeba511e54dddfde5e3ca4e987d1c4483",
+  "00history.txt": "bdd612eb26a326e55bc51488801a9d7ff7aad9f63557cdab445327714ac53239"
+ },
+ "sbom": {
+  "path": "components/fatfs/sbom.yml",
+  "sha256": "38c53c93be25a6a5af2c48fcfd9b561f51eab9beb6582b3704fa260c0142c377"
+ },
+ "compiled": [
+  "ff.c",
+  "ffunicode.c"
+ ]
+}

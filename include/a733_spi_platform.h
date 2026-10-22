@@ -32,7 +32,8 @@ struct a733_spi_platform_ops {
     int (*now)(void *,uint64_t *);
     int (*current)(void *); /* Exactly 1 for the designated running owner task. */
     /* Authenticated boot/electrical authority, not software lease substitutes.
-     * START excludes boot storage, DMA, remote firmware and other handlers.
+     * START excludes boot storage, remote firmware, other handlers and every
+     * DMA user except, with format.dma, this controller's own request channels.
      * It also excludes EVERY alternate pad route and unselected CS output of
      * this controller before enabling it. Every subsequent SPI mux writer
      * must honor the same exclusive controller lease. The four-pin lease
@@ -95,6 +96,11 @@ enum a733_spi_platform_result a733_spi_platform_reap(struct a733_spi_platform *,
  * buffers remain held after uncertainty. */
 enum a733_spi_platform_result a733_spi_platform_interrupt_start(struct a733_spi_platform *);
 enum a733_spi_platform_result a733_spi_platform_interrupt_poll(struct a733_spi_platform *,unsigned budget);
+/* DMA transfer abandonment: gate both FIFO requests under the register mutex
+ * with a fresh cleanup deadline, then retain every lease. Check spi.dma_requests:
+ * zero permits the caller to cancel its DMA channels; otherwise the requests are
+ * uncertain and the channels need external recovery. Never returns READY. */
+enum a733_spi_platform_result a733_spi_platform_dma_stop(struct a733_spi_platform *,uint64_t deadline);
 /* Only READY with no borrowed buffers can close. Mask/drain, restore pins with
  * CS inactive, disable controller, assert reset, restore clocks, release tokens.
  * No forced abort. Uncertainty retains every unreleased token and owned mutex. */

@@ -277,7 +277,12 @@ int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,
 {
     if (!p || p->initialized || !notify) return 0;
     *p=(struct a733_thermal_policy){.notify=notify,.cookie=cookie,.start_us=now,.last_us=now,.initialized=1};
-    atomic_init(&p->level,A733_THERMAL_NORMAL);return 1;
+    atomic_init(&p->level,A733_THERMAL_NORMAL);atomic_init(&p->published_seen,0);return 1;
+}
+unsigned a733_thermal_policy_seen(const struct a733_thermal_policy *p)
+{
+    if (!p || !p->initialized) return 0;
+    return atomic_load_explicit(&p->published_seen,memory_order_acquire);
 }
 enum a733_thermal_level a733_thermal_policy_level(const struct a733_thermal_policy *p)
 {
@@ -314,8 +319,11 @@ enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *p
         }
         unsigned level=p->sensor || p->critical ? A733_THERMAL_CRITICAL :
             p->passive || p->stale ? A733_THERMAL_THROTTLE : A733_THERMAL_NORMAL;
+        /* Channels publish after the level, so a reader that sees a channel
+         * also sees the level that its reading produced. */
+        if (level!=old) atomic_store_explicit(&p->level,level,memory_order_release);
+        atomic_store_explicit(&p->published_seen,p->seen,memory_order_release);
         if (level==old) return (enum a733_thermal_level)level;
-        atomic_store_explicit(&p->level,level,memory_order_release);
         if (level!=A733_THERMAL_CRITICAL) {
             (void)p->notify(p->cookie,(enum a733_thermal_level)level);return (enum a733_thermal_level)level;
         }

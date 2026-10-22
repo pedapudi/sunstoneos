@@ -22,15 +22,14 @@ static unsigned sout(struct local *d)
     assert(d->next<d->lower.outputs);unsigned o=d->next++;
     for(unsigned i=0;i<5;++i)spoll(d);return o;
 }
-static void start(struct local *d,unsigned mtu)
+static void start_profile(struct local *d,unsigned mtu,const struct bt_sdp_ag_profile *profile)
 {
     memset(d,0,sizeof(*d));ready(&d->lower.f,&d->lower.a);
     d->lower.link=begin_connect(&d->lower.f,&d->lower.a,1);
     connected(&d->lower.f,&d->lower.a,d->lower.link,0x23);
     d->lower.wire_cursor=d->lower.f.tn;d->lower.automatic_credits=1;d->allow=1;
-    const struct bt_sdp_ag_profile p={0x10001,9,0x109,9,7,0};
-    assert(bt_sdp_server_init(&d->server,&d->lower.q,&p,1000,5000,local_policy,d)==1);
-    assert(bt_sdp_server_init(&d->server,&d->lower.q,&p,1000,5000,local_policy,d)==-1);
+    assert(bt_sdp_server_init(&d->server,&d->lower.q,profile,1000,5000,local_policy,d)==1);
+    assert(bt_sdp_server_init(&d->server,&d->lower.q,profile,1000,5000,local_policy,d)==-1);
     assert(bt_rfcomm_registry_init(&d->registry,&d->lower.q,route,service_policy,d)==1);
     assert(bt_l2cap_init(&d->lower.q,&d->lower.a,672,1000000,60000000,bt_rfcomm_admit,&d->registry)==1);
     const struct l2cap_conn_req req={SDP_PSM,0x60};signal_in(&d->lower,L2CAP_CONN_REQ,40,&req,sizeof(req));
@@ -43,6 +42,8 @@ static void start(struct local *d,unsigned mtu)
     signal_in(&d->lower,L2CAP_CONF_REQ,41,peer,sizeof(peer));out=sout(d);command_out(&d->lower,out,L2CAP_CONF_RSP);
     assert(d->lower.q.channels[0].state==BT_L2CAP_OPEN);
 }
+static void start(struct local *d,unsigned mtu)
+{const struct bt_sdp_ag_profile p={0x10001,9,0x109,9,7,0,0,0};start_profile(d,mtu,&p);}
 static void rx(struct local *d,const uint8_t *p,unsigned n)
 {
     uint8_t all[BT_L2CAP_MTU+4];struct l2cap_hdr h={(uint16_t)n,d->lower.q.channels[0].local_cid};
@@ -195,8 +196,40 @@ static void close_and_short(void)
     assert(bt_sdp_server_release_channel(&d.server,identity)==1&&!d.server.sessions[0].channel);
     puts("SDP server short identity retains raw input until confirmed close");
 }
+/* The optional A2DP sink record, encoded independently from A2DP1.3 and
+ * AVDTP1.3: AudioSink class, L2CAP PSM0x19, AVDTP0x0103, A2DP0x0103. */
+static void sink_record(void)
+{
+    struct local d;unsigned n;const uint8_t *p;
+    const struct bt_sdp_ag_profile bad[]={{0x10001,9,0x109,9,7,0,0x10001,1},{0x10001,9,0x109,9,7,0,0x20000,0},
+        {0x10001,9,0x109,9,7,0,0x20000,16},{0x10001,9,0x109,9,7,0,0,1},{0x10001,9,0x109,9,7,0,0xffff,1}};
+    for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);++i){struct bt_sdp_server s={0};struct bt_l2cap l={0};
+        assert(bt_sdp_server_init(&s,&l,&bad[i],1000,5000,local_policy,&d)==-1);}
+    const struct bt_sdp_ag_profile profile={0x10001,9,0x109,9,7,0,0x10002,4};start_profile(&d,672,&profile);
+    const uint8_t sink[]={SDP_SEQ8,3,SDP_UUID16,0x11,0x0b,0,4,0};
+    request_send(&d,SDP_SVC_SEARCH_REQ,1,sink,sizeof(sink));p=response(&d,SDP_SVC_SEARCH_RSP,1,&n);
+    const uint8_t one[]={0,1,0,1,0,1,0,2,0};assert(n==14 && !memcmp(p+5,one,9));
+    const uint8_t browse[]={SDP_SEQ8,3,SDP_UUID16,0x10,0x02,0,4,0};
+    request_send(&d,SDP_SVC_SEARCH_REQ,2,browse,sizeof(browse));p=response(&d,SDP_SVC_SEARCH_RSP,2,&n);
+    const uint8_t two[]={0,2,0,2,0,1,0,1,0,1,0,2,0};assert(n==18 && !memcmp(p+5,two,13));
+    const uint8_t record[]={0x35,0x40,9,0,0,10,0,1,0,2,9,0,1,0x35,3,0x19,0x11,0x0b,
+        9,0,4,0x35,16,0x35,6,0x19,1,0,9,0,0x19,0x35,6,0x19,0,0x19,9,1,3,
+        9,0,5,0x35,3,0x19,0x10,2,9,0,9,0x35,8,0x35,6,0x19,0x11,0x0d,9,1,3,9,3,0x11,9,0,4};
+    const uint8_t attrs[]={0,1,0,2,0xff,0xff,SDP_SEQ8,5,SDP_UINT32,0,0,0xff,0xff,0};
+    request_send(&d,SDP_SVC_ATTR_REQ,3,attrs,sizeof(attrs));p=response(&d,SDP_SVC_ATTR_RSP,3,&n);
+    assert(get16be(p+5)==sizeof(record) && p[7+sizeof(record)]==0 && !memcmp(p+7,record,sizeof(record)));
+    const uint8_t combined[]={SDP_SEQ8,6,SDP_UUID16,0x11,0x0b,SDP_UUID16,0,0x19,1,0,SDP_SEQ8,5,SDP_UINT32,0,0,0xff,0xff,0};
+    request_send(&d,SDP_SVC_SEARCH_ATTR_REQ,4,combined,sizeof(combined));p=response(&d,SDP_SVC_SEARCH_ATTR_RSP,4,&n);
+    assert(get16be(p+5)==sizeof(record)+2 && p[7]==0x35 && p[8]==sizeof(record) && !memcmp(p+9,record,sizeof(record)));
+    const uint8_t missing[]={0,1,0,3,0,64,SDP_SEQ8,3,SDP_UINT16,0,0,0};
+    request_send(&d,SDP_SVC_ATTR_REQ,5,missing,sizeof(missing));p=response(&d,SDP_ERROR_RSP,5,&n);assert(get16be(p+5)==2);
+    struct local plain;start(&plain,672);
+    request_send(&plain,SDP_SVC_SEARCH_REQ,6,sink,sizeof(sink));p=response(&plain,SDP_SVC_SEARCH_RSP,6,&n);assert(get16be(p+5)==0);
+    request_send(&plain,SDP_SVC_ATTR_REQ,7,attrs,sizeof(attrs));p=response(&plain,SDP_ERROR_RSP,7,&n);assert(get16be(p+5)==2);
+    puts("SDP server optional A2DP sink record, searches and absence pass");
+}
 int main(void)
 {
     assert(sizeof(sdp_pdu_hdr_t)==5 && SDP_SVC_SEARCH_REQ==2 && SDP_SVC_ATTR_REQ==4);
-    search_and_attributes();errors_and_bounds();continuation_lifetimes();ownership();close_pending_tx();close_and_short();return 0;
+    search_and_attributes();errors_and_bounds();sink_record();continuation_lifetimes();ownership();close_pending_tx();close_and_short();return 0;
 }

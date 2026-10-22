@@ -8,6 +8,8 @@ _Static_assert(sizeof(struct board_radio_profile)==1872&&offsetof(struct board_r
 int main(int argc,char **argv)
 {
  if(argc>1)listener_variant=(unsigned)(argv[1][0]-'0');
+ /* Variant 4: SEND and RECEIVE time out during a link loss and are repeated. */
+ if(listener_variant==4){listener_variant=0;exchange_timeouts=1;}
  struct board_radio_profile raw={.magic=BOARD_RADIO_PROFILE_MAGIC,.version=6,.bytes=1872,.tcp_mode=1,
   .peer_address={10,0,0,1},.peer_port=7400,.client_timeout_ticks=3,.request_bytes=4,.response_bytes=4,
   .request={1,2,3,4},.response={5,6,7,8}};
@@ -25,6 +27,7 @@ int main(int argc,char **argv)
  assert(listener_closes==2&&app.listener_handle==5&&app.client_handle==6);
  if(listener_variant)assert(result==-1&&atomic_load(&app.client_status)==2&&app.client_error);
  else assert(result==1&&app.client_sent==4&&app.client_received==4&&atomic_load(&app.client_status)==1);
- puts("PASS board radio listener: authenticated profile, copied partial exchange, peer/late/address failure and both closes");
+ if(exchange_timeouts)assert(timed_sends==4&&timed_receives==4);
+ puts("PASS board radio listener: authenticated profile, copied partial exchange, repeated timeouts, peer/late/address failure and both closes");
  return 0;
 }

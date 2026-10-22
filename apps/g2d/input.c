@@ -27,7 +27,7 @@ int g2d_input_feed(struct g2d_input *p,const struct a733_g2d_session *s,
     if(!p||!s||!clock||!bytes||!n||n>4096||p->failed||g2d_input_ready(p)||
        !p->bytes||!p->capacity||p->capacity>G2D_INPUT_PADDED||p->capacity%4096||!deadline||
        clock(context,&now)!=1||now>=deadline||!s->board.epoch||!s->board.generation||
-       !a733_g2d_geometry_valid(s)||!s->authority||!present(s->fixture)||present(s->reference))return reject(p);
+       !a733_g2d_geometry_valid(s)||!s->authority||!present(s->fixture))return reject(p);
     if(!p->header_used){p->expected=(size_t)s->stride*s->height;if(!p->expected||p->expected>p->capacity)return reject(p);p->epoch=s->board.epoch;p->generation=s->board.generation;
         p->authority=s->authority;p->deadline=deadline;memcpy(p->hash,s->fixture,32);}
     if(p->epoch!=s->board.epoch||p->generation!=s->board.generation||p->authority!=s->authority||

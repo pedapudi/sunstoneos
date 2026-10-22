@@ -102,15 +102,20 @@ static const struct {
     {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
     {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN,FIELD(key),64},
     {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN_INVALIDATE,FIELD(cipher_output),1024},
+    {A733_CE_CIPHER_PUBLISH,AARCH64_CACHE_CLEAN_INVALIDATE,FIELD(output),64},
     {A733_CE_ACQUIRE,AARCH64_CACHE_INVALIDATE,FIELD(output),64},
     {A733_CE_CIPHER_ACQUIRE,AARCH64_CACHE_INVALIDATE,FIELD(cipher_output),1024},
-    {A733_CE_KEY_CLEAN,AARCH64_CACHE_CLEAN,FIELD(input),FIELD(key)+64-FIELD(input)},
+    /* CBC/CTR tasks write their next counter block to the output line. */
+    {A733_CE_CIPHER_ACQUIRE,AARCH64_CACHE_INVALIDATE,FIELD(output),64},
+    {A733_CE_KEY_CLEAN,AARCH64_CACHE_CLEAN,FIELD(output),FIELD(key)+64-FIELD(output)},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
     {A733_CE_RANDOM_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
 };
 #undef FIELD
-_Static_assert(offsetof(struct a733_ce_memory,input)+A733_CE_HASH_INPUT_BYTES==offsetof(struct a733_ce_memory,cipher_output) &&
+_Static_assert(offsetof(struct a733_ce_memory,output)+64==offsetof(struct a733_ce_memory,iv) &&
+    offsetof(struct a733_ce_memory,iv)+64==offsetof(struct a733_ce_memory,input) &&
+    offsetof(struct a733_ce_memory,input)+A733_CE_HASH_INPUT_BYTES==offsetof(struct a733_ce_memory,cipher_output) &&
     offsetof(struct a733_ce_memory,cipher_output)+1024==offsetof(struct a733_ce_memory,key),"CE ranges assume contiguous fields");
 int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync mode)
 {

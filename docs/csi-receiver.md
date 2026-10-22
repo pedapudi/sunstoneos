@@ -1,8 +1,8 @@
 # A733 CSI receiver configuration
 
 The [native receiver controller](../drivers/camera/a733_csi_receiver.c) configures
-a local D-PHY, CSI-2 packet port and image parser for the
-[OV5640 VGA profile](camera.md). It supports the two port indices associated
+a local D-PHY, CSI-2 packet port and image parser for two-lane
+[OV5640 YUV422 modes](camera.md). It supports the two port indices associated
 with the board's exposed camera lane groups. Host register comparisons and
 lifecycle checks pass, and the controller compiles for AArch64. Physical reception,
 camera DMA, ISP processing and sensor-to-memory capture remain unqualified.
@@ -19,9 +19,13 @@ loop inside the driver.
 The initial configuration accepts port/parser pairs zero/zero and one/one,
 a 324 MHz camera top clock, an explicit settle count from 1 to 255, and an
 explicit deskew count from 1 to 31. It uses two data lanes, virtual channel zero,
-UYVY 8-bit CSI-2 packets and progressive 640 × 480 output. The caller selects
-continuous video or single-image parser capture. These restrictions define an initial component profile; remaining
-receivers, formats, lane counts and synchronization modes remain required work.
+YUV422 8-bit CSI-2 packets and progressive output. `a733_csi_init` selects UYVY
+at 640 × 480; `a733_csi_init_format` accepts UYVY or YUYV and any width that is
+a multiple of 16 up to 2,592 with any even height up to 1,944. The caller
+selects continuous video or single-image parser capture. The settle count is
+admitted for the link rate of the selected mode; the controller does not derive
+it. These restrictions define the component profile; remaining receivers, raw
+and other formats, lane counts and synchronization modes remain required work.
 
 The platform admission callback must establish all of the following before it
 returns ready:
@@ -55,11 +59,11 @@ disabled. It configures data/clock lanes, MIPI receive mode, offset calibration
 fields, termination/high-speed controls, settle timing and deskew. Lane maps use
 physical lanes zero/one for port zero and four/five for port one.
 
-Packet configuration enables unpacking, UYVY ordering, data type `0x1e`, virtual
-channel zero and progressive frame/line triggers. Parser setup follows the
-reference enable/disable/enable sequence, configures MIPI input and UYVY ordering,
-sets a zero-offset 640 × 480 crop, disables frame-rate decimation and enables
-the selected capture mode. Single-image capture clears after the next frame;
+Packet configuration enables unpacking, the selected byte order, data type
+`0x1e`, virtual channel zero and progressive frame/line triggers. Parser setup
+follows the reference enable/disable/enable sequence, configures MIPI input and
+the same byte order, sets a zero-offset crop of the configured size, disables
+frame-rate decimation and enables the selected capture mode. Single-image capture clears after the next frame;
 the producer must remain quiet until the downstream path is armed. Packet-port enable occurs last, after downstream admission
 and all local setup have completed.
 
@@ -96,6 +100,12 @@ status must hold no flag since the last sample, which shows that no packet
 arrived in between, and every parser capture field must read clear. It then
 writes SCAP and reads it back. Any other observation faults without
 acknowledging status.
+
+`a733_csi_stop_video` ends continuous video capture, only from the armed video
+mode while the caller keeps the sensor stopped. As the reference capture-stop
+function does, it clears the capture field of every parser channel, with read,
+write and verification polls. The receiver stays armed with capture off, so
+the caller can verify the parser fence before disabling the DMA.
 
 Any packet error, including an ECC correction warning, enters a terminal fault.
 The parser's documented `MUL_ERR` flag also faults. Error flags remain uncleared
@@ -213,3 +223,12 @@ Single-image mode has separate source/model and native-build evidence in
 `~/.cache/sunstoneos/evidence/camera-route-20261016/`. Its final receiver object
 contains 3,512 bytes of code/read-only data, with a 64-byte maximum direct frame.
 Existing local PHY and packet checks remain reusable.
+
+The [route reference check](camera-route.md) also compares complete single-image
+receiver images on both ports at four further sizes: 320 × 240 and 2592 × 1944
+in UYVY order, and 1280 × 720 and 176 × 144 in YUYV order. The unchanged parser
+and packet functions build the reference images with the matching sequence
+codes and output sizes. The video-capture
+stop runs in the [continuous-capture model](camera-capture.md#composition-evidence-reuses-the-leaf-checks),
+which requires the stop to follow the sensor stop and packet quiet. With both
+changes the receiver object contains 4,204 bytes of code/read-only data.

@@ -351,6 +351,14 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
     if(!board_radio_init(r,&c))return 0;
     r->startup_profile=f;return 1;
 }
+/* While the link is lost, or a reassociation is under way, socket requests
+ * wait for the port and may reach their own timeout. A SEND or RECEIVE of an
+ * established exchange reports in that TIMEOUT reply the bytes it still
+ * moved, and repeating it moves no byte twice, so the client repeats it
+ * within its absolute deadline. send_stage names the SEND stage; RECEIVE
+ * follows it. Every other non-OK reply remains terminal. */
+static unsigned exchange_timeout(const struct board_radio *r,const struct sunstone_net_reply *reply,unsigned send_stage)
+{return reply->result==SUNSTONE_NET_TIMEOUT&&(r->client_stage==send_stage||r->client_stage==send_stage+1);}
 static int client_failure(struct board_radio *r)
 {atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
  atomic_store_explicit(&r->client_status,2,memory_order_release);
@@ -379,10 +387,12 @@ static int listener_poll(struct board_radio *r)
         if(r->client_stage==0&&reply.handle)r->listener_handle=reply.handle;
         if(r->client_stage==2&&reply.handle&&reply.handle!=r->listener_handle)r->client_handle=reply.handle;
         uint64_t expected=r->client_stage==1||r->client_stage==6?r->listener_handle:r->client_handle;
-        int ok=reply.result==SUNSTONE_NET_OK&&(r->client_stage==0?r->listener_handle!=0:reply.handle==expected);
+        unsigned waited=exchange_timeout(r,&reply,3);
+        int ok=(reply.result==SUNSTONE_NET_OK||waited)&&(r->client_stage==0?r->listener_handle!=0:reply.handle==expected);
         if(r->client_stage==2)ok=ok&&r->client_handle&&reply.port&& !memcmp(reply.address,f->peer_address,4);
-        if(r->client_stage==3)ok=ok&&reply.stack_result>0&&(unsigned)reply.stack_result<=f->request_bytes-r->client_sent;
-        if(r->client_stage==4)ok=ok&&reply.bytes&&reply.bytes<=f->response_bytes-r->client_received&&
+        if(r->client_stage==3)ok=ok&&(reply.stack_result>0||(waited&&!reply.stack_result))&&
+            (unsigned)reply.stack_result<=f->request_bytes-r->client_sent;
+        if(r->client_stage==4)ok=ok&&(reply.bytes||waited)&&reply.bytes<=f->response_bytes-r->client_received&&
             !memcmp(reply.payload,f->response+r->client_received,reply.bytes);
         if(!ok){
             r->client_error=1;
@@ -433,14 +443,16 @@ int board_radio_client_poll(struct board_radio *r)
         if(!board_radio_receive(r,&copied,0))return 0;
         r->client_reply=copied;
         struct sunstone_net_reply *reply=&r->client_reply;r->client_pending=0;
-        if(reply->ticket!=r->client_ticket||reply->result!=SUNSTONE_NET_OK)return client_failure(r);
+        unsigned waited=exchange_timeout(r,reply,2);
+        if(reply->ticket!=r->client_ticket||(reply->result!=SUNSTONE_NET_OK&&!waited))return client_failure(r);
         if(r->client_stage==0){r->client_handle=reply->handle;++r->client_stage;}
         else if(r->client_stage==1)++r->client_stage;
         else if(r->client_stage==2){
-            if(reply->stack_result<=0||(unsigned)reply->stack_result>f->request_bytes-r->client_sent)return client_failure(r);
+            if((reply->stack_result<=0&&!(waited&&!reply->stack_result))||
+               (unsigned)reply->stack_result>f->request_bytes-r->client_sent)return client_failure(r);
             r->client_sent+=(unsigned)reply->stack_result;if(r->client_sent==f->request_bytes)++r->client_stage;
         }else if(r->client_stage==3){
-            if(!reply->bytes||reply->bytes>f->response_bytes-r->client_received||
+            if((!reply->bytes&&!waited)||reply->bytes>f->response_bytes-r->client_received||
                 memcmp(reply->payload,f->response+r->client_received,reply->bytes))return client_failure(r);
             r->client_received+=reply->bytes;
             atomic_store_explicit(&r->verified_received,(unsigned)r->client_received,memory_order_release);

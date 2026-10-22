@@ -137,6 +137,17 @@ writers use the same scheduling-aware register mutex. Exclusive owner-task
 UART FIFO service does not acquire that global mutex for every byte.
 The adapter orders Device accesses with barriers, restricts addresses to the
 selected controller, and preserves other bits in shared local clock words.
+Controller writes accept only planned values: the port's FIFO trigger with or
+without FIFO resets, or DMA mode 0x09; the planned modem control alone or with
+loopback, IrDA SIR (`0x40`) or RS-485 (`0xa2`); RS-485 control 0 or `0x18`
+on UART1–6. Offset 0 is THR, or the divisor latch (DLL) while the line
+control DLAB bit is set. The adapter accepts a ninth data bit at offset 0 only
+when its last accepted modem control write selected RS-485 and its last
+accepted line control write left DLAB clear, so a divisor write never carries
+bit 8. Every port may use the DMA handshake and request-enable registers.
+The binding's own register filter, which every controller access passes before
+the adapter, admits the same registers: the handshake and request-enable
+registers on every port and RS-485 control on UART1–6.
 
 Callbacks must be bounded and non-reentrant. They use one monotonic microsecond
 clock and cannot invoke the interrupted binding or its borrowed controller.
@@ -157,6 +168,10 @@ It checks configuration and byte transfer, conflicting UART1 routes, coexistence
 of separate controllers, parent stability, shared S_UART word preservation,
 GIC masking, shift-register drain, completed release and retained faults.
 It also checks pin-manager health refusal and a late live transmit access.
+Through the binding's callbacks, UART1 enters loopback and RS-485, transmits
+a ninth bit and returns to UART mode, and S_UART0 enters IrDA SIR and refuses
+RS-485. Both ports then run a DMA lease: prepare, enable and disable the
+requests, and release.
 The native address restrictions cover every selected route.
 
 The runner pins source hashes, checks local clock declarations, executes the
@@ -184,8 +199,8 @@ UART teardown.
 The [native Bluetooth application](bluetooth-native.md) integrates this polled
 UART binding with module bootstrap and H4 transport. Physical admission and
 serial peer tests remain required. Alternate
-parent profiles, DMA, RS-485, IrDA, nine-bit modes, runtime format changes and
-suspend/resume also remain required. Modeled GIC observations do not qualify
+parent profiles, DMA applications beyond UART2, physical RS-485 and IrDA
+qualification, runtime format changes and suspend/resume also remain required. Modeled GIC observations do not qualify
 physical interrupt behavior or reset timing.
 
 The source basis is A733 User Manual V1.00 sections 4.1, 4.2, 9.1.7.16,

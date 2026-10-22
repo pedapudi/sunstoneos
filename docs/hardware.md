@@ -513,10 +513,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel without a valid reading throttles after 1 s and is critical after
   5 s. The thermal application and the thermal service of the
   [integrated OS image](os-image.md) end their session at the critical level;
-  no consumer reduces load at the throttle level yet. Host checks pass. The
-  policy reads temperatures whose physical acquisition is unqualified, and it
-  changes no clock or voltage. Rate changes and regulator control remain
-  outstanding.
+  no image reduces load at the throttle level yet. Host checks pass. The
+  policy reads temperatures whose physical acquisition is unqualified.
+  A [CPU clock driver](cpu-clock.md) is **implemented** and host-modeled. It
+  changes CPU-L and CPU-B among the pinned operating points. It raises the
+  DCDC5 or DCDC3 voltage before a frequency increase and lowers it after a
+  decrease. Its thermal coupling
+  admits a raise only at NORMAL after a reading from that cluster's sensor,
+  lowers raised clusters to 1014 MHz at THROTTLE and returns them at NORMAL.
+  Every transition needs a grant, which a defined session record carries with
+  the hash of the user's approval; no image carries one or calls the driver.
+  Its cycle timing reports the measured and configured rate of the core that
+  ran timed work. Host and instruction models pass. Physical rate changes,
+  rail settling, lock time and PMU access remain unqualified.
   A separate [finite returning application](../apps/thermal-returning/README.md)
   gathers two sets with the actual driver and disables configured acquisition.
   Thirteen linked cases and Astra review pass; all 46 compiled inputs match
@@ -678,7 +687,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   unqualified.
   It requires a passive PB0/PB1 loopback and electrical admission; inherited
   multicore startup remains physically unqualified. Physical serial and interrupt
-  operation and DMA remain unqualified; advanced modes remain required.
+  operation and DMA remain unqualified.
+  The driver permits the DMA lease on all nine controllers, using DMA0
+  requests 14–20 and 50–51, and selects IrDA SIR, RS-485 9-bit (UART1–6) or
+  internal loopback on a quiet line. Host models and the linked native write
+  policy pass; no application uses these modes or DMA beyond UART2. The board
+  device tree's `uart-v100` driver data disables hardware RS-485 and 9-bit
+  mode, which conflicts with the manual, so RS-485 needs physical resolution.
+  Runtime format changes and suspend/resume remain required.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,
@@ -686,8 +702,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [native platform binding](spi-platform.md) composes real clock/pin leases,
   reset/GIC handling, inactive chip-select preparation and bounded restoration.
   Focused host checks and native compilation pass. SPI4 route activation refuses
-  its unproven package signal mapping. Board admission, physical peers, DMA,
-  advanced modes and SPIF remain outstanding.
+  its unproven package signal mapping. The driver also implements dual and quad
+  data phases after a single-lane prefix, and DMA transfers on requests 23–26
+  and 53 with verified request gating and abandonment; host and platform
+  models pass. Routes lack IO2/IO3 pins, so the platform refuses quad, and
+  SPI4 has no DMA request in the manual. No application uses these modes.
+  Board admission, physical peers, three-wire and bit-aligned modes and SPIF
+  remain outstanding.
   The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
   supports polling version 1 and deferred-IRQ version 2 for one authenticated
   FIFO-sized WRITE_READ exchange on the 1.8 V PE0–3 route. CPU0 INTID59 masks
@@ -702,7 +723,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is in a later Type-C task body, not created for SPI workload 2; no hypothetical
   rebuilt-image equivalence is claimed. SPI/GIC, PMIC, scheduling and transport
   effects are modeled. Physical exchange, IRQ delivery, signal timing, electrical
-  compatibility and recovery remain unqualified; DMA and broader modes remain required.
+  compatibility and recovery remain unqualified; application DMA and broader modes remain required.
 - PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
   The complete application has a boot-CPU-only profile under
   `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and
@@ -898,8 +919,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
-- G2D: **implemented** one retained ARGB8888 fill, source-copy, source-over-solid or exact 2× enlargement operation per
-  session through the [native application](g2d.md). Caller geometry is bounded
+- G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
+  image-over-image operation per session through the [native application](g2d.md), with copy and scaling
+  converting between the eight 32-bit RGB channel orders. Caller geometry is bounded
   to 1280×720 with byte stride at most 5120. Authenticated source input, RCQ
   commands and destination use guarded allocations. Typed global IOMMU admission
   excludes other masters while master 10 alone translates; shared DE_SYS/PCK,
@@ -973,9 +995,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   generation/digest ACK. Source-over CPU comparison is diagnostic, without a
   qualified hardware-rounding oracle. Every allocation,
   mapping and provider identity remains retained; timeout or ACK establishes no
-  reclamation or drain. Other ratios/downscaling, image-over-image/translucent
-  blending, rotation, color conversion and further
-  formats remain required. Physical pixels, DMA confinement/visibility, IRQ
+  reclamation or drain. General scaling at any other ratio, including reduction with
+  the pinned coarse decimation, image-over-image blending with per-pixel and plane alpha,
+  and RGB order conversion reuse the same buffers, mappings and lifetime. Image
+  `08e56fc5…` passes register-image comparisons with the pinned setters, the linked
+  AArch64 validator and builder, a rebuilt 3008-byte SRAM launcher model and host
+  sealing/ACK-policy checks; earlier operations emit identical commands. Rotation and
+  mirroring (the pinned set lacks `g2d_rotate.c`), YUV color-space conversion, other
+  pixel sizes and a translucent solid background remain required. Physical pixels, DMA confinement/visibility, IRQ
   delivery, startup, recovery and performance remain unqualified.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
@@ -1161,9 +1188,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is source/object-bound; older single-final-fragment ownership evidence remains
   historical and is superseded for the corrected shared rendering sequence.
   Compute queues retain their separate behavior. Physical graphics, cache visibility,
-  confinement and recovery remain unqualified. Stencil, perspective, arbitrary
-  shaders, general blend equations, per-list state batches, multisampling, wider
-  texture modes, display presentation and context disposal remain required.
+  confinement and recovery remain unqualified.
+  [Graphics profile 4](gpu-render.md#state-batches-perspective-texturing-and-stencil)
+  draws up to sixteen index ranges per frame, each with its own depth compare,
+  culling, stencil test and one of five fixed blend equations. It adds
+  perspective-correct texturing, filtering and address modes, sRGB decoding and
+  a packed D32S8 attachment sized from the session. A completed frame can be
+  [lent to a display consumer](gpu-render.md#lending-a-completed-frame-for-presentation)
+  by physical address. Pinned-Mesa reference, QEMU native-service and linked
+  application checks pass with GPU, firmware and USB effects modeled; physical
+  rendering is unqualified. Arbitrary shaders and blend factors, clipping,
+  multisampling, mipmaps, other texture formats, wider compute input/output and
+  display use of the lent frame remain required.
   The [native GPU application](gpu-application.md) connects real firmware,
   providers, IRQ routing, fixed rendering and copied USB output. Its central
   image links; focused checks verify retention when isolation is unavailable
@@ -1577,6 +1613,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   security modes remain unqualified or required.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
+  [Station power save](radio-wifi.md#station-power-save-follows-the-source-management-configuration)
+  is **implemented** as the source management configuration, gated by the
+  firmware's power-save feature; source-structure host checks pass. Reconnect
+  and loss recovery admit any access point of the same network (same SSID
+  and security, own beacon evidence and RSN element), so the station can roam
+  by disconnection and new association; the loss-recovery composition recovers
+  onto a second access point. The board's outgoing client and listener repeat
+  a SEND or RECEIVE that timed out during a link loss, keeping reported bytes,
+  so an exchange survives recovery; host checks pass. An
+  [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
+  resolves its server, validates replies and exports an RTC SET request; host
+  checks and an actual-stack composition pass, but no image runs it yet.
+  WPA3 personal is not implemented: the pinned wpa_supplicant release has no
+  elliptic-curve back end usable here, and SAE external authentication and
+  protected management frames are missing
+  ([details](radio-security.md#wpa3-personal-needs-three-missing-parts)).
+  Physical power save, roaming, time accuracy and loss timing remain unqualified.
 
 - Camera: The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes
@@ -1589,9 +1642,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Its retention adapter has the same host-checked mutex-ownership correction
   described under combined monitoring; prior native images retain their original
   scope and do not include that source fix.
-  The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
-  640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
-  model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)
+  The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for the
+  reference driver's ten two-lane output sizes, from 160 × 120 to 2592 × 1944, in
+  UYVY, YUYV and 8-bit raw Bayer, with a selectable frame length. Complete register
+  images and derived rates of 36 modes match the pinned driver's own mode
+  functions; lifecycle checks and native compilation pass. The native application
+  uses 640 × 480 UYVY at nominal 30 frames/s. The [CSI controller](csi-receiver.md)
   configures local PHY, packet-port and parser state for both exposed port groups;
   complete register images match source functions. The [camera DMA controller](camera-dma.md)
   configures one NV16 image and retains buffers until capture, drain and cache
@@ -1613,8 +1669,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   focused cases pass; five native units and two existing embedding fixtures
   compile. Completed payload is copied into a CPU-owned destination while source
   buffers, tables and hardware leases remain reserved. Complete image admission,
-  module electrical binding, physical DMA/coherence and drain, additional modes
-  and physical qualification remain outstanding.
+  module electrical binding, physical DMA/coherence and drain, native use of
+  further modes and physical qualification remain outstanding.
   Repeated capture is **implemented**. The coordinator rearms a retained,
   readable capture into the same planes, mappings and leases with the sensor
   stopped, after two 100 ms quiet intervals and checked receiver and DMA status.
@@ -1625,6 +1681,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass. Register auto-increment, the quiet intervals and exposure behavior
   while packets are disabled need a module on the board.
   No MIPI camera is connected; physical capture qualification awaits a module.
+  Continuous capture is **implemented** in the [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
+  for any UYVY or YUYV mode, whose size now reaches the receiver, VIPP and DMA.
+  Frames stream into two to four slots; each frame start delivers the previous
+  complete slot and programs the next free one, and frames overwritten for lack
+  of a free slot, incomplete or unattributable after a start that raced the
+  address writes are counted as dropped. A modeled frame engine checks delivery,
+  held slots, both races, faults and refusals; route, receiver and DMA register
+  images for four further sizes match the pinned functions. Address latching at
+  frame start and frame-done timing need a module; the native application does
+  not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
+  parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
   640×480 BGGR12 frame and produces an immutable copied NV16 frame through
   TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned
@@ -1843,15 +1910,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   acquisition, and returns copied pixels with parsed dimensions. Optional
   independent reference pixels support qualification. Partial-block geometry,
   immutable input, native copy and fragmented host capture checks pass under
-  `jpeg-runtime-input-20261018/`. Each retained session decodes one image;
-  repeated operation and physical conformance remain outstanding.
+  `jpeg-runtime-input-20261018/`. A version 3 session decodes a manifest of up
+  to eight images in order, refilling the retained buffers after each delivered
+  healthy result; sanitized input and linked-image checks with modeled device
+  effects pass. The supervised capture tool and bundle still carry one image.
+  Repeated encoding and physical conformance remain outstanding.
   The complete JPEG session is now copied and verified against its admitted
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
   The [High-profile H.264 build](h264-native.md#high-profile-runtime-clips-and-presentation-ordering)
-  is implemented for progressive profile 100, 8-bit 4:2:0, with CABAC, scaling
-  matrices, weighted prediction and I/P/B pictures including reference B pictures.
+  is implemented for progressive Baseline, Main and High profile streams, 8-bit
+  4:2:0, with CABAC or CAVLC, scaling matrices, weighted prediction, I/P/B
+  pictures including reference B pictures, and long-term references in P pictures.
   Fixed storage now holds four full-HD picture slots, which admit three
   short-term references at full HD, or four at HD, with at most four active
   entries per list. Each coded picture may use up to 2 MiB of device input, and
@@ -1879,8 +1950,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `h264-high-20261019/compiled/build-identity-sources.json`; final provenance-only
   edits require no rebuild and extend no execution claim. Physical decoding,
   cache/reference visibility, confinement, timing and drain remain unqualified.
-  POC wrap and MMCO5 are source-reviewed but unexecuted. Long-term references,
-  unrestricted streaming, broader formats and broader encoding remain required. Baseline
+  Header-rewritten clips exercise long-term marking, memory-management operations
+  1 to 6, POC and frame_num wraparound and Baseline/Main streams through an
+  independent FFmpeg-syntax model and the linked image with modeled device effects;
+  B pictures with active long-term references are refused because the engine is
+  not told which references are long-term. Long-term B references, unrestricted
+  streaming, broader formats and broader encoding remain required. Baseline
   builds retain their separate scopes.
   The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
   is implemented for progressive Baseline IDR/P clips with one short-term reference
@@ -2006,7 +2081,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
-- DI301 deinterlacer: **implemented** retained [offline WEAVE, initial motion and fixed-strength TNR](deinterlace-native.md)
+- DI301 deinterlacer: **implemented** retained [offline WEAVE, initial motion and fixed or selected-strength TNR](deinterlace-native.md)
   for caller 640×480 NV12 combined-field frames, top field first and 640-byte
   strides. Pinned GPL DI301 configuration from Linux revision `2ac08e8…` runs
   against a private CPU register image; whitelisted masked writes configure the
@@ -2054,8 +2129,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `deinterlace-tnr-20261020/root-integration.json`; three external host-file differences
   are separately frozen, with all nine final host sources matching. Earlier
   WEAVE/motion/power/USB matrices retain their original scopes without replay.
-  Adaptive feedback, other strengths/shapes/formats, film detection, crop/scale and
-  repeated jobs remain required. All buffers/providers stay retained; no drain,
+  TNR strength 1–3 now selects the pinned adaptive mode's LOW, MIDDLE or HIGH initial
+  gain (38, 48 or 62) for the one operation; strength 0 keeps the fixed 58. Image
+  `9a4c1c38…` reports geometry revision 4 and passes host and linked-image plan
+  generation, host predicate and capture-label checks and a rebuilt SRAM launcher
+  model. Gain feedback between frames, other shapes/formats, film detection,
+  crop/scale and repeated jobs remain required. All buffers/providers stay retained; no drain,
   reclamation or physical reuse is qualified.
 
 - Crypto, random, identity and secure storage: **implemented** bounded
@@ -2069,12 +2148,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [SHA-256 streaming](crypto-hash.md) shares the same retained controller and page
   with entropy. Host checks compare modeled results with independent digests;
   source/native checks and a relocatable composition link pass. SHA-only sessions
-  require no entropy-quality assertion. [AES-128 block transforms](crypto-cipher.md)
-  use the same retained session for encryption and decryption, with private output
-  staging and successful-task key cleanup. Host checks, independent vectors and
-  native composition pass. Physical hashing/cipher operation, authenticated and
-  wider cipher modes, other hashes, asymmetric operations and secure key handling
-  remain outstanding. Internal hardware key erasure is unproven.
+  require no entropy-quality assertion. The same streams provide SHA-1, SHA-224,
+  SHA-384, SHA-512 and HMAC over all five hashes on the engine.
+  [AES transforms](crypto-cipher.md) use the same retained session for
+  128/192/256-bit keys in ECB, CBC, CTR and GCM, with private output staging,
+  software IV chaining, software GHASH, constant-time tag verification and
+  successful-task cleanup of key, IV and counter lines. Host models compare
+  every mode and hash with NIST vectors, OpenSSL and Python `hashlib`/`hmac`;
+  the board image builds. A host calculator derives SP 800-90B health cutoffs
+  from an assessed entropy, which still does not exist. Physical hashing/cipher
+  operation, the engine's other modes and native GCM, MD5/SM3, asymmetric
+  operations, hardware key selection and key ladders remain outstanding.
+  Internal hardware key erasure is unproven.
   A boot-CPU-only SHA/AES application is integrated under
   `crypto-single-core-20261018/`, with twelve startup groups and six host groups
   passing. This permits independent device validation; physical CE operation and

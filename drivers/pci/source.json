@@ -1,0 +1,23 @@
+{
+  "scope": "Register, protocol and allocation references for a733_pcie_function.c and a733_pcie_nvme.c. Linux and U-Boot do not run on the A733 FreeRTOS root; the adapted logic is rewritten for polled native ownership.",
+  "board_kernel": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "license": "GPL-2.0 and GPL-2.0-or-later (per file SPDX)",
+    "files": {
+      "bsp/drivers/pci/controller/allwinner/pcie-sunxi-rc.c": {"lock": "pcie-pcie-sunxi-rc-c", "sha256": "884f57727b1a03704034defb2f033672185f564205c8b0187cb37177f520750a", "use": "SII INTx mask/status and DesignWare MSI target, enable and status handling"},
+      "bsp/drivers/pci/controller/allwinner/pcie-sunxi-plat.c": {"lock": "pcie-pcie-sunxi-plat-c", "sha256": "f64e85ee9efbd1324abb0e36771e5990fbd76369e157298fa7226e96bf34f73a", "use": "INTx demultiplexing on the sii interrupt and LTSSM disable before teardown"},
+      "bsp/drivers/pci/controller/allwinner/pcie-sunxi.h": {"lock": "pcie-pcie-sunxi-h", "sha256": "f349423f5d2744b9ed5331c9c89718806b1f599ab5135e898a0b902a84edd4a7", "use": "SII_INT_MASK0/STAS0 offsets and INTX_RX_ASSERT bits"},
+      "sun60iw2p1.dtsi": {"use": "INTIDs 184 (sii) and 185 (msi), the 0x22000000 32-bit memory range and the INTA..INTD map"}
+    }
+  },
+  "board_uboot": {
+    "lock": "board-uboot",
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "license": "GPL-2.0+",
+    "files": {
+      "drivers/pci/pci_auto.c": {"sha256": "e32fa1fa310d9f17b258490ea75b7f0ab1ba4ae10dae8193ca82abadc0e604c4", "use": "BAR sizing with decode off and 64-bit BARs placed below 4 GiB"},
+      "drivers/nvme/nvme.c": {"sha256": "a4f51e3bed4a229a3f214d162ed644a88b7c54691f971e73ab0ca7290467eef4", "use": "Two-entry admin and I/O queues, phase-tagged polled completion, identify, queue creation and read commands"},
+      "drivers/nvme/nvme.h": {"sha256": "2d94dc8a9a01c470065ed5560e20068203bb67e1381470b254e3bb0eadaf0751", "use": "Controller register layout, CAP fields, CC and CSTS bits and opcodes"}
+    }
+  }
+}

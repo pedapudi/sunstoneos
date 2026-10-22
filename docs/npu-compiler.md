@@ -183,3 +183,29 @@ an internal SRAM intermediate tensor. The [graph support record](npu-two-stage.m
 records the emitted resources, checksum alignment rule, numerical comparison,
 SDK preparation and native runtime coverage. Existing model entries retain their
 accepted identities and interpretation.
+
+## Two inputs, two outputs and per-channel INT8
+
+[npu-dual-fixture.py](../tools/npu-dual-fixture.py) generates a graph with two
+independent 3×3 convolutions: a `1×3×8×8` input produces a `1×2×6×6` output
+and a `1×1×6×6` input produces a `1×2×4×4` output. Inputs, weights and biases
+are dyadic fractions, so the integer reference is exact in float32.
+[npu-dual-pipeline.sh](../tools/npu-dual-pipeline.sh) compiles it in the pinned
+image with UINT8 asymmetric quantization, or with `--perchannel-int8` as INT8
+tensors with per-channel symmetric weights, and runs the SDK simulator on both
+inputs. [npu-dual-reference.py](../checks/npu-dual-reference.py) requires exact
+float outputs and simulator bytes equal to the quantized CPU inference.
+
+Both variants pass. The emitted graphs are 2,912 bytes each, with SHA-256
+`f1a1aa4b6973a72093c5a2c6a1fcdb7408a54d308898ed9c38b7c9a21ab360c8` (UINT8) and
+`19f3aa1c36189be6ce10426d44ea4dfb253d5dd65bddd4e1eac3abf7891a09a5` (INT8). A
+second UINT8 compilation produced the same bytes. The largest dequantized
+errors against the exact outputs are 0.0151 and 0.0094 for UINT8 and 0.0240
+and 0.0102 for INT8. The network binary graph records one scale and zero
+point for each input and output tensor; the per-channel weight scales appear
+only in the compiled coefficients. Results are under
+`~/.cache/sunstoneos/build/audit-npu-runtime/compiler/work/dual-u8/` and
+`dual-i8/`. The [session runtime](npu-session.md) catalogues both graphs.
+
+The [mimus layer study](npu-mimus-linear.md) uses the same image to compile
+mimus linear layers with INT16 activations.

@@ -190,7 +190,7 @@ static void open_rx(void)
     memset(receive,0,sizeof(receive));unsigned bytes=24+8+n-14;
     receive[0]=(uint8_t)bytes;receive[1]=(uint8_t)(bytes>>8);
     receive[48]=0x40;receive[49]=1;receive[50]=3;receive[51]=0xff;
-    receive[60]=8;receive[61]=2;memcpy(receive+64,p,6);memcpy(receive+70,peer_mac,6);memcpy(receive+76,p+6,6);
+    receive[60]=8;receive[61]=2;memcpy(receive+64,p,6);memcpy(receive+70,session.wifi.target.bssid,6);memcpy(receive+76,p+6,6);
     const uint8_t snap[]={0xaa,0xaa,3,0,0,0};memcpy(receive+84,snap,6);memcpy(receive+90,p+12,n-12);
     m.card[1][4]=(uint8_t)((60+bytes+511)/512);peer_head=(peer_head+1)%8;--peer_count;
 }

@@ -58,7 +58,7 @@ The [D80 RF entry point][rf], [normal initialization caller][main], and
 | MAC read | `0x0073` / `0x0074` | Request the firmware MAC address; require six bytes and a nonzero unicast address |
 | Management reset | `0x0000` / `0x0001` | Perform the required initial management reset once |
 | Version | `0x0004` / `0x0005` | Preserve firmware, MAC/PHY versions, feature bits, station limit, and interface limit |
-| Management configuration | `0x1400` / `0x1401` | Configure a legacy management profile with power saving disabled |
+| Management configuration | `0x1400` / `0x1401` | Configure a legacy management profile with the admitted station power-save mode |
 | Channels | `0x1402` / `0x1403` | Publish the admitted channel list with its power limits and `NO_IR` flags |
 | Management start | `0x0002` / `0x0003` | Send source PHY/start parameters |
 | Station interface | `0x0006` / `0x0007` | Use the read MAC, require success, and retain the returned interface index |
@@ -73,15 +73,54 @@ substituting fabricated calibration results.
 The source's PHY-configuration call is disabled in this branch, leaving its
 64-byte configuration buffer zero. Management start therefore uses that zero
 buffer, the source's UAPSD timeout of 300, and its clock-accuracy value of 20 ppm.
-The admitted management profile uses 20 MHz, no HT/VHT/HE capability claims,
-power saving disabled, and packet lifetime 512. This is a bounded scan profile;
-future networking must configure and qualify the full capability set.
+The admitted management profile uses 20 MHz, no HT/VHT/HE capability claims
+and packet lifetime 512. Future networking must configure and qualify the full
+capability set.
 
 Version admission requires the source-defined full-MAC feature and a nonzero
 interface limit. Interface creation requires status zero and an index below
 that limit. A bad MAC address is a terminal failure; there is no generated
 address fallback. Confirmations whose source sender ignores the payload retain
 their bounded bytes without an invented zero-status or empty-payload rule.
+
+## Station power save follows the source management configuration
+
+The `power_save` field of the Wi-Fi configuration selects one of three modes.
+In power save, the firmware lets the station doze between beacons while the
+access point buffers its traffic.
+
+| Mode | `ps_on` | `dpsm` | Meaning |
+| --- | --- | --- | --- |
+| `AIC8800_WIFI_POWER_OFF` (0) | 0 | 0 | The station stays awake |
+| `AIC8800_WIFI_POWER_ON` (1) | 1 | 0 | The reference full-MAC default |
+| `AIC8800_WIFI_POWER_DYNAMIC` (2) | 1 | 1 | Dynamic power save, which leaves doze while traffic is active |
+
+The worker writes these two booleans into the management configuration
+request, as `rwnx_send_me_config_req` does. The source clears `ps_on` when the
+version confirmation lacks the power-save feature (`MM_FEAT_PS_BIT`, bit 2 of
+the feature word). The worker does the same and records the applied mode in
+`power_mode`, so a caller can see that the request had no effect. Values above
+2 and nonzero reserved bytes refuse initialization. The field occupies former
+tail padding, so the configuration remains 288 bytes and the 1,872-byte board
+radio profile keeps its layout; a zero byte keeps power save off.
+
+The pinned driver defines `ME_SET_PS_MODE_REQ` but never sends it, and its
+`set_power_mgmt` callback is empty. The native worker likewise has no runtime
+mode change; the mode stays fixed for the management lifetime. The firmware
+handles doze and wake itself, so the host data path does not change.
+
+`checks/aic8800-wifi-power.py` compiles the source `me_config_req` for each mode
+and drives the actual worker through management startup. The request bytes
+match for every mode; without the feature bit, both enabled modes send the
+power-off bytes and report `power_mode` 0. An out-of-range mode and a nonzero
+reserved byte are refused. Physical doze behavior and its effect on latency
+remain unqualified.
+
+```sh
+python3 checks/aic8800-wifi-power.py \
+  --reference-dir /path/to/pinned/aic8800_fdrv \
+  --evidence /path/outside/repository/radio-wifi-power
+```
 
 ## Binding and Wi-Fi share one outstanding command
 

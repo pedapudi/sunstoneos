@@ -51,6 +51,8 @@ static int notify(void *v,enum a733_thermal_level level)
 {
     struct model *m=v;assert(level<=A733_THERMAL_CRITICAL && level!=m->last);
     assert(a733_thermal_policy_level(&m->policy)==level);
+    /* Channels are published with the level, before the consumer hears of it. */
+    assert(a733_thermal_policy_seen(&m->policy)==m->policy.seen);
     ++m->notified[level];
     if (level!=A733_THERMAL_CRITICAL) {m->last=level;m->workers=level==A733_THERMAL_NORMAL ? 2 : 1;return 1;}
     if (m->answer==1) {m->last=level;m->workers=0;}
@@ -103,7 +105,9 @@ int main(void)
     struct model m;uint16_t c[5];
     setup(&m);codes(c,2338);
     /* Normal readings; hardware alarm and critical events alone change nothing. */
+    assert(!a733_thermal_policy_seen(&m.policy));
     assert(step(&m,31,c,31)==A733_THERMAL_NORMAL && m.policy.seen==31 && !m.notified[1]);
+    assert(a733_thermal_policy_seen(&m.policy)==31);
     assert(step(&m,0,c,0)==A733_THERMAL_NORMAL && step(&m,0,c,31)==A733_THERMAL_NORMAL);
     /* CPUB at its passive trip throttles, not below it; DDR/NPU have no passive trip. */
     c[0]=1310;assert(step(&m,1,c,0)==A733_THERMAL_NORMAL);
@@ -138,9 +142,13 @@ int main(void)
     assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==2 && m.policy.request==1);
     m.answer=7;assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==3 && m.policy.request==3);
     m.answer=1;assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==3);
+    /* A first reading that throttles publishes its channel with the level. */
+    setup(&m);codes(c,2338);c[0]=1309;
+    assert(step(&m,1,c,0)==A733_THERMAL_THROTTLE && a733_thermal_policy_seen(&m.policy)==1 && m.notified[1]==1);
     /* No reading for 5 s, including before any first sample, is critical. */
     setup(&m);codes(c,2338);
     m.time+=1000001;assert(step(&m,0,c,0)==A733_THERMAL_THROTTLE && m.policy.stale==31);
+    assert(!a733_thermal_policy_seen(&m.policy));
     m.time+=4000000;assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.policy.critical==31 && m.policy.stale==31);
     /* A controller failure ends supervision: driver retains, policy stops work. */
     setup(&m);codes(c,2338);assert(step(&m,31,c,0)==A733_THERMAL_NORMAL);
@@ -159,8 +167,10 @@ int main(void)
     /* Uninitialized policy objects report CRITICAL. */
     struct a733_thermal_policy none={0};
     assert(a733_thermal_policy_level(&none)==A733_THERMAL_CRITICAL && a733_thermal_policy_level(NULL)==A733_THERMAL_CRITICAL);
+    assert(!a733_thermal_policy_seen(&none) && !a733_thermal_policy_seen(NULL));
     assert(a733_thermal_policy_update(&none,1,A733_THERMAL_AGAIN,NULL)==A733_THERMAL_CRITICAL && !none.initialized);
     assert(!a733_thermal_policy_init(&none,1,NULL,NULL));
-    puts("PASS thermal policy trips, hysteresis, stale and lost readings, sensor failure and stop requests");
+    puts("PASS thermal policy trips, hysteresis, stale and lost readings, sensor failure, stop requests "
+         "and published channels");
     return 0;
 }

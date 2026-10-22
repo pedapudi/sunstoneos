@@ -127,4 +127,63 @@ int sunstone_net_cancel(struct sunstone_net *,uint64_t ticket);
 /* FreeRTOS+TCP's supported socket-free override; invoked after its socket's
  * buffers/event group are disposed. Applications must not call it. */
 void sunstone_net_stack_free(void *);
+
+/* SNTP time source (RFC 4330) over the copied socket requests above. */
+#define SUNSTONE_SNTP_PORT 123u
+#define SUNSTONE_SNTP_BYTES 48u
+#define SUNSTONE_SNTP_ATTEMPTS 8u
+/* UTC at an instant of the caller's monotonic microsecond clock. */
+struct sunstone_sntp_time {
+    uint64_t unix_us;       /* UTC microseconds since 1970-01-01 at local_us. */
+    uint64_t local_us;      /* Caller clock when the reply was received. */
+    uint64_t round_trip_us; /* Request-to-reply time less server processing. */
+    uint8_t stratum, leap;  /* Server stratum 1..15; leap indicator 0..2. */
+};
+/* Build a version 4 client request whose transmit timestamp is the random
+ * nonce; the server echoes it as the originate timestamp. */
+void sunstone_sntp_request(uint8_t packet[SUNSTONE_SNTP_BYTES],const uint8_t nonce[8]);
+/* Validate a server reply to the request carrying nonce, sent at sent_us and
+ * received at received_us. 1 valid; 0 not a reply to that request, to be
+ * ignored; -1 a refused reply: kiss-o'-death or other stratum 0, unsynchronized
+ * leap indicator, wrong version or mode, zero or reversed server timestamps,
+ * or a round trip that is negative or above max_round_trip_us. The time is
+ * the server transmit time plus half the round trip, at received_us. */
+int sunstone_sntp_reply(const uint8_t *reply,size_t bytes,const uint8_t nonce[8],uint64_t sent_us,
+    uint64_t received_us,uint64_t max_round_trip_us,struct sunstone_sntp_time *);
+/* RTC feed: fill an RTC_REQUEST_SET for the UTC second containing now_us
+ * (day 1 is 1970-01-01, packed hour/minute/second) for the registered RTC
+ * client to submit with rtc_service_submit. Refuses now_us before local_us
+ * and days beyond the RTC's 65535. The caller's clock drift since local_us,
+ * the dropped fraction and the RTC service latency add to the error. */
+struct rtc_request;
+int sunstone_sntp_rtc_request(const struct sunstone_sntp_time *,uint64_t now_us,struct rtc_request *);
+struct sunstone_sntp_config {
+    /* Exactly 1 after filling the bytes from a cryptographic source. */
+    int (*random)(void *,uint8_t *,size_t);
+    void *random_context;
+    uint64_t deadline_us, max_round_trip_us;
+    TickType_t timeout;     /* Each socket request; finite, <= portMAX_DELAY/2. */
+    unsigned attempts;      /* Requests sent before giving up, 1..SUNSTONE_SNTP_ATTEMPTS. */
+    uint8_t server[4];      /* Server IPv4 address, or zero to resolve name. */
+    uint16_t name_bytes;    /* Host name length without NUL, when server is zero. */
+    char name[SUNSTONE_NET_NAME_BYTES-1];
+};
+struct sunstone_sntp_client {
+    struct sunstone_net *net;
+    struct sunstone_sntp_config config;
+    struct sunstone_net_request request;
+    struct sunstone_net_reply reply;
+    struct sunstone_sntp_time time;
+    uint64_t ticket, handle, sent_us;
+    unsigned stage, pending, failed, sent;
+    uint8_t nonce[8], server[4];
+};
+/* Registered client task only, one exchange per client object: optional
+ * RESOLVE, OPEN_UDP, then up to `attempts` SEND/RECEIVE rounds, each with a
+ * fresh nonce, and CLOSE. Datagrams from another source, or for an earlier
+ * nonce, are ignored. No new request starts after deadline_us; a pending one
+ * ends at its own timeout, and CLOSE still runs. poll returns 0 pending, 1 time
+ * valid after CLOSE, -1 failed. A failed CLOSE leaves the socket retained. */
+int sunstone_sntp_start(struct sunstone_sntp_client *,struct sunstone_net *,const struct sunstone_sntp_config *);
+int sunstone_sntp_poll(struct sunstone_sntp_client *,uint64_t now_us);
 #endif

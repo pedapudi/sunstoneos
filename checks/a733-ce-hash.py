@@ -69,6 +69,6 @@ for symbol in ['device_memory_acquire', 'a733_ce_session_bind', 'a733_ce_entropy
 # Cache maintenance goes through the shared CWG/EL/MMU-checked helper.
 sync = body('a733_ce_native_sync')
 assert 'aarch64_device_cache' in sync
-assert 'dc\t' not in assembly
+assert '\tdc\t' not in assembly
 assert 'dsb\tsy' in body('a733_ce_native_read')
 print('PASS pinned SHA streaming descriptors, independent hashlib digests and actual native singleton/session/cache composition; no physical qualification')

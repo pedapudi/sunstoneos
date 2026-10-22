@@ -1,8 +1,9 @@
 # Native assembly of observed NPU model formats
 
 The native C assembler is **implemented and host-tested** for the neural-operation
-profiles in the pinned A733 ShuffleNetV2 model and compiled numerical convolution.
-It calculates buffer requirements,
+profiles in the pinned A733 ShuffleNetV2 model, the compiled numerical
+convolutions, a compiled graph with two inputs and two outputs, and a compiled
+mimus fully connected layer with transpose steps. It calculates buffer requirements,
 resolves model addresses, copies weights, and constructs a command image entirely
 in caller-owned RAM. Its output matches saved SDK bytes after allocation-address
 and completion-event adjustments. It does not authorize hardware submission.
@@ -17,8 +18,10 @@ and [convolution capture](nbg-conv-loader.md) provide allocation and command ref
 ## Restrict assembly to the observed command format
 
 Each model must pass the applicable [checksum verification](nbg-checksum.md).
-Both profiles require target `0x1000003b`, one core, and one asymmetrically
-quantized UINT8 input and output. Their observed wire values differ:
+Every profile requires target `0x1000003b` and one core. The six-slot interface
+below also requires one asymmetrically quantized UINT8 input and output; the
+general interface described later accepts more tensors and types. The two
+container formats use different wire values:
 
 | Property | ShuffleNetV2 profile | Numerical convolution profile |
 | --- | --- | --- |
@@ -30,15 +33,23 @@ quantized UINT8 input and output. Their observed wire values differ:
 
 The state-word difference is bit 17; its hardware meaning remains unresolved.
 These are accepted profiles, not a claim that every model in either format
-uses those values. One initialization operation precedes 1–1,024 sequential neural
-operations with 192-byte descriptors. Working-pool alignment is 64 bytes;
+uses those values. One initialization operation precedes 1–1,024 sequential
+operations with 192-byte descriptors. Each operation is a neural-network
+operation (kind 2) or, in the directory format only, a neural-transpose step
+(kind 8). The compiler wraps a fully connected layer in two transpose steps
+that move data through internal SRAM; a transpose step has no coefficients and
+uses the same pointer and ring fields. Working-pool alignment is 64 bytes;
 internal SRAM use must fit 512 KiB. Fixed pool/SRAM bases and external SRAM
 requirements are refused.
 
 The assembler recognizes the initialization state and its relocation before
 omitting them from the model command image, matching the SDK capture.
-Ordinary and terminal neural operations must match the observed load-state
-templates. Operation, descriptor, state-table, and relocation ordering must
+Every operation state must match one of two observed load-state forms. The
+24-byte form sets word 5 and is used for operations followed directly by
+another. The 32-byte form clears word 5 and appends a second state pair; the
+compiler emits it for the last operation and, in the directory format, for
+every operation of a graph with transpose steps. The command body is the
+48-byte prefix plus the actual state sizes. Operation, descriptor, state-table, and relocation ordering must
 agree. Unused relocations, repeated descriptor destinations, unknown sources,
 split high addresses, unsupported transformations, and additional nonempty
 execution sections are refused.
@@ -52,8 +63,28 @@ requires its tensor address to fall within that range in the same source allocat
 The first auxiliary operation word must be zero. The second remains opaque
 and does not affect assembly; its semantics remain unresolved. Recognition
 of a load-state template does not validate every field in its neural descriptor.
-Other operation classes, tensor layouts, and format versions remain required
-implementation work.
+Tensor-processor, shader and software operations, other tensor types and other
+format versions remain unsupported by this assembler; the fixed shader and
+transpose graph uses the separate [relative-shift assembler](npu-relative-shift.md).
+
+## A general plan covers several tensors
+
+`nbg_assembly_layout` and `nbg_assemble_layout` take graphs with one to eight
+inputs and one to eight outputs. Each tensor must be affine-quantized UINT8,
+INT8 or INT16. The plan lists the descriptor, coefficient, working-pool and
+command allocations, then one allocation per input in model order, then one
+per output. Relocation sources 1 and 2 select an input or output allocation
+by their tensor index. With one input and one output this is the six-slot
+order, and `nbg_assembly_requirements` and `nbg_assemble` are thin wrappers
+that keep their single-UINT8 contract and produce identical bytes.
+
+The container records one scale and zero point per input and output tensor.
+Per-channel weight quantization, which the compiler applies with the
+`perchannel_symmetric_affine` quantizer, exists only inside the compiled
+coefficient stream and descriptors; the assembler copies those bytes
+unchanged, so it needs no per-channel metadata. Input and output padding
+follows the same rule for every tensor type: logical bytes rounded up to 64,
+plus 64.
 
 ## Reserve buffers before modifying caller memory
 
@@ -157,13 +188,26 @@ so its existing 120-case sanitizer check and ShuffleNetV2 buffer comparison
 were run once and passed. Decoder and checksum implementations were unchanged;
 their previous evidence was reused.
 
-The current AArch64 object build passes. It contains 5,736 bytes of text and read-only
+The current AArch64 object build passes. It contains 6,776 bytes of text and read-only
 data, no writable static data, and references the checksum verifier, decoder, encoder, `memcpy`,
 and `memset`. Its SHA-256 is
-`8ea64ab592f88bbc4b538f4c2676f553246dc313458d511eb55430e0ee3eedbb`.
-Disassembly shows a 480-byte assembly frame and a 528-byte per-operation frame;
-decoder, encoder, and memory-helper frames are additional. The returned plan
-occupies 88 bytes on the 64-bit host. The isolated build target is `nbg-assembly`.
+`8793b3c3c6daea0eb6d0e13de0c64adc7aeaaf79cb391916bf96df1fc9032387`.
+The six-slot plan occupies 88 bytes and the general plan 264 bytes. The
+isolated build target is `nbg-assembly`.
+
+The general interface has its own comparison with the pinned SDK loader.
+[nbg-layout-reference.py](../checks/nbg-layout-reference.py) runs the loader
+in an instruction emulator with every input and output bound, stops at the
+intercepted submission, and compares every native allocation, minimum size,
+relocation and guard page with the SDK buffers after the address and
+completion-event adjustments. It passes for the two-input, two-output UINT8
+graph, its INT8 per-channel variant, the 8×8 convolution and the compiled
+mimus query projection, whose three operations are a transpose step, a
+neural-network operation and a second transpose step with INT16 tensors.
+The check also refuses a buffer count that differs from the plan. Results are
+under `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/layout-*/`; the
+existing 120-case and directory checks and both saved SDK comparisons were
+rerun after the change and pass.
 
 The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c),
 [nbg-directory-assembly.c](../checks/nbg-directory-assembly.c), and

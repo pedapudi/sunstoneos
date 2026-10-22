@@ -48,6 +48,8 @@ struct a733_npu_memory {
     struct a733_npu_command active;
     enum a733_npu_memory_state state;
     unsigned booted;
+    uint8_t groups[A733_NPU_MEMORY_MAX_BUFFERS]; /* Parallel to buffers; 0 is shared. */
+    size_t active_index;
 };
 
 /* Privileged, serialized memory policy; no allocation or MMIO. Zero once.
@@ -77,13 +79,23 @@ int a733_npu_memory_init(struct a733_npu_memory *, void *arena, size_t capacity,
  * The entire registered allocation is the readable prefetch span. */
 int a733_npu_memory_command(const struct a733_npu_memory *, uint32_t device,
                             struct a733_npu_command *);
+/* Optional session grouping for a service that runs several clients' commands.
+ * Assign the buffer whose device base is device to group 1..255 after init and
+ * before the bootstrap publication; every buffer starts in shared group 0 and
+ * the bootstrap stream stays there. A job publication and its finish then
+ * maintain only READ/WRITE buffers of group 0 and of the command buffer's own
+ * group, so one session's completion never invalidates lines that another
+ * session's CPU owner is still writing. The bootstrap publication and finish
+ * keep maintaining every buffer. Refusal leaves the object unchanged. */
+int a733_npu_memory_group(struct a733_npu_memory *, uint32_t device, unsigned group);
 /* Controller callback adapters pass their memory object here. publish checks
  * the selected image, canonical table contents, all live CPU translations,
  * command identity, and role before any cache maintenance. The bootstrap
  * publication cleans the tables and every buffer, and clean+invalidates WRITE
  * buffers. A job publication requires an earlier successful bootstrap
  * publication and maintains only READ (clean) and WRITE (clean+invalidate)
- * buffers; tables, commands, bootstrap and CONSTANT buffers are immutable.
+ * buffers of the command's group and group 0; tables, commands, bootstrap
+ * and CONSTANT buffers are immutable.
  * finish is legal only after the controller proves event/cancel completion
  * AND bus idle. IDLE denotes completed cache transfer, not permission to
  * bypass reap/close. Failure latches MEMORY_FAULT and ends further callbacks. */

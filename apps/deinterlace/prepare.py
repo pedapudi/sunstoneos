@@ -35,14 +35,14 @@ def session_check(raw):
 
 def geometry_check(geometry):
     require(len(geometry)==8 and tuple(geometry[:5])==(640,480,640,640,0x3231564e) and
-        geometry[5] in (1,2,3) and tuple(geometry[6:])==(1,0),
-        'Deinterlace requires fixed top-first NV12 WEAVE, first-operation motion or fixed-strength TNR.')
+        geometry[5] in (1,2,3) and geometry[6]==1 and (geometry[7]==0 or (geometry[5]==3 and geometry[7]<=3)),
+        'Deinterlace requires fixed top-first NV12 WEAVE, first-operation motion or TNR with strength0-3.')
     return 460800 if geometry[5]==1 else 921600
 
 def embedded_reference(image,session):
     """Bind immutable native geometry before preparation or runtime upload."""
     session_check(session)
-    _image_parts(image,mode=struct.unpack_from('<I',session,876)[0])
+    _image_parts(image,mode=struct.unpack_from('<I',session,876)[0],strength=struct.unpack_from('<I',session,884)[0])
     return None
 
 def upload_bytes(pixels,session):
@@ -267,7 +267,7 @@ def validate_bundle(bundle):
 def image_parts(path):
     return _image_parts(Path(path).read_bytes())
 
-def _image_parts(data,mode=None):
+def _image_parts(data,mode=None,strength=0):
     import io
     elf=ELFFile(io.BytesIO(data));require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Native extended-memory deinterlace ELF required.')
     table=elf.get_section_by_name('.symtab');require(table is not None,'Native deinterlace symbol table required.')
@@ -296,8 +296,8 @@ def _image_parts(data,mode=None):
     _,geometry=immutable('deinterlace_geometry',88)
     compiled=struct.unpack('<11Q',geometry)
     require(compiled in [(0x4153373344494131,revision,888,288,0x41f00000,20,capacity,460800,192,640,480)
-        for revision,capacity in ((1,460800),(2,921600),(3,921600))] and
-        (mode not in (2,3) or compiled[1]>=mode),
+        for revision,capacity in ((1,460800),(2,921600),(3,921600),(4,921600))] and
+        (mode not in (2,3) or compiled[1]>=mode) and (not strength or compiled[1]>=4),
         'Deinterlace compiled input capacity or geometry differs.')
     address,identity=immutable('a733_smp_build_id',32)
     for p in parts:p.pop('flags')

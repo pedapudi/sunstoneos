@@ -12,7 +12,7 @@ struct event {uint32_t address,width,value;};
 struct model {
     uint32_t ccu[2048],ve[1024],gic[1024];
     uint64_t now,reset_at,version;
-    unsigned lock,writes,reads,vereads,admissions,memory,drain,trigger,fail;
+    unsigned lock,writes,reads,vereads,admissions,memory,drain,trigger,acked,fail;
     struct event events[800];
     /* XO_CTRL0 with DCXO enabled and stable; PLL_REF is ccu[0]. */
     uint32_t osc;
@@ -38,7 +38,8 @@ static int read_any(void*v,uintptr_t a,uint32_t*out)
     else if(a>=GIC&&a<GIC+sizeof(m->gic))*out=m->gic[(a-GIC)/4];
     else if(a>=VE&&a<VE+sizeof(m->ve)) {
         assert(m->lock);++m->vereads;*out=m->ve[(a-VE)/4];
-        if(a==VE+0x11c&&m->trigger)*out=1;
+        /* Completion stays set from the trigger until it is acknowledged. */
+        if(a==VE+0x11c&&m->trigger&&!m->acked)*out=1;
     }else assert(0);
     return 1;
 }
@@ -60,9 +61,11 @@ static int write_reg(void*v,uintptr_t a,unsigned width,uint32_t value)
         m->ccu[0xa8c/4]=value;
     }else {
         assert(a>=VE&&a<VE+sizeof(m->ve));
-        if(width==4)m->ve[(a-VE)/4]=value;
+        /* Status bits at 0x11c are write-one-to-clear. */
+        if(a==VE+0x11c){assert(width==4);m->ve[0x11c/4]&=~value;if(value&1)m->acked=1;}
+        else if(width==4)m->ve[(a-VE)/4]=value;
         else ((uint8_t*)m->ve)[a-VE]=(uint8_t)value;
-        if(a==VE+0x118)m->trigger=1;
+        if(a==VE+0x118){m->trigger=1;m->acked=0;}
     }
     if(m->fail==7)m->now=100000;
     return 1;

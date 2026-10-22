@@ -83,7 +83,19 @@ A final barrier orders publication before controller submission.
 
 After the controller proves an event or cancellation acknowledgment and full
 bus idle, completion rechecks the live CPU mappings. It invalidates every
-device-written allocation and orders CPU visibility. The controller still
+device-written allocation and orders CPU visibility.
+
+A service that runs several clients' models on one controller groups the
+allocations by session. `a733_npu_memory_group` assigns an allocation to group
+1–255 after initialization and before the bootstrap publication; allocations
+start in shared group 0 and the bootstrap stream must stay there. A job
+publication then maintains only READ and WRITE allocations of group 0 and of
+the submitted command's own group, and its completion invalidates only those
+WRITE allocations. Without this, one session's completion would invalidate
+another session's working pool while that session's client is clearing it,
+and the invalidation would discard the client's dirty lines. The bootstrap
+publication and its completion still maintain every allocation. Objects that
+never assign a group keep the behavior described above. The controller still
 requires result consumption before releasing a job; the memory policy's IDLE
 state alone does not authorize reuse.
 
@@ -124,20 +136,26 @@ The check covers:
   four buffers; a later job publication covers only the READ input and WRITE
   output, or only the output when the input is CONSTANT. A job publication
   before any bootstrap publication is refused.
+- Session groups: a job publication and completion leave another group's WRITE
+  allocation and its CPU contents untouched, and maintain it once it joins the
+  command's group. Group zero, a group above 255, the bootstrap stream, an
+  unknown address, a faulted object and any assignment after the bootstrap
+  publication are refused.
 - Failure at each publication cache operation, failed completion maintenance,
   retained faults, and refusal without further callbacks.
 - Atomic admission refusal for aliases, SRAM overlap, address overflow,
   invalid roles, insufficient command/table capacity, and invalid alignment.
 
-One AddressSanitizer/UndefinedBehaviorSanitizer host run passed, followed by one
-AArch64 target compile. No physical device request occurred. Unchanged DMA,
-mimus, model-inspection, and standalone MMU/controller evidence remains reusable.
-Local logs, commands, input identities, and artifacts are under
-`~/.cache/sunstoneos/evidence/npu-memory-20261016/`.
+The AddressSanitizer/UndefinedBehaviorSanitizer host run passes, followed by
+the AArch64 target compile. No physical device request occurred. The original
+evidence is under `~/.cache/sunstoneos/evidence/npu-memory-20261016/`; the
+session-group cases were added later and pass with the same command. The
+[shared-session QEMU checks](npu-session.md) exercise the groups with the
+native cache operations.
 
 The AArch64 object has SHA-256
-`4cbe693d63ffea31b4adae64c5615f277a0756bcf5c982824345945aafda1494`.
-It contains 3,568 bytes of code and constants and no static data. It references
+`28eaae0b88e5df8271b5396d382a3eb04e423e51116779448f3cc1a608b1124e`.
+It contains 3,880 bytes of code and constants and no static data. It references
 the MMU builder, `memcpy`, and `memset`. These are object measurements;
 the service's separate measurements are in its implementation record. Physical
 publication latency remains unmeasured.
@@ -146,7 +164,7 @@ Reproduce the focused host check with:
 
 ```sh
 clang-21 -std=c11 -O1 -g -Wall -Wextra -Werror \
-  -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude \
+  -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iinclude \
   checks/npu-memory.c drivers/npu/a733_npu_memory.c \
   drivers/npu/a733_npu_mmu.c drivers/npu/a733_npu_controller.c \
   -o /tmp/npu-memory-check

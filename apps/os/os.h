@@ -1,9 +1,25 @@
 #ifndef SUNSTONE_OS_H
 #define SUNSTONE_OS_H
 /* Integrated OS image (docs/os-image.md): the mimus board composition plus a
- * continuous thermal service, optional I2S microphone receive, one fixed
- * interrupt table and one fixed start list. */
+ * continuous thermal service, optional I2S microphone receive, an optional
+ * radio station or Bluetooth headset, one fixed interrupt table and one fixed
+ * start list. */
 #include "a733_board_application.h"
+#if defined(SUNSTONE_A733_OS_HEADSET) && (defined(SUNSTONE_A733_OS_RADIO) || \
+    defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_BOARD_RESIDENT))
+#error The headset build excludes radio, I2S capture and the resident lifetime
+#endif
+/* Board workloads the image admits: the mimus board's 0 (storage) and 4
+ * (keyboard and storage) or, in the radio build, only 1, in which the board
+ * adds its radio station to storage. */
+static inline int os_workload_valid(unsigned workload)
+{
+#ifdef SUNSTONE_A733_OS_RADIO
+    return workload==1;
+#else
+    return workload==0||workload==4;
+#endif
+}
 /* The microphone build appends 184 bytes of I2S receive facts to the
  * 808-byte session. The stage-2 loader admits either size, so these
  * definitions do not depend on the build. */
@@ -91,13 +107,43 @@ void os_audio_irq(void);
  * being captured and -1 once audio or the board has failed. */
 int os_audio_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
+#ifdef SUNSTONE_A733_OS_RADIO
+/* The board starts the radio owner and network client for workload 1; this
+ * entry refuses radio and crypto engine owners that collide with the image's. */
+int os_radio_task_privileged(void (*)(void *),void *);
+int os_radio_pins(struct a733_pin_handoff *);
+int os_radio_start(void);
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+/* The Bluetooth profile that EL3 copied from 0x43000000 and published
+ * (identity.c); NULL before. Valid for the OS workloads and repeated CVSD
+ * capture only, with owners distinct from the board's. */
+struct bluetooth_profile;
+const struct bluetooth_profile *os_headset_profile(void);
+int os_headset_profile_valid(const struct a733_board_session *,const struct bluetooth_profile *);
+void os_headset_task(void *);
+int os_headset_task_privileged(void (*)(void *),void *);
+int os_headset_pins(struct a733_pin_handoff *);
+int os_headset_start(void);
+/* EL0-safe, with the contract of os_audio_capture: the 16 kHz WAV of the first
+ * headset segment that starts after generation g was requested. */
+int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
+#endif
+#if defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_HEADSET)
+/* The recognizer's capture source: the I2S microphone or the headset. */
+int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
+#endif
 
 /* Resident services after the board's own (apps/board/application.h). The
  * mimus board application reports as the first of them; the microphone
- * build adds its capture client. */
+ * build adds its capture client and the radio build the board's radio owner
+ * and network client. */
 enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
 #ifdef SUNSTONE_A733_OS_AUDIO
     OS_SERVICE_AUDIO,
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    OS_SERVICE_RADIO, OS_SERVICE_NETWORK,
 #endif
     OS_SERVICES };
 struct os_service { const char *name; uint32_t window_us; };

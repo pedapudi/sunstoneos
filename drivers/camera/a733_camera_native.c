@@ -432,13 +432,14 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES),p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,
             p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
         .table_words=(void *)p,.table_physical=p,.frame_id=n->boot.lease,
-        .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.color_bars=n->boot.test_pattern,
+        .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
+        .color_bars=n->boot.test_pattern,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
-        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain}};
+        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,NULL}};
     if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1 ||
        (n->boot.pwdn_only && ov5640_pwdn_only(&n->capture.sensor)!=1))return fail(n);
     return 1;

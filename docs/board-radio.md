@@ -39,6 +39,10 @@ response length at byte 1,336 and response data at byte 1,596.
 | 1,864 | `uint32_t address_timeout_ticks` | DHCP address acquisition timeout in FreeRTOS ticks. |
 | 1,868 | `uint32_t lease_cap_ticks` | Maximum DHCP lease lifetime in FreeRTOS ticks. |
 
+The profile's Wi-Fi configuration also carries the station power-save mode in
+its `power_save` byte (see [station power save](radio-wifi.md#station-power-save-follows-the-source-management-configuration)).
+Zero keeps power save off, and the three following reserved bytes must be zero.
+
 Fixed addressing requires both timing fields to be zero. DHCP requires both
 to be nonzero and no greater than half the runtime maximum tick value. The
 board uses 64-bit ticks, so every nonzero 32-bit wire value meets that upper
@@ -93,9 +97,24 @@ When the session reports a clean link loss, the owner calls
 recovery deadline is the association and security timeouts plus, with DHCP, the
 address acquisition timeout, capped by the runtime lease. If recovery cannot be
 admitted within the association and security timeouts after the loss is first
-reported, the owner retains the radio. The board's single TCP client treats any
-non-OK reply as terminal, so a loss during its exchange still ends the
-application; recovery serves a client that has finished or is idle.
+reported, the owner retains the radio. The profile names one access point, so
+the board recovers onto that access point; the session can also admit another
+access point of the same network when a caller supplies its target.
+
+A link loss during an exchange does not end it. While the link is down, the socket
+service holds each pending request until the port returns or the request's own
+timeout passes. A SEND or RECEIVE that times out reports the bytes it still
+moved, and repeating it moves no byte twice. Both the outgoing client and the
+listener therefore repeat a timed-out SEND or RECEIVE of their exchange until
+the absolute client deadline. The same TCP connection continues after recovery
+when the address is unchanged, because the pinned stack's network-down
+processing clears ARP but leaves sockets open. Every other non-OK reply,
+including a CONNECT or ACCEPT timeout, still ends the exchange.
+`checks/board-radio.py` covers this with modeled socket replies: SEND and
+RECEIVE each time out once with nothing moved and once with one late byte, and
+both modes complete the four-byte exchange. A CONNECT timeout still fails the
+client. Physical loss timing and TCP retransmission across a real recovery
+remain unqualified.
 
 Application tasks submit requests and receive results through the existing
 bounded copied socket queues. Network publication uses a release/acquire flag
@@ -136,7 +155,8 @@ count and enforce the immutable board session cap before each reload.
 
 The outgoing client task executes one TCP exchange through copied requests:
 open, connect, send, receive the supplied expected bytes and close. Partial sends
-and receives preserve their offsets. One absolute client deadline bounds the
+and receives preserve their offsets, including bytes reported by a timed-out
+request that the client repeats. One absolute client deadline bounds the
 entire exchange, including queue contention; individual socket requests also
 retain their existing fixed tick deadlines. Failure closes application admission
 and leaves outstanding sockets and replies retained for owner fault handling.

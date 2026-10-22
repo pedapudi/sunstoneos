@@ -136,10 +136,15 @@ Preparation and capture results are `result.json` and `capture/result.json`
 beneath the same parent directory. Native source, constructor and execution
 closure remains in `~/.cache/sunstoneos/evidence/deinterlace-motion-20261020/`.
 
-Fixed-strength TNR selects `--mode tnr` and requires geometry marker revision 3.
+TNR selects `--mode tnr` and requires geometry marker revision 3.
 It authenticates two 640 × 480 NV12 frames, previous then current, totaling
 921600 bytes. Its first source sequence skips CPU feedback; hardware TNR stays
-enabled. Strength follows the pinned native configuration.
+enabled. By default the strength is the pinned fixed value. `--strength low`,
+`middle` or `high` seals session strength 1, 2 or 3, which selects the source's
+adaptive initial gain for that level and requires geometry marker revision 4.
+Preparation refuses a selected strength outside TNR or for an older image.
+Capture labels the mode `TNR-FIXED`, `TNR-INITIAL-LOW`, `TNR-INITIAL-MIDDLE` or
+`TNR-INITIAL-HIGH`; every TNR output uses the planar layout below.
 
 TNR copies one 460800-byte planar YUV420 frame. Y starts at byte 0 with stride
 640; U starts at 307200 and V at 384000, each with stride 320. The wire header

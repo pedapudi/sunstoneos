@@ -39,7 +39,7 @@ set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
     "${SUNSTONE_TCP_DIR}/source/portable/BufferManagement/BufferAllocation_1.c"
     "${network_root}/network/allocator.c" "${network_root}/runtime/memmove.c" "${network_root}/checks/radio-network.c"
     "${network_root}/drivers/net/aic8800_network.c" "${network_root}/drivers/net/sunstone_net.c"
-    "${network_root}/drivers/net/aic8800_data.c" "${network_root}/drivers/net/aic8800_wifi.c"
+    "${network_root}/drivers/net/sunstone_sntp.c" "${network_root}/drivers/net/aic8800_data.c" "${network_root}/drivers/net/aic8800_wifi.c"
     "${network_root}/drivers/net/aic8800_runtime.c" "${network_root}/drivers/net/aic8800_firmware.c"
     "${network_root}/drivers/net/aic8800_sdio_transport.c" "${network_root}/drivers/net/aic8800_sdio_codec.c"
     "${network_root}/drivers/storage/sdio_card.c" "${network_root}/drivers/storage/sunxi_sdio.c"

@@ -69,7 +69,7 @@ int pwm_submit(const uint8_t raw[80])
   q.generation!=pwm.session.board.generation||!q.sequence||q.reserved||
   memcmp(q.session_digest,pwm.session_digest,32)||q.kind<1||q.kind>4||
   q.budget_us<20000||q.budget_us>100000||
-  ((q.kind<=2)?(!q.argument||q.argument>=600):q.kind==3?q.argument!=0:q.argument>1))reason=2;
+  ((q.kind<=2)?(!q.argument||q.argument>600):q.kind==3?q.argument!=0:q.argument>1))reason=2;
  else if(q.sequence==pwm.accepted.sequence){
   if(memcmp(&q,&pwm.accepted,sizeof(q)))reason=3;
  }else if(!pwm.ready||pwm.command_pending)reason=4;

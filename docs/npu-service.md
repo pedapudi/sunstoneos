@@ -77,6 +77,77 @@ Reap and close cannot clear the fault. Task abandonment also retains resources.
 External recovery must prove device quiescence before releasing faulted memory;
 automatic fault reset and task-deletion cleanup remain unimplemented.
 
+## Shared mode gives each client its own session
+
+`npu_service_share`, called after initialization and before scheduling, lets
+several clients use the controller at once. The [session runtime](npu-session.md)
+uses it to run several models. Each bound client opens its own session: the
+first OPEN boots the controller and later OPENs join it, even while the
+bootstrap is still running. Sharing refuses a command table in which any
+command overlaps the internal-SRAM window, because the controller would refuse
+such a command only when the worker later started it.
+
+Each member has at most one job. SUBMIT queues the job and replies at once.
+After each poll or interrupt pass and after each request, the worker reaps a
+finished job, records the result for its member and starts the next queued
+job. It searches the client slots in round-robin order, starting after the
+client it served last. While every member keeps a job queued, each member
+therefore runs once before any member runs twice. A completed result stays
+with its member until that member's REAP, so a member that has not yet reaped
+never delays the others. The completion's cache maintenance has already run
+for that job's [session group](npu-memory.md).
+
+Replies report the member's own view of the controller:
+
+| Member state | Reply state |
+| --- | --- |
+| No job; bootstrap running | BOOTING |
+| No job; controller ready or running another member's job | READY |
+| Job queued or running | RUNNING |
+| Job finished, not yet reaped | DONE |
+| Queued job canceled, not yet reaped | CANCELED |
+| Session left by this CLOSE | CLOSED |
+| Any member's controller fault | FAULT |
+
+WAIT is held separately for each member, until that member's own view leaves
+BOOTING or RUNNING. CANCEL removes only a job that has not started; REAP then
+reports it as canceled. Canceling a started job would drain the controller for
+every member, so the request is refused and the job's deadline bounds it.
+CLOSE requires a member without a job and leaves the session. The last
+member's CLOSE closes the controller exactly as in exclusive mode, including
+the interrupt stop. A controller fault, such as an expired deadline, retains
+the controller and every member's buffers; every member then receives FAULT.
+Exclusive mode, the default, is unchanged.
+
+The [shared-mode check](../checks/npu-service-shared.c) runs three EL0 member
+tasks on two QEMU cores against the actual controller, memory policy and
+native cache operations, with a register model that completes one job per
+credit granted by the check. It covers:
+
+- Refusals for non-members, joining during the bootstrap and immediate replies
+  to queued SUBMITs.
+- The start order A, B, C, A when A resubmits while C is still queued.
+- A completed result that stays unreaped while other members' jobs run.
+- Refusal of CANCEL for a started job, and cancellation of a queued job that
+  never reaches the device.
+- Held WAITs of all three members at once.
+- A member leaving and rejoining, the last member's CLOSE and a second
+  bootstrap after it.
+- A deadline fault reported to every member with no further register access.
+
+Before scheduling, sharing refuses a command overlapping internal SRAM and a
+second `npu_service_share` call.
+[npu-session.py](../checks/npu-session.py) builds the check with the
+npu-service-model flags and link line and runs it:
+
+```sh
+checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode service-shared
+```
+
+It passed seven consecutive QEMU runs; results are under
+`~/.cache/sunstoneos/build/audit-npu-runtime/evidence/service-shared/`. The
+exclusive-mode and interrupt checks below still pass with the changed source.
+
 ## A preemptible EL1 task performs device operations
 
 The [SMP port extension](../patches/freertos-smp-privileged.patch) changes the
@@ -159,8 +230,9 @@ Local results, the failed fixture, final artifacts, and input identities are und
 The final ELF has SHA-256
 `55323616f8c91cb26b77b8b105df3a37de9ce5a01774f35f2eaf1b22a2bc8575`.
 It contains 52,488 bytes of code/constants and 1,834,032 bytes of BSS and reserved
-stacks, with no initialized data. The service object occupies 36,208 bytes,
-including its 32 KiB task stack. The native adapter and fixture command/table
+stacks, with no initialized data. That ELF predates shared mode. The service
+object now occupies 36,912 bytes, including its 32 KiB task stack and eight
+64-byte shared-mode member records. The native adapter and fixture command/table
 buffers are separate. Physical stack usage and latency remain unmeasured.
 
 Reproduce after relevant inputs change, using the [configured toolchain](build.md):

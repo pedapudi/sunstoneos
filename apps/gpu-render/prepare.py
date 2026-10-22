@@ -60,7 +60,7 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
 def session_check(raw):
     if len(raw)==632:
         magic,version,size,width,height=struct.unpack_from('<5Q',raw,592)
-        require(magic==0x4153373347545831 and version in (1,2) and size==632 and 0<width<=1920 and 0<height<=1080,
+        require(magic==0x4153373347545831 and version in (1,2,3) and size==632 and 0<width<=1920 and 0<height<=1080,
                 'Invalid GPU texture session envelope.')
         raw=raw[:592]
     if len(raw)==8944:
@@ -180,14 +180,17 @@ def image_manifest_check(manifest,image,session=None):
         offset=first-int(parts[0]['p_vaddr'])
         require(parts[0].data()[offset:offset+size]==struct.pack('<2Q',0x4750555458543031,2),
                 'GPU texture marker differs.')
-    if texture is not None and session is not None and struct.unpack_from('<Q',session,600)[0]==2:
-        depth=symbols.get('gpu_depth_blend_marker')
-        require(depth is not None and depth[1]==16,'GPU depth/blend capability absent.')
-        first,size=depth
+    version=struct.unpack_from('<Q',session,600)[0] if texture is not None and session is not None else 0
+    if version>=2:
+        # Session versions 2 and 3 select graphics profiles 3 and 4.
+        name,magic=('gpu_depth_blend_marker',0x4750554450424c31) if version==2 else ('gpu_batch_marker',0x4750554241544331)
+        marker=symbols.get(name)
+        require(marker is not None and marker[1]==16,'GPU graphics profile capability absent.')
+        first,size=marker
         parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
                int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
         require(len(parts)==1 and parts[0].data()[first-int(parts[0]['p_vaddr']):first-int(parts[0]['p_vaddr'])+size]==
-                struct.pack('<2Q',0x4750554450424c31,3),'GPU depth/blend marker differs.')
+                struct.pack('<2Q',magic,version+1),'GPU graphics profile marker differs.')
     require(manifest.get('runtime_input',False) is (runtime is not None), 'GPU runtime-input profile differs.')
     if runtime is not None:
         require(workload=='trusted-compiled-program' and runtime[1]==16,'GPU runtime input requires a program image.')

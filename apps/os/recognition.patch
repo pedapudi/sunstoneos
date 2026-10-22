@@ -4,7 +4,7 @@
  #include "FreeRTOS.h"
  #include "task.h"
  void runtime_smp_init(void);
-+int os_audio_capture(unsigned,const uint8_t **,size_t *);
++int os_capture(unsigned,const uint8_t **,size_t *);
  }
  #include <atomic>
  #include <cstring>
@@ -12,9 +12,9 @@
              if(trigger==1)break;mimus_board_progress();vTaskDelay(1);
          }
          unsigned current=generation.load(std::memory_order_acquire);
-+        /* The microphone capture of this generation replaces the recorded WAV. */
++        /* The microphone or headset capture of this generation replaces the recorded WAV. */
 +        for(;;){
-+            const uint8_t *wav;size_t bytes;int r=os_audio_capture(current,&wav,&bytes);
++            const uint8_t *wav;size_t bytes;int r=os_capture(current,&wav,&bytes);
 +            if(r<0||!mimus_board_live()){failed();}
 +            if(r==1){input[2]={wav,bytes};break;}
 +            mimus_board_progress();vTaskDelay(1);

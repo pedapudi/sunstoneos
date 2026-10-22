@@ -4,9 +4,10 @@
 #include "pvr_render_target.h"
 #include "pvr_render_service.h"
 
-/* Maximum depth/texture profile: root + three directories + 23 leaf tables.
- * Every constructor still derives and checks the complete actual VM plan. */
-#define A733_GPU_GRAPHICS_TABLE_PAGES 27u
+/* Maximum batch profile at 1080p: root + three directories + 31 leaf tables,
+ * sixteen of them for the 32 MiB packed depth/stencil attachment. Every
+ * constructor still derives and checks the complete actual VM plan. */
+#define A733_GPU_GRAPHICS_TABLE_PAGES 35u
 #define A733_GPU_GRAPHICS_MAPS (PVR_RENDER_REGIONS + 2u)
 #define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 8u)
 #define A733_GPU_RENDER_FW UINT32_C(0xc0a00000)
@@ -74,6 +75,11 @@ int a733_gpu_graphics_memory_prepare_texture(struct a733_gpu_graphics_memory *,
     struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
     struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
 int a733_gpu_graphics_memory_prepare_depth_blend(struct a733_gpu_graphics_memory *,
+    struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
+    struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
+/* Profile 4: per-frame state batches with a packed depth/stencil attachment
+ * sized from the session's power-of-two twiddled extents. */
+int a733_gpu_graphics_memory_prepare_batches(struct a733_gpu_graphics_memory *,
     struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
     struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
 /* Called before service preparation writes. Validates the combined native

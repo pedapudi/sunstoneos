@@ -25,6 +25,21 @@ struct a733_uart_plan {
 static inline uint32_t a733_uart_fcr(unsigned port)
 { return port && port < 7 ? 0x81u : 1u; }
 int a733_uart_plan(const struct a733_uart_format *, struct a733_uart_plan *);
+/* DMA0 request line shared by RX and TX (manual table 13-2): UART0..6 use
+ * 14..20 and S_UART0..1 use 50..51. Returns 0 for an invalid port. */
+static inline unsigned a733_uart_dma_request(unsigned port)
+{ return port < 7 ? 14u + port : port < 9 ? 43u + port : 0u; }
+/* Line modes selected by a733_uart_mode after configuration. IRDA is IrDA 1.0
+ * SIR (MCR function 1) without flow control, at most 115200 baud within the
+ * 0.87% SIR rate tolerance. RS485 is the
+ * hardware half-duplex 9-bit mode (MCR function 2 with automatic RTS driver
+ * enable) on UART1..6; it requires eight data bits and parity, whose odd/even
+ * selection supplies the transmitted ninth bit. LOOPBACK is the internal
+ * diagnostic loop (MCR LOOP): TX is held idle and RTS/DTR loop to CTS/DSR. */
+enum a733_uart_mode {
+    A733_UART_MODE_UART, A733_UART_MODE_IRDA, A733_UART_MODE_RS485,
+    A733_UART_MODE_LOOPBACK
+};
 
 enum a733_uart_state {
     A733_UART_CLOSED, A733_UART_CONFIGURING, A733_UART_READY,
@@ -54,10 +69,12 @@ struct a733_uart {
     uint64_t deadline, last_now;
     enum a733_uart_state state;
     uint32_t ier, errors;
-    unsigned dma_owned, dma_requests, dma_released;
+    unsigned dma_owned, dma_requests, dma_released, mode;
 };
 /* Errors retain LSR bits 1..4 (overrun, parity, framing, break) and bit 7
- * (an error remains in RX FIFO). Per-byte status accompanies received data. */
+ * (an error remains in RX FIFO). Per-byte status accompanies received data.
+ * In RS485 mode status bit 0 carries the received ninth (address) bit. */
+#define A733_UART_NINTH_BIT 1u
 struct a733_uart_byte { uint8_t value, status; };
 struct a733_uart_result {
     size_t received, transmitted;
@@ -100,7 +117,14 @@ int a733_uart_interrupt(struct a733_uart *, struct a733_uart_byte *, size_t,
  * DRAINED permits the external owner to reset/release; it is not restoration
  * of inherited console state. GIC acknowledgement remains external. */
 int a733_uart_drain(struct a733_uart *, uint64_t deadline);
-/* UART2 finite DMA lease, same exclusive owner as FIFO/IRQ calls. prepare
+/* Select a line mode in READY without a DMA lease or armed THRE. The line must
+ * be quiet: TX FIFO and shift register empty, RX empty and USR idle; otherwise
+ * return READY unchanged (0 is never returned). MCR and, for RS485, the RS485
+ * control register are written and read back; a mismatch faults. The mode
+ * persists until another call or the external reset. Physical IrDA and RS-485
+ * transceivers are outside this object. Invalid or unsupported modes return -1. */
+int a733_uart_mode(struct a733_uart *, enum a733_uart_mode, uint64_t deadline);
+/* Finite DMA lease on any port, same exclusive owner as FIFO/IRQ calls. prepare
  * requires both DMA channels stopped; requests starts only after both active.
  * FIFO/IRQ service refuses while leased. status samples aggregate LSR only,
  * never RBR: DMA cannot preserve per-byte error flags. stop disables/readbacks
@@ -108,6 +132,8 @@ int a733_uart_drain(struct a733_uart *, uint64_t deadline);
  * channel quiescence and true TEMT/RX-empty/USR-idle. All uncertainty retains.
  * Release is terminal: IER stays 0 and FCR stays in DMA mode, so exchange,
  * interrupt, tx_irq and another prepare refuse; only drain and close follow.
+ * DMA mode uses the one-character RX trigger on every port. With automatic
+ * flow control, RTS therefore deasserts while a received byte waits for DMA.
  * Return READY, FAULT or -1 for invalid calls; release returns 0 while draining.
  * The caller retains both DMA buffers until release, copy and matched REAP. */
 int a733_uart_dma_prepare(struct a733_uart *,uint64_t deadline);
