@@ -1,7 +1,6 @@
 #include "dma_memory.h"
 #include "aarch64_device_memory.h"
 
-#define LIMIT (UINT64_C(1) << 35)
 #define ROLES (DMA_MEMORY_ROLE(A733_DMA_READ) | DMA_MEMORY_ROLE(A733_DMA_WRITE) | DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS))
 #define WIDTHS ((1u << 1) | (1u << 2) | (1u << 4))
 #define BURSTS ((1u << 1) | (1u << 4) | (1u << 8) | (1u << 16))
@@ -15,22 +14,22 @@ int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window 
     for (size_t i = 0; i < count; ++i) {
         const struct dma_memory_window *w = &windows[i];
         if (!w->cpu || !w->bytes || (w->cpu & 63) || (w->physical & 63) || (w->bytes & 63) ||
-            w->cpu > UINTPTR_MAX - w->bytes || w->physical >= LIMIT || w->bytes > LIMIT - w->physical ||
+            w->cpu > UINTPTR_MAX - w->bytes || w->physical >= A733_DMA0_DATA_LIMIT || w->bytes > A733_DMA0_DATA_LIMIT - w->physical ||
             !w->roles || (w->roles & ~ROLES) ||
             a733_extents_overlap_prechecked(w->cpu, w->bytes, (uintptr_t)p, sizeof(*p))) return 0;
         if ((w->roles & DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)) &&
-            (w->physical >= UINT64_C(0xfffff800) || w->bytes > UINT64_C(0xfffff800) - w->physical)) return 0;
+            (w->physical >= A733_DMA0_DESCRIPTOR_LIMIT || w->bytes > A733_DMA0_DESCRIPTOR_LIMIT - w->physical)) return 0;
         for (size_t j = 0; j < i; ++j)
             if (a733_extents_overlap_prechecked(w->cpu, w->bytes, windows[j].cpu, windows[j].bytes) ||
                 a733_extents_overlap_prechecked(w->physical, w->bytes, windows[j].physical, windows[j].bytes)) return 0;
     }
     for (size_t i = 0; i < port_count; ++i) {
         const struct dma_fifo_port *f = &ports[i];
-        if (f->address >= LIMIT || !f->request || f->request > 63 ||
+        if (f->address >= A733_DMA0_DATA_LIMIT || !f->request || f->request > 63 ||
             (f->access != A733_DMA_READ && f->access != A733_DMA_WRITE) ||
             !f->widths || (f->widths & ~WIDTHS) || !f->bursts || (f->bursts & ~BURSTS)) return 0;
         unsigned width = f->widths & (1u << 4) ? 4 : f->widths & (1u << 2) ? 2 : 1;
-        if (f->address % width || width > LIMIT - f->address) return 0;
+        if (f->address % width || width > A733_DMA0_DATA_LIMIT - f->address) return 0;
         for (size_t j = 0; j < count; ++j)
             if (a733_extents_overlap_prechecked(f->address, width, windows[j].physical, windows[j].bytes)) return 0;
         for (size_t j = 0; j < i; ++j)

@@ -408,6 +408,42 @@ static void refusal(void)
     assert(writes == 0 && caches == 0 && !a733_dma_owns(&controller, &transfers[0]));
 }
 
+/* The descriptor builder is the only descriptor-limit check on submit. It
+ * bounds the linked descriptors, which must end at or below the end-of-chain
+ * marker 0xfffff800, before any descriptor byte, cache operation or register
+ * write. */
+static void descriptor_limit(void)
+{
+    setup();
+    ram[DESC_A].bus = UINT64_C(0xfffff7c0); /* The second descriptor crosses. */
+    transfers[0].descriptors = mapping(DESC_A, A733_DMA_DESCRIPTORS);
+    assert(a733_dma_claim(&controller, 0) == A733_DMA_CONTROL_OK);
+    assert(a733_dma_submit(&controller, 0, &transfers[0], 100) == A733_DMA_INVALID);
+    unchanged(DESC_A, 0xa5);
+    assert(writes == 0 && caches == 0 && !a733_dma_owns(&controller, &transfers[0]));
+    assert(controller.channels[0].status == A733_DMA_CONTROL_OK);
+
+    /* A channel that is not quiet enters recovery before the chain is built. */
+    registers[reg_index(0, 0x28)] = 1;
+    assert(a733_dma_submit(&controller, 0, &transfers[0], 100) == A733_DMA_RECOVERY);
+    unchanged(DESC_A, 0xa5);
+    assert(writes == 0 && caches == 0 && !a733_dma_owns(&controller, &transfers[0]));
+
+    /* Two linked descriptors end exactly at the marker; the unused tail of
+     * the descriptor mapping is never linked or read. */
+    setup();
+    ram[DESC_A].bus = UINT64_C(0xfffff780);
+    transfers[0].descriptors = mapping(DESC_A, A733_DMA_DESCRIPTORS);
+    assert(a733_dma_claim(&controller, 0) == A733_DMA_CONTROL_OK);
+    assert(a733_dma_submit(&controller, 0, &transfers[0], 100) == A733_DMA_ACTIVE);
+    assert(registers[reg_index(0, 8)] == 0xfffff780);
+    execute(0);
+    assert(a733_dma_poll(&controller, 0) == A733_DMA_STOPPING);
+    drain(0);
+    assert(a733_dma_poll(&controller, 0) == A733_DMA_COMPLETE);
+    copied(DEST_A);
+}
+
 static void fifo_transfers(void)
 {
     for (unsigned receive = 0; receive < 2; ++receive) {
@@ -472,7 +508,8 @@ int main(void)
     cancellation_and_failed_stop();
     faults_and_timeouts();
     refusal();
+    descriptor_limit();
     fifo_transfers();
     event_wait();
-    puts("PASS DMA controller: noncoherent transfers, concurrent leases, bounded cancellation, and retained buffers after faults and interrupt-wait eligibility. Hardware untested.");
+    puts("PASS DMA controller: noncoherent transfers, concurrent leases, bounded cancellation, retained buffers after faults, descriptor limit and interrupt-wait eligibility. Hardware untested.");
 }

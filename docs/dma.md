@@ -151,8 +151,11 @@ while its memory-copy path does not perform that transformation. The pinned
 [bootloader header](https://github.com/orangepi-xunlong/u-boot-orangepi/blob/b791be842935b27268ae3d00e943a9075495f30a/arch/arm/include/asm/arch-sunxi/dma.h)
 also defines a descriptor-high register at channel offset `0x3c`.
 The inspected bootloader driver does not program that register.
-Until this is resolved, the encoder accepts descriptor storage only below
-`0xfffff800`, the end-of-chain marker. Wider data addresses remain representable.
+Until this is resolved, the encoder accepts linked descriptors only below
+`0xfffff800` (`A733_DMA0_DESCRIPTOR_LIMIT`), the end-of-chain marker. This
+check is the only descriptor-limit check on a controller submit. Data addresses
+up to `A733_DMA0_DATA_LIMIT` (2^35) remain representable.
+[DMA address widths](dma-address-width.md) give the rule for every DMA master.
 Register state and physical address reachability still require qualification.
 
 ## Encoder contract
@@ -184,7 +187,7 @@ The current software policy permits 1–64 segments, each containing 1 byte
 through 1 MiB. These bounds limit validation and descriptor allocation; they
 are not measured silicon limits. Lengths must be multiples of both endpoint
 widths. Each address must align to its endpoint's width.
-The complete addressed range must fit within 35 bits.
+The complete addressed range must end at or below `A733_DMA0_DATA_LIMIT` (2^35).
 For a fixed port, that range is one bus access wide.
 
 All segments are validated before any output byte changes. Invalid input leaves
@@ -342,6 +345,9 @@ UndefinedBehaviorSanitizer. Cases cover memory and FIFO streams, two channels
 sharing source data, conflicts between writable cache lines, and completion
 before bus drain. Faults cover ignored start/stop writes, descriptor configuration
 and restoration failures, uncleared events, and changed processor routing.
+A chain whose second descriptor crosses `0xfffff800` is refused with no
+descriptor, cache or register change; on a channel that is not quiet the same
+chain enters recovery. A chain that ends at that limit completes.
 The model also checks cancellation, timeout precedence, counter wrap, and a
 deadline consumed by cache preparation. It checks the interrupt-wait margin
 across counter wrap and that a pending half-package event, which is not

@@ -10,7 +10,10 @@
  */
 #include "a733_iommu.h"
 #include "a733_range.h"
-#define LIMIT (UINT64_C(1)<<34)
+#include "dma_address_width.h"
+/* Table geometry: the directory index is IOVA bits 33:22. */
+#define IOVA_SPACE (UINT64_C(1)<<34)
+_Static_assert(A733_IOMMU_IOVA_LIMIT<=IOVA_SPACE,"IOVA policy exceeds table geometry");
 #define PAGE 4096u
 #define DIRECTORY_WORDS 4096u
 #define L2_WORDS 1024u
@@ -27,21 +30,22 @@ const struct a733_iommu_master *a733_iommu_master(unsigned id)
     for(unsigned i=0;i<ARRAY_SIZE(masters);++i)if(masters[i].id==id)return &masters[i];
     return NULL;
 }
-static int bounds(uint64_t a,uint64_t n,uint64_t minimum)
+static int bounds(uint64_t a,uint64_t n,uint64_t minimum,uint64_t limit)
 {
-    return a>=minimum && a<LIMIT && n && n<=LIMIT-a && !(a&(PAGE-1)) && !(n&(PAGE-1));
+    return a>=minimum && a<limit && n && n<=limit-a && !(a&(PAGE-1)) && !(n&(PAGE-1));
 }
 /* Returns number of unique L2 windows, first-use order. */
 static int windows(const struct a733_iommu_tables *t,uint16_t slots[4])
 {
     unsigned used=0;
     if(!t || !t->words || ((uintptr_t)t->words&16383) ||
-       (t->physical&16383) || !bounds(t->physical,A733_IOMMU_TABLE_BYTES,0x40000000) ||
+       (t->physical&16383) || !bounds(t->physical,A733_IOMMU_TABLE_BYTES,0x40000000,A733_IOMMU_PHYSICAL_LIMIT) ||
        !t->count || t->count>A733_IOMMU_MAX_SPANS)return -1;
     if(a733_ranges_overlap_or_wrap(t,sizeof(*t),t->words,A733_IOMMU_TABLE_BYTES))return -1;
     for(unsigned i=0;i<t->count;++i) {
         const struct a733_iommu_span *p=&t->spans[i];
-        if(!bounds(p->iova,p->bytes,PAGE) || !bounds(p->physical,p->bytes,0x40000000) ||
+        if(!bounds(p->iova,p->bytes,PAGE,IOVA_SPACE) ||
+           !bounds(p->physical,p->bytes,0x40000000,A733_IOMMU_PHYSICAL_LIMIT) ||
            !p->access || (p->access&~3u) ||
            a733_extents_overlap_or_wrap(p->physical,p->bytes,t->physical,A733_IOMMU_TABLE_BYTES))return -1;
         for(unsigned j=0;j<i;++j)
@@ -109,7 +113,7 @@ int a733_iommu_validate(const struct a733_iommu_tables *t)
 int a733_iommu_translate(const struct a733_iommu_tables *t,uint64_t va,
                         unsigned access,uint64_t *pa)
 {
-    if(!pa || !access || (access&~3u) || va>=LIMIT || a733_iommu_validate(t)!=1 ||
+    if(!pa || !access || (access&~3u) || va>=IOVA_SPACE || a733_iommu_validate(t)!=1 ||
        a733_ranges_overlap_or_wrap(pa,sizeof(*pa),t,sizeof(*t)) ||
        a733_ranges_overlap_or_wrap(pa,sizeof(*pa),t->words,A733_IOMMU_TABLE_BYTES))return -1;
     for(unsigned i=0;i<t->count;++i) {
@@ -156,9 +160,9 @@ int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
        a733_ranges_overlap_or_wrap(s,sizeof(*s),t,sizeof(*t)) ||
        a733_ranges_overlap_or_wrap(s,sizeof(*s),t->words,A733_IOMMU_TABLE_BYTES) ||
        (ctx && a733_ranges_overlap_or_wrap(s,sizeof(*s),ctx,1)) || a733_iommu_validate(t)!=1)return -1;
-    /* Camera allocation policy is narrower than the hardware's 34-bit IOVA. */
+    /* Master IOVA policy is narrower than the hardware's 34-bit IOVA space. */
     for(unsigned i=0;i<t->count;++i)
-        if(t->spans[i].iova+t->spans[i].bytes>UINT64_C(0x100000000))return -1;
+        if(t->spans[i].iova+t->spans[i].bytes>A733_IOMMU_IOVA_LIMIT)return -1;
     *s=(struct a733_iommu){.ops=*ops,.tables=*t,.context=ctx,.initialized=1,
         .translated_masters=2,.accessible_masters=A733_IOMMU_REAL_MASTERS};return 1;
 }

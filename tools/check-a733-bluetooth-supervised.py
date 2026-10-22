@@ -133,6 +133,9 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
     require(1<=segments<=32,'Repeated headset target must be1..32segments.')
     record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved');save()
     queries=0;last=0;cancelled=False;failure=False;previous=(0,0,0,0,0);identity=None
+    # A segment's first sample is the sum of the input samples of all earlier
+    # segments, which the consecutive tickets let the host track exactly.
+    first_sample=0
     def query(op,ticket=0,offset=0,count=0):
         nonlocal queries,previous,failure
         require(now()<deadline and queries<16384,'Repeated headset deadline/query budget expired.')
@@ -151,6 +154,7 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
         value,_=query(0)
         if value['ticket']:
             require(value['ticket']==last+1,'Repeated headset skipped or repeated a transcript.')
+            require(value['first_sample']==first_sample,'Repeated headset first sample is not contiguous.')
             stamp={k:value[k] for k in ('firmware','uart','acl','audio','ticket','first_sample','bytes','input_samples','output_samples',
                    'pcm_sha256','wav_sha256','text_sha256','first_acquired','last_acquired','codec','sample_rate')}
             lifetime=tuple(value[k] for k in ('firmware','uart','acl','audio','codec','sample_rate'))
@@ -167,7 +171,7 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
             target=evidence/f'transcript-{stamp["ticket"]:04}.txt';supervisor.durable_frame(target,text)
             record.setdefault('transcripts',[]).append({**stamp,'path':target.name});save()
             current,_=query(2,stamp['ticket']);require(current['ticket']==stamp['ticket'],'Repeated transcript ACK differs.')
-            last=stamp['ticket'];value=current
+            last=stamp['ticket'];first_sample+=stamp['input_samples'];value=current
         if not cancelled and (last>=segments or failure):
             # An unclassified retained failure supplies no further transport authority.
             require(not(value['state']==3 and not value['flags']),'Repeated headset retained failure; disconnect unestablished.')
@@ -334,7 +338,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--pcm',type=Path,help='Runtime mono S16LE16k input, a nonempty multiple of2400bytes; playback/duplex modes only')
-    parser.add_argument('--segments',type=int,default=2,help='Mode2 transcript target before capture cancellation,1..32')
+    parser.add_argument('--segments',type=int,help='Transcript target before capture cancellation, 1..32; default 1 for modes 2 and 3, '
+                        'whose device starts one activation unattended, and 2 for mode 5')
     parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release Bluetooth resources.')
@@ -343,6 +348,7 @@ def main(argv=None):
     pcm=args.pcm.read_bytes() if args.pcm else None
     mode=struct.unpack_from('<I',profile,624)[0] if len(profile)>=752 else 0
     require((mode in (4,5))==(pcm is not None),'Caller PCM is required exactly for playback/duplex profiles.')
+    if args.segments is None:args.segments=1 if mode in (2,3) else 2
     if pcm is not None:require(0<len(pcm)<=2400*256 and len(pcm)%2400==0,'Caller PCM must contain1..256 complete2400byte periods.')
     evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):

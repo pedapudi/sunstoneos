@@ -148,8 +148,9 @@ void os_headset_task(void *);
 int os_headset_task_privileged(void (*)(void *),void *);
 int os_headset_pins(struct a733_pin_handoff *);
 int os_headset_start(void);
-/* EL0-safe, with the contract of os_audio_capture: the 16 kHz WAV of the first
- * headset segment that starts after generation g was requested. */
+/* EL0-safe, with the contract of os_audio_capture: the 16 kHz WAV of the
+ * headset segment recorded for generation g, which the headset button starts
+ * (and, in workload 4, the request itself). */
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #ifdef SUNSTONE_A733_OS_RADIO
 /* With the radio, one module owner serves Wi-Fi and Bluetooth: the board's

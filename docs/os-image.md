@@ -91,7 +91,7 @@ A failed service parks or suspends without recording.
 | Radio owner (radio build) | Each pass while the radio has not failed, one pass per tick | 1 s |
 | Network client (radio build) | Each pass while the board is live and the radio has not failed, one pass per tick | 1 s |
 | Bluetooth owner (headset build) | Each Bluetooth poll while the application has not failed, one per tick; with the radio, the radio owner makes it after each radio poll | 1 s |
-| Headset capture client (headset build) | Each task pass while capture has not failed, one pass per tick | 1 s |
+| Headset capture client (headset build) | Each task pass while capture has not failed; a pass follows each wake-up, at most 250 ms apart | 1 s |
 
 The windows are configuration. No board measurement of the longest pause of
 each loop exists yet. One radio owner pass repeats session polls for at most
@@ -320,10 +320,12 @@ The headset build runs the [native Bluetooth application](bluetooth-native.md)
 on the board's shared providers. The application runs H4/HCI over UART1,
 pairs securely with the headset, serves the hands-free audio gateway and
 receives audio over SCO or eSCO. The image admits the repeated profiles
-(version 3). In CVSD (mode 2), the application publishes fixed-length 8 kHz
-segments into two slots. In the mSBC build, wideband speech (mode 3) adds
-16 kHz segments decoded by the pinned libsbc, with a fallback to CVSD when
-the headset or the controller cannot use mSBC. Its USB0 output and its own
+(version 3). The headset's voice button starts one recording through the
+hands-free voice-recognition procedure. Each recording publishes one segment
+into one of two slots: 8 kHz in CVSD (mode 2) or, in the mSBC build, 16 kHz
+decoded by the pinned libsbc (mode 3). Mode 3 falls back to CVSD when the
+headset or the controller cannot use mSBC. The image never includes the
+Bluetooth image's optional call control. Its USB0 output and its own
 recognizer are not linked; the profile's recognition models are the mimus
 board's own.
 
@@ -371,38 +373,62 @@ owners, topology, radio identity and firmware spans must equal the radio's.
 ### Capture client
 
 The capture client ([headset.c](../apps/os/headset.c)) is the segment
-consumer. It copies and acknowledges every segment as it arrives, so the
-application never stops for backlog. When a recognition generation is
-requested, the client notes the published segment count; the segment being
-filled then has the next ticket. The first segment with a later ticket starts
-after the request. The client copies it and checks its SHA-256 and the
-unchanged segment record. It converts a CVSD segment to a 16 kHz WAV with the
-Bluetooth image's 8-to-16 kHz conversion, or wraps a 16 kHz mSBC segment
-unchanged, and publishes the WAV for that generation. Every other segment is
-discarded. The recognizer takes the WAV through the same
-[recognition.patch](../apps/os/recognition.patch) as the microphone build.
+consumer. It requests a recording only while a recognition generation waits
+for audio, through the application's request word
+([repeated capture](bluetooth-native.md#one-voice-recognition-activation-records-one-segment)):
 
-A refused copy, a segment with a lost packet, capture stopped for any reason
-other than the supervised capture window, a failed Bluetooth owner or a
-failed board ends the session through `board_fail`. The owner retains its
-transports and the client keeps its buffers. In the supervised lifetime they
-stay held until manual power removal. In the resident lifetime both headset
-services stop reporting and the watchdog resets the board.
+- In workload 0 it requests ACCEPT, which admits the headset button.
+- In workload 4 each new generation, started by the Enter key, requests START,
+  which records at once and sends `+BVRA: 1` to the headset. If that
+  recording ends without a segment, as after a headset cancel, the client
+  requests ACCEPT, so the button records the generation. A newer generation
+  upgrades a pending ACCEPT to START. A START refused because an earlier
+  recording is still running is requested again if that recording ends
+  without a segment.
+
+Each request passes the published count from the client's last status read,
+taken before its borrow found nothing. A recording that publishes between the
+borrow and the request makes the application refuse the request, so the
+client never admits the button again for a generation that already has its
+segment.
+
+Because requests are made only while a generation waits, the next published
+segment is the newest generation's. The client borrows it in place, converts
+a CVSD segment to a 16 kHz WAV with the Bluetooth image's 8-to-16 kHz
+conversion, or wraps a 16 kHz mSBC segment unchanged, acknowledges it and
+publishes the WAV for that generation. The segment's SHA-256 is the
+application's. A segment that arrives after its generation is captured is
+acknowledged without touching that WAV. The recognizer takes the WAV through
+the same [recognition.patch](../apps/os/recognition.patch) as the microphone
+build.
+
+The client waits on its task notification for at most 250 ms, within its 1 s
+progress window. The Bluetooth owner notifies it when a recording ends and
+after a stop or disconnection, and `os_headset_capture` notifies it when the
+recognizer requests a new generation.
+
+Published segments never contain a lost packet, because a loss stops capture
+and discards the segment. A refused borrow or request, capture stopped for any
+reason other than the supervised capture window, a failed Bluetooth owner
+or a failed board ends the session through `board_fail`. The owner retains
+its transports and the client keeps its buffers. In the supervised lifetime
+they stay held until manual power removal. In the resident lifetime both
+headset services stop reporting and the watchdog resets the board.
 
 ### The schedule follows the lifetime
 
 In the supervised lifetime the application keeps the 60-second schedule of
 the Bluetooth image: firmware by 30 s, HCI identification by 35 s, headset
-setup by 40 s and capture until 38 s; the recognizer has the remaining time.
-After the capture window closes, a pending request is never answered and the
-session ends at its deadline.
+setup by 40 s and recordings until 38 s; the recognizer has the remaining
+time. After the capture window closes, a pending request is never answered
+and the session ends at its deadline.
 
 In the resident lifetime the application has no end. Firmware loading has
 120 s from the session start, the bound of the resident radio. When the
 firmware first becomes ready, the stage schedule moves so that its 30 s
 firmware bound falls at that moment. HCI identification and headset setup
 then keep their supervised budgets of 5 s and 10 s after the firmware.
-Capture has no window: the application publishes segments until the link
+Recording has no window: the headset button records segments until the link
 fails, and a stop for any reason closes the audio link within 2 s. These
 bounds are configuration, not a board measurement.
 
@@ -528,20 +554,26 @@ profile.
 [os-image-headset.py](../checks/os-image-headset.py) compiles
 `apps/os/headset.c` with a headset build's flags, links the real WAV
 conversions and runs it under unicorn against a modeled segment publisher
-with the Bluetooth application's copy, acknowledgment and ticket rules. The
+with the Bluetooth application's request word, borrow, acknowledgment and
+ticket rules. The
 model follows the build's radio, resident and mSBC options. It covers the
 pin entry with its 18 refusals, or 24 with the radio, and startup with the
 session's lifetime. With the radio, startup creates only the capture client
 and attaches the application to the radio's module with the radio owner as
-Bluetooth owner. Two generations each discard the segments before and during
-the request and keep their WAV while later segments drain. A lost packet, a
-changed segment record, a wrong digest, a failed application and capture
-stopped for a deadline, backlog or loss each end the session; the supervised
-capture window does not. One owner iteration polls a live application and
+Bluetooth owner. In workload 4 the client requests nothing while no
+generation waits and requests START for a new generation. It keeps a captured
+generation's WAV when a stray segment arrives, requests ACCEPT after a
+recording ends without a segment and upgrades ACCEPT to START for a newer
+generation. A recording that publishes between the client's borrow and its
+request refuses the request, and a START refused while an earlier recording
+runs is requested again after that recording ends without a segment. In
+workload 0 it requests ACCEPT only. A refused borrow
+or request, a failed application and capture stopped for a deadline, backlog
+or loss each end the session; the supervised capture window does not. One owner iteration polls a live application and
 retains it after a board failure, and the resident build reports progress
 only before a failure. The mSBC build wraps a wideband segment unchanged and
 refuses an unknown capture state; other builds refuse a wideband segment.
-The request rules are also checked.
+The recognizer's request rules and the client's wake-up are also checked.
 
 [os-image-identity.py](../checks/os-image-identity.py) runs the linked
 image's EL3 publication hook under unicorn. Each build admits its own

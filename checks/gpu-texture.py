@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check native display-sized indexed texture staging, mapping and copied output ownership."""
+"""Check native display-sized indexed texture upload, mapping and in-place output ownership."""
 import argparse
 import hashlib
 import json
