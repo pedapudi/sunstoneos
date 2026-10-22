@@ -15,7 +15,10 @@ does not run. The build's link check names its options:
 - the headset build admits workloads 0 and 4, copies the 832-byte Bluetooth
   profile from 0x43000000 and publishes the copy, the profile span and the
   chip-ID record; it refuses another profile size and a profile that the
-  headset rules refuse.
+  headset rules refuse;
+- the build with both admits workload 1 and copies the Bluetooth profile
+  from 0x43008000, after the radio profile, with the headset build's
+  publications and refusals; the 1 MiB span covers both profiles.
 """
 import argparse
 import hashlib
@@ -80,7 +83,7 @@ def main():
         cpu.mem_write(0x03006200, struct.pack('<4I', *SID_WORDS))
         profile = bytes((i * 7 + 3) & 255 for i in range(832))
         profile = profile[:12] + struct.pack('<I', profile_bytes) + profile[16:]
-        cpu.mem_write(0x43000000, profile)
+        cpu.mem_write(0x43008000 if radio and headset else 0x43000000, profile)
         reads = {}
         for insn in Cs(CS_ARCH_ARM64, CS_MODE_ARM).disasm(bytes(cpu.mem_read(entry, length)), entry):
             if insn.mnemonic == 'mrs':
@@ -142,15 +145,15 @@ def main():
         assert returned == [int(accepted)], (workload, returned)
         if not accepted:
             assert calls == [] and not checked, (workload, calls)
-        elif radio:
-            assert calls[:5] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
-            assert len(calls) == 6, calls
-            record(cpu, calls)
         elif headset:
             assert checked == [True] and len(calls) == 6, (checked, calls)
             copy = calls[3][0]
             assert calls[:3] == assets and calls[3][1:] == (832, DEADLINE) and calls[4] == (0x43000000, 0x100000, DEADLINE)
             assert bytes(cpu.mem_read(copy, 832)) == profile
+            record(cpu, calls)
+        elif radio:
+            assert calls[:5] == assets + [(0x43000000, 1872, DEADLINE), (0x43010000, 0xf0000, DEADLINE)], calls
+            assert len(calls) == 6, calls
             record(cpu, calls)
         else:
             assert calls == assets, calls
@@ -161,7 +164,7 @@ def main():
     cases.append({'workload': workload, 'second-call-refused': True})
     if headset:
         for name, change in (('profile-size-752', {'profile_bytes': 752}), ('profile-refused', {'profile_valid': 0})):
-            _, calls, returned, _, _ = run(4, **change)
+            _, calls, returned, _, _ = run(admitted[0], **change)
             assert returned == [0] and calls == assets, (name, returned, calls)
             cases.append({'workload': 4, name: 'refused'})
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +172,8 @@ def main():
                                        'radio': radio, 'headset': headset, 'cases': cases, 'physical_access': False},
                                       indent=2) + '\n')
     print('PASS OS identity hook (%s): workloads %s admitted, others refused, %d cases' %
-          ('radio' if radio else 'headset' if headset else 'base', list(admitted), len(cases)))
+          ('radio and headset' if radio and headset else 'radio' if radio else 'headset' if headset else 'base',
+           list(admitted), len(cases)))
 
 
 if __name__ == '__main__':

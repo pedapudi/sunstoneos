@@ -3,8 +3,11 @@
  * reads the four chip-ID words and publishes the radio profile span, as the
  * board image does for its radio workloads. The headset build reads the
  * Bluetooth profile and the chip-ID words and publishes both, as the
- * Bluetooth image does (apps/bluetooth/identity.c). Cached start.S clears BSS
- * before this hook, so the records below keep their values. */
+ * Bluetooth image does (apps/bluetooth/identity.c). With both, the profile
+ * span holds the radio profile at 0x43000000, the Bluetooth profile at
+ * OS_HEADSET_PROFILE_ADDRESS and the shared firmware from 0x43010000, and the
+ * whole 1 MiB span is published. Cached start.S clears BSS before this hook,
+ * so the records below keep their values. */
 #include "os.h"
 #include "../board/identity.h"
 #include "../board/session.h"
@@ -30,7 +33,7 @@ int board_identity_prepare(uint64_t deadline)
         if(a733_cpu_coherence_publish(mimus_asset_address[i],mimus_asset_bytes[i],deadline)!=1)return 0;
 #if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifdef SUNSTONE_A733_OS_HEADSET
-    const volatile struct bluetooth_profile *source=(const void *)BLUETOOTH_PROFILE_ADDRESS;
+    const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;
     uint32_t bytes=source->bytes;
     if(bytes!=sizeof(profile))return 0;
     for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];

@@ -9,16 +9,31 @@
  #ifdef SUNSTONE_BOARD_USB2_IRQ
  #include "host_irq.h"
  #endif
-@@ -100,6 +103,8 @@
+@@ -17,6 +20,10 @@
+ struct board_application board;
+ struct board_provider providers;
+ static struct board_radio radio;
++#ifdef SUNSTONE_A733_OS_HEADSET
++/* The headset attaches its Bluetooth client to this radio's module. */
++struct board_radio *os_board_radio(void){return &radio;}
++#endif
+ static struct board_radio_profile admitted_profile;
+ #ifdef SUNSTONE_BOARD_SUPERVISED
+ static struct board_radio_profile runtime_profile;
+@@ -100,6 +107,12 @@
                  a733_typec_revoke(&board.typec.provider);
              }
          }
++#ifdef SUNSTONE_A733_OS_HEADSET
++        /* The same owner task serves the module's Bluetooth client. */
++        os_module_poll();
++#endif
 +        /* A failed radio stops reporting, so the resident watchdog resets the board. */
 +        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3)BOARD_PROGRESS(OS_SERVICE_RADIO);
          vTaskDelay(1);
      }
  }
-@@ -121,6 +126,8 @@
+@@ -121,6 +134,8 @@
                      memory_order_release,memory_order_relaxed);
              }
          }

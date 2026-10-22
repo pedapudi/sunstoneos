@@ -13,11 +13,13 @@ static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskDelay(1);}
 #include "../board/usb0_service.h"
 
 /* Query:0,ordinal8. ACK:1,ordinalLE32,generationLE64,digest32. Each output
- * remains immutable after ACK. While a response awaits actual transferred-byte
- * completion, no queued request or ACK is consumed. */
+ * remains immutable until picture ordinal+2 reuses its copy, which needs the
+ * ACK of ordinal+1; an acknowledged output that will be reused cannot be queried
+ * again. While a response awaits actual transferred-byte completion, no queued
+ * request or ACK is consumed. */
 static uint8_t response[H264_ENCODE_RESULT_HEADER],request[44];
 static size_t response_bytes,sent,transferred,request_used;
-static unsigned response_ordinal,request_kind,delivered[2];
+static unsigned response_ordinal,request_kind,delivered[A733_H264_ENCODE_GOP_FRAMES];
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 static uint32_t le32(const uint8_t *p)
 {return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);}
@@ -39,7 +41,8 @@ static int upload_now(void *unused,uint64_t *now)
 {(void)unused;return board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,now)==1&&board_live(NULL)?1:-1;}
 static void response_start(unsigned ordinal)
 {
- if(ordinal>1)stop();
+ unsigned frames=h264_encode_input_ready(&h264_encode.supplied)?h264_encode.supplied.frames:0;
+ if(ordinal>=frames||(ordinal+2<frames&&atomic_load_explicit(&h264_encode.acked[ordinal],memory_order_acquire)))stop();
  unsigned ready=atomic_load_explicit(&h264_encode.result[ordinal],memory_order_acquire);
  unsigned failed=atomic_load_explicit(&h264_encode.fatal,memory_order_acquire);
  unsigned status=ready?1:failed?2:0;
@@ -49,7 +52,7 @@ static void response_start(unsigned ordinal)
  put32(response+24,(uint32_t)board.session.generation);put32(response+28,(uint32_t)(board.session.generation>>32));
  memcpy(response+32,h264_encode.session.input_digest,32);
  if(status==1)memcpy(response+64,h264_encode.digest[ordinal],32);
- put32(response+96,ordinal);put32(response+100,2);put32(response+104,ordinal?0:1);
+ put32(response+96,ordinal);put32(response+100,frames);put32(response+104,ordinal?0:1);
  put32(response+108,640);put32(response+112,480);put32(response+116,640);put32(response+120,66);
  put32(response+124,31);put32(response+128,26);put32(response+132,30);put32(response+136,1); /* AnnexB */
  sent=transferred=0;response_ordinal=ordinal;
@@ -60,7 +63,7 @@ static void exchange(void)
  if(response_bytes){
   const uint8_t *p;size_t left;
   if(sent<H264_ENCODE_RESULT_HEADER){p=response+sent;left=H264_ENCODE_RESULT_HEADER-sent;}
-  else{p=h264_encode.storage.copies[response_ordinal]+sent-H264_ENCODE_RESULT_HEADER;left=response_bytes-sent;}
+  else{p=h264_encode.storage.copies[response_ordinal&1]+sent-H264_ENCODE_RESULT_HEADER;left=response_bytes-sent;}
   if(left>512)left=512;unsigned n=tud_vendor_write(p,left);if(n>left)stop();sent+=n;tud_vendor_flush();return;
  }
  if(!tud_vendor_available())return;
@@ -69,7 +72,7 @@ static void exchange(void)
   if(tud_vendor_read(request+request_used,n)!=n)stop();request_used+=n;if(request_used!=size)return;
   if(request_kind==1){unsigned ordinal=request[0];request_kind=request_used=0;response_start(ordinal);return;}
   unsigned ordinal=le32(request);
-  if(ordinal>1||le64(request+4)!=h264_encode.session.board.generation||!delivered[ordinal]||
+  if(ordinal>=h264_encode.supplied.frames||le64(request+4)!=h264_encode.session.board.generation||!delivered[ordinal]||
     !atomic_load_explicit(&h264_encode.result[ordinal],memory_order_acquire)||
     atomic_load_explicit(&h264_encode.acked[ordinal],memory_order_acquire)||
     memcmp(request+12,h264_encode.digest[ordinal],32))stop();

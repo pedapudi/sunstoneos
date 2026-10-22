@@ -622,6 +622,7 @@
  "a733-pcie-trace.py": {
   "cache_areas": [],
   "docs": [
+   "docs/pcie-nvme.md",
    "docs/pcie.md"
   ],
   "library": false,
@@ -1656,7 +1657,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1688,7 +1691,9 @@
    "evidence",
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1870,6 +1875,20 @@
    "--headers"
   ],
   "summary": "Build the native board composition and exercise only its new contracts.",
+  "usb": false
+ },
+ "board-park.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-application.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Linked board PMIC task: a parked service suspends once instead of waking every tick.",
   "usb": false
  },
  "board-radio.py": {
@@ -2142,7 +2161,7 @@
   "required_arguments": [
    "--output"
   ],
-  "summary": "Build and run the shared Bluetooth range-helper unit check under ASan/UBSan.",
+  "summary": "Build and run the shared Bluetooth range and deadline helper unit check under ASan/UBSan.",
   "usb": false
  },
  "bt-rfcomm-server.py": {
@@ -4184,7 +4203,9 @@
  },
  "h264-encode-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-encode-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4212,7 +4233,9 @@
  },
  "h264-encode-registers.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-encode-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4224,7 +4247,9 @@
  },
  "h264-encode-usb.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-encode-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4584,7 +4609,8 @@
   "docs": [
    ".agents/skills/sunstone-a733-device/SKILL.md",
    "docs/g2d-preparation.md",
-   "docs/h264-native.md"
+   "docs/h264-native.md",
+   "docs/pcie-nvme.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6586,6 +6612,53 @@
   "summary": "Check the linked PCIe MSI route and dispatch; no physical interrupt evidence.",
   "usb": false
  },
+ "pcie-nvme-fixture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Produce software-only PCIe NVMe session and admission records for the linked image.",
+  "usb": false
+ },
+ "pcie-nvme-host.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--fixture",
+   "--frame",
+   "--output"
+  ],
+  "summary": "Host admission, decoding and capture cases for the PCIe NVMe application.",
+  "usb": false
+ },
+ "pcie-nvme-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Execute the linked PCIe NVMe application, function client and NVMe driver.",
+  "usb": false
+ },
  "pcie-pd-rail-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -7912,6 +7985,24 @@
    "--output"
   ],
   "summary": "Shared range, deadline, MMIO, mapping-check and task-context helpers on host and AArch64/AArch32.",
+  "usb": false
+ },
+ "single-core-variants-equivalence.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/single-core-images.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--before",
+   "--before-source",
+   "--after",
+   "--after-source",
+   "--target",
+   "--output"
+  ],
+  "summary": "Compare a boot-CPU-only image built from two source trees.",
   "usb": false
  },
  "spi-application-fixture.py": {

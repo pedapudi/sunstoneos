@@ -1,14 +1,14 @@
 --- apps/board/main.c
 +++ main.c
-@@ -264,6 +264,7 @@
-         board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
-         if(!board.handles[i])platform_panic("board tasks",5);
+@@ -306,6 +306,7 @@
+         if(i==4)vTaskCoreAffinitySet(board.handles[i],1);
+ #endif
      }
 +    __asm__ volatile("msr daifset,#15\n isb":::"memory");
      if(!a733_native_usb_bind(&providers.shared,board.handles[0],board.handles[1]))platform_panic("board bind",6);
      if(a733_board_host_workload(s->workload)){
      struct a733_typec_native_config tc={.clocks=&providers.shared.clocks,.pins=&providers.shared.pins,
-@@ -300,5 +301,6 @@
+@@ -347,5 +348,6 @@
  #ifdef SUNSTONE_BOARD_APPLICATION
      if(board_application_start()!=1)platform_panic("board application startup",11);
  #endif

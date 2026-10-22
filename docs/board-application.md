@@ -53,6 +53,17 @@ Type-C tasks scheduled for bounded shutdown. Type-C tasks run at higher priority
 and delay one tick between calls; deployment requires the existing one
 millisecond scheduler tick and adequate scheduling margin.
 
+The PMIC task stops permanently when admission closes or the board lifetime
+ends, and when its provider reports a fault; a fault first closes admission. A
+stopped PMIC task keeps its ownership and suspends itself, so it no longer
+wakes on every tick. The
+resident supervising task stops the same way after a refused renewal. The
+Type-C, power and radio owner tasks keep polling once per tick after a failure,
+because they continue to revoke the Type-C attachment or report the radio
+failure. [checks/board-park.py](../checks/board-park.py) runs the PMIC task of
+a linked image under Unicorn. It checks that a stopped task suspends and never
+sleeps, and that a live idle task still sleeps one tick per poll.
+
 The device and host each keep their original TinyUSB configuration and logical
 port zero. The host object compilation renames the common TinyUSB exports and
 time API, so their singleton state and owner-specific timing remain separate.
@@ -268,8 +279,9 @@ deadline (`UINT64_MAX`) and expire four seconds after arming. The derived
 lifetime then never expires. The PMIC, Type-C and power tasks record progress
 after each poll, and the supervising task calls the image's
 `board_resident_renew` every 20 ms. When renewal is refused, the task closes
-admission, revokes the Type-C attachment and parks, and the armed watchdog
-resets the board. Other board images compile the progress calls to nothing.
+admission, revokes the Type-C attachment and suspends itself, and the armed
+watchdog resets the board. Other board images compile the progress calls to
+nothing.
 
 ## Boot-CPU execution preserves the complete application
 

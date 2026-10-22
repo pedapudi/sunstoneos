@@ -22,10 +22,11 @@ struct h264_encode_application {
  StaticTask_t task;
  StackType_t stack[4096];
  TaskHandle_t handle;
- size_t output_bytes[2],copied[2];
- unsigned stage,prime_step[2],copy_step[2];
- atomic_uint result[2],acked[2],fatal;
- uint8_t digest[2][32];
+ /* Indexed by picture ordinal. Picture k's bytes live in storage.copies[k&1]. */
+ size_t output_bytes[A733_H264_ENCODE_GOP_FRAMES],copied[A733_H264_ENCODE_GOP_FRAMES];
+ unsigned stage,prime_step[A733_H264_ENCODE_GOP_FRAMES],copy_step[A733_H264_ENCODE_GOP_FRAMES];
+ atomic_uint result[A733_H264_ENCODE_GOP_FRAMES],acked[A733_H264_ENCODE_GOP_FRAMES],fatal;
+ uint8_t digest[A733_H264_ENCODE_GOP_FRAMES][32];
 };
 _Static_assert(sizeof(struct h264_encode_application)<=65536,"H264 encoder CPU metadata budget");
 extern struct h264_encode_application h264_encode;

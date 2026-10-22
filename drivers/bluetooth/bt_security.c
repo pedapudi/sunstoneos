@@ -248,7 +248,7 @@ int bt_security_service(struct bt_security *s,uint64_t deadline)
     struct bt_hci *h=s->acl->hci;
     if(h->command!=BT_HCI_IDLE||s->acl->command_link<BT_ACL_LINKS||
         (s->acl->synchronous&&s->acl->synchronous->acknowledgement_pending(s->acl->synchronous_context)))return 1;
-    uint64_t bound=s->now>UINT64_MAX-s->timeout_us?UINT64_MAX:s->now+s->timeout_us;if(bound>deadline)bound=deadline;
+    uint64_t bound=a733_deadline_after_saturating(s->now,s->timeout_us);if(bound>deadline)bound=deadline;
     struct bt_security_command *q=&s->commands[s->first];
     int result=bt_hci_security_request(h,s,q->opcode,q->bytes,q->length,bound);
     if(result<0)return fault(s);

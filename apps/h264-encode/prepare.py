@@ -48,7 +48,7 @@ def embedded_reference(image,session):
     offset=first-int(parts[0]['p_vaddr']);require(parts[0].data()[offset:offset+size]==expected,'H264 encoder runtime capacities differ.')
     return None
 
-def upload_bytes(pixels,reference,session):
+def upload_bytes(pixels,reference,session,frames=2):
     session_check(session)
     reference=reference or b''
     require(len(pixels)==921600 and not reference,'Encoder requires VGA NV12 and no reference oracle.')
@@ -57,7 +57,8 @@ def upload_bytes(pixels,reference,session):
             'H264 encoder oracle mode/digest differs.')
     epoch,generation=struct.unpack_from('<2Q',session,24)
     require(epoch and generation,'H264 encoder upload requires a live session identity.')
-    return struct.pack('<4I2Q',0x55454853,1,len(pixels),2,epoch,generation)+pixels+reference
+    require(1<=frames<=30,'H264 encoder sequences hold 1 to 30 pictures.')
+    return struct.pack('<4I2Q',0x55454853,1,len(pixels),frames,epoch,generation)+pixels+reference
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     session_check(raw)

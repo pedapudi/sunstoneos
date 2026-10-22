@@ -2,12 +2,14 @@
 #define SUNSTONE_OS_H
 /* Integrated OS image (docs/os-image.md): the mimus board composition plus a
  * continuous thermal service, optional I2S microphone receive, an optional
- * radio station or Bluetooth headset, one fixed interrupt table and one fixed
- * start list. */
+ * radio station, an optional Bluetooth headset, one fixed interrupt table and
+ * one fixed start list. */
 #include "a733_board_application.h"
-#if defined(SUNSTONE_A733_OS_HEADSET) && (defined(SUNSTONE_A733_OS_RADIO) || \
-    defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_BOARD_RESIDENT))
-#error The headset build excludes radio, I2S capture and the resident lifetime
+#if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_AUDIO)
+#error The recognizer takes one capture source: the I2S microphone or the headset
+#endif
+#if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
+#error Wideband speech is a headset option
 #endif
 /* Board workloads the image admits: the mimus board's 0 (storage) and 4
  * (keyboard and storage) or, in the radio build, only 1, in which the board
@@ -113,11 +115,32 @@ int os_audio_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 int os_radio_task_privileged(void (*)(void *),void *);
 int os_radio_pins(struct a733_pin_handoff *);
 int os_radio_start(void);
+/* The radio profile that os_radio_pins authenticated; NULL before. */
+struct board_radio_profile;
+const struct board_radio_profile *os_radio_profile(void);
 #endif
 #ifdef SUNSTONE_A733_OS_HEADSET
-/* The Bluetooth profile that EL3 copied from 0x43000000 and published
- * (identity.c); NULL before. Valid for the OS workloads and repeated CVSD
- * capture only, with owners distinct from the board's. */
+/* The Bluetooth profile address. With the radio, the radio profile occupies
+ * 0x43000000 and the Bluetooth profile follows it in the first 64 KiB; the
+ * firmware spans from 0x43010000 serve both. */
+#ifdef SUNSTONE_A733_OS_RADIO
+#define OS_HEADSET_PROFILE_ADDRESS UINT64_C(0x43008000)
+#else
+#define OS_HEADSET_PROFILE_ADDRESS UINT64_C(0x43000000)
+#endif
+/* Repeated capture modes: CVSD (2) and, with SUNSTONE_A733_OS_MSBC, wideband
+ * mSBC with CVSD fallback (3). */
+static inline int os_headset_mode_valid(unsigned mode)
+{
+#ifdef SUNSTONE_A733_OS_MSBC
+    return mode==2||mode==3;
+#else
+    return mode==2;
+#endif
+}
+/* The Bluetooth profile that EL3 copied from OS_HEADSET_PROFILE_ADDRESS and
+ * published (identity.c); NULL before. Valid for the OS workloads and the
+ * repeated capture modes only, with owners distinct from the board's. */
 struct bluetooth_profile;
 const struct bluetooth_profile *os_headset_profile(void);
 int os_headset_profile_valid(const struct a733_board_session *,const struct bluetooth_profile *);
@@ -128,6 +151,13 @@ int os_headset_start(void);
 /* EL0-safe, with the contract of os_audio_capture: the 16 kHz WAV of the first
  * headset segment that starts after generation g was requested. */
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
+#ifdef SUNSTONE_A733_OS_RADIO
+/* With the radio, one module owner serves Wi-Fi and Bluetooth: the board's
+ * radio owner task calls this after each radio poll (apps/os/main.patch). */
+struct board_radio;
+struct board_radio *os_board_radio(void);
+void os_module_poll(void);
+#endif
 #endif
 #if defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_HEADSET)
 /* The recognizer's capture source: the I2S microphone or the headset. */
@@ -136,14 +166,18 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 
 /* Resident services after the board's own (apps/board/application.h). The
  * mimus board application reports as the first of them; the microphone
- * build adds its capture client and the radio build the board's radio owner
- * and network client. */
+ * build adds its capture client, the radio build the board's radio owner
+ * and network client, and the headset build the Bluetooth owner and the
+ * headset capture client. */
 enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
 #ifdef SUNSTONE_A733_OS_AUDIO
     OS_SERVICE_AUDIO,
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
     OS_SERVICE_RADIO, OS_SERVICE_NETWORK,
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    OS_SERVICE_BLUETOOTH, OS_SERVICE_HEADSET,
 #endif
     OS_SERVICES };
 struct os_service { const char *name; uint32_t window_us; };

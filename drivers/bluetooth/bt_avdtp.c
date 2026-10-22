@@ -18,7 +18,6 @@ static unsigned b16(const uint8_t *p){return ((unsigned)p[0]<<8)|p[1];}
 static uint32_t b32(const uint8_t *p){return ((uint32_t)b16(p)<<16)|b16(p+2);}
 static void cp(uint8_t *d,const uint8_t *s,size_t n){for(size_t i=0;i<n;++i)d[i]=s[i];}
 static unsigned single(unsigned v){return v && !(v&(v-1));}
-static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static int fail(struct bt_avdtp *q,enum bt_avdtp_error e){if(!q->error)q->error=e;return -1;}
 /* Lower objects and receive storage are fixed once L2CAP is ACTIVE. */
 static int disjoint(struct bt_avdtp *q)
@@ -72,7 +71,7 @@ int bt_avdtp_admit(void *ctx,uint64_t link,uint16_t psm,unsigned incoming)
 static void reply(struct bt_avdtp *q,unsigned label,unsigned type,unsigned signal,const uint8_t *p,unsigned n)
 {
     q->response[0]=(uint8_t)(label<<4|type);q->response[1]=(uint8_t)signal;cp(q->response+2,p,n);
-    q->response_length=n+2;q->deadline=after(q->l2cap->acl->hci->transport.now,q->response_us);
+    q->response_length=n+2;q->deadline=a733_deadline_after_saturating(q->l2cap->acl->hci->transport.now,q->response_us);
 }
 static void reject(struct bt_avdtp *q,unsigned label,unsigned signal,unsigned code)
 {const uint8_t p[]={(uint8_t)code};reply(q,label,REJECT,signal,p,1);}
@@ -261,7 +260,7 @@ static int maintain(struct bt_avdtp *q)
     }
     /* Signaling closure by the peer, or local close, ends the stream. */
     unsigned ending=q->closing || (s && s->state==BT_L2CAP_CLOSED);
-    if(ending && !q->close_deadline)q->close_deadline=after(now,q->response_us);
+    if(ending && !q->close_deadline)q->close_deadline=a733_deadline_after_saturating(now,q->response_us);
     if(ending && now>=q->close_deadline && (q->signal || q->media))return fail(q,BT_AVDTP_EXPIRED);
     if(ending && m && m->state==BT_L2CAP_OPEN && bt_l2cap_close(q->l2cap,q->media,q->close_deadline)<0)return fail(q,BT_AVDTP_LOWER);
     if(ending && !m && s && s->state==BT_L2CAP_OPEN && !q->tx_serial && bt_l2cap_close(q->l2cap,q->signal,q->close_deadline)<0)return fail(q,BT_AVDTP_LOWER);
@@ -284,7 +283,7 @@ int bt_avdtp_step(struct bt_avdtp *q,unsigned budget,uint64_t bound)
     if(!q->error && q->response_length && !q->tx_serial && s && s->state==BT_L2CAP_OPEN) {
         /* Accepted lower bytes keep the independent ERTX transport bound,
          * so the response deadline expires here before lower ownership. */
-        uint64_t serial=0,transport=after(q->l2cap->acl->hci->transport.now,q->l2cap->ertx_us);
+        uint64_t serial=0,transport=a733_deadline_after_saturating(q->l2cap->acl->hci->transport.now,q->l2cap->ertx_us);
         int r=bt_l2cap_send(q->l2cap,q->signal,q->response,q->response_length,transport,&serial);
         if(r<0)return fail(q,BT_AVDTP_LOWER);
         if(r==1){q->tx_serial=serial;q->response_length=0;}

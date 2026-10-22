@@ -9,8 +9,8 @@
 #include <stdatomic.h>
 uint64_t a733_smp_counter(void);
 /* Windows exceed each loop's expected pause: the board owners, including the
- * radio owner and network client, iterate every tick and the thermal reader
- * every 25 ms. The recognizer reports from its
+ * radio owner and network client, the Bluetooth owner and the headset client
+ * iterate every tick and the thermal reader every 25 ms. The recognizer reports from its
  * wait loops and from the yield checkpoint that inference calls. The capture
  * client reports from each pass without an unanswered DMA request. The windows
  * are configuration; no board measurement of the longest pause exists. */
@@ -22,6 +22,9 @@ const struct os_service os_services[OS_SERVICES]={
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
     {"radio",1000000},{"network",1000000},
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    {"bluetooth",1000000},{"headset",1000000},
 #endif
 };
 static atomic_uint_fast64_t seen[OS_SERVICES];

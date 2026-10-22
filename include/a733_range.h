@@ -158,4 +158,9 @@ static inline int a733_deadline_after(uint64_t now, uint64_t delta, uint64_t *ou
     *out = now + delta;
     return 1;
 }
+
+/* now + delta, or UINT64_MAX when the sum does not fit. For bounds that later
+ * samples are compared with: a saturated bound never expires. */
+static inline uint64_t a733_deadline_after_saturating(uint64_t now, uint64_t delta)
+{ return delta > UINT64_MAX - now ? UINT64_MAX : now + delta; }
 #endif

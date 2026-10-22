@@ -1,6 +1,6 @@
 --- apps/rtc/snapshot.c
 +++ snapshot.c
-@@ -9,8 +9,8 @@
+@@ -10,8 +10,8 @@
   struct a733_rtc_initialization initialization;
   struct a733_rtc_boot boot;
   unsigned attempted,ready;

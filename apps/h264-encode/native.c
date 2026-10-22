@@ -54,7 +54,8 @@ static int authority(void *v,const struct a733_encode_platform_config *c,
  if(v!=&h264_encode||!token)return -1;
  if(*token&&*token!=h264_encode.session.authority)return -1;*token=h264_encode.session.authority;
  if(!board_live(NULL)||d!=h264_encode_deadline()||memcmp(c,&h264_encode.config,sizeof(*c))||
-   !h264_encode_input_ready(&h264_encode.supplied)||!h264_encode.storage.published)return -1;
+   !h264_encode_input_ready(&h264_encode.supplied)||!h264_encode.storage.published||
+   j->frames!=h264_encode.supplied.frames)return -1;
  for(unsigned i=0;i<2;++i)if(j->input[i]!=h264_encode.storage.job.input[i])return -1;
  for(unsigned i=0;i<10;++i)if(j->buffers[i].iova!=h264_encode.storage.job.buffers[i].iova||j->buffers[i].bytes!=h264_encode.storage.job.buffers[i].bytes)return -1;
  struct storage_digest digest;uint8_t hash[32];storage_digest_init(&digest);
@@ -83,46 +84,52 @@ static int finished(size_t end)
 }
 static int prime(void *v,uint64_t token,unsigned ordinal,size_t cursor,uint64_t d)
 {
- if(v!=&h264_encode||token!=h264_encode.session.authority||d!=h264_encode_deadline()||ordinal>1||
-   cursor>2097152||!board_live(NULL)||!h264_encode_storage_guards(&h264_encode.storage))return -1;
+ if(v!=&h264_encode||token!=h264_encode.session.authority||d!=h264_encode_deadline()||
+   ordinal>=h264_encode.storage.job.frames||cursor>2097152||!board_live(NULL)||
+   !h264_encode_storage_guards(&h264_encode.storage))return -1;
+ /* run.end still names the previous picture, whose copy and ACK precede reuse. */
  if(ordinal){
-  if(!atomic_load_explicit(&h264_encode.acked[0],memory_order_acquire)||
-    !atomic_load_explicit(&h264_encode.result[0],memory_order_acquire)||
-    cursor!=((h264_encode.run.end[0]+63u)&~(size_t)63u)||!finished(h264_encode.run.end[0]))return -1;
+  if(!atomic_load_explicit(&h264_encode.acked[ordinal-1],memory_order_acquire)||
+    !atomic_load_explicit(&h264_encode.result[ordinal-1],memory_order_acquire)||
+    cursor!=a733_h264_encode_cursor(h264_encode.run.end)||!finished(h264_encode.run.end))return -1;
  }else if(cursor)return -1;
  if(h264_encode.prime_step[ordinal]==2)return 1;
  if(!h264_encode.prime_step[ordinal]){if(a733_iommu_scan(&h264_encode.iommu,d)!=1)return -1;h264_encode.prime_step[ordinal]=1;}
  int r=a733_iommu_poll(&h264_encode.iommu);if(r!=1)return r;
  if(h264_encode.iommu.fault.scanned_masters!=8||!h264_encode_storage_guards(&h264_encode.storage)||
-   (ordinal&&!finished(h264_encode.run.end[0])))return -1;
- size_t n;const uint8_t *prefix=a733_h264_encode_prefix(ordinal,&n);
- if(!prefix||cursor+n>4194304)return -1;
+   (ordinal&&!finished(h264_encode.run.end)))return -1;
+ uint8_t prefix[10];size_t n=a733_h264_encode_prefix(ordinal,prefix);
+ if(!n||cursor+n>4194304)return -1;
  memcpy(h264_encode.storage.buffers[A733_H264_ENCODE_RING]+cursor,prefix,n);
  __asm__ volatile("dsb sy":::"memory");h264_encode.prime_step[ordinal]=2;return board_live(NULL)?1:-1;
 }
 static int copied(void *v,uint64_t token,unsigned ordinal,size_t first,size_t end,uint64_t d)
 {
- if(v!=&h264_encode||token!=h264_encode.session.authority||d!=h264_encode_deadline()||ordinal>1||
-   first>=end||end>4194304||end-first>1048576-(ordinal?0:22)||!board_live(NULL))return -1;
+ if(v!=&h264_encode||token!=h264_encode.session.authority||d!=h264_encode_deadline()||
+   ordinal>=h264_encode.storage.job.frames||first>=end||end>4194304||end-first>1048576-(ordinal?0:22)||
+   !board_live(NULL))return -1;
+ /* Picture k overwrites the copy of picture k-2, acknowledged before k-1 started. */
+ if(ordinal>1&&!atomic_load_explicit(&h264_encode.acked[ordinal-2],memory_order_acquire))return -1;
+ uint8_t *copy=h264_encode.storage.copies[ordinal&1];
  size_t prefix=ordinal?0:22,n=end-first+prefix;
  if(h264_encode.output_bytes[ordinal]&&h264_encode.output_bytes[ordinal]!=n)return -1;
  h264_encode.output_bytes[ordinal]=n;
  if(!h264_encode.copy_step[ordinal]){
   if(a733_iommu_scan(&h264_encode.iommu,d)!=1)return -1;
   h264_encode.copy_step[ordinal]=1;
-  if(!ordinal)memcpy(h264_encode.storage.copies[0],a733_h264_encode_sps_pps,22);
+  if(!ordinal)memcpy(copy,a733_h264_encode_sps_pps,22);
  }
  int r=a733_iommu_poll(&h264_encode.iommu);if(r!=1)return r;
  if(h264_encode.iommu.fault.scanned_masters!=8||!finished(end)||!h264_encode_storage_guards(&h264_encode.storage))return -1;
  if(h264_encode.copied[ordinal]<end-first){
   size_t done=h264_encode.copied[ordinal],chunk=end-first-done;if(chunk>32768)chunk=32768;
   __asm__ volatile("dsb sy":::"memory");
-  memcpy(h264_encode.storage.copies[ordinal]+prefix+done,h264_encode.storage.buffers[A733_H264_ENCODE_RING]+first+done,chunk);
+  memcpy(copy+prefix+done,h264_encode.storage.buffers[A733_H264_ENCODE_RING]+first+done,chunk);
   __asm__ volatile("dsb sy":::"memory");
   if(!finished(end)||!h264_encode_storage_guards(&h264_encode.storage)||!board_live(NULL))return -1;
   h264_encode.copied[ordinal]+=chunk;if(a733_iommu_scan(&h264_encode.iommu,d)!=1)return -1;return 0;
  }
- storage_digest_bytes(h264_encode.storage.copies[ordinal],n,h264_encode.digest[ordinal]);
+ storage_digest_bytes(copy,n,h264_encode.digest[ordinal]);
  return finished(end)&&h264_encode_storage_guards(&h264_encode.storage)?1:-1;
 }
 int h264_encode_storage_allocate(void)
@@ -166,6 +173,7 @@ static int setup(void)
       if(r==A733_GPU_RESOURCE_BUSY)return 0;if(r!=A733_GPU_RESOURCE_OK)return -1;}
     c->pck=(struct a733_gpu_resource_lease){h264_encode.power_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE};
     struct a733_h264_encode_platform_ops ops={h264_encode_now,authority,memory,prime,copied,h264_encode_enter,h264_encode_leave,a733_encode_native_read,a733_encode_h264_native_write};
+    h264_encode.storage.job.frames=h264_encode.supplied.frames;
     if(!h264_encode_storage_publish(&h264_encode.storage,h264_encode.session.input_digest)||!a733_h264_encode_platform_init(&h264_encode.platform,c,&ops,&h264_encode))return -1;
     return a733_h264_encode_begin(&h264_encode.run,a733_encode_platform_h264_ops(),&h264_encode.platform,&h264_encode.storage.job,h264_encode_deadline())?1:-1;
 }
@@ -191,7 +199,7 @@ void h264_encode_task(void *unused)
    int r=0;
    if(!h264_encode.stage){r=setup();if(r==1)h264_encode.stage=1;}
    else if(h264_encode.stage==2){
-    if(atomic_load_explicit(&h264_encode.acked[0],memory_order_acquire)){
+    if(atomic_load_explicit(&h264_encode.acked[h264_encode.run.ordinal],memory_order_acquire)){
      r=a733_h264_encode_next(&h264_encode.run);if(r==1)h264_encode.stage=3;else r=-1;
     }
    }else if(h264_encode.stage==1||h264_encode.stage==3){
@@ -199,7 +207,7 @@ void h264_encode_task(void *unused)
     if(r==1&&h264_encode.run.state==A733_H264_ENCODE_COPIED){
      unsigned ordinal=h264_encode.run.ordinal;
      atomic_store_explicit(&h264_encode.result[ordinal],1,memory_order_release);
-     h264_encode.stage=ordinal?4:2;
+     h264_encode.stage=ordinal+1<h264_encode.run.job.frames?2:4;
     }
    }
    if(r<0)atomic_store_explicit(&h264_encode.fatal,1,memory_order_release);

@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
 """Compare native programming with preserved effective A733 instruction traces."""
-import argparse,hashlib,json
+import argparse,gzip,hashlib,json,pickle
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--evidence',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();r=a.evidence
-native=json.loads((r/'native-nominal-count-width/result.json').read_text());ref=json.loads((r/'p4m-stable/result.json').read_text())
+p.add_argument('--evidence',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
+# Optional longer sequences: a native gop result and a reference run of at least as many pictures.
+p.add_argument('--native',type=Path);p.add_argument('--reference',type=Path)
+# Optional slice header comparison: the native case output directory and the reference checkpoint after its last picture.
+p.add_argument('--pictures',type=Path);p.add_argument('--reference-memory',type=Path);a=p.parse_args();r=a.evidence
+native_path=a.native or r/'native-nominal-count-width/result.json';reference_path=a.reference or r/'p4m-stable/result.json'
+native=json.loads(native_path.read_text());ref=json.loads(reference_path.read_text())
+def pictures(writes):
+ # Each picture ends at its trigger write.
+ out=[[]]
+ for w in writes:
+  out[-1].append(w)
+  if w==(0xb18,8):out.append([])
+ assert not out[-1];return out[:-1]
 n=[(o,v) for o,v in native['programmed'] if o>=0xa00 and o!=0xb1c];s=[(x['offset'],x['value']) for x in ref['mmio'] if x['offset']!=0xb1c]
+count=len(pictures(n));later=pictures(s)[count:];s=[w for picture in pictures(s)[:count] for w in picture]
+# The library's next picture is an IDR, without P header bits, only after 30 pictures.
+if later:assert ((0xb04,0) in later[0])==((0xb20,0xf) not in later[0])==(count%30==0),later[0]
 # Relocate only independently identified input/reference/ring/scratch addresses.
 source={0x12000000:0x10001000,0x12100000:0x10074000,0x10114000:0x10400000,0x1053d000:0x10801000,0x105b5000:0x1087b000,0x1062d000:0x108f5000,0x10630000:0x108fa000,0x10633000:0x108ff000,0x10635000:0x10902000,0x10637000:0x10905000}
 shifted={0xb80,0xb84,0xb9c,0xba0,0xba4,0xbb0,0xbb4,0xbb8,0xbbc,0xbc0,0xbc4}
@@ -21,6 +36,13 @@ for off,value in s:
   if off in shifted:value>>=8
  normalized.append((off,value))
 assert n==normalized,[(i,tuple(map(hex,x)),tuple(map(hex,y))) for i,(x,y) in enumerate(zip(n,normalized)) if x!=y]
+headers=0
+if a.pictures:
+ # Each copied picture starts with the CPU-written header bytes the library put in its ring.
+ saved=pickle.loads(gzip.decompress(a.reference_memory.read_bytes()));ram=dict(saved['memory'])[0x10000000]
+ for k,picture in enumerate(pictures(s)):
+  cursor=dict(picture)[0xb88]//8-(9 if k else 10);bits=(a.pictures/('picture%d.h264'%k)).read_bytes()[0 if k else 22:]
+  assert bits[:9 if k else 10]==ram[0x114000+cursor:0x114000+cursor+(9 if k else 10)],(k,bits[:10].hex());headers+=1
 facts=json.loads((r/'facts/result.json').read_text());assert facts['frames'][0]['sps_pps']=='000000016742001f898940501e880000000168ce3c80'
-result=dict(passed=True,native_elf=native['image_sha256'],compared_program_writes=len(n),reference_sha256=hashlib.sha256((r/'p4m-stable/result.json').read_bytes()).hexdigest(),physical_access=False,scope='Pure comparison of preserved traces, no decoder/encoder execution. All ENCPP/H264/EXT programming and partial-header commands match effective library after independently mapped DMA relocation. Native TOP reset/enable follows separately reviewed libVE sequence. Status W1C differs intentionally: native clears only observed status. Entropy/completion and reconstructed reference contents remain modeled.')
-a.output.write_text(json.dumps(result,indent=2)+'\n');print('PASS',len(n),'source-matched programming writes')
+result=dict(passed=True,native_elf=native['image_sha256'],compared_pictures=count,compared_headers=headers,next_reference_idr=bool(later) and count%30==0,compared_program_writes=len(n),reference_sha256=hashlib.sha256(reference_path.read_bytes()).hexdigest(),physical_access=False,scope='Pure comparison of preserved traces, no decoder/encoder execution. All ENCPP/H264/EXT programming and partial-header commands match effective library after independently mapped DMA relocation. Native TOP reset/enable follows separately reviewed libVE sequence. Status W1C differs intentionally: native clears only observed status. Entropy/completion and reconstructed reference contents remain modeled.')
+a.output.write_text(json.dumps(result,indent=2)+'\n');print('PASS',len(n),'source-matched programming writes in',count,'pictures')

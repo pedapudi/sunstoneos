@@ -11,6 +11,7 @@
 #include "a733_storage_digest.h"
 #include <string.h>
 static struct board_radio_profile profile;
+static unsigned admitted;
 /* The board's own radio tasks are privileged by main.c. */
 int os_radio_task_privileged(void (*entry)(void *),void *context){(void)entry;(void)context;return 0;}
 int os_radio_pins(struct a733_pin_handoff *pins)
@@ -32,8 +33,9 @@ int os_radio_pins(struct a733_pin_handoff *pins)
     };
     for(unsigned i=0;i<sizeof(owners)/sizeof(owners[0]);++i)
         if(owners[i]==profile.platform.owner||owners[i]==profile.ce.owner)return 0;
-    return 1;
+    admitted=1;return 1;
 }
+const struct board_radio_profile *os_radio_profile(void){return admitted?&profile:NULL;}
 /* main.c created both radio tasks and started the radio before this list. */
 int os_radio_start(void)
 {
