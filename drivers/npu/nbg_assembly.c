@@ -43,12 +43,12 @@ static int patch_fields(const struct nbg_patch *p)
 /* Profile checks are intentionally narrower than structural container decoding.
  * The INIT bytes are recognized before being omitted, as in the SDK capture.
  * Their equivalence to a cold native bootstrap is still unqualified. */
-static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p)
+static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int checked)
 {
     const struct nbg_model_header *h = &m->header;
     int directory = h->version == NBG_MODEL_DIRECTORY_VERSION;
     struct nbg_checksum checksum;
-    if (nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
+    if (checked && nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
     if ((!directory && h->version != NBG_MODEL_VERSION) || h->target != 0x1000003b ||
         h->flags != (directory ? 0x0aU : 0x02d00027U) || h->core_count != 1 || h->nn_bytes != 192 ||
         !h->input_count || h->input_count > NBG_ASSEMBLY_MAX_TENSORS ||
@@ -290,8 +290,35 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
 int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *out)
 {
     struct nbg_assembly_layout p;
-    if (!result_space(m, out, sizeof(*out)) || !profile(m, &p) || !inspect(m, NULL, &p)) return 0;
+    if (!result_space(m, out, sizeof(*out)) || !profile(m, &p, 1) || !inspect(m, NULL, &p)) return 0;
     *out = p;
+    return 1;
+}
+
+/* Placement rules shared by the one-call and stepwise assemblers. Forced
+ * inlining keeps the one-call assembler as compact as before the stepwise
+ * form existed; only images that link the stepwise form carry the copies. */
+static inline __attribute__((always_inline)) int placed(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
+                  const struct nbg_assembly_layout *p, const void *out, size_t out_bytes)
+{
+    const size_t metadata_bytes = count * sizeof(*b);
+    for (unsigned i = 0; i < count; ++i) {
+        if (!p->buffers[i].allocation_bytes) {
+            if (b[i].cpu || b[i].bytes || b[i].device) return 0;
+            continue;
+        }
+        if (b[i].bytes != p->buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
+            ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
+            b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
+            a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
+            !separate(b[i].cpu, b[i].bytes, out, out_bytes) ||
+            !separate(b[i].cpu, b[i].bytes, b, metadata_bytes) ||
+            !separate(b[i].cpu, b[i].bytes, m, sizeof(*m)) ||
+            !separate(b[i].cpu, b[i].bytes, m->data, m->bytes)) return 0;
+        for (unsigned j = 0; j < i; ++j)
+            if (b[j].bytes && (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
+                a733_extents_overlap_prechecked(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
+    }
     return 1;
 }
 
@@ -302,25 +329,8 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
     const size_t metadata_bytes = count * sizeof(*b);
     if (!result_space(m, out, sizeof(*out)) || count > NBG_LAYOUT_MAX_BUFFERS ||
         !a733_span_excl_nonempty(b, metadata_bytes) || !separate(out, sizeof(*out), b, metadata_bytes) ||
-        !profile(m, &p) || count != buffer_count(&p)) return 0;
-    for (unsigned i = 0; i < count; ++i) {
-        if (!p.buffers[i].allocation_bytes) {
-            if (b[i].cpu || b[i].bytes || b[i].device) return 0;
-            continue;
-        }
-        if (b[i].bytes != p.buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
-            ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
-            b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
-            a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
-            !separate(b[i].cpu, b[i].bytes, out, sizeof(*out)) ||
-            !separate(b[i].cpu, b[i].bytes, b, metadata_bytes) ||
-            !separate(b[i].cpu, b[i].bytes, m, sizeof(*m)) ||
-            !separate(b[i].cpu, b[i].bytes, m->data, m->bytes)) return 0;
-        for (unsigned j = 0; j < i; ++j)
-            if (b[j].bytes && (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
-                a733_extents_overlap_prechecked(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
-    }
-    if (!inspect(m, b, &p)) return 0;
+        !profile(m, &p, 1) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
+        !inspect(m, b, &p)) return 0;
 
     /* All caller-visible failure paths precede mutation. Immutable input and
      * metadata make the repeated operation construction infallible here. */
@@ -343,6 +353,51 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
     }
     words(commands + offset, footer, sizeof(footer) / 4);
     *out = p;
+    return 1;
+}
+
+int nbg_assembly_begin(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
+                       struct nbg_assembly_layout *out, struct nbg_assembly_cursor *cursor)
+{
+    struct nbg_assembly_layout p;
+    const size_t metadata_bytes = count * sizeof(*b);
+    if (!result_space(m, out, sizeof(*out)) || !result_space(m, cursor, sizeof(*cursor)) ||
+        count > NBG_LAYOUT_MAX_BUFFERS || !a733_span_excl_nonempty(b, metadata_bytes) ||
+        !separate(out, sizeof(*out), b, metadata_bytes) || !separate(cursor, sizeof(*cursor), b, metadata_bytes) ||
+        !separate(out, sizeof(*out), cursor, sizeof(*cursor)) ||
+        !profile(m, &p, 0) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
+        !placed(m, b, count, &p, cursor, sizeof(*cursor))) return 0;
+    *out = p;
+    *cursor = (struct nbg_assembly_cursor){1, 1, (uint32_t)sizeof(prefix)};
+    return 1;
+}
+
+int nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
+                      struct nbg_assembly_layout *p, struct nbg_assembly_cursor *cursor,
+                      unsigned operations)
+{
+    if (!cursor->operation || cursor->operation > p->nn_operations + 1 || !operations) return -1;
+    unsigned char *commands = b[NBG_ALLOC_COMMAND].cpu;
+    if (cursor->operation == 1 && cursor->offset == sizeof(prefix))
+        words(commands, prefix, sizeof(prefix) / 4);
+    for (; operations && cursor->operation <= p->nn_operations; --operations) {
+        struct operation_image scratch;
+        uint32_t used = 0;
+        if (!operation(m, cursor->operation, cursor->patch, b, p, &scratch, &used) ||
+            cursor->offset + scratch.command_bytes > p->command_body_bytes) return -1;
+        memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + (cursor->operation - 1) * 192, scratch.nn, 192);
+        memcpy(commands + cursor->offset, scratch.command, scratch.command_bytes);
+        cursor->patch += used; cursor->offset += scratch.command_bytes; ++cursor->operation;
+    }
+    if (cursor->operation <= p->nn_operations) return 0;
+    if (cursor->offset == p->command_body_bytes + sizeof(footer)) return 1;
+    unsigned patch_bytes = m->header.version == NBG_MODEL_DIRECTORY_VERSION ? 28 : 40;
+    if (cursor->offset != p->command_body_bytes ||
+        cursor->patch != m->sections[NBG_PATCH].bytes / patch_bytes) return -1;
+    words(commands + cursor->offset, footer, sizeof(footer) / 4);
+    cursor->offset += (uint32_t)sizeof(footer);
+    p->state_patches = p->nn_operations;
+    p->descriptor_patches = cursor->patch - 1 - p->state_patches;
     return 1;
 }
 

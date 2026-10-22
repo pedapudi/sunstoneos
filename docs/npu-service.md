@@ -148,6 +148,46 @@ It passed seven consecutive QEMU runs; results are under
 `~/.cache/sunstoneos/build/audit-npu-runtime/evidence/service-shared/`. The
 exclusive-mode and interrupt checks below still pass with the changed source.
 
+## Runtime mode holds LOAD and SUBMIT replies
+
+`npu_service_runtime`, called after `npu_service_share` and before scheduling,
+hands job scheduling to a runtime that owns per-client slots, as in the
+[NPU runtime](designs/npu-breadth.md). Members still OPEN and CLOSE as in
+shared mode. LOAD (carrying a catalogue index) and SUBMIT go to the runtime's
+`request` callback, which normally holds the reply; WAIT, CANCEL and REAP are
+refused. The worker starts no job by itself. The runtime starts one with
+`npu_service_start` once its preparation is done, which masks INTID 97 and
+submits while the controller is ready; a deferred mask returns 0 and the start
+is retried. `npu_service_release` sends a held reply.
+`npu_service_retain` faults the controller after a runtime integrity failure.
+A controller fault releases every held reply with FAULT and refuses later
+requests.
+
+Each worker pass makes interrupt progress, hands a completed job to the
+runtime's `finished` callback, handles at most one request with a zero wait
+and runs one runtime step through the `step` callback. While a job runs,
+interrupt progress reads three configuration registers, so a pass runs it
+only after a notification or idle hint, while the source is masked or its
+rearm is deferred, after a tick timeout or once the job deadline has expired.
+Other passes read only the timer to check the deadline. While steps remain the
+worker does not block. With none left it blocks on its notification, for at
+most one tick while the controller is active. Runtime mode requires the
+interrupt binding: the runtime refuses activation without it. Until board
+evidence qualifies INTID 97 delivery, the worker also reads the idle register
+at offset `0x4`, which acknowledges nothing, after each step and after each
+tick timeout while the controller is active. Full idle queues the masked
+progress sequence that a notification runs, so the event register is never
+read while the source is unmasked. Exclusive and shared modes are unchanged.
+The runtime-mode state is a static object that `npu_service_runtime`
+installs, together with the pointer through which the worker enters the
+runtime loop. An image that never calls `npu_service_runtime` therefore links
+neither the loop nor its state.
+
+[npu-session-runtime.c](../checks/npu-session-runtime.c) checks the mode with
+the runtime; [npu-session.py](../checks/npu-session.py) runs it with
+`--mode runtime`. The shared-mode, session, reserved, exclusive and interrupt
+checks pass with the changed source.
+
 ## A preemptible EL1 task performs device operations
 
 The [SMP port extension](../patches/freertos-smp-privileged.patch) changes the
@@ -231,8 +271,8 @@ The final ELF has SHA-256
 `55323616f8c91cb26b77b8b105df3a37de9ce5a01774f35f2eaf1b22a2bc8575`.
 It contains 52,488 bytes of code/constants and 1,834,032 bytes of BSS and reserved
 stacks, with no initialized data. That ELF predates shared mode. The service
-object now occupies 36,912 bytes, including its 32 KiB task stack and eight
-64-byte shared-mode member records. The native adapter and fixture command/table
+object now occupies 36,920 bytes, including its 32 KiB task stack, eight
+64-byte shared-mode member records and the runtime-mode pointer. The native adapter and fixture command/table
 buffers are separate. Physical stack usage and latency remain unmeasured.
 
 Reproduce after relevant inputs change, using the [configured toolchain](build.md):

@@ -2105,7 +2105,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   board's, and its 2 MiB device pool is smaller than the 2,195,456 bytes that
   the three small catalogue models need. An image derived from the single-core
   NPU images needs their provider setup to select the session runtime
-  ([remaining work](npu-session.md#remaining-work)). The NPU startup and
+  ([remaining work](npu-session.md#remaining-work)).
+  The [NPU runtime](designs/npu-breadth.md) replaces the session code: up to
+  eight client tasks each load any catalogue model into a fixed slot at
+  runtime, switch it, and run it with inputs and outputs in place, one request
+  and one reply per inference, no per-job buffer translation or SHA-256, and
+  round-robin starts with interrupt completion. QEMU checks with modeled
+  device output pass for model switching, refused loads, concurrent loading,
+  late and dropped interrupts and interim integrity faults, and a host check
+  bounds start and reply latency per image. No board image links it; the
+  single-core provider must construct it for the large-graph image, and
+  shader graphs cannot yet be loaded. Physical execution remains unqualified.
+  The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A
   [mimus linear-layer study](npu-mimus-linear.md) finds that none of the eight

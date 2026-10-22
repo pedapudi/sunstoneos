@@ -38,7 +38,8 @@ MODES = {
                              'drivers/storage/storage_digest.c'],
                     marker='PASS NPU sessions', cases=[0, 1, 2],
                     port_define='npu_service_task_privileged=npu_session_task_privileged',
-                    wraps=['a733_npu_native_operations', 'aarch64_device_translate']),
+                    wraps=['a733_npu_native_operations', 'aarch64_device_translate',
+                           'aarch64_device_cache', 'storage_digest_bytes']),
     # The same check with the published ShuffleNet graph and a mimus linear
     # layer added, its parent
     # taken from the reservation constructor: case 0 runs every model and
@@ -50,10 +51,22 @@ MODES = {
                               'runtime/device_memory_pool.c'],
                      marker='PASS NPU sessions', cases=[0, 3], defines=['NPU_SESSION_RESERVED_CHECK=1'],
                      port_define='npu_service_task_privileged=npu_session_task_privileged',
-                     wraps=['a733_npu_native_operations', 'aarch64_device_translate']),
+                     wraps=['a733_npu_native_operations', 'aarch64_device_translate',
+                           'aarch64_device_cache', 'storage_digest_bytes']),
+    # The runtime that loads any catalogue model into fixed slots at runtime:
+    # see the case list at the top of checks/npu-session-runtime.c.
+    'runtime': dict(sources=['checks/npu-session-runtime.c', 'drivers/npu/a733_npu_runtime.c',
+                             'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/nbg_model.c',
+                             'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
+                             'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c'],
+                    marker='PASS NPU runtime', cases=[0, 1, 2, 3, 4],
+                    port_define='npu_service_task_privileged=npu_session_task_privileged',
+                    wraps=['a733_npu_native_operations', 'aarch64_device_translate', 'aarch64_device_cache',
+                           'storage_digest_add', 'nbg_assembly_next', 'npu_service_release']),
 }
 SESSION_NAMES = {'session': ('conv8', 'dual-u8', 'dual-i8'),
-                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
+                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
+                 'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
 
 
 def flags(build):
@@ -115,6 +128,8 @@ def main():
     ap.add_argument('output', type=Path, help='new evidence directory')
     ap.add_argument('--mode', choices=sorted(MODES), required=True)
     ap.add_argument('--artifacts', type=Path, help='session mode: catalogue artifact paths')
+    ap.add_argument('--icount', action='store_true',
+                    help='run QEMU with -icount shift=0, so one counter microsecond is 1,000 instructions')
     args = ap.parse_args()
     build = args.build.resolve()
     out = args.output.resolve()
@@ -162,16 +177,25 @@ def main():
                 '-semihosting-config', 'enable=on,target=native', '-kernel', str(elf)]
         if case is not None:
             qemu += ['-device', f'loader,addr={CASE_ADDRESS:#x},data={case},data-len=4']
+        if args.icount:
+            qemu += ['-icount', 'shift=0']
         result = subprocess.run(qemu, capture_output=True, text=True, timeout=180,
                                 env=harness.environment())
         log = out / (f'qemu-case{case}.log' if case is not None else 'qemu.log')
         log.write_text(result.stdout + result.stderr)
         lines = result.stdout.splitlines()
         passed = result.returncode == 0 and any(l.startswith(mode['marker']) for l in lines)
+        counts = [dict(item.split('=', 1) for item in l.split()[1:] if '=' in item)
+                  for l in lines if l.startswith('COUNT ')]
         results.append(dict(case=case, result='pass' if passed else 'fail', exit=result.returncode,
-                            line=next((l for l in lines if l.startswith(('PASS', 'FAIL'))), None), qemu=qemu))
+                            line=next((l for l in lines if l.startswith(('PASS', 'FAIL'))), None),
+                            counts=[{k: int(v) for k, v in c.items()} for c in counts], qemu=qemu))
         print(f'case {case}:', results[-1]['line'] or result.stderr.strip()[-200:])
-    record = dict(mode=args.mode, result='pass' if all(r['result'] == 'pass' for r in results) else 'fail',
+        for line in lines:
+            if line.startswith('COUNT '):
+                print(' ', line)
+    record = dict(mode=args.mode, icount=args.icount,
+                  result='pass' if all(r['result'] == 'pass' for r in results) else 'fail',
                   cases=results, elf_sha256=sha(elf), commands=commands,
                   sources={s: sha(ROOT / s) for s in mode['sources']}, artifacts=identities,
                   modeled_device=True, physical_access=False)

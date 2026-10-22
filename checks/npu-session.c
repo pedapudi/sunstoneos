@@ -16,7 +16,15 @@
  * linear layer with INT16 tensors and transpose steps, takes the parent from the
  * reservation constructor and a 48 MiB stand-in for the platform pool, and
  * requires a parent larger than the 4 MiB image-RAM window. Case 3 offers a
- * 4 MiB pool, which must refuse the reservation and leave the pool unused. */
+ * 4 MiB pool, which must refuse the reservation and leave the pool unused.
+ *
+ * Every passing nominal case prints one COUNT line per model with the totals
+ * over its jobs: requests and replies its client exchanged for the jobs,
+ * address translations, SHA-256 bytes and 64-byte cache lines that the worker
+ * spent in that model's job publications and completions, and the END-tail
+ * bytes, table bytes and CPU bytes copied or zeroed that the session code
+ * spends per job by construction. These are the baseline counters for the
+ * runtime that replaces the session code. */
 #include "a733_npu_session_reserved.h"
 #include "aarch64_device_memory.h"
 #include "platform.h"
@@ -59,6 +67,8 @@ static StackType_t stacks[FIXTURES + 1][4096];
 static TaskHandle_t clients[FIXTURES], bootstrap;
 static uint32_t started, opened[FIXTURES], queued[FIXTURES], done[FIXTURES], closed[FIXTURES], faulted;
 static uint32_t stops, irq_masked, irq_delivered;
+static struct { uint64_t requests, replies, translations, digest_bytes, lines; } counted[FIXTURES];
+static uint32_t in_job[FIXTURES];
 
 static struct {
     uint32_t regs[0x800 / 4];
@@ -212,9 +222,38 @@ static int finish(void *cookie, const struct a733_npu_command *command, int canc
 { return __real_a733_npu_native_operations.finish(cookie, command, canceled); }
 const struct a733_npu_ops __wrap_a733_npu_native_operations = {
     read32, write32, microseconds, delay, barrier, publish, finish};
+/* The model whose job publication or completion the worker is running, or
+ * -1. The controller enters RUNNING before the publication and leaves it only
+ * after the completion callback. */
+static int job_model(void)
+{
+    const struct a733_npu_controller *c = &sessions.service.controller;
+    if (!sessions.service.worker || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle() != sessions.service.worker ||
+        c->bootstrap || c->state != A733_NPU_RUNNING) return -1;
+    for (unsigned m = 0; m < sessions.count; ++m)
+        if (sessions.session[m].buffers[NBG_ALLOC_COMMAND].device == c->job.device) return (int)m;
+    return -1;
+}
+void __real_storage_digest_bytes(const void *, size_t, uint8_t[32]);
+void __wrap_storage_digest_bytes(const void *data, size_t bytes, uint8_t digest[32])
+{
+    int m = job_model();
+    if (m >= 0) counted[m].digest_bytes += bytes;
+    __real_storage_digest_bytes(data, bytes, digest);
+}
+int __real_aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
+int __wrap_aarch64_device_cache(enum aarch64_cache_op op, uintptr_t address, size_t bytes)
+{
+    int m = job_model();
+    if (m >= 0 && bytes) counted[m].lines += ((address + bytes + 63) / 64) - address / 64;
+    return __real_aarch64_device_cache(op, address, bytes);
+}
 int __real_aarch64_device_translate(uintptr_t, int, struct aarch64_translation *);
 int __wrap_aarch64_device_translate(uintptr_t address, int write, struct aarch64_translation *out)
 {
+    int m = job_model();
+    if (m >= 0) ++counted[m].translations;
     int result = __real_aarch64_device_translate(address, write, out);
     /* Model only the NPU register page's physical address; RAM is unchanged. */
     if (result && address >= REGISTER_CPU && address < REGISTER_CPU + 4096)
@@ -266,7 +305,9 @@ static struct npu_service_reply call(unsigned m, enum npu_service_operation op,
     struct npu_service_reply reply;
     uint64_t ticket;
     configASSERT(npu_session_send(&sessions, m, op, inputs, count, timeout, 100, &ticket));
+    if (in_job[m]) ++counted[m].requests;
     configASSERT(npu_session_collect(&sessions, m, ticket, &reply, 3000));
+    if (in_job[m]) ++counted[m].replies;
     configASSERT(reply.ticket == ticket);
     return reply;
 }
@@ -334,6 +375,7 @@ static void client(void *argument)
         for (unsigned i = 0; i < f->inputs; ++i)
             for (unsigned x = 0; x < f->tensor_bytes[i]; ++x)
                 inputs[i][x] = (uint8_t)(f->tensor[i][x] ^ (job * 0x25));
+        in_job[m] = 1;
         struct npu_service_reply submitted = call(m, NPU_SERVICE_SUBMIT, spans, f->inputs, 1000000);
         configASSERT(submitted.result == NPU_SERVICE_OK && submitted.state == A733_NPU_RUNNING &&
                      submitted.job_ticket == submitted.ticket);
@@ -353,6 +395,7 @@ static void client(void *argument)
         configASSERT(!npu_session_output(&sessions, m, f->outputs, output, 1));
         r = call(m, NPU_SERVICE_REAP, NULL, 0, 0);
         configASSERT(r.result == NPU_SERVICE_OK && r.state == A733_NPU_READY && !r.canceled);
+        in_job[m] = 0;
         set(&done[m], job + 1);
     }
     r = call(m, NPU_SERVICE_CLOSE, NULL, 0, 0);
@@ -360,6 +403,33 @@ static void client(void *argument)
     configASSERT(!npu_session_send(&sessions, m, NPU_SERVICE_OPEN, NULL, 0, 1000000, 100, &ticket));
     set(&closed[m], 1);
     vTaskSuspend(NULL);
+}
+static void decimal(uint64_t value)
+{
+    char text[24];
+    unsigned at = sizeof(text) - 1;
+    text[at] = 0;
+    do { text[--at] = (char)('0' + value % 10); value /= 10; } while (value);
+    platform_puts(text + at);
+}
+static void field(const char *name, uint64_t value) { platform_puts(name); decimal(value); }
+/* Totals over JOBS jobs per model; the per-job figures are fixed by layout. */
+static void report_counts(void)
+{
+    for (unsigned m = 0; m < FIXTURES; ++m) {
+        const struct npu_session *n = &sessions.session[m];
+        uint64_t copied = n->buffers[NBG_ALLOC_POOL].bytes;
+        for (unsigned i = 0; i < n->layout.inputs + n->layout.outputs; ++i)
+            copied += n->layout.buffers[NBG_ALLOC_INPUT + i].payload_bytes;
+        field("COUNT model=", m); field(" jobs=", JOBS);
+        field(" requests=", counted[m].requests); field(" replies=", counted[m].replies);
+        field(" translations=", counted[m].translations); field(" sha256_bytes=", counted[m].digest_bytes);
+        field(" cache_lines=", counted[m].lines);
+        field(" end_tail_bytes=", JOBS * (n->buffers[NBG_ALLOC_COMMAND].bytes - n->stream_bytes));
+        field(" table_bytes=", JOBS * (uint64_t)sessions.native.memory.image.bytes);
+        field(" copied_or_zeroed_bytes=", JOBS * copied);
+        platform_puts("\n");
+    }
 }
 static void bootstrap_run(void *unused)
 {
@@ -418,6 +488,7 @@ static void bootstrap_run(void *unused)
                      irq_delivered == 1 + FIXTURES * JOBS && npu_service_irq_stopped(&sessions.service));
     configASSERT(sessions.service.controller.state == A733_NPU_CLOSED);
     configASSERT(npu_session_stop_poll(&sessions) == A733_NPU_PLATFORM_READY && stops == 1);
+    report_counts();
 #if defined(NPU_SESSION_RESERVED_CHECK)
     platform_puts("PASS NPU sessions: five models, including a mimus linear layer, in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
 #else
