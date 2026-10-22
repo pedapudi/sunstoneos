@@ -11,10 +11,13 @@
  *
  * For each job j, the runner reads JOB_DIRECTORY/j/input<i>.bin, fills every
  * output tensor with a poison byte, copies the inputs, runs the graph, and
- * writes JOB_DIRECTORY/j/output<o>.bin and JOB_DIRECTORY/j/consumed<i>.bin,
- * the input bytes read back from the simulator's tensor. JOB_DIRECTORY/times
- * receives the preparation time and each job's run time in nanoseconds. Any
- * failure stops the runner with a nonzero exit status.
+ * writes JOB_DIRECTORY/j/output<o>.bin and JOB_DIRECTORY/j/readback<i>.bin,
+ * the input tensor's bytes read back after the run. The read-back shows that
+ * the input tensor still held the vector after the run; it does not show which
+ * bytes the simulated engine read. JOB_DIRECTORY/times receives the time of
+ * graph setup and verification and each job's run time in nanoseconds; the
+ * first run also completes the graph's preparation. Any failure stops the
+ * runner with a nonzero exit status.
  */
 #include <errno.h>
 #include <stdint.h>
@@ -113,7 +116,7 @@ static int run_job(vsi_nn_graph_t *graph, const char *root, unsigned long job, u
         if (!data)
             return fail("cannot read a tensor", NULL);
         if (i < NPU_CONFORMANCE_INPUTS)
-            snprintf(path, sizeof(path), "%s/%lu/consumed%u.bin", root, job, i);
+            snprintf(path, sizeof(path), "%s/%lu/readback%u.bin", root, job, i);
         else
             snprintf(path, sizeof(path), "%s/%lu/output%u.bin", root, job, i - NPU_CONFORMANCE_INPUTS);
         status = write_exact(path, data, npu_conformance_tensors[i].bytes);

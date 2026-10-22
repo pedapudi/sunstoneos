@@ -3,8 +3,8 @@
 
 Exercises tools/npu-conformance.py without the compiler image, the cache or a
 device: the vector plan for the session catalogue, seeded bytes, line
-coverage, the board job order, the int32-bias rule, the per-model verdict and
-the refusal of changed pinned files.
+coverage, the int32-bias rule, the per-model verdict, runner timing, runner
+lanes and the refusal of changed pinned files.
 """
 import copy
 import hashlib
@@ -34,7 +34,9 @@ def reference_input(model):
 
 def plan(name):
     model = CATALOGUE[name]
-    return model, tool.plan_jobs(model, reference_input(model), REFERENCES[name]['reference'] is not None)
+    entry = REFERENCES[name]
+    return model, tool.plan_jobs(model, reference_input(model), entry['reference'] is not None,
+                                 entry.get('repeat', 'seeded'))
 
 
 # Vector plan for the catalogue: the design's job budget and line counts.
@@ -44,9 +46,14 @@ kinds = [j['kind'] for js in jobs.values() for j in js]
 assert kinds.count('base') == 24 and kinds.count('line') == 55 and kinds.count('repeat') == 5, kinds
 assert {n: sum(j['kind'] == 'line' for j in js) for n, js in jobs.items()} == {
     'conv8': 3, 'dual-u8': 4, 'dual-i8': 4, 'mimus-linear-q': 44, 'shufflenet-v2-published': 0}
-# ShuffleNetV2's input zero point equals its minimum code, so that vector runs once.
+# ShuffleNetV2's input zero point equals its minimum code, so that vector runs
+# once; it repeats the maximum vector, whose output is unsaturated.
 assert [j['label'] for j in jobs['shufflenet-v2-published']] == [
-    'reference', 'zero point', 'maximum', 'seeded', 'seeded again']
+    'reference', 'zero point', 'maximum', 'seeded', 'maximum again']
+assert jobs['shufflenet-v2-published'][-1]['vector'] == jobs['shufflenet-v2-published'][2]['vector']
+harness.refused(lambda: tool.plan_jobs(CATALOGUE['shufflenet-v2-published'],
+                                       reference_input(CATALOGUE['shufflenet-v2-published']), False, 'minimum'),
+                'no minimum base vector to repeat')
 assert [j['label'] for j in jobs['conv8'][:5]] == ['reference', 'zero point', 'minimum', 'maximum', 'seeded']
 mimus = CATALOGUE['mimus-linear-q']
 assert jobs['mimus-linear-q'][2]['vector'] == (b'\x00\x80' * 1408,)    # INT16 minimum, little endian
@@ -59,10 +66,9 @@ for name, js in jobs.items():
     for job in (j for j in js if j['kind'] == 'line'):
         changed = [(i, n) for i, (a, b) in enumerate(zip(previous, job['vector']))
                    for n in tool.changed_lines(a, b)]
-        index, line = (int(w) for w in job['label'].split()[1::2])
-        assert changed == [(index, line)], (name, job['label'], changed)
+        assert changed == [(job['input'], job['line'])], (name, job['label'], changed)
         previous = job['vector']
-    assert js[-1]['vector'] == [j for j in js if j['kind'] == 'base'][-1]['vector']
+    assert js[-1]['vector'] == [j for j in js if j['kind'] == 'base'][js[-1]['of']]['vector']
 
 # Seeded bytes: SHA-256 counter blocks over name, vector and optional line.
 block = hashlib.sha256(b'conv8\x004\x00' + (0).to_bytes(8, 'little')).digest()
@@ -88,16 +94,16 @@ assert not tool.saturated(shuffle, (b'\xfb\x05',))
 assert tool.saturated(mimus, (b'\xff\x7f\x00\x80' * 704,))
 assert not tool.saturated(mimus, (b'\xff\x7f\x00\x80' * 703 + b'\x00\x00\x00\x80',))
 
-# Board order: most consecutive pairs with different outputs, seeded last.
-assert tool.board_order(['a', 'a', 'b', 'b']) == [0, 2, 1, 3]
-assert tool.board_order(['a', 'b', 'c']) == [0, 1, 2]
-assert tool.board_order(['a', 'a', 'a']) == [0, 1, 2]
-
-# Line coverage: a pair covers changed lines only when the outputs differ.
+# Line coverage. An input line is covered only by its own line job, when that
+# job's output differs from the preceding job's; a base pair covers no input
+# line. An output line is covered by any pair whose outputs differ in it.
 model = dict(inputs=[dict(logical_bytes=130)], outputs=[dict(logical_bytes=70)])
-a, b, c = bytes(130), b'\x01' + bytes(129), b'\x01' + bytes(64) + b'\x01' + bytes(64)
-coverage = tool.line_coverage(model, [((a,), (bytes(70),)), ((b,), (b'\x02' + bytes(69),)),
-                                      ((c,), (b'\x02' + bytes(69),))])
+base_job = dict(kind='base')
+coverage = tool.line_coverage(model, [
+    (base_job, (bytes(70),)), (base_job, (b'\x01' + bytes(69),)),
+    (dict(kind='line', input=0, line=0), (b'\x02' + bytes(69),)),
+    (dict(kind='line', input=0, line=1), (b'\x02' + bytes(69),)),
+    (dict(kind='repeat'), (b'\x01' + bytes(69),))])
 assert coverage == dict(input_lines=3, output_lines=2, uncovered_input_lines=[(0, 1), (0, 2)],
                         uncovered_output_lines=[(0, 1)]), coverage
 
@@ -117,13 +123,13 @@ outputs = [tuple(tool.seeded('out', i * 10 + o, t['logical_bytes']) for o, t in 
            for i in range(len(js))]
 base = [i for i, j in enumerate(js) if j['kind'] == 'base']
 outputs[-1] = outputs[base[-1]]  # the repeat equals the seeded job
-results = [dict(outputs=o, consumed=j['vector']) for o, j in zip(outputs, js)]
+results = [dict(outputs=o, read_back=j['vector']) for o, j in zip(outputs, js)]
 references = [outputs[i] for i in base]
 catalogued = [hashlib.sha256(v).hexdigest() for v in outputs[0]]
 state = tool.evaluate(model, js, results, references, catalogued)
 assert state['state'] == 'pass' and state['failures'] == [], state['failures']
 assert state['coverage']['uncovered_input_lines'] == [] and state['unsaturated_vectors'] == 5
-assert state['board_job_order'][:5] == ['reference', 'zero point', 'minimum', 'maximum', 'seeded']
+assert state['board_job_order'] == [j['label'] for j in js] and state['pairs_with_equal_outputs'] == []
 
 
 def verdict(change):
@@ -139,8 +145,29 @@ def failed(change, reason):
 
 
 failed(lambda r, ref, cat: r[3].update(outputs=(r[3]['outputs'][0][:-1], r[3]['outputs'][1])), 'output sizes')
-failed(lambda r, ref, cat: r[7].update(consumed=(bytes(192), r[7]['consumed'][1])), 'consumed an input')
-failed(lambda r, ref, cat: r[-1].update(outputs=outputs[0]), 'repeated seeded vector')
+failed(lambda r, ref, cat: r[7].update(read_back=(bytes(192), r[7]['read_back'][1])), 'read back after the run')
+failed(lambda r, ref, cat: r[-1].update(outputs=outputs[0]), 'repeated seeded vector gave different outputs')
+
+
+def saturate(r, ref, cat):
+    clamped = tuple(bytes([0, 255]) * (len(v) // 2) for v in r[base[-1]]['outputs'])
+    r[base[-1]].update(outputs=clamped)
+    r[-1].update(outputs=clamped)
+    ref[-1] = clamped
+
+
+failed(saturate, 'repeated seeded vector has a saturated output')
+
+
+def stale(r, ref, cat):
+    """Every line vector and the repeat give the preceding job's output."""
+    for index, job in enumerate(js):
+        if job['kind'] != 'base':
+            r[index].update(outputs=r[index - 1]['outputs'])
+
+
+state = failed(stale, 'input lines [(0, 0), (0, 1), (0, 2), (1, 0)] are not covered')
+assert state['coverage']['uncovered_output_lines'] == [] and len(state['pairs_with_equal_outputs']) == 5
 failed(lambda r, ref, cat: cat.__setitem__(0, '0' * 64), 'differs from the catalogue')
 failed(lambda r, ref, cat: ref.__setitem__(2, None), 'minimum: no reference output')
 state = failed(lambda r, ref, cat: ref.__setitem__(1, (bytes([ref[1][0][0] ^ 1]) + ref[1][0][1:], ref[1][1])),
@@ -155,9 +182,21 @@ assert '{ 4, { 8, 8, 3, 1 }, VSI_NN_TYPE_UINT8, 0x1.0101020000000p-6f, 127, 192 
 assert '{ 2, { 176, 8, 0, 0 }, VSI_NN_TYPE_INT16,' in tool.bindings(mimus)
 
 # Timeouts: the one-vector limit plus four per-vector times for each further job.
-assert tool.invocation_limit(dict(one_vector_limit=600, per_vector_seconds=10.5), 5) == 768
+assert tool.invocation_limit(dict(one_vector_limit=600, per_vector_seconds=8.5), 5) == 736
 entry = dict(one_vector_limit=120, per_vector_seconds=0.5, jobs=3, reference='compiler', base_vectors=2)
 assert tool.container_limit(dict(models=dict(m=entry))) == 120 + 120 + 60 + 124 + 240
+
+# Runner timing: job 0 also prepares the graph and is reported apart.
+t = tool.timing('prepare 5000000\njob 0 4000000000\njob 1 1000000000\njob 2 3000000000\n', 10.0, 99)
+assert t == dict(prepare_seconds=0.005, first_job_seconds=4.0, steady_job_seconds_mean=2.0,
+                 steady_job_seconds_max=3.0, outside_seconds=1.995, invocation_seconds=10.0,
+                 invocation_limit_seconds=99), t
+
+# Runner lanes: the catalogue's longest invocation runs alone.
+lane_plan = dict(models={n: dict(per_vector_seconds=REFERENCES[n]['per_vector_seconds']) for n in CATALOGUE})
+assert tool.lanes(lane_plan, jobs) == [['shufflenet-v2-published'],
+                                       ['mimus-linear-q', 'dual-u8', 'dual-i8', 'conv8']], tool.lanes(lane_plan, jobs)
+assert tool.lanes(dict(models=dict(a=dict(per_vector_seconds=1))), dict(a=[0])) == [['a']]
 
 # Staging refuses any changed or missing pinned identity.
 with tempfile.TemporaryDirectory() as temporary:
@@ -191,11 +230,10 @@ with tempfile.TemporaryDirectory() as temporary:
     staged = stage('good')
     entry = staged['models']['conv8']
     assert entry['jobs'] == 9 and entry['base_vectors'] == 5 and entry['reference'] == 'compiler'
+    assert entry['repeat'] == 'seeded'
     assert (Path(temporary) / 'good/inputs/conv8/model.nb').read_bytes() == files['nbg']
-    tool.staged_unchanged(Path(temporary) / 'good', staged)
-    (Path(temporary) / 'good/inputs/conv8/model.quantize').write_bytes(b'changed')
-    harness.refused(lambda: tool.staged_unchanged(Path(temporary) / 'good', staged),
-                    'staged file model.quantize changed')
+    harness.refused(lambda: stage('repeat', lambda t: t['models']['conv8'].update(repeat='absent')),
+                    'no absent base vector to repeat')
     harness.refused(lambda: stage('nbg', lambda t: t['models']['conv8'].update(nbg='data')), 'conv8 NBG changed')
     harness.refused(lambda: stage('input', lambda t: t['models']['conv8'].update(inputs=['data'])),
                     'conv8 reference input changed')
@@ -209,4 +247,4 @@ with tempfile.TemporaryDirectory() as temporary:
     harness.refused(lambda: stage('missing', lambda t: t['models']['conv8'].update(nbg='absent')),
                     'No such file', FileNotFoundError)
 
-print('PASS NPU conformance harness: 84-job plan, 55 line vectors, comparisons, verdicts and pins')
+print('PASS NPU conformance harness: 84-job plan, 55 line vectors, coverage, comparisons, verdicts, timing and pins')

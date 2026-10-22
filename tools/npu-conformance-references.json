@@ -100,7 +100,8 @@
     "evidence/npu-complete-nn-20261019/sdk-reuse/published-input.dat"
    ],
    "one_vector_limit": 600,
-   "per_vector_seconds": 10.5,
+   "per_vector_seconds": 8.5,
+   "repeat": "maximum",
    "reference": null
   },
   "mimus-linear-q": {
@@ -114,10 +115,6 @@
     "kind": "mimus-int32-bias",
     "layer": "encoder.layers.0.self_attn.linear_q",
     "files": {
-     "model.mimus": {
-      "path": "inputs/mimus-bench/base.mimus",
-      "sha256": "f73ccd024645387d2679eea97ae11d0c33f5e4be81b39a9430d1f5d285e8089d"
-     },
      "w.i8": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/w.i8",
       "sha256": "c2650d74579d1d04b11b12a508353f8ee643f2c0838d1fa1f9b80e12e09272c7"

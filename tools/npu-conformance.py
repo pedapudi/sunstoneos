@@ -5,8 +5,9 @@
                OUT/work, run one container from the pinned compiler image and
                write OUT/report.json. OUT must not exist.
   worker WORK  Inside that container: build one simulator runner per model,
-               run every vector as successive jobs on one prepared graph, run
-               the references, compare, and write WORK/report.json.
+               run every vector as successive jobs on one prepared graph, at
+               most RUNNER_LANES runner processes at a time, run the
+               references, compare, and write WORK/report.json.
 
 The model set is tools/npu-session-models.json; the references and the files
 they read are pinned in tools/npu-conformance-references.json. Every
@@ -21,7 +22,6 @@ which lets checks/npu-conformance.py exercise them on the host.
 import argparse
 import concurrent.futures
 import hashlib
-import itertools
 import json
 import os
 from pathlib import Path
@@ -44,12 +44,20 @@ COMPILER = '/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py'
 SIMULATOR = {'VSIMULATOR_CONFIG': 'VIP9000NANODI_PLUS_PID0X1000003B', 'VSIMULATOR_SHADER_CORE_COUNT': '1'}
 LINE = 64
 WORKERS = 6
+# Each runner process holds about 4.4 GiB from start-up regardless of graph
+# size, so at most two run at once: the longest alone in one lane, the rest in
+# turn in the other. Compiler inferences use the remaining worker slots.
+RUNNER_LANES = 2
+# Container memory limit: the measured cgroup peak of a run (report counter
+# container_memory_peak_mib) plus a margin; docs/npu-conformance.md records it.
+MEMORY_LIMIT = '14g'
 BUILD_LIMIT = 120       # seconds per runner build (tools/npu-conv-pipeline.sh)
 REFERENCE_LIMIT = 120   # seconds per compiler inference (tools/npu-conv-pipeline.sh)
 INSPECT_LIMIT = 60      # seconds per nbinfo report
 START_LIMIT = 120       # seconds for container start
 SEEDED_BASE = 4         # vector index of the seeded base vector
 SEEDED_LINE = 5         # vector index of every input-line vector
+CGROUP_PEAK = '/sys/fs/cgroup/memory.peak'
 AFFINE = 2              # catalogue quantization: affine asymmetric
 # Catalogue buffer format -> struct code, minimum, maximum, ovxlib type, quantize-file qtype.
 FORMATS = {2: ('B', 0, 255, 'VSI_NN_TYPE_UINT8', 'u8'),
@@ -157,18 +165,24 @@ def line_vectors(model, start):
             data = bytearray(current[index])
             data[offset:end] = seeded(model['name'], SEEDED_LINE, end - offset, line)
             current[index] = bytes(data)
-            result.append(('input %d line %d' % (index, offset // LINE), tuple(current)))
+            result.append((index, offset // LINE, tuple(current)))
             line += 1
     return result
 
 
-def plan_jobs(model, reference, with_lines):
-    """The runner's job sequence: base vectors, input-line vectors, then the seeded vector again."""
+def plan_jobs(model, reference, with_lines, repeat='seeded'):
+    """The runner's job sequence, which is also the board job order: base
+    vectors, input-line vectors, then the base vector labelled repeat again."""
     base = base_vectors(model, reference)
     jobs = [dict(label=label, kind='base', vector=vector) for label, vector in base]
     if with_lines:
-        jobs += [dict(label=label, kind='line', vector=vector) for label, vector in line_vectors(model, base[-1][1])]
-    jobs.append(dict(label='seeded again', kind='repeat', vector=base[-1][1]))
+        jobs += [dict(label='input %d line %d' % (index, line), kind='line', vector=vector, input=index, line=line)
+                 for index, line, vector in line_vectors(model, base[-1][1])]
+    labels = [label for label, _ in base]
+    if repeat not in labels:
+        raise ValueError('%s: no %s base vector to repeat' % (model['name'], repeat))
+    of = labels.index(repeat)
+    jobs.append(dict(label=repeat + ' again', kind='repeat', vector=base[of][1], of=of))
     return jobs
 
 
@@ -191,35 +205,29 @@ def saturated(model, outputs):
     return True
 
 
-def board_order(outputs):
-    """Order of the base vectors that maximizes consecutive pairs with different
-    expected outputs; the seeded vector stays last, ties keep canonical order."""
-    count = len(outputs)
-    best = None
-    for permutation in itertools.permutations(range(count - 1)):
-        order = list(permutation) + [count - 1]
-        score = sum(outputs[a] != outputs[b] for a, b in zip(order, order[1:]))
-        if best is None or score > best[0]:
-            best = (score, order)
-    return best[1]
-
-
 def changed_lines(before, after):
     return {offset // LINE for offset in range(0, len(after), LINE)
             if before[offset:offset + LINE] != after[offset:offset + LINE]}
 
 
 def line_coverage(model, sequence):
-    """Input and output lines not covered by a consecutive job pair with different
-    expected outputs. sequence holds (inputs, outputs) per job in board order."""
+    """Input and output lines left uncovered. sequence holds (job, outputs) per
+    job in board order.
+
+    An input line is covered only by its own input-line job, when that job's
+    expected output differs from the preceding job's: a stale copy of that one
+    line then makes the engine read the preceding vector and give the
+    preceding output. An output line is covered by any consecutive pair whose
+    outputs differ in it, because a stale output line holds the preceding
+    job's bytes."""
     inputs = {(i, n) for i, t in enumerate(model['inputs']) for n in range(lines(t))}
     outputs = {(o, n) for o, t in enumerate(model['outputs']) for n in range(lines(t))}
-    for (previous_in, previous_out), (current_in, current_out) in zip(sequence, sequence[1:]):
-        if previous_out == current_out:
+    for (_, previous), (job, current) in zip(sequence, sequence[1:]):
+        if previous == current:
             continue
-        for i, (a, b) in enumerate(zip(previous_in, current_in)):
-            inputs -= {(i, n) for n in changed_lines(a, b)}
-        for o, (a, b) in enumerate(zip(previous_out, current_out)):
+        if job['kind'] == 'line':
+            inputs.discard((job['input'], job['line']))
+        for o, (a, b) in enumerate(zip(previous, current)):
             outputs -= {(o, n) for n in changed_lines(a, b)}
     return dict(input_lines=sum(lines(t) for t in model['inputs']),
                 output_lines=sum(lines(t) for t in model['outputs']),
@@ -244,7 +252,7 @@ def mimus_int32_bias(x, rows, k, weights, n, weight_scales, bias, input_scale, s
 def evaluate(model, jobs, results, references, catalogued):
     """Decide one model's state from its simulator results.
 
-    results holds, per job, dict(outputs=..., consumed=...) as tuples of bytes,
+    results holds, per job, dict(outputs=..., read_back=...) as tuples of bytes,
     or None when the runner failed. references holds, per base vector, the
     reference outputs, or None when the model has no reference. catalogued is
     the catalogue's output SHA-256 list for the reference input."""
@@ -256,14 +264,17 @@ def evaluate(model, jobs, results, references, catalogued):
         if sizes != [t['logical_bytes'] for t in model['outputs']]:
             failures.append('job %d: output sizes %s differ from the catalogue' % (index, sizes))
             continue
-        if tuple(result['consumed']) != tuple(job['vector']):
-            failures.append('job %d: the simulator consumed an input that differs from the vector' % index)
+        if tuple(result['read_back']) != tuple(job['vector']):
+            failures.append('job %d: an input tensor read back after the run differs from the vector' % index)
     if failures:
         return dict(state='fail', failures=failures, vectors=[])
     base = [i for i, job in enumerate(jobs) if job['kind'] == 'base']
-    seeded_job, repeat = base[-1], len(jobs) - 1
-    if results[seeded_job]['outputs'] != results[repeat]['outputs']:
-        failures.append('the repeated seeded vector gave different outputs')
+    repeat = len(jobs) - 1
+    repeated = base[jobs[repeat]['of']]
+    if results[repeated]['outputs'] != results[repeat]['outputs']:
+        failures.append('the repeated %s vector gave different outputs' % jobs[repeated]['label'])
+    elif saturated(model, results[repeat]['outputs']):
+        failures.append('the repeated %s vector has a saturated output' % jobs[repeated]['label'])
     first = [sha256(v) for v in results[0]['outputs']]
     if jobs[0]['label'] == 'reference' and first != list(catalogued):
         failures.append('the simulator output for the catalogued input differs from the catalogue')
@@ -281,14 +292,18 @@ def evaluate(model, jobs, results, references, catalogued):
                 if any(d['differing'] for d in row['differences']):
                     failures.append('%s: simulator output differs from the reference' % row['vector'])
         rows.append(row)
-    order = [base[i] for i in board_order([results[i]['outputs'] for i in base])]
-    order += [i for i, job in enumerate(jobs) if job['kind'] != 'base']
-    sequence = [(jobs[i]['vector'], results[i]['outputs']) for i in order]
-    pairs = sum(a[1] != b[1] for a, b in zip(sequence, sequence[1:]))
+    sequence = [(job, result['outputs']) for job, result in zip(jobs, results)]
+    equal = ['%s, %s' % (a['label'], b['label']) for (a, x), (b, y) in zip(sequence, sequence[1:]) if x == y]
+    coverage = line_coverage(model, sequence)
+    if any(job['kind'] == 'line' for job in jobs):
+        if coverage['uncovered_input_lines']:
+            failures.append('input lines %s are not covered' % coverage['uncovered_input_lines'])
+        if coverage['uncovered_output_lines']:
+            failures.append('output lines %s are not covered' % coverage['uncovered_output_lines'])
     return dict(state='fail' if failures else 'pass', failures=failures, vectors=rows,
-                board_job_order=[jobs[i]['label'] for i in order],
-                pairs_with_different_outputs=pairs, coverage=line_coverage(model, sequence),
-                unsaturated_vectors=sum(not r['saturated'] for r in rows))
+                board_job_order=[job['label'] for job in jobs],
+                pairs_with_different_outputs=len(jobs) - 1 - len(equal), pairs_with_equal_outputs=equal,
+                coverage=coverage, unsaturated_vectors=sum(not r['saturated'] for r in rows))
 
 
 def bindings(model):
@@ -363,41 +378,36 @@ def stage(work, root=ROOT, cache=CACHE):
             (directory / role).write_bytes(data)
             files[role] = item['sha256']
         with_lines = reference is not None
+        repeat = entry.get('repeat', 'seeded')
         jobs = plan_jobs(model, [(directory / ('input%d.bin' % i)).read_bytes()
-                                 for i in range(len(model['inputs']))], with_lines)
+                                 for i in range(len(model['inputs']))], with_lines, repeat)
         plan['models'][name] = dict(
             catalogue=model, reference=reference['kind'] if reference else None,
-            layer=(reference or {}).get('layer'), files=files, lines=with_lines,
+            layer=(reference or {}).get('layer'), files=files, lines=with_lines, repeat=repeat,
             jobs=len(jobs), base_vectors=sum(j['kind'] == 'base' for j in jobs),
             per_vector_seconds=entry['per_vector_seconds'], one_vector_limit=entry['one_vector_limit'])
     return plan
 
 
-def staged_unchanged(work, plan):
-    for name, entry in plan['models'].items():
-        directory = work / 'inputs' / name
-        if sha256((directory / 'model.nb').read_bytes()) != entry['catalogue']['model']['sha256']:
-            raise ValueError(name + ': the staged NBG changed during the run')
-        for role, digest in entry['files'].items():
-            if sha256((directory / role).read_bytes()) != digest:
-                raise ValueError('%s: staged file %s changed during the run' % (name, role))
-
-
 def run(args):
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
+    # Only the host user can enter OUT, so the world-writable work directory
+    # and the files the container creates in it are closed to other users.
+    out.chmod(0o700)
     work = out / 'work'
     lock = load('tools/npu-compiler.lock.json')
     plan = stage(work)
     (work / 'plan.json').write_text(json.dumps(plan, indent=1) + '\n')
-    # The container runs as its root without capabilities; it writes only here.
+    # The container runs as its root without capabilities, so it needs write
+    # permission on work; the SDK under /root cannot be read as another user.
     work.chmod(0o777)
     limit = container_limit(plan)
     name = 'npu-conformance-%d-%d' % (int(time.time()), os.getpid())
     command = ['docker', 'run', '--name', name, '--network', 'none', '--cpus', str(WORKERS),
-               '--memory', '32g', '--pids-limit', '1024', '--cap-drop', 'ALL',
-               '--security-opt', 'no-new-privileges', '-v', '%s:/source:ro' % ROOT,
-               '-v', '%s:/work' % work, lock['loaded_image_id'],
+               '--memory', MEMORY_LIMIT, '--memory-swap', MEMORY_LIMIT, '--pids-limit', '1024',
+               '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '-v', '%s:/source:ro' % ROOT,
+               '-v', '%s:/work' % work, '-v', '%s:/work/inputs:ro' % (work / 'inputs'), lock['loaded_image_id'],
                'nice', '-n', '10', 'python3', '/source/tools/npu-conformance.py', 'worker', '/work']
     failure = None
     start = time.monotonic()
@@ -412,14 +422,14 @@ def run(args):
         finally:
             subprocess.run(['docker', 'rm', '-f', name], stdout=log, stderr=subprocess.STDOUT)
     wall = time.monotonic() - start
-    staged_unchanged(work, plan)
     report_path = work / 'report.json'
     report = json.loads(report_path.read_text()) if report_path.exists() else dict(result='fail', models={})
     if failure:
         report['result'] = 'fail'
         report.setdefault('failures', []).append(failure)
     report['host'] = dict(container_starts=1, container_name=name, container_limit_seconds=limit,
-                          wall_seconds=round(wall, 3), image=lock['loaded_image_id'])
+                          container_memory_limit=MEMORY_LIMIT, wall_seconds=round(wall, 3),
+                          image=lock['loaded_image_id'])
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
     for model, state in sorted(report.get('models', {}).items()):
         print('%-26s %s' % (model, state['state']) + ''.join('\n    ' + f for f in state['failures']))
@@ -479,18 +489,41 @@ def simulate(processes, work, name, entry, jobs):
         BUILD_LIMIT, directory, directory / 'build.log')
     env = dict(os.environ, LD_LIBRARY_PATH=sdk + '/lib:' + SDK + '/common/lib', **SIMULATOR)
     limit = invocation_limit(entry, len(jobs))
-    processes.run('runner invocation', ['./runner', str(work / 'inputs' / name / 'model.nb'), 'jobs', str(len(jobs))],
-                  limit, directory, directory / 'runner.log', env)
+    invocation = processes.run('runner invocation', ['./runner', str(work / 'inputs' / name / 'model.nb'), 'jobs',
+                                                     str(len(jobs))], limit, directory, directory / 'runner.log', env)
     results = []
     for index in range(len(jobs)):
         job = directory / 'jobs' / str(index)
         results.append(dict(outputs=tuple((job / ('output%d.bin' % o)).read_bytes() for o in range(len(model['outputs']))),
-                            consumed=tuple((job / ('consumed%d.bin' % i)).read_bytes() for i in range(len(model['inputs'])))))
-    times = (directory / 'jobs/times').read_text().split('\n')
-    prepare = int(times[0].split()[1]) / 1e9
-    per_job = [int(line.split()[2]) / 1e9 for line in times[1:] if line]
-    return results, dict(prepare_seconds=round(prepare, 6), job_seconds_max=round(max(per_job), 6),
-                         job_seconds_mean=round(sum(per_job) / len(per_job), 6), invocation_limit_seconds=limit)
+                            read_back=tuple((job / ('readback%d.bin' % i)).read_bytes() for i in range(len(model['inputs'])))))
+    return results, timing((directory / 'jobs/times').read_text(), invocation, limit)
+
+
+def timing(times, invocation, limit):
+    """Runner times from its times file. The first RunGraph also prepares the
+    graph, so job 0 is reported apart from the later, steady-state jobs.
+    outside_seconds is the invocation's wall time that no runner counter
+    covers: process start-up, simulator set-up, release and exit."""
+    lines = times.split('\n')
+    prepare = int(lines[0].split()[1]) / 1e9
+    per_job = [int(line.split()[2]) / 1e9 for line in lines[1:] if line]
+    steady = per_job[1:]
+    return dict(prepare_seconds=round(prepare, 6), first_job_seconds=round(per_job[0], 6),
+                steady_job_seconds_mean=round(sum(steady) / len(steady), 6), steady_job_seconds_max=round(max(steady), 6),
+                outside_seconds=round(invocation - prepare - sum(per_job), 3),
+                invocation_seconds=round(invocation, 3), invocation_limit_seconds=limit)
+
+
+def lanes(plan, jobs):
+    """Models per runner lane: longest expected invocation first, each to the
+    lane with the least expected time so far."""
+    result = [[] for _ in range(RUNNER_LANES)]
+    expected = [0.0] * RUNNER_LANES
+    for name in sorted(plan['models'], key=lambda n: -plan['models'][n]['per_vector_seconds'] * len(jobs[n])):
+        lane = expected.index(min(expected))
+        result[lane].append(name)
+        expected[lane] += plan['models'][name]['per_vector_seconds'] * len(jobs[name])
+    return [names for names in result if names]
 
 
 def tensor_dump(directory, prefix, index, tensor):
@@ -547,27 +580,17 @@ def compiler_reference(processes, work, name, entry, position, vector):
 
 
 def mimus_reference(work, name, entry, base):
-    """The int32-bias rule over the pinned mimus weights, checked against the model file."""
-    import importlib.util
-    import numpy as np
+    """The int32-bias rule over the pinned weight codes, weight scales and bias of the mimus layer."""
     import yaml
     model = entry['catalogue']
     inputs = work / 'inputs' / name
-    spec = importlib.util.spec_from_file_location('mimus_linear', str(inputs / 'npu-mimus-linear.py'))
-    mimus = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mimus)
     meta = json.loads((inputs / 'meta.json').read_text())
-    layers = mimus.tensors(str(inputs / 'model.mimus'))
-    _, _, shape, weight_codes, weight_scales = layers[entry['layer'] + '.weight']
-    bias = layers[entry['layer'] + '.bias'][3]
-    n, k = shape
+    n, k = meta['n'], meta['k']
     weights = (inputs / 'w.i8').read_bytes()
-    scales = struct.unpack('<%df' % n, (inputs / 'ws.f32').read_bytes())
-    biases = struct.unpack('<%df' % n, (inputs / 'bias.f32').read_bytes())
-    if (weights != np.ascontiguousarray(weight_codes).astype(np.int8).tobytes()
-            or list(scales) != [float(v) for v in weight_scales.astype(np.float32)]
-            or list(biases) != [float(v) for v in bias.astype(np.float32)]):
-        raise RuntimeError('pinned mimus weights differ from the model file')
+    scales = (inputs / 'ws.f32').read_bytes()
+    biases = (inputs / 'bias.f32').read_bytes()
+    if meta['layer'] != entry['layer'] or len(weights) != n * k or len(scales) != 4 * n or len(biases) != 4 * n:
+        raise RuntimeError('pinned mimus layer files differ from the study metadata')
     quantize = yaml.safe_load((inputs / 'model.quantize').read_text())['quantize_parameters']
     q = next(v for key, v in quantize.items() if key.startswith('@attach_output'))
     (tensor,), (output,) = model['inputs'], model['outputs']
@@ -575,7 +598,13 @@ def mimus_reference(work, name, entry, base):
     if (q['qtype'] != qtype or q['zero_point'] != output['zero_point'] or float32(q['scale']) != tensor_scale(output)
             or tensor['dimensions'] != [k, meta['rows']] or output['dimensions'] != [n, meta['rows']]):
         raise RuntimeError('mimus quantization or shape differs from the catalogue')
+    # The rule sums raw input codes, which equals the dequantized sum only for
+    # input zero point 0 and the catalogue's input scale.
+    if tensor['zero_point'] != 0 or float32(meta['input_scale']) != tensor_scale(tensor):
+        raise RuntimeError('mimus input zero point or scale differs from the rule\'s assumptions')
     weights = list(struct.unpack('<%db' % len(weights), weights))
+    scales = struct.unpack('<%df' % n, scales)
+    biases = struct.unpack('<%df' % n, biases)
     return [(pack(output, mimus_int32_bias(codes(tensor, vector[0]), meta['rows'], k, weights, n, scales, biases,
                                            meta['input_scale'], q['scale'], q['zero_point'], low, high)),)
             for _, vector in base]
@@ -593,6 +622,14 @@ def inspect(processes, work, name):
     return dict(version=version.group(1) if version else None, layers=layers or None, operations=operations or None)
 
 
+def memory_peak():
+    """The container cgroup's peak memory in MiB, or None where the kernel has no memory.peak."""
+    try:
+        return int(Path(CGROUP_PEAK).read_text()) // (1024 * 1024)
+    except (OSError, ValueError):
+        return None
+
+
 def worker(args):
     os.umask(0)
     work = args.work
@@ -603,14 +640,22 @@ def worker(args):
     for name, entry in plan['models'].items():
         model = entry['catalogue']
         reference = [(work / 'inputs' / name / ('input%d.bin' % i)).read_bytes() for i in range(len(model['inputs']))]
-        jobs[name] = plan_jobs(model, reference, entry['lines'])
-    # Longest runner invocations first, so they start before the references.
-    order = sorted(plan['models'], key=lambda n: -invocation_limit(plan['models'][n], len(jobs[n])))
+        jobs[name] = plan_jobs(model, reference, entry['lines'], entry['repeat'])
+    simulated = {}
+
+    def lane(names):
+        for name in names:
+            try:
+                simulated[name] = simulate(processes, work, name, plan['models'][name], jobs[name])
+            except Exception as error:  # reported with the model's other failures
+                simulated[name] = error
+
+    # The runner lanes start first; the references fill the remaining slots.
+    runner_lanes = lanes(plan, jobs)
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        for name in order:
-            entry = plan['models'][name]
-            tasks[(name, 'simulator')] = pool.submit(simulate, processes, work, name, entry, jobs[name])
-        for name in order:
+        for names in runner_lanes:
+            pool.submit(lane, names)
+        for name in sorted(plan['models']):
             entry = plan['models'][name]
             if entry['reference'] == 'compiler':
                 base = [j['vector'] for j in jobs[name] if j['kind'] == 'base']
@@ -628,8 +673,13 @@ def worker(args):
                 failures.append('%s: %s' % (key[1], error))
                 return None
 
-        simulated = outcome((name, 'simulator'))
-        results, timing = simulated if simulated else (None, None)
+        results, times = None, None
+        if isinstance(simulated.get(name), Exception):
+            failures.append('simulator: %s' % simulated[name])
+        elif name in simulated:
+            results, times = simulated[name]
+        else:
+            failures.append('simulator: no result')
         base = [(j['label'], j['vector']) for j in jobs[name] if j['kind'] == 'base']
         references = None
         if entry['reference'] == 'compiler':
@@ -652,7 +702,7 @@ def worker(args):
             state['state'] = 'fail'
         if not entry['lines']:
             state['coverage'] = None
-        state.update(reference=entry['reference'], jobs=len(jobs[name]), timing=timing,
+        state.update(reference=entry['reference'], jobs=len(jobs[name]), timing=times,
                      inventory=inventory or dict(layers=None, operations=None),
                      tensor_types=sorted({tensor_format(t)[4] for t in model['inputs'] + model['outputs']}))
         models[name] = state
@@ -672,8 +722,9 @@ def worker(args):
             repeats=sum(j['kind'] == 'repeat' for js in jobs.values() for j in js),
             runner_builds=counts.get('runner build', 0), runner_invocations=counts.get('runner invocation', 0),
             compiler_commands=counts.get('compiler inference', 0), inspector_commands=counts.get('inspector', 0),
-            peak_concurrent_processes=processes.peak,
-            peak_child_rss_mib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024),
+            peak_concurrent_processes=processes.peak, runner_lanes=runner_lanes,
+            peak_child_rss_mib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss // 1024,
+            container_memory_peak_mib=memory_peak()),
         step_seconds=processes.seconds, worker_seconds=round(time.monotonic() - start, 3),
         runner_sha256=plan['runner_sha256'])
     (work / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

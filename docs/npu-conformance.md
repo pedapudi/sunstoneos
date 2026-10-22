@@ -32,13 +32,16 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python \
 
 The command prints each model's state and exits with status 0 only when every
 model passes. `RUN/report.json` holds the full result; `RUN/work/` holds the
-staged inputs, every job's input, output and consumed-input files, the
+staged inputs, every job's input, output and input read-back files, the
 reference dumps and the logs.
 
-The container runs as its root user with every capability dropped, a 32 GiB
-memory limit and six CPUs. It writes only to `RUN/work`, which the harness
-makes world-writable for that purpose; the staged inputs inside it stay
-read-only to the container.
+The container runs as its root user with every capability dropped, six CPUs
+and a 14 GiB memory limit with no swap. The SDK lies under the image's
+`/root`, which only root can read, so the container cannot run as the host
+user. It writes only to `RUN/work`, which the harness makes world-writable
+for that purpose. The harness mounts the staged inputs in `RUN/work/inputs`
+read-only and creates `RUN` with mode 0700, so no other local user can reach
+the run's files.
 
 ## Models and references
 
@@ -49,7 +52,7 @@ The model set is the [session catalogue](../tools/npu-session-models.json):
 | 8×8 convolution (`conv8`) | UINT8 | Compiler quantized CPU inference | Imported model JSON and data, quantize file, input description |
 | Two convolutions (`dual-u8`) | UINT8 | Compiler quantized CPU inference | As above |
 | Same graph, INT8 (`dual-i8`) | INT8 | Compiler quantized CPU inference | As above |
-| mimus query projection (`mimus-linear-q`) | INT16 | Exact integer accumulator, bias as an int32 code, one rounding to INT16 | mimus model file, weight codes and scales, bias, study metadata, quantize file, `tools/npu-mimus-linear.py` |
+| mimus query projection (`mimus-linear-q`) | INT16 | Exact integer accumulator, bias as an int32 code, one rounding to INT16 | Weight codes and scales, bias, study metadata, quantize file, `tools/npu-mimus-linear.py` |
 | Published ShuffleNetV2 | UINT8 | None | None |
 
 - **Compiler inference.** For each base vector, the harness converts the codes
@@ -62,9 +65,15 @@ The model set is the [session catalogue](../tools/npu-session-models.json):
   [npu-mimus-linear.py](../tools/npu-mimus-linear.py). It forms the exact
   integer sum over the INT16 input codes and int8 weight codes and adds the
   bias as an int32 code in units of the input scale times the row's weight
-  scale. One rounding, half to even, gives the INT16 output. Before using the pinned
-  weight, scale and bias files, it requires them to equal the layer read from
-  the pinned mimus model file.
+  scale. One rounding, half to even, gives the INT16 output. The rule sums raw
+  input codes, so the harness requires the catalogue's input zero point to be 0
+  and its input scale to equal the study's. The weight codes, weight scales
+  and bias come from the study's derived files. When their pins were recorded,
+  the three files equalled the layer read from the mimus model file, whose
+  SHA-256 the pinned study metadata records. The harness carries its own copy
+  of the rule until the study script exposes it as a function; the SHA-256 pin
+  on `tools/npu-mimus-linear.py` refuses a run after any change to the
+  script.
 - **ShuffleNetV2.** Another compiler produced it, and no source model or
   quantize file exists. It runs in the simulator and its outputs are reported,
   but no arithmetic claim rests on it.
@@ -99,44 +108,67 @@ seeded base vector. The session runtime aligns every allocation to 4 KiB
 ([npu-session.md](npu-session.md)), so lines counted from a tensor's first
 byte are physical cache lines. The inputs span 3 lines for `conv8`, 3 and 1
 for each two-convolution graph, and 44 for mimus: 55 input-line vectors in
-all. The last job of every model repeats the seeded base vector, and the two
-outputs must be equal; this detects simulator nondeterminism.
+all.
+
+The last job of every model repeats one base vector, and the two outputs must
+be equal and unsaturated; this detects simulator nondeterminism. The models
+from the pinned compiler repeat the seeded vector. ShuffleNetV2 repeats the
+maximum vector, because its seeded output `[255, 0]` sits at the clamp limits
+and would change only if nondeterminism flipped the class.
 
 The runner fills every output tensor with the byte `0x5a` before each job, so
 a job that leaves an output unwritten cannot pass with the previous job's
-bytes. It reads every input back from the simulator after the run; that
-consumed input must equal the vector.
+bytes. After each run it reads every input tensor back, and that read-back
+must equal the vector. The read-back shows that the input tensor still held
+the vector after the run; it does not show which bytes the simulated engine
+read.
 
-The report gives each model's **board job order**: the base vectors arranged
-so that the most consecutive pairs have different expected outputs, with the
-seeded vector last, followed by the input-line vectors and the repeat. A
-board application that runs this order can compare its captures with the
-stored simulator outputs.
+The **board job order** is the job order above: base vectors, input-line
+vectors, then the repeat. A board application that runs this order can
+compare its captures with the stored simulator outputs. The report lists every
+consecutive pair with equal expected outputs; the run below has none.
 
-A line is **covered** when some consecutive pair of jobs in the board order
-changes that line and has different expected outputs. Every input and output
-line of the four pinned-compiler models is covered.
+Coverage of a 64-byte line is defined per tensor role:
+
+- **Input line.** Covered when its input-line job's expected output differs
+  from the preceding job's. If only that line were stale on the board, the
+  NPU would read the preceding vector and produce the preceding output, so the
+  capture would differ from the stored output. A pair that changes many lines
+  at once gives no such guarantee, so base-vector pairs cover no input line.
+- **Output line.** Covered when some consecutive pair of jobs has expected
+  outputs that differ in that line; a stale output line holds the preceding
+  job's bytes.
+
+An uncovered line of a pinned-compiler model fails the run. Every input and
+output line of the four pinned-compiler models is covered.
 
 ## Result
 
 The run below used the files pinned at this revision. Every comparison
 requires equality; no tolerance entry exists.
 
-| Model | Jobs | Base vectors | Differing codes | Unsaturated base vectors | Input / output lines covered | Mean / maximum job time |
-| --- | ---: | ---: | ---: | ---: | --- | --- |
-| `conv8` | 9 | 5 | 0 | 5 | 3 of 3 / 2 of 2 | 0.4 ms / 0.8 ms |
-| `dual-u8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 0.7 ms / 1.9 ms |
-| `dual-i8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 0.2 ms / 0.8 ms |
-| `mimus-linear-q` | 50 | 5 | 0 | 5 | 44 of 44 / 44 of 44 | 18 ms / 87 ms |
-| ShuffleNetV2 | 5 | 4 | no reference | 1 | not planned | 8.9 s / 10.2 s |
+| Model | Jobs | Base vectors | Differing codes | Unsaturated base vectors | Input / output lines covered | First job | Later jobs, mean / maximum | Runner start-up and release |
+| --- | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: |
+| `conv8` | 9 | 5 | 0 | 5 | 3 of 3 / 2 of 2 | 2.6 ms | 0.8 ms / 1.0 ms | 2.0 s |
+| `dual-u8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 1.0 ms | 0.4 ms / 0.5 ms | 2.8 s |
+| `dual-i8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 2.9 ms | 0.7 ms / 1.1 ms | 2.0 s |
+| `mimus-linear-q` | 50 | 5 | 0 | 5 | 44 of 44 / 44 of 44 | 17 ms | 17 ms / 97 ms | 2.3 s |
+| ShuffleNetV2 | 5 | 4 | no reference | 1 | not planned | 9.4 s | 8.50 s / 8.56 s | 2.4 s |
+
+The runner's first `RunGraph` call also completes the graph's preparation, so
+the first job is reported apart from the later jobs; graph setup and
+verification before it take 5–6 ms. The last column is the invocation's wall
+time less every time the runner measures: process start-up, simulator set-up,
+graph release and exit.
 
 - **mimus.** The int32-bias rule matches all 1,408 output codes of every base
   vector, including the vectors whose codes all sit at an INT16 limit.
 - **ShuffleNetV2.** The catalogued input gives `[0, 255]`, every code at zero
   gives `[255, 0]`, the seeded vector gives `[255, 0]`, and every code at 255
-  gives `[251, 5]`. The last output is unsaturated, so a board capture of that
-  vector would compare unclamped arithmetic of ShuffleNetV2's layers. Without
-  a reference, it supports no arithmetic claim in the simulator.
+  gives `[251, 5]`, as does its repeat. That output is unsaturated, so a board
+  capture of that vector would compare unclamped arithmetic of ShuffleNetV2's
+  layers. Without a reference, it supports no arithmetic claim in the
+  simulator.
 
 ### Operator coverage
 
@@ -172,6 +204,13 @@ jobs on one prepared graph with the environment that the fixture pipelines
 export (`VSIMULATOR_CONFIG=VIP9000NANODI_PLUS_PID0X1000003B`,
 `VSIMULATOR_SHADER_CORE_COUNT=1`).
 
+Each runner process holds about 4.4 GiB from start-up, whatever its graph
+size, so at most two run at once. They run in two lanes: the model with the
+longest expected invocation (per-vector time times job count) takes one lane
+alone, and the others run in turn in the second. That puts ShuffleNetV2 in
+one lane and the four short models, about 10 s in all, in the other. The
+compiler inferences and the inspector use the remaining four slots.
+
 The baseline is the fixture pipeline at the base revision, run in the same
 image with six CPUs: [npu-conv-pipeline.sh](../tools/npu-conv-pipeline.sh)
 took 13.9 s and [npu-dual-pipeline.sh](../tools/npu-dual-pipeline.sh) 13.0 s.
@@ -183,16 +222,27 @@ inference, export), and reproduces the catalogued model bytes.
 | --- | --- | --- | --- |
 | Simulator jobs | 1 | 84: 24 base, 55 input-line, 5 repeats | At most 25, 55 and 5 |
 | Runner builds | 1 | 5 | One per model |
-| Runner invocations | 1 | 5 | One per model |
+| Runner invocations | 1 | 5, at most 2 at once | One per model |
 | Compiler commands | 6 | 15 quantized inferences | At most 15 |
 | Peak concurrent processes | 1 | 6 | At most 6 |
 | Container starts | 1 | 1 | 1 |
-| Wall time | 13.0–13.9 s | 47.1 s | Recorded, no budget |
+| Container memory peak | Not measured | 9.1 GiB | Under the 14 GiB limit |
+| Wall time | 13.0–13.9 s | 46.2–46.8 s | Recorded, no budget |
 
-Three passing runs took 47.1, 47.4 and 47.7 s. ShuffleNetV2's runner invocation, at
-46.5 s for four jobs and a repeat, is the critical path; the 15 compiler
-inferences take 1.7–2.2 s each and the five runner builds 0.2 s each. The
-largest single process used 4.4 GiB.
+The container memory peak is the cgroup's `memory.peak`, which the worker
+reads when it ends; the report also gives the largest single process, 4.4
+GiB. A measurement run under a 32 GiB limit peaked at 9,301 MiB; the 14 GiB
+limit is that peak plus half, rounded up to a whole GiB. Three passing runs
+at the 14 GiB limit took 46.2, 46.7 and 46.8 s with peaks of 9,297, 9,289
+and 9,277 MiB. Before the runner lanes, when all five runners started
+together, the peak was 20.3 GiB and runs took 47.1–47.7 s.
+
+ShuffleNetV2's runner invocation, at 45.8–46.4 s, is the critical path. Each
+model's jobs run on one prepared graph, so ShuffleNetV2's five jobs run in
+series on one core. Splitting them across processes would shorten the run to
+about 12 s, each process paying 2.4 s of start-up and a 9.4 s first job, but
+would hold 4.4 GiB per process. The 15 compiler inferences take 1.7–1.9 s each
+and the five runner builds 0.1–0.2 s each.
 
 **The harness keeps no result cache.** The design allowed one only if a cold
 run took 60 s or more. Every run therefore repeats all 84 simulator jobs, and
@@ -206,11 +256,12 @@ The run fails, and reports every model's state, on any of these:
 
 - a runner, reference or inspector failure, or a timeout;
 - a wrong output size;
-- a consumed input that differs from the vector;
+- an input read-back that differs from the vector;
 - a missing or changed pinned file;
-- a repeated vector with different outputs;
+- a repeated vector with different outputs, or with a saturated output;
 - a simulator output for the catalogued input that differs from the catalogue;
-- any differing code.
+- any differing code;
+- an uncovered input or output line of a pinned-compiler model.
 
 A failing comparison
 reports the number of differing codes, at most 16 of their positions and the
@@ -223,25 +274,30 @@ Time limits:
 - **Inspector:** 60 s per model.
 - **Runner invocation:** the one-vector limit of the model's pipeline (120 s
   for the convolution graphs, 600 s for mimus and ShuffleNetV2) plus four times
-  the measured per-vector time for each further job. The per-vector times in
-  the reference table are 0.01 s for the convolution graphs, 0.1 s for mimus
-  and 10.5 s for ShuffleNetV2.
-- **Container:** the sum of the step limits plus 120 s, 4,569 s for this
+  the measured per-vector time for each further job. The one-vector limit
+  covers graph preparation, so the per-vector times in the reference table
+  are later-job means: 0.01 s for the convolution graphs, 0.1 s for mimus and
+  8.5 s for ShuffleNetV2.
+- **Container:** the sum of the step limits plus 120 s, 4,537 s for this
   catalogue. On expiry the harness runs `docker kill` and removes the
   container.
 
-After the container exits, the harness hashes the staged model and reference
-files again and fails the run if any changed.
+The harness verifies every pinned file once, when it stages the file. The
+container cannot change a staged file afterwards: the inputs are mounted
+read-only.
 
 The host check [npu-conformance.py](../checks/npu-conformance.py) runs without
 the image or the cache. It checks:
 
 - the 84-job plan and the 55 input-line vectors for the catalogue, the seeded
-  bytes and each line vector's single changed line;
-- line coverage and the board job order;
+  bytes, each line vector's single changed line and each model's repeated
+  vector;
+- line coverage, including line vectors whose outputs equal the preceding
+  job's, which leave their lines uncovered;
 - the int32-bias rule, including half-to-even rounding and clamping;
 - the verdict for each failure listed above;
-- the generated runner bindings and the time limits;
+- the generated runner bindings, the runner timing, the runner lanes and the
+  time limits;
 - the refusal of every changed or missing pinned file.
 
 ## Board evidence that would confirm conformance

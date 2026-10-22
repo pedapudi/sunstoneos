@@ -1,8 +1,10 @@
 # Design: NPU output conformance with the SDK simulator
 
 Status: **implemented**; the conformance record is
-[docs/npu-conformance.md](../npu-conformance.md). A cold run took 47 s, so the
-result cache described below was not built.
+[docs/npu-conformance.md](../npu-conformance.md). A cold run takes 47 s, so the
+result cache described below was not built. The harness carries its own copy
+of the int32-bias rule until `tools/npu-mimus-linear.py` exposes it as a
+function.
 
 The pinned SDK simulator models the A733 NPU's revision 9.2 engine and is the
 only arithmetic oracle the project has for compiled models
@@ -60,7 +62,7 @@ the SHA-256 of every file the reference reads:
 | 8×8 convolution | UINT8 | Compiler quantized CPU inference | Imported model JSON and data, `.quantize` |
 | Two-convolution, UINT8 | UINT8 | Compiler quantized CPU inference | As above |
 | Two-convolution, INT8 | INT8 | Compiler quantized CPU inference | As above |
-| mimus query projection | INT16 | Exact integer accumulator with the bias held as an int32 code, rounded once to INT16 | mimus model file, weight codes and scales, `.quantize`, `tools/npu-mimus-linear.py` |
+| mimus query projection | INT16 | Exact integer accumulator with the bias held as an int32 code, rounded once to INT16 | Weight codes and scales, bias, study metadata, `.quantize`, `tools/npu-mimus-linear.py` |
 | ShuffleNetV2 (published SDK example) | UINT8 | None | None |
 
 - **Compiler inference.** The convolution fixtures' exact integer references
@@ -74,7 +76,11 @@ the SHA-256 of every file the reference reads:
   script's `compare` step today; the owner is asked to move it into a function
   with unchanged behaviour. No separate reproduction of the study runs. If the
   catalogued input equals the study's saved simulator input, the first base
-  vector repeats the study's result.
+  vector repeats the study's result. The weights come from one source, the
+  study's pinned weight-code, weight-scale and bias files; they equalled the
+  layer in the mimus model file when the pins were recorded, and the pinned
+  study metadata records that file's SHA-256. The rule sums raw input codes,
+  so the harness requires input zero point 0 and the study's input scale.
 - **ShuffleNetV2.** A different compiler produced it, and no source model or
   quantize file exists. It takes part in the board comparison only, and no
   arithmetic claim rests on it.
@@ -82,8 +88,9 @@ the SHA-256 of every file the reference reads:
 Every comparison requires bit-for-bit equality. A difference fails the run; it
 becomes a tolerance only as a reviewed per-model entry with a computable
 acceptance rule. An output whose codes all sit at the clamp limits is marked
-**saturated** and does not count toward arithmetic coverage. Every ShuffleNetV2
-output seen so far is `[0,255]`. The report lists, for each model and vector,
+**saturated** and does not count toward arithmetic coverage. ShuffleNetV2's
+outputs are saturated for its catalogued, zero and seeded vectors; the vector
+with every code at 255 gives `[251,5]`. The report lists, for each model and vector,
 the number of differing codes, at most 16 of their positions and the largest
 code difference.
 
@@ -108,6 +115,18 @@ code difference.
   pipelines export: `VSIMULATOR_CONFIG=VIP9000NANODI_PLUS_PID0X1000003B` and
   `VSIMULATOR_SHADER_CORE_COUNT=1` (`tools/npu-conv-pipeline.sh:53-54`). The
   harness blocks on process exit.
+- **Runner memory.** Each runner process holds about 4.4 GiB from start-up,
+  whatever its graph size. With all five runners started together the
+  container peak was 20.3 GiB. At most two runners therefore run at once: the
+  longest expected invocation alone in one lane, the others in turn in the
+  second. The wall time stays on ShuffleNetV2's invocation, and the measured
+  peak falls to 9.1 GiB. The container memory limit is the measured peak plus
+  half, rounded up to 14 GiB, with no swap.
+- **One prepared graph per model.** ShuffleNetV2's five jobs run in series on
+  one graph, about 46 s. Splitting them across five processes would take
+  about 12 s but hold another 17.6 GiB, and each process would repeat the
+  9.5 s first job that completes graph preparation. The run keeps one graph
+  per model and accepts the longer wall time.
 - **Result cache.** Entries live under `~/.cache/sunstoneos/build/npu-conformance/`.
   Each entry's key is one SHA-256 digest:
   - a simulator entry hashes the runner source, the generated bindings, the
@@ -143,13 +162,18 @@ code difference.
 - **Memory placement.** Only host files. No device buffer, firmware or QEMU
   image is added.
 - **Job order for board cache visibility.** Implemented now: each model's job
-  order, so the board application has a fixed sequence. Base vectors are
-  ordered so that consecutive jobs have different expected outputs where the
-  simulator outputs allow. On each pinned-compiler model, one input-line
+  order, so the board application has a fixed sequence. Base vectors run in
+  their canonical order, and the report lists every consecutive pair with
+  equal expected outputs; in the catalogue every pair differs. On each
+  pinned-compiler model, one input-line
   vector follows for every 64-byte line of every input. It equals the
   preceding job's vector except in that line, which gets seeded bytes. It runs
   in the simulator only and needs no reference. Its expected output must
-  differ from the preceding job's; otherwise the line is reported uncovered.
+  differ from the preceding job's; otherwise the line is reported uncovered
+  and the run fails. Only that job covers its line: when several lines change
+  at once, a stale copy of one of them gives a mixed input whose output need
+  not differ from the new output. An output line is covered by any
+  consecutive pair whose expected outputs differ in it.
   The session runtime aligns every allocation to 4 KiB
   ([npu-session.md](../npu-session.md)), so lines counted from a tensor's
   first byte are physical cache lines. Inputs span 3 lines for the 8×8
@@ -179,8 +203,11 @@ code difference.
   separate temporary directories, and only the parent moves entries into the
   cache and writes the report. A run holds one `flock` on the cache directory
   from start to end; a second run fails at start. On a run with any miss, the
-  last job of each model's runner invocation repeats its seeded vector, and
-  the two outputs must be equal. This detects simulator nondeterminism.
+  last job of each model's runner invocation repeats a base vector with an
+  unsaturated output, and the two outputs must be equal. This detects
+  simulator nondeterminism. The models from the pinned compiler repeat the
+  seeded vector; ShuffleNetV2 repeats the vector with every code at 255,
+  because its seeded output is saturated.
 
 ## Operator coverage for each comparison
 
@@ -232,6 +259,8 @@ time without a budget.
 | Runner invocations, cold cache | One process for two ShuffleNetV2 inputs | One per simulated graph: five | Process counter |
 | Compiler commands per run | Each fixture pipeline: import, two inferences, quantize, export | One quantized inference per new reference key: at most 15 cold, zero when every key is cached | Command counter |
 | Peak concurrent processes | Not measured | At most six | Pool high-water mark |
+| Concurrent runner processes | Not measured | At most two | Runner lanes |
+| Container memory peak | 20.3 GiB with five concurrent runners | Under the 14 GiB container limit | cgroup `memory.peak`, read by the worker at its end |
 | Container starts per run | One per pipeline invocation | One with any miss, otherwise zero | Report |
 | Lines covered by a job pair with different expected outputs | Not applicable | Every input and output line of each pinned-compiler model | Report |
 | Lines changed outside owned files | Not applicable | Zero | `git diff --stat` against the base |
@@ -251,8 +280,9 @@ It reports every model's state and no partial pass. Timeouts per step:
   vector. The one-vector limit is 120 s for the convolution graphs
   (`tools/npu-conv-pipeline.sh:64`, `tools/npu-dual-pipeline.sh:68`) and
   600 s for mimus (`tools/npu-mimus-linear.sh:59`); ShuffleNetV2, which has no
-  pipeline, uses 600 s. The first implementation step records the per-vector
-  time of each model.
+  pipeline, uses 600 s. The per-vector time is the measured mean of each
+  model's jobs after the first, since the first job completes graph
+  preparation.
 - **Container:** the sum of the run's step limits plus 120 s for start. On
   expiry the harness runs `docker kill` and `docker rm -f` on the run's
   container and reports a failure.
@@ -275,8 +305,9 @@ the limits stated above, for the maintenance form named in the capture.
 - **A generated graph for layers found only in ShuffleNetV2.** Its result would
   not show that the published graph's descriptors, from another compiler,
   encode those layers the same way, so it would support no claim.
-- **Input-line vectors for ShuffleNetV2.** Its outputs are saturated, so no
-  pair would have different expected outputs.
+- **Input-line vectors for ShuffleNetV2.** Its input spans 2,352 lines, and
+  each job takes about 8.5 s, so the vectors would add about 5.5 hours of
+  simulation to a run.
 - **Dataset accuracy and simulator timing.** Conformance compares bytes, and
   host cycle counts do not predict board timing.
 - **A search for an unsaturating ShuffleNetV2 input.** Its class meanings are
