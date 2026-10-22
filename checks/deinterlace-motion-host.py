@@ -36,7 +36,7 @@ def main():
         if case=='one-frame':pixels=source[:460800]
         if case=='extra-frame':pixels=source+source[:460800]
         if case=='second-frame-mutated':pixels=source[:460800]+bytes([source[460800]^1])+source[460801:]
-        if case=='mode-unknown':struct.pack_into('<I',raw,876,3)
+        if case=='mode-unknown':struct.pack_into('<I',raw,876,4)
         if case=='bottom-first':struct.pack_into('<I',raw,880,0)
         if case=='result-input-sized':
             wire=bytearray(frame);struct.pack_into('<I',wire,12,921600);wire=bytes(wire)
