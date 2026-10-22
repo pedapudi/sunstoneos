@@ -1,4 +1,5 @@
 #include "a733_storage_update.h"
+#include "a733_range.h"
 #include "sunxi_smhc.h"
 #include <string.h>
 static uint32_t get32(const uint8_t *p)
@@ -7,8 +8,6 @@ static uint64_t get64(const uint8_t *p){return get32(p)|(uint64_t)get32(p+4)<<32
 static void put32(uint8_t *p,uint32_t v){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(v>>(8*i));}
 static void put64(uint8_t *p,uint64_t v){put32(p,(uint32_t)v);put32(p+4,(uint32_t)(v>>32));}
 static int nonzero(const uint8_t p[32]){unsigned v=0;for(unsigned i=0;i<32;++i)v|=p[i];return v!=0;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int card_equal(const struct sunxi_mmc_card *a,const struct sunxi_mmc_card *b)
 {return !memcmp(a->cid,b->cid,16)&&!memcmp(a->csd,b->csd,16)&&a->ocr==b->ocr&&a->sectors==b->sectors&&
     a->rca==b->rca&&a->sector_addressed==b->sector_addressed&&a->ext_revision==b->ext_revision;}
@@ -53,16 +52,17 @@ static int timely(struct a733_storage_update *s)
 {
     uint64_t now;
     if(!a733_storage_update_alive(s)||!a733_storage_update_owned(s,s->platform)||
-       s->platform->ops.now_us(s->platform->cookie,&now)!=1||now<s->last_now||now>=s->grant.deadline_us)return fault(s);
-    s->last_now=now;return 1;
+       s->platform->ops.now_us(s->platform->cookie,&now)!=1||!a733_deadline_admit(now,&s->last_now,s->grant.deadline_us))
+        return fault(s);
+    return 1;
 }
 int a733_storage_update_init(struct a733_storage_update *s,struct a733_mmc_platform *p,
     const struct a733_storage_grant *g,uint64_t deadline)
 {
-    if(!s||s->self||!p||!g||!separate(s,sizeof(*s),g,sizeof(*g))||
+    if(!s||s->self||!p||!g||!a733_ranges_disjoint(s,sizeof(*s),g,sizeof(*g))||
        !a733_mmc_platform_storage(p,s,sizeof(*s))||!a733_mmc_platform_storage(p,g,sizeof(*g)))return 0;
     const struct a733_storage_grant copied=*g;g=&copied;
-    if(!grant_valid(g)||!separate(s,sizeof(*s),p,sizeof(*p))||g->deadline_us>p->config.lifetime_deadline_us||
+    if(!grant_valid(g)||!a733_ranges_disjoint(s,sizeof(*s),p,sizeof(*p))||g->deadline_us>p->config.lifetime_deadline_us||
        deadline>g->deadline_us||!deadline)return 0;
     struct sunxi_mmc_card card;
     if(a733_mmc_platform_card(p,&card,deadline)!=A733_MMC_READY||g->kind!=(uint32_t)p->config.kind||
@@ -116,7 +116,7 @@ static void respond(struct a733_storage_update *s,uint64_t offset,const uint8_t 
 }
 int a733_storage_update_request(struct a733_storage_update *s,const uint8_t *p,size_t n)
 {
-    if(!s||s->self!=s||!p||!separate(s,sizeof(*s),p,n)||s->platform->ops.current(s->platform->cookie)!=1)return 0;
+    if(!s||s->self!=s||!p||!a733_ranges_disjoint(s,sizeof(*s),p,n)||s->platform->ops.current(s->platform->cookie)!=1)return 0;
     if(!timely(s)||s->finished||s->state!=A733_STORAGE_IDLE||s->response_ready||n<88||
        memcmp(p,s->grant.nonce,32)||s->sequence==UINT32_MAX||get32(p+32)!=s->sequence+1||get32(p+52))return fault(s);
     unsigned op=get32(p+36),bytes=get32(p+48);uint64_t offset=get64(p+40);
@@ -206,8 +206,8 @@ void a733_storage_update_poll(struct a733_storage_update *s)
 }
 int a733_storage_update_response(struct a733_storage_update *s,uint8_t *out,size_t capacity,size_t *n)
 {
-    if(!s||s->self!=s||s->platform->ops.current(s->platform->cookie)!=1||!out||!n||!separate(s,sizeof(*s),out,capacity)||!separate(s,sizeof(*s),n,sizeof(*n))||
-       !separate(out,capacity,n,sizeof(*n))||!a733_mmc_platform_storage(s->platform,out,capacity)||
+    if(!s||s->self!=s||s->platform->ops.current(s->platform->cookie)!=1||!out||!n||!a733_ranges_disjoint(s,sizeof(*s),out,capacity)||!a733_ranges_disjoint(s,sizeof(*s),n,sizeof(*n))||
+       !a733_ranges_disjoint(out,capacity,n,sizeof(*n))||!a733_mmc_platform_storage(s->platform,out,capacity)||
        !a733_mmc_platform_storage(s->platform,n,sizeof(*n))||!s->response_ready||capacity<s->response_size||!timely(s))return 0;
     memcpy(out,s->response,s->response_size);*n=s->response_size;s->response_ready=0;return 1;
 }

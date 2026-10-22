@@ -1,5 +1,6 @@
 #include "a733_mmc_platform.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include "a733_storage_update.h"
 #include "sunxi_smhc.h"
 #define CCU UINT32_C(0x02002000)
@@ -17,17 +18,12 @@ static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0},{24,0,800,600,480,0,0,0},{24,600,0,480,400,0,0,0}
 };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int outside(const struct a733_mmc_platform *p,const void *v,size_t n)
 {
-    return separate(p,sizeof(*p),v,n)&&separate(p->clocks,sizeof(*p->clocks),v,n)&&
-        separate(p->pins,sizeof(*p->pins),v,n)&&separate(p->rails,sizeof(*p->rails),v,n)&&
-        separate(p->pmic,sizeof(*p->pmic),v,n)&&
-        separate(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),v,n)&&p->ops.outside(p->cookie,v,n)==1&&p->pmic->ops.outside(p->pmic->cookie,v,n)==1;
+    return a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
+        a733_ranges_disjoint(p->pins,sizeof(*p->pins),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
+        a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&
+        a733_ranges_disjoint(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),v,n)&&p->ops.outside(p->cookie,v,n)==1&&p->pmic->ops.outside(p->pmic->cookie,v,n)==1;
 }
 int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock_mask_t *out)
 {
@@ -65,8 +61,9 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
 static int timely(struct a733_mmc_platform *p)
 {
     uint64_t now;
-    if((p->update&&!a733_storage_update_alive(p->update))||p->ops.now_us(p->cookie,&now)!=1||now<p->last_now)return 0;
-    p->last_now=now;return now<p->deadline&&now<p->config.lifetime_deadline_us;
+    if((p->update&&!a733_storage_update_alive(p->update))||p->ops.now_us(p->cookie,&now)!=1||
+       !a733_monotonic_advance(now,&p->last_now))return 0;
+    return now<p->deadline&&now<p->config.lifetime_deadline_us;
 }
 static enum a733_mmc_platform_result finish(struct a733_mmc_platform *p,enum a733_mmc_platform_result r)
 {
@@ -265,11 +262,11 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
        !clocks||!clocks->initialized||!pins||!pins->initialized||!rails||rails->self!=rails||
        rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||
        pmic->rails!=rails||pmic->pins!=pins||!pmic->ops.outside||
-       pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||!separate(p,sizeof(*p),c,sizeof(*c))||
-       !separate(p,sizeof(*p),o,sizeof(*o))||!separate(p,sizeof(*p),clocks,sizeof(*clocks))||
-       !separate(p,sizeof(*p),pins,sizeof(*pins))||!separate(p,sizeof(*p),rails,sizeof(*rails))||
-       !separate(p,sizeof(*p),pmic,sizeof(*pmic))||
-       !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu))||o->outside(cookie,p,sizeof(*p))!=1)return 0;
+       pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||!a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||
+       !a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||!a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||
+       !a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||!a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
+       !a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
+       !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu))||o->outside(cookie,p,sizeof(*p))!=1)return 0;
     unsigned sd=c->kind==SUNXI_MMC_SD,count=sd?7:12,bank=sd?A733_PIN_F:A733_PIN_C;
     if(sd&&!a733_mmc_sd0_inherited_mux(c->expected))return 0;
     for(unsigned i=0;i<count;++i) {
@@ -444,7 +441,7 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1||p->stage!=READY||
        (operation==1?p->core.state!=SUNXI_MMC_DONE:p->core.state!=SUNXI_MMC_READY)||
-       (p->core.borrowed&&!separate(out,bytes,p->core.borrowed,p->core.borrowed_bytes)))return finish(p,A733_MMC_INVALID);
+       (p->core.borrowed&&!a733_ranges_disjoint(out,bytes,p->core.borrowed,p->core.borrowed_bytes)))return finish(p,A733_MMC_INVALID);
     if(operation==0||operation==3) {
         const struct sunxi_mmc_card *c=&p->core.card;
         if(!blocks||blocks>SUNXI_MMC_MAX_BLOCKS||bytes!=(size_t)blocks*512||

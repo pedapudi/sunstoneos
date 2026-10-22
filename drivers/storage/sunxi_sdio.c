@@ -2,6 +2,7 @@
  * source identities are documented in docs/sdio.md. */
 #include "sunxi_sdio.h"
 #include "sunxi_smhc.h"
+#include "a733_range.h"
 
 #define GCTRL SUNXI_SMHC_GCTRL
 #define CLKCR SUNXI_SMHC_CLKCR
@@ -31,11 +32,6 @@
 #define ERRORS SUNXI_SMHC_ERRORS
 #define UPDATE SUNXI_SMHC_UPDATE
 
-static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an;
-}
 void sunxi_sdio_stop(struct sunxi_sdio *h, enum sunxi_sdio_error error)
 {
     if (h && h->state != SUNXI_SDIO_FAULT) {
@@ -63,13 +59,14 @@ static int barrier(struct sunxi_sdio *h)
 int sunxi_sdio_time(struct sunxi_sdio *h, uint64_t *out)
 {
     uint64_t now;
-    if (!h || !span(out, sizeof(*out)) || overlap(h, sizeof(*h), out, sizeof(*out)) ||
+    if (!h || !a733_span_excl(out, sizeof(*out)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)out, sizeof(*out)) ||
         h->state == SUNXI_SDIO_FAULT) return 0;
     if (!h->config.ops.now(h->config.context, &now)) {
         sunxi_sdio_stop(h, SUNXI_SDIO_IO_ERROR); return 0;
     }
-    if (now < h->last_now) { sunxi_sdio_stop(h, SUNXI_SDIO_CLOCK_ERROR); return 0; }
-    h->last_now = now; *out = now; return 1;
+    if (!a733_monotonic_advance(now, &h->last_now)) { sunxi_sdio_stop(h, SUNXI_SDIO_CLOCK_ERROR); return 0; }
+    *out = now; return 1;
 }
 static int time_limit(struct sunxi_sdio *h)
 {
@@ -80,7 +77,8 @@ static int time_limit(struct sunxi_sdio *h)
 }
 int sunxi_sdio_init(struct sunxi_sdio *h, const struct sunxi_sdio_config *c)
 {
-    if (!span(h, sizeof(*h)) || !span(c, sizeof(*c)) || overlap(h, sizeof(*h), c, sizeof(*c)) ||
+    if (!a733_span_excl(h, sizeof(*h)) || !a733_span_excl(c, sizeof(*c)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)c, sizeof(*c)) ||
         !c->ops.read32 || !c->ops.write32 || !c->ops.barrier || !c->ops.now ||
         !c->module_hz || c->module_hz > 800000 || h->initialized) return 0;
     struct sunxi_sdio initial = {0};
@@ -105,7 +103,7 @@ static int valid_request(const struct sunxi_sdio_request *r)
         return r->data == NULL && r->bytes == 0 && r->block_bytes == 0;
     }
     uint32_t fn = (r->argument >> 28) & 7u, count = r->argument & 511u;
-    if (!fn || !span(r->data, r->bytes) || !r->bytes || r->bytes > SUNXI_SDIO_MAX_BYTES ||
+    if (!fn || !a733_span_excl(r->data, r->bytes) || !r->bytes || r->bytes > SUNXI_SDIO_MAX_BYTES ||
         (r->bytes & 3u)) return 0;
     size_t expected;
     if (r->argument & (1u << 27)) {
@@ -122,9 +120,12 @@ static int valid_request(const struct sunxi_sdio_request *r)
 int sunxi_sdio_submit(struct sunxi_sdio *h, const struct sunxi_sdio_request *r, uint64_t deadline)
 {
     if (!h || h->entered || h->state != SUNXI_SDIO_READY || deadline <= h->last_now ||
-        !span(r, sizeof(*r)) || overlap(h, sizeof(*h), r, sizeof(*r)) || !valid_request(r)) return 0;
-    if (r->bytes && (overlap(h, sizeof(*h), r->data, r->bytes) ||
-                    overlap(r, sizeof(*r), r->data, r->bytes))) return 0;
+        !a733_span_excl(r, sizeof(*r)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)r, sizeof(*r)) ||
+        !valid_request(r)) return 0;
+    if (r->bytes &&
+        (a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)r->data, r->bytes) ||
+         a733_extents_overlap_prechecked((uintptr_t)r, sizeof(*r), (uintptr_t)r->data, r->bytes))) return 0;
     h->request = *r; h->result = (struct sunxi_sdio_result){0}; h->deadline = deadline;
     h->step = 0; h->response_seen = 0; h->state = SUNXI_SDIO_QUEUED; return 1;
 }
@@ -336,8 +337,10 @@ out:
 int sunxi_sdio_take_result(struct sunxi_sdio *h, struct sunxi_sdio_result *r)
 {
     if (!h || h->entered || (h->state != SUNXI_SDIO_DONE && h->state != SUNXI_SDIO_FAULT) ||
-        !span(r, sizeof(*r)) || overlap(h, sizeof(*h), r, sizeof(*r)) ||
-        (h->request.bytes && overlap(r, sizeof(*r), h->request.data, h->request.bytes))) return 0;
+        !a733_span_excl(r, sizeof(*r)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)r, sizeof(*r)) ||
+        (h->request.bytes &&
+            a733_extents_overlap_prechecked((uintptr_t)r, sizeof(*r), (uintptr_t)h->request.data, h->request.bytes))) return 0;
     *r = h->result;
     if (h->state == SUNXI_SDIO_DONE) h->state = SUNXI_SDIO_READY;
     return 1;
