@@ -17,6 +17,9 @@ static atomic_uint recovery_state;
 static int entropy_failed,boundary;
 static int client_model;
 static unsigned listener_variant,listener_closes;
+/* Socket requests that time out while the link is lost: the first SEND and
+ * RECEIVE time out with nothing moved, the second with one late byte. */
+static unsigned exchange_timeouts,timed_sends,timed_receives;
 static struct sunstone_net_request copied_request;
 static uint64_t copied_ticket;
 static enum a733_radio_session_result session_result=A733_SESSION_MANAGEMENT;
@@ -101,9 +104,15 @@ int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *r,Tic
         assert(copied_request.handle==(listener_closes?5u:6u)&&!atomic_load(&app.client_status));++listener_closes;
     }
  }
- if(client_model&&copied_request.operation==SUNSTONE_NET_SEND)r->stack_result=2;
+ uint16_t moved=copied_request.bytes<2?copied_request.bytes:2;
+ if(exchange_timeouts&&(copied_request.operation==SUNSTONE_NET_SEND||copied_request.operation==SUNSTONE_NET_RECEIVE)){
+    unsigned *count=copied_request.operation==SUNSTONE_NET_SEND?&timed_sends:&timed_receives;
+    if(++*count<=2){r->result=SUNSTONE_NET_TIMEOUT;moved=(uint16_t)(*count-1);}
+ }
+ if(client_model==4&&copied_request.operation==SUNSTONE_NET_CONNECT)r->result=SUNSTONE_NET_TIMEOUT;
+ if(client_model&&copied_request.operation==SUNSTONE_NET_SEND)r->stack_result=moved;
  if(client_model&&copied_request.operation==SUNSTONE_NET_RECEIVE){
-    r->bytes=2;memcpy(r->payload,app.startup_profile->response+app.client_received,2);
+    r->bytes=moved;memcpy(r->payload,app.startup_profile->response+app.client_received,moved);
  }return 1;
 }
 static int admission(void *p,const struct a733_radio_platform_config *c,const struct a733_clock_token *t)
@@ -163,6 +172,18 @@ int main(void)
     assert(app.client_stage==5&&app.client_sent==4&&app.client_received==4&&
         copied_request.operation==SUNSTONE_NET_CLOSE&&app.client_handle==5);
     unsigned verified=0;assert(board_radio_client_result(&app,&verified)==1&&verified==4);
+    /* SEND and RECEIVE timeouts during a link loss repeat within the client
+     * deadline and keep their late bytes; a CONNECT timeout stays terminal. */
+    app.client_stage=0;app.client_sent=app.client_received=0;atomic_store(&app.client_status,0);
+    exchange_timeouts=1;iteration=0;
+    while(board_radio_client_poll(&app)==0)assert(++iteration<25);
+    assert(app.client_stage==5&&app.client_sent==4&&app.client_received==4&&timed_sends==4&&timed_receives==4);
+    assert(board_radio_client_result(&app,&verified)==1&&verified==4);
+    exchange_timeouts=0;client_model=4;app.client_stage=0;app.client_sent=app.client_received=0;
+    atomic_store(&app.client_status,0);iteration=0;
+    while(board_radio_client_poll(&app)==0)assert(++iteration<5);
+    assert(copied_request.operation==SUNSTONE_NET_CONNECT&&atomic_load(&app.client_status)==2&&atomic_load(&app.failed));
+    atomic_store(&app.failed,0);atomic_store(&recovery_state,1);
     client_model=0;task=c.session.owner_task;
     uint64_t progress=0,deadline=0;app.session.transport.completed_transfers=3;
     assert(board_radio_poll(&app)==BOARD_RADIO_NETWORK);
@@ -176,6 +197,6 @@ int main(void)
     unsigned expected=1;assert(!atomic_compare_exchange_strong(&recovery_state,&expected,3));
     assert((expected&4)&&atomic_load(&app.failed));
     assert(board_radio_external_failure(&app)==BOARD_RADIO_RETAINED&&entropy_calls==polls&&entropy_retains==3);
-    puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets and retained entropy fault");
+    puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets, repeated exchange timeouts and retained entropy fault");
     return 0;
 }

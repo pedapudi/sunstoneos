@@ -1592,6 +1592,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   security modes remain unqualified or required.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
+  [Station power save](radio-wifi.md#station-power-save-follows-the-source-management-configuration)
+  is **implemented** as the source management configuration, gated by the
+  firmware's power-save feature; source-structure host checks pass. Reconnect
+  and loss recovery admit any access point of the same network (same SSID
+  and security, own beacon evidence and RSN element), so the station can roam
+  by disconnection and new association; the loss-recovery composition recovers
+  onto a second access point. The board's outgoing client and listener repeat
+  a SEND or RECEIVE that timed out during a link loss, keeping reported bytes,
+  so an exchange survives recovery; host checks pass. An
+  [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
+  resolves its server, validates replies and exports an RTC SET request; host
+  checks and an actual-stack composition pass, but no image runs it yet.
+  WPA3 personal is not implemented: the pinned wpa_supplicant release has no
+  elliptic-curve back end usable here, and SAE external authentication and
+  protected management frames are missing
+  ([details](radio-security.md#wpa3-personal-needs-three-missing-parts)).
+  Physical power save, roaming, time accuracy and loss timing remain unqualified.
 
 - Camera: The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes

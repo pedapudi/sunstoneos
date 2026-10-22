@@ -340,15 +340,19 @@ int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_d
 int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
 {if(!enter(s))return 0;return done(s,outside(s,out,sizeof(*out))&&admission(s,s->deadline)&&aic8800_transport_take_scan(&s->transport,out));}
 
-/* The same admitted target as the lost association, with its credentials. */
-static int same_target(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
+/* An admitted access point of the current network (ESS): the same SSID and
+ * security as the current association, any BSSID and admitted channel, with
+ * its own beacon evidence and credentials. Each access point's RSN element
+ * comes from its beacon, so WPA2 supplies a configuration for that access
+ * point. The worker checks the BSSID and channel again in the association. */
+static int same_ess(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
     const struct aic8800_supplicant_config *security,uint64_t open)
 {
     const struct aic8800_wifi *w=&s->wifi;
     return outside(s,target,sizeof(*target))&&w->association_generation!=UINT64_MAX&&
-        target->security==w->target.security&&target->channel_index==w->target.channel_index&&
+        target->security==w->target.security&&target->channel_index<w->config.channel_count&&
         target->ssid_bytes==w->target.ssid_bytes&&target->connection_authority&&target->beacon_evidence&&
-        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        !memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
         ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
          (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
           security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)));
@@ -361,7 +365,7 @@ int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800
     if(!now(s,&current)||deadline<=current)return done(s,0);
     int ok=s->stage==NETWORK&&aic8800_network_lost(&s->sockets.network)&&admission(s,deadline)&&
         s->wifi.state==AIC8800_WIFI_READY&&s->wifi.link==AIC8800_WIFI_LINK_DOWN&&
-        s->data.state==AIC8800_DATA_IDLE&&same_target(s,target,security,open)&&
+        s->data.state==AIC8800_DATA_IDLE&&same_ess(s,target,security,open)&&
         (!security||s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED||s->supplicant.state==AIC8800_SUPPLICANT_HANDSHAKE);
     if(ok){
         s->reconnect_target=*target;if(security)s->reconnect_security=*security;
@@ -376,19 +380,12 @@ int a733_radio_session_reconnect(struct a733_radio_session *s,const struct aic88
     if(!enter(s))return 0;
     struct aic8800_wifi *w=&s->wifi;uint64_t current;
     if(!now(s,&current)||deadline<=current)return done(s,0);
-    int ok=outside(s,target,sizeof(*target))&&s->stage==NETWORK&&admission(s,deadline)&&reason&&
+    int ok=s->stage==NETWORK&&admission(s,deadline)&&reason&&
         w->state==AIC8800_WIFI_READY&&w->link==
             (w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED)&&
-        aic8800_network_address(&s->sockets.network,NULL)&&
-        w->association_generation!=UINT64_MAX&&target->security==w->target.security&&
-        target->channel_index==w->target.channel_index&&target->ssid_bytes==w->target.ssid_bytes&&
-        target->connection_authority&&target->beacon_evidence&&
-        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        aic8800_network_address(&s->sockets.network,NULL)&&same_ess(s,target,security,open)&&
         aic8800_transport_attachment_ready(&s->transport)&&s->data.state==AIC8800_DATA_IDLE&&
-        ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
-         (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
-          security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)&&
-          s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(&s->security)));
+        (!security||(s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(&s->security)));
     if(ok&&sunstone_net_offline(&s->sockets)){
         s->reconnect_target=*target;if(security)s->reconnect_security=*security;
         s->reconnect_deadline=deadline;s->reconnect_reason=reason;s->reconnect_open=open;

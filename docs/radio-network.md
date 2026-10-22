@@ -2,7 +2,8 @@
 
 The network service runs FreeRTOS+TCP with the native AIC8800 Ethernet
 transport. It implements fixed IPv4 or DHCPv4 addressing, DNS client lookups, ARP,
-ICMP replies, UDP, outgoing TCP connections, and one bounded IPv4 TCP listener. Applications submit copied
+ICMP replies, UDP, outgoing TCP connections, one bounded IPv4 TCP listener and an
+SNTP client whose time feeds the RTC service. Applications submit copied
 requests through `sunstone_net.h`; the privileged service owns socket records
 and radio polling. This document assumes familiarity with FreeRTOS tasks and IP sockets.
 
@@ -386,3 +387,78 @@ Inputs, exact linked objects, results and source-review notes are preserved unde
 `~/.cache/sunstoneos/evidence/net-inbound-20261020/`. Physical radio networking,
 entropy quality, RF operation and platform recovery remain unqualified. Socket
 disposal and copied result delivery do not establish TCP or RF wire drain.
+
+## An SNTP client supplies UTC to the RTC service
+
+[drivers/net/sunstone_sntp.c](../drivers/net/sunstone_sntp.c) implements a
+Simple Network Time Protocol (SNTP) client, as specified in RFC 4330, over the
+copied socket requests. It runs in a registered client task and holds no stack
+pointer. `sunstone_sntp_start` copies a configuration: the server's IPv4 address
+or a host name, a per-request tick timeout, the number of requests to send, an
+absolute deadline, a maximum round trip and a cryptographic random-byte
+callback. `sunstone_sntp_poll` advances one step and returns 0 while pending,
+1 with a valid time, or -1 after failure.
+
+One exchange performs these requests:
+
+1. RESOLVE the host name, when no address is configured. The pinned DNS client
+   sends a single query, so an ARP miss for the DNS server leaves the lookup
+   unanswered until its timeout. A timed-out lookup, or one refused as BUSY
+   while the IP task still holds the earlier lookup, is repeated until the
+   deadline.
+2. OPEN_UDP with an automatically chosen local port.
+3. SEND one 48-byte version 4 client request to port 123. Its transmit
+   timestamp is an 8-byte random nonce, which the server returns as the
+   originate timestamp. A reply therefore matches only the request that
+   carried its nonce, and an off-path sender cannot predict it.
+4. RECEIVE datagrams. A datagram from another address or port, or for another
+   nonce, is ignored and the client receives again. If no valid reply arrives
+   before the request times out, the client sends a new request with a fresh
+   nonce, up to the configured number of requests. The pinned UDP stack
+   consumes a datagram that misses the ARP cache, so the first request to a new
+   server is usually lost.
+5. CLOSE the socket, after success or failure. A CLOSE that fails leaves the
+   socket retained and the exchange failed.
+
+No request starts after the deadline. A pending request ends at its own
+timeout, and CLOSE still runs.
+
+`sunstone_sntp_reply` validates a reply. It refuses a kiss-o'-death or any
+other stratum 0 reply, stratum above 15, the unsynchronized leap indicator,
+versions other than 3 and 4, modes other than server, zero timestamps,
+timestamps before 1970, and a server transmit time earlier than its receive
+time. Server timestamps use the era rule of RFC 4330, section 3, so times from
+1968 to 2104 convert correctly. The round trip is the local time from
+submitting the request to receiving the reply, less the server's processing
+time; a negative round trip or one above the configured maximum is refused.
+The client takes UTC at the reply's arrival to be the server transmit time
+plus half the round trip, and records it with the caller's monotonic clock
+reading at that arrival. Submission takes the request time, so queueing in
+the socket service adds to the round trip and to the uncertainty.
+
+`sunstone_sntp_rtc_request` feeds that time to the RTC service without changing
+the RTC driver. It advances the time by the caller's monotonic clock to the
+current instant and fills an `RTC_REQUEST_SET` for the current UTC second: day
+1 is 1970-01-01 and the hour, minute and second are packed as the RTC service
+expects. A registered RTC client submits it with `rtc_service_submit`. The
+request refuses a clock reading earlier than the reply and days after the
+RTC's limit of 65535. Clock drift since the reply, the dropped fraction of a
+second and the RTC service latency add to the error.
+
+No image yet runs both the radio network and the RTC service, so no image calls
+the client. `radio-network-model` compiles it for AArch64.
+
+[checks/radio-sntp.py](../checks/radio-sntp.py) builds a host fixture with
+address and undefined-behavior sanitizers against scripted socket replies,
+and compiles the client freestanding for the board CPU. It checks reply
+validation in both eras and every refusal above, RTC requests at midnight, at
+the last admitted day and past it, the ignored datagrams, a resend with a
+fresh nonce, a late reply that is still valid, and that each failure closes an
+open socket. The `sntp` case of
+[checks/radio-network-dhcp-dns.py](../checks/radio-network-dhcp-dns.py) runs
+the client with the actual socket service, FreeRTOS+TCP and DNS over the SDIO
+model. The modeled server does not answer the first DNS query. It answers ARP
+for the resolved time-server address, sends a datagram from another port and
+one for another nonce before each valid reply, and the resulting RTC request
+names the expected day and second. The emulator has no real network, so
+physical time accuracy remains unqualified.

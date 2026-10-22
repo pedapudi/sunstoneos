@@ -30,7 +30,8 @@ int aic8800_wifi_init(struct aic8800_wifi *w,const struct aic8800_wifi_config *c
 {
     if(!span(w,sizeof(*w))||!span(c,sizeof(*c))||overlap(w,sizeof(*w),c,sizeof(*c))||w->initialized||
         c->profile!=1||!c->rf_profile_record||!c->channel_policy_record||!c->command_timeout||
-        !c->channel_count||c->channel_count>AIC8800_WIFI_CHANNELS)return 0;
+        !c->channel_count||c->channel_count>AIC8800_WIFI_CHANNELS||c->power_save>AIC8800_WIFI_POWER_DYNAMIC||
+        c->reserved[0]||c->reserved[1]||c->reserved[2])return 0;
     unsigned bands[2]={0};
     for(unsigned i=0;i<c->channel_count;++i) {
         const struct aic8800_wifi_channel *v=&c->channels[i];
@@ -102,9 +103,11 @@ void aic8800_wifi_step(struct aic8800_wifi *w,const void *owner,uint64_t now)
     case CALIBRATE:put32(p,0x0f8f);put32(p+4,0x0f0f);put32(p+8,0x0c34c008);put32(p+16,0x264203);break;
     case MAC:put32(p,1);break;
     case ME_CONFIG:
-        /* Explicit legacy management-only profile: 20MHz, no HT/VHT/HE/PS.
-         * Source sender always includes LDPC in the unused HT field. */
-        put16(p,1);put16(p+100,512);break;
+        /* Explicit legacy profile: 20MHz, no HT/VHT/HE. Source sender always
+         * includes LDPC in the unused HT field. ps_on and dpsm follow the
+         * admitted power mode, which VERSION cleared without the PS feature. */
+        put16(p,1);put16(p+100,512);
+        p[107]=w->power_mode!=AIC8800_WIFI_POWER_OFF;p[109]=w->power_mode==AIC8800_WIFI_POWER_DYNAMIC;break;
     case CHANNELS: {
         unsigned counts[2]={0};
         for(unsigned i=0;i<w->config.channel_count;++i) {
@@ -127,7 +130,7 @@ void aic8800_wifi_step(struct aic8800_wifi *w,const void *owner,uint64_t now)
         for(unsigned i=0;i<w->target.ssid_bytes;++i)p[1+i]=w->target.ssid[i];
         for(unsigned i=0;i<6;++i)p[34+i]=w->target.bssid[i];
         channel(p+40,&w->config.channels[w->target.channel_index]);p[61]=w->vif;
-        /* Explicit legacy profile: host-controlled port, no HT or power saving.
+        /* Explicit legacy profile: host-controlled port, no HT and no U-APSD queues.
          * Source control-port ethertype is network-endian, unlike ABI integers. */
         put32(p+48,7);p[52]=0x88;p[53]=0x8e;
         if(w->target.security==AIC8800_WIFI_WPA2_PSK_CCMP) {
@@ -308,6 +311,8 @@ enum aic8800_codec_result aic8800_wifi_response(struct aic8800_wifi *w,const voi
         for(unsigned i=0;i<6;++i)w->version[i]=le32(p+4*i);
         w->max_stations=le16(p+24);w->max_vifs=p[26];
         if(!(w->version[5]&(1u<<8))||!w->max_vifs){aic8800_wifi_stop(w,owner,AIC8800_WIFI_VERSION_ERROR);return AIC8800_CODEC_OK;}
+        /* As in the source, power save stays off unless MM_FEAT_PS_BIT (2) is set. */
+        w->power_mode=(w->version[5]&(1u<<2))?w->config.power_save:AIC8800_WIFI_POWER_OFF;
     } else if(w->phase==ADD_IF) {
         w->vif=p[1];
         if(p[0]||w->vif>=w->max_vifs){aic8800_wifi_stop(w,owner,AIC8800_WIFI_STATUS_ERROR);return AIC8800_CODEC_OK;}
