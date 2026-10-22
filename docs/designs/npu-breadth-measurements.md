@@ -3,36 +3,39 @@
 These measurements check the NPU runtime, which loads and switches
 catalogue models in fixed slots, against the budgets in
 [npu-breadth.md](npu-breadth.md). They compare the integration base (commit
-`c45a76e`) with the branch (commit `aeb9cd8`). All values come from host
+`6cd12f0`) with the branch (commit `230acd1`). All values come from host
 builds, QEMU runs with a register model in place of the NPU, and the host
 bound check; no board or NPU was used.
 
 ## Method
 
 - **Sources.** Each commit was exported with `git archive` into its own
-  directory under `~/.cache/sunstoneos/build/npu-breadth-measure/`. The
+  directory under `~/.cache/sunstoneos/build/npu-breadth-measure/v3/`. The
   session code `drivers/npu/npu_session.c` is identical at both commits.
 - **Code and data size.** Both commits were configured with the shared
-  configuration script and built with `-j 6`. The NPU board applications
-  `apps/accelerators` (ShuffleNetV2 graph) and
+  configuration script and built with `-j 6`, including the
+  `npu-service-model` and `npu-service-irq-model` host checks. The NPU board
+  applications `apps/accelerators` (ShuffleNetV2 graph) and
   `apps/npu-convolution-single-core` (the small convolution fixture) were
   configured as separate projects at both commits. `llvm-size-21 -A` gave
-  section sizes, `llvm-objcopy-21 -O binary` gave loadable images, and
-  `llvm-nm-21 -S` gave per-function sizes.
-- **Per-inference counts.** `checks/npu-session.py` ran three modes. The
-  `reserved` mode runs the session code with five catalogue models; the
-  branch's version of `checks/npu-session.c` prints its counters, so it
-  measures the base behavior. The base's own check passed in the `session`
-  and `reserved` modes but prints no counters. The `runtime` mode runs the
-  same five models in four runtime slots. Figures are per ShuffleNetV2
-  inference, from the COUNT lines of three jobs. The `service-shared` mode
-  passed at both commits.
+  section sizes, `llvm-objcopy-21 -O binary` gave the loadable images that
+  were hashed, and `llvm-nm-21 -S` gave per-function sizes.
+- **Per-inference counts.** `checks/npu-session.py` ran four modes. The
+  `reserved` mode runs the session code with five catalogue models and prints
+  its counters at both commits, so it gives the base behavior. The `runtime`
+  mode, present only on the branch, runs the same five models in four
+  runtime slots. Figures are per ShuffleNetV2 inference, from the COUNT lines
+  of three jobs. The `session` and `service-shared` modes passed at both
+  commits.
 - **Time bounds.** `checks/npu-runtime-bounds.py` computed G, P, H, W and the
   start, reply and load bounds from the counted bytes at the design's
   estimated worst-case rates at 494 MHz, and matched its byte counts against
   the runtime COUNT line.
-- **Call overhead.** `llvm-objdump-21` disassembled the service worker in the
-  accelerators image at both commits.
+- **Worker instructions.** `llvm-objdump-21` disassembled the service worker
+  at both commits. QEMU ran `npu-service-model` three times per commit with
+  `-d exec,in_asm,nochain` restricted to the worker's address range; each
+  logged execution of a translation block was weighted by the block's
+  instruction count.
 
 ## Per-inference results for ShuffleNetV2
 
@@ -40,7 +43,7 @@ bound check; no board or NPU was used.
 | --- | ---: | ---: | --- | --- |
 | Requests and replies | 3 and 3 | 1 and 1 | 1 and 1 | Yes |
 | Client wake-ups | 3 | 1 | 1 | Yes |
-| Address translations of buffers | 3,216 (all five models) | 0 | 0 | Yes |
+| Address translations of buffers | 3,216 | 0 | 0 | Yes |
 | Register reads and writes per job | Not counted | 12 and 2 | At most 16 | Yes |
 | SHA-256 bytes | 920,616 | 0 | 0 | Yes |
 | Integrity-check bytes read | 541,656 | 1,509,856 | About 1,510,000 | Yes |
@@ -48,16 +51,17 @@ bound check; no board or NPU was used.
 | Cache lines maintained | 36,672 | 19,442 | 19,442 | Yes |
 | Worker steps: preparation, pool, post-job check | None | 11, 67 and 31 | Not set | — |
 
-The runtime reads more integrity-check bytes than the session code: two NPU
-table scans of 20,480 bytes, 27,112 address-bearing bytes, an END tail of
-521,168 bytes and 920,616 read-only bytes. The design sets this interim
-figure in its section on interim integrity checks, which replace per-job
-SHA-256 until fixed mappings make the slot memory read-only; with those
-mappings the budget is 0.
+The base translation counter covers the buffers of all five loaded models,
+so it exceeds the design's single-model baseline of 2,126. The runtime reads more
+integrity-check bytes than the session code: two NPU table scans of 20,480
+bytes, 27,112 address-bearing bytes, an END tail of 521,168 bytes and
+920,616 read-only bytes. The design sets this interim figure in its section
+on interim integrity checks, which replace per-job SHA-256 until fixed
+mappings make the slot memory read-only; with those mappings the budget is 0.
 
-In the case whose interrupts arrive late, four jobs overlapped 489 worker
-steps and 11 ticks and read 509 registers in that time. The budget allows 16
-accesses per job plus one read per overlapping step and four per tick, 597.
+In the case whose interrupts arrive late, four jobs overlapped 508 worker
+steps and 11 ticks and read 528 registers in that time. The budget allows 16
+accesses per job plus one read per overlapping step and four per tick, 616.
 
 ## Time bounds
 
@@ -82,81 +86,66 @@ The design states each excess:
   again, recorded under "LOAD reads the model through a staging copy". One
   ShuffleNetV2 LOAD hashed 964,224 bytes, checksummed the staging area
   (964,224 bytes), copied 1,856,832 bytes and read 920,616 bytes for the
-  check references. The three other slots completed 1,191 jobs while it ran.
+  check references. The three other slots completed 1,172 jobs while it ran.
 
-## Code and data size with the runtime loop linked into every service image
+## Code and data size
 
-The 13 default targets have byte-identical loadable images at both commits.
-No board image links the runtime, but every image that links the NPU
-service grows:
+The runtime state sits in a static object outside `struct npu_service`, and
+the worker reaches the runtime loop only through a function pointer that
+`npu_service_runtime` installs, so `--gc-sections` drops the runtime from
+images that never call that function. `irq_progress`, `execute_shared` and
+the assembler's `placed` are forced inline.
 
-| Image | `.text` base → branch | `.bss` base → branch |
-| --- | --- | --- |
-| `sunstone-a733-accelerators` | 348,652 → 350,700 | 1,379,536 → 1,379,600 |
-| `a733-npu-convolution-single-core` (ShuffleNetV2) | 194,360 → 196,408 | 1,262,368 → 1,262,432 |
-| `a733-npu-convolution-single-core` (small fixture) | 193,324 → 195,372 | 222,880 → 222,944 |
-| `a733-npu-convolution-supervised` | 208,740 → 210,788 | 519,168 → 519,232 |
-| `npu-service-model` (host check) | 56,576 → 58,624 | 1,769,200 → 1,769,264 |
+Thirteen of the 15 default targets have byte-identical loadable images at
+both commits; the other two are the NPU service host checks. The images that
+link the NPU service keep their section sizes:
 
-Function sizes in the accelerators image account for 2,008 of the 2,048
-`.text` bytes. The service worker calls the runtime worker loop whenever
-`runtime_mode` is set, so the linker keeps that loop in every image. The
-loop and its helpers add 2,600 bytes: `execute_shared` (956), `irq_progress`
-(652), `placed` (388), `runtime_settle` (344), `view` (116) and
-`irq_mask` (+144). Splitting the assembler and inlining changes remove a net 592
-bytes from `nbg_assemble_layout`, `nbg_assembly_layout` and `worker`. The 64 `.bss` bytes are the
-runtime fields added to `struct npu_service`.
+| Image | `.text` base and branch | `.rodata` base and branch | `.bss` base → branch |
+| --- | ---: | ---: | --- |
+| `sunstone-a733-accelerators` | 350,280 | 1,269,800 | 1,361,168, unchanged |
+| `a733-npu-convolution-single-core` (ShuffleNetV2) | 194,360 | 1,134,832 | 1,243,936, unchanged |
+| `a733-npu-convolution-single-core` (small fixture) | 193,324 | 22,568 | 204,448, unchanged |
+| `npu-service-model` (host check) | 56,576 | 2,008 | 1,769,200, unchanged |
+| `npu-service-irq-model` (host check) | 55,144 | 2,088 | 1,768,080 → 1,768,096 |
 
-The runtime itself adds 13,968 bytes of code and 796 bytes of constants in
-`a733_npu_runtime.c` and 1,472 bytes in `a733_npu_runtime_interim.c`. Once
-the session code is deleted, its 9,516 bytes of code and 716 bytes of
-constants leave the images that use the runtime.
+Function sizes grow by 20 bytes in each board image, which section
+alignment absorbs: 12 in the worker for the runtime check at task entry and
+4 each in `nbg_assemble_layout` and `nbg_assembly_layout`, which share their
+checks with the stepwise assembler that the runtime uses. `struct
+npu_service` grows from 36,912 to 36,920 bytes for the runtime pointer. In
+`npu-service-irq-model` that growth crosses an alignment boundary and adds
+16 bytes of `.bss`. The design's budget allows the runtime-mode check and
+its pointer.
 
-## Instructions with the runtime loop linked into every service image
+The runtime adds 13,984 bytes of code and 796 bytes of constants in
+`a733_npu_runtime.c`, and 1,472 bytes of code in
+`a733_npu_runtime_interim.c`, to an image that links it. No board image
+links it yet. Once the session code is deleted, its 9,516 bytes of code and
+716 bytes of constants leave the images that use the runtime.
 
-At the base commit the worker inlines `irq_progress` and `execute_shared`,
-each of which it calls once. On the branch the runtime worker also calls
-them, so the compiler emits both out of line. In the exclusive and shared
-service modes, each worker pass that runs interrupt progress now executes a
-call, a return and seven register save and restore instructions; each
-shared-mode request adds a call, a return and nine save and restore
-instructions. Request validation adds one comparison for the LOAD operation.
-These are about 10 extra instructions per interrupt progress pass and per
-shared request. They were not measured in an instruction count.
+## Worker instructions
 
-## Images without the runtime, remeasured
+The worker in the board images has 1,059 instructions on the branch against
+1,056 at the base, and calls neither inlined helper. Five of its
+instructions are the runtime check at task entry, which runs once per worker
+start rather than once per pass; register allocation and block order account
+for the remaining difference.
 
-The runtime state now sits in a static object outside `struct npu_service`,
-and the worker reaches the runtime loop only through a function pointer that
-`npu_service_runtime` installs, so `--gc-sections` drops both from images
-that never call it. `irq_progress`, `execute_shared` and the assembler's
-`placed` are forced inline. The accelerators application, its single-core
-ShuffleNetV2 image and `npu-service-model` were rebuilt at the integration
-base (commit `6cd12f0`) and on the branch with that change:
-
-| Image | `.text` base and branch | `.bss` base and branch |
-| --- | ---: | ---: |
-| `sunstone-a733-accelerators` | 350,280 | 1,361,168 |
-| `a733-npu-convolution-single-core` (ShuffleNetV2) | 194,360 | 1,243,936 |
-| `npu-service-model` (host check) | 56,576 | 1,769,200 |
-
-Function sizes in the accelerators image grow by 20 bytes, which section
-alignment absorbs: 12 in the worker for the runtime check at task entry and 4
-each in `nbg_assemble_layout` and `nbg_assembly_layout`. `execute_shared`,
-`irq_progress`, `view`, `placed` and `runtime_settle` no longer appear as
-functions. `struct npu_service` grows from 36,912 to 36,920 bytes for the
-runtime pointer. The worker has 1,059 instructions against 1,056 at the base
-and calls neither helper; five of its instructions are the runtime check,
-which runs once. The per-inference counts of the runtime check are unchanged,
-and all runtime, service-shared, session, reserved, exclusive and interrupt
-checks pass.
+Across three QEMU runs of `npu-service-model`, the worker executed 6,306,
+6,386 and 6,383 instructions at the base and 6,216, 6,218 and 6,186 on the
+branch, in 1,937 to 1,978 block executions. The branch executes about 2.6%
+fewer worker instructions in the same check, which meets the budget of no
+growth beyond the runtime-mode check.
 
 ## Conclusion
 
 Every per-inference budget of the interim runtime is met, and the time-bound
 excesses (H, W, the longest step and the LOAD time) have reasons stated in
 the design. Images that link the NPU service but not the runtime keep the
-section sizes of the integration base and the inlined worker helpers.
+section sizes of the integration base, except 16 bytes of `.bss` alignment in
+one host check, and their worker executes no more instructions than at the
+base. The runtime, session, service-shared, reserved, service and interrupt
+checks pass on the branch.
 
 ## Reproduce
 
