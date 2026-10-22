@@ -48,10 +48,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   write only when it repeats that record. A configuration field selects a 2.5, 5
   or 8 GT/s target, and above 2.5 GT/s the port follows the board kernel's
   directed speed change after training. Host-model checks pass; both
-  applications still select 2.5 GT/s, and no board test ran. BAR assignment and
-  MSI setup stay in the endpoint test driver until a second endpoint driver
-  exists. General endpoint drivers/enumeration, embedded root DMA, INTx/MSI-X,
-  physical Gen2/Gen3 links, power transitions and shutdown remain required.
+  applications still select 2.5 GT/s, and no board test ran. A general
+  [endpoint function client](pcie.md) is **implemented**. It scans the direct
+  endpoint's functions 0–7 and refuses bridges, assigns memory BARs below
+  4 GiB inside the aperture, delivers polling, INTx or MSI-X interrupts, moves
+  the function between D0 and D3hot and stops it in order. A read-only NVMe
+  driver uses it, and the port can stop by disabling link training and
+  asserting PERST. Twenty-four host-model cases pass, and both units compile
+  for AArch64. No image links them, and no endpoint, NVMe device, interrupt or
+  power transition has run on hardware; the endpoint test driver keeps its own
+  BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
+  selection by the applications and physical Gen2/Gen3 links remain required.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
@@ -186,12 +193,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the newest valid slot and reports the outcome; the host tool plans installs,
   updates and rollback as one storage session per changed card range. With its
   entry prerequisites granted, the loader arms WDT0, builds the resident
-  contract of the [integrated OS image](os-image.md) and branches to it. Host
-  and instruction-model checks pass. On a board, entry admission and cold SD
-  admission both refuse, so the loader stops before touching the SD
-  controller. Remote-writer exclusion, watchdog recovery after a cold boot, a
-  comparison of the boot0 entry state and fixed-board SD admission are missing.
-  No card has been written and no board has run the loader. Standalone OS boot
+  contract of the [integrated OS image](os-image.md), for the 808-byte session
+  or the microphone build's 992-byte session, and branches to it. Host and
+  instruction-model checks pass.
+  [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
+  is **implemented**. The loader compares the SDC0 bus, clock, pin, bank-voltage
+  and controller state that boot0 leaves with the pinned boot0 and the manual.
+  It then makes PF6 a card-detect input and sets the SDC0 module clock to
+  400 kHz, reading back each write. Host models cover the comparison and its
+  refusals. The card supply after boot0, boot0's module clock and exclusive use
+  of SDC0 need a board observation. Admitted slots load at about 25 KB/s, so a
+  multi-megabyte slot takes several minutes. The three entry prerequisites still
+  refuse: remote-writer exclusion, watchdog recovery after a cold boot and a
+  comparison of the boot0 entry state. The loader therefore enters no image on
+  a board. No card has been written and no board has run the loader. Standalone OS boot
   therefore remains incomplete; packer licensing and exact source equivalence
   remain unresolved.
   The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
@@ -209,7 +224,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remain unresolved. Reuse suitable existing firmware/services where their
   authority and provenance are established. Cold-start application admission
   requires remote-writer exclusion; omitting SCP firmware or reversing observed
-  startup writes does not establish E902 shutdown or transaction drain. No native
+  startup writes does not establish E902 shutdown or transaction drain.
+  A [remote-writer check](remote-writers.md) is **implemented**. It reads the
+  reset, clock and DMA-enable registers of the E902, the DMA controllers and
+  each peripheral with its own DMA engine, including the SPI flash controller,
+  and reports every master whose exclusion it cannot prove. It writes no
+  register. Checks against modeled register states pass. No source documents
+  an OR100 reset or clock, and the board ROM leaves the crypto engine out of
+  reset with no documented idle status, so on a board the check cannot report
+  every master excluded. No boot image calls it, and no board has reported the
+  registers it reads. No native
   management-core control or physical qualification is claimed. This inventory
   does not require a separate general-purpose application runtime on E902.
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and
@@ -412,18 +436,28 @@ implementation is **planned**. Partial results apply only to the stated scope:
   each interrupt only on its routed core. A host model covers validation,
   dispatch, route programming and nine refusals. Existing single-device images
   keep their per-device patches.
-  The [integrated OS image](os-image.md) is **implemented**. It runs the mimus
-  board application (USB0 device service, USB2 host with keyboard and read-only
-  storage, Type-C and PMIC owners, EL0 recognition) together with a continuous
-  thermal service, using that table and one fixed start list. It builds in two
-  lifetimes. The supervised lifetime keeps the bounded FEL contract with WDT0
+  The [integrated OS image](os-image.md) is **implemented** and host-modeled.
+  It runs the mimus board application (USB0 device service, USB2 host with
+  keyboard and read-only storage, Type-C and PMIC owners, EL0 recognition)
+  together with a continuous thermal service, using that table and one fixed
+  start list. The supervised lifetime keeps the bounded FEL contract with WDT0
   disabled. The resident lifetime runs after a cold boot from the stage-2
   loader and renews the armed WDT0 only while every listed service reports
-  progress within its window. A link check and host models of interrupt
-  delivery, supervision and admission pass in both lifetimes. No board has run
-  either lifetime: the supervised image has no FEL launcher yet, and the
-  resident image depends on the stage-2 entry prerequisites. I2S capture, radio,
-  CE, display, camera, GPU and NPU are not part of the image.
+  progress within its window. Optional builds add I2S microphone capture, with
+  the DMA0 interrupt (INTID 143) in the table; the board's Wi-Fi station, with
+  crypto engine entropy for WPA2; or Bluetooth headset recognition. The image
+  builds in six checked variants: supervised, resident, resident with I2S
+  audio, radio, resident with radio, and supervised Bluetooth headset, which
+  needs `SUNSTONE_BT_SECURITY_DIR`. The headset and radio builds exclude each
+  other, and the headset build is supervised only. Each variant passes its link
+  check and host models of interrupt delivery, supervision and admission. A
+  supervised launcher and session preparation exist; preparation needs a
+  reviewed entry record from physical evidence and refuses the radio and
+  headset builds until it stages their profile and firmware. The supervised
+  radio build cannot finish firmware loading within its 40 s bootstrap bound at
+  the admitted SDIO clock, and the resident image depends on the stage-2 entry
+  prerequisites. No board has run any variant. Display, camera, GPU and NPU are
+  not part of the image.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -465,8 +499,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remain unqualified. A boot-CPU-only service image now passes twelve modeled
   startup/provider and five host cases under `rtc-single-core-20261018/`. All
   182 compiled repository inputs match integration; no rebuild or test replay
-  was needed. Physical service operation remains outstanding. Independent
-  watchdog evidence is recorded above.
+  was needed. Physical service operation remains outstanding. An
+  [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
+  produces RTC SET requests from network time; no image runs it with the RTC
+  service. Independent watchdog evidence is recorded above.
 - Combined monitoring: **implemented** [repeated thermal/ADC sampling](monitor-application.md)
   through separate native owners with a shared stable clock parent and copied
   coherent snapshots. Stop requires both owners to verify converter-disable
@@ -525,7 +561,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the hash of the user's approval; no image carries one or calls the driver.
   Its cycle timing reports the measured and configured rate of the core that
   ran timed work. Host and instruction models pass. Physical rate changes,
-  rail settling, lock time and PMU access remain unqualified.
+  rail settling, lock time and PMU access remain unqualified. The user reviewed
+  the CPU clock plan and agreed with the design on 2026-10-21. Each physical
+  clock or voltage change still needs the user's approval, and none can run
+  until the board can be reconnected.
   A separate [finite returning application](../apps/thermal-returning/README.md)
   gathers two sets with the actual driver and disables configured acquisition.
   Thirteen linked cases and Astra review pass; all 46 compiled inputs match
@@ -612,6 +651,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Card operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
+  A [read-only FAT and exFAT filesystem](filesystem.md), FatFs R0.16 pinned from
+  ESP-IDF v6.1, is **implemented**. It loads whole files through the polled SD
+  core into a private buffer. After a read failure that may have started, it
+  keeps that buffer and makes no further device call. Twenty host cases over
+  FAT16, FAT32 and exFAT card images pass, including reads through the actual
+  core with a modeled controller and refusals of corrupt metadata; the native
+  objects compile. No image links it, and no card has been read through it.
+  GPT cards, several volumes, several client tasks and writes are unsupported.
+  UHS-I SDR50 and SDR104 remain unimplemented: the 1.8 V switch writes the PF
+  bank voltage that card detect and the debug pins share, and a failed switch
+  needs whole-board power removal ([mmc.md](mmc.md)).
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The second board also passes 21 register reads, including
@@ -632,7 +682,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [GPU/NPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared
   provider disables their competing inherited-bus readers. Emulator checks pass
-  for both consumers and retained failures. Cold bus startup, recovery, regulator
+  for both consumers and retained failures. The provider also accepts bounded
+  DCDC3 and DCDC5 selector writes, and only the [CPU clock driver](cpu-clock.md)
+  may submit them; no image does. Cold bus startup, recovery, regulator
   writes and electrical qualification remain open.
   [Provider clock admission](provider-clock-reference.md) validates normalized
   REF24 for generic TWI11, USB2, radio, CE, I2S AUDIO1 and PWM core/APB0 paths,
@@ -734,9 +786,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks pass under `pwm-service-20261018/`; the frozen image is reused without
   replay. Duty changes include a low interval. An uncertain failure can leave
   continuous output active until full power removal. Physical waveform, fan-off
-  current and visible LED behavior remain unqualified. Other channels, constant
-  endpoints, additional rates/polarities, S_PWM and other operating modes remain
-  required.
+  current and visible LED behavior remain unqualified. Cycle mode now plans the
+  smallest exact prescaler for any period up to 10 ms, in either polarity, with
+  constant levels at zero and full-period duty. The fan application accepts
+  a duty of 600 ticks, which is full speed, but the supervised host tool still
+  refuses that value.
+  Host and instruction-model checks pass. S_PWM needs a clock-registry scope
+  before an owner can reserve it. Other channels, capture, input counting and
+  other operating modes remain required.
   [Board routing](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
   identifies the analog inputs. [Native ADC monitoring](adc-application.md) is
   **implemented** for two raw observation sets from the GPADC0–3 board-selection
@@ -745,7 +802,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   host groups pass under `adc-application-20261018/`. Integration reuses the frozen
   image with an unrelated additive PWM pin helper recorded separately.
   Physical sampling, voltage/reference accuracy and recovery remain unqualified.
-  Repeated/concurrent monitoring, threshold modes and FIFO/DMA remain required.
+  The GPADC driver implements compare-window threshold mode for channels 0–3,
+  latching low and high events; host and instruction-model checks pass. No
+  application selects windows, and the native adapter refuses the compare
+  registers. Repeated/concurrent monitoring and FIFO/DMA remain required.
   GPADC4 reaches the display connector; the remaining GPADC channels have no
   documented usable connection. Accessory GPADC4 qualification remains outstanding.
   [LRADC0 raw observation](adc-application.md#lradc0-raw-observations-require-separate-electrical-authority)
@@ -799,8 +859,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   service. While every
   progressing channel waits for an enabled DMA event, the worker sleeps until the
   interrupt, a request or a fallback interval instead of polling every tick;
-  failures fall back to tick polling. Emulator checks pass. No platform binds
-  the interrupt yet, so every image still polls once per tick.
+  failures fall back to tick polling. Emulator checks pass. The I2S image and
+  the integrated OS image's microphone build bind the interrupt through their
+  interrupt tables, with a one-tick fallback; other images poll once per tick.
   [DMA0 platform preparation](dma-platform.md) now validates inherited fabric
   clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
   Host/reference checks and native compilation pass. Selected parent branches
@@ -900,10 +961,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   127 sources, 224 artifacts and four tools under
   `i2s-hardware-cyclic-20261019/root-integration.json`. Earlier unaffected cases
   were reused within the scope in `identity-reuse-clarification.json`. The manual's
-  completed-package counter lacks explicit destination-write/cursor ordering,
-  so cyclic RX/duplex physical
-  admission requires `cyclic-rx-completion-and-reuse-ordering-established`.
-  No qualifying record exists; CPU-cache review alone does not establish it.
+  completed-package counter lacks explicit destination-write/cursor ordering.
+  Cyclic receive therefore copies a period only while one whole period
+  separates it from the DMA writer, and refuses rings shorter than four
+  periods. With the application's four periods, the client must return each
+  copy within one period, 128 ms. Cyclic RX/duplex physical admission requires
+  `cyclic-rx-completion-and-reuse-ordering-established`, which only a board
+  measurement can meet: destination writes must trail the package counter,
+  and the writer must lead the counter and cursor, by less than one period
+  each. No such record exists; CPU-cache review alone does not establish it.
   Runtime PCM direction 6 accepts copied 16 kHz mono S16LE periods through
   finite TX leases. The [file-input protocol](i2s-application.md#complete-file-input-retains-unknown-serial-completion)
   adds BEGIN_FILE and END_INPUT, with an exact short final period and no guard
@@ -917,6 +983,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `88bf392`, with no compiled-source divergence, under
   `i2s-file-playback-20261019/root-integration.json`. Earlier refill evidence
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
+  The I2S image routes the DMA0 interrupt through a fixed table, so the end of
+  a finite period's queue wakes the DMA worker at once; an emulator check
+  passes. The [integrated OS image](os-image.md) captures recognition input
+  through the same receive path in its microphone build.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
 - G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
@@ -1348,8 +1418,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   No panel is selected or attached. Image-bound electrical/PLL, rail/bank-voltage,
   wiring, isolation, fetch-padding and panel facts remain physical prerequisites;
   model-only records are refused. Physical pixels, DMA confinement and drain remain
-  unqualified. Arbitrary new-frame streaming, old-buffer recycling, successful STOP,
-  release/retry, composition and wider display modes remain required. The generated
+  unqualified. Application use of ring streaming and slot recycling, successful
+  STOP, release/retry, composition and wider display modes remain required. The generated
   single-frame profile retains its separate accepted evidence.
   The HDMI framebuffer, DisplayPort and GPU display images now share one
   retained DE1 framebuffer source. Its DE_SYS domain-1 step uses the domain-ON
@@ -1357,9 +1427,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   command write, and an OFF domain receives the existing power-up sequence.
   Host checks pass, including a run from an inherited ON domain. The DSI image
   requires PCK domains 0, 1, 2, 3, 8 and 9 to be ON at entry and powers none of
-  them; no qualified VO0 or IOMMU domain sequence exists. Deinterlace also fails
-  setup on an unpowered DE_SYS domain. Physical domain power-up remains
-  untested.
+  them; no qualified VO0 or IOMMU domain sequence exists. The DE_SYS power
+  provider also powers domains 9 (VO0) and 10 (VO1), and host checks pass, but
+  neither DSI nor deinterlace calls it yet; DSI also needs domains 0, 2, 3 and
+  8 for its IOMMU group. Deinterlace still fails setup on an unpowered DE_SYS
+  domain. Physical domain power-up remains untested.
+  [Replay over a ring](display-engine.md#de352-replay-over-a-ring-of-two-to-four-frames)
+  of two to four frames is **implemented** in the display engine. The
+  configuration fixes the frame size, and a slot becomes writable again only
+  after a frame end shows that scanout has moved past it. Host checks pass,
+  including refusal of ring readings that the configuration does not declare.
+  No application produces frames into the ring yet. The ring stays retained
+  after STOP, because no drain proof exists, and physical slot retirement
+  remains unqualified.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
@@ -1398,8 +1478,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel policy and bounded passive scanning. Source-packet comparisons and
   host lifecycle checks pass. [Station association](radio-association.md) adds
   copied targets, explicit transmission authority and separate command/connection
-  completion. Source and focused host checks pass. Unresolved roaming blocks
-  replacement operations. [Data transport](radio-data.md)
+  completion. Source and focused host checks pass. A connect indication that
+  the firmware marks as roaming leaves the link unresolved and blocks replacement
+  operations; firmware-initiated roaming and fast transition are unsupported. [Data transport](radio-data.md)
   adds owned Ethernet packets, reserved transmit credits and EAPOL authentication
   frames with firmware confirmations. Open-network access requires an explicit
   association-bound authorization. Host checks, source comparisons and native compilation
@@ -1451,9 +1532,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks and native compilation pass. [Synchronous headset transport](bluetooth-audio.md)
   adds actual SCO/eSCO setup and acceptance, CVSD with signed 16-bit PCM over HCI,
   copied audio buffers and separate controller credits. Focused host checks and
-  nine native consumer compilations pass. Physical controller capabilities,
-  headset audio, wired PCM routing, wider codecs and mandatory remaining
-  call-control procedures remain outstanding.
+  nine native consumer compilations pass. Optional call control adds the
+  mandatory HFP call procedures, including answering, rejecting, terminating
+  and placing calls, redial, memory dialing, DTMF and the status queries; the
+  native application answers headset call queries. An [A2DP sink](bluetooth-a2dp.md)
+  for SBC streams is **implemented** in the AVDTP layer, with an optional SDP
+  record and a link security check on every step; no native application uses
+  it. Host checks pass. Physical controller capabilities, headset audio, wired
+  PCM routing and wider codecs remain outstanding.
   The [native Bluetooth application](bluetooth-native.md) connects firmware
   bootstrap, UART1, H4/HCI identification and copied USB output. Its headset mode
   reuses Zephyr secure pairing and RAM key policy, requires observed authentication
@@ -1536,6 +1622,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   **implemented** with the bootloader's default-speed delays and verified
   readback; host checks pass. No image requests it until a physical identity
   read qualifies it, so radio bootstrap still exceeds the 40 s supervised bound.
+  Receive accepts aggregates of up to 112 blocks, read with one CMD53 of up to
+  57,344 bytes whose deadline scales with its length. Firmware upload can write
+  long patch-table runs as block writes; that option stays off until a hardware
+  readback confirms it. Host checks pass. The [integrated OS image](os-image.md)
+  radio build runs this station beside recognition.
   The radio owner now repeats session polls while the transport or session
   advances, and receive accepts reorder-flagged MPDUs and validated A-MSDU
   subframes; neither form occurs until an HT profile exists. The [native radio session](radio-session.md) keeps
@@ -1680,6 +1771,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   camera image serves USB0 through the shared board service. Host-model checks
   pass. Register auto-increment, the quiet intervals and exposure behavior
   while packets are disabled need a module on the board.
+  The coordinator records receiver and parser status before each sensor stop,
+  so a board run can show whether stopping the sensor latches receiver errors.
+  A TWI9 controller and an exclusive TWI9 clock scope are **implemented** for
+  the CAM2 sensor bus. No CAM2 binding exists: the camera boot record has no
+  port field, and receiver port 1 has no sourced deskew value.
   No MIPI camera is connected; physical capture qualification awaits a module.
   Continuous capture is **implemented** in the [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
   for any UYVY or YUYV mode, whose size now reaches the receiver, VIPP and DMA.
@@ -1688,9 +1784,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   of a free slot, incomplete or unattributable after a start that raced the
   address writes are counted as dropped. A modeled frame engine checks delivery,
   held slots, both races, faults and refusals; route, receiver and DMA register
-  images for four further sizes match the pinned functions. Address latching at
-  frame start and frame-done timing need a module; the native application does
-  not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
+  images for four further sizes match the pinned functions. Delivery stays
+  exact only while consecutive DMA status reads lie within the status
+  interval, which keeps a margin under half a frame period; after a longer
+  gap the stream delivers nothing more until the owner stops it. The first
+  interval spans the OV5640 stream-on sequence, so a slow start can make a
+  stream deliver nothing while every slot stays owned
+  ([camera capture](camera-capture.md)); whether a real start fits is
+  unmeasured. Address latching at frame start and frame-done timing need a
+  module; the native application does not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
   640×480 BGGR12 frame and produces an immutable copied NV16 frame through
@@ -1888,6 +1990,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   comparisons pass under `npu-single-core-20261018/`; focused review accepted
   the image and source closure. Physical inference and the remaining NPU modes
   remain unqualified. The software fixture package must never deploy.
+  The [session runtime](npu-session.md) runs up to eight compiled models from a
+  build-time catalogue as concurrent sessions of the shared service, with
+  round-robin job starts and interrupt completion. Native assembly accepts one
+  to eight UINT8, INT8 or INT16 inputs and outputs and the transpose steps
+  around fully connected layers, and matches the pinned SDK loader for every
+  catalogue graph. Sessions reserve memory from the platform pool by model
+  size, which is DDR in the extended cached profile. QEMU checks with modeled
+  device output pass for polled, interrupt, integrity-fault and 6.2 MiB
+  reserved cases. No board image links the runtime. A
+  [mimus linear-layer study](npu-mimus-linear.md) finds the simulator's integer
+  arithmetic exact but its INT16 output not bit-exact with mimus, and the
+  compiler refuses the INT32 output that a bit-exact split would need. Physical
+  execution remains unqualified.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
   and native compilation pass. Identity admission precedes reset/engine setup;
@@ -1910,7 +2025,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   acquisition, and returns copied pixels with parsed dimensions. Optional
   independent reference pixels support qualification. Partial-block geometry,
   immutable input, native copy and fragmented host capture checks pass under
-  `jpeg-runtime-input-20261018/`. A version 3 session decodes a manifest of up
+  `jpeg-runtime-input-20261018/`. The decode application now accepts up to
+  512 KiB of JPEG input and padded luma planes up to 640×480, each buffer
+  between guard pages at a fixed device address. Full HD needs about 5 MiB of
+  uncached memory, which the image does not link. A version 3 session decodes a manifest of up
   to eight images in order, refilling the retained buffers after each delivered
   healthy result; sanitized input and linked-image checks with modeled device
   effects pass. The supervised capture tool and bundle still carry one image.
@@ -2063,21 +2181,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   visibility, confinement and safe drain remain unqualified. Wider dimensions,
   formats, counts, rate control, High/CABAC/B pictures, multiple references,
   unrestricted streaming and H.265 encoding remain required.
-  [HEVC decoding](hevc-native.md) remains incomplete. Bringup has typed
-  session/startup/CMake foundations and source-only host tools; runtime preparation
-  refuses absent native allocation/page-table proof. Partial native source remains
-  separately preserved at `hevc-decode` commit `69c4eac`, unreviewed and unbuilt.
-  Planned native dependencies are GPL Cedrus control and LGPL GStreamer parsing;
-  their pins and notices are in [the source record](../apps/hevc/sources.json).
-  Opaque A733 CedarC libraries remain offline instruction references, not planned
-  native runtime dependencies or a replacement project. Their metadata allocation
-  ABI mismatch limits the saved trace; constructor/register evidence establishes
-  no decoded picture. Existing UBSan session-validator evidence covers two valid
-  and eleven invalid range cases only. The source-only host audit verifies 24
-  frozen files under `hevc-host-source-20261020/root-integration.json`.
-  No native HEVC image, host-runtime result or physical decode claim exists;
-  review, complete IDR/P integration, allocation/mapping proof and selected runtime
-  validation remain required.
+  [HEVC decoding](hevc-native.md) is **implemented** for one uploaded
+  two-picture clip: progressive Main profile, 8-bit 4:2:0, 640×480, one IDR
+  and one P picture, with copied NV12 output over USB0. The reviewed parser,
+  controller and storage build as `sunstone-a733-hevc` on a typed video-engine
+  binding with its own H.265 register allowlist. Host models check parsing,
+  storage and register programming; for the IDR picture, the final values of
+  22 registers and the write order match a trace of the A733 vendor library.
+  GPL Cedrus control and LGPL GStreamer parsing are the native dependencies
+  ([source record](../apps/hevc/sources.json)). Host preparation refuses a
+  launch bundle until physical allocation and page-table evidence exists, and
+  no vendor trace covers the P picture's control bits. No numerical or
+  physical decode result exists. Main10, larger pictures, several slices,
+  tiles, wavefront parallel processing and B pictures remain required.
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
@@ -2310,8 +2426,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
   physical admission record exists. Physical link operation, source capacity,
   DMA, interrupt delivery and recovery remain unqualified. Wider HID profiles,
-  Gen2, streams, wider classes, power budgets, adapter use of detach and drain
-  remain required.
+  Gen2, streams, wider classes and drain remain required.
   [Direct Gen1 keyboard reports](usb2-host.md#direct-gen1-keyboard-reports-use-an-explicit-workload)
   are implemented under explicit supervised workload 8. One boot keyboard with
   a zero-burst companion and 1–64-byte packets supplies four copied raw reports;
@@ -2337,8 +2452,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `usb-ss-hub-20261020/root/integration.json`. The native image is linked, not
   physically executed. Admission binds root, topology and class, a ≥900 mA source,
   and actual hub supply/downstream power; no physical bundle exists. Physical
-  topology, DMA visibility, IRQ delivery and recovery remain unqualified. Nested
-  hubs, simultaneous roots, additional leaves and broader USB modes remain required.
+  topology, DMA visibility, IRQ delivery and recovery remain unqualified. More
+  than two hub tiers, simultaneous roots, additional leaves and broader USB
+  modes remain required.
   GET_MAX_LUN protocol-stall recovery now resets endpoint zero and sets its
   dequeue pointer before notifying TinyUSB, which falls back to LUN 0 and
   completes the copied READ10 path. Eleven affected high-speed TinyUSB/provider
@@ -2356,12 +2472,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   port can enumerate a new device on the same pages. A transaction error holds
   its endpoint for at most 1 s. A modeled controller passes root and hub-child
   detach followed by a second enumeration and bulk read. The TinyUSB adapter
-  does not call this path yet and still treats REMOVE as session loss, so no
-  image reuses a port after a detach. Full startup, physical power/switch
+  uses this path. An orderly disconnect behind an adapter or hub, or a hub
+  child's disconnect, unmounts the device, and a new device may then mount
+  within the startup budget; a single-device client repeats a request it has
+  not yet published. Unplugging a device directly from the Type-C connector,
+  or a bulk stall, still ends the session, because adoption of a new Type-C
+  attachment and Bulk-Only Transport reset recovery are not implemented.
+  Three admission options are **implemented** for a session: a second tier of
+  high-speed hubs, bus-powered hubs within the USB 2.0 current budget, and
+  capture from one USB Audio Class 1 microphone over one isochronous IN stream
+  in the xHCI core. A ring-level controller model checks them. No board
+  workload selects them, and no check covers isochronous audio with interrupt
+  completion. Full startup, physical power/switch
   qualification, actual transfers and report timing, DMA drain, CPU interrupt
-  delivery, repeated physical attachment, adapter use of detach, bus-powered budgets, deeper hubs/more leaves,
-  wider classes, isochronous transfers, wider SuperSpeed modes, role
-  swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
+  delivery, repeated physical attachment, more leaves, wider classes,
+  isochronous OUT, wider SuperSpeed modes, role swaps, USB PD, VCONN and
+  applicable alternate modes remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |
