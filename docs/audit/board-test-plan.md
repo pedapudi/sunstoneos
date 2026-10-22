@@ -83,10 +83,10 @@ read-only file system outside its new run directory under
 | Position in this plan | Row | Class | Runner | Queue timeout |
 | --- | --- | --- | --- | --- |
 | After rank 7, before rank 8, once an independent watchdog record exists | Memory qualification, one run per bundle of the three-step map chain | Monitor | Memory profile through `tools/a733-returning-host.py` | 1,200 s |
-| After rank 9, first board session | NPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 119 s |
-| After rank 9, next board session | GPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 119 s |
-| After rank 9, next board session | GPU and NPU jobs under the memory and power arbiter | Terminal | `tools/check-a733-accelerators-supervised.py` | 79 s |
-| After rank 9, next board session | Recognition dispatcher in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 119 s |
+| After rank 9, first board session | NPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
+| After rank 9, next board session | GPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
+| After rank 9, next board session | GPU and NPU jobs under the memory and power arbiter | Terminal | `tools/check-a733-accelerators-supervised.py` | 930 s plus the uploads |
+| After rank 9, next board session | Recognition dispatcher in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
 | Waits for physical recovery | GPU and NPU hang reset; voltage and clock changes; display output | Excluded | None | None |
 
 - **Monitor.** The EL3 monitor's secure timer forces the return to the boot
@@ -102,8 +102,12 @@ read-only file system outside its new run directory under
   access to untested DDR.
 - **Terminal.** The supervised runner keeps the port lock after every outcome
   until whole-board power removal is confirmed, so each Terminal test ends the
-  board session. Its prerequisites are the runner's own `PREREQUISITES`, and
-  its timeout is the runner's capture window plus 60 s.
+  board session. Its prerequisites are the runner's own `PREREQUISITES`. Its
+  timeout is the worst case of one attempt. That sum covers the USB churn
+  guard's 615 s wait, the FEL request bounds of the SRAM backups, of every
+  bundle file's upload and readback and of the SRAM restores, the capture
+  window, and 60 s of margin. An existing OS-image bundle of 22.9 MB gives 2,451 s. The tool
+  refuses a row whose bound exceeds the queue's 3,600 s limit.
 - **Excluded.** The test needs an accessory, a voltage or clock change, or an
   intentional hang. The tool prepares no bundle.
 
@@ -122,19 +126,33 @@ After a DMA0 expiry, uploads also wait until a FEL read shows DMA0 quiet.
 Terminal tests require ranks 1 to 5 and rank 9 earlier in the same power
 cycle. NPU comes first because GPU firmware writes memory on its own
 ([remote writers](../remote-writers.md)), so a GPU failure has more causes to
-separate. Each Terminal record counts, per job, the completions observed by
-interrupt, those observed by the one-tick fallback and the client wake-ups.
+separate. Each Terminal record must report, per job, the completions observed
+by interrupt, those observed by the one-tick fallback and the client
+wake-ups. The counts are measurements, not pass conditions; zero fallback
+completions over a session is the evidence that would remove the tick wait in
+the GPU and NPU services.
 
 Status: the tool is **implemented** and checked on the host by
 [checks/board-bundles.py](../../checks/board-bundles.py); no bundle of these
-rows has been prepared from real inputs. Each row still waits on its owner:
+rows has been prepared from real inputs. The tool refuses every row until its
+owner supplies what the row needs:
 
-- the memory qualification profile `apps/memtest/check.py` and the capped
-  renewal handler do not exist yet, so the memory row is refused;
-- `apps/os/prepare.py` admits only the mimus, thermal and audio OS builds, so
-  the GPU service, NPU service and dispatcher builds are refused until it
-  admits them;
-- the memory and power arbiter is designed but not implemented.
+- **Every row.** The owning package must name the admission values that
+  identify the row's build. Until then the row's `admission` is empty and the
+  tool refuses it, so an image admitted for another path cannot be prepared
+  under this row.
+- **Memory qualification.** The memory qualification profile
+  `apps/memtest/check.py` and the capped renewal handler do not exist yet.
+- **NPU service, GPU service and recognition dispatcher in the OS image.**
+  `apps/os/prepare.py` admits only the mimus, thermal and audio OS builds.
+  `drivers/npu/npu_service.c` and `drivers/gpu/pvr_gpu_service.c` do not
+  count interrupt-observed completions, fallback-observed completions and
+  client wake-ups separately, and `tools/check-a733-os-supervised.py` does
+  not report them or declare `COMPLETION_COUNTS`.
+- **GPU and NPU jobs under the arbiter.** The memory and power arbiter is
+  designed but not implemented. The two services lack the same counts, and
+  `tools/check-a733-accelerators-supervised.py` does not report them or
+  declare `COMPLETION_COUNTS`.
 
 ## Tests that must wait for physical recovery
 

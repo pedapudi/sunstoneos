@@ -4,10 +4,13 @@ Status: the tool and its host check are **implemented**
 ([measurements](board-bundles-measurements.md)). Bundles run only on the
 board, so every path they carry stays implemented and host-modeled, with
 physical behavior pending, until a board session records the evidence named in
-its row. No row has been prepared from real inputs: the memory profile
-(`apps/memtest/check.py`) and the capped renewal do not exist yet,
-`apps/os/prepare.py` does not yet admit the GPU service, NPU service or
-dispatcher builds, and the arbiter is not implemented.
+its row. No row has been prepared from real inputs, and the tool refuses
+every row today. The memory profile (`apps/memtest/check.py`) and the capped
+renewal do not exist yet. `apps/os/prepare.py` does not yet admit the GPU
+service, NPU service or dispatcher builds, and the arbiter is not
+implemented. No owning package has named the admission values that identify
+its row's build, and no Terminal runner yet reports the per-job completion
+and wake-up counts.
 
 One host tool, `tools/prepare-board-bundles.py`, turns the build output of
 each new memory, GPU and NPU path into a read-only bundle and a board-test
@@ -32,8 +35,7 @@ The tool holds a fixed table of rows, and each row has one of three classes:
   stacks and the shared USB0 loop), `a733_cpu_start_` or `a733_cpu_secondary_`
   (secondary-core power-up). Memory runs always renew the deadline, so a
   memory image must also define `monitor_renewal_cap`, the marker of the
-  capped renewal requested below. This scan is the tool's only safety check
-  of its own.
+  capped renewal requested below.
 - **Terminal.** Every other runner. The supervised runners keep the A733 port
   lock after every outcome until whole-board power removal is confirmed
   (`run_session` in `tools/check-a733-smp-supervised.py`). A Terminal test
@@ -184,11 +186,18 @@ sets it to 2, which is 40 bits.
 3. **Preparation and admission.** For each row, the step calls the module's
    `prepare()` into `<row>/bundle/`. Every `prepare()` ends by returning
    `validate_bundle(output)`, the path's admission rule and hash check; the
-   step takes that value as the admission result and adds no check. The
-   bundle layout stays what the runner's `--bundle` expects; the OS-image
-   bundle keeps its files under `board/` and `assets/`. A refusal at any
-   stage refuses only its row; `run.json` records each row's outcome, and the
-   tool exits with status 1 when any row was refused.
+   step takes that value as the admission result. Each row names, in
+   `admission`, the fields of that value that identify its build, such as
+   the workload or service flag `apps/os/prepare.py` records for the NPU
+   service build, or the arbiter's schema. The step refuses the row when a
+   field differs, so an image admitted for another path, such as a mimus OS
+   build offered as the NPU service row, cannot carry that row's expected
+   result. A row whose `admission` is `None` is refused; every row is `None`
+   until its owning package names those values. The bundle layout stays
+   what the runner's `--bundle` expects; the OS-image bundle keeps its files
+   under `board/` and `assets/`. A refusal at any stage refuses only its row;
+   `run.json` records each row's outcome, and the tool exits with status 1
+   when any row was refused.
 4. **Freezing.** The step removes write permission from every entry under
    `bundle/`, which stays the only copy of each file.
 5. **Artifacts.** The step walks `bundle/` recursively and hashes each
@@ -201,22 +210,49 @@ sets it to 2, which is 40 bits.
    manifest.
 7. **Submission.** The kind is `peripheral`. Terminal prerequisites are the
    runner's `PREREQUISITES` set, copied from the runner. The Monitor
-   prerequisite is `independent-watchdog-rom-return`. The tool validates the
-   result with `submission()` from `tools/board-test-queue.py`, loaded by
-   path.
+   prerequisite is `independent-watchdog-rom-return`. The queue timeout is
+   1,200 s for a Monitor row and the attempt bound below for a Terminal row.
+   The tool validates the result with `submission()` from
+   `tools/board-test-queue.py`, loaded by path.
 
 At claim time, each Terminal runner's `claimed()` re-hashes the bundle and
 checks its prerequisite bindings; the Monitor transport re-runs
 `validate_bundle()` in `ready()` before launch. The tool adds no later check.
 
 Terminal procedures require ranks 1 to 5 and rank 9 earlier in the same power
-cycle. Terminal expected results include, per job, completions observed by
-interrupt, completions observed by the one-tick fallback in
-`pvr_gpu_service.c` or `npu_service.c`, and client wake-ups. Zero fallback
-completions over a session is the evidence that removes that tick wait under
-section 1.3 of [docs/performance-architecture.md](../performance-architecture.md).
-The NPU evidence is one admitted model whose output matches its host
-reference.
+cycle. A Terminal test passes when its jobs complete and each output matches
+its host reference; for the NPU row that is one admitted model.
+
+**Completion counts.** Section 1.3 of
+[docs/performance-architecture.md](../performance-architecture.md) permits the
+one-tick fallback waits in `pvr_gpu_service.c` and `npu_service.c` only until
+board evidence shows interrupt delivery. That evidence is three counts per
+job: completions observed by interrupt, completions observed by the fallback,
+and client wake-ups. Zero fallback completions over a session would justify
+removing the tick wait. Nothing records these counts today.
+`pvr_gpu_service.c` counts no completions. `npu_service.c` counts
+`irq_completions` in `irq_progress()`, which also runs for transitions that
+the fallback observes, so that counter does not separate the two paths. No
+runner or host result reports any of the three. The tool therefore refuses a
+Terminal row unless its runner declares the module-level literal
+`COMPLETION_COUNTS = ('interrupt_completions', 'fallback_completions',
+'client_wakeups')`, read with `ast` in the same way as `PREREQUISITES`. The
+expected result and procedure record the counts as measurements, not as pass
+conditions.
+
+**Requests to the GPU service, NPU service and OS and accelerator image
+owners.**
+
+- In `pvr_gpu_service.c` and `npu_service.c`, count separately the
+  completions that the interrupt path observes, the completions that the
+  one-tick fallback observes, and the client wake-ups, per job.
+- Carry the three counts to the host in each job's result, and have
+  `tools/check-a733-os-supervised.py` and
+  `tools/check-a733-accelerators-supervised.py` write them to the session
+  record under the three names above and declare `COMPLETION_COUNTS`.
+- Name the admission values in the value `prepare()` returns that identify
+  the NPU service, GPU service, dispatcher and arbiter builds, so that each
+  row's `admission` can name them.
 
 ## Guard against board contact
 
@@ -284,7 +320,7 @@ sandbox fails the check instead of reaching a device.
 | Fixed cost per run: upload, launch, re-enumeration, record read | 2.0 s *estimated*: the 2026-10-15 forced-stall run took 4.0 s from its first read to its result file, of which 2 s was the deadline | 3 s | Evidence file times; board journals replace the estimate |
 | USB re-enumerations per chain | Not applicable | 8 to 12 (two per run) | Count of `guard.reenumeration` reservations |
 | Chain wall time | Not applicable | 10 min: 2.3 to 3.5 min for 4 to 6 runs alone; 8.3 to 9.5 min after ranks 1 to 7 (*estimated*) | Replay through `wait_needed` in `~/git/mimus/tools/usb_guard.py` from the guard state ranks 1 to 7 leave |
-| Queue timeout | Not applicable | Monitor 1,200 s; Terminal the runner's `capture_seconds` (19 or 59 s) plus 60 s | Computed by the tool; the check confirms 1 to 3,600 s and at least the runner's internal maximum |
+| Queue timeout | Not applicable | Monitor 1,200 s; Terminal the attempt bound below, at most 3,600 s | Computed by the tool from the runner, the transport and the bundle's file sizes; the check recomputes the bound with the transport's own `transfer_timeout()` and `REGIONS` and confirms the timeout is at least that bound |
 
 The wall-time replay assumes 22 s per run plus 3 s of fixed cost, and at
 least 60 s from rank 7's last re-enumeration to the first memory run. It
@@ -298,8 +334,31 @@ the churn guard to admit two re-enumerations (the 600 s window plus 15 s
 spacing), 435 s of transaction and return bounds (120 s each for the upload,
 contract write and record read, 15 s each for three short commands, and the
 30 s return window), and 150 s of margin. A stop during the guard wait comes
-before launch and leaves the board in FEL. No figure above was measured on
-the board.
+before launch and leaves the board in FEL.
+
+The Terminal timeout covers the worst case of one supervised attempt, in the
+order `run_session` in `tools/check-a733-smp-supervised.py` performs it. Each
+FEL request is bounded by `transfer_timeout()` in `tools/check-a733-smp.py`:
+15 s plus one second per 250,000 bytes moved, rounded up. The tool reads
+those constants and the SRAM backup regions from that file without running
+it. The terms are:
+
+- 615 s for the churn guard to admit one re-enumeration;
+- 45 s for the version request, the watchdog read before launch and the
+  `exe` request;
+- 80 s for the five SRAM backup reads;
+- for each bundle file, a 15 s watchdog read plus one write and readback of
+  the file; every upload is the bytes of one bundle file, so counting every
+  file covers every upload;
+- the runner's capture window, 19 s or 59 s;
+- 111 s for the refusal report read, a watchdog read and the five SRAM
+  restores that follow a capture window with no native device;
+- 60 s of margin.
+
+The tool refuses a row whose bound exceeds the queue's 3,600 s limit. Without
+uploads the bound is 970 s for the OS-image rows and 930 s for the arbiter
+row. An existing OS-image bundle of 42 files and 22.9 MB gives 2,451 s, of
+which 1,481 s are uploads. No figure above was measured on the board.
 
 ## Left out
 

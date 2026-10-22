@@ -13,16 +13,24 @@ rows. It checks that:
   writable entry, every file is hashed once (bytes read equal the bundle
   size), and the snapshot holds the sources and artifacts.json only;
 - each submission passes submission() from tools/board-test-queue.py, with
-  the runner's PREREQUISITES and capture window plus 60 s, or the Monitor
-  prerequisite and 1,200 s;
+  the runner's PREREQUISITES and the Monitor prerequisite and 1,200 s, or a
+  Terminal timeout at least the attempt bound computed here with the
+  supervised transport's own transfer_timeout() and REGIONS from the
+  bundle's file sizes;
+- a Terminal row is refused when its runner does not declare
+  COMPLETION_COUNTS, and when its attempt bound exceeds 3,600 s;
+- a bundle that passes its module's validate_bundle() but whose admitted
+  value is not the row's build is refused, for a Monitor and a Terminal row,
+  and a row without admission values is refused;
 - the nm scan accepts a Monitor image linked with --discard-locals and refuses
   a stripped image, an image without monitor_entry, each USB and
   secondary-core prefix, and a memory image without monitor_renewal_cap;
 - a refusing prepare(), an uncommitted source and a missing module refuse
   only their own rows, and unknown or excluded input rows stop before any run
   directory exists;
-- the fixed row table names existing runners whose timeouts lie in 1 to
-  3,600 s and cover each runner's internal maximum;
+- the fixed row table names existing runners and transports, every
+  Terminal runner's attempt bound without uploads lies within 3,600 s, and
+  the table records which runners declare COMPLETION_COUNTS;
 - the sandbox starts within 100 ms.
 
 Every fixture lives in a new directory under
@@ -62,6 +70,17 @@ def module(name, path):
 
 tool = module('board_bundles_tool', ROOT / 'tools/prepare-board-bundles.py')
 queue = module('board_bundles_queue', ROOT / 'tools/board-test-queue.py')
+transport = module('board_bundles_transport', ROOT / tool.SUPERVISED_TRANSPORT)
+SCHEMAS = {'monitor.py': 'fixture-monitor-v1', 'nested.py': 'fixture-nested-v1', 'many.py': 'fixture-many-v1'}
+
+
+def attempt_bound(sizes, capture_seconds):
+    """run_session's worst case with the transport's own bounds: guard wait, version, backups, per-upload
+    readl and write+readback, final readl, exe, capture window, refusal report and SRAM restore."""
+    request, timeout = transport.FEL_REQUEST_SECONDS, transport.transfer_timeout
+    lengths = [length for _, _, length in transport.REGIONS]
+    return (615 + request + sum(timeout(n) for n in lengths) + sum(request + timeout(2 * n) for n in sizes)
+            + 2 * request + capture_seconds + timeout(128) + request + sum(timeout(2 * n) for n in lengths))
 
 VIEW = r'''
 import json, os
@@ -121,6 +140,18 @@ def validate_bundle(output):
     return {'schema': 'fixture-monitor-v1', '_frozen': {'image.elf': (output / 'image.elf').read_bytes()}}
 '''
 
+MANY = '''
+import json
+
+
+def prepare(source, output):
+    output.mkdir()
+    for index in range(100):
+        (output / f'part-{index:03}.bin').write_bytes(bytes(64))
+    (output / 'prepared.json').write_text(json.dumps({'schema': 'fixture-many-v1'}))
+    return json.loads((output / 'prepared.json').read_text())
+'''
+
 FAILING = '''
 def prepare(source, output):
     raise ValueError('Fixture admission refused this bundle.')
@@ -128,6 +159,7 @@ def prepare(source, output):
 
 RUNNER = '''
 PREREQUISITES = {'supervised-ram-recovery', 'fixture-supervised-software'}
+COMPLETION_COUNTS = ('interrupt_completions', 'fallback_completions', 'client_wakeups')
 
 
 def capture(launch):
@@ -155,8 +187,11 @@ def git(repo, *arguments):
 def fixture_repository(work):
     repo = work / 'repo'
     (repo / 'fixture').mkdir(parents=True)
-    for name, text in [('nested.py', NESTED), ('monitor.py', MONITOR), ('failing.py', FAILING),
-                       ('runner.py', RUNNER), ('dirty.c', 'int dirty;\n'), ('service.c', 'int service;\n')]:
+    uncounted = RUNNER.replace('COMPLETION_COUNTS', 'OTHER_COUNTS')
+    for name, text in [('nested.py', NESTED), ('monitor.py', MONITOR), ('failing.py', FAILING), ('many.py', MANY),
+                       ('runner.py', RUNNER), ('uncounted.py', uncounted), ('dirty.c', 'int dirty;\n'),
+                       ('service.c', 'int service;\n'),
+                       ('transport.py', (ROOT / tool.SUPERVISED_TRANSPORT).read_text())]:
         (repo / 'fixture' / name).write_text(text)
     git(repo, 'init', '-q')
     git(repo, 'add', '.')
@@ -167,7 +202,9 @@ def fixture_repository(work):
 
 def row(name, cls, module_name, sources=(), **extra):
     value = {'name': name, 'class': cls, 'component': 'Fixture ' + name, 'module': 'fixture/' + module_name,
-             'runner': 'fixture/runner.py', 'sources': ['fixture/' + module_name, 'fixture/runner.py', *sources],
+             'runner': 'fixture/runner.py', 'transport': 'fixture/transport.py',
+             'admission': {'schema': SCHEMAS.get(module_name, 'fixture-other-v1')},
+             'sources': ['fixture/' + module_name, 'fixture/runner.py', 'fixture/transport.py', *sources],
              'expected_result': 'Fixture result.'}
     value.update(extra)
     return value
@@ -186,7 +223,7 @@ def writable_tree(path):
 
 
 def check_table():
-    """The fixed rows: runners exist, timeouts in 1..3600 s and at least each runner's internal maximum."""
+    """The fixed rows: runners and transports exist, and Terminal attempt bounds without uploads fit 3,600 s."""
     names = [r['name'] for r in tool.ROWS]
     assert len(names) == len(set(names))
     classes = [r['class'] for r in tool.ROWS]
@@ -197,19 +234,25 @@ def check_table():
             assert r['reason']
             continue
         assert (ROOT / r['runner']).is_file(), r['runner']
-        prerequisites, timeout = tool.terms(r, ROOT)
-        assert 1 <= timeout <= 3600
+        admission = r['admission']
+        assert admission is None or (isinstance(admission, dict) and admission), r['name']
+        entry = {'admission_named': admission is not None, 'module_present': (ROOT / r['module']).is_file()}
         if r['class'] == 'terminal':
-            runner_prerequisites, seconds = tool.runner_terms(ROOT / r['runner'])
-            assert prerequisites == runner_prerequisites and timeout == seconds + 60 > seconds
+            prerequisites, counts, seconds = tool.runner_terms(ROOT / r['runner'])
             assert queue.SUPERVISED_RECOVERY in prerequisites
             missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
             assert not missing, missing
+            assert r['transport'] in r['sources']
+            fixed, _ = tool.terminal_timeout(seconds, [], tool.transport_bounds(ROOT / r['transport']))
+            assert fixed >= attempt_bound([], seconds) and fixed <= 3600, fixed
+            entry.update(prerequisites=prerequisites, counts_declared=counts == sorted(tool.COUNT_FIELDS),
+                         timeout_without_uploads=fixed)
         else:
+            prerequisites, _, _ = tool.terms(r, ROOT)
             # 615 s of churn-guard wait plus 435 s of transaction and return bounds.
-            assert prerequisites == [queue.RECOVERY] and timeout >= 615 + 435
-        results[r['name']] = {'prerequisites': prerequisites, 'timeout_seconds': timeout,
-                              'module_present': (ROOT / r['module']).is_file()}
+            assert prerequisites == [queue.RECOVERY] and tool.MONITOR_TIMEOUT >= 615 + 435
+            entry.update(prerequisites=prerequisites, timeout_seconds=tool.MONITOR_TIMEOUT)
+        results[r['name']] = entry
     return results
 
 
@@ -248,7 +291,12 @@ def main():
             row('monitor-no-cap', 'monitor', 'monitor.py', procedure=['Run {runner}.'], stop_condition='Stop.'),
             row('memory-no-cap', 'monitor', 'monitor.py', renewal_cap=True),
             row('memory-stripped', 'monitor', 'monitor.py', renewal_cap=True),
-            row('memory-no-entry', 'monitor', 'monitor.py', renewal_cap=True)]
+            row('memory-no-entry', 'monitor', 'monitor.py', renewal_cap=True),
+            row('memory-wrong-build', 'monitor', 'monitor.py', renewal_cap=True,
+                admission={'schema': 'fixture-memory-v1'}),
+            row('memory-unnamed', 'monitor', 'monitor.py', renewal_cap=True, admission=None)]
+    for name in ('memory-wrong-build', 'memory-unnamed'):
+        inputs[name] = inputs['memory-good']
     for prefix in tool.FORBIDDEN_PREFIXES:
         name = 'prefix-' + prefix.rstrip('_').replace('_', '-')
         body = good + cap + f'static int {prefix}probe(void){{return 2;}}\nint keep(void){{return {prefix}probe();}}\n'
@@ -259,9 +307,14 @@ def main():
              row('failing', 'terminal', 'failing.py'),
              row('dirty', 'terminal', 'nested.py', ['fixture/dirty.c']),
              row('absent', 'terminal', 'absent.py'),
+             row('service-wrong-build', 'terminal', 'nested.py', admission={'schema': 'fixture-npu-service-v1'}),
+             row('service-unnamed', 'terminal', 'nested.py', admission=None),
+             row('uncounted', 'terminal', 'nested.py', runner='fixture/uncounted.py'),
+             row('too-long', 'terminal', 'many.py'),
              row('no-inputs', 'terminal', 'nested.py'),
              {'name': 'excluded', 'class': 'excluded', 'reason': 'Fixture needs physical recovery.'}]
-    inputs.update({name: {'source': source} for name in ('nested', 'failing', 'dirty', 'absent')})
+    inputs.update({name: {'source': source} for name in ('nested', 'failing', 'dirty', 'absent', 'service-wrong-build',
+                                                         'service-unnamed', 'uncounted', 'too-long')})
     repo = fixture_repository(work)
     evidence = work / 'evidence'
 
@@ -278,10 +331,18 @@ def main():
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
-               'dirty': 'Uncommitted row sources: fixture/dirty.c', 'absent': 'does not exist'}
+               'dirty': 'Uncommitted row sources: fixture/dirty.c', 'absent': 'does not exist',
+               'memory-wrong-build': "schema is 'fixture-monitor-v1', not 'fixture-memory-v1'",
+               'service-wrong-build': "schema is 'fixture-nested-v1', not 'fixture-npu-service-v1'",
+               'memory-unnamed': 'refused until it does', 'service-unnamed': 'refused until it does',
+               'uncounted': 'does not declare COMPLETION_COUNTS', 'too-long': "more than the queue's 3600 s"}
+    stages = {'memory-wrong-build': 'admission', 'service-wrong-build': 'admission', 'memory-unnamed': 'admission',
+              'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout'}
     reasons.update({'prefix-' + p.rstrip('_').replace('_', '-'): p + 'probe' for p in tool.FORBIDDEN_PREFIXES})
     for name, reason in reasons.items():
         assert reason in record['rows'][name]['message'], (name, record['rows'][name])
+    for name, stage in stages.items():
+        assert record['rows'][name]['stage'] == stage, (name, record['rows'][name])
     assert not (run_dir / 'absent').exists() and not (run_dir / 'dirty/submission.json').exists()
 
     view = json.loads((run_dir / 'nested/bundle/board/view.json').read_text())
@@ -316,8 +377,11 @@ def main():
         assert submission['sources'] == [{'repository': str(repo), 'revision': git(repo, 'rev-parse', 'HEAD').strip()}]
         if name == 'nested':
             assert submission['prerequisites'] == ['fixture-supervised-software', 'supervised-ram-recovery']
-            assert submission['timeout_seconds'] == 79
+            bound = attempt_bound([p.stat().st_size for p in files], 19)
+            assert bound <= submission['timeout_seconds'] == sum(r['timeout_terms'].values()) <= 3600, r
+            assert r['timeout_terms']['margin'] == tool.TERMINAL_MARGIN
             assert str(bundle) in submission['procedure'][1]
+            prepared['nested_timeout'] = {'bound': bound, **r['timeout_terms']}
         else:
             assert submission['prerequisites'] == [tool.MONITOR_PREREQUISITE]
             assert submission['timeout_seconds'] == tool.MONITOR_TIMEOUT

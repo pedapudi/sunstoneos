@@ -18,8 +18,9 @@ the change.
   the sandbox. The host view is what a preparation module sees when it runs
   without the sandbox.
 - **After.** The host check builds AArch64 ELF fixtures with `clang-21` and
-  `ld.lld`, commits fixture preparation modules and a fixture runner to a new
-  Git repository, and runs the tool once on 18 fixture rows. A fixture module
+  `ld.lld`, commits fixture preparation modules, two fixture runners and a
+  copy of the supervised transport to a new Git repository, and runs the tool
+  once on 24 fixture rows. A fixture module
   lists `/dev`, `/sys`, `/tmp`, `/run`, the network interfaces and the
   environment from its own process and from a child process, and tries to
   write outside the run directory. The check reads each row's `run.json`
@@ -39,8 +40,9 @@ the change.
 | Copies of each bundle file | One | One | One; each snapshot holds the row's sources and `artifacts.json` only |
 | Submissions refused by `submission()` | Not applicable | Zero | Zero of three prepared rows |
 | Monitor images accepted that should be refused | Not applicable | Zero | Zero of ten injected cases: no symbol table, no `monitor_entry`, each of the seven prefixes, and a memory image without `monitor_renewal_cap` |
-| Queue timeout | Not applicable | Monitor 1,200 s; Terminal capture window plus 60 s | Monitor 1,200 s; OS-image rows 119 s; arbiter row 79 s |
-| Host check wall time | Not applicable | None | 0.71 s |
+| Queue timeout | Not applicable | Monitor 1,200 s; Terminal the attempt bound, at most 3,600 s | Monitor 1,200 s. Nested fixture 1,118 s, which is its 1,058 s attempt bound recomputed with the transport's `transfer_timeout()` plus 60 s. Without uploads, 970 s for the OS-image rows and 930 s for the arbiter row. An existing OS-image bundle of 42 files and 22.9 MB: 2,451 s |
+| Rows refused for the wrong build, no named admission values, no `COMPLETION_COUNTS` or a bound over 3,600 s | Not applicable | All | All six injected cases: a Monitor and a Terminal bundle admitted under another schema, a Monitor and a Terminal row without admission values, a runner without `COMPLETION_COUNTS`, and a 101-file bundle whose bound is 4,061 s |
+| Host check wall time | Not applicable | None | 0.79 s |
 
 The fixture run also refused a failing `prepare()`, an uncommitted source and
 a missing module on their own rows only, and stopped unknown and excluded

@@ -11,13 +11,17 @@ preparation step once inside a bubblewrap sandbox that has no USB device, no
 outside /tmp, /run and /sys, which the sandbox replaces with empty
 directories.
 
-For each row with inputs, the step calls the module's prepare(), which ends
-with the module's own validate_bundle(). It then scans a Monitor row's
-image.elf with nm, removes write permission from every bundle entry, hashes
-each bundle file once into artifacts.json, snapshots the row's sources with
-tools/evidence-snapshot.py, and writes submission.json after checking it with
-submission() from tools/board-test-queue.py. run.json records every row's
-outcome. The exit status is 0 when no row was refused.
+For each row with inputs, the step refuses a Terminal row whose runner does
+not declare COMPLETION_COUNTS. It calls the module's prepare(), which ends
+with the module's own validate_bundle(), and refuses the row unless the
+admitted value carries the row's admission fields. It then scans a Monitor
+row's image.elf with nm, removes write permission from every bundle entry,
+hashes each bundle file once into artifacts.json, derives a Terminal row's
+queue timeout from the runner's own bounds and the bundle's file sizes,
+snapshots the row's sources with tools/evidence-snapshot.py, and writes
+submission.json after checking it with submission() from
+tools/board-test-queue.py. run.json records every row's outcome. The exit
+status is 0 when no row was refused.
 
   prepare-board-bundles.py --inputs inputs.json
 """
@@ -48,6 +52,15 @@ MONITOR_PREREQUISITE = 'independent-watchdog-rom-return'
 # 435 s of transaction and return bounds, and 150 s of margin.
 MONITOR_TIMEOUT = 1200
 TERMINAL_MARGIN = 60
+QUEUE_TIMEOUT_LIMIT = 3600
+# The churn guard admits one re-enumeration within its 600 s window plus 15 s
+# spacing (usb_guard.reenumeration in run_session).
+GUARD_WAIT = 615
+# The supervised runners move every byte through this module's FEL requests.
+SUPERVISED_TRANSPORT = 'tools/check-a733-smp.py'
+# Per-job fields a Terminal runner must declare in COMPLETION_COUNTS and report
+# in its result record before the tool prepares its row.
+COUNT_FIELDS = ('interrupt_completions', 'fallback_completions', 'client_wakeups')
 # USB stacks, the shared USB0 loop and secondary-core power-up.
 FORBIDDEN_PREFIXES = ('dcd_', 'hcd_', 'tud_', 'tuh_', 'usb0_', 'a733_cpu_start_', 'a733_cpu_secondary_')
 ENVIRONMENT = ('PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE')
@@ -55,20 +68,25 @@ ENVIRONMENT = ('PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE')
 TERMINAL_PROCEDURE = [
     'Confirm that ranks 1 to 5 and rank 9 of docs/audit/board-test-plan.md passed earlier in this power cycle.',
     'Claim this test, then run {runner} on the frozen bundle {bundle} with this evidence directory.',
-    'Record, per job, the completions observed by interrupt, the completions observed by the one-tick '
-    'fallback, and the client wake-ups.',
+    'Save the per-job interrupt_completions, fallback_completions and client_wakeups from the runner\'s '
+    'result record with the evidence; they are measurements, not pass conditions.',
     'Keep the port lock and confirm whole-board power removal before any other test; this test ends the '
     'board session.']
 TERMINAL_STOP = ('Stop after the first failure. The runner keeps the A733 port lock after every outcome until '
                  'whole-board power removal is confirmed, so no other test runs in this board session.')
-TERMINAL_COUNTS = (' The record gives, per job, completions observed by interrupt, completions observed by the '
-                   'one-tick fallback and client wake-ups; zero fallback completions over the session is the '
-                   'evidence that removes the tick wait.')
+TERMINAL_COUNTS = (' The record also reports, per job, interrupt_completions, fallback_completions and '
+                   'client_wakeups. These counts are measurements, not pass conditions; zero fallback '
+                   'completions over the session is the evidence that removes the tick wait.')
+TRANSPORT_SOURCES = ['tools/check-a733-smp-supervised.py', SUPERVISED_TRANSPORT]
 OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/mimus-board/prepare.py',
-              'apps/thermal/prepare.py', 'apps/board/prepare.py', 'tools/prepare-board-bundles.py']
+              'apps/thermal/prepare.py', 'apps/board/prepare.py', 'tools/prepare-board-bundles.py',
+              *TRANSPORT_SOURCES]
 
 ROWS = [
-    {'name': 'memory-qualification', 'class': 'monitor', 'renewal_cap': True,
+    # `admission` maps fields of the value prepare() returns to the values that
+    # identify this row's build. None refuses the row: no owning package has
+    # named those values yet.
+    {'name': 'memory-qualification', 'class': 'monitor', 'renewal_cap': True, 'admission': None,
      'component': 'DDR memory qualification, one run of the three-step map chain',
      'module': 'apps/memtest/check.py', 'runner': 'tools/a733-returning-host.py',
      'sources': ['apps/memtest/check.py', 'tools/a733-returning-host.py', 'tools/prepare-board-bundles.py'],
@@ -86,26 +104,30 @@ ROWS = [
                        'abort and no expired DMA0 deadline. Such a record retains the board: no further upload of '
                        'any kind, including rank 8 and the Terminal rows, until the user reviews the record, and '
                        'after a DMA0 expiry not until a FEL read also shows DMA0 quiet.'},
-    {'name': 'npu-service-os-image', 'class': 'terminal',
+    {'name': 'npu-service-os-image', 'class': 'terminal', 'admission': None,
+     'transport': SUPERVISED_TRANSPORT,
      'component': 'NPU service in the integrated OS image',
      'module': 'apps/os/prepare.py', 'runner': 'tools/check-a733-os-supervised.py',
      'sources': OS_SOURCES + ['drivers/npu/npu_service.c', 'apps/os/services.c'],
      'expected_result': 'One admitted model completes and its output matches its host reference.' + TERMINAL_COUNTS},
-    {'name': 'gpu-service-os-image', 'class': 'terminal',
+    {'name': 'gpu-service-os-image', 'class': 'terminal', 'admission': None,
+     'transport': SUPERVISED_TRANSPORT,
      'component': 'GPU service in the integrated OS image',
      'module': 'apps/os/prepare.py', 'runner': 'tools/check-a733-os-supervised.py',
      'sources': OS_SOURCES + ['drivers/gpu/pvr_gpu_service.c', 'apps/os/services.c'],
      'expected_result': 'Every submitted GPU job completes and its output matches its host reference.'
                         + TERMINAL_COUNTS},
-    {'name': 'accelerator-arbiter', 'class': 'terminal',
+    {'name': 'accelerator-arbiter', 'class': 'terminal', 'admission': None,
+     'transport': SUPERVISED_TRANSPORT,
      'component': 'GPU and NPU jobs under the memory and power arbiter',
      'module': 'apps/accelerators/prepare.py', 'runner': 'tools/check-a733-accelerators-supervised.py',
      'sources': ['apps/accelerators/prepare.py', 'tools/check-a733-accelerators-supervised.py',
                  'apps/npu-convolution/prepare-supervised.py', 'drivers/npu/npu_service.c',
-                 'drivers/gpu/pvr_gpu_service.c', 'tools/prepare-board-bundles.py'],
+                 'drivers/gpu/pvr_gpu_service.c', 'tools/prepare-board-bundles.py', *TRANSPORT_SOURCES],
      'expected_result': 'The GPU and NPU jobs complete under the arbiter and each output matches its host '
                         'reference.' + TERMINAL_COUNTS},
-    {'name': 'recognition-dispatcher', 'class': 'terminal',
+    {'name': 'recognition-dispatcher', 'class': 'terminal', 'admission': None,
+     'transport': SUPERVISED_TRANSPORT,
      'component': 'Recognition dispatcher placing mimus linear layers on the CPU or GPU in the OS image',
      'module': 'apps/os/prepare.py', 'runner': 'tools/check-a733-os-supervised.py',
      'sources': OS_SOURCES + ['apps/os/dispatch.c', 'apps/os/placement.py', 'drivers/gpu/pvr_gpu_service.c'],
@@ -148,24 +170,85 @@ def sandbox(run_dir):
             '--setenv', 'PYTHONDONTWRITEBYTECODE', '1', '--chdir', run_dir]
 
 
+def literals(path):
+    """Module-level NAME = literal assignments of a Python source, read without executing it."""
+    found = {}
+    for node in ast.parse(Path(path).read_text()).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    try:
+                        found.setdefault(target.id, []).append(ast.literal_eval(node.value))
+                    except (ValueError, TypeError):
+                        pass
+    return {name: values[0] for name, values in found.items() if len(values) == 1}
+
+
 def runner_terms(path):
-    """The runner's PREREQUISITES literal and its largest capture window, read without executing it."""
-    text = Path(path).read_text()
-    found = [ast.literal_eval(node.value) for node in ast.parse(text).body
-             if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'PREREQUISITES'
-                                                      for t in node.targets)]
-    seconds = [int(x) for x in re.findall(r'capture_seconds\s*=\s*(\d+)', text)]
-    require(len(found) == 1 and isinstance(found[0], set) and found[0] and seconds,
+    """The runner's PREREQUISITES, its COMPLETION_COUNTS (None when absent) and its largest capture window."""
+    values = literals(path)
+    prerequisites = values.get('PREREQUISITES')
+    seconds = [int(x) for x in re.findall(r'capture_seconds\s*=\s*(\d+)', Path(path).read_text())]
+    require(isinstance(prerequisites, set) and prerequisites and seconds,
             f'Runner {path} has no PREREQUISITES literal or capture window.')
-    return sorted(found[0]), max(seconds)
+    counts = values.get('COMPLETION_COUNTS')
+    return sorted(prerequisites), (sorted(counts) if isinstance(counts, (set, tuple, list)) else None), max(seconds)
+
+
+def transport_bounds(path):
+    """The FEL request bound, transfer rate and SRAM backup regions of the supervised transport."""
+    values = literals(path)
+    request, rate, regions = (values.get(k) for k in ('FEL_REQUEST_SECONDS', 'FEL_BYTES_PER_SECOND', 'REGIONS'))
+    require(type(request) is int and request > 0 and type(rate) is int and rate > 0 and isinstance(regions, list)
+            and regions and all(len(r) == 3 and type(r[2]) is int and r[2] > 0 for r in regions),
+            f'Transport {path} has no FEL bounds or SRAM regions.')
+    return {'request': request, 'rate': rate, 'regions': [r[2] for r in regions]}
 
 
 def terms(row, root):
-    """Prerequisites and queue timeout of one prepared row."""
+    """Prerequisites, capture window and transport bounds of one row; refuses a Terminal row without counts."""
     if row['class'] == 'monitor':
-        return [MONITOR_PREREQUISITE], MONITOR_TIMEOUT
-    prerequisites, seconds = runner_terms(root / row['runner'])
-    return prerequisites, seconds + TERMINAL_MARGIN
+        return [MONITOR_PREREQUISITE], None, None
+    prerequisites, counts, seconds = runner_terms(root / row['runner'])
+    require(counts == sorted(COUNT_FIELDS),
+            f'Runner {row["runner"]} does not declare COMPLETION_COUNTS {", ".join(COUNT_FIELDS)}; its record '
+            'cannot carry the per-job completion and wake-up counts.')
+    return prerequisites, seconds, transport_bounds(root / row['transport'])
+
+
+def terminal_timeout(seconds, sizes, bounds):
+    """One supervised attempt's worst case, in run_session order, plus margin.
+
+    Every upload is the bytes of one bundle file, so each bundle file is
+    counted as an upload: a watchdog readl, then one write and readback.
+    """
+    request, rate, regions = bounds['request'], bounds['rate'], bounds['regions']
+
+    def transfer(moved):
+        return request + -(-moved // rate)
+
+    parts = {'guard_wait': GUARD_WAIT,
+             'version_readl_exe': 3 * request,
+             'sram_backup': sum(transfer(n) for n in regions),
+             'uploads': sum(request + transfer(2 * n) for n in sizes),
+             'capture': seconds,
+             'refusal_probe': transfer(128) + request + sum(transfer(2 * n) for n in regions),
+             'margin': TERMINAL_MARGIN}
+    total = sum(parts.values())
+    require(total <= QUEUE_TIMEOUT_LIMIT,
+            f'One attempt can take {total} s, more than the queue\'s {QUEUE_TIMEOUT_LIMIT} s limit.')
+    return total, parts
+
+
+def admit(row, admitted):
+    """The admitted value names this row's build."""
+    expected = row.get('admission')
+    require(expected is not None, f'No owning package has named the admission values of {row["name"]}; '
+                                  'the row is refused until it does.')
+    require(isinstance(admitted, dict), 'prepare() returned no admission record.')
+    wrong = sorted(k for k, v in expected.items() if admitted.get(k) != v)
+    require(not wrong, 'The admitted bundle is not this row\'s build: ' +
+            ', '.join(f'{k} is {admitted.get(k)!r}, not {expected[k]!r}' for k in wrong))
 
 
 def monitor_scan(elf, nm, renewal_cap):
@@ -207,14 +290,15 @@ def rchar():
 
 
 def artifact_pass(bundle):
-    """Hash each regular file once; report bytes read and writable entries."""
+    """Hash each regular file once; return the artifacts, each file's size, bytes read and writable entries."""
     found = entries(bundle)
     writable = sum(bool(os.lstat(p).st_mode & 0o222) for p in found)
     files = sorted(p for p in found if not p.is_dir())
-    size = sum(os.lstat(p).st_size for p in files)
     buffer = bytearray(BLOCK)
     view = memoryview(buffer)
     artifacts = []
+    sizes = [os.lstat(p).st_size for p in files]
+    size = sum(sizes)
     before, sample = rchar()
     for path in files:
         digest = hashlib.sha256()
@@ -223,7 +307,8 @@ def artifact_pass(bundle):
                 digest.update(view[:count])
         artifacts.append({'path': str(path), 'sha256': digest.hexdigest()})
     after, _ = rchar()
-    return artifacts, {'bundle_bytes': size, 'read_bytes': after - before - sample, 'writable_entries': writable}
+    return artifacts, sizes, {'bundle_bytes': size, 'read_bytes': after - before - sample,
+                              'writable_entries': writable}
 
 
 def changed_paths(status):
@@ -266,7 +351,7 @@ def prepare_row(row, arguments, row_dir, request, queue):
         root = Path(request['repository'])
         module_path = root / row['module']
         require(module_path.is_file(), f'Preparation module {row["module"]} does not exist.')
-        prerequisites, timeout = terms(row, root)
+        prerequisites, seconds, bounds = terms(row, root)
         row_dir.mkdir()
         bundle = row_dir / 'bundle'
         stage = 'prepare'
@@ -274,14 +359,21 @@ def prepare_row(row, arguments, row_dir, request, queue):
         kwargs = {k: paths(v) for k, v in arguments.items()}
         admitted = module.prepare(**kwargs, output=bundle)
         record['admission_schema'] = admitted.get('schema') if isinstance(admitted, dict) else None
+        stage = 'admission'
+        admit(row, admitted)
         if row['class'] == 'monitor':
             stage = 'monitor-scan'
             monitor_scan(bundle / 'image.elf', request['nm'], row.get('renewal_cap', False))
         stage = 'freeze'
         freeze(bundle)
         stage = 'artifacts'
-        artifacts, metrics = artifact_pass(bundle)
+        artifacts, sizes, metrics = artifact_pass(bundle)
         record['metrics'] = metrics
+        stage = 'timeout'
+        if row['class'] == 'monitor':
+            timeout = MONITOR_TIMEOUT
+        else:
+            timeout, record['timeout_terms'] = terminal_timeout(seconds, sizes, bounds)
         artifacts_file = row_dir / 'artifacts.json'
         save(artifacts_file, artifacts)
         stage = 'snapshot'
