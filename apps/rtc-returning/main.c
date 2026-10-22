@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_counter_clock.h"
+#include "a733_range.h"
 #include "a733_rtc.h"
 
 /* One finite owner. The coordinator admits exclusive RTC/source/calendar
@@ -86,8 +87,7 @@ static void probe(void *unused)
     (void)unused;
     REQUIRE(a733_counter_clock_init(&clock,24000000),"counter init");
     uint64_t start,first_counter,second_counter;
-    REQUIRE(now(&rtc,&start)&&start<=UINT64_MAX-1500000,"counter sample");
-    deadline=start+1500000;
+    REQUIRE(now(&rtc,&start)&&a733_deadline_after(start,1500000,&deadline),"counter sample");
     step=1;
     /* Gate status is accessible independently of the RTC aperture. Never
      * release reset, enable the gate, or read a gated RTC block. */

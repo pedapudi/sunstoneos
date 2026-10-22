@@ -3,6 +3,8 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_counter_clock.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "a733_rtc.h"
 #include "gicv3_spi.h"
 #include "monitor.h"
@@ -46,7 +48,7 @@ static _Noreturn void failed(const char *reason){done(1,reason);}
 static int read_reg(void *c,uint32_t offset,uint32_t *value)
 {
     if(c!=&rtc||!value||offset>0x50||(offset&3)||!timely()||!quiet(phase!=2))return 0;
-    *value=mmio_read(0x07090000+offset);__asm__ volatile("dsb sy":::"memory");return timely();
+    *value=a733_mmio_read32_dsb_sy_after(0x07090000+offset);return timely();
 }
 static int write_reg(void *c,uint32_t offset,uint32_t value)
 {
@@ -54,8 +56,7 @@ static int write_reg(void *c,uint32_t offset,uint32_t value)
     if((offset!=0x20&&offset!=0x24&&offset!=0x28&&offset!=0x2c&&offset!=0x30)||(offset==0x30&&value!=1)){
         invariant=1;return 0;
     }
-    ++writes;*(volatile uint32_t *)(uintptr_t)(0x07090000+offset)=value;
-    __asm__ volatile("dsb sy":::"memory");return timely();
+    ++writes;a733_mmio_write32_dsb_sy_after(0x07090000+offset,value);return timely();
 }
 void __wrap_vApplicationFPUSafeIRQHandler(uint64_t interrupt)
 {
@@ -70,7 +71,7 @@ void __wrap_vApplicationFPUSafeIRQHandler(uint64_t interrupt)
 static void probe(void *unused)
 {
     (void)unused;REQUIRE(a733_counter_clock_init(&clock,24000000),"counter init");
-    uint64_t start,value;REQUIRE(now(&rtc,&start)&&start<=UINT64_MAX-1500000,"counter sample");deadline=start+1500000;
+    uint64_t start,value;REQUIRE(now(&rtc,&start)&&a733_deadline_after(start,1500000,&deadline),"counter sample");
     step=1;REQUIRE(rtc_alarm_route.ready&&!rtc_alarm_route.retained,"EL3 route not admitted");
     REQUIRE((mmio_read(0x0701020c)&0x10001)==0x10001&&timely()&&quiet(1),"RTC bus/IRQ preflight");
     const struct a733_rtc_ops ops={now,read_reg,write_reg};

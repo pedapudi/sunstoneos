@@ -1,22 +1,18 @@
 #include "storage_read.h"
 #include "boot.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct storage_read_application storage_read;
 __attribute__((used,retain)) const uint64_t storage_read_geometry[5]={A733_STORAGE_READ_SESSION_MAGIC,STORAGE_READ_SESSION_BYTES,288,4096,2};
 static uint64_t limit(void){return board.session.deadline_us-10000;}
+/* Every page of [a, a + bytes) translates for write to itself with exactly
+ * this attribute value and shareability. The exclusive end must fit. */
 static int memory(uintptr_t a,size_t bytes,uint8_t attributes,uint8_t shareability)
 {
- if(!bytes||bytes>UINTPTR_MAX-a)return 0;
- uintptr_t last=a+bytes-1;
- for(uintptr_t p=a;;){
-  struct aarch64_translation t;
-  if(!aarch64_device_translate(p,1,&t)||t.physical!=p||t.attributes!=attributes||t.shareability!=shareability)return 0;
-  if((p>>12)==(last>>12))break;
-  p=(p&~(uintptr_t)4095)+4096;
- }
- return 1;
+ if(!bytes||bytes>UINTPTR_MAX-a||shareability>3)return 0;
+ const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{attributes,(uint8_t)(1u<<shareability)}},0,1};
+ return a733_mapping_check_pages(aarch64_device_translate,a,a,bytes,&rule);
 }
 static int mappings(void)
 {

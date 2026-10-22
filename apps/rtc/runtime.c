@@ -1,7 +1,8 @@
 #include "rtc.h"
 #include "boot.h"
 #include "a733_storage_digest.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include <string.h>
 static uint64_t deadline(void)
 {return board.session.deadline_us>10000?board.session.deadline_us-10000:0;}
@@ -18,19 +19,16 @@ static int live(void)
 static int now(void *c,uint64_t *value)
 {return c==&rtc&&rtc.runtime_active&&value&&live()&&
  a733_counter_clock_now(&providers.shared.counter,value)==1&&live();}
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mapped(uintptr_t address)
-{
- struct aarch64_translation t;
- return aarch64_device_translate(address,1,&t)&&t.physical==address&&t.attributes==0&&t.shareability==2;
-}
+{return a733_mapping_check(aarch64_device_translate,address,address,&device_rule);}
 static int read_reg(void *c,uint32_t offset,uint32_t *value)
 {
  if(c!=&rtc||!value||!rtc.runtime_active||offset>0x50||(offset&3)||!live()||
     a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,deadline())!=1)return 0;
  int result=0;uintptr_t address=0x07090000+offset;
  if(live()&&mapped(address)){
-  __asm__ volatile("dsb sy":::"memory");*value=*(volatile uint32_t *)address;
-  __asm__ volatile("dsb sy":::"memory");result=live();
+  *value=a733_mmio_read32_dsb_sy_both(address);result=live();
  }
  a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return result;
 }
@@ -45,7 +43,7 @@ static int write_reg(void *c,uint32_t offset,uint32_t value)
   if(!rtc.runtime_attempted&&atomic_load_explicit(&rtc.cancel,memory_order_acquire))result=2;
   else{
    rtc.runtime_attempted=1;
-   *(volatile uint32_t *)address=value;__asm__ volatile("dsb sy":::"memory");result=live();
+   a733_mmio_write32_dsb_sy_after(address,value);result=live();
   }
  }
  /* Only the private calendar is uncertain on failure. Its exclusive lifetime
@@ -62,10 +60,10 @@ static int cancelled(void *c)
 {return c==&rtc&&atomic_load_explicit(&rtc.cancel,memory_order_acquire);}
 static int quiescent(void)
 {
- if(!mapped(0x03400000))return 0;__asm__ volatile("dsb sy":::"memory");
- return !(*(volatile uint32_t *)0x03400000&(1u<<31))&&
-        !((*(volatile uint32_t *)0x0340011c|*(volatile uint32_t *)0x0340021c|
-           *(volatile uint32_t *)0x0340031c)&16);
+ if(!mapped(0x03400000))return 0;a733_mmio_dsb_sy();
+ return !(a733_mmio_read32(0x03400000)&(1u<<31))&&
+        !((a733_mmio_read32(0x0340011c)|a733_mmio_read32(0x0340021c)|
+           a733_mmio_read32(0x0340031c))&16);
 }
 void rtc_runtime_task(void)
 {

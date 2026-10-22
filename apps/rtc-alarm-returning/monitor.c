@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "platform.h"
 #include "monitor.h"
+#include "a733_mmio.h"
 #include <string.h>
 volatile struct rtc_alarm_route rtc_alarm_route __attribute__((section(".monitor_state")));
 extern void __real_monitor_init(void);
@@ -27,16 +28,16 @@ static int rtc_quiet(void)
     return !((mmio_read(R+0x28)|mmio_read(R+0x2c)|mmio_read(R+0x30)|mmio_read(R+0x50))&1);
 }
 static void field(uint32_t offset,uint32_t mask,uint32_t value)
-{mmio_write(D+offset,(mmio_read(D+offset)&~mask)|(value&mask));__asm__ volatile("dsb sy":::"memory");}
+{a733_mmio_write32_dsb_sy_after(D+offset,(mmio_read(D+offset)&~mask)|(value&mask));}
 static void route_write(uint64_t value)
-{*(volatile uint64_t *)(uintptr_t)(D+0x6720)=value;__asm__ volatile("dsb sy":::"memory");}
+{a733_mmio_write64_dsb_sy_after(D+0x6720,value);}
 static int fields_match(unsigned restored)
 {
     return (mmio_read(D+0x9c)&BIT)==(restored?(rtc_alarm_route.group&BIT):BIT)&&
       (mmio_read(D+0xd1c)&BIT)==(restored?(rtc_alarm_route.modifier&BIT):0)&&
       (mmio_read(D+0xc38)&0x300)==(restored?(rtc_alarm_route.configuration&0x300):0)&&
       (mmio_read(D+0x4e4)&255)==(restored?(rtc_alarm_route.priority&255):0xe0)&&
-      *(volatile uint64_t *)(uintptr_t)(D+0x6720)==(restored?rtc_alarm_route.affinity:0);
+      a733_mmio_read64(D+0x6720)==(restored?rtc_alarm_route.affinity:0);
 }
 void __wrap_monitor_init(void)
 {
@@ -62,7 +63,7 @@ void __wrap_monitor_init(void)
             rtc_alarm_route.alarm_day=mmio_read(R+0x20);rtc_alarm_route.alarm_hms=mmio_read(R+0x24);
             rtc_alarm_route.group=mmio_read(D+0x9c);rtc_alarm_route.modifier=mmio_read(D+0xd1c);
             rtc_alarm_route.configuration=mmio_read(D+0xc38);rtc_alarm_route.priority=mmio_read(D+0x4e4);
-            rtc_alarm_route.affinity=*(volatile uint64_t *)(uintptr_t)(D+0x6720);
+            rtc_alarm_route.affinity=a733_mmio_read64(D+0x6720);
             rtc_alarm_route.baseline=1;
         }
     }
@@ -86,7 +87,7 @@ _Noreturn void __wrap_monitor_exception(uint64_t operation,uint64_t status,uint6
         if(access){
             /* Always fence our newly enabled SPI, including timeout/fault.
              * Old monitor finish only sets saved enables and cannot do this. */
-            mmio_write(D+0x19c,BIT);__asm__ volatile("dsb sy":::"memory");
+            a733_mmio_write32_dsb_sy_after(D+0x19c,BIT);
             uint64_t end=counter()+COUNTER_HZ/50;
             while((mmio_read(D)&(1u<<31))&&counter()<end){}
             if(kind==1&&(esr>>26)==0x17&&operation==0x733&&!status&&rtc_alarm_route.ready&&

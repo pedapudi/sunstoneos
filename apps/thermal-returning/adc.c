@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_counter_clock.h"
+#include "a733_range.h"
 #include "a733_platform_locks.h"
 #include "a733_pmic_native.h"
 #include "a733_pins_native.h"
@@ -99,8 +100,8 @@ static void probe(void *unused)
     platform_puts("BEGIN native GPADC returning\n");
     REQUIRE(a733_counter_clock_init(&clock,24000000),"counter init");
     uint64_t start;
-    REQUIRE(now(NULL,&start) && start<=UINT64_MAX-1500000,"counter sample");
-    deadline=start+1500000;sample_deadline=start+1200000;
+    REQUIRE(now(NULL,&start) && a733_deadline_after(start,1500000,&deadline),"counter sample");
+    sample_deadline=start+1200000;
     REQUIRE(a733_platform_locks_init(&locks,a733_counter_clock_now,&clock),"locks init");
     REQUIRE(a733_clock_leases_init(&clocks,a733_counter_clock_now,&clock),"clock leases init");
     struct a733_pins_locks pin_locks={pin_enter,pin_leave,now,NULL};

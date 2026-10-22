@@ -6,7 +6,7 @@
 #include "host/usbh.h"
 #include "class/hid/hid_host.h"
 #include "boot.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 static atomic_uint attached;
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
@@ -55,16 +55,13 @@ int mimus_board_task_privileged(void (*entry)(void *),void *context)
 int mimus_board_pins(struct a733_pin_handoff *pins)
 {
     if(!pins||(board.session.workload!=0&&board.session.workload!=4))return 0;
-    for(unsigned i=0;i<3;++i)for(uintptr_t page=mimus_asset_address[i]&~(uintptr_t)4095;
-        page<mimus_asset_address[i]+mimus_asset_bytes[i];page+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
-    for(uintptr_t page=0x46000000;page<0x47000000;page+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,1,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
-    return 1;
+    /* configure.py places each nonempty asset at a fixed page-aligned address. */
+    static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
+        writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    for(unsigned i=0;i<3;++i)
+        if(!a733_mapping_check_pages(aarch64_device_translate,mimus_asset_address[i],mimus_asset_address[i],
+               mimus_asset_bytes[i],&readable))return 0;
+    return a733_mapping_check_pages(aarch64_device_translate,0x46000000,0x46000000,0x01000000,&writable);
 }
 int mimus_board_application_start(void){return (board.session.workload==0||board.session.workload==4)&&mimus_board_start();}
 #ifndef SUNSTONE_A733_OS
