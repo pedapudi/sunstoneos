@@ -3,6 +3,8 @@
 #include "platform.h"
 #include "a733_pmic_native.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 
 static atomic_uint pmic_stop,pmic_parked;
 static _Noreturn void retained(unsigned reason)
@@ -32,12 +34,11 @@ void gpu_finite_pmic_checkpoint(void)
 }
 static int irq_read(unsigned offset,uint32_t *out)
 {
-    struct aarch64_translation r;
+    /* Device identity mapping for reads, any shareability. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
     uintptr_t address=A733_GPU_GICD+offset;
-    if(!aarch64_device_translate(address,0,&r)||r.physical!=address||r.attributes!=0)return 0;
-    __asm__ volatile("dsb sy":::"memory");
-    *out=*(volatile uint32_t *)address;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    if(!a733_mapping_check(aarch64_device_translate,address,address,&rule))return 0;
+    *out=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 static int irq_quiet(void)
 {

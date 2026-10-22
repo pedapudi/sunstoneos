@@ -2,6 +2,7 @@
 #include "a733_media_clock_native.h"
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include <string.h>
 static int current(void)
 {return xTaskGetCurrentTaskHandle()==app.handles[2]&&camera_live(NULL)&&
@@ -48,9 +49,9 @@ static void retain(void *v)
 }
 static int mapped(uintptr_t a)
 {
- struct aarch64_translation r,w;
- return aarch64_device_translate(a,0,&r)&&aarch64_device_translate(a,1,&w)&&
-  r.physical==a&&w.physical==a&&r.attributes==0&&w.attributes==0;
+ /* Device identity mapping for reads and writes, any shareability. */
+ static const struct a733_mapping_rule rule={A733_MAPPING_READ_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+ return a733_mapping_check(aarch64_device_translate,a,a,&rule);
 }
 static int read_word(void *v,uintptr_t a,uint32_t *out)
 {return v==&app&&app.held&&current()&&mapped(a)&&a733_media_clock_native_read(NULL,a,out)==1;}

@@ -2,6 +2,7 @@
 #include "../board/session.h"
 #include "a733_board_application.h"
 #include "a733_cpu_coherence.h"
+#include "a733_mmio.h"
 #include "boot.h"
 static struct board_radio_chip_id identity;
 static struct bluetooth_profile profile;
@@ -20,9 +21,9 @@ int board_identity_prepare(uint64_t deadline)
     for(uint32_t i=0;i<bytes;++i)((uint8_t *)&profile)[i]=((const volatile uint8_t *)source)[i];
     if(profile.bytes!=bytes||!bluetooth_boot_profile(s,&profile)||
        a733_cpu_coherence_publish((uintptr_t)&profile,sizeof(profile),deadline)!=1)return 0;
-    for(unsigned i=0;i<4;++i){__asm__ volatile("dsb sy":::"memory");
-        identity.words[i]=*(volatile const uint32_t *)(uintptr_t)(0x03006200+4*i);}
-    __asm__ volatile("dsb sy":::"memory");identity.secure_read_record=s->sid_authority;
+    for(unsigned i=0;i<4;++i){a733_mmio_dsb_sy();
+        identity.words[i]=a733_mmio_read32(0x03006200+4*i);}
+    a733_mmio_dsb_sy();identity.secure_read_record=s->sid_authority;
     if(a733_cpu_coherence_publish((uintptr_t)&identity,sizeof(identity),deadline)==1&&
        a733_cpu_coherence_publish(BLUETOOTH_PROFILE_ADDRESS,0x100000,deadline)==1)return 1;
     identity.secure_read_record=0;return 0;

@@ -3,6 +3,7 @@
 #include "a733_memory_uncached.h"
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
+#include "a733_range.h"
 #include <string.h>
 /* About 150 single-operation PLL polls and 100 us of PLL waits fit well
  * within this when each poll takes tens of microseconds. */
@@ -257,8 +258,8 @@ static int step(void)
 void dsi_task(void *unused)
 {
  (void)unused;uint64_t start=board.session.session_start_ticks/24;
- if(start>UINT64_MAX-dsi.session.values[DSI_TIMEOUT])goto fault;
- dsi.deadline=start+dsi.session.values[DSI_TIMEOUT];if(dsi.deadline>=board.session.deadline_us-10000)goto fault;
+ if(!a733_deadline_after(start,dsi.session.values[DSI_TIMEOUT],&dsi.deadline))goto fault;
+ if(dsi.deadline>=board.session.deadline_us-10000)goto fault;
  /* The PLL holds the common register mutex from its ENTER to LEAVE polls and
   * its own waits are microseconds, so poll it again after a yield instead of
   * sleeping a tick per register operation while other MMIO users wait.

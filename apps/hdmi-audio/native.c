@@ -10,6 +10,9 @@
 #include "a733_storage_digest.h"
 #include "a733_cpu_coherence.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "boot.h"
 #include <string.h>
 #define CCU UINT32_C(0x02002000)
@@ -41,8 +44,8 @@ static int now(void *v,uint64_t *out)
 {
     uint64_t t;
     if(v!=&audio||!current()||a733_counter_clock_now(&app.counter,&t)!=1||
-       t<audio.last_now||t>=app.stop_at)return 0;
-    audio.last_now=t;*out=t;return 1;
+       !a733_deadline_admit(t,&audio.last_now,app.stop_at))return 0;
+    *out=t;return 1;
 }
 static int enter(void *v,uint64_t deadline)
 {
@@ -87,20 +90,20 @@ static int address(uintptr_t a,unsigned write)
 static int rd(uintptr_t a,uint32_t *out)
 {
     uint64_t t;
+    /* Device identity mapping for reads, any shareability. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
     if(!audio.held||!owns()||!address(a,0)||!out||!now(&audio,&t))return 0;
-    struct aarch64_translation r;
-    if(!aarch64_device_translate(a,0,&r)||r.physical!=a||r.attributes)return 0;
-    __asm__ volatile("dsb sy":::"memory");*out=*(volatile uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return now(&audio,&t);
+    if(!a733_mapping_check(aarch64_device_translate,a,a,&rule))return 0;
+    *out=a733_mmio_read32_dsb_sy_both(a);return now(&audio,&t);
 }
 static int wr(uintptr_t a,uint32_t value)
 {
     uint64_t t;
+    /* Device identity mapping for writes, any shareability. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
     if(!audio.held||!owns()||!address(a,1)||!now(&audio,&t))return 0;
-    struct aarch64_translation w;
-    if(!aarch64_device_translate(a,1,&w)||w.physical!=a||w.attributes)return 0;
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy":::"memory");return now(&audio,&t);
+    if(!a733_mapping_check(aarch64_device_translate,a,a,&rule))return 0;
+    a733_mmio_write32_dsb_sy_both(a,value);return now(&audio,&t);
 }
 static int update(uintptr_t a,uint32_t mask,uint32_t value)
 {
@@ -156,13 +159,12 @@ static int nc_mapping(const struct a733_dma_mapping *m)
         m->bytes==audio.pcm_span&&m->access==A733_DMA_READ;
     if(!descriptor&&!pcm)return 0;
     /* PAR_EL1 reports Normal-NC as outer shareable (2), whatever the
-     * descriptor says; accept inner (3) as well, like the uncached pool. */
-    for(size_t off=0;off<m->bytes;off+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate((uintptr_t)m->cpu+off,descriptor,&t)||
-           t.physical!=m->bus+off||t.attributes!=0x44||(t.shareability!=2&&t.shareability!=3))return 0;
-    }
-    return 1;
+     * descriptor says; accept inner (3) as well, like the uncached pool. The
+     * descriptor page is translated for writes and the PCM pages for reads. */
+    static const struct a733_mapping_rule nc[2]={
+        {A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_NC,A733_SH_OUTER|A733_SH_INNER}},0,1},
+        {A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_NC,A733_SH_OUTER|A733_SH_INNER}},0,1}};
+    return a733_mapping_check_stride(aarch64_device_translate,(uintptr_t)m->cpu,m->bus,m->bytes,4096,&nc[descriptor]);
 }
 static void dma_cache(void *v,enum a733_dma_cache op,void *p,size_t bytes)
 {
@@ -199,10 +201,11 @@ int hdmi_audio_boot(void)
     const struct hdmi_audio_session *s=&app.session.audio;
     if(audio.initialized||!hdmi_audio_session_valid(s)||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     uint8_t digest[32];size_t bytes=(size_t)s->frames*4;
-    for(uintptr_t a=HDMI_AUDIO_PCM_ADDRESS;a<HDMI_AUDIO_PCM_ADDRESS+bytes;a+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(a,0,&t)||t.physical!=a||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
+    /* Write-back identity pages, inner shareable; the read translation is
+     * checked. */
+    static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    if(!a733_mapping_check_stride(aarch64_device_translate,HDMI_AUDIO_PCM_ADDRESS,HDMI_AUDIO_PCM_ADDRESS,bytes,4096,&wb))
+        return 0;
     storage_digest_bytes((const void *)HDMI_AUDIO_PCM_ADDRESS,bytes,digest);
     if(memcmp(digest,s->pcm_sha256,32))return 0;
     audio.pool=a733_memory_uncached_init();audio.pcm_span=(bytes+4095)&~(size_t)4095;
