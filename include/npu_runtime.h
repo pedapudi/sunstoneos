@@ -67,8 +67,11 @@ struct npu_runtime_counters {
      * counter; the start step includes G and the trigger, not the LOAD step
      * that follows it. */
     uint64_t steps[NPU_RUNTIME_STEP_KINDS], longest[NPU_RUNTIME_STEP_KINDS], loads, refused_loads, jobs;
-    uint64_t table_bytes, address_bytes, tail_bytes, readonly_bytes, reference_bytes;
+    uint64_t table_bytes, address_bytes, tail_bytes, readonly_bytes, reference_bytes, staging_check_bytes;
     uint64_t zeroed_bytes, copied_bytes, cache_lines, digest_bytes;
+    /* NPU register accesses through the backend; on the board each one also
+     * makes one AT translation in the native adapter's mapping check. */
+    uint64_t register_reads, register_writes;
 };
 
 /* Private storage, public only so the platform can reserve it without a heap.
@@ -108,6 +111,7 @@ struct npu_runtime {
     struct a733_npu_startup *startup;
     /* Worker-private LOAD state: one load runs at a time. */
     struct storage_digest digest;
+    uint32_t staging_crc;
     struct nbg_model view;
     struct nbg_assembly_cursor cursor;
     unsigned loading, checking, last_started;

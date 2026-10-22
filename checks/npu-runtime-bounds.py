@@ -41,14 +41,18 @@ estimated worst-case rates (cycles at 494 MHz, which board timing replaces):
   n  LOAD steps: one per 1 KiB copied and hashed (portable SHA-256), one to open
      and plan, one per 8 operations assembled, one per 16 KiB of END pairs up to
      the END mark (at most the whole fetch span), one for padding, one per 16 KiB
-     of coefficients, one per 32 KiB of reference CRC and one per 16 KiB cleaned.
+     of coefficients, one per 32 KiB of the staged copy checksummed again, one
+     per 32 KiB of reference CRC and one per 16 KiB cleaned.
 
 Counters that measure these terms in the emulator, printed by
 checks/npu-session-runtime.c through checks/npu-session.py --mode runtime on its
 COUNT lines and compared here with --evidence: requests, replies, translations
 and SHA-256 bytes per inference; table_bytes (T), address_bytes and
 end_tail_bytes (A), readonly_bytes (H), zeroed_bytes (pool) and cache_lines
-(inputs, outputs and pool); load, prepare, pool, start and check step counts.
+(inputs, outputs and pool); register_reads and register_writes, each of which
+costs one AT translation in the native adapter on the board; load, prepare,
+pool, start and check step counts; and for one ShuffleNetV2 LOAD its step
+count, SHA-256 bytes and staging_check_bytes.
 
 Images: the emulator check image, whose constants this check reads from its
 source, and the planned first consumer, apps/npu-runtime-large with one
@@ -121,10 +125,12 @@ def terms(m, table):
            lines(m['pool']) * (ZERO + MAINTAIN))
     h = us(lines(m['readonly']) * STREAM)
     steps = (math.ceil(m['model_bytes'] / 1024) + 1 + math.ceil(m['operations'] / 8) + FETCH // 16384 + 1 +
-             math.ceil(m['model_bytes'] / 16384) + math.ceil(m['readonly'] / 32768) +
+             math.ceil(m['model_bytes'] / 16384) + math.ceil(m['model_bytes'] / 32768) +
+             math.ceil(m['readonly'] / 32768) +
              math.ceil((m['constant'] + COMMAND) / 16384))
     idle_load = us(m['model_bytes'] * SHA_BYTE + lines(m['model_bytes']) * COPY * 2 +
-                   lines(m['readonly']) * STREAM + lines(m['constant'] + COMMAND) * MAINTAIN)
+                   lines(m['model_bytes']) * STREAM + lines(m['readonly']) * STREAM +
+                   lines(m['constant'] + COMMAND) * MAINTAIN)
     return dict(T=t, A=a, G=t + a, P=p, H=h, load_steps=steps, idle_load_us=idle_load)
 
 
@@ -188,10 +194,19 @@ def compare(evidence, catalogue):
                     end_tail_bytes=jobs * (FETCH - m['stream']), zeroed_bytes=jobs * m['pool'],
                     cache_lines=jobs * (sum(lines(b) for b in m['inputs']) + 2 * sum(lines(b) for b in m['outputs'])
                                         + lines(m['pool'])))
+    # Each trigger writes the command address and the trigger register.
+    expected['register_writes'] = 2 * jobs
     for key, value in expected.items():
         assert c[key] == value, f'{key}: counted {c[key]}, computed {value}'
     assert c['readonly_bytes'] <= jobs * m['readonly'], 'read-only bytes exceed the bound used for H'
-    return dict(evidence=str(evidence), counted=c, computed=expected)
+    loads = [c for case in record['cases'] for c in case.get('counts', []) if c.get('load') == 3]
+    assert loads, 'evidence has no ShuffleNetV2 LOAD COUNT line'
+    load = loads[0]
+    steps = terms(m, table)['load_steps']
+    assert load['sha256_bytes'] == load['staging_check_bytes'] == m['model_bytes'], \
+        'a LOAD must hash and checksum the staged copy once each'
+    assert load['load_steps'] <= steps, f"LOAD ran {load['load_steps']} steps, bound {steps}"
+    return dict(evidence=str(evidence), counted=c, computed=expected, load=load, load_step_bound=steps)
 
 
 def main():

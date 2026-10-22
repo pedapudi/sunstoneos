@@ -67,11 +67,24 @@ therefore never read while the source is unmasked. A deferred mask
 notification that arrives after a hint-driven completion only makes the next
 job's progress sample `0x10` early. The controller requires clear event status
 before each trigger and an event read after it, so the stale notification
-cannot complete the next job. The cost is one MMIO read per step inside the
-loop's 20 µs margin and one masked sequence per job. With no step left, the
-worker blocks on its queue and the notification, with a one-tick timeout while
-a job runs (section 1.3). Board evidence of delivery removes the idle read and
-the timeout.
+cannot complete the next job.
+
+While a job runs, interrupt progress reads the configuration registers
+`0x3b4`, `0x388` and `0x14`. The worker therefore runs it only after a
+notification or hint, while INTID 97 is masked or its rearm is deferred (after
+each start), after a tick timeout, or once the job deadline has expired; other
+passes read only the generic timer. A step that overlaps a running job costs
+one register read, the idle read. On the native path every register access
+also makes one `AT S1E1R` translation with an `ISB` in the adapter's mapping
+check and ends with a `DSB SY`. An estimated 2 µs per read, which board timing
+replaces, fits the loop's 20 µs margin. A job costs at most 16 further
+register accesses: 5 reads and 2 writes at the trigger, 3 reads at the rearm
+and 6 at completion. In the four-slot image a ShuffleNetV2 job overlaps about
+110 worker steps (input clean, 67 pool steps, 31 post-job check steps), so
+about 126 register accesses and translations per job. With no step left, the worker
+blocks on its queue and the notification, with a one-tick timeout while a job
+runs (section 1.3); each timeout costs four register reads. Board evidence of
+delivery removes the idle read and the timeout.
 
 Steps run in this order:
 
@@ -141,6 +154,7 @@ deletes.
 | T: every NPU table word, after each completion and before a trigger that does not follow one | 20,480 per scan, one or two scans | 0.04 ms per scan | Table arena in the read-only group |
 | A, before each trigger: CRC32C of the slot's address-bearing bytes and a word compare of its END tail | 27,056 and 521,224 | 1.11 ms, 1.06 ms of it the tail | Read-only group |
 | H, while the next job runs: CRC32C of the slot's read-only bytes; the SUBMIT reply waits for H | About 920,000 | 1.86 ms | Read-only group |
+| S, per LOAD rather than per job: CRC32C of each staged chunk as it is hashed, recomputed over the staging area after the coefficient copy; a mismatch refuses the LOAD | 964,224 per ShuffleNetV2 LOAD | 1.95 ms in 30 steps | Staging area in the read-only group |
 | Output clean and invalidate at preparation | 64 | Under 1 µs | Write group read-only |
 
 H does not compare the END tail. The controller fetches the command span only
@@ -151,6 +165,14 @@ never invalidated, so they detect CPU writes only. An NPU write into the
 read-only group stays undetected until the board shows NPU MMU write permission
 enforced. A CPU write to the pool or outputs between preparation and trigger
 also goes undetected until the fixed mappings.
+
+S covers the staging area from hashing to the end of the coefficient copy, so
+the slot takes only bytes that match the authenticated file. One window stays
+open: a CPU write to a slot's read-only bytes after the LOAD writes them and
+before it records the A and H references enters those references, and the slot
+then runs the changed bytes until it is loaded again. For ShuffleNetV2 the
+window runs from the first assembly step to the reference pass, about 1,000
+worker steps. Closing it needs the fixed mappings.
 
 ## Synchronization across cores
 
@@ -182,8 +204,8 @@ completion only after that check ends, up to H + C after the trigger. The order 
 does the same work in each period G + max(D, W), and a start that waits for the
 rest of one H stays inside that period because W > H. A LOAD with n steps
 completes within n × (G + max(D, W)) under steady load. For ShuffleNetV2 with
-W > D that is about 1,000 steps and 7.4 s portable, or about 290 steps and
-2.2 s with the SHA-2 instructions; with one slot, a load runs on an idle worker.
+W > D that is about 1,030 steps and 7.6 s portable, or about 320 steps and
+2.4 s with the SHA-2 instructions; with one slot, a load runs on an idle worker.
 Worker terms take the 1.25 factor where USB0 shares core 0. A host check
 computes the three bounds for each image, using these formulas and factors, and
 refuses an image whose client collect timeout is shorter than the reply bound.
@@ -222,7 +244,8 @@ Estimated worst-case rates at 494 MHz, which the board replaces:
 | --- | --- | --- | --- |
 | Requests and replies per inference | 3 and 3 | 1 and 1 | 1 and 1 |
 | Client wake-ups per inference | 3, plus one per idle tick | 1 | 1 |
-| `AT` translations per inference | 2,126 | 0 | 0 |
+| `AT` translations of buffer addresses per inference | 2,126 | 0 | 0 |
+| Register accesses per inference, each with one `AT` translation on the board | Not counted | At most 16, plus one read per overlapping worker step | Same; no translations once the adapter checks the register mapping only at initialization |
 | SHA-256 bytes per inference | About 920,000 | 0 | 0 |
 | Integrity-check bytes read per inference | About 540,000 | About 1,510,000 | 0 |
 | CPU bytes zeroed or copied per inference | 1,244,162 | 1,093,632 zeroed | 0 |
@@ -231,7 +254,7 @@ Estimated worst-case rates at 494 MHz, which the board replaces:
 | W, and W with USB0 on core 0 | No worker | 6.29 and 7.86 ms | 0.56 and 0.70 ms |
 | NPU idle per inference, S = 1 | About 57 ms | 7.3 ms plus client time | 0.46 ms plus client time |
 | Largest non-yielding worker block | No worker | G = 1.15 ms; other steps C | C |
-| One catalogue load, idle worker | Not supported | About 56 ms portable, 13 ms with SHA-2 | Same |
+| One catalogue load, idle worker | Not supported | About 58 ms portable, 15 ms with SHA-2 | Same |
 
 D for ShuffleNetV2 is unmeasured, and W > D is likely in the interim. The
 derivation of each figure and the counter list sit in the header comment of
@@ -261,7 +284,7 @@ counters record the baseline against `npu_session.c`. New cases:
 
 | Failure | Class | Retained |
 | --- | --- | --- |
-| LOAD refused: format, digest, template, role or size | 1 | Nothing; slot EMPTY |
+| LOAD refused: format, digest, staging checksum, template, role or size | 1 | Nothing; slot EMPTY |
 | SUBMIT refused: slot not READY, wrong input count or length | 1 | Nothing |
 | *Interim:* T, A or H mismatch | 3 | Every slot and the controller |
 | Job deadline or controller fault | 3 | Every slot and the controller until the hang-reset package supplies a verified quiesce |
@@ -291,6 +314,9 @@ interim, so the writer and the extent of the damage are unknown.
   runtime for `apps/npu-runtime-large`.
 - **Memory policy:** per-buffer extents on the EL1 alias and mapping checks
   once at initialization.
+- **Native adapter** (`platform/a733/npu_native.c`): check the register page
+  mapping once at initialization instead of at every register access, which
+  removes one `AT` translation per access.
 - **Primary agent:** the fixed mappings with the EL1 alias, and A76 admission.
   If `aarch64_device_cache` loses its leading `DSB SY`, the input clean must
   follow a `DMB ISH`, which orders data cache maintenance after the acquire.
@@ -332,7 +358,12 @@ and the assembler gains a stepwise form (`nbg_assembly_begin` and
   chunk after copying it. The source is read once, and the digest is the
   catalogue's existing whole-file SHA-256, so the session catalogue needs no
   per-section digests. A source byte changed before its chunk is copied fails
-  the digest; a change after it does not affect the load. The staging area is
+  the digest; a change after it does not affect the load. The digest and the
+  A and H references come from two passes, over the staged bytes and over the
+  slot bytes built from them, with decoding, assembly and the coefficient copy
+  in between. The interim check S closes the gap in the staging area, and the
+  remaining window in the slot is recorded under
+  [Interim integrity checks](#interim-integrity-checks). The staging area is
   the size of the largest catalogue model (964,224 bytes for ShuffleNetV2),
   and coefficients are copied a second time, from staging into the slot. The
   4 KiB section buffer of the design needs a decoder that reads sections in
@@ -344,8 +375,9 @@ and the assembler gains a stepwise form (`nbg_assembly_begin` and
   as the longest step L in place of C. Assembly steps of eight operations run
   29,000 instructions in the same count.
 - **The worker handles every completion at once.** Interrupt progress runs on
-  every pass, so a completion is handled between the steps of a running
-  post-job check; only the next start and the next check wait for that check.
+  the pass after a notification or hint, so a completion is handled between
+  the steps of a running post-job check; only the next start and the next
+  check wait for that check.
   The reply bound of the design still holds.
 - **Relocated fields are bounded by construction.** The assembler places each
   allocation inside the region of its role and refuses a relocation outside
@@ -366,7 +398,8 @@ inference, from the COUNT lines of three jobs each.
 | Metric | Session code | Runtime |
 | --- | ---: | ---: |
 | Requests and replies | 3 and 3 | 1 and 1 |
-| Address translations | 3,216 | 0 |
+| Address translations of buffers | 3,216 | 0 |
+| Register reads and writes, each job complete before its rearm and overlapping no worker step | Not counted | 12 and 2 |
 | SHA-256 bytes | 920,616 | 0 |
 | Integrity-check bytes read: tables, address-bearing bytes, END tail, read-only bytes | 541,656 | 1,509,856 |
 | CPU bytes zeroed or copied | 1,244,162 | 1,093,632 zeroed |
@@ -376,9 +409,12 @@ inference, from the COUNT lines of three jobs each.
 The baseline's translations cover the buffers of all five models; the design's
 figure of 2,126 counts ShuffleNetV2 alone. The runtime's integrity bytes are
 two table scans of 20,480 bytes, 27,112 address-bearing bytes, an END tail of
-521,168 bytes and 920,616 read-only bytes. One ShuffleNetV2 LOAD runs 1,105
-steps, hashes 964,224 bytes, copies 1,856,832 bytes and reads 920,616 bytes for
-the check references; the three other slots completed 1,142 jobs while it ran.
+521,168 bytes and 920,616 read-only bytes. One ShuffleNetV2 LOAD runs 1,135
+steps, hashes 964,224 bytes, checksums the staging area again (964,224 bytes),
+copies 1,856,832 bytes and reads 920,616 bytes for the check references; the
+three other slots completed 1,171 jobs while it ran. In the case whose
+interrupts arrive late, four jobs overlap 508 worker steps and 11 ticks and
+read 528 registers in that time, about one per step.
 
 [npu-runtime-bounds.py](../../checks/npu-runtime-bounds.py) computes the
 bounds from these byte counts at the design's rates and compares its byte
@@ -400,7 +436,10 @@ checks/npu-runtime-bounds.py --output NEW_OUTPUT_DIRECTORY --evidence RUNTIME_OU
 
 All five runtime cases pass; the cases are listed at the top of the check.
 Removing the END fill of a LOAD fails case 0, and removing the pool's
-`DC ZVA` fails case 1. The emulator cannot change `DCZID_EL0`, so the refusal
+`DC ZVA` fails case 1. Skipping the comparison of S fails case 0, which
+changes a staged coefficient byte after it was hashed. Running interrupt
+progress on every pass fails cases 0 to 2, at about four register reads per
+step (253 reads in 64 steps). The emulator cannot change `DCZID_EL0`, so the refusal
 of a wrong DC ZVA block size is not exercised. The `longest` step times that
 the runtime records use the generic timer; in QEMU they include the other
 core's time slices and are diagnostic only, and on the board they give D, G, P

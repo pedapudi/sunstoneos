@@ -15,20 +15,23 @@
  * The case word at 0x47fff000 selects:
  *  0 four slots, three jobs each, started one at a time on credits in
  *    round-robin order. Slot 3 runs the mimus layer, then a LOAD of a changed
- *    catalogue model and two ShuffleNetV2 LOADs whose staged copy changes
+ *    catalogue model and three ShuffleNetV2 LOADs whose staged copy changes
  *    during assembly (a load-state record outside the templates, a relocation
- *    outside its region) are refused, and the shorter conv8 stream loaded
- *    afterwards leaves END pairs from its end to the fetch end.
+ *    outside its region, a coefficient byte that only the staging recheck
+ *    sees) are refused, and the shorter conv8 stream loaded afterwards leaves
+ *    END pairs from its end to the fetch end.
  *  1 slots 0 to 2 run jobs that complete at once while slot 3 loads
  *    ShuffleNetV2: one LOAD step follows every trigger. ShuffleNetV2 then runs
  *    alone with garbage written over its pool and output before each SUBMIT,
- *    and the per-inference counters are printed. Last, slots 0 and 1 submit
+ *    and the per-inference counters, register accesses included, are
+ *    printed. Last, slots 0 and 1 submit
  *    while a ShuffleNetV2 job runs: its post-job check finishes before their
  *    replies.
  *  2 every interrupt arrives late, at the next rearm, and one mask is
  *    deferred, while slot 3 loads ShuffleNetV2: the idle-register hint
  *    completes each job within one step and a late notification never
- *    completes the next job.
+ *    completes the next job. While a job runs with no event pending, the
+ *    worker reads one register per step, the idle register.
  *  3 a descriptor byte changes while the slot is idle: A refuses the trigger
  *    and every slot is retained.
  *  4 a coefficient byte changes while the job runs: H fails after the job and
@@ -62,7 +65,10 @@ void decimal(uint64_t);
 static struct {
     uint32_t regs[0x800 / 4];
     unsigned running, bootstrap, event_sent, immediate, late, masked, latched, defer_mask, mask_calls;
-    uint32_t credits, triggers, completed, accesses, delivered, event_reads;
+    uint32_t credits, triggers, completed, accesses, delivered, event_reads, reads;
+    /* Register reads, steps and ticks at a job's trigger, and their growth
+     * until completion summed over jobs. */
+    uint64_t run_reads, run_steps, run_ticks, run_reads_total, run_steps_total, run_ticks_total;
     uint32_t order[256];
     uint64_t load_steps_at_trigger, completed_at_step, finished_at_step;
     unsigned loading_at_trigger;
@@ -185,9 +191,25 @@ static void deliver(void)
     npu_service_irq_notify_from_isr(&rt.service, 1, &woken);
     taskEXIT_CRITICAL();
 }
+/* A job that runs across worker steps costs one register read per step,
+ * four per one-tick timeout, and the bounded reads of its rearm, of one late
+ * notification and of the completing read. */
+static void running_reads(void)
+{
+    uint64_t reads = model.reads - model.run_reads, run = steps() - model.run_steps;
+    uint64_t ticks = xTaskGetTickCount() - model.run_ticks;
+    if (reads > run + 4 * (ticks + 1) + 8) {
+        platform_puts("FAIL register reads while a job ran: "); decimal(reads);
+        platform_puts(" in "); decimal(run); platform_puts(" steps and "); decimal(ticks);
+        platform_puts(" ticks\n");
+        configASSERT(0);
+    }
+    model.run_reads_total += reads; model.run_steps_total += run; model.run_ticks_total += ticks;
+}
 static void complete(void)
 {
     model.regs[0x10/4] |= 1; model.event_sent = 1; model.regs[1] = IDLE; model.running = 0;
+    if (!model.bootstrap && !model.immediate) running_reads();
     if (!model.bootstrap) execute(model.regs[0x654/4]);
     model.completed_at_step = steps();
     __atomic_fetch_add(&model.completed, 1, __ATOMIC_RELEASE);
@@ -209,6 +231,7 @@ static int read32(void *cookie, unsigned offset, uint32_t *value)
 {
     configASSERT(cookie == &rt.native && offset < sizeof(model.regs)); privileged();
     __atomic_fetch_add(&model.accesses, 1, __ATOMIC_RELEASE);
+    ++model.reads;
     advance();
     if (offset == 0x10) { configASSERT(model.masked); ++model.event_reads; }
     *value = model.regs[offset / 4];
@@ -239,6 +262,7 @@ static int write32(void *cookie, unsigned offset, uint32_t value)
         model.load_steps_at_trigger = rt.counters.steps[NPU_RUNTIME_STEP_LOAD];
         set(&model.triggers, n + 1);
         model.running = 1; model.event_sent = 0; model.regs[1] = 0;
+        model.run_reads = model.reads; model.run_steps = steps(); model.run_ticks = xTaskGetTickCount();
         if (model.bootstrap || model.immediate) complete();
     }
     return 1;
@@ -290,8 +314,9 @@ static int was_flushed(uintptr_t cpu, size_t bytes)
     return 0;
 }
 /* Case 0: change the staged ShuffleNetV2 copy during assembly, once per
- * armed load: a load-state record outside the templates, then a relocation
- * source offset outside its region. */
+ * armed load: a load-state record outside the templates, a relocation source
+ * offset outside its region, then a coefficient byte, which the assembler
+ * does not read. */
 int __real_nbg_assembly_next(const struct nbg_model *, const struct nbg_assembly_buffer *,
                              struct nbg_assembly_layout *, struct nbg_assembly_cursor *, unsigned);
 int __wrap_nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
@@ -302,6 +327,10 @@ int __wrap_nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembl
             struct nbg_span state;
             configASSERT(nbg_model_table(m, NBG_LOAD_STATES_TABLE, 70, &state) && state.bytes >= 8);
             ((uint8_t *)state.data)[4] ^= 0x40;
+        } else if (corrupt == 3) {
+            struct nbg_span coeff;
+            configASSERT(nbg_model_section(m, NBG_COEFF, &coeff) && coeff.bytes > 64);
+            ((uint8_t *)coeff.data)[coeff.bytes / 2] ^= 1;
         } else {
             struct nbg_operation op;
             configASSERT(nbg_model_operation(m, 70, &op) && op.patch_count >= 2);
@@ -516,6 +545,8 @@ static void client(void *argument)
             configASSERT(mark > mimus_stream && !corrupt);
             corrupt = 2; refused_load(slot, SHUFFLENET);
             configASSERT(!corrupt && rt.slot[slot].end_mark >= mark);
+            corrupt = 3; refused_load(slot, SHUFFLENET);
+            configASSERT(!corrupt && rt.slot[slot].end_mark >= mark);
             load(slot, CONV8);   /* Also compares the whole fetch span with a one-call assembly. */
             configASSERT(rt.slot[slot].stream_bytes < mimus_stream);
             tail_is_end(slot);
@@ -542,6 +573,8 @@ static void client(void *argument)
             platform_puts(" load_steps="); decimal(rt.counters.steps[NPU_RUNTIME_STEP_LOAD] - loading.steps[NPU_RUNTIME_STEP_LOAD]);
             platform_puts(" sha256_bytes="); decimal(rt.counters.digest_bytes - loading.digest_bytes);
             platform_puts(" copied_bytes="); decimal(rt.counters.copied_bytes - loading.copied_bytes);
+            platform_puts(" staging_check_bytes=");
+            decimal(rt.counters.staging_check_bytes - loading.staging_check_bytes);
             platform_puts(" reference_bytes="); decimal(rt.counters.reference_bytes - loading.reference_bytes);
             platform_puts(" jobs_during_load="); decimal(rt.counters.jobs - loading.jobs);
             platform_puts("\n");
@@ -582,6 +615,8 @@ static void client(void *argument)
             FIELD("prepare_steps", after->steps[NPU_RUNTIME_STEP_PREPARE] - before.steps[NPU_RUNTIME_STEP_PREPARE]);
             FIELD("pool_steps", after->steps[NPU_RUNTIME_STEP_POOL] - before.steps[NPU_RUNTIME_STEP_POOL]);
             FIELD("check_steps", after->steps[NPU_RUNTIME_STEP_CHECK] - before.steps[NPU_RUNTIME_STEP_CHECK]);
+            FIELD("register_reads", after->register_reads - before.register_reads);
+            FIELD("register_writes", after->register_writes - before.register_writes);
             platform_puts("\n");
             set(&phase, 2);
             wait_flag(&phase, 3);
@@ -671,7 +706,7 @@ static void bootstrap_run(void *unused)
         for (unsigned k = 1; k + SLOTS < 1 + SLOTS * JOBS; ++k) configASSERT(model.order[k] == model.order[k + SLOTS]);
         for (unsigned k = 1; k <= SLOTS; ++k)
             for (unsigned j = 1; j < k; ++j) configASSERT(model.order[k] != model.order[j]);
-        configASSERT(rt.counters.refused_loads == 3 && rt.counters.loads == 5);
+        configASSERT(rt.counters.refused_loads == 4 && rt.counters.loads == 5);
         finish_case("PASS NPU runtime: four slots, round-robin starts, model switch, refused loads keep the END tail\n");
     }
     if (npu_case == 1) {
@@ -710,6 +745,9 @@ static void bootstrap_run(void *unused)
             configASSERT(model.finished_at_step <= model.completed_at_step + 1);
         }
         configASSERT(rt.service.idle_hints >= 4 && model.delivered >= 4 && model.mask_calls > model.defer_mask);
+        platform_puts("COUNT running_jobs=4 running_reads="); decimal(model.run_reads_total);
+        platform_puts(" running_steps="); decimal(model.run_steps_total);
+        platform_puts(" running_ticks="); decimal(model.run_ticks_total); platform_puts("\n");
         finish_case("PASS NPU runtime: late interrupts, idle hint completion within a step, deferred mask retried\n");
     }
     /* Cases 3 and 4: integrity failures retain every slot. */

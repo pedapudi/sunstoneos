@@ -25,14 +25,15 @@ static const struct catalogue_entry catalogue[] = {
 };
 #define CATALOGUE_COUNT (sizeof(catalogue) / sizeof(catalogue[0]))
 
-/* Worker phases. A LOAD copies and hashes the model into the staging area,
- * opens and plans the copy, assembles it in steps, fills END pairs up to the
- * END mark, zeroes descriptor and coefficient padding, copies coefficients,
- * computes the interim check references and cleans what it wrote. A job
+/* Worker phases. A LOAD copies the model into the staging area, hashing and
+ * checksumming each chunk, opens and plans the copy, assembles it in steps,
+ * fills END pairs up to the END mark, zeroes descriptor and coefficient
+ * padding, copies coefficients, checksums the staging area again, computes
+ * the interim check references and cleans what it wrote. A job
  * cleans its inputs, cleans and invalidates its output lines, then zeroes,
  * cleans and invalidates its working pool. */
 enum {
-    LOAD_COPY, LOAD_OPEN, LOAD_ASSEMBLE, LOAD_END, LOAD_PAD, LOAD_COEFF, LOAD_SUM, LOAD_CLEAN,
+    LOAD_COPY, LOAD_OPEN, LOAD_ASSEMBLE, LOAD_END, LOAD_PAD, LOAD_COEFF, LOAD_STAGED, LOAD_SUM, LOAD_CLEAN,
     PREPARE_INPUT, PREPARE_OUTPUT, PREPARE_POOL,
     CHECK_READONLY
 };
@@ -267,9 +268,17 @@ static int maintain(struct npu_runtime *rt, enum aarch64_cache_op op, uintptr_t 
  * native memory policy once; jobs use G (the T and A checks) before the
  * trigger and invalidate only the output lines after completion. */
 static int read_reg(void *cookie, unsigned offset, uint32_t *out)
-{ struct npu_runtime *rt = cookie; return good(rt) && a733_npu_native_operations.read(&rt->native, offset, out); }
+{
+    struct npu_runtime *rt = cookie;
+    ++rt->counters.register_reads;
+    return good(rt) && a733_npu_native_operations.read(&rt->native, offset, out);
+}
 static int write_reg(void *cookie, unsigned offset, uint32_t value)
-{ struct npu_runtime *rt = cookie; return good(rt) && a733_npu_native_operations.write(&rt->native, offset, value); }
+{
+    struct npu_runtime *rt = cookie;
+    ++rt->counters.register_writes;
+    return good(rt) && a733_npu_native_operations.write(&rt->native, offset, value);
+}
 static uint64_t now(void *cookie)
 { struct npu_runtime *rt = cookie; return a733_npu_native_operations.microseconds(&rt->native); }
 static void delay(void *cookie, unsigned us)
@@ -412,18 +421,21 @@ static int load_work(struct npu_runtime *rt)
         if (rt->loading == NPU_RUNTIME_SLOTS) return 0;
         next_phase(&rt->slot[rt->loading], LOAD_COPY);
         storage_digest_init(&rt->digest);
+        rt->staging_crc = UINT32_MAX;
     }
     struct npu_runtime_slot *s = &rt->slot[rt->loading];
     const struct npu_runtime_model *model = &rt->catalogue[s->model];
     ++rt->counters.steps[NPU_RUNTIME_STEP_LOAD];
     switch (s->phase) {
     case LOAD_COPY: {
-        /* The source is read once; the hash covers the staged bytes. */
+        /* The source is read once; the hash and the CRC cover the staged
+         * bytes while they are still in the cache. */
         size_t n = model->bytes - s->offset;
         if (n > NPU_RUNTIME_LOAD_CHUNK) n = NPU_RUNTIME_LOAD_CHUNK;
         void *to = (void *)(rt->staging + s->offset);
         memcpy(to, (const unsigned char *)model->data + s->offset, n);
         (void)storage_digest_add(&rt->digest, to, n);
+        rt->staging_crc = npu_runtime_crc32c(rt->staging_crc, to, n);
         rt->counters.copied_bytes += n; rt->counters.digest_bytes += n;
         s->offset += n;
         if (s->offset == model->bytes) next_phase(s, LOAD_OPEN);
@@ -487,7 +499,21 @@ static int load_work(struct npu_runtime *rt)
         memcpy((unsigned char *)s->targets[NBG_ALLOC_COEFF].cpu + s->offset, coeff.data + s->offset, n);
         rt->counters.copied_bytes += n;
         s->offset += n;
-        if (s->offset == bytes) { next_phase(s, LOAD_SUM); s->crc = UINT32_MAX; }
+        if (s->offset == bytes) { next_phase(s, LOAD_STAGED); s->crc = UINT32_MAX; }
+        return 1;
+    }
+    case LOAD_STAGED: {
+        /* Interim: every task can write the staging area, and decoding,
+         * assembly and the coefficient copy read it after its chunks were
+         * hashed. The slot takes only bytes that still match that pass. */
+        size_t n = model->bytes - s->offset;
+        if (n > NPU_RUNTIME_READ_CHUNK) n = NPU_RUNTIME_READ_CHUNK;
+        s->crc = npu_runtime_crc32c(s->crc, (const void *)(rt->staging + s->offset), n);
+        rt->counters.staging_check_bytes += n;
+        s->offset += n;
+        if (s->offset < model->bytes) return 1;
+        if (s->crc != rt->staging_crc) { load_end(rt, s, 0); return 1; }
+        next_phase(s, LOAD_SUM); s->crc = UINT32_MAX;
         return 1;
     }
     case LOAD_SUM:

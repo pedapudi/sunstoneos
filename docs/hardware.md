@@ -2072,7 +2072,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [NPU runtime](designs/npu-breadth.md) replaces the session code: up to
   eight client tasks each load any catalogue model into a fixed slot at
   runtime, switch it, and run it with inputs and outputs in place, one request
-  and one reply per inference, no per-job translation or SHA-256, and
+  and one reply per inference, no per-job buffer translation or SHA-256, and
   round-robin starts with interrupt completion. QEMU checks with modeled
   device output pass for model switching, refused loads, concurrent loading,
   late and dropped interrupts and interim integrity faults, and a host check

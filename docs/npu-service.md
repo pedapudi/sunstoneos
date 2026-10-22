@@ -163,9 +163,13 @@ is retried. `npu_service_release` sends a held reply.
 A controller fault releases every held reply with FAULT and refuses later
 requests.
 
-Each worker pass runs interrupt progress, hands a completed job to the
+Each worker pass makes interrupt progress, hands a completed job to the
 runtime's `finished` callback, handles at most one request with a zero wait
-and runs one runtime step through the `step` callback. While steps remain the
+and runs one runtime step through the `step` callback. While a job runs,
+interrupt progress reads three configuration registers, so a pass runs it
+only after a notification or idle hint, while the source is masked or its
+rearm is deferred, after a tick timeout or once the job deadline has expired.
+Other passes read only the timer to check the deadline. While steps remain the
 worker does not block. With none left it blocks on its notification, for at
 most one tick while the controller is active. Runtime mode requires the
 interrupt binding: the runtime refuses activation without it. Until board

@@ -395,6 +395,18 @@ static int idle_hint(struct npu_service *s)
     atomic_fetch_or_explicit(&s->irq_pending, IRQ_EVENT, memory_order_release);
     return 1;
 }
+/* Interrupt progress reads the configuration registers while a job runs, so
+ * a pass runs it only when it can change something: a notification or hint
+ * is pending, the source is masked or rearming (after a start), the wait
+ * timed out, the deadline expired or no job runs. Other passes read only
+ * the timer. */
+static int runtime_progress(struct npu_service *s, int timed_out)
+{
+    if (!timed_out && controller_active(s) && !s->irq_masked && !s->irq_rearming &&
+        !atomic_load_explicit(&s->irq_pending, memory_order_acquire) &&
+        a733_npu_check_timeout(&s->controller) != A733_NPU_FAULT) return 1;
+    return irq_progress(s);
+}
 static void runtime_worker(struct npu_service *s)
 {
     for (int timed_out = 0;;) {
@@ -404,7 +416,7 @@ static void runtime_worker(struct npu_service *s)
         }
         if (!controller_active(s) && s->controller.state != A733_NPU_FAULT)
             (void)s->ops.microseconds(s->cookie);
-        int progressed = irq_progress(s);
+        int progressed = runtime_progress(s, timed_out);
         runtime_settle(s);
         if (timed_out && idle_hint(s)) { timed_out = 0; continue; }
         timed_out = 0;
