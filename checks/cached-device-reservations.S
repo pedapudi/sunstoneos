@@ -70,10 +70,60 @@ a733_smp_entry:
 .balign 2048
 .global a733_cached_el1_vectors
 a733_cached_el1_vectors:
-.rept 16
-    b fixture_exception
+/* Synchronous exceptions from the current level go to fixture_sync, which
+ * services the kernel critical section's interrupt SVCs; everything else
+ * fails the check. */
+.macro vector handler
+    b \handler
     .balign 128
+.endm
+    vector fixture_sync      /* Current level, SP0, synchronous. */
+.rept 3
+    vector fixture_exception
 .endr
+    vector fixture_sync      /* Current level, SPx, synchronous. */
+.rept 11
+    vector fixture_exception
+.endr
+/* The device-memory ledger enters the kernel critical section before the
+ * scheduler starts. vTaskEnterCritical() issues SVC #107
+ * (portSVC_DISABLE_INTERRUPTS) and SVC #109 (portSVC_GET_CORE_ID); once the
+ * scheduler runs, the exit also issues SVC #108 (portSVC_ENABLE_INTERRUPTS).
+ * The port's handler changes the GIC priority mask for 107 and 108 and
+ * returns tpidr_el1 for 109. This harness has no GIC CPU interface, so it
+ * masks or unmasks IRQs in the caller's saved state instead, and returns the
+ * core index that the entry code stored in tpidr_el1. Any other synchronous
+ * exception, or one taken at EL3, fails the check. */
+fixture_sync:
+    stp x0, x1, [sp, #-16]!
+    mrs x0, CurrentEL
+    cmp x0, #4
+    b.ne 1f
+    mrs x0, esr_el1
+    mov x1, #107
+    movk x1, #0x5600, lsl #16 /* EC 0x15 (SVC64), IL 1, immediate 107. */
+    cmp x0, x1
+    b.eq 2f
+    add x1, x1, #1
+    cmp x0, x1
+    b.eq 3f
+    add x1, x1, #1
+    cmp x0, x1
+    b.eq 5f
+1:  ldp x0, x1, [sp], #16
+    b fixture_exception
+2:  mrs x0, spsr_el1
+    orr x0, x0, #0x80
+    b 4f
+3:  mrs x0, spsr_el1
+    bic x0, x0, #0x80
+4:  msr spsr_el1, x0
+    ldp x0, x1, [sp], #16
+    eret
+5:  ldp x0, x1, [sp], #16
+    mrs x0, tpidr_el1
+    and x0, x0, #0xff
+    eret
 fixture_exception:
     mov x0, #1
     mov x1, #0xdead

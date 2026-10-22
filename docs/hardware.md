@@ -439,10 +439,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Emulator checks pass for translation on every core and retained construction.
   Native application binding and physical exclusion/coherence remain required.
   The [larger native profile](device-memory-capacity.md) reserves 768 MiB of
-  write-back memory and 16 MiB of uncached memory, with privileged mappings and
-  bounded validation before publishing either pool. Its native publication and
-  refusal checks pass. Physical range ownership and device reachability remain
-  unqualified; external pools still need application-specific mapping access.
+  write-back memory and 16 MiB of uncached memory with privileged mappings.
+  One call checks one translation per 2 MiB block (392) and publishes both
+  pools; extents take the GPU MMU's page alignment, the kernel critical section
+  serializes acquire, release and retain while the per-access lease check stays
+  lock-free, and acquire cleans recycled pages. The
+  [EL1 map](memory-protection.md) is **implemented** for 910 MiB of the
+  reported 12 GiB, and a QEMU check compares every EL1 entry with it; mapping
+  the remaining DRAM waits on launch evidence. Physical range ownership,
+  device reachability and the full-capacity DRAM check remain unqualified;
+  external pools still need application-specific mapping access.
   A [fixed interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners)
   is **implemented** for images with several device owners. EL3 programs the
   route of each listed shared peripheral interrupt once and reads it back, and the shared handler dispatches

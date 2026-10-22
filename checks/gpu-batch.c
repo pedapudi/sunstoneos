@@ -12,18 +12,11 @@
 #undef client
 #undef kernel_main
 void kernel_main(void);
-static unsigned model_commits,model_ready,stopping,isolated,frame_width,frame_height;
+static unsigned model_ready,stopping,isolated,frame_width,frame_height;
 static unsigned char source[PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES+256];
-extern int a733_memory_reservations_commit_verified(void);
-extern int a733_memory_uncached_commit_verified(void);
+/* READY is modeled: the pools are prepared directly, without the boot record
+ * and table-profile checks of a733_device_memory_prepare(). */
 int a733_device_memory_ready(void){return model_ready;}
-int a733_device_memory_commit_allowed(unsigned nc,uintptr_t start,uintptr_t end)
-{
-    configASSERT(!model_ready && nc==model_commits);
-    configASSERT(start==(nc?UINT64_C(0x78000000):UINT64_C(0x48000000)) &&
-        end==(nc?UINT64_C(0x79000000):UINT64_C(0x78000000)));
-    ++model_commits;return 1;
-}
 /* Frame states and batch tables submitted by the client; the kick handler
  * decodes the native command stream against them. */
 static const uint32_t frames[2]={2u|PVR_RENDER_BATCH_LINEAR|0u<<6|1u<<9,3u|3u<<6|4u<<9|PVR_RENDER_BATCH_SRGB};
@@ -287,8 +280,8 @@ static void batch_client(void *unused)
 void kernel_main(void)
 {
     platform_init();configASSERT(gpu_render_case<3);
-    configASSERT(a733_memory_reservations_commit_verified() && a733_memory_uncached_commit_verified());
-    configASSERT(model_commits==2);model_ready=1;
+    configASSERT(!a733_memory_reservations_init() && !a733_memory_uncached_init());
+    configASSERT(a733_memory_reservations_prepare() && a733_memory_uncached_prepare());model_ready=1;
     configASSERT(a733_memory_reservations_init() && a733_memory_uncached_init());
     const unsigned widths[]={1920,640,63},heights[]={1080,360,17};
     frame_width=widths[gpu_render_case];frame_height=heights[gpu_render_case];

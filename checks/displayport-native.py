@@ -32,7 +32,7 @@ class Machine:
   runtime=image.address('a733_cached_runtime');rl=image.layouts['a733_cached_runtime'];cl=image.layouts['a733_smp_contract']
   for field in ('epoch','startup_deadline','diagnostic_deadline'):
    self.put(runtime+rl[field],struct.unpack_from('<Q',contract,cl[field])[0])
-  names=['a733_smp_counter','a733_smp_device_preparation_admitted','a733_device_memory_commit_allowed','a733_device_memory_ready','a733_cpu_coherence_publish',
+  names=['a733_smp_counter','a733_smp_device_preparation_admitted','a733_device_memory_ready','a733_cpu_coherence_publish',
    'vTaskStartScheduler','aarch64_device_translate','a733_counter_clock_init','a733_counter_clock_now','xTaskGetSchedulerState','xTaskGetCurrentTaskHandle',
    'xTaskCreateStatic','xTaskCreateStaticAffinitySet','xQueueGenericCreateStatic','xQueueCreateMutexStatic','vTaskEnterCritical','vTaskExitCritical',
    'xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','vPortYield','platform_panic']
@@ -65,7 +65,6 @@ class Machine:
   if name=='platform_panic':raise AssertionError(('panic',bytes(self.u.mem_read(a[0],80)).split(b'\0')[0],a[1],self.callname,self.trace[-20:]))
   if name=='a733_smp_counter':self.ret(self.time*24)
   elif name in ('a733_smp_device_preparation_admitted','a733_device_memory_ready','a733_cpu_coherence_publish'):self.ret(1)
-  elif name=='a733_device_memory_commit_allowed':self.ret((a[0],a[1],a[2]) in ((0,0x48000000,0x78000000),(1,0x78000000,0x79000000)))
   elif name=='aarch64_device_translate':
    attr=0x44 if 0x78000000<=a[0]<0x79000000 else 0xff if a[0]>=0x40000000 else 0
    self.u.mem_write(a[2],struct.pack('<QII',a[0],attr,3 if attr else 2));self.translations.append(a[:2]);self.ret(1)
@@ -117,7 +116,7 @@ def main():
  assert m.call('a733_smp_contract_valid',m.record,200)==1
  assert m.call('displayport_board_prepare',m.record)==1
  assert m.call('displayport_session_prepare',m.record)==1
- assert m.call('a733_memory_uncached_commit_verified')==1
+ assert m.call('a733_memory_uncached_prepare')==1
  # Hashing the complete immutable frame executes the linked SHA256 and
  # byte-copy routines; keep a checkpoint if its instruction bound expires.
  try:m.call('a733_smp_diagnostic_start',budget=1000000000)

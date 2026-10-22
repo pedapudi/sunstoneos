@@ -95,7 +95,9 @@ Focused checks cover actual allocation, authenticated upload, real lower native
 MMIO policy, encoder programming, IOMMU accesses restricted to master 3, copied output,
 completion/count failures, later-copy fault retention, launcher admission,
 supervisor entry and durable host capture. Device completion and entropy are
-explicit model inputs. A placeholder entropy payload cannot establish JPEG
+explicit model inputs. The emulator runs one core, so it returns from the
+kernel critical-section calls that the device-memory ledger makes without
+executing them. A placeholder entropy payload cannot establish JPEG
 arithmetic; physical qualification needs independently decoded captured JPEG
 pixels plus guard/fault, visibility and bounded completion observations.
 
