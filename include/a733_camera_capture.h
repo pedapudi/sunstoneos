@@ -157,10 +157,12 @@ int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
  * with the parser in video capture mode. The DMA enters its ring mode just
  * before the sensor starts. Polls return 1 once STREAMING is reached and
  * after each further step. DMA status decides delivery: see
- * a733_camera_dma_stream. DMA status reads lie up to four polls apart.
- * Once two of them are more than status_us apart, nothing more is delivered
- * until the stream stops, so the owner must poll more often than every
- * eighth of a frame period. The deadline bounds the preparation and then
+ * a733_camera_dma_stream. DMA status reads lie up to four polls apart, plus
+ * one poll for each pending slot invalidation. Once two of them are more than
+ * status_us apart, nothing more is delivered until the stream stops, so the
+ * owner must poll more often than every eighth of a frame period and slot
+ * invalidation must fit in that budget. The first interval opens before the
+ * sensor's stream-on sequence; see docs/camera-capture.md for its limit. The deadline bounds the preparation and then
  * the stream itself until renew replaces it; at the deadline the stream
  * faults. Faults retain every resource, as for still images. */
 int a733_camera_capture_open_stream(struct a733_camera_capture *,uint64_t deadline);

@@ -233,12 +233,13 @@ assumption. On each observed frame start the DMA controller:
    programmed slot becomes active at the next start.
 
 The owed count is exact only while every frame start appears in a status read
-of its own. The coordinator sets the DMA status interval to half the frame
-period of the mode the sensor derived, rounded down to whole microseconds; the
-QVGA mode's 33.3 ms period gives 16.6 ms. Consecutive DMA status reads are at
-most four polls apart: after a frame start the acknowledgement and two address
-writes come before the next read, and a slot invalidation may come before any
-read. The owner must therefore poll more often than every eighth of a frame
+of its own. The coordinator sets the DMA status interval just under half the frame
+period of the mode the sensor derived: half the period, less 1 % for sensor
+clock tolerance and 2 µs for whole-microsecond clock readings. The QVGA mode's
+33.3 ms period gives 16.5 ms. Consecutive DMA status reads are at most four
+polls apart, plus one poll for each pending slot invalidation: after a frame
+start the acknowledgement and two address writes come before the next read,
+and an invalidation that is still pending delays the read. The owner must therefore poll more often than every eighth of a frame
 period. If two status reads lie further apart than the interval, two frame
 starts may have merged into one observation and the count may be short. A short count
 would let a late flag pay for a frame the device is still writing. The DMA
@@ -246,6 +247,15 @@ then marks the count unknown, and from that point every frame is dropped, as
 after merged flags, until the owner stops the stream. The DMA's first
 interval starts with a clock reading taken just before the sensor start, when
 no frame can have started.
+
+The first interval also covers the sensor's stream-on sequence: two register
+writes, their read-backs and the DMA start callback, about six owner polls
+plus their I2C transfer times. If that exceeds the interval, the first read
+marks the count unknown and the stream delivers nothing, although every slot
+stays owned correctly. Whether a real OV5640 start fits is unmeasured. The
+fix is to open the first interval at the stream-on write itself, which needs
+a hook inside the sensor's start sequence; until a sensor is attached to
+measure it, the stream can fail closed in this way.
 
 While the owner polls within that bound, a delivered slot is never one that
 either address register names or that any frame may still write: its

@@ -186,7 +186,11 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
     mode=&s->sensor.mode;
     uint64_t three=((uint64_t)3*mode->htotal*mode->vtotal*1000000u+mode->pixel_hz-1)/mode->pixel_hz;
     s->quiet_us=three>A733_CAPTURE_QUIET_US?three:A733_CAPTURE_QUIET_US;
-    s->status_us=(uint64_t)mode->htotal*mode->vtotal*1000000u/(2u*(uint64_t)mode->pixel_hz);
+    /* Just under half the derived frame period: 1/2 minus 1 % for sensor clock
+     * tolerance, minus 2 us for whole-microsecond clock readings. A short
+     * interval costs only delivery, never ownership. */
+    uint64_t half=(uint64_t)mode->htotal*mode->vtotal*1000000u/(2u*(uint64_t)mode->pixel_hz);
+    s->status_us=half-half/100-2;
     return 1;
 }
 int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)

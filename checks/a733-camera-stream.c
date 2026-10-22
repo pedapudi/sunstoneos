@@ -398,12 +398,13 @@ int main(void){
     assert(model.checked_frames==3 && capture.dma.ring.dropped==8 && capture.dma.ring.owed>1);
     stop();
     /* An owner that stalls across two frame starts lets both merge into one
-     * status read. The status interval, half of the 33.3 ms period here, is
+     * status read. The status interval, just under half of the 33.3 ms period
+     * here (half less 1 % and 2 us), is
      * exceeded, so nothing is delivered after the stall. With every frame
      * done late, a short count would otherwise let a late flag pay for the
      * next frame and deliver slots the device still writes. */
     setup(0,OV5640_UYVY);model.late=3000;model.stall=5;run(30,0,0);
-    assert(!model.stall && capture.status_us==model.period/2);
+    assert(!model.stall && capture.status_us==model.period/2-model.period/2/100-2);
     assert(capture.dma.ring.owed==A733_CAMERA_DMA_OWED_UNKNOWN);
     assert(!model.checked_frames && !model.syncs && capture.dma.ring.dropped==capture.dma.ring.starts-1);
     stop();
