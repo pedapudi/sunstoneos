@@ -1,6 +1,6 @@
 --- apps/rtc/initialize.c
 +++ initialize.c
-@@ -2,7 +2,7 @@
+@@ -3,7 +3,7 @@
  #include "boot.h"
  /* This provider exists only during the sealed primary EL3 hook. The authenticated
   * clock authority excludes all inherited32k consumers/writers, not just tasks. */
