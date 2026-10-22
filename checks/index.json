@@ -7861,6 +7861,21 @@
   "summary": "Run production per-core preparation and interrupt setup with modeled hardware.",
   "usb": false
  },
+ "shared-helpers.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/shared-helpers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Shared range, deadline, MMIO, mapping-check and task-context helpers on host and AArch64/AArch32.",
+  "usb": false
+ },
  "spi-application-fixture.py": {
   "cache_areas": [
    "evidence"

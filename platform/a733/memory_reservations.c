@@ -1,5 +1,6 @@
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_device_memory_layout.h"
 
 extern unsigned char __device_pool_start[], __device_pool_end[], __heap_end[];
@@ -19,11 +20,12 @@ struct device_memory_pool *a733_memory_reservations_init(void)
         end > UINT32_C(0x41f00000) || end <= start ||
         ((start | end) & 4095) || end - start > A733_LOCAL_DEVICE_POOL_BYTES ||
         !aarch64_device_cache_stride()) return NULL;
-    for (uintptr_t cpu = start; cpu < end; cpu += DEVICE_MEMORY_PAGE) {
-        struct aarch64_translation t;
-        if (!aarch64_device_translate(cpu, 1, &t) || t.physical != cpu ||
-            t.attributes != 0xff || t.shareability != 3) return NULL;
-    }
+    /* Write-back identity pages, inner shareable; the write translation is
+     * checked. */
+    static const struct a733_mapping_rule wb = {A733_MAPPING_WRITE, 1,
+        {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
+    if (!a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
+                                   DEVICE_MEMORY_PAGE, &wb)) return NULL;
     if (!device_memory_pool_init(&boot_pool, start, start, end - start)) return NULL;
     return &boot_pool;
 #endif

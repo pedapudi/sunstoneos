@@ -6,6 +6,7 @@
  * DisplayPort is trademark of VESA (www.vesa.org)
  * See docs/typec-pd-sources.json for pinned source and license identities. */
 #include "a733_typec.h"
+#include "a733_range.h"
 #include <stddef.h>
 enum {CAPS,REQUEST,ACCEPT,TRANSITION,PSRDY,IDENT,SVIDS,MODES,ENTER,STATUS,CONFIG,READY,VDM_WAIT};
 static uint32_t word(const uint8_t *b)
@@ -21,14 +22,12 @@ static uint32_t crc32(const uint8_t *b,unsigned n)
 }
 static void put(uint8_t *b,uint32_t w)
 {for(unsigned i=0;i<4;i++)b[i]=(uint8_t)(w>>(i*8));}
-static int limit(uint64_t now,uint64_t delta,uint64_t *out)
-{if(now>UINT64_MAX-delta)return -1;*out=now+delta;return 1;}
 /* One source-defined I2C FIFO operation, retaining the common engine on error. */
 static int io(struct a733_typec *s,unsigned reg,unsigned read,unsigned n)
 {
     struct a733_typec_pd *p=&s->pd;int r;
     if(!p->transaction){
-        uint64_t d;if(limit(s->now,5000,&d)<0)return -1;
+        uint64_t d;if(!a733_deadline_after(s->now,5000,&d))return -1;
         if(!p->ready&&d>p->deadline)d=p->deadline;
         if(a733_twi_request_block(s->config.bus,0x22,(uint16_t)reg,read,p->data,n,d))return -1;
         p->transaction=1;return 0;
@@ -77,8 +76,8 @@ static int received(struct a733_typec *s)
     if(!n&&type==1){ /* FUSB302 puts the peer GoodCRC into the RX FIFO. */
         if(!p->tx_wait||id!=p->tx_id)return -1;
         p->tx_wait=0;p->tx_id=(p->tx_id+1)&7;p->state=p->after_tx;
-        if(p->state==TRANSITION&&limit(s->now,35000,&p->transition_until)<0)return -1;
-        if(p->state==REQUEST||p->state==VDM_WAIT)return limit(s->now,30000,&p->wait_until);
+        if(p->state==TRANSITION&&!a733_deadline_after(s->now,35000,&p->transition_until))return -1;
+        if(p->state==REQUEST||p->state==VDM_WAIT)return a733_deadline_after(s->now,30000,&p->wait_until)?1:-1;
         return 1;
     }
     if(p->rx_seen&&id==p->rx_id)return 1; /* Already hardware-acknowledged duplicate. */
@@ -146,7 +145,7 @@ int a733_typec_pd_service(struct a733_typec *s)
 {
     struct a733_typec_pd *p=&s->pd;int r;
     if(!p->deadline){
-        if(limit(s->now,1000000,&p->deadline)<0)return -1;
+        if(!a733_deadline_after(s->now,1000000,&p->deadline))return -1;
         if(p->deadline>s->startup_deadline)p->deadline=s->startup_deadline;
         if(!p->deadline)return -1;
     }
@@ -163,7 +162,7 @@ int a733_typec_pd_service(struct a733_typec *s)
     if(p->tx_length){
         if(!p->transaction)for(unsigned i=0;i<p->tx_length;i++)p->data[i]=p->tx[i];
         r=io(s,0x43,0,p->tx_length);
-        if(r==1){p->tx_length=0;p->tx_wait=1;if(limit(s->now,30000,&p->wait_until)<0)return -1;}
+        if(r==1){p->tx_length=0;p->tx_wait=1;if(!a733_deadline_after(s->now,30000,&p->wait_until))return -1;}
         return r;
     }
     switch(p->phase){

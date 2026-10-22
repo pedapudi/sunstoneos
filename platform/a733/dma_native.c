@@ -1,5 +1,6 @@
 #include "a733_dma_native.h"
 #include "aarch64_device_memory.h"
+#include "a733_mmio.h"
 
 int a733_dma_native_translate(void *unused, uintptr_t address, int write,
                               struct dma_translation *result)
@@ -57,20 +58,16 @@ static uint32_t native_read(void *cookie, uintptr_t address)
 {
     struct a733_dma_native *n = cookie;
     check_register(n, address);
-    uint32_t result = *(volatile uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");
-    return result;
+    return a733_mmio_read32_dsb_sy_after(address);
 }
 static void native_write(void *cookie, uintptr_t address, uint32_t value)
 {
     struct a733_dma_native *n = cookie;
     check_register(n, address);
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)address = value;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(address, value);
 }
 static void native_barrier(void *cookie)
-{ (void)cookie; __asm__ volatile("dsb sy" ::: "memory"); }
+{ (void)cookie; a733_mmio_dsb_sy(); }
 static uint64_t native_ticks(void *cookie)
 {
     (void)cookie;
