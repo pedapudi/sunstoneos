@@ -5,6 +5,7 @@
  */
 #include "a733_gpu_backend.h"
 #include "a733_range.h"
+#include "a733_mmio.h"
 #include "aarch64_device_memory.h"
 #include "a733_gpu_platform_native.h"
 
@@ -86,19 +87,17 @@ static int active(struct a733_gpu_backend *b)
 static int raw_read(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t *out)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
-    __asm__ volatile("dsb sy" ::: "memory");
-    uint64_t value = width == 4 ? *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + off) :
-                                 *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + off);
-    __asm__ volatile("dsb sy" ::: "memory");
-    *out = value; return 1;
+    uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
+    *out = width == 4 ? a733_mmio_read32_dsb_sy_both(address) : a733_mmio_read64_dsb_sy_both(address);
+    return 1;
 }
 static int raw_write(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t value)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
-    __asm__ volatile("dsb sy" ::: "memory");
-    if (width == 4) *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + off) = (uint32_t)value;
-    else *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + off) = value;
-    __asm__ volatile("dsb sy" ::: "memory"); return 1;
+    uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
+    if (width == 4) a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
+    else a733_mmio_write64_dsb_sy_both(address, value);
+    return 1;
 }
 static int power_begin(void *context, uint64_t deadline)
 {

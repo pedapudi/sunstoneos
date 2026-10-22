@@ -1,5 +1,6 @@
 #include "pvr_compute_service.h"
 #include "a733_range.h"
+#include "a733_mmio.h"
 #include "pvr_compute_context.h"
 #include "pvr_gpu_service.h"
 #include "a733_gpu_mapping.h"
@@ -265,8 +266,8 @@ static int read_client(void *ctx,enum pvr_cccb_region r,uint32_t off,void *out,s
 {
     struct pvr_compute_service *s=ctx;
     if(r!=PVR_CCCB_CONTROL||n!=4||(off&3)||!io_span(s,2,off,n,0))return 0;
-    uint32_t value=*(volatile uint32_t *)((uintptr_t)s->config->firmware[2].storage.cpu+off);
-    __asm__ volatile("dsb sy":::"memory");memcpy(out,&value,4);return 1;
+    uint32_t value=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config->firmware[2].storage.cpu+off);
+    memcpy(out,&value,4);return 1;
 }
 static int write_client(void *ctx,enum pvr_cccb_region r,uint32_t off,const void *in,size_t n)
 {
@@ -305,8 +306,8 @@ static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t
 static int read_fence(void *ctx,uint32_t *out)
 {
     struct pvr_compute_service *s=ctx;if(!io_span(s,5,0,4,0))return 0;
-    uint32_t value=*(volatile uint32_t *)s->config->firmware[5].storage.cpu;
-    __asm__ volatile("dsb sy":::"memory");*out=value;return 1;
+    uint32_t value=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config->firmware[5].storage.cpu);
+    *out=value;return 1;
 }
 static int read_output(void *ctx,void *out,size_t bytes)
 {

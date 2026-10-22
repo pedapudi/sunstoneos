@@ -1,5 +1,6 @@
 #include "a733_gpu_compute_reserved.h"
 #include "a733_range.h"
+#include "a733_mmio.h"
 #include "a733_gpu_mapping.h"
 #include "a733_gpu_disposal.h"
 #include <string.h>
@@ -178,8 +179,7 @@ static int submission_owned(const struct a733_gpu_compute_reserved *s)
        c->epoch!=s->binding.service->epoch||j->epoch!=c->epoch||c->client.epoch!=c->epoch||
        s->binding.service->queue.epoch!=c->epoch||c->client.serial!=j->serial||
        j->transport!=&c->client||c->client.queue!=&s->binding.service->queue||j->config!=&s->job)return 0;
-    uint32_t timeline=*(volatile uint32_t *)s->config.firmware[5].storage.cpu;
-    __asm__ volatile("dsb sy":::"memory");
+    uint32_t timeline=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config.firmware[5].storage.cpu);
     return timeline==j->sequence;
 }
 static int admit_job(void *ctx, const struct pvr_compute_job_config *j)
