@@ -50,5 +50,5 @@ assert 'iosc_clk, "iosc", "rc-16m", 0x160, BIT(0)' in rtc
 assembly = subprocess.check_output([a.objdump, '-dr', str(a.object)], text=True)
 # Ordered MMIO stays local; cache maintenance uses the shared helper, which
 # also refuses an unknown writeback granule, non-EL1 callers and a disabled MMU.
-assert 'dsb\tsy' in assembly and 'aarch64_device_cache' in assembly and 'dc\t' not in assembly
+assert 'dsb\tsy' in assembly and 'aarch64_device_cache' in assembly and '\tdc\t' not in assembly
 print('PASS pinned A733 descriptor, status, health and clock source references; native MMIO and shared cache maintenance')
