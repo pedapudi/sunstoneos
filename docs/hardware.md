@@ -1295,7 +1295,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [lent to a display consumer](gpu-render.md#lending-a-completed-frame-for-presentation)
   by physical address. Pinned-Mesa reference, QEMU native-service and linked
   application checks pass with GPU, firmware and USB effects modeled; physical
-  rendering is unqualified. Arbitrary shaders and blend factors, clipping,
+  rendering is unqualified. A [conformance harness](gpu-conformance.md) compares
+  captured frames and compute results with pinned-Mesa llvmpipe renderings and
+  closed-form references; its host self-check passes, and the twelve planned
+  board launches remain to run. Arbitrary shaders and blend factors, clipping,
   multisampling, mipmaps, other texture formats, wider compute input/output and
   display use of the lent frame remain required.
   The [native GPU application](gpu-application.md) connects real firmware,
