@@ -14,7 +14,7 @@ TRANSLATION=re.compile(r'at\s+s1e1([rw]),\s*x(\d+)$',re.I)
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
-TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').TCR
+TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').SINGLE_CORE
 class Machine:
     def __init__(self,image,session,variant='nominal'):
         self.e=image;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)

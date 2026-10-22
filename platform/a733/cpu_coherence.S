@@ -3,7 +3,7 @@
  * Copyright (c) 2017-2026, Arm Limited and Contributors. All rights reserved.
  */
 #include "a733_cpu_coherence.h"
-.if (A733_CPU_COHERENCE_TCR >> 48)
+.if (A733_CPU_COHERENCE_TCR_CACHED_WALK >> 48) | (A733_CPU_COHERENCE_TCR_UNCACHED_WALK >> 48)
 .error "A733_CPU_COHERENCE_TCR needs a fourth move"
 .endif
 .section .text.a733_cpu_coherence,"ax"
@@ -86,13 +86,13 @@ a733_cpu_coherence_reg_write:
     b .Lrefuse
 .size a733_cpu_coherence_reg_write,.-a733_cpu_coherence_reg_write
 /* Tick deadline in x2, previous sampled counter x14. */
-.macro deadline_check
+.macro deadline_check refuse=.Lrefuse
     isb
     mrs x15, cntpct_el0
     cmp x15, x14
-    b.lo .Lrefuse
+    b.lo \refuse
     cmp x15, x2
-    b.hs .Lrefuse
+    b.hs \refuse
     mov x14, x15
 .endm
 .global a733_cpu_coherence_publish
@@ -195,26 +195,26 @@ a733_cpu_coherence_flush:
     mov x2, x1 /* Shared deadline macro ABI. */
     mrs x3, CurrentEL
     cmp x3, #4
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     mrs x3, daif
     and x3, x3, #0x3c0
     cmp x3, #0x3c0
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     mrs x4, sctlr_el1
     mov x3, #0x1005
     movk x3, #0x200, lsl #16
     tst x4, x3
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     tst x0, #4095
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     mov x3, #0x42000000
     cmp x0, x3
-    b.lo .Lrefuse
+    b.lo .Lrefuse_el1
     mov x3, #0x42200000
     cmp x0, x3
-    b.hs .Lrefuse
+    b.hs .Lrefuse_el1
     mov x14, xzr
-    deadline_check
+    deadline_check .Lrefuse_el1
 .endm
 /* DC CIVAC over the 4 KiB page at \page, four lines per pass. Clobbers x5, x6. */
 .macro flush_page page
@@ -263,86 +263,35 @@ a733_cpu_coherence_flush:
     mrs x5, ctr_el0
     ubfx x5, x5, #16, #4
     cmp x5, #4
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     flush_page x0
     dsb sy
     ldr x8, [x0, #8]
     and x5, x8, #4095
     cmp x5, #3
-    b.ne .Lrefuse
+    b.ne .Lrefuse_el1
     sub x8, x8, #3
     mov x5, #0x42000000
     cmp x8, x5
-    b.lo .Lrefuse
+    b.lo .Lrefuse_el1
     mov x5, #0x42200000
     cmp x8, x5
-    b.hs .Lrefuse
+    b.hs .Lrefuse_el1
     cmp x8, x0
-    b.eq .Lrefuse
+    b.eq .Lrefuse_el1
     flush_page x8
     dsb sy
-    deadline_check
+    deadline_check .Lrefuse_el1
     mov x5, xzr
     sum_page x0
     sum_page x8
     adrp x6, a733_cached_el1_table_sum
     ldr x6, [x6, :lo12:a733_cached_el1_table_sum]
     cmp x5, x6
-    b.ne .Lrefuse
-    deadline_check
+    b.ne .Lrefuse_el1
+    deadline_check .Lrefuse_el1
 .endm
 
-.global a733_cpu_coherence_check_el1
-.type a733_cpu_coherence_check_el1,%function
-a733_cpu_coherence_check_el1:
-    el1_admit
-    el1_tables_check
-    mov w0, #1
-    ret
-.size a733_cpu_coherence_check_el1,.-a733_cpu_coherence_check_el1
-
-.global a733_cpu_coherence_enable_el1
-.type a733_cpu_coherence_enable_el1,%function
-a733_cpu_coherence_enable_el1:
-    el1_admit
-    el1_tables_check
-    /* Preserve every unrelated SCTLR bit. */
-    dsb sy
-    ic iallu
-    dsb sy
-    isb
-    mov x3, #0xff00
-    movk x3, #0x44, lsl #16
-    msr mair_el1, x3
-    mov x3, #(A733_CPU_COHERENCE_TCR & 0xffff)
-    movk x3, #((A733_CPU_COHERENCE_TCR >> 16) & 0xffff), lsl #16
-    movk x3, #((A733_CPU_COHERENCE_TCR >> 32) & 0xffff), lsl #32
-    msr tcr_el1, x3
-    msr ttbr0_el1, x0
-    msr ttbr1_el1, xzr
-    isb
-    /* Duplicate local invalidation also covers A76 1286807. */
-    tlbi vmalle1
-    dsb sy
-    tlbi vmalle1
-    dsb sy
-    isb
-    deadline_check
-    orr x4, x4, #1
-    orr x4, x4, #4
-    orr x4, x4, #0x1000
-    msr sctlr_el1, x4
-    isb
-    deadline_check
-    mrs x3, sctlr_el1
-    cmp x3, x4
-    b.ne .Lrefuse
-    mrs x3, ttbr0_el1
-    cmp x3, x0
-    b.ne .Lrefuse
-    mov w0, #1
-    ret
-.size a733_cpu_coherence_enable_el1,.-a733_cpu_coherence_enable_el1
 .global a733_cpu_coherence_enable_el3
 .type a733_cpu_coherence_enable_el3,%function
 a733_cpu_coherence_enable_el3:
@@ -405,6 +354,66 @@ a733_cpu_coherence_enable_el3:
     ret
 .size a733_cpu_coherence_enable_el3,.-a733_cpu_coherence_enable_el3
 .Lrefuse:
+    mov w0, #-1
+    ret
+
+/* The EL1 entry primitives read a733_cached_el1_table_sum, which only the
+ * cached table builder defines. A section of their own lets an image that
+ * links this file for publication alone drop them under --gc-sections. */
+.section .text.a733_cpu_coherence_el1,"ax"
+.balign 4
+.global a733_cpu_coherence_check_el1
+.type a733_cpu_coherence_check_el1,%function
+a733_cpu_coherence_check_el1:
+    el1_admit
+    el1_tables_check
+    mov w0, #1
+    ret
+.size a733_cpu_coherence_check_el1,.-a733_cpu_coherence_check_el1
+
+.global a733_cpu_coherence_enable_el1
+.type a733_cpu_coherence_enable_el1,%function
+a733_cpu_coherence_enable_el1:
+    el1_admit
+    el1_tables_check
+    /* Preserve every unrelated SCTLR bit. */
+    dsb sy
+    ic iallu
+    dsb sy
+    isb
+    mov x3, #0xff00
+    movk x3, #0x44, lsl #16
+    msr mair_el1, x3
+    mov x3, #(A733_CPU_COHERENCE_TCR & 0xffff)
+    movk x3, #((A733_CPU_COHERENCE_TCR >> 16) & 0xffff), lsl #16
+    movk x3, #((A733_CPU_COHERENCE_TCR >> 32) & 0xffff), lsl #32
+    msr tcr_el1, x3
+    msr ttbr0_el1, x0
+    msr ttbr1_el1, xzr
+    isb
+    /* Duplicate local invalidation also covers A76 1286807. */
+    tlbi vmalle1
+    dsb sy
+    tlbi vmalle1
+    dsb sy
+    isb
+    deadline_check .Lrefuse_el1
+    orr x4, x4, #1
+    orr x4, x4, #4
+    orr x4, x4, #0x1000
+    msr sctlr_el1, x4
+    isb
+    deadline_check .Lrefuse_el1
+    mrs x3, sctlr_el1
+    cmp x3, x4
+    b.ne .Lrefuse_el1
+    mrs x3, ttbr0_el1
+    cmp x3, x0
+    b.ne .Lrefuse_el1
+    mov w0, #1
+    ret
+.size a733_cpu_coherence_enable_el1,.-a733_cpu_coherence_enable_el1
+.Lrefuse_el1:
     mov w0, #-1
     ret
 .section .note.GNU-stack,"",%progbits

@@ -194,5 +194,7 @@ its loader enters a slot. On core 0 at EL3 with the MMU off, the experiment:
 The experiment passes when no word changes in three cold boots per path. A
 changed word means that the Nonsecure flush must move before the first
 descriptor write, which needs an EL3 mapping of the Nonsecure alias while the
-tables are built. No image built with the cacheable EL1 walk profile runs on
-the board before this experiment passes.
+tables are built. Images with the table check may run on the board before the
+experiment, because such a line stops the entering core at the check, before
+any translation register is written. The experiment is the first run of the
+first board session that uses them.

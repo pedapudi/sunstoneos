@@ -10,11 +10,21 @@
 #endif
 
 /* Cold-entry primitives used by the dedicated cached eight-core diagnostic.
- * TCR_EL1: 39-bit VA, 40-bit PA, 4 KiB granule, TTBR1 walks disabled, and
- * Inner Shareable write-back read/write-allocate walks (IRGN0 = ORGN0 = 1).
- * Assembly sources and tools/a733_tcr.py read this definition. */
+ * TCR_EL1: 39-bit VA, 40-bit PA, 4 KiB granule, TTBR1 walks disabled and
+ * Inner Shareable walks. The cached single-core images, which run only on
+ * Cortex-A55 core 0, walk through the caches (IRGN0 = ORGN0 = 1). The
+ * eight-core images also schedule tasks on the Cortex-A76 and keep
+ * noncacheable walks until a core-6 walk measurement admits the cached value
+ * (docs/designs/cpu-table-walks.md). Assembly sources and tools/a733_tcr.py
+ * read these definitions. */
 #define A733_CPU_COHERENCE_MAIR A733_CPU_COHERENCE_U64(0x44ff00)
-#define A733_CPU_COHERENCE_TCR A733_CPU_COHERENCE_U64(0x200803519)
+#define A733_CPU_COHERENCE_TCR_CACHED_WALK A733_CPU_COHERENCE_U64(0x200803519)
+#define A733_CPU_COHERENCE_TCR_UNCACHED_WALK A733_CPU_COHERENCE_U64(0x200803019)
+#ifdef SUNSTONE_CACHED_SINGLE_CORE
+#define A733_CPU_COHERENCE_TCR A733_CPU_COHERENCE_TCR_CACHED_WALK
+#else
+#define A733_CPU_COHERENCE_TCR A733_CPU_COHERENCE_TCR_UNCACHED_WALK
+#endif
 #define A733_CPU_COHERENCE_TCR_EL3 A733_CPU_COHERENCE_U64(0x80823019)
 #define A733_CPU_COHERENCE_MONITOR A733_CPU_COHERENCE_U64(0x42000000)
 #define A733_CPU_COHERENCE_MONITOR_END A733_CPU_COHERENCE_U64(0x42200000)

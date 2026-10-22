@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check the cacheable EL1 table walk profile: one TCR source, table flush and checksum order."""
+"""Check the EL1 table walk profile on linked images: TCR sources, table flush and checksum order.
+
+The primitive refusal cases (flush range, state and deadline refusals, malformed
+roots and a corrupted checksum) live in checks/a733-cpu-coherence.py.
+"""
 import argparse
 import importlib.util
 import json
@@ -24,15 +28,15 @@ def load(name, path):
     return module
 
 
-TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py').TCR
+TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py')
 GPR = [UC_ARM64_REG_X0 + i for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_LR]
 SENTINEL = 0x47fff000
 STACK = 0x47f00000
 
 # Files that may spell an EL1 TCR value, by directory, and why. Every other
-# tracked source must name A733_CPU_COHERENCE_TCR or read it with
-# tools/a733_tcr.py. The check only reads these files as text.
-FROZEN = 'records from the digest-pinned native image'
+# tracked source must name A733_CPU_COHERENCE_TCR or read the header values
+# with tools/a733_tcr.py. The check only reads these files as text.
+FROZEN = 'records from the digest-pinned production eight-core image'
 ALLOWED_BY_DIRECTORY = {
     'include': {'a733_cpu_coherence.h': 'the definition'},
     'platform/a733': {'cpu_continue.c': 'non-cacheable continuation profile (MAIR 0x4400)',
@@ -216,69 +220,12 @@ def measure(image_path, baseline):
     assert m.read(root) & (3 << 8) == 2 << 8 and m.read(pages['a733_cached_el3_l1']) & (3 << 8) == 2 << 8
     cases['el3-flush-precedes-descriptors-and-checksum-is-last'] = True
 
-    # EL1: flush, readback and compare precede every translation register write.
-    m.el1()
-    assert m.call('a733_cpu_coherence_enable_el1', root, m.clock + 10**7) == 1
-    ops = m.trace
-    civac = [x[2] for x in ops if x[:2] == ('dc', 'civac')]
-    assert civac == list(range(root, root + 4096, 64)) + list(range(level2, level2 + 4096, 64))
-    first_msr = next(i for i, x in enumerate(ops) if x[0] == 'msr')
-    last_dc = max(i for i, x in enumerate(ops) if x[0] == 'dc')
-    assert last_dc < first_msr and ('dsb', 'sy', 0) in ops[last_dc:first_msr]
-    assert m.model['tcr_el1'] == TCR and m.model['ttbr0_el1'] == root and m.model['sctlr_el1'] & 0x1005 == 0x1005
-    cases['enable-el1-checks-before-translation-registers'] = True
-
-    def refused(change, function='a733_cpu_coherence_enable_el1'):
-        m = prepared(image)
-        change(m)
-        m.el1()
-        assert m.call(function, root, m.clock + 10**7) == 0xffffffff, function
-        assert not [x for x in m.trace if x[0] == 'msr'], 'no translation register changes after a refusal'
-        assert not m.model['sctlr_el1'] & 1
-        return m
-
-    refused(lambda m: m.write(level2 + 8 * 300, m.read(level2 + 8 * 300) ^ (1 << 12)))
-    refused(lambda m: m.write(root + 8 * 5, 1))
-    refused(lambda m: m.write(total, m.read(total) + 1))
-    refused(lambda m: m.write(root + 8, 0x48000003))
-    refused(lambda m: m.write(root + 8, root | 3))
-    refused(lambda m: m.write(level2 + 8 * 300, m.read(level2 + 8 * 300) ^ (1 << 12)), 'a733_cpu_coherence_check_el1')
-    cases['corrupted-table-checksum-or-root-leaves-translation-off'] = True
-
-    m = prepared(image)
-    m.el1()
-    assert m.call('a733_cpu_coherence_check_el1', root, m.clock + 10**7, count=True) == 1
-    result['check_el1_instructions'] = len(m.executed)
-    assert not [x for x in m.trace if x[0] == 'msr']
-    cases['check-el1-alone-changes-no-register'] = True
-
-    for label, el, args in [('below-dram', 12, (0x3fffffc0, 128)), ('beyond-dram', 12, (0x47ffffc0, 128)),
-                            ('empty', 12, (0x42000000, 0)), ('el2', 8, (0x42000000, 64)),
-                            ('expired', 12, (0x42000000, 64))]:
-        m = Machine(image)
-        m.model['currentel'] = el
-        deadline = 1 if label == 'expired' else 10**7
-        assert m.call('a733_cpu_coherence_flush', *args, deadline) == 0xffffffff, label
-        assert not [x for x in m.trace if x[0] == 'dc'], label
-    for reg in ('sctlr_el3', 'sctlr_el1'):
-        m = Machine(image)
-        m.model['currentel'] = 12 if reg == 'sctlr_el3' else 4
-        m.model[reg] |= 4
-        assert m.call('a733_cpu_coherence_flush', 0x42000000, 64, 10**7) == 0xffffffff
-    m = Machine(image)
-    m.model['daif'] = 0
-    assert m.call('a733_cpu_coherence_flush', 0x42000000, 64, 10**7) == 0xffffffff
-    m = Machine(image)
-    m.model['currentel'] = 4
-    assert m.call('a733_cpu_coherence_flush', 0x42000010, 100, 10**7) == 1
-    last = max(i for i, x in enumerate(m.trace) if x[0] == 'dc')
-    assert [x[2] for x in m.trace if x[0] == 'dc'] == [0x42000000, 0x42000040] and ('dsb', 'sy', 0) in m.trace[last:]
-    cases['flush-refusals-and-partial-lines'] = True
-
     budgets = {'enable_el1_instructions': 2500}
     assert result['enable_el1_instructions'] <= budgets['enable_el1_instructions'], result
     assert result['enable_el1_ldp'] == 512 and result['enable_el1_dc_civac'] == 128, result
-    assert result['tcr_el1'] == hex(TCR)
+    # The eight-core entry keeps noncacheable walks until the core-6 walk run.
+    assert result['tcr_el1'] == hex(TCR.EIGHT_CORE), result
+    cases['eight-core-entry-installs-the-uncached-walk-value'] = True
     return result, cases
 
 
@@ -296,11 +243,13 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     result, cases = measure(a.image.resolve(), a.baseline)
     if not a.baseline:
-        fields = {'T0SZ': (TCR & 63, 25), 'IRGN0': ((TCR >> 8) & 3, 1), 'ORGN0': ((TCR >> 10) & 3, 1),
-                  'SH0': ((TCR >> 12) & 3, 3), 'TG0': ((TCR >> 14) & 3, 0), 'EPD1': ((TCR >> 23) & 1, 1),
-                  'IPS': ((TCR >> 32) & 7, 2)}
-        assert all(v == want for v, want in fields.values()) and TCR >> 35 == 0, fields
-        cases['header-tcr-selects-write-back-inner-shareable-walks'] = True
+        cached = TCR.SINGLE_CORE
+        fields = {'T0SZ': (cached & 63, 25), 'IRGN0': ((cached >> 8) & 3, 1), 'ORGN0': ((cached >> 10) & 3, 1),
+                  'SH0': ((cached >> 12) & 3, 3), 'TG0': ((cached >> 14) & 3, 0), 'EPD1': ((cached >> 23) & 1, 1),
+                  'IPS': ((cached >> 32) & 7, 2)}
+        assert all(v == want for v, want in fields.values()) and cached >> 35 == 0, fields
+        assert TCR.EIGHT_CORE == cached & ~(0xf << 8), hex(TCR.EIGHT_CORE)
+        cases['header-tcr-values-differ-only-in-walk-cacheability'] = True
         sites = literal_sites()
         result['tcr_literal_files'] = sorted(sites)
         unexpected = sorted(set(sites) - set(ALLOWED))
@@ -318,7 +267,10 @@ def main():
             check = next(i for i, op in enumerate(body) if re.match(r'bl\s+0x[0-9a-f]+ <a733_cpu_coherence_check_el1>$', op))
             tcr = next(i for i, op in enumerate(body) if re.match(r'msr\s+TCR_EL1,', op, re.I))
             assert 'a733_cpu_coherence_check_el1' in names and check < tcr, path
-            cases[f'single-core-checks-tables-before-tcr:{path.name}'] = True
+            # The low half of the cached value is materialized before the write.
+            low = TCR.SINGLE_CORE & 0xffff
+            assert any(re.match(rf'mov\s+x\d+, #0x{low:x}\b', op) for op in body[:tcr]), path
+            cases[f'single-core-checks-tables-then-installs-cached-walks:{path.name}'] = True
     report = {'passed': True, 'baseline': a.baseline, 'metrics': result, 'cases': cases,
               'scope': 'Linked-image instruction model: system registers, cache maintenance and the counter '
                        'are modeled; no physical cache, walk or coherence behaviour is established.'}

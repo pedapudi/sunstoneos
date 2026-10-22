@@ -8,7 +8,7 @@ from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
-TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').TCR
+TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').SINGLE_CORE
 shared=module('gpu_shared_startup_checks',ROOT/'checks/storage-read-single-core.py')
 prep=module('gpu_single_core_preparation',ROOT/'apps/gpu-render/prepare.py')
 class Machine(shared.Machine):

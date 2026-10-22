@@ -128,18 +128,24 @@ field (SH = `0b10`) of level-1 entry 0 in both regimes; for Device memory the
 field does not change behaviour, and the single-core images no longer set it
 after the builder returns.
 
-Both regimes use `MAIR = 0x44ff00`. The translation-control values are
-`TCR_EL1 = 0x200803519` and `TCR_EL3 = 0x80823019`. Both select 39-bit virtual
-addresses, 40-bit physical addresses, Inner Shareable table walks and 4 KiB
-granules. EL1 walks are write-back read/write-allocate cacheable
+Both regimes use `MAIR = 0x44ff00` and `TCR_EL3 = 0x80823019`. `TCR_EL1` is
+`0x200803519` in the cached single-core images and `0x200803019` in the cached
+eight-core images. Every value selects 39-bit virtual addresses, 40-bit
+physical addresses, Inner Shareable table walks and 4 KiB granules. The
+single-core EL1 walks are write-back read/write-allocate cacheable
 (IRGN0 = ORGN0 = `0b01`), the value that `platform_init()` already uses for
-its own tables. EL3 walks stay noncacheable. EL1 disables its second address
-range; EL3 includes its reserved-one fields. `A733_CPU_COHERENCE_TCR` in
-[the header](../include/a733_cpu_coherence.h) is the only source of the EL1
-value: assembly expands it into its `mov`/`movk` sequence, and host checks read
-it through [tools/a733_tcr.py](../tools/a733_tcr.py). Table construction
-refuses misalignment, overlapping output arrays, unsupported regimes and
-out-of-reservation table addresses before modifying either array.
+its own tables. The eight-core EL1 walks and all EL3 walks are noncacheable;
+the eight-core images also run on the Cortex-A76, and they take the cacheable
+value only after the core-6 walk measurement below passes. EL1 disables its
+second address range; EL3 includes its reserved-one fields.
+[The header](../include/a733_cpu_coherence.h) is the only source of both EL1
+values. It defines `A733_CPU_COHERENCE_TCR` as the cacheable value when the
+target defines `SUNSTONE_CACHED_SINGLE_CORE` and as the noncacheable value
+otherwise. Assembly expands that name into its `mov`/`movk` sequence, and host
+checks read both values through [tools/a733_tcr.py](../tools/a733_tcr.py).
+Table construction refuses misalignment, overlapping output arrays,
+unsupported regimes and out-of-reservation table addresses before modifying
+either array.
 
 ## Cache entry requires published immutable memory
 
@@ -196,11 +202,14 @@ noncacheable diagnostic continuation cannot call these primitives unchanged.
 
 ## EL1 table walks read descriptors through the data caches
 
-**Status: implemented and checked in instruction models; not run on the board.**
-With `TCR_EL1` IRGN0 = ORGN0 = `0b01`, a descriptor read that misses the
-walk caches can be served from a core's data cache or the DynamIQ Shared Unit
-(DSU) L3 cache instead of DRAM. A cacheable walker can also hit a stale line
-over a table page, so the tables follow this sequence:
+**Status: implemented in the cached single-core images and checked in
+instruction models; not run on the board.** With `TCR_EL1` IRGN0 = ORGN0 =
+`0b01`, a descriptor read that misses the walk caches can be served from a
+core's data cache or the DynamIQ Shared Unit (DSU) L3 cache instead of DRAM.
+A cacheable walker can also hit a stale line over a table page, so the tables
+follow this sequence. The eight-core images run the same sequence with
+noncacheable walks, where it removes stale lines that a later eviction could
+write over the tables:
 
 1. **Cold entry, core 0, EL3, MMU off.** `a733_cached_memory_prepare()` flushes
    the whole table section (the five table pages and the checksum line) before
@@ -220,7 +229,10 @@ over a table page, so the tables follow this sequence:
    `a733_cpu_coherence_check_el1()` in the single-core images, flushes the two
    EL1 pages in the Nonsecure space, reads them back and compares the sum (see
    the previous section). A dirty Nonsecure line written back before the check
-   makes the check refuse.
+   makes the check refuse. The check and the EL1 enable occupy their own
+   input section, because only images with the cached table builder define
+   the checksum; an image that links the file for publication alone drops
+   them under `--gc-sections`.
 4. **Runtime.** The EL1 walker is the only reader of the EL1 tables. EL1 has no
    data mapping of the monitor interval, and EL3 does not access the tables
    after preparation.
@@ -263,29 +275,34 @@ blocks. The header constant is 1, so this code is compiled out.
 
 ### Board measurement before the profile is adopted
 
-No image with this profile runs on the board before the Nonsecure dirty-line
-experiment in [cold entry](cold-entry.md#the-el1-tables-need-a-nonsecure-dirty-line-experiment)
-passes. Each run records the CPU-L, CPU-B and DSU clock rates.
+Images with the table check may run on the board now: a dirty Nonsecure line
+over an EL1 table page stops the entering core at the check, before any
+translation register is written. The Nonsecure dirty-line experiment in
+[cold entry](cold-entry.md#the-el1-tables-need-a-nonsecure-dirty-line-experiment)
+is the first run of the first board session that uses them. Each run records
+the CPU-L, CPU-B and DSU clock rates.
 
 - **Boot.** Each changed image class reaches the scheduler, and its recorded
-  `TCR_EL1` equals the header value.
-- **Walk A/B.** Image A is built from the commit before this profile and image
-  B from this profile. A forced-walk loop runs `TLBI VMALLE1`, `DSB`, `ISB` and
-  one load from a different 2 MiB block per iteration. It records the PMU
-  events `CPU_CYCLES` (`0x11`) and `DTLB_WALK` (`0x34`) on core 0 (Cortex-A55)
-  and core 6 (Cortex-A76). A GPU frame, an NPU inference and a recognizer
-  inference record the same events and `ITLB_WALK` (`0x35`) on core 0. B must
-  not use more cycles than A beyond the spread of five runs; otherwise only the
-  TCR value reverts. The eight-core image schedules tasks on the Cortex-A76,
-  so it takes the new value only after the core-6 loop and the same workloads
-  on core 6 pass. The estimate is 50 to 75 cycles per DRAM descriptor read at
-  494 MHz against 30 to 50 cycles for an L3 hit.
-- **Core-6 harness.** The secondary cached-entry probe
-  (`boot/a733/native-el1-cache-probe.S` with `SUNSTONE_SECONDARY_CACHE`)
-  completes cached entry on both Cortex-A76 cores. It enters through a
-  digest-pinned production image, which still sets the previous `TCR_EL1`, so
-  it measures image A only. Image B needs a production image built from this
-  profile and a new pin.
+  `TCR_EL1` equals its header value.
+- **Core-0 walk A/B.** Image A is a cached single-core image with
+  noncacheable walks and image B the same image with cacheable walks. A
+  forced-walk loop runs `TLBI VMALLE1`, `DSB`, `ISB` and one load from a
+  different 2 MiB block per iteration. It records the PMU events `CPU_CYCLES`
+  (`0x11`) and `DTLB_WALK` (`0x34`) on core 0 (Cortex-A55). A GPU frame, an
+  NPU inference and a recognizer inference record the same events and
+  `ITLB_WALK` (`0x35`) on core 0. B must not use more cycles than A beyond the
+  spread of five runs; otherwise the single-core value reverts to the
+  noncacheable one. The estimate is 50 to 75 cycles per DRAM descriptor read
+  at 494 MHz against 30 to 50 cycles for an L3 hit.
+- **Core-6 walk A/B, which admits the eight-core images.** The secondary
+  cached-entry probe (`boot/a733/native-el1-cache-probe.S` built with
+  `SUNSTONE_SECONDARY_CACHE`) completes cached entry on both Cortex-A76 cores
+  through a production eight-core image pinned by SHA-256. The probe first
+  gains the forced-walk loop and stores its two counts in the core's probe
+  record. Image A is the current eight-core image; image B is the same image
+  built with the header's eight-core branch set to the cacheable value, pinned
+  beside A. The eight-core images take the cacheable value only when B passes
+  the core-0 rule on core 6, for the loop and for the three workloads.
 - **Stage 2.** The decode check reports 12,288 MiB and the location of the
   secure region; EL1 then makes one read and one write per 1 GiB block.
 
@@ -338,6 +355,16 @@ four accepted A55 revisions and seven accepted A76 revisions. Their final contro
 values and patch contents match isolated unchanged reset bodies from pinned TF-A.
 The remaining cases exercise publication and both cache-enable primitives,
 including expired deadlines, late enable and control readback failure.
+These cases are the only tests of the flush primitive and the EL1 table check.
+The EL1 enable and `a733_cpu_coherence_check_el1()` refuse a corrupted
+checksum and a root entry 1 that lies outside the monitor interval, names the
+root or carries attribute bits, and write no system register when they refuse.
+The check writes none on success either. The flush cleans both lines of a
+partial range and refuses, with no `DC`, a range below or beyond DRAM, an empty
+range, EL2, unmasked exceptions, `SCTLR.C` set and an expired deadline. These
+cases need the check changes listed in
+[the table-walk design](designs/cpu-table-walks.md); with them the check
+passes 41 cases.
 System registers, cache instructions and barriers are modeled; these results
 cannot establish physical cache behavior.
 
@@ -362,19 +389,21 @@ All TF-A references use revision
 | [EL3 common macros](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/arch/aarch64/el3_common_macros.S) | Speculative-translation entry/restore obligations |
 
 [The table-walk check](../checks/cpu-table-walks.py) runs a linked cached
-image in a Unicorn instruction model with modeled system registers, cache
-maintenance and counter. It executes the actual `a733_cached_memory_prepare()`
-and checks that the table-section flush precedes the first descriptor write,
-that the checksum is the last table write, and that the EL1 flush, `DSB SY` and
-readback precede every translation register write. A corrupted table word,
-root entry or checksum leaves `SCTLR_EL1.M` clear and writes no translation
-register. It also covers the flush refusals, the header's TCR fields, the
-absence of table writes after preparation (through the writer scan of
-`checks/device-memory-capacity.py`), and the order of the check before the
-`TCR_EL1` write in each single-core image passed with `--single-core-image`.
-Its literal scan allows the old EL1 value only in the non-cacheable
-continuation profile and in tools and probes that describe frozen,
-digest-pinned images:
+eight-core image in a Unicorn instruction model with modeled system registers,
+cache maintenance and counter. It executes the actual
+`a733_cached_memory_prepare()` and checks that the table-section flush precedes
+the builder call and the first descriptor write, that the checksum line
+follows the five table pages and that the checksum is the last table write. It
+counts the instructions, `LDP` loads and `DC CIVAC` operations of a successful
+EL1 enable and checks that the enable installs the eight-core `TCR_EL1`. It
+also checks the two header TCR values and the absence of table writes after
+preparation, through the writer scan of `checks/device-memory-capacity.py`. In
+each single-core image passed with `--single-core-image`, it checks that
+`platform_init()` calls the table check and loads the cacheable value before
+its `TCR_EL1` write. Its literal scan allows a spelled EL1 TCR value only in
+the header, the non-cacheable continuation profile and the tools and probes
+that describe frozen, digest-pinned images. The refusal cases of the flush,
+the table check and the EL1 enable belong to the coherence check above.
 
 ```sh
 ~/.cache/sunstoneos/venv/bin/python checks/cpu-table-walks.py --output OUT \

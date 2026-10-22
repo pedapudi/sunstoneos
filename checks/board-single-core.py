@@ -11,7 +11,7 @@ parser.add_argument('--host-only-cases',action='store_true')
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=False)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').TCR
+TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').SINGLE_CORE
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/board/prepare.py')
 image=args.image;e=native.Image(image);e.path=image;e.ops={}
 for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True).splitlines():

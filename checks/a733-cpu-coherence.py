@@ -26,7 +26,7 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py').TCR
+TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py').EIGHT_CORE
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 

@@ -10,7 +10,7 @@ parser.add_argument('--resume',action='store_true',help='Retain completed cases 
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=args.resume)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').TCR
+TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').SINGLE_CORE
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/pwm/prepare.py')
 providers=mod('pwm_nominal_providers',r/'checks/a733-provider-fixture.py')
 raw=bytearray(args.session.read_bytes());providers.validate_nominal_providers(raw,usb_reference_mode=2)
