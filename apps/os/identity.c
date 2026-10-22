@@ -9,6 +9,7 @@
 #include "../board/identity.h"
 #include "../board/session.h"
 #include "a733_cpu_coherence.h"
+#include "a733_mmio.h"
 #include "boot.h"
 #include "assets.h"
 #ifdef SUNSTONE_A733_OS_HEADSET
@@ -43,10 +44,10 @@ int board_identity_prepare(uint64_t deadline)
     /* The session binds secure SID ownership and exclusion evidence. These
      * four read-only words are the entire admitted access. */
     for(unsigned i=0;i<4;++i){
-        __asm__ volatile("dsb sy":::"memory");
-        identity.words[i]=*(volatile const uint32_t *)(uintptr_t)(0x03006200+4*i);
+        a733_mmio_dsb_sy();
+        identity.words[i]=a733_mmio_read32(0x03006200+4*i);
     }
-    __asm__ volatile("dsb sy":::"memory");
+    a733_mmio_dsb_sy();
     identity.secure_read_record=s->sid_authority;
     if(a733_cpu_coherence_publish((uintptr_t)&identity,sizeof(identity),deadline)==1)return 1;
     identity.secure_read_record=0;return 0;

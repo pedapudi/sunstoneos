@@ -1,5 +1,6 @@
 #include "session.h"
 #include "boot.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 extern const uint8_t i2s_recorded_pcm_digest[32];
@@ -27,14 +28,14 @@ int i2s_session_valid(const struct i2s_session *s)
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {
- const struct i2s_session *s=(const void *)A733_STORAGE_SESSION_ADDRESS;uint8_t digest[32];
+ const struct i2s_session *s=(const void *)A733_STORAGE_SESSION_ADDRESS;uint8_t digest[32];uint64_t window;
  if(!c||!i2s_session_valid(s)||c->magic!=I2S_CONTRACT_MAGIC||c->version!=3||c->bytes!=sizeof(*c)||
     c->epoch!=s->epoch||c->generation!=s->generation||c->inverse_generation!=~c->generation||c->lease!=s->lease||
     memcmp(c->build_id,a733_smp_build_id,32)||memcmp(s->image,a733_smp_build_id,32)||
     c->reserved[0]!=A733_STORAGE_SESSION_ADDRESS||c->reserved[1]!=sizeof(*s)||
-    c->armed_at>now||c->armed_at>UINT64_MAX-I2S_SESSION_SECONDS*A733_SMP_COUNTER_HZ||
+    c->armed_at>now||!a733_deadline_after(c->armed_at,I2S_SESSION_SECONDS*A733_SMP_COUNTER_HZ,&window)||
     c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
-    c->diagnostic_deadline!=c->armed_at+I2S_SESSION_SECONDS*A733_SMP_COUNTER_HZ||
+    c->diagnostic_deadline!=window||
     c->expires_at!=c->diagnostic_deadline||c->watchdog_mode||c->watchdog_configuration||
     c->watchdog_output||c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)return 0;
  storage_digest_bytes(s,sizeof(*s),digest);return !memcmp(digest,&c->reserved[2],32);

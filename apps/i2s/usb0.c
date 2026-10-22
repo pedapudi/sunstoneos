@@ -1,6 +1,7 @@
 #include "application.h"
 #include "boot.h"
 #include "platform.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include "tusb.h"
 #include "device/dcd.h"
@@ -145,10 +146,11 @@ static void exchange(void)
   }
   if(op==6){
    pcm_upload_sequence=(uint64_t)offset|((uint64_t)bytes<<32);
-   uint64_t head=atomic_load_explicit(&app.runtime.head,memory_order_acquire),now=a733_smp_counter();
-   if(!pcm_upload_sequence||head>=UINT64_MAX/I2S_RUNTIME_FRAMES||pcm_upload_sequence!=head+1||now>UINT64_MAX-24000000)stop();
+   uint64_t head=atomic_load_explicit(&app.runtime.head,memory_order_acquire),now=a733_smp_counter(),deadline;
+   if(!pcm_upload_sequence||head>=UINT64_MAX/I2S_RUNTIME_FRAMES||pcm_upload_sequence!=head+1||
+      !a733_deadline_after(now,24000000,&deadline))stop();
    pcm_upload_extent=i2s_runtime_upload_bytes(pcm_upload_sequence);if(!pcm_upload_extent)stop();
-   pcm_upload_deadline=now+24000000;pcm_upload_bytes=0;
+   pcm_upload_deadline=deadline;pcm_upload_bytes=0;
    pcm_upload_ok=i2s_runtime_credits()!=0;pcm_upload_active=1;return;
   }
   if((op!=0&&op!=2)||offset||bytes)stop();
