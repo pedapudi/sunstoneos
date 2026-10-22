@@ -27,7 +27,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument("--verify-source",type=Path)
     p.add_argument("--tinyusb",type=Path);p.add_argument("--tcp",type=Path);p.add_argument("--rsn",type=Path);p.add_argument("--kernel",type=Path)
     p.add_argument("--headers",type=Path);p.add_argument("--linker",type=Path);p.add_argument("--qemu",type=Path)
-    p.add_argument("--case",choices=["generation","entropy","late","alias","inbound","inbound-cancel","inbound-timeout","inbound-queue","inbound-late-child","inbound-lost-child","inbound-pending","rekey"],default="generation");p.add_argument("--evidence",type=Path);p.add_argument("--build-only",action="store_true")
+    p.add_argument("--case",choices=["generation","entropy","late","alias","inbound","inbound-cancel","inbound-timeout","inbound-queue","inbound-late-child","inbound-lost-child","inbound-pending","rekey","sae"],default="generation")
+    p.add_argument("--openssl",type=Path,help="pinned OpenSSL tree; build the model with OpenSSL crypto and SAE");p.add_argument("--evidence",type=Path);p.add_argument("--build-only",action="store_true")
     a=p.parse_args()
     if a.verify_source:verify(a.verify_source.resolve());print("Pinned FreeRTOS+TCP source matches");return
     assert all([a.tcp,a.rsn,a.kernel,a.headers,a.linker,a.evidence,a.tinyusb])
@@ -37,7 +38,8 @@ def main():
     toolchain=out/"toolchain.cmake"
     toolchain.write_text(f'set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER clang)\nset(CMAKE_ASM_COMPILER clang)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")\nset(SUNSTONE_LLD "{a.linker}")\n# The repository toolchain also defines the path-map helpers its CMakeLists uses.\ninclude("{ROOT}/cmake/aarch64-clang.cmake")\n')
     result={"tcp_archive_sha256":TCP_ARCHIVE_SHA,"tcp_source":verify(a.tcp.resolve()),"commands":[]}
-    commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_LLD={a.linker}",f"-DTINYUSB_DIR={a.tinyusb}","-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"],
+    commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_LLD={a.linker}",f"-DTINYUSB_DIR={a.tinyusb}","-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]+
+              ([f"-DSUNSTONE_OPENSSL_DIR={a.openssl}","-DSUNSTONE_RADIO_SAE=ON"] if a.openssl else ["-DSUNSTONE_RADIO_SAE=OFF"]),
               ["cmake","--build",str(out/"build"),"--target","radio-network-model","-j4"]]
     for cmd in commands:
         run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"exit_code":run.returncode,"stdout":run.stdout,"stderr":run.stderr})
@@ -56,6 +58,8 @@ def main():
            "include/sunstone_net.h","network/allocator.c","network/include/FreeRTOSConfig.h",
            "network/include/FreeRTOSIPConfig.h","docs/radio-network.md"]
     names += ["checks/aic8800-runtime.c","checks/aic8800-sdio-transport.c","checks/sdio-controller.c"]
+    if a.openssl:names += ["checks/sae-openssl-native.c","cmake/openssl.cmake","drivers/net/aic8800_sae.c",
+        "drivers/net/aic8800_openssl.c","drivers/net/aic8800_openssl_libc.c","include/aic8800_openssl.h"]
     result["source_sha256"]={n:digest(ROOT/n) for n in names if (ROOT/n).is_file()}
     result.update(result="passed" if not run.returncode else "failed",exit_code=run.returncode)
     (out/"results.json").write_text(json.dumps(result,indent=2)+"\n")

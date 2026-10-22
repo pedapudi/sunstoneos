@@ -16,7 +16,16 @@ struct aic8800_supplicant_config {
     uint64_t entropy_record, beacon_record, ticks_per_second, command_timeout;
     uint8_t pmk[32], ap_rsn[256];
     uint16_t ap_rsn_bytes;
+    /* SAE derives the PMK from the password, so pmk stays zero. ap_rsnx is the
+     * first capability octet of the AP's observed RSNXE (zero when absent);
+     * its H2E bit selects hash-to-element instead of hunting-and-pecking. */
+    uint8_t key_mgmt, ap_rsnx, sae_password_bytes, sae_password[64];
 };
+enum aic8800_supplicant_key_mgmt { AIC8800_SUPPLICANT_PSK, AIC8800_SUPPLICANT_SAE };
+/* Station SAE results. SEND returns an Authentication frame body to transmit;
+ * WAIT means the received frame was discarded and nothing is sent. */
+enum aic8800_supplicant_sae_result { AIC8800_SUPPLICANT_SAE_FAILED, AIC8800_SUPPLICANT_SAE_WAIT,
+    AIC8800_SUPPLICANT_SAE_SEND, AIC8800_SUPPLICANT_SAE_ACCEPTED };
 enum aic8800_supplicant_state { AIC8800_SUPPLICANT_NEW, AIC8800_SUPPLICANT_HANDSHAKE,
     AIC8800_SUPPLICANT_AUTHORIZED, AIC8800_SUPPLICANT_RETIRING,
     AIC8800_SUPPLICANT_RETIRED, AIC8800_SUPPLICANT_FAULT };
@@ -33,7 +42,7 @@ struct aic8800_supplicant {
     struct aic8800_data *data;
     struct aic8800_wifi *wifi;
     struct aic8800_sdio_transport *owner;
-    void *rsn;
+    void *rsn,*sae,*sae_pt,*sae_token;
     enum aic8800_supplicant_state state;
     int rsn_state;
     uint64_t generation,last_now,deadline;
@@ -45,6 +54,10 @@ struct aic8800_supplicant {
     _Alignas(16) uint8_t large[AIC8800_SUPPLICANT_LARGE_SLOTS][16384];
     uint8_t deferred_rx[AIC8800_DATA_ETHERNET_BYTES], deferred_encrypted;
     uint16_t deferred_bytes;
+    /* SAE peer binding and the PMKID derived with the PMK. */
+    uint64_t sae_deadline;
+    uint8_t sae_own[6], sae_bssid[6], pmkid[16];
+    uint8_t sae_group, sae_rejected, sae_rounds, sae_accepted;
     uint8_t initialized,entered,head,count,action_active,completed,port_pending,retire_closed;
 };
 /* Fresh zero storage, copied immutable config/PMK/observed AP RSN. Single native
@@ -65,6 +78,26 @@ int aic8800_supplicant_receive(struct aic8800_supplicant *,const struct aic8800_
 int aic8800_supplicant_rearm(struct aic8800_supplicant *,struct aic8800_security *,
     struct aic8800_sdio_transport *,const struct aic8800_supplicant_config *);
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *);
+/* SAE authentication before association, in an initialized NEW supplicant
+ * configured for SAE. Start writes the first commit; receive consumes each
+ * Authentication frame body from the BSSID. Groups 19, 20 and 21 are tried in
+ * order. ACCEPTED sets the PMK and PMKID. Claim still refuses an SAE
+ * configuration: the association request, external authentication and
+ * protected management frames are not implemented. A failure, a frame at or
+ * after the deadline or an exhausted retry faults the supplicant like a
+ * failed handshake. Available
+ * only in images built with SUNSTONE_AIC8800_SAE. */
+enum aic8800_supplicant_sae_result aic8800_supplicant_sae_start(struct aic8800_supplicant *,
+    const uint8_t own[6],const uint8_t bssid[6],const uint8_t *ssid,size_t ssid_bytes,
+    uint64_t now,uint64_t deadline,uint8_t *frame,size_t capacity,size_t *bytes);
+enum aic8800_supplicant_sae_result aic8800_supplicant_sae_receive(struct aic8800_supplicant *,
+    const uint8_t *body,size_t body_bytes,uint64_t now,uint8_t *frame,size_t capacity,size_t *bytes);
+/* Free the SAE exchange state and wipe the password, keeping any accepted
+ * PMK and PMKID. A faulted supplicant keeps everything for recovery. Receive
+ * checks the deadline only when a frame arrives, so the caller clears an
+ * exchange whose deadline passes without one. Start then refuses: a retry
+ * initializes a new supplicant. */
+void aic8800_supplicant_sae_clear(struct aic8800_supplicant *);
 /* Close the port, delete every key, then wipe. After an unsolicited
  * disconnection (link DOWN) the station's port and pairwise key are gone with
  * it, so only group keys are deleted. Refused during unresolved roaming. */
