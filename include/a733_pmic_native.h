@@ -6,7 +6,7 @@ struct a733_pmic_native {
     struct a733_pmic_ops operations;
     struct a733_platform_locks *locks;
     void *task;
-    unsigned initialized;
+    unsigned initialized, holding; /* holding: the provider task entered the I2C mutex. */
 };
 /* Pure allowlist: only legacy TWI DATA/CNTR can be written. All engine, clock,
  * reset, pin, IRQ and autonomous PMU controls are observations only. */

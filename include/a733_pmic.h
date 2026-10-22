@@ -76,13 +76,21 @@ int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
     const struct a733_pmic_ops *,void *,struct a733_clock_leases *,
     struct a733_rail_leases *,struct a733_pins *);
 /* identity returns READY when the metadata copy succeeds, even during startup.
- * Only live reports provider readiness. Neither performs hardware discovery. */
+ * Only live reports provider readiness. Neither performs hardware discovery.
+ * live takes the provider object's try-lock and reads the power-authority
+ * state word of the bound rail ledger; it queries no other lock. A provider,
+ * clock registry or rail ledger fault in that word retains the provider. */
 enum a733_pmic_status a733_pmic_identity(struct a733_pmic *,struct a733_pmic_lifetime *);
 enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_lifetime *);
 /* One designated task advances one bounded state per call. No busy waits,
  * retries, clock/reset writes or bus-recovery pulses. The only PMIC data
  * write is an admitted selector write (a733_pmic_submit_write). An
  * accepted transaction retains the common I2C mutex across worker calls.
+ * Startup verifies the S_TWI0 gate and reset and the idle engines once, and
+ * sets A733_POWER_PROVIDER_READY. A request is admitted once against the
+ * clock registry, its rail borrow, the unchanged clock route and divisor and
+ * an idle bus; each later bus phase checks only the state word. The bus-idle
+ * registers are read again after every STOP.
  * Failure retains any still-owned mutex, request ticket and all leases. A
  * client-detected fault is latched immediately; the provider task must poll
  * once more to mark its own mutex retained. No client unlocks another task.
