@@ -561,6 +561,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
+- CPU performance counters: **implemented** [measurement regions](cpu-pmu.md)
+  that count cycles, instructions, cache refills, bus accesses and TLB walks
+  per core for an EL1 task pinned to that core. An instruction model and
+  two-core QEMU runs on Cortex-A55 and Cortex-A76 models pass; an empty region
+  counts 20 instructions. No image links the module. Event counting first
+  needs both EL3 continuation paths to copy `PMCR_EL0.N` into
+  `MDCR_EL2.HPMN`. Physical PMU access is unqualified.
 - Thermal and frequency control: **implemented** [controller](thermal.md) and
   [native application](thermal-application.md). The controller
   implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
