@@ -38,7 +38,7 @@ void board_fail(void *unused)
  * atomic admission. The independent watchdog owns recovery from stopped CPUs. */
 void a733_storage_maintenance_stop(void)
 {board_fail(NULL);a733_typec_revoke(&board.typec.provider);}
-static _Noreturn void park(void){for(;;)vTaskDelay(1);}
+static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
 static void pmic(void *unused)

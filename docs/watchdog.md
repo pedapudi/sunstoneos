@@ -15,13 +15,58 @@ reset destination and recovery path. The failed USB instance is recorded in
 still contains its ROM descriptor. A new instance must pass normal ROM checks.
 The record is retained for diagnosis and does not block a distinct instance.
 
-## Prepared watchdog driver
+## Launchers arm the watchdog for runtime images
 
-[drivers/watchdog/a733_watchdog.c](../drivers/watchdog/a733_watchdog.c) programs
-the A733 watchdog at `0x02050000`. It uses the keyed configuration and mode
-registers, supports the documented discrete timeouts from 1 to 16 seconds, and
-refuses an already enabled watchdog. Callers must zero-initialize the context
-and provide exclusive ownership.
+Every runtime image that runs under the watchdog finds WDT0 already armed by
+the code that admitted it: an SRAM launcher loaded over FEL, or the stage-2
+slot loader. A FEL launcher writes the RTC FEL request `0x5aa5a55a` to
+`0x07090108`, the CPU0 ROM redirect flag `0xfa50392f` to `0x070501c0` and the
+redirect entry `0x20` to `0x070501c4`. It then writes output `2` and
+configuration `1` (system reset) under key `0x16aa0000`, and mode `0x41`, which
+enables the four-second interval. Restart word `0x14af` starts the count. It
+reads each value back, records the arming time in the contract and never
+disarms the timer.
+
+Each of five files writes these register values with its own literals:
+
+- [platform/a733-smp/launch.c](../platform/a733-smp/launch.c), the SMP
+  diagnostic launcher;
+- [platform/a733-smp-observe/launch.c](../platform/a733-smp-observe/launch.c),
+  which must stay textually equal to the SMP launcher apart from its request
+  magic;
+- [platform/a733-storage-launch/launch.c](../platform/a733-storage-launch/launch.c),
+  the storage-maintenance and native mimus launcher;
+- [platform/a733-device-launch/launch.c](../platform/a733-device-launch/launch.c),
+  the extended device-memory launcher;
+- [boot/a733/stage2/loader.c](../boot/a733/stage2/loader.c), the stage-2 slot
+  loader, which omits the FEL and redirect writes.
+
+The maintenance reload verifier in
+[platform/a733/maintenance_watchdog.c](../platform/a733/maintenance_watchdog.c)
+and the board contract validators for the armed and resident lifetimes require
+mode `0x41`, configuration `1` and output `2`. A different interval therefore
+needs the launchers, the reload verifier, the contract validators and their
+host checks changed together. A missed site makes the verifier or the contract
+admission refuse, which stops the image and leaves the armed watchdog to reset
+the board.
+
+The launchers do not share a header. The host tools that build the storage
+and device launchers copy only each launcher's own files into an isolated
+directory, and a host check compares the SMP launcher as text with the observe
+launcher.
+
+## Save-and-restore driver for the expiry diagnostic
+
+[drivers/watchdog/a733_watchdog.c](../drivers/watchdog/a733_watchdog.c) arms
+WDT0 only in the [protected expiry diagnostic](watchdog-expiry.md); no runtime
+image links it, and `a733_watchdog_feed` has no caller outside the host check.
+Unlike the launchers, it keeps the other mode bits, can disarm, and leaves the
+ROM redirect registers untouched.
+
+The driver programs the A733 watchdog at `0x02050000`. It uses the keyed
+configuration and mode registers, supports the documented discrete timeouts
+from 1 to 16 seconds, and refuses an already enabled watchdog. Callers must
+zero-initialize the context and provide exclusive ownership.
 
 Arming saves the previous configuration and writes the bootloader's FEL request
 value to RTC register `0x07090108`. It selects system reset and the reset-pulse
