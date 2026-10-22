@@ -140,14 +140,23 @@ point of coherency before the read-only mapping takes effect.
 A job's tags occupy the top of the tag area, `[64 KiB − tags × 4, 64 KiB)`,
 directly below its sums at `[64 KiB, 64 KiB + sums)`. Tag words therefore
 never hold sums, and one maintenance call covers both. Per job the worker
-makes three `aarch64_device_cache` calls, six `DSB SY` in total, and three
-once the primary agent removes the helper's leading `DSB SY`:
+makes three `aarch64_device_cache` calls, six `DSB SY` in total. The Arm
+architecture orders a data-cache operation by address only against accesses
+to the same line from the same core, so the helper's leading `DSB SY` is the
+barrier that orders two of these calls, and this design keeps it:
 
 - clean the activation extent, rounded outward to 64-byte lines; the span is
-  2 MiB aligned, so the rounded range stays inside it;
+  2 MiB aligned, so the rounded range stays inside it. Cores 6 and 7 write
+  the codes through `ParallelFor`, and core 6 cleans them after the join.
+  The leading barrier orders the clean after the join's acquire load;
+  without it the clean can run before core 6 observes core 7's stores, and
+  the GPU reads stale codes behind matching tags;
 - clean the 128-byte job-word area, already line-aligned;
 - after completion, clean and invalidate tags and sums, from a
   128-byte-aligned start to the end rounded up to a line, inside the region.
+  The leading barrier orders this after the worker's read of the completion
+  record; without it a line can refill before the GPU's store lands and hold
+  a stale sum next to a fresh tag.
 
 A refusal from the helper is a class-1 refusal: no kick has happened, and the
 call runs on the CPU.
@@ -170,8 +179,9 @@ completion before touching that call's codes. The per-job clean provides
 coherence, and the per-job extent check stays.
 
 The GPU worker runs at EL1 on core 6 and performs all maintenance. Completion
-arrives by SPI 63 (INTID 95) on core 6. In order: the worker cleans and
-invalidates the job's tags and sums, whose trailing `DSB SY` completes the
+arrives by SPI 63 (INTID 95) on core 6. In order: the worker reads the
+completion record; it cleans and invalidates the job's tags and sums behind
+the helper's leading `DSB SY`, and the trailing `DSB SY` completes the
 maintenance for every core; it posts the completion; the recognizer compares
 every tag with the job's sequence; then it reads out the sums.
 
@@ -277,7 +287,7 @@ the saving of each left-out change.
 | GPU compute, all channels | 14.894 s on the A55 | 0.574 s; 0.72 s or 0.90 s if an assumption fails | Time model; board |
 | DRAM bytes read per MAC | None | 0.75 per lane; 0.156 per workgroup with cache reuse | `checks/gpu-mimus-layers` |
 | Lines maintained on core 6 per recording, GPU only | None | 597,601 cleaned; 988,060 cleaned and invalidated, tags included | `aarch64_device_cache` wrap counters, same check |
-| `DSB SY` per job | None | 6, from three helper calls; 3 without the leading barrier | Barrier wraps in `checks/pvr-compute-service` |
+| `DSB SY` per job | None | 6, from three helper calls, including a barrier after the join and after the completion read | Barrier wraps in `checks/pvr-compute-service` and `checks/gpu-mimus-layers` |
 | Tag words per recording, GPU only | None | 815,008 | `checks/gpu-mimus-layers` |
 | Read-out instructions per recording | Inside the CPU kernel | At most 43.3 M: 3 per int32 output, 4 per int64, 1 more per residual output; 155 M scalar | `checks/gpu-mimus-readout` under Unicorn, times outputs per call |
 | Checks per job | Native resource admission and a CPU mapping check | At most 12 compares; no translation, no hash | `checks/pvr-compute-service` |
@@ -310,7 +320,11 @@ host maps the output region with `PROT_READ` outside the modeled GPU, so a
 CPU store into it faults the check, and the check fails if the completion
 maintenance is anything but clean-and-invalidate. It enforces codes inside
 the arena span, `rows ≤ job_rows`, job boundaries on 32-row multiples,
-complete tags and total MACs within 0.06% of the profile. It prints each
+complete tags and total MACs within 0.06% of the profile. Its barrier and
+maintenance wraps record the order of the `ParallelFor` join, the
+completion-record read, each barrier and each cache operation, and the check
+fails unless a barrier separates the join from the activation clean and the
+completion read from the clean-and-invalidate. It prints each
 call's rows, K, N, residual flag and read-out path for the time model. It
 compares each tensor class's GPU read-out with that tensor's CPU path. Cases:
 
@@ -423,8 +437,7 @@ Also left out:
   read-out path and output counters per call.
 - **Primary agent:** A76 admission with the inference workers on cores 6 and
   7; `0x46C00000`–`0x47000000` read-only at EL0; the tag area zeroed and
-  cleaned in each boot before that mapping takes effect; removal of the
-  leading `DSB SY` in `aarch64_device_cache`.
+  cleaned in each boot before that mapping takes effect.
 
 ## Board evidence that would confirm the design
 
