@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "a733_range.h"
 #include "return.h"
 #include "../gpu-render/application.h"
 #include "../gpu-render/session.h"
@@ -29,11 +30,11 @@ _Noreturn void platform_exit(unsigned status)
     for(unsigned interval=0;interval<2;++interval){
         uintptr_t lo=interval?0x48000000:start,hi=interval?0x48086000:end;
         for(uintptr_t p=lo;p<hi;p+=64){
-            now=counter();if(now<last||now>=deadline)retain();last=now;
+            now=counter();if(!a733_deadline_admit(now,&last,deadline))retain();
             __asm__ volatile("dc cvac,%0"::"r"(p):"memory");
         }
     }
     __asm__ volatile("dsb sy":::"memory");
-    now=counter();if(now<last||now>=deadline)retain();
+    now=counter();if(!a733_deadline_admit(now,&last,deadline))retain();
     gpu_finite_smc(0);
 }
