@@ -33,9 +33,14 @@ struct pvr_render_service {
     /* Copied output becomes readable only at COMPLETE, after both timelines,
      * coherent reads, every pixel/guard and the final deadline observation. */
     uint32_t pixels[PVR_RENDER_WIDTH*PVR_RENDER_HEIGHT];
+    /* Texture profiles: WRITE places each upload byte in the vertex, index or
+     * texture area while no frame is in flight, and batch records here.
+     * PRESENT and READ use the output frame in place. */
     atomic_uint texture_state,texture_output_state;
     struct pvr_render_texture_request texture_request;
     struct pvr_render_texture_input texture_input;
+    struct pvr_render_batch texture_batches[PVR_RENDER_BATCH_MAX];
+    uint32_t payload_checked; /* The payload mapping was translated at the first BEGIN. */
     uint64_t texture_ticket,texture_epoch,texture_generation,texture_draft_deadline;
     uint64_t texture_output_ticket;
     uint32_t texture_client,texture_output_client,texture_output_frame;

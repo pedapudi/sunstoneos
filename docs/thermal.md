@@ -145,29 +145,45 @@ publishes one of three levels:
 | Channel | Passive trip | Hysteresis | Critical trip |
 | --- | --- | --- | --- |
 | 0, CPUB | 90 °C | 2 °C | 110 °C |
-| 1, DDR | none | none | 110 °C |
+| 1, DDR | 85 °C | 2 °C | 110 °C |
 | 2, NPU | none | none | 110 °C |
 | 3, CPUL | 90 °C | 2 °C | 110 °C |
 | 4, GPU | 90 °C | 0 °C | 110 °C |
 
-The trips come from the `thermal-zones` node of the pinned `sun60iw2p1.dtsi`.
-Each CPU and GPU zone there has two passive trips. The second one is bound to a
-CPU or GPU cooling device and is the policy's passive trip. The first, at 70 °C
-for the CPUs (55 °C for CPUB in the board device tree) and 60 °C for the GPU,
-only starts fans and power accounting, which this board does not use. The GPU
-zone specifies no hysteresis, so its throttle can switch on and off at
-consecutive readings near 90 °C. The zones that refer to sensors 5–7 describe
-no hardware and are omitted. The 1 s staleness bound equals the zones'
-1000 ms polling delay. The 5 s bound limits how long throttled work continues
-without temperature data.
+The trips come from the `thermal-zones` node of the pinned `sun60iw2p1.dtsi`,
+except the DDR passive trip. Each CPU and GPU zone there has two passive
+trips. The second one is bound to a CPU or GPU cooling device and is the
+policy's passive trip. The first, at 70 °C for the CPUs (55 °C for CPUB in the
+board device tree) and 60 °C for the GPU, only starts fans and power
+accounting, which this board does not use. The GPU zone specifies no
+hysteresis, so its throttle can switch on and off at consecutive readings near
+90 °C. The zones that refer to sensors 5–7 describe no hardware and are
+omitted. The 1 s staleness bound equals the zones' 1000 ms polling delay. The
+5 s bound limits how long throttled work continues without temperature data.
+
+The vendor DDR zone has only the 110 °C critical trip. The board adds a
+passive trip at 85 °C because JEDEC specifies LPDDR5 standard refresh up to
+85 °C die temperature, and no decoded boot0 setting shows derated or
+temperature-driven refresh. The input is the SoC's THS DDR channel, which
+measures near the memory controller and has an unknown offset from the DRAM
+die. Today THROTTLE has no consumer in the OS image, whose thermal service acts
+only on CRITICAL, so the trip changes the published level and nothing else.
+Its board cost is unmeasured. Connecting THROTTLE to the CPU clock driver,
+which would cap both clusters at 1014 MHz, waits for the DDR trip measurement
+in the [DRAM controller design](designs/dram-controller.md#performance-budgets).
+That measurement records the recognition real-time factor over 10 minutes
+with and without the trip, DDR minus CPUB temperature per sample, and the time
+each channel spends at or above 85 °C. It belongs in the same board session
+that qualifies the throttle.
 
 Every trip lies in the code ≤ 1769 branch of the conversion formula, where
 temperature decreases strictly as the code increases. For example, code 1309
-converts to 90.034 °C and code 970 to 110.035 °C. The discontinuity at code 1769
-therefore cannot reorder a reading relative to a trip. The hardware alarm and
-critical thresholds are separate per-session raw codes. The thermal
-application requires all five alarm and critical interrupts, while the
-returning client disables them, so the policy cannot depend on either setting.
+converts to 90.034 °C, code 1394 to 85.019 °C and code 970 to 110.035 °C. The
+discontinuity at code 1769 therefore cannot reorder a reading relative to a
+trip. The hardware alarm and critical thresholds are separate per-session raw
+codes. The thermal application requires all five alarm and critical
+interrupts, while the returning client disables them, so the policy cannot
+depend on either setting.
 
 Other tasks and cores read the level with `a733_thermal_policy_level`, and
 the channels that have had at least one valid reading with
@@ -253,7 +269,13 @@ published channels to match the policy's own before each notification,
 including a first reading that throttles. The check passes with
 AddressSanitizer and UndefinedBehaviorSanitizer. The existing controller,
 lease-wait, clock-reference and configured-stop checks also pass with the
-policy code present.
+policy code present. For the DDR channel the policy check requires no
+THROTTLE at code 1395 (84.96 °C) and THROTTLE at code 1394 (85.02 °C), holds
+it at code 1428 (83.01 °C), releases it at code 1429 (82.95 °C) and reaches
+CRITICAL at code 970 while throttled. The DDR trip adds 68 bytes of text to
+`a733_thermal.c` (10,408 to 10,476 bytes), 68 bytes to the thermal image and
+64 bytes to the OS image; the monitor image, which links no policy, is
+unchanged.
 
 ## Detected reference-clock compatibility has focused evidence
 

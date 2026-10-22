@@ -8,14 +8,24 @@ The native caller submits two caller-selected canonical texture inputs through
 existing GPU service operations. Trusted graphics profile 2 supplies the resident
 vertex and fragment programs. It uses the corrected geometry plus partial-render
 kick followed by final fragment submission. The existing paired completion,
-cache acquisition, guard checks and copied snapshot precede output access.
+cache invalidation and guard checks precede output access.
 
-The caller borrows each sequence-matched copied output slot, converts its RGBA8
+The caller borrows each sequence-matched read-back slot, which holds one 64 KiB
+chunk of the GPU output frame, converts its RGBA8
 pixels to RGB565 and returns that exact ticket before borrowing another slot.
 The conversion drops alpha and uses the upper five, six and five bits of red,
 green and blue. It performs no scaling; the GPU already rendered the complete
 720p surface. A separate display allocation receives the converted pixels. GPU
 and display engines share no framebuffer mapping or imported ownership token.
+
+Before each kick the worker fills the output frame with a poison value, 3.7 MB
+at 720p, and cleans it. A tile that the GPU fails to write then reaches HDMI as
+the poison colour instead of pixels from an earlier frame. This application
+reads every frame back through READ slots, and the worker learns whether a
+frame will be read or presented only after completion, so every frame keeps the
+fill. The design in [designs/gpu-graphics.md](designs/gpu-graphics.md) removes
+it for scanout: scanout slots are fixed at OPEN and skip the fill, and
+read-back keeps it until a board run shows that every tile is written.
 
 Both display frames and register command pages become immutable before display
 translation installation and DE start. The application closes the GPU normally,

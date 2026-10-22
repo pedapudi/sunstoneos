@@ -3848,7 +3848,9 @@
  },
  "gpu-display-replay.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-graphics.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4137,6 +4139,24 @@
   "summary": "Only supervised GPU admission, immutable input packaging and launcher cases.",
   "usb": false
  },
+ "gpu-texture-frame.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/gpu-graphics-measurements.md",
+   "docs/designs/gpu-graphics.md",
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count the render worker's per-frame CPU work on the texture path.",
+  "usb": false
+ },
  "gpu-texture-runtime.py": {
   "cache_areas": [],
   "docs": [
@@ -4165,7 +4185,7 @@
    "--qemu",
    "--lld"
   ],
-  "summary": "Check native display-sized indexed texture staging, mapping and copied output ownership.",
+  "summary": "Check native display-sized indexed texture upload, mapping and in-place output ownership.",
   "usb": false
  },
  "gpu-transport-only.py": {
@@ -5887,6 +5907,7 @@
  "nbg-checksum-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-exact-sum.md",
    "docs/nbg-checksum.md"
   ],
   "library": false,
@@ -5977,6 +5998,7 @@
  "nbg-layout-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-conformance.md",
    "docs/nbg-assembly.md"
   ],
   "library": false,
@@ -6125,10 +6147,25 @@
   "summary": "One native NPU application link and focused constructor/client/frame/host composition.",
   "usb": false
  },
+ "npu-conformance.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-conformance-measurements.md",
+   "docs/designs/npu-conformance.md",
+   "docs/npu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the NPU conformance harness's vectors, comparisons and identity pins; host only.",
+  "usb": false
+ },
  "npu-conv-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu-compiler.md"
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6159,7 +6196,9 @@
  "npu-dual-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu-compiler.md"
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6398,7 +6437,9 @@
    "host"
   ],
   "docs": [
+   "docs/designs/npu-conformance.md",
    "docs/handoff.md",
+   "docs/npu-conformance.md",
    "docs/npu-service.md",
    "docs/npu-session.md"
   ],

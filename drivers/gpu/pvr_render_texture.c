@@ -296,9 +296,11 @@ int pvr_render_texture_layout_profile(uint32_t width,uint32_t height,uint32_t pr
     struct pvr_render_texture_layout l={0};
     l.output=PVR_RENDER_PROGRAM_BYTES+4096;
     l.output_bytes=bytes+128;l.output_allocation=(l.output_bytes+4095)&~4095u;
+    /* The frame between the guards is presented and read in place. */
+    l.copy=l.output+64;
     l.image=l.output+l.output_allocation;
     l.geometry=l.image+((PVR_RENDER_TEXTURE_MAX_BYTES+4095)&~4095u);
-    l.draft=l.geometry+PVR_RENDER_TEXTURE_GEOMETRY_BYTES;
+    uint32_t next=l.geometry+PVR_RENDER_TEXTURE_GEOMETRY_BYTES;
     if(profile==3)l.depth_bytes=PVR_RENDER_DEPTH_BYTES;
     if(profile==4) {
         /* Packed D32S8 uses eight bytes per sample over the same twiddled
@@ -306,10 +308,8 @@ int pvr_render_texture_layout_profile(uint32_t width,uint32_t height,uint32_t pr
         uint32_t x=32,y=32;while(x<width)x*=2;while(y<height)y*=2;
         l.depth_bytes=x*y*8u;
     }
-    if(l.depth_bytes){l.depth=l.draft;l.draft+=l.depth_bytes+8192;}
-    l.copy=l.draft+((PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES+
-        (profile==4?PVR_RENDER_BATCH_MAX*PVR_RENDER_BATCH_BYTES:0)+4095)&~4095u);
-    l.upload=l.copy+((bytes+4095)&~4095u);
+    if(l.depth_bytes){l.depth=next;next+=l.depth_bytes+8192;}
+    l.upload=next;
     l.download=l.upload+PVR_RENDER_TEXTURE_CHUNK;
     l.total=l.download+PVR_RENDER_TEXTURE_CHUNK;
     *out=l;return 1;
@@ -422,10 +422,13 @@ int pvr_render_texture_depth_job(uint32_t width,uint32_t height,struct pvr_rende
     uint32_t stride,bytes;
     if(!job || !pvr_render_texture_geometry(width,height,&stride,&bytes))return 0;
     /* Pinned BXM ZLS minimum is a 2x2 block of 16-pixel ISP tiles. Power-of-two
-     * twiddled extents cover that minimum, avoiding small-surface transfers. */
+     * twiddled extents cover that minimum, avoiding small-surface transfers.
+     * The background object clears depth on chip. zloaden, zstoreen and their
+     * force bits stay clear, as pvr_arch_job_render.c:993-1003 encodes an
+     * attachment that is neither loaded nor stored, so the GPU never reads or
+     * writes depth in DRAM. */
     uint32_t x=32,y=32;while(x<width)x*=2;while(y<height)y*=2;
-    uint64_t zls=(uint64_t)(y/16-1)<<27 | (uint64_t)(x/16-1)<<3 |
-        (1u<<19)|(1u<<17)|(1u<<13)|4u;
+    uint64_t zls=(uint64_t)(y/16-1)<<27 | (uint64_t)(x/16-1)<<3 | (1u<<17)|(1u<<13);
     put64(job->fragment+136,zls);put64(job->fragment+144,PVR_RENDER_DEPTH_ADDRESS);
     uint32_t flags;memcpy(&flags,job->fragment+464,4);put32(job->fragment+464,flags|(1u<<7));
     put32(job->fragment+468,x*y*4);return 1;
@@ -538,11 +541,12 @@ int pvr_render_batch_commands(void *payload,uint32_t width,uint32_t height,uint3
 int pvr_render_batch_depth_job(uint32_t width,uint32_t height,struct pvr_render_job_image *job)
 {
     if(!pvr_render_texture_depth_job(width,height,job))return 0;
-    /* D32_SFLOAT_S8_UINT uses packed F64Z storage. Depth and stencil share the
-     * address and stride, are cleared by the background object and stored
-     * without an initial load, as pvr_arch_job_render.c:958-1025 does. */
+    /* D32_SFLOAT_S8_UINT uses packed F64Z format. Depth and stencil share the
+     * address and stride and are cleared by the background object; sloaden
+     * and sstoreen stay clear, so neither is loaded or stored
+     * (pvr_arch_job_render.c:958-1025). */
     uint64_t zls;memcpy(&zls,job->fragment+136,8);
-    put64(job->fragment+136,zls|UINT64_C(3)<<25|UINT64_C(3)<<23|UINT64_C(1)<<18);
+    put64(job->fragment+136,zls|UINT64_C(3)<<25|UINT64_C(3)<<23);
     put64(job->fragment+152,PVR_RENDER_DEPTH_ADDRESS);
     uint32_t flags,stride;memcpy(&flags,job->fragment+464,4);memcpy(&stride,job->fragment+468,4);
     put32(job->fragment+464,flags|(1u<<8));put32(job->fragment+468,stride*2u);put32(job->fragment+472,stride*2u);
