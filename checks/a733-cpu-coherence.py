@@ -2,6 +2,7 @@
 """Check cold CPU controls and cache entry; no SMP-image or physical execution."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -19,6 +20,13 @@ REF = Path.home() / '.cache/sunstoneos/sources/cpu-coherence'
 REV = '0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e'
 GPR = [UC_ARM64_REG_X0+i for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_LR]
 MASK = (1 << 64) - 1
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py').TCR
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -143,7 +151,7 @@ def emulate(path, selected):
             else:
                 assert len(tlbi)==2 and len(enables)==1
                 assert model[f'mair_el{el}']==0x44ff00
-                assert model[f'tcr_el{el}']==(0x200803019 if el==1 else 0x80823019)
+                assert model[f'tcr_el{el}']==(TCR if el==1 else 0x80823019)
                 assert model[f'ttbr0_el{el}']==0x42000000
                 assert model[f'sctlr_el{el}']&0x1005==0x1005
                 first=trace.index(tlbi[0]);second=trace.index(tlbi[1],first+1)

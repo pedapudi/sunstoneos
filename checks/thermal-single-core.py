@@ -9,6 +9,7 @@ for name in ('image','session','output'):parser.add_argument('--'+name,type=Path
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=False)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').TCR
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/thermal/prepare.py')
 image=args.image;e=native.Image(image);e.path=image;e.ops={}
 for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True).splitlines():
@@ -43,10 +44,10 @@ class Machine(shared.Machine):
   assert self.finished or self.parked,(name,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
   return self.cpu.reg_read(UC_ARM64_REG_X0)
  def translate(self,va,write):
-  assert self.sysregs['tcr_el1']==0x200803019
-  self.sysregs['tcr_el1']=0x200803519
+  assert self.sysregs['tcr_el1']==TCR
+  self.sysregs['tcr_el1']=TCR
   try:return super().translate(va,write)
-  finally:self.sysregs['tcr_el1']=0x200803019
+  finally:self.sysregs['tcr_el1']=TCR
 results={}
 def passed(n):results[n]=True;(out/'completed.json').write_text(json.dumps(results,indent=2)+'\n')
 m=Machine();m.call('sd_single_core_monitor_init');assert not m.parked, (m.read(0x42000028),m.publications)

@@ -10,6 +10,7 @@ parser.add_argument('--resume',action='store_true',help='Retain completed cases 
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=args.resume)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').TCR
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/pwm/prepare.py')
 providers=mod('pwm_nominal_providers',r/'checks/a733-provider-fixture.py')
 raw=bytearray(args.session.read_bytes());providers.validate_nominal_providers(raw,usb_reference_mode=2)
@@ -48,10 +49,10 @@ class Machine(shared.Machine):
   assert self.finished or self.parked,(name,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
   return self.cpu.reg_read(UC_ARM64_REG_X0)
  def translate(self,va,write):
-  assert self.sysregs['tcr_el1']==0x200803019
-  self.sysregs['tcr_el1']=0x200803519
+  assert self.sysregs['tcr_el1']==TCR
+  self.sysregs['tcr_el1']=TCR
   try:return super().translate(va,write)
-  finally:self.sysregs['tcr_el1']=0x200803019
+  finally:self.sysregs['tcr_el1']=TCR
 results=json.loads((out/'completed.json').read_text()) if args.resume else {}
 def passed(n):results[n]=True;(out/'completed.json').write_text(json.dumps(results,indent=2)+'\n')
 runtime_cases={'retained-session-contract-and-disabled-routed-irq67','session-survives-upload-mutation-and-el1-bss-clear','actual-descriptors-map-pwm-device-and-exclude-monitor','actual-owner-usb-pmic-provider-task-construction-restores-daif','actual-single-core-irq67-dispatch-defers-without-pwm-read'}|{'refuses-'+v for v in ('tampered-session','tampered-contract','secondary-active','secondary-control','secondary-mode','watchdog-active','publication-failure','irq-enabled','irq-pending','irq-active')}

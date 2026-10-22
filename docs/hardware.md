@@ -273,6 +273,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   interrupts. Focused checks cover inherited SIF clearing and terminal faults.
   The central image also links; it has a distinct build identity. Physical
   cache coherence, entry, interrupts and secondary scheduling remain unqualified.
+  The cached images walk their EL1 translation tables through the data caches;
+  every core flushes the tables and compares their checksum before enabling
+  translation. Instruction models pass, but no such image may run on the board
+  before the [table walk measurements](cpu-coherence.md#board-measurement-before-the-profile-is-adopted) pass.
   The [USB observer](a733-smp-observe.md) publishes validated bounded result
   frames from the cached diagnostic. Host and instruction checks pass. Its
   [separate launcher](a733-smp-observe-host.md) preserves received frames before

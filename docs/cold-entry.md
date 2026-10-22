@@ -164,3 +164,35 @@ unproven: the OR100 processor, for which neither pinned document gives a
 reset or clock control, and the crypto engine, which the board ROM takes out
 of reset. The check therefore refuses on every board until further evidence
 exists. The loader does not call it yet.
+
+## The EL1 tables need a Nonsecure dirty-line experiment
+
+**Status: specified; not run.** The cached images walk the EL1 translation
+tables through the data caches ([CPU coherence](cpu-coherence.md#el1-table-walks-read-descriptors-through-the-data-caches)).
+Core 0 writes the tables at EL3 with the MMU off, which addresses the Secure
+physical space, after removing Secure lines over them. Each core then flushes
+the two EL1 pages with `DC CIVAC` in the Nonsecure space before its first walk.
+On the Cortex-A55, `DC IVAC` cleans a dirty line before invalidating it
+(Technical Reference Manual 100442_0200_00, section A6.2.4), and `DC CIVAC`
+always does. A Nonsecure dirty line left over a table page by the boot loader
+or an earlier image would therefore be written back over the new descriptors.
+The per-core table checksum then stops that core before translation, which is
+a bounded failure on every boot, so the experiment must show that no such line
+exists at entry.
+
+The experiment runs on each launch path that starts a cached image. Today
+that is the supervised USB launch; the microSD stage-2 monitor joins it when
+its loader enters a slot. On core 0 at EL3 with the MMU off, the experiment:
+
+1. fills the five table pages at `0x421f0000`–`0x421f5000` with a known
+   pattern through the Secure alias;
+2. cleans the same pages with `DC CVAC` through the Nonsecure alias, using the
+   temporary EL3 mapping of `platform/a733-smp-supervised/publication.S`;
+3. reads the pages back through the Secure alias and records every word that
+   differs from the pattern, with its address.
+
+The experiment passes when no word changes in three cold boots per path. A
+changed word means that the Nonsecure flush must move before the first
+descriptor write, which needs an EL3 mapping of the Nonsecure alias while the
+tables are built. No image built with the cacheable EL1 walk profile runs on
+the board before this experiment passes.

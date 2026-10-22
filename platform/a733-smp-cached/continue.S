@@ -1,4 +1,5 @@
 #include "a733_cpu_continue.h"
+#include "a733_cpu_coherence.h"
 .section .text.a733_cpu_continue,"ax"
 .balign 4
 .global a733_cpu_secondary_continue
@@ -137,9 +138,9 @@ a733_cached_enter_el1:
     msr sctlr_el1, x25
     isb
     // Restore TCR last, with M/C/I off until the stackless EL1 helper.
-    mov x2, #0x3019
-    movk x2, #0x0080, lsl #16
-    movk x2, #2, lsl #32
+    mov x2, #(A733_CPU_COHERENCE_TCR & 0xffff)
+    movk x2, #((A733_CPU_COHERENCE_TCR >> 16) & 0xffff), lsl #16
+    movk x2, #((A733_CPU_COHERENCE_TCR >> 32) & 0xffff), lsl #32
     msr tcr_el1, x2
     isb
     eret
@@ -170,7 +171,6 @@ a733_cached_enter_el1:
     bl a733_cached_el1
     b a733_cached_el1_fault
 .size a733_cached_enter_el1,.-a733_cached_enter_el1
-
 
 /* Workaround ordering and BHB loop adapted from Trusted Firmware-A.
  * Copyright (c) 2017-2026, Arm Limited and Contributors. All rights reserved.

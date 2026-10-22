@@ -13,6 +13,7 @@ parser.add_argument('--resume',action='store_true')
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=args.resume)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').TCR
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/npu-convolution/prepare-supervised.py')
 image=args.image;e=native.Image(image);e.path=image;e.ops={}
 original_address=e.address
@@ -54,10 +55,10 @@ class Machine(shared.Machine):
   assert self.finished or self.parked,(name,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
   return self.cpu.reg_read(UC_ARM64_REG_X0)
  def translate(self,va,write):
-  assert self.sysregs['tcr_el1']==0x200803019
-  self.sysregs['tcr_el1']=0x200803519
+  assert self.sysregs['tcr_el1']==TCR
+  self.sysregs['tcr_el1']=TCR
   try:return super().translate(va,write)
-  finally:self.sysregs['tcr_el1']=0x200803019
+  finally:self.sysregs['tcr_el1']=TCR
 assert not args.resume or args.usb_terminal_only
 results=json.loads((out/'completed.json').read_text()) if args.resume else {}
 def passed(n):results[n]=True;(out/'completed.json').write_text(json.dumps(results,indent=2)+'\n')

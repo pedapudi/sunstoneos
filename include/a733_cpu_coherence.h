@@ -1,19 +1,29 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 #ifndef SUNSTONE_A733_CPU_COHERENCE_H
 #define SUNSTONE_A733_CPU_COHERENCE_H
+#ifdef __ASSEMBLER__
+#define A733_CPU_COHERENCE_U64(x) x
+#else
 #include <stddef.h>
 #include <stdint.h>
+#define A733_CPU_COHERENCE_U64(x) UINT64_C(x)
+#endif
 
-/* Cold-entry primitives used by the dedicated cached eight-core diagnostic. */
-#define A733_CPU_COHERENCE_MAIR UINT64_C(0x44ff00)
-#define A733_CPU_COHERENCE_TCR UINT64_C(0x200803019)
-#define A733_CPU_COHERENCE_TCR_EL3 UINT64_C(0x80823019)
-#define A733_CPU_COHERENCE_MONITOR UINT64_C(0x42000000)
-#define A733_CPU_COHERENCE_MONITOR_END UINT64_C(0x42200000)
+/* Cold-entry primitives used by the dedicated cached eight-core diagnostic.
+ * TCR_EL1: 39-bit VA, 40-bit PA, 4 KiB granule, TTBR1 walks disabled, and
+ * Inner Shareable write-back read/write-allocate walks (IRGN0 = ORGN0 = 1).
+ * Assembly sources and tools/a733_tcr.py read this definition. */
+#define A733_CPU_COHERENCE_MAIR A733_CPU_COHERENCE_U64(0x44ff00)
+#define A733_CPU_COHERENCE_TCR A733_CPU_COHERENCE_U64(0x200803519)
+#define A733_CPU_COHERENCE_TCR_EL3 A733_CPU_COHERENCE_U64(0x80823019)
+#define A733_CPU_COHERENCE_MONITOR A733_CPU_COHERENCE_U64(0x42000000)
+#define A733_CPU_COHERENCE_MONITOR_END A733_CPU_COHERENCE_U64(0x42200000)
 #define A733_CPU_COHERENCE_AT 1u
 #define A733_CPU_COHERENCE_BHB 2u
 #define A733_CPU_COHERENCE_POWER_DSB 4u
 #define A733_CPU_COHERENCE_TLBI 8u
+
+#ifndef __ASSEMBLER__
 
 struct a733_cpu_coherence_identity {
     uint64_t midr, mpidr, clidr, mmfr0, clusteridr, clustercfr;
@@ -29,10 +39,11 @@ struct a733_cpu_coherence_plan {
  */
 int a733_cpu_coherence_plan(struct a733_cpu_coherence_plan *,
                             const struct a733_cpu_coherence_identity *, unsigned core);
-/* Immutable identity profile: MMIO [0,1GiB) Device; RAM [1GiB,0x48000000)
- * WBWA Inner Shareable except the privileged Normal NC monitor/table arena.
- * Code [0x41000000,0x41200000) RO executable; other RAM RW XN.
- * Table walks and monitor accesses are NC in both translated regimes.
+/* Immutable identity profile: MMIO [0,1GiB) Device with the Outer Shareable
+ * field; RAM [1GiB,0x48000000) WBWA Inner Shareable except the privileged
+ * Normal NC monitor/table arena. Code [0x41000000,0x41200000) RO executable;
+ * other RAM RW XN. Monitor accesses are NC in both translated regimes; EL3
+ * walks are NC and EL1 walks are WBWA (A733_CPU_COHERENCE_TCR).
  * el is 1 or 3; EL3 RAM descriptors select nonsecure physical addresses,
  * matching nonsecure EL1, with EL3-specific AP/execute-never fields.
  * CPU arrays must be disjoint/aligned 4KiB; L2 physical belongs to monitor.
@@ -90,9 +101,29 @@ extern const struct a733_cpu_coherence_ops a733_cpu_coherence_native_ops;
  * possibly dirty data. Clean code/data/table ranges before exposing to peers.
  */
 int a733_cpu_coherence_publish(uint64_t base, uint64_t bytes, uint64_t deadline_ticks);
+/* EL3 or EL1 with M/C/I zero, DAIF masked: DC CIVAC every 64-byte line of
+ * [base, base+bytes) inside [0x40000000,0x48000000), then DSB SY. The deadline
+ * is checked before and after the loop. Clean-and-invalidate never discards
+ * data, so a refusal part way through leaves memory unchanged. The physical
+ * address space is the caller's: Secure at EL3, Nonsecure at EL1.
+ */
+int a733_cpu_coherence_flush(uint64_t base, uint64_t bytes, uint64_t deadline_ticks);
+/* Additive 64-bit sum of the 1,024 words of the EL1 root and of the level-2
+ * page named by root entry 1. Core 0 stores it at EL3 as the last step of
+ * table preparation; word 0 of a line of its own in the table section. */
+extern uint64_t a733_cached_el1_table_sum[8];
+/* EL1, M/C/I zero, DAIF masked. Flushes the root page at ttbr and the level-2
+ * page named by root entry 1 in the Nonsecure space, reads both back with
+ * Device loads and compares their sum with a733_cached_el1_table_sum.
+ * Returns 1 on a match, -1 on refusal, deadline or mismatch. Images that
+ * enable translation without a733_cpu_coherence_enable_el1() call it first.
+ */
+int a733_cpu_coherence_check_el1(uint64_t ttbr, uint64_t deadline_ticks);
 /* EL1, M/C/I all zero; immutable canonical tables physically published; every
  * core already prepared and same profile selected. TTBR is a 4KiB monitor page.
  * Stack/code/vectors/return address must reside in mapped admitted intervals.
+ * Runs the a733_cpu_coherence_check_el1() sequence first and refuses on a
+ * mismatch before any translation register is written.
  * Invalidate local I-cache and TLB, install profile, enable M/C/I, read back.
  * After any attempted enable, failure retains ownership; never turn caches off
  * or reuse memory automatically. Exceptions require separately integrated
@@ -103,5 +134,6 @@ int a733_cpu_coherence_enable_el1(uint64_t ttbr, uint64_t deadline_ticks);
  * All participants must establish this translated profile before concurrent
  * cached operation. EL3 accesses MMIO securely and shared RAM nonsecurely. */
 int a733_cpu_coherence_enable_el3(uint64_t ttbr, uint64_t deadline_ticks);
+#endif
 #endif
 #endif

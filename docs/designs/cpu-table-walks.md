@@ -1,7 +1,9 @@
 # Design: cacheable EL1 translation-table walks and one table builder
 
-Status: **design**. No code exists yet, and no figure below has been measured
-on the board. Readers are assumed to know AArch64 stage-1 translation, the
+Status: **implemented** in the package files and checked in instruction
+models; not run on the board. Section "Implementation results" records the
+measured counts and where the implementation differs from the design. No
+figure below has been measured on the board. Readers are assumed to know AArch64 stage-1 translation, the
 Secure and Non-secure physical address spaces, and data-cache maintenance by
 virtual address.
 
@@ -126,32 +128,39 @@ firmware or bus master left running by boot0 uses
   the builder, and the Unicorn harness of `checks/a733-cpu-coherence.py`,
   which already traces every `msr`, `dc`, `tlbi` and `dsb`.
 - Removed: the 16 later writes to level-1 entry 0; the EL1 TCR value repeated
-  in 16 files (three assembly sources and 13 host checks and tools, listed
-  below). Assembly takes the value from `include/a733_cpu_coherence.h`, whose
-  C declarations move under `#ifndef __ASSEMBLER__`; each `mov`/`movk` triple
-  keeps three instructions. Python reads the value through one new reader,
+  in ten files that describe current images (two assembly sources and eight
+  host checks, listed below). Assembly takes the value from
+  `include/a733_cpu_coherence.h`, whose C declarations move under
+  `#ifndef __ASSEMBLER__`; each `mov`/`movk` triple keeps three instructions. Python reads the value through one new reader,
   `tools/a733_tcr.py`, that parses the header.
 - Literal sites that change: `platform/a733/cpu_coherence.S`,
-  `platform/a733-smp-cached/continue.S`, `boot/a733/native-el1-cache-probe.S`;
-  `checks/a733-cpu-coherence.py`, `checks/native-startup-probe.py`, and the
-  board, crypto, GPU, NPU, PWM, RTC and thermal single-core checks; and
-  `tools/all-core-pre-scheduler-host.py`, `tools/prepare-primary-cache-probe.py`,
-  `tools/run-native-startup-probe.py` and `tools/secondary-cache-host.py`.
-  Board evidence recorded with the old value stays valid for the commit it
-  names.
+  `platform/a733-smp-cached/continue.S`; `checks/a733-cpu-coherence.py` and
+  the board, crypto, GPU, NPU, PWM, RTC and thermal single-core checks, whose
+  translation model in `checks/storage-read-single-core.py` also reads the
+  header value. Board evidence recorded with the old value stays valid for
+  the commit it names.
 - Literal sites that stay: the non-cacheable continuation profile in
   `platform/a733/cpu_continue.{S,c}` and `checks/a733-cpu-continue.py`
   (`MAIR = 0x4400`, where all RAM is non-cacheable), the frozen
-  `apps/gpu-finite/return-check.py`, and every `TCR_EL3` literal.
+  `apps/gpu-finite/return-check.py`, and every `TCR_EL3` literal. The native
+  startup and cache probes also keep the old value:
+  `boot/a733/native-el1-cache-probe.S`, `checks/native-startup-probe.py`,
+  `tools/run-native-startup-probe.py`, `tools/prepare-primary-cache-probe.py`,
+  `tools/secondary-cache-host.py` and `tools/all-core-pre-scheduler-host.py`.
+  They enter EL1 through a production image pinned by SHA-256, whose
+  `a733_cached_enter_el1` still sets `0x200803019`; the value they compare is
+  that image's, and it changes only with a new pin.
 
-The only change to `platform/a733-smp-cached/continue.S` is the TCR triple at
-lines 140–142, which keeps its length. Three private builds patch that file
+The changes to `platform/a733-smp-cached/continue.S` are the TCR triple, which
+keeps its length, an `#include "a733_cpu_coherence.h"` on line 2 and the
+removal of one of two consecutive blank lines before line 273. Three private builds patch that file
 and pin its SHA-256, and their hooks were reviewed against the change. The
 observe hook (`platform/a733-smp-observe/continue.patch`, which the
 supervised build also applies) adds an SVC 120 dispatch at line 336. The
 storage hooks (`platform/a733-storage-maintenance/continue.patch`) change the
 fatal path at line 273 and the EL1t vectors at line 307. No hook reads TCR or
-the tables, and every hunk applies with `--fuzz=0` at an unchanged offset.
+the tables, and every hunk applies with `--fuzz=0` at the same offset as
+before the change.
 
 Changes outside this package's files, for the primary agent and other owners,
 in the same merge:
@@ -171,12 +180,23 @@ in the same merge:
   `2 << 8`, and the writer scan can then require zero writers. When the
   layout constant becomes 2, the assertion at line 300 that entries 2 to 511
   are invalid admits the two stage-2 values above, and the mapped total
-  becomes 2,958 MiB.
-- `checks/a733-cpu-coherence.py`: add emulation cases for the flush primitive
-  and for `enable_el1` with a matching and a corrupted checksum. They count
-  instructions and `DC` operations, check that the flush, `DSB` and readback
-  precede the `SCTLR_EL1` write, and check that a corrupted page leaves
-  `SCTLR_EL1.M` clear.
+  becomes 2,958 MiB. The interior-fault fixture (mode 1) clears level-2
+  entry 100 after preparation; it must subtract that entry from
+  `a733_cached_el1_table_sum[0]` as well, or every core refuses at the table
+  check before the pool preparation that the case exercises.
+- `checks/device-memory-capacity.py` and `checks/cached-device-reservations.py`:
+  the table section measures `5 * 4096 + 64` bytes.
+- `checks/a733-cpu-coherence.py`: the stub file defines
+  `a733_cached_el1_table_sum`, which `cpu_coherence.S` now references, and the
+  EL1 enable cases need a root at `0x42000000` whose entry 1 names a level-2
+  page, with the recorded sum. Add cases for the flush primitive and for a
+  corrupted checksum, which must leave `SCTLR_EL1.M` clear and write no
+  translation register.
+- `checks/a733-smp-cached.py`: the model refuses any CPU access to
+  `0x421f0000`–`0x42200000` once a core has enabled EL3 translation. Each core
+  now reads the two EL1 table pages and the checksum line at EL1 with the MMU
+  off before its own enable, so the rule must admit those reads and keep
+  refusing every write.
 - DRAM-controller package: `a733_dram_decode_check()` as specified above.
 
 ## Performance budgets
@@ -199,6 +219,52 @@ uncached loads per core, an estimated 0.1 ms at 200 ns each. Both run once
 per boot. Every image that links a changed file is rebuilt, and every patch
 applies with fuzz 0. QEMU does not model caches or walk latency, so it shows
 only that each image still reaches the scheduler with the header's TCR.
+
+## Implementation results
+
+Counts come from `checks/cpu-table-walks.py`, run on the cached eight-core
+diagnostic image built from this change and from the integration commit before
+it (`--baseline`). The writer scan is the one in
+`checks/device-memory-capacity.py`.
+
+| Metric | Baseline | Budget | Measured |
+| --- | --- | --- | --- |
+| Table writes after the builder returns | 17 scan hits: 16 statements and one patch context line | 0 | 0 |
+| EL1 TCR value repeated in files that describe current images | 10 files | 0 | 0; 11 allowed files remain (header, continuation profile, frozen images) |
+| Flush before the first table write | not checked | flush call precedes the builder call | precedes it, and every flush line precedes the first table-section write |
+| `enable_el1` instructions, success path | 75 | at most 2,500 | 2,233 (`check_el1` alone: 2,189) |
+| Table-line maintenance per boot, eight-core image | 320 `DC CVAC` | 1,344; 1,664 until the publication is dropped | 1,345; 1,666 until the publication is dropped |
+| Table-line maintenance per boot, single-core image | 0 | 448 | 449 |
+| Table readback per core and boot | 0 | 512 `LDP` | 512 `LDP` |
+| DRAM mapped at EL1; table memory | 910 MiB; 20,480 B | 910 MiB; 20,544 B | 910 MiB; 20,544 B |
+
+The implementation differs from the design above in these points:
+
+- The EL3 flush covers the whole table section, so it includes the checksum
+  line: 321 lines instead of 320. The checksum is a 64-byte array, so the line
+  holds nothing else. Clang emits the section's objects in the order in which
+  `memory.c` first names them, and `memory.c` names the checksum last; the new
+  check verifies that it follows the five pages in each image.
+- Only whole table pages get the EL3 Normal noncacheable mapping. The partial
+  page that holds the checksum keeps the Device mapping, which leaves the EL3
+  map unchanged.
+- To stay within the instruction budget, the flush loop handles four lines
+  and the readback loop one line per pass.
+- The core-6 forced-walk loop cannot measure image B inside the secondary
+  cached-entry probe as it stands: the probe enters EL1 through the
+  digest-pinned production image, which sets the previous `TCR_EL1`. Image B
+  needs a production image built from this change and a new pin.
+- `a733_cached_memory_prepare()` takes no deadline argument, so its flush uses
+  a 10 ms bound from its own counter read. The single-core `platform_init()`
+  also passes 10 ms.
+- The emulation cases are in `checks/cpu-table-walks.py`, because
+  `checks/a733-cpu-coherence.py` is outside this package. The changes listed
+  above for that file and for the capacity, reservation and eight-core checks
+  were applied to a copy of this change. In that copy the coherence check
+  passes 29 cases and the reservation check and eight-core scheduler model
+  pass. The capacity check passes its four modes on eight QEMU CPUs with 392
+  translations and 22,547 preparation instructions, the same counts as
+  before.
 
 ## Board evidence required
 
