@@ -53,6 +53,22 @@ struct pvr_compute_job_image {
 int pvr_compute_job_build(const struct pvr_compute_job_config *,
                           struct pvr_compute_job_image *);
 
+/* Encoders shared by profile three and the mimus linear session
+ * (pvr_compute_mimus.h); each writes only the bytes it names. command: the
+ * 96-byte firmware compute command. fence_pds: the five-instruction fence
+ * program at byte 16 of a 64-byte region. grid_pds: the 18-word data block
+ * with the task word at byte 0, the group counts at byte 48 and the two
+ * pointer constants at bytes 80-111, and the 60-byte program at byte 128.
+ * grid_cdm: the 60-byte stream of one grid kernel, the fence kernel and
+ * the terminate word; pds and fence are offsets in the PDS heap. */
+void pvr_compute_job_command(unsigned char compute[96], uint64_t border,
+                             uint64_t cdm, uint64_t resume);
+void pvr_compute_job_fence_pds(void *fence);
+void pvr_compute_job_grid_pds(void *pds, uint64_t task, const uint32_t groups[3],
+                              uint64_t input, uint64_t output);
+void pvr_compute_job_grid_cdm(void *cdm, uint32_t pds, uint32_t fence,
+                              const uint32_t groups[3]);
+
 enum pvr_compute_job_phase { PVR_JOB_NEW, PVR_JOB_CHECK_FENCE, PVR_JOB_PUBLISH,
     PVR_JOB_SUBMIT, PVR_JOB_KICK, PVR_JOB_WAIT_FENCE, PVR_JOB_READ_OUTPUT,
     PVR_JOB_COMPLETE, PVR_JOB_FAILED };

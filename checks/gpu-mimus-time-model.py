@@ -14,7 +14,9 @@ sets n_gpu.
 
 By default the model uses the 204 calls of the bench recording (8.87 s of
 audio, 222 encoder frames, subsampling in blocks of 224 rows). --calls reads another call list, one call per
-line as "rows K N accumulate", as checks/gpu-mimus-layers prints it. No
+line as "rows K N accumulate", as checks/gpu-mimus-layers writes it.
+--program and --readout replace the instruction constants with the counts
+that checks/gpu-mimus-program and checks/gpu-mimus-readout record. No
 hardware is accessed."""
 import argparse, json, math
 
@@ -34,7 +36,7 @@ A76_MAC_FACTOR = 2.0
 LINE_CYCLES = 20.0    # one DC CVAC or DC IVAC line
 READOUT_IPC = 2.0     # read-out instructions retired per A76 clock
 READOUT_INSTR = {4: 3.0, 8: 4.0}  # per output, by sum width in bytes
-ACCUMULATE_INSTR = 1.0            # extra per output for y += alpha * value
+ACCUMULATE_INSTR = {4: 1.0, 8: 1.0}  # extra per output for y += alpha * value
 TAG_INSTR = 0.5                   # per tag word compared
 JOB_WORD_LINES = 2                # argument record and CDM block, one per slot
 TAG_AREA = 64 * 1024
@@ -90,7 +92,7 @@ def job_costs(rows, k, n, acc, hz, t):
     tags = wg * LANES
     clean = math.ceil(code / 64) + 1 + JOB_WORD_LINES
     inval = math.ceil((sums + tags * 4) / 64)
-    readout = rows * n * (READOUT_INSTR[width(k)] + ACCUMULATE_INSTR * acc)
+    readout = rows * n * (READOUT_INSTR[width(k)] + ACCUMULATE_INSTR[width(k)] * acc)
     t.add('jobs', 1); t.add('clean_lines', clean); t.add('inval_lines', inval)
     t.add('tags', tags); t.add('readout_instr', readout)
     t.add('gpu_macs', rows * k * n)
@@ -198,14 +200,28 @@ def main():
     parser.add_argument('--calls', help='call list: rows K N accumulate per line')
     parser.add_argument('--mhz', type=float, action='append',
                         help='A76 clock in MHz (default 494 and 2002)')
+    parser.add_argument('--program', help='program-check.json of checks/gpu-mimus-program.py')
+    parser.add_argument('--readout', help='readout-check.json of checks/gpu-mimus-readout.py')
     args = parser.parse_args()
+    global INSTR_PER_MAC
+    if args.program:
+        with open(args.program) as f:
+            INSTR_PER_MAC = json.load(f)['instructions_per_mac']
+    if args.readout:
+        with open(args.readout) as f:
+            per = json.load(f)['instructions_per_output']
+        for w, name in ((4, 'readout_i32'), (8, 'readout_i64')):
+            READOUT_INSTR[w] = per[name]
+            ACCUMULATE_INSTR[w] = per[name + '_accumulate'] - per[name]
     calls = BENCH
     if args.calls:
         with open(args.calls) as f:
             calls = [tuple(int(v) for v in line.split()) for line in f if line.strip()]
     macs = sum(r * k * n for r, k, n, _ in calls)
     outputs = {w: sum(r * n for r, k, n, _ in calls if width(k) == w) for w in (4, 8)}
-    print(json.dumps({'calls': len(calls), 'macs': macs, 'int32_outputs': outputs[4],
+    print(json.dumps({'calls': len(calls), 'macs': macs, 'instr_per_mac': INSTR_PER_MAC,
+                      'readout_instr': READOUT_INSTR, 'accumulate_instr': ACCUMULATE_INSTR,
+                      'int32_outputs': outputs[4],
                       'int64_outputs': outputs[8],
                       'gpu_compute_all_channels_s': sum(
                           workgroups(r, n) * 512 * k for r, k, n, _ in calls)

@@ -13,6 +13,9 @@ import subprocess
 MESA='86c7176d2dd0065555521bf8c61f208bf53c75d6'
 CLC_HASH='1281aa7e7b909d496a25f145ebc72bcdebc2755aec83bdde351b700091e9a1d4'
 CODE=4032
+# A native session program (--session) has no package: its code is linked
+# into the image and copied into two 4 KiB program pages at session open.
+SESSION_CODE=8128
 INPUT=4096
 BVNC=(36<<48)|(56<<32)|(104<<16)|183
 
@@ -31,10 +34,13 @@ def upstream_binary(build,out,compiler=None):
     if len(arrays)!=1:raise ValueError('Unexpected upstream program count')
     return b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0])),command
 
-def metadata_valid(meta,profile):
+def metadata_valid(meta,profile,session=False):
     if len(meta)!=18 or any(meta[3:10]) or any(meta[13:]) or (meta[0]+3)//4>63:return False
     if profile==3:
-        return meta[1:3]==[5,7] and meta[12]==1 and 0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
+        # A session program may leave the workgroup counts unread: the PDS
+        # still writes all seven coefficients and the program reads three.
+        return (meta[1:3]==[5,7] or (session and meta[1:3]==[5,3])) and meta[12]==1 and \
+            0<meta[10]<=32 and 0<meta[11]<=32 and meta[10]*meta[11]==32
     return meta[2]==0 and meta[10:13]==[32,1,1] and meta[1]<=(6 if profile==2 else 4)
 
 def grid_compiler_source(original,mesa):
@@ -60,9 +66,9 @@ def grid_compiler_source(original,mesa):
 '''
     return source.replace('   pco_postprocess_nir(ctx, nir, data);','   pco_postprocess_nir(ctx, nir, data);'+allocation)
 
-def compile_program(source,mesa,build,out,ninja,profile=1):
+def compile_program(source,mesa,build,out,ninja,profile=1,session=False):
     """The supplied source requires a trusted reviewer; syntax is not a sandbox."""
-    if profile not in (1,2,3):raise ValueError('Unsupported register/dispatch ABI')
+    if profile not in (1,2,3) or (session and profile!=3):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
     out.mkdir(parents=True,exist_ok=True)
     original=(mesa/'src/imagination/pco/uscgen/pco_clc.c').read_bytes()
@@ -142,12 +148,12 @@ def compile_program(source,mesa,build,out,ninja,profile=1):
     if len(masks)!=1:raise ValueError('Missing explicit input-register use metadata')
     explicit_mask=int(masks[0])
     if profile==2 and explicit_mask!=63:raise ValueError('Profile2 requires exactly six explicit input registers')
-    if not metadata_valid(meta,profile):
+    if not metadata_valid(meta,profile,session):
         raise ValueError('Unsupported compiler metadata: '+str(meta))
     arrays=re.findall(r'static const uint32_t \w+\[\d+\] = \{(.*?)\};',(out/'kernel.c').read_text(),re.S)
     if len(arrays)!=1:raise ValueError('Require exactly one common binary')
     blob=b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0]))
-    if len(blob)<12 or len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or len(blob)-8>CODE-(32 if profile==3 else 0):raise ValueError('Invalid USC extent')
+    if len(blob)<12 or len(blob)!=8+int.from_bytes(blob[5:7],'little')*4 or len(blob)-8>(SESSION_CODE if session else CODE-(32 if profile==3 else 0)):raise ValueError('Invalid USC extent')
     if blob[:2]!=bytes(meta[:2]) or blob[2:5]!=bytes([meta[2],0,0]):raise ValueError('Metadata/header disagreement')
     upstream,command=upstream_binary(build,out,reference_compiler)
     commands.append(command)
@@ -157,10 +163,11 @@ def compile_program(source,mesa,build,out,ninja,profile=1):
         fields=re.findall(r'^SUNSTONE_SYSVALS (.*)$',err,re.M)
         if len(fields)!=1:raise ValueError('Missing compiler sysval allocation')
         sysvals=list(map(int,fields[0].split()))
-        if sysvals!=[4,1,0,3,4,3] or explicit_mask!=15:raise ValueError('Grid register ABI differs')
+        counts=[4,3] if meta[2]==7 else [0,0]
+        if sysvals!=[4,1,0,3]+counts or explicit_mask!=15:raise ValueError('Grid register ABI differs')
     (out/'program.bin').write_bytes(blob)
     (out/'source.cl').write_bytes(source.read_bytes())
-    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':5 if profile==3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
+    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'session':session,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':5 if profile==3 else 6 if profile==2 else 4,'sysval_ranges':sysvals,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
       'spirv_sha256':digest((out/'kernel.spv').read_bytes()),'program_sha256':digest(blob),'metadata':meta,
       'compiler_sha256':digest((out/'pco_clc_metadata').read_bytes()),
       'upstream_compiler_sha256':digest((build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
@@ -175,6 +182,7 @@ def package(program,manifest,input_data,output_bytes,input_header_bytes,input_el
     m=json.loads(Path(manifest).read_text());blob=Path(program).read_bytes();data=Path(input_data).read_bytes()
     profile=m.get('profile',1)
     if profile not in (1,2,3) or m['schema']!='sunstone-pco-profile-v'+str(profile) or m['mesa_revision']!=MESA or digest(blob)!=m['program_sha256']:raise ValueError('Program identity differs')
+    if m.get('session'):raise ValueError('A session program has no package')
     if len(data)<4 or len(data)>INPUT or not 0<output_bytes<=3968 or output_bytes%4:raise ValueError('Invalid data bounds')
     meta=m['metadata']
     if not metadata_valid(meta,profile):raise ValueError('Unsupported profile')
@@ -201,9 +209,10 @@ if __name__=='__main__':
     c=sub.add_parser('compile')
     for x in ('source','mesa','build','output','ninja'):c.add_argument('--'+x,type=Path,required=True)
     c.add_argument('--profile',type=int,choices=(1,2,3),default=1)
+    c.add_argument('--session',action='store_true',help='Profile three without a package: code linked into the image')
     b=sub.add_parser('package')
     for x in ('program','manifest','input','output'):b.add_argument('--'+x,type=Path,required=True)
     for x in ('output-bytes','input-header-bytes','input-element-bytes','output-element-bytes'):b.add_argument('--'+x,type=int,required=True)
     a=p.parse_args()
-    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile)
+    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile,a.session)
     else:a.output.write_bytes(package(a.program,a.manifest,a.input,a.output_bytes,a.input_header_bytes,a.input_element_bytes,a.output_element_bytes))

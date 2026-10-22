@@ -1417,8 +1417,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `gpu-cache-visibility-20261020/assessment.json`. This reuses pinned source and
   accepted image comparisons, without qualifying physical visibility or opaque
   firmware internals.
-  Wider dispatch geometry, shape/program replacement, graphics, concurrency,
-  physical computation and mimus acceleration remain required. The accepted
+  [Exact mimus matrix products](gpu-mimus.md) are implemented and
+  host-modeled: a compiled kernel sums int16 activation codes times int8
+  weight codes in place in the model regions and the arena, proves each job's
+  completion with per-lane tags, and the CPU reads the sums out bit-identically
+  to mimus's CPU path. The session code admits each job with nine compares and
+  makes three cache-maintenance calls. A host model of the kernel source,
+  session code and read-out matches mimus's CPU path on all 12,923,134 outputs
+  of the bench recording and in every refusal, fault and fallback case; the
+  read-out runs under Unicorn. The program needs 3.39 USC instruction groups
+  per multiply-accumulate against the budgeted 1.75, so the modeled linear
+  stage takes 0.535 s on the A76 pair against 0.396 s
+  ([measurements](designs/gpu-mimus-compute-measurements.md)). The GPU
+  runtime's session, worker and interrupt, the mimus port's hook and GPU
+  execution remain required.
+  Wider dispatch geometry, shape/program replacement, graphics, concurrency
+  and physical computation remain required. The accepted
   fixed-workload returning profile is preserved separately.
   The [combined GPU/NPU application](accelerator-composition.md) retains the
   trusted GPU compute service and complete ShuffleNetV2 NPU graph in one image.

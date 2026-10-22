@@ -117,16 +117,58 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
     }
     return 1;
 }
-static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
+/* Shared with pvr_compute_mimus.c; one out-of-line copy each, so images
+ * without the mimus session do not grow. */
+__attribute__((noinline)) void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
+{
+    clear(compute,96);
+    put64(compute,8,border>>2);
+    put64(compute,40,cdm);
+    put64(compute,48,resume);
+    /* Resume unified four, shared allocation, four 16-byte PDS data units. */
+    put32(compute,60,(4u<<21)|(1u<<20)|(4u<<1));
+    /* Source flags: prevent all overlap and execute on one GPU core. */
+    put32(compute,80,(1u<<2)|(1u<<5));
+}
+__attribute__((noinline)) void pvr_compute_job_fence_pds(void *fence)
+{
+    static const uint32_t code[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
+    words(fence,16,code,5);
+}
+__attribute__((noinline)) void pvr_compute_job_grid_pds(void *pds,uint64_t task,const uint32_t groups[3],uint64_t input,uint64_t output)
+{
+    /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
+     * Insert pointer writes at the ordinary entry. The relative branch10
+     * still enters that prefix; coefficient tasks halt before it. */
+    static const uint32_t data[]={0,0,0x10000002u,0x10004001u,0x10008002u,0x1000c000u,
+        0x90008000u,0x80008000u,0,0,0,0,0,0,0,0,0,0};
+    static const uint32_t code[]={0xc2c0000au,0x90022000u,0x90026041u,0x9002a0c3u,
+        0xf0024001u,0xf0034101u,0xf0040601u,0xf0050701u,0xf0060800u,0xd3000000u,
+        0xf0160a01u,0xf01a0c01u,0xf0074001u,0xfc000002u,0xd3000000u};
+    words(pds,0,data,18);words(pds,128,code,15);
+    put64(pds,0,task);
+    for(unsigned i=0;i<3;++i)put32(pds,48+4*i,groups[i]);
+    /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
+     * Their control words omit LAST; the ordinary local-index write ends it. */
+    put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
+    put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
+}
+__attribute__((noinline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
+{
+    /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
+     * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
+    put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
+    put32(cdm,4,pds);put32(cdm,8,pds+128);
+    for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,groups[i]-1);
+    put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
+    put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,fence|(1u<<2)|(1u<<1));
+    put32(cdm,36,fence+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+}
+__attribute__((noinline)) static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
 {
     clear(out,sizeof(*out));
-    put64(out->compute,8,c->buffers[PVR_JOB_BORDER].gpu>>2);
-    put64(out->compute,40,c->buffers[PVR_JOB_CDM].gpu);
-    put64(out->compute,48,c->program_result->cdm_resume_address);
-    /* Resume unified four, shared allocation, four 16-byte PDS data units. */
-    put32(out->compute,60,(4u<<21)|(1u<<20)|(4u<<1));
-    /* Source flags: prevent all overlap and execute on one GPU core. */
-    put32(out->compute,80,(1u<<2)|(1u<<5));
+    pvr_compute_job_command(out->compute,c->buffers[PVR_JOB_BORDER].gpu,c->buffers[PVR_JOB_CDM].gpu,
+        c->program_result->cdm_resume_address);
     put32(out->update,0,c->firmware_ufo);put32(out->update,4,1);
     for(unsigned i=0;!c->package&&i<PVR_COMPUTE_JOB_WORDS;++i)
         out->expected[i]=(c->seed+(i+1u)*c->factor)^(0x9e3779b9u+(i<<16));
@@ -146,8 +188,7 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     put64(pds,32,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|((uint64_t)(c->package?(pvr_compute_package_temps(c->package)+3)/4:2)<<35));
     static const uint32_t dispatch[]={0xc1100001u,0xdb000000u,0xc1080001u,0xf0020001u,0xf0060201u,0xfc000402u};
     words(pds,64,dispatch,6);
-    static const uint32_t fence[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
-    words(c->buffers[PVR_JOB_FENCE_PDS].cpu,16,fence,5);
+    pvr_compute_job_fence_pds(c->buffers[PVR_JOB_FENCE_PDS].cpu);
     void *cdm=c->buffers[PVR_JOB_CDM].cpu;
     uint32_t a=(uint32_t)(c->buffers[PVR_JOB_PDS].gpu-c->programs->pds.base);
     uint32_t b=(uint32_t)(c->buffers[PVR_JOB_FENCE_PDS].gpu-c->programs->pds.base);
@@ -189,30 +230,9 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     if(c->package&&c->package->profile==3) {
         const struct pvr_compute_package *p=c->package;
         clear(pds,c->buffers[PVR_JOB_PDS].bytes);clear(cdm,c->buffers[PVR_JOB_CDM].bytes);
-        /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
-         * Insert pointer writes at the ordinary entry. The relative branch10
-         * still enters that prefix; coefficient tasks halt before it. */
-        static const uint32_t data[]={0,0,0x10000002u,0x10004001u,0x10008002u,0x1000c000u,
-            0x90008000u,0x80008000u,0,0,0,0,0,0,0,0,0,0};
-        static const uint32_t code[]={0xc2c0000au,0x90022000u,0x90026041u,0x9002a0c3u,
-            0xf0024001u,0xf0034101u,0xf0040601u,0xf0050701u,0xf0060800u,0xd3000000u,
-            0xf0160a01u,0xf01a0c01u,0xf0074001u,0xfc000002u,0xd3000000u};
-        words(pds,0,data,18);words(pds,128,code,15);
-        put64(pds,0,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
-            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35));
-        for(unsigned i=0;i<3;++i)put32(pds,48+4*i,p->grid.groups[i]);
-        /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
-         * Their control words omit LAST; the ordinary local-index write ends it. */
-        put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
-        put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
-        /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
-         * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
-        put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
-        put32(cdm,4,a);put32(cdm,8,a+128);
-        for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,p->grid.groups[i]-1);
-        put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
-        put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,b|(1u<<2)|(1u<<1));
-        put32(cdm,36,b+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+        pvr_compute_job_grid_pds(pds,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
+            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35),p->grid.groups,input,output);
+        pvr_compute_job_grid_cdm(cdm,a,b,p->grid.groups);
     }
     if(c->package) {
         memcpy(c->buffers[PVR_JOB_INPUT].cpu,c->package->input,c->package->input_bytes);

@@ -1,8 +1,15 @@
 # Design: exact mimus integer matrix products on the GPU
 
-Status: **design**; no code exists. Each item ends at implemented and
-host-modeled, with physical behavior pending until the board evidence at the
-end exists. It follows [performance-architecture.md](../performance-architecture.md).
+Status: **implemented** and host-modeled; physical behavior is pending until
+the board evidence at the end exists. Two budgets are **not met**: the program
+has 3.39 USC instruction groups per multiply-accumulate against 1.75, and
+7,624 code bytes against 4,000, so it takes two 4 KiB program pages.
+[gpu-mimus.md](../gpu-mimus.md) describes what was built, including two
+departures from this design: the chunk sums are combined with a cheaper
+exact rule, and each sum store carries a data fence because the pinned
+compiler emits nothing for `mem_fence`. [The measurements](gpu-mimus-compute-measurements.md)
+compare the result with the budgets below. It follows
+[performance-architecture.md](../performance-architecture.md).
 
 The placement design for mimus linear layers
 ([recognition-dispatch.md](recognition-dispatch.md), the dispatcher design
