@@ -3,6 +3,7 @@
  * Copyright (c) 2022, 2025 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_render_programs.h"
+#include "a733_range.h"
 #include <string.h>
 static const unsigned char pds_image[1669] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -257,21 +258,19 @@ static const unsigned char register_image[432] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x80, 0x00,
     0x80, 0x06, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0xf8, 0x7f, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
 };
-static int apart(uintptr_t a, size_t an, uintptr_t b, size_t bn)
-{ return a + an <= b || b + bn <= a; }
 int pvr_render_programs_build(void *payload, size_t bytes, struct pvr_render_program_image *out)
 {
     if (!payload || !out || bytes != PVR_RENDER_PROGRAM_BYTES ||
         (uintptr_t)payload > UINTPTR_MAX - bytes ||
         (uintptr_t)out > UINTPTR_MAX - sizeof(*out) ||
         ((uintptr_t)out & (_Alignof(struct pvr_render_program_image) - 1)) ||
-        !apart((uintptr_t)payload,bytes,(uintptr_t)out,sizeof(*out)) ||
-        !apart((uintptr_t)payload,bytes,(uintptr_t)pds_image,sizeof(pds_image)) ||
-        !apart((uintptr_t)payload,bytes,(uintptr_t)usc_image,sizeof(usc_image)) ||
-        !apart((uintptr_t)payload,bytes,(uintptr_t)register_image,sizeof(register_image)) ||
-        !apart((uintptr_t)out,sizeof(*out),(uintptr_t)pds_image,sizeof(pds_image)) ||
-        !apart((uintptr_t)out,sizeof(*out),(uintptr_t)usc_image,sizeof(usc_image)) ||
-        !apart((uintptr_t)out,sizeof(*out),(uintptr_t)register_image,sizeof(register_image))) return 0;
+        !a733_extents_disjoint_prechecked((uintptr_t)payload,bytes,(uintptr_t)out,sizeof(*out)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)payload,bytes,(uintptr_t)pds_image,sizeof(pds_image)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)payload,bytes,(uintptr_t)usc_image,sizeof(usc_image)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)payload,bytes,(uintptr_t)register_image,sizeof(register_image)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)out,sizeof(*out),(uintptr_t)pds_image,sizeof(pds_image)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)out,sizeof(*out),(uintptr_t)usc_image,sizeof(usc_image)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)out,sizeof(*out),(uintptr_t)register_image,sizeof(register_image))) return 0;
     _Static_assert(sizeof(*out) == sizeof(register_image), "register image ABI");
     unsigned char *p=payload;
     memset(p,0,bytes);memcpy(p,pds_image,sizeof(pds_image));

@@ -1,4 +1,5 @@
 #include "a733_gpu_resources_native.h"
+#include "a733_mmio.h"
 #include "boot.h"
 
 static int native_now(void *context, uint64_t *out)
@@ -22,9 +23,7 @@ static int native_read(void *context, uintptr_t address, uint32_t *out)
 {
     (void)context;
     if (!allowed(address) || !out) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *out = mmio_read(address);
-    __asm__ volatile("dsb sy" ::: "memory");
+    *out = a733_mmio_read32_dsb_sy_both(address);
     return 1;
 }
 static int native_update(void *context, uintptr_t address, uint32_t required,
@@ -43,8 +42,7 @@ static int native_update(void *context, uintptr_t address, uint32_t required,
     if (!native_read(n, address, &old) || (old & required) != required) {
         n->locks.register_leave(n->locks.context); return 0;
     }
-    mmio_write(address, old | set);
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_after(address, old | set);
     n->locks.register_leave(n->locks.context);
     return 1;
 }

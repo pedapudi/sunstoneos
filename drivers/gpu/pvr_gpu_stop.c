@@ -4,15 +4,14 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_stop.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { POLL, WRITE, FENCE };
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int outside(const struct pvr_gpu_stop *s, const void *p, size_t n)
 {
-    return range(p, n) && ((uintptr_t)s + sizeof(*s) <= (uintptr_t)p ||
-                          (uintptr_t)p + n <= (uintptr_t)s);
+    return a733_span_excl_nonempty(p, n) &&
+        a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)p, n);
 }
 static void add(struct pvr_gpu_stop *s, unsigned kind, unsigned off, unsigned width,
                 uint64_t mask, uint64_t value)
@@ -22,7 +21,7 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
                       void *ctx, uint64_t deadline)
 {
     struct pvr_fw_plan p;
-    if (!range(s,sizeof(*s)) || s->phase != PVR_GPU_STOP_NEW ||
+    if (!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase != PVR_GPU_STOP_NEW ||
         !outside(s,c,sizeof(*c)) || !outside(s,ops,sizeof(*ops)) ||
         c->phase != PVR_GPU_CONTROL_READY || !outside(s,c->queue,sizeof(*c->queue)) ||
         c->queue->phase != PVR_CCB_ACTIVE || !deadline ||

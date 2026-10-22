@@ -21,11 +21,8 @@
  * SOFTWARE.
  */
 #include "pvr_render_target.h"
+#include "a733_range.h"
 #include <string.h>
-static int span(const void *p, size_t n)
-{ return p && n && (uintptr_t)p <= UINTPTR_MAX - n; }
-static int apart(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static uint32_t align(uint32_t n, uint32_t a) { return (n + a - 1) & ~(a - 1); }
 static void put32(unsigned char *p, uint32_t x)
 { for (unsigned i = 0; i < 4; ++i) p[i] = (unsigned char)(x >> (8 * i)); }
@@ -33,7 +30,8 @@ static void put64(unsigned char *p, uint64_t x)
 { for (unsigned i = 0; i < 8; ++i) p[i] = (unsigned char)(x >> (8 * i)); }
 int pvr_render_target_require(const struct pvr_render_profile *p, struct pvr_render_requirements *out)
 {
-    if (!span(p, sizeof(*p)) || !span(out, sizeof(*out)) || !apart(p, sizeof(*p), out, sizeof(*out)) ||
+    if (!a733_span_excl_nonempty(p, sizeof(*p)) || !a733_span_excl_nonempty(out, sizeof(*out)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)p, sizeof(*p), (uintptr_t)out, sizeof(*out)) ||
         !p->width || !p->height || p->width > 8192 || p->height > 8192 ||
         p->global_maximum_pages < 28 || p->global_maximum_pages > 16384 || (p->global_maximum_pages & 3)) return 0;
     struct pvr_render_requirements r = {0};
@@ -57,7 +55,7 @@ int pvr_render_target_require(const struct pvr_render_profile *p, struct pvr_ren
 int pvr_render_target_build(const struct pvr_render_profile *p, const struct pvr_render_target *t)
 {
     struct pvr_render_requirements r;
-    if (!span(t, sizeof(*t)) || !pvr_render_target_require(p, &r)) return 0;
+    if (!a733_span_excl_nonempty(t, sizeof(*t)) || !pvr_render_target_require(p, &r)) return 0;
     const void *cpu[] = {t->common, t->data[0], t->data[1]};
     const uint32_t n[] = {88, 384, 384, 64, 64};
     const uint32_t va[] = {t->common_firmware, t->data_firmware[0], t->data_firmware[1],
@@ -66,9 +64,10 @@ int pvr_render_target_build(const struct pvr_render_profile *p, const struct pvr
         if ((va[i] & ((i == 1 || i == 2) ? 63u : 7u)) || va[i] < 0xc0000000u || va[i] > 0xc1000000u - n[i]) return 0;
         for (unsigned j = 0; j < i; ++j) if (va[i] < va[j] + n[j] && va[j] < va[i] + n[i]) return 0;
         if (i < 3) {
-            if (!span(cpu[i], n[i]) || ((uintptr_t)cpu[i] & (i ? 63 : 7)) ||
-                !apart(cpu[i], n[i], p, sizeof(*p)) || !apart(cpu[i], n[i], t, sizeof(*t))) return 0;
-            for (unsigned j = 0; j < i; ++j) if (!apart(cpu[i], n[i], cpu[j], n[j])) return 0;
+            if (!a733_span_excl_nonempty(cpu[i], n[i]) || ((uintptr_t)cpu[i] & (i ? 63 : 7)) ||
+                !a733_extents_disjoint_prechecked((uintptr_t)cpu[i], n[i], (uintptr_t)p, sizeof(*p)) ||
+                !a733_extents_disjoint_prechecked((uintptr_t)cpu[i], n[i], (uintptr_t)t, sizeof(*t))) return 0;
+            for (unsigned j = 0; j < i; ++j) if (!a733_extents_disjoint_prechecked((uintptr_t)cpu[i], n[i], (uintptr_t)cpu[j], n[j])) return 0;
         }
     }
     for (unsigned i = 0; i < PVR_RENDER_REGIONS; ++i) {

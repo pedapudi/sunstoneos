@@ -4,6 +4,7 @@
  * See LICENSE.pvr for the retained MIT terms.
  */
 #include "pvr_firmware.h"
+#include "a733_range.h"
 #include <string.h>
 
 static uint32_t u16(const unsigned char *p)
@@ -18,18 +19,6 @@ static uint64_t u64(const unsigned char *p)
 {
     return u32(p) | (uint64_t)u32(p + 4) << 32;
 }
-static int range(const void *p, size_t n)
-{
-    return p && n && n <= UINTPTR_MAX - (uintptr_t)p;
-}
-static int overlap(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
-{
-    return a < b + bn && b < a + an;
-}
-static int separate(const void *a, size_t an, const void *b, size_t bn)
-{
-    return !overlap((uintptr_t)a, an, (uintptr_t)b, bn);
-}
 static int span(uint32_t offset, uint32_t bytes, uint32_t limit)
 {
     return offset <= limit && bytes <= limit - offset;
@@ -38,7 +27,7 @@ static int span(uint32_t offset, uint32_t bytes, uint32_t limit)
 static int decode(const unsigned char *image, size_t bytes, uint64_t expected,
                   struct pvr_fw_plan *p)
 {
-    if (!range(image, bytes) || bytes < 8192 || bytes > PVR_FW_MAX_IMAGE ||
+    if (!a733_span_excl_nonempty(image, bytes) || bytes < 8192 || bytes > PVR_FW_MAX_IMAGE ||
         bytes % 4096 || expected != PVR_FW_A733_BVNC) return 0;
     uint32_t footer = (uint32_t)bytes - 4096;
     const unsigned char *h = image + footer;
@@ -83,8 +72,8 @@ static int decode(const unsigned char *image, size_t bytes, uint64_t expected,
         for (unsigned j = 0; j < PVR_FW_LAYOUTS; ++j) {
             if (!(seen & (1u << j))) continue;
             const struct pvr_fw_layout *other = &p->layouts[j];
-            if (overlap(v.address, v.maximum_bytes, other->address, other->maximum_bytes) ||
-                (v.type == other->type && overlap(v.allocation_offset, v.allocation_bytes,
+            if (a733_extents_overlap_prechecked(v.address, v.maximum_bytes, other->address, other->maximum_bytes) ||
+                (v.type == other->type && a733_extents_overlap_prechecked(v.allocation_offset, v.allocation_bytes,
                     other->allocation_offset, other->allocation_bytes))) return 0;
         }
         seen |= 1u << (id - 4);
@@ -129,7 +118,7 @@ static int decode(const unsigned char *image, size_t bytes, uint64_t expected,
         for (unsigned j = 0; j < p->load_count; ++j) {
             const struct pvr_fw_load *other = &p->loads[j];
             if (load.allocation == other->allocation &&
-                overlap(load.destination, load.memory_bytes, other->destination, other->memory_bytes))
+                a733_extents_overlap_prechecked(load.destination, load.memory_bytes, other->destination, other->memory_bytes))
                 return 0;
         }
         p->loads[p->load_count++] = load;
@@ -145,8 +134,9 @@ int pvr_fw_requirements(const void *image, size_t bytes, uint64_t expected,
                         struct pvr_fw_plan *out)
 {
     struct pvr_fw_plan plan;
-    if (!range(out, sizeof(*out)) || !range(image, bytes) ||
-        !separate(out, sizeof(*out), image, bytes) || !decode(image, bytes, expected, &plan))
+    if (!a733_span_excl_nonempty(out, sizeof(*out)) || !a733_span_excl_nonempty(image, bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)out, sizeof(*out), (uintptr_t)image, bytes) ||
+        !decode(image, bytes, expected, &plan))
         return 0;
     *out = plan;
     return 1;
@@ -156,14 +146,14 @@ int pvr_fw_stage(const void *image, size_t bytes, uint64_t expected,
                  const struct pvr_fw_buffer buffers[2])
 {
     struct pvr_fw_plan plan;
-    if (!range(buffers, sizeof(*buffers) * 2) || !decode(image, bytes, expected, &plan)) return 0;
+    if (!a733_span_excl_nonempty(buffers, sizeof(*buffers) * 2) || !decode(image, bytes, expected, &plan)) return 0;
     for (unsigned i = 0; i < 2; ++i) {
         if (buffers[i].bytes != plan.allocation_bytes[i] ||
-            !range(buffers[i].cpu, buffers[i].bytes) ||
-            !separate(buffers[i].cpu, buffers[i].bytes, image, bytes) ||
-            !separate(buffers[i].cpu, buffers[i].bytes, buffers, sizeof(*buffers) * 2)) return 0;
+            !a733_span_excl_nonempty(buffers[i].cpu, buffers[i].bytes) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)buffers[i].cpu, buffers[i].bytes, (uintptr_t)image, bytes) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)buffers[i].cpu, buffers[i].bytes, (uintptr_t)buffers, sizeof(*buffers) * 2)) return 0;
     }
-    if (!separate(buffers[0].cpu, buffers[0].bytes, buffers[1].cpu, buffers[1].bytes)) return 0;
+    if (!a733_extents_disjoint_prechecked((uintptr_t)buffers[0].cpu, buffers[0].bytes, (uintptr_t)buffers[1].cpu, buffers[1].bytes)) return 0;
     for (unsigned i = 0; i < 2; ++i) memset(buffers[i].cpu, 0, buffers[i].bytes);
     for (unsigned i = 0; i < plan.load_count; ++i) {
         const struct pvr_fw_load *load = &plan.loads[i];

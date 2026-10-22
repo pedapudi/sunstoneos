@@ -21,6 +21,7 @@
  * SOFTWARE.
  */
 #include "pvr_compute_job.h"
+#include "a733_range.h"
 #include <string.h>
 #include "pvr_compute_probe.inc"
 _Static_assert(PVR_COMPUTE_DISPATCH_MAX*128u+64u<=4096u-64u,"PDS data, code and trailing fetch space");
@@ -36,14 +37,8 @@ size_t pvr_compute_job_region_bytes(const struct pvr_compute_job_config *c,unsig
 }
 unsigned pvr_compute_job_result_words(const struct pvr_compute_job_config *c)
 {return c->package?c->package->output_bytes/4:PVR_COMPUTE_JOB_WORDS;}
-static int range(const void *p,size_t n)
-{ return p && n && n<=UINTPTR_MAX-(uintptr_t)p; }
 static int gpu(uint64_t a,size_t n)
 { return a && n && a<(UINT64_C(1)<<40) && n<=(UINT64_C(1)<<40)-a; }
-static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m)
-{ return a<b+m && b<a+n; }
-static int apart(const void *a,size_t n,const void *b,size_t m)
-{ return range(a,n)&&range(b,m)&&!overlap((uintptr_t)a,n,(uintptr_t)b,m); }
 static uint32_t get32(const void *p,size_t off)
 { const unsigned char *b=p;return (uint32_t)b[off]|(uint32_t)b[off+1]<<8|(uint32_t)b[off+2]<<16|(uint32_t)b[off+3]<<24; }
 static uint64_t get64(const void *p,size_t off)
@@ -57,46 +52,46 @@ static void clear(void *p,size_t n)
 static void words(void *p,size_t off,const uint32_t *w,size_t count)
 { for(size_t i=0;i<count;++i)put32(p,off+4*i,w[i]); }
 static int span(const struct pvr_compute_program_span *s)
-{ return range(s->cpu,s->bytes)&&gpu(s->gpu,s->bytes); }
+{ return a733_span_excl_nonempty(s->cpu,s->bytes)&&gpu(s->gpu,s->bytes); }
 static int heap(const struct pvr_compute_program_heap *h,int relative)
 { return gpu(h->base,h->bytes)&&!(h->base&4095)&&!(h->bytes&4095)&&(!relative||h->bytes<=(UINT64_C(1)<<32)); }
 static int inside(const struct pvr_compute_program_heap *h,const struct pvr_compute_program_span *s)
-{ return s->gpu>=h->base&&s->gpu-h->base<=h->bytes&&s->bytes<=h->bytes-(s->gpu-h->base); }
+{ return a733_extent_within(h->base,h->bytes,s->gpu,s->bytes); }
 static int fw(uint32_t a,size_t n,unsigned alignment)
 { return a>=0xc0000000u&&a<0xc1000000u&&n<=0xc1000000u-a&&!(a&(alignment-1)); }
 static int valid(const struct pvr_compute_job_config *c,const void *out,size_t out_size)
 {
-    if(!range(c,sizeof(*c))||(uintptr_t)c%_Alignof(struct pvr_compute_job_config)||
-       !apart(c,sizeof(*c),out,out_size)||!c->admit||
-       !range(c->programs,sizeof(*c->programs))||
+    if(!a733_span_excl_nonempty(c,sizeof(*c))||(uintptr_t)c%_Alignof(struct pvr_compute_job_config)||
+       !a733_ranges_disjoint_nonempty(c,sizeof(*c),out,out_size)||!c->admit||
+       !a733_span_excl_nonempty(c->programs,sizeof(*c->programs))||
        (uintptr_t)c->programs%_Alignof(struct pvr_compute_program_config)||
-       !range(c->program_result,sizeof(*c->program_result))||
+       !a733_span_excl_nonempty(c->program_result,sizeof(*c->program_result))||
        (uintptr_t)c->program_result%_Alignof(struct pvr_compute_program_result)||
-       !apart(c->programs,sizeof(*c->programs),out,out_size)||
-       !apart(c->program_result,sizeof(*c->program_result),out,out_size)||
+       !a733_ranges_disjoint_nonempty(c->programs,sizeof(*c->programs),out,out_size)||
+       !a733_ranges_disjoint_nonempty(c->program_result,sizeof(*c->program_result),out,out_size)||
        !fw(c->firmware_context,232,8)||!fw(c->firmware_ufo,64,4))return 0;
-    if(c->package&&(!range(c->package,sizeof(*c->package))||!pvr_compute_package_valid(c->package)||
-       !apart(c->package,sizeof(*c->package),out,out_size)))return 0;
+    if(c->package&&(!a733_span_excl_nonempty(c->package,sizeof(*c->package))||!pvr_compute_package_valid(c->package)||
+       !a733_ranges_disjoint_nonempty(c->package,sizeof(*c->package),out,out_size)))return 0;
     const struct pvr_compute_program_config *p=c->programs;
     if(p->bvnc!=PVR_FW_A733_BVNC||p->execution_cores!=1||!p->admission_token||
        p->excluded_count<5||p->excluded_count>PVR_COMPUTE_PROGRAM_EXCLUSIONS||
        !heap(&p->pds,1)||!heap(&p->usc,1)||!heap(&p->general,0)||
-       overlap(p->pds.base,p->pds.bytes,p->usc.base,p->usc.bytes)||
-       overlap(p->pds.base,p->pds.bytes,p->general.base,p->general.bytes)||
-       overlap(p->usc.base,p->usc.bytes,p->general.base,p->general.bytes))return 0;
+       a733_extents_overlap_prechecked(p->pds.base,p->pds.bytes,p->usc.base,p->usc.bytes)||
+       a733_extents_overlap_prechecked(p->pds.base,p->pds.bytes,p->general.base,p->general.bytes)||
+       a733_extents_overlap_prechecked(p->usc.base,p->usc.bytes,p->general.base,p->general.bytes))return 0;
     static const uint32_t min_size[5]={232,4,32,256,32};
     for(unsigned i=0;i<p->excluded_count;++i)
         if(!span(&p->excluded[i])||(i<5&&p->excluded[i].bytes<min_size[i])||
-           !apart(p->excluded[i].cpu,p->excluded[i].bytes,out,out_size))return 0;
+           !a733_ranges_disjoint_nonempty(p->excluded[i].cpu,p->excluded[i].bytes,out,out_size))return 0;
     for(unsigned i=0;i<PVR_PROGRAM_REGIONS;++i)
         if(!span(&p->buffers[i])||(p->buffers[i].gpu&63)||p->buffers[i].bytes!=pvr_compute_program_bytes[i]||
-           !apart(p->buffers[i].cpu,p->buffers[i].bytes,out,out_size))return 0;
+           !a733_ranges_disjoint_nonempty(p->buffers[i].cpu,p->buffers[i].bytes,out,out_size))return 0;
     const void *context=p->excluded[0].cpu;
     uint32_t addresses[5]={c->firmware_context,get32(context,24),get32(context,0),
                            get32(context,4),get32(context,136)};
     for(unsigned i=0;i<5;++i)
         if(!fw(addresses[i],p->excluded[i].bytes,i==1?4:8)||
-           overlap(c->firmware_ufo,64,addresses[i],p->excluded[i].bytes))return 0;
+           a733_extents_overlap_prechecked(c->firmware_ufo,64,addresses[i],p->excluded[i].bytes))return 0;
     for(unsigned i=0;i<7;++i)
         if(get64(context,152+8*i)!=c->program_result->switch_registers[i])return 0;
     if(c->program_result->cdm_resume_address!=p->buffers[PVR_PROGRAM_CDM_RESUME].gpu)return 0;
@@ -106,19 +101,19 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
             i==PVR_JOB_PDS||i==PVR_JOB_FENCE_PDS?&p->pds:&p->general;
         if(!span(s)||s->bytes!=pvr_compute_job_region_bytes(c,i)||(s->gpu&63)||
            (i==PVR_JOB_CDM&&(s->gpu&4095))||(i!=PVR_JOB_UFO&&!inside(h,s))||
-           !apart(s->cpu,s->bytes,c,sizeof(*c))||!apart(s->cpu,s->bytes,p,sizeof(*p))||
-           !apart(s->cpu,s->bytes,c->program_result,sizeof(*c->program_result))||
-           !apart(s->cpu,s->bytes,out,out_size))return 0;
-        if(c->package&&!apart(s->cpu,s->bytes,c->package,sizeof(*c->package)))return 0;
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c,sizeof(*c))||!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p,sizeof(*p))||
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->program_result,sizeof(*c->program_result))||
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,out,out_size))return 0;
+        if(c->package&&!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->package,sizeof(*c->package)))return 0;
         for(unsigned j=0;j<i;++j)
-            if(!apart(s->cpu,s->bytes,c->buffers[j].cpu,c->buffers[j].bytes)||
-               overlap(s->gpu,s->bytes,c->buffers[j].gpu,c->buffers[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->buffers[j].cpu,c->buffers[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,c->buffers[j].gpu,c->buffers[j].bytes))return 0;
         for(unsigned j=0;j<PVR_PROGRAM_REGIONS;++j)
-            if(!apart(s->cpu,s->bytes,p->buffers[j].cpu,p->buffers[j].bytes)||
-               overlap(s->gpu,s->bytes,p->buffers[j].gpu,p->buffers[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p->buffers[j].cpu,p->buffers[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,p->buffers[j].gpu,p->buffers[j].bytes))return 0;
         for(unsigned j=0;j<p->excluded_count;++j)
-            if(!apart(s->cpu,s->bytes,p->excluded[j].cpu,p->excluded[j].bytes)||
-               overlap(s->gpu,s->bytes,p->excluded[j].gpu,p->excluded[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p->excluded[j].cpu,p->excluded[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,p->excluded[j].gpu,p->excluded[j].bytes))return 0;
     }
     return 1;
 }
@@ -245,17 +240,17 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
                          const struct pvr_compute_job_image *i,const struct pvr_compute_job_ops *ops,
                          void *ctx,struct pvr_cccb *t,uint64_t deadline)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase!=PVR_JOB_NEW||
-       !range(i,sizeof(*i))||(uintptr_t)i%_Alignof(struct pvr_compute_job_image)||
-       !range(ops,sizeof(*ops))||(uintptr_t)ops%_Alignof(struct pvr_compute_job_ops)||
-       !range(t,sizeof(*t))||(uintptr_t)t%_Alignof(struct pvr_cccb)||
-       !range(t->queue,sizeof(*t->queue))||(uintptr_t)t->queue%_Alignof(struct pvr_ccb)||
-       !apart(j,sizeof(*j),i,sizeof(*i))||!apart(j,sizeof(*j),ops,sizeof(*ops))||
-       !apart(j,sizeof(*j),t,sizeof(*t))||!apart(j,sizeof(*j),t->queue,sizeof(*t->queue))||
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase!=PVR_JOB_NEW||
+       !a733_span_excl_nonempty(i,sizeof(*i))||(uintptr_t)i%_Alignof(struct pvr_compute_job_image)||
+       !a733_span_excl_nonempty(ops,sizeof(*ops))||(uintptr_t)ops%_Alignof(struct pvr_compute_job_ops)||
+       !a733_span_excl_nonempty(t,sizeof(*t))||(uintptr_t)t%_Alignof(struct pvr_cccb)||
+       !a733_span_excl_nonempty(t->queue,sizeof(*t->queue))||(uintptr_t)t->queue%_Alignof(struct pvr_ccb)||
+       !a733_ranges_disjoint_nonempty(j,sizeof(*j),i,sizeof(*i))||!a733_ranges_disjoint_nonempty(j,sizeof(*j),ops,sizeof(*ops))||
+       !a733_ranges_disjoint_nonempty(j,sizeof(*j),t,sizeof(*t))||!a733_ranges_disjoint_nonempty(j,sizeof(*j),t->queue,sizeof(*t->queue))||
        !valid(c,j,sizeof(*j))||!valid(c,i,sizeof(*i))||
        !valid(c,t,sizeof(*t))||!valid(c,t->queue,sizeof(*t->queue))||
-       !apart(t,sizeof(*t),t->queue,sizeof(*t->queue))||
-       !apart(t,sizeof(*t),i,sizeof(*i))||!apart(t->queue,sizeof(*t->queue),i,sizeof(*i))||
+       !a733_ranges_disjoint_nonempty(t,sizeof(*t),t->queue,sizeof(*t->queue))||
+       !a733_ranges_disjoint_nonempty(t,sizeof(*t),i,sizeof(*i))||!a733_ranges_disjoint_nonempty(t->queue,sizeof(*t->queue),i,sizeof(*i))||
        !ops->now||!ops->publish||!ops->read_fence||!ops->read_output||
        t->phase!=PVR_CCCB_IDLE||t->queue->phase!=PVR_CCB_ACTIVE||!t->epoch||
        t->epoch!=t->queue->epoch||t->serial||t->size<512||
@@ -272,7 +267,7 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
 }
 int pvr_compute_job_can_repeat(const struct pvr_compute_job *j,uint64_t deadline)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
        j->phase!=PVR_JOB_COMPLETE||j->sequence==UINT32_MAX||j->serial==UINT64_MAX||
        j->transport->phase!=PVR_CCCB_IDLE||j->transport->queue->phase!=PVR_CCB_ACTIVE||
        j->transport->serial!=j->serial||j->transport->epoch!=j->epoch||
@@ -288,7 +283,7 @@ int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
 }
 int pvr_compute_job_poll(struct pvr_compute_job *j)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
     if(j->phase==PVR_JOB_COMPLETE)return 1;
     if(j->phase==PVR_JOB_FAILED)return -1;
     if(j->epoch!=j->transport->epoch||j->epoch!=j->transport->queue->epoch||
@@ -347,7 +342,7 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
 }
 int pvr_compute_job_abort(struct pvr_compute_job *j)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
     if(j->phase==PVR_JOB_COMPLETE)return 1;
     if(j->phase==PVR_JOB_FAILED)return -1;
     return fail(j,PVR_JOB_TRANSPORT);

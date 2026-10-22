@@ -1,4 +1,5 @@
 #include "a733_gpu_resources.h"
+#include "a733_range.h"
 #include "a733_clock_reference.h"
 #include <stddef.h>
 
@@ -6,12 +7,6 @@
 #define RCCU UINT32_C(0x07010000)
 #define RTC UINT32_C(0x07090000)
 #define PCK UINT32_C(0x07060000)
-static int separate(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return a && b && x <= UINTPTR_MAX - an && y <= UINTPTR_MAX - bn &&
-        (x + an <= y || y + bn <= x);
-}
 static uint32_t expand(uint32_t mask)
 {
     if (mask & (A733_GPU_RESOURCE_PARENT | A733_GPU_RESOURCE_PCK |
@@ -41,7 +36,7 @@ static enum a733_gpu_resource_result leave(struct a733_gpu_resource_manager *m,
 enum a733_gpu_resource_result a733_gpu_resources_status(struct a733_gpu_resource_manager *m,
     unsigned client,const struct a733_gpu_resource_lease *token)
 {
-    if(client>=A733_GPU_RESOURCE_CLIENTS || !separate(m,sizeof(*m),token,sizeof(*token)))
+    if(client>=A733_GPU_RESOURCE_CLIENTS || !a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)))
         return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result r=enter(m);
     if(r!=A733_GPU_RESOURCE_OK)return r;
@@ -168,9 +163,9 @@ enum a733_gpu_resource_result a733_gpu_resources_acquire(
     struct a733_gpu_resource_manager *m, unsigned client, uint32_t mask,
     uint64_t deadline, uint64_t *token, struct a733_gpu_power_resources *ready)
 {
-    if (!valid(client, mask) || !separate(m, sizeof(*m), token, sizeof(*token)) ||
-        !separate(m, sizeof(*m), ready, sizeof(*ready)) ||
-        !separate(token, sizeof(*token), ready, sizeof(*ready))) return A733_GPU_RESOURCE_INVALID;
+    if (!valid(client, mask) || !a733_ranges_disjoint(m, sizeof(*m), token, sizeof(*token)) ||
+        !a733_ranges_disjoint(m, sizeof(*m), ready, sizeof(*ready)) ||
+        !a733_ranges_disjoint(token, sizeof(*token), ready, sizeof(*ready))) return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result result = enter(m);
     if (result != A733_GPU_RESOURCE_OK) return result;
     mask = expand(mask);
@@ -195,7 +190,7 @@ enum a733_gpu_resource_result a733_gpu_resources_acquire(
 enum a733_gpu_resource_result a733_gpu_resources_change(
     struct a733_gpu_resource_manager *m, unsigned client, uint32_t mask, uint64_t *token)
 {
-    if (!valid(client, mask) || !separate(m, sizeof(*m), token, sizeof(*token)))
+    if (!valid(client, mask) || !a733_ranges_disjoint(m, sizeof(*m), token, sizeof(*token)))
         return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result result = enter(m);
     if (result != A733_GPU_RESOURCE_OK) return result;
@@ -247,7 +242,7 @@ static int exact_guard(struct a733_gpu_resource_manager *m, const struct a733_gp
 enum a733_gpu_resource_result a733_gpu_rail_guard_acquire(
     struct a733_gpu_resource_manager *m, int change, struct a733_gpu_rail_guard *out)
 {
-    if ((change != 0 && change != 1) || !separate(m,sizeof(*m),out,sizeof(*out)))
+    if ((change != 0 && change != 1) || !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)))
         return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result r = enter(m);
     if (r != A733_GPU_RESOURCE_OK) return r;
@@ -266,7 +261,7 @@ enum a733_gpu_resource_result a733_gpu_rail_guard_acquire(
 enum a733_gpu_resource_result a733_gpu_rail_guard_status(
     struct a733_gpu_resource_manager *m, const struct a733_gpu_rail_guard *g)
 {
-    if (!separate(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
+    if (!a733_ranges_disjoint(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result r = enter(m);
     if (r != A733_GPU_RESOURCE_OK) return r;
     return leave(m,exact_guard(m,g) ? A733_GPU_RESOURCE_OK : A733_GPU_RESOURCE_INVALID);
@@ -274,7 +269,7 @@ enum a733_gpu_resource_result a733_gpu_rail_guard_status(
 enum a733_gpu_resource_result a733_gpu_rail_guard_end(
     struct a733_gpu_resource_manager *m, const struct a733_gpu_rail_guard *g)
 {
-    if (!separate(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
+    if (!a733_ranges_disjoint(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
     enum a733_gpu_resource_result r = enter(m);
     if (r != A733_GPU_RESOURCE_OK) return r;
     if (!exact_guard(m,g)) return leave(m,A733_GPU_RESOURCE_INVALID);

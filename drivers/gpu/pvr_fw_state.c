@@ -4,6 +4,7 @@
  * See LICENSE.pvr for retained terms.
  */
 #include "pvr_fw_state.h"
+#include "a733_range.h"
 #include "pvr_ccb.h"
 #include <string.h>
 
@@ -35,20 +36,13 @@ const struct pvr_fw_resource_layout *pvr_fw_state_layout(enum pvr_fw_resource id
 {
     return (unsigned)id < PVR_FW_RESOURCE_COUNT ? &layouts[id] : NULL;
 }
-static int range(const void *p, size_t n)
-{
-    return p && n && n <= UINTPTR_MAX - (uintptr_t)p;
-}
-static int separate(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a + an <= (uintptr_t)b || (uintptr_t)b + bn <= (uintptr_t)a;
-}
 static int separate_outputs(const struct pvr_mips_buffer *b, const struct pvr_mips_object *out,
                             const void *input, size_t n)
 {
-    if (!range(input, n) || !separate(out, sizeof(*out) * PVR_FW_RESOURCE_COUNT, input, n)) return 0;
+    if (!a733_span_excl_nonempty(input, n) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)out, sizeof(*out) * PVR_FW_RESOURCE_COUNT, (uintptr_t)input, n)) return 0;
     for (unsigned i = 0; i < PVR_FW_RESOURCE_COUNT; ++i)
-        if (!separate(b[i].storage.cpu, b[i].storage.bytes, input, n)) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)b[i].storage.cpu, b[i].storage.bytes, (uintptr_t)input, n)) return 0;
     return 1;
 }
 static int physical_page(uint64_t p)
@@ -66,18 +60,19 @@ int pvr_fw_state_prepare(const struct pvr_mips_buffer b[PVR_FW_RESOURCE_COUNT],
                          const struct pvr_fw_state_config *config,
                          struct pvr_mips_object out[PVR_FW_RESOURCE_COUNT])
 {
-    if (!range(b, sizeof(*b) * PVR_FW_RESOURCE_COUNT) || !range(config, sizeof(*config)) ||
-        !range(out, sizeof(*out) * PVR_FW_RESOURCE_COUNT) ||
+    if (!a733_span_excl_nonempty(b, sizeof(*b) * PVR_FW_RESOURCE_COUNT) ||
+        !a733_span_excl_nonempty(config, sizeof(*config)) ||
+        !a733_span_excl_nonempty(out, sizeof(*out) * PVR_FW_RESOURCE_COUNT) ||
         config->bvnc != PVR_FW_A733_BVNC || !config->gpu_clock_hz ||
         config->clusters != 1 || config->slc_kilobytes != 16) return 0;
     for (unsigned i = 0; i < PVR_FW_RESOURCE_COUNT; ++i) {
         if (b[i].storage.bytes != layouts[i].allocation_bytes ||
             b[i].page_count != layouts[i].allocation_bytes / 4096 ||
-            !range(b[i].storage.cpu, b[i].storage.bytes) ||
-            !separate(b[i].storage.cpu, b[i].storage.bytes, out, sizeof(*out) * PVR_FW_RESOURCE_COUNT))
+            !a733_span_excl_nonempty(b[i].storage.cpu, b[i].storage.bytes) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b[i].storage.cpu, b[i].storage.bytes, (uintptr_t)out, sizeof(*out) * PVR_FW_RESOURCE_COUNT))
             return 0;
         for (unsigned j = 0; j < i; ++j)
-            if (!separate(b[i].storage.cpu, b[i].storage.bytes, b[j].storage.cpu, b[j].storage.bytes))
+            if (!a733_extents_disjoint_prechecked((uintptr_t)b[i].storage.cpu, b[i].storage.bytes, (uintptr_t)b[j].storage.cpu, b[j].storage.bytes))
                 return 0;
     }
     if (!separate_outputs(b, out, b, sizeof(*b) * PVR_FW_RESOURCE_COUNT) ||

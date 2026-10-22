@@ -4,6 +4,7 @@
  * See LICENSE.pvr for retained terms.
  */
 #include "pvr_ccb.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { WRITE_OFFSET = 0, READ_OFFSET = 128, WRAP_MASK = 132, COMMAND_SIZE = 136 };
@@ -19,15 +20,9 @@ size_t pvr_ccb_region_bytes(enum pvr_ccb_region r)
     default: return 0;
     }
 }
-static int range(const void *p, size_t bytes)
-{
-    return p && bytes && bytes <= UINTPTR_MAX - (uintptr_t)p;
-}
 static int outside(const struct pvr_ccb *q, const void *p, size_t bytes)
 {
-    return range(q, sizeof(*q)) && range(p, bytes) &&
-        ((uintptr_t)p + bytes <= (uintptr_t)q ||
-         (uintptr_t)q + sizeof(*q) <= (uintptr_t)p);
+    return a733_ranges_disjoint_nonempty(q, sizeof(*q), p, bytes);
 }
 static uint32_t u32(const unsigned char *p)
 {
@@ -62,7 +57,7 @@ static enum pvr_ccb_result fail(struct pvr_ccb *q)
 }
 static enum pvr_ccb_result active(struct pvr_ccb *q)
 {
-    if (!range(q, sizeof(*q))) return PVR_CCB_INVALID;
+    if (!a733_span_excl_nonempty(q, sizeof(*q))) return PVR_CCB_INVALID;
     if (q->phase == PVR_CCB_FAILED || q->phase == PVR_CCB_RETIRED) return PVR_CCB_FAULT;
     return q->phase == PVR_CCB_ACTIVE ? PVR_CCB_OK : PVR_CCB_INVALID;
 }
@@ -119,7 +114,7 @@ enum pvr_ccb_result pvr_ccb_init(struct pvr_ccb *q, const struct pvr_ccb_ops *op
 
 enum pvr_ccb_result pvr_ccb_start(struct pvr_ccb *q, uint64_t now)
 {
-    if (!range(q, sizeof(*q))) return PVR_CCB_INVALID;
+    if (!a733_span_excl_nonempty(q, sizeof(*q))) return PVR_CCB_INVALID;
     if (q->phase == PVR_CCB_FAILED) return PVR_CCB_FAULT;
     if (q->phase != PVR_CCB_PREPARED) return PVR_CCB_INVALID;
     uint32_t write, read;
@@ -220,7 +215,7 @@ enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *q, void *event)
 
 enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *q)
 {
-    if (!range(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
+    if (!a733_span_excl_nonempty(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
         q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED &&
         q->phase != PVR_CCB_RETIRED)) return PVR_CCB_INVALID;
     return fail(q);
@@ -228,7 +223,7 @@ enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *q)
 
 enum pvr_ccb_result pvr_ccb_retire(struct pvr_ccb *q)
 {
-    if (!range(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
+    if (!a733_span_excl_nonempty(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
         q->phase != PVR_CCB_ACTIVE)) return PVR_CCB_INVALID;
     q->phase = PVR_CCB_RETIRED;
     return PVR_CCB_OK;

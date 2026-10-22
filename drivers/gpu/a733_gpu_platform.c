@@ -1,4 +1,5 @@
 #include "a733_gpu_platform.h"
+#include "a733_range.h"
 #include "a733_gpu_resources_native.h"
 #include <stddef.h>
 
@@ -52,17 +53,13 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
     return p->token && p->delegated &&
         p->ops.update(p->context, bank, off, clear, set, p->deadline);
 }
-static int disjoint(const void *a, size_t as, const void *b, size_t bs)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return x <= UINTPTR_MAX - as && y <= UINTPTR_MAX - bs && (x + as <= y || y + bs <= x);
-}
 int a733_gpu_platform_init(struct a733_gpu_platform *p, struct a733_gpu_resource_manager *m,
     unsigned client, const struct a733_gpu_platform_ops *ops, void *context)
 {
     if (!p || !m || !ops || p->initialized || !m->initialized || client >= A733_GPU_RESOURCE_CLIENTS ||
         !ops->now || !ops->read || !ops->write || !ops->update ||
-        !disjoint(p, sizeof(*p), m, sizeof(*m)) || !disjoint(p, sizeof(*p), ops, sizeof(*ops))) return 0;
+        !a733_extents_disjoint_checked((uintptr_t)p, sizeof(*p), (uintptr_t)m, sizeof(*m)) ||
+        !a733_extents_disjoint_checked((uintptr_t)p, sizeof(*p), (uintptr_t)ops, sizeof(*ops))) return 0;
     *p = (struct a733_gpu_platform){.manager = m, .ops = *ops, .context = context,
                                    .client = client, .initialized = 1};
     const struct a733_gpu_power_ops power_ops = {clock_read, acquire, release, read_reg, write_reg, update_reg};
@@ -83,7 +80,7 @@ int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *p,struct a733_gpu_reso
 {
     if(!p || !p->initialized || p->phase!=A733_GPU_PLATFORM_NEW || p->pmic_native ||
         !n || !life || !provider || provider->self!=provider || provider->rails->binding.gpu!=p->manager ||
-        !disjoint(p,sizeof(*p),n,sizeof(*n)) ||
+        !a733_extents_disjoint_checked((uintptr_t)p,sizeof(*p),(uintptr_t)n,sizeof(*n)) ||
         !a733_pmic_consumer_storage(provider,p,sizeof(*p)) ||
         !a733_gpu_resources_native_use_pmic(n,p->manager,provider))return 0;
     const struct a733_pmic_consumer_config config={provider,*life,owner,A733_RAIL_DCDC4};

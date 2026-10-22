@@ -1,16 +1,12 @@
 #include "a733_gpu_clock_parent.h"
+#include "a733_range.h"
 #include <stddef.h>
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_gpu_clock_parent_init(struct a733_gpu_clock_parent *s,struct a733_clock_leases *m,
     struct a733_gpu_resource_manager *r,unsigned client,uint64_t owner,uint64_t deadline)
 {
-    if(!separate(s,sizeof(*s),m,sizeof(*m)) || !separate(s,sizeof(*s),r,sizeof(*r)) ||
-        !separate(m,sizeof(*m),r,sizeof(*r)) || s->phase!=A733_GPU_CLOCK_NEW ||
+    if(!a733_ranges_disjoint(s,sizeof(*s),m,sizeof(*m)) || !a733_ranges_disjoint(s,sizeof(*s),r,sizeof(*r)) ||
+        !a733_ranges_disjoint(m,sizeof(*m),r,sizeof(*r)) || s->phase!=A733_GPU_CLOCK_NEW ||
         !m->initialized || m->failed || !r->initialized || r->failed ||
         client>=A733_GPU_RESOURCE_CLIENTS || !owner || !deadline)return 0;
     for(unsigned i=0;i<A733_GPU_RESOURCE_SLOTS;++i)

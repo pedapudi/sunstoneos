@@ -4,14 +4,11 @@
  * See LICENSE.pvr.
  */
 #include "pvr_free_list.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { ZERO_TABLE, ALLOCATE, ZERO_PAGE, PUBLISH_PAGE, INSERT, INIT_RECORD,
        REBUILD, READ_CURRENT, WRITE_STACK, CLEAR_COUNTS, RECOVER_TARGETS, SEND, WAIT };
-static int span(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int apart(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static void put(unsigned char *p, uint64_t value, unsigned n)
 { for (unsigned i=0;i<n;++i) p[i]=(unsigned char)(value>>(8*i)); }
 static uint32_t get(const unsigned char *p)
@@ -31,13 +28,17 @@ int pvr_free_lists_init(struct pvr_free_lists *s,const struct pvr_free_list_conf
     unsigned minimum,const struct pvr_free_list_ops *ops,void *ctx,struct pvr_ccb *q,
     uint64_t now,uint64_t timeout)
 {
-    if(!span(s,sizeof(*s)) || s->phase!=PVR_FREE_LIST_NEW || !count || count>PVR_FREE_LISTS ||
-       !minimum || minimum>PVR_FREE_LIST_MAX_PAGES || !span(configs,count*sizeof(*configs)) ||
-       !span(ops,sizeof(*ops)) || !span(q,sizeof(*q)) || !timeout || timeout>INT64_MAX ||
-       timeout>UINT64_MAX-now || !q->epoch ||
+    uint64_t deadline;
+    if(!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase!=PVR_FREE_LIST_NEW || !count || count>PVR_FREE_LISTS ||
+       !minimum || minimum>PVR_FREE_LIST_MAX_PAGES || !a733_span_excl_nonempty(configs,count*sizeof(*configs)) ||
+       !a733_span_excl_nonempty(ops,sizeof(*ops)) || !a733_span_excl_nonempty(q,sizeof(*q)) || !timeout ||
+       timeout>INT64_MAX ||
+       !a733_deadline_after(now,timeout,&deadline) || !q->epoch ||
        (q->phase!=PVR_CCB_PREPARED && q->phase!=PVR_CCB_ACTIVE) ||
-       !apart(s,sizeof(*s),configs,count*sizeof(*configs)) || !apart(s,sizeof(*s),ops,sizeof(*ops)) ||
-       !apart(s,sizeof(*s),q,sizeof(*q)) || !ops->allocate || !ops->publish_page ||
+       !a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)configs,count*sizeof(*configs)) ||
+       !a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)ops,sizeof(*ops)) ||
+       !a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)q,sizeof(*q)) || !ops->allocate ||
+       !ops->publish_page ||
        !ops->read || !ops->write || !ops->publish || !ops->recover_targets) return 0;
     for(unsigned i=0;i<count;++i) {
         const struct pvr_free_list_config *c=&configs[i];
@@ -50,15 +51,17 @@ int pvr_free_lists_init(struct pvr_free_lists *s,const struct pvr_free_list_conf
            !c->firmware_address || (c->firmware_address&7) || c->firmware_address>UINT32_MAX-63 ||
            (c->gpu_address&15) || c->gpu_address>=(UINT64_C(1)<<40) ||
            4*(uint64_t)c->maximum_pages>(UINT64_C(1)<<40)-c->gpu_address ||
-           !span(c->pages,bytes) || !apart(c->pages,bytes,s,sizeof(*s)) ||
-           !apart(c->pages,bytes,q,sizeof(*q)) || !apart(c->pages,bytes,ops,sizeof(*ops)) ||
-           !apart(c->pages,bytes,configs,count*sizeof(*configs))) return 0;
+           !a733_span_excl_nonempty(c->pages,bytes) ||
+           !a733_extents_disjoint_prechecked((uintptr_t)c->pages,bytes,(uintptr_t)s,sizeof(*s)) ||
+           !a733_extents_disjoint_prechecked((uintptr_t)c->pages,bytes,(uintptr_t)q,sizeof(*q)) ||
+           !a733_extents_disjoint_prechecked((uintptr_t)c->pages,bytes,(uintptr_t)ops,sizeof(*ops)) ||
+           !a733_extents_disjoint_prechecked((uintptr_t)c->pages,bytes,(uintptr_t)configs,count*sizeof(*configs))) return 0;
         for(unsigned j=0;j<i;++j) {
             const struct pvr_free_list_config *d=&configs[j];
             if(c->resource.id==d->resource.id || c->resource.token==d->resource.token ||
                (c->gpu_address < d->gpu_address+4*(uint64_t)d->maximum_pages &&
                 d->gpu_address < c->gpu_address+4*(uint64_t)c->maximum_pages) ||
-               !apart(c->pages,bytes,d->pages,(size_t)d->maximum_pages*sizeof(*d->pages)) ||
+               !a733_extents_disjoint_prechecked((uintptr_t)c->pages,bytes,(uintptr_t)d->pages,(size_t)d->maximum_pages*sizeof(*d->pages)) ||
                ((uint64_t)c->firmware_address < (uint64_t)d->firmware_address+64 &&
                 (uint64_t)d->firmware_address < (uint64_t)c->firmware_address+64)) return 0;
         }
@@ -67,7 +70,7 @@ int pvr_free_lists_init(struct pvr_free_lists *s,const struct pvr_free_list_conf
     }
     struct pvr_free_lists result={0};
     result.ops=*ops; result.context=ctx; result.queue=q; result.epoch=q->epoch;
-    result.timeout=timeout; result.last_now=now; result.deadline=now+timeout; result.count=count;
+    result.timeout=timeout; result.last_now=now; result.deadline=deadline; result.count=count;
     for(unsigned i=0;i<count;++i)result.lists[i].config=configs[i];
     result.phase=PVR_FREE_LIST_BUILDING; result.stage=ZERO_TABLE; result.goal=configs[0].initial_pages;
     *s=result; return 1;
@@ -84,15 +87,16 @@ static unsigned find(const struct pvr_free_lists *s,const struct pvr_gpu_event_r
 int pvr_free_lists_event(void *ctx,const struct pvr_gpu_event *e,
     const struct pvr_gpu_event_resource *const *targets,unsigned count)
 {
-    struct pvr_free_lists *s=ctx;
+    struct pvr_free_lists *s=ctx; uint64_t deadline;
     if(!s || !e || s->phase==PVR_FREE_LIST_NEW || s->phase==PVR_FREE_LIST_FAILED)return 0;
     if(s->busy) { (void)fail(s,PVR_FREE_LIST_REENTRY); return 0; }
     if(s->phase==PVR_FREE_LIST_BUILDING || s->request_count==PVR_FREE_LIST_REQUESTS ||
        s->queue->epoch!=s->epoch || s->queue->phase!=PVR_CCB_ACTIVE ||
-       s->timeout>UINT64_MAX-s->last_now || count>PVR_GPU_EVENTS_RECONSTRUCT || (count&&!targets))return 0;
+       !a733_deadline_after(s->last_now,s->timeout,&deadline) ||
+       count>PVR_GPU_EVENTS_RECONSTRUCT || (count&&!targets))return 0;
     if((e->kind==PVR_GPU_EVENT_GROW ? count!=1 :
         e->kind!=PVR_GPU_EVENT_RECONSTRUCT || count!=e->data.reconstruct.count))return 0;
-    struct pvr_free_list_request r={.event=*e,.deadline=s->last_now+s->timeout,.count=count};
+    struct pvr_free_list_request r={.event=*e,.deadline=deadline,.count=count};
     for(unsigned i=0;i<count;++i) {
         r.lists[i]=find(s,targets[i]);
         uint32_t id=e->kind==PVR_GPU_EVENT_GROW ? e->data.id : e->data.reconstruct.ids[i];
@@ -113,16 +117,18 @@ static int write_publish(struct pvr_free_lists *s,enum pvr_free_list_memory memo
 static int page_valid(struct pvr_free_lists *s,unsigned index)
 {
     const struct pvr_free_list_page *p=&s->lists[s->list].config.pages[index];
-    if(!span(p->cpu,4096) || ((uintptr_t)p->cpu&4095) || !p->physical || (p->physical&4095) ||
-       p->physical>=(UINT64_C(1)<<36) || !p->lease || !apart(p->cpu,4096,s,sizeof(*s)) ||
-       !apart(p->cpu,4096,s->queue,sizeof(*s->queue)))return 0;
+    if(!a733_span_excl_nonempty(p->cpu,4096) || ((uintptr_t)p->cpu&4095) || !p->physical || (p->physical&4095) ||
+       p->physical>=(UINT64_C(1)<<36) || !p->lease ||
+       !a733_extents_disjoint_prechecked((uintptr_t)p->cpu,4096,(uintptr_t)s,sizeof(*s)) ||
+       !a733_extents_disjoint_prechecked((uintptr_t)p->cpu,4096,(uintptr_t)s->queue,sizeof(*s->queue)))return 0;
     for(unsigned i=0;i<s->count;++i) {
         const struct pvr_free_list_state *l=&s->lists[i];
-        if(!apart(p->cpu,4096,l->config.pages,(size_t)l->config.maximum_pages*sizeof(*p)))return 0;
+        if(!a733_extents_disjoint_prechecked((uintptr_t)p->cpu,4096,(uintptr_t)l->config.pages,(size_t)l->config.maximum_pages*sizeof(*p)))return 0;
         for(unsigned j=0;j<l->acquired;++j) {
             if(i==s->list && j==index)continue;
             const struct pvr_free_list_page *a=&l->config.pages[j];
-            if(p->physical==a->physical || p->lease==a->lease || !apart(p->cpu,4096,a->cpu,4096))return 0;
+            if(p->physical==a->physical || p->lease==a->lease ||
+                !a733_extents_disjoint_prechecked((uintptr_t)p->cpu,4096,(uintptr_t)a->cpu,4096))return 0;
         }
     }
     return 1;
