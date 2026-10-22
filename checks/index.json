@@ -1224,7 +1224,9 @@
  },
  "accelerator-providers.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4032,6 +4034,68 @@
   "summary": "Actual retained depth lifecycle client/USB producer; GPU/service effects modeled.",
   "usb": false
  },
+ "gpu-mimus-layers.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mimus",
+   "--output"
+  ],
+  "summary": "Build and run the host model of exact mimus linear layers on the GPU.",
+  "usb": false
+ },
+ "gpu-mimus-program.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-compiled-programs.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-build",
+   "--ninja",
+   "--output"
+  ],
+  "summary": "Check the linked mimus linear-layer program against the pinned compiler.",
+  "usb": false
+ },
+ "gpu-mimus-readout.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Run the compiled mimus read-out entry under Unicorn.",
+  "usb": false
+ },
+ "gpu-mimus-time-model.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/designs/gpu-mimus-compute.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Per-core time model of mimus linear layers with exact sums on the GPU.",
+  "usb": false
+ },
  "gpu-render-cleanup.py": {
   "cache_areas": [],
   "docs": [],
@@ -5701,7 +5765,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5757,6 +5823,64 @@
    "--output"
   ],
   "summary": "Check reserved allocation ownership, local pool preparation and opt-in native image layout.",
+  "usb": false
+ },
+ "memtest-emulate.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/designs/memory-qualification.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--elf",
+   "--binary",
+   "--out"
+  ],
+  "summary": "Unicorn checks of the linked memory qualification image.",
+  "usb": false
+ },
+ "memtest-image.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--elf",
+   "--out"
+  ],
+  "summary": "Layout checks of the linked memory qualification image.",
+  "usb": false
+ },
+ "memtest-machine.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Unicorn model of the returning platform for the memory qualification checks.",
+  "usb": false
+ },
+ "memtest-plan.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/designs/memory-qualification.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "Planner model of the memory qualification image (docs/memory-qualification.md).",
   "usb": false
  },
  "microsd-boot-package.py": {
@@ -6166,7 +6290,9 @@
  },
  "npu-application-clock-reference.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6180,6 +6306,7 @@
  "npu-application.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-platform.md",
    "docs/npu-application.md"
   ],
   "library": false,
@@ -6259,7 +6386,9 @@
  },
  "npu-finite-client.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6297,7 +6426,9 @@
  },
  "npu-interrupt-client.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6338,7 +6469,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6456,6 +6589,7 @@
  "npu-runtime-bounds.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-breadth-measurements.md",
    "docs/designs/npu-breadth.md"
   ],
   "library": false,
@@ -6471,7 +6605,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6500,6 +6636,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/npu-breadth-measurements.md",
    "docs/designs/npu-breadth.md",
    "docs/designs/npu-conformance.md",
    "docs/handoff.md",
@@ -6519,7 +6656,9 @@
  },
  "npu-single-core-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6537,7 +6676,10 @@
  },
  "npu-single-core.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6550,7 +6692,9 @@
  },
  "npu-stop-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6563,7 +6707,9 @@
  },
  "npu-supervised-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6582,6 +6728,8 @@
   "cache_areas": [],
   "docs": [
    "apps/npu-runtime/README.md",
+   "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-platform.md",
    "docs/npu-application.md"
   ],
   "library": false,
@@ -7139,6 +7287,7 @@
  "pvr-compute-job.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
    "docs/gpu-compute-job.md"
   ],
   "library": false,
@@ -7170,7 +7319,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7199,6 +7350,7 @@
  "pvr-compute-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
    "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-compute-mode.md",
    "docs/gpu-compute-service.md"
