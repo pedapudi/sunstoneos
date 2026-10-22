@@ -2,8 +2,8 @@
 
 The initial native profile implements the A733 COMB1 internal 100 MHz PHY
 sequence, PCIe root-complex preparation, an x1 link and read-only
-configuration access to one directly attached endpoint. Both applications
-select Gen1 (2.5 GT/s). FreeRTOS owns the
+configuration access to one directly attached endpoint. The configuration-read,
+endpoint-test and NVMe applications all select Gen1 (2.5 GT/s). FreeRTOS owns the
 controller. Linux and U-Boot supply register semantics and comparison helpers;
 neither is a runtime dependency. The [supervised native application](pcie-application.md)
 connects these providers to authenticated entry and copied USB results. Physical
@@ -19,9 +19,9 @@ A general function client configures any cold type-0 endpoint function: it
 assigns every memory BAR and delivers interrupts by polling, INTx or MSI-X. It
 also moves the function between D0 and D3hot and stops it in order. A
 read-only NVMe driver is its first consumer, and the port itself can stop by
-holding the endpoint in PERST. Host models cover these paths and both new
-units compile for AArch64. No image links them yet, and none of them has run
-on hardware. Bridges and switches, embedded root DMA, ASPM, physical
+holding the endpoint in PERST. Host models cover these paths, and the
+supervised [NVMe block-read image](pcie-nvme.md), `sunstone-a733-pcie-nvme`,
+links both units. None of them has run on hardware. Bridges and switches, embedded root DMA, ASPM, physical
 Gen2/Gen3 links and physical power transitions remain required.
 
 ## The board handoff identifies the actual endpoint circuit
@@ -83,11 +83,13 @@ the inherited GPIO-output-low condition before mutation under the pin manager's
 shared lock. The port holds PERST low while it initializes COMB1, then waits at
 least 100 ms after successful PHY initialization before raising PERST. After
 raising PERST, it waits at least another 100 ms before the first configuration
-request. The pinned U-Boot `pcie_sunxi_rc.c` (SHA-256
-`15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
-lines 375–379) has the same two 100 ms delays, around the PERST release. No
-running inherited endpoint is converted into a cold endpoint by an unapproved
-reset.
+request. Link training runs during that second interval; only the first
+configuration request waits for it to end. The pinned U-Boot `pcie_sunxi_rc.c`
+(SHA-256 `15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
+lines 375–383) also waits 100 ms with PERST low and 100 ms after raising it,
+but it sets up the root complex and trains the link only after the second
+delay. No running inherited endpoint is converted into a cold endpoint by an
+unapproved reset.
 
 Every register operation uses the actual common FreeRTOS register mutex. Pin
 operations and resource health checks occur outside that mutex, avoiding nested
