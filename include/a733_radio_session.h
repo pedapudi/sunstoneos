@@ -59,7 +59,9 @@ int a733_radio_session_init(struct a733_radio_session *,struct a733_radio_platfo
 int a733_radio_session_init_bootstrap(struct a733_radio_session *,struct a733_radio_platform *,
     const struct a733_radio_session_config *);
 /* Owner-only authenticated completed firmware generation; 1 ready,0 pending/
- * contention,-1 invalid/fault. Readiness establishes bootstrap, not HCI. */
+ * contention,-1 invalid/fault. Readiness establishes bootstrap, not HCI. A
+ * full session reports it too, also while Wi-Fi reconnects or recovers, so a
+ * Bluetooth client on the same owner task shares the one firmware load. */
 int a733_radio_session_bootstrap(struct a733_radio_session *,uint64_t *generation);
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *);
 /* Owner-only external prerequisite failure. Closes network admission before

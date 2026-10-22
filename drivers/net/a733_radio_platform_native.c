@@ -21,7 +21,9 @@ static int now(void *cookie,uint64_t *v)
 static int admit(void *cookie,const struct a733_radio_platform_config *c,const struct a733_clock_token *t)
 {
     struct a733_radio_platform_native *n=cookie;
-    return current(n) ? n->admit(n->admission_cookie,c,t) : -1;
+    if(!current(n))return -1;
+    int r=n->admit(n->admission_cookie,c,t);
+    return r==1&&n->extension?n->extension(n->extension_cookie,c,t):r;
 }
 static int enter(void *cookie,uint64_t deadline)
 {
@@ -79,4 +81,10 @@ int a733_radio_platform_native_init(struct a733_radio_platform_native *n,
     n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
     n->operations=(struct a733_radio_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier};
     n->initialized=1;return 1;
+}
+int a733_radio_platform_native_extend(struct a733_radio_platform_native *n,
+    int (*admission)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *cookie)
+{
+    if(!n||!n->initialized||n->extension||!admission||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    n->extension=admission;n->extension_cookie=cookie;return 1;
 }

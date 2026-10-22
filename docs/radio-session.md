@@ -276,6 +276,30 @@ board caller, session and changed network structure layout. That image was not
 executed. These results and exact compiled closures are retained under
 `~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
 
+## A Bluetooth client shares the firmware generation
+
+The firmware upload applies the Bluetooth patch before it loads the Wi-Fi
+image, so a full session also brings up the module's Bluetooth controller.
+`a733_radio_session_bootstrap` reports the completed firmware generation of a
+full session as it does for a bootstrap-only one: in the management and
+online stages and while a reconnect or a loss recovery reassociates. Those
+Wi-Fi stages leave the firmware, runtime and dispatcher unchanged, so a
+Bluetooth client keeps its H4 binding while Wi-Fi recovers. The call
+requires the session's owner task, so the client runs on that task after the
+session poll ([native Bluetooth](bluetooth-native.md#attachment-to-a-wi-fi-module-owner)).
+The client never polls or retains the session; a session fault ends the
+client.
+
+The radio platform's native adapter accepts one added admission before the
+scheduler starts (`a733_radio_platform_native_extend`). It runs only after
+the owner's own admission accepts, and both must accept. A Bluetooth client
+that adds the wake pins to a platform another owner built authenticates them
+there.
+
+The reconnect model (`checks/radio-reconnect.py`) requests the firmware
+generation right after a healthy reconnect is admitted and requires the
+current borrow generation.
+
 ## Faults close admission and preserve outstanding work
 
 A failed actual platform guard stops the host and protocol workers, closes

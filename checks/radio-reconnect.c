@@ -139,7 +139,14 @@ static void reconnect_owner(void *unused)
             assert(!a733_radio_session_reconnect(&session,&target,NULL,92,3,session.deadline));
             assert(!atomic_load(&session.sockets.offline));atomic_store(&reconnect_test,5);
         }else if(phase==6){
-            if(a733_radio_session_reconnect(&session,&target,NULL,92,3,session.deadline))atomic_store(&reconnect_test,7);
+            if(a733_radio_session_reconnect(&session,&target,NULL,92,3,session.deadline)){
+                /* A Bluetooth client of the same module keeps its firmware
+                 * generation while Wi-Fi reconnects. The upload checkpoint
+                 * skips the patch records, so their completion is modeled. */
+                uint64_t generation=0;session.firmware.bt_patch_applied=1;
+                assert(a733_radio_session_bootstrap(&session,&generation)==1&&generation==session.borrow.generation);
+                atomic_store(&reconnect_test,7);
+            }
         }else if(phase==7&&status==A733_SESSION_NETWORK&&!atomic_load(&session.sockets.offline)){
             assert(reconnect_commands==2&&session.wifi.association_generation==2);
             assert(session.sockets.network.generation==2&&atomic_load(&session.sockets.network.offline_ack)==1);

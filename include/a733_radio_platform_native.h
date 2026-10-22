@@ -7,6 +7,8 @@ struct a733_radio_platform_native {
     struct a733_platform_locks *locks;
     void *owner_task,*admission_cookie;
     int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *);
+    int (*extension)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *);
+    void *extension_cookie;
     unsigned initialized;
 };
 /* Pure address filtering. SDC0/SDC2/storage apertures, PM2, parents, supplies
@@ -40,5 +42,11 @@ static inline int a733_radio_platform_native_address(uintptr_t a,unsigned writin
  * register lock as pin/clock/GIC writers; actual shared PMIC provider is separate. */
 int a733_radio_platform_native_init(struct a733_radio_platform_native *,
     struct a733_platform_locks *,void *owner_task,
+    int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *);
+/* Before the scheduler starts, add one admission that must also accept after
+ * the first one does. A client that adds the Bluetooth wake extension to a
+ * platform built by another owner authenticates that extension here, as the
+ * platform's admission contract requires. */
+int a733_radio_platform_native_extend(struct a733_radio_platform_native *,
     int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *);
 #endif
