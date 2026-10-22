@@ -35,12 +35,12 @@ was used; every figure comes from a host model, and figures marked
 | Metric | Budget | Before | After | Within budget |
 | --- | --- | --- | --- | --- |
 | DRAM tested per board | 12,224 MiB less excluded ranges | 8 KiB (board record) | Scan and signature 12,224 MiB; march plan 12,224 MiB in 48 members and 23 groups; every fixed extent inside the tested map | Yes |
-| DRAM mapped at EL1; table memory | 12,288 MiB; 8 KiB | 128 MiB (126 MiB write-back, 2 MiB non-cacheable); 8 KiB | 128 MiB; 8 KiB. 12,288 MiB once the platform writes the tested-map entries | No; the entries belong to `platform.c` |
+| DRAM mapped at EL1; table memory | 12,288 MiB; 8 KiB | 128 MiB (126 MiB write-back, 2 MiB non-cacheable); 8 KiB | 128 MiB; 8 KiB. 12,288 MiB once the platform writes the tested-map entries | No; the entries belong to `platform.c`, the reason the design's budget row states |
 | Translations | 3 at admission; none afterwards | None | 3 in a complete run | Yes |
-| March cycles per line | Write ≤ 12, read-verify ≤ 21, read-verify-write ≤ 33.5 | None | 12.19, 21.19, 33.19 | Read-and-write yes; write and read no, by 0.19 cycles of loop branch that the design budgets only for read-and-write (see below) |
+| March cycles per line | Write ≤ 12, read-verify ≤ 21, read-verify-write ≤ 33.5 | None | 12.19, 21.19, 33.19 | Read-and-write yes; write and read no, by 0.19 cycles of loop decrement and branch, the reason the design's budget row states (see below) |
 | March work per block outside the loop | 1 `ISB` and counter read, 1 `UMAXV`, 1 progress store, ≤ 1 `SMC` per 200 ms; no call, maintenance, `DSB` or `DMB` | None | As budgeted, in every kernel and direction | Yes |
 | `PRFM` and load-to-use | 1 `PRFM` per loaded line, 16 lines ahead; each `LD1` one line before its use | None | 32,767 `PRFM` for 32,768 loaded lines, all 16 lines ahead outside a member's last 16 lines; at least 17 (read-and-write) and 12 (read) instructions between a load and its use | Yes |
-| March rate at 494 MHz, *estimated* | Write 2–3, read 1.5–1.9, read-and-write 0.94–1.6 GB/s; 0.91–1.45 s per 256 MiB | None | 2.59, 1.49, 0.95 GB/s; 1.41 s per 256 MiB | Write, read-and-write and time yes; read no, 1.49 against 1.5 (see below) |
+| March rate at 494 MHz, *estimated* | Write 2–3, read 1.5–1.9, read-and-write 0.94–1.6 GB/s; 0.91–1.45 s per 256 MiB | None | 2.59, 1.49, 0.95 GB/s; 1.41 s per 256 MiB | Write, read-and-write and time yes; read no, 1.49 against 1.5, by the same loop cost (see below) |
 | Runs for March C-, *estimated* | 3–5 | None | 3 at the fast rate, 5 at the slow rate | Yes |
 | Window scan | 6,258,688 loads; ≤ 9 instructions per page; ≥ 15 from load to use | None | 6,258,688 loads; 6.58 instructions per page; 15 | Yes |
 | Address lines, bits 6–25 | 21 writes, 21 reads | None | 21 writes, 21 reads, 21 `DC CIVAC`, 1 `DSB SY` | Yes |
@@ -60,10 +60,11 @@ the loop's decrement and branch add 0.19 cycles per line to each element. The
 per-line work matches the design's sequence: 12, 21 and 33 cycles. The write
 and read elements therefore exceed their budgets by 0.19 cycles, 1.6% and
 0.9%, and the read rate of 1.49 GB/s falls below the 1.5 GB/s lower bound by
-the same loop cost. The design gives no reason for this excess: its write and
-read budgets need the same loop-branch allowance as the read-and-write budget,
-12.25 and 21.25 cycles, or the kernels need a longer unroll. A March C- pass
-over 256 MiB takes 1.41 s, inside the 0.91–1.45 s budget.
+the same loop cost. A 2 MiB block holds 32,768 lines, so the kernels need a
+loop, and the design's budget rows state this loop cost as the reason for the
+excess: a 16-line unroll would leave 12.09 and 21.09 cycles, and a 32-line
+unroll 12.05 and 21.05 cycles at 1.50 GB/s for 3.6 KiB more kernel text. A
+March C- pass over 256 MiB takes 1.41 s, inside the 0.91–1.45 s budget.
 
 ### Signature barriers
 

@@ -312,11 +312,11 @@ Changes needed from the primary agent, all under the memtest build definition:
 | Metric | Baseline | Budget | Measured by |
 | --- | --- | --- | --- |
 | DRAM tested per board | 8 KiB | 12,224 MiB less the contract's excluded ranges | Planner model `checks/memtest-plan.py`: slices and every fixed write extent, harness and chase included, inside the tested map and outside excluded ranges |
-| DRAM mapped at EL1 | 128 MiB; 8 KiB of tables | 12,288 MiB; 8 KiB of tables | Host comparison with the golden word, once per build |
+| DRAM mapped at EL1 | 128 MiB; 8 KiB of tables | 12,288 MiB; 8 KiB of tables. Measured 128 MiB in 8 KiB: the entries above 128 MiB belong to `platform/a733/platform.c`, which this package does not edit (see the changes outside the package). Until they are written, the image's mapping check refuses every run, and `checks/memtest-emulate.py` confirms the refusal; with the entries as specified, the same 8 KiB map 12,286 MiB write-back and 2 MiB non-cacheable | Host comparison with the golden word, once per build |
 | Translations | none | 3 at admission; none afterwards | `AT` count in Unicorn |
-| March cycles per line, A55 model | none | write ≤ 12; read-verify ≤ 21; read-verify-write ≤ 33.5; each `LD1` at least one line before its use; one `PRFM` per loaded line, 16 lines ahead in the travel direction | Unicorn trace and load-to-use trace over 1 MiB in each direction, priced by the cost model |
+| March cycles per line, A55 model | none | write ≤ 12; read-verify ≤ 21; read-verify-write ≤ 33.5; each `LD1` at least one line before its use; one `PRFM` per loaded line, 16 lines ahead in the travel direction. Measured 12.19, 21.19 and 33.19. The per-line work is 12, 21 and 33 cycles; each kernel's loop adds one `SUBS` and one `B.NE`, 1.5 cycles per eight lines, or 0.19 cycles per line. The write and read bounds omit that loop cost, which the read-and-write bound includes as half a cycle. A 2 MiB block holds 32,768 lines, so the kernels need a loop; a 16-line unroll would leave 12.09 and 21.09 cycles and a 32-line unroll 12.05 and 21.05, still above the bounds, for 1.2 KiB and 3.6 KiB more text across the three kernels | Unicorn trace and load-to-use trace over 1 MiB in each direction, priced by the cost model |
 | March work per 2 MiB block outside the loop | none | one `ISB` and counter read, one `UMAXV` test, one progress store, ≤ one `SMC` per 200 ms; no call, cache maintenance, `DSB` or `DMB` | Unicorn counters |
-| March rate at 494 MHz | none | write 2–3, read-verify 1.5–1.9, read-verify-write 0.94–1.6 GB/s *estimated*; 0.91–1.45 s per 256 MiB | Cost model; board figures replace it |
+| March rate at 494 MHz | none | write 2–3, read-verify 1.5–1.9, read-verify-write 0.94–1.6 GB/s *estimated*; 0.91–1.45 s per 256 MiB. Estimated from the measured cycles: 2.59, 1.49 and 0.95 GB/s; 1.41 s per 256 MiB. The read rate falls 0.01 GB/s below its lower bound by the same 0.19 cycles of loop cost per line as the row above. A 32-line unroll would reach 1.50 GB/s for 3.6 KiB more kernel text; the pass time, which sets the number of runs, stays inside its bound | Cost model; board figures replace it |
 | Runs for March C- | none | 3–5 *estimated* (appendix B) | Planner |
 | Window scan, every run | none | 6,258,688 loads; ≤ 9 instructions per page; ≥ 15 instructions from each load to its use; 0.7 s *estimated*, 1.25 s with no overlap | Unicorn counters and load-to-use trace |
 | Address lines, bits 6–25 | none | 21 writes, 21 reads | Unicorn counters |
@@ -450,7 +450,10 @@ access.
   8 + 1 + 4 + 4 + 4 + 8 + 4 = 33 cycles plus half a cycle of branch: 0.94 GB/s
   at 494 MHz. With 128 bits per cycle and some pairing, the line costs about
   20 cycles: 1.6 GB/s. The write element costs 8–12 cycles and is bounded by
-  DRAM at 2–3 GB/s; the read element costs 17–21 cycles, 1.5–1.9 GB/s.
+  DRAM at 2–3 GB/s; the read element costs 17–21 cycles, 1.5–1.9 GB/s. These
+  two figures count the per-line work only. The kernels loop over eight lines
+  per iteration, and the loop's `SUBS` and `B.NE` add 0.19 cycles per line:
+  12.19 and 21.19 cycles, 2.59 and 1.49 GB/s at the slow end.
 - **Latency term.** A miss costs 150–200 ns. The `PRFM` runs 16 lines, at
   least 320 cycles or 650 ns, ahead of the load, so the model's latency term,
   miss latency less lookahead, is zero. If prefetching failed, the one-line
