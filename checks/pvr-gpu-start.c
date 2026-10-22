@@ -8,7 +8,8 @@ struct event { unsigned kind, offset, width; uint64_t value, time; };
 struct model {
     uint64_t now, ace_done, release_done;
     unsigned io, fail_at, clock_calls, fail_clock, flag, published, released, aced;
-    unsigned event_count, reads_started, auto_ready;
+    unsigned event_count, reads_started, auto_ready, floored, frozen;
+    uint64_t counter, ace_counter, release_counter, ace_counts, release_counts;
     struct event events[64];
 };
 static unsigned char *image, *altered;
@@ -16,17 +17,24 @@ static size_t image_bytes;
 static struct pvr_mips_boot boot;
 static unsigned refusals, fault_trials;
 static int operation(struct model *m) { return ++m->io != m->fail_at; }
+/* Each clock read takes one microsecond, so waits inside a step end. With
+ * floored set, each clock read and callback instead takes one 24 MHz counter
+ * tick and the clock reports whole microseconds rounded down, as the board
+ * clock does. With frozen set, the clock stops. */
 static int now(void *ctx, uint64_t *value)
 {
-    struct model *m = ctx; ++m->clock_calls;
+    struct model *m = ctx; ++m->clock_calls; ++m->counter;
     if (m->clock_calls == m->fail_clock) return 0;
-    *value = m->now; return 1;
+    *value = m->floored ? 100 + m->counter / 24 : m->now;
+    if (!m->frozen) ++m->now;
+    return 1;
 }
 static void event(struct model *m, unsigned kind, unsigned off, unsigned width, uint64_t value)
 {
     assert(m->event_count < 64 && m->published && (width == 4 || width == 8));
     m->events[m->event_count++] = (struct event){kind, off, width, value, m->now};
-    m->now += 2; /* Callbacks take time; delay origins must follow completion. */
+    ++m->counter;
+    if (!m->frozen) m->now += 2; /* Callbacks take time; delay origins must follow completion. */
 }
 static int read_reg(void *ctx, uint32_t off, uint32_t width, uint64_t *value)
 {
@@ -41,10 +49,12 @@ static int write_reg(void *ctx, uint32_t off, uint32_t width, uint64_t value)
     if (!operation(m)) return 0;
     if (off == 0x100 && value == 0) {
         assert(m->aced && m->now >= m->ace_done + 3); m->released = 1;
+        m->ace_counts = m->counter - m->ace_counter;
+        assert(!m->floored || m->ace_counts >= 72);
     }
     event(m, 1, off, width, value);
-    if (off == 0x38c0) { m->ace_done = m->now; m->aced = 1; }
-    if (off == 0x100 && value == 0) m->release_done = m->now;
+    if (off == 0x38c0) { m->ace_done = m->now; m->ace_counter = m->counter; m->aced = 1; }
+    if (off == 0x100 && value == 0) { m->release_done = m->now; m->release_counter = m->counter; }
     return 1;
 }
 static int started(void *ctx, uint32_t *value)
@@ -54,6 +64,8 @@ static int started(void *ctx, uint32_t *value)
     assert(m->published); ++m->reads_started;
     if (m->released) {
         assert(m->now >= m->release_done + 3);
+        if (!m->release_counts) m->release_counts = m->counter - m->release_counter;
+        assert(!m->floored || m->release_counts >= 72);
         *value = m->auto_ready ? 1 : m->flag;
     } else *value = m->flag;
     return 1;
@@ -73,9 +85,10 @@ static void prepare(struct pvr_gpu_start *s, struct model *m, const void *fw)
 static enum pvr_gpu_start_result run(struct pvr_gpu_start *s, struct model *m)
 {
     for (unsigned i = 0; i < 1000; ++i) {
-        unsigned io = m->io;
+        unsigned io = m->io, reads = m->reads_started;
         enum pvr_gpu_start_result r = pvr_gpu_start_poll(s);
-        assert(m->io - io <= 1);
+        /* One device access per poll; only the readiness byte is re-read. */
+        assert(m->io - io <= 1 || m->io - io == m->reads_started - reads);
         if (r != PVR_GPU_START_AGAIN) return r;
         ++m->now;
     }
@@ -178,7 +191,7 @@ int main(int argc, char **argv)
     prepare(&s,&m,image);
     assert(pvr_gpu_start_begin(&s,100)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_TIMEOUT);
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
-    --m.now; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_CLOCK);
+    m.now-=2; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_CLOCK);
     for(unsigned bad=1;bad<=2;++bad) {
         prepare(&s,&m,image); m.flag=bad;
         assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_FAULT);
@@ -187,12 +200,38 @@ int main(int argc, char **argv)
     prepare(&s,&m,image); m.auto_ready=0;
     assert(pvr_gpu_start_begin(&s,300)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_FAULT);
     assert(m.released && m.reads_started>2); retained(&s,&m,PVR_GPU_START_TIMEOUT);
+    /* A readiness wait re-reads for at most A733_GPU_SPIN_US per poll. */
+    prepare(&s,&m,image); m.auto_ready=0; assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(s.index+1<s.count) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    unsigned reads=m.reads_started; uint64_t waited=m.now;
+    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.phase==PVR_GPU_START_RUNNING);
+    assert(m.reads_started-reads>1 && m.now-waited>=A733_GPU_SPIN_US && m.now-waited<=2*A733_GPU_SPIN_US+4);
+    m.flag=1; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_OK);
+    /* A delay waits inside its step and ends at the deadline. */
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
-    while(!m.aced) { assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN); ++m.now; }
-    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN); /* Starts first minimum delay. */
+    while(!m.aced) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
     uint32_t delay_index=s.index;
-    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.index==delay_index);
-    m.now=10000; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.released);
+    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.index==delay_index+1 && m.now>=m.ace_done+3);
+    /* A clock that rounds counter ticks down to microseconds still gives
+     * each delay at least 3 us between the bracketing callbacks. */
+    prepare(&s,&m,image); m.floored=1;
+    assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_OK);
+    unsigned ace_counts=(unsigned)m.ace_counts, release_counts=(unsigned)m.release_counts;
+    assert(ace_counts>=72 && release_counts>=72);
+    /* A stopped clock cannot end a delay or a readiness wait: the poll returns
+     * AGAIN without advancing the step and completes once the clock runs. */
+    prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(!m.aced) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    delay_index=s.index; m.frozen=1;
+    for(unsigned i=0;i<2;++i) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.index==delay_index);
+    m.frozen=0; assert(run(&s,&m)==PVR_GPU_START_OK);
+    prepare(&s,&m,image); m.auto_ready=0; assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(s.index+1<s.count) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    m.frozen=1; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.phase==PVR_GPU_START_RUNNING);
+    m.frozen=0; m.flag=1; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_OK);
+    prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(!m.aced) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    m.now=10000-2; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.released);
     retained(&s,&m,PVR_GPU_START_TIMEOUT);
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
     assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
@@ -223,5 +262,6 @@ int main(int argc, char **argv)
     prepare(&s,&m,image); struct pvr_gpu_start before=s;
     assert(!pvr_gpu_start_init(&s,image,image_bytes,&boot,&ops,&m) && !memcmp(&s,&before,sizeof(s)));
     free(altered); free(image);
-    printf("PASS GPU startup: reference traces, callback timing, %u retained faults and %u atomic refusals\n",fault_trials,refusals);
+    printf("PASS GPU startup: reference traces, callback timing, delays of %u and %u counter ticks, stopped clock, %u retained faults and %u atomic refusals\n",
+           ace_counts,release_counts,fault_trials,refusals);
 }

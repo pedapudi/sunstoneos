@@ -22,19 +22,29 @@ def main():
   for at,n in [(0x40000000,0x4000000),(0x48000000,0x2000000),(0x78000000,0x1000000),(0x7a000000,0x1000000)]:u.mem_map(at,n)
   for at,data in segments:
    if data:u.mem_write(at,data)
-  parked=[];low=[STACK]
+  parked=[];low=[STACK];preparing=[False];cleans=[]
   def hook(m,at,size,unused):
-   if at==STOP:parked.append(1);m.emu_stop()
-   else:m.reg_write(REGS[0],syms['boot_pool'] if at==syms['a733_memory_reservations_init'] else syms['uncached_pool']);m.reg_write(UC_ARM64_REG_PC,m.reg_read(UC_ARM64_REG_LR))
-  for at in [STOP,syms['a733_memory_reservations_init'],syms['a733_memory_uncached_init']]:u.hook_add(UC_HOOK_CODE,hook,begin=at,end=at)
+   if at==STOP:parked.append(1);m.emu_stop();return
+   if at==syms['aarch64_device_translate']:
+    # Pool preparation only: each 2 MiB block's modeled identity translation
+    # carries the pool's MAIR attribute with inner shareability. Other
+    # callers run the linked translation unchanged.
+    if not preparing[0]:return
+    va=m.reg_read(REGS[0]);m.mem_write(m.reg_read(REGS[2]),struct.pack('<QII',va,0x44 if 0x78000000<=va<0x79000000 else 0xff,3))
+   # Modeled clean to the point of coherency of a recycled write-back extent.
+   if at==syms['aarch64_device_cache']:cleans.append([m.reg_read(r) for r in REGS[:3]])
+   # Modeled READY; one emulated core, so the ledger's critical section has no effect.
+   m.reg_write(REGS[0],1);m.reg_write(UC_ARM64_REG_PC,m.reg_read(UC_ARM64_REG_LR))
+  for at in [STOP]+[syms[n] for n in ('aarch64_device_translate','aarch64_device_cache','a733_device_memory_ready','vTaskEnterCritical','vTaskExitCritical')]:u.hook_add(UC_HOOK_CODE,hook,begin=at,end=at)
   def stack_write(m,access,at,size,value,unused):low[0]=min(low[0],at)
   u.hook_add(UC_HOOK_MEM_WRITE,stack_write,begin=STACK-65536,end=STACK-1)
   def invoke(symbol,*values):
    for reg,value in zip(REGS,values):u.reg_write(reg,value)
    parked.clear();u.reg_write(UC_ARM64_REG_SP,STACK);u.reg_write(UC_ARM64_REG_LR,STOP);u.emu_start(syms[symbol],0,count=800000000);assert parked,symbol;return u.reg_read(REGS[0])
   def get(at,n=8):return int.from_bytes(u.mem_read(at,n),'little')
-  assert invoke('device_memory_pool_init',syms['boot_pool'],0x48000000,0x48000000,0x30000000)==1
-  assert invoke('device_memory_pool_init',syms['uncached_pool'],0x78000000,0x78000000,0x1000000)==1
+  # The actual extended preparations type the pools: dma32 write-back and
+  # Normal non-cacheable.
+  preparing[0]=True;assert invoke('a733_memory_reservations_prepare')&0xffffffff==1 and invoke('a733_memory_uncached_prepare')&0xffffffff==1;preparing[0]=False
   assert invoke('h264_stream_storage_init',12)==1 and invoke('h264_stream_storage_valid')==1
   st=syms['h264_stream'];sty=types['h264_stream'];app=syms['h264'];aty=types['h264_application']
   raw=(a.inputs/name/'qualification/frame-000.h264').read_bytes();pointer=get(st+sty['input']);u.mem_write(pointer,raw)
@@ -52,9 +62,14 @@ def main():
     base=pool+pooltype['allocations']+i*sizes['device_memory_allocation'];rows.append(dict(first=get(base+alloc['first'],4),pages=get(base+alloc['pages'],4),state=get(base+alloc['state'],4)))
    return rows
   ncrows=ledger(nc,7);wbrows=ledger(wb,8)
-  assert max(x['first']+x['pages'] for x in ncrows)*4096==16044032 and all(x['state']==2 for x in ncrows)
-  assert max(x['first']+x['pages'] for x in wbrows)*4096==21823488 and all(x['state']==3 for x in wbrows)
-  assert get(st+sty['output']+types['h264_stream_output']['payload'])==0x484f8000
-  reports.append(dict(geometry=name,nc_bytes=16044032,wb_bytes=21823488,metadata_used=highsize,metadata_reserved=1048576,parser_observed_stack_bytes=parsed_stack,output_slots=5,output_capacity_each=3110400,nc=ncrows,wb=wbrows,device_writes=0))
- (a.output/'result.json').write_text(json.dumps(dict(passed=True,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),physical_access=False,cases=reports,scope='Actual native parser, immutable CPU ledger, uncached allocator, guards and IOMMU construction/validation. Extended-memory readiness/getters modeled; no provider programming, CPU startup or device operation.'),indent=2)+'\n');print('PASS actual High allocation, CPU metadata/stack, copied outputs and four-window tables')
+  assert max(x['first']+x['pages'] for x in ncrows)*4096==16044032 and all(x['state']==2 for x in ncrows),ncrows
+  # dma32 places the 2 MiB input and each 3,110,400-byte output at a 2 MiB
+  # boundary, and the 1 MiB metadata extent first fit at a 64 KiB boundary
+  # in the gap after the oracle, which acquire cleans once. Before the pool
+  # was typed the extents were contiguous and ended at 21,823,488.
+  assert max(x['first']+x['pages'] for x in wbrows)*4096==26181632 and all(x['state']==3 for x in wbrows),(wbrows,cleans)
+  assert cleans==[[0,0x48500000,1048576]],cleans
+  assert get(st+sty['output']+types['h264_stream_output']['payload'])==0x48600000,hex(get(st+sty['output']+types['h264_stream_output']['payload']))
+  reports.append(dict(geometry=name,nc_bytes=16044032,wb_bytes=26181632,write_back_cleans=cleans,metadata_used=highsize,metadata_reserved=1048576,parser_observed_stack_bytes=parsed_stack,output_slots=5,output_capacity_each=3110400,nc=ncrows,wb=wbrows,device_writes=0))
+ (a.output/'result.json').write_text(json.dumps(dict(passed=True,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),physical_access=False,cases=reports,scope='Actual native parser, immutable CPU ledger, extended pool preparation and getters, uncached allocator, guards and IOMMU construction/validation. Extended-memory readiness and pool translations modeled; no provider programming, CPU startup or device operation.'),indent=2)+'\n');print('PASS actual High allocation, CPU metadata/stack, copied outputs and four-window tables')
 if __name__=='__main__':main()

@@ -94,9 +94,12 @@ and the effective A733 allocation anchors are the same as the full-HD branch
 below. These formulas include coded padding and are independent of visible crop.
 
 Actual allocator execution requires 16,044,032 of the 16,777,216 uncached bytes,
-including tables, alignment and guards. CPU write-back allocations require
-21,823,488 bytes: a 2 MiB upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
-metadata. Each copied-output capacity is 3,110,400 bytes. The actual metadata
+including tables, alignment and guards. CPU write-back allocations hold a 2 MiB
+upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
+metadata, and end 26,181,632 bytes into the pool. The WB pool has class
+`dma32`, so the upload and each output start on a 2 MiB boundary. The metadata
+fills the gap after the oracle at a 64 KiB boundary, and acquire cleans that
+1 MiB once because it lies below the highest page already handed out. Each copied-output capacity is 3,110,400 bytes. The actual metadata
 structure uses 243,136 bytes. Observed native parser stack use in the allocation
 fixture is 2,760 bytes; the existing USB task has a 16 KiB stack. These are
 modeled execution measurements, not worst-case stack or physical timing proofs.

@@ -69,6 +69,91 @@ the rules forbid a retry.
   recovered without a power cycle. The device paths that report through USB0
   depend on it, so it is the gate for all peripheral qualification.
 
+## Bundles for the memory, GPU and NPU paths
+
+[tools/prepare-board-bundles.py](../../tools/prepare-board-bundles.py)
+prepares a frozen bundle and a queue submission for each new memory, GPU and
+NPU path ([design](../designs/board-bundles.md)). It never contacts the board,
+never submits and never claims. The coordinator supplies each row's
+preparation inputs in one JSON file and submits the result. The tool runs
+every preparation module in a sandbox with no USB device, no network and a
+read-only file system outside its new run directory under
+`~/.cache/sunstoneos/evidence/`. Each row has one of three recovery classes:
+
+| Position in this plan | Row | Class | Runner | Queue timeout |
+| --- | --- | --- | --- | --- |
+| After rank 7, before rank 8, once an independent watchdog record exists | Memory qualification, one run per bundle of the three-step map chain | Monitor | Memory profile through `tools/a733-returning-host.py` | 1,200 s |
+| After rank 9, first board session | NPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
+| After rank 9, next board session | GPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
+| After rank 9, next board session | GPU and NPU jobs under the memory and power arbiter | Terminal | `tools/check-a733-accelerators-supervised.py` | 930 s plus the uploads |
+| After rank 9, next board session | Recognition dispatcher in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
+| Waits for physical recovery | GPU and NPU hang reset; voltage and clock changes; display output | Excluded | None | None |
+
+- **Monitor.** The EL3 monitor's secure timer forces the return to the boot
+  ROM. Before it records a Monitor bundle, the tool checks the bundle's
+  `image.elf` with `nm`. It refuses an image with no symbol table, without
+  `monitor_entry`, or with a defined symbol from a USB stack, the shared USB0
+  loop or secondary-core power-up (`dcd_`, `hcd_`, `tud_`, `tuh_`, `usb0_`,
+  `a733_cpu_start_`, `a733_cpu_secondary_`). A memory image must also define
+  `monitor_renewal_cap`, the capped deadline renewal that forces a return at
+  most 22 s after entry. The submission's prerequisite is
+  `independent-watchdog-rom-return`. No record qualifies for it yet, so the
+  memory runs wait: the monitor timer cannot recover from a stalled first
+  access to untested DDR.
+- **Terminal.** The supervised runner keeps the port lock after every outcome
+  until whole-board power removal is confirmed, so each Terminal test ends the
+  board session. Its prerequisites are the runner's own `PREREQUISITES`. Its
+  timeout is the worst case of one attempt. That sum covers the USB churn
+  guard's 615 s wait, the FEL request bounds of the SRAM backups, of every
+  bundle file's upload and readback and of the SRAM restores, the capture
+  window, and 60 s of margin. An existing OS-image bundle of 22.9 MB gives 2,451 s. The tool
+  refuses a row whose bound exceeds the queue's 3,600 s limit.
+- **Excluded.** The test needs an accessory, a voltage or clock change, or an
+  intentional hang. The tool prepares no bundle.
+
+Memory runs require ranks 1 to 7 earlier in the same power cycle, with rank 3
+reporting `dram_mib` equal to 12,288 and rank 6 reporting the boot clock. Rank
+7 re-runs a frozen ELF that has passed, so it comes first. Placing memory
+before rank 8 is a judgement: a non-linear address decode that turns a
+tested-DDR write into a monitor write is less likely than a secondary-core
+hang under load. A memory run record chains to the next run only when it shows
+an image-initiated exit, every field present, alias-probe, address-line and
+page-signature passes, no external abort and no expired DMA0 deadline. Any
+other record retains the board. No further upload of any kind follows,
+including rank 8 and the Terminal rows, until the user reviews that record.
+After a DMA0 expiry, uploads also wait until a FEL read shows DMA0 quiet.
+
+Terminal tests require ranks 1 to 5 and rank 9 earlier in the same power
+cycle. NPU comes first because GPU firmware writes memory on its own
+([remote writers](../remote-writers.md)), so a GPU failure has more causes to
+separate. Each Terminal record must report, per job, the completions observed
+by interrupt, those observed by the one-tick fallback and the client
+wake-ups. The counts are measurements, not pass conditions; zero fallback
+completions over a session is the evidence that would remove the tick wait in
+the GPU and NPU services.
+
+Status: the tool is **implemented** and checked on the host by
+[checks/board-bundles.py](../../checks/board-bundles.py); no bundle of these
+rows has been prepared from real inputs. The tool refuses every row until its
+owner supplies what the row needs:
+
+- **Every row.** The owning package must name the admission values that
+  identify the row's build. Until then the row's `admission` is empty and the
+  tool refuses it, so an image admitted for another path cannot be prepared
+  under this row.
+- **Memory qualification.** The memory qualification profile
+  `apps/memtest/check.py` and the capped renewal handler do not exist yet.
+- **NPU service, GPU service and recognition dispatcher in the OS image.**
+  `apps/os/prepare.py` admits only the mimus, thermal and audio OS builds.
+  `drivers/npu/npu_service.c` and `drivers/gpu/pvr_gpu_service.c` do not
+  count interrupt-observed completions, fallback-observed completions and
+  client wake-ups separately, and `tools/check-a733-os-supervised.py` does
+  not report them or declare `COMPLETION_COUNTS`.
+- **GPU and NPU jobs under the arbiter.** The memory and power arbiter is
+  designed but not implemented. The two services lack the same counts, and
+  `tools/check-a733-accelerators-supervised.py` does not report them or
+  declare `COMPLETION_COUNTS`.
+
 ## Tests that must wait for physical recovery
 
 These need the ability to power-cycle or reconnect the board, or an
@@ -77,6 +162,7 @@ accessory, and are excluded from this plan:
 - any test that writes either microSD card, including the persistent-boot
   package and the stage-2 loader;
 - intentional watchdog expiry;
+- intentional GPU or NPU hangs, including hang-reset tests;
 - raising the CPU clock or changing any PMIC voltage;
 - every peripheral path that reports through the native USB0 channel, until
   rank 9 passes;

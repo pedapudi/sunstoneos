@@ -17,7 +17,7 @@ class Machine:
   for at,data in image.parts:self.u.mem_write(at,data)
   self.base=image.address('jpeg_encode');self.a=image.layouts['jpeg_encode_application'];self.s=self.base+self.a['supplied'];self.il=image.layouts['jpeg_encode_input'];self.done=False;self.now=1000;self.calls=[];self.tx=bytearray();self.incoming=bytearray();self.triggers=0;self.codec_writes=[];self.io=[];self.quant=[];self.status=0;self.count=0;self.variant='nominal';self.finish_reads=0;self.native_poll_result=None
   self.u.mem_write(self.base,session);self.u.mem_write(image.address('board'),session[:592]);self.put(image.address('board')+160,1000000,8)
-  self.hooks={image.address(n):n for n in ('a733_memory_reservations_init','a733_memory_uncached_init','board_live','a733_counter_clock_now','aarch64_device_translate','a733_clock_token_status','a733_gpu_resources_status','a733_platform_lock_enter','a733_platform_lock_leave','a733_native_usb_step','a733_native_usb_health','vTaskDelay','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush')}
+  self.hooks={image.address(n):n for n in ('a733_memory_reservations_init','a733_memory_uncached_init','board_live','a733_counter_clock_now','aarch64_device_translate','a733_clock_token_status','a733_gpu_resources_status','a733_platform_lock_enter','a733_platform_lock_leave','a733_native_usb_step','a733_native_usb_health','vTaskDelay','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','vTaskEnterCritical','vTaskExitCritical')}
   self.u.hook_add(UC_HOOK_CODE,self.hook);self.u.hook_add(UC_HOOK_MEM_READ,self.mmread);self.u.hook_add(UC_HOOK_MEM_WRITE,self.mmwrite)
  def put(self,at,v,n=4):self.u.mem_write(at,int(v).to_bytes(n,'little'))
  def get(self,at,n=8):return int.from_bytes(self.u.mem_read(at,n),'little')
@@ -33,7 +33,7 @@ class Machine:
   elif name=='a733_counter_clock_now':self.now+=1;self.put(x[1],self.now,8);self.ret(1)
   elif name=='aarch64_device_translate':u.mem_write(x[2],struct.pack('<QII',x[0],0,2));self.ret(1)
   elif name in ('a733_clock_token_status','a733_gpu_resources_status'):self.ret(0)
-  elif name=='a733_platform_lock_leave':self.ret()
+  elif name in ('a733_platform_lock_leave','vTaskEnterCritical','vTaskExitCritical'):self.ret() # One emulated core: the device-memory ledger's critical section has no effect.
   elif name=='tud_vendor_n_available':self.ret(len(self.incoming))
   elif name=='tud_vendor_n_read':
    n=min(x[2],len(self.incoming));u.mem_write(x[1],bytes(self.incoming[:n]));del self.incoming[:n];self.ret(n)

@@ -187,7 +187,7 @@ def main():
  identity=dict(epoch=epoch,generation=generation,lease=lease,build_id=build,session_sha256=digest)
  if (a.output/'caller-checkpoint.json').exists():restore(m,a.output,'caller-checkpoint')
  else:
-  assert m.call('a733_memory_reservations_commit_verified')==m.call('a733_memory_uncached_commit_verified')==1
+  assert m.call('a733_memory_reservations_prepare')==m.call('a733_memory_uncached_prepare')==1
   m.call('a733_smp_diagnostic_start');assert len(m.tasks)==5 and len(m.clocks)==1
   m.scheduler=2;m.task=m.get(m.app+m.af['handles']+24);m.put(m.app+m.af['pmic_ready'],1,4)
   for i in range(500):
