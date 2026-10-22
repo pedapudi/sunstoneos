@@ -1,6 +1,9 @@
 # Design: per-core cycle and event counts for performance measurement
 
-Status: **planned**; no code exists. Section numbers refer to
+Status: **implemented** in [platform/a733/cpu_pmu.c](../../platform/a733/cpu_pmu.c)
+and described in [docs/cpu-pmu.md](../cpu-pmu.md); no image links it yet.
+Measured figures are in [cpu-pmu-measurements.md](cpu-pmu-measurements.md).
+Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 
 Board A/B runs requested by other designs need cycle counts and cache and TLB
@@ -21,7 +24,8 @@ and the module writes the per-core differences into a fixed 64-byte record.
 
 - `a733_cpu_pmu_begin(struct a733_cpu_pmu_region *)` runs on the core to be
   measured. It refuses unless the calling task's affinity mask,
-  `vTaskCoreAffinityGet(NULL)`, holds only the current core. It then masks IRQs and reads `PMCR_EL0`, and configures the
+  `vTaskCoreAffinityGet(NULL)`, holds only the current core. It then masks
+  IRQs and reads `PMCR_EL0`, and configures the
   core's PMU only when the core's configured flag is clear or `PMCR_EL0.E`
   reads 0. It zeroes the six event counters, clears their overflow flags and
   stores the core number, a per-core generation, `PMCCNTR_EL0` and
@@ -67,7 +71,7 @@ Pinned sources:
 
 - the Cortex-A55 TRM 100442_0200_00 (r2p0),
   `~/.cache/sunstoneos/sources/cpu-continue/cortex-a55-trm.pdf`, SHA-256
-  `1f71b74d1cf1cbf3c86dab85d1407c45355ab5015d12d68afc0dc64107f7dd97`;
+  `1f71b74d5cf1cbf3c86dab85d1407c45355ab5015d12d68afc0dc64107f7dd97`;
 - TF-A `0892ad4d` `include/arch/aarch64/arch.h`, under `cpu-entry/`;
 - the vendor EL3 monitor `monitor.fex` from orangepi-build `a95129bf`, with
   its disassembly in `cpu-startup/monitor.disasm`.
@@ -84,7 +88,8 @@ back no configuration register.
 1. Read `PMCR_EL0.N` and use counters `0 … min(N, 6) − 1`. TRM D5.4 gives
    N = 6 on the A55 and states that `MDCR_EL2.HPMN` limits the counters that
    Non-secure EL1 controls. At Non-secure EL1, N reads as `HPMN`
-   (unproven, see below).
+   (unproven, see below). Begin refuses N = 0, because then counter 0, which
+   end reads first, does not exist.
 2. Read `PMCEID0_EL0` and `PMCEID1_EL0`. Event e < 0x20 is implemented when
    bit e of PMCEID0 is set, and event 0x20 + k when bit k of PMCEID1 is set
    (TRM D5.2 and D5.3; `L2D_CACHE_REFILL` exists only if an L2 cache is
@@ -109,9 +114,16 @@ counters:
 - begin (14): `DAIF` read, `DAIFSet`, `TPIDR_EL1` (the port's logical core
   index), `PMCR_EL0`, six `PMEVCNTR<n>_EL0` writes, `PMOVSCLR_EL0`, `ISB`,
   `PMCCNTR_EL0`, `CNTPCT_EL0`, `DAIF` restore;
-- end (14): `DAIF` read, `DAIFSet`, `ISB`, `PMCCNTR_EL0`, `CNTPCT_EL0`, six
-  `PMEVCNTR<n>_EL0` reads, `PMOVSSET_EL0`, `PMCR_EL0`, `TPIDR_EL1`, `DAIF`
-  restore.
+- end (14): `DAIF` read, `DAIFSet`, `ISB`, `PMEVCNTR0_EL0`, `PMCCNTR_EL0`,
+  `CNTPCT_EL0`, `TPIDR_EL1`, the other five `PMEVCNTR<n>_EL0` reads,
+  `PMOVSSET_EL0`, `PMCR_EL0`, `DAIF` restore.
+
+Begin zeroes counter 0, which counts `INST_RETIRED`, last, and end reads it
+first, so the counted window holds as few instructions as possible. Begin
+tail-calls a leaf that zeroes the counters, so no stack frame is restored
+inside the window. End checks its arguments, and refuses a region that begin
+refused, before it reads any register. It reads the other five counters only
+after it confirms that it runs on the beginning core.
 
 End takes `MIDR_EL1`, `CNTFRQ_EL0`, the counters used and the supported mask
 from the core's state line. Begin reads no `CurrentEL`, because only EL1t
@@ -138,8 +150,10 @@ overflow.
   `MDCR_EL3.SPME` is 0, so Secure event counting depends on the SoC's debug
   authentication signals. Regions therefore exclude SMC calls.
 
-The implementation pins DDI 0487 and the A76 TRM in
-`checks/cpu-pmu-sources.json`, with hashes that the host check verifies.
+`checks/cpu-pmu-sources.json` pins the A55 TRM, TF-A `arch.h` and the monitor
+disassembly with hashes that the host check verifies. It lists DDI 0487 and
+the A76 TRM with their URLs and no hash: fetching them needs the user's
+approval, and the host check reports them as not fetched.
 
 ## EL2 and EL3 controls
 
@@ -243,14 +257,14 @@ continuation sources.
 `checks/memory-architecture-smp.py`, it applies the SMP port patches and
 `patches/freertos-smp-privileged.patch`, and the fixture's
 `npu_service_task_privileged` starts its measuring tasks at EL1t. Each core
-runs a pinned task that measures a loop of K instructions while the other core
-measures its own loop. The check requires `INST_RETIRED` = K plus the
-empty-region count on both cores, a nonzero cycle difference, the correct core
-and MIDR, and a supported mask equal to QEMU's `PMCEID` bits. It also requires
-these refusals:
+runs a pinned task that measures a loop of K = 2,000 instructions while the
+other core measures its own loop. The check requires `INST_RETIRED` = K plus
+the count of the same region without iterations on both cores, a nonzero cycle
+difference, the correct core and MIDR, and a supported mask equal to QEMU's
+`PMCEID` bits. It also requires these refusals:
 
-- a task with a two-core affinity mask, which a peer moves from core 0 to
-  core 1 and back during the region, is refused at begin;
+- a task with a two-core affinity mask is refused at begin, before any region
+  starts;
 - a pinned task that a peer moves to core 1 is refused at end with the
   final-core mismatch;
 - a nested region on one core is refused through the generation check.
