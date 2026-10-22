@@ -1,5 +1,6 @@
 #include "npu_session.h"
 #include "a733_storage_digest.h"
+#include "a733_range.h"
 #include <string.h>
 
 #define PAGE 4096u
@@ -20,9 +21,6 @@ static const struct catalogue_entry catalogue[] = {
 };
 #define CATALOGUE_COUNT (sizeof(catalogue) / sizeof(catalogue[0]))
 
-static int span(uintptr_t base, size_t size) { return base && size && size - 1 <= UINTPTR_MAX - base; }
-static int overlap(uintptr_t a, size_t n, uintptr_t b, size_t m)
-{ return n && m && (a <= b ? b - a < n : a - b < m); }
 static size_t pages(size_t bytes) { return (bytes + PAGE - 1) & ~(size_t)(PAGE - 1); }
 static int fault(struct npu_sessions *s)
 { atomic_store_explicit(&s->failed, 1, memory_order_release); return 0; }
@@ -111,7 +109,7 @@ size_t npu_session_requirements(const struct npu_session_model *models, unsigned
     for (unsigned m = 0; m < count; ++m) {
         struct nbg_model model;
         unsigned entry;
-        if (!span((uintptr_t)models[m].data, models[m].bytes) ||
+        if (!a733_span_incl_nonempty(models[m].data, models[m].bytes) ||
             !admit(models[m].data, models[m].bytes, &entry, &model, &layouts[m])) return 0;
         sizes[m] = models[m].bytes;
     }
@@ -172,16 +170,18 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     const struct npu_session_config v = *config;
     if (!v.count || v.count > NPU_SESSION_MODELS || v.register_physical != 0x03600000 ||
-        !span(v.cpu, v.bytes) || ((v.cpu | v.physical | v.bytes) & (PAGE - 1)) ||
-        !span((uintptr_t)s, sizeof(*s)) || overlap((uintptr_t)s, sizeof(*s), v.cpu, v.bytes) ||
-        overlap((uintptr_t)config, sizeof(*config), v.cpu, v.bytes) ||
-        overlap((uintptr_t)config, sizeof(*config), (uintptr_t)s, sizeof(*s)) ||
-        overlap(v.register_cpu, PAGE, v.cpu, v.bytes)) return 0;
+        !a733_span_incl_nonempty((const void *)v.cpu, v.bytes) ||
+        ((v.cpu | v.physical | v.bytes) & (PAGE - 1)) ||
+        !a733_span_incl_nonempty(s, sizeof(*s)) ||
+        a733_extents_intersect((uintptr_t)s, sizeof(*s), v.cpu, v.bytes) ||
+        a733_extents_intersect((uintptr_t)config, sizeof(*config), v.cpu, v.bytes) ||
+        a733_extents_intersect((uintptr_t)config, sizeof(*config), (uintptr_t)s, sizeof(*s)) ||
+        a733_extents_intersect(v.register_cpu, PAGE, v.cpu, v.bytes)) return 0;
     for (unsigned m = 0; m < v.count; ++m)
-        if (!span((uintptr_t)v.models[m].data, v.models[m].bytes) ||
+        if (!a733_span_incl_nonempty(v.models[m].data, v.models[m].bytes) ||
             v.models[m].bytes > NBG_MODEL_MAX_BYTES ||
-            overlap((uintptr_t)v.models[m].data, v.models[m].bytes, v.cpu, v.bytes) ||
-            overlap((uintptr_t)v.models[m].data, v.models[m].bytes, (uintptr_t)s, sizeof(*s)))
+            a733_extents_intersect((uintptr_t)v.models[m].data, v.models[m].bytes, v.cpu, v.bytes) ||
+            a733_extents_intersect((uintptr_t)v.models[m].data, v.models[m].bytes, (uintptr_t)s, sizeof(*s)))
             return 0;
     /* Copy first; everything below reads only the private copies. */
     atomic_init(&s->failed, 0);
@@ -295,9 +295,11 @@ static int metadata(const struct npu_sessions *s, const struct a733_npu_ops *ops
 }
 static int private_overlap(const struct npu_sessions *s, uintptr_t p, size_t n)
 {
-    return !span(p, n) || overlap(p, n, (uintptr_t)s, sizeof(*s)) ||
-        overlap(p, n, s->parent_cpu, s->parent_bytes) || overlap(p, n, s->native.registers, PAGE) ||
-        (s->startup && overlap(p, n, (uintptr_t)s->startup, sizeof(*s->startup)));
+    return !a733_span_incl_nonempty((const void *)p, n) ||
+        a733_extents_intersect(p, n, (uintptr_t)s, sizeof(*s)) ||
+        a733_extents_intersect(p, n, s->parent_cpu, s->parent_bytes) ||
+        a733_extents_intersect(p, n, s->native.registers, PAGE) ||
+        (s->startup && a733_extents_intersect(p, n, (uintptr_t)s->startup, sizeof(*s->startup)));
 }
 int npu_session_handoff(struct npu_sessions *s, const struct a733_npu_handoff *base,
                         struct a733_npu_handoff *out)

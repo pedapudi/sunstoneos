@@ -26,6 +26,7 @@
 /* Translation format adapted from the pinned VIPLite 2 MMU implementation.
  * The allocator and offline admission policy are native. See docs/npu-mmu.md. */
 #include "a733_npu_mmu.h"
+#include "a733_range.h"
 
 #define PA_LIMIT (UINT64_C(1) << 40)
 #define VA_LIMIT (UINT64_C(1) << 32)
@@ -33,16 +34,6 @@
 #define ROOT_ENTRIES 256u
 #define BLOCK_BYTES (UINT64_C(1) << 24)
 #define INVALID_ENTRY 2u
-
-static int intersects(uint64_t a, uint64_t size_a, uint64_t b, uint64_t size_b)
-{
-    return size_a && size_b && (a <= b ? b - a < size_a : a - b < size_b);
-}
-
-static int pointer_range(const void *p, size_t bytes)
-{
-    return p && bytes && bytes - 1 <= UINTPTR_MAX - (uintptr_t)p;
-}
 
 static void word(uint8_t *p, uint32_t value)
 {
@@ -67,16 +58,16 @@ int a733_npu_mmu_build(void *arena, size_t capacity, uint64_t physical,
     size_t used = ROOT_BYTES;
     unsigned tables = 0;
     if (count > A733_NPU_MMU_MAX_REGIONS ||
-        !pointer_range(arena, capacity) || !pointer_range(result, sizeof(*result)) ||
-        (count && !pointer_range(regions, count * sizeof(*regions))) ||
+        !a733_span_incl_nonempty(arena, capacity) || !a733_span_incl_nonempty(result, sizeof(*result)) ||
+        (count && !a733_span_incl_nonempty(regions, count * sizeof(*regions))) ||
         ((uintptr_t)arena & 4095u) || (physical & 4095u) ||
         capacity < ROOT_BYTES || capacity > A733_NPU_MMU_MAX_BYTES || (capacity & 63u) ||
         physical >= PA_LIMIT || capacity > PA_LIMIT - physical ||
         (physical >> 32) != ((physical + capacity - 1) >> 32)) return 0;
     size_t metadata_bytes = count * sizeof(*regions);
-    if (intersects((uintptr_t)arena, capacity, (uintptr_t)result, sizeof(*result)) ||
-        intersects((uintptr_t)arena, capacity, (uintptr_t)regions, metadata_bytes) ||
-        intersects((uintptr_t)result, sizeof(*result), (uintptr_t)regions, metadata_bytes)) return 0;
+    if (a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)result, sizeof(*result)) ||
+        a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)regions, metadata_bytes) ||
+        a733_extents_intersect((uintptr_t)result, sizeof(*result), (uintptr_t)regions, metadata_bytes)) return 0;
 
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_region *r = &regions[i];
@@ -87,12 +78,12 @@ int a733_npu_mmu_build(void *arena, size_t capacity, uint64_t physical,
             ((r->physical | r->bytes | r->device) & (page - 1)) ||
             r->physical >= PA_LIMIT || r->bytes > PA_LIMIT - r->physical ||
             r->bytes > VA_LIMIT - r->device ||
-            intersects(r->physical, r->bytes, physical, capacity)) return 0;
+            a733_extents_intersect(r->physical, r->bytes, physical, capacity)) return 0;
         for (size_t j = 0; j < i; ++j) {
             const struct a733_npu_region *prev = &regions[j];
-            if (intersects(r->device, r->bytes, prev->device, prev->bytes) ||
+            if (a733_extents_intersect(r->device, r->bytes, prev->device, prev->bytes) ||
                 ((r->writable || prev->writable) &&
-                 intersects(r->physical, r->bytes, prev->physical, prev->bytes))) return 0;
+                 a733_extents_intersect(r->physical, r->bytes, prev->physical, prev->bytes))) return 0;
         }
         unsigned first = r->device >> 24;
         unsigned last = (unsigned)(((uint64_t)r->device + r->bytes - 1) >> 24);

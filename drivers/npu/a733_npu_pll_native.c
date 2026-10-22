@@ -1,4 +1,5 @@
 #include "a733_npu_pll.h"
+#include "a733_mmio.h"
 #define CCU UINT32_C(0x02002000)
 #define LOCK UINT32_C(0x10000000)
 static int readable(uintptr_t address)
@@ -13,24 +14,17 @@ static int readable(uintptr_t address)
     default:return 0;
     }
 }
-static uint32_t load(uintptr_t address)
-{
-    __asm__ volatile("dsb sy" ::: "memory");
-    uint32_t value=*(volatile const uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");
-    return value;
-}
 int a733_npu_pll_native_read(void *cookie,uintptr_t address,uint32_t *value)
 {
     (void)cookie;
     if (!value || !readable(address)) return 0;
-    *value=load(address);return 1;
+    *value=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 int a733_npu_pll_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
     (void)cookie;
     if (address!=CCU+0x2a0 && address!=CCU+0x1920) return 0;
-    uint32_t old=load(address);
+    uint32_t old=a733_mmio_read32_dsb_sy_both(address);
     if (address==CCU+0x1920) {
         if (((old^value)&~UINT32_C(0x10001)) || (old&~value&0x10001)) return 0;
     } else {
@@ -41,7 +35,6 @@ int a733_npu_pll_native_write(void *cookie,uintptr_t address,uint32_t value)
             ((old&0x08000000) || (value&0x0070ff02)!=0x00305100)) return 0;
         if ((value&0x08000000) && ((old&0xf0000000)!=0xf0000000)) return 0;
     }
-    *(volatile uint32_t *)address=value;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_after(address,value);
     return 1;
 }

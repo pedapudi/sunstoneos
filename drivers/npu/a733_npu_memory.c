@@ -1,18 +1,11 @@
 #include "a733_npu_memory.h"
+#include "a733_range.h"
 
 #define PAGE 4096u
 #define TABLE 16384u
 #define PA_LIMIT (UINT64_C(1) << 40)
 #define VA_LIMIT (UINT64_C(1) << 32)
 
-static int overlap(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
-{
-    return an && bn && (a <= b ? b - a < an : a - b < bn);
-}
-static int pointer(const void *p, size_t n)
-{
-    return p && n && n - 1 <= UINTPTR_MAX - (uintptr_t)p;
-}
 static int translated(const struct a733_npu_memory *m, uintptr_t cpu,
                        uint64_t pa, size_t bytes, int write)
 {
@@ -42,20 +35,21 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
                          uint64_t physical, const struct a733_npu_buffer *buffers,
                          size_t count, const struct a733_npu_memory_ops *ops, void *cookie)
 {
-    if (!pointer(m, sizeof(*m)) || m->state != A733_NPU_MEMORY_EMPTY ||
+    if (!a733_span_incl_nonempty(m, sizeof(*m)) || m->state != A733_NPU_MEMORY_EMPTY ||
         !count || count > A733_NPU_MEMORY_MAX_BUFFERS ||
-        !pointer(buffers, count * sizeof(*buffers)) || !pointer(ops, sizeof(*ops)) ||
-        !ops->translate || !ops->cache || !ops->barrier || !pointer(arena, capacity) ||
+        !a733_span_incl_nonempty(buffers, count * sizeof(*buffers)) ||
+        !a733_span_incl_nonempty(ops, sizeof(*ops)) ||
+        !ops->translate || !ops->cache || !ops->barrier || !a733_span_incl_nonempty(arena, capacity) ||
         ((uintptr_t)arena & (PAGE - 1)) || (physical & (PAGE - 1)) ||
         capacity < PAGE || capacity > A733_NPU_MMU_MAX_BYTES || (capacity & 63u) ||
         physical >= PA_LIMIT || capacity > PA_LIMIT - physical ||
         (physical >> 32) != ((physical + capacity - 1) >> 32)) return 0;
     size_t input_bytes = count * sizeof(*buffers);
-    if (overlap((uintptr_t)m, sizeof(*m), (uintptr_t)arena, capacity) ||
-        overlap((uintptr_t)m, sizeof(*m), (uintptr_t)buffers, input_bytes) ||
-        overlap((uintptr_t)m, sizeof(*m), (uintptr_t)ops, sizeof(*ops)) ||
-        overlap((uintptr_t)arena, capacity, (uintptr_t)buffers, input_bytes) ||
-        overlap((uintptr_t)arena, capacity, (uintptr_t)ops, sizeof(*ops))) return 0;
+    if (a733_extents_intersect((uintptr_t)m, sizeof(*m), (uintptr_t)arena, capacity) ||
+        a733_extents_intersect((uintptr_t)m, sizeof(*m), (uintptr_t)buffers, input_bytes) ||
+        a733_extents_intersect((uintptr_t)m, sizeof(*m), (uintptr_t)ops, sizeof(*ops)) ||
+        a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)buffers, input_bytes) ||
+        a733_extents_intersect((uintptr_t)arena, capacity, (uintptr_t)ops, sizeof(*ops))) return 0;
 
     struct a733_npu_memory next = {0};
     struct a733_npu_region regions[A733_NPU_MEMORY_MAX_BUFFERS];
@@ -64,23 +58,23 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
     unsigned bootstraps = 0;
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &buffers[i];
-        if (!pointer((void *)b->cpu, b->bytes) || !b->device ||
+        if (!a733_span_incl_nonempty((void *)b->cpu, b->bytes) || !b->device ||
             ((b->cpu | b->physical | b->bytes | b->device) & (PAGE - 1)) ||
             (unsigned)b->role > A733_NPU_BUFFER_CONSTANT ||
             b->physical >= PA_LIMIT || b->bytes > PA_LIMIT - b->physical ||
             b->bytes > VA_LIMIT - b->device ||
-            overlap(b->cpu, b->bytes, (uintptr_t)m, sizeof(*m)) ||
-            overlap(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||
-            overlap(b->physical, b->bytes, physical, capacity) ||
-            overlap(b->device, b->bytes, 0x400000, 0x80000)) return 0;
+            a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)m, sizeof(*m)) ||
+            a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)arena, capacity) ||
+            a733_extents_intersect(b->physical, b->bytes, physical, capacity) ||
+            a733_extents_intersect(b->device, b->bytes, 0x400000, 0x80000)) return 0;
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) ++bootstraps;
         if ((b->role == A733_NPU_BUFFER_COMMAND || b->role == A733_NPU_BUFFER_BOOTSTRAP) &&
             b->bytes < A733_NPU_FETCH_BYTES) return 0;
         for (size_t j = 0; j < i; ++j) {
             const struct a733_npu_buffer *p = &buffers[j];
-            if (overlap(b->cpu, b->bytes, p->cpu, p->bytes) ||
-                overlap(b->physical, b->bytes, p->physical, p->bytes) ||
-                overlap(b->device, b->bytes, p->device, p->bytes)) return 0;
+            if (a733_extents_intersect(b->cpu, b->bytes, p->cpu, p->bytes) ||
+                a733_extents_intersect(b->physical, b->bytes, p->physical, p->bytes) ||
+                a733_extents_intersect(b->device, b->bytes, p->device, p->bytes)) return 0;
         }
         /* Insertion sort keeps canonical table validation linear in pages. */
         size_t at = i;
@@ -103,10 +97,10 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
 
 static int output_private(const struct a733_npu_memory *m, const void *p, size_t n)
 {
-    if (!pointer(p, n) || overlap((uintptr_t)p, n, (uintptr_t)m, sizeof(*m)) ||
-        overlap((uintptr_t)p, n, m->arena, m->capacity)) return 0;
+    if (!a733_span_incl_nonempty(p, n) || a733_extents_intersect((uintptr_t)p, n, (uintptr_t)m, sizeof(*m)) ||
+        a733_extents_intersect((uintptr_t)p, n, m->arena, m->capacity)) return 0;
     for (size_t i = 0; i < m->count; ++i)
-        if (overlap((uintptr_t)p, n, m->buffers[i].cpu, m->buffers[i].bytes)) return 0;
+        if (a733_extents_intersect((uintptr_t)p, n, m->buffers[i].cpu, m->buffers[i].bytes)) return 0;
     return 1;
 }
 int a733_npu_memory_command(const struct a733_npu_memory *m, uint32_t device,

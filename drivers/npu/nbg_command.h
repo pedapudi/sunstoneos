@@ -33,8 +33,4 @@ static inline void words(unsigned char *p, const uint32_t *v, size_t n)
 {
     for (size_t i = 0; i < n; ++i) put(p + i * 4, v[i]);
 }
-static inline int range(const void *p, size_t n)
-{
-    return p && n && n <= UINTPTR_MAX - (uintptr_t)p;
-}
 #endif

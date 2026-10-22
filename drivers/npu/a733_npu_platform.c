@@ -1,4 +1,5 @@
 #include "a733_npu_platform.h"
+#include "a733_range.h"
 #include "a733_clock_reference.h"
 
 #define CCU UINT32_C(0x02002000)
@@ -49,8 +50,7 @@ int a733_npu_platform_adopt_on(struct a733_npu_platform *p)
 static int timely(struct a733_npu_platform *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->config.deadline_us) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
 }
 static enum a733_npu_platform_result fault(struct a733_npu_platform *p)
 {p->failed=1;return RETAINED;}
@@ -174,8 +174,8 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
         if (ok) {
             value&=0xf;
             if (value==8) {
-                ok=p->last_now<=UINT64_MAX-2000;
-                if(ok) {p->settle_until=p->last_now+2000;p->stage=SETTLE;}
+                ok=a733_deadline_after(p->last_now,2000,&p->settle_until);
+                if(ok)p->stage=SETTLE;
             } else if (value!=0 || p->adopt_on) ok=0;
         }
     } else if (ok && p->stage==SETTLE) {

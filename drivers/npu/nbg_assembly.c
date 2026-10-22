@@ -3,6 +3,7 @@
 #include "nbg_checksum.h"
 #include "a733_npu_controller.h"
 #include "nbg_command.h"
+#include "a733_range.h"
 #include <string.h>
 
 static const uint32_t state[] = {
@@ -10,17 +11,13 @@ static const uint32_t state[] = {
     0x08010428, 1, 0x08010429, 0
 };
 
-static int overlaps(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
-{
-    return a < b + bn && b < a + an;
-}
 static int separate(const void *a, size_t an, const void *b, size_t bn)
 {
-    return !overlaps((uintptr_t)a, an, (uintptr_t)b, bn);
+    return a733_extents_disjoint_prechecked((uintptr_t)a, an, (uintptr_t)b, bn);
 }
 static int result_space(const struct nbg_model *m, const void *out, size_t bytes)
 {
-    return range(m, sizeof(*m)) && range(out, bytes) &&
+    return a733_span_excl_nonempty(m, sizeof(*m)) && a733_span_excl_nonempty(out, bytes) &&
            separate(out, bytes, m, sizeof(*m)) &&
            separate(out, bytes, m->data, m->bytes);
 }
@@ -304,24 +301,24 @@ int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buf
     struct nbg_assembly_layout p;
     const size_t metadata_bytes = count * sizeof(*b);
     if (!result_space(m, out, sizeof(*out)) || count > NBG_LAYOUT_MAX_BUFFERS ||
-        !range(b, metadata_bytes) || !separate(out, sizeof(*out), b, metadata_bytes) ||
+        !a733_span_excl_nonempty(b, metadata_bytes) || !separate(out, sizeof(*out), b, metadata_bytes) ||
         !profile(m, &p) || count != buffer_count(&p)) return 0;
     for (unsigned i = 0; i < count; ++i) {
         if (!p.buffers[i].allocation_bytes) {
             if (b[i].cpu || b[i].bytes || b[i].device) return 0;
             continue;
         }
-        if (b[i].bytes != p.buffers[i].allocation_bytes || !range(b[i].cpu, b[i].bytes) ||
+        if (b[i].bytes != p.buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
             ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
-            overlaps(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
+            a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
             !separate(b[i].cpu, b[i].bytes, out, sizeof(*out)) ||
             !separate(b[i].cpu, b[i].bytes, b, metadata_bytes) ||
             !separate(b[i].cpu, b[i].bytes, m, sizeof(*m)) ||
             !separate(b[i].cpu, b[i].bytes, m->data, m->bytes)) return 0;
         for (unsigned j = 0; j < i; ++j)
             if (b[j].bytes && (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
-                overlaps(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
+                a733_extents_overlap_prechecked(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
     }
     if (!inspect(m, b, &p)) return 0;
 
@@ -378,7 +375,7 @@ int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
 {
     struct nbg_assembly_layout l;
     if (!result_space(m, out, sizeof(*out)) ||
-        !range(b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
+        !a733_span_excl_nonempty(b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
         !separate(out, sizeof(*out), b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
         !nbg_assembly_layout(m, &l) || !single(m, &l)) return 0;
     for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i)
