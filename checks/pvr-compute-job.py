@@ -110,7 +110,7 @@ def main():
     flags = recorded['commands'][0]
     flags = flags[:flags.index('-c')]
     flags = [v for v in flags if not v.startswith('-I' + str(old))]
-    flags += ['-I' + str(out)]
+    flags += ['-I' + str(out), '-I' + str(root / 'include')]
     pins = runpy.run_path(str(root / 'checks/pvr-compute-programs.py'))['SOURCE_HASHES']
     pins.update(SOURCE_HASHES)
     for name, sha in pins.items():
