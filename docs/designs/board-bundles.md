@@ -1,8 +1,13 @@
 # Board-test bundles for the memory, GPU and NPU paths
 
-Status: designed; not implemented. Bundles run only on the board, so every
-path they carry stays implemented and host-modeled, with physical behavior
-pending, until a board session records the evidence named in its row.
+Status: the tool and its host check are **implemented**
+([measurements](board-bundles-measurements.md)). Bundles run only on the
+board, so every path they carry stays implemented and host-modeled, with
+physical behavior pending, until a board session records the evidence named in
+its row. No row has been prepared from real inputs: the memory profile
+(`apps/memtest/check.py`) and the capped renewal do not exist yet,
+`apps/os/prepare.py` does not yet admit the GPU service, NPU service or
+dispatcher builds, and the arbiter is not implemented.
 
 One host tool, `tools/prepare-board-bundles.py`, turns the build output of
 each new memory, GPU and NPU path into a read-only bundle and a board-test
@@ -167,7 +172,11 @@ sets it to 2, which is 40 bits.
 ## Data flow and ownership
 
 1. **Inputs.** Each owning package builds its image under
-   `~/.cache/sunstoneos/build/<package>/`. The tool builds nothing.
+   `~/.cache/sunstoneos/build/<package>/`. The tool builds nothing. The
+   coordinator passes one JSON file that maps each row name to the keyword
+   arguments of that row's `prepare()`, without `output`; the tool turns
+   every string into a path and adds `output`. A row without inputs is
+   recorded as such and skipped.
 2. **Run directory.** The outer process creates
    `~/.cache/sunstoneos/evidence/board-bundles-<date>-<n>/` exclusively,
    then runs the preparation step once in the sandbox described below. It
@@ -177,7 +186,9 @@ sets it to 2, which is 40 bits.
    `validate_bundle(output)`, the path's admission rule and hash check; the
    step takes that value as the admission result and adds no check. The
    bundle layout stays what the runner's `--bundle` expects; the OS-image
-   bundle keeps its files under `board/` and `assets/`.
+   bundle keeps its files under `board/` and `assets/`. A refusal at any
+   stage refuses only its row; `run.json` records each row's outcome, and the
+   tool exits with status 1 when any row was refused.
 4. **Freezing.** The step removes write permission from every entry under
    `bundle/`, which stays the only copy of each file.
 5. **Artifacts.** The step walks `bundle/` recursively and hashes each
@@ -220,7 +231,11 @@ fd, full, null, ptmx, pts, random, shm, stderr, stdin, stdout, tty, urandom
 and zero; `/sys`, `/tmp` and `/run` are empty, so no session bus socket is
 reachable; the queue databases are read-only; and there is no network.
 Child processes, including the `git` that `evidence-snapshot.py` runs, see
-the same view. If `bwrap` is missing or fails to start, the tool stops.
+the same view. The sandbox also changes into the run directory with `--chdir`;
+`bwrap` then always sets `PWD`, so the step removes it before it loads any
+module. Inputs must lie outside `/tmp`, `/run` and `/sys`, which the sandbox
+replaces with empty directories. If `bwrap` is missing or fails to start, the
+tool stops.
 
 ## Interrupts, memory and synchronization
 

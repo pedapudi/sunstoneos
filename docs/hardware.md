@@ -431,6 +431,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   framebuffer and gpu-display edits that call them. DRAM training, frequency
   scaling, voltage and the firewall remain boot0 dependencies, and the memory
   configuration is not decoded.
+  [Board-test bundle preparation](audit/board-test-plan.md#bundles-for-the-memory-gpu-and-npu-paths)
+  for the full-capacity memory runs is **implemented** and host-checked; it
+  refuses the memory row until the memory qualification profile and the
+  capped monitor renewal exist, and the runs wait for an independent watchdog
+  record. Board run records would confirm the tested ranges.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
   boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
   storage work for this workload; full memory protection/coherence remains untested.
