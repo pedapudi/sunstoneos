@@ -37,8 +37,8 @@ class Owner(leaf.Machine):
         package_at=retain_package(self,package)
         assert self.call('gpu_application_package')==package_at
         assert self.call('pvr_compute_package_valid',package_at)==1
-        assert self.call('a733_memory_reservations_commit_verified')==1
-        assert self.call('a733_memory_uncached_commit_verified')==1
+        assert self.call('a733_memory_reservations_prepare')==1
+        assert self.call('a733_memory_uncached_prepare')==1
         fw=self.image.address('gpu_firmware');end=self.image.address('gpu_firmware_end')
         assert self.call('a733_gpu_reserved_prepare',f,9,fw,end-fw,400000000)
         assert self.call('a733_gpu_compute_reserved_prepare_package',c,f,s,10,package_at)
@@ -86,8 +86,8 @@ class Owner(leaf.Machine):
         self.checkpoint('stopped')
 
 def preflight_owner(m,out):
-    functions=['gpu_application_package','pvr_compute_package_valid','a733_memory_reservations_commit_verified',
-        'a733_memory_uncached_commit_verified','a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare_package',
+    functions=['gpu_application_package','pvr_compute_package_valid','a733_memory_reservations_prepare',
+        'a733_memory_uncached_prepare','a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare_package',
         'a733_gpu_backend_bind','pvr_gpu_service_init','pvr_gpu_service_bind','a733_gpu_backend_stopped',
         'a733_gpu_disposal_begin','a733_gpu_disposal_poll','a733_gpu_disposal_rebuild','device_memory_lookup']
     resolved={n:m.image.address(n) for n in functions}
@@ -100,7 +100,7 @@ def preflight_owner(m,out):
     record=dict(image_sha256=sha(m.path),functions=resolved,hooks=m.hooks,types=required,
         return_widths='int/poll results use W0; pointer results use X0; leases32B passed indirectly',
         scheduler='single-core SRE: CurrentEL4, SPSel1, counter24MHz; vPort critical boundaries modeled; actual worker_stack',
-        providers='actual extended commit_verified/pool/owner/backend/service initialization; inherited provider construction and complete healthy stop modeled',
+        providers='actual extended pool preparation/pool/owner/backend/service initialization; inherited provider construction and complete healthy stop modeled',
         pool_bounds={n:m.image.address(n) for n in ('__device_pool_start','__device_pool_end','__uncached_pool_start','__uncached_pool_end')})
     (out/'preflight.json').write_text(json.dumps(record,indent=2)+'\n')
 

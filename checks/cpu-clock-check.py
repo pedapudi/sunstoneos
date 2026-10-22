@@ -318,7 +318,8 @@ def main():
         read(path)
     common = [CLANG, '-std=c11', '-Wall', '-Wextra', '-Werror', '-Iinclude']
     model = out / 'cpu-clock-model'
-    run('host-build', [*common, '-O1', '-g', *SANITIZE, 'checks/cpu-clock-model.c', *UNITS, '-o', model])
+    run('host-build', [*common, '-O1', '-g', *SANITIZE, '-Wl,--wrap=a733_rail_floor',
+                      'checks/cpu-clock-model.c', *UNITS, '-o', model])
     result = run('model', [model])
     for unit in CHANGED:
         read(ROOT / unit)

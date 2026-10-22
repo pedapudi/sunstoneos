@@ -78,7 +78,8 @@ The CPU's existing low Device mapping covers DI, but does not isolate DMA.
 Native callbacks also verify translation and whitelist each DI word.
 
 Two private WB allocations of 462,848 bytes hold the authenticated upload and
-copied result. The uncached pool supplies a 32 KiB table allocation and two
+copied result. The WB pool has class `dma32`, so the second starts at the
+64 KiB boundary `0x48080000`. The uncached pool supplies a 32 KiB table allocation and two
 471,040-byte image allocations. Each image starts after a 4 KiB guard page and
 has another guard page after its rounded extent; tail padding remains guarded.
 The IOMMU maps only source IOVA `0x10000000` read-only and output IOVA

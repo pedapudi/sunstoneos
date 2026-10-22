@@ -28,10 +28,11 @@ The worker masks delivery before advancing device control. It rearms only after
 control reports a drained event batch. A batch that exhausts its budget keeps
 delivery masked for the next worker iteration, and the worker steps again
 within one tick. Once delivery is rearmed and no work is outstanding, a ready
-worker sleeps until the next interrupt or request. The existing one-tick polling
-fallback continues to advance deadlines and command returns without interrupts.
-Startup, compatibility checking, and shutdown use that fallback with delivery
-masked. CLOSE masks delivery before beginning the shutdown protocol.
+worker sleeps until the next interrupt or request. While a job is in flight the
+worker also wakes after at most 4 ms, which completes the job if an interrupt
+is lost. Startup, compatibility checking, and shutdown wake every tick with
+delivery masked. CLOSE masks delivery before beginning the shutdown protocol.
+[gpu-service.md](gpu-service.md) lists every worker wait.
 
 A rearm callback can report that a prior disable is still propagating. The worker
 allows at most 32 consecutive deferred attempts before retaining an interrupt

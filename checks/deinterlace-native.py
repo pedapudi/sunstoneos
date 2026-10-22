@@ -16,7 +16,7 @@ class Machine:
    if data:self.u.mem_write(at,data)
   self.base=im.address('deinterlace');self.fields=im.layouts['deinterlace_application'];self.now=1000;self.done=False;self.held=False;self.started=0;self.status=1;self.events=[];self.regs={};self.variant='nominal';self.callbacks={};self.hooks={};self.installed=set()
   self.u.mem_write(self.base,session);self.u.mem_write(im.address('board'),session[:592]);self.put(im.address('board')+160,1000000,8)
-  for name in ['a733_device_memory_ready','board_live','a733_counter_clock_now','vTaskDelay','aarch64_device_translate','a733_platform_lock_enter','a733_platform_lock_leave','a733_pmic_submit','a733_pmic_result']:
+  for name in ['a733_device_memory_ready','board_live','a733_counter_clock_now','vTaskDelay','aarch64_device_translate','a733_platform_lock_enter','a733_platform_lock_leave','a733_pmic_submit','a733_pmic_result','vTaskEnterCritical','vTaskExitCritical']:
    address=im.address(name);self.hooks[address]=name;self.install(address)
   self.install(STOP)
   self.mmio=[(0x02002000,0x2000),(0x07010000,0x1000),(0x07060000,0x2000),(0x07090000,0x1000),(0x03900000,0x20000),(0x05400000,0x40000)]
@@ -42,9 +42,13 @@ class Machine:
   if name in ['a733_device_memory_ready','board_live']:self.ret(1);return
   if name=='a733_counter_clock_now':self.now+=1;self.put(a[1],self.now,8);self.ret(1);return
   if name=='aarch64_device_translate':
-   t=self.im.layouts['aarch64_translation'];self.put(a[2]+t['physical'],a[0],8);self.put(a[2]+t['attributes'],0,4);self.put(a[2]+t['shareability'],2,4);self.ret(1);return
+   # The extended pools carry their MAIR attribute and inner shareability;
+   # other addresses keep the earlier attribute-free model.
+   attributes,shareability=(0x44,3) if 0x78000000<=a[0]<0x79000000 else (0xff,3) if 0x48000000<=a[0]<0x78000000 else (0,2)
+   t=self.im.layouts['aarch64_translation'];self.put(a[2]+t['physical'],a[0],8);self.put(a[2]+t['attributes'],attributes,4);self.put(a[2]+t['shareability'],shareability,4);self.ret(1);return
   if name=='a733_platform_lock_enter':assert not self.held;self.held=True;self.ret(1);return
   if name=='a733_platform_lock_leave':assert self.held;self.held=False;self.ret();return
+  if name in ['vTaskEnterCritical','vTaskExitCritical']:self.ret();return # One emulated core: the ledger's critical section has no effect.
   if name=='a733_pmic_submit':
    f=self.im.layouts['a733_pmic_request'];self.put(a[5]+f['id'],1,8);self.put(a[5]+f['owner'],a[1],8);self.ret(0);return
   if name=='a733_pmic_result':
@@ -56,10 +60,10 @@ class Machine:
   for i,v in enumerate(args):self.u.reg_write(UC_ARM64_REG_X0+i,v)
   self.u.emu_start(self.im.address(name),0,count=200000000);assert self.done,(name,hex(self.u.reg_read(UC_ARM64_REG_PC)))
   return self.u.reg_read(UC_ARM64_REG_X0)&0xffffffff
- def pools(self,nonidentity=False):
-  for pool,lo,hi in [('boot_pool','__device_pool_start','__device_pool_end'),('uncached_pool','__uncached_pool_start','__uncached_pool_end')]:
-   start=self.im.address(lo);end=self.im.address(hi);physical=start+(0x4000 if nonidentity and pool=='uncached_pool' else 0)
-   assert self.call('device_memory_pool_init',self.im.address(pool),start,physical,end-start)==1
+ def pools(self):
+  # The actual extended preparations check each 2 MiB block's translation and
+  # type the pools: dma32 write-back and Normal non-cacheable.
+  assert self.call('a733_memory_reservations_prepare')==1 and self.call('a733_memory_uncached_prepare')==1
   assert self.call('deinterlace_upload_allocate')==1
  def upload(self,raw,kind='nominal'):
   supplied=self.base+self.fields['supplied'];epoch,generation=struct.unpack_from('<2Q',self.session,24)

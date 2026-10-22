@@ -29,7 +29,7 @@ int a733_de_sys_power_init_domain(struct a733_de_sys_power *p,
     const struct a733_de_sys_power_ops *o,void *v,uint64_t d,unsigned domain)
 {
     if(!p||p->self||!o||!o->authorize||!o->now||!o->enter||!o->leave||
-       !o->read||!o->write||!d||(domain!=1&&domain!=9&&domain!=10))return 0;
+       !o->read||!o->write||!d||(domain!=1&&domain!=10))return 0;
     p->self=p;p->ops=*o;p->context=v;p->deadline=d;
     p->base=A733_PCK_DOMAIN_BASE(domain);return 1;
 }

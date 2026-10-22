@@ -10,8 +10,8 @@ voltage, settling behavior, wiring and hardware operation remain unqualified.
 The shared provider owns S_TWI0, PL0/PL1 and their clock authority. Consumers
 never poll its bus state machine. A separate designated provider task must
 continue polling while GPU or NPU startup waits for a result. Every writer of
-these supplies must participate in the common rail ledger, including its
-existing DCDC2 and GPU DCDC4 ownership bridges.
+these supplies must participate in the common rail ledger, the only rail
+authority; the provider writes neither DCDC2 nor DCDC4.
 
 ## Binding disables competing inherited-bus readers
 
@@ -52,7 +52,7 @@ callback consumes a single authorization and copies only the prepared raw
 bytes into that manager's rail record. It requires the registered GPU client to
 hold the actual complete lease, including exclusive local authority, while the
 manager lock is held. It performs no provider or rail-ledger
-lookup, which would reenter the GPU manager through the DCDC4 guard. Any
+lookup while that lock is held. Any
 authorization unused because acquisition returned BUSY is cleared immediately.
 The platform checks health outside the lock before power progression and again
 before reporting ON. Contention after completed power-up preserves that progress
