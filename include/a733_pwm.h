@@ -6,7 +6,9 @@
 #define A733_PWM_BASE UINT32_C(0x02527000)
 #define A733_PWM_INTID 67u
 /* Fixed board consumer: whole PWM0 is owned, output is channel5/PD5 mux7.
- * SYS_CLK24M supports finite pulses or the fixed continuous fan service. */
+ * SYS_CLK24M supports finite pulses or the continuous fan service. The period
+ * and duty are exact SYS_CLK24M multiples after the smallest exact prescale
+ * 1..256; active_high selects polarity. Continuous periods are at most10ms. */
 struct a733_pwm_config {
  uint64_t owner,handoff,deadline_us;
  uint32_t apb0,apb0_hz,period_ns,duty_ns,pulses,active_high;
@@ -73,7 +75,10 @@ enum a733_pwm_result a733_pwm_start(struct a733_pwm *);
 /* Owner-only metadata after revocation, including expiry. BUSY bookkeeping
  * retries are explicit. A retained result never claims the fan stopped. */
 enum a733_pwm_result a733_pwm_retain(struct a733_pwm *);
-/* Continuous fixed40kHz service (config.pulses==0). One owner request at a time.
+/* Continuous service (config.pulses==0) at the planned rate and polarity.
+ * active_ticks is 0..plan.ticks in prescaled clocks: 0 holds the inactive and
+ * plan.ticks the active level. Stop always drives PD5 low as a GPIO, whatever
+ * the polarity. One owner request at a time.
  * Each start/duty change includes disable/low/reconfigure/resume. An accepted
  * command returns PENDING; poll completes it when service_step becomes0 and
  * service_completed advances. Each start requires its own IRQ observation.

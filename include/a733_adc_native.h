@@ -10,7 +10,9 @@ struct a733_adc_native {
 };
 /* Pure binding of actual privileged FreeRTOS owner and common register mutex.
  * Admit authenticates source/electrical/boot authority. Accesses require identity
- * Device-nGnRnE mappings. No reference/test/pad/DMA access is provided. */
+ * Device-nGnRnE mappings. No reference/test/pad/DMA access is provided. Compare
+ * windows and their enables/status are not admitted, so threshold mode cannot
+ * start through this binding until an application selects fixed windows. */
 int a733_adc_native_init(struct a733_adc_native *,struct a733_platform_locks *,void *,
  int (*)(void *,const struct a733_adc_config *,const struct a733_clock_token *),void *);
 /* LRADC binding narrows I/O to its local controller, RTC source readbacks and
