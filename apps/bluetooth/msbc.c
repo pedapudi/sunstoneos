@@ -32,6 +32,7 @@ int bluetooth_msbc_silence(uint8_t out[60])
     memcpy(out,codec.silence,60);out[1]=sequence[codec.tx_sequence];
     codec.tx_sequence=(codec.tx_sequence+1)&3;return 1;
 }
+void bluetooth_msbc_resync(void){codec.used=codec.locked=codec.sequence=codec.discarded=0;}
 int bluetooth_msbc_byte(uint8_t byte,uint64_t acquired,uint8_t out[240],uint64_t *first)
 {
     if(!codec.ready||!acquired||!out||!first||codec.used>=60)return -1;

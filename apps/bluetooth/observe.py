@@ -89,7 +89,11 @@ def decode_recognition(frame,session,profile,offset,count):
     return result,frame[208:]
 
 def decode_repeated(frame,session,profile,offset=0):
-    """Decode one copied mode2 transcript/status; no physical-disconnect inference."""
+    """Decode one copied mode2 transcript/status; no physical-disconnect inference.
+
+    A recognition activation ends early at the headset's AT+BVRA=0, so a
+    segment holds up to the profile's samples and first_sample counts the
+    samples of earlier segments."""
     def require(ok,message):
         if not ok:raise ValueError(message)
     mode=struct.unpack_from('<I',profile,624)[0] if len(profile)==832 else 0
@@ -112,7 +116,7 @@ def decode_repeated(frame,session,profile,offset=0):
         require(codec in (1,2),'Repeated Bluetooth codec differs.')
         samples=struct.unpack_from('<I',profile,720)[0]
         require(all((firmware,uart,acl,audio)) and ticket<=consumed and
-                first==(ticket-1)*samples and inputs==samples and outputs==(inputs if codec==2 else 2*inputs) and
+                first<=(ticket-1)*samples and 0<inputs<=samples and outputs==(inputs if codec==2 else 2*inputs) and
                 total<=65536 and first_acquired<=last_acquired and first_acquired and
                 offset<=total and count<=total-offset and state in (1,3),'Repeated transcript metadata differs.')
         require(all(any(frame[n:n+32]) for n in (128,160,192)),'Repeated transcript digests missing.')

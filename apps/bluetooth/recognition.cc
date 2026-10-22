@@ -24,21 +24,27 @@ struct Retained {
     StackType_t stack[16384];
     alignas(64) uint8_t scratch[97280];
     alignas(4) uint8_t wav[BLUETOOTH_WAV_BYTES];
-    uint8_t pcm[48000],log[BLUETOOTH_RECOGNITION_LOG];
+    uint8_t log[BLUETOOTH_RECOGNITION_LOG];
     bluetooth_recognition_snapshot snapshot;
     bluetooth_repeated_snapshot segment;
     unsigned used;
 } retained;
+// A finite capture is staged in the internal arena, which is unused until
+// transcription starts.
+static_assert(sizeof(retained.scratch)>=BLUETOOTH_PCM_BYTES);
 std::atomic<unsigned> terminal{0};
 std::atomic<bool> stopped{false};
 std::atomic<unsigned> finished{0};
 uint64_t now(){return mimus::asr::platform::MonotonicNanos()/1000;}
+// Waits for a segment, a stop or USB collection; every wake-up re-reads state.
+constexpr TickType_t kWait=pdMS_TO_TICKS(100);
 
 bool live()
 {return retained.app&&!stopped.load(std::memory_order_acquire)&&now()<retained.deadline&&bluetooth_recognition_live(retained.app)==1;}
 void fail()
 {if(retained.app&&bluetooth_headset_repeated(retained.app)==1)(void)bluetooth_headset_segment_stop(retained.app);
- stopped.store(true,std::memory_order_release);terminal.store(2,std::memory_order_release);}
+ stopped.store(true,std::memory_order_release);terminal.store(2,std::memory_order_release);
+ if(retained.owner)xTaskNotifyGive(retained.owner);}
 [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
 bool separate(const void *a,size_t n,const void *b,size_t m)
 {uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
@@ -54,48 +60,23 @@ bool model_hash(unsigned i)
     uint8_t hash[32];storage_digest_end(&digest,hash);
     return live()&&!std::memcmp(hash,retained.models.sha256[i],32);
 }
-void recognize(void *)
+bool valid(const bluetooth_pcm_snapshot &c)
+{return live()&&c.state>=1&&c.state<=(bluetooth_headset_wideband(retained.app)?2u:1u)&&c.bytes&&!(c.bytes&1)&&
+    c.bytes<=BLUETOOTH_PCM_BYTES&&!c.loss_packets;}
+// mSBC PCM is already 16 kHz; CVSD PCM is interpolated.
+size_t convert(const uint8_t *pcm,const bluetooth_pcm_snapshot &c)
 {
-    const bool repeated=bluetooth_headset_repeated(retained.app)==1;
-    // USB cannot replace model assets during this lifetime, so one bounded
-    // hash before the first capture authenticates every later load and use.
-    if(!model_hash(0)||!model_hash(1)){failed();}
-    for(;;){
-        bluetooth_pcm_snapshot capture{};bluetooth_segment_snapshot segment{};
-        size_t copied=0;uint8_t chunk[1024];int result=0;
-        while(live()){
-            result=repeated?bluetooth_headset_segment_copy(retained.app,0,0,2,chunk,&copied,&segment):
-                bluetooth_headset_copy(retained.app,0,0,2,chunk,&copied,&capture);
-            if(result<0){failed();}if(result==1)break;
-            if(repeated){bluetooth_segment_status state{};
-                if(bluetooth_headset_segment_status(retained.app,&state)!=1){failed();}
-                if(state.disconnected&&state.published==state.consumed){
-                    finished.store(1,std::memory_order_release);for(;;)vTaskSuspend(nullptr);}
-            }
-            vTaskDelay(1);
-        }
-        if(repeated)capture=segment.capture;
-        if(result!=1||!live()||capture.state<1||capture.state>(bluetooth_headset_wideband(retained.app)?2u:1u)||!capture.bytes||(capture.bytes&1)||capture.bytes>sizeof(retained.pcm)||capture.loss_packets){failed();}
-        const bluetooth_pcm_snapshot identity=capture;
-        const bluetooth_segment_snapshot segment_identity=segment;
-        for(uint32_t offset=0;offset<identity.bytes;){
-            size_t count=identity.bytes-offset;if(count>1024)count=1024;
-            int got=repeated?bluetooth_headset_segment_copy(retained.app,segment_identity.ticket,offset,count,chunk,&copied,&segment):
-                bluetooth_headset_copy(retained.app,0,offset,count,chunk,&copied,&capture);
-            if(!live()||got!=1||copied!=count||(repeated?
-                std::memcmp(&segment,&segment_identity,sizeof(segment)):std::memcmp(&capture,&identity,sizeof(identity)))){failed();}
-            std::memcpy(retained.pcm+offset,chunk,count);offset+=static_cast<uint32_t>(count);
-        }
-        uint8_t hash[32];storage_digest_bytes(retained.pcm,identity.bytes,hash);
-        if(!live()||std::memcmp(hash,identity.sha256,32)){failed();}
-        if(repeated&&bluetooth_headset_segment_ack(retained.app,segment_identity.ticket)!=1){failed();}
-        retained.used=0;
-    size_t wav_bytes=0;
-    int converted=identity.state==2?bluetooth_pcm16_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes):
-        bluetooth_pcm_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes);
-    if(converted!=1||!live()){
-        failed();
-    }
+    size_t bytes=0;
+    int converted=c.state==2?bluetooth_pcm16_wav(pcm,c.bytes,retained.wav,sizeof(retained.wav),&bytes):
+        bluetooth_pcm_wav(pcm,c.bytes,retained.wav,sizeof(retained.wav),&bytes);
+    if(converted!=1||!live()){failed();}
+    return bytes;
+}
+// Transcribes the converted WAV and records the result; the PCM digest is
+// the producer's.
+void transcribe(const bluetooth_pcm_snapshot &identity,size_t wav_bytes,bool repeated)
+{
+    retained.used=0;
     std::span<const uint8_t> inputs[3]={
         {reinterpret_cast<const uint8_t *>(BLUETOOTH_MODEL_BASE),static_cast<size_t>(retained.models.bytes[0])},
         {reinterpret_cast<const uint8_t *>(BLUETOOTH_MODEL_BASE+BLUETOOTH_MODEL_SLOT),static_cast<size_t>(retained.models.bytes[1])},
@@ -116,15 +97,65 @@ void recognize(void *)
     storage_digest_bytes(retained.wav,wav_bytes,retained.snapshot.wav_sha256);
     storage_digest_bytes(retained.log,retained.used,retained.snapshot.text_sha256);
     if(!live()){failed();}
-
-        if(repeated){
-            retained.segment.result=retained.snapshot;retained.segment.ticket=segment_identity.ticket;
-            retained.segment.first_sample=segment_identity.first_sample;
-            retained.segment.first_acquired=segment_identity.first_acquired;retained.segment.last_acquired=segment_identity.last_acquired;
+}
+// Profile version 3 with mode 1: one finite capture, copied after the
+// producer's confirmed disconnect and checked against its digest.
+[[noreturn]] void finite()
+{
+    bluetooth_pcm_snapshot capture{};size_t copied=0;uint8_t chunk[1024];int result=0;
+    while(live()){
+        result=bluetooth_headset_copy(retained.app,0,0,2,chunk,&copied,&capture);
+        if(result<0){failed();}if(result==1)break;
+        vTaskDelay(1);
+    }
+    if(result!=1||!valid(capture)){failed();}
+    const bluetooth_pcm_snapshot identity=capture;uint8_t *staged=retained.scratch;
+    for(uint32_t offset=0;offset<identity.bytes;){
+        size_t count=identity.bytes-offset;if(count>sizeof(chunk))count=sizeof(chunk);
+        if(bluetooth_headset_copy(retained.app,0,offset,count,chunk,&copied,&capture)!=1||!live()||copied!=count||
+           std::memcmp(&capture,&identity,sizeof(identity))){failed();}
+        std::memcpy(staged+offset,chunk,count);offset+=static_cast<uint32_t>(count);
+    }
+    uint8_t hash[32];storage_digest_bytes(staged,identity.bytes,hash);
+    if(!live()||std::memcmp(hash,identity.sha256,32)){failed();}
+    transcribe(identity,convert(staged,identity),false);
+    terminal.store(1,std::memory_order_release);
+    for(;;)vTaskSuspend(nullptr);
+}
+void recognize(void *)
+{
+    // USB cannot replace model assets during this lifetime, so one bounded
+    // hash before the first capture authenticates every later load and use.
+    if(!model_hash(0)||!model_hash(1)){failed();}
+    if(bluetooth_headset_repeated(retained.app)!=1)finite();
+    // The first request starts an activation at once, so an unattended
+    // supervised session records one segment and exercises both +BVRA
+    // responses; later activations wait for the headset button.
+    unsigned request=BLUETOOTH_SEGMENT_START;
+    for(;;){
+        bluetooth_segment_snapshot segment{};const uint8_t *pcm=nullptr;int result=0;
+        while(live()){
+            result=bluetooth_headset_segment_take(retained.app,&pcm,&segment);
+            if(result<0){failed();}if(result==1)break;
+            bluetooth_segment_status state{};
+            if(bluetooth_headset_segment_status(retained.app,&state)!=1){failed();}
+            if(state.disconnected&&state.published==state.consumed){
+                finished.store(1,std::memory_order_release);for(;;)vTaskSuspend(nullptr);}
+            int requested=bluetooth_headset_segment_request(retained.app,request);
+            if(requested<0){failed();}if(requested)request=BLUETOOTH_SEGMENT_ACCEPT;
+            (void)ulTaskNotifyTake(pdTRUE,kWait);
         }
+        if(result!=1||!valid(segment.capture)){failed();}
+        // The borrowed slot is released after conversion, so the next
+        // segment can record during transcription.
+        const size_t wav_bytes=convert(pcm,segment.capture);
+        if(bluetooth_headset_segment_ack(retained.app,segment.ticket)!=1){failed();}
+        transcribe(segment.capture,wav_bytes,true);
+        retained.segment.result=retained.snapshot;retained.segment.ticket=segment.ticket;
+        retained.segment.first_sample=segment.first_sample;
+        retained.segment.first_acquired=segment.first_acquired;retained.segment.last_acquired=segment.last_acquired;
         terminal.store(1,std::memory_order_release);
-        if(!repeated)for(;;)vTaskSuspend(nullptr);
-        while(live()&&terminal.load(std::memory_order_acquire)==1)vTaskDelay(1);
+        while(live()&&terminal.load(std::memory_order_acquire)==1)(void)ulTaskNotifyTake(pdTRUE,kWait);
         if(!live()||terminal.load(std::memory_order_acquire)==2){failed();}
     }
 }
@@ -200,7 +231,7 @@ extern "C" int bluetooth_recognition_segment_ack(bluetooth_application *app,uint
 {
     if(!app||app!=retained.app||bluetooth_headset_repeated(app)!=1||!ticket||!live()||
        terminal.load(std::memory_order_acquire)!=1||retained.segment.ticket!=ticket)return -1;
-    terminal.store(0,std::memory_order_release);return 1;
+    terminal.store(0,std::memory_order_release);xTaskNotifyGive(retained.owner);return 1;
 }
 extern "C" int bluetooth_recognition_finished(bluetooth_application *app)
 {return app==retained.app&&bluetooth_recognition_live(app)==1?static_cast<int>(finished.load(std::memory_order_acquire)):-1;}

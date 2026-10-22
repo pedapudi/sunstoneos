@@ -19,9 +19,11 @@ p.add_argument('--msbc',action='store_true',help='Build the new actual mSBC stac
 p.add_argument('--repeated',action='store_true',help='Build only the new repeated headset composition')
 p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
+p.add_argument('--call-control',action='store_true',help='Build with the HFP call-control option')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','retry','retry-limit','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','resident','stop-in-poll','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence'])
+p.add_argument('--case',action='append',choices=['success','retry','retry-limit','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','resident','stop-in-poll','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence',
+    'button','start','no-voice','early','pending-off','idle-stop','open-stop','setup-stop','ag-stop','window','peer-release','activations','bac-idle'])
 a=p.parse_args();
 if a.playback:a.msbc=True;a.recognition_profile=True
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
@@ -36,6 +38,7 @@ common=['-std=c11','-Wall','-Wextra','-Wno-unused-function','-Wno-sign-compare',
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/include'),
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/portable/Compiler/GCC')]
 if a.recognition_profile:common.append('-DSUNSTONE_BLUETOOTH_RECOGNITION=1')
+if a.call_control:common.append('-DSUNSTONE_BT_HFP_CALL_CONTROL=1')
 sources=['drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c',
          'drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_rfcomm.c',
          'drivers/bluetooth/bt_hfp_ag.c','drivers/bluetooth/bt_sco.c','drivers/bluetooth/bt_security.c',

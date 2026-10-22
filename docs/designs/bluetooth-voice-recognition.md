@@ -1,6 +1,18 @@
 # Headset voice-recognition activation and optional call control
 
-Status: design for review; no code is implemented yet.
+Status: implemented, with three differences from the text below.
+
+- The finite-capture branch of `recognition.cc` remains. Profile version 3
+  admits mode 1 (`bluetooth_profile_valid` and `prepare.py`), and
+  `checks/bluetooth-recognition.cc` exercises that finite recognition. Its
+  copied capture is staged in the recognizer's internal scratch, so
+  `retained.pcm` is still removed.
+- The application admits `AT+BVRA=1` by writing the AG field `voice_admit`
+  between steps, which keeps the call-control build within its size budget.
+- A packet between activations costs 198 instructions for CVSD and 201 for
+  mSBC, above the 188 and 191 targets. The 171 and 174 baselines were measured
+  on the DONE path, which skips the capture window, deadline and stop checks
+  and silence scheduling that the open link still needs.
 
 The board is the Hands-Free Profile (HFP) Audio Gateway (AG) so that it can
 record a headset microphone for mimus. Pressing the headset's voice button

@@ -51,10 +51,12 @@ qualified security provider.
 
 The runtime in [bt_hfp_ag.c](../drivers/bluetooth/bt_hfp_ag.c) implements the AG
 side of the service-level connection, the HFP control state established over
-RFCOMM. Its interface is [bt_hfp_ag.h](../include/bt_hfp_ag.h). Without call
-control or codec negotiation, the supported AG feature bitmap is zero, and the
-local SDP record must also use zero supported features and Network zero.
-The bitmap names only implemented behavior and makes no qualification claim.
+RFCOMM. Its interface is [bt_hfp_ag.h](../include/bt_hfp_ag.h).
+`bt_hfp_ag_init` takes the codec set (none, or CVSD and mSBC) and whether the
+AG offers voice recognition. The AG feature bitmap names only these: voice
+recognition activation (bit 2, value 4) and codec negotiation (bit 9, value
+512). The local SDP record must carry the matching SupportedFeatures, which the
+SDP server checks, and Network zero. The bitmap makes no qualification claim.
 
 The caller binds an authorized open RFCOMM session. An incoming session must
 serve AG UUID `0x111f`; an outgoing session must target HF UUID `0x111e`.
@@ -68,7 +70,8 @@ The initial command sequence is:
 
 1. `AT+BRSF=<features>` records the headset's 32-bit feature value and returns
    `+BRSF: <AG features>` followed by `OK`. The value is 0 for the basic
-   engine, 512 with codec negotiation, 352 with call control and 864 with both.
+   engine, plus 4 with voice recognition and 512 with codec negotiation. The
+   call-control build option adds 352.
 2. `AT+CIND=?` returns the seven supported indicators and their order.
 3. `AT+CIND?` returns their current values.
 4. `AT+CMER=3,0,0,1` enables indicator reporting. The engine enters `READY`
@@ -94,9 +97,23 @@ incomplete lines across RFCOMM records and handles successive lines in one
 record. Command names are case insensitive and spaces are ignored. A line holds
 at most 128 non-space bytes. An overlong or malformed line is consumed through
 its terminator and receives `ERROR`; its prefix cannot execute as a command.
-Unknown commands and unsupported codec or voice requests also receive
-`ERROR`. Without call control, call commands also receive `ERROR`; the next
-section describes the procedures that call control adds.
+Unknown commands and unsupported codec requests also receive `ERROR`.
+
+After setup the engine answers the queries that headsets send whether or not a
+call exists:
+
+- `AT+COPS=3,0` selects the long alphanumeric format. `AT+COPS?` returns
+  `+COPS: 0`: no network operator exists, so the format and name are omitted.
+- `AT+CNUM` returns `OK` alone because no subscriber number exists.
+- `AT+CLCC` returns `OK` alone while no call exists.
+- `AT+CLIP`, `AT+CCWA` and `AT+CMEE` accept 0 or 1.
+- `AT+BCC`, with codec negotiation, requests an audio connection. The engine
+  replies `OK` and counts the request when no codec offer is outstanding; the
+  application must then select a codec and open synchronous audio.
+
+After `AT+CMEE=1`, a refused `AT+BCC` receives `+CME ERROR: 3` (operation not
+allowed). Call commands such as `ATA`, `ATD` and `AT+CHUP` receive `ERROR`
+unless the call-control build option described below is enabled.
 
 Each response uses at most 256 bytes and splits at the negotiated RFCOMM MTU.
 Only one fragment is owned by RFCOMM at a time; the next waits for controller
@@ -118,18 +135,51 @@ detaches; its caller separately releases RFCOMM. Security revocation or lower
 failure retains all unresolved backing for recovery. No default authorization,
 call action, voice-recognition result or audio completion is supplied.
 
-## Call control adds the mandatory call procedures
+## The headset button starts voice recognition
+
+HFP 1.9 section 4.25 defines voice recognition activation, which SunstoneOS
+uses to start one recording for mimus from the headset's voice button. With
+voice recognition enabled at initialization the AG advertises bit 2. The
+`recognition` field holds the committed state. It turns on once the UART
+accepts the complete `OK` for `AT+BVRA=1` or the complete `+BVRA: 1`, and off
+likewise for `AT+BVRA=0` or `+BVRA: 0`.
+
+- `AT+BVRA=1` from the headset receives `OK` only when the application admits
+  an activation, the headset advertised voice recognition (its BRSF bit 3,
+  value 8), the service-level connection is ready and recognition is off.
+  The application writes the field `voice_admit` between steps to admit one;
+  it is the only field the application writes.
+- `AT+BVRA=0` receives `OK` only while recognition is on. HFP section 5 sends
+  no `+BVRA: 0` after an accepted one.
+- `AT+BVRA=2` and other values receive `ERROR`, because enhanced
+  voice-recognition status is not advertised.
+- `bt_hfp_ag_voice` queues `+BVRA: 1` or `+BVRA: 0` for a state change. It
+  returns 0 while a response or a partly received command owns the serial
+  stream, and refuses a headset without voice recognition.
+
+A refused request leaves the session usable. A `+BVRA` response that the UART
+does not accept within the response duration ends the AG like any other
+expired response. The application opens the audio connection itself after
+recognition turns on, as HFP section 4.11 permits without a call.
+
+## The call-control build option adds the mandatory call procedures
+
+Call control exists only for HFP conformance and has no board use. The CMake
+option `SUNSTONE_BT_HFP_CALL_CONTROL`, off by default, compiles it into the
+Bluetooth image; the integrated OS image never includes it. Without the option
+the AG has no call state, `RING` alert or call event interface, and its call
+indicators stay at the values the application supplies.
 
 HFP Table 3.1 makes several call procedures mandatory for an AG: answering,
 terminating and placing calls, last-number redial, memory dialing, call waiting
 and calling-line notification activation, DTMF, subscriber number, current call
-list, operator query and extended error codes. `bt_hfp_ag_init_calls` enables
-them with a nonzero RING interval of at most 60 seconds. The AG then advertises
-`BT_HFP_AG_CALL_FEATURES`, 352: ability to reject a call (bit 5), enhanced call
-status (bit 6) and extended error result codes (bit 8). The local SDP record must
-set Network to 1, which HFP section 6.3 defines as the ability to reject a call.
-Three-way calling, in-band ringing, voice recognition and echo cancellation are
-not advertised.
+list, operator query and extended error codes. With the option,
+`bt_hfp_ag_init_calls` enables them with a nonzero RING interval of at most
+60 seconds. The AG then advertises `BT_HFP_AG_CALL_FEATURES`, 352: ability to
+reject a call (bit 5), enhanced call status (bit 6) and extended error result
+codes (bit 8). The local SDP record must set Network to 1, which HFP section
+6.3 defines as the ability to reject a call. Three-way calling, in-band ringing
+and echo cancellation are not advertised.
 
 The engine holds at most one call. It owns the call, call-setup and held-call
 indicators from initialization onward; all three must start at zero. The
@@ -163,14 +213,7 @@ The headset drives the same call through these commands:
   the digit for the application, which owns any call audio.
 - `AT+CLCC` lists the call with index 1, direction, status, voice mode, no
   multiparty membership and its quoted number when known.
-- `AT+COPS=3,0` selects the long alphanumeric format. `AT+COPS?` returns
-  `+COPS: 0`: no network operator exists, so the format and name are omitted.
-- `AT+CNUM` returns `OK` alone because no subscriber number exists.
-- `AT+CLIP`, `AT+CCWA` and `AT+CMEE` accept 0 or 1. Call waiting never produces
-  `+CCWA` because a second call cannot exist.
-- `AT+BCC`, with codec negotiation, requests an audio connection. The engine
-  replies `OK` and counts the request when no codec offer is outstanding; the
-  application must then select a codec and open synchronous audio.
+- Call waiting never produces `+CCWA` because a second call cannot exist.
 
 Indicator changes are reported after the command's `OK`, with call before call
 setup. During an incoming call the engine sends `RING` after the call-setup
@@ -230,10 +273,20 @@ establishes an incoming link, reads the actual local AG record, negotiates the
 advertised RFCOMM service and exchanges HFP commands. The expected SDP features
 and AT responses are independently encoded from the pinned specifications.
 
-The selected cases cover split and successive commands, MTU fragmentation,
-indicator masks and ordering, gain reports, malformed input, response
-backpressure, setup refusal, security revocation and retained close ownership.
-The call-control case uses a record with Network 1 and checks incoming alerts
+The runner builds and runs the fixture twice, without and with the
+call-control option. The selected cases cover split and successive commands,
+MTU fragmentation, indicator masks and ordering, gain reports, malformed
+input, response backpressure, setup refusal, security revocation and retained
+close ownership. Both builds check the queries without call control. Both
+also check voice recognition:
+
+- refusals before setup, without admission, for `AT+BVRA=0` while off, for
+  `AT+BVRA=2` and for a headset without the feature;
+- commitment only at UART acceptance, and `+BVRA` in both directions;
+- a partly received command that holds back `+BVRA`, and an expired `+BVRA`.
+
+The call-control build also uses a record with Network 1 and checks incoming
+alerts
 with `RING` and `+CLIP`, repeated ringing, answer, reject, termination, dialing,
 redial, DTMF, the status queries, extended errors, application refusals and an
 audio request with codec negotiation. Physical headset call handling remains
@@ -251,12 +304,12 @@ Linux header and RFCOMM checksum fixtures preserve their original notices.
 Published BlueZ code is a reading reference and is not copied into this runtime.
 
 
-The native recognition application also supports [successive copied CVSD
-segments](bluetooth-native.md#repeated-headset-capture-and-recognition) within
-one bounded supervised session. Two input slots and exact transcript delivery
-acknowledgments provide backpressure; capture stops on backlog or loss. This
-application extension keeps the existing CVSD negotiation and disconnect path.
-Physical capture and wideband mSBC remain unqualified.
+The native recognition application records [one segment per voice-recognition
+activation](bluetooth-native.md#repeated-headset-capture-and-recognition)
+within one session. Two input slots and exact transcript delivery
+acknowledgments provide backpressure; capture stops on backlog or loss. The
+audio connection opens at the first activation and stays open. Physical
+capture and wideband mSBC remain unqualified.
 
 The optional native caller-PCM modes require a confirmed mSBC selection and reuse
 the existing transparent eSCO connection. They encode actual 16 kHz PCM with the
