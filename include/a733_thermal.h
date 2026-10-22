@@ -102,10 +102,12 @@ enum a733_thermal_result a733_thermal_read(struct a733_thermal *,uint64_t deadli
 enum a733_thermal_result a733_thermal_stop(struct a733_thermal *,uint64_t deadline);
 /* Fixed board thermal policy over a733_thermal_read results. Trips are the
  * pinned sun60iw2p1 thermal zones: CPUB, CPUL and GPU throttle at 90 C (CPU
- * hysteresis 2 C, GPU none) and every channel is critical at 110 C. All trips
- * lie in the code<=1769 branch, so the conversion discontinuity cannot reorder
- * them. Hardware alarm/critical events are not inputs: their raw thresholds
- * are per-session configuration. A channel with no valid reading for 1 s
+ * hysteresis 2 C, GPU none) and every channel is critical at 110 C. DDR also
+ * throttles at 85 C with 2 C hysteresis, a board trip for the LPDDR5
+ * standard-refresh limit; the THS DDR channel is a proxy with an unknown
+ * offset from the DRAM die. All trips lie in the code<=1769 branch, so the
+ * conversion discontinuity cannot reorder them. Hardware alarm/critical
+ * events are not inputs: their raw thresholds are per-session configuration. A channel with no valid reading for 1 s
  * throttles and for 5 s is critical. Controller failure, an unexpected result,
  * a replayed sample or backward time is critical. CRITICAL is terminal until
  * power removal. The policy changes no clock, voltage, power or THS state. */
