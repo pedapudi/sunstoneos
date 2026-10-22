@@ -29,9 +29,11 @@ mode under unicorn:
   WAV; a stray segment is acknowledged without touching that WAV; after a
   headset cancel the client requests ACCEPT, so the button records the
   generation; a newer generation upgrades a pending ACCEPT to START;
-- 2, 3, 5: a segment with a lost packet, a refused borrow and a refused
-  request each end the session, stop capture and leave any segment
-  unacknowledged;
+- 2: an activation that publishes between the client's take and its request
+  refuses the request, and a START refused while an earlier activation runs
+  is requested again after that activation ends without a segment;
+- 3, 5: a refused borrow and a refused request each end the session, stop
+  capture and leave any segment unacknowledged;
 - 4: the recognizer's request rules, and the wake-up of the client;
 - 6: a failed Bluetooth application ends the session;
 - 7: one owner iteration (with the radio, the module poll that the radio
@@ -56,7 +58,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ['pins-and-startup', 'keyboard-generations', 'lost-packet-refused', 'refused-borrow',
+CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
          'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
          'stopped-capture', 'wideband-segment', 'button-only-workload']
 

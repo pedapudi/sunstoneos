@@ -23,7 +23,7 @@ p.add_argument('--call-control',action='store_true',help='Build with the HFP cal
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
 p.add_argument('--case',action='append',choices=['success','retry','retry-limit','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','resident','stop-in-poll','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence',
-    'button','start','no-voice','early','pending-off','idle-stop','open-stop','setup-stop','ag-stop','window','peer-release','activations','bac-idle'])
+    'button','start','no-voice','early','pending-off','idle-stop','open-stop','setup-stop','ag-stop','window','peer-release','activations','bac-idle','ag-cancel'])
 a=p.parse_args();
 if a.playback:a.msbc=True;a.recognition_profile=True
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)

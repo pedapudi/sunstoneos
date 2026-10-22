@@ -93,7 +93,8 @@ def decode_repeated(frame,session,profile,offset=0):
 
     A recognition activation ends early at the headset's AT+BVRA=0, so a
     segment holds up to the profile's samples and first_sample counts the
-    samples of earlier segments."""
+    samples of earlier segments. One frame bounds first_sample by the ticket;
+    the caller, which sees every ticket, checks that it is contiguous."""
     def require(ok,message):
         if not ok:raise ValueError(message)
     mode=struct.unpack_from('<I',profile,624)[0] if len(profile)==832 else 0

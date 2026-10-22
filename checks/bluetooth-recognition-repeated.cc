@@ -62,8 +62,9 @@ extern "C" int bluetooth_headset_segment_take(bluetooth_application *p,const uin
  *s=identities[consumed];*out=pcm.data()+consumed*48000;return 1;
 }
 // The first request starts an activation; later ones admit the button.
-extern "C" int bluetooth_headset_segment_request(bluetooth_application *p,unsigned word)
-{assert(p==app&&word==(requests?BLUETOOTH_SEGMENT_ACCEPT:BLUETOOTH_SEGMENT_START));++requests;return 1;}
+// The recognizer passes the head its take saw, which is the consumed count.
+extern "C" int bluetooth_headset_segment_request(bluetooth_application *p,unsigned word,uint64_t observed)
+{assert(p==app&&word==(requests?BLUETOOTH_SEGMENT_ACCEPT:BLUETOOTH_SEGMENT_START)&&observed==consumed);++requests;return 1;}
 extern "C" int bluetooth_headset_segment_ack(bluetooth_application *p,uint64_t ticket)
 {assert(p==app&&ticket==consumed+1&&consumed<published());++consumed;return 1;}
 extern "C" int bluetooth_headset_copy(bluetooth_application *,unsigned,uint32_t,size_t,uint8_t[1024],size_t *,bluetooth_pcm_snapshot *)

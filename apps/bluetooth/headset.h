@@ -38,15 +38,18 @@ struct bluetooth_segment_status {uint64_t published,consumed;uint32_t flags,disc
  * Modes 2 and 3 record one segment per voice-recognition activation, started
  * by the headset button (AT+BVRA=1) or by the owner on START. The request
  * word holds 0, ACCEPT (admit the next AT+BVRA=1), START (start now) or
- * ACTIVE. The consumer changes 0 to ACCEPT or START, or ACCEPT to START: 1
- * changed, 0 unchanged, -1 refused. When an activation ends the owner
- * publishes its segment if it holds a sample, stores 0 with release and
- * notifies the consumer (task notification index 0), also after a stop or
- * disconnection. Mode 5 records continuously and ignores the word.
+ * ACTIVE. The consumer changes 0 to ACCEPT or START, or ACCEPT to START,
+ * passing the published count it last observed (status or a take that
+ * returned 0): 1 the word holds the request, 0 unchanged because the word is
+ * past it or a segment was published since, -1 refused. When an activation
+ * ends the owner publishes its segment if it holds a sample, stores 0 with
+ * release and notifies the consumer (task notification index 0), also after
+ * a stop or disconnection. Mode 5 records continuously and ignores the word.
  *
  * take borrows the oldest published segment: 0 none, 1 with a read-only
  * pointer to its PCM valid until the matching ack, -1 refused. The segment
- * holds an even number of bytes; first_sample counts samples in earlier
+ * holds an even number of bytes and no lost packet, because a loss stops
+ * capture and discards the segment; first_sample counts samples in earlier
  * segments. */
 int bluetooth_headset_wideband(const struct bluetooth_application *);
 int bluetooth_headset_repeated(const struct bluetooth_application *);
@@ -54,7 +57,7 @@ int bluetooth_headset_segment_bind(struct bluetooth_application *,void *consumer
 #define BLUETOOTH_SEGMENT_ACCEPT 1u
 #define BLUETOOTH_SEGMENT_START 2u
 #define BLUETOOTH_SEGMENT_ACTIVE 3u
-int bluetooth_headset_segment_request(struct bluetooth_application *,unsigned request);
+int bluetooth_headset_segment_request(struct bluetooth_application *,unsigned request,uint64_t published);
 int bluetooth_headset_segment_take(struct bluetooth_application *,const uint8_t **pcm,struct bluetooth_segment_snapshot *);
 int bluetooth_headset_segment_ack(struct bluetooth_application *,uint64_t);
 int bluetooth_headset_segment_status(struct bluetooth_application *,struct bluetooth_segment_status *);

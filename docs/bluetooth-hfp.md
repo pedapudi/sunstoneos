@@ -162,6 +162,11 @@ does not accept within the response duration ends the AG like any other
 expired response. The application opens the audio connection itself after
 recognition turns on, as HFP section 4.11 permits without a call.
 
+Two physical checks remain outstanding for the default build. A board run
+must show that the target headset stays connected to an AG that advertises no
+call feature (`+BRSF` without the value 352 and an SDP record with Network 0),
+and that the headset's voice button sends `AT+BVRA=1` and records a segment.
+
 ## The call-control build option adds the mandatory call procedures
 
 Call control exists only for HFP conformance and has no board use. The CMake

@@ -77,7 +77,7 @@ int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app,
  * request and ends by storing 0, with or without a segment. */
 enum { SEGMENT_BYTES=3000 };
 static uint64_t head,tail;
-static unsigned failed_app,refuse_take,refuse_request,word,notified;
+static unsigned failed_app,refuse_take,refuse_request,word,notified,publish_in_take;
 static uint8_t slot[BLUETOOTH_SEGMENT_SLOTS][SEGMENT_BYTES];
 static struct bluetooth_segment_snapshot snapshots[BLUETOOTH_SEGMENT_SLOTS];
 static uint8_t value(uint64_t ticket,unsigned i){return (uint8_t)(ticket*17+i*3);}
@@ -106,17 +106,19 @@ int bluetooth_headset_segment_status(struct bluetooth_application *a,struct blue
     if(a!=&app||failed_app)return -1;
     *out=(struct bluetooth_segment_status){head,tail,segment_flags,0};return 1;
 }
-int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request)
+int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t observed)
 {
     if(a!=&app||failed_app||refuse_request||(request!=BLUETOOTH_SEGMENT_ACCEPT&&request!=BLUETOOTH_SEGMENT_START))return -1;
-    if(word>=request)return 0;
+    if(word==request)return 1;
+    if(word>request||head!=observed)return 0;
     word=request;return 1;
 }
 int bluetooth_headset_segment_take(struct bluetooth_application *a,const uint8_t **pcm,struct bluetooth_segment_snapshot *snapshot)
 {
     if(a!=&app||failed_app||refuse_take)return -1;
     *pcm=NULL;memset(snapshot,0,sizeof(*snapshot));
-    if(head==tail)return 0;
+    /* An activation may end with a segment right after take sees none. */
+    if(head==tail){if(publish_in_take){publish_in_take=0;publish(0);word=0;}return 0;}
     unsigned n=(unsigned)(tail%BLUETOOTH_SEGMENT_SLOTS);*pcm=slot[n];*snapshot=snapshots[n];return 1;
 }
 int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticket)
@@ -348,11 +350,24 @@ void os_check_run(unsigned selected)
         activation(1);steps(1);check(tail==1&&!word,132);converted(1,1);
         os_check_result=1;return;
     }
-    /* Refusals: a lost packet, a refused borrow or request and a failed
-     * application end the session and stop capture. */
+    if(mode==2){
+        /* An activation that publishes after the client's take found nothing
+         * refuses its request, so ACCEPT is not armed again for a generation
+         * that already has a segment. */
+        generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==1,140);
+        word=BLUETOOTH_SEGMENT_ACTIVE;publish_in_take=1;steps(1);check(!word&&head==1&&!tail,141);
+        steps(1);check(tail==1&&!word,142);converted(1,1);
+        /* START refused while an earlier activation runs is requested again
+         * when that activation ends without a segment. */
+        generation(2);word=BLUETOOTH_SEGMENT_ACTIVE;steps(1);check(word==BLUETOOTH_SEGMENT_ACTIVE&&headset.started==1,143);
+        word=0;steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==2,144);
+        activation(1);steps(1);converted(2,2);check(!board_failed&&!stopped,145);
+        os_check_result=1;return;
+    }
+    /* Refusals: a refused borrow or request and a failed application end the
+     * session and stop capture. */
     generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_START,74);
-    if(mode==2){activation(0);publish(1);}
-    else if(mode==3){activation(1);refuse_take=1;}
+    if(mode==3){activation(1);refuse_take=1;}
     else if(mode==5){activation(0);refuse_request=1;}
     else failed_app=1;
     check(step()<0,75);fail();

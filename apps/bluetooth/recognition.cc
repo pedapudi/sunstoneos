@@ -60,9 +60,10 @@ bool model_hash(unsigned i)
     uint8_t hash[32];storage_digest_end(&digest,hash);
     return live()&&!std::memcmp(hash,retained.models.sha256[i],32);
 }
+// Published repeated segments are loss-free; the finite path checks loss itself.
 bool valid(const bluetooth_pcm_snapshot &c)
 {return live()&&c.state>=1&&c.state<=(bluetooth_headset_wideband(retained.app)?2u:1u)&&c.bytes&&!(c.bytes&1)&&
-    c.bytes<=BLUETOOTH_PCM_BYTES&&!c.loss_packets;}
+    c.bytes<=BLUETOOTH_PCM_BYTES;}
 // mSBC PCM is already 16 kHz; CVSD PCM is interpolated.
 size_t convert(const uint8_t *pcm,const bluetooth_pcm_snapshot &c)
 {
@@ -108,7 +109,7 @@ void transcribe(const bluetooth_pcm_snapshot &identity,size_t wav_bytes,bool rep
         if(result<0){failed();}if(result==1)break;
         vTaskDelay(1);
     }
-    if(result!=1||!valid(capture)){failed();}
+    if(result!=1||!valid(capture)||capture.loss_packets){failed();}
     const bluetooth_pcm_snapshot identity=capture;uint8_t *staged=retained.scratch;
     for(uint32_t offset=0;offset<identity.bytes;){
         size_t count=identity.bytes-offset;if(count>sizeof(chunk))count=sizeof(chunk);
@@ -141,7 +142,9 @@ void recognize(void *)
             if(bluetooth_headset_segment_status(retained.app,&state)!=1){failed();}
             if(state.disconnected&&state.published==state.consumed){
                 finished.store(1,std::memory_order_release);for(;;)vTaskSuspend(nullptr);}
-            int requested=bluetooth_headset_segment_request(retained.app,request);
+            // Take returned 0, so the head it saw is the consumed count; a
+            // segment published since refuses the request until it is taken.
+            int requested=bluetooth_headset_segment_request(retained.app,request,state.consumed);
             if(requested<0){failed();}if(requested)request=BLUETOOTH_SEGMENT_ACCEPT;
             (void)ulTaskNotifyTake(pdTRUE,kWait);
         }

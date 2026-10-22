@@ -5,6 +5,8 @@ static unsigned msbc_no_cap,msbc_bad_bcs,msbc_fallback,msbc_refuse,msbc_setups,m
 static unsigned msbc_two_frames;
 /* The headset drops mSBC from its codec list while the owner waits idle. */
 static unsigned msbc_narrowed;
+/* The headset withholds its AT+BCS answer, holding a codec offer in flight. */
+static unsigned msbc_hold_bcs;
 #define BLUETOOTH_CHECK_MSBC 1
 #define BLUETOOTH_CHECK_REPEATED 1
 #define BLUETOOTH_HEADSET_FIXTURE_ENTRY archived_headset_main
@@ -12,6 +14,7 @@ static unsigned msbc_narrowed;
 #undef BLUETOOTH_HEADSET_FIXTURE_ENTRY
 #include <sbc/sbc.h>
 static TaskHandle_t reader=(TaskHandle_t)2;
+static const char *latency_codec="mSBC";
 static void inject(const uint8_t *p,unsigned n,unsigned status)
 {uint8_t h[]={3,0,(uint8_t)(status<<4),(uint8_t)n};assert(n<=255);bytes(&wire,h,4);bytes(&wire,p,n);}
 static uint64_t segments(void){return atomic_load(&voice.segment_head);}
@@ -27,12 +30,20 @@ static void connect_audio(void)
 /* An owner-started activation: +BVRA: 1, then the link, opened by the first. */
 static void activate(void)
 {
-    current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START)==1);current_task=owner;
+    current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START,atomic_load(&voice.segment_head))==1);current_task=owner;
+    LATENCY("START to committed on",POLLS(voice.ag.recognition),5);assert(voice.active);
+    /* A codec list changed while idle adds the +BCS exchange before setup. */
+    if(voice.stage!=CAPTURE){unsigned setups=sco_setups;
+        if(msbc_narrowed)LATENCY("START commit to setup accepted after codec reselection",POLLS(sco_setups==setups+1),13);
+        else LATENCY("START commit to setup accepted",POLLS(sco_setups==setups+1),4);}
     MSBC_UNTIL(voice.active&&voice.stage==CAPTURE);
 }
 /* The segment-ending activation's +BVRA: 0 has been accepted. */
 static void ended(uint64_t published)
-{MSBC_UNTIL(segments()==published&&!voice.active);MSBC_UNTIL(!voice.ag.recognition&&!voice.voice_off);}
+{
+    MSBC_UNTIL(segments()==published&&!voice.active);
+    MSBC_UNTIL(!voice.ag.recognition&&!voice.voice_off);
+}
 static struct bluetooth_segment_snapshot take(uint64_t ticket,FILE *out)
 {
     current_task=reader;const uint8_t *pcm;struct bluetooth_segment_snapshot s;
@@ -83,7 +94,7 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
     if(msbc_bad_bcs){for(unsigned n=0;n<1000;++n)assert(pump()>=0);assert(!msbc_setups&&!voice.ag.selected_codec);
         wire.now=voice.ag.codec_deadline;assert(pump()<0);puts("PASS mismatched BCS cannot start synchronous setup");return 0;}
     until(IDLE);assert(!msbc_setups&&brsf==BT_HFP_AG_VOICE+(voice.wideband?512u:0u)+call_features);
-    if(msbc_refuse){current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START)==1);current_task=owner;
+    if(msbc_refuse){current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START,atomic_load(&voice.segment_head))==1);current_task=owner;
         for(unsigned n=0;n<2000&&!atomic_load(&app.failed);++n)if(pump()<0)break;
         assert(atomic_load(&app.failed)&&msbc_setups==1&&!atomic_load(&voice.segment_disconnected));puts("PASS command refusal retains without speculative fallback");return 0;}
     if(!strcmp(argv[1],"bac-idle")){
@@ -95,6 +106,38 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
         activate();assert(stream()->codec==1&&voice.ag.selected_codec==1&&msbc_setups==1);
         uint8_t pcm[240]={0};inject(pcm,sizeof(pcm),0);MSBC_UNTIL(segments()==1);ended(1);take(1,NULL);close_audio();
         puts("PASS a codec list changed while idle is negotiated again before the link opens");return 0;
+    }
+    if(!strcmp(argv[1],"button")){
+        /* The headset button opens the mSBC link; one whole frame in one
+         * packet fills the segment. */
+        current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_ACCEPT,segments())==1);current_task=owner;
+        for(unsigned n=0;n<2;++n)assert(pump()>=0);
+        rf_in(14,0xef,(const uint8_t *)"AT+BVRA=1\r",10,-1);LATENCY("AT+BVRA=1 line to committed on",POLLS(voice.ag.recognition),4);
+        unsigned setups=sco_setups;LATENCY("AT+BVRA=1 commit to setup accepted",POLLS(sco_setups==setups+1),4);
+        MSBC_UNTIL(voice.active&&voice.stage==CAPTURE);assert(stream()->codec==2);
+        sbc_t encoder;assert(!sbc_init_msbc(&encoder,0));encoder.endian=SBC_LE;uint8_t pcm[240]={0},frame[60];encode(&encoder,pcm,0,frame);
+        unsigned off=bvra_off;inject(frame,60,0);LATENCY("packet to first PCM byte in a slot",POLLS(voice.segment_bytes||segments()),1);
+        LATENCY("publication to +BVRA: 0 queued",POLLS(voice.ag.response_length||bvra_off!=off),1);
+        ended(1);take(1,NULL);close_audio();sbc_finish(&encoder);
+        puts("PASS the headset button records one mSBC segment");return 0;
+    }
+    if(!strcmp(argv[1],"ag-cancel")){
+        /* The headset cancels the first activation while the AG stage
+         * reselects the codec, and a stop follows: the AG stage ends like
+         * idle once the offer is answered, without retention or a link. */
+        const char *narrow="AT+BAC=1\r";rf_in(14,0xef,(const uint8_t *)narrow,(unsigned)strlen(narrow),-1);
+        for(unsigned n=0;n<100;++n)assert(pump()>=0);
+        msbc_narrowed=1;msbc_hold_bcs=1;
+        current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START,segments())==1);current_task=owner;
+        MSBC_UNTIL(voice.active&&voice.stage==AG&&voice.ag.offered_codec);
+        rf_in(14,0xef,(const uint8_t *)"AT+BVRA=0\r",10,-1);MSBC_UNTIL(!voice.active);assert(voice.stage==AG);
+        current_task=reader;assert(bluetooth_headset_segment_stop(&app)==1);current_task=owner;
+        for(unsigned n=0;n<20;++n)assert(pump()>=0);
+        assert(voice.stage==AG&&!atomic_load(&app.failed)&&!voice.ag.voice_admit);
+        msbc_hold_bcs=0;rf_in(14,0xef,(const uint8_t *)"AT+BCS=1\r",9,-1);MSBC_UNTIL(voice.stage==DONE);
+        assert(atomic_load(&voice.segment_disconnected)&&!atomic_load(&app.failed)&&!(atomic_load(&recovery)&4)&&
+            !msbc_setups&&!segments()&&atomic_load(&voice.segment_flags)==BLUETOOTH_SEGMENT_CANCEL);
+        puts("PASS a stop after a cancel during codec reselection ends the AG stage without retention");return 0;
     }
     activate();assert(stream()->codec==(msbc_no_cap||msbc_fallback?1u:2u));
     if(!strcmp(argv[1],"cadence")){

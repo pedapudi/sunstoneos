@@ -14,9 +14,25 @@
  * selected; voice recognition opens the audio link from there (FALLBACK,
  * AUDIO) and keeps it open between activations (CAPTURE). */
 enum phase {CONFIGURE,CONFIGURING,SECURITY_CONFIG,CONNECT,AUTHENTICATE,SDP,CONTROL,AG,IDLE,FALLBACK,AUDIO,CAPTURE,CLOSE,DONE};
+/* The owner's per-poll scalars come first, so one base register reaches
+ * them within a cache line or two; the words shared with the consumer follow
+ * on their own cache line. Voice recognition: the AG advertises it (voice),
+ * the AG first reached idle (idled), an activation runs (active), started
+ * with +BVRA (bvra), +BVRA: 0 is owed (voice_off), the CVSD byte-count parity
+ * since the link opened with its pending skip, the capture window and the end
+ * of AT+BVRA=1 and START admission (admit_end). stop is the owner's copy of
+ * segment_stop, loaded once per poll and set by the owner's own stops. */
 static struct {
-    struct bluetooth_application *app;
-    struct bt_hci_incoming_config incoming;
+    unsigned stage,stop,idled,voice,active,bvra,voice_off,parity,skip;
+    unsigned partial_offset,segment_bytes,segment_records,hashed;
+    unsigned silence_bytes,silence_offset,silence_ready,wideband,auth_started,configured;
+    uint64_t window,admit_end,capture_deadline,next_silence,operation_deadline,link,stream,last_owner;
+    uint64_t partial_serial,published_samples,silence_restarts;
+    struct bluetooth_application *app,*segment_app;
+    void *segment_consumer;
+    _Alignas(64) atomic_ullong segment_head,segment_tail;
+    atomic_uint segment_stop,segment_flags,segment_disconnected,segment_request,terminal;
+    _Alignas(64) struct bt_hci_incoming_config incoming;
     struct bt_acl acl;
     struct bt_security security;
     struct bt_l2cap l2cap;
@@ -27,28 +43,15 @@ static struct {
     struct bt_hfp_ag ag;
     struct bt_sco audio;
     struct bt_sco_binding audio_binding;
+    struct storage_digest digest;
     struct bluetooth_pcm_snapshot snapshot;
     struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
     uint8_t pcm[BLUETOOTH_PCM_BYTES],silence[254];
-    uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence,silence_restarts;
-    unsigned stage,auth_started,silence_bytes,configured,wideband,silence_offset,silence_ready;
-    atomic_uint terminal;
-    void *segment_consumer;
-    struct bluetooth_application *segment_app;
-    atomic_ullong segment_head,segment_tail;
-    atomic_uint segment_stop,segment_flags,segment_disconnected,segment_request;
     struct {
         struct bluetooth_segment_snapshot snapshot;
         struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
         uint8_t pcm[BLUETOOTH_PCM_BYTES];
     } segments[BLUETOOTH_SEGMENT_SLOTS];
-    uint64_t partial_serial,published_samples;
-    unsigned partial_offset,segment_bytes,segment_records,hashed;
-    /* Voice recognition: the AG advertises it (voice), an activation runs
-     * (active), started with +BVRA (bvra), +BVRA: 0 is owed (voice_off), and
-     * the CVSD byte-count parity since the link opened with its pending skip. */
-    unsigned voice,active,bvra,voice_off,parity,skip;
-    struct storage_digest digest;
 } voice;
 static struct {struct bluetooth_application *app;} context;
 static int live(struct bluetooth_application *a)
@@ -101,9 +104,10 @@ int bluetooth_headset_retain(struct bluetooth_application *a)
         atomic_store_explicit(&voice.terminal,2,memory_order_release);}
     return -1;
 }
-/* Failure, stop, wake-up, publication and consumer admission are kept out of
- * line: each runs at most once per segment or call, and inlining them at
- * every call site costs code size. */
+/* Failure, stop, wake-up, publication, activation start and end, the
+ * in-segment write and consumer admission are kept out of line: each runs at
+ * most once per segment, packet or call, and inlining them into the per-poll
+ * path costs code size and callee-saved registers on every poll. */
 static __attribute__((noinline)) int fail(void){return bluetooth_headset_retain(voice.app);}
 static uint64_t cap(uint64_t now,uint64_t duration,uint64_t limit)
 {uint64_t end=a733_deadline_after_saturating(now,duration);return end<limit?end:limit;}
@@ -128,7 +132,11 @@ static int upper_init(struct bluetooth_application *a)
     features|=BT_HFP_AG_CALL_FEATURES;
 #endif
     struct bt_sdp_ag_profile ag={.handle=0x10000,.version=0x0109,.rfcomm_channel=(uint8_t)p->server_channel,
-        .brsf_features=features,.supported_features=(uint16_t)((features&31)|((features>>4)&32)),.network=(uint8_t)((features>>5)&1)};
+        .brsf_features=features,.supported_features=(uint16_t)((voice.wideband?32u:0u)|(voice.voice?4u:0u))};
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    /* HFP section 6.3: Network is the ability to reject a call. */
+    ag.network=1;
+#endif
     voice.audio_binding=(struct bt_sco_binding){p->scheduling_authority,p->receive_latency_us,p->response_timeout_us,audio_current,audio_security,&context};
     if(bt_acl_init(&voice.acl,&a->hci)!=1||bt_security_init(&voice.security,&voice.acl,a->owner,a->recovery_state,&sec,a->profile->command_timeout_us)!=1||
         bt_rfcomm_registry_init(&voice.registry,&voice.l2cap,psm,service,&context)!=1||
@@ -157,8 +165,9 @@ static int control_step(struct bluetooth_application *a)
     return bt_security_service(&voice.security,a->deadline);
 }
 static int repeated_audio(struct bluetooth_application *,struct bt_sco_link *,uint64_t);
-static int recognition(struct bluetooth_application *,uint64_t);
-static void voice_admission(const struct bluetooth_application *,uint64_t);
+static int recognition(struct bluetooth_application *,uint64_t,unsigned);
+static void voice_admission(uint64_t,unsigned);
+static void idle(const struct bluetooth_application *);
 static int finished(void);
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
@@ -172,11 +181,14 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(bluetooth_playback_mode(a)&&voice.stage<=AUDIO&&bluetooth_playback_cancelled(a))return fail();
 #endif
     if(a->profile->headset.mode<2&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
-    /* Before idle a stop retains the transports: setup commands may be in
-     * flight. An activation that returned to the AG stage to open the link
-     * handles its stop like idle. */
-    const unsigned recognizing=voice.voice&&(voice.stage>=IDLE||voice.active)&&voice.stage<=CAPTURE;
-    if(a->profile->headset.mode>=2&&voice.stage<IDLE&&!voice.active&&atomic_load_explicit(&voice.segment_stop,memory_order_acquire))return fail();
+    voice.stop=atomic_load_explicit(&voice.segment_stop,memory_order_acquire);
+    /* Before the AG first reaches idle a stop retains the transports: setup
+     * commands may be in flight. After it, every stage through CAPTURE,
+     * including the AG and FALLBACK stages that open the link, handles voice
+     * recognition and stops like idle. */
+    if(voice.stop&&voice.stage<IDLE&&!voice.idled)return fail();
+    const unsigned recognizing=voice.idled&&voice.stage<=CAPTURE;
+    unsigned word=0;
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     if(voice.operation_deadline&&now>=voice.operation_deadline)return fail();
     if(voice.stage==CONFIGURE){
@@ -241,7 +253,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         if(bt_sdp_close(&voice.discovery,voice.operation_deadline)!=1)return fail();
         voice.stage=CONTROL;return 0;
     }
-    if(recognizing)voice_admission(a,now);
+    if(recognizing){word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);voice_admission(now,word);}
     if(control_step(a)!=1)return fail();
     if(voice.stage==CONTROL){
         if(voice.rfcomm.phase!=BT_RFCOMM_OPEN)return 0;
@@ -255,7 +267,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 #endif
         voice.stage=AG;return 0;
     }
-    if(recognizing){int r=recognition(a,now);if(r!=1)return r;}
+    if(recognizing){int r=recognition(a,now,word);if(r!=1)return r;}
     if(voice.stage==AG||voice.stage==FALLBACK){
         if(voice.ag.phase!=BT_HFP_AG_READY)return 0;
         if(voice.wideband&&(voice.ag.hf_features&128)){
@@ -268,7 +280,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         if(p->mode>=4&&voice.ag.selected_codec!=2)return fail();
         /* Voice recognition waits idle for an activation, which then bounds
          * the link open and its CVSD retry. */
-        if(voice.voice&&voice.stage==AG&&!voice.active){voice.operation_deadline=0;voice.stage=IDLE;return 0;}
+        if(voice.voice&&voice.stage==AG&&!voice.active){idle(a);return 0;}
         if(!voice.voice)voice.operation_deadline=stage_deadline(a,58000000);
         if(voice.stage==FALLBACK){if(bt_sco_retry_cvsd(&voice.audio,voice.stream,voice.operation_deadline,&voice.stream)!=1)return fail();}
         else if(bt_sco_open(&voice.audio,&voice.ag,0,voice.operation_deadline,&voice.stream)!=1)return fail();
@@ -284,15 +296,15 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(voice.stage==IDLE||(voice.stage==DONE&&!voice.stream))return voice.stage==DONE;
     struct bt_sco_link *l=stream();if(!l)return fail();
     if(voice.stage==AUDIO){
-        unsigned stopping=atomic_load_explicit(&voice.segment_stop,memory_order_acquire);
-        if(p->mode==3&&l->phase==BT_SCO_CLOSED&&l->codec==2&&l->fallback_allowed&&!stopping){voice.stage=FALLBACK;return 0;}
+        if(p->mode==3&&l->phase==BT_SCO_CLOSED&&l->codec==2&&l->fallback_allowed&&!voice.stop){voice.stage=FALLBACK;return 0;}
         /* A stop during an open waits for the result; a confirmed setup
          * failure then ends cleanly. */
-        if(voice.voice&&stopping&&l->phase==BT_SCO_CLOSED)return finished();
+        if(voice.voice&&voice.stop&&l->phase==BT_SCO_CLOSED)return finished();
         if(l->phase==BT_SCO_CLOSED||l->phase==BT_SCO_RETAINED)return fail();
         if(l->phase!=BT_SCO_OPEN)return 0;
         if(p->mode>=4&&l->codec!=2)return fail();
         /* Voice recognition armed the capture deadline at activation start. */
+        voice.window=bluetooth_capture_window(a);
         if(!voice.voice)voice.capture_deadline=cap(now,p->capture_timeout_us,stage_deadline(a,59000000));
         voice.operation_deadline=p->mode>=2?0:voice.capture_deadline;voice.next_silence=now;
         voice.parity=voice.skip=0;if(p->mode==5){voice.active=1;storage_digest_init(&voice.digest);}
@@ -401,13 +413,18 @@ int bluetooth_headset_segment_status(struct bluetooth_application *a,struct blue
     out->flags=atomic_load_explicit(&voice.segment_flags,memory_order_acquire);
     return segment_live(a)?1:-1;
 }
-int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request)
+/* The word is loaded before head. The owner stores head before the 0 that
+ * ends an activation, so a 0 seen here comes with that activation's segment,
+ * and an unchanged head means the activation published none. Only the
+ * consumer moves the word out of 0, and only an activation start moves it out
+ * of ACCEPT, so a failed exchange means an activation started or ended. */
+int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t published)
 {
     if(!consumer(a)||(request!=BLUETOOTH_SEGMENT_ACCEPT&&request!=BLUETOOTH_SEGMENT_START))return -1;
     unsigned word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);
-    while(word<request)
-        if(atomic_compare_exchange_weak_explicit(&voice.segment_request,&word,request,memory_order_acq_rel,memory_order_acquire))return 1;
-    return 0;
+    if(word==request)return 1;
+    if(word>request||atomic_load_explicit(&voice.segment_head,memory_order_acquire)!=published)return 0;
+    return atomic_compare_exchange_strong_explicit(&voice.segment_request,&word,request,memory_order_acq_rel,memory_order_acquire);
 }
 int bluetooth_headset_segment_take(struct bluetooth_application *a,const uint8_t **pcm,struct bluetooth_segment_snapshot *snapshot)
 {
@@ -422,7 +439,9 @@ int bluetooth_headset_segment_take(struct bluetooth_application *a,const uint8_t
     if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;if(head==tail)return 0;
     unsigned slot=(unsigned)(tail%BLUETOOTH_SEGMENT_SLOTS);const struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
     if(s->ticket!=tail+1||s->capture.bytes<2||(s->capture.bytes&1)||s->capture.bytes>BLUETOOTH_PCM_BYTES)return -1;
-    *snapshot=*s;*pcm=voice.segments[slot].pcm;return segment_live(a)?1:-1;
+    /* consumer() checked liveness at entry and ack checks it again; a failure
+     * in between leaves the slot with its owner, so the pointer stays valid. */
+    *snapshot=*s;*pcm=voice.segments[slot].pcm;return 1;
 }
 int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticket)
 {
@@ -432,11 +451,13 @@ int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticke
     if(!ticket||tail==UINT64_MAX||ticket!=tail+1||head<=tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;
     atomic_store_explicit(&voice.segment_tail,tail+1,memory_order_release);return 1;
 }
-/* The first stop sets the close bound; later stop reasons only add flags. */
+/* The first stop sets the close bound; later stop reasons only add flags. No
+ * stage after a stop admits AT+BVRA=1. */
 static __attribute__((noinline)) void segment_stopping(unsigned flag,uint64_t now)
 {
     atomic_fetch_or_explicit(&voice.segment_flags,flag,memory_order_release);
     atomic_store_explicit(&voice.segment_stop,1,memory_order_release);
+    voice.stop=1;voice.ag.voice_admit=0;
     if(!voice.operation_deadline)voice.operation_deadline=bluetooth_close_deadline(voice.app,now);
 }
 /* Publishes the even prefix of the segment being written, if it holds a
@@ -461,7 +482,7 @@ static __attribute__((noinline)) int publish(struct bluetooth_application *a,uns
 }
 /* Ends the activation: publication, then the request word with release, then
  * the notification, so a consumer that reads0 sees any published segment. */
-static void end(struct bluetooth_application *a,unsigned codec)
+static __attribute__((noinline)) void end(struct bluetooth_application *a,unsigned codec)
 {
     (void)publish(a,codec);
     voice.active=0;voice.capture_deadline=0;voice.voice_off=voice.bvra&&voice.ag.recognition;
@@ -469,60 +490,146 @@ static void end(struct bluetooth_application *a,unsigned codec)
 }
 static __attribute__((noinline)) int finished(void)
 {
-    voice.stage=DONE;voice.operation_deadline=0;voice.active=0;
+    voice.stage=DONE;voice.operation_deadline=0;voice.active=0;voice.ag.voice_admit=0;
     atomic_store_explicit(&voice.segment_request,0,memory_order_release);
     atomic_store_explicit(&voice.segment_disconnected,1,memory_order_release);wake();return 1;
 }
-/* An AT+BVRA=1 must commit before the supervised capture window ends. */
-static int admissible(const struct bluetooth_application *a,uint64_t now)
-{return a733_deadline_after_saturating(now,a->profile->headset.line_timeout_us)<=bluetooth_capture_window(a);}
-static void voice_admission(const struct bluetooth_application *a,uint64_t now)
+/* Entering idle without an activation. An AT+BVRA=1 or START must commit
+ * before the capture window ends: now plus the line timeout (nonzero) within
+ * the window, which is now < admit_end. */
+static void idle(const struct bluetooth_application *a)
 {
-    unsigned word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);
-    voice.ag.voice_admit=!voice.active&&!voice.voice_off&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&
-        (word==BLUETOOTH_SEGMENT_ACCEPT||word==BLUETOOTH_SEGMENT_START)&&admissible(a,now);
+    uint64_t line=a->profile->headset.line_timeout_us;
+    voice.window=bluetooth_capture_window(a);voice.admit_end=voice.window>=line?voice.window-line+1:0;
+    voice.idled=1;voice.operation_deadline=0;voice.stage=IDLE;
+}
+/* Runs before the AG step on every poll from IDLE through CAPTURE. The word
+ * is ACTIVE exactly while an activation runs, because only the owner changes
+ * it from ACTIVE, so the word test also excludes an active one. */
+static void voice_admission(uint64_t now,unsigned word)
+{
+    voice.ag.voice_admit=!voice.voice_off&&!voice.stop&&
+        (word==BLUETOOTH_SEGMENT_ACCEPT||word==BLUETOOTH_SEGMENT_START)&&now<voice.admit_end;
 }
 /* Starts an activation on a committed AT+BVRA=1 or +BVRA: 1 (bvra1), or on
  * START for a headset without voice recognition (bvra0). */
-static int begin(struct bluetooth_application *a,uint64_t now,unsigned bvra)
+static __attribute__((noinline)) int begin(struct bluetooth_application *a,uint64_t now,unsigned bvra,unsigned word)
 {
-    unsigned word=atomic_load_explicit(&voice.segment_request,memory_order_acquire);
     do if(word!=BLUETOOTH_SEGMENT_ACCEPT&&word!=BLUETOOTH_SEGMENT_START)return fail();
     while(!atomic_compare_exchange_weak_explicit(&voice.segment_request,&word,BLUETOOTH_SEGMENT_ACTIVE,memory_order_acq_rel,memory_order_acquire));
     voice.active=1;voice.bvra=bvra;voice.skip=voice.parity;storage_digest_init(&voice.digest);
-    voice.capture_deadline=cap(now,a->profile->headset.capture_timeout_us,bluetooth_capture_window(a));
+    voice.capture_deadline=cap(now,a->profile->headset.capture_timeout_us,voice.window);
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     if(voice.wideband)bluetooth_msbc_resync();
 #endif
     if(voice.stage!=IDLE)return 1;
     /* The first activation opens the link, which then stays open. The AG
      * stage opens it, after selecting the codec again if an AT+BAC while
-     * idle cleared the selection. */
-    voice.operation_deadline=bluetooth_close_deadline(a,now);voice.stage=AG;return 1;
+     * idle cleared the selection. The bound allows one AG response and one
+     * codec reselection, each within the line timeout, and the link open and
+     * its CVSD retry, each within the response timeout; a supervised session
+     * also caps it at its close deadline. */
+    const struct bluetooth_headset_profile *p=&a->profile->headset;
+    voice.operation_deadline=cap(now,2*(uint64_t)p->line_timeout_us+2*p->response_timeout_us,
+        a->resident?UINT64_MAX:bluetooth_close_deadline(a,now));
+    voice.stage=AG;return 1;
+}
+/* Starts an activation on START: +BVRA: 1 for a headset with voice
+ * recognition, otherwise at once (HFP section 4.11). */
+static __attribute__((noinline)) int start(struct bluetooth_application *a,uint64_t now,unsigned word)
+{
+    if(!(voice.ag.hf_features&BT_HFP_AG_HF_VOICE))return begin(a,now,0,word);
+    return bt_hfp_ag_voice(&voice.ag,1)<0?fail():1;
+}
+/* +BVRA: 0 is owed after a segment ended an activation started with +BVRA. */
+static __attribute__((noinline)) int voice_off(struct bluetooth_application *a,uint64_t now,unsigned word)
+{
+    if(voice.ag.recognition)return bt_hfp_ag_voice(&voice.ag,0)<0?fail():1;
+    voice.voice_off=0;
+    return !voice.stop&&word==BLUETOOTH_SEGMENT_START&&now<voice.admit_end?start(a,now,word):1;
+}
+/* The headset ended recognition early (AT+BVRA=0): publish the even prefix. */
+static __attribute__((noinline)) int early_end(struct bluetooth_application *a)
+{const struct bt_sco_link *l=stream();end(a,l?l->codec:0);return 1;}
+/* A stop or the window before the link is open. Idle and the AG stages end
+ * once no AG response or codec offer is in flight; AUDIO waits for the
+ * open's result and still owes +BVRA: 0. */
+static __attribute__((noinline)) int stop_before_capture(struct bluetooth_application *a,uint64_t now,unsigned word)
+{
+    if(!voice.stop)segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
+    /* A consumer's stop carries no flag yet. */
+    else if(!atomic_load_explicit(&voice.segment_flags,memory_order_acquire))segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
+    if(voice.stage!=AUDIO)return voice.ag.response_length||voice.ag.offered_codec?0:finished();
+    return !voice.active&&voice.voice_off?voice_off(a,now,word):1;
 }
 /* Voice recognition after the AG step, from IDLE through CAPTURE: stop
  * handling before the link is open, activation start and end, and the
- * owner's +BVRA: 0. 1 continue,0 or -1 return that result. */
-static int recognition(struct bluetooth_application *a,uint64_t now)
+ * owner's +BVRA: 0. 1 continue, 0 or -1 return that result. Every action is
+ * a tail call, so a poll with nothing to do sets up no stack frame. */
+static int recognition(struct bluetooth_application *a,uint64_t now,unsigned word)
 {
-    struct bt_hfp_ag *g=&voice.ag;
-    unsigned stopping=atomic_load_explicit(&voice.segment_stop,memory_order_acquire);
-    if(voice.stage<CAPTURE){
-        if(!stopping&&now>=bluetooth_capture_window(a))segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
-        else if(stopping&&!atomic_load_explicit(&voice.segment_flags,memory_order_acquire))segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
-        stopping=atomic_load_explicit(&voice.segment_stop,memory_order_acquire);
-        /* Idle ends once no AG response or codec offer is in flight. */
-        if(stopping&&voice.stage!=AUDIO)return g->response_length||g->offered_codec?0:finished();
-    }
-    if(voice.voice_off&&!g->recognition)voice.voice_off=0;
-    /* The headset ended recognition early; a stop discards the segment instead. */
-    if(voice.active&&voice.bvra&&!g->recognition&&!stopping){const struct bt_sco_link *l=stream();end(a,l?l->codec:0);}
-    if(voice.voice_off){if(bt_hfp_ag_voice(g,0)<0)return fail();}
-    else if(!voice.active&&!stopping){
-        if(g->recognition)return begin(a,now,1);
-        if(atomic_load_explicit(&voice.segment_request,memory_order_acquire)==BLUETOOTH_SEGMENT_START&&admissible(a,now)){
-            if(!(g->hf_features&BT_HFP_AG_HF_VOICE))return begin(a,now,0);
-            if(bt_hfp_ag_voice(g,1)<0)return fail();
+    const struct bt_hfp_ag *g=&voice.ag;
+    if(voice.stage<CAPTURE&&(voice.stop||now>=voice.window))return stop_before_capture(a,now,word);
+    /* A stop discards the segment instead of an early end. */
+    if(voice.active)return voice.bvra&&!g->recognition&&!voice.stop?early_end(a):1;
+    if(voice.voice_off)return voice_off(a,now,word);
+    if(voice.stop)return 1;
+    if(g->recognition)return begin(a,now,1,word);
+    return word==BLUETOOTH_SEGMENT_START&&now<voice.admit_end?start(a,now,word):1;
+}
+/* Writes the packet into the segment being recorded, from partial_offset,
+ * and ends or publishes the segment when it is full. */
+static __attribute__((noinline)) int capture_packet(struct bluetooth_application *a,const struct bt_sco_link *l,
+    const struct bt_sco_packet *rx,uint64_t now)
+{
+    const struct bluetooth_headset_profile *p=&a->profile->headset;
+    voice.partial_serial=rx->serial;
+    if(rx->status)segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);
+    while(voice.partial_offset<rx->length&&voice.active&&!voice.stop){
+        uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_relaxed);
+        uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
+        if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS||head>=UINT64_MAX/p->samples)return fail();
+        if(head-tail==BLUETOOTH_SEGMENT_SLOTS||voice.segment_records==BLUETOOTH_PCM_RECORDS){
+            segment_stopping(BLUETOOTH_SEGMENT_BACKLOG,now);break;}
+        unsigned slot=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);
+        struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+        if(l->codec==2){
+            /* Frames decode into the slot: mSBC sample counts are
+             * multiples of 120, so a whole frame always fits. */
+            uint64_t first=0;
+            if(p->samples*2-voice.segment_bytes<240)return fail();
+            int result=bluetooth_msbc_byte(rx->bytes[voice.partial_offset++],rx->acquired,
+                voice.segments[slot].pcm+voice.segment_bytes,&first);
+            if(result<0){segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);break;}
+            if(!result)continue;
+            if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->first_acquired=first;}
+            voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){first,
+                voice.segment_bytes,60,240,0,0};
+            voice.segment_bytes+=240;s->last_acquired=rx->acquired;
+        }else
+#endif
+        {
+            /* A packet may split a sample; an activation that starts
+             * after an odd byte count skips the second half. */
+            if(voice.skip){voice.skip=0;++voice.partial_offset;continue;}
+            if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->first_acquired=rx->acquired;}
+            unsigned remaining=p->samples*2-voice.segment_bytes;
+            size_t used=rx->length-voice.partial_offset;if(used>remaining)used=remaining;
+            voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){rx->acquired,
+                voice.segment_bytes,(uint16_t)rx->length,(uint16_t)used,rx->status,0};
+            memcpy(voice.segments[slot].pcm+voice.segment_bytes,rx->bytes+voice.partial_offset,used);
+            voice.segment_bytes+=(unsigned)used;voice.partial_offset+=(unsigned)used;s->last_acquired=rx->acquired;
+        }
+        /* Hash each write while it is in L1, over the even prefix. */
+        unsigned even=voice.segment_bytes&~1u;
+        if(even>voice.hashed){
+            if(!storage_digest_add(&voice.digest,voice.segments[slot].pcm+voice.hashed,even-voice.hashed))return fail();
+            voice.hashed=even;}
+        if(voice.segment_bytes==p->samples*2){
+            if(voice.voice){end(a,l->codec);break;}
+            (void)publish(a,l->codec);wake();
+            voice.capture_deadline=cap(now,p->capture_timeout_us,voice.window);
         }
     }
     return 1;
@@ -530,20 +637,19 @@ static int recognition(struct bluetooth_application *a,uint64_t now)
 static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,uint64_t now)
 {
     const struct bluetooth_headset_profile *p=&a->profile->headset;
-    const uint64_t window=bluetooth_capture_window(a);
-    /* Only the close at the end of this step leaves CAPTURE. */
+    const uint64_t window=voice.window;
+    /* Only the close at the end of this step leaves CAPTURE. A consumer's
+     * stop is flagged at the close, before its wait for the UART. */
     const unsigned capture=voice.stage==CAPTURE;
     if(capture){
         if(l->phase!=BT_SCO_OPEN)return fail();
         if(now>=window)segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
         else if(voice.capture_deadline&&now>=voice.capture_deadline&&p->mode!=4)segment_stopping(BLUETOOTH_SEGMENT_DEADLINE,now);
-        if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!voice.operation_deadline)
-            segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
     }
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     if(bluetooth_playback_mode(a)){
         if(capture&&bluetooth_playback_cancelled(a))segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
-        if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
+        if(voice.stop&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
         if(bluetooth_playback_step(a,&voice.audio,voice.link,voice.stream,now,a->deadline)!=1)return fail();
     }
 #endif
@@ -555,59 +661,11 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
         if(p->mode==4){if(bluetooth_playback_discard(a,rx->length,rx->status)!=1)return fail();voice.partial_offset=rx->length;}
         else
 #endif
-        if(capture&&voice.active&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
-            voice.partial_serial=rx->serial;
-            if(rx->status)segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);
-            while(voice.partial_offset<rx->length&&voice.active&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
-                uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_relaxed);
-                uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
-                if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS||head>=UINT64_MAX/p->samples)return fail();
-                if(head-tail==BLUETOOTH_SEGMENT_SLOTS||voice.segment_records==BLUETOOTH_PCM_RECORDS){
-                    segment_stopping(BLUETOOTH_SEGMENT_BACKLOG,now);break;}
-                unsigned slot=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);
-                struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
-#ifdef SUNSTONE_BLUETOOTH_MSBC
-                if(l->codec==2){
-                    uint8_t decoded[240];uint64_t first=0;
-                    int result=bluetooth_msbc_byte(rx->bytes[voice.partial_offset++],rx->acquired,decoded,&first);
-                    if(result<0){segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);break;}
-                    if(!result)continue;
-                    if(p->samples*2-voice.segment_bytes<sizeof(decoded))return fail();
-                    if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->first_acquired=first;}
-                    voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){first,
-                        voice.segment_bytes,60,240,0,0};
-                    memcpy(voice.segments[slot].pcm+voice.segment_bytes,decoded,sizeof(decoded));
-                    voice.segment_bytes+=sizeof(decoded);s->last_acquired=rx->acquired;
-                }else
-#endif
-                {
-                /* A packet may split a sample; an activation that starts
-                 * after an odd byte count skips the second half. */
-                if(voice.skip){voice.skip=0;++voice.partial_offset;continue;}
-                if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->first_acquired=rx->acquired;}
-                unsigned remaining=p->samples*2-voice.segment_bytes;
-                size_t used=rx->length-voice.partial_offset;if(used>remaining)used=remaining;
-                voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){rx->acquired,
-                    voice.segment_bytes,(uint16_t)rx->length,(uint16_t)used,rx->status,0};
-                memcpy(voice.segments[slot].pcm+voice.segment_bytes,rx->bytes+voice.partial_offset,used);
-                voice.segment_bytes+=(unsigned)used;voice.partial_offset+=(unsigned)used;s->last_acquired=rx->acquired;
-                }
-                /* Hash each write while it is in L1, over the even prefix. */
-                unsigned even=voice.segment_bytes&~1u;
-                if(even>voice.hashed){
-                    if(!storage_digest_add(&voice.digest,voice.segments[slot].pcm+voice.hashed,even-voice.hashed))return fail();
-                    voice.hashed=even;}
-                if(voice.segment_bytes==p->samples*2){
-                    if(voice.voice){end(a,l->codec);break;}
-                    (void)publish(a,l->codec);wake();
-                    voice.capture_deadline=cap(now,p->capture_timeout_us,window);
-                }
-            }
-        }
+        if(capture&&voice.active&&!voice.stop&&capture_packet(a,l,rx,now)!=1)return -1;
         /* Closing explicitly abandons unpublished packet tails. Accepted input
          * slots stay immutable; only the exact currently borrowed RX is freed.
          * Between activations each packet is released without a copy. */
-        if(!voice.active||!capture||voice.partial_offset==rx->length||atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
+        if(!voice.active||!capture||voice.partial_offset==rx->length||voice.stop){
             voice.parity^=rx->length&1;
             if(bt_sco_release_receive(&voice.audio,rx->serial)!=1)return fail();
             voice.partial_serial=0;voice.partial_offset=0;
@@ -616,14 +674,13 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
     if(capture){
 #ifdef SUNSTONE_BLUETOOTH_MSBC
         if(bluetooth_playback_mode(a)){
-            if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
+            if(voice.stop&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
             if(bluetooth_playback_done(a))segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
         }
 #endif
-        if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
-            if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
-            /* Another task may store a stop after this poll's first check. */
+        if(voice.stop){
             if(!voice.operation_deadline)segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
+            if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
             if(bt_sco_close(&voice.audio,voice.stream,voice.operation_deadline)!=1)return fail();voice.stage=CLOSE;return 0;
         }
         if(now<voice.next_silence)return 0;

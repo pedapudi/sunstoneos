@@ -58,7 +58,7 @@ extern "C" int bluetooth_headset_wideband(const bluetooth_application *){return 
 extern "C" int bluetooth_headset_repeated(const bluetooth_application *){return 0;}
 extern "C" int bluetooth_headset_segment_bind(bluetooth_application *,void *){assert(false);return -1;}
 extern "C" int bluetooth_headset_segment_take(bluetooth_application *,const uint8_t **,bluetooth_segment_snapshot *){assert(false);return -1;}
-extern "C" int bluetooth_headset_segment_request(bluetooth_application *,unsigned){assert(false);return -1;}
+extern "C" int bluetooth_headset_segment_request(bluetooth_application *,unsigned,uint64_t){assert(false);return -1;}
 extern "C" uint32_t ulTaskNotifyTake(BaseType_t,TickType_t){assert(false);return 0;}
 // The failure path wakes the recognizer, which waits only when repeated.
 extern "C" BaseType_t xTaskNotifyGive(TaskHandle_t t){assert(t==task);return 1;}

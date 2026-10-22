@@ -140,7 +140,7 @@ static void peer_acl(const uint8_t *p,unsigned n)
 #ifdef BLUETOOTH_CHECK_MSBC
                 for(unsigned i=0;i+7<count;++i)if(!memcmp(data+i,"+BCS: ",6)){
                     msbc_selected=data[i+6]-'0';char response[20];snprintf(response,sizeof(response),"AT+BCS=%u\r",msbc_bad_bcs?3:msbc_selected);
-                    rf_in(14,0xef,(const uint8_t *)response,(unsigned)strlen(response),-1);
+                    if(!msbc_hold_bcs)rf_in(14,0xef,(const uint8_t *)response,(unsigned)strlen(response),-1);
                 }
 #endif
             }}
@@ -172,6 +172,13 @@ static void wire_outputs(void)
 }
 static int pump(void)
 {wire.room=1024;++wire.now;int r=bluetooth_application_poll(&app);wire_outputs();return r;}
+#ifdef BLUETOOTH_CHECK_REPEATED
+/* Owner polls until the condition holds, counting the poll that makes it
+ * true: 1 means the next poll. Latency cases report these counts. */
+#define POLLS(condition) __extension__({unsigned n_=0;while(!(condition)){assert(n_<400&&pump()>=0);++n_;}n_;})
+/* Reports a latency in owner polls and holds it to its recorded bound. */
+#define LATENCY(name,value,bound) do{unsigned v_=(value);fprintf(stderr,"LATENCY %s %s %u polls\n",latency_codec,name,v_);assert(v_<=(bound));}while(0)
+#endif
 static void until(unsigned phase)
 {for(unsigned i=0;i<2000&&voice.stage!=phase;++i){int r=pump();if(r<0)fprintf(stderr,"failure phase=%u HCI=%u acl=%u sec=%u config=%u now=%llu\n",voice.stage,app.hci.state,voice.acl.state,voice.security.fatal,voice.security.configuration_stage,(unsigned long long)wire.now);assert(r>=0);}assert(voice.stage==phase);}
 /* Owner polls on a jittered 1 ms tick: each gap is 700..1000 us, never past

@@ -110,7 +110,6 @@ static int step(void)
 #else
         if(c->state!=1)return -1;
 #endif
-        if(c->loss_packets)return -1;
         /* Requests are made only while a generation waits, so the segment is
          * the newest one's; the WAV of a generation already captured, which
          * the recognizer may be reading, is never rewritten. */
@@ -124,10 +123,15 @@ static int step(void)
     }
     if(!g||atomic_load_explicit(&headset.captured,memory_order_relaxed)==g)return 0;
     /* A new keyboard generation upgrades the word to START once; otherwise
-     * the client admits the headset button whenever the word is 0. */
+     * the client admits the headset button whenever the word is 0. With no
+     * segment taken, status.published is the head that take saw, so the
+     * request is refused if an activation published after it. START counts
+     * only once the word holds it: an activation that was running instead
+     * may still end without a segment. */
     unsigned start=board.session.workload==4&&headset.started!=g;
-    if(bluetooth_headset_segment_request(&app,start?BLUETOOTH_SEGMENT_START:BLUETOOTH_SEGMENT_ACCEPT)<0)return -1;
-    if(start)headset.started=g;
+    int requested=bluetooth_headset_segment_request(&app,start?BLUETOOTH_SEGMENT_START:BLUETOOTH_SEGMENT_ACCEPT,status.published);
+    if(requested<0)return -1;
+    if(start&&requested)headset.started=g;
     return 0;
 }
 void os_headset_task(void *unused)

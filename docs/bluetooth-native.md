@@ -196,6 +196,7 @@ which no counter value reaches.
 | Schedule origin | Session start | Firmware readiness minus the supervised firmware bound |
 | HCI identification, headset setup | Fixed offsets from the origin | The same offsets from the moved origin |
 | Repeated capture window | 38 s after the origin | None |
+| First audio link open in a voice-recognition activation | Two line timeouts plus two response timeouts, at most 40 s after the origin | Two line timeouts plus two response timeouts |
 | Closing after capture stops | 40 s after the origin | 2 s after the stop |
 
 The resident origin keeps each stage's supervised time budget after the
@@ -494,11 +495,19 @@ word, shared with the bound consumer task, holds one of four values:
 - ACTIVE: an activation runs.
 
 The consumer may change 0 to ACCEPT or START, and ACCEPT to START, with an
-atomic compare-and-exchange. The task changes ACCEPT or START to ACTIVE when
+atomic compare-and-exchange. It passes the published-segment count it last
+observed, and the change is refused when a segment was published since: the
+word is read before that count, so a 0 stored at the end of an activation is
+always seen together with that activation's segment. The task changes ACCEPT or START to ACTIVE when
 recognition commits, after the UART accepts the `OK` or `+BVRA: 1`. The first
 activation opens the audio link, which then stays open; the mode-3 CVSD retry
 also happens within it. An activation is admitted only while the commit can
-complete before the supervised capture window ends.
+complete before the supervised capture window ends. The first link open is
+bounded by two line timeouts (one AG response and one codec reselection) plus
+two response timeouts (the link open and its CVSD retry), capped in the
+supervised lifetime by the close bound. A stop at any stage from idle through
+capture, including a headset cancel while the first link opens, ends without
+retaining the transports.
 
 An activation ends when its segment holds the profile's sample count, at most
 24,000 samples, or when the headset sends `AT+BVRA=0`. The task then publishes
@@ -509,7 +518,7 @@ response to commit. A headset cancel therefore never restarts capture; the
 consumer chooses the next request. The recognizer in this image requests
 START once, so an unattended supervised session records one segment and
 exercises both `+BVRA` responses, then requests ACCEPT whenever the word is 0.
-The host tool's `--segments 1` option matches that run.
+The host tool therefore defaults to one transcript for modes 2 and 3.
 
 Between activations the task releases each received packet without copying,
 decoding or hashing it. Silence transmission continues, each packet bounded by
@@ -613,8 +622,8 @@ and body. Finished means that disconnect is confirmed and all accepted inputs
 have passed through recognition and their transcript acknowledgments.
 The host stores each complete transcript and its digest before acknowledging it.
 It requires matching session/profile identities, consecutive tickets, a first
-sample of at most (ticket − 1) × samples, an input sample count of at most the
-profile's, confirmed disconnect, and equal accepted/consumed/acknowledged
+sample equal to the input samples of all earlier transcripts, an input sample
+count of at most the profile's, confirmed disconnect, and equal accepted/consumed/acknowledged
 counts.
 
 ### Software evidence and remaining qualification
@@ -630,7 +639,18 @@ a modeled headset and controller. Its cases cover:
 - stops before the AG is ready, while idle with a response in flight, during
   the link open and during capture, and the capture window while idle;
 - backlog, loss, revocation, late disconnect, resident activations and an
-  unrequested link release after `+BVRA: 0`.
+  unrequested link release after `+BVRA: 0`;
+- a request refused because a segment was published after the consumer's
+  last observation, and `AT+BVRA=1` refused after a stop;
+- with `--msbc`, the button on an mSBC link, and a stop after a headset
+  cancel while the first activation reselects the codec, which ends without
+  retention.
+
+The button, START and early-end cases print the owner polls from the
+`AT+BVRA` line or START to the commit, from the commit to the
+synchronous-connection setup accepted by the UART, from a packet's arrival to
+its first byte in a slot and from publication to `+BVRA: 0` queued, and fail
+when a count exceeds its recorded value.
 
 With `--call-control` the same
 cases build with the call-control option. A speech case records two

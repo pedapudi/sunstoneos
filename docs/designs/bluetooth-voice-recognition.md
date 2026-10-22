@@ -1,6 +1,8 @@
 # Headset voice-recognition activation and optional call control
 
-Status: implemented, with three differences from the text below.
+Status: implemented, with the differences below. Five budget rows are
+missed; their revised targets await approval by the performance reviewer and
+are not accepted by this document.
 
 - The finite-capture branch of `recognition.cc` remains. Profile version 3
   admits mode 1 (`bluetooth_profile_valid` and `prepare.py`), and
@@ -8,11 +10,45 @@ Status: implemented, with three differences from the text below.
   copied capture is staged in the recognizer's internal scratch, so
   `retained.pcm` is still removed.
 - The application admits `AT+BVRA=1` by writing the AG field `voice_admit`
-  between steps, which keeps the call-control build within its size budget.
-- A packet between activations costs 198 instructions for CVSD and 201 for
-  mSBC, above the 188 and 191 targets. The 171 and 174 baselines were measured
-  on the DONE path, which skips the capture window, deadline and stop checks
-  and silence scheduling that the open link still needs.
+  before each AG step, which keeps the call-control build within its size
+  budget. The owner clears it at every stop and at DONE.
+- The consumer's request carries the published-segment count it last
+  observed (see Synchronization across cores).
+- Measured misses, with the full recognition part of the owner step counted
+  (admission, recognition and the repeated-capture step; the base figures
+  count the repeated-capture step alone):
+  - a packet between activations costs 246 instructions for CVSD and 251 for
+    mSBC, against 188 and 191. Receiving and releasing the packet in `bt_sco`
+    costs 109 of them, the per-poll admission and recognition checks about
+    60, and the open link's window, deadline and stop checks and silence
+    pacing the rest;
+  - a CVSD packet in a segment costs at most 3,024 instructions, against
+    3,000. The packet that completes a SHA-256 block costs 2,231 in the
+    compression; the runtime `memcpy` copies byte by byte when source and
+    destination differ in alignment modulo 8, which costs 264 for every other
+    60-byte packet;
+  - `AT+BVRA=1` commits 4 owner polls after its line arrives, against 2. The
+    AG commits when RFCOMM reports the `OK` transmitted, which takes three
+    polls through L2CAP, ACL and the UART after the poll that parses the
+    line;
+  - commit to the synchronous-connection setup accepted by the UART takes 4
+    polls, against 2, because `bt_sco` reads the remote features before the
+    setup command. After a codec list change while idle it takes 13 polls,
+    which include the `+BCS` exchange;
+  - `apps/os/headset.c` static data is 500,184 bytes, against 500,000. It is
+    48,008 bytes below its base, but the base itself grew by 192 bytes to
+    548,192 when the integration branch enlarged `struct
+    bluetooth_application`.
+- Per-second cost of the recognition part of the owner step, excluding
+  silence sends, which are unchanged. With the link open between activations,
+  CVSD has 266.7 packet polls at 246 instructions and 733.3 polls without a
+  packet at 162, about 184,000 instructions per second. mSBC has 133.3 packet
+  polls at 251 and 866.7 others at 162, about 174,000. In idle before the
+  first press, with no link, each of the 1,000 polls costs 71 instructions,
+  about 71,000 per second.
+- The rows that are met: a packet reaches its slot in the poll that holds it,
+  for CVSD and for the first valid mSBC frame, and `+BVRA: 0` is queued in the
+  first poll after publication.
 
 The board is the Hands-Free Profile (HFP) Audio Gateway (AG) so that it can
 record a headset microphone for mimus. Pressing the headset's voice button
@@ -78,21 +114,27 @@ consumer chooses the next request.
 
 - Bluetooth image: the recognizer requests START first, so the unattended
   60-second supervised session records one segment and exercises both `+BVRA`
-  responses (that run passes `--segments 1` to the host tool). Afterwards it
-  requests ACCEPT whenever the word is 0.
+  responses. The host tool therefore defaults to one transcript for modes 2
+  and 3. Afterwards the recognizer requests ACCEPT whenever the word is 0.
 - OS image: in workload 0 the capture client requests ACCEPT while a
   generation waits for audio. In workload 4 a new generation, started by the
   Enter key, requests START. If that activation ends without a segment, as
   after a headset cancel, the client requests ACCEPT: the button then records
   that generation, and the next Enter upgrades ACCEPT to START for the new
-  one. The next published segment becomes the newest generation's WAV.
+  one. A START that the word refuses because an earlier activation is still
+  running is requested again if that activation ends without a segment. The
+  next published segment becomes the newest generation's WAV.
 
 A segment ends at the profile's sample count (at most 24,000 samples: 3 s of
 CVSD or 1.5 s of mSBC) or at an accepted `AT+BVRA=0`; an early end publishes
 the largest even byte count. `first_sample` counts samples in earlier
-published segments, so [observe.py](../../apps/bluetooth/observe.py) accepts
-`first_sample` up to (ticket − 1) × samples. The existing ticket check
-(ticket equals tail + 1) orders segments.
+published segments, so [observe.py](../../apps/bluetooth/observe.py) bounds a
+single frame's `first_sample` by (ticket − 1) × samples, and the supervised
+host tool, which sees every ticket, requires it to equal the sum of the input
+samples of earlier transcripts. The existing ticket check (ticket equals
+tail + 1) orders segments. A published segment never holds a lost packet,
+because a loss stops capture and discards the segment; consumers of repeated
+segments therefore do not test `loss_packets`.
 
 ## Deadlines and failures
 
@@ -107,11 +149,20 @@ published segments, so [observe.py](../../apps/bluetooth/observe.py) accepts
   `segment_disconnected` set and no retention. Idle, and DONE with no audio
   link, run the existing `control_step` (SDP discovery, SDP server, AG or
   RFCOMM, security) and `bt_sco_step`, and skip only the stream lookup.
-- An activation is admitted only while now plus the response timeout is
-  within the window, which also bounds the first link open and the
-  mSBC-to-CVSD retry. A stop during an open waits for the result: an open link
-  closes through the existing sequence, a confirmed setup failure ends
-  cleanly, and `BT_SCO_RETAINED` fails as today.
+- An activation is admitted only while now plus the line timeout is within
+  the window. The owner computes that admission limit once, on entering idle.
+- The first link open, from activation start, is bounded by two line timeouts
+  (one AG response still in flight and one codec reselection) plus two
+  response timeouts (the link open and its mSBC-to-CVSD retry). In the
+  supervised lifetime the bound is also capped at the close bound, 40 s after
+  the origin. Exceeding it fails with retention, and in the resident lifetime
+  the watchdog then resets the board.
+- From the first entry into idle, every stage through CAPTURE handles a stop
+  as idle does. This includes the AG and FALLBACK stages that open the link
+  after a headset cancel ended the activation. A stop during an open waits
+  for the result: an open link closes through the existing sequence, a
+  confirmed setup failure ends cleanly, and `BT_SCO_RETAINED` fails as
+  today.
 - `capture_deadline` is armed at activation start and disarmed at its end;
   between activations silence packets get now plus the response timeout,
   capped by the window.
@@ -136,7 +187,8 @@ mSBC decoder and the audio link. In the poll in which the AG parses
 activation.
 
 During an activation, CVSD bytes go from the SCO packet into a slot with one
-`memcpy`, as today, and mSBC frames decode into the slot. The owner hashes the
+`memcpy`, as today, and mSBC frames decode into the slot directly; mSBC sample
+counts are multiples of 120, so a whole frame always fits. The owner hashes the
 slot with `storage_digest_add` as it writes, over the even-length prefix, and
 calls `storage_digest_end` at publication. Between activations it releases
 each packet without copying, decoding or hashing it, and keeps the next
@@ -208,10 +260,23 @@ The owner and a consumer may run on different cores. Head and tail keep their
 release and acquire ordering. Every change of the request word is an
 acquire-release compare-and-exchange, except the owner's final store of 0. At
 the end of an activation the owner stores *head* with release, then 0 in the
-word with release, then notifies. A consumer that loads 0 with acquire and
-then loads *head* sees any segment that activation published; an unchanged
-*head* means it ended without one. Only the owner touches AG and decoder
-state.
+word with release, then notifies.
+
+`bluetooth_headset_segment_request(app, request, published)` takes the
+published count the consumer last observed: its status read, or the head a
+take saw when it returned 0. It loads the word with acquire, then *head*. A 0
+from an activation end therefore comes with that activation's segment, and
+the request is refused when *head* differs from `published`; otherwise the
+exchange from the loaded word succeeds unless an activation started or ended
+in between. It returns 1 when the word holds the request, including when it
+already did, so a consumer can tell that its START is pending. Only the owner
+touches AG and decoder state.
+
+The owner loads `segment_stop` and the word once per poll and passes them to
+admission, recognition and the repeated-capture step; its own stops update
+its copy. A consumer's stop stored during a poll is handled in the next poll,
+1 ms later. The words the consumer writes sit on their own cache line, apart
+from the owner's per-poll fields.
 
 ## Reuse and removal
 
@@ -322,5 +387,15 @@ and the OS headset image.
 - `storage_digest.c` is scalar under `-mgeneral-regs-only`; ARMv8 SHA2
   instructions or the crypto engine's hash queue are a follow-up for its
   owner.
+- The runtime `memcpy` copies byte by byte when source and destination differ
+  in alignment modulo 8, which costs about 264 instructions for half of the
+  60-byte CVSD packets written to a slot. Word copies with shifts are a
+  follow-up for the runtime's owner.
+- The finite mode-1 path of `recognition.cc` still waits with `vTaskDelay(1)`
+  (1,000 wake-ups per second), copies the capture through a 1 KiB stack chunk
+  in 47 calls into scratch and hashes its 48,000 bytes again. The capture is
+  immutable after the confirmed disconnect, so the owner could notify the
+  recognizer at the terminal state and lend the capture in place, as
+  repeated segments are lent.
 - Call control is not offered in the OS image, and ACL loss keeps its
   handling.

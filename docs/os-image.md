@@ -382,7 +382,15 @@ for audio, through the application's request word
   which records at once and sends `+BVRA: 1` to the headset. If that
   recording ends without a segment, as after a headset cancel, the client
   requests ACCEPT, so the button records the generation. A newer generation
-  upgrades a pending ACCEPT to START.
+  upgrades a pending ACCEPT to START. A START refused because an earlier
+  recording is still running is requested again if that recording ends
+  without a segment.
+
+Each request passes the published count from the client's last status read,
+taken before its borrow found nothing. A recording that publishes between the
+borrow and the request makes the application refuse the request, so the
+client never admits the button again for a generation that already has its
+segment.
 
 Because requests are made only while a generation waits, the next published
 segment is the newest generation's. The client borrows it in place, converts
@@ -399,8 +407,9 @@ progress window. The Bluetooth owner notifies it when a recording ends and
 after a stop or disconnection, and `os_headset_capture` notifies it when the
 recognizer requests a new generation.
 
-A refused borrow or request, a segment with a lost packet, capture stopped for
-any reason other than the supervised capture window, a failed Bluetooth owner
+Published segments never contain a lost packet, because a loss stops capture
+and discards the segment. A refused borrow or request, capture stopped for any
+reason other than the supervised capture window, a failed Bluetooth owner
 or a failed board ends the session through `board_fail`. The owner retains
 its transports and the client keeps its buffers. In the supervised lifetime
 they stay held until manual power removal. In the resident lifetime both
@@ -555,7 +564,10 @@ Bluetooth owner. In workload 4 the client requests nothing while no
 generation waits and requests START for a new generation. It keeps a captured
 generation's WAV when a stray segment arrives, requests ACCEPT after a
 recording ends without a segment and upgrades ACCEPT to START for a newer
-generation. In workload 0 it requests ACCEPT only. A lost packet, a refused borrow
+generation. A recording that publishes between the client's borrow and its
+request refuses the request, and a START refused while an earlier recording
+runs is requested again after that recording ends without a segment. In
+workload 0 it requests ACCEPT only. A refused borrow
 or request, a failed application and capture stopped for a deadline, backlog
 or loss each end the session; the supervised capture window does not. One owner iteration polls a live application and
 retains it after a board failure, and the resident build reports progress
