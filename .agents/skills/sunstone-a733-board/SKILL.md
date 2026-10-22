@@ -30,7 +30,7 @@ work after a failed launch. Respect the helper's failed-instance records.
 ## Establish the prerequisites the next operation actually uses
 
 Follow [boot evidence](../../../docs/boot.md) and the existing runner for the
-chosen operation. Preserve both microSD cards. Inspect the command before running
+chosen operation. Preserve the existing contents of both microSD cards; write only as [the goal](../../../docs/goal.md) section 4 permits. Inspect the command before running
 it; a tool's filename is not proof that it only touches RAM.
 
 Read-only MMIO can still stall the processor if the target block is inaccessible.

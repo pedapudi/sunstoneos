@@ -20,7 +20,7 @@ Do not repeat a failed launch without a concrete correction or a narrower diagno
 
 3. Use both boards and parallel development efficiently
 
-Keep independent identities, permissions, locks, queues and evidence for the boards on USB ports 3-1 and 3-3. Preserve both microSD cards. Qualify the second board’s DDR, platform state and recovery independently.
+Keep independent identities, permissions, locks, queues and evidence for the boards on USB ports 3-1 and 3-3. Preserve the existing contents of both microSD cards; section 4 states which writes are permitted. Qualify the second board’s DDR, platform state and recovery independently.
 
 Use the original board for direct multicore work and the second for eligible independent hardware integration. The primary agent coordinates physical access. Subagents develop without hardware access and submit frozen artifacts for queued testing.
 
@@ -30,7 +30,13 @@ Use Sol 6.1 medium implementation workers and focused Astra review for substanti
 
 Start with supervised RAM-only execution and reviewed return procedures. Stop device communication after the first transport failure; preserve evidence and require explicit recovery before reuse.
 
-Do not make watchdog expiry or USB power automation prerequisites for unrelated work. Keep the failed UFS probe disabled until its failure and recovery are resolved. Persistent writes require established recovery and preservation of existing contents.
+Do not make watchdog expiry or USB power automation prerequisites for unrelated work. Keep the failed UFS probe disabled until its failure and recovery are resolved.
+
+Write paths may be implemented and host-checked at any time. Each image refuses writes unless its session grants them. Physical writes depend on the target:
+
+- Boot area (boot0, the TOC1 package and the stage-2 slots): only through the backup-first update path with slot fallback, after a host backup of the card.
+- A data partition on a microSD card: permitted once a host backup of that card exists and the image confines its writes to that partition.
+- An NVMe device: permitted only on a device the user designates as scratch storage.
 
 5. Run the existing mimus application
 
@@ -43,6 +49,8 @@ No MIPI camera or display is attached. Support OV5640 first; keep DSI panel conf
 6. Keep the system minimal
 
 Prefer fixed configuration, existing services and suitable open-source implementations. Add abstractions only for concrete consumers or demonstrated correctness requirements.
+
+Design for the hardware's performance from the start. Each change follows docs/performance-architecture.md: a short design with measurable budgets, review for over-engineering, hardware use and correctness before implementation, and before-and-after measurement that blocks unexplained regressions. Prefer interrupts and completion queues to tick polling, single-copy data paths, the weakest correct barrier and verification once at admission rather than on every operation. Benchmarking against the recognition target still follows section 8.
 
 Document third-party source, firmware and tool dependencies, their licenses, provenance and execution locations. Opaque dependencies are temporarily acceptable. Defer their replacement and the native NPU development toolkit until hardware functionality and performance tuning are complete. Do not rewrite adequate open-source dependencies merely to make them repository-native.
 

@@ -2562,7 +2562,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | I2C | Transactions and recovery on exposed and internal buses | Clock dependencies, power devices, sensor control |
 | SPI | Transfers and exposed controller modes | Chip selects, DMA, shared pin functions |
 | PWM and ADC | Applicable waveform and sampling interfaces | Routed channels, clocking, signal verification |
-| SD, eMMC, UFS, SPI storage | Block access and recovery where populated or exposed; eMMC and UFS media absent on both current boards | Preserve both microSD cards; qualify SD and applicable SPI storage, boot conflicts, voltage, capacity and power-loss behavior |
+| SD, eMMC, UFS, SPI storage | Block access and recovery where populated or exposed; eMMC and UFS media absent on both current boards | Preserve the existing contents of both microSD cards and follow the write targets in goal.md section 4; qualify SD and applicable SPI storage, boot conflicts, voltage, capacity and power-loss behavior |
 | USB controllers and PHYs | Host/device transfers and supported speeds; console and HID classes | Confirm physical ports, role switching, disconnect recovery |
 | Type-C and display multiplexing | Role/orientation and applicable display alternate modes | Confirm controller, wiring, shared PHY modes |
 | Wi-Fi | Firmware transport, scan, association, supported connection modes, packet interface | Confirm radio variant; SDIO/USB wiring; coexistence and reconnect |

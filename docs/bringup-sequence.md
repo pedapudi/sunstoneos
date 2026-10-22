@@ -24,8 +24,11 @@ not been qualified on the attached boards. The user's ordinary USB power cycle r
 a microSD card inserted. The [physical recovery procedure](board-wiring.md)
 identifies the pads and the prepared input checker.
 
-Persistent writes require established recovery and a preserved copy of the
-existing contents. Preserve both microSD cards and other storage contents.
+Preserve the existing contents of both microSD cards. Physical writes depend
+on the target, as [the goal](goal.md) states in section 4: the boot area only
+through the backup-first update path with slot fallback; a data partition once
+a host backup of the card exists and the image confines its writes to it; an
+NVMe device only when the user designates it as scratch storage.
 
 ## Shared platform services enable device drivers
 
