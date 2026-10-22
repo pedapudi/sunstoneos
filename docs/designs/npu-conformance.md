@@ -3,184 +3,212 @@
 Status: **design**; no code exists yet. The conformance record will be
 [docs/npu-conformance.md](../npu-conformance.md).
 
-The pinned SDK simulator models the A733 NPU's revision 9.2 engine. It is the
-only arithmetic oracle that the project has for compiled models
-([npu-compiler.md](../npu-compiler.md)). The conformance harness runs a fixed
-set of compiled models and input vectors through three comparisons:
+The pinned SDK simulator models the A733 NPU's revision 9.2 engine and is the
+only arithmetic oracle the project has for compiled models
+([npu-compiler.md](../npu-compiler.md)). The conformance harness,
+`tools/npu-conformance.py`, runs on the host and makes two comparisons:
 
-1. **Simulator against an independent reference.** The simulator output must
-   equal the compiler's quantized CPU inference, or the exact integer
-   reference where the fixture has one.
-2. **Native runtime against the simulator, in QEMU.** The product session
-   runtime ([npu-session.md](../npu-session.md)) submits each model with the
-   simulator's input. A register model checks the bytes that the device would
-   read and returns the simulator's output bytes. The client must receive those
-   bytes unchanged.
-3. **Board against the simulator.** This comparison runs later, on saved board
-   captures, and checks the same output files.
+1. **Simulator against an independent reference** for every catalogue model
+   and input vector.
+2. **Board against the simulator** on saved board captures. This comparison
+   is pending until a board application produces captures.
 
-The first two comparisons establish that the native path delivers the
-simulator's input to the addresses that the program reads, and returns the
-bytes that the program writes. NPU arithmetic and cache visibility on the
-board remain unqualified until the third comparison passes.
+Native delivery of tensor bytes already has evidence, which the record cites.
+Reserved case 0 of [npu-session.py](../../checks/npu-session.py) runs the five
+catalogue models through the session runtime in QEMU. Its register model reads
+each neural descriptor through the published NPU page tables, and the client
+must receive the output derived from the input bytes found there.
+[nbg-layout-reference.py](../../checks/nbg-layout-reference.py) shows that
+native allocations and relocations match the SDK loader. The runtime treats
+tensor bytes as opaque, so simulator bytes in a QEMU check would expose no
+runtime fault that those checks miss. One gap remains: reserved case 0 never
+checks ShuffleNetV2's 150,528-byte input, because that model's first
+descriptor writes intermediate memory. This package asks the owner of
+`checks/npu-session.c` to make `execute()` walk every 4 KiB page of each model
+input at completion and compare it with the submitted bytes.
 
-## Model set, inputs and tolerances
+## Models, inputs and references
 
-- **Models.** The model set is the session catalogue
-  ([npu-session-models.json](../../tools/npu-session-models.json)): the 8×8
-  convolution, the two UINT8 and INT8 two-convolution graphs, ShuffleNetV2 and
-  the mimus query projection. A model that the runtime refuses, such as the
-  shader-based relative shift, runs in the simulator comparison only. It joins
-  the native comparison when a catalogue change admits it.
-- **Inputs.** Each model gets five input vectors: the catalogued reference
-  input, every code at the zero point, every code at the minimum, every code at
-  the maximum, and one seeded uniform vector over the full code range. Inputs
-  are raw tensor codes, so the harness performs no quantization.
-- **Tolerances.** The board must match the simulator bit for bit. The
-  simulator must match its reference bit for bit, with one declared exception:
-  the mimus projection may differ by one output code where the int32 bias
-  rounding explains the difference ([npu-mimus-linear.md](../npu-mimus-linear.md)).
-  A new tolerance needs a reviewed per-model entry that states its cause.
-- **Saturated outputs.** An output whose codes all sit at the clamp limits
-  shows little about arithmetic. ShuffleNetV2's two output bytes are `[0,255]`
-  for every input tried so far. The report marks such comparisons as
-  saturated, and they do not count toward operator coverage.
-- **Operator coverage.** The operator inventory is the set of layer types that
-  the SDK's model inspection reports for the catalogue models, together with
-  the NBG operation kinds that the native assembler accepts: neural network
-  (kind 2) and neural transpose (kind 8). The run fails unless every layer type,
-  operation kind and tensor type (UINT8, INT8 and INT16) appears in at least
-  one unsaturated comparison. A layer type that appears only inside
-  ShuffleNetV2 gets one small generated graph whose values are exact in
-  float32, compiled once through the existing pipeline pattern
-  ([npu-conv-pipeline.sh](../../tools/npu-conv-pipeline.sh)).
+The model set is the session catalogue
+([npu-session-models.json](../../tools/npu-session-models.json)). Each model
+gets five vectors of raw tensor codes, so the harness performs no
+quantization: the catalogued reference input, every code at the zero point,
+every code at the minimum, every code at the maximum, and one seeded vector.
+Seeded bytes are SHA-256 in counter mode over the model name and vector index,
+independent of any library version. A vector equal to an earlier one runs
+once; ShuffleNetV2's input zero point equals its minimum code.
+
+`tools/npu-conformance-references.json` fixes one reference per model and pins
+the SHA-256 of every file the reference reads:
+
+| Model | Tensor types | Reference | Pinned files |
+| --- | --- | --- | --- |
+| 8×8 convolution | UINT8 | Compiler quantized CPU inference | Imported model JSON and data, `.quantize` |
+| Two-convolution, UINT8 | UINT8 | Compiler quantized CPU inference | As above |
+| Two-convolution, INT8 | INT8 | Compiler quantized CPU inference | As above |
+| mimus query projection | INT16 | Exact integer accumulator with the bias held as an int32 code, rounded once to INT16 | mimus model file, weight codes and scales, `.quantize` |
+| ShuffleNetV2 (published SDK example) | UINT8 | None | None |
+
+- **Compiler inference.** The convolution fixtures' exact integer references
+  give float outputs for their dyadic inputs only; they give no output codes
+  for other vectors. Compiler quantized inference matched the simulator bit
+  for bit on all three fixtures. The harness feeds it the dequantized codes
+  and requires its dumped quantized input to equal the vector.
+- **mimus.** The rule is the int32-bias computation in
+  [npu-mimus-linear.py](../../tools/npu-mimus-linear.py), under which 1,408 of
+  1,408 simulator codes matched. The harness first reproduces that count on
+  the study's saved input.
+- **ShuffleNetV2.** A different compiler produced it, and no source model or
+  quantize file exists. It takes part in the board comparison only, and no
+  arithmetic claim rests on it.
+
+Every comparison requires bit-for-bit equality. A difference fails the run; it
+becomes a tolerance only as a reviewed per-model entry with a computable
+acceptance rule. An output whose codes all sit at the clamp limits is marked
+**saturated** and does not count toward arithmetic coverage. Every ShuffleNetV2
+output seen so far is `[0,255]`.
 
 ## Data flow and ownership
 
-The simulator comparison runs in the pinned compiler image. One NBG runner,
-built once from the SDK's NBG example program against the simulator libraries,
-executes a model on one input file. The runner writes the output bytes and the
-input bytes that the simulator consumed. If the example program cannot bind a
-model's tensors, the saved export wrapper for that model is used. Results are
-content-addressed under `~/.cache/sunstoneos/build/npu-conformance/` by model
-SHA-256, input SHA-256 and the loaded image ID from
-[npu-compiler.lock.json](../../tools/npu-compiler.lock.json).
-
-The QEMU comparison builds `checks/npu-conformance.c` with the source list,
-flags and link line that [npu-session.py](../../checks/npu-session.py) already
-defines; the Python driver imports them. The product catalogue include is used
-unchanged, so the check exercises the shipped admission path. Each client task
-submits its model's input vectors as successive jobs. Buffers keep the
-runtime's existing ownership states: SUBMIT copies the input into the READ
-buffer, the device owns READ, WRITE and pool buffers during the job, and the
-client copies the output with `npu_session_output` before REAP.
-
-At completion the register model reads each NN descriptor through the
-published NPU page tables. It resolves the input and output address fields
-that the session check already decodes. It then requires that the bytes at
-each input address equal the simulator's consumed input, and writes the
-simulator's output at each output address. A wrong relocation, mapping, tensor
-order or input copy therefore changes the received output or stops the run.
-Descriptor kinds whose address fields the model does not decode fall back to
-the buffer addresses, and the report records that fallback per model.
-[nbg-layout-reference.py](../../checks/nbg-layout-reference.py) remains the
-check that native allocations and relocations match the SDK loader. The
-conformance report records the identity of its passing result for each model.
-
-The board comparison reads output captures that a scheduled board session
-saves with the image, model and input identities. The harness never contacts
-USB devices or the board.
+- **Runner.** One simulator runner exists: the 8×8 convolution's generated
+  ovxlib program, built against the simulator libraries. The
+  [complete-graph record](../npu-complete-nn.md) already ran ShuffleNetV2
+  through it by rewriting its tensor bindings. The harness generates each
+  model's bindings from the catalogue's tensor descriptors and runs N vectors
+  as successive jobs on one prepared graph. Binding is confirmed for the 8×8
+  convolution and for ShuffleNetV2, which ran two inputs on one prepared
+  graph. The first implementation step confirms two-tensor binding for the
+  two-convolution graphs and INT16 binding for mimus. A model that the runner
+  cannot bind has no simulator output and fails the run.
+- **Execution.** A run with any cache miss starts one container from the
+  loaded image ID in [npu-compiler.lock.json](../../tools/npu-compiler.lock.json),
+  with no network and no devices. Inside it, one runner invocation per model
+  executes all that model's vectors, up to six invocations at once, and the
+  reference inferences run beside them. The harness blocks on process exit.
+- **Result cache.** Entries live under `~/.cache/sunstoneos/build/npu-conformance/`.
+  A simulator key is the runner source hash, generated binding hash, NBG
+  SHA-256, input SHA-256 and image ID. A reference key is the reference kind,
+  its pinned file hashes, the input SHA-256 and the image ID. Each invocation
+  writes a temporary directory, which the harness renames into place only
+  after a zero exit, outputs of the catalogued sizes and a consumed-input dump
+  equal to the vector. Failures are never cached. An entry stores the output
+  bytes and the consumed input's SHA-256.
+- **Board captures.** One directory per board session holds `capture.json` and
+  the output files. `capture.json` records the image SHA-256, the source hashes
+  of the session runtime, service and driver, and one row per job: model, NBG
+  SHA-256, input SHA-256, job order, interrupt count and session fault state.
+  Output files use the simulator entry's layout and names, so the board
+  comparison reuses the simulator comparison code unchanged, and no capture
+  code is written until a board session produces files. The producer is the
+  board application listed under remaining work in
+  [npu-session.md](../npu-session.md). The harness never contacts USB devices
+  or the board.
 
 ## Interrupts, memory, cache and cores
 
-- **Completion.** The check binds interrupt completion with
-  `npu_session_bind_irq`. As in session case 1, the register model completes a
-  started job when the service re-arms the interrupt, then calls
-  `npu_service_irq_notify_from_isr`. The client blocks on the held WAIT reply,
-  so the job loop contains no tick wait. Startup and stop polling remain in the startup
-  adapter; they run once per boot.
-- **Memory placement.** The session reservation comes from a 48 MiB pool, as
-  in reserved case 0 of the session check, because all five models need
-  6,459,392 bytes. Inputs and simulator outputs are read-only arrays in the
-  check image. No new device buffer exists.
-- **Cache policy.** QEMU does not model caches, so cache visibility is
-  established only by the board comparison. The link wrapper of
-  `a733_npu_native_operations`, which the session check already uses, counts
-  the bytes cleaned and invalidated per job. The design adds no barrier.
-- **Synchronization across cores.** The check runs on two QEMU cores with the
-  session check's placement: the service worker at EL1 and one EL0 client per
-  model. After activation, only the service worker changes register-model
-  state, through register accesses and the interrupt re-arm call. Trigger and
-  completion counters use release and acquire ordering, as in the session
-  check's model. A client reads its output only after the WAIT reply, which the
-  service queue orders after the completion. No lock is added to product code.
+- **Interrupts.** The host harness has no device. On the board, conformance
+  requires one recorded NPU interrupt per job.
+- **Memory placement.** Only host files. No device buffer, firmware or QEMU
+  image is added.
+- **Cache visibility on the board.** Bit-equal output shows cache visibility
+  only when a stale buffer would change the result. The harness orders each
+  model's vectors so that consecutive jobs have different expected outputs
+  where the simulator outputs allow, and labels each consecutive pair:
+  - A missing output invalidate is detectable on each 64-byte output line
+    whose bytes differ between the two jobs.
+  - A missing clean of the whole input is detectable when the two outputs
+    differ. A clean missing from part of the input is not reliably detectable.
+
+  Cache visibility is qualified for a model when every output line is covered
+  by some pair and at least one pair detects input staleness, and for a tensor
+  type when one such model uses it. The first job after open counts for
+  nothing. ShuffleNetV2's cache path stays unqualified until an input gives it
+  an unsaturated output.
+- **Synchronization across cores.** No product code runs. Host worker
+  processes write separate temporary directories; only the parent renames
+  entries and writes the report. When a rename finds its key already present
+  from a concurrent run, the harness compares the bytes and fails on a
+  difference, which also detects simulator nondeterminism.
+
+## Operator coverage for each comparison
+
+The inventory is each model's hardware layer names, as printed in the layer
+table of the SDK inspector `nbinfo` 2.0.0.b7fb7b62 (for example
+`ConvolutionReluPoolingLayer2`), its NBG operation kinds and its tensor types.
+`nbinfo` read ShuffleNetV2's format `0x1001e` header in the recorded reports,
+but its layer table has been seen only for format `0x20000`. The first
+implementation step confirms the layer table for `0x1001e`.
+
+- **Simulator against reference.** The four pinned-compiler models, plus one
+  generated graph that holds every layer name found only in ShuffleNetV2. That
+  graph has dyadic values, is compiled once with the
+  [convolution pipeline](../../tools/npu-conv-pipeline.sh) pattern, runs only
+  in this comparison and stays outside the catalogue. Its `nbinfo` table must
+  list each targeted name; a name the pinned compiler does not emit is
+  reported uncovered. Coverage here shows that the simulator handles the layer
+  as the pinned compiler encodes it. It does not show that the published
+  graph's descriptors, from another compiler, encode it the same way.
+- **Native.** Tensor delivery for all five models, through the two checks
+  cited above. No arithmetic.
+- **Board.** Unsaturated coverage of the four pinned-compiler models. Layer
+  names found only in ShuffleNetV2 stay without board coverage until the
+  catalogue owner admits a graph that contains them or an unsaturating
+  ShuffleNetV2 input exists.
 
 ## Reuse, removal and changes elsewhere
 
-- **Reused.** The session runtime, its catalogue and admission, the session
-  check's build recipe and interrupt glue, the fixture pipelines, and the
-  comparison rules of [npu-conv-reference.py](../../checks/npu-conv-reference.py)
-  and [npu-dual-reference.py](../../checks/npu-dual-reference.py), which the
-  simulator comparison generalizes.
-- **Shared, to avoid a second copy.** The page-table walk and descriptor
-  decoding go in `checks/npu-conformance-device.h`. The session check can
-  include it in a later change by its owner.
-- **Removable later by their owners.** The two per-fixture reference checks,
-  once the conformance report covers their fixtures and passes.
-- **Product code.** This package changes none. It needs no change from the
-  primary agent.
+- **Reused.** The catalogue, the compiler lock, the adapted ovxlib runner, the
+  fixture pipelines' source artifacts, the int32-bias rule, and the comparison
+  rules of [npu-conv-reference.py](../../checks/npu-conv-reference.py) and
+  [npu-dual-reference.py](../../checks/npu-dual-reference.py).
+- **Removable by their owners.** The simulator comparisons in those two checks,
+  once this report covers their fixtures.
+- **Requested.** The multi-page input check in `checks/npu-session.c`. No
+  product code or code reserved for the primary agent changes.
+- **Not recorded here.** The NPU metrics of section 3 of
+  [performance-architecture.md](../performance-architecture.md). The packages
+  that reduce them count them in the existing session and large-graph host
+  models.
 
 ## Budgets
 
+Counts appear in the report with the input identities. Wall time and process
+count of a cold run are recorded without a budget.
+
 | Metric | Baseline | Budget | Measured by |
 | --- | --- | --- | --- |
-| Instructions that the conformance build adds to driver, service and runtime objects | None; new check | Zero: each object's SHA-256 equals the session check build's | Harness compares object hashes from both builds |
-| Compiler commands per conformance run | Each fixture pipeline runs import, two inferences, quantize and export per invocation (counted) | Zero; only catalogued NBGs and once-compiled operator graphs are consumed | Command counter in the report |
-| Simulator executions per model, input and image identity | One per pipeline invocation, repeated on every invocation | One in total; a rerun with unchanged identities executes none | Cache-hit counter in the report |
-| QEMU boots for the catalogue with five inputs per model | Session check: five boots for five cases, one input per model | One boot for up to eight models (25 jobs today) | Boot count in the report |
-| Tick waits per job in the client loop | Session check case 2 and its flag waits use `vTaskDelay(1)` | Zero between the first SUBMIT and the last REAP | `--wrap=vTaskDelay` counter |
-| Comparisons per output byte | Not applicable | One `memcmp` in the guest and one host comparison per reference; at most 16 listed differences, plus the count and the largest code difference | Report |
-| Fixture bytes in the check image | Not applicable | At most 2 MiB; about 0.8 MiB today, mostly five 150,528-byte ShuffleNetV2 inputs | Section sizes of the ELF |
-
-The check also records, per model and job, the NPU metrics of section 3 of
-[performance-architecture.md](../performance-architecture.md). This package does
-not change them; it supplies a per-model before-and-after table for the
-packages that reduce them. Counted baselines are:
-
-- one input copy per byte at SUBMIT and one output copy per byte at
-  `npu_session_output`;
-- a clear of the full working pool per job, 1,092,352 bytes for ShuffleNetV2;
-- digests of the model's descriptor and coefficient allocations and its
-  command payload, plus a check of every later eight-byte word of the
-  512 KiB command stream;
-- at least 3,154 address translations per job with all five models admitted,
-  because the 1,577 pages of the reservation are translated at publication and
-  again at completion;
-- three service round trips per job: SUBMIT, WAIT and REAP.
+| Simulator executions per simulator key | One per pipeline invocation, repeated each invocation (counted) | One in total; zero when every key is cached | Execution and cache-hit counters |
+| Runner processes, cold cache | One process for two ShuffleNetV2 inputs | One per model: five | Process counter |
+| Compiler commands per run | Each fixture pipeline: import, two inferences, quantize, export (counted) | One quantized inference per new reference key: at most 15 cold, zero when every key is cached; the generated graph's pipeline once per graph identity | Command counter |
+| Container starts per run | One per pipeline invocation | One with any miss, otherwise zero | Report |
+| Comparisons per output byte | Not applicable | One per comparison; at most 16 listed differences plus their count and the largest code difference | Report |
+| Cache bytes per simulator entry | Not applicable | Output bytes plus two digests; at most 2,816 output bytes today | Entry sizes |
+| Job pairs that detect staleness | Not applicable | Every output line covered and one input pair, for each pinned-compiler model | Report |
+| Lines changed outside owned files | Not applicable | Zero | `git diff --stat` against the base |
 
 ## Failure handling
 
-The harness fails the run on any simulator, QEMU or comparison failure; it
-reports no partial pass. A register-model input mismatch writes no output and
-stops QEMU with the model and input index. Product failure paths and their
-retained resources are unchanged.
+The run fails on any runner or reference failure, a timeout, a wrong output
+size, a consumed input that differs from the vector, a missing or changed
+pinned identity, or any mismatch. It reports every model's state and no partial
+pass. Timeouts are the pipelines': 120 s per inference, 300 s per runner
+invocation.
 
 ## Board evidence that would confirm conformance
 
-For every catalogue model and input vector, the board output equals the stored
-simulator output. Each job raises one NPU interrupt, and no session retains a
-fault. Unsaturated comparisons must cover every layer type in the inventory.
+For every catalogue model and vector, the board output equals the stored
+simulator output, the capture's image and runtime hashes match the image under
+test, each job raises one NPU interrupt, and no session retains a fault. Cache
+visibility is qualified only for the models and tensor types whose job pairs
+meet the staleness condition above.
 
 ## Left out
 
-- **A host model of NPU arithmetic.** The simulator already models the engine.
-  A second model would need its own qualification and would duplicate the
-  simulator.
-- **Compilation inside the conformance run.** Catalogue admission stays the
-  only route for executable models, and the reference identities stay fixed.
-- **Accuracy on datasets.** Classification accuracy and recognition error are
-  model-quality questions; conformance compares bytes.
-- **Simulator timing.** Host simulator cycle counts do not predict board
-  performance ([npu-compiler.md](../npu-compiler.md)).
-- **Tolerances for board output.** No difference is accepted before one is
-  observed and explained.
+- **A QEMU comparison.** It would re-prove the transport that reserved case 0
+  proves, with a second register model.
+- **A host model of NPU arithmetic.** It would duplicate the simulator and need
+  its own qualification.
+- **Dataset accuracy and simulator timing.** Conformance compares bytes, and
+  host cycle counts do not predict board timing.
+- **A search for an unsaturating ShuffleNetV2 input.** Its class meanings are
+  undocumented, and the search has no stopping rule.
