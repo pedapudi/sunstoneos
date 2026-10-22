@@ -27,6 +27,8 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
 #define A733_DEVICE_WB_END UINT64_C(0x78000000)
 #define A733_DEVICE_NC_START UINT64_C(0x78000000)
 #define A733_DEVICE_NC_END UINT64_C(0x79000000)
+/* The EL1 tables map both extended pools with 2 MiB level-2 blocks. */
+#define A733_DEVICE_MEMORY_BLOCK ((size_t)2 << 20)
 struct a733_device_memory_layout {
     uint64_t profile, wb_start, wb_end, nc_start, nc_end;
 };
@@ -51,11 +53,13 @@ int a733_device_memory_boot_admit(const struct a733_smp_contract *);
 int a733_device_memory_tables_admitted(struct a733_device_memory_layout *);
 int a733_device_memory_tables_complete(void);
 /* One call on core 0 at EL1, after the eight-core barrier and before the
- * scheduler starts. It checks the installed table base, TCR, MAIR and the
- * admitted epoch and deadline, then prepares the `dma32` and `uncached` pools
- * (one write translation per 2 MiB block, 392 in all) and sets READY. It
- * returns 1 when READY, -1 on refusal; a refusal is retained. Other cores and
- * later calls change nothing. No allocation, clearing, DMA or MMIO. */
+ * scheduler starts. It prepares the `dma32` and `uncached` pools (one write
+ * translation per 2 MiB block, 392 in all), then checks the installed table
+ * base, TCR, MAIR and the admitted epoch and deadline once, and sets READY. It
+ * returns 1 when READY, -1 on refusal; a refusal is retained, and a pool
+ * initialized before a refused check stays unreachable because the getters
+ * test READY. Other cores and later calls change nothing. No allocation,
+ * clearing, DMA or MMIO. */
 int a733_device_memory_prepare(void);
 /* True once preparation has succeeded. The EL1 tables do not change after
  * preparation, so READY also marks the final mapping. Starting the scheduler

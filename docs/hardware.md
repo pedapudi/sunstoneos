@@ -435,7 +435,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   write-back memory and 16 MiB of uncached memory with privileged mappings.
   One call checks one translation per 2 MiB block (392) and publishes both
   pools; extents take the GPU MMU's page alignment, the kernel critical section
-  serializes the ledger, and acquire cleans recycled pages. The
+  serializes acquire, release and retain while the per-access lease check stays
+  lock-free, and acquire cleans recycled pages. The
   [EL1 map](memory-protection.md) is **implemented** for 910 MiB of the
   reported 12 GiB, and a QEMU check compares every EL1 entry with it; mapping
   the remaining DRAM waits on launch evidence. Physical range ownership,

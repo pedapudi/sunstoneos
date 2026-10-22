@@ -1,6 +1,7 @@
 /* Local-layout pool preparation against a modeled translation callback.
  * The runner links the pool sources with --defsym pool addresses and counts
- * the address translations each preparation makes. */
+ * the address translations each preparation makes: one per write-back page
+ * and two per non-cacheable page. */
 #include "a733_memory_reservations.h"
 #include "a733_memory_uncached.h"
 #include "aarch64_device_memory.h"
@@ -36,7 +37,11 @@ int main(int argc, char **argv)
     printf("translations wb=%u nc=%u total=%u\n", wb_translations, nc_translations, translations);
     if (fault_block != UINT32_MAX) {
         assert(!wb || !nc);
-        puts("PASS local preparation: a faulting block refuses its pool");
+        /* A refusal is kept: later getter calls translate nothing. */
+        unsigned before = translations;
+        assert(a733_memory_reservations_init() == wb && a733_memory_uncached_init() == nc);
+        assert(translations == before);
+        puts("PASS local preparation: a faulting block refuses its pool, once");
         return 0;
     }
     assert(wb && nc && wb != nc);
@@ -49,7 +54,8 @@ int main(int argc, char **argv)
     unsigned before = translations;
     assert(a733_memory_reservations_init() == wb && a733_memory_uncached_init() == nc);
     assert(translations == before); /* Published pools make no further translations. */
-    assert(!a733_memory_reservations_prepare() && !a733_memory_uncached_prepare());
+    /* Preparation called again, as platform_init() will, reports success. */
+    assert(a733_memory_reservations_prepare() == 1 && a733_memory_uncached_prepare() == 1);
 #endif
     puts("PASS local preparation: identity write-back and non-cacheable pools published");
     return 0;

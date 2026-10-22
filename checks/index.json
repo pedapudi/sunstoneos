@@ -2817,7 +2817,10 @@
  },
  "device-memory-capacity.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/device-memory-capacity.md",
+   "docs/memory-protection.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2827,7 +2830,7 @@
    "--qemu",
    "--freertos"
   ],
-  "summary": "Check large-pool placement, actual native mappings and bounded pool publication.",
+  "summary": "Check pool placement and class alignment, the EL1 map, and one-call pool preparation.",
   "usb": false
  },
  "display-clock-handoff.py": {
@@ -5656,6 +5659,23 @@
   "summary": "Compose maintenance supervision with actual storage; no hardware access.",
   "usb": false
  },
+ "memory-architecture-smp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/device-memory-capacity.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--clang",
+   "--lld",
+   "--qemu",
+   "--freertos"
+  ],
+  "summary": "Measure and check the device-memory ledger on two QEMU cores with the FreeRTOS SMP port.",
+  "usb": false
+ },
  "memory-reservations.py": {
   "cache_areas": [
    "host"
@@ -5668,7 +5688,7 @@
   "required_arguments": [
    "--output"
   ],
-  "summary": "Check reserved allocation ownership and opt-in native image layout.",
+  "summary": "Check reserved allocation ownership, local pool preparation and opt-in native image layout.",
   "usb": false
  },
  "microsd-boot-package.py": {

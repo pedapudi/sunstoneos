@@ -20,26 +20,25 @@ and an image whose heap plus pool exceeds the image reservation.
 
 The `.device_pool` section is `NOLOAD`. It contributes reserved memory without
 adding upload bytes. It lies outside BSS clearing and the general heap.
-Acquisition returns uninitialized bytes unless the caller uses
-`device_memory_acquire_zeroed()`; otherwise the CPU owner must initialize every
+Acquisition returns uninitialized bytes; the CPU owner must initialize every
 byte a device may read before submitting work. Drivers maintain caches over the
 complete rounded allocation, including unused padding.
 
 The [native preparation](../platform/a733/memory_reservations.c),
 `a733_memory_reservations_prepare()`, derives CPU and physical addresses from
-the linker symbols. It makes one write address translation per 2 MiB block
-that holds part of the pool, at most two, and requires identity translation,
-Normal write-back memory and inner shareability. Every page of a 2 MiB block
-descriptor shares that result, and image RAM is mapped with block descriptors.
-The optional uncached pool has its own preparation,
-`a733_memory_uncached_prepare()`, with one translation. Preparation performs no
-writes to pool backing and no peripheral MMIO, and returns success with no
-pool when the image links none. The getter returns NULL until preparation has
-succeeded.
+the linker symbols. It makes one write address translation per pool page and
+requires identity translation, Normal write-back memory and inner
+shareability. No golden comparison covers this layout's tables, so every page
+is checked: 512 translations for a 2 MiB pool. The optional uncached pool has
+its own preparation, `a733_memory_uncached_prepare()`, with a read and a write
+translation per page. Preparation performs no writes to pool backing and no
+peripheral MMIO. It returns 1 when the pool is ready or the image links none,
+and 0 after a refusal, which it keeps. The getter returns NULL until
+preparation has succeeded.
 
 `platform_init()` is to call both preparations on core 0 before the scheduler
-starts. Until it does, the first getter call prepares its pool inside the
-kernel critical section, and later calls read a published flag.
+starts. Until it does, each getter call enters the kernel critical section,
+prepares its pool on the first call, and returns the kept result.
 
 The pool excludes image code, driver state, translation tables, monitor state,
 exception stacks and heap allocations by construction. It also remains below
@@ -84,28 +83,38 @@ It rounds requested sizes up to whole pages and returns CPU address, physical
 address and complete byte extent. It searches reusable free extents without
 moving existing allocations.
 
-Acquire, describe, set state, release and retain each run inside the kernel
-critical section, which serializes every core, and none may be called from an
-interrupt handler. The owner initializes the pool once, before any other task
-can reach it, and never resets its state to reclaim memory. One task at a time
-holds a lease, changes its state and maintains its cache lines; handing a lease
-to another task needs an ordering event such as task creation or a queue
-message. A lease from
+Acquire, release and retain each run inside the kernel critical section,
+which serializes every core, and none may be called from an interrupt handler.
+Describe takes no lock: acquire publishes a slot's generation after its other
+fields, release clears the generation first, and describe accepts a copy only
+when the generation equals the lease's before and after it. The owner
+initializes the pool once, before any other task can reach it, and never
+resets its state to reclaim memory. One task at a time holds a lease, changes
+its state and maintains its cache lines; handing a lease to another task needs
+an ordering event such as task creation or a queue message. A lease from
 another pool, owner or generation is refused. Exhausting the 64-bit generation
 counter prevents further allocation; generations never wrap into reuse.
 Output metadata cannot overlap the pool or allocator state.
 
-`device_memory_set_state()` changes a CPU-owned allocation to device-owned and
-back; it refuses every other change. A CPU-owned allocation may be released. A
-device-owned or retained allocation cannot be released through the allocator
-API. Retention is permanent for this
-pool lifetime. Timeout, a changed controller pointer or a device failure does
-not authorize reuse.
+The holder still changes its allocation between CPU-owned and device-owned,
+or to retained, by writing the `state` field that `device_memory_lookup()`
+returns. That write takes no ledger lock: the holder serializes it under its
+own service lock, and no transition rule checks it. A holder never writes the
+free state or any other field. A locked state change with a transition table
+replaces these writes in a later merge, when the holders move onto it.
+
+A CPU-owned allocation may be released. A device-owned or retained allocation
+cannot be released through the allocator API, and retain succeeds from every
+held state. Retention is permanent for this pool lifetime: nothing in the
+ledger frees a retained allocation, and holders must not write another state
+over it. Timeout, a changed controller pointer or a device failure does not
+authorize reuse.
 
 The native pool uses write-back mappings. Acquire cleans the part of an extent
 that an earlier holder can have left dirty, the pages below the pool's
-watermark of the highest page ever handed out, before returning it. A pool
-initialized as Non-cacheable runs no clean. The [GPU firmware constructor](gpu-reserved.md)
+watermark of the highest page ever handed out, before returning it. That
+clean uses EL1-only instructions, so acquire on a write-back pool must run at
+EL1. A pool initialized as Non-cacheable runs no clean. The [GPU firmware constructor](gpu-reserved.md)
 adds a separate optional uncached linker block with attributes established before
 MMU/cache enable. Both pools remain disjoint inside the existing image reservation.
 [NPU convolution](npu-reserved.md) binds one complete session to the write-back pool.
@@ -129,15 +138,17 @@ contract, which software checks do not qualify.
 The host check runs the allocator against modeled backing storage under
 AddressSanitizer and UndefinedBehaviorSanitizer. It checks complete page
 extents, stale and cross-pool leases, retained allocations, allocation and
-generation exhaustion, every pair of source state and requested change, the
-clean watermark, and zeroed extents on write-back and Non-cacheable pools. A
-traced build of the pool confirms that every critical-section entry has its
+generation exhaustion, retain and release from every held state, describe
+without a lock, and the clean watermark on write-back and Non-cacheable pools.
+A traced build of the pool confirms that every critical-section entry has its
 exit. A second host build links both local preparations with modeled
 translations at fixed linker addresses. With an unaligned 2 MiB write-back
-pool and the uncached pool, preparation makes 3 translations, against 1,536
-before the change; with the large NPU graph pool it makes 3, against 2,048.
-A faulting block refuses its pool. Native AArch64 compilation covers the
-allocator, both preparations and the translation helper. The link mode
+pool and the uncached pool, preparation makes 1,536 translations; with the
+large NPU graph pool it makes 2,048. A faulting block refuses its pool, and
+later getter calls make no further translation. Native AArch64 compilation
+covers the allocator, both preparations and the translation helper as a
+one-thread fixture, and confirms that the allocator does not compile for
+AArch64 without the kernel headers unless a fixture asks for that. The link mode
 compares allocated sections, bytes, existing symbol addresses and
 load-segment extents with the previous linker script when no pool is
 requested, and checks the explicit pool's placement and linker refusal cases.

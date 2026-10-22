@@ -15,21 +15,22 @@ static struct a733_smp_contract contract(uint64_t now)
     memcpy(c.build_id,a733_smp_build_id,sizeof(c.build_id));return c;
 }
 #ifdef CAPACITY_HOST
-#include "a733_memory_critical.h"
 #include <assert.h>
 #include <stdio.h>
 #define CHECK(x) assert(x)
 /* The pool is compiled with DEVICE_MEMORY_POOL_TRACE: count placement
  * attempts (each compares against all 32 slots), bytes cleaned and the
- * critical-section nesting. */
+ * critical-section nesting. Event numbers are those of the pool source. */
+enum{TRACE_ENTER,TRACE_EXIT,TRACE_ATTEMPT,TRACE_CLEAN};
 static unsigned attempts,depth,max_depth;
 static size_t cleaned;
-void device_memory_trace(enum device_memory_trace_event event,size_t value)
+void device_memory_trace(unsigned event,size_t value);
+void device_memory_trace(unsigned event,size_t value)
 {
-    if(event==DEVICE_MEMORY_TRACE_ENTER){++depth;if(depth>max_depth)max_depth=depth;}
-    else if(event==DEVICE_MEMORY_TRACE_EXIT){CHECK(depth);--depth;}
-    else if(event==DEVICE_MEMORY_TRACE_ATTEMPT)++attempts;
-    else if(event==DEVICE_MEMORY_TRACE_CLEAN)cleaned+=value;
+    if(event==TRACE_ENTER){++depth;if(depth>max_depth)max_depth=depth;}
+    else if(event==TRACE_EXIT){CHECK(depth);--depth;}
+    else if(event==TRACE_ATTEMPT)++attempts;
+    else if(event==TRACE_CLEAN)cleaned+=value;
 }
 /* Largest run of free pages. */
 static unsigned largest_free(const struct device_memory_pool *p)
@@ -122,6 +123,32 @@ static void replay(const struct order *o)
         "GPU MMU entries %u (4 KiB pages %u), first use cleaned %zu bytes, reopen cleaned %zu bytes\n",
         o->image,o->count,worst,smallest_delta,entries,entries_4k,first_use,recycled);
 }
+/* apps/gpu-finite cleans the fixed range 0x48000000..0x48086000 at exit, which
+ * covers its write-back extents (34, 88 and 12 pages) only under 4 KiB
+ * placement. With the dma32 class the 88-page extent moves to 64 KiB
+ * alignment and ends at 0x48088000, so the fixed range misses two pages. The
+ * composition links frozen pool objects today; this records the placement a
+ * rebuild against this pool would get. */
+static void gpu_finite(void)
+{
+    static const unsigned pages[]={34,88,12};
+    static const uint64_t plain_at[]={0x48000000,0x48022000,0x4807a000},class_at[]={0x48000000,0x48030000,0x48022000};
+    struct device_memory_pool cls={0},plain={0};
+    CHECK(device_memory_pool_init_typed(&cls,0x48000000,0x48000000,768u<<20,DEVICE_MEMORY_CLASS_DMA32,
+        DEVICE_MEMORY_WRITE_BACK));
+    CHECK(device_memory_pool_init(&plain,0x48000000,0x48000000,768u<<20));
+    uint64_t plain_end=0,class_end=0;
+    for(unsigned i=0;i<3;++i) {
+        struct device_memory_lease l;struct device_memory_extent e;
+        CHECK(device_memory_acquire(&plain,1,pages[i]*4096u,&l,&e) && e.physical==plain_at[i]);
+        if(e.physical+e.bytes>plain_end)plain_end=e.physical+e.bytes;
+        CHECK(device_memory_acquire(&cls,1,pages[i]*4096u,&l,&e) && e.physical==class_at[i]);
+        if(e.physical+e.bytes>class_end)class_end=e.physical+e.bytes;
+    }
+    CHECK(plain_end==0x48086000 && class_end==0x48088000);
+    printf("replay gpu-finite: write-back extents end at %#llx with 4 KiB placement and %#llx with dma32\n",
+        (unsigned long long)plain_end,(unsigned long long)class_end);
+}
 /* Deliberately simple page oracle, independent of extent-jumping placement. */
 static unsigned oracle(const struct device_memory_pool *p,unsigned pages,unsigned alignment)
 {
@@ -171,23 +198,15 @@ int main(void)
     CHECK(device_memory_acquire_aligned(&q,1,4096,16384,&l,&e) && e.physical==0x48004000);
     CHECK(device_memory_release(&q,l));
     CHECK(device_memory_acquire(&q,1,q.backing.bytes,&l,&e));
-    CHECK(device_memory_set_state(&q,l,DEVICE_MEMORY_DEVICE));
+    device_memory_lookup(&q,l)->state=DEVICE_MEMORY_DEVICE; /* As a holder does. */
     CHECK(!device_memory_release(&q,l) && !device_memory_acquire(&q,1,4096,&l,&e));
-    /* Class minimums: each class raises a smaller caller alignment. */
+    /* Class minimums: dma32 raises a smaller caller alignment; NONE keeps it. */
+    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_DMA32,2u<<20)==(2u<<20));
     CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_DMA32,(2u<<20)-1)==(64u<<10));
-    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_GPU,2u<<20)==(2u<<20));
-    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_GPU,(64u<<10)-1)==4096);
-    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_NPU,(16u<<20)-1)==(1u<<20));
-    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_NPU,16u<<20)==(16u<<20));
-    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_UNCACHED,64u<<20)==4096);
+    CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_DMA32,(64u<<10)-1)==4096);
     CHECK(device_memory_class_alignment(DEVICE_MEMORY_CLASS_NONE,64u<<20)==4096);
-    struct device_memory_pool n={0};
-    CHECK(device_memory_pool_init_typed(&n,0x48000000,0x48000000,768u<<20,DEVICE_MEMORY_CLASS_NPU,
-        DEVICE_MEMORY_WRITE_BACK));
-    CHECK(device_memory_acquire(&n,1,4096,&l,&e) && e.physical==0x48000000);
-    CHECK(device_memory_acquire(&n,1,4096,&l,&e) && e.physical==0x48100000);
-    CHECK(device_memory_acquire(&n,1,16u<<20,&l,&e) && e.physical==0x49000000);
     for(unsigned i=0;i<sizeof(orders)/sizeof(*orders);++i)replay(&orders[i]);
+    gpu_finite();
     CHECK(max_depth==1 && !depth);
     struct a733_smp_contract c=contract(100);
     CHECK(sizeof(c)==224 && a733_smp_contract_valid(&c,100));
@@ -367,22 +386,22 @@ void fixture_el1(unsigned core)
         CHECK(wb && nc && wb!=nc && wb->backing.cpu==0x48000000 && wb->backing.bytes==(768u<<20));
         CHECK(nc->backing.cpu==0x78000000 && nc->backing.bytes==(16u<<20));
         CHECK(wb->memory_class==DEVICE_MEMORY_CLASS_DMA32 && wb->memory_type==DEVICE_MEMORY_WRITE_BACK);
-        CHECK(nc->memory_class==DEVICE_MEMORY_CLASS_UNCACHED && nc->memory_type==DEVICE_MEMORY_NON_CACHEABLE);
-        struct device_memory_lease l,z;struct device_memory_extent e,f;
+        CHECK(nc->memory_class==DEVICE_MEMORY_CLASS_NONE && nc->memory_type==DEVICE_MEMORY_NON_CACHEABLE);
+        struct device_memory_lease l,z;struct device_memory_extent e,f,g;enum device_memory_state s;
         CHECK(device_memory_acquire_aligned(wb,1,3u*3840*2160*4,16384,&l,&e));
         CHECK(e.physical==0x48000000 && device_memory_retain(wb,l) && !device_memory_release(wb,l));
-        /* Zeroed extents through DC ZVA, on both memory types. A 64 KiB
-         * request in dma32 is raised to 64 KiB alignment; a smaller one keeps
-         * 4 KiB and overlaps the pages just written. */
+        /* A 64 KiB request in dma32 is raised to 64 KiB alignment; the
+         * uncached pool keeps 4 KiB. Reacquiring a written write-back extent
+         * runs the production clean at EL1; the uncached pool runs none. */
         for(unsigned pass=0;pass<2;++pass) {
             struct device_memory_pool *p=pass?nc:wb;
-            CHECK(device_memory_acquire(p,2,65536,&z,&f) && device_memory_set_state(p,z,DEVICE_MEMORY_DEVICE));
+            CHECK(device_memory_acquire(p,2,65536,&z,&f));
             CHECK(!(f.physical&(pass?4095:65535)));
             for(size_t i=0;i<f.bytes;i+=8)*(volatile uint64_t *)(f.cpu+i)=~(uint64_t)i;
-            CHECK(device_memory_set_state(p,z,DEVICE_MEMORY_CPU) && device_memory_release(p,z));
-            CHECK(device_memory_acquire_zeroed(p,2,65536-1,4096,&z,&f) && f.bytes==65536);
-            for(size_t i=0;i<f.bytes;i+=8)CHECK(!*(volatile uint64_t *)(f.cpu+i));
-            CHECK(device_memory_release(p,z) && !critical_nesting);
+            CHECK(device_memory_release(p,z) && device_memory_acquire(p,2,65536,&z,&g));
+            CHECK(g.physical==f.physical && p->clean_end*4096u>=g.physical+g.bytes-p->backing.physical);
+            CHECK(device_memory_describe(p,z,&f,&s) && s==DEVICE_MEMORY_CPU && f.physical==g.physical);
+            CHECK(device_memory_release(p,z) && !device_memory_describe(p,z,&f,&s) && !critical_nesting);
         }
         CHECK(a733_device_memory_prepare()==1 && a733_memory_reservations_init()==wb);
     }

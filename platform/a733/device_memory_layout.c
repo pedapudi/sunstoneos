@@ -92,9 +92,10 @@ int a733_device_memory_prepare(void)
     if(el!=4 || !a733_cpu_index(mpidr,&core) || core)return -1;
     if(binding.state==READY)return 1;
     /* Each pool preparation checks one write translation per 2 MiB block:
-     * 384 for dma32 and 8 for uncached. A refusal is retained. */
-    if(binding.state!=TABLES || !prepared_profile() ||
-       !a733_memory_reservations_prepare() || !a733_memory_uncached_prepare()) {
+     * 384 for dma32 and 8 for uncached. The profile check after them also
+     * bounds the scan by the startup deadline. A refusal is retained. */
+    if(binding.state!=TABLES || !a733_memory_reservations_prepare() ||
+       !a733_memory_uncached_prepare() || !prepared_profile()) {
         binding.state=FAULT;return -1;
     }
     binding.state=READY;return 1;

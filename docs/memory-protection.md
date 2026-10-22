@@ -65,9 +65,8 @@ Non-secure access to the new range.
 A level-2 block descriptor gives one output address, one memory attribute
 and one permission to all 2 MiB it maps. One address translation (`AT`) of
 any address in the block therefore reports what every page of the block
-reports. Pool preparation makes one write translation per 2 MiB block: 384
-for `dma32` and 8 for `uncached`. A local-layout image makes at most three,
-two for its write-back pool and one for its uncached pool.
+reports. Extended pool preparation makes one write translation per 2 MiB
+block: 384 for `dma32` and 8 for `uncached`.
 
 This holds only while every pool entry is a block descriptor. The QEMU
 fixture `checks/device-memory-capacity.py` compares all 1,024 EL1 level-1 and
@@ -76,19 +75,17 @@ It also checks that every valid level-2 entry is a block descriptor and that
 no valid entry is writable and executable. A change to any entry, including
 one that splits a pool block into pages, fails that comparison.
 
-Two gaps remain in this check:
+Level-1 entry 0, the MMIO block, has a shareability field of zero in the
+builder's tables. Two monitor variants (`apps/storage-read-single-core/monitor.c`
+and `apps/dsi-scanout/monitor.patch`) set its outer-shareable field after the
+tables are prepared. That write changes no pool entry, and the capacity check
+scans the sources and fails on any later write to the cached tables of
+another form. Once the table builder sets the field itself and those writes
+are deleted, the golden entry changes with it.
 
-- Level-1 entry 0, the MMIO block, has a shareability field of zero. The
-  table builder still has to set the outer-shareable value; the golden entry
-  changes with it.
-- Two monitor variants (`apps/storage-read-single-core/monitor.c` and
-  `apps/dsi-scanout/monitor.patch`) rewrite level-1 entry 0 after the tables
-  are prepared. Until they stop, the fixture compares the tables that the
-  builder produces, which those images then change.
-
-The local layout has no QEMU golden comparison yet. Its pool checks depend on
-the level-2 blocks that `platform/a733/platform.c` and the cached table
-builder write for image RAM.
+The local layout has no QEMU golden comparison, so its preparation keeps a
+check of every pool page: one write translation per write-back page and a
+read and a write translation per uncached page, 1,536 for 2 MiB pools.
 
 ## What the map does not protect
 

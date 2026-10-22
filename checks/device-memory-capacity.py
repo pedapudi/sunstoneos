@@ -19,6 +19,32 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Writers of the cached EL1 and EL3 tables outside their builder. The golden
+# comparison sees the builder's tables; a later writer may only set the
+# outer-shareable field of level-1 entry 0 (MMIO), which leaves every pool
+# entry, and so the per-block pool check, unchanged.
+BUILDERS = {'platform/a733-smp-cached/memory.c'}
+LATER_WRITE = re.compile(r'a733_cached_el[13]_l1\[0\]\|=UINT64_C\(2\)<<8;')
+
+
+def later_table_writers():
+    files = subprocess.run(['git', '-C', str(ROOT), 'ls-files', '*.c', '*.cc', '*.h', '*.S', '*.patch'],
+                           check=True, capture_output=True, text=True).stdout.split()
+    write = re.compile(r'a733_cached_el[13]_l[123]\s*\[[^]]*\]\s*([|&^+-]?=)(?!=)')
+    found = []
+    for name in files:
+        if name in BUILDERS or name.startswith('checks/'):
+            continue
+        for number, line in enumerate((ROOT / name).read_text(errors='replace').splitlines(), 1):
+            if name.endswith('.patch') and line.startswith('-'):
+                continue
+            if write.search(line):
+                if not LATER_WRITE.search(line.replace(' ', '')):
+                    raise RuntimeError(f'table write outside the builder touches more than l1[0] SH: {name}:{number}')
+                found.append(f'{name}:{number}')
+    return found
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
@@ -28,6 +54,7 @@ def main():
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
+    writers = later_table_writers()
     objects = out / 'objects'
     objects.mkdir()
     commands = []
@@ -240,6 +267,7 @@ def main():
         'qemu_sha256': digest(a.qemu.resolve()), 'clang_sha256': digest(a.clang.resolve()),
         'ld_sha256': digest(a.ld.resolve()), 'counting_elf_sha256': digest(counting_path),
         'native_cases': len(cases), 'cores': 8,
+        'later_table_writers': writers,
         'measurements': measurements,
         'loaded_segments': {p.name: digest(p) for p in out.glob('*segment-*.bin')},
         'rom_sha256': digest(rom),
