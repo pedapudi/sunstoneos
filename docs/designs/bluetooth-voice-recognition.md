@@ -5,255 +5,284 @@ Status: design for review; no code is implemented yet.
 The board is the Hands-Free Profile (HFP) Audio Gateway (AG) so that it can
 record a headset microphone for mimus. Pressing the headset's voice button
 starts one recognition segment, using the HFP 1.9 voice-recognition activation
-procedure (section 4.25, `AT+BVRA`). Call control, which exists only for HFP
-conformance, becomes a build option that is off by default.
+procedure (section 4.25, `AT+BVRA`). Call control exists only for HFP
+conformance and has no board use, so it becomes a build option that is off by
+default.
 
 ## Behavior
 
-**Call control.** Only [a733-bluetooth.cmake](../../cmake/a733-bluetooth.cmake)
-defines `SUNSTONE_BT_HFP_CALL_CONTROL`, from a CMake option that defaults to
-OFF, with `target_compile_definitions` on `sunstone-a733-bluetooth` after the
-loop that copies the board target's `COMPILE_DEFINITIONS`. The OS image never
-defines it. [bt_hfp_ag.h](../../include/bt_hfp_ag.h) tests it with `#ifdef`
-and puts the call fields last in `struct bt_hfp_ag`, so the fields that
-`bt_sco.c` reads keep their offsets. The header references a guard symbol
-named after the setting, which only `bt_hfp_ag.c` defines, so objects compiled
-with different settings fail to link.
+**Call control.** [a733-bluetooth.cmake](../../cmake/a733-bluetooth.cmake)
+defines `SUNSTONE_BT_HFP_CALL_CONTROL` from a CMake option, default OFF, with
+one `target_compile_definitions` on `sunstone-a733-bluetooth`. That target
+compiles `bt_hfp_ag.c`, `bt_sco.c` and `apps/bluetooth/headset.c` together;
+the OS image target compiles its own copies without the definition. No link
+therefore combines objects built with different settings, and
+[bt_hfp_ag.h](../../include/bt_hfp_ag.h) needs only an `#ifdef`.
 
 ON keeps today's behavior: `bt_hfp_ag_init_calls`, `bt_hfp_ag_call`, RING,
 call indicators, AG features 352 and SDP Network 1. OFF compiles out
 answering, dialing, hang-up, hold, DTMF, RING, call-state indicators and
 `bt_hfp_ag_call`, advertises no call feature and sets Network to 0. The
 queries headsets send after setup keep today's answers in both settings,
-because none depends on a call: `AT+CLCC` (`OK`), `AT+COPS=3,0`, `AT+COPS?`
-(`+COPS: 0`), `AT+CNUM`, `AT+CLIP`, `AT+CCWA` and `AT+CMEE` (one stored bit).
-`AT+BCC`, a codec-connection request, moves out of the call handler. One board
-run must still show that the target headset stays connected to an AG without
-call features. `bt-hfp-ag.py` and `bluetooth-headset.py` build both settings;
-`bt-sco.py`, `bt-config.py` and `bluetooth-playback-native.py` build OFF.
+because none depends on a call: `AT+CLCC`, `AT+COPS`, `AT+CNUM`, `AT+CLIP`,
+`AT+CCWA` and `AT+CMEE`. `AT+BCC`, a codec-connection request, moves out of
+the call handler. A board run must still show that the target headset stays
+connected to an AG without call features.
 
 **One initializer.** `bt_hfp_ag_init(q, rfcomm, indicators, setup_deadline,
 timeout_us, codecs, voice)` replaces `bt_hfp_ag_init` (called only by
 `checks/bt-hfp-ag.c`) and `bt_hfp_ag_init_codecs` (no caller).
 
 **Voice recognition in the AG.** With `voice` set, the AG advertises bit 2
-(value 4) in `+BRSF` and the application sets the same SDP SupportedFeatures
-bit, which the SDP server already cross-checks. The AG handles:
+(value 4) in `+BRSF`, and the application sets the same SDP SupportedFeatures
+bit, which the SDP server already cross-checks. Recognition is *committed on*
+once the UART accepts the complete `OK` for `AT+BVRA=1` or the complete
+`+BVRA: 1`.
 
-- `AT+BVRA=1`: `OK` only when the application admits an activation
-  (`bt_hfp_ag_voice_admit`), the headset set bit 3 (value 8) in `AT+BRSF`,
-  the service-level connection is ready, committed recognition is off and no
-  `+BVRA` response is queued or in flight; otherwise `ERROR`. The last two
-  conditions refuse a press between a segment's publication and acceptance of
-  its `+BVRA: 0`, which would otherwise end the new activation at the headset.
-- `AT+BVRA=0`: `OK`; recognition is off. No `+BVRA: 0` follows (HFP
-  section 5).
+- `AT+BVRA=1`: `OK` only when the application admits an activation, the
+  headset set bit 3 (value 8) in `AT+BRSF`, the service-level connection is
+  ready, recognition is not committed on and no `+BVRA` response is queued or
+  in flight; otherwise `ERROR`.
+- `AT+BVRA=0`: `OK` only while recognition is committed on; otherwise
+  `ERROR`. No `+BVRA: 0` follows an accepted one (HFP section 5).
 - `AT+BVRA=2`: `ERROR`; enhanced status is not advertised.
 - `bt_hfp_ag_voice(q, 1)` and `(q, 0)` queue `+BVRA: 1` and `+BVRA: 0`, and
   return 0 while a response owns the serial stream.
 
-State commits only after the UART accepts the complete response.
-
-**One request, one segment.** The repeated modes 2 (CVSD) and 3 (mSBC)
+**One request, one activation.** The repeated modes 2 (CVSD) and 3 (mSBC)
 capture only on request. Mode 5, mSBC with caller playback, keeps continuous
 capture and does not advertise voice recognition, because its playback pacing
 and cancellation depend on an open capture.
 
-The bound segment consumer calls `bluetooth_headset_listen(app, kind)`, which
-stores the kind in a request word with a compare-and-exchange from 0 and is
-refused when the word is not 0. Kind 1, *accept the button*, admits the next
-`AT+BVRA=1`. Kind 2, *start now*, makes the owner start an activation, with
-`+BVRA: 1` when the headset set bit 3, and otherwise as an audio connection
-without a call (HFP section 4.11). The owner starts nothing while recognition
-is committed on or a `+BVRA` response is pending.
+A request word holds 0, ACCEPT (admit the next `AT+BVRA=1`), START (start
+now) or ACTIVE. The bound consumer may change 0 to ACCEPT or START, or ACCEPT
+to START; the owner changes ACCEPT or START to ACTIVE when it starts an
+activation, on an admitted `AT+BVRA=1` or by itself on START. On START the
+owner sends `+BVRA: 1` when the headset set bit 3, and otherwise opens an
+audio connection without a call (HFP section 4.11). When the activation ends,
+the owner publishes the segment if it holds at least 2 bytes, stores 0 and
+notifies the consumer. A headset cancel therefore never restarts capture; the
+consumer chooses the next request.
 
-The owner keeps the word non-zero for the whole activation and clears it when
-it publishes. At activation start it replaces *start now* with *accept the
-button*, so a cancel from the headset does not restart capture, and withdraws
-AG admission until the activation ends. `listen` is therefore refused until
-publication, each published segment answers the one outstanding request, and
-the existing ticket check (ticket equals tail + 1) orders segments. An
-activation that ends with fewer than 2 bytes publishes nothing and leaves the
-word at *accept the button*.
-
-- Bluetooth image: the recognizer requests the next segment as soon as it
-  acknowledges a slot. Its first request is *start now*, so the unattended
-  60-second supervised session still records one segment and exercises both
-  `+BVRA` responses; that run passes `--segments 1` to the host tool.
-- OS image: the capture client requests when a new generation arrives and no
-  request is outstanding, *accept the button* in workload 0 and *start now*
-  in workload 4, where the Enter key started the generation. The next
-  published segment becomes the newest generation's WAV.
+- Bluetooth image: the recognizer requests START first, so the unattended
+  60-second supervised session records one segment and exercises both `+BVRA`
+  responses (that run passes `--segments 1` to the host tool). Afterwards it
+  requests ACCEPT whenever the word is 0.
+- OS image: in workload 0 the capture client requests ACCEPT while a
+  generation waits for audio. In workload 4 a new generation, started by the
+  Enter key, requests START. If that activation ends without a segment, as
+  after a headset cancel, the client requests ACCEPT: the button then records
+  that generation, and the next Enter upgrades ACCEPT to START for the new
+  one. The next published segment becomes the newest generation's WAV.
 
 A segment ends at the profile's sample count (at most 24,000 samples: 3 s of
-CVSD or 1.5 s of mSBC) or at `AT+BVRA=0`. An early end publishes the largest
-even byte count, because a CVSD packet may split a sample. `first_sample`
-counts samples in earlier published segments; gaps show in `first_acquired`
-and `last_acquired`. [observe.py](../../apps/bluetooth/observe.py) accepts
-`first_sample` up to (ticket − 1) × samples.
+CVSD or 1.5 s of mSBC) or at an accepted `AT+BVRA=0`; an early end publishes
+the largest even byte count. `first_sample` counts samples in earlier
+published segments, so [observe.py](../../apps/bluetooth/observe.py) accepts
+`first_sample` up to (ticket − 1) × samples. The existing ticket check
+(ticket equals tail + 1) orders segments.
 
-## Deadlines and terminal states
+## Deadlines and failures
 
-- Setup, through codec selection, keeps its stage deadlines and today's
-  `fail()` with transport retention on a stop or the window, because ACL,
-  authentication, SDP, RFCOMM or codec commands may be in flight.
-- With the AG READY, the codec selected and no codec offer outstanding, the
-  owner enters a new idle stage and clears the stage deadline; AG line and
-  response timeouts still bound each exchange. A stop, or the supervised
-  window 38 s after the session origin, ends idle at the first poll with no AG
-  response or codec offer in flight, bounded by `bluetooth_close_deadline`.
-  The owner reaches DONE and sets `segment_disconnected` without retention.
-  Resident idle has no bound.
+- Setup, through codec selection, keeps its stage deadlines and `fail()` with
+  transport retention on a stop or the window, because ACL, authentication,
+  SDP, RFCOMM or codec commands may be in flight.
+- With the AG ready and the codec selected, the owner enters a new idle stage
+  without a stage deadline; AG line and response timeouts still bound each
+  exchange. A stop, or the supervised window 38 s after the session origin,
+  ends idle at the first poll with no AG response or codec offer in flight,
+  bounded by `bluetooth_close_deadline`, and reaches DONE with
+  `segment_disconnected` set and no retention. Idle, and DONE with no audio
+  link, run the existing `control_step` (SDP discovery, SDP server, AG or
+  RFCOMM, security) and `bt_sco_step`, and skip only the stream lookup.
 - An activation is admitted only while now plus the response timeout is
-  within the window. The first link open and the mSBC-to-CVSD retry have the
-  deadline now plus the response timeout. A stop during an open waits for its
-  result: a confirmed OPEN closes through the existing close sequence, a
-  confirmed setup failure ends cleanly without the retry, and
-  `BT_SCO_RETAINED` fails as today.
-- `capture_deadline` is armed at activation start (capture timeout, capped by
-  the window) and disarmed at publication or an early end, so no DEADLINE flag
-  is raised outside a segment. Silence packets get now plus the response
-  timeout, capped by the window, in place of `capture_deadline`.
+  within the window, which also bounds the first link open and the
+  mSBC-to-CVSD retry. A stop during an open waits for the result: an open link
+  closes through the existing sequence, a confirmed setup failure ends
+  cleanly, and `BT_SCO_RETAINED` fails as today.
+- `capture_deadline` is armed at activation start and disarmed at its end;
+  between activations silence packets get now plus the response timeout,
+  capped by the window.
 - With the link open, a stop or the window closes it through the existing
-  sequence and discards a partial segment. A confirmed peer release ends
-  cleanly; `BT_SCO_RETAINED` and other uncertain states keep `fail()`. After a
-  clean end the Bluetooth recognizer finishes, and the OS client keeps
-  reporting progress while `os_headset_capture` returns pending.
-- DONE with no link skips the stream lookup and steps only the RFCOMM, AG,
-  SDP server and security objects, all initialized before idle.
-
-Whether a headset keeps the link after `+BVRA: 0` is unverified until a board
-run with the target headset.
+  sequence and discards a partial segment.
+- Any release of the audio link that the owner did not request, in either
+  lifetime, calls `fail()`, as a release during capture does today. The owner
+  retains its transports, the OS client calls `board_fail`, and in the
+  resident image the watchdog resets the board. This holds until `bt_sco` can
+  reopen a link (Left out).
+- `storage_digest_add` returns 0 only for a null state or more than 2^61
+  bytes; the owner passes its own state and at most 48,000 bytes per
+  activation. A 0 return calls `fail()`.
+- AT refusals leave the session usable. A consumer call that finds the
+  counters inconsistent returns −1, and the consumer fails as today.
 
 ## Data flow and ownership
 
-The Bluetooth owner task alone advances UART, H4, HCI, RFCOMM, the AG and the
-audio link. In the poll in which the AG parses `AT+BVRA`, the application
-updates admission, starts or ends the activation, and clears the request word
-at publication.
+The Bluetooth owner task alone advances UART, H4, HCI, RFCOMM, the AG, the
+mSBC decoder and the audio link. In the poll in which the AG parses
+`AT+BVRA`, the application updates admission and starts or ends the
+activation.
 
-During a segment, received PCM follows the existing single-copy path from the
-SCO packet into a slot, and mSBC frames decode into the slot. The owner hashes
-the slot with `storage_digest_add` as it writes, over the even-length prefix;
-an odd trailing CVSD byte waits in the slot until the next packet or the end.
-Publication and an early end call `storage_digest_end` on the published
-length, and the digest state restarts at each activation and on discard.
-Between segments the owner releases each packet without copying, decoding or
-hashing it.
+During an activation, CVSD bytes go from the SCO packet into a slot with one
+`memcpy`, as today, and mSBC frames decode into the slot. The owner hashes the
+slot with `storage_digest_add` as it writes, over the even-length prefix, and
+calls `storage_digest_end` at publication. Between activations it releases
+each packet without copying, decoding or hashing it, and keeps the next
+activation aligned:
 
-A consumer takes a segment with one call,
-`bluetooth_headset_segment_take(app, dst, capacity, &snapshot)`, which
-returns 0 when nothing is published. Otherwise it checks once the calling
-task, the destination and snapshot ranges, that `capacity` holds
-`capture.bytes`, and that head, tail and ticket agree; then it copies
-`capture.bytes` with one `memcpy` and returns the snapshot. The only guard
-against slot reuse is the producer's: it writes slot *head* mod 2 only while
-*head − tail* < 2, and *tail* advances at the consumer's acknowledgement after
-its copy. The reported PCM digest is the owner's.
+- **CVSD.** [bt_sco.h](../../include/bt_sco.h) allows odd packet lengths, so a
+  packet can split a 16-bit sample. The owner keeps the parity of all bytes
+  received since the stream opened, one exclusive-or per packet, and an
+  activation that starts after an odd count skips one byte.
+- **mSBC.** The decoder in [msbc.c](../../apps/bluetooth/msbc.c) carries its
+  H2 sequence lock and a partial frame across packets. A new
+  `bluetooth_msbc_resync`, called at activation start, clears the partial
+  frame, the lock, the expected sequence and the discard count; the existing
+  search then locks onto the first valid H2 header. The libsbc synthesis
+  history is kept, so only the first decoded frame of a segment can carry
+  audio from before the gap.
+
+A consumer borrows the oldest segment with
+`bluetooth_headset_segment_take(app, &pcm, &snapshot)`, which returns 0 when
+nothing is published. Otherwise it checks the calling task, the argument
+ranges and that head, tail and ticket agree, copies the snapshot and returns a
+read-only pointer to slot *tail* mod 2, valid until
+`bluetooth_headset_segment_ack`. The producer writes slot *head* mod 2 only
+while *head − tail* < 2, and *tail* advances only at the acknowledgement, so
+that check alone keeps the borrowed slot unchanged. Each consumer converts
+the slot into its WAV buffer with the existing `bluetooth_pcm_wav` or
+`bluetooth_pcm16_wav` and acknowledges; the recognizer transcribes after the
+acknowledgement. Holding a slot for a conversion of about a millisecond cannot
+cause backlog within a 1.5 to 3 s segment. The reported PCM digest is the
+owner's.
+
+After the H4 record, each PCM byte is copied by `bt_sco` into its packet, by
+the owner or decoder into the slot, and by the WAV conversion. The conversion
+stays because CVSD needs 8-to-16 kHz interpolation and because releasing the
+slot lets the next segment record during transcription. Today each byte also
+passes through a 1 KiB chunk and a 48,000-byte consumer buffer.
 
 ## Interrupt and polling
 
 The owner keeps its 1 ms poll, which the UART and audio receive-latency
-contract requires. Before the first press that poll has no audio work, so its
-1,000 wake-ups per second become idle cost until the UART receive-interrupt
-change (Left out).
+contract requires; before the first press those 1,000 wake-ups per second do
+no audio work.
 
 Consumers wait in `ulTaskNotifyTake(pdTRUE, timeout)` on index 0 and re-read
-the shared counters after every return, so a lost or spurious notification
-changes only latency. The owner gives to the bound consumer after a
-publication, stop or disconnection.
-
-- The Bluetooth recognizer's two per-tick waits, for a segment and for USB to
-  collect a result, become 100 ms waits; `bluetooth_recognition_segment_ack`
-  and the recognizer's failure path also give to it.
-- The OS client waits 250 ms, inside its 1 s progress window;
-  `os_headset_capture` gives to it. The client does not notify the
-  recognizer, whose wait still polls every tick, so
-  [apps/os/headset.c](../../apps/os/headset.c) records no recognizer handle.
-
-The owner and consumer handles are set before the scheduler starts. Other
-notification users in the tree each notify only their own worker.
+the counters and the request word after every return, so a lost or spurious
+notification changes only latency. The owner gives to the bound consumer when
+an activation ends and after a stop or disconnection. The Bluetooth
+recognizer's per-tick waits for a segment and for USB collection become
+100 ms waits, also given by `bluetooth_recognition_segment_ack` and the
+recognizer's failure path. The OS client waits 250 ms, inside its 1 s
+progress window, and `os_headset_capture` gives to it. All handles are set
+before the scheduler starts.
 
 ## Memory placement and cache policy
 
-No buffer is added; slots, records and the consumers' PCM copies keep their
-static placement in Normal write-back, inner-shareable memory. The UART path
-is programmed I/O, so DMA ownership and cache maintenance do not change. New
-state: the request word, an activation flag, the published-sample total, a
-112-byte digest state with its hashed count, and a few AG words; OFF drops the
-call fields. Hashing each packet right after its copy reads it from L1, where
-today's publication re-reads 48,000 B. The consumers' 1 KiB stack buffers go.
+No buffer is added. Slots and records keep their static placement in Normal
+write-back, inner-shareable memory; the UART path is programmed I/O, so DMA
+ownership and cache maintenance do not change. `retained.pcm` in
+[recognition.cc](../../apps/bluetooth/recognition.cc), `headset.pcm` in
+[apps/os/headset.c](../../apps/os/headset.c) (48,000 bytes each) and the
+consumers' 1 KiB stack chunks are removed. New state: the request word, the
+published-sample total, the parity bit, a 112-byte digest state and a few AG
+words; OFF drops the call fields. Hashing each packet right after its copy
+reads it from L1, where today's publication re-reads 48,000 bytes.
 
 ## Synchronization across cores
 
-The owner and a consumer may run on different cores. Release and acquire head
-and tail counters still guard slot reuse. The consumer sets the request word
-with a compare-and-exchange from 0 in release order; the owner reads it with
-acquire. Only the owner writes a non-zero word, so replacing *start now* is a
-plain atomic store. The owner clears the word with release before storing
-*head* with release, so a consumer that observes a segment can request the
-next. Only the owner touches AG state. Notifications only wake tasks.
+The owner and a consumer may run on different cores. Head and tail keep their
+release and acquire ordering. Every change of the request word is an
+acquire-release compare-and-exchange, except the owner's final store of 0. At
+the end of an activation the owner stores *head* with release, then 0 in the
+word with release, then notifies. A consumer that loads 0 with acquire and
+then loads *head* sees any segment that activation published; an unchanged
+*head* means it ended without one. Only the owner touches AG and decoder
+state.
 
 ## Reuse and removal
 
 Reused: the AG response and commit rules, the `bt_sco` link and silence
 cadence, the two-slot queue and ticket check, the stop flags, the close
-sequence, the incremental `storage_digest` API and the 8-to-16 kHz
-conversion; the SDP server is unchanged. Removed: the unused initializer and
-wrapper, call control from default builds, the OS client's discard path and
-ticket arithmetic, the consumers' 2-byte peek, chunk loops, per-chunk snapshot
-comparison, stack copy and second SHA-256, the hash burst at publication,
-owner work on unrequested audio, and the consumers' per-tick waits.
+sequence, the incremental `storage_digest` API, the WAV conversions and the
+mSBC header search. The SDP server is unchanged.
+
+Removed:
+
+- `bluetooth_headset_segment_copy`, which take replaces in `recognition.cc`,
+  `apps/os/headset.c`, `checks/bluetooth-headset-repeated.c`,
+  `checks/bluetooth-msbc.c` and the models in
+  `checks/bluetooth-recognition*.cc` and `checks/os-image-headset.c`.
+  `bluetooth_headset_copy` stays only for the finite modes 0, 1 and 4
+  through `usb0.c`.
+- The finite-capture branch of `recognition.cc`, which cannot run because
+  recognition starts only for profile version 3.
+- The unused initializer and wrapper, and call control in default builds.
+- The consumers' 2-byte peek, chunk loops, per-chunk snapshot comparison, PCM
+  buffers, second SHA-256 and per-tick waits; the OS client's discard path and
+  ticket arithmetic; the hash burst at publication; and owner work on
+  unrequested audio.
 
 ## Performance budgets
 
-Sizes are AArch64 `-O2` text and read-only data from `size`, built from the
-base commit with `SUNSTONE_BLUETOOTH_APPLICATION=ON` and
-`SUNSTONE_A733_OS_HEADSET=ON`. Instruction counts come from Unicorn running
-the functions compiled with the Bluetooth image's flags (`-O2`,
-`-mgeneral-regs-only`) and linked with the runtime `memcpy`, `bt_sco.c`, the
-storage digest and libsbc. Each case starts from one RFCOMM buffer holding one
-AT line or one received 60-byte SCO packet. The existing checks cannot give these counts:
-`bt-hfp-ag.py` and `bluetooth-headset.py` build x86-64 programs at `-O1` with
-AddressSanitizer, and `os-image-headset.py` runs Unicorn on a model of segment
-publication. The harness therefore stays in the package build cache as
-before-and-after measurement; its after values go into this table and the
-implementing commit message. The `bluetooth-headset.py` and
-`os-image-headset.py` host models count wake-ups, packets, UART bytes and
-digest calls. CVSD sends 266.7 packets per second and mSBC 133.3.
+Sizes are text plus read-only data, and static data, from `size` on AArch64
+`-O2` objects built at the base commit with `SUNSTONE_BLUETOOTH_APPLICATION`
+and `SUNSTONE_A733_OS_HEADSET` on. Instruction counts come from a Unicorn
+harness that runs the functions built with the image's flags (`-O2`,
+`-mgeneral-regs-only`) and stays in the package build cache as
+before-and-after measurement only. Poll, wake-up and byte counts come from the
+`bluetooth-headset.py` and `os-image-headset.py` host models. The implementing
+commit message records the after value of every row and every AT command.
 
 | Metric | Baseline | Target |
 | --- | --- | --- |
 | `bt_hfp_ag.c` code, OFF | 15,066 B; 11,938 B with all call handling removed | ≤ 13,000 B |
 | `bt_hfp_ag.c` code, ON | 15,066 B | ≤ 15,800 B |
 | `apps/bluetooth/headset.c` code; static data | 11,879 B; 440,320 B | ≤ 13,400 B; ≤ 160 B more |
-| `apps/os/headset.c` code; static data | 2,069 B; 548,000 B | ≤ 2,100 B; not larger |
+| `msbc.c` code | 1,012 B | ≤ 1,076 B |
+| `apps/os/headset.c` code; static data | 2,069 B; 548,000 B | ≤ 2,100 B; ≤ 500,000 B |
+| `recognition.cc` static data | includes `retained.pcm`, 48,000 B | 48,000 B smaller |
 | `bt_sdp_server.c` code | 10,333 B | unchanged |
-| Existing AT line | 1,104 to 2,441 instructions per command in the harness results | ≤ 2% over each command's baseline |
+| Existing AT line, both settings | per command, below | ≤ 2% over each |
 | `AT+BVRA` line | none | ≤ 1,400 instructions |
-| Owner step, packet between segments | 171 CVSD, 174 mSBC (release-only path) | ≤ 188 CVSD, ≤ 191 mSBC |
-| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B, about 2,245 per 64-byte block | ≤ 3,000 CVSD, ≤ 46,500 mSBC, hashed |
+| Activation start: word exchange, digest restart, parity, resync | none | ≤ 400 instructions |
+| Owner step, packet between activations | 171 CVSD, 174 mSBC | ≤ 188 CVSD, ≤ 191 mSBC |
+| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B | ≤ 3,000 CVSD, ≤ 46,500 mSBC, hashed |
 | Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | ≤ 8,000 CVSD, ≤ 52,000 mSBC |
-| Owner audio instructions per second between segments | continuous capture: about 674,000 CVSD, 6,052,000 mSBC | ≤ 50,200 CVSD, ≤ 25,500 mSBC |
-| Owner wake-ups per second, idle before the first press | 1,000 | 1,000; after the UART receive-interrupt change ≤ 10 plus 1 per HCI packet |
-| UART bytes per second each way between segments | 17,067 CVSD, 8,533 mSBC | unchanged until `bt_sco` reopens links |
-| Consumer work per 48,000 B segment | 47 chunks × 1,699 plus SHA-256: about 1,763,000 | runtime `memcpy` of 48,000 B plus ≤ 600 |
+| Consumer work per 48,000 B segment | 47 chunks × 1,699 plus SHA-256 (about 1,763,000) plus WAV conversion | ≤ 600 plus WAV conversion; no PCM copy |
+| Owner wake-ups per second, idle | 1,000 | 1,000; ≤ 10 plus 1 per HCI packet after the UART receive interrupt |
 | Consumer wake-ups while waiting | 1,000 per second | ≤ 10 per second per recognizer wait, ≤ 4 in the OS client, plus 1 per event |
-| `AT+BVRA=1` to first PCM byte in a slot, link open | none | ≤ 3 owner polls |
+| `AT+BVRA=1` line to committed on | none | ≤ 2 owner polls |
+| Commit to HCI synchronous-connection setup accepted by the UART, link closed | none | ≤ 2 owner polls |
+| Link open to first PCM byte in a slot | none | the poll holding the first CVSD packet or completing the first valid mSBC frame |
+| mSBC bytes discarded after resync, intact stream | none | ≤ 59 |
 | Publication to `+BVRA: 0` queued | none | first owner poll with the serial stream free |
 
-The in-segment targets allow one 64-byte block beyond the bytes added (one
-block for 60 CVSD bytes, four for a 240-byte mSBC frame); publication adds the
-two-block finalization. The 1.5 Mbaud UART carries 150,000 bytes per second
-each way, so idle CVSD audio uses 11.4% of it. Physical activation latency
-stays unmeasured until a board run.
+AT baselines in instructions, with call control as built today: `AT+BRSF`
+1,292; `AT+BAC` 1,205; `AT+CIND=?` 2,441; `AT+CIND?` 1,427; `AT+CMER` 1,567;
+`AT+BIA` 1,723; `AT+VGS` 1,190; `AT+VGM` 1,173; `AT+BCS` 1,104; `AT+CMEE`
+1,273; `AT+CLCC` 1,163; `AT+COPS?` 1,246; `ERROR` answers 1,781 (`AT+NREC`)
+and 2,321 (`AT+XAPL`). The in-segment targets allow one 64-byte SHA-256 block
+beyond the bytes added, and publication adds the two-block finalization.
+Physical activation latency stays unmeasured until a board run.
 
-New host cases: a window or stop during CONNECT, the AG stage, a link open and
-idle with an AG response in flight; a request between publication and
-acceptance of `+BVRA: 0`; zero-sample and odd-byte early ends against the
-digest of the even prefix; and a link of mixed call-control objects, which
-must fail. The builds are the Bluetooth image with recognition, with and
-without mSBC, and the OS headset image.
+New host cases:
+
+- a window or stop during CONNECT, the AG stage, a link open, and idle with
+  an AG response in flight;
+- a request between publication and acceptance of `+BVRA: 0`, and
+  `AT+BVRA=0` while not committed on;
+- a workload 4 headset cancel followed by a button press and by a new Enter;
+- zero-sample and odd-byte early ends against the digest of the even prefix;
+- odd-length CVSD packets released between two activations;
+- two activations on one open mSBC link separated by an odd number of
+  released frames, with a packet length that does not divide 60;
+- a resident peer release after `+BVRA: 0`, which must report a failure;
+- both call-control settings in `bt-hfp-ag.py` and `bluetooth-headset.py`.
+
+The builds are the Bluetooth image with recognition, with and without mSBC,
+and the OS headset image.
 
 ## Left out
 
@@ -261,22 +290,25 @@ without mSBC, and the OS headset image.
   cancellation and in-band ringing have no board use.
 - Closing the audio link between segments needs `bt_sco` to reopen a link to
   the same peer, a change for the owner of
-  [bt_sco.c](../../drivers/bluetooth/bt_sco.c). In the resident image the link
-  stays open from the first press for the rest of the lifetime. Its idle cost
-  is therefore the steady state: about 34,100 UART bytes per second for CVSD, both
-  directions, 266.7 packet releases and silence sends per second, and the
-  radio's eSCO slots. That follow-up removes the largest remaining hardware
-  cost of this feature and lets a headset that releases the link after
-  `+BVRA: 0` record again.
-- Interrupt-driven owner wake-up from UART receive is a UART driver change
+  [bt_sco.c](../../drivers/bluetooth/bt_sco.c). Until then the link stays open
+  from the first press. For CVSD that costs about 34,100 UART bytes per second
+  in both directions (11.4% of the 1.5 Mbaud link), 266.7 packet releases and
+  silence sends per second, and the radio's eSCO slots. The same change would
+  let a headset that releases the link after `+BVRA: 0` record again instead
+  of failing the session. Lending the H4 record instead of copying it byte by
+  byte into a `bt_sco` packet is also a `bt_sco.c` change.
+- Owner wake-up from the UART receive interrupt is a UART driver change
   ([performance findings](../audit/performance.md), UART and SPI).
 - The OS recognizer's capture wait in
-  [recognition.patch](../../apps/os/recognition.patch) still wakes every tick,
-  for minutes with button gating. Replacing its `vTaskDelay(1)` with a 250 ms
-  notification wait needs `apps/mimus-board` to expose the recognizer's task
-  handle.
+  [recognition.patch](../../apps/os/recognition.patch) still wakes every tick.
+  A 250 ms notification wait needs `apps/mimus-board` to expose the
+  recognizer's task handle.
+- libsbc is built with `-mgeneral-regs-only`, so mSBC decoding costs about
+  36,800 instructions per 60-byte frame, about 4.9 million per second during a
+  segment. NEON decoding needs FP/SIMD context for the owner task and is a
+  follow-up.
 - `storage_digest.c` is scalar under `-mgeneral-regs-only`; ARMv8 SHA2
   instructions or the crypto engine's hash queue are a follow-up for its
   owner.
-- The finite capture modes 0, 1 and 4 keep `bluetooth_headset_copy`, call
-  control is not offered in the OS image, and ACL loss keeps its handling.
+- Call control is not offered in the OS image, and ACL loss keeps its
+  handling.
