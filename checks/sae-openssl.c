@@ -265,7 +265,16 @@ int main(int argc,char **argv)
         assert(aic8800_supplicant_sae_start(&sta,sta_addr,ap_addr,ssid,sizeof(ssid)-1,now,now+10,frame,sizeof(frame),&bytes)==AIC8800_SUPPLICANT_SAE_SEND);
         n=put(reply,1,WLAN_STATUS_ANTI_CLOGGING_TOKEN_REQ,0);reply[n++]=19;reply[n++]=0;
         refused("deadline",aic8800_supplicant_sae_receive(&sta,reply,n,now+10,frame,sizeof(frame),&bytes));
-        /* A PSK configuration cannot start SAE, and claim refuses SAE. */
+        /* Clearing an unfinished exchange wipes the password, so a second
+         * start is refused and cannot run SAE with an empty password. */
+        sta_reset("correct horse",1);
+        assert(aic8800_supplicant_sae_start(&sta,sta_addr,ap_addr,ssid,sizeof(ssid)-1,now,now+10,frame,sizeof(frame),&bytes)==AIC8800_SUPPLICANT_SAE_SEND);
+        aic8800_supplicant_sae_clear(&sta);
+        assert(aic8800_supplicant_sae_start(&sta,sta_addr,ap_addr,ssid,sizeof(ssid)-1,now,now+10,frame,sizeof(frame),&bytes)==AIC8800_SUPPLICANT_SAE_FAILED);
+        assert(sta.state==AIC8800_SUPPLICANT_NEW&&!sta.sae&&!sta.sae_pt&&!sta.sae_accepted);
+        printf("start after clear: refused\n");
+        /* A PSK configuration cannot start SAE; checks/aic8800-supplicant.c
+         * covers claim's refusal of SAE. */
         memset(&sta,0,sizeof(sta));struct aic8800_supplicant_config c=config("correct horse",0);
         c.key_mgmt=AIC8800_SUPPLICANT_PSK;assert(!aic8800_supplicant_init(&sta,&c));
         c.sae_password_bytes=0;memset(c.sae_password,0,sizeof(c.sae_password));c.ap_rsn[19]=2;

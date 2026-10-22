@@ -49,7 +49,9 @@ enum aic8800_supplicant_sae_result aic8800_supplicant_sae_start(struct aic8800_s
     const uint8_t own[6],const uint8_t bssid[6],const uint8_t *ssid,size_t ssid_bytes,
     uint64_t now,uint64_t deadline,uint8_t *frame,size_t capacity,size_t *bytes)
 {
+    /* Clear wipes the password, so a cleared supplicant cannot start again. */
     if(!s||!s->initialized||s->state!=AIC8800_SUPPLICANT_NEW||s->config.key_mgmt!=AIC8800_SUPPLICANT_SAE||
+        !s->config.sae_password_bytes||s->config.sae_password_bytes>sizeof(s->config.sae_password)||
         s->sae||s->sae_accepted||!own||!bssid||!ssid||!ssid_bytes||ssid_bytes>32||!frame||!bytes||
         deadline<=now||!aic8800_supplicant_os_enter(s))return AIC8800_SUPPLICANT_SAE_FAILED;
     s->last_now=now;s->sae_deadline=deadline;os_memcpy(s->sae_own,own,6);os_memcpy(s->sae_bssid,bssid,6);

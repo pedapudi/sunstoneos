@@ -83,8 +83,9 @@ int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *);
  * Authentication frame body from the BSSID. Groups 19, 20 and 21 are tried in
  * order. ACCEPTED sets the PMK and PMKID. Claim still refuses an SAE
  * configuration: the association request, external authentication and
- * protected management frames are not implemented. A failure, deadline or
- * exhausted retry faults the supplicant like a failed handshake. Available
+ * protected management frames are not implemented. A failure, a frame at or
+ * after the deadline or an exhausted retry faults the supplicant like a
+ * failed handshake. Available
  * only in images built with SUNSTONE_AIC8800_SAE. */
 enum aic8800_supplicant_sae_result aic8800_supplicant_sae_start(struct aic8800_supplicant *,
     const uint8_t own[6],const uint8_t bssid[6],const uint8_t *ssid,size_t ssid_bytes,
@@ -92,7 +93,10 @@ enum aic8800_supplicant_sae_result aic8800_supplicant_sae_start(struct aic8800_s
 enum aic8800_supplicant_sae_result aic8800_supplicant_sae_receive(struct aic8800_supplicant *,
     const uint8_t *body,size_t body_bytes,uint64_t now,uint8_t *frame,size_t capacity,size_t *bytes);
 /* Free the SAE exchange state and wipe the password, keeping any accepted
- * PMK and PMKID. A faulted supplicant keeps everything for recovery. */
+ * PMK and PMKID. A faulted supplicant keeps everything for recovery. Receive
+ * checks the deadline only when a frame arrives, so the caller clears an
+ * exchange whose deadline passes without one. Start then refuses: a retry
+ * initializes a new supplicant. */
 void aic8800_supplicant_sae_clear(struct aic8800_supplicant *);
 /* Close the port, delete every key, then wipe. After an unsolicited
  * disconnection (link DOWN) the station's port and pairwise key are gone with
