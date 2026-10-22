@@ -10,7 +10,7 @@ static struct {
     uint64_t now;
     unsigned calls, fail_at, sync, clears, sent, no_ack, no_return, status;
     unsigned hold_register, register_reads, isolation, late_isolation, fenced, reset;
-    unsigned events_count;
+    unsigned events_count, frozen;
     int isolation_result;
     unsigned isolation_polls, isolation_pending;
     int poll_result;
@@ -26,7 +26,7 @@ static uint32_t word(const unsigned char *p)
 { return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
 static void put(unsigned char *p,uint32_t v)
 { for(unsigned i=0;i<4;++i)p[i]=(unsigned char)(v>>(i*8)); }
-static int operation(void) { ++m.now; return ++m.calls!=m.fail_at; }
+static int operation(void) { if(!m.frozen)++m.now; return ++m.calls!=m.fail_at; }
 static int read_memory(void *ctx,enum pvr_ccb_region r,uint32_t off,void *out,size_t n)
 {
     assert(ctx==&m && off<=pvr_ccb_region_bytes(r) && n<=pvr_ccb_region_bytes(r)-off);
@@ -195,6 +195,18 @@ int main(int argc,char **argv)
         assert(m.register_reads-reads>1 && m.now-start>=PVR_GPU_SPIN_US && m.now-start<=3*PVR_GPU_SPIN_US);
         m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
     }
+    /* A stopped clock cannot end a re-read: the poll returns AGAIN without
+     * advancing, and shutdown completes once the clock runs again. */
+    prepare(image); m.no_ack=1;
+    while(s.phase!=PVR_GPU_STOP_WAIT_IDLE)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.frozen=1; assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.phase==PVR_GPU_STOP_WAIT_IDLE);
+    m.frozen=0; m.no_ack=0; m.sync=0x55; assert(run()==PVR_GPU_STOP_OK);
+    prepare(image); m.hold_register=held[0];
+    while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
+        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.frozen=1; unsigned held_index=s.index;
+    assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==held_index && !m.reset);
+    m.frozen=0; m.hold_register=0; assert(run()==PVR_GPU_STOP_OK);
     prepare(image); m.late_isolation=1;
     assert(run()==PVR_GPU_STOP_FAULT && s.isolation_observed && m.isolation==1); stopped(PVR_GPU_STOP_TIMEOUT);
     /* Negative errors and unexpected positive values cannot establish drain. */

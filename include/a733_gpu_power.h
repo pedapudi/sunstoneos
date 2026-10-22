@@ -5,8 +5,13 @@
 #define A733_GPU_INITIAL_HZ 400000000u
 #define A733_GPU_INITIAL_UV 800000u
 /* Longest time one poll re-reads an unsatisfied power-domain acknowledgement,
- * in microseconds. */
+ * in microseconds from the first read. This is the same design bound as
+ * PVR_GPU_SPIN_US; the power controller keeps its own copy so it does not
+ * depend on the PowerVR headers. */
 #define A733_GPU_POWER_SPIN_US 50u
+/* Most consecutive clock samples without an advance inside one wait, as
+ * PVR_GPU_SPIN_STALLED_READS. A stopped clock then returns AGAIN. */
+#define A733_GPU_POWER_STALLED_READS 1024u
 
 enum a733_gpu_power_bank { A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_PCK };
 enum a733_gpu_power_phase { A733_GPU_POWER_NEW, A733_GPU_POWER_STARTING,
@@ -21,7 +26,8 @@ enum a733_gpu_power_error { A733_GPU_POWER_NO_ERROR, A733_GPU_POWER_IO,
 struct a733_gpu_power_resources { uint32_t parent_hz, supply_uv; };
 /* One privileged owner serializes this controller. All callbacks are bounded,
  * non-reentrant and return 1 for success. A failed callback may have side effects.
- * now uses monotonic microseconds without wrap during an operation.
+ * now uses monotonic microseconds without wrap during an operation; it may
+ * round down to whole microseconds.
  * acquire owns the GPU-local clock, reset and GPU_TOP domain exclusively. It
  * also holds shared leases for stable pll-peri0-400m, DCDC4, dcxo, the PCK clock,
  * and GPU AHB/MBUS gates. Return the established parent rate and rail setting.
@@ -70,10 +76,13 @@ enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *, uint64_t d
  */
 enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t deadline);
 /* Runs the resource and register steps back to back, with clock reads. The
- * clock-settling delay waits on the clock inside the poll. An unsatisfied PCK
- * acknowledgement is re-read for at most A733_GPU_POWER_SPIN_US and then
- * returns AGAIN. Every wait ends at the absolute deadline. Failure
- * retains diagnostics and disables further I/O; no automatic rollback.
+ * clock-settling delay waits on the clock inside the poll until the clock
+ * passes the sample after the clock-gate write by more than one microsecond.
+ * An unsatisfied PCK acknowledgement is re-read for at most
+ * A733_GPU_POWER_SPIN_US from its first read and then returns AGAIN. A wait
+ * whose clock stops advancing for A733_GPU_POWER_STALLED_READS samples returns
+ * AGAIN without advancing the step. Every wait ends at the absolute deadline.
+ * Failure retains diagnostics and disables further I/O; no automatic rollback.
  * lease_held records completed acquire/release callbacks. Failed callbacks can
  * leave partial ownership; a late successful release leaves lease_held clear.
  * ON establishes the configured 400 MHz clock, not a frequency measurement.

@@ -64,6 +64,13 @@ static int clock_read(struct a733_gpu_power *s)
     if (now >= s->deadline) { fail(s, A733_GPU_POWER_TIMEOUT); return 0; }
     return 1;
 }
+/* Record a clock sample taken during a wait. Return 0 once
+ * A733_GPU_POWER_STALLED_READS consecutive samples show no advance. */
+static int advancing(uint64_t *seen, unsigned *still, uint64_t now)
+{
+    if (now != *seen) { *seen = now; *still = 0; return 1; }
+    return ++*still < A733_GPU_POWER_STALLED_READS;
+}
 int a733_gpu_power_init(struct a733_gpu_power *s,
                        const struct a733_gpu_power_ops *ops, void *context)
 {
@@ -113,17 +120,27 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
     }
     uint32_t count = on ? sizeof(on_steps) / sizeof(*on_steps) :
                           sizeof(off_steps) / sizeof(*off_steps);
-    /* Steps run back to back. A delay waits on the clock inside the poll and
-     * a status wait re-reads for at most A733_GPU_POWER_SPIN_US of this poll;
-     * every wait ends at the deadline. */
-    const uint64_t entered = s->last_now;
+    /* Steps run back to back. A delay waits on the clock inside the poll. A
+     * status wait re-reads for at most A733_GPU_POWER_SPIN_US from its first
+     * read, so the lease callback and earlier steps do not consume it. A wait
+     * whose clock stops advancing returns AGAIN without advancing the step.
+     * Every wait ends at the deadline. */
+    uint32_t waiting = count;
+    uint64_t wait_start = 0, seen = s->last_now;
+    unsigned still = 0;
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
         if (p->kind == DELAY) {
+            /* The clock may round down to whole microseconds; passing the
+             * start sample by more than the delay guarantees the delay. */
             uint64_t until;
-            if (!a733_deadline_after(s->last_now, p->value, &until))
+            if (!a733_deadline_after(s->last_now, p->value + 1, &until))
                 return fail(s, A733_GPU_POWER_TIMEOUT);
-            while (s->last_now < until) if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+            seen = s->last_now; still = 0;
+            while (s->last_now < until) {
+                if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+                if (!advancing(&seen, &still, s->last_now)) return A733_GPU_POWER_AGAIN;
+            }
             ++s->index;
             continue;
         }
@@ -145,7 +162,11 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         } else if (p->kind == CHECK || p->kind == WAIT) {
             if ((value & p->mask) != p->value) {
                 if (p->kind == CHECK) return fail(s, A733_GPU_POWER_STATE);
-                if (s->last_now - entered >= A733_GPU_POWER_SPIN_US) return A733_GPU_POWER_AGAIN;
+                if (waiting != s->index) {
+                    waiting = s->index; wait_start = seen = s->last_now; still = 0;
+                } else if (!advancing(&seen, &still, s->last_now) ||
+                           s->last_now - wait_start >= A733_GPU_POWER_SPIN_US)
+                    return A733_GPU_POWER_AGAIN;
                 continue;
             }
         }

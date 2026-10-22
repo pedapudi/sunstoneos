@@ -239,6 +239,10 @@ static void compute_owner(void *unused)
      * per tick; startup and health still wait for the firmware model. */
     TickType_t opening=xTaskGetTickCount()-opened;
     platform_puts("compute open ticks ");platform_hex(opening);platform_puts("\n");configASSERT(opening<=50);
+    metric("compute-open-timed-waits",lifecycle_timed_waits());configASSERT(!lifecycle_timed_waits());
+    metric("longest-yield-bursts",__atomic_load_n(&service.longest_yield_run,__ATOMIC_ACQUIRE));
+    metric("longest-yield-us",__atomic_load_n(&service.longest_yield_us,__ATOMIC_ACQUIRE));
+    metric("yield-blocks",__atomic_load_n(&service.yield_blocks,__ATOMIC_ACQUIRE));
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
     if(compute_service_case>=15) {
         if(compute_service_case!=15) {
@@ -405,10 +409,14 @@ static void compute_owner(void *unused)
         if(compute_service_case==7) {
             /* Pacing while a job waits for its fence without interrupt delivery,
              * then completion observed without requests that would wake the worker. */
-            uint32_t active=get(&active_ticks);vTaskDelay(50);
+            uint32_t active=get(&active_ticks),expired=expiries(PVR_GPU_SERVICE_READY);vTaskDelay(50);
             uint32_t measured=get(&active_ticks)-active;
             metric("job-active-ticks-per-50",measured);
-            configASSERT(measured<=50000/PVR_GPU_SERVICE_JOB_POLL_US+4);
+            /* Without interrupt delivery the worker wakes every JOB_POLL_US;
+             * the window can split one period. */
+            measured=expiries(PVR_GPU_SERVICE_READY)-expired;
+            metric("job-expired-waits-per-50",measured);
+            configASSERT(measured+1>=50000/PVR_GPU_SERVICE_JOB_POLL_US&&measured<=50000/PVR_GPU_SERVICE_JOB_POLL_US+1);
             completion_model();TickType_t fenced=xTaskGetTickCount();
             while(__atomic_load_n(&compute.phase,__ATOMIC_ACQUIRE)!=PVR_COMPUTE_SERVICE_COMPLETE) {
                 configASSERT(xTaskGetTickCount()-fenced<100);vTaskDelay(1);

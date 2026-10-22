@@ -38,9 +38,10 @@ static unsigned char *resource(unsigned id)
 { configASSERT(id < PVR_FW_RESOURCE_COUNT); return config.resources[id].storage.cpu; }
 static uint64_t level(void)
 { register uint64_t result __asm__("x0"); __asm__ volatile("svc #120" : "=r"(result) :: "memory"); return result; }
-/* Pacing measurement: the number of scheduler ticks in which the worker made
- * at least one backend callback. Every worker wake-up samples the clock, so
- * this counts wake-ups at one per tick or less. */
+/* Latency measurement: the number of scheduler ticks in which the worker made
+ * at least one backend callback. Worker CPU time that crosses a tick boundary
+ * counts like a wait, so pacing assertions use the worker's own wait
+ * counters below. */
 static uint32_t active_ticks;
 static TickType_t last_active = portMAX_DELAY;
 static void callback(void *ctx)
@@ -55,6 +56,17 @@ static void callback(void *ctx)
 }
 static void metric(const char *name, uint64_t value)
 { platform_puts("metric "); platform_puts(name); platform_puts(" "); platform_hex(value); platform_puts("\n"); }
+/* Timed waits the worker began outside READY, or expiries in one phase. The
+ * owner reads them after a reply or while the worker blocks. */
+static uint32_t lifecycle_timed_waits(void)
+{
+    uint32_t sum = 0;
+    for (unsigned i = 0; i < PVR_GPU_SERVICE_PHASES; ++i)
+        if (i != PVR_GPU_SERVICE_READY) sum += __atomic_load_n(&service.timed_waits[i], __ATOMIC_ACQUIRE);
+    return sum;
+}
+static uint32_t expiries(enum pvr_gpu_service_phase phase)
+{ return __atomic_load_n(&service.wait_expiries[phase], __ATOMIC_ACQUIRE); }
 /* Wait for a worker phase without sending requests, which would wake it. */
 static TickType_t observe_phase(enum pvr_gpu_service_phase phase)
 {
@@ -379,6 +391,10 @@ static void owner(void *arg)
          * deadline; whichever reads the clock first reports its expiry. */
         configASSERT(response.error == PVR_GPU_SERVICE_ENABLE ||
             (gpu_service_case == 5 && response.error == PVR_GPU_SERVICE_CLOCK));
+        /* In case 5 the power controller fails only by its deadline. */
+        configASSERT(gpu_service_case != 5 || response.error != PVR_GPU_SERVICE_ENABLE ||
+            (power_controller.phase == A733_GPU_POWER_FAILED &&
+             power_controller.error == A733_GPU_POWER_TIMEOUT));
         configASSERT(get(&power_lease) && !get(&published) && !get(&enabled) && !running);
         if (gpu_service_case == 5) configASSERT(get(&power_requested) == 8);
         unsigned count = get(&calls);
@@ -428,22 +444,35 @@ static void owner(void *arg)
         configASSERT(get(&isolated) == 2 && get(&published) == 2);
         /* Pacing: startup, an idle ready session without interrupt delivery,
          * and shutdown, observed without requests that would wake the worker. */
-        uint32_t active = get(&active_ticks);
+        uint32_t active = get(&active_ticks), waits = lifecycle_timed_waits();
         configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
         metric("open-ticks", observe_phase(PVR_GPU_SERVICE_READY));
         /* The model answers every hardware wait at once, so start and stop
-         * need no tick waits; the limits leave emulator scheduling slack. */
+         * need no timed waits. */
         uint32_t measured = get(&active_ticks) - active;
-        metric("open-active-ticks", measured); configASSERT(measured <= 4);
-        vTaskDelay(2); active = get(&active_ticks); vTaskDelay(200);
+        metric("open-active-ticks", measured);
+        measured = lifecycle_timed_waits() - waits;
+        metric("open-timed-waits", measured); configASSERT(measured == 0);
+        vTaskDelay(2); active = get(&active_ticks); uint32_t expired = expiries(PVR_GPU_SERVICE_READY);
+        vTaskDelay(200);
         measured = get(&active_ticks) - active;
         metric("idle-active-ticks-per-200", measured);
-        configASSERT(measured <= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US + 4);
-        active = get(&active_ticks);
+        /* Without interrupt callbacks the idle session wakes every
+         * IDLE_POLL_US; the window can split one period. */
+        measured = expiries(PVR_GPU_SERVICE_READY) - expired;
+        metric("idle-expired-waits-per-200", measured);
+        configASSERT(measured + 1 >= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US &&
+                     measured <= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US + 1);
+        active = get(&active_ticks); waits = lifecycle_timed_waits();
         configASSERT(request(PVR_GPU_SERVICE_CLOSE, 1000000).result == PVR_GPU_SERVICE_OK);
         metric("close-ticks", observe_phase(PVR_GPU_SERVICE_STOPPED));
         measured = get(&active_ticks) - active;
-        metric("close-active-ticks", measured); configASSERT(measured <= 4);
+        metric("close-active-ticks", measured);
+        measured = lifecycle_timed_waits() - waits;
+        metric("close-timed-waits", measured); configASSERT(measured == 0);
+        metric("longest-yield-bursts", __atomic_load_n(&service.longest_yield_run, __ATOMIC_ACQUIRE));
+        metric("longest-yield-us", __atomic_load_n(&service.longest_yield_us, __ATOMIC_ACQUIRE));
+        metric("yield-blocks", __atomic_load_n(&service.yield_blocks, __ATOMIC_ACQUIRE));
         configASSERT(get(&isolated) == 3 && get(&published) == 3);
         set(&fault_mode, 1);
         configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_OK);

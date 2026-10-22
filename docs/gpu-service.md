@@ -89,19 +89,39 @@ request. When a step makes progress without waiting for the device, the worker
 takes another step at once. A burst ends after 200 µs
 (`PVR_GPU_SERVICE_BURST_US`), when a step only waits for the device, or when a
 request or interrupt wake is queued. Progress means a change in the phase or step
-position of the startup, shutdown, queue, free-list, compute or render state.
-OPEN preparation and disposal always count as progress because they never wait
-for the GPU. When a burst ends with CPU work left, the worker takes a queued
-request without waiting or calls `taskYIELD()`, so tasks of its priority run
-and the work continues without a tick wait. A compute dispatch therefore reaches
-its completion wait within one worker wake.
+position of the startup, compatibility and health check, shutdown, queue,
+free-list, compute or render state. OPEN preparation and disposal always count
+as progress because they never wait for the GPU. When a burst ends with CPU
+work left, the worker takes a queued request without waiting or calls
+`taskYIELD()`, so tasks of its priority run and the work continues without a
+tick wait. A compute dispatch therefore reaches its completion wait within one
+worker wake.
+
+`taskYIELD()` does not run tasks below the worker's priority. Once consecutive
+bursts with CPU work left have run for 1 ms (`PVR_GPU_SERVICE_CPU_RUN_US`), the
+worker blocks for one tick, so those tasks run for the rest of that tick. Every
+GPU image runs the worker at priority 3 on core 0. The tasks below that
+priority that can run only on core 0 are:
+
+- Accelerator image (`apps/accelerators`): the GPU compute client and the NPU
+  runtime client, both at priority 2.
+- Render image (`apps/gpu-render`): the PMIC, USB and client tasks, all at
+  priority 2. The finite-return build omits the USB task; the single-core build
+  creates the tasks without affinity on its only core.
+- Display image (`apps/gpu-display`): none. Its render client (priority 2) has
+  no core affinity and can run on another core.
 
 Hardware waits shorter than 50 µs (`PVR_GPU_SPIN_US`) end inside a step.
 Startup waits on the clock for its two 3 µs delays and re-reads the firmware
 readiness byte for up to 50 µs. Shutdown re-reads each idle register and each
 power acknowledgement for up to 50 µs. The power controller runs its register
-steps back to back and re-reads the power-domain acknowledgement for up to
-50 µs. A step returns to the worker only for a longer wait.
+steps back to back, waits on the clock for its 1 µs settling delay and re-reads
+the power-domain acknowledgement for up to 50 µs. Each re-read budget starts at
+the first read of its step. Each delay waits until the clock passes its start
+by more than the delay, because the board clock rounds down to whole
+microseconds. A step returns to the worker for a longer wait, and also when the
+clock shows no advance for 1,024 consecutive samples, so a stopped clock
+degrades to tick pacing instead of holding the worker inside one step.
 
 When no step is ready, the worker has one wait:
 
@@ -109,18 +129,24 @@ When no step is ready, the worker has one wait:
   or disposing: one tick.
 - Ready with a masked event batch: one tick.
 - Ready with a compute job, render or free-list operation in flight: until the
-  operation deadline or 4 ms (`PVR_GPU_SERVICE_JOB_POLL_US`), whichever is
-  earlier. An interrupt or request wakes it sooner. The 4 ms bound completes a
-  job after a lost interrupt and in an image without interrupt callbacks.
+  earliest deadline of that work or 4 ms (`PVR_GPU_SERVICE_JOB_POLL_US`),
+  whichever is earlier. The deadline of the latest client request counts only
+  while a compute job or render is in flight; a pending free-list operation
+  contributes its own operation deadline. An interrupt or request wakes the
+  worker sooner. The 4 ms bound completes a job after a lost interrupt and in
+  an image without interrupt callbacks.
 - Ready and idle with armed interrupt delivery: until a request or interrupt.
 - Ready and idle without interrupt callbacks: 50 ms
   (`PVR_GPU_SERVICE_IDLE_POLL_US`), so firmware events that arrive without a
-  job, such as statistics updates, are drained.
+  job, such as statistics updates, are drained. When idle power-off is
+  implemented, this wait becomes its 50 ms delay before parking and the
+  constant is replaced.
 - Cold, stopped, failed or disposed: until a request.
 
-A missed job deadline therefore fails the service within one tick of the
-deadline. Completion and deadlines advance without client status polling.
-Scheduling delays and callback duration can extend the actual interval.
+A missed job, render or free-list deadline therefore fails the service within
+one tick of the deadline. Completion and deadlines advance without client
+status polling. Scheduling delays and callback duration can extend the actual
+interval.
 
 All composed components sample time through one worker-owned monotonic clock
 (`pvr_gpu_service_now`). It records the latest sample of any component and
@@ -236,32 +262,63 @@ their own frames. Physical stack use remains unmeasured.
 
 ## Worker pacing measured in the emulator
 
-The service fixtures count worker wake-ups as the number of 1 ms scheduler
-ticks in which the worker makes at least one backend callback; every wake-up
-samples the clock through a callback. They observe phases by reading the
-service state, without requests that would wake the worker. The device models
-answer every hardware wait at once, so the counts measure pacing overhead, not
-GPU time. Neither build delivers GPU interrupts. Both columns use the same
-fixtures; the earlier column is the service before the one-wait pacing change.
+The service fixtures report two kinds of figures. Latency figures count 1 ms
+scheduler ticks, either between a reply and a phase or with at least one worker
+callback. Worker CPU time that crosses a tick boundary counts like a wait in
+them. Pacing figures come from the worker's own counters: by phase, the timed
+waits it begins and those that expire without a request or interrupt wake. The
+fixtures observe phases by reading the service state, without requests that
+would wake the worker. The device models answer every hardware wait at once,
+so the figures measure pacing overhead, not GPU time. Only the interrupt model
+delivers GPU interrupts.
 
-| Measurement | Before | After |
+| Latency | One tick per poll | One wait |
 | --- | --- | --- |
 | Ticks from OPEN reply to READY, synchronous power | 5 | 2 |
-| Ticks from OPEN reply to READY, power controller | 34 | 3 |
+| Ticks from OPEN reply to READY, power controller | 34 | 2 |
 | Ticks from CLOSE reply to STOPPED, power controller | 10 | 1 |
-| Worker wake-ups in 200 ticks, ready and idle | 200 | 4 |
-| Worker wake-ups in 50 ticks, compute job waiting for its fence | 50 | 12 |
+| Ticks with worker activity in 200, ready and idle | 200 | 4 |
+| Ticks with worker activity in 50, compute job waiting for its fence | 50 | 12 |
 | Ticks from fence write to COMPLETE, no client requests | 1 | 2 |
-| Ticks from compute OPEN to READY, with status polling | 14 | 9 |
+| Ticks from compute OPEN to READY, with status polling | 14 | 9 to 12 |
 
-The idle and job rows match the 50 ms and 4 ms bounds: about 20 and 250
-timed wake-ups per second. Without interrupt delivery, a job completes up to
-4 ms after its fence instead of within one tick; with interrupt delivery the
-interrupt wakes the worker at once. The fixtures assert the after column with
-emulator slack. Logs, case images' hashes and the base commit are under
-`~/.cache/sunstoneos/evidence/gpu-runtime-pacing-20261022/`. No board
-measurement exists; unpark wall-clock time and interrupt-driven completion
-remain board items in the [runtime design](designs/gpu-runtime.md).
+The first column is the service that polled every tick. The second column
+held in each of three runs of the service and power-controller fixtures; its
+compute rows come from two runs of the compute fixture.
+
+The fixtures assert these worker counters:
+
+- OPEN to READY: 0 timed waits, with synchronous power and with the power
+  controller. A step of the compatibility and health check counts as progress,
+  so the check needs no tick wait.
+- CLOSE to STOPPED: 0 timed waits.
+- Ready and idle without interrupt callbacks: 4 expired waits in 200 ticks,
+  about 20 per second.
+- Compute job waiting for its fence without interrupt delivery: 12 expired
+  waits in 50 ticks, about 250 per second.
+- Ready and idle with armed interrupt delivery, in the interrupt model: 0 timed
+  waits in 20 ticks.
+- Compute OPEN to READY: 0 timed waits.
+
+The idle and job assertions allow one wait either way, because the measuring
+window can split one wait period. Without interrupt delivery, a job completes
+up to 4 ms after its fence instead of within one tick; with interrupt delivery
+the interrupt wakes the worker at once.
+
+The longest run of CPU-only bursts lasted 1.5 to 2.5 ms in the service
+fixtures and 1.2 to 1.8 ms in the compute fixture. A run is checked against the
+1 ms bound after each burst, and it includes time that tasks of the worker's
+priority used after each yield, so it can exceed the bound by one burst plus
+that time. Service case 1, which opens the service three times, blocked for a
+tick three to five times; each compute case blocked five or six times. These
+blocks add up to three ticks to the compute OPEN.
+
+Logs and the hashes of the measured executables are under
+`~/.cache/sunstoneos/evidence/gpu-runtime-pacing-counters-20261022/`; the one-tick
+column comes from `~/.cache/sunstoneos/evidence/gpu-runtime-pacing-20261022/`.
+No board measurement exists; unpark wall-clock time, the length of CPU-only
+runs and interrupt-driven completion remain board items in the
+[runtime design](designs/gpu-runtime.md).
 
 Reproduce only after relevant inputs change, using the configured toolchain:
 

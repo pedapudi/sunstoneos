@@ -99,13 +99,14 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         enum pvr_gpu_control_result r=pvr_gpu_control_poll(s->control,4);
         if (r==PVR_GPU_CONTROL_AGAIN) return PVR_GPU_STOP_AGAIN;
         if (r!=PVR_GPU_CONTROL_OK) return fail(s,PVR_GPU_STOP_CONTROL);
-        /* Re-read the acknowledgement for at most PVR_GPU_SPIN_US. */
-        uint32_t ack=0; uint64_t start=now;
+        /* Re-read the acknowledgement for at most PVR_GPU_SPIN_US, counted
+         * from the first read so event servicing does not consume it. */
+        uint32_t ack=0; struct pvr_gpu_spin wait={0};
         for (;;) {
             if (!s->ops.sync_read(s->context,&ack)) return fail(s,PVR_GPU_STOP_IO);
             if (ack) break;
             if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
-            if (now-start>=PVR_GPU_SPIN_US) return PVR_GPU_STOP_AGAIN;
+            if (!pvr_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
         }
         s->acknowledgement[which]=ack;
         if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
@@ -123,12 +124,12 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
             if (!s->ops.write(s->context,op->offset,op->width,op->value)) return fail(s,PVR_GPU_STOP_IO);
         } else {
             /* A register poll re-reads for at most PVR_GPU_SPIN_US. */
-            uint64_t start=now;
+            struct pvr_gpu_spin wait={0};
             for (;;) {
                 if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
                 if (op->kind!=POLL || (value&op->mask)==op->value) break;
                 if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
-                if (now-start>=PVR_GPU_SPIN_US) return PVR_GPU_STOP_AGAIN;
+                if (!pvr_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
             }
         }
         if (++s->index==s->count) ++s->phase;

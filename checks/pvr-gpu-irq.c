@@ -82,8 +82,11 @@ static void irq_owner(void *arg)
     while (service.irq_masked) { configASSERT(xTaskGetTickCount() - armed < 100); vTaskDelay(1); }
     vTaskDelay(2);
     uint32_t idle_calls = get(&calls), idle_masks = get(&mask_calls), idle_rearms = get(&rearm_calls);
+    uint32_t idle_waits = get(&service.timed_waits[PVR_GPU_SERVICE_READY]);
     vTaskDelay(20);
     configASSERT(get(&calls) == idle_calls && get(&mask_calls) == idle_masks && get(&rearm_calls) == idle_rearms);
+    idle_waits = get(&service.timed_waits[PVR_GPU_SERVICE_READY]) - idle_waits;
+    metric("idle-armed-timed-waits-per-20", idle_waits); configASSERT(idle_waits == 0);
     /* IRQ routes to core 0; the supervisor moved the worker to core 1. */
     uint32_t before = get(&interrupt_count);
     pend(); wait_at_least(&interrupt_count, before + 1);

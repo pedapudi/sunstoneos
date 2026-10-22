@@ -195,6 +195,13 @@ static int service_event(void *ctx, const unsigned char command[PVR_CCB_COMMAND_
         return pvr_gpu_events_dispatch(&s->free_list_events, s->epoch, command, PVR_CCB_COMMAND_BYTES);
     return s->config.control.event && s->config.control.event(ctx, command);
 }
+/* Deadline of the pending free-list operation, or 0 when none is pending. */
+static uint64_t free_list_deadline(const struct pvr_gpu_service *s)
+{
+    if (s->free_lists.phase != PVR_FREE_LIST_IDLE) return s->free_lists.deadline;
+    if (s->free_lists.request_count) return s->free_lists.requests[s->free_lists.request_head].deadline;
+    return 0;
+}
 static enum pvr_free_list_result free_list_progress(struct pvr_gpu_service *s, int closing)
 {
     uint64_t now;
@@ -206,10 +213,7 @@ static enum pvr_free_list_result free_list_progress(struct pvr_gpu_service *s, i
     }
     /* Capture the deadline before completion can move the manager to IDLE or
      * consume its request. A bounded callback can still finish too late. */
-    uint64_t operation_deadline = 0;
-    if (s->free_lists.phase != PVR_FREE_LIST_IDLE) operation_deadline = s->free_lists.deadline;
-    else if (s->free_lists.request_count)
-        operation_deadline = s->free_lists.requests[s->free_lists.request_head].deadline;
+    uint64_t operation_deadline = free_list_deadline(s);
     enum pvr_free_list_result r = pvr_free_lists_poll(&s->free_lists, now);
     if (r == PVR_FREE_LIST_FAULT) { fail(s, PVR_GPU_SERVICE_FREE_LISTS); return r; }
     if (operation_deadline) {
@@ -707,8 +711,9 @@ static uint64_t progress(const struct pvr_gpu_service *s)
 {
     const struct pvr_compute_service *c = s->config.compute;
     const struct pvr_render_service *r = s->config.render;
-    const uint64_t values[] = {s->phase, s->start.phase, s->start.index, s->stop.phase, s->stop.index,
-        s->queue.serial, s->queue.host_read, s->queue.firmware_read, s->free_lists.phase,
+    const uint64_t values[] = {s->phase, s->start.phase, s->start.index, s->control.phase,
+        s->control.health_done, s->stop.phase, s->stop.index, s->queue.serial, s->queue.host_read,
+        s->queue.firmware_read, s->free_lists.phase,
         s->free_lists.stage, s->free_lists.list, s->free_lists.cursor, s->free_lists.request_count,
         s->graphics_cleanup_index,
         c ? c->phase : 0, c ? c->job.phase : 0, c ? c->client.phase : 0, c ? c->client.index : 0,
@@ -741,10 +746,11 @@ static TickType_t ticks(uint64_t us)
 }
 /* The worker's one wait when no step is ready to run. A lifecycle phase waits
  * one tick: its hardware waits shorter than PVR_GPU_SPIN_US end inside the
- * step. A ready session waits one tick while a masked event batch remains, the
- * job deadline or PVR_GPU_SERVICE_JOB_POLL_US while a job, render or free-list
- * operation is in flight, and otherwise until a request or interrupt. Without
- * interrupt delivery an idle session also wakes every IDLE_POLL_US. */
+ * step. A ready session waits one tick while a masked event batch remains.
+ * While a job, render or free-list operation is in flight it waits until the
+ * earliest deadline of that work or PVR_GPU_SERVICE_JOB_POLL_US, whichever is
+ * sooner, and otherwise until a request or interrupt. Without interrupt
+ * delivery an idle session also wakes every IDLE_POLL_US. */
 static TickType_t wait_ticks(struct pvr_gpu_service *s)
 {
     switch (s->phase) {
@@ -754,23 +760,34 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     default: return 1;
     }
     if (s->config.irq.mask && s->irq_masked) return 1;
+    /* s->deadline belongs to the latest client request; it bounds the wait
+     * only while that request's job or render is in flight. A free-list
+     * operation carries its own deadline. */
     const struct pvr_compute_service *c = s->config.compute;
-    int busy = (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
-        render_polled(s) || (s->config.free_lists.count &&
-            (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count));
+    uint64_t earliest = UINT64_MAX;
+    int busy = 0;
+    if ((c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
+        render_polled(s)) { busy = 1; earliest = s->deadline; }
+    if (s->config.free_lists.count &&
+        (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count)) {
+        uint64_t operation = free_list_deadline(s);
+        busy = 1;
+        if (operation && operation < earliest) earliest = operation;
+    }
     if (!busy) return s->config.irq.mask ? portMAX_DELAY : ticks(PVR_GPU_SERVICE_IDLE_POLL_US);
     uint64_t now, bound = PVR_GPU_SERVICE_JOB_POLL_US;
-    if (sample(s, &now)) bound = s->deadline <= now ? 0 : s->deadline - now < bound ? s->deadline - now : bound;
+    if (sample(s, &now)) bound = earliest <= now ? 0 : earliest - now < bound ? earliest - now : bound;
     return ticks(bound);
 }
 /* Steps that progress continue while nothing is queued, for at most
  * PVR_GPU_SERVICE_BURST_US. Return 1 when CPU work remains. */
-static int burst(struct pvr_gpu_service *s)
+static int burst(struct pvr_gpu_service *s, uint64_t *start)
 {
-    uint64_t start, now;
-    int clocked = sample(s, &start), more = step(s);
+    uint64_t now;
+    int clocked = sample(s, start), more = step(s);
+    if (!clocked) *start = s->last_now;
     while (more && clocked && !uxQueueMessagesWaiting(s->requests) &&
-           sample(s, &now) && now - start < PVR_GPU_SERVICE_BURST_US) more = step(s);
+           sample(s, &now) && now - *start < PVR_GPU_SERVICE_BURST_US) more = step(s);
     return more;
 }
 static void worker(void *argument)
@@ -790,9 +807,30 @@ static void worker(void *argument)
          * work left, the worker takes a queued request without waiting or
          * yields to tasks of its priority. */
         struct pvr_gpu_service_message message;
-        if (burst(s)) {
-            if (xQueueReceive(s->requests, &message, 0) != pdTRUE) { taskYIELD(); continue; }
-        } else if (xQueueReceive(s->requests, &message, wait_ticks(s)) != pdTRUE) continue;
+        uint64_t started;
+        if (burst(s, &started)) {
+            /* Bursts that end with CPU work left keep tasks below the worker's
+             * priority off its core. Once such a run reaches CPU_RUN_US the
+             * worker blocks for one tick, so those tasks run for the rest of
+             * the tick; otherwise it yields only to tasks of its priority. */
+            if (!s->yield_run++) s->yield_start = started;
+            if (s->yield_run > s->longest_yield_run) s->longest_yield_run = s->yield_run;
+            uint64_t run = s->last_now - s->yield_start;
+            if (run > s->longest_yield_us) s->longest_yield_us = run;
+            if (run >= PVR_GPU_SERVICE_CPU_RUN_US) {
+                s->yield_run = 0; ++s->yield_blocks;
+                if (xQueueReceive(s->requests, &message, 1) != pdTRUE) continue;
+            } else if (xQueueReceive(s->requests, &message, 0) != pdTRUE) { taskYIELD(); continue; }
+        } else {
+            s->yield_run = 0;
+            enum pvr_gpu_service_phase phase = s->phase;
+            TickType_t wait = wait_ticks(s);
+            if (wait != portMAX_DELAY) ++s->timed_waits[phase];
+            if (xQueueReceive(s->requests, &message, wait) != pdTRUE) {
+                if (wait != portMAX_DELAY) ++s->wait_expiries[phase];
+                continue;
+            }
+        }
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
             taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
             continue;

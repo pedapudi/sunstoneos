@@ -1,9 +1,8 @@
 # Design: concurrent GPU sessions, recovery and power management
 
 Status: **partly implemented**. Worker pacing (the "Interrupts and worker
-pacing" section) is implemented and host-modeled, including the power
-controller's back-to-back steps; [gpu-service.md](../gpu-service.md) records its
-measurements. The other sections remain design. Each item ends at implemented
+pacing" section) is implemented and host-modeled, except park;
+[gpu-service.md](../gpu-service.md) records its measurements. The other sections remain design. Each item ends at implemented
 and host-modeled; physical behavior stays pending until the board evidence at
 the end exists. Firmware events and failure classes are in
 [gpu-recovery.md](../gpu-recovery.md).
@@ -65,25 +64,43 @@ existing handler masks it and queues one coalesced wake. The worker drains
 the firmware-to-host queue (FWCCB), reads each busy session's timeline,
 completes advanced jobs and rearms.
 
-The worker has one wait. It blocks until the earliest job deadline, a request
-or interrupt wake, or a 4 ms bound while a job is in flight. With nothing in
-flight it blocks 50 ms and then parks; parked, it blocks without a timeout.
-The 4 ms bound covers a lost interrupt until SPI 63 delivery is qualified, and
-completes jobs in an image without `platform/a733-smp-cached/irq_table.c`. The
-per-tick mode and the `!config.irq.mask` branch of `timed()` in
-`pvr_gpu_service.c` are removed.
+The worker has one wait. It blocks until the earliest deadline of the work in
+flight, a request or interrupt wake, or a 4 ms bound while a job, render or
+free-list operation is in flight. The deadline of the latest client request
+counts only while its job or render is in flight; a free-list operation uses
+its own deadline. With nothing in flight it blocks 50 ms and then parks;
+parked, it blocks without a timeout. The 4 ms bound covers a lost interrupt
+until SPI 63 delivery is qualified, and completes jobs in an image without
+`platform/a733-smp-cached/irq_table.c`. The per-tick mode in
+`pvr_gpu_service.c` is removed. Until park exists, an image without interrupt
+callbacks wakes every 50 ms when idle (`PVR_GPU_SERVICE_IDLE_POLL_US`) to
+drain unsolicited FWCCB events, and an image with armed delivery blocks without
+a timeout. That 50 ms wait becomes the park delay, and park replaces the
+constant.
 
 Start, stop and job preparation are paced by the hardware:
 
 - A 3 µs `DELAY` step in `pvr_gpu_start.c` waits on the counter inside the
-  step; register writes and fences run back to back.
+  step; register writes and fences run back to back. The board clock reports
+  whole microseconds rounded down, so a delay ends when the clock passes its
+  start by more than the delay.
 - A register `POLL` in `pvr_gpu_stop.c`, the readiness-byte read and a
-  firmware acknowledgement re-read for up to 50 µs, then return AGAIN; the
-  worker then waits one tick, as section 1.3 of performance-architecture.md
-  allows for a hardware wait of a tick or more.
+  firmware acknowledgement re-read for up to 50 µs from their first read, then
+  return AGAIN; the worker then waits one tick, as section 1.3 of
+  performance-architecture.md allows for a hardware wait of a tick or more.
+- The power controller in `a733_gpu_power.c` runs its register steps back to
+  back in one poll. It waits on the clock for the 1 µs settling delay and
+  re-reads the PCK acknowledgement for up to 50 µs from its first read. The
+  platform binding in `a733_gpu_platform.c` still runs the PMIC health check
+  before each power poll and before it reports the GPU on.
+- Every wait inside a step returns AGAIN when the clock shows no advance for
+  1,024 consecutive samples, so a stopped clock degrades to tick pacing.
 - The worker repeats progressing steps for up to 200 µs per burst (the USB0
-  bound) in place of 16 steps. With CPU work left, it checks the request queue
-  without waiting and calls `taskYIELD()`.
+  bound) in place of 16 steps. A step of the compatibility and health check
+  counts as progress. With CPU work left, it checks the request queue without
+  waiting and calls `taskYIELD()`. After 1 ms of such bursts it blocks for one
+  tick, so tasks below its priority on core 0 (the GPU, NPU, PMIC and USB
+  clients at priority 2) still run during long preparation or disposal.
 
 ## Memory placement and cache policy
 

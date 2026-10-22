@@ -68,9 +68,14 @@ writing stale CPU cache lines over firmware-owned data.
 
 A poll performs at most one register access or publication operation. A delay
 step starts after the preceding callback has finished and waits on the clock
-inside the step for its 3 µs. The readiness check re-reads the shared byte for
-up to 50 µs (`PVR_GPU_SPIN_US`) and then returns to the caller, which polls
-again on its next wake. Every wait ends at the startup deadline. The service
+inside the step for its 3 µs. The clock may report whole microseconds rounded
+down, so the step waits until the clock passes its first sample by more than
+3 µs. The readiness check re-reads the shared byte for up to 50 µs
+(`PVR_GPU_SPIN_US`) and then returns to the caller, which polls again on its
+next wake. A wait whose clock shows no advance for 1,024 consecutive samples
+(`PVR_GPU_SPIN_STALLED_READS`) also returns to the caller without advancing the
+step; the next poll restarts the delay, so a stopped clock cannot shorten it.
+Every wait ends at the startup deadline. The service
 must continue polling and keep its independent watchdog protection active.
 
 The caller supplies one absolute deadline for the complete startup. Clock
@@ -96,7 +101,12 @@ saved wrapper plan from the existing MIPS preparation evidence. Its device model
 charges one microsecond for each clock read and two for each device callback. It
 checks publication before register access, minimum delays waited inside one
 poll, a readiness wait bounded to 50 µs per poll, a deadline that expires during
-a delay, and at most one register access per poll. A synthetic feature variant covers
+a delay, and at most one register access per poll. A second clock model counts
+one 24 MHz tick per clock read and callback and reports whole microseconds
+rounded down, as the board counter does. Under it, the two 3 µs delays
+separated their bracketing callbacks by 86 and 95 counter ticks, at least the
+72 that 3 µs requires. With a stopped clock, a delay and a readiness wait each
+return to the caller without advancing and complete once the clock runs. A synthetic feature variant covers
 alternate reset-mask selection, omission of secure-bus/reset2 operations, a
 1,024-bit cache line, and the lazy-writeback workaround. It is not another
 physically supported board profile.
