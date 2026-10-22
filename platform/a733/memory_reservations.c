@@ -29,13 +29,11 @@ struct device_memory_pool *a733_memory_reservations_init(void)
     return a733_device_memory_ready() ? &boot_pool : NULL;
 }
 #else
-/* 0 before the first preparation, 1 when the pool is ready or the image links
- * none, -1 after a refusal. Accessed inside the critical section until
- * platform_init() prepares the pool before the scheduler starts. */
-static int local_result;
+static int local_result; /* See a733_memory_prepare_once(). */
 
-static int prepare_local(uintptr_t start, uintptr_t end)
+static int check_local(void)
 {
+    uintptr_t start = (uintptr_t)__device_pool_start, end = (uintptr_t)__device_pool_end;
     if (start == end) return 1; /* The image links no pool. */
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
     if (!a733_device_memory_local_pool_valid(start, end)) return 0;
@@ -50,24 +48,24 @@ static int prepare_local(uintptr_t start, uintptr_t end)
     static const struct a733_mapping_rule wb = {A733_MAPPING_WRITE, 1,
         {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
     return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
-                                     DEVICE_MEMORY_PAGE, &wb) &&
-        device_memory_pool_init(&boot_pool, start, start, end - start);
+                                     DEVICE_MEMORY_PAGE, &wb);
+}
+
+static int init_local(void)
+{
+    uintptr_t start = (uintptr_t)__device_pool_start, end = (uintptr_t)__device_pool_end;
+    return start == end || device_memory_pool_init(&boot_pool, start, start, end - start);
 }
 
 int a733_memory_reservations_prepare(void)
 {
-    if (!local_result)
-        local_result = prepare_local((uintptr_t)__device_pool_start, (uintptr_t)__device_pool_end) ? 1 : -1;
-    return local_result > 0;
+    return a733_memory_prepare_once(&local_result, check_local, init_local);
 }
 
 struct device_memory_pool *a733_memory_reservations_init(void)
 {
     /* Transitional: until platform_init() prepares the pool, the first getter
      * call prepares it. */
-    a733_memory_critical_enter();
-    int ready = a733_memory_reservations_prepare();
-    a733_memory_critical_exit();
-    return ready && boot_pool.initialized ? &boot_pool : NULL;
+    return a733_memory_reservations_prepare() && boot_pool.initialized ? &boot_pool : NULL;
 }
 #endif

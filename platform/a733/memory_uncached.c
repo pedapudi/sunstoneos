@@ -29,11 +29,11 @@ struct device_memory_pool *a733_memory_uncached_init(void)
     return a733_device_memory_ready() ? &uncached_pool : NULL;
 }
 #else
-/* As in memory_reservations.c. */
-static int local_result;
+static int local_result; /* See a733_memory_prepare_once(). */
 
-static int prepare_local(uintptr_t start, uintptr_t end)
+static int check_local(void)
 {
+    uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
     if (start == end) return 1; /* The image links no uncached pool. */
     if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
         (uintptr_t)__device_pool_end > start) return 0;
@@ -42,24 +42,25 @@ static int prepare_local(uintptr_t start, uintptr_t end)
     static const struct a733_mapping_rule nc = {A733_MAPPING_READ_WRITE, 1,
         {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 1, 1};
     return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
-                                     DEVICE_MEMORY_PAGE, &nc) &&
+                                     DEVICE_MEMORY_PAGE, &nc);
+}
+
+static int init_local(void)
+{
+    uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
+    return start == end ||
         device_memory_pool_init_typed(&uncached_pool, start, start, end - start, DEVICE_MEMORY_CLASS_NONE,
                                       DEVICE_MEMORY_NON_CACHEABLE);
 }
 
 int a733_memory_uncached_prepare(void)
 {
-    if (!local_result)
-        local_result = prepare_local((uintptr_t)__uncached_pool_start, (uintptr_t)__uncached_pool_end) ? 1 : -1;
-    return local_result > 0;
+    return a733_memory_prepare_once(&local_result, check_local, init_local);
 }
 
 struct device_memory_pool *a733_memory_uncached_init(void)
 {
     /* Transitional, as for the write-back pool. */
-    a733_memory_critical_enter();
-    int ready = a733_memory_uncached_prepare();
-    a733_memory_critical_exit();
-    return ready && uncached_pool.initialized ? &uncached_pool : NULL;
+    return a733_memory_uncached_prepare() && uncached_pool.initialized ? &uncached_pool : NULL;
 }
 #endif

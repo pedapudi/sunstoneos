@@ -225,9 +225,13 @@ describe, an xHCI register read and the camera memory check against the pool
 source before this profile, and measures the worst-case acquire hold. It
 checks that an acquire and a release inside an enclosing critical section keep
 the GIC priority mask raised. It then runs 200,000 rounds of release and
-retain on one core against long acquires on the other. An execution trace counts the
+retain on one core against long acquires on the other, followed by 100,000
+rounds in which one core describes a released lease while the other gives
+its slot to another owner and extent. An execution trace counts the
 barriers per call: each acquire, release or retain adds a critical-section
-pair of 485 instructions with 5 supervisor calls, 27 `DSB` and 7 `ISB`.
+pair of 485 instructions with 5 supervisor calls, 27 `DSB` and 7 `ISB`. A
+local pool getter call after preparation costs 17 instructions and no
+barrier.
 
 These results do not qualify physical DRAM, coherence, device transactions,
 sustained workloads or any cycle count on the board. Every cycle budget in

@@ -11,8 +11,10 @@ qualified on the board.
 
 FreeRTOS tasks start at EL0 unless the image selects EL1, and EL0 tasks call
 kernel functions directly. Kernel data, stacks and heap therefore stay
-readable and writable at EL0. Device pools have no EL0 mapping, so every task
-that touches pool memory runs at EL1.
+readable and writable at EL0. MMIO and the extended device pools have no EL0
+mapping, so every task that programs a device or touches an extended pool
+runs at EL1. The local layout's pools, described after the table, lie inside
+EL0 read-write data blocks.
 
 | Physical range | Use | EL1 descriptor | EL0 access |
 | --- | --- | --- | --- |
@@ -39,7 +41,7 @@ write-back pool, at most 2 MiB (4 MiB with the large NPU graph), lies after
 BSS and below `0x41f0_0000` inside the write-back data blocks. When the image
 links an uncached pool, the level-2 entry for `0x41c0_0000`–`0x41e0_0000` is
 Normal non-cacheable and keeps the access-permission and execute-never bits
-of the data block it replaces.
+of the data block it replaces, so EL0 can read and write both local pools.
 
 ## Mapping the rest of the 12 GiB is staged
 

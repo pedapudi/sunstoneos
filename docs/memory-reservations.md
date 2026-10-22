@@ -37,8 +37,10 @@ and 0 after a refusal, which it keeps. The getter returns NULL until
 preparation has succeeded.
 
 `platform_init()` is to call both preparations on core 0 before the scheduler
-starts. Until it does, each getter call enters the kernel critical section,
-prepares its pool on the first call, and returns the kept result.
+starts. Until it does, each getter calls its preparation. The first call
+checks the translations outside any lock and initializes the pool inside the
+kernel critical section; a later call returns the kept result after one
+load-acquire and takes no lock.
 
 The pool excludes image code, driver state, translation tables, monitor state,
 exception stacks and heap allocations by construction. It also remains below

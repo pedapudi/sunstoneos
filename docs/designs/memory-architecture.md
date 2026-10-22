@@ -21,9 +21,11 @@ a 1 GiB class each for the GPU and the NPU. Stage 3 maps the DRAM above
 ## Map and protection
 
 Tasks start at EL0 unless the image selects EL1, and EL0 tasks call kernel
-functions directly, so kernel data, stacks and heap stay EL0 read-write. Pool
-memory and MMIO have no EL0 access in either layout, so every lease holder
-that touches pool memory or programs a device is an EL1 task.
+functions directly, so kernel data, stacks and heap stay EL0 read-write. MMIO
+has no EL0 access in either layout, so every lease holder that programs a
+device is an EL1 task. The extended layout also gives its pools no EL0
+access. The local layout places its pools inside EL0 read-write data blocks,
+as described after the table.
 
 | Physical range | Use | EL1 descriptor | EL0 |
 | --- | --- | --- | --- |
@@ -50,7 +52,7 @@ the table above in two places. Its write-back pool, at most 2 MiB (4 MiB with
 the large NPU graph), lies after BSS and below `0x41f0_0000` inside the WB
 data blocks. When the image links an `uncached` pool, the level-2 entry for
 `0x41c0_0000`–`0x41e0_0000` is Normal-NC and keeps the AP and XN bits of the
-data block it replaces.
+data block it replaces. EL0 can therefore read and write both local pools.
 
 ## Boot checks one translation per extended pool block
 
@@ -91,15 +93,40 @@ preparation, so READY serves as the mapping generation.
 
 The local preparations, `a733_memory_reservations_prepare()` and
 `a733_memory_uncached_prepare()`, return 1 when the pool is ready or the image
-links none, and 0 after a refusal, which they keep. Until `platform_init()`
-calls them (a primary-agent change below), each local getter enters the
-kernel critical section, prepares its pool on the first call, and returns the
-pool or NULL. Each later getter call costs one critical-section pair. Once
-`platform_init()` prepares the pools, the getters become a plain test of the
-kept result.
+links none, and 0 after a refusal, which they keep. Both go through one
+shared inline helper, `a733_memory_prepare_once()` in
+`include/a733_memory_critical.h`, which keeps the result in one word: 0
+before the first call, 1 for ready or absent, -1 for refused. A call that
+finds the word nonzero returns after one acquire load. Otherwise the helper
+runs the translation check outside any lock, because the check reads only
+linker symbols and the installed tables, so concurrent first callers reach
+the same verdict. It then enters the kernel critical section, and if the
+word is still 0, initializes the pool and stores the result with a release
+store. The critical section therefore holds only the pool initialization,
+344 instructions in the QEMU SMP fixture, and never a translation.
+
+Until `platform_init()` calls the local preparations (a primary-agent change
+below), each local getter calls its preparation, so the first call prepares
+the pool. A later getter call costs 17 instructions with one load-acquire
+and no `SVC`, `DSB`, `ISB` or `DMB`. Once `platform_init()` prepares the
+pools, the getters can test the kept result directly.
 
 Memory management has no interrupt or polling path: every operation is a
-synchronous call from boot code or a task.
+synchronous call from boot code or a task. These paths reach the pool on
+every pass rather than once at admission:
+
+- `a733_display_framebuffer_memory()` calls the `uncached` getter on every
+  pass of the HDMI, GPU display and DisplayPort output services and on every
+  display-engine replay submission.
+- `firmware_owned()` in `platform/a733/gpu_compute_reserved.c` calls both
+  getters from each compute binding check; the GPU compute service checks a
+  job's binding up to five times.
+- The xHCI driver describes its lease twice per register read.
+- The camera, display, crypto and codec drivers describe their lease once per
+  device access.
+
+A local getter call costs one load-acquire, an extended getter call one plain
+load of READY, and a describe one `DMB`. None of them takes a lock.
 
 ## Allocation: class alignment and a ledger inside the kernel critical section
 
@@ -178,7 +205,10 @@ by writing `device_memory_lookup(pool, lease)->state` under its own service
 lock, as before stage 1; 25 production files do this. These writes take
 no ledger lock. They never write FREE or any other field, so acquire's
 free-slot scan and placement, which run under the lock, see the same occupied
-set, and describe reads `state` as one aligned word. The ledger does not
+set. Describe loads `state` atomically, but the holders store it with plain
+C assignments, which C11 treats as a data race. The design relies on the
+compiler emitting each such store as one aligned 32-bit `STR`, which Clang
+does for AArch64; the locked `set_state` below removes that assumption. The ledger does not
 check these writes against a transition rule, so it does not enforce that a
 retained slot stays retained; that remains a holder obligation, as before.
 A locked `set_state` with a transition table returns together with the merge
@@ -201,8 +231,10 @@ the USB host driver marks its private pool, which it builds inside an
 Each write-back pool also records a clean watermark: the end of the highest
 page it has handed out. A page above the watermark has never been handed out,
 and no Non-secure agent writes it. EL1 code writes no pool page before acquire
-returns it, EL0 has no mapping of it, and the CPU never creates dirty lines
-speculatively. Secure dirty lines left by boot0 or the launcher before EL3
+returns it, and the CPU never creates dirty lines speculatively. In the
+extended layout EL0 has no mapping of the pools. In the local layout EL0 can
+write them, so the watermark there also relies on the cooperative ownership
+rule below: no task writes pool memory it does not hold. Secure dirty lines left by boot0 or the launcher before EL3
 entry cannot be removed by Non-secure maintenance at all; the cold-entry
 experiment below covers them. A boot pool starts with the watermark at its
 base. A pool built inside a lease also starts at its base, so its builder
@@ -221,7 +253,11 @@ name, and refuses; the raised watermark only causes more cleaning later.
 The clean uses EL1-only instructions (`aarch64_device_cache_stride()` reads
 `CurrentEL`), so acquire on a write-back pool must run at EL1. Every current
 caller does, because each acquires memory for a device it programs, and MMIO
-has no EL0 mapping in either layout. The pool header states the rule.
+has no EL0 mapping in either layout. The pool header states the rule. An EL0
+task that acquired a recycled write-back extent would take an
+undefined-instruction exception at `MRS CurrentEL` rather than receive a
+refusal. Only the local layout maps its pools at EL0, and no local-layout
+task acquires without programming a device.
 
 Three consumers, `platform/a733/gpu_compute_reserved.c`,
 `platform/a733/gpu_graphics_memory.c` and `apps/uart/dma.c`, still write zeros
@@ -260,10 +296,14 @@ barrier is a precondition for every maintenance form in this design.
   version-2 boot record, `a733_mapping_check_stride()` for both layouts, and
   the QEMU fixture with its golden array.
 - Removed: the batched page-scan state machine in `device_memory_layout.c`
-  with `a733_device_memory_commit_allowed()` and `same_layout()`.
+  with `a733_device_memory_commit_allowed()`, `same_layout()`,
+  `a733_memory_reservations_commit_verified()` and
+  `a733_memory_uncached_commit_verified()`. The GPU, display and DisplayPort
+  checks that called or hooked them model READY and call the two pool
+  preparations instead.
 - Transitional, removed in this order:
-  1. The lazy preparation in the local getters, once `platform_init()` calls
-     both local preparations.
+  1. The lazy preparation in both local getters, once `platform_init()` calls
+     both local preparations; the getters then test the kept result.
   2. `a733_device_memory_tables_admitted()` and
      `a733_device_memory_tables_complete()`, once the table builder reads the
      layout constants directly.
@@ -288,12 +328,14 @@ provisional and unqualified.
 | Slot comparisons per acquire | 1,056 bound | unchanged bound | 160 worst replayed | host replay |
 | Critical-section hold | no serialization | acquire at most 15,000 instructions; release and retain at most 100 | acquire 14,206 (31 occupied slots, 32 attempts); release 31; retain 24 | QEMU SMP fixture |
 | Critical-section pair per acquire, release or retain | none | one pair in today's port | 485 instructions, 5 `SVC`, 27 `DSB`, 7 `ISB`, 8 or 9 `DMB` | QEMU SMP fixture |
+| Local getter call after preparation | one plain load | no `SVC`, `DSB`, `ISB` or `DMB` | 17 instructions, one load-acquire, no barrier | QEMU SMP fixture |
+| Critical-section hold of a local pool's first preparation | none | at most 15,000 instructions | 344 instructions (pool initialization only) | QEMU SMP fixture |
 | Describe | 71 instructions, no barrier | no `SVC`, `DSB` or `ISB` | 92 instructions, 1 `DMB` | QEMU SMP fixture |
 | xHCI register read (`rd()`, two describes) | 371 instructions | no `SVC`, `DSB` or `ISB` | 413 instructions, 2 `DMB` | QEMU SMP fixture |
 | Camera memory check (`memory_owned()`, one describe) | 102 instructions | no `SVC`, `DSB` or `ISB` | 123 instructions, 1 `DMB` | QEMU SMP fixture |
 | GPU MMU entries for the replayed extents | 354 to 4,568 per image (4 KiB pages) | 2 MiB and 64 KiB pages where aligned | 24 to 137 per image | host replay |
 | Largest free extent before each allocation | 4 KiB alignment | no request newly refused | none refused; up to 1,056 pages (4.1 MiB) smaller | host replay |
-| Bytes cleaned on first use of a page | callers clean whole extents | 0 | 0, except alignment gaps below the watermark: 77,824 (GPU images) and 1,048,576 (high-profile H.264) | host replay counter |
+| Bytes cleaned on first use of a page | callers clean whole extents | 0 | 0, except alignment gaps below the watermark: 77,824 (GPU images) and 1,048,576 (high-profile H.264), at admission only | host replay counter |
 | Plain clean cost | done by callers | 4 cycles per absent line on A55 and A76 | provisional, unmeasured | board, cores 0 and 6 |
 | GPU session open, NPU model load (stage 2) | none | first open: 0 lines cleaned; reopen: one 1 GiB clean, at most 80 M A76 cycles | provisional, unmeasured | board core 6 |
 | `DC` per device-to-CPU transition | full READ and WRITE buffers (NPU) | declared write set | not changed in stage 1 | GPU and NPU host models |
@@ -320,9 +362,17 @@ These rows are explained regressions:
   including gap pages that were never handed out, and first fit with class
   minimums places later small extents in those gaps. The largest free extent
   shrinks for the same reason: a 2 MiB-aligned extent leaves a gap that only
-  smaller extents can use.
+  smaller extents can use. These cleans happen at admission only. If a
+  measured admission exceeds its budget, the watermark is refined to cover
+  only handed-out pages, so gap pages below a 2 MiB-aligned extent stay
+  uncleaned; the high-profile H.264 admission, which cleans 16,384 lines in
+  gaps, is the first to measure.
 - On a recycled extent, the three zero-and-clean consumers clean the lines
   below the watermark a second time, as described above.
+- A local getter call costs 17 instructions with one load-acquire, where the
+  getter before stage 1 was one plain load. The getter calls its preparation
+  so that the first call prepares the pool until `platform_init()` does; the
+  cost falls to a plain test of the kept result after that change.
 
 ## Fixtures
 
@@ -343,17 +393,24 @@ These rows are explained regressions:
   - measures the worst-case acquire hold with 31 occupied slots;
   - checks that an acquire and a release inside an enclosing critical section
     return with `ICC_PMR_EL1` still raised;
+  - measures a getter built on `a733_memory_prepare_once()`: the hold of its
+    first call and the cost and barriers of a later call;
   - under multithreaded TCG, runs 200,000 rounds of release and retain on
     core 1 against long acquires on core 0. Both must be attempted while
     core 0 holds an acquire and must complete, and no two held slots may
-    overlap.
+    overlap;
+  - then runs 100,000 rounds in which core 0 releases a lease and acquires
+    the same slot for another owner and a different extent, while core 1
+    describes the released lease. Every describe must refuse or return the
+    published extent and state, and a refused lease must stay refused. The
+    measured run accepted 1,307,496 describes and refused 18,207,728.
 - QEMU cached-devices fixture (`checks/cached-device-reservations.{S,py}`):
   the pre-scheduler path in which core 0 acquires and retains under the
   kernel critical section. Its EL1 vectors service the critical section's
   `SVC #107`, `#108` and `#109`.
 
 Results, logs and the measured images are in
-`~/.cache/sunstoneos/evidence/memory-architecture-20261022/revision-2/`.
+`~/.cache/sunstoneos/evidence/memory-architecture-20261022/revision-3/`.
 
 ## Left out
 
@@ -418,6 +475,11 @@ Results, logs and the measured images are in
   the pools on the board.
 - `platform/a733-smp-cached/memory.c` reads the layout header constants
   directly.
+- **Single preparation call.** `a733_device_memory_prepare()` returns 1 or
+  -1 and never 0. Replace the `do { ... } while (prepared == 0)` loops in
+  `platform/a733-smp-cached/continue.c`,
+  `apps/storage-read-single-core/runtime.c` and
+  `apps/dsi-scanout/runtime.patch` with one call that requires 1.
 - Stage 2: EL1 level-1 entries 2 and 3 become
   `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP[2:1] = 0b00; EL3
   entries stay invalid. Stage 3 adds entries 4 to 12 the same way.

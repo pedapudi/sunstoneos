@@ -7,11 +7,14 @@ Three runs of the current pool:
 
   measure   -icount shift=0: PMU instructions retired for describe, one xHCI
             register read, the camera memory check, the critical-section pair,
-            and the hold of a worst-case acquire, a release and a retain;
+            the hold of a worst-case acquire, a release and a retain, and a
+            local-pool getter's first-call hold and later call;
             nested-masking assertions; a short cross-core run.
   contend   multithreaded TCG: 200,000 rounds of release and retain on core 1
             against long acquires on core 0; entries attempted while the other
-            core held an acquire are counted.
+            core held an acquire are counted. Then 100,000 rounds in which
+            core 0 releases a lease and gives its slot to another owner and
+            extent while core 1 describes the released lease.
   trace     -d int,exec,nochain,in_asm: each measured call once between
             semihosting markers; the executed blocks give the SVC, DSB, ISB and
             DMB instructions per call.
@@ -222,7 +225,7 @@ def main():
         sections = trace_counts(trace_log)
         # One section follows each marker; the one after the first end marker
         # holds the ledger set-up between the two groups.
-        names = ['describe', 'xhci_rd', 'camera_memory'] + ([None, 'acquire', 'release', 'retain']
+        names = ['describe', 'xhci_rd', 'camera_memory'] + ([None, 'acquire', 'release', 'retain', 'getter']
                                                             if revision is None else [])
         assert len(sections) >= len(names) + 1, sections
         result['trace'] = {name: counts for name, counts in zip(names, sections) if name}
@@ -234,8 +237,10 @@ def main():
             result['contend'] = measurements(contend)
             assert result['contend']['contended_release_entries'] > 0, result['contend']
             assert result['contend']['contended_retain_entries'] > 0, result['contend']
-            for call in ('describe', 'xhci_rd', 'camera_memory'):
-                assert result['trace'][call]['svc'] == 0 and result['trace'][call]['dsb'] == 0, result['trace']
+            assert result['contend']['stale_describe_accepted'] > 0, result['contend']
+            assert result['contend']['stale_describe_refused'] > 0, result['contend']
+            for call in ('describe', 'xhci_rd', 'camera_memory', 'getter'):
+                assert all(result['trace'][call][n] == 0 for n in ('svc', 'dsb', 'isb')), result['trace']
         results[label] = result
     (out / 'result.json').write_text(json.dumps({
         'passed': True, 'qemu_sha256': digest(a.qemu), 'clang_sha256': digest(a.clang),

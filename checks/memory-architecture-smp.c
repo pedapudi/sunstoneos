@@ -13,6 +13,9 @@
  *   2  trace: each measured call once between semihosting markers, for an
  *      exception trace (-d int) that counts its SVCs.
  *
+ * Both runs that contend also describe released leases on core 1 while
+ * core 0 hands their slot to another owner and extent.
+ *
  * FIXTURE_LEDGER is defined for the current pool. Without it the image is
  * built against an earlier pool source and runs only the per-access
  * measurements (describe, xHCI register read, camera memory check). */
@@ -20,6 +23,7 @@
 #include "task.h"
 #include "platform.h"
 #include "device_memory_pool.h"
+#include "a733_memory_critical.h"
 #include <string.h>
 
 extern _Noreturn void platform_panic(const char *, unsigned);
@@ -230,6 +234,24 @@ static int worst_release(void *unused) { (void)unused; return device_memory_rele
 static int retain_retained(void *lease) { return device_memory_retain(&pool, *(struct device_memory_lease *)lease); }
 static int empty_pair(void *unused) { (void)unused; taskENTER_CRITICAL(); taskEXIT_CRITICAL(); return 1; }
 
+/* A getter shaped like the local pool getters: a733_memory_prepare_once()
+ * over a check that passes and a pool initialization. */
+static int getter_result;
+static struct device_memory_pool getter_pool;
+static unsigned char getter_backing[4 * DEVICE_MEMORY_PAGE] __attribute__((aligned(DEVICE_MEMORY_PAGE)));
+static int getter_check(void) { return 1; }
+static int getter_init(void)
+{
+    return device_memory_pool_init(&getter_pool, (uintptr_t)getter_backing, (uintptr_t)getter_backing,
+                                   sizeof(getter_backing));
+}
+__attribute__((noinline)) static struct device_memory_pool *getter(void)
+{
+    return a733_memory_prepare_once(&getter_result, getter_check, getter_init) && getter_pool.initialized ?
+        &getter_pool : NULL;
+}
+static int getter_first(void *unused) { (void)unused; return getter() == &getter_pool; }
+
 static void ledger_measurements(void)
 {
     uint64_t pair, empty, acquire, release, retain;
@@ -237,6 +259,10 @@ static void ledger_measurements(void)
     say("critical_pair_instructions", pair);
     empty = held_by(OP_OTHER, empty_pair, NULL);
     say("probe_overhead_instructions", empty);
+    /* The first getter call holds the critical section only to initialize
+     * the pool; later calls take no lock. */
+    uint64_t getter_hold = held_by(OP_OTHER, getter_first, NULL), getter_call;
+    MEASURE(getter_call, CHECK(getter() == &getter_pool));
     fill();
     struct device_memory_lease r = fillers[FILLERS - 1];
     if (fixture_mode == 2) {
@@ -246,6 +272,8 @@ static void ledger_measurements(void)
         CHECK(worst_release(NULL));
         marker("TRACE retain\n");
         CHECK(device_memory_retain(&pool, r));
+        marker("TRACE getter\n");
+        CHECK(getter() == &getter_pool);
         marker("TRACE end\n");
         return;
     }
@@ -264,6 +292,8 @@ static void ledger_measurements(void)
     say("acquire_hold_instructions", acquire - empty);
     say("release_hold_instructions", release - empty);
     say("retain_hold_instructions", retain - empty);
+    say("getter_first_hold_instructions", getter_hold - empty);
+    say("getter_instructions", getter_call);
     CHECK(acquire - empty <= 15000 && release - empty <= 100 && retain - empty <= 100);
 }
 
@@ -322,6 +352,75 @@ static void peer_rounds_run(void)
     __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
 }
 
+/* Stale leases: core 0 publishes a held lease, releases it and acquires its
+ * slot again for the other of two owners with a different extent; core 1
+ * describes the published lease meanwhile. Describe must refuse, or return
+ * the published extent and state exactly. Published leases sit in a ring;
+ * core 1 discards a copy that core 0 may have overwritten. */
+#define STALE_RING 16u
+static struct { struct device_memory_lease lease; struct device_memory_extent extent; } stale[STALE_RING];
+static unsigned stale_published, stale_finished, stale_peer_done;
+static uint64_t stale_accepted, stale_refused;
+#define SET(field, value) __atomic_store_n(&(field), (value), __ATOMIC_RELAXED)
+#define GET(field) __atomic_load_n(&(field), __ATOMIC_RELAXED)
+
+static void stale_peer(void)
+{
+    while (!__atomic_load_n(&stale_published, __ATOMIC_ACQUIRE)) {}
+    while (!__atomic_load_n(&stale_finished, __ATOMIC_ACQUIRE)) {
+        unsigned n = __atomic_load_n(&stale_published, __ATOMIC_ACQUIRE), i = (n - 1) % STALE_RING;
+        struct device_memory_lease l = {GET(stale[i].lease.pool), GET(stale[i].lease.owner),
+                                        GET(stale[i].lease.generation), GET(stale[i].lease.slot)};
+        struct device_memory_extent x = {GET(stale[i].extent.cpu), GET(stale[i].extent.physical),
+                                         GET(stale[i].extent.bytes)};
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&stale_published, __ATOMIC_RELAXED) - n > STALE_RING - 2) continue;
+        int refused = 0;
+        for (unsigned k = 0; k < 8; ++k) {
+            struct device_memory_extent d;
+            enum device_memory_state s;
+            if (device_memory_describe(&pool, l, &d, &s)) {
+                CHECK(!refused); /* A generation is never reused. */
+                CHECK(s == DEVICE_MEMORY_CPU && !memcmp(&d, &x, sizeof(d)));
+                ++stale_accepted;
+            } else {
+                refused = 1;
+                ++stale_refused;
+            }
+        }
+    }
+    __atomic_store_n(&stale_peer_done, 1, __ATOMIC_RELEASE);
+}
+
+static void stale_leases(unsigned rounds)
+{
+    struct device_memory_lease l;
+    struct device_memory_extent e;
+    CHECK(device_memory_acquire(&pool, 70, DEVICE_MEMORY_PAGE, &l, &e));
+    unsigned slot = l.slot;
+    for (unsigned n = 0; n < rounds; ++n) {
+        unsigned i = n % STALE_RING;
+        SET(stale[i].lease.pool, l.pool); SET(stale[i].lease.owner, l.owner);
+        SET(stale[i].lease.generation, l.generation); SET(stale[i].lease.slot, l.slot);
+        SET(stale[i].extent.cpu, e.cpu); SET(stale[i].extent.physical, e.physical);
+        SET(stale[i].extent.bytes, e.bytes);
+        __atomic_store_n(&stale_published, n + 1, __ATOMIC_RELEASE);
+        probe[0].op = OP_RELEASE;
+        CHECK(device_memory_release(&pool, l));
+        probe[0].op = OP_ACQUIRE;
+        unsigned odd = (n + 1) & 1;
+        CHECK(device_memory_acquire(&pool, 70 + odd, (odd ? 3 : 1) * DEVICE_MEMORY_PAGE, &l, &e));
+        probe[0].op = OP_NONE;
+        CHECK(l.slot == slot); /* The same slot, another owner and extent. */
+    }
+    __atomic_store_n(&stale_finished, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&stale_peer_done, __ATOMIC_ACQUIRE)) {}
+    CHECK(device_memory_release(&pool, l));
+    say("stale_rounds", rounds);
+    say("stale_describe_accepted", stale_accepted);
+    say("stale_describe_refused", stale_refused);
+}
+
 static void contention(unsigned rounds)
 {
     /* Two fillers go back: one slot for the peer's retained lease, one for
@@ -348,6 +447,7 @@ static void contention(unsigned rounds)
     say("contended_release_entries", probe[1].contended[OP_RELEASE]);
     say("contended_retain_entries", probe[1].contended[OP_RETAIN]);
     say("contended_acquire_entries", probe[1].contended[OP_ACQUIRE]);
+    stale_leases(rounds / 2);
 }
 #endif
 
@@ -358,7 +458,10 @@ static void peer(void *unused)
     (void)unused;
     pmu_start();
 #if defined(FIXTURE_LEDGER)
-    if (fixture_mode != 2) peer_rounds_run();
+    if (fixture_mode != 2) {
+        peer_rounds_run();
+        stale_peer();
+    }
 #endif
     for (;;) __asm__ volatile("wfe");
 }
