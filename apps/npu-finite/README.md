@@ -2,7 +2,7 @@ The NPU finite image combines the existing supervised single-core convolution wi
 
 The selected FreeRTOS SRE port initializes tasks at EL1t, with SP_EL0 as the stack selector. This image does not link the cached SMP SVC119 exit handler. The task-profile check executes the actual stack constructor and observes saved PSTATE 4. The privileged return path follows the selected SRE architecture.
 
-Before providers start, the unchanged EL3 monitor authenticates the uploaded session and seals its private copy. The application-local monitor includes that implementation and replaces only its terminal exception entry. The retained session, authentication receipt and runtime contract survive EL1 BSS clearing. The additional return receipt occupies the same separately retained section.
+Before providers start, the EL3 contract check copies the uploaded session into private retained memory and authenticates that copy; the unchanged monitor then seals it. The application-local monitor includes that implementation and replaces only its terminal exception entry. The retained session, its admission flags and the runtime contract survive EL1 BSS clearing. The additional return receipt occupies the same separately retained section.
 
 After successful task quiescence, normal exit checks the numerical result and publishes a receipt bound to epoch, generation, lease, status, deadline and exact linked memory interval. It stops the EL1 timers and cleans every 64-byte line from `__npu_clean_start` through `__device_pool_end`. The interval includes retained metadata, provider state, stacks, command buffers and NPU tables. Page-boundary deadline checks bound this sweep.
 

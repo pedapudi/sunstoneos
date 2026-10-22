@@ -1995,6 +1995,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and leased supply, programs local clock/reset state, and powers domain 4.
   Source/model checks and native compilation pass. It preserves shared SRAM
   reset and requires exclusive ownership of that memory's existing users.
+  Startup programs the local clocks and requests domain 4 in one locked register
+  pass, and local stop gates the engine in one locked call. One startup call
+  runs acquisition steps until one waits, and EL3 admission hashes one private
+  copy of the session page. In the modeled two-core startup, PLL preparation and
+  startup take 17 calls instead of 41 and 18 ticks instead of 40 to 42
+  ([measurements](designs/npu-platform-measurements.md)). Physical behavior
+  remains unqualified.
   The [startup adapter](npu-startup.md) binds shared clocks, stable DCDC2 supply
   ownership, native PMIC reads and deferred service activation.
   [Shared-provider admission](pmic-consumers.md) retains two actual observations

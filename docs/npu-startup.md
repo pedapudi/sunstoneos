@@ -91,6 +91,33 @@ and unlocked transaction still retains the resource tokens.
 The existing I2C transaction may perform its bounded STOP cleanup internally;
 startup issues no later transaction after a failure.
 
+## One startup call runs until a step waits
+
+`a733_npu_startup_poll` runs acquisition steps in one call until a step has to
+wait. A step waits on a PLL that is not yet ready, a pending PMIC provider
+request, the 5,160-microsecond DCDC2 settle, a busy owner, or the platform's
+own power and settle waits. When acquisition completes, the platform runs its
+locked register pass in the same call. Each step repeats the entry checks of
+a call: owner task, deadline, PMIC binding and health, PLL binding and the
+adopted clock token. A further step runs only after the previous step
+advanced the acquisition stage, and the stage only advances through six
+values, so at most seven steps run in one call.
+
+The owner task, the EL1 exception level and the scheduler state are checked
+at the start of each step and again when the register mutex is taken.
+The register and clock callbacks that the platform makes inside a step
+take no ownership check of their own. Register access still requires the
+register mutex, which is taken only after that check.
+
+The two-core fixture counts calls with one call per tick. From the first
+acquisition step to READY, startup takes 9 calls and 13 ticks; with PLL
+adoption, PLL preparation and startup take 6 and 11 calls and 18 ticks. The
+5,160-microsecond DCDC2 settle accounts for about six of those calls. The
+native convolution application hashes its private model, constant and command
+bytes once per startup call, so fewer calls hash fewer bytes. The
+[measurements](designs/npu-platform-measurements.md) compare these counts with
+the previous binding.
+
 ## Deferred activation authenticates the complete service registration
 
 Platform integration uses this sequence:

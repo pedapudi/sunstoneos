@@ -144,11 +144,24 @@ is excluded from writes. Native access rejects other write addresses, changes
 to unrelated fields, PLL/LDO disable and factor changes while output is open.
 This allowlist is an additional guard, not a replacement for startup authority.
 
-Each poll does bounded work. Absolute deadlines and the shared monotonic
-microsecond clock are checked around every operation, including after the final
-callback. BUSY before effects permits another poll. Pending acquisition retains
-all admitted tokens. Token replacement preserves both original and observed
-identities for fault handling.
+Preparation takes six polls when the PLL locks on its first three
+observations:
+
+1. Acquisition. No register is accessed in this poll.
+2. One locked enable pass: the entry checks, then all six programming steps,
+   each read back. A clock sample taken after the last write sets the time of
+   the first LOCK observation.
+3. Three locked passes, one LOCK observation each.
+4. After the 20 microsecond settle, one locked pass checks LOCK and the gate
+   status, opens the output gate and checks the final control word.
+
+Each poll does bounded work. Every poll checks the absolute deadline on entry
+and again after releasing the mutex. Inside a locked pass the controller
+checks it before its first write, after each LOCK observation and before
+releasing the mutex; individual reads and writes take no clock sample. BUSY
+before effects permits another poll. Pending acquisition retains all admitted
+tokens. Token replacement preserves both original and observed identities for
+fault handling.
 
 A failed read, write, readback, clock observation or deadline ends hardware
 access immediately. Before unlock, the controller publishes failure and calls
@@ -174,6 +187,14 @@ available before DRAM and scheduler initialization. Reviewed entry conditions
 and the selected recovery plan must precede a physical qualification attempt.
 
 ## Focused validation
+
+The [PLL budget harness](../checks/npu-platform-pll-budget.c) counts work in
+the existing register model, with one poll standing for one bootstrap tick.
+Enabled retuning takes 6 polls, 43 register reads including 3 LOCK
+observations, 7 writes, 19 clock samples and 5 mutex acquisitions; live-DRAM
+enable takes 42 reads and 6 writes with the other counts equal. The
+[measurements](designs/npu-platform-measurements.md) compare them with the
+previous controller.
 
 The controller fixture uses the real common clock registry and modeled registers.
 It checks both sequences, timed lock admission, retained exclusive ownership,

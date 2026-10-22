@@ -10,7 +10,7 @@
 #define BUSY A733_NPU_PLATFORM_BUSY
 #define PENDING A733_NPU_PLATFORM_PENDING
 #define RETAINED A733_NPU_PLATFORM_RETAINED
-enum { ACQUIRE, BASELINE, PROGRAM, POWER_WAIT, SETTLE, COMPLETE };
+enum { ACQUIRE, BASELINE, POWER_WAIT=3, SETTLE, COMPLETE }; /* Host fixtures use these values. */
 static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 static const uint32_t fabric_masks[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
@@ -54,17 +54,18 @@ static int timely(struct a733_npu_platform *p)
 }
 static enum a733_npu_platform_result fault(struct a733_npu_platform *p)
 {p->failed=1;return RETAINED;}
+/* Register accesses take no clock sample of their own. Each locked pass checks
+ * the deadline after taking the lock, before its first write and before release. */
 static int rd(struct a733_npu_platform *p,uintptr_t address,uint32_t *value)
-{return timely(p) && p->ops.read(p->cookie,address,value)==1 && timely(p);}
+{return p->ops.read(p->cookie,address,value)==1;}
 static int update(struct a733_npu_platform *p,uintptr_t address,uint32_t mask,uint32_t value)
 {
     uint32_t old,actual;
     if (!rd(p,address,&old)) return 0;
     value=(old&~mask)|(value&mask);
     if (value==old) return 1;
-    if (!timely(p)) return 0;
     p->wrote=1;
-    return p->ops.write(p->cookie,address,value)==1 && timely(p) && rd(p,address,&actual) && actual==value;
+    return p->ops.write(p->cookie,address,value)==1 && rd(p,address,&actual) && actual==value;
 }
 static int parents_stable(struct a733_npu_platform *p)
 {
@@ -155,29 +156,25 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
         if (r!=READY || !p->resources.clock.id || p->resources.clock.owner!=p->config.owner ||
             p->resources.clock.shared!=p->shared || p->resources.clock.exclusive!=A733_CLOCK_NPU ||
             !p->resources.rail || !p->resources.pck || p->resources.supply_uv!=A733_NPU_INITIAL_UV) return fault(p);
-        p->stage=BASELINE;return PENDING;
+        p->stage=BASELINE; /* The register pass follows in this call. */
     }
     if (p->stage==SETTLE && p->last_now<p->settle_until) return PENDING;
     int locked=p->ops.enter(p->cookie,p->config.deadline_us);
     if (!locked) return timely(p) ? BUSY : fault(p);
     if (locked!=1) return fault(p);
     int ok=timely(p);
-    if (ok && p->stage==BASELINE) {ok=baseline(p);if(ok)p->stage=PROGRAM;}
-    else if (ok && p->stage==PROGRAM) {
-        const struct step *s=&steps[p->step];
-        uint32_t value=p->step==3 ? p->divisor-1 : s->value;
-        ok=update(p,s->address,s->mask,value);
-        if (ok && ++p->step==(p->adopt_on ? 6 : sizeof(steps)/sizeof(*steps))) p->stage=POWER_WAIT;
-    } else if (ok && p->stage==POWER_WAIT) {
-        uint32_t value;
-        ok=rd(p,PCK+8,&value);
-        if (ok) {
-            value&=0xf;
-            if (value==8) {
-                ok=a733_deadline_after(p->last_now,2000,&p->settle_until);
-                if(ok)p->stage=SETTLE;
-            } else if (value!=0 || p->adopt_on) ok=0;
-        }
+    uint32_t value;
+    if (ok && p->stage==BASELINE) {
+        unsigned count=p->adopt_on ? 6 : sizeof(steps)/sizeof(*steps);
+        ok=baseline(p) && timely(p);
+        for (; ok && p->step<count; ++p->step)
+            ok=update(p,steps[p->step].address,steps[p->step].mask,p->step==3 ? p->divisor-1 : steps[p->step].value);
+        if (ok) p->stage=POWER_WAIT;
+    }
+    /* Domain 4 ON arms the 2 ms settle from a sample taken after the read; OFF waits unless adopted ON. */
+    if (ok && p->stage==POWER_WAIT) {
+        ok=rd(p,PCK+8,&value) && timely(p) && ((value&=0xf)==8 || (value==0 && !p->adopt_on));
+        if (ok && value==8) {ok=a733_deadline_after(p->last_now,2000,&p->settle_until);if(ok)p->stage=SETTLE;}
     } else if (ok && p->stage==SETTLE) {
         ok=check(p,PCK+8,0xf,8) && (!p->adopt_on || check(p,PCK,0xf,8)) && check(p,CCU+0xb04,0xf0001,0xf0001) &&
             check(p,CCU+0xb00,0x8700001f,BIT(31)|(p->divisor-1));
@@ -192,9 +189,8 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
 }
 int a733_npu_platform_ready(const struct a733_npu_platform *p)
 {return p && p->initialized && !p->failed && p->stage==COMPLETE && !p->stopping;}
-
-/* Local subset of npu_clk_uninit in the pinned Allwinner VIPLite platform.
- * Critical shared leaves and the ON SRAM domain retain their owners. */
+/* Local subset of npu_clk_uninit in the pinned Allwinner VIPLite platform, in one locked pass
+ * from the state startup left. Shared leaves, PLL_NPU, the rail and the ON SRAM domain keep owners. */
 enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platform *p)
 {
     if(!p || !p->initialized || p->failed || p->stage!=COMPLETE)return RETAINED;
@@ -208,18 +204,20 @@ enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platfo
         {CCU+0xb00,BIT(31),0}, {CCU+0xb04,1,0},
         {CCU+0xb04,BIT(18),0}, {CCU+0xb04,BIT(17),0}, {CCU+0xb04,BIT(16),0}
     };
-    int ok=timely(p) && parents_stable(p) && check(p,PCK,15,8) &&
-        check(p,PCK+8,15,8) && check(p,CCU+0xb04,BIT(19),BIT(19));
-    if(ok && p->stop_step<sizeof(stop)/sizeof(*stop)) {
+    uint32_t pll,module,bus;
+    int ok=timely(p) && rd(p,CCU+0x2a0,&pll) && (pll&UINT32_C(0xf8000000))==UINT32_C(0xf8000000) &&
+        check(p,PCK,15,8) && check(p,PCK+8,15,8) &&
+        rd(p,CCU+0xb00,&module) && (module&0x8700001f)==(BIT(31)|(p->divisor-1)) &&
+        rd(p,CCU+0xb04,&bus) && (bus&0xf0001)==0xf0001;
+    for(; ok && p->stop_step<sizeof(stop)/sizeof(*stop); ++p->stop_step) {
         const struct step *s=&stop[p->stop_step];
-        ok=update(p,s->address,s->mask,s->value);
-        if(ok)++p->stop_step;
-    } else if(ok) {
-        ok=check(p,CCU+0xb00,BIT(31),0) && check(p,CCU+0xb04,0xf0001,BIT(19));
-        if(ok)p->stopped=1;
+        uint32_t *word=s->address==CCU+0xb00 ? &module : &bus,next=(*word&~s->mask)|(s->value&s->mask);
+        p->wrote=1; /* Known value written, then read back. */
+        ok=p->ops.write(p->cookie,s->address,next)==1 && rd(p,s->address,word) && *word==next;
     }
+    if(ok)p->stopped=1;
     if(!ok || !timely(p))(void)fault(p);
     int released=p->ops.leave(p->cookie);
     if(p->failed || released!=1 || !timely(p))return fault(p);
-    return p->stopped?READY:PENDING;
+    return READY;
 }
