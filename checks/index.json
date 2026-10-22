@@ -1694,6 +1694,7 @@
   ],
   "docs": [
    "docs/bluetooth-native.md",
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
    "docs/designs/bluetooth-voice-recognition.md",
    "docs/handoff.md"
   ],
@@ -6488,6 +6489,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
    "docs/designs/bluetooth-voice-recognition.md",
    "docs/handoff.md",
    "docs/os-image.md"
@@ -8784,6 +8786,7 @@
  "usb0-service-burst.py": {
   "cache_areas": [],
   "docs": [
+   "docs/performance-architecture.md",
    "docs/usb.md"
   ],
   "library": false,
