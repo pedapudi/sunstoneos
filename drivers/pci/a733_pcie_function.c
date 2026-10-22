@@ -3,6 +3,7 @@
  * follow the board kernel's pcie-sunxi-rc.c and pcie-sunxi-plat.c. Hashes and
  * licenses are in source.json beside this file. */
 #include "a733_pcie_function.h"
+#include "a733_range.h"
 #define CFG UINT32_C(0x20000000)
 #define DBI UINT32_C(0x06000000)
 #define APP UINT32_C(0x06400000)
@@ -15,8 +16,6 @@
 #define INTX_ASSERT UINT32_C(0x1e0) /* SII INTA..INTD assert bits 5..8. */
 enum { CLAIM,SCAN,BARS,WINDOW,IRQ,ARM,READY,SUSPEND,SUSPEND_WAIT,SUSPENDED,
     RESUME,RESUME_WAIT,RESTORE,STOP,STOPPED };
-static int separate(const void *a,size_t n,const void *b,size_t m)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 static int rd(struct a733_pcie_function *f,uintptr_t a,unsigned w,uint32_t *v)
 {return a733_pcie_read(f->port,a,w,v);}
 static int wr(struct a733_pcie_function *f,uintptr_t a,unsigned w,uint32_t v)
@@ -56,8 +55,8 @@ int a733_pcie_function_init(struct a733_pcie_function *f,struct a733_pcie *p,
        c->irq>A733_PCIE_IRQ_MSIX||!c->write_allowed||!pool||!pool->initialized||
        (c->irq==A733_PCIE_IRQ_MSIX?!c->vectors||c->vectors>A733_PCIE_MSIX_VECTORS:c->vectors!=0)||
        (c->irq!=A733_PCIE_IRQ_POLL&&(!irq||!irq->arm||!irq->event||!irq->stop))||
-       !separate(f,sizeof(*f),p,sizeof(*p))||!separate(f,sizeof(*f),pool,sizeof(*pool))||
-       !separate(f,sizeof(*f),c,sizeof(*c))||(irq&&!separate(f,sizeof(*f),irq,sizeof(*irq)))||
+       !a733_ranges_disjoint(f,sizeof(*f),p,sizeof(*p))||!a733_ranges_disjoint(f,sizeof(*f),pool,sizeof(*pool))||
+       !a733_ranges_disjoint(f,sizeof(*f),c,sizeof(*c))||(irq&&!a733_ranges_disjoint(f,sizeof(*f),irq,sizeof(*irq)))||
        a733_pcie_output_outside(p,f,sizeof(*f))!=1)return 0;
     *f=(struct a733_pcie_function){.self=f,.port=p,.pool=pool,.config=*c};
     if(irq)f->irq=*irq;
@@ -328,7 +327,7 @@ enum a733_pcie_result a733_pcie_function_poll(struct a733_pcie_function *f)
 }
 enum a733_pcie_result a733_pcie_function_begin(struct a733_pcie_function *f,uint64_t deadline,uint32_t *events)
 {
-    if(!f||f->self!=f||f->locked||!events||!separate(events,sizeof(*events),f,sizeof(*f))||
+    if(!f||f->self!=f||f->locked||!events||!a733_ranges_disjoint(events,sizeof(*events),f,sizeof(*f))||
        a733_pcie_output_outside(f->port,events,sizeof(*events))!=1)return A733_PCIE_INVALID;
     if(f->failed)return A733_PCIE_RETAINED;
     if(f->stage!=READY)return f->stage==STOPPED?A733_PCIE_STOPPED:A733_PCIE_INVALID;

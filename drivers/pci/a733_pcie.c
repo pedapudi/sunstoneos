@@ -1,5 +1,6 @@
 #include "a733_pcie.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define DBI UINT32_C(0x06000000)
 #define APP UINT32_C(0x06400000)
@@ -16,16 +17,11 @@ static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0},{24,0,800,600,480,0,0,0},{24,600,0,480,400,0,0,0}
 };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 int a733_pcie_output_outside(const struct a733_pcie *p,const void *v,size_t n)
 {
-    return separate(p,sizeof(*p),v,n)&&separate(p->clocks,sizeof(*p->clocks),v,n)&&
-        separate(p->pins,sizeof(*p->pins),v,n)&&separate(p->rails,sizeof(*p->rails),v,n)&&
-        separate(p->pmic,sizeof(*p->pmic),v,n)&&separate(p->pck,sizeof(*p->pck),v,n)&&
+    return a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
+        a733_ranges_disjoint(p->pins,sizeof(*p->pins),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
+        a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&a733_ranges_disjoint(p->pck,sizeof(*p->pck),v,n)&&
         p->ops.outside(p->cookie,v,n)==1&&p->pmic->ops.outside(p->pmic->cookie,v,n)==1;
 }
 static int config_valid(const struct a733_pcie_config *c)
@@ -56,10 +52,10 @@ int a733_pcie_init(struct a733_pcie *p,const struct a733_pcie_config *c,
         pmic->clocks!=clocks||pmic->rails!=rails||pmic->pins!=pins||
         !o->now||!o->current||!o->admit||!o->enter||!o->leave||!o->retain||
         !o->read||!o->write||!o->outside||!config_valid(c)||
-        !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||
-        !separate(p,sizeof(*p),clocks,sizeof(*clocks))||!separate(p,sizeof(*p),pins,sizeof(*pins))||
-        !separate(p,sizeof(*p),rails,sizeof(*rails))||!separate(p,sizeof(*p),pmic,sizeof(*pmic))||
-        !separate(p,sizeof(*p),pck,sizeof(*pck))||o->outside(cookie,p,sizeof(*p))!=1||
+        !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
+        !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
+        !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
+        !a733_ranges_disjoint(p,sizeof(*p),pck,sizeof(*pck))||o->outside(cookie,p,sizeof(*p))!=1||
         pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1)return 0;
     *p=(struct a733_pcie){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,
         .pins=pins,.rails=rails,.pmic=pmic,.pck=pck,.deadline=c->deadline};
@@ -68,8 +64,8 @@ int a733_pcie_init(struct a733_pcie *p,const struct a733_pcie_config *c,
 static int timely(struct a733_pcie *p)
 {
     uint64_t now;
-    if(p->ops.now(p->cookie,&now)!=1||now<p->last_now)return 0;
-    p->last_now=now;return now<p->deadline&&now<p->config.lifetime_deadline;
+    if(p->ops.now(p->cookie,&now)!=1||!a733_monotonic_advance(now,&p->last_now))return 0;
+    return now<p->deadline&&now<p->config.lifetime_deadline;
 }
 int a733_pcie_read(struct a733_pcie *p,uintptr_t a,unsigned w,uint32_t *v)
 {return timely(p)&&p->ops.read(p->cookie,a,w,v)==1&&timely(p);}

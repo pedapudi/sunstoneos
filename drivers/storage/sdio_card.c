@@ -1,19 +1,15 @@
 /* SDIO protocol facts follow the pinned kernel references in docs/sdio.md.
  * Native state machine; no Linux allocation, retry, or device-model dependency. */
 #include "sdio_card.h"
+#include "a733_range.h"
 
 enum { PROBE, READY_POLL, RCA, SELECT, CCCR, FBR, FBR_EXT, CIS_POINTER,
        TUPLE_CODE, TUPLE_LENGTH, TUPLE_DATA };
-static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an;
-}
 static int output_ok(const struct sdio_card *c, const struct sunxi_sdio_request *r)
 {
-    return c && c->host && span(r, sizeof(*r)) &&
-           !overlap(c, sizeof(*c), r, sizeof(*r)) &&
-           !overlap(c->host, sizeof(*c->host), r, sizeof(*r));
+    return c && c->host && a733_span_excl(r, sizeof(*r)) &&
+           !a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)r, sizeof(*r)) &&
+           !a733_extents_overlap_prechecked((uintptr_t)c->host, sizeof(*c->host), (uintptr_t)r, sizeof(*r));
 }
 static uint16_t le16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0] | (uint16_t)p[1] << 8); }
 static struct sunxi_sdio_request direct(unsigned function, uint32_t address,
@@ -25,9 +21,11 @@ static struct sunxi_sdio_request direct(unsigned function, uint32_t address,
 }
 int sdio_card_init(struct sdio_card *c, struct sunxi_sdio *h, const struct sdio_card_config *cfg)
 {
-    if (!span(c, sizeof(*c)) || !span(h, sizeof(*h)) || !span(cfg, sizeof(*cfg)) ||
-        overlap(c, sizeof(*c), h, sizeof(*h)) || overlap(c, sizeof(*c), cfg, sizeof(*cfg)) ||
-        overlap(h, sizeof(*h), cfg, sizeof(*cfg)) || !cfg->supported_ocr ||
+    if (!a733_span_excl(c, sizeof(*c)) || !a733_span_excl(h, sizeof(*h)) || !a733_span_excl(cfg, sizeof(*cfg)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)h, sizeof(*h)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)cfg, sizeof(*cfg)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)cfg, sizeof(*cfg)) ||
+        !cfg->supported_ocr ||
         (cfg->supported_ocr & 0xff000000u) || !cfg->command_timeout || !cfg->ready_poll_interval ||
         c->initialized || !h->initialized) return 0;
     struct sdio_card initial = {0}; initial.initialized = 1; initial.host = h; initial.config = *cfg;
@@ -222,9 +220,11 @@ int sdio_card_cmd53(const struct sdio_card *c, unsigned function, uint32_t addre
     if (!output_ok(c, out) || c->state != SDIO_CARD_READY || c->host->state != SUNXI_SDIO_READY ||
         !function || function > c->function_count || address > 0x1ffffu ||
         (write != 0 && write != 1) || (increment != 0 && increment != 1) ||
-        !span(data, bytes) || !bytes || bytes > SUNXI_SDIO_MAX_BYTES || (bytes & 3) ||
-        overlap(c, sizeof(*c), data, bytes) || overlap(c->host, sizeof(*c->host), data, bytes) ||
-        overlap(out, sizeof(*out), data, bytes) || (increment && bytes - 1 > 0x1ffffu - address)) return 0;
+        !a733_span_excl(data, bytes) || !bytes || bytes > SUNXI_SDIO_MAX_BYTES || (bytes & 3) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)data, bytes) ||
+        a733_extents_overlap_prechecked((uintptr_t)c->host, sizeof(*c->host), (uintptr_t)data, bytes) ||
+        a733_extents_overlap_prechecked((uintptr_t)out, sizeof(*out), (uintptr_t)data, bytes) ||
+        (increment && bytes - 1 > 0x1ffffu - address)) return 0;
     uint32_t count;
     if (block_bytes) {
         if (block_bytes < 4 || block_bytes > 512 || (block_bytes & 3) || bytes % block_bytes ||
