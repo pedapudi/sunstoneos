@@ -13,8 +13,8 @@ static int live(struct a733_ce_clock *p)
     if(p->self!=p||p->state!=A733_CE_CLOCK_ATTEMPTING||
        p->ops.authorize(p->cookie)!=1||
        a733_clock_token_status(p->registry,&p->token)!=A733_CLOCK_OK||
-       p->ops.now_us(p->cookie,&t)!=1||t<p->last_now||t>=p->config.deadline_us)return 0;
-    p->last_now=t;return 1;
+       p->ops.now_us(p->cookie,&t)!=1)return 0;
+    return a733_deadline_admit(t,&p->last_now,p->config.deadline_us);
 }
 static int read32(struct a733_ce_clock *p,uintptr_t a,uint32_t *v)
 {return p->held&&live(p)&&p->ops.read(p->cookie,a,v)==1&&live(p);}
@@ -69,7 +69,7 @@ int a733_ce_clock_provision(struct a733_ce_clock *p,const struct a733_ce_config 
     const void *objects[]={p,c,o,r,t};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*r),sizeof(*t)};
     for(unsigned i=0;i<5;i++)for(unsigned j=i+1;j<5;j++)
-        if(!a733_ce_separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+        if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
     for(unsigned i=0;i<4;i++)if(c->health[i])return 0;
     *p=(struct a733_ce_clock){.self=p,.config=*c,.ops=*o,.registry=r,.token=*t,
         .cookie=cookie,.state=A733_CE_CLOCK_ATTEMPTING};

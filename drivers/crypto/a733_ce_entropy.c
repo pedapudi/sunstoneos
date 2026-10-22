@@ -16,20 +16,19 @@ static enum a733_ce_entropy_result retain(struct a733_ce_entropy *s)
 static int time_ok(struct a733_ce_entropy *s,uint64_t deadline)
 {
     uint64_t now;
-    if (s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)!=1 || now<s->last_now || now>=deadline) return 0;
-    s->last_now=now;return 1;
+    return s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)==1 && a733_deadline_admit(now,&s->last_now,deadline);
 }
 static int output_ok(const struct a733_ce_entropy *s,const void *out,size_t n)
-{return a733_ce_separate(s,sizeof(*s),out,n) && a733_ce_session_outside(s->engine,out,n);}
+{return a733_ranges_disjoint(s,sizeof(*s),out,n) && a733_ce_session_outside(s->engine,out,n);}
 int a733_ce_entropy_attach(struct a733_ce_entropy *s,struct a733_ce_session *engine)
 {
     if (!s || s->initialized || !a733_ce_session_bound(engine) || engine->client ||
         !(a733_ce_capabilities(engine->binding.config.profile)&A733_CE_CAP_TRNG) ||
         !a733_ce_session_outside(engine,s,offsetof(struct a733_ce_entropy,owned_session)) ||
-        !a733_ce_separate(s,sizeof(*s),engine->binding.pool,sizeof(*engine->binding.pool)) ||
-        !a733_ce_separate(s,sizeof(*s),(void *)engine->binding.pool->backing.cpu,engine->binding.pool->backing.bytes) ||
-        !a733_ce_separate(s,sizeof(*s),engine->binding.registry,sizeof(*engine->binding.registry)) ||
-        (engine!=&s->owned_session && !a733_ce_separate(s,sizeof(*s),engine,sizeof(*engine)))) return 0;
+        !a733_ranges_disjoint(s,sizeof(*s),engine->binding.pool,sizeof(*engine->binding.pool)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),(void *)engine->binding.pool->backing.cpu,engine->binding.pool->backing.bytes) ||
+        !a733_ranges_disjoint(s,sizeof(*s),engine->binding.registry,sizeof(*engine->binding.registry)) ||
+        (engine!=&s->owned_session && !a733_ranges_disjoint(s,sizeof(*s),engine,sizeof(*engine)))) return 0;
     s->self=(uintptr_t)s;s->engine=engine;s->bound_engine=engine;
     s->next_generation=1;s->initialized=1;atomic_init(&s->busy,0);return 1;
 }
@@ -38,11 +37,11 @@ int a733_ce_entropy_bind(struct a733_ce_entropy *s,struct device_memory_pool *po
     void *cookie,struct a733_clock_leases *registry,const struct a733_clock_token *token)
 {
     if (!s || s->initialized || !pool || !c || !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
-        !a733_ce_separate(s,sizeof(*s),pool,sizeof(*pool)) ||
-        !a733_ce_separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes) ||
-        !a733_ce_separate(s,sizeof(*s),registry,sizeof(*registry)) ||
-        !a733_ce_separate(s,sizeof(*s),c,sizeof(*c)) || !a733_ce_separate(s,sizeof(*s),o,sizeof(*o)) ||
-        !a733_ce_separate(s,sizeof(*s),token,sizeof(*token))) return 0;
+        !a733_ranges_disjoint(s,sizeof(*s),pool,sizeof(*pool)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes) ||
+        !a733_ranges_disjoint(s,sizeof(*s),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)) || !a733_ranges_disjoint(s,sizeof(*s),o,sizeof(*o)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),token,sizeof(*token))) return 0;
     if (!a733_ce_session_bind(&s->owned_session,pool,lease,c,o,cookie,registry,token)) return 0;
     return a733_ce_entropy_attach(s,&s->owned_session);
 }

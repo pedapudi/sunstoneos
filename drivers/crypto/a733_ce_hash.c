@@ -4,7 +4,7 @@ enum { OPEN,REQUEST,WAIT,DONE };
 enum { INNER,KEY,OUTER };
 static void zero(void *p,size_t n) {volatile uint8_t *b=p;while (n--) *b++=0;}
 static int outside(const struct a733_ce_hash *h,const void *p,size_t n)
-{return a733_ce_separate(h,sizeof(*h),p,n) && a733_ce_session_outside(h->bound_engine,p,n);}
+{return a733_ranges_disjoint(h,sizeof(*h),p,n) && a733_ce_session_outside(h->bound_engine,p,n);}
 static enum a733_ce_hash_result finish(struct a733_ce_hash *h,enum a733_ce_hash_result r)
 {atomic_store_explicit(&h->busy,0,memory_order_release);return r;}
 static enum a733_ce_hash_result retain(struct a733_ce_hash *h)
@@ -18,9 +18,8 @@ static int bound(struct a733_ce_hash *h)
 static int time_ok(struct a733_ce_hash *h)
 {
     uint64_t now;
-    if (h->bound_engine->binding.ops.now_us(h->bound_engine->binding.cookie,&now)!=1 ||
-        now<h->last_now || now>=h->deadline) return 0;
-    h->last_now=now;return 1;
+    return h->bound_engine->binding.ops.now_us(h->bound_engine->binding.cookie,&now)==1 &&
+        a733_deadline_admit(now,&h->last_now,h->deadline);
 }
 /* Append standard SHA padding to a queued tail shorter than 2048 bytes. */
 static void pad(struct a733_ce_hash *h)
@@ -61,7 +60,7 @@ enum a733_ce_hash_result a733_ce_hash_start(struct a733_ce_hash *h,enum a733_ce_
     unsigned block=a733_ce_hash_block(method);
     if (!deadline || !generation || !outside(h,generation,sizeof(*generation)) || !h->next_generation ||
         !block || (!key && key_bytes) || key_bytes>A733_CE_HMAC_KEY_MAX ||
-        (key_bytes && (!outside(h,key,key_bytes) || !a733_ce_separate(key,key_bytes,generation,sizeof(*generation)))))
+        (key_bytes && (!outside(h,key,key_bytes) || !a733_ranges_disjoint(key,key_bytes,generation,sizeof(*generation)))))
         return finish(h,A733_CE_HASH_INVALID);
     if (h->active) return finish(h,A733_CE_HASH_BUSY);
     uint64_t now;
@@ -93,7 +92,7 @@ enum a733_ce_hash_result a733_ce_hash_update(struct a733_ce_hash *h,uint64_t gen
     if (h->fault || !bound(h)) return retain(h);
     if (!generation || generation!=h->generation || !bytes || bytes>2048 || !accepted ||
         !outside(h,input,bytes) || !outside(h,accepted,sizeof(*accepted)) ||
-        !a733_ce_separate(input,bytes,accepted,sizeof(*accepted)) || h->finalizing || !h->active)
+        !a733_ranges_disjoint(input,bytes,accepted,sizeof(*accepted)) || h->finalizing || !h->active)
         return finish(h,A733_CE_HASH_INVALID);
     if (!active(h)) return retain(h);
     if (h->phase!=OPEN) return finish(h,A733_CE_HASH_BUSY);

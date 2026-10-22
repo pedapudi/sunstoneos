@@ -6,24 +6,21 @@
  */
 #ifndef SUNSTONE_A733_CAMERA_COMMON_H
 #define SUNSTONE_A733_CAMERA_COMMON_H
+#include "a733_range.h"
 #include <stddef.h>
 #include <stdint.h>
 
 /* Helpers shared by the camera controllers. Each controller keeps its own
- * register access granularity and fault state; these only remove copies. */
-static inline int a733_camera_overlap(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
-}
+ * register access granularity and fault state; these only remove copies.
+ * Range checks use a733_range.h: a733_ranges_overlap_or_wrap() is the
+ * fail-closed overlap test that the controllers use to refuse aliases. */
 /* Store a fresh monotonic time before the deadline. 0 means the clock failed,
  * went backward or reached the deadline; the caller faults. */
 static inline int a733_camera_clock(int (*now_us)(void *,uint64_t *),void *context,
                                     uint64_t *now,uint64_t deadline)
 {
     uint64_t n;
-    if(now_us(context,&n)!=1 || n<*now || n>=deadline)return 0;
-    *now=n;return 1;
+    return now_us(context,&n)==1 && a733_deadline_admit(n,now,deadline);
 }
 /* Adopt the token an admission callback published and check its result.
  * A held token must not change, and success needs a nonzero token. Returns

@@ -1,10 +1,6 @@
 #include "a733_audio_leases.h"
+#include "a733_range.h"
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static enum a733_i2s_resource_result fault(struct a733_audio_leases *b)
 {b->failed=1;return A733_I2S_RESOURCE_RETAINED;}
 static enum a733_i2s_resource_result acquire(void *ctx,enum a733_audio_scope scope,
@@ -13,8 +9,8 @@ static enum a733_i2s_resource_result acquire(void *ctx,enum a733_audio_scope sco
     struct a733_audio_leases *b=ctx;
     if(!b || !b->initialized || b->failed || scope<A733_AUDIO_REFERENCE || scope>A733_AUDIO_LOCAL)
         return A733_I2S_RESOURCE_RETAINED;
-    if(!separate(b,sizeof(*b),out,sizeof(*out)) ||
-        !separate(b->registry,sizeof(*b->registry),out,sizeof(*out)))return fault(b);
+    if(!a733_ranges_disjoint(b,sizeof(*b),out,sizeof(*out)) ||
+        !a733_ranges_disjoint(b->registry,sizeof(*b->registry),out,sizeof(*out)))return fault(b);
     struct a733_clock_token *t=&b->tokens[scope-1];
     if(out->id || t->id)return fault(b); /* No asynchronous registry acquisition. */
     a733_clock_mask_t shared=scope==A733_AUDIO_REFERENCE ? A733_CLOCK_REF :
@@ -31,9 +27,9 @@ static enum a733_i2s_resource_result publish(void *ctx,const struct a733_audio_t
 {
     struct a733_audio_leases *b=ctx;
     if(!b || !b->initialized || b->failed)return A733_I2S_RESOURCE_RETAINED;
-    if(!separate(b,sizeof(*b),old,sizeof(*old)) || !separate(b,sizeof(*b),out,sizeof(*out)) ||
-        !separate(old,sizeof(*old),out,sizeof(*out)) ||
-        !separate(b->registry,sizeof(*b->registry),out,sizeof(*out)) ||
+    if(!a733_ranges_disjoint(b,sizeof(*b),old,sizeof(*old)) || !a733_ranges_disjoint(b,sizeof(*b),out,sizeof(*out)) ||
+        !a733_ranges_disjoint(old,sizeof(*old),out,sizeof(*out)) ||
+        !a733_ranges_disjoint(b->registry,sizeof(*b->registry),out,sizeof(*out)) ||
         old->scope!=A733_AUDIO_CHANGE || old->id!=b->tokens[A733_AUDIO_CHANGE-1].id ||
         out->id || b->tokens[A733_AUDIO_STABLE-1].id)return fault(b);
     enum a733_clock_result r=a733_clock_publish_audio(b->registry,&b->tokens[A733_AUDIO_CHANGE-1],
@@ -48,7 +44,7 @@ static enum a733_i2s_resource_result release(void *ctx,const struct a733_audio_t
 {
     struct a733_audio_leases *b=ctx;
     if(!b || !b->initialized || b->failed)return A733_I2S_RESOURCE_RETAINED;
-    if(!separate(b,sizeof(*b),old,sizeof(*old)) || old->scope!=A733_AUDIO_LOCAL ||
+    if(!a733_ranges_disjoint(b,sizeof(*b),old,sizeof(*old)) || old->scope!=A733_AUDIO_LOCAL ||
         old->id!=b->tokens[A733_AUDIO_LOCAL-1].id)return fault(b);
     enum a733_clock_result r=a733_clock_release(b->registry,&b->tokens[A733_AUDIO_LOCAL-1],deadline);
     if(r==A733_CLOCK_BUSY)return A733_I2S_RESOURCE_BUSY;
@@ -68,7 +64,7 @@ static int write_reg(void *ctx,uintptr_t a,uint32_t v)
 int a733_audio_leases_init(struct a733_audio_leases *b,struct a733_clock_leases *m,
     uint64_t owner,const struct a733_audio_operations *ops,void *ctx)
 {
-    if(!separate(b,sizeof(*b),m,sizeof(*m)) || !separate(b,sizeof(*b),ops,sizeof(*ops)) ||
+    if(!a733_ranges_disjoint(b,sizeof(*b),m,sizeof(*m)) || !a733_ranges_disjoint(b,sizeof(*b),ops,sizeof(*ops)) ||
         !m->initialized || b->initialized || !owner || !ops->enter || !ops->leave ||
         !ops->now_us || !ops->read || !ops->write)return 0;
     *b=(struct a733_audio_leases){.registry=m,.backend=*ops,.context=ctx,.owner=owner,.initialized=1,

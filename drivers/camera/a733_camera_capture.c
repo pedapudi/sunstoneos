@@ -140,26 +140,26 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
        (c->slots && (c->slots<2 || !c->dma.sync_slot || (c->slot_bytes&4095) ||
         c->slot_bytes<a733_camera_plane_bytes(&format) ||
         c->slot_bytes>c->memory[1].bytes/c->slots || c->slot_bytes>c->memory[2].bytes/c->slots)) ||
-       a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
-       (c->context && a733_camera_overlap(s,sizeof(*s),c->context,1)) ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),c,sizeof(*c)) ||
+       (c->context && a733_ranges_overlap_or_wrap(s,sizeof(*s),c->context,1)) ||
        !callbacks(c) || !c->frame_id || !c->table_words || ((uintptr_t)c->table_words&16383) ||
        c->receiver.port>1 || c->receiver.parser!=c->receiver.port ||
        !c->receiver.settle || !c->receiver.deskew || c->receiver.deskew>31 ||
        c->receiver.top_hz!=324000000 || (c->color_bars!=0 && c->color_bars!=1) ||
-       a733_camera_overlap(s,sizeof(*s),c->table_words,A733_IOMMU_TABLE_BYTES) ||
-       a733_camera_overlap(c,sizeof(*c),c->table_words,A733_IOMMU_TABLE_BYTES))return -1;
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),c->table_words,A733_IOMMU_TABLE_BYTES) ||
+       a733_ranges_overlap_or_wrap(c,sizeof(*c),c->table_words,A733_IOMMU_TABLE_BYTES))return -1;
     struct a733_iommu_span spans[3];
     for(unsigned i=0;i<3;i++){
         const struct a733_capture_span *m=&c->memory[i];
         if(!m->cpu || ((uintptr_t)m->cpu&4095) || !m->iova ||
            m->iova>=UINT64_C(0x100000000) || m->bytes>UINT64_C(0x100000000)-m->iova ||
            m->bytes<(i?a733_camera_plane_bytes(&format):4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
-           a733_camera_overlap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
-           a733_camera_overlap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
-           a733_camera_overlap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))
+           a733_ranges_overlap_or_wrap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
+           a733_ranges_overlap_or_wrap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
+           a733_ranges_overlap_or_wrap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))
             return -1;
         for(unsigned j=0;j<i;j++)
-            if(a733_camera_overlap(c->memory[j].cpu,(size_t)c->memory[j].bytes,m->cpu,(size_t)m->bytes))
+            if(a733_ranges_overlap_or_wrap(c->memory[j].cpu,(size_t)c->memory[j].bytes,m->cpu,(size_t)m->bytes))
                 return -1;
         spans[i]=(struct a733_iommu_span){m->iova,m->physical,m->bytes,i?A733_IOMMU_WRITE:A733_IOMMU_READ};
     }

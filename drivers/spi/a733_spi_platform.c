@@ -1,5 +1,6 @@
 #include "a733_spi_platform.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -31,11 +32,6 @@ int a733_spi_route_plan(enum a733_spi_route id,unsigned cs,struct a733_spi_route
     out->port=routes[id].port;out->bank=routes[id].bank;out->function=routes[id].function;
     out->clock=routes[id].clock;out->mosi=routes[id].mosi;out->miso=routes[id].miso;out->cs=routes[id].cs[cs];return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static a733_clock_mask_t local(unsigned port)
 { return A733_CLOCK_SPI0<<port; }
 static uintptr_t irq(struct a733_spi_platform *s,unsigned off)
@@ -44,8 +40,8 @@ static uint32_t irqbit(struct a733_spi_platform *s)
 { return BIT(s->spi.plan.intid%32); }
 static int time_ok(struct a733_spi_platform *s)
 {
-    uint64_t now;if(s->ops.now(s->context,&now)!=1||now<s->last_now||now>=s->deadline)return 0;
-    s->last_now=now;return 1;
+    uint64_t now;
+    return s->ops.now(s->context,&now)==1&&a733_deadline_admit(now,&s->last_now,s->deadline);
 }
 static enum a733_spi_platform_result fault(struct a733_spi_platform *s)
 {
@@ -153,8 +149,8 @@ int a733_spi_platform_init(struct a733_spi_platform *s,const struct a733_spi_pla
        /* Routes lease clock, MOSI, MISO and CS only; quad needs IO2/IO3. */
        c->format.lanes>2||c->format.dma>1||(c->format.dma&&!a733_spi_dma_request(c->format.port))||
        a733_spi_plan(c->format.port,c->format.max_hz,&plan)||
-       !separate(s,sizeof(*s),c,sizeof(*c))||!separate(s,sizeof(*s),o,sizeof(*o))||
-       !separate(s,sizeof(*s),registry,sizeof(*registry))||!separate(s,sizeof(*s),pins,sizeof(*pins)))return 0;
+       !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c))||!a733_ranges_disjoint(s,sizeof(*s),o,sizeof(*o))||
+       !a733_ranges_disjoint(s,sizeof(*s),registry,sizeof(*registry))||!a733_ranges_disjoint(s,sizeof(*s),pins,sizeof(*pins)))return 0;
     unsigned numbers[]={route.clock,route.mosi,route.miso,route.cs};
     for(unsigned i=0;i<4;i++) {
         if((c->expected[i].function!=0&&c->expected[i].function!=15)||c->desired[i].function!=route.function||
@@ -345,13 +341,13 @@ static enum a733_spi_platform_result command(struct a733_spi_platform *s,const s
 }
 enum a733_spi_platform_result a733_spi_platform_submit(struct a733_spi_platform *s,const struct a733_spi_transfer *t,uint64_t deadline)
 {
-    if(!s||!t||!separate(s,sizeof(*s),t,sizeof(*t)))return INVALID;
+    if(!s||!t||!a733_ranges_disjoint(s,sizeof(*s),t,sizeof(*t)))return INVALID;
     /* DMA transfers name no CPU buffers; the core refuses any pointer. */
     const void *buffers[]={t->tx,t->rx};size_t lengths[]={t->tx_bytes,t->rx_bytes};
     for(unsigned i=0;i<2;i++)if(lengths[i]&&!t->dma&&
-        (!separate(s,sizeof(*s),buffers[i],lengths[i])||
-         !separate(s->registry,sizeof(*s->registry),buffers[i],lengths[i])||
-         !separate(s->pins,sizeof(*s->pins),buffers[i],lengths[i])))return INVALID;
+        (!a733_ranges_disjoint(s,sizeof(*s),buffers[i],lengths[i])||
+         !a733_ranges_disjoint(s->registry,sizeof(*s->registry),buffers[i],lengths[i])||
+         !a733_ranges_disjoint(s->pins,sizeof(*s->pins),buffers[i],lengths[i])))return INVALID;
     return command(s,t,deadline,0);
 }
 enum a733_spi_platform_result a733_spi_platform_reap(struct a733_spi_platform *s,uint64_t deadline)

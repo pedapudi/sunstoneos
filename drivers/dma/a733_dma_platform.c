@@ -1,5 +1,6 @@
 #include "a733_dma_platform.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include "a733_dma_regs.h"
 
 #define CCU UINT32_C(0x02002000)
@@ -51,8 +52,7 @@ int a733_dma_platform_init(struct a733_dma_platform *p,
 static int timely(struct a733_dma_platform *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->config.deadline_us) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
 }
 static enum a733_dma_platform_result fault(struct a733_dma_platform *p)
 {p->failed=1;return RETAINED;}

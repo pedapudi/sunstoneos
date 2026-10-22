@@ -1,4 +1,5 @@
 #include "a733_i2s_platform_native.h"
+#include "a733_mmio.h"
 #define CCU UINT32_C(0x02002000)
 #define I2S UINT32_C(0x02532000)
 static int controller(uintptr_t a, unsigned write)
@@ -29,9 +30,7 @@ int a733_audio_native_read(void *cookie, uintptr_t a, uint32_t *v)
 {
     (void)cookie;
     if (!v || !readable(a)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");
+    *v=a733_mmio_read32_dsb_sy_both(a);
     return 1;
 }
 int a733_audio_native_write(void *cookie, uintptr_t a, uint32_t v)
@@ -44,13 +43,11 @@ int a733_audio_native_write(void *cookie, uintptr_t a, uint32_t v)
     else if (a == CCU+0x120c) mask=UINT32_C(0x00010001);
     else if (!controller(a,1)) return 0;
     if (mask) {
-        uint32_t old=*(volatile const uint32_t *)a;
+        uint32_t old=a733_mmio_read32(a);
         uint32_t ignore=a == CCU+0x280 ? UINT32_C(0x10000000) : 0;
         if ((v ^ old) & ~(mask | ignore)) return 0;
         v=(old & ~mask) | (v & mask);
     }
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(a,v);
     return 1;
 }
