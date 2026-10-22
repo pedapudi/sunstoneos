@@ -128,8 +128,9 @@ static enum a733_dma_control_status validate_transfer(
         if (!endpoint_mapped(t, &s->source, s->bytes, A733_DMA_READ) ||
             !endpoint_mapped(t, &s->destination, s->bytes, A733_DMA_WRITE)) return A733_DMA_INVALID;
     }
-    for (unsigned channel = 0; channel < A733_DMA_CHANNELS; ++channel) {
-        const struct a733_dma_transfer *other = c->channels[channel].transfer;
+    const struct a733_dma_channel *channels = c->channels;
+    for (const struct a733_dma_channel *ch = channels; ch != channels + A733_DMA_CHANNELS; ++ch) {
+        const struct a733_dma_transfer *other = ch->transfer;
         if (!other) continue;
         if (t == other || metadata_overlap(&t->descriptors, other) ||
             metadata_overlap(&other->descriptors, t) ||
