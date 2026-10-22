@@ -145,7 +145,7 @@ static void setup(void)
         .timing={.dsi={.pixel_hz=80000000,.hs_hz=480000000,.ls_hz=80000000,.width=1280,.height=720,
             .hsync=40,.hback=100,.hfront=80,.vsync=5,.vback=20,.vfront=5,.lanes=4},.actual_dclk_hz=80000000},
         .frame={.cpu_address=0x40000000,.device_address=0x50000000,.mapped_bytes=5120*720,.frame_id=11,.pitch=5120}};
-    struct display_provider p={now,resources,frame,authenticate,read32,write32,barrier,panel,drain,quiet};
+    struct display_provider p={now,resources,frame,authenticate,read32,write32,barrier,panel,drain,quiet,0};
     struct a733_dsi_pll_plan pll;assert(a733_dsi_pll_plan(480000000,80000000,&pll));
     m.ccu[0]=0x82000000;m.ccu[1]=0x10001;m.phy[0x104/4]=pll.factors|0x00700080;
     m.phy[0x108/4]=0x00601000;m.phy[0xe0/4]=1u<<26;m.top[3]=0x20;

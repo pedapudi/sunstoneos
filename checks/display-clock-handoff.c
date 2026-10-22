@@ -95,7 +95,7 @@ static struct a733_display_handoff_config config(void)
 {
     return (struct a733_display_handoff_config){.media=&n.media,.pll=&n.pll,
         .request=request_image,.recovery_generation=3,.context=&m,.authorize_handoff=admission,
-        .platform={consumer_now,NULL,frame,consumer_auth,consumer_read,consumer_write,barrier,panel,drain,quiet}};
+        .platform={consumer_now,NULL,frame,consumer_auth,consumer_read,consumer_write,barrier,panel,drain,quiet,NULL}};
 }
 static void prepare_sources(void)
 {
