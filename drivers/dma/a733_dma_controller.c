@@ -100,9 +100,9 @@ static enum a733_dma_control_status validate_transfer(
         (uintptr_t)t->segments > UINTPTR_MAX - t->count * sizeof(*t->segments) ||
         (uintptr_t)t->mappings > UINTPTR_MAX - t->mapping_count * sizeof(*t->mappings))
         return A733_DMA_INVALID;
+    /* a733_dma_build refuses linked descriptors at or above
+     * A733_DMA0_DESCRIPTOR_LIMIT before it writes a descriptor or register. */
     if (!valid_mapping(c, &t->descriptors) || t->descriptors.access != A733_DMA_DESCRIPTORS ||
-        t->descriptors.bus >= UINT64_C(0xfffff800) ||
-        t->descriptors.bytes > UINT64_C(0xfffff800) - t->descriptors.bus ||
         t->descriptors.bytes / 64 < t->count || metadata_overlap(&t->descriptors, t))
         return A733_DMA_INVALID;
     for (size_t i = 0; i < t->mapping_count; ++i) {
@@ -119,8 +119,8 @@ static enum a733_dma_control_status validate_transfer(
             if (!ends[e]->request) continue;
             if (ends[e]->request > 63 ||
                 (ends[e]->width != 1 && ends[e]->width != 2 && ends[e]->width != 4) ||
-                ends[e]->address >= (UINT64_C(1) << 35) ||
-                ends[e]->width > (UINT64_C(1) << 35) - ends[e]->address ||
+                ends[e]->address >= A733_DMA0_DATA_LIMIT ||
+                ends[e]->width > A733_DMA0_DATA_LIMIT - ends[e]->address ||
                 !c->operations.validate_fifo(c->cookie, ends[e], e ? A733_DMA_WRITE : A733_DMA_READ))
                 return A733_DMA_INVALID;
             if (fifo_memory_conflict(ends[e], t)) return A733_DMA_CONFLICT;
