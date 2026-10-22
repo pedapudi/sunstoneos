@@ -4142,6 +4142,7 @@
    "sources"
   ],
   "docs": [
+   "docs/designs/gpu-graphics.md",
    "docs/gpu-render.md"
   ],
   "library": false,
@@ -4155,7 +4156,6 @@
  "gpu-texture-runtime.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/gpu-graphics.md",
    "docs/gpu-render.md"
   ],
   "library": false,

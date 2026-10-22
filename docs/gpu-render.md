@@ -51,10 +51,11 @@ of coherency as written; batch records go to the worker's private copy. A
 replacement BEGIN starts a new generation. Generation and ticket wrap
 are refused.
 
-The input areas belong to the last frame until both of its completion
-timelines are acquired. BEGIN and WRITE are therefore refused while a frame is
-in flight or while either timeline differs from the last frame. All current
-clients wait for completion before the next BEGIN.
+The input areas belong to the last frame until the worker observes both of
+its completion timelines and marks the frame complete. BEGIN and WRITE are
+therefore refused while a frame is in flight. SUBMIT reads both timelines again
+and refuses the frame unless they still show the last one. All current clients
+wait for completion before the next BEGIN.
 
 SUBMIT requires the complete upload. The privileged worker validates the shape,
 all vertices and all indices in place, then checks native ownership, the
@@ -70,15 +71,15 @@ The existing graphics owner leases these allocations from the admitted
 write-back (WB) pool. Texture and geometry mappings are GPU-read-only; guarded
 output is writable. The upload and read-back slots occupy CPU-only portions of
 the lease, absent from GPU mappings. The worker translates the payload's CPU
-mapping once per lease, at the first texture request, and the admission check
-verifies the payload lease on every clock sample after that. At maximum
+mapping once per lease, at the first BEGIN, and the admission check verifies
+the payload lease on every clock sample after that. At maximum
 geometry, the complete graphics VM
 needs 19 table pages: one root, three directories and fifteen leaf tables.
 Construction still derives and checks the complete actual mapping plan.
 Extended-memory ownership remains an external launch prerequisite; selecting
 this image does not establish physical DDR or GPU authority.
 
-Output preparation and invalidation each advance by at most 64 KiB per worker
+Output preparation and invalidation each advance by at most 1 MiB per worker
 step. Both acquired timelines precede output invalidation and the guard
 comparison. The guards are the 64 bytes before the frame and the rest of the
 page-rounded allocation after it; the comparison reads only those words, at
@@ -138,20 +139,21 @@ A single D32_SFLOAT depth attachment uses twiddled F32Z storage. Its physical
 width and height round up to powers of two, with a minimum of 32 pixels per
 axis from the pinned GPU's depth load/store tile geometry. The allocation
 reserves 16 MiB for depth plus two unmapped guard pages. At 1080p, the physical
-extent is 2048 × 2048 pixels. The GPU mapping at `0x800d000000` is writable.
-Hardware clears logical depth to one and stores it without an initial depth
-load, so the CPU never writes the attachment. Before the first frame it writes
-the two guard pages and cleans and invalidates the attachment once, so no CPU
-cache line can later overwrite a GPU store; it compares the guard pages after
-every frame. Depth
-contents do not persist between frames or appear in the output.
+extent is 2048 × 2048 pixels. Hardware clears logical depth to one in tile
+memory. `ISP_ZLSCTL` leaves `zloaden`, `zstoreen` and both force bits clear,
+as `pvr_arch_job_render.c:993–1003` encodes an attachment that is neither
+loaded nor stored. The GPU therefore never reads or writes depth in DRAM, and
+depth does not persist between frames or appear in the output. No CPU code
+writes, maintains or compares the depth extent or its guard pages, which lie
+outside every GPU mapping. The graphics owner still maps the extent writable
+at `0x800d000000` and keeps it in the lease. When that mapping is removed, the
+ZLS base becomes an unmapped GPU address, and any depth store faults.
 
 The additional depth mapping increases the native maximum to sixteen mappings
 and 27 table pages. Actual construction and admission derive the entire VM
 plan, including the eight additional leaf tables. The existing graphics lease
 retains depth, shaders, input, commands and output through both final timelines
-and every uncertain failure. Completion precedes the depth-guard comparison.
-Existing output-slot ownership and healthy CLOSE apply.
+and every uncertain failure. Existing output-slot ownership and healthy CLOSE apply.
 
 The resident source-over fragment shader contains 344 instruction bytes plus
 32 prefetch bytes. It uses 32 temporaries, eight coefficients and 27 shared
@@ -175,8 +177,8 @@ Focused evidence is retained in
 `~/.cache/sunstoneos/evidence/gpu-depth-blend-20261019/`. The source comparison
 checks resident shader/PDS bytes, every admitted state, firmware offsets and
 padded depth geometry with sanitizers. Native service cases cover two changing
-1080p frames, legacy-profile reuse, invalid-state refusal, depth guards and an
-uncertain final kick. GPU writes and firmware effects remain explicit models.
+1080p frames, legacy-profile reuse, invalid-state refusal, an overwritten
+output guard and an uncertain final kick. GPU writes and firmware effects remain explicit models.
 These checks do not establish physical depth testing or blending.
 
 ## State batches, perspective texturing and stencil
@@ -251,10 +253,11 @@ The attachment is packed `D32_SFLOAT_S8_UINT` in the F64Z depth load/store
 format, eight bytes per sample. Its twiddled extents are the session width and
 height rounded up to powers of two, at least 32 each. A 1080p session needs a
 2048 × 2048 extent and 32 MiB; a 64 × 64 session needs 32 KiB. The background
-object clears depth to one and stencil to zero for every frame. Depth and
-stencil are stored without an initial load, as for profile 3, so the CPU
-writes only the two guard pages, once. The writable GPU mapping at `0x800d000000` covers only the
-attachment, so a 1080p session needs at most 35 VM table pages.
+object clears depth to one and stencil to zero for every frame. As for
+profile 3, `sloaden` and `sstoreen` stay clear with the depth bits, so neither
+is loaded or stored, and no CPU code touches the attachment. The graphics
+owner still maps it writable at `0x800d000000`, so a 1080p session needs at
+most 35 VM table pages.
 
 After previous completion, the worker validates its private batch table again
 and writes one 26-word programmable primitive pipeline (PPP) state block per
@@ -321,40 +324,64 @@ release and healthy CLOSE in QEMU.
 
 ## CPU work per frame
 
-`checks/gpu-texture-frame.py` builds the worker and texture sources with the
-image's compiler flags and runs two frames per scene under Unicorn. The client
-rings, clock, ownership checks and GPU result are stubs; the counts cover the
-worker's requests and polls from BEGIN through COMPLETE, and then the READ or
-PRESENT requests. Each cache-maintenance call in the image also executes two
-`DSB SY`. The table gives the second frame of each scene for the sources before
-and after the in-place frame path. The 1080p scene is profile 4 with a
-1920 × 1080 texture, 65,535 indices and 16 batches; the 720p scene is profile 2
-with a 1280 × 720 texture and one quad, as `apps/gpu-display` submits.
+`checks/gpu-texture-frame.py` builds the worker and texture sources with the C
+flags of the A733 SMP images, including `-mgeneral-regs-only`, and runs two
+frames per scene under Unicorn. The client rings, clock, ownership checks and
+GPU result are stubs. The counts cover the worker's requests and polls from
+BEGIN through COMPLETE, and then the READ or PRESENT requests. The harness also
+applies the worker loop's burst rule from `pvr_gpu_service.c`: after a request
+or a GPU wait, the worker runs at most 16 consecutive steps that make progress
+and then waits one tick on its queue. A tick wait counts only when CPU work
+alone exhausts a burst; the two waits for the GPU per frame are separate.
 
-| Per frame | 1080p profile 4, before | after | 720p profile 2, before | after |
+The 1080p scene is profile 4 with a 1920 × 1080 texture, 65,535 indices and
+16 batches. The 720p scene is profile 2 with a 1280 × 720 texture and one quad,
+as `apps/gpu-display` submits. The table gives the second frame of each scene,
+for the integration base and for the current sources.
+
+| Per frame | 1080p profile 4, base | current | 720p profile 2, base | current |
 | --- | --- | --- | --- | --- |
 | Bytes stored by the worker, excluding read-back | 77.0 MB | 16.7 MB | 24.7 MB | 7.4 MB |
 | Bytes of cache maintenance | 68.5 MB | 25.0 MB | 21.1 MB | 11.1 MB |
-| Cache-maintenance calls | 14,819 | 389 | 4,302 | 175 |
+| Cache-maintenance calls | 14,819 | 149 | 4,302 | 69 |
+| `DSB SY`, including two per maintenance call | 29,645 | 304 | 8,611 | 144 |
 | Stage-1 translations | 66,457 | 0 | 24,853 | 0 |
 | Output bytes loaded by the completion check | 8.3 MB | 4,096 | 3.7 MB | 4,096 |
-| Worker instructions, upload to COMPLETE | 619 million | 15.9 million | 79.4 million | 6.1 million |
+| Worker instructions, upload to COMPLETE | 619 million | 9.5 million | 79.4 million | 3.3 million |
 | Worker instructions for read-back | 5.6 million | 5.3 million | 2.5 million | 2.3 million |
-| Worker polls | 1,050 | 261 | 327 | 120 |
-| Store-release instructions | 600 | 254 | 460 | 114 |
+| Worker polls | 1,050 | 22 | 327 | 14 |
+| Worker tick waits between CPU-only steps | 65 | 0 | 20 | 0 |
+| Store-release instructions, read-back | 600 | 254 | 460 | 114 |
 | Lease bytes after the render payload | 70.7 MB | 52.4 MB | 27.9 MB | 14.2 MB |
 
-After the change, the stored bytes are the texture and geometry once, the
-output poison and guards, and about 2 KiB of commands and ring words. The
-poison fill (8.3 MB at 1080p) remains until a board run shows that every tile
-is written. The 25,564 translations of the first 1080p frame (6,926 at 720p)
-check the payload mapping once per lease; that frame also cleans and
-invalidates the 32 MiB depth attachment once. Each input byte is copied twice, by
-the runtime into the upload slot and by the worker into its area; it was copied
-three times. A read-back byte is copied once by the worker; it was copied
-twice. A presented frame is not copied; it was copied once. The 127 READ and
-127 RELEASE requests per 1080p read-back remain, because the runtime lends a
-fixed 64 KiB slot.
+The stored bytes are the texture and geometry once, the output poison and
+guards, and about 2 KiB of commands and ring words. The poison fill (8.3 MB at
+1080p) remains until a board run shows that every tile is written. Each worker
+step fills and cleans, or invalidates, at most 1 MiB of the output, so a 1080p
+frame needs eight steps before the kick and eight after completion. Both runs
+fit in one burst. Steps of 64 KiB would need 16 tick waits per 1080p frame, up
+to 16 ms at the 1 kHz tick. The fill and the input copy use
+pairs of 8-byte stores (`STP`).
+
+The first frame of a lease also makes the 25,564 stage-1 translations (6,926
+at 720p) that check the payload mapping, in the first BEGIN request. The
+design does these at OPEN; the move needs a change to the graphics owner's OPEN
+steps. Apart from these translations and the two ring-format steps, the first
+frame costs the same as the second.
+
+Each input byte is copied twice, by the runtime into the upload slot and by the
+worker into its area; at the base it was copied three times. A read-back byte
+is copied once by the worker, and a presented frame is not copied. The 127 READ
+and 127 RELEASE requests per 1080p read-back remain, because the runtime lends a
+fixed 64 KiB slot. The input copy keeps a private shifted 8-byte path because
+`runtime/memory.c` `memcpy` copies single bytes when the two addresses differ
+in 8-byte alignment, as they do after an odd index count.
+
+The GPU stores no depth or stencil to DRAM (see the depth sections). Storing
+them would write about 8.4 MB of depth per 1080p profile-3 frame and 16.7 MB
+of depth and stencil per profile-4 frame, which nothing reads. The
+graphics owner still reserves and maps the depth extent: 32 MiB of the 52.4 MB
+lease at 1080p profile 4, and 16 MiB at profile 3.
 
 ## Geometry, partial renders and final completion
 

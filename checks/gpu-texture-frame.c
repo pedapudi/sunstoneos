@@ -31,8 +31,9 @@ volatile struct frame_layout frame_layout;
 volatile uint32_t frame_failure;
 
 /* Markers observed by the harness. 1 starts counting a request, 2 a worker
- * poll, and 0 stops counting;
- * 16 + n starts frame n; 32 + n starts the read-back or present of frame n. */
+ * poll, and 0 stops counting; 3 records a worker tick wait between CPU-only
+ * steps and 4 a wait for the GPU; 16 + n starts frame n; 32 + n starts the
+ * read-back or present of frame n. */
 __attribute__((noinline)) void frame_mark(unsigned what) { __asm__ volatile("" :: "r"(what) : "memory"); }
 __attribute__((noinline)) void gpu_model_render(uint32_t sequence) { __asm__ volatile("" :: "r"(sequence) : "memory"); }
 __attribute__((noinline, noreturn)) static void fail(unsigned where)
@@ -108,8 +109,12 @@ int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *p, const struct pvr_
     (void)clean; (void)cleans; (void)deadline;
     p->fragment_tail = 1; return ring_write(p->fragment, c, n);
 }
+/* Set by each pair poll. On the device, the poll after a kick waits for the
+ * GPU, so the worker sleeps until the next tick or interrupt before it. */
+static unsigned device_polled;
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
 {
+    device_polled = 1;
     if (p->fragment_tail && p->phase != 3) {
         uint32_t sequence = owner.submission.sequence;
         gpu_model_render(sequence);
@@ -167,12 +172,24 @@ void frame_main(void)
         q = (struct pvr_render_texture_request){.operation = PVR_TEXTURE_SUBMIT, .previous = frame - 1,
             .generation = generation};
         if (request(&q) != 1) fail(12);
+        /* The worker loop in pvr_gpu_service.c: after a request it steps
+         * while each step progresses, up to PVR_GPU_SERVICE_BURST_STEPS, and
+         * then waits one tick on its queue before the next burst. The fields
+         * below are the render part of its progress identity. */
+        unsigned burst = 0;
         for (unsigned i = 0;; ++i) {
+            const uint32_t before[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
+            device_polled = 0;
             frame_mark(2);
             int r = pvr_render_service_poll(s);
             frame_mark(0);
-            if (r == 1) break;
             if (r < 0 || i > 1000000) fail(13);
+            const uint32_t after[4] = {s->phase, s->checked, s->texture_cursor, s->pair.phase | s->pair.fragment_tail << 4};
+            /* A poll that waited for the GPU starts a new burst. */
+            if (device_polled) { frame_mark(4); burst = 1; }
+            else if (!memcmp(before, after, sizeof(before))) fail(18);
+            else if (++burst == PVR_GPU_SERVICE_BURST_STEPS) { frame_mark(3); burst = 0; }
+            if (r == 1) break;
         }
         frame_mark(32 + frame);
         uint32_t bytes = l.output_bytes - 128;

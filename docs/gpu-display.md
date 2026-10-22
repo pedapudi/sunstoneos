@@ -18,6 +18,15 @@ green and blue. It performs no scaling; the GPU already rendered the complete
 720p surface. A separate display allocation receives the converted pixels. GPU
 and display engines share no framebuffer mapping or imported ownership token.
 
+Before each kick the worker fills the output frame with a poison value, 3.7 MB
+at 720p, and cleans it. A tile that the GPU fails to write then reaches HDMI as
+the poison colour instead of pixels from an earlier frame. This application
+reads every frame back through READ slots, and the worker learns whether a
+frame will be read or presented only after completion, so every frame keeps the
+fill. The design in [designs/gpu-graphics.md](designs/gpu-graphics.md) removes
+it for scanout: scanout slots are fixed at OPEN and skip the fill, and
+read-back keeps it until a board run shows that every tile is written.
+
 Both display frames and register command pages become immutable before display
 translation installation and DE start. The application closes the GPU normally,
 publishes the noncacheable display bank and then allows TV0 to fetch it. DE's

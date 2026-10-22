@@ -1,8 +1,16 @@
 # Design: GPU graphics features and zero-copy presentation
 
-Status: **design**. No code implements it yet. Each item ends at implemented
-and host-modeled; physical behavior stays pending until the board items at the
-end pass.
+Status: **partly implemented**. The frame path of profiles 2 to 4 implements
+these items: WRITE moves each upload byte once into the area the GPU reads;
+PRESENT and READ use the output frame in place; completion compares only the
+output guards; the payload mapping is translated once per lease; depth and
+stencil stay in tile memory with no load or store; and the worker's CPU work on
+a frame fits in one burst of steps. The ZLS base still points at the mapped
+depth extent, because the graphics owner still reserves and maps it. Profile 5,
+the scanout slots, freshness markers, the fixed free list, interrupt-driven
+waits and the remaining items are not implemented. Each item ends at
+implemented and host-modeled; physical behavior stays pending until the board
+items at the end pass.
 
 Graphics profile 5 extends the retained renderer of
 [gpu-render.md](../gpu-render.md). It adds trusted shader programs compiled on
@@ -185,8 +193,9 @@ IOMMU pages, the only size it has: 450 walks per 720p frame.
 **Freshness markers.** Before each kick the worker writes a 64-byte marker with
 the frame sequence number into the first and last lines of the frame and cleans
 them; after completion it invalidates them and requires both overwritten.
-Read-back sessions keep today's poison fill (`pvr_render_service.c:187, 320`)
-until the tile-coverage board item passes; scanout skips it.
+Read-back sessions keep today's poison fill (`texture_prepare` in
+`pvr_render_service.c`) until the tile-coverage board item passes; scanout
+skips it.
 
 **Barriers.** The existing `DSB SY` forms stay until `include/a733_mmio.h` gains
 `DMB OSHST`. The targets are plain stores for CCCB words, one `DMB OSHST`
@@ -232,10 +241,10 @@ boundaries; ETC2 and EAC formats.
 ## Budgets
 
 Baselines are counted from the integration base for a 1920 × 1080 profile-4
-frame and the 1280 × 720 display frame. Three existing harnesses gain counters:
-the frame-path emulation `checks/gpu-texture-runtime.py` (Unicorn), the display
-replay model `checks/gpu-display-replay.py`, and the VM check
-`checks/pvr-gpu-vm.c`.
+frame and the 1280 × 720 display frame. Three harnesses hold the counters: the
+frame-path emulation `checks/gpu-texture-frame.py`, which runs the worker's
+sources under Unicorn and applies its burst rule; the display replay model
+`checks/gpu-display-replay.py`; and the VM check `checks/pvr-gpu-vm.c`.
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
@@ -261,6 +270,24 @@ replay model `checks/gpu-display-replay.py`, and the VM check
 
 Targets are maxima, except the largest render time, which is a minimum.
 
+The frame-path emulation gives these values for the current sources. The last
+column names the item that closes the remaining gap.
+
+| Metric | 1080p profile 4 read-back; 720p profile 2 | Closed by |
+| --- | --- | --- |
+| CPU bytes stored by the worker | 16.7 MB; 7.4 MB: the input copy (8.4 MB; 3.7 MB) and the poison fill (8.3 MB; 3.7 MB) | Input lending, which deletes the TEXTURE WRITE copy; scanout slots and the coverage board item for the fill |
+| CPU cache maintenance | 25.0 MB; 11.1 MB | The same items |
+| `AT` translations | 0; the first frame of a lease makes 25,564 and 6,926 | Payload check moved into OPEN |
+| Output check iterations | 1,024 guard words; no depth guards | Freshness markers with scanout slots |
+| Copies per input, displayed and read-back byte | 2; 1, because `apps/gpu-display` reads back and converts; 1 | Input lending; zero-copy scanout |
+| Queue round trips per read-back frame | 254; 114 | One-reply READ with the 64 KiB output accessor removed |
+| Worker instructions, upload to COMPLETE | 9.5 million; 3.3 million, mostly the input copy and the fill | Input lending; scanout slots and the coverage item |
+| Worker tick waits between CPU-only steps | 0; 0 (65 and 20 at the base) | Met |
+| Worker waits for the GPU | Two per frame, each repeated once per tick of rendering | GPU interrupt delivery |
+| `DSB SY` per frame | 304; 144, two per maintenance call; about 130 and 60 of the calls each clean the bytes of one 64 KiB WRITE | Input lending; a multi-range maintenance call |
+| GPU DRAM writes of depth and stencil | None; about 8.4 MB (profile 3) and 16.7 MB (profile 4) at the base | Met |
+| Lease bytes after the render payload | 52.4 MB; 14.2 MB, including 32 MiB of unused depth extent at profile 4 | Depth region removed from the lease and VM plan |
+
 ## Changes needed from other owners
 
 - **GPU runtime** (`pvr_gpu_service.c`, `pvr_cccb.c`, `pvr_free_list.c`,
@@ -270,7 +297,8 @@ Targets are maxima, except the largest render time, which is a minimum.
   TEXTURE WRITE copy (`pvr_gpu_service.c:1020`) and the 64 KiB output accessor;
   the 2 MiB-aligned lease with the VM plans above, no depth region and DISPOSE
   refused while an extent is imported; a fixed free list with growth removed
-  and GROW as unknown state; the two statistics reads; `pvr-batch.c` assertions
+  and GROW as unknown state; the whole-payload translation in the DATA step of
+  OPEN instead of the first BEGIN; the two statistics reads; `pvr-batch.c` assertions
   for `clip_mode`, `down_scale`, the PBE pack mode and clear `zloaden` and
   `zstoreen`; the PTE and display-bank assertions in `pvr-gpu-vm.c`.
 - **Display** (`a733_display_engine.c`): a replay that ends at RCQ finish and
@@ -285,9 +313,12 @@ Targets are maxima, except the largest render time, which is a minimum.
 - **Primary agent**: route SPI 95 to core 6 and admit cores 6 and 7 for the
   graphics images; qualify the cross-cluster task-notification wake between the
   A76 and A55 cores, whose latency counts in the interrupt-to-RCQ budget; add
-  `DMB OSHST` to `a733_mmio.h`. A multi-range cache-maintenance call with one
-  trailing `DSB SY` is needed only if the frame-path emulation counts more than
-  16 `DSB SY` from `aarch64_device_cache` per scanout frame.
+  `DMB OSHST` to `a733_mmio.h`; a multi-range cache-maintenance call with one
+  trailing `DSB SY`, needed because the frame-path emulation counts more than
+  16 `DSB SY` from `aarch64_device_cache` per frame (144 for the 720p display
+  frame); and a `memcpy` in `runtime/memory.c` that copies with shifted 8-byte
+  words when source and destination differ in 8-byte alignment, as
+  `-mstrict-align` requires, so that the worker's private copy loop can go.
 
 ## Left out
 

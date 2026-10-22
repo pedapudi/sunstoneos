@@ -40,8 +40,7 @@ struct pvr_render_service {
     struct pvr_render_texture_request texture_request;
     struct pvr_render_texture_input texture_input;
     struct pvr_render_batch texture_batches[PVR_RENDER_BATCH_MAX];
-    uintptr_t mapped_cpu; /* Payload extent whose mapping was translated once. */
-    size_t mapped_bytes;
+    uint32_t payload_checked; /* The payload mapping was translated at the first BEGIN. */
     uint64_t texture_ticket,texture_epoch,texture_generation,texture_draft_deadline;
     uint64_t texture_output_ticket;
     uint32_t texture_client,texture_output_client,texture_output_frame;

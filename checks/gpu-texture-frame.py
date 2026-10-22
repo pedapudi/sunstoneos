@@ -6,8 +6,9 @@ Builds checks/gpu-texture-frame.c with the worker and texture sources of
 frame and while the worker runs: bytes stored by memory region, cache
 maintenance by operation, stage-1 translations, loads from the output
 allocation during completion checks, instructions, barriers and store-release
-instructions, and worker polls. Client rings, clock, ownership and GPU results
-are stubs; nothing touches a device. Runs 1080p profile 4 with 16 batches and
+instructions, worker polls, and the worker's tick waits between CPU-only steps
+under its burst rule. Client rings, clock, ownership and GPU results are stubs;
+nothing touches a device. Runs 1080p profile 4 with 16 batches and
 read-back, 720p profile 2 with read-back, and 720p profile 2 presented.
 """
 import argparse
@@ -25,6 +26,9 @@ FREERTOS = Path.home() / '.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b
 NEWLIB = Path.home() / '.cache/sunstoneos/host/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf/aarch64-none-elf/include'
 SOURCES = ['drivers/gpu/pvr_render_service.c', 'drivers/gpu/pvr_render_texture.c', 'drivers/gpu/pvr_render_job.c',
            'drivers/gpu/pvr_render_programs.c', 'drivers/gpu/pvr_render_draw.c', 'runtime/memory.c']
+# The C flags of the A733 SMP images that run the render worker
+# (cmake/a733-smp-cached.cmake and its siblings), which include
+# -mgeneral-regs-only, so no copy loop uses SIMD registers.
 FLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only', '-ffreestanding',
          '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections', '-O2', '-Wall', '-Wextra']
 STACK, INPUT, SHARED, PAYLOAD = 0x4f000000, 0x50000000, 0x5f000000, 0x60000000
@@ -142,13 +146,16 @@ class Frame:
                 elif 16 < x0 < 32:
                     self.frame = x0 - 16; self.stage = 'render'
                     self.frames[self.frame] = dict(stores={}, cache={}, cache_calls=0, translations=0, output_loads=0,
-                        instructions=0, read_instructions=0, dsb=0, dmb=0, stlr=0, polls=0, requests=0, read_requests=0)
+                        instructions=0, read_instructions=0, dsb=0, dmb=0, stlr=0, polls=0, requests=0, read_requests=0,
+                        tick_waits=0, gpu_waits=0)
                     if self.layout is None:
                         fields = 'output output_allocation image geometry depth depth_bytes copy upload download total program_bytes payload_bytes'.split()
                         self.layout = dict(zip(fields, struct.unpack('<12I', uc.mem_read(self.symbols['frame_layout'], 48))))
                 elif 32 < x0 < 48: self.stage = 'output'
                 if x0 == 1: add(current(), 'read_requests' if self.stage == 'output' else 'requests', 1)
                 if x0 == 2: current()['polls'] += 1
+                if x0 == 3: current()['tick_waits'] += 1
+                if x0 == 4: current()['gpu_waits'] += 1
             elif name == 'gpu_model_render':
                 l = self.layout; frame = bytes(((x * 3 + x0) & 255) for x in range(4096))
                 total = ((scene['width'] + 1) & ~1) * scene['height'] * 4
@@ -191,9 +198,10 @@ class Frame:
         assert bytes(u.mem_read(PAYLOAD + l['output'], 64)) == guard * 16
         tail = l['output_allocation'] - 64 - frame
         assert bytes(u.mem_read(PAYLOAD + l['output'] + 64 + frame, tail)) == guard * (tail // 4)
-        if l['depth_bytes']:
-            for page in (l['depth'], l['depth'] + l['depth_bytes'] + 4096):
-                assert bytes(u.mem_read(PAYLOAD + page, 4096)) == guard * 1024
+        # Depth stays in tile memory: the worker neither stores to nor
+        # maintains the depth extent.
+        for f in self.frames.values():
+            assert 'depth' not in f['stores'] and not any(k.endswith(':depth') for k in f['cache']), f
         return dict(layout=self.layout, input_bytes=len(data), frames=self.frames)
 
 

@@ -199,55 +199,55 @@ int pvr_render_service_draw_next(struct pvr_render_service *s,uint32_t previous,
 }
 int pvr_render_service_draw(struct pvr_render_service *s,const void *v,size_t bytes,uint32_t count,uint64_t deadline)
 { return pvr_render_service_draw_next(s,0,v,bytes,count,deadline); }
-/* The payload's write-back mapping is translated once per extent. admitted()
- * checks the payload lease on every clock sample and the platform pins the
- * mapping, so a translation per request would repeat the same answer. */
-static int payload_mapped(struct pvr_render_service *s,const struct pvr_render_texture_layout *l)
-{
-    uintptr_t cpu=s->owner->payload_extent.cpu;size_t bytes=s->owner->render.payload_bytes+(size_t)l->total;
-    if(s->mapped_cpu==cpu && s->mapped_bytes==bytes)return 1;
-    if(s->owner->payload_extent.bytes!=bytes || !mapped(cpu,bytes,0xff))return 0;
-    s->mapped_cpu=cpu;s->mapped_bytes=bytes;return 1;
-}
-/* No frame is in flight: none was submitted, or the worker completed the last
- * one and both timelines still show it. Only then may input areas change. */
+/* CPU work per worker step on the output frame: the poison and guard fill
+ * with its clean, and the invalidation after completion. A 1080p frame takes
+ * eight steps each way, so preparation and completion each fit in one worker
+ * burst of PVR_GPU_SERVICE_BURST_STEPS and wait for no tick. */
+#define PVR_RENDER_STEP_BYTES (1024u*1024u)
+/* No frame is in flight: none was submitted, or the worker observed both
+ * timelines of the last one (COMPLETE). Only SUBMIT starts a frame, and it
+ * closes the upload, so input areas may change while this holds. */
 static int idle(const struct pvr_render_service *s)
-{
-    if((s->phase!=PVR_RENDER_SERVICE_READY && s->phase!=PVR_RENDER_SERVICE_COMPLETE) || s->sequence>UINT32_MAX/2)return 0;
-    uintptr_t timeline=a733_gpu_graphics_memory_render_shared(s->owner)+1408;
-    uint32_t fragment=__atomic_load_n((uint32_t *)(timeline+4),__ATOMIC_ACQUIRE);
-    uint32_t geometry=__atomic_load_n((uint32_t *)timeline,__ATOMIC_ACQUIRE);
-    return fragment==s->sequence*2u && geometry==s->sequence;
-}
+{ return s->phase==PVR_RENDER_SERVICE_READY || s->phase==PVR_RENDER_SERVICE_COMPLETE; }
 /* Payload words. The image builds with -fno-builtin, so memcpy of four
  * bytes is a call, and the project memcpy moves single bytes unless both
  * addresses share their 8-byte alignment, which upload streams with an odd
  * index count never do. */
 typedef uint32_t __attribute__((may_alias)) payload_word;
 typedef uint64_t __attribute__((may_alias)) payload_dword;
-/* Copy with 8-byte stores. A source that is not 8-byte aligned is read as
- * whole aligned words and shifted; those words stay inside the page-aligned
- * 64 KiB upload chunk that holds the source. */
+/* Copy with pairs of 8-byte stores (STP). A source that is not 8-byte
+ * aligned is read as whole aligned words and shifted; those words stay inside
+ * the page-aligned 64 KiB upload chunk that holds the source. */
 static void move_bytes(uintptr_t to,uintptr_t from,uint32_t n)
 {
     for(;n && (to&7);--n)*(unsigned char *)to++=*(const unsigned char *)from++;
+    payload_dword *out=(payload_dword *)to;
     unsigned shift=(unsigned)(from&7)*8u;
-    if(!shift)for(;n>=8;n-=8,to+=8,from+=8)*(payload_dword *)to=*(const payload_dword *)from;
-    else {
+    if(!shift) {
+        const payload_dword *in=(const payload_dword *)from;
+        for(;n>=16;n-=16,out+=2,in+=2){uint64_t a=in[0],b=in[1];out[0]=a;out[1]=b;}
+        if(n>=8){*out++=*in;n-=8;}
+    } else {
         const payload_dword *word=(const payload_dword *)(from&~(uintptr_t)7);
         uint64_t low=*word++;
-        for(;n>=8;n-=8,to+=8,from+=8) {
-            uint64_t high=*word++;
-            *(payload_dword *)to=low>>shift | high<<(64u-shift);low=high;
+        for(;n>=16;n-=16,out+=2,word+=2) {
+            uint64_t a=word[0],b=word[1];
+            out[0]=low>>shift | a<<(64u-shift);out[1]=a>>shift | b<<(64u-shift);low=b;
         }
+        if(n>=8){uint64_t a=*word;*out++=low>>shift | a<<(64u-shift);n-=8;}
     }
+    from+=(uintptr_t)out-to;to=(uintptr_t)out;
     for(;n;--n)*(unsigned char *)to++=*(const unsigned char *)from++;
 }
-/* Fill [first, end) of the output allocation; both are multiples of eight. */
+/* Fill [first, end) of the output allocation with pairs of 8-byte stores;
+ * both are multiples of eight. */
 static void fill(uintptr_t output,uint32_t first,uint32_t end,uint32_t value)
 {
     const uint64_t pair=(uint64_t)value<<32 | value;
-    for(uint32_t i=first;i<end;i+=8)*(payload_dword *)(output+i)=pair;
+    if(first>=end)return;
+    payload_dword *p=(payload_dword *)(output+first);uint32_t n=(end-first)/8;
+    for(;n>=2;n-=2,p+=2){p[0]=pair;p[1]=pair;}
+    if(n)*p=pair;
 }
 /* Maintain whole 64-byte lines around a range inside the payload extent. */
 static int lines(enum aarch64_cache_op op,uintptr_t at,size_t bytes)
@@ -286,7 +286,6 @@ int pvr_render_service_texture_request(struct pvr_render_service *s,uint64_t dea
     if(!admitted(s) || !now(s,&clock) || clock>=deadline ||
         !pvr_render_texture_layout_profile(s->owner->profile.render.width,s->owner->profile.render.height,s->owner->draw,&l) ||
         pvr_compute_service_admit_mode(s->owner->service->config.compute)!=1)return 0;
-    if(!payload_mapped(s,&l))return failed(s,PVR_RENDER_SERVICE_MEMORY);
     const struct pvr_render_texture_request *q=&s->texture_request;
     if(q->operation!=PVR_TEXTURE_BEGIN && q->state)return 0;
     uintptr_t base=s->owner->payload_extent.cpu+s->owner->render.payload_bytes;
@@ -324,6 +323,16 @@ int pvr_render_service_texture_request(struct pvr_render_service *s,uint64_t dea
             !pvr_render_texture_geometry(q->input.width,q->input.height,&stride,&bytes) || q->input.stride!=stride ||
             !q->input.vertex_count || q->input.vertex_count>PVR_RENDER_TEXTURE_VERTICES ||
             q->input.index_count<3 || q->input.index_count>PVR_RENDER_TEXTURE_INDICES || q->input.index_count%3)return 0;
+        /* The payload's write-back mapping is translated once per lease,
+         * before the first upload stores into it. admitted() checks the
+         * lease on every clock sample; reconstruction clears the flag. */
+        if(!s->payload_checked) {
+            size_t bytes=s->owner->render.payload_bytes+(size_t)l.total;
+            if(s->owner->payload_extent.bytes!=bytes || !mapped(s->owner->payload_extent.cpu,bytes,0xff))
+                return failed(s,PVR_RENDER_SERVICE_MEMORY);
+            s->payload_checked=1;
+            if(!now(s,&clock) || clock>=deadline)return 0;
+        }
         s->texture_input=q->input;s->texture_render_state=q->state;
         s->texture_total=q->input.vertex_count*24+q->input.index_count*2+pvr_render_batch_table_bytes(s->owner->draw,q->state)+bytes;
         s->texture_received=0;s->texture_previous=q->previous;++s->texture_generation;
@@ -332,8 +341,9 @@ int pvr_render_service_texture_request(struct pvr_render_service *s,uint64_t dea
     if(!s->texture_draft || q->generation!=s->texture_generation || q->previous!=s->texture_previous)return 0;
     if(clock>=s->texture_draft_deadline){s->texture_draft=0;return 0;}
     if(q->operation==PVR_TEXTURE_WRITE) {
-        /* Input areas belong to the last frame until both its timelines are
-         * acquired; a refused or abandoned upload leaves no frame using them. */
+        /* An open upload implies no frame in flight; idle() repeats the
+         * phase test. A refused or abandoned upload leaves no frame using
+         * the input areas. */
         if(!q->bytes || q->bytes>PVR_RENDER_TEXTURE_CHUNK || q->offset!=s->texture_received ||
             q->offset>s->texture_total || q->bytes>s->texture_total-q->offset || !idle(s))return 0;
         if(!texture_place(s,&l,base,q->offset,q->bytes))return failed(s,PVR_RENDER_SERVICE_MEMORY);
@@ -362,7 +372,11 @@ int pvr_render_service_texture_request(struct pvr_render_service *s,uint64_t dea
         !pvr_cccb_pair_reusable(&s->pair) || !s->pair.fragment_tail ||
             s->fragment.serial!=(uint64_t)previous*2 || s->geometry.serial!=previous) :
         (s->phase!=PVR_RENDER_SERVICE_READY || s->draw_accepted))return 0;
-    if(!idle(s))return 0;
+    /* Both timelines still show the last frame. This is the one place a
+     * timeline rollback after COMPLETE would be seen before a kick. */
+    uintptr_t timeline=a733_gpu_graphics_memory_render_shared(s->owner)+1408;
+    if(__atomic_load_n((uint32_t *)(timeline+4),__ATOMIC_ACQUIRE)!=previous*2u ||
+        __atomic_load_n((uint32_t *)timeline,__ATOMIC_ACQUIRE)!=previous)return 0;
     struct pvr_render_job_image image;uint32_t next=previous+1;
     if(!pvr_render_job_build_frame_pr(&s->programs,s->owner->target.data_firmware[(next-1)&1],
         A733_GPU_RENDER_FW+1408,A733_GPU_RENDER_FW+1412,next,&image))return 0;
@@ -385,25 +399,21 @@ static int texture_prepare(struct pvr_render_service *s)
     uintptr_t base=s->owner->payload_extent.cpu+s->owner->render.payload_bytes;
     /* Read-back keeps the poison fill until a board run shows full tile
      * coverage. The guards cover the 64 bytes before the frame and the rest
-     * of the allocation after it. The GPU clears depth and stencil on chip and
-     * stores them without a load, so the CPU never writes the attachment. Before
-     * the first frame it writes the two depth guard pages and removes any cache
-     * line over the attachment, which no later CPU access recreates. One 64 KiB
-     * chunk per step. */
-    uint32_t depth=l.depth && s->sequence==1?l.depth_bytes+8192u:0;
-    if(s->texture_cursor<l.output_allocation+depth) {
+     * of the allocation after it. Depth and stencil stay in tile memory: the
+     * GPU neither loads nor stores them, and the CPU never touches the depth
+     * extent. */
+    if(s->texture_cursor<l.output_allocation) {
         uint64_t clock;
         if(!now(s,&clock) || clock>=s->deadline)return failed(s,PVR_RENDER_SERVICE_CLOCK);
-        /* Offsets are relative to the area; guards are [0, head) and [tail, end). */
+        /* Offsets are relative to the output; guards are [0, head) and [tail, end). */
         uint32_t first=s->texture_cursor,end=l.output_allocation,head=64,tail=l.output_bytes-64;
-        uintptr_t area=base+l.output;int output=first<end;
-        if(!output){first-=end;end=depth;area=base+l.depth;head=4096;tail=l.depth_bytes+4096;}
-        if(end-first>PVR_RENDER_TEXTURE_CHUNK)end=first+PVR_RENDER_TEXTURE_CHUNK;
+        uintptr_t area=base+l.output;
+        if(end-first>PVR_RENDER_STEP_BYTES)end=first+PVR_RENDER_STEP_BYTES;
         fill(area,first,end<head?end:head,PVR_RENDER_GUARD);
-        if(output)fill(area,first>head?first:head,end<tail?end:tail,PVR_RENDER_POISON);
+        fill(area,first>head?first:head,end<tail?end:tail,PVR_RENDER_POISON);
         fill(area,first>tail?first:tail,end,PVR_RENDER_GUARD);
         if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,area+first,end-first))return failed(s,PVR_RENDER_SERVICE_MEMORY);
-        s->texture_cursor+=end-first;
+        s->texture_cursor=end;
         return 0;
     }
     uintptr_t commands=base+8192+0xf000,metadata=base+8192+0x10000,batch=base+8192+PVR_RENDER_BATCH_VDM_OFFSET;
@@ -492,21 +502,13 @@ int pvr_render_service_poll(struct pvr_render_service *s)
             struct pvr_render_texture_layout l;
             if(!pvr_render_texture_layout_profile(s->owner->profile.render.width,s->owner->profile.render.height,s->owner->draw,&l))
                 return failed(s,PVR_RENDER_SERVICE_MEMORY);
-            /* One 64 KiB chunk of the output per step, then both depth guard
-             * pages, which are compared here. */
+            /* Up to 1 MiB of the output per step. */
             uintptr_t base=s->owner->payload_extent.cpu+s->owner->render.payload_bytes;
-            if(s->checked<l.output_allocation) {
-                uint32_t n=l.output_allocation-s->checked;if(n>PVR_RENDER_TEXTURE_CHUNK)n=PVR_RENDER_TEXTURE_CHUNK;
-                if(!aarch64_device_cache(AARCH64_CACHE_INVALIDATE,base+l.output+s->checked,n))
-                    return failed(s,PVR_RENDER_SERVICE_MEMORY);
-                s->checked+=n;
-                if(s->checked<l.output_allocation || l.depth)break;
-            } else if(l.depth) for(unsigned page=0;page<2;++page) {
-                uintptr_t guard=base+l.depth+(page?l.depth_bytes+4096u:0);
-                if(!aarch64_device_cache(AARCH64_CACHE_INVALIDATE,guard,4096))return failed(s,PVR_RENDER_SERVICE_MEMORY);
-                for(unsigned i=0;i<4096;i+=4)
-                    if(*(const payload_word *)(guard+i)!=PVR_RENDER_GUARD)return failed(s,PVR_RENDER_SERVICE_RESULT);
-            }
+            uint32_t n=l.output_allocation-s->checked;if(n>PVR_RENDER_STEP_BYTES)n=PVR_RENDER_STEP_BYTES;
+            if(!aarch64_device_cache(AARCH64_CACHE_INVALIDATE,base+l.output+s->checked,n))
+                return failed(s,PVR_RENDER_SERVICE_MEMORY);
+            s->checked+=n;
+            if(s->checked<l.output_allocation)break;
             s->checked=0;s->phase=PVR_RENDER_SERVICE_OUTPUT;
             break;
         }

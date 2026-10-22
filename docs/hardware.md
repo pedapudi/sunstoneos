@@ -1140,9 +1140,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reopen; the optional standalone path below has separate disposal evidence.
   The [texture frame path](gpu-render.md#cpu-work-per-frame) moves each upload
   byte once into its GPU-read area, lends the output frame in place for PRESENT
-  and READ, and writes only guard pages around the depth attachment. Counted under
-  Unicorn, the worker's instructions for a 1080p profile-4 frame fall from 619
-  million to 16 million and its per-frame translations from 66,457 to none.
+  and READ, and keeps depth and stencil in tile memory with no DRAM load or
+  store. Counted under Unicorn, the worker's instructions for a 1080p profile-4
+  frame fall from 619 million to 9.5 million, its per-frame translations from
+  66,457 to none, and its tick waits between CPU-only steps from 65 to none.
   Profile-5 trusted programs, general blending, clipping, mipmaps, B5G6R5,
   4× multisampling and scanout of the rendered frame without a copy remain
   required.

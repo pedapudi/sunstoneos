@@ -32,9 +32,11 @@ struct pvr_render_texture_input {
     uint32_t width,height,stride,vertex_count,index_count;
 };
 /* Payload offsets after the render payload: guarded output, texture area,
- * vertex and index areas, guarded depth (profiles 3 and 4), the runtime's
+ * vertex and index areas, the depth extent (profiles 3 and 4), the runtime's
  * 64 KiB upload chunk and the 64 KiB read-back chunk. copy is the frame inside
- * the output guards. */
+ * the output guards. The GPU neither loads nor stores depth, and no CPU code
+ * touches the depth extent; it remains only because the graphics owner still
+ * maps it at PVR_RENDER_DEPTH_ADDRESS, one page after depth. */
 struct pvr_render_texture_layout {
     uint32_t output,image,geometry,copy,upload,download,total;
     uint32_t output_bytes,output_allocation;
