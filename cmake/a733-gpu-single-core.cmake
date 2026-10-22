@@ -80,7 +80,7 @@ list(FILTER gpsc_includes EXCLUDE REGEX "(a733-smp-cached|freertos-a733-smp-cach
 set_property(TARGET ${gpsc_target} PROPERTY COMPILE_OPTIONS "${gpsc_options}")
 target_include_directories(${gpsc_target} BEFORE PRIVATE "${gpsc_app}" "${gpsc_port}")
 target_include_directories(${gpsc_target} PRIVATE ${gpsc_includes})
-target_compile_definitions(${gpsc_target} PRIVATE ${gpsc_definitions} GUEST=1 SUNSTONE_GPU_SINGLE_CORE=1)
+target_compile_definitions(${gpsc_target} PRIVATE ${gpsc_definitions} GUEST=1 SUNSTONE_CACHED_SINGLE_CORE=1 SUNSTONE_GPU_SINGLE_CORE=1)
 # The shared adapter's local boot.h stays unchanged; include the GPU log placement first.
 set_property(SOURCE "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c" "${gpsc_build}/platform.c" APPEND PROPERTY COMPILE_OPTIONS
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,${gpsc_target}>:-include>"

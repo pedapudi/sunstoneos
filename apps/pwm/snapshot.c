@@ -3,11 +3,18 @@
 #include "a733_storage_digest.h"
 #include "boot.h"
 #include <string.h>
+#ifdef SUNSTONE_PWM_SINGLE_CORE
+/* The boot-CPU image fills this state at EL3 before EL1 clears .bss, so it
+ * keeps it in the retained section that the monitor clears beforehand. */
+#define PWM_SESSION_RETAINED __attribute__((section(".pwm_runtime_retained")))
+#else
+#define PWM_SESSION_RETAINED
+#endif
 /* Written only by the primary EL3 hook, before provider construction/SMP. */
 static struct {
     struct pwm_session session;
     unsigned attempted,ready;
-} admitted;
+} admitted PWM_SESSION_RETAINED;
 int pwm_session_prepare(const struct a733_smp_contract *contract)
 {
     if(admitted.attempted)return 0;

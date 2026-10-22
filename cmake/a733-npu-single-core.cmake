@@ -56,7 +56,7 @@ list(FILTER npsc_includes EXCLUDE REGEX "(a733-smp-cached|freertos-a733-smp-cach
 set_property(TARGET a733-npu-convolution-single-core PROPERTY COMPILE_OPTIONS "${npsc_options}")
 target_include_directories(a733-npu-convolution-single-core BEFORE PRIVATE "${npsc_app}" "${npsc_port}")
 target_include_directories(a733-npu-convolution-single-core PRIVATE ${npsc_includes} "${npsc_root}/apps/npu-convolution")
-target_compile_definitions(a733-npu-convolution-single-core PRIVATE ${npsc_definitions} GUEST=1 SUNSTONE_NPU_SINGLE_CORE=1)
+target_compile_definitions(a733-npu-convolution-single-core PRIVATE ${npsc_definitions} GUEST=1 SUNSTONE_CACHED_SINGLE_CORE=1 SUNSTONE_NPU_SINGLE_CORE=1)
 if(A733_NPU_RUNTIME_INPUT)
  target_compile_definitions(a733-npu-convolution-single-core PRIVATE SUNSTONE_NPU_RUNTIME_INPUT=1)
  target_include_directories(a733-npu-convolution-single-core PRIVATE "${npsc_root}/apps/npu-runtime")
