@@ -7,6 +7,7 @@
 #include "a733_range.h"
 #include "a733_mmio.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_gpu_platform_native.h"
 
 static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
@@ -25,9 +26,9 @@ static int healthy(struct a733_gpu_backend *b)
 }
 static int device_page(uintptr_t address)
 {
-    struct aarch64_translation r, w;
-    return aarch64_device_translate(address, 0, &r) && aarch64_device_translate(address, 1, &w) &&
-        r.physical == address && w.physical == address && r.attributes == 0 && w.attributes == 0;
+    static const struct a733_mapping_rule device = {A733_MAPPING_READ_WRITE, 1,
+        {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 0, 1};
+    return a733_mapping_check(aarch64_device_translate, address, address, &device);
 }
 static int device_pages(void)
 {
@@ -51,13 +52,11 @@ static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, 
         if (!a733_ranges_disjoint_nonempty(buffer->storage.cpu, buffer->storage.bytes, p, bytes) ||
             !a733_ranges_disjoint_nonempty(buffer->pages, buffer->page_count * sizeof(uint64_t), p, bytes)) return 0;
     }
-    uintptr_t first = (uintptr_t)p, end = first + bytes - 1;
-    for (uintptr_t address = first;; address = (address & ~(uintptr_t)4095) + 4096) {
-        struct aarch64_translation t;
-        if (!aarch64_device_translate(address, 1, &t) || (t.attributes != 0xff && t.attributes != 0x44)) return 0;
-        if ((address >> 12) == (end >> 12)) break;
-    }
-    return 1;
+    /* Every page of the span must be writable Normal memory, write-back or
+     * non-cacheable; the physical address is not compared. */
+    static const struct a733_mapping_rule normal = {A733_MAPPING_WRITE, 2,
+        {{A733_MAIR_NORMAL_WB, A733_SH_ANY}, {A733_MAIR_NORMAL_NC, A733_SH_ANY}}, 0, 0};
+    return a733_mapping_check_pages(aarch64_device_translate, (uintptr_t)p, 0, bytes, &normal);
 }
 static int output(struct a733_gpu_backend *b, const void *p, size_t bytes)
 { return output_span(b, p, bytes, 0); }
@@ -439,9 +438,10 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     const void *objects[] = {b, s, c, m, p, p->manager, external};
     const size_t sizes[] = {sizeof(*b), sizeof(*s), sizeof(*c), sizeof(*m), sizeof(*p), sizeof(*p->manager), sizeof(*external)};
     if (external->revoked) {
-        struct aarch64_translation t;
+        static const struct a733_mapping_rule write_back = {A733_MAPPING_READ, 1,
+            {{A733_MAIR_NORMAL_WB, A733_SH_ANY}}, 0, 0};
         if ((uintptr_t)external->revoked % _Alignof(atomic_uint) ||
-            !aarch64_device_translate((uintptr_t)external->revoked, 0, &t) || t.attributes != 0xff ||
+            !a733_mapping_check(aarch64_device_translate, (uintptr_t)external->revoked, 0, &write_back) ||
             !a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
         for (unsigned i = 0; i < 7; ++i)
             if (!a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;

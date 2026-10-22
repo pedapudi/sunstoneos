@@ -1,6 +1,7 @@
 #include "a733_gpu_reserved.h"
 #include "a733_range.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 
 extern unsigned char __device_pool_start[];
 
@@ -11,13 +12,11 @@ static int private_image(uintptr_t cpu, size_t bytes, int write)
     if (!bytes || cpu < UINT32_C(0x41000000) ||
         cpu >= (uintptr_t)__device_pool_start ||
         bytes > (uintptr_t)__device_pool_start - cpu) return 0;
-    uintptr_t last = (cpu + bytes - 1) & ~(uintptr_t)4095;
-    for (uintptr_t page = cpu & ~(uintptr_t)4095; ; page += 4096) {
-        struct aarch64_translation t;
-        if (!aarch64_device_translate(page, write, &t) || t.physical != page ||
-            t.attributes != 0xff || t.shareability != 3) return 0;
-        if (page == last) return 1;
-    }
+    static const struct a733_mapping_rule readable = {A733_MAPPING_READ, 1,
+        {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
+    static const struct a733_mapping_rule writable = {A733_MAPPING_WRITE, 1,
+        {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
+    return a733_mapping_check_pages(aarch64_device_translate, cpu, cpu, bytes, write ? &writable : &readable);
 }
 
 static struct pvr_gpu_service_config *failed(struct a733_gpu_reserved *s)
