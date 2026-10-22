@@ -2724,7 +2724,9 @@
  },
  "deinterlace-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/memory-architecture.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4278,6 +4280,7 @@
  "h264-encode-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture.md",
    "docs/h264-encode-native.md",
    "docs/handoff.md"
   ],
@@ -4371,7 +4374,9 @@
  },
  "h264-fullhd-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/memory-architecture.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4423,6 +4428,7 @@
  "h264-high-allocation.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture.md",
    "docs/h264-native.md"
   ],
   "library": false,
@@ -4515,6 +4521,7 @@
  "h264-high-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture.md",
    "docs/h264-native.md"
   ],
   "library": false,

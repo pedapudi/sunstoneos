@@ -49,6 +49,9 @@ static int clean(uintptr_t cpu, size_t bytes)
 #endif
 }
 
+/* The class and type comparisons refuse an integer converted to either enum,
+ * so a pool never takes an alignment or cache rule that the header does not
+ * define. checks/memory-reservations.c passes an out-of-range class. */
 int device_memory_pool_init_typed(struct device_memory_pool *p, uintptr_t cpu, uint64_t physical,
     size_t bytes, enum device_memory_class memory_class, enum device_memory_type memory_type)
 {

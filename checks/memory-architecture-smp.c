@@ -295,6 +295,7 @@ static void ledger_measurements(void)
     say("getter_first_hold_instructions", getter_hold - empty);
     say("getter_instructions", getter_call);
     CHECK(acquire - empty <= 15000 && release - empty <= 100 && retain - empty <= 100);
+    CHECK(getter_call <= 32 && getter_hold - empty <= 15000);
 }
 
 static uint64_t pmr(void)
@@ -356,7 +357,10 @@ static void peer_rounds_run(void)
  * slot again for the other of two owners with a different extent; core 1
  * describes the published lease meanwhile. Describe must refuse, or return
  * the published extent and state exactly. Published leases sit in a ring;
- * core 1 discards a copy that core 0 may have overwritten. */
+ * core 1 discards a copy that core 0 may have overwritten. The ring is a
+ * sequence lock: core 0 rewrites an entry only after a release fence that
+ * follows its last store of stale_published, so a reader that copied any
+ * rewritten field sees, after its acquire fence, a count that discards it. */
 #define STALE_RING 16u
 static struct { struct device_memory_lease lease; struct device_memory_extent extent; } stale[STALE_RING];
 static unsigned stale_published, stale_finished, stale_peer_done;
@@ -400,6 +404,7 @@ static void stale_leases(unsigned rounds)
     unsigned slot = l.slot;
     for (unsigned n = 0; n < rounds; ++n) {
         unsigned i = n % STALE_RING;
+        __atomic_thread_fence(__ATOMIC_RELEASE);
         SET(stale[i].lease.pool, l.pool); SET(stale[i].lease.owner, l.owner);
         SET(stale[i].lease.generation, l.generation); SET(stale[i].lease.slot, l.slot);
         SET(stale[i].extent.cpu, e.cpu); SET(stale[i].extent.physical, e.physical);

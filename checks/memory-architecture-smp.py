@@ -153,6 +153,16 @@ def trace_counts(log):
     return sections
 
 
+def source_identity():
+    """The commit the current variant was built from, and whether the tree
+    differed from it; a differing tree is identified by its diff's digest."""
+    git = lambda *args: subprocess.run(['git', *args], cwd=ROOT, capture_output=True, check=True).stdout
+    identity = {'commit': git('rev-parse', 'HEAD').decode().strip(), 'clean': not git('status', '--porcelain')}
+    if not identity['clean']:
+        identity['diff_sha256'] = hashlib.sha256(git('diff', 'HEAD', '--binary')).hexdigest()
+    return identity
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--output', type=Path, required=True)
@@ -212,7 +222,7 @@ def main():
               '--wrap=vTaskEnterCritical', '--wrap=vTaskExitCritical',
               '-T', ROOT / 'platform/qemu-smp/link.ld', '-Map=' + str(work / 'memory-architecture-smp.map'),
               *common, *variant_objects, '-o', elf])
-        result = {'revision': revision or 'working tree', 'elf_sha256': digest(elf)}
+        result = {'revision': revision or source_identity(), 'elf_sha256': digest(elf)}
         measure = r.run(label + '-measure', [a.qemu, *QEMU, '-icount', 'shift=0', '-device',
                         f'loader,file={mode_image(elf, 0, work / "measure.elf")},cpu-num=0'])
         if 'PASS memory-architecture SMP fixture' not in measure or 'FAIL' in measure:
@@ -241,6 +251,8 @@ def main():
             assert result['contend']['stale_describe_refused'] > 0, result['contend']
             for call in ('describe', 'xhci_rd', 'camera_memory', 'getter'):
                 assert all(result['trace'][call][n] == 0 for n in ('svc', 'dsb', 'isb')), result['trace']
+            # A prepared getter is one acquire load: no barrier of any kind.
+            assert result['trace']['getter']['dmb'] == 0, result['trace']
         results[label] = result
     (out / 'result.json').write_text(json.dumps({
         'passed': True, 'qemu_sha256': digest(a.qemu), 'clang_sha256': digest(a.clang),

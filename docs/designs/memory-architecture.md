@@ -64,7 +64,9 @@ preparation calls `a733_mapping_check_stride()` with a 2 MiB step: one write
 translation per block, 392 in all. Both extended pool ranges start and end on
 2 MiB boundaries, so the stride covers every block once. A write translation
 that succeeds at EL1 implies the read translation of the same descriptor, so
-no read `AT` is made.
+no read `AT` is made. By the same argument the read `AT` of the local uncached
+check is redundant; removing it would cut the local count for 2 MiB pools from
+1,536 to 1,024 translations, and that change is not yet made.
 
 The local layout keeps its per-page check: one write `AT` per write-back page
 and a read and a write `AT` per uncached page, 1,536 translations for 2 MiB
@@ -301,6 +303,20 @@ barrier is a precondition for every maintenance form in this design.
   `a733_memory_uncached_commit_verified()`. The GPU, display and DisplayPort
   checks that called or hooked them model READY and call the two pool
   preparations instead.
+- Removed from the emulator checks of extended-layout codec images: their own
+  pool construction with `device_memory_pool_init()`, which no such image
+  links any longer and which built `boot_pool` as class `none` and
+  `uncached_pool` as write-back. `checks/h264-encode-native.py`,
+  `checks/deinterlace-native.py`, `checks/h264-high-allocation.py`,
+  `checks/h264-fullhd-native.py` and `checks/h264-high-native.py` now model
+  READY, the pool translations and the kernel critical section, and call the
+  two pool preparations. Under `dma32` their write-back extents move to 64 KiB
+  or 2 MiB boundaries. The encoder's write-back use grows from 3,022,848 to
+  3,080,192 bytes and the High decoder's from 21,823,488 to 26,181,632 bytes;
+  the expected values in those checks and in `docs/h264-encode-native.md`,
+  `docs/h264-native.md` and `docs/deinterlace-native.md` changed with them.
+  `apps/gpu-finite/return-check.py` stays frozen with the composition it
+  checks, as described under "Changes the primary agent must make".
 - Transitional, removed in this order:
   1. The lazy preparation in both local getters, once `platform_init()` calls
      both local preparations; the getters then test the kept result.
@@ -403,14 +419,23 @@ These rows are explained regressions:
     the same slot for another owner and a different extent, while core 1
     describes the released lease. Every describe must refuse or return the
     published extent and state, and a refused lease must stay refused. The
-    measured run accepted 1,307,496 describes and refused 18,207,728.
+    counts vary between runs under multithreaded TCG; each recorded run
+    accepted more than one million describes and refused more than ten
+    million, and its `result.json` holds the counts;
+  - fails when a prepared getter call exceeds 32 instructions, contains any
+    `SVC`, `DSB`, `ISB` or `DMB`, or when its first call holds the critical
+    section for more than 15,000 instructions. The result records the commit
+    it was built from and whether the tree differed from that commit.
 - QEMU cached-devices fixture (`checks/cached-device-reservations.{S,py}`):
   the pre-scheduler path in which core 0 acquires and retains under the
   kernel critical section. Its EL1 vectors service the critical section's
   `SVC #107`, `#108` and `#109`.
 
 Results, logs and the measured images are in
-`~/.cache/sunstoneos/evidence/memory-architecture-20261022/revision-3/`.
+`~/.cache/sunstoneos/evidence/memory-architecture-20261022/revision-4/`. Its
+`README.json` names the commit the results were produced from; the rebuilt
+codec images and the results of the five rebound codec checks are under
+`codec/`.
 
 ## Left out
 
