@@ -273,6 +273,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   interrupts. Focused checks cover inherited SIF clearing and terminal faults.
   The central image also links; it has a distinct build identity. Physical
   cache coherence, entry, interrupts and secondary scheduling remain unqualified.
+  The cached single-core images walk their EL1 translation tables through the
+  data caches; the eight-core images keep noncacheable walks until a core-6
+  walk measurement passes. In both, every core flushes the EL1 tables and
+  compares their checksum before enabling translation, so a stale dirty line
+  stops the core at entry. Instruction models pass. The
+  [Nonsecure dirty-line experiment](cold-entry.md#the-el1-tables-need-a-nonsecure-dirty-line-experiment)
+  is the first board run for these images; the
+  [walk measurements](cpu-coherence.md#board-measurement-before-the-profile-is-adopted)
+  follow it.
   The [USB observer](a733-smp-observe.md) publishes validated bounded result
   frames from the cached diagnostic. Host and instruction checks pass. Its
   [separate launcher](a733-smp-observe-host.md) preserves received frames before

@@ -141,44 +141,28 @@ void sd_single_core_monitor_init(void)
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     if(!gpu_application_seal_session(&admission)||!secondaries_off()||
        !a733_device_memory_boot_admit(&admission)||!a733_cached_memory_prepare())finish(1);
-    /* The shared single-core providers require outer-shareable Device MMIO.
-     * Both regimes are still cache-disabled; no table has been adopted. */
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
     extern int thermal_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !thermal_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     extern int board_identity_prepare(uint64_t);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !board_identity_prepare(admission.startup_deadline)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)
     extern int rtc_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !rtc_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_PWM_SINGLE_CORE)
     extern int pwm_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !pwm_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
     extern int crypto_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !crypto_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     if(!npu_single_core_seal(&admission)||!secondaries_off()||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #else
     if(!board_session_prepare(&admission)||!storage_read_session_prepare(&admission)||
        !secondaries_off())finish(1);

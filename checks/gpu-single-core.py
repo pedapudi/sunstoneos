@@ -8,6 +8,7 @@ from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').SINGLE_CORE
 shared=module('gpu_shared_startup_checks',ROOT/'checks/storage-read-single-core.py')
 prep=module('gpu_single_core_preparation',ROOT/'apps/gpu-render/prepare.py')
 class Machine(shared.Machine):
@@ -40,10 +41,10 @@ class Machine(shared.Machine):
             cpu.reg_write(UC_ARM64_REG_X0+int(read[1]),self.el if read[2].lower()=='currentel' else 0);cpu.reg_write(UC_ARM64_REG_PC,address+4);return
         return super().hook(cpu,address,size,unused)
     def translate(self,va,write):
-        assert self.sysregs['tcr_el1']==0x200803019
-        self.sysregs['tcr_el1']=0x200803519
+        assert self.sysregs['tcr_el1']==TCR
+        self.sysregs['tcr_el1']=TCR
         try:return super().translate(va,write)
-        finally:self.sysregs['tcr_el1']=0x200803019
+        finally:self.sysregs['tcr_el1']=TCR
     def call(self,name,*args):
         self.finished=False;self.parked=False
         self.cpu.reg_write(UC_ARM64_REG_SP,0x43ffeff0);self.cpu.reg_write(UC_ARM64_REG_LR,0x43fff000)
@@ -109,7 +110,7 @@ def run(image,bundle,out):
     passed('sealed-input-and-memory-binding-survive-el1-bss-clear')
     m.stop_at=e.address('a733_smp_diagnostic_start');m.sysregs['sctlr_el1']=0x30d00800
     m.call('kernel_main');assert not m.parked
-    assert m.sysregs['ttbr0_el1']==e.address('a733_cached_el1_l1') and m.sysregs['tcr_el1']==0x200803019
+    assert m.sysregs['ttbr0_el1']==e.address('a733_cached_el1_l1') and m.sysregs['tcr_el1']==TCR
     assert m.call('a733_smp_device_preparation_admitted')==1 and m.call('a733_device_memory_ready')==1
     for address,attr,share in [(0x48000000,255,3),(0x77fff000,255,3),(0x78000000,68,3),(0x78fff000,68,3),(0x01800000,0,2)]:
         assert m.call('aarch64_device_translate',address,1,0x43010000)==1

@@ -14,6 +14,7 @@ TRANSLATION=re.compile(r'at\s+s1e1([rw]),\s*x(\d+)$',re.I)
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
     result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
+TCR=module('a733_tcr',ROOT/'tools/a733_tcr.py').SINGLE_CORE
 class Machine:
     def __init__(self,image,session,variant='nominal'):
         self.e=image;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
@@ -102,7 +103,7 @@ class Machine:
     def translate(self,va,write):
         # Model the architecture's hardware walk over the descriptors actually
         # written by platform_init, never a fabricated identity/attribute tuple.
-        assert self.sysregs['tcr_el1']==0x200803519,hex(self.sysregs['tcr_el1'])
+        assert self.sysregs['tcr_el1']==TCR,hex(self.sysregs['tcr_el1'])
         table=self.sysregs['ttbr0_el1']&0x0000fffffffff000
         for shift in (30,21,12):
             entry=self.read(table+((va>>shift)&511)*8)

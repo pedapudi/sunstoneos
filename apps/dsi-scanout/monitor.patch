@@ -38,8 +38,8 @@
  #endif
      __asm__ volatile("dsb sy":::"memory");
      if(!a733_smp_contract_valid(&admission,counter())||source->magic!=admission.magic||
-@@ -137,8 +151,13 @@
-     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+@@ -147,8 +161,13 @@
+        !thermal_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
  #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
      extern int board_identity_prepare(uint64_t);
 +#ifdef SUNSTONE_DSI_APPLICATION
@@ -49,6 +49,6 @@
      if(!secondaries_off()||!board_session_prepare(&admission)||
         !board_identity_prepare(admission.startup_deadline)||!a733_cached_memory_prepare())finish(1);
 +#endif
-     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
  #elif defined(SUNSTONE_RTC_SINGLE_CORE)
+     extern int rtc_session_prepare(const struct a733_smp_contract *);
+     if(!secondaries_off()||!board_session_prepare(&admission)||
