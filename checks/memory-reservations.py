@@ -14,7 +14,7 @@ SOURCES = [
     'include/a733_memory_reservations.h', 'platform/a733/memory_reservations.c',
     'platform/a733/link.ld', 'checks/memory-reservations.c', 'checks/memory-reservations.py',
     'include/a733_dma.h', 'include/a733_dma_controller.h', 'include/a733_dma_native.h',
-    'include/dma_memory.h', 'include/aarch64_device_memory.h',
+    'include/dma_memory.h', 'include/aarch64_device_memory.h', 'include/a733_mapping_check.h',
     'arch/aarch64/device_memory.c',
 ]
 

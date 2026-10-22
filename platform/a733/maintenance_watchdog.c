@@ -4,6 +4,8 @@
 #include "a733_platform_locks.h"
 #include "a733_storage_update.h"
 #include "aarch64_device_memory.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 #include "task.h"
 
 static int mappings(void)
@@ -21,11 +23,7 @@ static int mappings(void)
     return 1;
 }
 static uint32_t read32(uintptr_t a)
-{
-    __asm__ volatile("dsb sy":::"memory");
-    uint32_t value=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return value;
-}
+{ return a733_mmio_read32_dsb_sy_both(a); }
 static int same(const struct a733_watchdog_window *t)
 {
     return (read32(0x02050014)&0xffff)==0x41 && (read32(0x02050010)&0xffff)==1 &&
@@ -42,23 +40,7 @@ int a733_watchdog_hw_admit(const struct a733_watchdog_window *t)
 }
 int a733_maintenance_hw_task(void *task)
 {
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif":"=r"(el),"=r"(flags));
-    if(!task || el!=4 || (flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2":::"memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1":"=r"(core));
-    nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
-    critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0"::"r"(flags):"memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)task;
+    return task && a733_task_context_owner_el1((TaskHandle_t)task);
 }
 int a733_watchdog_hw_reload(const struct a733_watchdog_window *t,
     struct a733_counter_clock *clock,struct a733_platform_locks *locks,void *task,
@@ -77,9 +59,7 @@ int a733_watchdog_hw_reload(const struct a733_watchdog_window *t,
      * revocation may prevent later reloads but cannot retract a bus transaction.
      * Neither CTRL nor the configuration readback acknowledges counter restart.
      */
-    __asm__ volatile("dsb sy":::"memory");
-    *(volatile uint32_t *)(uintptr_t)0x0205000c=0x14af;
-    __asm__ volatile("dsb sy":::"memory");
+    a733_mmio_write32_dsb_sy_both(0x0205000c,0x14af);
     if(!same(t) || a733_counter_clock_now(clock,&end)!=1 || end<start ||
        end-start>t->guard_us || end>=t->deadline_us) {
         atomic_fetch_or_explicit(state,4,memory_order_release);

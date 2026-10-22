@@ -4,6 +4,8 @@
 #include "a733_counter_clock.h"
 #include "a733_clock_reference.h"
 #include "aarch64_device_memory.h"
+#include "a733_range.h"
+#include "a733_task_context.h"
 #include "task.h"
 #include <stddef.h>
 #define BASE UINT32_C(0x07084000)
@@ -14,44 +16,22 @@
 static struct a733_typec_native *instance;
 static int same(const void *a,const void *b,size_t bytes)
 {const unsigned char *x=a,*y=b;for(size_t i=0;i<bytes;i++)if(x[i]!=y[i])return 0;return 1;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int intact(struct a733_typec_native *n)
 {return n&&n->self==n&&instance==n&&same(&n->config,&n->sealed,sizeof(n->config));}
-static int task(void *expected)
-{
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif":"=r"(el),"=r"(flags));
-    if(el!=4||(flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2":::"memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1":"=r"(core));
-    nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
-    critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0"::"r"(flags):"memory");
-    return !nesting&&!critical&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)expected;
-}
 static int current(void *p)
-{struct a733_typec_native *n=p;return intact(n)&&task(n->config.provider_task);}
+{struct a733_typec_native *n=p;return intact(n)&&a733_task_context_owner_el1(n->config.provider_task);}
 static int now(void *p,uint64_t *out)
 {struct a733_typec_native *n=p;return intact(n)&&n->config.locks->now(n->config.locks->context,out)==1;}
 static int outside(void *p,const void *x,unsigned long bytes)
 {
     struct a733_typec_native *n=p;
-    return intact(n)&&separate(n,sizeof(*n),x,bytes)&&
-        separate(n->config.clocks,sizeof(*n->config.clocks),x,bytes)&&
-        separate(n->config.rails,sizeof(*n->config.rails),x,bytes)&&
-        separate(n->config.pins,sizeof(*n->config.pins),x,bytes)&&
-        separate(n->config.pmic,sizeof(*n->config.pmic),x,bytes)&&
-        separate(n->config.locks,sizeof(*n->config.locks),x,bytes)&&
-        separate(n->config.locks->context,sizeof(struct a733_counter_clock),x,bytes)&&
+    return intact(n)&&a733_ranges_disjoint(n,sizeof(*n),x,bytes)&&
+        a733_ranges_disjoint(n->config.clocks,sizeof(*n->config.clocks),x,bytes)&&
+        a733_ranges_disjoint(n->config.rails,sizeof(*n->config.rails),x,bytes)&&
+        a733_ranges_disjoint(n->config.pins,sizeof(*n->config.pins),x,bytes)&&
+        a733_ranges_disjoint(n->config.pmic,sizeof(*n->config.pmic),x,bytes)&&
+        a733_ranges_disjoint(n->config.locks,sizeof(*n->config.locks),x,bytes)&&
+        a733_ranges_disjoint(n->config.locks->context,sizeof(struct a733_counter_clock),x,bytes)&&
         n->config.pmic->ops.outside(n->config.pmic->cookie,x,bytes)==1;
 }
 static int ownership(struct a733_typec_native *n,unsigned require_pin)
@@ -233,7 +213,7 @@ int a733_typec_native_init(struct a733_typec_native *n,const struct a733_typec_n
        c->pmic->ops.outside(c->pmic->cookie,c,sizeof(*c))!=1)return 0;
     const void *objects[]={n,c,c->clocks,c->rails,c->pins,c->pmic,c->locks,c->locks->context};
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->clocks),sizeof(*c->rails),sizeof(*c->pins),sizeof(*c->pmic),sizeof(*c->locks),sizeof(struct a733_counter_clock)};
-    for(unsigned i=0;i<8;i++)for(unsigned j=i+1;j<8;j++)if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+    for(unsigned i=0;i<8;i++)for(unsigned j=i+1;j<8;j++)if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
     /* Cold GPIO input/disabled admission only; an inherited output could already
      * be sourcing a partner and must be handled by a separate recovery path. */
     for(unsigned i=0;i<4;i++)if(c->expected[i].function!=0&&c->expected[i].function!=15)return 0;
@@ -261,7 +241,7 @@ static int power_stop(struct a733_typec_native *n,uint64_t t)
 }
 int a733_typec_native_power_poll(struct a733_typec_native *n)
 {
-    if(!intact(n)||!task(n->config.power_task))return -1;
+    if(!intact(n)||!a733_task_context_owner_el1(n->config.power_task))return -1;
     if(n->power_fault)return -1;
     if(!atomic_load_explicit(&n->gpio_ready,memory_order_acquire))return 0;
     uint64_t t,d;

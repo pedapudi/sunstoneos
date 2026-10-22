@@ -1,4 +1,5 @@
 #include "a733_npu_pll.h"
+#include "a733_range.h"
 #include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -74,8 +75,7 @@ int a733_npu_pll_ready(const struct a733_npu_pll *p)
 static int timely(struct a733_npu_pll *p)
 {
     uint64_t t;
-    if (p->ops.now_us(p->cookie,&t)!=1 || t<p->last_now || t>=p->config.deadline_us) return 0;
-    p->last_now=t;return 1;
+    return p->ops.now_us(p->cookie,&t)==1 && a733_deadline_admit(t,&p->last_now,p->config.deadline_us);
 }
 static enum a733_npu_pll_result fault(struct a733_npu_pll *p)
 {

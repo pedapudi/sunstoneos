@@ -1,4 +1,5 @@
 #include "a733_media_clock.h"
+#include "a733_range.h"
 #include "a733_clock_reference.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -74,8 +75,7 @@ int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clo
 static int timely(struct a733_media_clock *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->config.deadline_us) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
 }
 static int rd(struct a733_media_clock *p,uintptr_t a,uint32_t *v)
 {return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
