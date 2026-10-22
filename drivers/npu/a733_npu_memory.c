@@ -122,6 +122,23 @@ int a733_npu_memory_command(const struct a733_npu_memory *m, uint32_t device,
     }
     return 0;
 }
+int a733_npu_memory_group(struct a733_npu_memory *m, uint32_t device, unsigned group)
+{
+    if (!m || m->state != A733_NPU_MEMORY_IDLE || m->booted || !group || group > UINT8_MAX)
+        return 0;
+    for (size_t i = 0; i < m->count; ++i) {
+        if (m->buffers[i].device != device) continue;
+        if (m->buffers[i].role == A733_NPU_BUFFER_BOOTSTRAP) return 0;
+        m->groups[i] = (uint8_t)group;
+        return 1;
+    }
+    return 0;
+}
+/* Job maintenance scope: shared group 0 plus the active command's group. */
+static int maintained(const struct a733_npu_memory *m, size_t i, size_t command)
+{
+    return !m->groups[i] || m->groups[i] == m->groups[command];
+}
 static uint32_t word(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -188,7 +205,7 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
     if (b->role != (bootstrap ? A733_NPU_BUFFER_BOOTSTRAP : A733_NPU_BUFFER_COMMAND) ||
         cmd->device != b->device || cmd->readable_bytes != b->bytes ||
         (!bootstrap && !m->booted) || !live_mappings(m) || !canonical(m)) return fault(m);
-    m->active = *cmd; m->state = A733_NPU_MEMORY_DEVICE;
+    m->active = *cmd; m->active_index = found; m->state = A733_NPU_MEMORY_DEVICE;
     /* Validate everything before publishing any range. A partial failure
      * retains the complete session even if the controller never triggers.
      * Immutable tables, streams and CONSTANT data were cleaned by the
@@ -197,7 +214,8 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
         return fault(m);
     for (size_t i = 0; i < m->count; ++i) {
         b = &m->buffers[i];
-        if (!bootstrap && b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE)
+        if (!bootstrap && ((b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE) ||
+                           !maintained(m, i, found)))
             continue;
         enum a733_npu_cache_op op = b->role == A733_NPU_BUFFER_WRITE ?
             A733_NPU_CACHE_CLEAN_INVALIDATE : A733_NPU_CACHE_CLEAN;
@@ -212,9 +230,11 @@ int a733_npu_memory_finish(struct a733_npu_memory *m, const struct a733_npu_comm
     if (!m || m->state == A733_NPU_MEMORY_EMPTY || m->state == A733_NPU_MEMORY_FAULT) return 0;
     if (m->state != A733_NPU_MEMORY_DEVICE || !same_command(cmd, &m->active) ||
         !live_mappings(m)) return fault(m);
+    const struct a733_npu_buffer *active = m->active.token;
+    int bootstrap = active->role == A733_NPU_BUFFER_BOOTSTRAP;
     for (size_t i = 0; i < m->count; ++i) {
         const struct a733_npu_buffer *b = &m->buffers[i];
-        if (b->role == A733_NPU_BUFFER_WRITE &&
+        if (b->role == A733_NPU_BUFFER_WRITE && (bootstrap || maintained(m, i, m->active_index)) &&
             !m->ops.cache(m->cookie, A733_NPU_CACHE_INVALIDATE, b->cpu, b->bytes)) return fault(m);
     }
     m->ops.barrier(m->cookie);
