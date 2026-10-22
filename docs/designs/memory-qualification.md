@@ -1,7 +1,10 @@
 # Design: returning memory qualification image
 
-Status: **design**; no code exists. No figure has been measured on the board,
-and figures marked *estimated* come from the cost model stated beside them.
+Status: **implemented** and host-modeled, except the DMA0 cases;
+[memory-qualification.md](../memory-qualification.md) describes the image and
+[the measurements](memory-qualification-measurements.md) compare it with the
+budgets below. No figure has been measured on the board, and figures marked
+*estimated* come from the cost model stated beside them.
 Readers are assumed to know AArch64 caches, translation and Advanced SIMD
 (NEON), the returning platform in [a733-kernel.md](../a733-kernel.md) and
 [performance-architecture.md](../performance-architecture.md).

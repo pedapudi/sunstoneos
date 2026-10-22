@@ -421,7 +421,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   continues before another full-image attempt.
 - DDR: **tested** independently on both attached boards for initialization and
   distinct transfers to two 4 KiB pages. Firmware reports 12 GiB LPDDR5 on each;
-  full capacity and stability remain untested. The second board also passes its
+  full capacity and stability remain untested. A
+  [returning memory qualification image](memory-qualification.md) that tests the
+  12,224 MiB outside its protected window in an estimated three to five runs is
+  **implemented** and host-modeled. It refuses every run until the platform maps
+  all DRAM at EL1 and the monitor samples the remote writers; its DMA0 cases are
+  not built, and no run has taken place on a board. The second board also passes its
   returning platform survey with SRAM restoration under
   `second-board-20261018-3-3/platform-attempt1/`.
   The thermal policy throttles at 85 °C on the DDR temperature channel; this is
