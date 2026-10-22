@@ -4,13 +4,16 @@
 The model replays each linear call of a recording on three timelines: core 6
 (recognizer, GPU worker and interrupt), core 7 (the second inference worker)
 and the GPU. It prints every time and count row of the budget table in
-docs/designs/gpu-mimus-compute.md for three placements: GPU only with one job
-per call, GPU only with each call split into two jobs, and the best channel
-split per tensor shape. Each assumption is a named constant below; board
-measurements replace them, and rerunning the model then sets n_gpu.
+docs/designs/gpu-mimus-compute.md for two placements: GPU only, and the best
+channel split per tensor shape with one job in flight. It also prints the
+savings of three left-out changes to the channel split: a second job in
+flight, read-out of the GPU share on both cores, and a CPU-channel share on
+core 7 enlarged by core 6's cache maintenance. Each assumption is a named
+constant below; board measurements replace them, and rerunning the model then
+sets n_gpu.
 
-By default the model uses the 203 calls of the bench recording (8.87 s of
-audio, 222 encoder frames). --calls reads another call list, one call per
+By default the model uses the 204 calls of the bench recording (8.87 s of
+audio, 222 encoder frames, subsampling in blocks of 224 rows). --calls reads another call list, one call per
 line as "rows K N accumulate", as checks/gpu-mimus-layers prints it. No
 hardware is accessed."""
 import argparse, json, math
@@ -38,7 +41,7 @@ TAG_AREA = 64 * 1024
 REGION = 2 * 1024 * 1024
 MAX_JOB_MACS = 1 << 26
 
-BENCH = ([(240, 1584, 176, 0)] * 18 + [(120, 1584, 176, 0)] +
+BENCH = ([(224, 1584, 176, 0)] * 19 + [(184, 1584, 176, 0)] +
          [(32, 3520, 176, 0)] * 6 + [(30, 3520, 176, 0)] +
          [(222, 176, 704, 0)] * 32 + [(222, 704, 176, 1)] * 32 +
          [(222, 176, 176, 0)] * 48 + [(222, 176, 176, 1)] * 32 +
@@ -123,46 +126,69 @@ def gpu_only(call, hz, force_two, t):
     return core6
 
 
-def channel_split(call, n_gpu, hz, t, two_worker_readout=False):
+def channel_split(call, n_gpu, hz, t, two_worker_readout=False, depth=1,
+                  rebalance=False):
+    """CPU channels on cores 6 and 7, GPU channels as one job in flight (depth
+    1), or two with each job's read-out on core 6 overlapping the next job
+    (depth 2). rebalance moves core 6's cache maintenance time of CPU channels
+    to core 7."""
     rows, k, n, acc = call
-    cpu_half = (n - n_gpu) * rows * k / 2 / (A55_MAC_PER_CYCLE * A76_MAC_FACTOR * hz)
-    jobs = [job_costs(r, k, n_gpu, acc, hz, t) for r in split_rows(rows, k, n_gpu, False)]
-    core6, gpu, inval, readout = 0.0, 0.0, 0.0, 0.0
-    for job in jobs:
+    cpu = (n - n_gpu) * rows * k / (A55_MAC_PER_CYCLE * A76_MAC_FACTOR * hz)
+    jobs = [job_costs(r, k, n_gpu, acc, hz, t)
+            for r in split_rows(rows, k, n_gpu, depth == 2)]
+    core6, gpu, readout, done = 0.0, 0.0, 0.0, []
+    for job in jobs[:depth]:
         core6 += job['clean']
         gpu = max(gpu, core6) + job['gpu']
-        inval += job['inval']
-        readout += job['readout']
-    join = max(core6 + cpu_half + inval, DISPATCH_US * 1e-6 + cpu_half,
-               gpu + WAKE_US * 1e-6 + jobs[-1]['inval'])
+        done.append(gpu)
+    maint = sum(j['clean'] + j['inval'] for j in jobs) if rebalance else 0.0
+    core7_cpu = min(cpu, (cpu + maint) / 2)
+    core7 = DISPATCH_US * 1e-6 + core7_cpu
+    core6 += cpu - core7_cpu
+    for i, job in enumerate(jobs):
+        core6 = max(core6, done[i] + WAKE_US * 1e-6) + job['inval']
+        if depth == 2:
+            core6 += job['readout']
+        else:
+            readout += job['readout']
+        if i + depth < len(jobs):
+            core6 += jobs[i + depth]['clean']
+            gpu = max(gpu, core6) + jobs[i + depth]['gpu']
+            done.append(gpu)
+    join = max(core6, core7)
     if two_worker_readout:
         return join + DISPATCH_US * 1e-6 + readout / 2
     return join + readout
 
 
-def run(calls, hz):
-    rows = {}
-    for name, force in (('gpu_only_one_job', False), ('gpu_only_two_jobs', True)):
-        t = Totals()
-        rows[name] = dict(seconds=sum(gpu_only(c, hz, force, t) for c in calls), **t)
-    t, t2, total, total2, gpu_macs = Totals(), Totals(), 0.0, 0.0, 0
-    split_n = {}
+def best_split(calls, hz, t, **options):
+    """Total time with n_gpu chosen per call among N and N minus each multiple
+    of 16; n_gpu = N is the GPU-only path."""
+    total, split_n = 0.0, {}
     for c in calls:
         _, k, n, _ = c
-        options = [n] + list(range(16, n - 15, 16))
-        best = min(options, key=lambda m: channel_split(c, m, hz, Totals()) if m < n
-                   else gpu_only(c, hz, False, Totals()))
+        cost = (lambda m, tt: channel_split(c, m, hz, tt, **options) if m < n
+                else gpu_only(c, hz, options.get('depth', 1) == 2, tt))
+        best = min([n] + list(range(16, n - 15, 16)), key=lambda m: cost(m, Totals()))
         split_n[f'{k}x{n}'] = best
-        if best == n:
-            total += gpu_only(c, hz, False, t)
-            total2 += gpu_only(c, hz, False, t2)
-        else:
-            total += channel_split(c, best, hz, t)
-            total2 += channel_split(c, best, hz, t2, True)
+        total += cost(best, t)
+    return total, split_n
+
+
+def run(calls, hz):
+    t = Totals()
+    rows = {'gpu_only': dict(seconds=sum(gpu_only(c, hz, False, t) for c in calls), **t)}
+    t = Totals()
+    total, split_n = best_split(calls, hz, t)
     all_macs = sum(r * k * n for r, k, n, _ in calls)
     rows['channel_split'] = dict(seconds=total, gpu_share=t['gpu_macs'] / all_macs,
                                  n_gpu=split_n, **t)
-    rows['channel_split_two_worker_readout_saving_s'] = total - total2
+    for name, options in (('two_jobs', dict(depth=2)),
+                          ('two_worker_readout', dict(two_worker_readout=True)),
+                          ('core7_rebalance', dict(rebalance=True))):
+        other, other_n = best_split(calls, hz, Totals(), **options)
+        rows[f'channel_split_{name}'] = dict(seconds=other, saving=1 - other / total,
+                                             n_gpu=other_n)
     rows['cpu_only_a76_pair_s'] = all_macs / (2 * A55_MAC_PER_CYCLE * A76_MAC_FACTOR * hz)
     return rows
 
