@@ -1,4 +1,5 @@
-// Actual repeated bridge and unchanged engine. Scheduling/copied source modeled.
+// Actual repeated bridge and unchanged engine. Scheduling and the borrowed
+// segment source are modeled.
 #include "../apps/bluetooth/recognition.h"
 extern "C" {
 #include "../apps/bluetooth/headset.h"
@@ -21,7 +22,7 @@ static TaskFunction_t worker;
 static TaskHandle_t task=reinterpret_cast<TaskHandle_t>(1);
 static bluetooth_application *app=reinterpret_cast<bluetooth_application *>(0x10000);
 static bool scheduler_started,revoked;
-static unsigned consumed,outputs,stops;
+static unsigned consumed,outputs,stops,requests,wakes;
 static uint64_t clock_us=1;
 static std::vector<uint8_t> pcm;
 static bluetooth_segment_snapshot identities[2];
@@ -50,23 +51,32 @@ extern "C" int bluetooth_headset_wideband(const bluetooth_application *p){assert
 extern "C" int bluetooth_headset_repeated(const bluetooth_application *p){assert(p==app);return 1;}
 extern "C" int bluetooth_headset_segment_bind(bluetooth_application *p,void *consumer){assert(p==app&&consumer==task&&!scheduler_started);return 1;}
 extern "C" int bluetooth_headset_segment_stop(bluetooth_application *p){assert(p==app);++stops;return 1;}
+// Each request records one segment; the headset disconnects after two.
+static unsigned published(){return requests<2?requests:2;}
 extern "C" int bluetooth_headset_segment_status(bluetooth_application *p,bluetooth_segment_status *s)
-{assert(p==app);*s={2,consumed,BLUETOOTH_SEGMENT_CANCEL,1};return 1;}
-extern "C" int bluetooth_headset_segment_copy(bluetooth_application *p,uint64_t ticket,uint32_t offset,size_t n,
- uint8_t out[1024],size_t *copied,bluetooth_segment_snapshot *s)
+{assert(p==app);*s={published(),consumed,published()==2?BLUETOOTH_SEGMENT_CANCEL:0u,published()==2};return 1;}
+// The recognizer borrows each published segment in place.
+extern "C" int bluetooth_headset_segment_take(bluetooth_application *p,const uint8_t **out,bluetooth_segment_snapshot *s)
 {
- assert(p==app&&n<=1024);*copied=0;std::memset(s,0,sizeof(*s));if(consumed==2)return 0;
- assert(!ticket||ticket==consumed+1);assert(offset+n<=48000);*s=identities[consumed];
- std::memcpy(out,pcm.data()+consumed*48000+offset,n);*copied=n;return 1;
+ assert(p==app&&out&&s);*out=nullptr;std::memset(s,0,sizeof(*s));if(consumed==published())return 0;
+ *s=identities[consumed];*out=pcm.data()+consumed*48000;return 1;
 }
+// The first request starts an activation; later ones admit the button.
+// The recognizer passes the head its take saw, which is the consumed count.
+extern "C" int bluetooth_headset_segment_request(bluetooth_application *p,unsigned word,uint64_t observed)
+{assert(p==app&&word==(requests?BLUETOOTH_SEGMENT_ACCEPT:BLUETOOTH_SEGMENT_START)&&observed==consumed);++requests;return 1;}
 extern "C" int bluetooth_headset_segment_ack(bluetooth_application *p,uint64_t ticket)
-{assert(p==app&&ticket==consumed+1);++consumed;return 1;}
+{assert(p==app&&ticket==consumed+1&&consumed<published());++consumed;return 1;}
 extern "C" int bluetooth_headset_copy(bluetooth_application *,unsigned,uint32_t,size_t,uint8_t[1024],size_t *,bluetooth_pcm_snapshot *)
 {assert(false);return -1;}
 static void write(const std::string &name,const void *data,size_t bytes)
 {FILE *f=std::fopen(name.c_str(),"wb");assert(f&&std::fwrite(data,1,bytes,f)==bytes&&!std::fclose(f));}
-extern "C" void vTaskDelay(TickType_t)
+extern "C" void vTaskDelay(TickType_t){assert(false);}
+extern "C" BaseType_t xTaskNotifyGive(TaskHandle_t t){assert(t==reinterpret_cast<TaskHandle_t>(1));++wakes;return 1;}
+// Each wait of the recognizer runs the USB consumer once.
+extern "C" uint32_t ulTaskNotifyTake(BaseType_t clear,TickType_t ticks)
 {
+ assert(clear==pdTRUE&&ticks==pdMS_TO_TICKS(100));
  ++clock_us;uint8_t chunk[1024];size_t copied;bluetooth_repeated_snapshot s{};
  task=reinterpret_cast<TaskHandle_t>(2);
  int r=bluetooth_recognition_segment_copy(app,0,0,0,chunk,&copied,&s);
@@ -94,7 +104,7 @@ extern "C" void vTaskDelay(TickType_t)
   assert(bluetooth_recognition_segment_ack(app,s.ticket+1)==-1);
   assert(bluetooth_recognition_segment_ack(app,s.ticket)==1&&bluetooth_recognition_segment_ack(app,s.ticket)==-1);++outputs;
  }
- task=reinterpret_cast<TaskHandle_t>(1);
+ task=reinterpret_cast<TaskHandle_t>(1);return 0;
 }
 static std::vector<uint8_t> read(const char *name)
 {std::ifstream f(name,std::ios::binary);assert(f);return {std::istreambuf_iterator<char>(f),{}};}
@@ -110,8 +120,8 @@ int main(int argc,char **argv)
  assert(mmap(reinterpret_cast<void *>(0x46000000),16*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)!=MAP_FAILED);
  assert(bluetooth_recognition_start(app,&models,60000000)==1&&worker);scheduler_started=true;
  if(!setjmp(parked))worker(nullptr);
- assert(outputs==2&&consumed==2&&!stops&&bluetooth_recognition_finished(app)==1);
+ assert(outputs==2&&consumed==2&&!stops&&requests==2&&wakes==2&&bluetooth_recognition_finished(app)==1);
  uint8_t chunk[1024];size_t copied=99;bluetooth_repeated_snapshot value{};revoked=true;
  assert(bluetooth_recognition_segment_copy(app,0,0,0,chunk,&copied,&value)==-1&&!copied);
- std::puts("PASS two copied segments through unchanged converter/recognizer, held logs, exact ACK and final revocation");
+ std::puts("PASS two borrowed segments through unchanged converter/recognizer, held logs, exact ACK and final revocation");
 }

@@ -53,6 +53,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--upstream",type=Path,required=True);p.add_argument("--evidence",type=Path,required=True)
     p.add_argument("--cc",default="cc");p.add_argument("--case",default="lifecycle")
+    p.add_argument("--openssl",type=Path,help="pinned OpenSSL tree; run the RSN with crypto_openssl.c as SAE images do")
     a=p.parse_args();out=a.evidence.resolve();out.mkdir(parents=True,exist_ok=True);up=a.upstream.resolve()
     assert digest(up.parent/(up.name+".tar.gz"))==ARCHIVE_SHA256
     # Pin each consumed source/header to the authenticated release archive.
@@ -68,8 +69,18 @@ def main():
     result={"archive_sha256":ARCHIVE_SHA256,"upstream":external,"vectors":vectors(out/"vectors.bin"),"commands":[]}
     flags=["-std=c11","-O1","-g","-ffunction-sections","-fdata-sections","-fsanitize=address,undefined",
            "-fno-omit-frame-pointer","-DSUNSTONE_AIC8800_RSN","-I",str(ROOT/"include"),"-I",str(up/"src"),"-I",str(up/"src/utils")]
+    native,external,library=NATIVE,EXTERNAL,None
+    if a.openssl:
+        # Same source selection and host library as checks/sae-openssl.py.
+        import importlib.util
+        spec=importlib.util.spec_from_file_location("sae_recipe",ROOT/"checks/sae-openssl.py")
+        sae=importlib.util.module_from_spec(spec);spec.loader.exec_module(sae)
+        tree=a.openssl.resolve();result["openssl_files"]=sae.verify(tree)
+        library,identity,_=sae.host_library(tree,out,a.cc);result["openssl_identity"]=identity
+        native,external=sae.NATIVE,[n for n in EXTERNAL if n not in sae.INTERNAL]+sae.SAE
+        flags+=["-DSUNSTONE_AIC8800_SAE","-I",str(library.parent/"include"),"-I",str(tree/"include")]
     objects=[];result["source_sha256"]={str(n.relative_to(ROOT)):digest(n) for n in ROOT.glob("include/*") if n.is_file()}
-    source_list=[ROOT/n for n in NATIVE]+[ROOT/"checks/aic8800-supplicant.c"]+[up/"src"/n for n in EXTERNAL]
+    source_list=[ROOT/n for n in native]+[ROOT/"checks/aic8800-supplicant.c"]+[up/"src"/n for n in external]
     for source in source_list:
         obj=out/(str(source.relative_to(up if source.is_relative_to(up) else ROOT)).replace("/","_")+".o")
         cmd=[a.cc]+flags
@@ -82,7 +93,7 @@ def main():
         if run.returncode:break
         objects.append(str(obj))
     if not run.returncode:
-        exe=out/"supplicant-check";cmd=[a.cc,"-fsanitize=address,undefined","-Wl,--gc-sections"]+objects+["-o",str(exe)]
+        exe=out/"supplicant-check";cmd=[a.cc,"-fsanitize=address,undefined","-Wl,--gc-sections"]+objects+([str(library)] if library else [])+["-o",str(exe)]
         run=subprocess.run(cmd,capture_output=True,text=True);result["commands"].append({"command":cmd,"exit_code":run.returncode,"stderr":run.stderr})
         if not run.returncode:
             cmd=[str(exe),str(out/"vectors.bin"),a.case];run=subprocess.run(cmd,capture_output=True,text=True)

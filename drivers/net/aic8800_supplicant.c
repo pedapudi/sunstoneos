@@ -77,8 +77,18 @@ int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *cfg)
        !cfg->command_timeout||cfg->command_timeout>UINT64_MAX/8||
        cfg->ap_rsn_bytes<2||cfg->ap_rsn_bytes>sizeof(cfg->ap_rsn))return 0;
     struct wpa_ie_data ie;
-    return !wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)&&ie.group_cipher==WPA_CIPHER_CCMP&&
-        (ie.pairwise_cipher&WPA_CIPHER_CCMP)&&(ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!(ie.capabilities&WPA_CAPABILITY_MFPR);
+    if(wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)||ie.group_cipher!=WPA_CIPHER_CCMP||
+        !(ie.pairwise_cipher&WPA_CIPHER_CCMP)||(ie.capabilities&WPA_CAPABILITY_MFPR))return 0;
+    if(cfg->key_mgmt==AIC8800_SUPPLICANT_PSK)
+        return (ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!cfg->sae_password_bytes;
+#ifdef SUNSTONE_AIC8800_SAE
+    /* SAE derives the PMK; a supplied one would be ignored, so refuse it. */
+    uint8_t pmk=0;for(unsigned i=0;i<sizeof(cfg->pmk);++i)pmk|=cfg->pmk[i];
+    return cfg->key_mgmt==AIC8800_SUPPLICANT_SAE&&(ie.key_mgmt&WPA_KEY_MGMT_SAE)&&!pmk&&
+        cfg->sae_password_bytes&&cfg->sae_password_bytes<=sizeof(cfg->sae_password);
+#else
+    return 0;
+#endif
 }
 int aic8800_supplicant_init(struct aic8800_supplicant *s,const struct aic8800_supplicant_config *cfg)
 {
@@ -89,7 +99,10 @@ int aic8800_supplicant_init(struct aic8800_supplicant *s,const struct aic8800_su
 int aic8800_supplicant_claim(struct aic8800_supplicant *s,struct aic8800_sdio_transport *owner,
     struct aic8800_security *security,uint64_t now,uint64_t deadline)
 {
+    /* The association request and key installation lack the SAE AKM and
+     * protected management frames, so only PSK reaches the handshake. */
     if(!s||!s->initialized||s->owner||!owner||!owner->wifi||!owner->data||!security||
+        s->config.key_mgmt!=AIC8800_SUPPLICANT_PSK||
         s->state!=AIC8800_SUPPLICANT_NEW||deadline<=now||deadline>owner->deadline||
         s->config.beacon_record!=owner->wifi->target.beacon_evidence)return 0;
     if(!aic8800_security_claim(security,owner,owner->wifi,s,now))return 0;

@@ -14,19 +14,21 @@
  * upper layers, with its own recovery latch: its failure leaves the module and
  * Wi-Fi to the radio, and a module failure ends the Bluetooth client.
  *
- * One capture client task is the segment consumer. It copies and acknowledges
- * every segment as it arrives, so the headset never stops for backlog. The
- * first segment that starts after a recognition generation was requested is
- * converted to a 16 kHz WAV for the recognizer (apps/os/recognition.patch);
- * every other segment is discarded. A segment starts after the request when
- * its ticket exceeds the segment being filled at the request, which is at most
- * one ticket past the published count. A refused copy, a lost packet, capture
- * stopped for any reason but the supervised capture window, a failed
- * Bluetooth owner or a failed board ends the session through board_fail. The
- * Bluetooth owner then retains its transports and the client keeps its
- * buffers. The supervised image waits for manual power removal; in the
- * resident image both tasks stop reporting progress and the watchdog resets
- * the board. */
+ * One capture client task is the segment consumer. The headset records one
+ * segment per voice-recognition activation, and the client requests one only
+ * while a recognition generation waits for audio: in workload 0 it admits the
+ * headset button (ACCEPT); in workload 4 each new generation, started by the
+ * Enter key, starts recording at once (START), and if that activation ends
+ * without a segment, as after a headset cancel, the button records it
+ * instead. The next published segment is converted from the borrowed slot to
+ * a 16 kHz WAV for the newest generation (apps/os/recognition.patch) and
+ * acknowledged. A lost packet stops capture, and its stop flag, like any
+ * stop but the supervised capture window, ends the session through
+ * board_fail, as do a refused take, a failed Bluetooth owner and a failed
+ * board. The Bluetooth owner then retains
+ * its transports and the client keeps its buffers. The supervised image waits
+ * for manual power removal; in the resident image both tasks stop reporting
+ * progress and the watchdog resets the board. */
 #include "os.h"
 #include "../board/application.h"
 #include "../bluetooth/bluetooth.h"
@@ -50,10 +52,8 @@ static struct {
     StackType_t client_stack[2048];
     TaskHandle_t owner,client;
     atomic_uint failed,requested,captured;
-    unsigned generation;
-    uint64_t first_ticket;
+    unsigned started; /* The newest generation that requested START. */
     size_t bytes;
-    uint8_t pcm[BLUETOOTH_PCM_BYTES];
     _Alignas(4) uint8_t wav[BLUETOOTH_WAV_BYTES];
 } headset;
 static int live(void){return board_live(NULL)&&!atomic_load_explicit(&headset.failed,memory_order_acquire);}
@@ -91,28 +91,6 @@ void os_module_poll(void){serve();}
 #else
 static void owner(void *unused){(void)unused;for(;;){serve();vTaskDelay(1);}}
 #endif
-/* Copies the whole oldest segment into headset.pcm; 1 copied, -1 refused. */
-static int copy(const struct bluetooth_segment_snapshot *first)
-{
-    const struct bluetooth_pcm_snapshot *c=&first->capture;
-    /* State 1 is CVSD at 8 kHz; state 2 is mSBC at 16 kHz. */
-#ifdef SUNSTONE_A733_OS_MSBC
-    if(c->state!=1&&c->state!=2)return -1;
-#else
-    if(c->state!=1)return -1;
-#endif
-    if(!c->bytes||(c->bytes&1)||c->bytes>sizeof(headset.pcm)||c->loss_packets)return -1;
-    uint8_t chunk[1024];
-    for(uint32_t offset=0;offset<c->bytes;){
-        size_t count=c->bytes-offset,copied=0;if(count>sizeof(chunk))count=sizeof(chunk);
-        struct bluetooth_segment_snapshot s;
-        if(bluetooth_headset_segment_copy(&app,first->ticket,offset,count,chunk,&copied,&s)!=1||copied!=count||
-           memcmp(&s,first,sizeof(s)))return -1;
-        memcpy(headset.pcm+offset,chunk,count);offset+=(uint32_t)count;
-    }
-    uint8_t hash[32];storage_digest_bytes(headset.pcm,c->bytes,hash);
-    return memcmp(hash,c->sha256,32)?-1:1;
-}
 /* Client task only: one bounded step. 0 continue, -1 failed. */
 static int step(void)
 {
@@ -122,19 +100,39 @@ static int step(void)
      * later generations without a capture. */
     if(status.flags&~BLUETOOTH_SEGMENT_WINDOW)return -1;
     unsigned g=atomic_load_explicit(&headset.requested,memory_order_acquire);
-    if(g!=headset.generation){headset.generation=g;headset.first_ticket=status.published+2;}
-    struct bluetooth_segment_snapshot segment;uint8_t chunk[1024];size_t copied;
-    int r=bluetooth_headset_segment_copy(&app,0,0,2,chunk,&copied,&segment);
-    if(r<=0)return r;
-    if(segment.capture.loss_packets)return -1;
-    int wanted=g&&atomic_load_explicit(&headset.captured,memory_order_relaxed)!=g&&segment.ticket>=headset.first_ticket;
-    if(wanted&&copy(&segment)!=1)return -1;
-    if(bluetooth_headset_segment_ack(&app,segment.ticket)!=1)return -1;
-    if(!wanted)return 0;
-    /* mSBC segments are already 16 kHz; CVSD segments are interpolated. */
-    if((segment.capture.state==2?bluetooth_pcm16_wav(headset.pcm,segment.capture.bytes,headset.wav,sizeof(headset.wav),&headset.bytes):
-        bluetooth_pcm_wav(headset.pcm,segment.capture.bytes,headset.wav,sizeof(headset.wav),&headset.bytes))!=1)return -1;
-    atomic_store_explicit(&headset.captured,g,memory_order_release);
+    struct bluetooth_segment_snapshot segment;const uint8_t *pcm;
+    int r=bluetooth_headset_segment_take(&app,&pcm,&segment);
+    if(r<0)return -1;
+    if(r){
+        const struct bluetooth_pcm_snapshot *c=&segment.capture;
+        /* State 1 is CVSD at 8 kHz; state 2 is mSBC at 16 kHz. */
+#ifdef SUNSTONE_A733_OS_MSBC
+        if(c->state!=1&&c->state!=2)return -1;
+#else
+        if(c->state!=1)return -1;
+#endif
+        /* Requests are made only while a generation waits, so the segment is
+         * the newest one's; the WAV of a generation already captured, which
+         * the recognizer may be reading, is never rewritten. */
+        unsigned wanted=g&&atomic_load_explicit(&headset.captured,memory_order_relaxed)!=g;
+        /* mSBC segments are already 16 kHz; CVSD segments are interpolated. */
+        if((wanted&&(c->state==2?bluetooth_pcm16_wav(pcm,c->bytes,headset.wav,sizeof(headset.wav),&headset.bytes):
+            bluetooth_pcm_wav(pcm,c->bytes,headset.wav,sizeof(headset.wav),&headset.bytes))!=1)||
+           bluetooth_headset_segment_ack(&app,segment.ticket)!=1)return -1;
+        if(wanted)atomic_store_explicit(&headset.captured,g,memory_order_release);
+        return 0;
+    }
+    if(!g||atomic_load_explicit(&headset.captured,memory_order_relaxed)==g)return 0;
+    /* A new keyboard generation upgrades the word to START once; otherwise
+     * the client admits the headset button whenever the word is 0. With no
+     * segment taken, status.published is the head that take saw, so the
+     * request is refused if an activation published after it. START counts
+     * only once the word holds it: an activation that was running instead
+     * may still end without a segment. */
+    unsigned start=board.session.workload==4&&headset.started!=g;
+    int requested=bluetooth_headset_segment_request(&app,start?BLUETOOTH_SEGMENT_START:BLUETOOTH_SEGMENT_ACCEPT,status.published);
+    if(requested<0)return -1;
+    if(start&&requested)headset.started=g;
     return 0;
 }
 void os_headset_task(void *unused)
@@ -144,7 +142,9 @@ void os_headset_task(void *unused)
         /* A failed capture keeps its buffers, stops and stops reporting. */
         if(!atomic_load_explicit(&headset.failed,memory_order_acquire)&&(!live()||step()<0))fail();
         if(!atomic_load_explicit(&headset.failed,memory_order_acquire))BOARD_PROGRESS(OS_SERVICE_HEADSET);
-        vTaskDelay(1);
+        /* Woken by the Bluetooth owner and by a new generation; the wait stays
+         * inside the 1 s progress window. */
+        (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(250));
     }
 }
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes)
@@ -152,7 +152,7 @@ int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes)
     if(!live()||!g||!wav||!bytes)return -1;
     unsigned requested=atomic_load_explicit(&headset.requested,memory_order_relaxed);
     if(g<requested)return -1;
-    if(g>requested)atomic_store_explicit(&headset.requested,g,memory_order_release);
+    if(g>requested){atomic_store_explicit(&headset.requested,g,memory_order_release);if(headset.client)xTaskNotifyGive(headset.client);}
     if(atomic_load_explicit(&headset.captured,memory_order_acquire)!=g)return 0;
     *wav=headset.wav;*bytes=headset.bytes;return live()?1:-1;
 }

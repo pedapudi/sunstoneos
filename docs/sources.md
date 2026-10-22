@@ -15,6 +15,7 @@ implementations; physical support on this board requires qualification evidence.
 | [Board schematic and position drawing](https://drive.google.com/drive/folders/199S7SkbqVDjMpPT7tkcbBX6kmbfnz94r) | V1.2; PDF hashes in `sources.lock.json` | Physical recovery pads, connector routing, and component references |
 | [Board user manual](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view) | V1.0; PDF hash in `sources.lock.json` | Recovery-pad photograph, power-on procedure, and advertised interfaces |
 | [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-16 | Candidate GPU runtime; board software selects BVNC 36.56.104.183, listed under active development; physical identity pending |
+| [OpenSSL](https://github.com/openssl/openssl/releases/tag/openssl-3.5.9) | 3.5.9 long-term-support release; archive hash in `sources.lock.json`; Apache-2.0 | Minimal static `libcrypto` for station SAE and, in SAE images, all RSN cryptography; see [radio security](radio-security.md#openssl-supplies-the-elliptic-curve-arithmetic) |
 | [OV5640 driver](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c) | `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` | Sensor programming reference; native control and complete register-image comparison in [camera.md](camera.md) |
 
 The [Type-C Power Delivery (PD)/DisplayPort adaptation](typec.md#bounded-pd-and-displayport-profile) uses
@@ -166,6 +167,9 @@ dependency inventory and unresolved documentation requirements.
 
 The native OS uses source-built FreeRTOS, TinyUSB, Newlib, FreeRTOS+TCP and
 selected wpa_supplicant security code where the application requires them.
+Images with station SAE also link a minimal OpenSSL `libcrypto` built from the
+pinned release, whose archive SHA-256 matches the digest published with the
+release.
 Linux drivers provide implementation references; Linux is not a board runtime.
 The native Bluetooth application reuses Zephyr's open-source BR/EDR secure
 pairing and RAM link-key policy through the existing FreeRTOS HCI owner.

@@ -424,6 +424,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   full capacity and stability remain untested. The second board also passes its
   returning platform survey with SRAM restoration under
   `second-board-20261018-3-3/platform-attempt1/`.
+  The thermal policy throttles at 85 °C on the DDR temperature channel; this is
+  **implemented** and host-modeled, and its board cost is unmeasured.
+  [Memory-bus priority for display scan-out](designs/dram-controller.md) and a
+  display-port latency window are **planned**; they land together with the
+  framebuffer and gpu-display edits that call them. DRAM training, frequency
+  scaling, voltage and the firewall remain boot0 dependencies, and the memory
+  configuration is not decoded.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
   boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
   storage work for this workload; full memory protection/coherence remains untested.
@@ -916,6 +923,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source comparisons and host checks pass, including refusal of inherited
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
+  [DMA address widths](dma-address-width.md) record one rule per DMA master.
+  DMA0 and the IOMMU enforce named limits at admission, and host checks pass.
+  The NVMe refusal of pools above 4 GiB is **planned**, and no transfer above
+  4 GiB has run on hardware.
 
   DMA-copy [host admission](dma-pool-session.md#the-host-command-reuses-the-sealed-compact-launcher)
   now requires external digest/session-bound authority for selected-channel
@@ -1134,6 +1145,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Firmware, GPU pixels, MMIO and isolation remain modeled. Physical cleanup/visibility
   remains unqualified. Default retained profiles still do not unmap, reclaim or
   reopen; the optional standalone path below has separate disposal evidence.
+  The [texture frame path](gpu-render.md#cpu-work-per-frame) moves each upload
+  byte once into its GPU-read area, lends the output frame in place for PRESENT
+  and READ, and keeps depth and stencil in tile memory with no DRAM load or
+  store. Counted under Unicorn, the worker's instructions for a 1080p profile-4
+  frame fall from 619 million to 9.5 million, its per-frame translations from
+  66,457 to none, and its tick waits between CPU-only steps from 65 to none.
+  Profile-5 trusted programs, general blending, clipping, mipmaps, B5G6R5,
+  4× multisampling and scanout of the rendered frame without a copy remain
+  required.
   Optional [standalone child disposal/reopen](gpu-render.md#standalone-sessions-can-dispose-and-reconstruct-child-resources)
   is now implemented for the admitted sole-client single-core image. After healthy
   CLOSE, exact owner/epoch and stopped-backend checks precede child cache ownership,
@@ -1556,10 +1576,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks and native compilation pass. [Synchronous headset transport](bluetooth-audio.md)
   adds actual SCO/eSCO setup and acceptance, CVSD with signed 16-bit PCM over HCI,
   copied audio buffers and separate controller credits. Focused host checks and
-  nine native consumer compilations pass. Optional call control adds the
-  mandatory HFP call procedures, including answering, rejecting, terminating
-  and placing calls, redial, memory dialing, DTMF and the status queries; the
-  native application answers headset call queries. An [A2DP sink](bluetooth-a2dp.md)
+  nine native consumer compilations pass. The gateway answers the headset's
+  status queries without call control. Call control, which adds the mandatory
+  HFP call procedures (answering, rejecting, terminating and placing calls,
+  redial, memory dialing and DTMF), exists only for HFP conformance and is a
+  build option that is off by default. The headset's voice button starts one
+  recording through HFP voice-recognition activation (`AT+BVRA`) in the
+  Bluetooth image and the integrated OS image; host checks pass and physical
+  button behavior remains unqualified. An [A2DP sink](bluetooth-a2dp.md)
   for SBC streams is **implemented** in the AVDTP layer, with an optional SDP
   record and a link security check on every step; no native application uses
   it. Host checks pass. Physical controller capabilities, headset audio, wired
@@ -1750,10 +1774,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
   resolves its server, validates replies and exports an RTC SET request; host
   checks and an actual-stack composition pass, but no image runs it yet.
-  WPA3 personal is not implemented: the pinned wpa_supplicant release has no
-  elliptic-curve back end usable here, and SAE external authentication and
-  protected management frames are missing
-  ([details](radio-security.md#wpa3-personal-needs-three-missing-parts)).
+  WPA3 personal is not usable yet: the SAE exchange runs on a pinned minimal
+  OpenSSL build in host and AArch64 model checks, but SAE external
+  authentication, protected management frames and SAE association are missing
+  ([details](radio-security.md#wpa3-personal-authenticates-but-cannot-yet-associate)).
   Physical power save, roaming, time accuracy and loss timing remain unqualified.
   A full Wi-Fi session can also [serve a Bluetooth client](radio-session.md#a-bluetooth-client-shares-the-firmware-generation)
   on the same module. The session reports its firmware generation while it
@@ -2557,7 +2581,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | Interrupt controller and timers | Interrupt dispatch, tick, monotonic time, deadlines | GICv3 distributor/redistributors; per-core timers |
 | Clocks, resets, regulators, power domains | Dependency-aware enable, disable, rate control, power transitions | Confirm power ICs and safe board operating points |
 | Pin control and GPIO | Pin functions, levels, pulls, interrupts | Confirm header routing, voltage domains, shared-pin exclusions |
-| DMA and device address translation | Transfers, mapped buffers, cache synchronization, completion, recovery | Address widths, alignment, ownership, IOMMU faults |
+| DMA and device address translation | Transfers, mapped buffers, cache synchronization, completion, recovery | Address widths and transfers above 4 GiB, alignment, ownership, IOMMU faults |
 | UART | Console and exposed serial channels | Pin routing, baud rates, flow control, receive overrun |
 | I2C | Transactions and recovery on exposed and internal buses | Clock dependencies, power devices, sensor control |
 | SPI | Transfers and exposed controller modes | Chip selects, DMA, shared pin functions |

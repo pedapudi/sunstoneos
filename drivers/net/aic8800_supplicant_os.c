@@ -2,9 +2,20 @@
 #include "aic8800_supplicant.h"
 #include "utils/common.h"
 #include "utils/eloop.h"
+#ifdef SUNSTONE_AIC8800_SAE
+#include "aic8800_openssl.h"
+#endif
 static struct aic8800_supplicant *active;
 int aic8800_supplicant_os_enter(struct aic8800_supplicant *s)
-{if(!s||active||s->entered||s->state==AIC8800_SUPPLICANT_FAULT)return 0;active=s;s->entered=1;return 1;}
+{
+    if(!s||active||s->entered||s->state==AIC8800_SUPPLICANT_FAULT)return 0;
+#ifdef SUNSTONE_AIC8800_SAE
+    /* All upstream crypto runs in OpenSSL, which must take its allocator and
+     * seed source before its first use. */
+    if(!aic8800_openssl_init())return 0;
+#endif
+    active=s;s->entered=1;return 1;
+}
 void aic8800_supplicant_os_leave(struct aic8800_supplicant *s)
 {if(active==s){s->entered=0;active=0;}}
 void *os_memcpy(void *d,const void *s,size_t n)

@@ -1,11 +1,11 @@
 /* The integrated OS image's headset capture client (apps/os/headset.c)
  * against a modeled Bluetooth application. The model publishes fixed-length
- * CVSD or mSBC segments with the segment API's own copy, acknowledgment and
- * ticket rules (apps/bluetooth/headset.c); the client, its startup and pin
- * entries and the real WAV conversions (apps/bluetooth/pcm.c) run unchanged.
- * The same model covers the build's options: the radio build attaches the
- * Bluetooth client to the radio's module, the resident build records service
- * progress and the mSBC build admits mode 3. The runner
+ * CVSD or mSBC segments with the segment API's request word, borrow,
+ * acknowledgment and ticket rules (apps/bluetooth/headset.c); the client, its
+ * startup and pin entries and the real WAV conversions (apps/bluetooth/pcm.c)
+ * run unchanged. The same model covers the build's options: the radio build
+ * attaches the Bluetooth client to the radio's module, the resident build
+ * records service progress and the mSBC build admits mode 3. The runner
  * (checks/os-image-headset.py) executes each mode under unicorn. Each failed
  * expectation stops with its own code. */
 #include "../apps/os/headset.c"
@@ -73,14 +73,15 @@ int bluetooth_application_poll(struct bluetooth_application *a){check(a==&app,85
 int bluetooth_application_retain(struct bluetooth_application *a){check(a==&app,86);++retained;return -1;}
 
 /* Modeled segment producer: two slots, 3,000-byte CVSD segments whose bytes
- * encode their ticket. */
+ * encode their ticket, and the request word. An activation starts only on a
+ * request and ends by storing 0, with or without a segment. */
 enum { SEGMENT_BYTES=3000 };
 static uint64_t head,tail;
-static unsigned failed_app,changed_copy;
+static unsigned failed_app,refuse_take,refuse_request,word,notified,publish_in_take;
 static uint8_t slot[BLUETOOTH_SEGMENT_SLOTS][SEGMENT_BYTES];
 static struct bluetooth_segment_snapshot snapshots[BLUETOOTH_SEGMENT_SLOTS];
 static uint8_t value(uint64_t ticket,unsigned i){return (uint8_t)(ticket*17+i*3);}
-static void publish_state(unsigned loss,unsigned bad_hash,unsigned state)
+static void publish_state(unsigned loss,unsigned state)
 {
     check(head-tail<BLUETOOTH_SEGMENT_SLOTS,81);
     unsigned n=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);uint64_t t=++head;
@@ -90,26 +91,35 @@ static void publish_state(unsigned loss,unsigned bad_hash,unsigned state)
     s->capture=(struct bluetooth_pcm_snapshot){.firmware=1,.uart=2,.acl=3,.audio=4,.state=state,.bytes=SEGMENT_BYTES,
         .records=12,.loss_packets=loss};
     storage_digest_bytes(slot[n],SEGMENT_BYTES,s->capture.sha256);
-    if(bad_hash)s->capture.sha256[0]^=1;
 }
-static void publish(unsigned loss,unsigned bad_hash){publish_state(loss,bad_hash,1);}
+static void publish(unsigned loss){publish_state(loss,1);}
+/* One activation on the current request; segment 0 ends it without one, as
+ * after a headset cancel. */
+static void activation(unsigned segment)
+{
+    check(word==BLUETOOTH_SEGMENT_ACCEPT||word==BLUETOOTH_SEGMENT_START,87);
+    if(segment)publish(0);
+    word=0;
+}
 int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
 {
     if(a!=&app||failed_app)return -1;
     *out=(struct bluetooth_segment_status){head,tail,segment_flags,0};return 1;
 }
-int bluetooth_headset_segment_copy(struct bluetooth_application *a,uint64_t ticket,uint32_t offset,size_t bytes,
-    uint8_t out[1024],size_t *copied,struct bluetooth_segment_snapshot *snapshot)
+int bluetooth_headset_segment_request(struct bluetooth_application *a,unsigned request,uint64_t observed)
 {
-    if(a!=&app||failed_app||!bytes||bytes>1024)return -1;
-    *copied=0;memset(snapshot,0,sizeof(*snapshot));
-    if(head==tail)return 0;
-    unsigned n=(unsigned)(tail%BLUETOOTH_SEGMENT_SLOTS);
-    if((ticket&&ticket!=tail+1)||offset>SEGMENT_BYTES||bytes>SEGMENT_BYTES-offset)return -1;
-    memcpy(out,slot[n]+offset,bytes);*copied=bytes;*snapshot=snapshots[n];
-    /* Mode 3: the producer's record changes during a later copy. */
-    if(changed_copy&&offset)snapshot->capture.records^=1;
-    return 1;
+    if(a!=&app||failed_app||refuse_request||(request!=BLUETOOTH_SEGMENT_ACCEPT&&request!=BLUETOOTH_SEGMENT_START))return -1;
+    if(word==request)return 1;
+    if(word>request||head!=observed)return 0;
+    word=request;return 1;
+}
+int bluetooth_headset_segment_take(struct bluetooth_application *a,const uint8_t **pcm,struct bluetooth_segment_snapshot *snapshot)
+{
+    if(a!=&app||failed_app||refuse_take)return -1;
+    *pcm=NULL;memset(snapshot,0,sizeof(*snapshot));
+    /* An activation may end with a segment right after take sees none. */
+    if(head==tail){if(publish_in_take){publish_in_take=0;publish(0);word=0;}return 0;}
+    unsigned n=(unsigned)(tail%BLUETOOTH_SEGMENT_SLOTS);*pcm=slot[n];*snapshot=snapshots[n];return 1;
 }
 int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticket)
 {
@@ -119,6 +129,10 @@ int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticke
 int bluetooth_headset_segment_stop(struct bluetooth_application *a){(void)a;++stopped;return failed_app?-1:1;}
 int bluetooth_headset_segment_bind(struct bluetooth_application *a,void *consumer)
 {check(a==&app&&consumer==headset.client,82);++bound;return 1;}
+/* A new generation wakes the client. */
+BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t v,eNotifyAction action,uint32_t *previous)
+{(void)v;check(task&&task==headset.client&&!index&&action==eIncrement&&!previous,88);++notified;return pdPASS;}
+uint32_t ulTaskGenericNotifyTake(UBaseType_t index,BaseType_t clear,TickType_t ticks){(void)index;(void)clear;(void)ticks;return 0;}
 
 static void steps(unsigned n){for(unsigned i=0;i<n;++i)check(step()==0,83);}
 static uint32_t get32(const uint8_t *p){return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24;}
@@ -257,12 +271,22 @@ static void owner_case(void)
     check(progress[OS_SERVICE_BLUETOOTH]==1,103);
 #endif
 }
+/* The recognizer requests generation g; the client is woken once. */
+static void generation(unsigned g)
+{
+    const uint8_t *wav;size_t bytes;unsigned before=notified;
+    check(!os_headset_capture(g,&wav,&bytes)&&notified==before+1,61);
+    check(!os_headset_capture(g,&wav,&bytes)&&notified==before+1,62);
+}
 void os_check_run(unsigned selected)
 {
     mode=selected;
     const uint8_t *wav;size_t bytes;
     if(mode==0){pins_cases();start_case();os_check_result=1;return;}
     if(mode==7){owner_case();os_check_result=1;return;}
+    /* The started client's handle; os_headset_start runs in mode 0. */
+    headset.client=(TaskHandle_t)&headset.client_task;
+    board.session.workload=mode==10?0:4;
     if(mode==8){
         /* The supervised capture window ends capture without a fault; any other
          * stop reason leaves later generations without a capture. */
@@ -275,62 +299,80 @@ void os_check_run(unsigned selected)
 #ifdef SUNSTONE_A733_OS_MSBC
     if(mode==9){
         /* A wideband segment is already 16 kHz; its WAV carries it unchanged. */
-        check(!os_headset_capture(1,&wav,&bytes),120);steps(1);
-        publish(0,0);steps(1);publish_state(0,0,2);steps(1);check(tail==2,121);
+        generation(1);steps(1);publish_state(0,2);word=0;steps(1);check(tail==1,121);
         check(os_headset_capture(1,&wav,&bytes)==1&&bytes==44+SEGMENT_BYTES&&get32(wav+24)==16000&&
             get32(wav+40)==SEGMENT_BYTES,122);
-        for(unsigned k=0;k<SEGMENT_BYTES;++k)check(wav[44+k]==value(2,k),123);
+        for(unsigned k=0;k<SEGMENT_BYTES;++k)check(wav[44+k]==value(1,k),123);
         /* A capture state other than CVSD or mSBC is refused. */
-        check(!os_headset_capture(2,&wav,&bytes),124);steps(1);
-        publish(0,0);steps(1);publish_state(0,0,3);check(step()<0,125);
+        generation(2);steps(1);publish_state(0,3);word=0;check(step()<0,125);
         os_check_result=1;return;
     }
 #else
     if(mode==9){
         /* Without mSBC, a wideband segment is refused. */
-        check(!os_headset_capture(1,&wav,&bytes),120);steps(1);
-        publish(0,0);steps(1);publish_state(0,0,2);check(step()<0,126);
+        generation(1);steps(1);publish_state(0,2);word=0;check(step()<0,126);
         os_check_result=1;return;
     }
 #endif
     if(mode==4){
         check(os_headset_capture(0,&wav,&bytes)<0&&os_headset_capture(1,NULL,&bytes)<0,50);
-        check(!os_headset_capture(2,&wav,&bytes)&&os_headset_capture(1,&wav,&bytes)<0,51);
+        check(!os_headset_capture(2,&wav,&bytes)&&os_headset_capture(1,&wav,&bytes)<0&&notified==1,51);
+        check(!os_headset_capture(2,&wav,&bytes)&&notified==1,53);
         board_up=0;check(os_headset_capture(2,&wav,&bytes)<0,52);
         os_check_result=1;return;
     }
     if(mode==1){
-        /* Two generations. Segments before a request are discarded. */
-        publish(0,0);steps(2);publish(0,0);steps(2);
-        check(head==2&&tail==2&&!atomic_load(&headset.captured),60);
-        /* Segment 3 is being filled when generation 1 is requested; the first
-         * segment that starts after the request is 4. */
-        check(!os_headset_capture(1,&wav,&bytes),61);
-        steps(1);check(headset.first_ticket==4,62);
-        publish(0,0);steps(1);check(tail==3&&!atomic_load(&headset.captured),63);
-        publish(0,0);steps(1);check(tail==4,64);converted(1,4);
-        /* While the recognizer holds generation 1, later segments are discarded
-         * without touching its WAV; two at once drain over two steps. */
-        publish(0,0);publish(0,0);steps(2);check(tail==6,65);converted(1,4);
-        check(!os_headset_capture(2,&wav,&bytes),66);
-        steps(1);check(headset.first_ticket==8,67);
-        publish(0,0);publish(0,0);steps(2);check(tail==8,68);converted(2,8);
-        check(os_headset_capture(1,&wav,&bytes)<0&&!board_failed&&!stopped,69);
+        /* Workload 4. No request is made while no generation waits. */
+        steps(2);check(!word&&!head,60);
+        /* A new generation starts recording at once. */
+        generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==1,63);
+        steps(1);check(word==BLUETOOTH_SEGMENT_START,64);
+        activation(1);steps(1);check(tail==1&&!word,65);converted(1,1);
+        /* Once captured, the client requests nothing and a stray segment does
+         * not touch the generation's WAV. */
+        steps(2);check(!word,66);publish(0);steps(1);check(tail==2&&!word,67);converted(1,1);
+        /* A headset cancel ends the START activation without a segment; the
+         * button then records the generation. */
+        generation(2);steps(1);check(word==BLUETOOTH_SEGMENT_START,68);
+        activation(0);steps(1);check(word==BLUETOOTH_SEGMENT_ACCEPT,69);
+        activation(1);steps(1);check(tail==3,70);converted(2,3);
+        /* A newer generation upgrades a pending ACCEPT to START. */
+        generation(3);steps(1);activation(0);steps(1);check(word==BLUETOOTH_SEGMENT_ACCEPT,71);
+        generation(4);steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==4,72);
+        activation(1);steps(1);converted(4,4);
+        check(os_headset_capture(3,&wav,&bytes)<0&&!board_failed&&!stopped,73);
         os_check_result=1;return;
     }
-    /* Refusals: a lost packet, a wrong digest or a record that changes during
-     * the copy ends the session and stops capture; a failed application too. */
-    check(!os_headset_capture(1,&wav,&bytes),70);steps(1);check(headset.first_ticket==2,74);
-    /* Segment 1 started before the request and is discarded unread; a lost
-     * packet refuses any segment. */
-    if(mode!=2){publish(0,0);steps(1);check(tail==1,75);}
-    if(mode==2)publish(1,0);
-    else if(mode==3){changed_copy=1;publish(0,0);}
-    else if(mode==5)publish(0,1);
+    if(mode==10){
+        /* Workload 0 admits the headset button only. */
+        generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_ACCEPT&&!headset.started,130);
+        activation(0);steps(1);check(word==BLUETOOTH_SEGMENT_ACCEPT,131);
+        activation(1);steps(1);check(tail==1&&!word,132);converted(1,1);
+        os_check_result=1;return;
+    }
+    if(mode==2){
+        /* An activation that publishes after the client's take found nothing
+         * refuses its request, so ACCEPT is not armed again for a generation
+         * that already has a segment. */
+        generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==1,140);
+        word=BLUETOOTH_SEGMENT_ACTIVE;publish_in_take=1;steps(1);check(!word&&head==1&&!tail,141);
+        steps(1);check(tail==1&&!word,142);converted(1,1);
+        /* START refused while an earlier activation runs is requested again
+         * when that activation ends without a segment. */
+        generation(2);word=BLUETOOTH_SEGMENT_ACTIVE;steps(1);check(word==BLUETOOTH_SEGMENT_ACTIVE&&headset.started==1,143);
+        word=0;steps(1);check(word==BLUETOOTH_SEGMENT_START&&headset.started==2,144);
+        activation(1);steps(1);converted(2,2);check(!board_failed&&!stopped,145);
+        os_check_result=1;return;
+    }
+    /* Refusals: a refused borrow or request and a failed application end the
+     * session and stop capture. */
+    generation(1);steps(1);check(word==BLUETOOTH_SEGMENT_START,74);
+    if(mode==3){activation(1);refuse_take=1;}
+    else if(mode==5){activation(0);refuse_request=1;}
     else failed_app=1;
-    check(step()<0,71);fail();
-    check(board_failed&&stopped==1&&atomic_load(&headset.failed)&&os_headset_capture(1,&wav,&bytes)<0,72);
+    check(step()<0,75);fail();
+    check(board_failed&&stopped==1&&atomic_load(&headset.failed)&&os_headset_capture(1,&wav,&bytes)<0,76);
     /* The refused segment stays unacknowledged. */
-    check(tail==(mode==2?0u:1u),73);
+    check(!tail,77);
     os_check_result=1;
 }

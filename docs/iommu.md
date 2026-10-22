@@ -97,10 +97,14 @@ The builder accepts device addresses from `0x1000` through `2^34 - 1` and CPU
 physical addresses from `0x40000000` through `2^34 - 1`. Complete spans must fit
 inside those bounds. Linux also describes a high-DRAM alias above 16 GiB; its
 boundary conversion requires separate verification and is refused here.
-The common initializer, which every profile calls, further restricts device
-spans to end at or below 4 GiB. The limit matches the camera allocation mask and
-applies to the decoder, encoder, ISP, G2D, deinterlace and display profiles as
-well.
+The physical bound is `A733_IOMMU_PHYSICAL_LIMIT` in
+[dma_address_width.h](../include/dma_address_width.h), because leaf and
+directory bits 9:8 hold physical bits 33:32. The common initializer, which
+every profile calls, further restricts device spans to end at or below
+`A733_IOMMU_IOVA_LIMIT` (4 GiB). The limit matches the camera allocation mask
+and applies to the decoder, encoder, ISP, G2D, deinterlace and display profiles
+as well. [DMA address widths](dma-address-width.md) give the rule for every
+DMA master.
 
 The builder rejects incomplete pages, excess table capacity, address overflow,
 physical aliases between mappings, and mappings over its own table storage.

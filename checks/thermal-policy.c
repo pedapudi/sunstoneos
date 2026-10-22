@@ -102,6 +102,10 @@ int main(void)
     assert(a733_thermal_temperature(970,&t) && t==110035);
     assert(a733_thermal_temperature(971,&t) && t==109976);
     assert(a733_thermal_temperature(2338,&t) && t==30008);
+    assert(a733_thermal_temperature(1394,&t) && t==85019);
+    assert(a733_thermal_temperature(1395,&t) && t==84960);
+    assert(a733_thermal_temperature(1428,&t) && t==83013);
+    assert(a733_thermal_temperature(1429,&t) && t==82954);
     struct model m;uint16_t c[5];
     setup(&m);codes(c,2338);
     /* Normal readings; hardware alarm and critical events alone change nothing. */
@@ -109,9 +113,9 @@ int main(void)
     assert(step(&m,31,c,31)==A733_THERMAL_NORMAL && m.policy.seen==31 && !m.notified[1]);
     assert(a733_thermal_policy_seen(&m.policy)==31);
     assert(step(&m,0,c,0)==A733_THERMAL_NORMAL && step(&m,0,c,31)==A733_THERMAL_NORMAL);
-    /* CPUB at its passive trip throttles, not below it; DDR/NPU have no passive trip. */
+    /* CPUB at its passive trip throttles, not below it; DDR below 85 C and NPU change nothing. */
     c[0]=1310;assert(step(&m,1,c,0)==A733_THERMAL_NORMAL);
-    c[1]=c[2]=1000;assert(step(&m,6,c,0)==A733_THERMAL_NORMAL);
+    c[1]=1395;c[2]=1000;assert(step(&m,6,c,0)==A733_THERMAL_NORMAL);
     c[0]=1309;uint64_t before=m.progress;
     assert(step(&m,1,c,0)==A733_THERMAL_THROTTLE && m.notified[1]==1 && m.policy.passive==1 && m.workers==1);
     /* Hysteresis holds the trip until the reading falls below 88 C. */
@@ -123,6 +127,13 @@ int main(void)
     c[4]=1309;c[3]=1300;assert(step(&m,24,c,0)==A733_THERMAL_THROTTLE && m.policy.passive==24);
     c[4]=1310;assert(step(&m,16,c,0)==A733_THERMAL_THROTTLE && m.policy.passive==8);
     c[3]=1344;assert(step(&m,8,c,0)==A733_THERMAL_NORMAL && m.notified[0]==2);
+    /* DDR throttles at 85.02 C, not at 84.96 C; hysteresis holds it down to 83.01 C. */
+    codes(c,2338);c[1]=1395;assert(step(&m,2,c,0)==A733_THERMAL_NORMAL && !m.policy.passive);
+    unsigned throttled=m.notified[1];
+    c[1]=1394;assert(step(&m,2,c,0)==A733_THERMAL_THROTTLE && m.policy.passive==2 && m.notified[1]==throttled+1);
+    c[1]=1395;assert(step(&m,2,c,0)==A733_THERMAL_THROTTLE);
+    c[1]=1428;assert(step(&m,2,c,0)==A733_THERMAL_THROTTLE);
+    c[1]=1429;assert(step(&m,2,c,0)==A733_THERMAL_NORMAL && m.notified[0]==3 && !m.policy.passive);
     /* Repeated BUSY/AGAIN keeps values; a channel without readings for 1 s throttles. */
     codes(c,2338);assert(step(&m,31,c,0)==A733_THERMAL_NORMAL);
     m.time+=900000;assert(step(&m,15,c,0)==A733_THERMAL_NORMAL);
@@ -130,11 +141,11 @@ int main(void)
     assert(step(&m,31,c,0)==A733_THERMAL_NORMAL && !m.policy.stale);
     /* Critical trip on one channel: one stop request, terminal and frozen. */
     unsigned notified=m.notified[2];
-    c[1]=971;assert(step(&m,2,c,0)==A733_THERMAL_NORMAL);
-    c[1]=970;before=m.progress;
-    assert(step(&m,2,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==notified+1 && m.policy.critical==2 &&
+    c[2]=971;assert(step(&m,4,c,0)==A733_THERMAL_NORMAL);
+    c[2]=970;before=m.progress;
+    assert(step(&m,4,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==notified+1 && m.policy.critical==4 &&
         m.policy.request==2 && !m.workers);
-    codes(c,2338);assert(step(&m,31,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==notified+1 && m.policy.critical==2);
+    codes(c,2338);assert(step(&m,31,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==notified+1 && m.policy.critical==4);
     assert(m.progress==before);
     /* A busy stop request is asked again once per update; an uncertain answer is retained. */
     setup(&m);codes(c,2338);m.answer=0;
@@ -142,6 +153,10 @@ int main(void)
     assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==2 && m.policy.request==1);
     m.answer=7;assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==3 && m.policy.request==3);
     m.answer=1;assert(step(&m,0,c,0)==A733_THERMAL_CRITICAL && m.notified[2]==3);
+    /* A throttled DDR channel still reaches its 110 C critical trip. */
+    setup(&m);codes(c,2338);c[1]=1394;assert(step(&m,31,c,0)==A733_THERMAL_THROTTLE && m.policy.passive==2);
+    c[1]=971;assert(step(&m,2,c,0)==A733_THERMAL_THROTTLE);
+    c[1]=970;assert(step(&m,2,c,0)==A733_THERMAL_CRITICAL && m.policy.critical==2 && m.notified[2]==1);
     /* A first reading that throttles publishes its channel with the level. */
     setup(&m);codes(c,2338);c[0]=1309;
     assert(step(&m,1,c,0)==A733_THERMAL_THROTTLE && a733_thermal_policy_seen(&m.policy)==1 && m.notified[1]==1);
@@ -170,7 +185,7 @@ int main(void)
     assert(!a733_thermal_policy_seen(&none) && !a733_thermal_policy_seen(NULL));
     assert(a733_thermal_policy_update(&none,1,A733_THERMAL_AGAIN,NULL)==A733_THERMAL_CRITICAL && !none.initialized);
     assert(!a733_thermal_policy_init(&none,1,NULL,NULL));
-    puts("PASS thermal policy trips, hysteresis, stale and lost readings, sensor failure, stop requests "
+    puts("PASS thermal policy trips including the DDR trip at 85 C, hysteresis, stale and lost readings, sensor failure, stop requests "
          "and published channels");
     return 0;
 }
