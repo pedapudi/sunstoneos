@@ -2059,6 +2059,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   arithmetic exact but its INT16 output not bit-exact with mimus, and the
   compiler refuses the INT32 output that a bit-exact split would need. Physical
   execution remains unqualified.
+  The [conformance harness](npu-conformance.md) is implemented and runs every
+  catalogue model in the SDK simulator on fixed vectors, 84 jobs in one
+  container. The four models from the pinned compiler match compiler or
+  integer references bit for bit on every vector, with every input and output
+  cache line covered by a job pair whose outputs differ. ConcatLayer and
+  TensorCopy occur only in ShuffleNetV2 and have no reference. Comparison of
+  board captures with the simulator is pending a board application.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
   and native compilation pass. Identity admission precedes reset/engine setup;

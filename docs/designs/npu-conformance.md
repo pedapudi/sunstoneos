@@ -1,7 +1,8 @@
 # Design: NPU output conformance with the SDK simulator
 
-Status: **design**; no code exists yet. The conformance record will be
-[docs/npu-conformance.md](../npu-conformance.md).
+Status: **implemented**; the conformance record is
+[docs/npu-conformance.md](../npu-conformance.md). A cold run took 47 s, so the
+result cache described below was not built.
 
 The pinned SDK simulator models the A733 NPU's revision 9.2 engine and is the
 only arithmetic oracle the project has for compiled models
