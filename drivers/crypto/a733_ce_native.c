@@ -1,6 +1,7 @@
 #include "a733_ce_native.h"
 #include "a733_ce_clock.h"
 #include "aarch64_device_memory.h"
+#include "a733_mmio.h"
 #include <stddef.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
@@ -28,22 +29,20 @@ int a733_ce_native_read(void *cookie,uintptr_t a,uint32_t *v)
 {
     (void)cookie;
     if (!v || !readable(a)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    *v=a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
 {
     (void)cookie;
     uint32_t mask=0;
     if (a>=SEC+0x90 && a<=SEC+0x9c && !(a&3)) {
-        __asm__ volatile("dsb sy" ::: "memory");
-        uint32_t control=*(volatile const uint32_t *)(SEC+0x9c);
+        a733_mmio_dsb_sy();
+        uint32_t control=a733_mmio_read32(SEC+0x9c);
         /* No live reconfiguration, including a write that would disable tests. */
         if (control&0x30000u) return 0;
         if (a==SEC+0x9c && ((control^v)&~UINT32_C(0x307ff))) return 0;
-        *(volatile uint32_t *)a=v;
-        __asm__ volatile("dsb sy" ::: "memory");return 1;
+        a733_mmio_write32(a,v);
+        a733_mmio_dsb_sy();return 1;
     }
     if (a<NS || a>NS+0xd0) return 0;
     switch (a-NS) {
@@ -55,14 +54,14 @@ int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
     case 0xd0:mask=2;break;
     default:return 0;
     }
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_dsb_sy();
     if (mask) {
-        uint32_t old=*(volatile const uint32_t *)a;
+        uint32_t old=a733_mmio_read32(a);
         if ((old^v)&~mask) return 0;
         if (a==NS+0xd0 && ((old&1) || !(v&2))) return 0;
     }
-    *(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    a733_mmio_write32(a,v);
+    a733_mmio_dsb_sy();return 1;
 }
 /* The cold provider owns the register mutex and authenticates CCU write
  * permission before entry. No ordinary CE operation can call this adapter. */
@@ -70,8 +69,8 @@ int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
 {
     (void)cookie;
     if(a!=CCU+0xac0&&a!=CCU+0xac4&&a!=CCU+0x5e4)return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    uint32_t old=*(volatile const uint32_t *)a,mask;
+    a733_mmio_dsb_sy();
+    uint32_t old=a733_mmio_read32(a),mask;
     if(a==CCU+0xac0){
         mask=0x8700001f;
         uint32_t from=old&mask,to=value&mask;
@@ -86,8 +85,8 @@ int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
         if((old&0x40306)!=0x40302||(value&4)!=4)return 0;
     }
     if((old^value)&~mask)return 0;
-    *(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    a733_mmio_write32(a,value);
+    a733_mmio_dsb_sy();return 1;
 }
 /* Field ranges per mode, in order. iv, input, cipher_output and key are
  * contiguous, so one range covers a run of them. */
@@ -157,12 +156,12 @@ int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_c
 {
     if (!s || s->initialized || !c || !platform || !registry || !token ||
         !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
-        !a733_ce_separate(s,sizeof(*s),c,sizeof(*c)) || !a733_ce_separate(s,sizeof(*s),platform,sizeof(*platform)) ||
-        !a733_ce_separate(s,sizeof(*s),registry,sizeof(*registry)) || !a733_ce_separate(s,sizeof(*s),token,sizeof(*token))) return 0;
+        !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)) || !a733_ranges_disjoint(s,sizeof(*s),platform,sizeof(*platform)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),registry,sizeof(*registry)) || !a733_ranges_disjoint(s,sizeof(*s),token,sizeof(*token))) return 0;
     /* Check attach's pool placement first, so a refusal binds nothing. */
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if (!pool || !a733_ce_separate(s,sizeof(*s),pool,sizeof(*pool)) ||
-        !a733_ce_separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
+    if (!pool || !a733_ranges_disjoint(s,sizeof(*s),pool,sizeof(*pool)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes)) return 0;
     if (!a733_ce_session_native_init(&s->owned_session,c,platform,cookie,registry,token)) return 0;
     if (a733_ce_entropy_attach(s,&s->owned_session)) return 1;
     /* The page is DEVICE and the controller bound; keep both retained. */

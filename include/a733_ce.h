@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "a733_clock_leases.h"
+#include "a733_range.h"
 #define A733_CE_RANDOM_BYTES 32u
 #define A733_CE_DESCRIPTOR_BYTES 208u
 #define A733_CE_HASH_INPUT_BYTES 2048u
@@ -55,12 +56,6 @@ static inline unsigned a733_ce_capabilities(enum a733_ce_profile profile)
     case A733_CE_AES128_ONLY:return 4;case A733_CE_SHA256_AES128:return 6;
     case A733_CE_TRNG_AES128:return 5;case A733_CE_TRNG_SHA256_AES128:return 7;default:return 0;
     }
-}
-/* Both ranges are nonnull, do not wrap the address space and do not overlap. */
-static inline int a733_ce_separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
 }
 #define A733_CE_NS_INTID 200u
 #define A733_CE_S_INTID 201u
