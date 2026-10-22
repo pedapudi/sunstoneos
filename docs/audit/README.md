@@ -354,7 +354,11 @@ Every package in this tranche follows
 any code is written, a short design with measurable budgets goes to three
 reviewers: one for simplicity, one for hardware performance and one for
 correctness. A design proceeds when two of them approve and none reports a
-blocking issue. The same three lenses review the code. A final step measures
+blocking issue. The same three lenses review the code. From the second
+round of a review, each reviewer re-checks its own earlier findings and may
+add a new finding only when it is blocking: wrong results, data loss, a hang,
+a hardware hazard or a broken project rule. Without that rule, ten packages
+received new major findings in every round and never reached approval. A final step measures
 the base and the package with host models or instruction emulation, and blocks
 a package when a metric is worse than the base without a reason stated in its
 design. Each package's design and measurement table are in
@@ -368,17 +372,18 @@ design. Each package's design and measurement table are in
 | A passive thermal trip at a DDR temperature of 85 °C | `dram-controller` | Partial. Memory-bus priority, the latency window and the copy-load measurement have designs but no code. |
 | A study of exact integer sums on the NPU for mimus linear layers: base-16 digit partial sums are exact in the SDK simulator, but one layer would cost about 13 times the A76 kernel's CPU cycles, so mimus keeps its CPU kernel | `npu-exact-sum` | Done. Host tools and checks only. |
 | A [conformance harness](../npu-conformance.md) that runs every catalogue model in the SDK simulator on fixed vectors and compares the results with compiler or integer references | `npu-conformance` | Done. Its measurement step objected only to the harness's status entry in docs/hardware.md, which the integrator accepted. |
+| The extended device pools cover all 12 GiB: one admission check of 392 address translations instead of 401,410 in 3,136 calls, a per-class lock for acquire, and a lease ledger that other tasks read without locking | `memory-architecture` | Done. Cycle budgets stay provisional until a board run. Three small simplifications the reviewers suggested are not made. Changes to CPU startup that the design requests are listed for the multicore work. |
+| GPU worker pacing: timed wake-ups during a job fall from 1,000 to 240 per second, idle wake-ups from 200 to 4 per 200 ticks, and power-on to ready from 34 ticks to 2 | `gpu-runtime` | Done. Completion without a delivered interrupt now takes 2 ticks instead of 1, and one CPU run can last 1.8 ms against a 1 ms bound; the design gives the reason for both. Admission-to-kick time and texture preparation time need a board run. |
+| A [GPU conformance harness](../gpu-conformance.md) that compares 32 rendered features with a host software renderer and rejects 10 deliberate mutations | `gpu-conformance` | Done. Host tools and checks only. Comparison with board captures needs a change to frame capture. |
+| A placement table for mimus linear layers across the CPU and GPU in the OS image; the modeled linear stage takes 0.414 s on the A76 pair and 0.812 s on the A55 pair, with exact integer sums | `recognition-dispatch` | Partial. The GPU build compiles only after the mimus port shrinks its arena to 12 MiB, and linking needs four GPU runtime functions and an EL0 translation from the page-table owner. Default images are unchanged. |
+| One owner for the supply rails, with PMIC transactions routed through it; the rail ledger is 1,752 bytes smaller and no image grows | `power-authority` | Partial. The power-domain owner, the PMIC service task and moving the GPU, NPU and display onto domain rows remain. Barrier placement and all rail and power-domain behavior need a board run. |
+| Sandboxed [board-test bundles](board-test-plan.md) for the memory, GPU and NPU paths, with fault injection for the monitor and admission steps | `board-bundles` | Done. Every real row stays refused until its owner supplies admission values and completion counts. |
 
-Ten packages are still under review and are not merged:
-
-- **Code written, review not settled:** the 12 GiB memory map with large
-  device reservations and memory protection; the GPU runtime (concurrency,
-  isolation, hang recovery and power); and the GPU conformance harness.
-- **Design not approved:** NPU model breadth; NPU cold boot, recovery and
-  power; placement of mimus layers on the CPU, GPU or NPU; one owner for
-  every rail and power domain; bit-exact mimus matrix products on the GPU;
-  the 12 GiB memory qualification image; and board-test bundles for the new
-  paths.
+Four packages passed review but are held because their measurements are
+worse than the base without a reason in the design: NPU model breadth; NPU
+cold boot, recovery and power; bit-exact mimus matrix products on the GPU;
+and the 12 GiB memory qualification image. A follow-up either removes each
+regression or records its measured reason.
 
 ## Deferred findings
 
