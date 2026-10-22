@@ -1,0 +1,29 @@
+--- main.c
++++ main-os.c
+@@ -1,4 +1,7 @@
+-#include "application.h"
++/* Generated in the build directory, where "application.h" would name the
++ * mimus board header. */
++#include "../board/application.h"
++#include "os.h"
+ #ifdef SUNSTONE_BOARD_USB2_IRQ
+ #include "host_irq.h"
+ #endif
+@@ -100,6 +103,8 @@
+                 a733_typec_revoke(&board.typec.provider);
+             }
+         }
++        /* A failed radio stops reporting, so the resident watchdog resets the board. */
++        if(atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3)BOARD_PROGRESS(OS_SERVICE_RADIO);
+         vTaskDelay(1);
+     }
+ }
+@@ -121,6 +126,8 @@
+                     memory_order_release,memory_order_relaxed);
+             }
+         }
++        if(board_live(NULL)&&atomic_load_explicit(&board.radio_result,memory_order_acquire)!=3)
++            BOARD_PROGRESS(OS_SERVICE_NETWORK);
+         vTaskDelay(1);
+     }
+ }

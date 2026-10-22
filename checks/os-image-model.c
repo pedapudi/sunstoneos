@@ -6,6 +6,7 @@
  *   clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
  *     -Iinclude -Iplatform/a733-smp-cached -Iapps/os -DSUNSTONE_BOARD_SUPERVISED=1 \
  *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1] [-DSUNSTONE_A733_OS_AUDIO=1] \
+ *     [-DSUNSTONE_A733_OS_RADIO=1 | -DSUNSTONE_A733_OS_HEADSET=1] \
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
@@ -98,11 +99,15 @@ static void irq_cases(void)
         ROUTES==2?"thermal INTID 71 and DMA0 INTID 143":"thermal INTID 71",988u-ROUTES);
 }
 
-/* Report periods: the board owners and the capture client every tick, the
- * recognizer every 5 ms and the thermal reader every 25 ms. */
+/* Report periods: the board owners, the capture client and the radio owner
+ * and network client every tick, the recognizer every 5 ms and the thermal
+ * reader every 25 ms. */
 static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25,
 #ifdef SUNSTONE_A733_OS_AUDIO
     1,
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    1,1,
 #endif
 };
 /* One supervision run in 1 ms steps. The supervisor runs every 20 ms from
@@ -220,6 +225,16 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     b->usb_supply_uv[0]=b->usb_supply_uv[1]=3300000;b->usb0_cold_reference=1;b->usb2_revision=1;
     b->source_min_mv=4750;b->source_max_mv=5250;b->source_ma=500;b->zero_threshold_max_mv=600;
     b->fusb_device_id=0x81;
+#if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
+    /* The SID authority and, for the headset, the Bluetooth profile digest. */
+    b->sid_authority=21;memset(b->sid_evidence,0x54,32);
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* Workload 1: the board's radio station with storage. */
+    b->workload=1;b->radio_profile_address=0x43000000;b->radio_profile_bytes=1872;
+    memset(b->radio_profile_digest,0x55,32);
+    b->latch_m_identity=22;b->latch_m_owner=23;b->latch_m_known_mask=0x3f;
+#endif
     s->magic=A733_OS_SESSION_MAGIC;s->version=OS_SESSION_VERSION;s->bytes=sizeof(*s);
     s->thermal_owner=15;s->thermal_authority=16;
     memset(s->thermal_initial,1,32);memset(s->thermal_electrical,2,32);
@@ -252,6 +267,12 @@ static struct a733_smp_contract nominal_contract(const struct os_session *s,uint
     c.reserved[0]=A733_BOARD_SESSION_ADDRESS;c.reserved[1]=sizeof(*s);
     storage_digest_bytes(s,sizeof(*s),(uint8_t *)&c.reserved[2]);
     return c;
+}
+/* A board session without the radio fields, as workloads 0 and 4 require. */
+static void without_radio(struct a733_board_session *b,unsigned workload)
+{
+    b->workload=workload;b->radio_profile_address=b->radio_profile_bytes=0;memset(b->radio_profile_digest,0,32);
+    b->latch_m_identity=b->latch_m_owner=0;b->latch_m_known_mask=b->latch_m_value=0;
 }
 static void admission_cases(void)
 {
@@ -294,6 +315,25 @@ static void admission_cases(void)
     SESSION_REFUSED(SESSION->apb1=0x03000003;SESSION->apb1_hz=0);
     SESSION_REFUSED(SESSION->reserved[5]=1);
     SESSION_REFUSED(SESSION->board.deadline_us=1);
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* The radio build admits workload 1 only, and the board's radio rules apply. */
+    SESSION_REFUSED(without_radio(&SESSION->board,0));
+    SESSION_REFUSED(without_radio(&SESSION->board,4));
+    SESSION_REFUSED(SESSION->board.radio_profile_address=0x43001000);
+    SESSION_REFUSED(SESSION->board.latch_m_known_mask=0x1f);
+#else
+    /* Without the radio build, a board session with the radio is refused. */
+    SESSION_REFUSED(SESSION->board.workload=1;SESSION->board.sid_authority=21;memset(SESSION->board.sid_evidence,0x54,32);
+        SESSION->board.radio_profile_address=0x43000000;SESSION->board.radio_profile_bytes=1872;
+        memset(SESSION->board.radio_profile_digest,0x55,32);SESSION->board.latch_m_identity=22;
+        SESSION->board.latch_m_owner=23;SESSION->board.latch_m_known_mask=0x3f);
+    (void)without_radio;
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    /* The headset build requires the SID authority and the profile digest. */
+    SESSION_REFUSED(SESSION->board.sid_authority=0);
+    SESSION_REFUSED(memset(SESSION->board.sid_evidence,0,32));
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     struct os_audio_session *a=&SESSION->audio;
     SESSION_REFUSED(a->magic^=1);
@@ -323,15 +363,26 @@ static void admission_cases(void)
     /* A start after the startup deadline is refused. */
     nominal_session(SESSION,9);c=nominal_contract(SESSION,armed);
     assert(!a733_smp_contract_valid(&c,armed+HZ));++refused;
-    printf("PASS %s OS admission: nominal contract and session accepted, %u refusals\n",
-#if defined(SUNSTONE_BOARD_RESIDENT) && defined(SUNSTONE_A733_OS_AUDIO)
-        "resident audio",
-#elif defined(SUNSTONE_BOARD_RESIDENT)
+    printf("PASS %s%s%s%s OS admission: nominal contract and session accepted, %u refusals\n",
+#ifdef SUNSTONE_BOARD_RESIDENT
         "resident",
-#elif defined(SUNSTONE_A733_OS_AUDIO)
-        "supervised audio",
 #else
         "supervised",
+#endif
+#ifdef SUNSTONE_A733_OS_AUDIO
+        " audio",
+#else
+        "",
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+        " radio",
+#else
+        "",
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+        " headset",
+#else
+        "",
 #endif
         refused);
 }

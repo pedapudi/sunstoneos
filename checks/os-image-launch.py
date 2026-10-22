@@ -205,6 +205,11 @@ def main():
     resident = dict(manifest, lifetime='resident')
     (out / 'resident-link-check.json').write_text(json.dumps(resident))
     refusals['resident-link-check'] = lambda: prepare('r7', check=out / 'resident-link-check.json')
+    # Preparation does not stage the radio or Bluetooth profile and firmware yet.
+    for index, option in enumerate(('radio', 'headset')):
+        (out / (option + '-link-check.json')).write_text(json.dumps(dict(manifest, **{option: True})))
+        refusals[option + '-link-check'] = (lambda name, path: lambda: prepare(name, check=path))(
+            'r%d' % (8 + index), out / (option + '-link-check.json'))
     if audio:
         refusals.update({
             'missing-audio-record': lambda: prepare('a1', entry=entry_with(lambda v: v.pop('audio'), 'audio')),
@@ -234,7 +239,7 @@ def main():
         assert refused(action), name
         cases['refuses-' + name] = True
     # Every refusal comes before the bundle directory is created.
-    assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'a1', 'a2', 'a3',
+    assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'a1', 'a2', 'a3',
                                                  'a4', 'a5', 'a6', 'a7', 'n1'))
 
     # The frozen bundle no longer depends on the original evidence files.
