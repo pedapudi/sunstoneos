@@ -4,6 +4,7 @@
  * Copyright (C) 2023 Allwinner.
  */
 #include "a733_display_pll.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -18,11 +19,6 @@
 #define CCU UINT32_C(0x02002000)
 static const uint16_t offsets[]={0x104,0x108,0x10c,0x124,0x130,0x134,0x138};
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static int bounded(uint32_t word)
 {
     uint64_t numerator=UINT64_C(24000000)*((word>>8)&255);
@@ -36,7 +32,8 @@ int a733_display_pll_plan(const struct a733_display_pll_profile *initial,
     uint32_t hs,uint32_t ls,struct a733_display_pll_plan *out)
 {
     struct a733_display_pll_plan p={0};
-    if (!initial || !out || !separate(initial,sizeof(*initial),out,sizeof(*out)) ||
+    if (!initial || !out ||
+        !a733_extents_disjoint_checked((uintptr_t)initial,sizeof(*initial),(uintptr_t)out,sizeof(*out)) ||
         !initial->id || !initial->generation ||
         !a733_dsi_pll_plan(initial->hs_hz,initial->ls_hz,&p.initial) ||
         !a733_dsi_pll_plan(hs,ls,&p.target)) return 0;
@@ -66,9 +63,9 @@ int a733_display_pll_init(struct a733_display_pll *p,const struct a733_display_p
 {
     struct a733_display_pll_plan plan;
     if (!p || !c || p->initialized || !c->registry ||
-        !separate(p,sizeof(*p),c,sizeof(*c)) ||
-        !separate(p,sizeof(*p),c->registry,sizeof(*c->registry)) ||
-        !separate(c,sizeof(*c),c->registry,sizeof(*c->registry)) ||
+        !a733_extents_disjoint_checked((uintptr_t)p,sizeof(*p),(uintptr_t)c,sizeof(*c)) ||
+        !a733_extents_disjoint_checked((uintptr_t)p,sizeof(*p),(uintptr_t)c->registry,sizeof(*c->registry)) ||
+        !a733_extents_disjoint_checked((uintptr_t)c,sizeof(*c),(uintptr_t)c->registry,sizeof(*c->registry)) ||
         !c->ops.now_us || !c->ops.enter || !c->ops.leave || !c->ops.retain ||
         !c->ops.authorize || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
         !c->deadline || !c->reservation.token.id || !c->reservation.token.owner ||
@@ -105,14 +102,13 @@ static void fail(struct a733_display_pll *p,enum a733_display_pll_error e)
 static int timely(struct a733_display_pll *p)
 {
     uint64_t n=0;
-    if (p->config.ops.now_us(p->config.context,&n)!=1 || n<p->last_now ||
-        n>=p->config.deadline) {fail(p,A733_DISPLAY_PLL_TIME);return 0;}
-    p->last_now=n;return !p->fault;
+    if (p->config.ops.now_us(p->config.context,&n)!=1 ||
+        !a733_deadline_admit(n,&p->last_now,p->config.deadline)) {fail(p,A733_DISPLAY_PLL_TIME);return 0;}
+    return !p->fault;
 }
 static void delay(struct a733_display_pll *p,unsigned us)
 {
-    if (p->last_now>UINT64_MAX-us) fail(p,A733_DISPLAY_PLL_TIME);
-    else p->wait_until=p->last_now+us;
+    if (!a733_deadline_after(p->last_now,us,&p->wait_until)) fail(p,A733_DISPLAY_PLL_TIME);
 }
 static void retain(struct a733_display_pll *p)
 {

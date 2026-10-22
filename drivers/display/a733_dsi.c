@@ -4,15 +4,8 @@
  * Copyright (C) 2016 Allwinner.
  */
 #include "a733_dsi.h"
+#include "a733_range.h"
 #include <string.h>
-
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    if (!an || !bn) return 0;
-    if (an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y) return 1;
-    return x < y + bn && y < x + an;
-}
 
 static uint8_t ecc(uint32_t header)
 {
@@ -54,7 +47,8 @@ int a733_dsi_encode(struct a733_dsi_packet *out, unsigned type, unsigned channel
     }
     if (!out || channel > 3 || (size && !payload) ||
         (is_long ? (!size || size > A733_DSI_LONG_PAYLOAD_MAX) : size != expected) ||
-        overlap(out, sizeof(*out), payload, size)) return 0;
+        a733_extents_overlap_nonempty_or_wrap((uintptr_t)out, sizeof(*out),
+                                              (uintptr_t)payload, size)) return 0;
     const uint8_t *p = payload;
     uint8_t a = is_long ? (uint8_t)size : size ? p[0] : 0;
     uint8_t b = is_long ? (uint8_t)(size >> 8) : size > 1 ? p[1] : 0;
@@ -76,7 +70,9 @@ int a733_dsi_encode(struct a733_dsi_packet *out, unsigned type, unsigned channel
 
 int a733_dsi_init(struct a733_dsi *d, const struct a733_dsi_config *c)
 {
-    if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized ||
+    if (!d || !c ||
+        a733_extents_overlap_nonempty_or_wrap((uintptr_t)d, sizeof(*d), (uintptr_t)c, sizeof(*c)) ||
+        d->initialized ||
         c->controller > 1 || !c->lanes || c->lanes > 4 || !c->lease ||
         !c->ops.admit || !c->ops.read32 || !c->ops.write32 ||
         !c->ops.barrier || !c->ops.now_us) return 0;
@@ -90,7 +86,8 @@ int a733_dsi_submit(struct a733_dsi *d, unsigned type, unsigned channel,
                     const void *payload, size_t size, uint64_t deadline)
 {
     if (!d || !d->initialized || d->entered || d->state != A733_DSI_IDLE ||
-        deadline <= d->last_now || overlap(d, sizeof(*d), payload, size)) return 0;
+        deadline <= d->last_now ||
+        a733_extents_overlap_nonempty_or_wrap((uintptr_t)d, sizeof(*d), (uintptr_t)payload, size)) return 0;
     if (!a733_dsi_encode(&d->packet, type, channel, payload, size)) return 0;
     d->deadline = deadline;
     d->step = d->position = d->writes_attempted = 0;
@@ -109,11 +106,10 @@ static int time_ok(struct a733_dsi *d)
 {
     uint64_t now = 0;
     if (d->config.ops.now_us(d->config.context, &now) != 1 ||
-        now < d->last_now || now >= d->deadline) {
+        !a733_deadline_admit(now, &d->last_now, d->deadline)) {
         fail(d, A733_DSI_TIME);
         return 0;
     }
-    d->last_now = now;
     return d->state == A733_DSI_PENDING;
 }
 

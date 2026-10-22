@@ -4,7 +4,9 @@
 #include "a733_display_framebuffer.h"
 #include "a733_memory_uncached.h"
 #include "a733_media_clock_native.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -22,8 +24,8 @@ static int now(void *v,uint64_t *out)
 {
     fb_t *f=self(v);uint64_t t;
     if(!f||!current(f)||a733_counter_clock_now(f->config.counter,&t)!=1||
-       t<f->last_now||t>=f->config.deadline)return 0;
-    f->last_now=t;*out=t;return 1;
+       !a733_deadline_admit(t,&f->last_now,f->config.deadline))return 0;
+    *out=t;return 1;
 }
 static int timely(fb_t *f)
 {uint64_t t;return now(f,&t)&&!atomic_load_explicit(&f->config.clocks->failed,memory_order_acquire);}
@@ -48,9 +50,9 @@ static int owns(fb_t *f)
 }
 static int mapped(uintptr_t a)
 {
-    struct aarch64_translation r,w;
-    return aarch64_device_translate(a,0,&r)&&aarch64_device_translate(a,1,&w)&&
-        r.physical==a&&w.physical==a&&r.attributes==0&&w.attributes==0;
+    static const struct a733_mapping_rule rule={A733_MAPPING_READ_WRITE,1,
+        {{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
 }
 static int address(uintptr_t a)
 {
@@ -78,15 +80,13 @@ static int raw_read(void *v,uintptr_t a,uint32_t *out)
 {
     fb_t *f=self(v);
     if(!f||!out||!f->held||!address(a)||!mapped(a)||!timely(f))return 0;
-    __asm__ volatile("dsb sy":::"memory");*out=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return timely(f);
+    *out=a733_mmio_read32_dsb_sy_both(a);return timely(f);
 }
 static int raw_write(void *v,uintptr_t a,uint32_t value)
 {
     fb_t *f=self(v);
     if(!f||!f->held||!address(a)||!mapped(a)||!timely(f))return 0;
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy":::"memory");return timely(f);
+    a733_mmio_write32_dsb_sy_both(a,value);return timely(f);
 }
 void a733_display_framebuffer_retain(fb_t *f)
 {

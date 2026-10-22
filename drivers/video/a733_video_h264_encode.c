@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_h264_encode.h"
+#include "a733_range.h"
 /* Format data and fixed controls verified against pinned A733
  * H264InitSPS/PPS/EncSliceHeader and h264EncFrame. See sources.json.
  * No opaque library is linked; hardware alone generates entropy/reconstruction. */
@@ -13,7 +14,7 @@ const uint8_t *a733_h264_encode_prefix(unsigned ordinal,size_t *bytes)
 }
 static int fail(struct a733_h264_encode_run *s){s->state=A733_H264_ENCODE_FAULT;return -1;}
 static int tick(struct a733_h264_encode_run *s)
-{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||n<s->last_now||n>=s->deadline)return fail(s);s->last_now=n;return 1;}
+{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||!a733_deadline_admit(n,&s->last_now,s->deadline))return fail(s);return 1;}
 static int rd(struct a733_h264_encode_run *s,uint32_t o,uint32_t *v)
 {return s->ops.read(s->context,s->token,o,v,s->deadline)==1&&tick(s)==1?1:fail(s);}
 static int wr(struct a733_h264_encode_run *s,uint32_t o,uint32_t v)

@@ -1,12 +1,7 @@
 #include "display_scanout.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
-
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX-x || bn > UINTPTR_MAX-y || (x < y+bn && y < x+an);
-}
 static void fail(struct display_scanout *s, enum display_scanout_error e)
 {
     if (s->state != DISPLAY_SCANOUT_FAULT_RETAINED) {
@@ -19,10 +14,10 @@ static int clock_read(void *ctx, uint64_t *value)
     uint64_t n = 0;
     int ok = s->provider.now_us(s->context, &n);
     if (s->state == DISPLAY_SCANOUT_FAULT_RETAINED) return 0;
-    if (ok != 1 || n < s->last_now || n >= s->deadline) {
+    if (ok != 1 || !a733_deadline_admit(n, &s->last_now, s->deadline)) {
         fail(s, DISPLAY_SCANOUT_TIME); return 0;
     }
-    s->last_now = n; *value = n;
+    *value = n;
     return 1;
 }
 static int resources_valid(const struct display_scanout *s, const struct display_resource_token *t)
@@ -121,8 +116,8 @@ static int de_admit(void *ctx, const struct a733_de_config *c, enum a733_de_acti
 int display_scanout_init(struct display_scanout *s, const struct display_request *r,
                          const struct display_provider *p, void *ctx)
 {
-    if (!s || !r || !p || s->initialized || overlap(s,sizeof(*s),r,sizeof(*r)) ||
-        overlap(s,sizeof(*s),p,sizeof(*p)) || !r->owner || !r->board_id || !r->panel_id ||
+    if (!s || !r || !p || s->initialized || a733_ranges_overlap_or_wrap(s,sizeof(*s),r,sizeof(*r)) ||
+        a733_ranges_overlap_or_wrap(s,sizeof(*s),p,sizeof(*p)) || !r->owner || !r->board_id || !r->panel_id ||
         !r->frame.frame_id || !r->frame.cpu_address || (r->frame.cpu_address & 63) ||
         r->frame.mapped_bytes > UINTPTR_MAX-r->frame.cpu_address ||
         !p->now_us || !p->acquire_resources || !p->acquire_frame || !p->authenticate ||

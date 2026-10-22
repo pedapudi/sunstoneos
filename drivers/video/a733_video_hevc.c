@@ -5,6 +5,7 @@
  * Copyright (C) 2018 Bootlin
  */
 #include "a733_video_hevc.h"
+#include "a733_range.h"
 #include <string.h>
 static int fail(struct a733_hevc_run *r){r->state=HEVC_FAILED;return -1;}
 static int write_reg(struct a733_hevc_run *r,uint32_t off,uint32_t value)
@@ -93,7 +94,7 @@ int a733_hevc_poll(struct a733_hevc_run *r)
 {
  if(!r||r->state==HEVC_FAILED)return -1;
  if(r->state==HEVC_COPIED)return 1;
- uint64_t now;if(r->ops.now_us(r->context,&now)!=1||now<r->last_now||now>=r->deadline)return fail(r);r->last_now=now;
+ uint64_t now;if(r->ops.now_us(r->context,&now)!=1||!a733_deadline_admit(now,&r->last_now,r->deadline))return fail(r);
  uint32_t value;int result;
  switch(r->state){
  case HEVC_ACQUIRE:{uint64_t token=r->token;result=r->ops.acquire(r->context,&r->job,r->deadline,&token);
@@ -122,7 +123,7 @@ int a733_hevc_poll(struct a733_hevc_run *r)
  case HEVC_DISABLE:if(write_reg(r,0x530,UINT32_C(0x80000000))<0)return -1;r->state=HEVC_ACK_STATUS;return 0;
  case HEVC_ACK_STATUS:if(write_reg(r,0x538,r->status&7)<0)return -1;r->state=HEVC_COPY;return 0;
  case HEVC_COPY:result=r->ops.copied(r->context,r->token,r->picture,r->deadline);
-  if(result<0||(result!=0&&result!=1))return fail(r);if(result==1){if(r->ops.now_us(r->context,&now)!=1||now<r->last_now||now>=r->deadline)return fail(r);r->last_now=now;r->state=HEVC_COPIED;return 1;}return 0;
+  if(result<0||(result!=0&&result!=1))return fail(r);if(result==1){if(r->ops.now_us(r->context,&now)!=1||!a733_deadline_admit(now,&r->last_now,r->deadline))return fail(r);r->state=HEVC_COPIED;return 1;}return 0;
  case HEVC_COPIED:return 1;
  default:return fail(r);
  }

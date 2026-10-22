@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_unit.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define R_CCU UINT32_C(0x07010000)
 #define GIC UINT32_C(0x03400000)
@@ -65,9 +66,10 @@ int a733_video_unit_fail(struct a733_video_unit *u) {u->failed=1;return -1;}
 int a733_video_unit_now(struct a733_video_unit *u,uint64_t *out)
 {
     uint64_t n;
-    if(!u||!u->initialized||u->failed||!out||u->ops.now_us(u->cookie,&n)!=1||n<u->last_now)
+    if(!u||!u->initialized||u->failed||!out||u->ops.now_us(u->cookie,&n)!=1||
+       !a733_monotonic_advance(n,&u->last_now))
         return u?a733_video_unit_fail(u):-1;
-    u->last_now=n;*out=n;return 1;
+    *out=n;return 1;
 }
 int a733_video_unit_timely(struct a733_video_unit *u)
 {uint64_t n;return a733_video_unit_now(u,&n)==1&&n<u->deadline;}
@@ -206,17 +208,19 @@ int a733_video_unit_identity(struct a733_video_unit *u,uint64_t *version)
     return 0;
 }
 #ifdef __aarch64__
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 static int device(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&t.attributes==0&&t.shareability==2;}
+{
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+}
 #endif
 int a733_video_unit_native_read(uintptr_t a,uint32_t *out)
 {
 #ifdef __aarch64__
     if(!out||(a&3)||!device(a))return -1;
-    __asm__ volatile("dsb sy":::"memory");
-    *out=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    *out=a733_mmio_read32_dsb_sy_both(a);return 1;
 #else
     (void)a;(void)out;return -1;
 #endif
@@ -225,11 +229,11 @@ int a733_video_unit_native_write(uintptr_t a,unsigned width,uint32_t owned,uint3
 {
 #ifdef __aarch64__
     if((width!=1&&width!=4)||(a&(width-1))||(owned&&width!=4)||!device(a))return -1;
-    __asm__ volatile("dsb sy":::"memory");
-    if(owned&&((*(volatile const uint32_t *)a^value)&~owned))return -1;
-    if(width==1)*(volatile uint8_t *)a=(uint8_t)value;
-    else *(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_dsb_sy();
+    if(owned&&((a733_mmio_read32(a)^value)&~owned))return -1;
+    if(width==1)a733_mmio_write8(a,(uint8_t)value);
+    else a733_mmio_write32(a,value);
+    a733_mmio_dsb_sy();return 1;
 #else
     (void)a;(void)width;(void)owned;(void)value;return -1;
 #endif
