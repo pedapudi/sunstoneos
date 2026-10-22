@@ -439,10 +439,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Emulator checks pass for translation on every core and retained construction.
   Native application binding and physical exclusion/coherence remain required.
   The [larger native profile](device-memory-capacity.md) reserves 768 MiB of
-  write-back memory and 16 MiB of uncached memory, with privileged mappings and
-  bounded validation before publishing either pool. Its native publication and
-  refusal checks pass. Physical range ownership and device reachability remain
-  unqualified; external pools still need application-specific mapping access.
+  write-back memory and 16 MiB of uncached memory with privileged mappings.
+  One call checks one translation per 2 MiB block (392) and publishes both
+  pools; extents take the GPU MMU's page alignment, the kernel critical section
+  serializes acquire, release and retain while the per-access lease check stays
+  lock-free, and acquire cleans recycled pages. The
+  [EL1 map](memory-protection.md) is **implemented** for 910 MiB of the
+  reported 12 GiB, and a QEMU check compares every EL1 entry with it; mapping
+  the remaining DRAM waits on launch evidence. Physical range ownership,
+  device reachability and the full-capacity DRAM check remain unqualified;
+  external pools still need application-specific mapping access.
   A [fixed interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners)
   is **implemented** for images with several device owners. EL3 programs the
   route of each listed shared peripheral interrupt once and reads it back, and the shared handler dispatches
@@ -469,8 +475,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   headset, resident headset, radio with headset, and resident radio with
   headset. Each build runs the image's link check, and host models cover
   interrupt delivery, supervision and admission for each combination of
-  lifetime and options. A supervised launcher and session preparation
-  exist; preparation needs a reviewed entry record from physical evidence and
+  lifetime and options. A resident [GPU linear option](recognition-dispatch.md)
+  places mimus linear layers on the CPU or the GPU from a generated table,
+  with INTID 95 and the GPU worker on the recognition core; it is
+  **implemented** and host-modeled, with exact sums equal to a CPU-only
+  reference on the bench call list. It does not build until the mimus port
+  shrinks its arena to 12 MiB and the GPU runtime and the page-table owner
+  provide five functions and two build constants.
+  A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
   refuses the radio and headset builds until it stages their profile and
   firmware. The supervised radio and headset builds cannot finish firmware
   loading within their 40 s and 30 s bootstrap bounds at the admitted SDIO
@@ -1266,6 +1278,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
   cores, queue saturation, backlog draining, deferred rearm, and retained failures.
   Physical GPU power and interrupt behavior remain unqualified.
+  The [service worker](gpu-service.md#worker-pacing-measured-in-the-emulator)
+  has one wait: one tick in lifecycle phases, the job deadline or 4 ms while a
+  job is in flight, and an interrupt or request otherwise. Startup delays,
+  shutdown polls and power-domain sequencing wait inside their steps for up to
+  50 µs. In the emulator, power-on to READY falls from 34 ticks to 3 and timed
+  wake-ups during a job from 1,000 to about 250 per second. Concurrent sessions,
+  bounded reset, idle power-off and firmware loading from the FAT volume remain
+  required ([runtime design](designs/gpu-runtime.md)).
   The [translation-cache invalidation protocol](gpu-flush.md) has host evidence
   for publication ordering, bounded command completion, and retained failures.
   Actual mapping changes and physical invalidation remain unqualified.
@@ -1311,7 +1331,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [lent to a display consumer](gpu-render.md#lending-a-completed-frame-for-presentation)
   by physical address. Pinned-Mesa reference, QEMU native-service and linked
   application checks pass with GPU, firmware and USB effects modeled; physical
-  rendering is unqualified. Arbitrary shaders and blend factors, clipping,
+  rendering is unqualified. A [conformance harness](gpu-conformance.md) compares
+  captured frames and compute results with pinned-Mesa llvmpipe renderings and
+  closed-form references; its host self-check passes, and the twelve planned
+  board launches remain to run. Arbitrary shaders and blend factors, clipping,
   multisampling, mipmaps, other texture formats, wider compute input/output and
   display use of the lent frame remain required.
   The [native GPU application](gpu-application.md) connects real firmware,
@@ -2071,10 +2094,26 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ([remaining work](npu-session.md#remaining-work)). The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A
-  [mimus linear-layer study](npu-mimus-linear.md) finds the simulator's integer
-  arithmetic exact but its INT16 output not bit-exact with mimus, and the
-  compiler refuses the INT32 output that a bit-exact split would need. Physical
-  execution remains unqualified.
+  [mimus linear-layer study](npu-mimus-linear.md) finds that none of the eight
+  three-bit output type codes of the NN descriptor returns 32-bit sums in the
+  SDK simulator; a fourth type bit, if one exists, was not located, and its
+  codes 8–15 are untested. Base-16 digit partial sums return exact sums in the
+  simulator, and their CPU read-out is bit-identical to the mimus kernel. On
+  today's session runtime one such layer is estimated to cost about 13 times
+  the A76 kernel's CPU cycles, mostly per-job integrity checks, so mimus keeps
+  its CPU kernel. The A76 figure is an emulated instruction count, not a
+  measurement. The INT16 layer, recorded as a separate variant, meets the
+  float32 word-error-rate criterion on three held-out sets in simulation.
+  Physical execution remains unqualified.
+  The [conformance harness](npu-conformance.md) is implemented and runs every
+  catalogue model in the SDK simulator on fixed vectors, 84 jobs in one
+  container. The four models from the pinned compiler match compiler or
+  integer references bit for bit on every vector. Each input cache line has a
+  job that changes only that line and whose output differs from the preceding
+  job's, and each output cache line changes between some consecutive pair of
+  jobs. ConcatLayer and TensorCopy occur only in ShuffleNetV2 and have no
+  reference. Comparison of board captures with the simulator is pending a
+  board application.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
   and native compilation pass. Identity admission precedes reset/engine setup;

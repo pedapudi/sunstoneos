@@ -38,6 +38,12 @@ static unsigned char *resource(unsigned id)
 { configASSERT(id < PVR_FW_RESOURCE_COUNT); return config.resources[id].storage.cpu; }
 static uint64_t level(void)
 { register uint64_t result __asm__("x0"); __asm__ volatile("svc #120" : "=r"(result) :: "memory"); return result; }
+/* Latency measurement: the number of scheduler ticks in which the worker made
+ * at least one backend callback. Worker CPU time that crosses a tick boundary
+ * counts like a wait, so pacing assertions use the worker's own wait
+ * counters below. */
+static uint32_t active_ticks;
+static TickType_t last_active = portMAX_DELAY;
 static void callback(void *ctx)
 {
     uint64_t el, sp;
@@ -45,6 +51,27 @@ static void callback(void *ctx)
     configASSERT(ctx == &config && el == 4 && sp == 0 && xTaskGetCurrentTaskHandle() == service.worker);
     __atomic_fetch_add(&calls, 1, __ATOMIC_RELEASE);
     __atomic_fetch_or(&cores, 1u << portGET_CORE_ID(), __ATOMIC_RELEASE);
+    TickType_t tick = xTaskGetTickCount();
+    if (tick != last_active) { last_active = tick; __atomic_fetch_add(&active_ticks, 1, __ATOMIC_RELEASE); }
+}
+static void metric(const char *name, uint64_t value)
+{ platform_puts("metric "); platform_puts(name); platform_puts(" "); platform_hex(value); platform_puts("\n"); }
+/* Timed waits the worker began outside READY, and READY waits that expired.
+ * The owner reads them after a reply or while the worker blocks. */
+static uint32_t lifecycle_timed_waits(void)
+{ return __atomic_load_n(&service.lifecycle_timed_waits, __ATOMIC_ACQUIRE); }
+static uint32_t ready_expiries(void)
+{ return __atomic_load_n(&service.ready_wait_expiries, __ATOMIC_ACQUIRE); }
+/* Wait for a worker phase without sending requests, which would wake it. */
+static TickType_t observe_phase(enum pvr_gpu_service_phase phase)
+{
+    TickType_t start = xTaskGetTickCount();
+    while (__atomic_load_n(&service.phase, __ATOMIC_ACQUIRE) != phase) {
+        configASSERT(__atomic_load_n(&service.phase, __ATOMIC_ACQUIRE) != PVR_GPU_SERVICE_FAILED &&
+            xTaskGetTickCount() - start < 1000);
+        vTaskDelay(1);
+    }
+    return xTaskGetTickCount() - start;
 }
 static int now(void *ctx, uint64_t *out)
 {
@@ -355,7 +382,14 @@ static void owner(void *arg)
         vTaskDelay(80); /* No requests are needed to enforce the deadline. */
         response = request(PVR_GPU_SERVICE_STATUS, 0);
         configASSERT(response.result == PVR_GPU_SERVICE_FAULT && response.owns_session);
-        configASSERT(response.error == (gpu_service_case == 5 ? PVR_GPU_SERVICE_CLOCK : PVR_GPU_SERVICE_ENABLE));
+        /* The service's opening clock and the power controller share the
+         * deadline; whichever reads the clock first reports its expiry. */
+        configASSERT(response.error == PVR_GPU_SERVICE_ENABLE ||
+            (gpu_service_case == 5 && response.error == PVR_GPU_SERVICE_CLOCK));
+        /* In case 5 the power controller fails only by its deadline. */
+        configASSERT(gpu_service_case != 5 || response.error != PVR_GPU_SERVICE_ENABLE ||
+            (power_controller.phase == A733_GPU_POWER_FAILED &&
+             power_controller.error == A733_GPU_POWER_TIMEOUT));
         configASSERT(get(&power_lease) && !get(&published) && !get(&enabled) && !running);
         if (gpu_service_case == 5) configASSERT(get(&power_requested) == 8);
         unsigned count = get(&calls);
@@ -403,6 +437,37 @@ static void owner(void *arg)
         configASSERT(!wait_phase(PVR_GPU_SERVICE_STOPPED).owns_session);
         configASSERT(get(&isolated) == 1); set(&stage, 2); wait_flag(&peer_done, 2);
         configASSERT(get(&isolated) == 2 && get(&published) == 2);
+        /* Pacing: startup, an idle ready session without interrupt delivery,
+         * and shutdown, observed without requests that would wake the worker. */
+        uint32_t active = get(&active_ticks), waits = lifecycle_timed_waits();
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
+        metric("open-ticks", observe_phase(PVR_GPU_SERVICE_READY));
+        /* The model answers every hardware wait at once, so start and stop
+         * need no timed waits. */
+        uint32_t measured = get(&active_ticks) - active;
+        metric("open-active-ticks", measured);
+        measured = lifecycle_timed_waits() - waits;
+        metric("open-timed-waits", measured); configASSERT(measured == 0);
+        vTaskDelay(2); active = get(&active_ticks); uint32_t expired = ready_expiries();
+        vTaskDelay(200);
+        measured = get(&active_ticks) - active;
+        metric("idle-active-ticks-per-200", measured);
+        /* Without interrupt callbacks the idle session wakes every
+         * IDLE_POLL_US; the window can split one period. */
+        measured = ready_expiries() - expired;
+        metric("idle-expired-waits-per-200", measured);
+        configASSERT(measured + 1 >= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US &&
+                     measured <= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US + 1);
+        active = get(&active_ticks); waits = lifecycle_timed_waits();
+        configASSERT(request(PVR_GPU_SERVICE_CLOSE, 1000000).result == PVR_GPU_SERVICE_OK);
+        metric("close-ticks", observe_phase(PVR_GPU_SERVICE_STOPPED));
+        measured = get(&active_ticks) - active;
+        metric("close-active-ticks", measured);
+        measured = lifecycle_timed_waits() - waits;
+        metric("close-timed-waits", measured); configASSERT(measured == 0);
+        metric("longest-yield-us", __atomic_load_n(&service.longest_yield_us, __ATOMIC_ACQUIRE));
+        metric("yield-blocks", __atomic_load_n(&service.yield_blocks, __ATOMIC_ACQUIRE));
+        configASSERT(get(&isolated) == 3 && get(&published) == 3);
         set(&fault_mode, 1);
         configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_OK);
         vTaskDelay(150); /* Startup expires autonomously without STATUS requests. */
@@ -416,7 +481,9 @@ static void owner(void *arg)
             || gpu_service_case == 4
 #endif
         );
-        set(&fault_mode, gpu_service_case); vTaskDelay(10);
+        /* Without interrupt delivery an idle ready worker notices the control
+         * failure at its next idle wake-up. */
+        set(&fault_mode, gpu_service_case); vTaskDelay(PVR_GPU_SERVICE_IDLE_POLL_US / 1000 + 10);
     }
     reply = request(PVR_GPU_SERVICE_STATUS, 0);
     configASSERT(reply.result == PVR_GPU_SERVICE_FAULT && reply.phase == PVR_GPU_SERVICE_FAILED && reply.owns_session);
