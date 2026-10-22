@@ -4,18 +4,13 @@
  * See LICENSE.pvr for retained terms.
  */
 #include "pvr_cccb.h"
+#include "a733_range.h"
 #include <string.h>
 
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX-(uintptr_t)p; }
-static int disjoint(const void *a, size_t an, const void *b, size_t bn)
-{
-    return range(a,an) && range(b,bn) &&
-        ((uintptr_t)a+an<=(uintptr_t)b || (uintptr_t)b+bn<=(uintptr_t)a);
-}
 static int outside(const struct pvr_cccb *s, const void *p, size_t n)
 {
-    return disjoint(s,sizeof(*s),p,n) && disjoint(s->queue,sizeof(*s->queue),p,n);
+    return a733_ranges_disjoint_nonempty(s,sizeof(*s),p,n) &&
+        a733_ranges_disjoint_nonempty(s->queue,sizeof(*s->queue),p,n);
 }
 static void put32(unsigned char *p, uint32_t v)
 { for (unsigned i=0;i<4;++i) p[i]=(unsigned char)(v>>(8*i)); }
@@ -31,8 +26,8 @@ static int type_valid(uint32_t type)
 int pvr_cccb_init(struct pvr_cccb *s, const struct pvr_cccb_ops *ops, void *ctx,
                   struct pvr_ccb *q, uint32_t size, uint32_t fw, uint64_t deadline)
 {
-    if (!disjoint(s,sizeof(*s),q,sizeof(*q)) ||
-        !disjoint(s,sizeof(*s),ops,sizeof(*ops)) || s->phase!=PVR_CCCB_NEW ||
+    if (!a733_ranges_disjoint_nonempty(s,sizeof(*s),q,sizeof(*q)) ||
+        !a733_ranges_disjoint_nonempty(s,sizeof(*s),ops,sizeof(*ops)) || s->phase!=PVR_CCCB_NEW ||
         !q->epoch || (q->phase!=PVR_CCB_PREPARED && q->phase!=PVR_CCB_ACTIVE) ||
         !ops->now || !ops->read || !ops->write || !ops->barrier ||
         size<256 || size>PVR_CCCB_MAX_BYTES || (size&(size-1)) || !fw || (fw&7) ||
@@ -48,7 +43,7 @@ static int begin_valid(struct pvr_cccb *s, const struct pvr_cccb_command *cmd,
                    unsigned count, const uint32_t *cleanup, unsigned cleanups,
                    uint64_t deadline)
 {
-    if (!range(s,sizeof(*s)) || s->phase!=PVR_CCCB_IDLE || !count ||
+    if (!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase!=PVR_CCCB_IDLE || !count ||
         count>PVR_CCCB_MAX_COMMANDS || cleanups>PVR_CCCB_MAX_CLEANUPS ||
         !outside(s,cmd,count*sizeof(*cmd)) ||
         (cleanups && !outside(s,cleanup,cleanups*sizeof(*cleanup))) ||
@@ -220,9 +215,9 @@ static int pair_fault(struct pvr_cccb_pair *p)
 }
 int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *p)
 {
-    if(!range(p,sizeof(*p)) || p->phase!=3 || p->status!=1 || !p->geometry || !p->fragment)return 0;
+    if(!a733_span_excl_nonempty(p,sizeof(*p)) || p->phase!=3 || p->status!=1 || !p->geometry || !p->fragment)return 0;
     const struct pvr_cccb *g=p->geometry,*f=p->fragment;
-    return range(g,sizeof(*g)) && range(f,sizeof(*f)) && g!=f &&
+    return a733_span_excl_nonempty(g,sizeof(*g)) && a733_span_excl_nonempty(f,sizeof(*f)) && g!=f &&
         g->phase==PVR_CCCB_IDLE && f->phase==PVR_CCCB_IDLE && g->status==1 && f->status==1 &&
         g->paired==1 && f->paired==1 && g->serial &&
         g->serial==p->geometry_serial && f->serial==p->fragment_serial &&
@@ -236,25 +231,27 @@ int pvr_cccb_pair_begin(struct pvr_cccb_pair *p, struct pvr_cccb *g, struct pvr_
     const struct pvr_cccb_command *gc, unsigned gn, const struct pvr_cccb_command *fc, unsigned fn,
     const uint32_t *gr, unsigned grn, const uint32_t *fr, unsigned frn, uint64_t deadline)
 {
-    if (!range(p, sizeof(*p)) || !range(g, sizeof(*g)) || !range(f, sizeof(*f)) ||
-        !disjoint(p, sizeof(*p), g, sizeof(*g)) || !disjoint(p, sizeof(*p), f, sizeof(*f)) ||
-        !disjoint(g, sizeof(*g), f, sizeof(*f)) ||
+    if (!a733_span_excl_nonempty(p, sizeof(*p)) || !a733_span_excl_nonempty(g, sizeof(*g)) ||
+        !a733_span_excl_nonempty(f, sizeof(*f)) ||
+        !a733_ranges_disjoint_nonempty(p, sizeof(*p), g, sizeof(*g)) ||
+        !a733_ranges_disjoint_nonempty(p, sizeof(*p), f, sizeof(*f)) ||
+        !a733_ranges_disjoint_nonempty(g, sizeof(*g), f, sizeof(*f)) ||
         !((!p->phase && !g->serial && !f->serial && !g->paired && !f->paired) ||
           (p->geometry==g && p->fragment==f && pvr_cccb_pair_reusable(p))) ||
         g->queue != f->queue || g->epoch != f->epoch ||
         g->ops.now != f->ops.now || g->context != f->context ||
         g->firmware_context > UINT32_MAX - 152 || g->firmware_context + 152 != f->firmware_context ||
         !begin_valid(g, gc, gn, gr, grn, deadline) || !begin_valid(f, fc, fn, fr, frn, deadline) ||
-        !disjoint(p, sizeof(*p), g->queue, sizeof(*g->queue)) ||
-        !disjoint(p, sizeof(*p), gc, gn * sizeof(*gc)) ||
-        !disjoint(p, sizeof(*p), fc, fn * sizeof(*fc)) ||
-        (grn && !disjoint(p, sizeof(*p), gr, grn * sizeof(*gr))) ||
-        (frn && !disjoint(p, sizeof(*p), fr, frn * sizeof(*fr)))) return 0;
+        !a733_ranges_disjoint_nonempty(p, sizeof(*p), g->queue, sizeof(*g->queue)) ||
+        !a733_ranges_disjoint_nonempty(p, sizeof(*p), gc, gn * sizeof(*gc)) ||
+        !a733_ranges_disjoint_nonempty(p, sizeof(*p), fc, fn * sizeof(*fc)) ||
+        (grn && !a733_ranges_disjoint_nonempty(p, sizeof(*p), gr, grn * sizeof(*gr))) ||
+        (frn && !a733_ranges_disjoint_nonempty(p, sizeof(*p), fr, frn * sizeof(*fr)))) return 0;
     for (unsigned i = 0; i < gn; ++i)
-        if (gc[i].bytes && (!disjoint(p, sizeof(*p), gc[i].payload, gc[i].bytes) ||
+        if (gc[i].bytes && (!a733_ranges_disjoint_nonempty(p, sizeof(*p), gc[i].payload, gc[i].bytes) ||
             !outside(f, gc[i].payload, gc[i].bytes))) return 0;
     for (unsigned i = 0; i < fn; ++i)
-        if (fc[i].bytes && (!disjoint(p, sizeof(*p), fc[i].payload, fc[i].bytes) ||
+        if (fc[i].bytes && (!a733_ranges_disjoint_nonempty(p, sizeof(*p), fc[i].payload, fc[i].bytes) ||
             !outside(g, fc[i].payload, fc[i].bytes))) return 0;
     if (!outside(f, gc, gn * sizeof(*gc)) || !outside(g, fc, fn * sizeof(*fc)) ||
         (grn && !outside(f, gr, grn * sizeof(*gr))) ||
@@ -276,12 +273,12 @@ int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *p,
     if(!pvr_cccb_pair_reusable(p) || p->fragment_tail || !count || count>PVR_CCCB_MAX_COMMANDS ||
         cleanups>PVR_CCCB_MAX_CLEANUPS || deadline>p->deadline ||
         !outside(p->geometry,commands,count*sizeof(*commands)) ||
-        !disjoint(p,sizeof(*p),commands,count*sizeof(*commands)) ||
+        !a733_ranges_disjoint_nonempty(p,sizeof(*p),commands,count*sizeof(*commands)) ||
         (cleanups && (!outside(p->geometry,cleanup,cleanups*sizeof(*cleanup)) ||
-                     !disjoint(p,sizeof(*p),cleanup,cleanups*sizeof(*cleanup)))))return 0;
+                     !a733_ranges_disjoint_nonempty(p,sizeof(*p),cleanup,cleanups*sizeof(*cleanup)))))return 0;
     for(unsigned i=0;i<count;++i)if(commands[i].bytes &&
         (!outside(p->geometry,commands[i].payload,commands[i].bytes) ||
-         !disjoint(p,sizeof(*p),commands[i].payload,commands[i].bytes)))return 0;
+         !a733_ranges_disjoint_nonempty(p,sizeof(*p),commands[i].payload,commands[i].bytes)))return 0;
     if(!pvr_cccb_begin(p->fragment,commands,count,cleanup,cleanups,deadline))return 0;
     p->fragment->paired=0;p->fragment_serial=p->fragment->serial;
     p->deadline=deadline;p->phase=5;return 1;

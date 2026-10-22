@@ -1,6 +1,7 @@
 #include "spi.h"
 #include "irq.h"
 #include "gicv3_spi.h"
+#include "a733_mmio.h"
 static const struct gicv3_spi source={UINT32_C(0x03400000),59};
 static struct {
  unsigned bound,armed,masked,service,stopped,fault,deferred;
@@ -9,11 +10,7 @@ static struct {
 _Static_assert((configMAX_API_CALL_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT)<=0xb0,
  "SPI priority must permit FreeRTOS FromISR calls");
 static uint32_t read32(unsigned off)
-{
- __asm__ volatile("dsb sy":::"memory");
- uint32_t v=*(volatile const uint32_t *)(uintptr_t)(0x03400000u+off);
- __asm__ volatile("dsb sy":::"memory");return v;
-}
+{return a733_mmio_read32_dsb_sy_both(0x03400000u+off);}
 static int quiescent(void)
 {
  if(read32(0)&(1u<<31))return 0;

@@ -1,6 +1,7 @@
 #include "isp0.h"
 #include "a733_storage_digest.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include "boot.h"
 #include <string.h>
 struct isp0_application isp0;
@@ -14,18 +15,18 @@ static int owner(void)
  uint64_t el;__asm__ volatile("mrs %0, CurrentEL":"=r"(el));
  return el==4&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&xTaskGetCurrentTaskHandle()==isp0.handle&&live();
 }
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mapped(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&!t.attributes&&t.shareability==2;}
+{return a733_mapping_check(aarch64_device_translate,a,a,&device_rule);}
 static int load(uintptr_t a,uint32_t *v)
 {
  if(!v||!owner()||!mapped(a)||(a&3))return 0;
- __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint32_t *)a;
- __asm__ volatile("dsb sy":::"memory");return live();
+ *v=a733_mmio_read32_dsb_sy_both(a);return live();
 }
 static int store(uintptr_t a,uint32_t v)
 {
  if(!owner()||!mapped(a)||(a&3))return 0;
- *(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");return live();
+ a733_mmio_write32_dsb_sy_after(a,v);return live();
 }
 static int enter(void *v,uint64_t d)
 {return v==&isp0&&d==deadline()&&owner()?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}

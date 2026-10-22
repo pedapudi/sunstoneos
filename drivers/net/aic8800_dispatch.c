@@ -5,25 +5,25 @@
 #include "aic8800_security.h"
 #include "aic8800_supplicant.h"
 #include "aic8800_firmware.h"
+#include "a733_range.h"
 #include <string.h>
 static uint16_t le16(const uint8_t *p){return (uint16_t)((unsigned)p[0]|(unsigned)p[1]<<8);}
 static uint32_t le32(const uint8_t *p){return (uint32_t)le16(p)|(uint32_t)le16(p+2)<<16;}
 static void increment(uint64_t *v){if(*v!=UINT64_MAX)++*v;}
-static int disjoint(const void *p,size_t n,const void *q,size_t bytes)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    return p&&n<=UINTPTR_MAX-a&&(!q||(bytes<=UINTPTR_MAX-b&&!(a<b+bytes&&b<a+n)));
-}
 static int independent(const struct aic8800_dispatch *d,const void *p,size_t n)
 {
     const struct aic8800_sdio_transport *t=d->transport;
-    if(!disjoint(p,n,d,sizeof(*d))||!disjoint(p,n,t,sizeof(*t))||
-        !disjoint(p,n,t->card,sizeof(*t->card))||!disjoint(p,n,t->card->host,sizeof(*t->card->host))||
-        !disjoint(p,n,t->runtime,sizeof(struct aic8800_runtime))||!disjoint(p,n,t->wifi,sizeof(struct aic8800_wifi))||
-        !disjoint(p,n,t->data,sizeof(struct aic8800_data))||!disjoint(p,n,t->security,sizeof(struct aic8800_security))||
-        !disjoint(p,n,t->supplicant,sizeof(struct aic8800_supplicant))||!disjoint(p,n,t->firmware,sizeof(struct aic8800_firmware)))return 0;
+    if(!a733_ranges_disjoint_optional_second(p,n,d,sizeof(*d))||!a733_ranges_disjoint_optional_second(p,n,t,sizeof(*t))||
+        !a733_ranges_disjoint_optional_second(p,n,t->card,sizeof(*t->card))||
+        !a733_ranges_disjoint_optional_second(p,n,t->card->host,sizeof(*t->card->host))||
+        !a733_ranges_disjoint_optional_second(p,n,t->runtime,sizeof(struct aic8800_runtime))||
+        !a733_ranges_disjoint_optional_second(p,n,t->wifi,sizeof(struct aic8800_wifi))||
+        !a733_ranges_disjoint_optional_second(p,n,t->data,sizeof(struct aic8800_data))||
+        !a733_ranges_disjoint_optional_second(p,n,t->security,sizeof(struct aic8800_security))||
+        !a733_ranges_disjoint_optional_second(p,n,t->supplicant,sizeof(struct aic8800_supplicant))||
+        !a733_ranges_disjoint_optional_second(p,n,t->firmware,sizeof(struct aic8800_firmware)))return 0;
     if(t->firmware)for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
-        if(!disjoint(p,n,t->firmware->config.blobs[i].data,t->firmware->config.blobs[i].bytes))return 0;
+        if(!a733_ranges_disjoint_optional_second(p,n,t->firmware->config.blobs[i].data,t->firmware->config.blobs[i].bytes))return 0;
     return 1;
 }
 static void fault(struct aic8800_dispatch *d)

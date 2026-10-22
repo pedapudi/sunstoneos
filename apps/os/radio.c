@@ -7,7 +7,7 @@
  * provider is constructed. */
 #include "os.h"
 #include "../board/application.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 static struct board_radio_profile profile;
@@ -18,10 +18,8 @@ int os_radio_pins(struct a733_pin_handoff *pins)
     const struct os_session *s=os_session_admitted();
     if(!pins||!s||s->board.workload!=1||s->board.radio_profile_address!=UINT64_C(0x43000000)||
        s->board.radio_profile_bytes!=sizeof(profile))return 0;
-    for(uintptr_t page=0x43000000;page<0x43000000+sizeof(profile);page+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
+    static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    if(!a733_mapping_check_pages(aarch64_device_translate,0x43000000,0x43000000,sizeof(profile),&wb))return 0;
     /* The profile copy main.c authenticates later has the same owners. */
     const volatile uint8_t *source=(const void *)UINT64_C(0x43000000);
     for(size_t i=0;i<sizeof(profile);++i)((uint8_t *)&profile)[i]=source[i];

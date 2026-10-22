@@ -20,7 +20,7 @@
 #include "../bluetooth/bluetooth.h"
 #include "../bluetooth/headset.h"
 #include "../bluetooth/pcm.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 static struct bluetooth_application app;
@@ -131,10 +131,9 @@ int os_headset_pins(struct a733_pin_handoff *pins)
     const struct bluetooth_profile *p=os_headset_profile();
     if(!pins||!s||!p||!os_headset_profile_valid(&s->board,p)||p->radio.owner==s->thermal_owner||
        p->uart.owner==s->thermal_owner||pins->authorized[A733_PIN_G]||pins->authorized[A733_PIN_M])return 0;
-    for(uintptr_t page=BLUETOOTH_PROFILE_ADDRESS;page<UINT64_C(0x43100000);page+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
+    static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    if(!a733_mapping_check_pages(aarch64_device_translate,BLUETOOTH_PROFILE_ADDRESS,BLUETOOTH_PROFILE_ADDRESS,
+           UINT64_C(0x43100000)-BLUETOOTH_PROFILE_ADDRESS,&wb))return 0;
     pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;pins->latch[1]=p->pm_latch;
     return 1;
 }

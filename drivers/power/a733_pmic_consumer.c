@@ -1,11 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic_consumer.h"
+#include "a733_range.h"
 enum { NEW, RESERVED, STABLE, REQUESTED, SAMPLED };
-static int separate(const void *a,size_t n,const void *b,size_t k)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && n<=UINTPTR_MAX-x && k<=UINTPTR_MAX-y && (x+n<=y || y+k<=x);
-}
 static int identity(const struct a733_pmic_consumer *c)
 {
     return c && c->self==c && !c->failed && c->config.provider==c->sealed.provider &&
@@ -19,9 +15,9 @@ static int fault(struct a733_pmic_consumer *c)
 static int timely(struct a733_pmic_consumer *c,uint64_t deadline)
 {
     uint64_t now;struct a733_rail_leases *r=c->config.provider->rails;
-    if(!deadline || r->binding.now(r->binding.context,&now)!=1 || now<c->last_now || now>=deadline)
+    if(!deadline || r->binding.now(r->binding.context,&now)!=1 || !a733_deadline_admit(now,&c->last_now,deadline))
         return fault(c);
-    c->last_now=now;return 1;
+    return 1;
 }
 static int request_identity(const struct a733_pmic_consumer *c)
 {
@@ -46,16 +42,16 @@ static int equal(const struct a733_pmic_snapshot *a,const struct a733_pmic_snaps
 int a733_pmic_consumer_storage(struct a733_pmic *p,const void *v,size_t n)
 {
     return p && p->self==p && p->rails && p->clocks && p->pins &&
-        separate(v,n,p,sizeof(*p)) && separate(v,n,p->rails,sizeof(*p->rails)) &&
-        separate(v,n,p->clocks,sizeof(*p->clocks)) && separate(v,n,p->pins,sizeof(*p->pins)) &&
-        separate(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) &&
+        a733_ranges_disjoint(v,n,p,sizeof(*p)) && a733_ranges_disjoint(v,n,p->rails,sizeof(*p->rails)) &&
+        a733_ranges_disjoint(v,n,p->clocks,sizeof(*p->clocks)) && a733_ranges_disjoint(v,n,p->pins,sizeof(*p->pins)) &&
+        a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) &&
         p->ops.outside(p->cookie,v,n)==1;
 }
 int a733_pmic_consumer_init(struct a733_pmic_consumer *c,const struct a733_pmic_consumer_config *v)
 {
     if(!c || c->self || !v || !v->provider || !v->owner ||
         (v->rail!=A733_RAIL_DCDC2 && v->rail!=A733_RAIL_DCDC4) ||
-        !separate(c,sizeof(*c),v,sizeof(*v)))return 0;
+        !a733_ranges_disjoint(c,sizeof(*c),v,sizeof(*v)))return 0;
     struct a733_pmic_consumer_config copy=*v;struct a733_pmic *p=copy.provider;
     if(!a733_pmic_consumer_storage(p,c,sizeof(*c)))return 0;
     struct a733_pmic_lifetime actual;

@@ -2,6 +2,7 @@
 #include "boot.h"
 #include "cached.h"
 #include "result.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 #ifdef SUNSTONE_NPU_SINGLE_CORE
@@ -22,7 +23,7 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
     const struct npu_session *s=(const void *)NPU_SESSION_ADDRESS;
     uint64_t el;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
     if(el!=12)return 0;
-    uint8_t digest[32];
+    uint8_t digest[32];uint64_t window;
     if(!c || c->magic!=NPU_CONTRACT_MAGIC || c->version!=3 || c->bytes!=sizeof(*c) ||
        !c->epoch || !c->generation || c->inverse_generation!=~c->generation || !c->lease ||
        memcmp(c->build_id,a733_smp_build_id,32) || !c->reserved[0] || c->reserved[1])return 0;
@@ -30,9 +31,9 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
     if(memcmp(digest,&c->reserved[2],32) || !npu_session_valid(s) ||
        memcmp(s->image,a733_smp_build_id,32) || c->epoch!=s->epoch || c->generation!=s->generation ||
        c->lease!=s->lease || c->reserved[0]!=s->supervisor || c->armed_at>now ||
-       c->armed_at>UINT64_MAX-NPU_WINDOW_TICKS ||
+       !a733_deadline_after(c->armed_at,NPU_WINDOW_TICKS,&window) ||
        c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ || now>=c->startup_deadline ||
-       c->diagnostic_deadline!=c->armed_at+NPU_WINDOW_TICKS || c->expires_at!=c->diagnostic_deadline)return 0;
+       c->diagnostic_deadline!=window || c->expires_at!=c->diagnostic_deadline)return 0;
     if(c->watchdog_mode || c->watchdog_configuration || c->watchdog_output ||
        c->fel_flag || c->redirect_flag || c->redirect_entry || c->alternate_flag)return 0;
     /* EL3 boot publishes this receipt before the existing cache-adoption and

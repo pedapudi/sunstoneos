@@ -37,7 +37,7 @@ struct model {
 };
 static struct model model;
 
-static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_translation *out)
+static int translate(void *cookie, uintptr_t cpu, int write, struct aarch64_translation *out)
 {
     struct model *d = cookie;
     ++d->translations;
@@ -52,7 +52,7 @@ static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_tra
             writable = maps[i].role == A733_NPU_BUFFER_WRITE; found = 1;
         }
     if (!found || (write && !writable)) return 0;
-    *out = (struct a733_npu_translation){pa, 0xff, 3};
+    *out = (struct aarch64_translation){pa, 0xff, 3};
     if (cpu == d->bad_cpu) {
         if (d->bad_kind == 1 || (d->bad_kind == 2 && write)) return 0;
         if (d->bad_kind == 3) out->physical += 4096;
@@ -61,23 +61,23 @@ static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_tra
     }
     return 1;
 }
-static int cache(void *cookie, enum a733_npu_cache_op op, uintptr_t cpu, size_t bytes)
+static int cache(void *cookie, enum aarch64_cache_op op, uintptr_t cpu, size_t bytes)
 {
     struct model *d = cookie;
     assert(!(cpu & 63) && !(bytes & 63) && bytes);
     if (++d->cache_calls == d->cache_failure) return 0;
     d->ordered = 0;
     if (cpu == (uintptr_t)arena) {
-        assert(op == A733_NPU_CACHE_CLEAN && bytes <= sizeof(device_arena));
+        assert(op == AARCH64_CACHE_CLEAN && bytes <= sizeof(device_arena));
         d->cleaned |= 16; memcpy(device_arena, arena, bytes); return 1;
     }
     for (unsigned i = 0; i < 4; ++i) {
         if (cpu != maps[i].cpu) continue;
         assert(bytes == maps[i].bytes); d->cleaned |= 1u << i;
         if (maps[i].role == A733_NPU_BUFFER_WRITE)
-            assert(op == A733_NPU_CACHE_CLEAN_INVALIDATE || op == A733_NPU_CACHE_INVALIDATE);
-        else assert(op == A733_NPU_CACHE_CLEAN);
-        if (op == A733_NPU_CACHE_INVALIDATE) memcpy((void *)cpu, device_copies[i], bytes);
+            assert(op == AARCH64_CACHE_CLEAN_INVALIDATE || op == AARCH64_CACHE_INVALIDATE);
+        else assert(op == AARCH64_CACHE_CLEAN);
+        if (op == AARCH64_CACHE_INVALIDATE) memcpy((void *)cpu, device_copies[i], bytes);
         else memcpy(device_copies[i], (void *)cpu, bytes);
         return 1;
     }

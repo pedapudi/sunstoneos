@@ -1,4 +1,5 @@
 #include "a733_gpu_platform_native.h"
+#include "a733_mmio.h"
 #include "boot.h"
 
 int a733_gpu_platform_native_now(void *context, uint64_t *out)
@@ -17,9 +18,7 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
     (void)context;
     uintptr_t addr = address(bank, off);
     if (!addr || !out) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *out = mmio_read(addr);
-    __asm__ volatile("dsb sy" ::: "memory");
+    *out = a733_mmio_read32_dsb_sy_both(addr);
     return 1;
 }
 static int enter(struct a733_gpu_platform_native *n, uint64_t deadline)
@@ -40,9 +39,7 @@ static int write_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off,
         (off == 0x5174 && value == 0x1f1f) || (off == 0x5c00 && value == 0x08080808) ||
         (off == 0x5c04 && value == 0x0808) || (off == 0x5c10 && value == 8))) return 0;
     if (!enter(n, deadline)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    mmio_write(address(bank, off), value);
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(address(bank, off), value);
     n->locks.register_leave(n->locks.context);
     return 1;
 }
@@ -59,8 +56,7 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
     if (!allowed || !enter(n, deadline)) return 0;
     uint32_t old;
     (void)read_reg(n, bank, off, &old);
-    mmio_write(address(bank, off), (old & ~clear) | set);
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_after(address(bank, off), (old & ~clear) | set);
     n->locks.register_leave(n->locks.context);
     return 1;
 }

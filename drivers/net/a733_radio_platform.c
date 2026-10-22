@@ -1,5 +1,6 @@
 #include "a733_clock_reference.h"
 #include "a733_radio_platform.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define SDC UINT32_C(0x04021000)
 #define GIC UINT32_C(0x03400000)
@@ -14,17 +15,12 @@ static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0},{24,0,800,600,480,0,0,0},{24,600,0,480,400,0,0,0}
 };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int output_disjoint(const struct a733_radio_platform *p,const void *out,size_t bytes)
 {
-    return separate(p,sizeof(*p),out,bytes)&&separate(p->clocks,sizeof(*p->clocks),out,bytes)&&
-        separate(p->pins,sizeof(*p->pins),out,bytes)&&separate(p->rails,sizeof(*p->rails),out,bytes)&&
-        separate(p->pmic,sizeof(*p->pmic),out,bytes)&&
-        separate(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),out,bytes);
+    return a733_ranges_disjoint(p,sizeof(*p),out,bytes)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),out,bytes)&&
+        a733_ranges_disjoint(p->pins,sizeof(*p->pins),out,bytes)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),out,bytes)&&
+        a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),out,bytes)&&
+        a733_ranges_disjoint(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),out,bytes);
 }
 static a733_rail_mask_t rail_scope(enum a733_radio_rail rail)
 {
@@ -73,8 +69,7 @@ static enum a733_radio_platform_result fail(struct a733_radio_platform *p)
 static int observe(struct a733_radio_platform *p)
 {
     uint64_t now;
-    if(p->ops.now_us(p->cookie,&now)!=1||now<p->last_now||now>=p->config.lifetime_deadline_us)return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1&&a733_deadline_admit(now,&p->last_now,p->config.lifetime_deadline_us);
 }
 static int timely(struct a733_radio_platform *p)
 {return observe(p)&&p->last_now<p->deadline;}
@@ -255,10 +250,10 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
         !o->retain||!o->read||!o->write||!o->barrier||!clocks||!clocks->initialized||!pins||!pins->initialized||!rails||rails->self!=rails||rails->binding.clocks!=clocks||!pmic||
         !a733_radio_platform_scopes(c,&shared)||!c->card.supported_ocr||
         (c->card.supported_ocr&~UINT32_C(0x00300000))||!c->card.command_timeout||!c->card.ready_poll_interval||
-        !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||
-        !separate(p,sizeof(*p),clocks,sizeof(*clocks))||!separate(p,sizeof(*p),pins,sizeof(*pins))||
-        !separate(p,sizeof(*p),rails,sizeof(*rails))||
-        !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
+        !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
+        !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
+        !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
+        !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
     for(unsigned i=0;i<8;++i) {
         unsigned bank=i<6?A733_PIN_G:A733_PIN_M,pin=i<6?i:i-6;
         if((c->expected[i].function!=0&&c->expected[i].function!=15)||
@@ -267,7 +262,7 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
             !a733_pin_config_valid_banked(bank,pin,c->desired[i]))return 0;
     }
     struct a733_pmic_lifetime identity;
-    if(!separate(p,sizeof(*p),pmic,sizeof(*pmic))||pmic->clocks!=clocks||pmic->rails!=rails||
+    if(!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||pmic->clocks!=clocks||pmic->rails!=rails||
         pmic->pins!=pins||a733_pmic_identity(pmic,&identity)!=A733_PMIC_READY)return 0;
     p->config=*c;p->ops=*o;p->cookie=cookie;p->clocks=clocks;p->pins=pins;p->rails=rails;p->pmic=pmic;
     p->pmic_lifetime=identity;
@@ -288,7 +283,7 @@ int a733_radio_platform_four_bit(struct a733_radio_platform *p)
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {
     if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->bluetooth.authority||
-        !b||!b->authority||!separate(p,sizeof(*p),b,sizeof(*b)))return 0;
+        !b||!b->authority||!a733_ranges_disjoint(p,sizeof(*p),b,sizeof(*b)))return 0;
     for(unsigned i=0;i<2;++i)
         if((b->expected[i].function!=0&&b->expected[i].function!=15)||
             b->desired[i].function!=(i?0u:1u)||
@@ -478,7 +473,7 @@ int a733_radio_platform_borrow(struct a733_radio_platform *p,uint64_t owner,
     struct a733_radio_borrow *out,struct sdio_card **card)
 {
     if(!p||!p->initialized||!owner||!output_disjoint(p,out,sizeof(*out))||
-        !output_disjoint(p,card,sizeof(*card))||!separate(out,sizeof(*out),card,sizeof(*card)))return 0;
+        !output_disjoint(p,card,sizeof(*card))||!a733_ranges_disjoint(out,sizeof(*out),card,sizeof(*card)))return 0;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return 0;
     int ok=!p->fault&&p->ops.current(p->cookie)==1&&p->stage==READY&&!p->borrower.generation&&
@@ -490,7 +485,7 @@ int a733_radio_platform_borrow(struct a733_radio_platform *p,uint64_t owner,
 enum a733_radio_platform_result a733_radio_platform_live(struct a733_radio_platform *p,
     const struct a733_radio_borrow *token,uint64_t deadline)
 {
-    if(!p||!p->initialized||!deadline||!separate(p,sizeof(*p),token,sizeof(*token)))return A733_RADIO_INVALID;
+    if(!p||!p->initialized||!deadline||!a733_ranges_disjoint(p,sizeof(*p),token,sizeof(*token)))return A733_RADIO_INVALID;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
     if(p->fault)return finish(p,fail(p));
@@ -520,7 +515,7 @@ enum a733_radio_platform_result a733_radio_platform_wake(struct a733_radio_platf
     const struct a733_radio_borrow *token,uint64_t deadline,unsigned *level)
 {
     if(!p||!p->initialized||!output_disjoint(p,level,sizeof(*level))||
-        !separate(token,sizeof(*token),level,sizeof(*level)))return A733_RADIO_INVALID;
+        !a733_ranges_disjoint(token,sizeof(*token),level,sizeof(*level)))return A733_RADIO_INVALID;
     enum a733_radio_platform_result live=a733_radio_platform_live(p,token,deadline);
     if(live!=A733_RADIO_READY)return live;
     unsigned expected=0;
@@ -536,7 +531,7 @@ enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_r
     const struct a733_radio_borrow *token,uint64_t deadline,unsigned *level)
 {
     if(!p||!p->initialized||!p->bluetooth.authority||!output_disjoint(p,level,sizeof(*level))||
-        !separate(token,sizeof(*token),level,sizeof(*level)))return A733_RADIO_INVALID;
+        !a733_ranges_disjoint(token,sizeof(*token),level,sizeof(*level)))return A733_RADIO_INVALID;
     enum a733_radio_platform_result live=a733_radio_platform_live(p,token,deadline);
     if(live!=A733_RADIO_READY)return live;
     unsigned expected=0;

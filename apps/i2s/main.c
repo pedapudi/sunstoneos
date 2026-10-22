@@ -1,7 +1,7 @@
 #include "application.h"
 #include "snapshot.h"
 #include "a733_i2s_platform_native.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "cached.h"
 #include "platform.h"
 struct i2s_application app;
@@ -33,7 +33,11 @@ static int enter(void *v,uint64_t d)
 static void leave(void *v)
 {configASSERT(v==&app);a733_platform_lock_leave(&app.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
 static int mapped(uintptr_t a,int write)
-{struct aarch64_translation t;return aarch64_device_translate(a,write,&t)&&t.physical==a&&t.attributes==0;}
+{
+ static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1},
+  writable={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+ return a733_mapping_check(aarch64_device_translate,a,a,write?&writable:&readable);
+}
 static int read_reg(void *v,uintptr_t a,uint32_t *out)
 {return v==&app&&worker()&&mapped(a,0)&&a733_audio_native_read(NULL,a,out)==1;}
 static int write_reg(void *v,uintptr_t a,uint32_t value)

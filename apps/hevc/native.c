@@ -1,6 +1,8 @@
 #include "hevc.h"
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include "boot.h"
 #include <string.h>
 struct hevc_application hevc;
@@ -18,11 +20,12 @@ static int hevc_leave(void *v)
 {if(v!=&hevc)return -1;a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return 1;}
 static int hevc_device(uintptr_t address)
 {
-    struct aarch64_translation t;
-    return aarch64_device_translate(address,1,&t)&&t.physical==address&&t.attributes==0&&t.shareability==2;
+    /* Device identity mapping; the write translation must be outer shareable. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+    return a733_mapping_check(aarch64_device_translate,address,address,&rule);
 }
 static int hevc_load(uintptr_t address,uint32_t *value)
-{if(!hevc_device(address)||!board_live(NULL))return -1;__asm__ volatile("dsb sy":::"memory");*value=*(volatile uint32_t *)address;__asm__ volatile("dsb sy":::"memory");return board_live(NULL)?1:-1;}
+{if(!hevc_device(address)||!board_live(NULL))return -1;*value=a733_mmio_read32_dsb_sy_both(address);return board_live(NULL)?1:-1;}
 static int hevc_iommu_read(void *v,uint64_t token,uint32_t off,uint32_t *value,uint64_t d)
 {return v==&hevc&&token==hevc.session.authority&&d==hevc_deadline()&&off<0x20000&&!(off&3)?hevc_load(A733_IOMMU_BASE+off,value):-1;}
 static int hevc_iommu_write(void *v,uint64_t token,uint32_t off,uint32_t value,uint64_t d)
@@ -30,8 +33,7 @@ static int hevc_iommu_write(void *v,uint64_t token,uint32_t off,uint32_t value,u
     uint32_t ignored;
     if(hevc_iommu_read(v,token,off,&ignored,d)!=1)return -1;
     if(hevc_enter(v,d)!=1)return -1;
-    *(volatile uint32_t *)(uintptr_t)(A733_IOMMU_BASE+off)=value;
-    __asm__ volatile("dsb sy":::"memory");
+    a733_mmio_write32_dsb_sy_after(A733_IOMMU_BASE+off,value);
     if(!board_live(NULL))return -1;return hevc_leave(v);
 }
 static int hevc_publish(void *v,uint64_t token,const void *p,size_t n,uint64_t d)

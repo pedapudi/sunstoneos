@@ -1,5 +1,6 @@
 #include "application.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "boot.h"
 #include <string.h>
 struct bluetooth_application bluetooth;
@@ -31,17 +32,20 @@ int board_application_pins(struct a733_pin_handoff *pins)
 {
     const struct bluetooth_profile *p=bluetooth_admitted_profile();
     const struct a733_board_session *s=&board.session;
+    /* Write-back identity pages, inner shareable; the read translation is
+     * checked. */
+    static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!pins||!bluetooth_boot_profile(s,p)||pins->authorized[A733_PIN_G]||pins->authorized[A733_PIN_M])return 0;
-    for(uintptr_t page=BLUETOOTH_PROFILE_ADDRESS;page<0x43100000;page+=4096){
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
+    if(!a733_mapping_check_stride(aarch64_device_translate,BLUETOOTH_PROFILE_ADDRESS,BLUETOOTH_PROFILE_ADDRESS,
+        UINT64_C(0x43100000)-BLUETOOTH_PROFILE_ADDRESS,4096,&wb))return 0;
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
-    if(p->version==3)for(uintptr_t page=BLUETOOTH_MODEL_BASE;page<UINT64_C(0x47000000);page+=4096){
-        if(page>=UINT64_C(0x45000000)&&page<UINT64_C(0x46000000))continue;
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
-    }
+    /* The model pages skip [0x45000000, 0x46000000). */
+    _Static_assert(BLUETOOTH_MODEL_BASE<UINT64_C(0x45000000)&&!(BLUETOOTH_MODEL_BASE&4095),"model pages start page-aligned below the gap");
+    if(p->version==3&&
+       (!a733_mapping_check_stride(aarch64_device_translate,BLUETOOTH_MODEL_BASE,BLUETOOTH_MODEL_BASE,
+            UINT64_C(0x45000000)-BLUETOOTH_MODEL_BASE,4096,&wb)||
+        !a733_mapping_check_stride(aarch64_device_translate,UINT64_C(0x46000000),UINT64_C(0x46000000),
+            UINT64_C(0x01000000),4096,&wb)))return 0;
 #endif
     pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;
     pins->latch[1]=p->pm_latch;return 1;

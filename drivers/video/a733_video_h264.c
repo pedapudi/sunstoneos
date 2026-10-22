@@ -5,6 +5,7 @@
  * cedrus_h264.c (Jens Kuske/Bootlin), and checked against pinned A733 instructions.
  * Source/license identities are recorded in apps/h264/sources.json. */
 #include "a733_video_h264.h"
+#include "a733_range.h"
 #include "a733_h264_high.h"
 #include <string.h>
 /* Syntax adaptation from H6-CedarC h264_nalu.c, revision recorded in
@@ -216,8 +217,8 @@ static int fail(struct a733_h264_run *r){r->state=A733_H264_FAULT;return -1;}
 static int live(struct a733_h264_run *r)
 {
     uint64_t now;
-    if(r->ops.now_us(r->context,&now)!=1||now<r->last_now||now>=r->deadline)return fail(r);
-    r->last_now=now;return 1;
+    if(r->ops.now_us(r->context,&now)!=1||!a733_deadline_admit(now,&r->last_now,r->deadline))return fail(r);
+    return 1;
 }
 static int read_reg(struct a733_h264_run *r,uint32_t off,uint32_t *out)
 {return live(r)==1&&r->ops.read(r->context,r->token,off,out,r->deadline)==1&&live(r)==1?1:fail(r);}

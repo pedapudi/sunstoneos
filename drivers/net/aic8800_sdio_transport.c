@@ -7,6 +7,7 @@
 #include "aic8800_data.h"
 #include "aic8800_security.h"
 #include "aic8800_supplicant.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
@@ -18,26 +19,23 @@ enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
 /* The configured command timeout covers this many receive bytes; a larger
  * aggregate read gets one timeout per started unit. */
 #define RX_TIMEOUT_BYTES 4096u
-static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an;
-}
 static int independent(const struct aic8800_sdio_transport *t, const void *p, size_t n)
 {
-    if (!span(p, n) || overlap(t, sizeof(*t), p, n) ||
-        overlap(t->card, sizeof(*t->card), p, n) ||
-        overlap(t->card->host, sizeof(*t->card->host), p, n)) return 0;
-    if (t->receive_owner && overlap(t->receive_owner,t->receive_owner_bytes,p,n)) return 0;
-    if (t->security && overlap(t->security, sizeof(*t->security), p, n)) return 0;
-    if (t->supplicant && overlap(t->supplicant, sizeof(*t->supplicant), p, n)) return 0;
-    if (t->data && overlap(t->data, sizeof(*t->data), p, n)) return 0;
-    if (t->wifi && overlap(t->wifi, sizeof(*t->wifi), p, n)) return 0;
-    if (t->runtime && overlap(t->runtime, sizeof(*t->runtime), p, n)) return 0;
+    if (!a733_span_excl(p, n) ||
+        a733_extents_overlap_prechecked((uintptr_t)t, sizeof(*t), (uintptr_t)p, n) ||
+        a733_extents_overlap_prechecked((uintptr_t)t->card, sizeof(*t->card), (uintptr_t)p, n) ||
+        a733_extents_overlap_prechecked((uintptr_t)t->card->host, sizeof(*t->card->host), (uintptr_t)p, n)) return 0;
+    if (t->receive_owner && a733_extents_overlap_prechecked((uintptr_t)t->receive_owner,t->receive_owner_bytes,(uintptr_t)p,n)) return 0;
+    if (t->security && a733_extents_overlap_prechecked((uintptr_t)t->security, sizeof(*t->security), (uintptr_t)p, n)) return 0;
+    if (t->supplicant && a733_extents_overlap_prechecked((uintptr_t)t->supplicant, sizeof(*t->supplicant), (uintptr_t)p, n)) return 0;
+    if (t->data && a733_extents_overlap_prechecked((uintptr_t)t->data, sizeof(*t->data), (uintptr_t)p, n)) return 0;
+    if (t->wifi && a733_extents_overlap_prechecked((uintptr_t)t->wifi, sizeof(*t->wifi), (uintptr_t)p, n)) return 0;
+    if (t->runtime && a733_extents_overlap_prechecked((uintptr_t)t->runtime, sizeof(*t->runtime), (uintptr_t)p, n)) return 0;
     if (t->firmware) {
-        if (overlap(t->firmware, sizeof(*t->firmware), p, n)) return 0;
+        if (a733_extents_overlap_prechecked((uintptr_t)t->firmware, sizeof(*t->firmware), (uintptr_t)p, n)) return 0;
         for (unsigned i = 0; i < AIC8800_FIRMWARE_BLOBS; ++i)
-            if (overlap(t->firmware->config.blobs[i].data, t->firmware->config.blobs[i].bytes, p, n)) return 0;
+            if (a733_extents_overlap_prechecked((uintptr_t)t->firmware->config.blobs[i].data,
+                                                t->firmware->config.blobs[i].bytes, (uintptr_t)p, n)) return 0;
     }
     return 1;
 }
@@ -93,18 +91,16 @@ static int observe(struct aic8800_sdio_transport *t, uint64_t *now)
 #endif
     return 1;
 }
-static int later(uint64_t now, uint64_t delta, uint64_t *out)
-{
-    if (delta > UINT64_MAX - now) return 0;
-    *out = now + delta; return 1;
-}
 int aic8800_transport_init(struct aic8800_sdio_transport *t, struct sdio_card *c,
                           const struct aic8800_transport_config *cfg)
 {
-    if (!span(t, sizeof(*t)) || !span(c, sizeof(*c)) || !span(cfg, sizeof(*cfg)) ||
-        !span(c->host, sizeof(*c->host)) || overlap(t, sizeof(*t), c, sizeof(*c)) ||
-        overlap(t, sizeof(*t), cfg, sizeof(*cfg)) || overlap(t, sizeof(*t), c->host, sizeof(*c->host)) ||
-        overlap(c, sizeof(*c), cfg, sizeof(*cfg)) || overlap(c->host, sizeof(*c->host), cfg, sizeof(*cfg)) ||
+    if (!a733_span_excl(t, sizeof(*t)) || !a733_span_excl(c, sizeof(*c)) || !a733_span_excl(cfg, sizeof(*cfg)) ||
+        !a733_span_excl(c->host, sizeof(*c->host)) ||
+        a733_extents_overlap_prechecked((uintptr_t)t, sizeof(*t), (uintptr_t)c, sizeof(*c)) ||
+        a733_extents_overlap_prechecked((uintptr_t)t, sizeof(*t), (uintptr_t)cfg, sizeof(*cfg)) ||
+        a733_extents_overlap_prechecked((uintptr_t)t, sizeof(*t), (uintptr_t)c->host, sizeof(*c->host)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)cfg, sizeof(*cfg)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c->host, sizeof(*c->host), (uintptr_t)cfg, sizeof(*cfg)) ||
         t->initialized || !c->initialized || !c->host->initialized || c->state != SDIO_CARD_READY ||
         c->host->state != SUNXI_SDIO_READY || c->host->entered || c->entered ||
         cfg->variant != AIC8800_TRANSPORT_D80_BOOTSTRAP ||
@@ -293,7 +289,7 @@ int aic8800_transport_start_security(struct aic8800_sdio_transport *t,struct aic
 {
     if(!runtime_idle(t)||!t->data||t->data->state!=AIC8800_DATA_IDLE||t->security||t->supplicant||
         !independent(t,sec,sizeof(*sec))||!independent(t,s,sizeof(*s))||
-        overlap(sec,sizeof(*sec),s,sizeof(*s))||!sec->initialized||sec->owner||!s->initialized||s->owner||
+        a733_extents_overlap_prechecked((uintptr_t)sec,sizeof(*sec),(uintptr_t)s,sizeof(*s))||!sec->initialized||sec->owner||!s->initialized||s->owner||
         deadline>t->deadline||deadline<=t->card->host->last_now)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
     if(ok) {
@@ -335,7 +331,7 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if (timeout > UINT64_MAX / units) return 0;
         timeout *= units;
     }
-    if (!later(now, timeout, &deadline)) return 0;
+    if (!a733_deadline_after(now, timeout, &deadline)) return 0;
     if (deadline > t->deadline) deadline = t->deadline;
     if (t->enable_deadline && deadline > t->enable_deadline) deadline = t->enable_deadline;
     int ok;
@@ -419,7 +415,7 @@ static void advanced(struct aic8800_sdio_transport *t)
 { if (t->progress != UINT64_MAX) ++t->progress; }
 static void delay(struct aic8800_sdio_transport *t, uint64_t now, uint64_t ticks)
 {
-    if (!later(now, ticks, &t->wait_until)) fail(t, AIC8800_TRANSPORT_TIMEOUT);
+    if (!a733_deadline_after(now, ticks, &t->wait_until)) fail(t, AIC8800_TRANSPORT_TIMEOUT);
 }
 static void rx_size(struct aic8800_sdio_transport *t, size_t bytes)
 {
@@ -439,8 +435,8 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
     case BLOCK_HI_VERIFY: if (value != 2) { fail(t, AIC8800_TRANSPORT_SETUP_ERROR); break; } ++t->phase; break;
     case ENABLE_READ: t->prior_enable = value; ++t->phase; break;
     case ENABLE_WRITE:
-        if (!later(now, t->config.ticks_per_ms * t->card->functions[1].enable_timeout_ms,
-                   &t->enable_deadline)) { fail(t, AIC8800_TRANSPORT_TIMEOUT); break; }
+        if (!a733_deadline_after(now, t->config.ticks_per_ms * t->card->functions[1].enable_timeout_ms,
+                                 &t->enable_deadline)) { fail(t, AIC8800_TRANSPORT_TIMEOUT); break; }
         ++t->phase; break;
     case ENABLE_READY:
         if (value & 2) { t->enable_deadline = 0; ++t->phase; }
@@ -664,7 +660,7 @@ int aic8800_transport_receive_view(const struct aic8800_sdio_transport *t,const 
     if(!t||!owner||t->receive_owner!=owner||t->entered||t->pending||t->held||
         t->state!=AIC8800_TRANSPORT_RUNTIME||t->phase!=PARSE||t->cursor>=t->rx_bytes||
         !independent(t,record,sizeof(*record))||!independent(t,available,sizeof(*available))||
-        overlap(record,sizeof(*record),available,sizeof(*available)))return 0;
+        a733_extents_overlap_prechecked((uintptr_t)record,sizeof(*record),(uintptr_t)available,sizeof(*available)))return 0;
     *record=t->rx+t->cursor;*available=t->rx_bytes-t->cursor;return 1;
 }
 int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void *owner,

@@ -57,14 +57,14 @@ int a733_camera_dma_init_format(struct a733_camera_dma *s,
     const struct a733_camera_format *f)
 {
     if(!s || !o || !c || s->initialized || s->state!=A733_CAM_DMA_NEW ||
-       !a733_camera_format_valid(f) || a733_camera_overlap(s,sizeof(*s),f,sizeof(*f)) ||
+       !a733_camera_format_valid(f) || a733_ranges_overlap_or_wrap(s,sizeof(*s),f,sizeof(*f)) ||
        c->block>5 || !c->frame_id || !plane_valid(&c->y,a733_camera_plane_bytes(f)) ||
        !plane_valid(&c->uv,a733_camera_plane_bytes(f)) ||
        (c->y.bus_address<c->uv.bus_address+c->uv.mapped_bytes &&
         c->uv.bus_address<c->y.bus_address+c->y.mapped_bytes) ||
-       a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
-       a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
-       (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),o,sizeof(*o)) ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),c,sizeof(*c)) ||
+       (ctx && a733_ranges_overlap_or_wrap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
        !o->read || !o->write || !o->start_one || !o->producer_stop || !o->drain ||
        !o->sync_cpu || !o->release)return -1;
     *s=(struct a733_camera_dma){.ops=*o,.config=*c,.context=ctx,.format=*f,.initialized=1};

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define TWI UINT32_C(0x07083000)
 #define BIT(n) (UINT32_C(1)<<(n))
 #define POLL_PHASES 8u /* Bus phases one poll may advance. */
@@ -46,16 +47,11 @@ int a733_pmic_decode(enum a733_rail rail,uint8_t enable,uint8_t selector,struct 
     *out=(struct a733_pmic_snapshot){.rail=rail,.enable=enable,.selector=selector,
         .enabled=!!(enable&BIT(p.bit)),.decoded=!!mv,.programmed_uv=mv*1000};return 1;
 }
-static int separate(const void *p,size_t n,const void *q,size_t k)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    return p && q && n<=UINTPTR_MAX-a && k<=UINTPTR_MAX-b && (a+n<=b || b+k<=a);
-}
 static int outside(struct a733_pmic *p,const void *v,size_t n)
 {
-    return separate(v,n,p,sizeof(*p)) && separate(v,n,p->clocks,sizeof(*p->clocks)) &&
-        separate(v,n,p->rails,sizeof(*p->rails)) && separate(v,n,p->pins,sizeof(*p->pins)) &&
-        separate(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->ops.outside(p->cookie,v,n)==1;
+    return a733_ranges_disjoint(v,n,p,sizeof(*p)) && a733_ranges_disjoint(v,n,p->clocks,sizeof(*p->clocks)) &&
+        a733_ranges_disjoint(v,n,p->rails,sizeof(*p->rails)) && a733_ranges_disjoint(v,n,p->pins,sizeof(*p->pins)) &&
+        a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->ops.outside(p->cookie,v,n)==1;
 }
 static int enter(struct a733_pmic *p)
 {
@@ -75,8 +71,8 @@ static enum a733_pmic_status fault(struct a733_pmic *p)
 static int time_now(struct a733_pmic *p)
 {
     uint64_t now;
-    if(p->ops.now(p->cookie,&now)!=1 || now<p->last_now){fault(p);return 0;}
-    p->last_now=now;return 1;
+    if(p->ops.now(p->cookie,&now)!=1 || !a733_monotonic_advance(now,&p->last_now)){fault(p);return 0;}
+    return 1;
 }
 static int timely(struct a733_pmic *p)
 {return time_now(p) && p->last_now<p->deadline;}
@@ -149,10 +145,10 @@ int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
        rails->self!=rails || rails->binding.clocks!=clocks || !rails->binding.gpu || !pins->initialized ||
        !c->owner || !c->identity || !c->startup_deadline || !o->now || !o->current || !o->enter ||
        !o->leave || !o->retain || !o->read || !o->write || !o->outside ||
-       !separate(p,sizeof(*p),c,sizeof(*c)) || !separate(p,sizeof(*p),o,sizeof(*o)) ||
-       !separate(p,sizeof(*p),clocks,sizeof(*clocks)) || !separate(p,sizeof(*p),rails,sizeof(*rails)) ||
-       !separate(p,sizeof(*p),pins,sizeof(*pins)) ||
-       !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c)) || !a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks)) || !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)) ||
        o->outside(cookie,p,sizeof(*p))!=1)return 0;
     for(unsigned i=0;i<2;++i)if(c->pins[i].function!=2 ||
         !a733_pin_config_valid_banked(A733_PIN_L,i,c->pins[i]))return 0;
@@ -195,7 +191,7 @@ static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,
     if(!owner || parent.owner!=owner || !profile(which,&f) ||
        !((write ? parent.exclusive : parent.shared|parent.exclusive)&A733_RAIL_BIT(which)) ||
        (write && (!writable(which,target) || expected>f.mask)) || !outside(p,rail,sizeof(*rail)) ||
-       !outside(p,out,sizeof(*out)) || !separate(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
+       !outside(p,out,sizeof(*out)) || !a733_ranges_disjoint(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
     if(p->stage!=S_READY)return leave(p,A733_PMIC_PENDING);
@@ -232,7 +228,7 @@ enum a733_pmic_status a733_pmic_result(struct a733_pmic *p,const struct a733_pmi
     struct a733_pmic_snapshot *out)
 {
     if(!p || p->self!=p || !outside(p,r,sizeof(*r)) || !outside(p,out,sizeof(*out)) ||
-       !separate(r,sizeof(*r),out,sizeof(*out)))return A733_PMIC_INVALID;
+       !a733_ranges_disjoint(r,sizeof(*r),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     struct a733_pmic_slot *s=request(p,r);if(!s)return leave(p,A733_PMIC_INVALID);
     if(p->failed)return leave(p,A733_PMIC_RETAINED);

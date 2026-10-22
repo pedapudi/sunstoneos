@@ -103,10 +103,10 @@ int a733_csi_init_format(struct a733_csi_receiver *s,const struct a733_csi_ops *
         !a733_camera_format_valid(format) ||
         cfg->port>1 || cfg->parser!=cfg->port || !cfg->settle ||
         !cfg->deskew || cfg->deskew>31 || cfg->top_hz!=324000000 ||
-        a733_camera_overlap(s,sizeof(*s),ops,sizeof(*ops)) ||
-        a733_camera_overlap(s,sizeof(*s),cfg,sizeof(*cfg)) ||
-        a733_camera_overlap(s,sizeof(*s),format,sizeof(*format)) ||
-        (context && a733_camera_overlap(s,sizeof(*s),context,1)) || !ops->now_us ||
+        a733_ranges_overlap_or_wrap(s,sizeof(*s),ops,sizeof(*ops)) ||
+        a733_ranges_overlap_or_wrap(s,sizeof(*s),cfg,sizeof(*cfg)) ||
+        a733_ranges_overlap_or_wrap(s,sizeof(*s),format,sizeof(*format)) ||
+        (context && a733_ranges_overlap_or_wrap(s,sizeof(*s),context,1)) || !ops->now_us ||
         !ops->admit || !ops->read || !ops->write || !ops->producer_stop ||
         !ops->drain || !ops->release) return -1;
     *s=(struct a733_csi_receiver){.ops=*ops,.config=*cfg,.context=context,

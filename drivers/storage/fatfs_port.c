@@ -1,13 +1,12 @@
 /* Read-only FatFs media interface. Source anchors: docs/filesystem.md. */
 #include "fatfs_port.h"
 #include "diskio.h"
+#include "a733_range.h"
 #include <string.h>
 
 /* FatFs drive 0. Bound once; the owner task is the only caller. */
 static struct fatfs_port *bound;
 
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{ return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an; }
 static struct fatfs_port *drive(BYTE pdrv)
 { return pdrv == 0 && bound && bound->state == FATFS_PORT_READY ? bound : 0; }
 
@@ -54,10 +53,12 @@ FRESULT fatfs_port_mount(struct fatfs_port *p, uint64_t deadline_us)
 FRESULT fatfs_port_load(struct fatfs_port *p, const char *path, void *buffer,
                         size_t capacity, size_t *bytes, uint64_t deadline_us)
 {
-    if (!p || p != bound || !path || !bytes || overlap(bytes, sizeof(*bytes), p, sizeof(*p)) ||
-        (capacity && (!buffer || capacity > UINTPTR_MAX - (uintptr_t)buffer ||
-                      overlap(buffer, capacity, p, sizeof(*p)) ||
-                      overlap(buffer, capacity, bytes, sizeof(*bytes)))))
+    if (!p || p != bound || !path || !bytes ||
+        a733_extents_overlap_prechecked((uintptr_t)bytes, sizeof(*bytes), (uintptr_t)p, sizeof(*p)) ||
+        (capacity && (!a733_span_excl(buffer, capacity) ||
+                      a733_extents_overlap_prechecked((uintptr_t)buffer, capacity, (uintptr_t)p, sizeof(*p)) ||
+                      a733_extents_overlap_prechecked((uintptr_t)buffer, capacity,
+                                                      (uintptr_t)bytes, sizeof(*bytes)))))
         return FR_INVALID_PARAMETER;
     if (p->state != FATFS_PORT_READY) return FR_NOT_READY;
     p->deadline_us = deadline_us;

@@ -1,6 +1,6 @@
 #include "monitor.h"
 #include "boot.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct monitor_application monitor;
@@ -60,11 +60,12 @@ static int thermal_admit(void *v,const struct a733_thermal_config *c,const struc
 }
 static int native_admit(void *v,const struct a733_adc_config *c,const struct a733_clock_token *t)
 {(void)v;(void)c;(void)t;return 0;} /* Used only for actual task/MMIO binding. */
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mappings(void)
 {
  const uintptr_t pages[]={0x02002000,0x02003000,0x02521000,0x02522000,0x03006000,0x03400000,0x07090000};
- for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i){struct aarch64_translation t;
-  if(!aarch64_device_translate(pages[i],1,&t)||t.physical!=pages[i]||t.attributes||t.shareability!=2)return 0;}
+ for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)
+  if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&device_rule))return 0;
  return 1;
 }
 int monitor_construct(void)

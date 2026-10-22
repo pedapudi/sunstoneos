@@ -2,6 +2,9 @@
 #include "a733_clock_reference.h"
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "boot.h"
 #include <string.h>
 struct deinterlace_application deinterlace;
@@ -11,11 +14,14 @@ static int now(void *v,uint64_t *out)
 {return v==&deinterlace&&board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,out)==1;}
 static int live(void)
 {
-    uint64_t t;if(now(&deinterlace,&t)!=1||t<deinterlace.last_now||t>=deadline())return 0;
-    deinterlace.last_now=t;return 1;
+    uint64_t t;return now(&deinterlace,&t)==1&&a733_deadline_admit(t,&deinterlace.last_now,deadline());
 }
 static int device(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&!t.attributes&&t.shareability==2;}
+{
+    /* Device identity mapping; the write translation must be outer shareable. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+}
 static int di_address(uintptr_t address,unsigned writing,uint32_t value)
 {
  if(address<A733_DEINTERLACE_BASE||address>=A733_DEINTERLACE_BASE+0x40000)return 1;
@@ -31,13 +37,12 @@ static int di_address(uintptr_t address,unsigned writing,uint32_t value)
 static int load(uintptr_t a,uint32_t *v)
 {
     if(!v||!di_address(a,0,0)||!live()||!device(a))return 0;
-    __asm__ volatile("dsb sy":::"memory");*v=*(volatile uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return live();
+    *v=a733_mmio_read32_dsb_sy_both(a);return live();
 }
 static int store(uintptr_t a,uint32_t v)
 {
     if(!di_address(a,1,v)||!live()||!device(a))return 0;
-    *(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");return live();
+    a733_mmio_write32_dsb_sy_after(a,v);return live();
 }
 static int bits(uintptr_t a,uint32_t mask,uint32_t value)
 {uint32_t v;return load(a,&v)&&(v&mask)==value;}

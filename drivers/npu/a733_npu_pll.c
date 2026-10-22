@@ -65,9 +65,7 @@ int a733_npu_pll_bind_registry(struct a733_npu_pll *p,struct a733_clock_leases *
     if (!p || p->self!=p || !p->initialized || p->failed || p->registry || p->successor ||
         p->stage!=ACQUIRE || p->resources.clock.id || p->observed.clock.id ||
         !registry || !registry->initialized) return 0;
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)registry;
-    if (sizeof(*p)>UINTPTR_MAX-a || sizeof(*registry)>UINTPTR_MAX-b ||
-        !(a+sizeof(*p)<=b || b+sizeof(*registry)<=a)) return 0;
+    if (!a733_ranges_disjoint(p,sizeof(*p),registry,sizeof(*registry))) return 0;
     p->registry=registry;return 1;
 }
 int a733_npu_pll_ready(const struct a733_npu_pll *p)
@@ -169,8 +167,8 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
         const struct step *s=p->config.mode==A733_NPU_PLL_ENABLED_RETUNE ? &retune[p->step] : &cold[p->step];
         ok=update(p,s->address,s->mask,s->value);
         if (ok && ++p->step==6) {
-            ok=p->last_now<=UINT64_MAX-3;
-            if(ok) {p->next_sample=p->last_now+3;p->stage=LOCK_WAIT;}
+            ok=a733_deadline_after(p->last_now,3,&p->next_sample);
+            if(ok)p->stage=LOCK_WAIT;
         }
     } else if (p->stage==LOCK_WAIT) {
         uint32_t v;
@@ -179,11 +177,10 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
             p->consecutive=(v&LOCK) ? p->consecutive+1 : 0;
             ++p->samples;
             if (p->consecutive==3) {
-                ok=p->last_now<=UINT64_MAX-20;
-                if(ok) {p->settle_until=p->last_now+20;p->stage=SETTLE;}
+                ok=a733_deadline_after(p->last_now,20,&p->settle_until);
+                if(ok)p->stage=SETTLE;
             } else {
-                ok=p->samples<100 && p->last_now<=UINT64_MAX-3;
-                if(ok)p->next_sample=p->last_now+3;
+                ok=p->samples<100 && a733_deadline_after(p->last_now,3,&p->next_sample);
             }
         }
     } else if (p->stage==SETTLE) {

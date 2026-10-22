@@ -2,6 +2,7 @@
 /* xHCI 1.2 sections4.6,4.9,4.10,4.11.2.2,5.4/5.5,6.2/6.4/6.5.
  * Ordered NC DMA is supplied by the native owner. Never reclaim this parent. */
 #include "a733_xhci.h"
+#include "a733_range.h"
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TYPE(n) ((uint32_t)(n)<<10)
@@ -23,12 +24,10 @@ static void put32(void *v,uint32_t n)
 {uint8_t *p=v;for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 static void put64(void *v,uint64_t n)
 {put32(v,(uint32_t)n);put32((uint8_t *)v+4,(uint32_t)(n>>32));}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int outside(const struct a733_xhci *x,const void *p,size_t bytes)
 {
-    return p&&separate(x,sizeof(*x),p,bytes)&&separate(x->pool,sizeof(*x->pool),p,bytes)&&
-        separate((void *)x->extent.cpu,x->extent.bytes,p,bytes)&&x->ops.outside(x->context,p,bytes)==1;
+    return p&&a733_ranges_disjoint(x,sizeof(*x),p,bytes)&&a733_ranges_disjoint(x->pool,sizeof(*x->pool),p,bytes)&&
+        a733_ranges_disjoint((void *)x->extent.cpu,x->extent.bytes,p,bytes)&&x->ops.outside(x->context,p,bytes)==1;
 }
 static int owner(const struct a733_xhci *x)
 {return x&&x->self==x&&!x->notifying&&x->ops.current(x->context)==1;}
@@ -55,11 +54,11 @@ static int guard(struct a733_xhci *x,uint64_t deadline)
     uint64_t now;struct device_memory_extent e;enum device_memory_state s;
     if(x->failed||!device_memory_describe(x->pool,x->memory,&e,&s)||s!=DEVICE_MEMORY_DEVICE||
        e.cpu!=x->extent.cpu||e.physical!=x->extent.physical||e.bytes!=x->extent.bytes||
-       x->ops.now(x->context,&now)!=1||now<x->last_now||now>=deadline||now>=x->lifetime_deadline)return -1;
-    x->last_now=now;int live=x->ops.live(x->context,x->generation,deadline);
+       x->ops.now(x->context,&now)!=1||now>=x->lifetime_deadline||!a733_deadline_admit(now,&x->last_now,deadline))return -1;
+    int live=x->ops.live(x->context,x->generation,deadline);
     if(live!=0&&live!=1)return -1;
-    if(x->ops.now(x->context,&now)!=1||now<x->last_now||now>=deadline||now>=x->lifetime_deadline)return -1;
-    x->last_now=now;return live;
+    if(x->ops.now(x->context,&now)!=1||now>=x->lifetime_deadline||!a733_deadline_admit(now,&x->last_now,deadline))return -1;
+    return live;
 }
 /* Repeat a BUSY observation without MMIO for at most BUSY_US of counter time
  * and never past the deadline, which guard() enforces. A provider can stay
@@ -675,12 +674,12 @@ int a733_xhci_init(struct a733_xhci *x,const struct a733_xhci_ops *ops,void *con
 {
     if(!x||x->self||!ops||!pool||!context||!generation||!deadline||lifetime<deadline||
        !ops->now||!ops->current||!ops->live||!ops->read32||!ops->write32||!ops->write64||!ops->barrier||!ops->outside||!ops->notice||
-       !separate(x,sizeof(*x),ops,sizeof(*ops))||!separate(x,sizeof(*x),pool,sizeof(*pool)))return 0;
+       !a733_ranges_disjoint(x,sizeof(*x),ops,sizeof(*ops))||!a733_ranges_disjoint(x,sizeof(*x),pool,sizeof(*pool)))return 0;
     const struct a733_xhci_ops copied=*ops;struct device_memory_extent e;enum device_memory_state state;
     if(copied.current(context)!=1||!device_memory_describe(pool,lease,&e,&state)||state!=DEVICE_MEMORY_CPU||
        e.bytes!=A733_XHCI_MEMORY_BYTES||(e.cpu&4095)||(e.physical&4095)||
-       e.physical>UINT64_MAX-e.bytes||!separate(x,sizeof(*x),(void *)e.cpu,e.bytes)||
-       !separate(pool,sizeof(*pool),(void *)e.cpu,e.bytes)||copied.outside(context,x,sizeof(*x))!=1||
+       e.physical>UINT64_MAX-e.bytes||!a733_ranges_disjoint(x,sizeof(*x),(void *)e.cpu,e.bytes)||
+       !a733_ranges_disjoint(pool,sizeof(*pool),(void *)e.cpu,e.bytes)||copied.outside(context,x,sizeof(*x))!=1||
        copied.outside(context,(void *)e.cpu,e.bytes)!=1)return 0;
     uint64_t now;if(copied.now(context,&now)!=1||now>=deadline||copied.live(context,generation,deadline)!=1)return 0;
     struct device_memory_allocation *allocation=device_memory_lookup(pool,lease);

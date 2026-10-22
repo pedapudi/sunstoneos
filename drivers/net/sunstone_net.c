@@ -16,6 +16,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 #include "sunstone_net.h"
+#include "a733_range.h"
 #include "FreeRTOS_IP_Private.h"
 #include "FreeRTOS_DNS.h"
 #include "event_groups.h"
@@ -133,9 +134,7 @@ static void dns_cancel(struct sunstone_net *s,unsigned client)
 }
 static int independent(const struct sunstone_net *s,const void *p,size_t n)
 {
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)s;
-    return p&&n<=UINTPTR_MAX-a&&sizeof(*s)<=UINTPTR_MAX-b&&!(a<b+sizeof(*s)&&b<a+n)&&
-        (!s->initialized||aic8800_network_storage_valid(p,n,&s->config.network));
+    return a733_ranges_disjoint(p,n,s,sizeof(*s))&&(!s->initialized||aic8800_network_storage_valid(p,n,&s->config.network));
 }
 static int client(struct sunstone_net *s)
 {TaskHandle_t t=xTaskGetCurrentTaskHandle();for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)if(s->clients[i].task==t)return (int)i;return -1;}

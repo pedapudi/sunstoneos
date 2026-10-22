@@ -2,6 +2,7 @@
  * U-Boot polled driver (drivers/nvme/nvme.c and nvme.h); see source.json here.
  * Queue memory and doorbells follow its two-entry admin and I/O queues. */
 #include "a733_pcie_nvme.h"
+#include "a733_range.h"
 #include <string.h>
 #define DEPTH A733_PCIE_NVME_DEPTH
 #define CC_ENABLE UINT32_C(0x00460001) /* EN, 4 KiB pages, NVM, IOSQES 6, IOCQES 4. */
@@ -11,8 +12,6 @@ enum { FUNCTION,CHECK,CONFIGURE,ENABLING,IDENTIFY_CONTROLLER,IDENTIFY_NAMESPACE,
     QUEUES,CREATE_CQ,CREATE_SQ,READY,READ,DONE,DELETE_SQ,DELETE_CQ,SHUTDOWN,
     SHUTDOWN_WAIT,STOP,PORT,STOPPED };
 enum { ASQ,ACQ,IOSQ,IOCQ,IDENTIFY,DATA,PAGES };
-static int separate(const void *a,size_t n,const void *b,size_t m)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 static volatile uint32_t *page(const struct a733_pcie_nvme *n,unsigned index)
 {return (volatile uint32_t *)(n->memory.cpu+(uintptr_t)index*4096);}
 static uint64_t physical(const struct a733_pcie_nvme *n,unsigned index)
@@ -174,8 +173,8 @@ int a733_pcie_nvme_init(struct a733_pcie_nvme *n,struct a733_pcie *p,
 {
     if(!n||n->self||!p||p->self!=p||!c||!c->identity||!c->timeout_us||c->timeout_us>30000000||
        !c->namespace_id||c->namespace_id==UINT32_MAX||!pool||!pool->initialized||
-       !separate(n,sizeof(*n),c,sizeof(*c))||!separate(n,sizeof(*n),pool,sizeof(*pool))||
-       !separate(n,sizeof(*n),p,sizeof(*p))||a733_pcie_output_outside(p,n,sizeof(*n))!=1)return 0;
+       !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c))||!a733_ranges_disjoint(n,sizeof(*n),pool,sizeof(*pool))||
+       !a733_ranges_disjoint(n,sizeof(*n),p,sizeof(*p))||a733_pcie_output_outside(p,n,sizeof(*n))!=1)return 0;
     *n=(struct a733_pcie_nvme){.self=n,.pool=pool,.config=*c,.phase={1,1}};
     if(!device_memory_acquire(pool,p->config.owner,PAGES*4096,&n->lease,&n->memory)||
        n->memory.cpu!=n->memory.physical){
@@ -227,7 +226,7 @@ enum a733_pcie_result a733_pcie_nvme_poll(struct a733_pcie_nvme *n)
 }
 enum a733_pcie_result a733_pcie_nvme_identity(struct a733_pcie_nvme *n,struct a733_pcie_nvme_identity *out)
 {
-    if(!n||n->self!=n||!out||!separate(out,sizeof(*out),n,sizeof(*n))||
+    if(!n||n->self!=n||!out||!a733_ranges_disjoint(out,sizeof(*out),n,sizeof(*n))||
        a733_pcie_output_outside(n->function.port,out,sizeof(*out))!=1)return A733_PCIE_INVALID;
     if(n->failed)return A733_PCIE_RETAINED;
     if(n->stage!=READY&&n->stage!=DONE)return A733_PCIE_PENDING;
@@ -242,9 +241,9 @@ int a733_pcie_nvme_read(struct a733_pcie_nvme *n,uint64_t lba)
 }
 enum a733_pcie_result a733_pcie_nvme_copy(struct a733_pcie_nvme *n,uint8_t out[4096])
 {
-    if(!n||n->self!=n||!out||!separate(out,4096,n,sizeof(*n))||
-       !separate(out,4096,n->pool,sizeof(*n->pool))||
-       !separate(out,4096,(void *)n->pool->backing.cpu,n->pool->backing.bytes)||
+    if(!n||n->self!=n||!out||!a733_ranges_disjoint(out,4096,n,sizeof(*n))||
+       !a733_ranges_disjoint(out,4096,n->pool,sizeof(*n->pool))||
+       !a733_ranges_disjoint(out,4096,(void *)n->pool->backing.cpu,n->pool->backing.bytes)||
        a733_pcie_output_outside(n->function.port,out,4096)!=1)return A733_PCIE_INVALID;
     if(n->failed)return A733_PCIE_RETAINED;
     if(n->stage!=DONE)return A733_PCIE_PENDING;

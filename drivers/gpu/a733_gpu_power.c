@@ -1,4 +1,5 @@
 #include "a733_gpu_power.h"
+#include "a733_range.h"
 #include <stddef.h>
 
 #define BIT(n) (UINT32_C(1) << (n))
@@ -125,8 +126,8 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
     const struct step *p = &(on ? on_steps : off_steps)[s->index];
     if (p->kind == DELAY) {
         if (!s->wait_until) {
-            if (s->last_now > UINT64_MAX - p->value) return fail(s, A733_GPU_POWER_TIMEOUT);
-            s->wait_until = s->last_now + p->value;
+            if (!a733_deadline_after(s->last_now, p->value, &s->wait_until))
+                return fail(s, A733_GPU_POWER_TIMEOUT);
         }
         if (s->last_now >= s->wait_until) { s->wait_until = 0; ++s->index; }
         return A733_GPU_POWER_AGAIN;

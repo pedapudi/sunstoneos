@@ -1,4 +1,5 @@
 #include "pvr_gpu_service.h"
+#include "a733_range.h"
 #include "pvr_compute_service.h"
 #include "a733_gpu_graphics_memory.h"
 #ifdef SUNSTONE_GPU_LIFECYCLE
@@ -12,10 +13,6 @@ static void worker(void *);
 BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
 
-static int span(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static const struct pvr_mips_buffer *buffer(const struct pvr_gpu_service_config *c, unsigned i)
 { return i < 3 ? &c->firmware_buffers[i] : &c->resources[i - 3]; }
 static int free_list_allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_config *c)
@@ -26,7 +23,7 @@ static int free_list_allocations(struct pvr_gpu_service *s, const struct pvr_gpu
         !f->operation_timeout_us || f->operation_timeout_us > INT64_MAX ||
         !f->ops.allocate || !f->ops.publish_page || !f->ops.read || !f->ops.write ||
         !f->ops.publish || !f->ops.recover_targets ||
-        !span(f->lists, f->count * sizeof(*f->lists))) return 0;
+        !a733_span_excl_nonempty(f->lists, f->count * sizeof(*f->lists))) return 0;
     /* Include immutable list configs and the common ops/config object in the
      * cross-component checks before any firmware builder can modify backing. */
     for (unsigned i = 0; i <= f->count; ++i) {
@@ -34,17 +31,17 @@ static int free_list_allocations(struct pvr_gpu_service *s, const struct pvr_gpu
         size_t bytes = i == f->count ? f->count * sizeof(*f->lists) :
             (size_t)f->lists[i].maximum_pages * sizeof(*f->lists[i].pages);
         if ((i < f->count && f->lists[i].maximum_pages > PVR_FREE_LIST_MAX_PAGES) ||
-            !span(ptr, bytes) || !separate(ptr, bytes, s, sizeof(*s)) ||
-            !separate(ptr, bytes, c, sizeof(*c)) ||
-            !separate(ptr, bytes, c->firmware, c->firmware_bytes)) return 0;
-        if (i < f->count && !separate(ptr, bytes, f->lists, f->count * sizeof(*f->lists))) return 0;
+            !a733_span_excl_nonempty(ptr, bytes) || !a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)s, sizeof(*s)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)c, sizeof(*c)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)c->firmware, c->firmware_bytes)) return 0;
+        if (i < f->count && !a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)f->lists, f->count * sizeof(*f->lists))) return 0;
         for (unsigned j = 0; j < i && j < f->count; ++j)
-            if (!separate(ptr, bytes, f->lists[j].pages,
+            if (!a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)f->lists[j].pages,
                     (size_t)f->lists[j].maximum_pages * sizeof(*f->lists[j].pages))) return 0;
         for (unsigned j = 0; j < 3 + PVR_FW_RESOURCE_COUNT; ++j) {
             const struct pvr_mips_buffer *b = buffer(c, j);
-            if (!separate(ptr, bytes, b->storage.cpu, b->storage.bytes) ||
-                !separate(ptr, bytes, b->pages, b->page_count * sizeof(uint64_t))) return 0;
+            if (!a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)b->storage.cpu, b->storage.bytes) ||
+                !a733_extents_disjoint_prechecked((uintptr_t)ptr, bytes, (uintptr_t)b->pages, b->page_count * sizeof(uint64_t))) return 0;
         }
     }
     return 1;
@@ -52,10 +49,10 @@ static int free_list_allocations(struct pvr_gpu_service *s, const struct pvr_gpu
 static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_config *c)
 {
     struct pvr_fw_plan plan;
-    if (!span(s, sizeof(*s)) || !span(c, sizeof(*c)) ||
-        !separate(s, sizeof(*s), c, sizeof(*c)) ||
-        !span(c->firmware, c->firmware_bytes) ||
-        !separate(s, sizeof(*s), c->firmware, c->firmware_bytes) ||
+    if (!a733_span_excl_nonempty(s, sizeof(*s)) || !a733_span_excl_nonempty(c, sizeof(*c)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)c, sizeof(*c)) ||
+        !a733_span_excl_nonempty(c->firmware, c->firmware_bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)c->firmware, c->firmware_bytes) ||
         !pvr_fw_requirements(c->firmware, c->firmware_bytes, PVR_FW_A733_BVNC, &plan) ||
         c->state.bvnc != PVR_FW_A733_BVNC || !c->state.gpu_clock_hz ||
         c->state.clusters != 1 || c->state.slc_kilobytes != 16) return 0;
@@ -66,19 +63,19 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
         size_t expected = i < 2 ? plan.allocation_bytes[i] : i == 2 ? PVR_MIPS_TABLE_BYTES :
             pvr_fw_state_layout((enum pvr_fw_resource)(i - 3))->allocation_bytes;
         if (b->storage.bytes != expected || b->page_count != expected / PVR_MIPS_PAGE_BYTES ||
-            !span(b->storage.cpu, expected) ||
-            !span(b->pages, b->page_count * sizeof(uint64_t)) ||
-            !separate(s, sizeof(*s), b->pages, b->page_count * sizeof(uint64_t)) ||
-            !separate(b->storage.cpu, expected, s, sizeof(*s)) ||
-            !separate(b->storage.cpu, expected, c, sizeof(*c)) ||
-            !separate(b->storage.cpu, expected, c->firmware, c->firmware_bytes)) return 0;
+            !a733_span_excl_nonempty(b->storage.cpu, expected) ||
+            !a733_span_excl_nonempty(b->pages, b->page_count * sizeof(uint64_t)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)b->pages, b->page_count * sizeof(uint64_t)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, expected, (uintptr_t)s, sizeof(*s)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, expected, (uintptr_t)c, sizeof(*c)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, expected, (uintptr_t)c->firmware, c->firmware_bytes)) return 0;
         for (unsigned j = 0; j < 3 + PVR_FW_RESOURCE_COUNT; ++j) {
             const struct pvr_mips_buffer *a = buffer(c, j);
             /* Validate lengths before pointer arithmetic even for later entries. */
             if (a->page_count > PVR_FW_MAX_ALLOCATION / PVR_MIPS_PAGE_BYTES ||
-                !span(a->pages, a->page_count * sizeof(uint64_t)) ||
-                !separate(b->storage.cpu, expected, a->pages, a->page_count * sizeof(uint64_t))) return 0;
-            if (j < i && !separate(b->storage.cpu, expected, a->storage.cpu, a->storage.bytes)) return 0;
+                !a733_span_excl_nonempty(a->pages, a->page_count * sizeof(uint64_t)) ||
+                !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, expected, (uintptr_t)a->pages, a->page_count * sizeof(uint64_t))) return 0;
+            if (j < i && !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, expected, (uintptr_t)a->storage.cpu, a->storage.bytes)) return 0;
         }
         for (unsigned p = 0; p < b->page_count; ++p) {
             uint64_t pa = b->pages[p];
@@ -229,8 +226,10 @@ static enum pvr_free_list_result free_list_progress(struct pvr_gpu_service *s, i
 static int deadline(struct pvr_gpu_service *s, uint64_t duration)
 {
     uint64_t now;
-    if (!sample(s, &now) || duration > UINT64_MAX - now) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
-    s->deadline = now + duration; return 1;
+    if (!sample(s, &now) || !a733_deadline_after(now, duration, &s->deadline)) {
+        fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
+    }
+    return 1;
 }
 static int opening_clock(struct pvr_gpu_service *s)
 {
@@ -952,13 +951,13 @@ int pvr_gpu_service_compute_read(struct pvr_gpu_service *s,uint32_t first,
 int pvr_gpu_service_compute_input_epoch(struct pvr_gpu_service *s,uint64_t epoch,uint32_t sequence,
     const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    if(!ticket||!sequence||!span(input,bytes)||bytes>PVR_COMPUTE_PACKAGE_INPUT||
+    if(!ticket||!sequence||!a733_span_excl_nonempty(input,bytes)||bytes>PVR_COMPUTE_PACKAGE_INPUT||
        !timeout||timeout>INT64_MAX||wait==portMAX_DELAY)return 0;
     unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
     if(!client||client->pending||client->next_ticket==UINT64_MAX||!s->config.compute)return 0;
     struct pvr_compute_service *c=s->config.compute;
     const struct pvr_compute_package *p=c->config->job->package;
-    if(!p||bytes!=p->input_bytes||!separate(input,bytes,c,sizeof(*c)))return 0;
+    if(!p||bytes!=p->input_bytes||!a733_extents_disjoint_prechecked((uintptr_t)input,bytes,(uintptr_t)c,sizeof(*c)))return 0;
     unsigned empty=0;
     if(!atomic_compare_exchange_strong_explicit(&c->input_state,&empty,1,
         memory_order_acquire,memory_order_relaxed))return 0;
@@ -976,12 +975,13 @@ int pvr_gpu_service_compute_input_epoch(struct pvr_gpu_service *s,uint64_t epoch
 int pvr_gpu_service_draw_next(struct pvr_gpu_service *s,uint64_t epoch,uint32_t previous,const void *vertices,
     size_t bytes,uint32_t count,uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    if(previous>=PVR_RENDER_DRAW_MAX_FRAMES || !epoch || !ticket || !span(vertices,bytes) || !pvr_render_draw_vertices_valid(vertices,bytes,count) ||
+    if(previous>=PVR_RENDER_DRAW_MAX_FRAMES || !epoch || !ticket ||
+        !a733_span_excl_nonempty(vertices,bytes) || !pvr_render_draw_vertices_valid(vertices,bytes,count) ||
         !timeout || timeout>INT64_MAX || wait==portMAX_DELAY)return 0;
     unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
     if(!client || client->pending || client->next_ticket==UINT64_MAX || !s->config.render)return 0;
     struct pvr_render_service *d=s->config.render;
-    if(!separate(vertices,bytes,d,sizeof(*d)))return 0;
+    if(!a733_extents_disjoint_prechecked((uintptr_t)vertices,bytes,(uintptr_t)d,sizeof(*d)))return 0;
     unsigned empty=0;
     if(!atomic_compare_exchange_strong_explicit(&d->draw_state,&empty,1,memory_order_acquire,memory_order_relaxed))return 0;
     struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_DRAW,timeout},.ticket=client->next_ticket+1,.epoch=epoch,.client=slot};
@@ -1001,19 +1001,19 @@ int pvr_gpu_service_draw(struct pvr_gpu_service *s,uint64_t epoch,const void *ve
 int pvr_gpu_service_texture(struct pvr_gpu_service *s,uint64_t epoch,const struct pvr_render_texture_request *request,
     const void *data,uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    if(!epoch || !ticket || !span(request,sizeof(*request)) || !timeout || timeout>INT64_MAX || wait==portMAX_DELAY ||
+    if(!epoch || !ticket || !a733_span_excl_nonempty(request,sizeof(*request)) || !timeout || timeout>INT64_MAX || wait==portMAX_DELAY ||
         request->operation>PVR_TEXTURE_PRESENT || request->bytes>PVR_RENDER_TEXTURE_CHUNK ||
-        (request->operation==PVR_TEXTURE_WRITE && !span(data,request->bytes)))return 0;
+        (request->operation==PVR_TEXTURE_WRITE && !a733_span_excl_nonempty(data,request->bytes)))return 0;
     unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
     if(!client || client->pending || client->next_ticket==UINT64_MAX || !s->config.render || !s->config.graphics ||
         s->config.graphics->draw<2 || s->config.graphics!=s->config.render->owner)return 0;
     struct pvr_render_service *d=s->config.render;struct pvr_render_texture_layout l;
     if(!pvr_render_texture_layout_profile(d->owner->profile.render.width,d->owner->profile.render.height,d->owner->draw,&l) ||
-        !separate(request,sizeof(*request),d,sizeof(*d)))return 0;
+        !a733_extents_disjoint_prechecked((uintptr_t)request,sizeof(*request),(uintptr_t)d,sizeof(*d)))return 0;
     uintptr_t base=d->owner->payload_extent.cpu+d->owner->render.payload_bytes;
     if(request->operation==PVR_TEXTURE_WRITE &&
-        (!separate(data,request->bytes,d,sizeof(*d)) ||
-         !separate(data,request->bytes,(void *)d->owner->payload_extent.cpu,d->owner->payload_extent.bytes)))return 0;
+        (!a733_extents_disjoint_prechecked((uintptr_t)data,request->bytes,(uintptr_t)d,sizeof(*d)) ||
+         !a733_extents_disjoint_prechecked((uintptr_t)data,request->bytes,d->owner->payload_extent.cpu,d->owner->payload_extent.bytes)))return 0;
     unsigned empty=0;
     if(!atomic_compare_exchange_strong_explicit(&d->texture_state,&empty,1,memory_order_acquire,memory_order_relaxed))return 0;
     d->texture_request=*request;

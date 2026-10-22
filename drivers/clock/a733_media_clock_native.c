@@ -1,4 +1,5 @@
 #include "a733_media_clock_native.h"
+#include "a733_mmio.h"
 #define CCU UINT32_C(0x02002000)
 #define BIT(n) (UINT32_C(1)<<(n))
 static int readable(uintptr_t address)
@@ -26,9 +27,7 @@ int a733_media_clock_native_read(void *cookie,uintptr_t address,uint32_t *value)
 {
     (void)cookie;
     if (!value || !readable(address)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *value=*(volatile const uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    *value=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 int a733_media_clock_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
@@ -44,12 +43,12 @@ int a733_media_clock_native_write(void *cookie,uintptr_t address,uint32_t value)
     case 0x1804: case 0x1808:mask=0x87001f1f;module=1;mclk=1;break;
     default:return 0;
     }
-    __asm__ volatile("dsb sy" ::: "memory");
-    uint32_t old=*(volatile const uint32_t *)address;
+    a733_mmio_dsb_sy();
+    uint32_t old=a733_mmio_read32(address);
     if (((value^old)&~mask) || (!module && (old&~value&mask))) return 0;
     if (module && (old&BIT(31)) && ((old^value)&mask)) return 0;
     if (mclk && (value&BIT(31))) return 0;
     if (address==CCU+0x5e4 && (old&0x40302)!=0x40302) return 0;
-    *(volatile uint32_t *)address=value;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    a733_mmio_write32(address,value);
+    a733_mmio_dsb_sy();return 1;
 }

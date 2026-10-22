@@ -192,8 +192,7 @@ static int time_ok(struct ov5640 *s)
 }
 static int delay(struct ov5640 *s, uint64_t us)
 {
-    if (us > UINT64_MAX - s->now) return fault(s);
-    s->wait_until = s->now + us;
+    if (!a733_deadline_after(s->now, us, &s->wait_until)) return fault(s);
     return 0;
 }
 int ov5640_init(struct ov5640 *s, const struct ov5640_ops *ops, void *context,
@@ -201,8 +200,8 @@ int ov5640_init(struct ov5640 *s, const struct ov5640_ops *ops, void *context,
 {
     if (!s || !ops || s->initialized || s->state != OV5640_NEW ||
         (color_bars != 0 && color_bars != 1) ||
-        a733_camera_overlap(s, sizeof(*s), ops, sizeof(*ops)) ||
-        (context && a733_camera_overlap(s, sizeof(*s), context, 1)) ||
+        a733_ranges_overlap_or_wrap(s, sizeof(*s), ops, sizeof(*ops)) ||
+        (context && a733_ranges_overlap_or_wrap(s, sizeof(*s), context, 1)) ||
         !ops->now_us || !ops->acquire || !ops->line || !ops->read ||
         !ops->write || !ops->receiver || !ops->release) return -1;
     *s = (struct ov5640){ .ops = *ops, .context = context,

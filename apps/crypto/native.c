@@ -4,6 +4,8 @@
 #include "a733_ce_native.h"
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct crypto_application crypto;
@@ -17,7 +19,11 @@ static void leave(void *v)
 static void retain(void *v)
 {if(v==&crypto)(void)a733_platform_lock_retain(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
 static int device(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&t.attributes==0&&t.shareability==2;}
+{
+ /* Device identity mapping; the write translation must be outer shareable. */
+ static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+ return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+}
 static int mappings(void)
 {
  static const uintptr_t addresses[]={0x02002000,0x02003000,0x07090160,0x04603000,0x04603800,0x03400118};
@@ -27,9 +33,7 @@ static int mappings(void)
 static int masked(void)
 {
  if(!device(0x03400118))return 0;
- __asm__ volatile("dsb sy":::"memory");
- uint32_t enabled=*(volatile const uint32_t *)(uintptr_t)0x03400118;
- __asm__ volatile("dsb sy":::"memory");
+ uint32_t enabled=a733_mmio_read32_dsb_sy_both(0x03400118);
  return !(enabled&0x300); /* INTIDs200/201. Ownership of both security views is admitted separately. */
 }
 static int authorize(void *v,const struct a733_ce_config *c,const struct a733_clock_token *t,const struct a733_ce_memory *m)
@@ -43,8 +47,10 @@ static int authorize(void *v,const struct a733_ce_config *c,const struct a733_cl
  struct device_memory_extent e;enum device_memory_state state;
  if(!device_memory_describe(crypto.engine.binding.pool,crypto.engine.binding.lease,&e,&state)||
  state!=DEVICE_MEMORY_DEVICE||e.cpu!=(uintptr_t)m||e.bytes!=4096||e.physical!=c->descriptor_physical||c->output_physical!=e.physical+256)return 0;
- for(uintptr_t p=e.cpu;p<e.cpu+e.bytes;p+=64){struct aarch64_translation x;
-  if(!aarch64_device_translate(p,1,&x)||x.physical!=e.physical+p-e.cpu||x.attributes!=0xff||x.shareability!=3)return 0;}
+ /* Every 64-byte descriptor line is write-back and inner shareable at its
+  * physical offset. */
+ static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+ if(!a733_mapping_check_stride(aarch64_device_translate,e.cpu,e.physical,e.bytes,64,&wb))return 0;
  /* Immutable initial/memory/clock/supervision records authenticate exclusion,
   * prior drain and secure access; masked/readable registers alone never do. */
  return a733_clock_token_status(&providers.shared.clocks,&crypto.token)==A733_CLOCK_OK;

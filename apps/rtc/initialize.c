@@ -1,4 +1,5 @@
 #include "a733_rtc_application.h"
+#include "a733_mmio.h"
 #include "boot.h"
 /* This provider exists only during the sealed primary EL3 hook. The authenticated
  * clock authority excludes all inherited32k consumers/writers, not just tasks. */
@@ -14,15 +15,13 @@ static int now(void *c,uint64_t *value)
 static int read_reg(void *c,uint32_t offset,uint32_t *value)
 {
  if(c!=initializing||!value||!allowed()||offset>0x50||(offset&3))return 0;
- __asm__ volatile("dsb sy":::"memory");*value=*(volatile uint32_t *)(uintptr_t)(0x07090000+offset);
- __asm__ volatile("dsb sy":::"memory");return allowed();
+ *value=a733_mmio_read32_dsb_sy_both(0x07090000+offset);return allowed();
 }
 static int write_reg(void *c,uint32_t offset,uint32_t value)
 {
  if(c!=initializing||!allowed()||(offset!=0&&offset!=4&&offset!=0x10&&offset!=0x14)||
     (offset==0&&(value>>16)!=0x16aa)||(offset==4&&value!=2))return 0;
- *(volatile uint32_t *)(uintptr_t)(0x07090000+offset)=value;
- __asm__ volatile("dsb sy":::"memory");return allowed();
+ a733_mmio_write32_dsb_sy_after(0x07090000+offset,value);return allowed();
 }
 int rtc_boot_initialize(const struct a733_rtc_setting *setting,struct a733_rtc_initialization *out,
  const struct a733_smp_contract *contract)

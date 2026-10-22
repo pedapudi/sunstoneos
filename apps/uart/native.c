@@ -1,6 +1,7 @@
 #include "uart.h"
 #include "boot.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct uart_application uart;
@@ -11,11 +12,12 @@ int uart_live(void)
  a733_smp_counter()/24<board.session.deadline_us-10000;}
 int uart_output_ready(void)
 {return uart_live()&&atomic_load_explicit(&uart.result,memory_order_acquire)==1;}
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mappings(void)
 {
  const uintptr_t pages[]={0x02002000,0x02502000,0x03400000,0x07090000};
- for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i){struct aarch64_translation t;
-  if(!aarch64_device_translate(pages[i],1,&t)||t.physical!=pages[i]||t.attributes||t.shareability!=2)return 0;}
+ for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)
+  if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&device_rule))return 0;
  return 1;
 }
 static int admitted(void *v,const struct a733_uart_platform_config *c,
@@ -52,11 +54,11 @@ static int write_register(void *v,uintptr_t a,uint32_t value)
 int uart_construct(void)
 {
  if(!board_live(NULL)||board.session.deadline_us<=10000||!uart.handle||!mappings())return 0;
- uint64_t start=board.session.session_start_ticks/24;
- if(start>UINT64_MAX-uart.session.operation_timeout_us||start+uart.session.operation_timeout_us>=board.session.deadline_us-10000)return 0;
+ uint64_t start=board.session.session_start_ticks/24,end;
+ if(!a733_deadline_after(start,uart.session.operation_timeout_us,&end)||end>=board.session.deadline_us-10000)return 0;
  atomic_init(&uart.failed,0);atomic_init(&uart.result,0);
  atomic_init(&uart.pending,0);atomic_init(&uart.irq_fault,0);atomic_init(&uart.notifications,0);
- uart.irq=(struct gicv3_spi){0x03400000,36};uart.masked=1;uart.deadline=start+uart.session.operation_timeout_us;
+ uart.irq=(struct gicv3_spi){0x03400000,36};uart.masked=1;uart.deadline=end;
  uart.config=(struct a733_uart_platform_config){.owner=uart.session.owner,.handoff=uart.session.authority,
  .startup_deadline_us=uart.deadline,.route=A733_UART2_PB,.deferred_irq=
 #ifdef SUNSTONE_UART_DMA

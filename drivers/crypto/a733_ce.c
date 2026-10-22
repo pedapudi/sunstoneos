@@ -28,7 +28,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
     const void *objects[]={p,c,o,r,t,m};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*r),sizeof(*t),sizeof(*m)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
-        if (!a733_ce_separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        if (!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     a733_clock_mask_t stable=A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
     if ((a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) stable|=A733_CLOCK_RC16M;
     if ((t->exclusive&A733_CLOCK_CE)!=A733_CLOCK_CE || ((t->shared|t->exclusive)&stable)!=stable ||
@@ -55,8 +55,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
 static int timely(struct a733_ce *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->config.deadline_us) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->config.deadline_us);
 }
 static int rd(struct a733_ce *p,uintptr_t a,uint32_t *v)
 {return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
@@ -170,8 +169,8 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
 {
     if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output ||
         output_bytes!=p->result_bytes ||
-        !a733_ce_separate(p,sizeof(*p),output,output_bytes) ||
-        !a733_ce_separate(p->memory,sizeof(*p->memory),output,output_bytes) || !a733_ce_separate(p->registry,sizeof(*p->registry),output,output_bytes)) return A733_CE_INVALID;
+        !a733_ranges_disjoint(p,sizeof(*p),output,output_bytes) ||
+        !a733_ranges_disjoint(p->memory,sizeof(*p->memory),output,output_bytes) || !a733_ranges_disjoint(p->registry,sizeof(*p->registry),output,output_bytes)) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
@@ -244,8 +243,8 @@ fail:
 }
 
 static int distinct(struct a733_ce *p,const void *a,size_t n)
-{return a733_ce_separate(a,n,p,sizeof(*p)) && a733_ce_separate(a,n,p->memory,sizeof(*p->memory)) &&
-    a733_ce_separate(a,n,p->registry,sizeof(*p->registry));}
+{return a733_ranges_disjoint(a,n,p,sizeof(*p)) && a733_ranges_disjoint(a,n,p->memory,sizeof(*p->memory)) &&
+    a733_ranges_disjoint(a,n,p->registry,sizeof(*p->registry));}
 static unsigned key_size(size_t bytes) {return bytes==16?0:(bytes==24?1:(bytes==32?2:3));}
 /* operation 0 TRNG, 1 hash (method), 2 symmetric (sym). */
 static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned operation,unsigned method,

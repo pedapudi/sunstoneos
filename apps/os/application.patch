@@ -13,12 +13,12 @@
  {
 -    if(!pins||(board.session.workload!=0&&board.session.workload!=4))return 0;
 +    if(!pins||!os_workload_valid(board.session.workload))return 0;
-     for(unsigned i=0;i<3;++i)for(uintptr_t page=mimus_asset_address[i]&~(uintptr_t)4095;
-         page<mimus_asset_address[i]+mimus_asset_bytes[i];page+=4096){
-         struct aarch64_translation t;
-@@ -66,7 +67,7 @@
-     }
-     return 1;
+     /* configure.py places each nonempty asset at a fixed page-aligned address. */
+     static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
+         writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+@@ -63,7 +64,7 @@
+                mimus_asset_bytes[i],&readable))return 0;
+     return a733_mapping_check_pages(aarch64_device_translate,0x46000000,0x46000000,0x01000000,&writable);
  }
 -int mimus_board_application_start(void){return (board.session.workload==0||board.session.workload==4)&&mimus_board_start();}
 +int mimus_board_application_start(void){return os_workload_valid(board.session.workload)&&mimus_board_start();}

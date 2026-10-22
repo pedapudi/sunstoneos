@@ -1,4 +1,5 @@
 #include "a733_pins_native.h"
+#include "a733_mmio.h"
 
 static int native_enter(void *cookie, uint64_t deadline)
 {
@@ -19,18 +20,14 @@ static int native_read(void *cookie, uintptr_t address, uint32_t *value)
 {
     (void)cookie;
     if (!value || !a733_pins_native_address(address,0)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *value=*(volatile uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");
+    *value=a733_mmio_read32_dsb_sy_both(address);
     return 1;
 }
 static int native_write(void *cookie, uintptr_t address, uint32_t value)
 {
     (void)cookie;
     if (!a733_pins_native_address(address,1)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)address=value;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(address,value);
     return 1;
 }
 int a733_pins_native_init(struct a733_pins_native *n, const struct a733_pins_locks *locks)

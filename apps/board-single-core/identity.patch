@@ -1,6 +1,6 @@
 --- apps/board/identity.c
 +++ identity.c
-@@ -4,7 +4,7 @@
+@@ -5,7 +5,7 @@
  #include "a733_cpu_coherence.h"
  #include "boot.h"
  /* Written once by admitted primary EL3 before SMP starts. */

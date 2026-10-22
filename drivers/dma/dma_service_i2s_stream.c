@@ -1,10 +1,10 @@
 #include "dma_service_i2s_stream.h"
+#include "a733_range.h"
 static int deadline(const struct a733_i2s_stream_profile *p,uint64_t duration,uint64_t *out)
 {
     uint64_t now;
-    if(!duration || duration>INT64_MAX || !p->operations.io.now_us(p->cookie,&now) ||
-        now>UINT64_MAX-duration)return 0;
-    *out=now+duration;return 1;
+    if(!duration || duration>INT64_MAX || !p->operations.io.now_us(p->cookie,&now))return 0;
+    return a733_deadline_after(now,duration,out);
 }
 enum a733_i2s_status dma_service_i2s_stream_open(struct a733_i2s_stream *s,
     const struct dma_service_i2s_stream_profile *p,const struct a733_dma_transfer *t,

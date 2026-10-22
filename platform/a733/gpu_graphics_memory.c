@@ -1,4 +1,5 @@
 #include "a733_gpu_graphics_memory.h"
+#include "a733_range.h"
 #include "a733_gpu_disposal.h"
 #include "a733_gpu_mapping.h"
 #include "pvr_render_draw.h"
@@ -9,8 +10,6 @@ static struct a733_gpu_graphics_memory *graphics_owner;
 #define GPU_BASE UINT64_C(0x8004000000)
 #define TABLE_BASE UINT64_C(0x8006000000)
 static size_t rounded(size_t n) { return (n + 4095) & ~(size_t)4095; }
-static int apart(uintptr_t a, size_t n, uintptr_t b, size_t m)
-{ return a + n <= b || b + m <= a; }
 static int mapped(uintptr_t cpu, size_t bytes, unsigned attr)
 { return a733_gpu_identity_mapped(cpu, bytes, attr, 1); }
 static int private_image(uintptr_t cpu, size_t bytes, uintptr_t pool_start, int write)
@@ -215,13 +214,13 @@ int a733_gpu_graphics_memory_validate(struct a733_gpu_graphics_memory *s,
     const size_t sizes[] = {sizeof(*s->firmware), sizeof(*s->compute), sizeof(*service), c->firmware_bytes,
         sizeof(*s->firmware->wb_pool), sizeof(*s->firmware->nc_pool)};
     for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
-        if (!apart((uintptr_t)s, sizeof(*s), (uintptr_t)metadata[i], sizes[i])) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)metadata[i], sizes[i])) return 0;
     const struct device_memory_extent extents[] = {s->backing_extent, s->payload_extent,
         s->shared_extent, s->table_extent, s->firmware->wb_extent, s->firmware->nc_extent,
         s->compute->payload_extent, s->compute->firmware_extent, s->compute->table_extent};
     for (unsigned i = 0; i < 4; ++i) {
         for (unsigned j = i + 1; j < sizeof(extents) / sizeof(extents[0]); ++j)
-            if (!apart(extents[i].cpu, extents[i].bytes, extents[j].cpu, extents[j].bytes)) return 0;
+            if (!a733_extents_disjoint_prechecked(extents[i].cpu, extents[i].bytes, extents[j].cpu, extents[j].bytes)) return 0;
         if (extents[i].cpu < boundary) return 0;
     }
     struct pvr_render_requirements r;
@@ -317,7 +316,7 @@ static int prepare(struct a733_gpu_graphics_memory *s,
     const void *p[] = {s, g, compute, service, profile, g->config.firmware};
     const size_t n[] = {sizeof(*s), sizeof(*g), sizeof(*compute), sizeof(*service), sizeof(*profile), g->config.firmware_bytes};
     for (unsigned i = 0; i < 6; ++i) for (unsigned j = 0; j < i; ++j)
-        if (!apart((uintptr_t)p[i], n[i], (uintptr_t)p[j], n[j])) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)p[i], n[i], (uintptr_t)p[j], n[j])) return 0;
     if (s->self || s->phase || (!rebuilding && service->initialized) || g->config.graphics || g->config.free_lists.count ||
         g->config.context || g->config.render || g->config.compute != &compute->compute || compute->binding.firmware != g ||
         compute->binding.service != service || compute->compute.phase != PVR_COMPUTE_SERVICE_BOUND ||
@@ -335,8 +334,8 @@ static int prepare(struct a733_gpu_graphics_memory *s,
     struct pvr_render_requirements r;
     if (!pvr_render_target_require(&profile->render, &r)) return 0;
     for (unsigned i = 0; i < 5; ++i)
-        if (!apart((uintptr_t)p[i], n[i], (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
-            !apart((uintptr_t)p[i], n[i], (uintptr_t)g->nc_pool, sizeof(*g->nc_pool))) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)p[i], n[i], (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)p[i], n[i], (uintptr_t)g->nc_pool, sizeof(*g->nc_pool))) return 0;
     struct device_memory_lease first; struct device_memory_extent extent;
     if (!device_memory_acquire(g->wb_pool, owner,
         ((size_t)profile->render.global_maximum_pages + 28) * 4096, &first, &extent)) return 0;

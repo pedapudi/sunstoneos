@@ -1,4 +1,5 @@
 #include "a733_thermal_native.h"
+#include "a733_mmio.h"
 #define CCU UINT32_C(0x02002000)
 #define THS UINT32_C(0x02522000)
 static int readable(uintptr_t a)
@@ -25,9 +26,7 @@ int a733_thermal_native_read(void *cookie,uintptr_t address,uint32_t *value)
 {
     (void)cookie;
     if (!value || !readable(address)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *value=*(volatile const uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    *value=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 int a733_thermal_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
@@ -49,14 +48,14 @@ int a733_thermal_native_write(void *cookie,uintptr_t address,uint32_t value)
         default:return 0;
         }
     }
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_dsb_sy();
     if (w1c) {if (value&~mask) return 0;}
     else {
-        uint32_t old=*(volatile const uint32_t *)address;
+        uint32_t old=a733_mmio_read32(address);
         if ((old^value)&~mask) return 0;
         if (address==CCU+0xfc0 && (old&UINT32_C(0x80000000)) && ((old^value)&mask)) return 0;
         if (address==CCU+0xfe4 && (old&~value&mask)) return 0;
     }
-    *(volatile uint32_t *)address=value;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    a733_mmio_write32(address,value);
+    a733_mmio_dsb_sy();return 1;
 }

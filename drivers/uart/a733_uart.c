@@ -6,6 +6,7 @@
  * 2013.6.6 Mintow <duanmintao@allwinnertech.com>
  * sunxi-uart-ng.h and sunxi-uart-ng-core.c, Linux BSP. */
 #include "a733_uart.h"
+#include "a733_range.h"
 
 #define RBR 0x00u
 #define THR 0x00u
@@ -33,14 +34,9 @@
 #define RS485_CHECKED 0x97u
 #define ERRORS 0x9eu
 
-static int span(const void *p, size_t n)
-{
-    return !n || (p && (uintptr_t)p <= UINTPTR_MAX - (n - 1));
-}
 static int overlap(const void *a, size_t an, const void *b, size_t bn)
 {
-    return an && bn && ((uintptr_t)a <= (uintptr_t)b ?
-           (uintptr_t)b - (uintptr_t)a < an : (uintptr_t)a - (uintptr_t)b < bn);
+    return a733_extents_intersect((uintptr_t)a, an, (uintptr_t)b, bn);
 }
 int a733_uart_plan(const struct a733_uart_format *f, struct a733_uart_plan *out)
 {
@@ -156,7 +152,7 @@ static int buffers_ok(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
 {
     if (rn > SIZE_MAX / sizeof(*rx)) return 0;
     rn *= sizeof(*rx);
-    return r && span(rx, rn) && span(tx, tn) &&
+    return r && a733_span_incl_or_empty(rx, rn) && a733_span_incl_or_empty(tx, tn) &&
         !overlap(u, sizeof(*u), rx, rn) && !overlap(u, sizeof(*u), tx, tn) &&
         !overlap(u, sizeof(*u), r, sizeof(*r)) && !overlap(rx, rn, tx, tn) &&
         !overlap(rx, rn, r, sizeof(*r)) && !overlap(tx, tn, r, sizeof(*r));

@@ -5,6 +5,7 @@
 #include "aic8800_supplicant.h"
 #include "aic8800_runtime.h"
 #include "aic8800_firmware.h"
+#include "a733_range.h"
 #include "FreeRTOS_IP_Private.h"
 #include "FreeRTOS_DHCP.h"
 #include "NetworkBufferManagement.h"
@@ -13,24 +14,23 @@
 static struct aic8800_network *stack_owner;
 static _Alignas(16) uint8_t network_buffers[ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS][1536];
 _Static_assert(ipBUFFER_PADDING+ipconfigNETWORK_MTU+ipSIZE_OF_ETH_HEADER<=1536,"network pool capacity");
-static int disjoint(const void *p,size_t bytes,const void *q,size_t other)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    if(!p||bytes>UINTPTR_MAX-a)return 0;
-    if(!q)return 1;
-    return other<=UINTPTR_MAX-b&&!(a<b+other&&b<a+bytes);
-}
 int aic8800_network_storage_valid(const void *p,size_t bytes,const struct aic8800_network_config *c)
 {
     if(!c||!c->transport||!c->transport->initialized)return 0;
     const struct aic8800_sdio_transport *t=c->transport;
     if(t->firmware)for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
-        if(!disjoint(p,bytes,t->firmware->config.blobs[i].data,t->firmware->config.blobs[i].bytes))return 0;
-    return disjoint(p,bytes,t->receive_owner,t->receive_owner_bytes)&&disjoint(p,bytes,t,sizeof(*t))&&t->card&&disjoint(p,bytes,t->card,sizeof(*t->card))&&
-        t->card->host&&disjoint(p,bytes,t->card->host,sizeof(*t->card->host))&&
-        disjoint(p,bytes,t->data,sizeof(struct aic8800_data))&&disjoint(p,bytes,t->wifi,sizeof(struct aic8800_wifi))&&
-        disjoint(p,bytes,t->security,sizeof(struct aic8800_security))&&disjoint(p,bytes,t->supplicant,sizeof(struct aic8800_supplicant))&&
-        disjoint(p,bytes,t->runtime,sizeof(struct aic8800_runtime))&&disjoint(p,bytes,t->firmware,sizeof(struct aic8800_firmware));
+        if(!a733_ranges_disjoint_optional_second(p,bytes,t->firmware->config.blobs[i].data,
+            t->firmware->config.blobs[i].bytes))return 0;
+    return a733_ranges_disjoint_optional_second(p,bytes,t->receive_owner,t->receive_owner_bytes)&&
+        a733_ranges_disjoint_optional_second(p,bytes,t,sizeof(*t))&&
+        t->card&&a733_ranges_disjoint_optional_second(p,bytes,t->card,sizeof(*t->card))&&
+        t->card->host&&a733_ranges_disjoint_optional_second(p,bytes,t->card->host,sizeof(*t->card->host))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->data,sizeof(struct aic8800_data))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->wifi,sizeof(struct aic8800_wifi))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->security,sizeof(struct aic8800_security))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->supplicant,sizeof(struct aic8800_supplicant))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->runtime,sizeof(struct aic8800_runtime))&&
+        a733_ranges_disjoint_optional_second(p,bytes,t->firmware,sizeof(struct aic8800_firmware));
 }
 static int authority_for(const struct aic8800_sdio_transport *t,uint64_t generation)
 {
@@ -173,9 +173,7 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
         c->transport->entered||c->transport->pending||c->transport->data_tx||c->transport->security_tx||
         c->transport->data->state!=AIC8800_DATA_IDLE||c->transport->card->state!=SDIO_CARD_READY||
         c->transport->card->host->state!=SUNXI_SDIO_READY)return 0;
-    uintptr_t begin=(uintptr_t)n,end=(uintptr_t)c;
-    if(sizeof(*n)>UINTPTR_MAX-begin||sizeof(*c)>UINTPTR_MAX-end||
-        (begin<end+sizeof(*c)&&end<begin+sizeof(*n)))return 0;
+    if(a733_ranges_overlap_or_wrap(n,sizeof(*n),c,sizeof(*c)))return 0;
     memset(n,0,sizeof(*n));n->initialized=1;n->config=*c;n->generation=generation;
     if(c->dispatcher)n->receive=c->dispatcher;
     else{
@@ -259,8 +257,9 @@ void aic8800_network_poll(struct aic8800_network *n)
             ++n->tx_dropped;n->owns_current=0;return;
         }
         uint64_t now=t->card->host->last_now;
-        if(n->config.tx_timeout>UINT64_MAX-now){aic8800_network_fault(n);return;}
-        uint64_t deadline=now+n->config.tx_timeout;if(deadline>t->deadline)deadline=t->deadline;
+        uint64_t deadline;
+        if(!a733_deadline_after(now,n->config.tx_timeout,&deadline)){aic8800_network_fault(n);return;}
+        if(deadline>t->deadline)deadline=t->deadline;
         if(aic8800_transport_send_data(t,n->current.ethernet,n->current.bytes,deadline))n->active=1;
     }
 }

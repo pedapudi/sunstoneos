@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_jpeg_encode.h"
+#include "a733_range.h"
 #include <string.h>
 /* Register values follow the pinned A733 JpegEncEncode/ENCPP instruction trace,
  * not the similarly named decoder block. All offsets are relative to ENC VE
@@ -7,7 +8,7 @@
 static int fail(struct a733_jpeg_encode_run *s)
 {s->state=A733_JPEG_ENCODE_FAULT;return -1;}
 static int tick(struct a733_jpeg_encode_run *s)
-{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||n<s->last_now||n>=s->deadline)return fail(s);s->last_now=n;return 1;}
+{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||!a733_deadline_admit(n,&s->last_now,s->deadline))return fail(s);return 1;}
 static int rd(struct a733_jpeg_encode_run *s,uint32_t o,uint32_t *v)
 {return s->ops.read(s->context,s->token,o,v,s->deadline)==1&&tick(s)==1?1:fail(s);}
 static int wr(struct a733_jpeg_encode_run *s,uint32_t o,uint32_t v)

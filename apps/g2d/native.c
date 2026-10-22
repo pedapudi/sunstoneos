@@ -2,6 +2,9 @@
 #include "a733_clock_reference.h"
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "boot.h"
 #include <string.h>
 struct g2d_application g2d;
@@ -13,19 +16,21 @@ static int now(void *v,uint64_t *out)
 {return v==&g2d&&board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,out)==1;}
 static int live(void)
 {
-    uint64_t t;if(now(&g2d,&t)!=1||t<g2d.last_now||t>=deadline())return 0;
-    g2d.last_now=t;return 1;
+    uint64_t t;return now(&g2d,&t)==1&&a733_deadline_admit(t,&g2d.last_now,deadline());
 }
 static int device(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&!t.attributes&&t.shareability==2;}
+{
+    /* Device identity mapping; the write translation must be outer shareable. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+}
 static int load(uintptr_t a,uint32_t *v)
 {
     if(((a>=A733_IOMMU_BASE&&a<A733_IOMMU_BASE+0x20000)||
         (a>=A733_G2D_BASE&&a<A733_G2D_BASE+0x40000))&&
         !a733_de_sys_power_ready(&g2d.domain))return 0;
     if(!v||!live()||!device(a))return 0;
-    __asm__ volatile("dsb sy":::"memory");*v=*(volatile uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return live();
+    *v=a733_mmio_read32_dsb_sy_both(a);return live();
 }
 static int store(uintptr_t a,uint32_t v)
 {
@@ -33,7 +38,7 @@ static int store(uintptr_t a,uint32_t v)
         (a>=A733_G2D_BASE&&a<A733_G2D_BASE+0x40000))&&
         !a733_de_sys_power_ready(&g2d.domain))return 0;
     if(!live()||!device(a))return 0;
-    *(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");return live();
+    a733_mmio_write32_dsb_sy_after(a,v);return live();
 }
 static int bits(uintptr_t a,uint32_t mask,uint32_t value)
 {uint32_t v;return load(a,&v)&&(v&mask)==value;}

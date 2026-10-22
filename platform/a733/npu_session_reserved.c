@@ -1,10 +1,5 @@
 #include "a733_npu_session_reserved.h"
-
-static int disjoint(uintptr_t a, size_t an, uintptr_t b, size_t bn)
-{
-    return a && b && an && bn && a <= UINTPTR_MAX - an && b <= UINTPTR_MAX - bn &&
-        !(a < b + bn && b < a + an);
-}
+#include "a733_range.h"
 
 struct npu_sessions *a733_npu_session_reserve(struct a733_npu_session_reserved *s, uint64_t owner,
     const struct npu_session_model *models, unsigned count, uintptr_t registers,
@@ -14,14 +9,18 @@ struct npu_sessions *a733_npu_session_reserve(struct a733_npu_session_reserved *
         !models || !count || count > NPU_SESSION_MODELS || !fatal || !registers ||
         (registers & 4095) || registers > UINTPTR_MAX - 4096 ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        !disjoint((uintptr_t)s, sizeof(*s), registers, 4096)) return NULL;
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s), (const void *)registers, 4096)) return NULL;
     struct device_memory_pool *pool = a733_memory_reservations_init();
-    if (!pool || !disjoint((uintptr_t)s, sizeof(*s), pool->backing.cpu, pool->backing.bytes) ||
-        !disjoint((uintptr_t)s, sizeof(*s), (uintptr_t)pool, sizeof(*pool)) ||
-        !disjoint(registers, 4096, pool->backing.cpu, pool->backing.bytes)) return NULL;
+    if (!pool ||
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s),
+            (const void *)pool->backing.cpu, pool->backing.bytes) ||
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s), pool, sizeof(*pool)) ||
+        !a733_ranges_disjoint_nonempty((const void *)registers, 4096,
+            (const void *)pool->backing.cpu, pool->backing.bytes)) return NULL;
     for (unsigned m = 0; m < count; ++m)
-        if (!disjoint((uintptr_t)models[m].data, models[m].bytes, pool->backing.cpu, pool->backing.bytes) ||
-            !disjoint((uintptr_t)models[m].data, models[m].bytes, (uintptr_t)s, sizeof(*s))) return NULL;
+        if (!a733_ranges_disjoint_nonempty(models[m].data, models[m].bytes,
+                (const void *)pool->backing.cpu, pool->backing.bytes) ||
+            !a733_ranges_disjoint_nonempty(models[m].data, models[m].bytes, s, sizeof(*s))) return NULL;
     size_t bytes = npu_session_requirements(models, count);
     struct device_memory_lease lease;
     struct device_memory_extent extent;

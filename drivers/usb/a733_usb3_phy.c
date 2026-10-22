@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_usb3_phy.h"
+#include "a733_range.h"
 #include <stdbool.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define GENMASK(h,l) ((UINT32_MAX>>(31-(h)))&(UINT32_MAX<<(l)))
@@ -52,8 +53,7 @@ static int wait_after(struct a733_usb2_platform *p,uint64_t delay)
 int a733_usb3_phy_poll(struct a733_usb2_platform *p)
 {
     uint64_t now;uint32_t v;
-    if(!p||p->ss_failed||p->ops.now(p->cookie,&now)!=1||now<p->last_now||now>=p->config.deadline)return -1;
-    p->last_now=now;
+    if(!p||p->ss_failed||p->ops.now(p->cookie,&now)!=1||!a733_deadline_admit(now,&p->last_now,p->config.deadline))return -1;
     if(now<p->ss_wait)return 0;
     switch(p->ss_phase){
     case 0:

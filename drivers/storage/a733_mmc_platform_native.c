@@ -1,6 +1,7 @@
 #include "a733_mmc_platform_native.h"
 #include "a733_storage_update.h"
 #include "a733_platform_locks.h"
+#include "a733_range.h"
 #include "sunxi_smhc.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
@@ -150,15 +151,10 @@ static int barrier(void *cookie)
     if(!current(cookie))return 0;
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int outside(void *cookie,const void *v,size_t bytes)
 {
     struct a733_mmc_platform_native *n=cookie;
-    return n&&separate(n,sizeof(*n),v,bytes)&&separate(n->locks,sizeof(*n->locks),v,bytes);
+    return n&&a733_ranges_disjoint(n,sizeof(*n),v,bytes)&&a733_ranges_disjoint(n->locks,sizeof(*n->locks),v,bytes);
 }
 int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *n,
     struct a733_platform_locks *locks,void *task,enum sunxi_mmc_kind kind,enum a733_mmc_emmc_host host,

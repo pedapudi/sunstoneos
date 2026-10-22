@@ -27,8 +27,8 @@ static int tick(struct a733_camera_platform *s){
 static int initialize(struct a733_camera_platform *s,
     const struct a733_camera_platform_ops *o,void *ctx,uint32_t proof){
     if(!s || !o || s->initialized || s->state!=A733_CAMERA_PLATFORM_NEW ||
-       a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
-       (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),o,sizeof(*o)) ||
+       (ctx && a733_ranges_overlap_or_wrap(s,sizeof(*s),ctx,1)) ||
        !o->now_us || !o->admit || !o->read || !o->write)return -1;
     s->ops=*o;s->context=ctx;s->required_proof=proof;s->initialized=1;return 1;
 }

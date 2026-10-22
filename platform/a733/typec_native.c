@@ -3,7 +3,8 @@
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
 #include "a733_clock_reference.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include "a733_range.h"
 #include "a733_task_context.h"
 #include "task.h"
@@ -79,36 +80,34 @@ static void bus_retain(void *p)
 {struct a733_typec_native *n=p;if(!current(n))return;
  if(n->held)configASSERT(a733_platform_lock_retain(n->config.locks,(enum a733_platform_lock)(n->held-1))==1);
  n->bus_fault=1;a733_typec_revoke(&n->provider);}
-static uint32_t load(uintptr_t a)
-{uint32_t v;__asm__ volatile("dsb sy":::"memory");v=*(volatile const uint32_t *)a;__asm__ volatile("dsb sy":::"memory");return v;}
-static void store(uintptr_t a,uint32_t v)
-{__asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");}
 static int bus_read(void *p,uintptr_t a,uint32_t *out)
 {
     if(!out||!bus_owned(p)||a<BASE)return 0;
     switch(a-BASE){case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:case 0x20:
-    case 0x200:case 0x210:case 0x214:case 0x218:case 0x21c:*out=load(a);return 1;default:return 0;}
+    case 0x200:case 0x210:case 0x214:case 0x218:case 0x21c:*out=a733_mmio_read32_dsb_sy_both(a);return 1;default:return 0;}
 }
 static int bus_write(void *p,uintptr_t a,uint32_t v)
 {
     if(!bus_owned(p)||v>255||(a!=BASE+8&&a!=BASE+0xc)||
        (a==BASE+0xc&&v!=0x48&&v!=0x4c&&v!=0x58&&v!=0x68))return 0;
-    store(a,v);return 1;
+    a733_mmio_write32_dsb_sy_both(a,v);return 1;
 }
 static int at(uintptr_t a)
-{struct aarch64_translation r,w;return aarch64_device_translate(a,0,&r)&&
- aarch64_device_translate(a,1,&w)&&r.physical==a&&w.physical==a&&
- r.attributes==0&&w.attributes==0;}
+{
+    static const struct a733_mapping_rule device={A733_MAPPING_READ_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&device);
+}
 static int before(struct a733_typec_native *n)
 {
-    uint64_t t;if(!current(n)||!now(n,&t)||t<n->last_now||t>=n->deadline||
-       atomic_load_explicit(&n->config.clocks->failed,memory_order_acquire))return 0;
-    n->last_now=t;return 1;
+    uint64_t t;
+    return current(n)&&now(n,&t)&&!atomic_load_explicit(&n->config.clocks->failed,memory_order_acquire)&&
+        a733_deadline_admit(t,&n->last_now,n->deadline);
 }
 static int observed(struct a733_typec_native *n,uintptr_t a,uint32_t mask,uint32_t v)
-{return before(n)&&(load(a)&mask)==v&&before(n);}
+{return before(n)&&(a733_mmio_read32_dsb_sy_both(a)&mask)==v&&before(n);}
 static int update(struct a733_typec_native *n,uintptr_t a,uint32_t mask,uint32_t value)
-{if(!before(n))return 0;uint32_t v=(load(a)&~mask)|(value&mask);if(!before(n))return 0;store(a,v);return observed(n,a,UINT32_MAX,v);}
+{if(!before(n))return 0;uint32_t v=(a733_mmio_read32_dsb_sy_both(a)&~mask)|(value&mask);if(!before(n))return 0;
+ a733_mmio_write32_dsb_sy_both(a,v);return observed(n,a,UINT32_MAX,v);}
 static int snapshot(struct a733_typec_native *n,unsigned i)
 {
     enum a733_rail rail=i?A733_RAIL_DC1SW2:A733_RAIL_DCDC1;
@@ -155,7 +154,7 @@ static int prepare(void *p,uint64_t d)
         if(!observed(n,APBS1,0x0700001f,0)||!observed(n,BGR,0x20002,0)||!before(n))goto fault;
         /* APBS1 source0 is raw DCXO, not the normalized PLL_REF output.
          * The shared OSC/APBS1 leases and remote exclusion retain this image. */
-        uint32_t oscillator=load(UINT32_C(0x07090160));
+        uint32_t oscillator=a733_mmio_read32_dsb_sy_both(UINT32_C(0x07090160));
         if(!before(n)||(oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002))goto fault;
         n->input_hz=a733_clock_dcxo_hz(oscillator);
         if(!a733_twi_divider(n->input_hz,&n->divider,&n->rate_hz))goto fault;
@@ -233,8 +232,7 @@ static int power_stop(struct a733_typec_native *n,uint64_t t)
 {
     a733_typec_revoke(&n->provider);
     if(!n->power_shutdown_deadline){
-        if(t>UINT64_MAX-5000){n->power_fault=1;return 0;}
-        n->power_shutdown_deadline=t+5000;
+        if(!a733_deadline_after(t,5000,&n->power_shutdown_deadline)){n->power_fault=1;return 0;}
     }
     if(t>=n->power_shutdown_deadline&&atomic_load_explicit(&n->output_state,memory_order_acquire)!=1){n->power_fault=1;return 0;}
     return 1;
@@ -245,8 +243,8 @@ int a733_typec_native_power_poll(struct a733_typec_native *n)
     if(n->power_fault)return -1;
     if(!atomic_load_explicit(&n->gpio_ready,memory_order_acquire))return 0;
     uint64_t t,d;
-    if(!now(n,&t)||t<n->power_now||t>UINT64_MAX-1000){a733_typec_revoke(&n->provider);n->power_fault=1;return -1;}
-    n->power_now=t;d=t+1000;
+    if(!now(n,&t)||!a733_deadline_after(t,1000,&d)||!a733_monotonic_advance(t,&n->power_now)){
+        a733_typec_revoke(&n->provider);n->power_fault=1;return -1;}
     unsigned command=atomic_load_explicit(&n->command,memory_order_acquire);
     unsigned output=atomic_load_explicit(&n->output_state,memory_order_acquire);
     unsigned stop=atomic_load_explicit(&n->provider.revoked,memory_order_acquire)||n->power_fault;

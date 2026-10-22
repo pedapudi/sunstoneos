@@ -4,14 +4,13 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_control.h"
+#include "a733_range.h"
 #include <string.h>
 
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int outside(const struct pvr_gpu_control *s, const void *p, size_t n)
 {
-    return range(p, n) && ((uintptr_t)s + sizeof(*s) <= (uintptr_t)p ||
-                          (uintptr_t)p + n <= (uintptr_t)s);
+    return a733_span_excl_nonempty(p, n) &&
+        a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)p, n);
 }
 static uint64_t le(const unsigned char *p, unsigned n)
 {
@@ -39,7 +38,7 @@ int pvr_gpu_control_init(struct pvr_gpu_control *s, const struct pvr_gpu_start *
                          struct pvr_ccb *q, const struct pvr_gpu_control_ops *ops,
                          void *ctx, uint64_t deadline)
 {
-    if (!range(s, sizeof(*s)) || s->phase != PVR_GPU_CONTROL_NEW ||
+    if (!a733_span_excl_nonempty(s, sizeof(*s)) || s->phase != PVR_GPU_CONTROL_NEW ||
         !outside(s, start, sizeof(*start)) || !outside(s, q, sizeof(*q)) ||
         !outside(s, ops, sizeof(*ops)) || start->phase != PVR_GPU_START_BOOTED ||
         q->phase != PVR_CCB_PREPARED || !deadline || !ops->now || !ops->read32 ||

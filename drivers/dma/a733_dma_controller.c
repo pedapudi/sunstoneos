@@ -27,7 +27,7 @@ static int valid_channel(const struct a733_dma_controller *c, unsigned channel)
 
 /* Every range passed here was checked for overflow. */
 static int cpu_overlap(const struct a733_dma_mapping *a, const void *b, size_t n)
-{ return a733_dma_overlap((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
+{ return a733_extents_overlap_prechecked((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
 static int metadata_overlap(const struct a733_dma_mapping *m, const struct a733_dma_transfer *t)
 {
     return cpu_overlap(m, t, sizeof(*t)) ||
@@ -62,8 +62,8 @@ static int fifo_memory_conflict(const struct a733_dma_endpoint *e,
                                 const struct a733_dma_transfer *t)
 {
     for (size_t j = 0; j < t->mapping_count; ++j)
-        if (a733_dma_overlap(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
-    return a733_dma_overlap(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
+        if (a733_extents_overlap_prechecked(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
+    return a733_extents_overlap_prechecked(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
 }
 
 static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dma_transfer *b)
@@ -78,8 +78,9 @@ static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dm
                     /* Read and write FIFOs may share one MMIO address (UART RBR/
                      * THR). Each direction still needs independent native port
                      * admission; two readers or two writers remain exclusive. */
-                    if (e == o && other[o]->request && a733_dma_overlap(ends[e]->address, ends[e]->width,
-                                                     other[o]->address, other[o]->width)) return 1;
+                    if (e == o && other[o]->request &&
+                        a733_extents_overlap_prechecked(ends[e]->address, ends[e]->width,
+                                                        other[o]->address, other[o]->width)) return 1;
             }
             if (fifo_memory_conflict(ends[e], b)) return 1;
         }

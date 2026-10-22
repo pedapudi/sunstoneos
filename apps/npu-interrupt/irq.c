@@ -1,6 +1,7 @@
 #include "irq.h"
 #include "npu_service.h"
 #include "gicv3_spi.h"
+#include "a733_mmio.h"
 
 #define GICD UINT32_C(0x03400000)
 #define BIT (UINT32_C(1)<<1)
@@ -63,8 +64,7 @@ static int stop(void *cookie)
             /* CLOSE has disabled the device source and proved full idle.
              * Clear only this lifetime's pending SPI, after deactivation. */
             if(!binding.stopped) {
-                *(volatile uint32_t *)(uintptr_t)(GICD+0x28c)=BIT;
-                __asm__ volatile("dsb sy" ::: "memory");
+                a733_mmio_write32_dsb_sy_after(GICD+0x28c,BIT);
             }
             if((read32(0x10c)|read32(0x20c)|read32(0x30c))&BIT) {
                 binding.fault=1;result=-1;

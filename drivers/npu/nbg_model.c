@@ -1,4 +1,5 @@
 #include "nbg_model.h"
+#include "a733_range.h"
 
 static uint32_t u32(const unsigned char *p)
 {
@@ -10,16 +11,6 @@ static int32_t i32(const unsigned char *p)
 {
     uint32_t value = u32(p);
     return value > INT32_MAX ? -1 - (int32_t)~value : (int32_t)value;
-}
-
-static int cpu_range(const void *p, size_t n)
-{
-    return p != NULL && n != 0 && n <= UINTPTR_MAX - (uintptr_t)p;
-}
-
-static int overlaps(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an;
 }
 
 static void name(char *out, const unsigned char *in)
@@ -131,12 +122,7 @@ static enum nbg_decode_result fixed_header(struct nbg_model *m)
     return NBG_DECODE_OK;
 }
 
-static int file_range(size_t bytes, uint32_t offset, uint32_t length)
-{
-    return offset <= bytes && length <= bytes - offset;
-}
-
-/* Call only after file_range proves both ends fit within the 256 MiB file. */
+/* Call only after a733_extent_within proves both ends fit within the 256 MiB file. */
 static int intersect(uint32_t a, uint32_t an, uint32_t b, uint32_t bn)
 {
     return an && bn && a < b + bn && b < a + an;
@@ -150,12 +136,12 @@ static enum nbg_decode_result directory_header(struct nbg_model *m)
     if (u32(data + 36) || u32(data + 40) || u32(data + 44) || u32(data + 32) != 1)
         return NBG_DECODE_UNSUPPORTED;
     uint32_t sub = u32(data + 24);
-    if (u32(data + 28) != 12 || sub < 48 || !file_range(m->bytes, sub, 12))
+    if (u32(data + 28) != 12 || sub < 48 || !a733_extent_within(0, m->bytes, sub, 12))
         return NBG_DECODE_INVALID;
     uint32_t directory = u32(data + sub), width = u32(data + sub + 4);
     uint32_t count = u32(data + sub + 8);
     if (width != 44 || !count || count > NBG_SECTION_COUNT || directory < 48 ||
-        !file_range(m->bytes, directory, count * 44) ||
+        !a733_extent_within(0, m->bytes, directory, count * 44) ||
         intersect(sub, 12, directory, count * 44)) return NBG_DECODE_INVALID;
     uint64_t seen = 0;
     for (uint32_t i = 0; i < count; ++i) {
@@ -167,7 +153,7 @@ static enum nbg_decode_result directory_header(struct nbg_model *m)
         uint64_t bit = UINT64_C(1) << (kind - 1);
         if (seen & bit) return NBG_DECODE_INVALID;
         seen |= bit;
-        if (u32(p + 8) || u32(p + 16) || !file_range(m->bytes, offset, bytes) ||
+        if (u32(p + 8) || u32(p + 16) || !a733_extent_within(0, m->bytes, offset, bytes) ||
             !entry || bytes % entry ||
             (alignment && ((alignment & (alignment - 1)) || offset % alignment)) ||
             intersect(offset, bytes, 0, 48) || intersect(offset, bytes, sub, 12) ||
@@ -215,8 +201,9 @@ static enum nbg_decode_result directory_header(struct nbg_model *m)
 enum nbg_decode_result nbg_model_open(const void *input, size_t bytes, struct nbg_model *result)
 {
     if (bytes < NBG_MODEL_DIRECTORY_HEADER_BYTES || bytes > NBG_MODEL_MAX_BYTES ||
-        !cpu_range(input, bytes) || !cpu_range(result, sizeof(*result)) ||
-        overlaps(input, bytes, result, sizeof(*result))) return NBG_DECODE_INVALID;
+        !a733_span_excl_nonempty(input, bytes) || !a733_span_excl_nonempty(result, sizeof(*result)) ||
+        a733_extents_overlap_prechecked((uintptr_t)input, bytes, (uintptr_t)result, sizeof(*result)))
+        return NBG_DECODE_INVALID;
     const unsigned char *data = input;
     if (data[0] != 'V' || data[1] != 'P' || data[2] != 'M' || data[3] != 'N')
         return NBG_DECODE_INVALID;
@@ -293,12 +280,13 @@ enum nbg_decode_result nbg_model_open(const void *input, size_t bytes, struct nb
 
 static int output_valid(const struct nbg_model *m, void *out, size_t bytes)
 {
-    return cpu_range(m, sizeof(*m)) && cpu_range(out, bytes) &&
+    return a733_span_excl_nonempty(m, sizeof(*m)) && a733_span_excl_nonempty(out, bytes) &&
         m->bytes <= NBG_MODEL_MAX_BYTES &&
         ((m->header.version == NBG_MODEL_VERSION && m->bytes >= NBG_MODEL_HEADER_BYTES) ||
          (m->header.version == NBG_MODEL_DIRECTORY_VERSION &&
-          m->bytes >= NBG_MODEL_DIRECTORY_HEADER_BYTES)) && cpu_range(m->data, m->bytes) &&
-        !overlaps(m, sizeof(*m), out, bytes) && !overlaps(m->data, m->bytes, out, bytes);
+          m->bytes >= NBG_MODEL_DIRECTORY_HEADER_BYTES)) && a733_span_excl_nonempty(m->data, m->bytes) &&
+        a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)out, bytes) &&
+        a733_extents_disjoint_prechecked((uintptr_t)m->data, m->bytes, (uintptr_t)out, bytes);
 }
 
 static const unsigned char *record(const struct nbg_model *m, unsigned id, uint32_t index,

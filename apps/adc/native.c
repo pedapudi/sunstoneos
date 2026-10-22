@@ -1,6 +1,7 @@
 #include "adc.h"
 #include "boot.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct adc_application adc;
@@ -15,9 +16,11 @@ int adc_output_ready(void)
 {return adc_live()&&atomic_load_explicit(&adc.result,memory_order_acquire)==1;}
 static int mappings(void)
 {
+ /* Device identity pages; the write translation must be outer shareable. */
+ static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
  const uintptr_t pages[]={0x02002000,0x02003000,adc.session.version==2?0x02524000:0x02521000,0x03400000,0x07090000};
- for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i){struct aarch64_translation t;
-  if(!aarch64_device_translate(pages[i],1,&t)||t.physical!=pages[i]||t.attributes||t.shareability!=2)return 0;}
+ for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i)
+  if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&rule))return 0;
  return 1;
 }
 static int admitted(void *v,const struct a733_adc_config *c,const struct a733_clock_token *t)

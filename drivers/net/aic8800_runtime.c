@@ -1,11 +1,9 @@
 /* Native bounded radio receive and binding worker. Protocol and algorithm
  * references, source identities and licensing are in docs/radio-runtime.md. */
 #include "aic8800_runtime.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 
-static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX-(uintptr_t)p; }
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{ return (uintptr_t)a<(uintptr_t)b+bn && (uintptr_t)b<(uintptr_t)a+an; }
 static uint8_t majority(uint8_t a,uint8_t b,uint8_t c) { return (uint8_t)((a&b)^(a&c)^(b&c)); }
 static uint8_t choose(uint8_t a,uint8_t b,uint8_t c) { return (uint8_t)((a&b)^(~a&c)); }
 /* Every binding hash is SHA-256 of exactly four bytes. */
@@ -37,7 +35,7 @@ void aic8800_runtime_observe(struct aic8800_runtime *r,const void *owner,uint64_
 }
 int aic8800_runtime_init(struct aic8800_runtime *r,const struct aic8800_runtime_config *c)
 {
-    if(!span(r,sizeof(*r))||!span(c,sizeof(*c))||overlap(r,sizeof(*r),c,sizeof(*c))||
+    if(!a733_span_excl(r,sizeof(*r))||!a733_span_excl(c,sizeof(*c))||a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)c,sizeof(*c))||
        r->initialized||!c->read_platform_id||!c->binding_timeout)return 0;
     struct aic8800_runtime initial={0};initial.config=*c;initial.initialized=1;initial.binding_status=255;
     *r=initial;return 1;
@@ -48,15 +46,14 @@ static int challenge(struct aic8800_runtime *r,const uint8_t *bytes,uint64_t now
     /* Copy before any operation that can fault: received work stays owned. */
     for(unsigned i=0;i<16;++i)r->challenge[i]=bytes[i];
     r->binding_seen=1;r->stage=0;r->state=AIC8800_RUNTIME_VERIFYING;
-    if(r->config.binding_timeout>UINT64_MAX-now) {
-        aic8800_runtime_stop(r,r->owner,AIC8800_RUNTIME_TIME_ERROR);return 1;
-    }
-    r->binding_deadline=now+r->config.binding_timeout;return 1;
+    if(!a733_deadline_after(now,r->config.binding_timeout,&r->binding_deadline))
+        aic8800_runtime_stop(r,r->owner,AIC8800_RUNTIME_TIME_ERROR);
+    return 1;
 }
 int aic8800_runtime_claim(struct aic8800_runtime *r,const void *owner,uint64_t now,const uint8_t *early)
 {
     if(!r||!r->initialized||r->state!=AIC8800_RUNTIME_NEW||r->owner||!owner||
-        (early&&(!span(early,16)||overlap(r,sizeof(*r),early,16))))return 0;
+        (early&&(!a733_span_excl(early,16)||a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)early,16))))return 0;
     r->owner=owner;r->last_now=now;r->state=AIC8800_RUNTIME_RECEIVING;
     if(early)(void)challenge(r,early,now);
     return 1;
@@ -103,9 +100,10 @@ int aic8800_runtime_sent(struct aic8800_runtime *r,const void *owner)
 enum aic8800_codec_result aic8800_runtime_response(struct aic8800_runtime *r,
     const void *owner,const void *input,size_t available,uint64_t now,struct aic8800_sdio_response *out)
 {
-    if(!r||!r->initialized||r->owner!=owner||!span(input,available)||!span(out,sizeof(*out))||
-        overlap(r,sizeof(*r),input,available)||overlap(r,sizeof(*r),out,sizeof(*out))||
-        overlap(input,available,out,sizeof(*out)))return AIC8800_CODEC_INVALID;
+    if(!r||!r->initialized||r->owner!=owner||!a733_span_excl(input,available)||!a733_span_excl(out,sizeof(*out))||
+        a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)input,available)||
+        a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)out,sizeof(*out))||
+        a733_extents_overlap_prechecked((uintptr_t)input,available,(uintptr_t)out,sizeof(*out)))return AIC8800_CODEC_INVALID;
     aic8800_runtime_observe(r,owner,now);
     if(r->state==AIC8800_RUNTIME_FAULT)return AIC8800_CODEC_INVALID;
     const uint8_t *p=input;struct aic8800_sdio_response v={0};

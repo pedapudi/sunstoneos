@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_native_usb.h"
+#include "a733_range.h"
 #include "a733_usb_platform_native.h"
 #include "tusb.h"
 #include "device/dcd.h"
@@ -176,7 +177,7 @@ void kernel_main(void)
     memcpy(&input,(const void *)0x43000000,sizeof(input));platform_init();
     if(input.magic!=UINT64_C(0x31504e4953425355)||input.version!=1||
        input.bytes!=sizeof(input)||!input.generation)retained("input");
-    uint64_t start=counter()/24;if(start>UINT64_MAX-1800000)retained("counter");deadline=start+1800000;observation_deadline=start+1400000;
+    uint64_t start=counter()/24;if(!a733_deadline_after(start,1800000,&deadline))retained("counter");observation_deadline=start+1400000;
     struct a733_native_usb_config config={.identity=input.generation};
     config.pmic.owner=2;config.pmic.identity=input.generation;config.pmic.startup_deadline=deadline;
     for(unsigned i=0;i<2;++i)config.pmic.pins[i]=(struct a733_pin_config){input.pins[i][0],input.pins[i][1],input.pins[i][2]};

@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_usb.h"
+#include "a733_mmio.h"
 #include "device/dcd.h"
 
 #define USB 0x04100000UL
@@ -28,12 +29,12 @@ void a733_usb_prepare(void)
     mmio_write(CCU + 0x1300, mmio_read(CCU + 0x1300) | (1U << 30));
     uint32_t gate = mmio_read(CCU + 0x1304) | (1U << 8);
     mmio_write(CCU + 0x1304, gate & ~(1U << 24));
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_dsb_sy();
     vTaskDelay(pdMS_TO_TICKS(1));
     mmio_write(CCU + 0x1304, gate | (1U << 24));
     mmio_write(USB + 0x420, mmio_read(USB + 0x420) | 1);
     mmio_write(USB + 0x410, (mmio_read(USB + 0x410) & ~(1U << 3)) | (1U << 5));
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_dsb_sy();
     platform_puts("USB controller prepared\n");
 }
 
@@ -46,11 +47,11 @@ void a733_usb_poll(void)
 {
     if (poll_enabled) {
         volatile uint32_t *stats = (volatile uint32_t *)(RESULT_BASE + 128);
-        uint8_t pending = *(volatile uint8_t *)(USB + 0x4c);
+        uint8_t pending = a733_mmio_read8(USB + 0x4c);
         ++stats[0];
         if (pending & 4) ++stats[1];
         stats[2] = pending;
-        stats[3] = *(volatile uint16_t *)(USB + 0x82);
+        stats[3] = a733_mmio_read16(USB + 0x82);
         dcd_int_handler(0);
     }
 }

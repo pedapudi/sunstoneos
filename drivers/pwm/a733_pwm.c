@@ -13,6 +13,7 @@
  */
 #include "a733_pwm.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define PWM A733_PWM_BASE
@@ -53,8 +54,6 @@ int a733_pwm_plan(const struct a733_pwm_config *c,struct a733_pwm_plan *p,a733_c
  ((uint32_t)(ticks-1)<<16)|(uint32_t)active,(uint32_t)ticks,(uint32_t)active,duration};
  *shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|(source==3?A733_CLOCK_PERI0:0)|(c->led_enabled?A733_CLOCK_APBS0:0);return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static enum a733_pwm_result fail(struct a733_pwm *p,unsigned error)
 {
  p->fault=1;if(!p->report.error)p->report.error=error;
@@ -64,7 +63,8 @@ static enum a733_pwm_result fail(struct a733_pwm *p,unsigned error)
  return A733_PWM_RETAINED;
 }
 static int timely(struct a733_pwm *p)
-{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->config.deadline_us&&(!p->service_step||n<p->service_deadline);}
+{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||!a733_monotonic_advance(n,&p->last_now))return 0;
+ return n<p->config.deadline_us&&(!p->service_step||n<p->service_deadline);}
 static enum a733_pwm_result finish(struct a733_pwm *p,enum a733_pwm_result r)
 {if(p->held){p->ops.leave(p->cookie);p->held=0;}atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
 static int api(struct a733_pwm *p)
@@ -116,9 +116,10 @@ int a733_pwm_init(struct a733_pwm *p,const struct a733_pwm_config *c,const struc
  !o->leave||!o->retain||!o->read||!o->write||!o->outside||!clocks||!clocks->initialized||!pins||!pins->initialized||
  !rails||rails->self!=rails||rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||pmic->pins!=pins||
  pmic->rails!=rails||!pmic->ops.outside||pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||o->outside(cookie,p,sizeof(*p))!=1||
- !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||!separate(p,sizeof(*p),clocks,sizeof(*clocks))||
- !separate(p,sizeof(*p),pins,sizeof(*pins))||!separate(p,sizeof(*p),rails,sizeof(*rails))||!separate(p,sizeof(*p),pmic,sizeof(*pmic))||
- !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
+ !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
+ !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
+ !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
+ !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
  *p=(struct a733_pwm){.config=*c,.plan=plan,.ops=*o,.cookie=cookie,.clocks=clocks,.pins=pins,.rails=rails,.pmic=pmic,.shared=shared};
  atomic_init(&p->busy,0);p->initialized=1;return 1;
 }

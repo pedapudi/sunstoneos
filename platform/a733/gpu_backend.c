@@ -4,13 +4,12 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See drivers/gpu/LICENSE.pvr.
  */
 #include "a733_gpu_backend.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_gpu_platform_native.h"
 
-static int span(const void *p, size_t n)
-{ return p && n && (uintptr_t)p <= UINTPTR_MAX - n; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return span(a, n) && span(b, m) && ((uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a); }
 static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
 {
     unsigned expected = 0;
@@ -27,9 +26,9 @@ static int healthy(struct a733_gpu_backend *b)
 }
 static int device_page(uintptr_t address)
 {
-    struct aarch64_translation r, w;
-    return aarch64_device_translate(address, 0, &r) && aarch64_device_translate(address, 1, &w) &&
-        r.physical == address && w.physical == address && r.attributes == 0 && w.attributes == 0;
+    static const struct a733_mapping_rule device = {A733_MAPPING_READ_WRITE, 1,
+        {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 0, 1};
+    return a733_mapping_check(aarch64_device_translate, address, address, &device);
 }
 static int device_pages(void)
 {
@@ -41,25 +40,23 @@ static int device_pages(void)
 }
 static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int queue_event)
 {
-    if (!span(p, bytes) || !separate(b, sizeof(*b), p, bytes) ||
-        (b->external.revoked && !separate(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
-        !separate(b->memory, sizeof(*b->memory), p, bytes) ||
-        !separate(b->power, sizeof(*b->power), p, bytes) ||
-        !separate(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
-        (!queue_event && !separate(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
-        !separate(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
+    if (!a733_span_excl_nonempty(p, bytes) || !a733_ranges_disjoint_nonempty(b, sizeof(*b), p, bytes) ||
+        (b->external.revoked && !a733_ranges_disjoint_nonempty(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
+        !a733_ranges_disjoint_nonempty(b->memory, sizeof(*b->memory), p, bytes) ||
+        !a733_ranges_disjoint_nonempty(b->power, sizeof(*b->power), p, bytes) ||
+        !a733_ranges_disjoint_nonempty(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
+        (!queue_event && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
+        !a733_ranges_disjoint_nonempty(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *buffer = i < 3 ? &b->memory->firmware[i] : &b->memory->resources[i - 3];
-        if (!separate(buffer->storage.cpu, buffer->storage.bytes, p, bytes) ||
-            !separate(buffer->pages, buffer->page_count * sizeof(uint64_t), p, bytes)) return 0;
+        if (!a733_ranges_disjoint_nonempty(buffer->storage.cpu, buffer->storage.bytes, p, bytes) ||
+            !a733_ranges_disjoint_nonempty(buffer->pages, buffer->page_count * sizeof(uint64_t), p, bytes)) return 0;
     }
-    uintptr_t first = (uintptr_t)p, end = first + bytes - 1;
-    for (uintptr_t address = first;; address = (address & ~(uintptr_t)4095) + 4096) {
-        struct aarch64_translation t;
-        if (!aarch64_device_translate(address, 1, &t) || (t.attributes != 0xff && t.attributes != 0x44)) return 0;
-        if ((address >> 12) == (end >> 12)) break;
-    }
-    return 1;
+    /* Every page of the span must be writable Normal memory, write-back or
+     * non-cacheable; the physical address is not compared. */
+    static const struct a733_mapping_rule normal = {A733_MAPPING_WRITE, 2,
+        {{A733_MAIR_NORMAL_WB, A733_SH_ANY}, {A733_MAIR_NORMAL_NC, A733_SH_ANY}}, 0, 0};
+    return a733_mapping_check_pages(aarch64_device_translate, (uintptr_t)p, 0, bytes, &normal);
 }
 static int output(struct a733_gpu_backend *b, const void *p, size_t bytes)
 { return output_span(b, p, bytes, 0); }
@@ -89,19 +86,17 @@ static int active(struct a733_gpu_backend *b)
 static int raw_read(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t *out)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
-    __asm__ volatile("dsb sy" ::: "memory");
-    uint64_t value = width == 4 ? *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + off) :
-                                 *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + off);
-    __asm__ volatile("dsb sy" ::: "memory");
-    *out = value; return 1;
+    uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
+    *out = width == 4 ? a733_mmio_read32_dsb_sy_both(address) : a733_mmio_read64_dsb_sy_both(address);
+    return 1;
 }
 static int raw_write(struct a733_gpu_backend *b, uint32_t off, uint32_t width, uint64_t value)
 {
     if (!device_page(A733_GPU_REGISTERS + off)) return fail(b, A733_GPU_BACKEND_MAPPING);
-    __asm__ volatile("dsb sy" ::: "memory");
-    if (width == 4) *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + off) = (uint32_t)value;
-    else *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + off) = value;
-    __asm__ volatile("dsb sy" ::: "memory"); return 1;
+    uintptr_t address = (uintptr_t)(A733_GPU_REGISTERS + off);
+    if (width == 4) a733_mmio_write32_dsb_sy_both(address, (uint32_t)value);
+    else a733_mmio_write64_dsb_sy_both(address, value);
+    return 1;
 }
 static int power_begin(void *context, uint64_t deadline)
 {
@@ -436,32 +431,33 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     if (!b || !s || !c || !m || !p || !external || b->phase != A733_GPU_BACKEND_NEW ||
         s->initialized || m->phase != A733_GPU_MEMORY_OFFLINE || !p->initialized || !p->manager ||
         p->phase != A733_GPU_PLATFORM_NEW || c->state.gpu_clock_hz != A733_GPU_INITIAL_HZ ||
-        c->state.bvnc != PVR_FW_A733_BVNC || !span(c->firmware, c->firmware_bytes)) return 0;
+        c->state.bvnc != PVR_FW_A733_BVNC || !a733_span_excl_nonempty(c->firmware, c->firmware_bytes)) return 0;
     if (c->free_lists.count && (!c->free_lists.ops.allocate || !c->free_lists.ops.publish_page ||
         !c->free_lists.ops.read || !c->free_lists.ops.write || !c->free_lists.ops.publish ||
         !c->free_lists.ops.recover_targets)) return 0;
     const void *objects[] = {b, s, c, m, p, p->manager, external};
     const size_t sizes[] = {sizeof(*b), sizeof(*s), sizeof(*c), sizeof(*m), sizeof(*p), sizeof(*p->manager), sizeof(*external)};
     if (external->revoked) {
-        struct aarch64_translation t;
+        static const struct a733_mapping_rule write_back = {A733_MAPPING_READ, 1,
+            {{A733_MAIR_NORMAL_WB, A733_SH_ANY}}, 0, 0};
         if ((uintptr_t)external->revoked % _Alignof(atomic_uint) ||
-            !aarch64_device_translate((uintptr_t)external->revoked, 0, &t) || t.attributes != 0xff ||
-            !separate(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
+            !a733_mapping_check(aarch64_device_translate, (uintptr_t)external->revoked, 0, &write_back) ||
+            !a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
         for (unsigned i = 0; i < 7; ++i)
-            if (!separate(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;
+            if (!a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;
     }
     for (unsigned i = 0; i < 7; ++i) {
-        if (!separate(objects[i], sizes[i], c->firmware, c->firmware_bytes)) return 0;
-        for (unsigned j = 0; j < i; ++j) if (!separate(objects[i], sizes[i], objects[j], sizes[j])) return 0;
+        if (!a733_ranges_disjoint_nonempty(objects[i], sizes[i], c->firmware, c->firmware_bytes)) return 0;
+        for (unsigned j = 0; j < i; ++j) if (!a733_ranges_disjoint_nonempty(objects[i], sizes[i], objects[j], sizes[j])) return 0;
     }
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *a = i < 3 ? &c->firmware_buffers[i] : &c->resources[i - 3];
         const struct pvr_mips_buffer *d = i < 3 ? &m->firmware[i] : &m->resources[i - 3];
         if (a->storage.cpu != d->storage.cpu || a->storage.bytes != d->storage.bytes || a->pages != d->pages || a->page_count != d->page_count) return 0;
-        if (external->revoked && (!separate(external->revoked, sizeof(*external->revoked), a->storage.cpu, a->storage.bytes) ||
-            !separate(external->revoked, sizeof(*external->revoked), a->pages, a->page_count * sizeof(uint64_t)))) return 0;
-        for (unsigned j = 0; j < 7; ++j) if (!separate(objects[j], sizes[j], a->storage.cpu, a->storage.bytes) ||
-            !separate(objects[j], sizes[j], a->pages, a->page_count * sizeof(uint64_t))) return 0;
+        if (external->revoked && (!a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), a->storage.cpu, a->storage.bytes) ||
+            !a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), a->pages, a->page_count * sizeof(uint64_t)))) return 0;
+        for (unsigned j = 0; j < 7; ++j) if (!a733_ranges_disjoint_nonempty(objects[j], sizes[j], a->storage.cpu, a->storage.bytes) ||
+            !a733_ranges_disjoint_nonempty(objects[j], sizes[j], a->pages, a->page_count * sizeof(uint64_t))) return 0;
     }
     uint64_t frequency;
     if (!aarch64_device_cache_stride() || !device_pages()) return 0;

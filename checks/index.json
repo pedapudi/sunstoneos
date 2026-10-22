@@ -154,7 +154,8 @@
   "cache_areas": [],
   "docs": [
    "docs/crypto-cipher.md",
-   "docs/crypto-hash.md"
+   "docs/crypto-hash.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -732,7 +733,9 @@
  },
  "a733-radio-session.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -882,7 +885,8 @@
   ],
   "docs": [
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1316,7 +1320,9 @@
  },
  "aic8800-dispatch.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1557,6 +1563,17 @@
    "--output"
   ],
   "summary": "Check that build patches apply exactly and supervised profiles require an explicit board mode.",
+  "usb": false
+ },
+ "audit-consolidate-apps-a-h-equivalence.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Application mapping, deadline and range helpers match the inline code they replaced.",
   "usb": false
  },
  "audit-device-minors-usb-control.py": {
@@ -2472,7 +2489,9 @@
  },
  "crypto-runtime-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3689,7 +3708,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3732,7 +3753,8 @@
  "gpu-display-preparation.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-display-preparation.md"
+   "docs/gpu-display-preparation.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4365,7 +4387,8 @@
  "h264-high-modes.py": {
   "cache_areas": [],
   "docs": [
-   "docs/h264-native.md"
+   "docs/h264-native.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4831,6 +4854,7 @@
    "sources"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/hevc-native.md"
   ],
   "library": false,
@@ -4862,6 +4886,7 @@
  "hevc-image.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/hevc-native.md"
   ],
   "library": false,
@@ -4879,6 +4904,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/hevc-native.md"
   ],
   "library": false,
@@ -4922,6 +4948,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/i2s-stream.md"
   ],
   "library": false,
@@ -5394,7 +5421,9 @@
  },
  "jpeg-sealing-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5424,7 +5453,9 @@
  },
  "jpeg-supervised-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5703,7 +5734,9 @@
  },
  "monitor-application-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6355,6 +6388,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6371,6 +6405,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6385,6 +6420,7 @@
  "os-image-identity.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6401,6 +6437,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6439,6 +6476,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -8530,7 +8568,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

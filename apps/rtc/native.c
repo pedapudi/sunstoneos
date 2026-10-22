@@ -1,24 +1,22 @@
 #include "rtc.h"
 #include "boot.h"
 #include "a733_storage_digest.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include <string.h>
 struct rtc_application rtc;
 static uint64_t deadline(void){return board.session.deadline_us>10000?board.session.deadline_us-10000:0;}
 static int now(void *c,uint64_t *out)
 {return c==&rtc&&board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,out)==1;}
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int device(uintptr_t p)
-{
- struct aarch64_translation t;
- return aarch64_device_translate(p,1,&t)&&t.physical==p&&t.attributes==0&&t.shareability==2;
-}
+{return a733_mapping_check(aarch64_device_translate,p,p,&device_rule);}
 static int read_reg(void *c,uint32_t offset,uint32_t *v)
 {
  if(c!=&rtc||!v||offset>0x50||(offset&3)||!board_live(NULL))return 0;
  uintptr_t p=0x07090000+offset;
  if(!device(p))return 0;
- __asm__ volatile("dsb sy":::"memory");*v=*(volatile uint32_t *)p;
- __asm__ volatile("dsb sy":::"memory");return board_live(NULL);
+ *v=a733_mmio_read32_dsb_sy_both(p);return board_live(NULL);
 }
 static int write_reg(void *c,uint32_t offset,uint32_t value)
 {
@@ -26,18 +24,18 @@ static int write_reg(void *c,uint32_t offset,uint32_t value)
     (offset!=0x20&&offset!=0x24&&offset!=0x28&&offset!=0x2c&&offset!=0x30)||
     (offset==0x30&&value!=1))return 0;
  uintptr_t p=0x07090000+offset;if(!device(p))return 0;
- *(volatile uint32_t *)p=value;__asm__ volatile("dsb sy":::"memory");return board_live(NULL);
+ a733_mmio_write32_dsb_sy_after(p,value);return board_live(NULL);
 }
 /* Caller has already masked228. Active must clear after the FreeRTOS IRQ
  * wrapper's EOI before task-side RTC access. Never clear inherited GIC pending. */
 static int quiet(unsigned pending)
 {
  if(!device(0x03400000)||!device(0x0340011c))return 0;
- __asm__ volatile("dsb sy":::"memory");
- if((*(volatile uint32_t *)0x03400000&(1u<<31))||
-    (*(volatile uint32_t *)0x0340011c&16)||
-    (*(volatile uint32_t *)0x0340031c&16))return 0;
- return !pending||!(*(volatile uint32_t *)0x0340021c&16);
+ a733_mmio_dsb_sy();
+ if((a733_mmio_read32(0x03400000)&(1u<<31))||
+    (a733_mmio_read32(0x0340011c)&16)||
+    (a733_mmio_read32(0x0340031c)&16))return 0;
+ return !pending||!(a733_mmio_read32(0x0340021c)&16);
 }
 static _Noreturn void retained(void)
 {

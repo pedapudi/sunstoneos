@@ -1,16 +1,12 @@
 #include "radio.h"
 #include "a733_ce_native.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 enum { STARTING,CONNECTING,SECURING,ONLINE };
 /* CPU time one owner poll may spend repeating session steps that advance. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
 #define BOARD_RADIO_POLL_BUDGET_US 500u
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int platform_id(void *context,uint8_t id[16])
 {
     const struct board_radio_chip_id *source=context;
@@ -23,12 +19,12 @@ static int platform_id(void *context,uint8_t id[16])
 int board_radio_init(struct board_radio *r,const struct board_radio_config *input)
 {
     if(!r||r->self||!input||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
-        !separate(r,sizeof(*r),input,sizeof(*input)))return 0;
+        !a733_ranges_disjoint(r,sizeof(*r),input,sizeof(*input)))return 0;
     const struct board_radio_config *c=input;
     if(!c->shared||!c->shared->used||!c->admit||!c->chip_id||!c->chip_id->secure_read_record||
-        !c->recovery_state||!separate(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
-        !separate(r,sizeof(*r),c->shared,sizeof(*c->shared))||
-        !separate(r,sizeof(*r),c->chip_id,sizeof(*c->chip_id))||
+        !c->recovery_state||!a733_ranges_disjoint(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
+        !a733_ranges_disjoint(r,sizeof(*r),c->shared,sizeof(*c->shared))||
+        !a733_ranges_disjoint(r,sizeof(*r),c->chip_id,sizeof(*c->chip_id))||
         c->session.owner_task!=c->entropy.owner||c->network.bootstrap!=c->session.owner_task||
         c->entropy.clock!=&c->shared->counter||!c->entropy.source||!c->entropy.source->engine||
         c->entropy.source->engine->binding.registry!=&c->shared->clocks||
@@ -207,13 +203,13 @@ int board_radio_submit(struct board_radio *r,const struct sunstone_net_request *
     return r&&r->self==r&&r->constructed&&!atomic_load_explicit(&r->failed,memory_order_acquire)&&
         !(atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)&&
         atomic_load_explicit(&r->network_started,memory_order_acquire)&&
-        separate(r,sizeof(*r),request,sizeof(*request))&&separate(r,sizeof(*r),ticket,sizeof(*ticket))&&
+        a733_ranges_disjoint(r,sizeof(*r),request,sizeof(*request))&&a733_ranges_disjoint(r,sizeof(*r),ticket,sizeof(*ticket))&&
         sunstone_net_submit(&r->session.sockets,request,ticket);
 }
 int board_radio_receive(struct board_radio *r,struct sunstone_net_reply *reply,TickType_t wait)
 {
     return r&&r->self==r&&r->constructed&&atomic_load_explicit(&r->network_started,memory_order_acquire)&&
-        separate(r,sizeof(*r),reply,sizeof(*reply))&&
+        a733_ranges_disjoint(r,sizeof(*r),reply,sizeof(*reply))&&
         sunstone_net_receive(&r->session.sockets,reply,wait);
 }
 uint64_t board_radio_completed_transfers(const struct board_radio *r)
@@ -227,8 +223,8 @@ uint64_t board_radio_completed_transfers(const struct board_radio *r)
 int board_radio_watchdog(struct board_radio *r,uint64_t *progress,uint64_t *deadline)
 {
     if(!r||r->self!=r||!r->constructed||!progress||!deadline||
-        !separate(r,sizeof(*r),progress,sizeof(*progress))||!separate(r,sizeof(*r),deadline,sizeof(*deadline)))return -1;
-    if(!separate(progress,sizeof(*progress),deadline,sizeof(*deadline)))return -1;
+        !a733_ranges_disjoint(r,sizeof(*r),progress,sizeof(*progress))||!a733_ranges_disjoint(r,sizeof(*r),deadline,sizeof(*deadline)))return -1;
+    if(!a733_ranges_disjoint(progress,sizeof(*progress),deadline,sizeof(*deadline)))return -1;
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||
         (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     unsigned unlocked=0;
@@ -311,8 +307,8 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
 {
     if(!r||r->self||!shared||!p||p->used||!providers||!provider_bytes||!owner||!client||
         owner==client||!recovery_state||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
-        !startup_profile_valid(f,expected,id)||!separate(r,sizeof(*r),providers,provider_bytes)||
-        !separate(r,sizeof(*r),f,sizeof(*f)))return 0;
+        !startup_profile_valid(f,expected,id)||!a733_ranges_disjoint(r,sizeof(*r),providers,provider_bytes)||
+        !a733_ranges_disjoint(r,sizeof(*r),f,sizeof(*f)))return 0;
     p->used=1;p->shared=shared;p->profile=f;p->source=&r->ce_source;
     p->pool_mutex=xSemaphoreCreateMutexStatic(&p->mutex_storage);
     if(!p->pool_mutex)return 0;
@@ -365,7 +361,7 @@ static int client_failure(struct board_radio *r)
  atomic_store_explicit(&r->failed,1,memory_order_release);return -1;}
 int board_radio_client_result(const struct board_radio *r,unsigned *verified)
 {
-    if(!r||r->self!=r||!r->constructed||!verified||!separate(r,sizeof(*r),verified,sizeof(*verified)))return -1;
+    if(!r||r->self!=r||!r->constructed||!verified||!a733_ranges_disjoint(r,sizeof(*r),verified,sizeof(*verified)))return -1;
     unsigned status=atomic_load_explicit(&r->client_status,memory_order_acquire);
     *verified=atomic_load_explicit(&r->verified_received,memory_order_acquire);
     if(status==2||atomic_load_explicit(&r->failed,memory_order_acquire)||

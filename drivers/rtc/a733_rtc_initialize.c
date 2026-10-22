@@ -4,13 +4,13 @@
  * Calendar ordering/settling adapted from pinned rtc-sunxi.c:settime.
  * Source mux/gate fields follow ccu-sun60iw2-rtc.c and manual9.1.7 tables. */
 #include "a733_rtc_application.h"
+#include "a733_range.h"
 #include <stddef.h>
 struct initialization {const struct a733_rtc_ops *ops;void *context;uint64_t deadline,last,start;struct a733_rtc_initialization *out;
  int (*pause)(void *,uint64_t);int (*cancelled)(void *);uint32_t cancel_seen;};
 static int now(struct initialization *c,uint64_t *n)
 {
- if(c->ops->now_us(c->context,n)!=1||*n<c->last||*n>=c->deadline)return 0;
- c->last=*n;
+ if(c->ops->now_us(c->context,n)!=1||!a733_deadline_admit(*n,&c->last,c->deadline))return 0;
  if(c->cancelled&&c->cancelled(c->context)){
   c->cancel_seen=1;if(!c->out->writes)return 0;
  }

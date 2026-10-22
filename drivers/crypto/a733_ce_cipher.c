@@ -2,7 +2,7 @@
 enum { REQUEST,WAIT,CLEAN,PUBLISH,DONE };
 static void zero(void *p,size_t n) {volatile uint8_t *b=p;while (n--) *b++=0;}
 static int outside(const struct a733_ce_cipher *s,const void *p,size_t n)
-{return a733_ce_separate(s,sizeof(*s),p,n) && a733_ce_session_outside(s->bound_engine,p,n);}
+{return a733_ranges_disjoint(s,sizeof(*s),p,n) && a733_ce_session_outside(s->bound_engine,p,n);}
 static void private_clear(struct a733_ce_cipher *s)
 {
     zero(s->key,sizeof(s->key));zero(s->iv,sizeof(s->iv));zero(s->hash_subkey,sizeof(s->hash_subkey));
@@ -22,9 +22,8 @@ static int bound(struct a733_ce_cipher *s)
 static int time_ok(struct a733_ce_cipher *s)
 {
     uint64_t now;
-    if (s->bound_engine->binding.ops.now_us(s->bound_engine->binding.cookie,&now)!=1 ||
-        now<s->last_now || now>=s->deadline) return 0;
-    s->last_now=now;return 1;
+    return s->bound_engine->binding.ops.now_us(s->bound_engine->binding.cookie,&now)==1 &&
+        a733_deadline_admit(now,&s->last_now,s->deadline);
 }
 /* GHASH multiplication in GF(2^128) (SP 800-38D 6.3) without data-dependent
  * branches: x = x*y. */
@@ -105,7 +104,7 @@ enum a733_ce_cipher_result a733_ce_cipher_start(struct a733_ce_cipher *s,const s
         !outside(s,generation,sizeof(*generation)) || !s->next_generation) return finish(s,A733_CE_CIPHER_INVALID);
     for (unsigned i=0;i<4;++i)
         if ((sizes[i] || i==3) && (!outside(s,buffers[i],sizes[i]) ||
-            !a733_ce_separate(buffers[i],sizes[i],generation,sizeof(*generation)))) return finish(s,A733_CE_CIPHER_INVALID);
+            !a733_ranges_disjoint(buffers[i],sizes[i],generation,sizeof(*generation)))) return finish(s,A733_CE_CIPHER_INVALID);
     if (s->active) return finish(s,A733_CE_CIPHER_BUSY);
     uint64_t now;
     if (s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)!=1 || now<s->last_now) return retain(s);
