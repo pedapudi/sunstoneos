@@ -134,6 +134,7 @@ def main():
     r = sub.add_parser('report')
     r.add_argument('--samples', type=int, default=10000)
     args = ap.parse_args()
+    args.out = args.out.resolve()  # before the chdir into the mimus checkout
     args.out.mkdir(parents=True, exist_ok=True)
     root = args.mimus.resolve()
     os.chdir(root)

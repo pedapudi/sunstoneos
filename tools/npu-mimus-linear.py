@@ -267,8 +267,10 @@ def quantize(args):
     params = data['quantize_parameters']
     changed = []
     for key, value in params.items():
-        if meta['digits']:
-            # Codes at unit scale: digits in, exact integer partials out.
+        if meta['digits'] or meta['unit']:
+            # Codes at unit scale with no bias. The digit form takes INT8
+            # digits and returns exact INT16 partials; the unit form takes
+            # INT16 codes and returns the sums in the requested output type.
             if key.endswith(':weight'):
                 params[key] = dict(qtype='i8', quantizer='perchannel_symmetric_affine', rounding='rtne',
                                    scale=[1.0] * len(ws), channel_dim=value.get('channel_dim', 1))
@@ -276,19 +278,9 @@ def quantize(args):
                 params[key] = dict(qtype='i32', quantizer='perchannel_symmetric_affine', rounding='rtne',
                                    scale=[1.0] * len(ws), channel_dim=0)
             elif key.startswith('@input'):
-                params[key] = entry('i8', 1.0)
+                params[key] = entry('i8' if meta['digits'] else 'i16', 1.0)
             else:
-                params[key] = entry('i16', 1.0)
-        elif meta['unit']:
-            if key.endswith(':weight') or key.endswith(':bias'):
-                params[key] = dict(qtype='i8' if key.endswith(':weight') else 'i32',
-                                   quantizer='perchannel_symmetric_affine', rounding='rtne',
-                                   scale=[1.0] * len(ws),
-                                   channel_dim=value.get('channel_dim', 1) if key.endswith(':weight') else 0)
-            elif key.startswith('@input'):
-                params[key] = entry('i16', 1.0)
-            else:
-                params[key] = entry(args.output_qtype, 1.0)
+                params[key] = entry('i16' if meta['digits'] else args.output_qtype, 1.0)
         elif key.endswith(':weight'):
             params[key] = dict(qtype='i8', quantizer='perchannel_symmetric_affine', rounding='rtne',
                                scale=[float(v) for v in ws], channel_dim=value.get('channel_dim', 1))

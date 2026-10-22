@@ -2071,12 +2071,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ([remaining work](npu-session.md#remaining-work)). The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A
-  [mimus linear-layer study](npu-mimus-linear.md) finds no 32-bit output code
-  in the NN descriptor. Base-16 digit partial sums instead return exact sums
-  in the simulator, and their CPU read-out is bit-identical to the mimus
-  kernel. On today's session runtime one such layer costs about 13 times the
-  A76 kernel's CPU cycles, mostly per-job integrity checks, so mimus keeps its
-  CPU kernel. The INT16 layer, recorded as a separate variant, meets the
+  [mimus linear-layer study](npu-mimus-linear.md) finds that none of the eight
+  three-bit output type codes of the NN descriptor returns 32-bit sums in the
+  SDK simulator; a fourth type bit, if one exists, was not located, and its
+  codes 8–15 are untested. Base-16 digit partial sums return exact sums in the
+  simulator, and their CPU read-out is bit-identical to the mimus kernel. On
+  today's session runtime one such layer is estimated to cost about 13 times
+  the A76 kernel's CPU cycles, mostly per-job integrity checks, so mimus keeps
+  its CPU kernel. The A76 figure is an emulated instruction count, not a
+  measurement. The INT16 layer, recorded as a separate variant, meets the
   float32 word-error-rate criterion on three held-out sets in simulation.
   Physical execution remains unqualified.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)

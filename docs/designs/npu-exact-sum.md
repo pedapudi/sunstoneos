@@ -1,10 +1,30 @@
 # Design: exact integer sums from the NPU for mimus linear layers
 
-Status: **design; no code.** All work runs on the host: the pinned compiler,
-the SDK simulator, the native NBG decoder and assembler, the session host
-model and Unicorn instruction emulation. No board or NPU executes anything.
-Each result ends at implemented and host-modeled, with physical behavior
-pending.
+Status: **implemented as a host study; result recorded in
+[npu-mimus-linear.md](../npu-mimus-linear.md).** All work runs on the host:
+the pinned compiler, the SDK simulator, the native NBG decoder and
+assembler, the session host model and Unicorn instruction emulation. No
+board or NPU executes anything, and physical behavior is untested.
+
+- **Step 1 refused.** None of the eight three-bit output type codes returns
+  32-bit sums in the simulator. A fourth type bit, if one exists, was not
+  located, so codes 8–15 are untested.
+- **Step 2 exact, cost comparison failed.** Every simulator partial is exact
+  for the query projection, the first feed-forward linear and the range
+  fixture, and the read-out is bit-identical to `MimusGemmS16FC`. On today's
+  runtime the exact layer is estimated at 13.4 times the A76 kernel's CPU
+  cycles.
+- **Step 3 passes.** The INT16 variant meets the float32 word-error-rate
+  criterion on dev-other, dev-clean and the device replay in simulation.
+
+The implementation departs from this design in five places, each recorded
+where it applies below:
+
+- the probe repairs checksums with its own code;
+- the step 3 accuracy model wraps mimus instead of changing it;
+- instruction counts come from a second Unicorn harness;
+- NPU cycles are compiler estimates;
+- the layer with K = 704 is refused, as the chunk rule requires.
 
 ## What a bit-exact layer needs
 
@@ -45,9 +65,15 @@ settles the question from the descriptor:
   neural-transpose records to locate the output data-type, post-multiplier
   and post-shift fields.
 - Write each unused data-type code into a copy of the INT16 graph, recompute
-  the checksums with `checks/nbg-checksum-reference.py`, and run the copy in
-  the simulator. Accept a code only if every sum of the three studied layers
-  comes back exact.
+  the checksums, and run the copy in the simulator. Accept a code only if
+  every sum of the three studied layers comes back exact.
+
+`checks/nbg-checksum-reference.py` handles only graphs whose header version
+is 0x1001e, while the pinned compiler writes version 0x20000 graphs with a
+section directory. The probe, `tools/npu-mimus-probe.py`, therefore carries
+its own checksum repair. The repair reproduces every compiled graph's stored
+checksums, and the native verifier `nbg_checksum_verify` accepts every
+patched copy.
 
 Patched graphs are simulator-only probe artifacts. They are never added to
 the session catalogue or run on the board, because catalogue admission rests
@@ -100,13 +126,17 @@ unmodified mimus kernel `MimusGemmS16FC`. A range fixture drives partials to
 the step 2 graph, the assembler refuses its operations, the simulator output
 is not bit-exact, or the cost comparison below fails. The INT16 graph then
 becomes a separate recorded variant; the shipped model and CPU kernel stay
-unchanged. The accuracy model extends mimus `train/static_scales.py`, which
+unchanged. The accuracy model builds on mimus `train/static_scales.py`, which
 already simulates static per-tensor input scales with calibration
 (`--calib`), saturation and the same scoring. Two pieces are added: the bias
 rounded to an int32 code in units of the input scale times `ws[n]`, and one
 rounding of each output to the INT16 step at the NPU output scale, taken
 from the site's calibrated output range. Scoring uses `train/compare_wer.py`
-with 10,000 bootstrap resamples on dev-other, dev-clean and replay. A set
+with 10,000 bootstrap resamples on dev-other, dev-clean and replay. The
+mimus checkout stays unchanged: `tools/npu-mimus-accuracy.py` loads
+`static_scales.py` and replaces `quant.QuantSite.matmul`,
+`static_scales.configure` and the result directory from outside, and it
+stands in for the two additions until the mimus owner takes them. A set
 passes when the 95% interval of the relative WER change against fp32
 contains 0 and the point estimate is at most +1% relative
 (`docs/int8_activations.md`). mimus reserves test-clean and test-other for
@@ -163,9 +193,8 @@ failed comparison is a recorded result that touches no device.
   `tools/npu-mimus-linear.py` and `tools/npu-mimus-linear.sh`; the host build
   of the unmodified mimus kernel in `checks/npu-mimus-kernel.cc`;
   `nbg_model_open` and `nbg_assemble_layout`, unchanged, to lay out the new
-  graph; the checksum reference for the probe; mimus `train/static_scales.py`
-  and `train/compare_wer.py` for step 3; the Unicorn harness
-  `tools/aarch64_kernel_check.py` on the mimus `port/sunstoneos` branch.
+  graph; mimus `train/static_scales.py` and `train/compare_wer.py` for
+  step 3, unchanged.
 - **Removed:** the `--raw-sums` INT32 form of the tool. The descriptor probe
   replaces it as the INT32 evidence; its refusal logs stay in the build cache.
 - **New, owned:** `checks/npu-mimus-cost.c`, a native host check that
@@ -174,6 +203,14 @@ failed comparison is a recorded result that touches no device.
   and `checks/npu-mimus-digits.cc`, the digit split and recombination,
   compiled with the backend's AArch64 flags for instruction counts and later
   handed to the mimus engine owner.
+- **New, not planned above:** `tools/npu-mimus-probe.py`, the descriptor
+  probe with its own checksum repair; `tools/npu-mimus-accuracy.py`, the
+  step 3 wrapper around `static_scales.py`; and `tools/npu-mimus-cost.py`,
+  which counts instructions under Unicorn and charges the events. Its
+  Unicorn harness duplicates the mimus `tools/aarch64_kernel_check.py` on the
+  `port/sunstoneos` branch, which has no instruction-count option, so that
+  file stays unchanged. The two harnesses can merge when the mimus owner
+  adds the option.
 
 ## Performance budgets
 
@@ -184,7 +221,7 @@ the same runtime.
 
 | Metric | Baseline (INT16 layer) | Budget (digit layer) | Counter |
 | --- | --- | --- | --- |
-| Read-out bytes equal to `MimusGemmS16FC` | None bit-exact; largest error half a step | All outputs of the three studied layers and the range fixture | mismatch count in `checks/npu-mimus-kernel.cc` |
+| Read-out bytes equal to `MimusGemmS16FC` | None bit-exact; largest error half a step | All outputs of the query projection, the first feed-forward linear and the range fixture; the second feed-forward linear, K = 704, needs 22 chunks and is refused | mismatch count in `checks/npu-mimus-kernel.cc` |
 | NN multiply-accumulates | 247,808 | At most 991,232 | MACs from the compiled graph's tensor shapes |
 | CPU bytes copied in by SUBMIT | 2,816 | 5,632 | `copy_in_bytes` |
 | CPU bytes copied out by `npu_session_output` | 2,816 | 67,584 | `copy_out_bytes` |
@@ -208,11 +245,14 @@ pass does not rest on optimistic figures. Exact-path code is charged one
 cycle per instruction. Each translation is charged 100 cycles, the upper end
 of section 1.5's estimate. Each cache line maintained is charged 20 cycles,
 each CPU DDR byte half a cycle, and each queue hop 2,000 cycles for a context
-switch. NPU execution is charged from the simulator's reported cycle count at
-the NPU clock. The A76 kernel is charged its Unicorn instruction count
+switch. The SDK simulator reports zero cycles, so NPU execution is charged
+the compiler architecture model's `CycleCount` estimates at the 492 MHz NPU
+clock. Time is charged per cluster: client and kernel cycles at the CPU-B
+rate, which is not recorded and is taken at the table's 2,002 MHz maximum;
+worker cycles at the 494 MHz CPU-L boot rate. The A76 kernel is charged its Unicorn instruction count
 divided by two, crediting both NEON pipes. The only measured kernel figure is
-the board NEON run: 0.28 billion multiply-accumulates per second on one core
-at 494 MHz, about 55,000 cycles per row of this layer
+the board NEON run: 0.28 billion multiply-accumulates per second on one A55
+core at 494 MHz, about 55,000 cycles per row of this layer
 ([mimus.md](../mimus.md)). The A76 has not been measured.
 
 With today's runtime the comparison is expected to fail by about an order of
@@ -236,17 +276,19 @@ to step 3.
   invalidate after finish (2.3). A completion reply that also performs REAP
   and keeps the ownership return explicit. Removal of the per-job digest,
   stream scan and per-page translations once read-only mappings cover the
-  same writers (1.4, 1.5); those mappings need the primary agent's
-  page-table work.
+  same writers (1.4, 1.5); those mappings need page-table changes in the
+  platform's memory management, which this package does not own.
 - **Session host model (`checks/npu-session.c`).** The event counters named
   above, run on the catalogued INT16 layer, so that the counts derived in
   `checks/npu-mimus-cost.c` become measured. Until then the baseline is
   counted.
 - **Session catalogue.** The digit graph is registered only after it passes
   the simulator and the comparison.
-- **mimus repository.** The two additions to `train/static_scales.py` for
-  step 3, and an instruction-count option in `tools/aarch64_kernel_check.py`
-  for the packed kernel and the digit functions.
+- **mimus repository, not changed by this package.** The two additions to
+  `train/static_scales.py` for step 3, for which `tools/npu-mimus-accuracy.py`
+  stands in, and an instruction-count option in
+  `tools/aarch64_kernel_check.py` for the packed kernel and the digit
+  functions, which would let `tools/npu-mimus-cost.py` drop its own harness.
 
 ## Left out
 

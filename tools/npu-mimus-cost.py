@@ -20,6 +20,14 @@ instructions each executes. It then charges every per-job event with the unit
 costs below, all estimates chosen at the expensive end, and writes one JSON
 report. A pass needs both the total CPU cycles per job and the client's time
 from SUBMIT to the copied output to be below the A76 kernel's.
+
+Time needs three clocks. The client and the kernel it replaces run on a
+Cortex-A76 core of cluster CPU-B (--cpu-b-mhz), whose rate is not recorded;
+the default is the highest rate the pinned operating-point table permits.
+The NPU service worker runs on core 0 of cluster CPU-L (--cpu-l-mhz), by
+default the 494 MHz that boot0 leaves. The NPU runs at 492 MHz, the native
+NPU PLL output. The report also gives the CPU-B rate above which the exact
+path's time exceeds the kernel's.
 """
 import argparse
 import hashlib
@@ -43,8 +51,8 @@ UNIT = dict(
     int16_readout=1,        # instructions per INT16 output converted to float
     a76_ipc=2,              # NEON instructions per A76 cycle, crediting both pipes
 )
-CPU_MHZ, NPU_MHZ = 494, 492  # configured CPU clock; native NPU PLL output
-BOARD_CYCLES_PER_ROW = 55000  # measured NEON rate on one core at 494 MHz, this layer
+NPU_MHZ = 492  # native NPU PLL output
+BOARD_CYCLES_PER_ROW = 55000  # measured NEON rate on one A55 core at 494 MHz, this layer
 BASE, STACK, STOP = 0x2000000, 0x3f00000, 0x3ff0000
 
 
@@ -140,9 +148,13 @@ def npu_cycles(log):
                if line.startswith('CycleCount:'))
 
 
-def charge(events, client_insns, npu, rows, round_trips=3, verified=True, page_maintenance=True,
-           copies=True, maintained_bytes=None):
-    """Client and worker cycles and the client's SUBMIT-to-output latency for one job."""
+def charge(events, client_insns, npu, rows, clocks, round_trips=3, verified=True, copies=True,
+           maintained_bytes=None):
+    """Client and worker cycles and the client's SUBMIT-to-output time for one job.
+
+    clocks holds the CPU-B (client) and CPU-L (worker) rates in MHz. Each core
+    pays one context switch per queue hop.
+    """
     u = UNIT
     hops = 2 * round_trips * u['queue_hop']
     copy_bytes = (events['copy_in_bytes'] + events['copy_out_bytes']) if copies else 0
@@ -154,12 +166,10 @@ def charge(events, client_insns, npu, rows, round_trips=3, verified=True, page_m
         worker += (events['digest_bytes'] * u['digest_byte'] + events['scan_words'] * u['scan_word'] +
                    events['table_words'] * u['table_word'] + events['translations'] * u['translation'] +
                    (events['digest_bytes'] + 8 * events['scan_words'] + 4 * events['table_words']) * u['ddr_byte'])
-    elif page_maintenance:
-        worker += events['translations'] * u['translation']
-    npu_cpu = npu * CPU_MHZ / NPU_MHZ
-    return dict(client_cycles=round(client + hops / 2), worker_cycles=round(worker + hops / 2),
-                total_cpu_cycles=round(client + worker + hops), npu_cycles=npu,
-                latency_cycles=round(client + worker + hops + npu_cpu), rows=rows)
+    client, worker = client + hops / 2, worker + hops / 2
+    return dict(client_cycles=round(client), worker_cycles=round(worker), total_cpu_cycles=round(client + worker),
+                npu_cycles=npu, latency_us=round(client / clocks['cpu_b_mhz'] + worker / clocks['cpu_l_mhz'] +
+                                                 npu / NPU_MHZ, 1), rows=rows)
 
 
 def main():
@@ -170,47 +180,64 @@ def main():
     ap.add_argument('--int16-log', type=Path, required=True)
     ap.add_argument('--digit-log', type=Path, required=True)
     ap.add_argument('--report', type=Path, required=True)
+    ap.add_argument('--cpu-b-mhz', type=float, default=2002, help='Cortex-A76 rate: client and kernel')
+    ap.add_argument('--cpu-l-mhz', type=float, default=494, help='Cortex-A55 rate: NPU service worker')
     args = ap.parse_args()
+    clocks = dict(cpu_b_mhz=args.cpu_b_mhz, cpu_l_mhz=args.cpu_l_mhz, npu_mhz=NPU_MHZ)
     counts = instruction_counts(args.elf, args.study)
     int16_events, digit_events = [json.loads(line) for line in args.events.read_text().splitlines()[:2]]
     rows, n = counts['rows'], counts['n']
     kernel = counts['kernel_insns'] / UNIT['a76_ipc']
     split_combine = counts['split_insns'] + counts['recombine_insns']
-    digit = charge(digit_events, split_combine, npu_cycles(args.digit_log), rows)
-    int16 = charge(int16_events, rows * n * UNIT['int16_readout'], npu_cycles(args.int16_log), rows)
+    kernel_us = kernel / args.cpu_b_mhz
+    digit = charge(digit_events, split_combine, npu_cycles(args.digit_log), rows, clocks)
+    int16 = charge(int16_events, rows * n * UNIT['int16_readout'], npu_cycles(args.int16_log), rows, clocks)
     # Proposed runtime changes (separate designs): a buffer accessor removes both
     # copies, range maintenance covers tensor bytes only, read-only mappings
     # replace the digest, stream scan and per-page translations, and a
     # completion reply that also reaps removes one round trip.
     tensor_bytes = (digit_events['copy_in_bytes'] + 2 * digit_events['copy_out_bytes'] + 63) // 64 * 64
-    changed = charge(digit_events, split_combine, npu_cycles(args.digit_log), rows, round_trips=2,
-                     verified=False, page_maintenance=False, copies=False, maintained_bytes=tensor_bytes)
+    changed = charge(digit_events, split_combine, npu_cycles(args.digit_log), rows, clocks, round_trips=2,
+                     verified=False, copies=False, maintained_bytes=tensor_bytes)
 
-    def verdict(path):
-        return dict(path, passes=path['total_cpu_cycles'] < kernel and path['latency_cycles'] < kernel,
+    def verdict(path, key='passes'):
+        # The client waits for the worker and the NPU, whose times do not
+        # scale with CPU-B; its own cycles and the kernel's do.
+        fixed_us = path['worker_cycles'] / args.cpu_l_mhz + path['npu_cycles'] / NPU_MHZ
+        return dict(path, **{key: path['total_cpu_cycles'] < kernel and path['latency_us'] < kernel_us},
                     cpu_shortfall=round(path['total_cpu_cycles'] / kernel, 2),
-                    latency_shortfall=round(path['latency_cycles'] / kernel, 2))
+                    latency_shortfall=round(path['latency_us'] / kernel_us, 2),
+                    latency_below_kernel_up_to_cpu_b_mhz=(round((kernel - path['client_cycles']) / fixed_us)
+                                                          if kernel > path['client_cycles'] else None))
 
     # Rows per job at which total CPU cycles match the kernel: per-row work is
     # the split, recombination, both copies and the cache maintenance of the
-    # tensor bytes; verification and queue hops are per job.
-    per_row = (split_combine + 2 * (digit_events['copy_in_bytes'] + digit_events['copy_out_bytes']) *
-               UNIT['ddr_byte'] + (digit_events['copy_in_bytes'] + 2 * digit_events['copy_out_bytes']) / 64 *
-               UNIT['cache_line']) / rows
-    fixed = digit['total_cpu_cycles'] - per_row * rows
+    # tensor bytes; verification and queue hops are per job. The split and
+    # recombination are NEON code, so the result is given with the main
+    # charge of one cycle per instruction and with the kernel's two.
+    other_per_row = (2 * (digit_events['copy_in_bytes'] + digit_events['copy_out_bytes']) * UNIT['ddr_byte'] +
+                     (digit_events['copy_in_bytes'] + 2 * digit_events['copy_out_bytes']) / 64 *
+                     UNIT['cache_line']) / rows
+    fixed = digit['total_cpu_cycles'] - split_combine - other_per_row * rows
     kernel_per_row = kernel / rows
-    report = dict(units=UNIT, cpu_mhz=CPU_MHZ, npu_mhz=NPU_MHZ, instruction_counts=counts,
-                  a76_kernel_cycles=round(kernel), board_neon_cycles=BOARD_CYCLES_PER_ROW * rows,
+    break_even = {}
+    for ipc in (1, UNIT['a76_ipc']):
+        per_row = split_combine / ipc / rows + other_per_row
+        break_even[f'client_ipc_{ipc}'] = dict(
+            exact_path_cycles_per_row=round(per_row), kernel_cycles_per_row=round(kernel_per_row),
+            rows=round(fixed / (kernel_per_row - per_row)) if kernel_per_row > per_row else None)
+    report = dict(units=UNIT, clocks=clocks, instruction_counts=counts,
+                  a76_kernel_cycles=round(kernel), a76_kernel_us=round(kernel_us, 1),
+                  board_neon_cycles=BOARD_CYCLES_PER_ROW * rows,
                   digit_layer=verdict(digit), int16_layer=verdict(int16),
-                  digit_layer_with_runtime_changes=verdict(changed),
-                  break_even_rows=(round(fixed / (kernel_per_row - per_row))
-                                   if kernel_per_row > per_row else None),
-                  exact_path_cycles_per_row=round(per_row), kernel_cycles_per_row=round(kernel_per_row),
+                  # Outside the pass condition: input to the runtime designs.
+                  digit_layer_with_runtime_changes=verdict(changed, 'below_kernel_estimate'),
+                  break_even=break_even,
                   events=dict(int16=int16_events, digit=digit_events),
                   elf_sha256=hashlib.sha256(args.elf.read_bytes()).hexdigest(), physical_access=False)
     args.report.write_text(json.dumps(report, indent=2) + '\n')
-    print(json.dumps({k: report[k] for k in ('a76_kernel_cycles', 'board_neon_cycles', 'break_even_rows',
-                                             'exact_path_cycles_per_row', 'kernel_cycles_per_row')}))
+    print(json.dumps({k: report[k] for k in ('clocks', 'a76_kernel_cycles', 'a76_kernel_us', 'board_neon_cycles',
+                                             'break_even')}))
     for name in ('int16_layer', 'digit_layer', 'digit_layer_with_runtime_changes'):
         print(name, json.dumps(report[name]))
 

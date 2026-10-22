@@ -2,13 +2,15 @@
 
 This is a **research result** from the pinned host compiler, the SDK
 simulator, native host checks and instruction emulation; no board or NPU
-executed anything. The NPU can return exact integer sums for a mimus int8
-linear layer when the CPU splits each activation into four base-16 digits:
-the simulator returns every partial sum exactly, and the CPU read-out of the
-recombined sums is bit-identical to the mimus kernel. The NBG descriptor has
-no 32-bit output code that the simulator accepts. On the session runtime as
-it is written today, one exact layer costs about 13 times the CPU cycles of
-the A76 NEON kernel it would replace, so it is not used. The INT16 layer,
+executed anything. In the SDK simulator, the NPU returns exact integer sums
+for a mimus int8 linear layer when the CPU splits each activation into four
+base-16 digits. Every simulated partial sum is exact, and the CPU read-out
+of the recombined sums is bit-identical to the mimus kernel. None of
+the eight three-bit output type codes of the NBG descriptor returns 32-bit
+sums in the simulator; a fourth type bit, if one exists, was not located. On
+the session runtime as it is written today, one exact layer is estimated to
+cost about 13 times the CPU cycles of the A76 NEON kernel it would replace,
+so it is not used. The INT16 layer,
 which rounds each output once, is recorded as a separate variant with
 a word error rate that meets the float32 pass criterion on three held-out
 sets in simulation. Neither graph is in the session catalogue, and physical behavior
@@ -92,7 +94,7 @@ Recompiling the query projection reproduces the catalogued graph
 `4872524cf2bd0681e9b17c8a8bcaa61615dc925e31313d6d1f0dba2fea4eacb0` byte for
 byte.
 
-## No 32-bit output code exists in the descriptor
+## None of the eight three-bit output codes returns 32-bit sums
 
 The compiler refuses an INT32 output for the query projection and the second
 feed-forward linear: network-binary generation stops with "Fatal model
@@ -132,9 +134,13 @@ compiled output bytes.
   twice the INT16 elements. No combination returns the sums read as INT32;
   code 3 again stops the simulator.
 
-No three-bit code yields exact sums, so the descriptor offers no INT32
-output. The probe did not locate a fourth type bit; if the v9.2 engine has
-one, its codes 8–15 remain untested. Patched graphs are simulator-only probe
+No three-bit code yields exact sums. The type is not encoded in these
+three bits alone: INT8 and UINT8 share code 0, and the simulator's twelve
+data types do not fit in three bits. The probe did not locate a further type
+bit, so whether the descriptor can encode an INT32 output remains open; if
+the revision-9.2 engine has a fourth bit, its codes 8–15 are untested.
+Comparing the descriptors of FP16 and BF16 outputs with the INT16 one would
+be the next step to locate it. Patched graphs are simulator-only probe
 artifacts. They are not in the session catalogue, whose admission rests on
 reviewed compiler output ([npu-session.md](npu-session.md)), and never run
 on a board.
@@ -166,7 +172,7 @@ the split executes 12,230 instructions and the recombination with read-out
 41,341 instructions for 8 rows of the query projection, under Unicorn. Both
 compiled functions reproduce the simulator inputs and the reference bytes.
 
-## On today's runtime the exact layer costs more CPU than the A76 kernel
+## On today's runtime the exact layer is estimated to cost more CPU than the A76 kernel
 
 [npu-mimus-cost.c](../checks/npu-mimus-cost.c) assembles each graph with the
 native assembler at the session placement and derives one job's CPU events
@@ -198,41 +204,77 @@ path, 25 cycles per hashed byte, 4 and 12 instructions per checked command
 and page-table word, 100 cycles per translation, 20 cycles per cache line
 maintained, half a cycle per CPU DDR byte and 2,000 cycles per queue message.
 NPU cycles are the compiler architecture model's `CycleCount` estimates
-(`NN_EXT_SHOW_PERF=1` at export), converted at 492 MHz for the NPU and 494 MHz
-for the CPU; the SDK simulator reports no cycle count. The A76 kernel is the
-packed NEON `MimusGemmS16FC` from the mimus `port/sunstoneos` branch: 332,354
-instructions for 8 rows under Unicorn, charged as 166,177 cycles by crediting
-two NEON pipes. The only measured kernel figure, the board NEON run of
-0.28 billion multiply-accumulates per second on one core at 494 MHz,
-corresponds to about 440,000 cycles for these rows; the A76 has not been
-measured.
+(`NN_EXT_SHOW_PERF=1` at export); the SDK simulator reports no cycle count.
+The A76 kernel is the packed NEON `MimusGemmS16FC` from the mimus
+`port/sunstoneos` branch: 332,354 instructions for 8 rows under Unicorn,
+charged as 166,177 cycles by crediting two NEON pipes. The only measured
+kernel figure, the board NEON run of 0.28 billion multiply-accumulates per
+second on one A55 core at 494 MHz, corresponds to about 440,000 cycles for
+these rows; the A76 has not been measured.
 
-| Path, 8 rows | CPU cycles, client + service worker | Client time from SUBMIT to copied output, cycles | Against the A76 kernel |
+Time uses three clocks. The client and the kernel it replaces run on an A76
+core of cluster CPU-B, whose rate is not recorded; the pinned operating-point
+table permits up to 2,002 MHz ([cpu-clock.md](cpu-clock.md)), and the table
+below uses that rate. The service worker runs on core 0 of cluster CPU-L at
+the 494 MHz that boot0 leaves. The NPU runs at 492 MHz, so its estimated
+51,104 cycles for the digit layer take 103.9 µs. At 2,002 MHz the kernel
+takes 83.0 µs.
+
+| Path, 8 rows | CPU cycles, client + service worker | Client time from SUBMIT to copied output, CPU-B at 2,002 MHz | Against the A76 kernel, cycles and time |
 | --- | ---: | ---: | --- |
-| Digit layer, today's runtime | 2,231,903 | 2,283,215 | 13.4 and 13.7 times |
-| INT16 layer, today's runtime | 1,619,380 | 1,630,618 | 9.7 and 9.8 times |
-| Digit layer with the runtime changes below | 105,571 | 156,883 | 0.64 and 0.94 times |
+| Digit layer, today's runtime | 2,231,903 | 4,419 µs | 13.4 and 53 times |
+| INT16 layer, today's runtime | 1,619,380 | 3,281 µs | 9.7 and 40 times |
+| Digit layer with the runtime changes below | 105,571 | 230 µs | 0.64 and 2.8 times |
 
-The exact layer passes only when both figures are below the kernel's
-166,177 cycles, so it fails on today's runtime. The per-job SHA-256 of the
-descriptor and coefficient allocations costs 1.35 million cycles, and the
-scan of the 512 KiB command allocation reads 523,416 bytes. No job size
-recovers the cost: the exact path's per-row work, the split, recombination,
-both copies and the cache maintenance of the tensor bytes, is 21,348 cycles
-against the kernel's 20,772, so it never breaks even with today's runtime.
+The exact layer passes only when both figures are below the kernel's, so it
+fails on today's runtime. The per-job SHA-256 of the descriptor and
+coefficient allocations is estimated at 1.35 million cycles, and the scan of
+the 512 KiB command allocation reads 523,416 bytes. The exact path's per-row
+work, the split, recombination, both copies and the cache maintenance of the
+tensor bytes, is estimated at 21,348 cycles against the kernel's 20,772.
+That margin is under 3%, inside the error of these estimates:
+
+- At one cycle per client instruction, the main charge, the per-row cost does
+  not fall below the kernel's, and no job size breaks even.
+- The split and recombination are NEON code. Charged two instructions per
+  cycle, as the kernel is, they bring the per-row work to 18,000 cycles, and
+  the CPU cycles break even at about 744 rows per job, 93 times the 8-row
+  streaming chunk.
+
+Break-even, if it exists, therefore lies beyond any practical job size on
+today's runtime.
 
 The last row applies four changes that belong to separate runtime designs:
 
-- an accessor that lets the client write READ buffers and read WRITE buffers
-  directly, removing both copies;
+- an accessor that returns pointers to the READ and WRITE buffers only while
+  the model is READY with no job, and revokes them at SUBMIT and on any
+  fault, so the client writes inputs and reads outputs in place of both
+  copies;
 - cache maintenance over the tensor bytes only;
-- read-only mappings that replace the per-job digest, command scan and page
-  translations;
-- a completion reply that also performs REAP.
+- read-only mappings of the descriptor, coefficient and command allocations
+  that cover every writer the per-job digest, command scan and page
+  translations guard against; only then can those checks be removed, and the
+  mappings need page-table changes in the platform's memory management;
+- a completion reply that also performs REAP and keeps the return of buffer
+  ownership explicit.
 
-With all of them the exact layer would use 0.64 times the kernel's CPU cycles and
-0.94 times its time. This figure is input to those designs and does not
-change the result here.
+With all four, the exact layer is estimated to use 0.64 times the kernel's
+CPU cycles, but its job takes longer than the kernel at the CPU-B rates the
+table permits. The client time stays below the kernel's only while CPU-B runs
+below about 540 MHz with the worker at 494 MHz, or below about 830 MHz with
+CPU-L at 1,794 MHz. The NPU's 103.9 µs alone exceeds the kernel's time above
+about 1,600 MHz:
+
+| CPU-B clock | A76 kernel | Digit layer with the runtime changes | Ratio |
+| ---: | ---: | ---: | ---: |
+| 494 MHz | 336 µs | 318 µs | 0.94 |
+| 1,014 MHz | 164 µs | 258 µs | 1.57 |
+| 1,404 MHz | 118 µs | 242 µs | 2.04 |
+| 2,002 MHz | 83 µs | 230 µs | 2.77 |
+
+A job that beats the kernel on time therefore also needs fewer NPU cycles
+per job or a faster NPU clock. These figures are input to the runtime
+designs and do not change the result here.
 
 ## The INT16 variant keeps recognition accuracy in simulation
 
@@ -278,10 +320,13 @@ the board.
 
 ## Consequences for running mimus on the NPU
 
-- Exact sums need four times the NPU multiply-accumulates of the INT16 layer
-  and return 24 partials per output channel, 24 times the INT16 output bytes.
-  They pay off only after the session runtime drops its per-job verification
-  and copies.
+- Exact sums through base-16 digits need four times the NPU
+  multiply-accumulates of the INT16 layer and return 24 partials per output
+  channel, 24 times the INT16 output bytes. Their estimated CPU cycles fall
+  below the kernel's only after the session runtime replaces its per-job
+  verification and copies under the conditions above. Even then the job
+  takes longer than the A76 kernel unless CPU-B runs below about 540 MHz or
+  the NPU work per job shrinks.
 - The INT16 layer rounds each output once and quantizes inputs with one
   static scale per site. It changes recognition results and does not replace
   the shipped model or the CPU kernel.
@@ -331,8 +376,12 @@ shared C++ options, then `-march=armv8.2-a+nolse -mtune=cortex-a55
 
 ```sh
 python tools/npu-mimus-cost.py --elf counts.elf --study q-digits --events events.jsonl \
-  --int16-log q-int16/export.log --digit-log q-digits/export.log --report cost.json
+  --int16-log q-int16/export.log --digit-log q-digits/export.log --report cost.json \
+  --cpu-b-mhz 2002 --cpu-l-mhz 494
 ```
+
+The report gives each path's time at the stated clocks and the CPU-B rate
+below which its time stays under the kernel's.
 
 The study used mimus revision `46d8e64aa5eb841f19c4205113b030e501b72c7a` for the
 portable kernel and `3e05158e31cb3de952f77526794f6772281e3668` of its `port/sunstoneos`
