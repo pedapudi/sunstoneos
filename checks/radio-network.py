@@ -35,7 +35,7 @@ def main():
     source=out/"project";source.mkdir(exist_ok=True)
     (source/"CMakeLists.txt").write_text(f'cmake_minimum_required(VERSION 3.24)\nproject(network_composition C ASM)\nadd_subdirectory("{ROOT}" base)\nif(NOT TARGET radio-network-model)\ninclude("{ROOT}/cmake/radio-network.cmake")\nendif()\n')
     toolchain=out/"toolchain.cmake"
-    toolchain.write_text(f'set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER clang)\nset(CMAKE_ASM_COMPILER clang)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")\n')
+    toolchain.write_text(f'set(CMAKE_SYSTEM_NAME Generic)\nset(CMAKE_SYSTEM_PROCESSOR aarch64)\nset(CMAKE_C_COMPILER clang)\nset(CMAKE_ASM_COMPILER clang)\nset(CMAKE_C_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_ASM_COMPILER_TARGET aarch64-none-elf)\nset(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\nset(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")\nset(SUNSTONE_LLD "{a.linker}")\n# The repository toolchain also defines the path-map helpers its CMakeLists uses.\ninclude("{ROOT}/cmake/aarch64-clang.cmake")\n')
     result={"tcp_archive_sha256":TCP_ARCHIVE_SHA,"tcp_source":verify(a.tcp.resolve()),"commands":[]}
     commands=[["cmake","-S",str(source),"-B",str(out/"build"),f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",f"-DFREERTOS_DIR={a.kernel}",f"-DSUNSTONE_TCP_DIR={a.tcp}",f"-DSUNSTONE_RSN_DIR={a.rsn}",f"-DSUNSTONE_NETWORK_C_HEADERS={a.headers}",f"-DSUNSTONE_LLD={a.linker}",f"-DTINYUSB_DIR={a.tinyusb}","-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"],
               ["cmake","--build",str(out/"build"),"--target","radio-network-model","-j4"]]
