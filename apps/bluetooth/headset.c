@@ -470,8 +470,9 @@ static __attribute__((noinline)) void segment_stopping(unsigned flag,uint64_t no
     if(!voice.operation_deadline)voice.operation_deadline=bluetooth_close_deadline(voice.app,now);
 }
 /* Publishes the even prefix of the segment being written, if it holds a
- * sample, and starts the next one. Head is stored with release after the
- * slot, its snapshot and digest. */
+ * sample, and starts the next one. The digest holds whole blocks up to
+ * hashed; the even bytes after it, fewer than 64, are hashed here. Head is
+ * stored with release after the slot, its snapshot and digest. */
 static __attribute__((noinline)) int publish(struct bluetooth_application *a,unsigned codec)
 {
     unsigned bytes=voice.segment_bytes&~1u;
@@ -482,6 +483,7 @@ static __attribute__((noinline)) int publish(struct bluetooth_application *a,uns
         s->ticket=head+1;s->first_sample=voice.published_samples;
         s->capture=(struct bluetooth_pcm_snapshot){.firmware=a->firmware_generation,.uart=a->uart_generation,
             .acl=voice.link,.audio=voice.stream,.state=codec,.bytes=bytes,.records=voice.segment_records};
+        (void)storage_digest_add(&voice.digest,voice.segments[slot].pcm+voice.hashed,bytes-voice.hashed);
         storage_digest_end(&voice.digest,s->capture.sha256);
         voice.published_samples+=bytes/2;
         atomic_store_explicit(&voice.segment_head,head+1,memory_order_release);
@@ -543,7 +545,9 @@ static __attribute__((noinline)) int begin(struct bluetooth_application *a,uint6
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     /* mSBC frames are 60 bytes, so once a frame has decoded on this link the
      * next frame boundary is known and the decoder starts there. Before that
-     * the header search finds it, once per link. */
+     * the header search finds it, once per link. On a link that fell back to
+     * CVSD no frame decodes, so boundary stays 0 and the sample parity skip
+     * above applies. */
     if(voice.wideband){bluetooth_msbc_resync();
         if(voice.boundary){unsigned r=(unsigned)((voice.position-voice.boundary)%60);voice.skip=r?60-r:0;}}
 #endif
@@ -651,11 +655,13 @@ static __attribute__((noinline)) int capture_packet(struct bluetooth_application
             memcpy(voice.segments[slot].pcm+voice.segment_bytes,rx->bytes+voice.partial_offset,used);
             voice.segment_bytes+=(unsigned)used;voice.partial_offset+=(unsigned)used;s->last_acquired=rx->acquired;
         }
-        /* Hash each write while it is in L1, over the even prefix. */
-        unsigned even=voice.segment_bytes&~1u;
-        if(even>voice.hashed){
-            if(!storage_digest_add(&voice.digest,voice.segments[slot].pcm+voice.hashed,even-voice.hashed))return fail();
-            voice.hashed=even;}
+        /* Hash each complete 64-byte block while it is in L1. Whole blocks
+         * keep the digest's staging block empty, so they compress in place
+         * from the slot; publish() hashes the rest. */
+        unsigned whole=voice.segment_bytes&~63u;
+        if(whole>voice.hashed){
+            if(!storage_digest_add(&voice.digest,voice.segments[slot].pcm+voice.hashed,whole-voice.hashed))return fail();
+            voice.hashed=whole;}
         if(voice.segment_bytes==p->samples*2){
             if(voice.voice){end(a,l->codec);break;}
             (void)publish(a,l->codec);wake();
