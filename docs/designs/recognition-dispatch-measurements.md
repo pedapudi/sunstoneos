@@ -14,7 +14,10 @@ no board or GPU was used.
   commits were configured with the shared configuration script and built with
   `-j 6` under `~/.cache/sunstoneos/build/recognition-dispatch/`. Four default
   OS variants were built at each commit: supervised, resident, resident with
-  the I2S microphone and resident with the Bluetooth headset. `llvm-size-21
+  the I2S microphone and resident with the Bluetooth headset. A second,
+  independent build of the supervised and resident variants under
+  `~/.cache/sunstoneos/build/recognition-dispatch-measure/` gave the same
+  sizes and the same result from the host check. `llvm-size-21
   -A` gave the section sizes and `llvm-objcopy-21 -O binary` the loadable
   bytes.
 - **GPU option.** A resident build with `SUNSTONE_A733_OS_GPU_LINEAR`, both
@@ -82,6 +85,7 @@ the feed-forward first linear takes 6.25 ms GPU-only and 7.95 ms with
 | --- | --- | --- |
 | Default OS images with equal section sizes and loadable bytes, apart from the 32-byte build identity | 4 of 4 | 4 of 4 |
 | Resident image `.text` / `.rodata` / `.data` / `.bss` | 845,088 / 41,321 / 3,168 / 1,481,568 B | Same |
+| Dispatcher object `apps/os/dispatch.c` for AArch64 `.text` / `.rodata` / `.bss` | None | 512 / 2,345 / 36 B, in the image only with the option |
 | Translations in `mimus_board_pins` for the arena | 4,096 | 4,096 without the option; 5,120 with it |
 | Read-only rule refusals: one writable, unreadable or Device page at the first, middle or last of 1,024 pages | None | All 9 cases refused |
 | Job with a missing tag | None | The rest of the call and every later call on the CPU, exact sums, no `board_fail` |
