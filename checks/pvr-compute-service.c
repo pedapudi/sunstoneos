@@ -402,7 +402,21 @@ static void compute_owner(void *unused)
         configASSERT(compute.client.serial==2&&compute.client.write==368&&compute.job.sequence==2);
         /* New publication must poison prior results before the second KICK. */
         for(unsigned i=0;i<32;++i)configASSERT(word((unsigned char *)job_config.buffers[PVR_JOB_OUTPUT].cpu+64+4*i,4)==~job_image.expected[i]);
-        if(compute_service_case==7||compute_service_case==11)completion_model();
+        if(compute_service_case==7) {
+            /* Pacing while a job waits for its fence without interrupt delivery,
+             * then completion observed without requests that would wake the worker. */
+            uint32_t active=get(&active_ticks);vTaskDelay(50);
+            uint32_t measured=get(&active_ticks)-active;
+            metric("job-active-ticks-per-50",measured);
+            configASSERT(measured<=50000/PVR_GPU_SERVICE_JOB_POLL_US+4);
+            completion_model();TickType_t fenced=xTaskGetTickCount();
+            while(__atomic_load_n(&compute.phase,__ATOMIC_ACQUIRE)!=PVR_COMPUTE_SERVICE_COMPLETE) {
+                configASSERT(xTaskGetTickCount()-fenced<100);vTaskDelay(1);
+            }
+            TickType_t completion=xTaskGetTickCount()-fenced;
+            metric("unrequested-completion-ticks",completion);
+            configASSERT(completion<=PVR_GPU_SERVICE_JOB_POLL_US/1000+2);
+        } else if(compute_service_case==11)completion_model();
         else if(compute_service_case==9)put(computation.firmware[5].storage.cpu,4,3);
         else if(compute_service_case==10) {
             r=request(PVR_GPU_SERVICE_COMPUTE_CANCEL,0);

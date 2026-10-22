@@ -1,8 +1,11 @@
 # Design: concurrent GPU sessions, recovery and power management
 
-Status: **design**; no code exists yet. Each item ends at implemented and
-host-modeled; physical behavior stays pending until the board evidence at the
-end exists. Firmware events and failure classes are in
+Status: **partly implemented**. Worker pacing (the "Interrupts and worker
+pacing" section) is implemented and host-modeled, including the power
+controller's back-to-back steps; [gpu-service.md](../gpu-service.md) records its
+measurements. The other sections remain design. Each item ends at implemented
+and host-modeled; physical behavior stays pending until the board evidence at
+the end exists. Firmware events and failure classes are in
 [gpu-recovery.md](../gpu-recovery.md).
 
 Today the GPU service runs one job at a time, polls STATUS every tick and

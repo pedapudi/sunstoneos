@@ -702,7 +702,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
 }
 /* Coarse progress identity of the controllers the worker advances. It only
  * decides whether another step may follow without waiting. A missed change
- * falls back to tick pacing and never affects a protocol decision. */
+ * falls back to the worker's wait and never affects a protocol decision. */
 static uint64_t progress(const struct pvr_gpu_service *s)
 {
     const struct pvr_compute_service *c = s->config.compute;
@@ -733,24 +733,45 @@ static int step(struct pvr_gpu_service *s)
         phase == PVR_GPU_SERVICE_PUBLISHING || phase == PVR_GPU_SERVICE_DISPOSING) return 1;
     return progress(s) != before;
 }
-/* Return 1 when the worker must step again within one tick without a request.
- * A ready session sleeps only while delivery is armed and no job, render,
- * free-list operation or masked event batch remains; an interrupt or request
- * then wakes it. Without interrupt callbacks, a ready session keeps polling. */
-static int timed(const struct pvr_gpu_service *s)
+static TickType_t ticks(uint64_t us)
+{
+    const uint64_t period = 1000000u / configTICK_RATE_HZ;
+    uint64_t n = (us + period - 1) / period;
+    return n ? (TickType_t)n : 1;
+}
+/* The worker's one wait when no step is ready to run. A lifecycle phase waits
+ * one tick: its hardware waits shorter than PVR_GPU_SPIN_US end inside the
+ * step. A ready session waits one tick while a masked event batch remains, the
+ * job deadline or PVR_GPU_SERVICE_JOB_POLL_US while a job, render or free-list
+ * operation is in flight, and otherwise until a request or interrupt. Without
+ * interrupt delivery an idle session also wakes every IDLE_POLL_US. */
+static TickType_t wait_ticks(struct pvr_gpu_service *s)
 {
     switch (s->phase) {
     case PVR_GPU_SERVICE_COLD: case PVR_GPU_SERVICE_STOPPED: case PVR_GPU_SERVICE_FAILED:
-    case PVR_GPU_SERVICE_DISPOSED: case PVR_GPU_SERVICE_RECONSTRUCTING: return 0;
-    case PVR_GPU_SERVICE_READY: {
-        const struct pvr_compute_service *c = s->config.compute;
-        return !s->config.irq.mask || s->irq_masked ||
-            (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
-            render_polled(s) || (s->config.free_lists.count &&
-                (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count));
-    }
+    case PVR_GPU_SERVICE_DISPOSED: case PVR_GPU_SERVICE_RECONSTRUCTING: return portMAX_DELAY;
+    case PVR_GPU_SERVICE_READY: break;
     default: return 1;
     }
+    if (s->config.irq.mask && s->irq_masked) return 1;
+    const struct pvr_compute_service *c = s->config.compute;
+    int busy = (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
+        render_polled(s) || (s->config.free_lists.count &&
+            (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count));
+    if (!busy) return s->config.irq.mask ? portMAX_DELAY : ticks(PVR_GPU_SERVICE_IDLE_POLL_US);
+    uint64_t now, bound = PVR_GPU_SERVICE_JOB_POLL_US;
+    if (sample(s, &now)) bound = s->deadline <= now ? 0 : s->deadline - now < bound ? s->deadline - now : bound;
+    return ticks(bound);
+}
+/* Steps that progress continue while nothing is queued, for at most
+ * PVR_GPU_SERVICE_BURST_US. Return 1 when CPU work remains. */
+static int burst(struct pvr_gpu_service *s)
+{
+    uint64_t start, now;
+    int clocked = sample(s, &start), more = step(s);
+    while (more && clocked && !uxQueueMessagesWaiting(s->requests) &&
+           sample(s, &now) && now - start < PVR_GPU_SERVICE_BURST_US) more = step(s);
+    return more;
 }
 static void worker(void *argument)
 {
@@ -764,17 +785,14 @@ static void worker(void *argument)
     (void)stack;
 #endif
     for (;;) {
-        /* One bounded step before each request; traffic cannot starve it.
-         * Steps that progress without waiting for the device continue for a
-         * bounded burst while nothing is queued, so requests are not starved
-         * either. An exhausted burst still yields for one tick. */
-        unsigned steps = 1;
-        int more = step(s);
-        while (more && steps < PVR_GPU_SERVICE_BURST_STEPS && !uxQueueMessagesWaiting(s->requests)) {
-            more = step(s); ++steps;
-        }
+        /* One bounded burst before each request; traffic cannot starve it,
+         * and the burst bound keeps requests from waiting behind it. With CPU
+         * work left, the worker takes a queued request without waiting or
+         * yields to tasks of its priority. */
         struct pvr_gpu_service_message message;
-        if (xQueueReceive(s->requests, &message, more || timed(s) ? 1 : portMAX_DELAY) != pdTRUE) continue;
+        if (burst(s)) {
+            if (xQueueReceive(s->requests, &message, 0) != pdTRUE) { taskYIELD(); continue; }
+        } else if (xQueueReceive(s->requests, &message, wait_ticks(s)) != pdTRUE) continue;
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
             taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
             continue;

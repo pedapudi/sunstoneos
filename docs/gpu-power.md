@@ -8,9 +8,12 @@ remain outstanding.
 
 The implementation is [a733_gpu_power.c](../drivers/gpu/a733_gpu_power.c), with
 its callback contract in [a733_gpu_power.h](../include/a733_gpu_power.h).
-A privileged owner polls the controller. Each poll performs at most one resource
-or register operation, plus monotonic clock reads. Clock settling and domain
-acknowledgement share one absolute deadline. An expired deadline, clock
+A privileged owner polls the controller. One poll runs the resource and
+register steps back to back, with monotonic clock reads. It waits on the clock
+for the one-microsecond clock-settling delay and re-reads an unsatisfied
+power-domain acknowledgement for up to 50 µs (`A733_GPU_POWER_SPIN_US`) before
+returning to the owner. Clock settling and domain acknowledgement share one
+absolute deadline. An expired deadline, clock
 regression, callback failure, or unexpected register value stops further I/O.
 The controller performs no automatic rollback after a failure.
 
@@ -86,8 +89,11 @@ the board or running performance measurements.
 
 The [native check](../checks/a733-gpu-power.c) runs under AddressSanitizer and
 UndefinedBehaviorSanitizer. Successful startup, shutdown, and reopening preserve
-unrelated fields and shared gates. Frozen clock readings cannot shorten the
-settling interval. The check covers 141 retained faults, including every
+unrelated fields and shared gates. Reset release follows the clock gate by at
+least the settling delay. One poll completes startup when the domain
+acknowledges within 50 µs; a stalled acknowledgement returns after at least
+50 µs of re-reads and completes on a later poll. The check covers 101 retained
+faults, including every
 callback failure on a successful startup/shutdown path, stalled transitions,
 invalid prerequisites, a partially applied write, and a late resource release.
 

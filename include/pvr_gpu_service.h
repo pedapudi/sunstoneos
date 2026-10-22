@@ -18,9 +18,15 @@ struct pvr_render_texture_frame;
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
-/* Consecutive worker steps taken without waiting while each one makes progress
- * and no request or interrupt wake is queued. */
-#define PVR_GPU_SERVICE_BURST_STEPS 16u
+/* Worker pacing, in microseconds. Steps that progress continue without waiting
+ * for at most BURST_US while nothing is queued. A ready session with a job in
+ * flight waits at most JOB_POLL_US, or until the job deadline if that is
+ * earlier, so a job completes after a lost interrupt or in an image without
+ * interrupt delivery. A ready idle session without interrupt delivery waits at
+ * most IDLE_POLL_US, so firmware events that arrive with no job are drained. */
+#define PVR_GPU_SERVICE_BURST_US 200u
+#define PVR_GPU_SERVICE_JOB_POLL_US 4000u
+#define PVR_GPU_SERVICE_IDLE_POLL_US 50000u
 /* Firmware UPDATE_STATS counters: partial renders, out-of-memory events and
  * TA, 3D, CDM and TDM context stores, in firmware statistic order 1..6. */
 #define PVR_GPU_SERVICE_STATISTICS 6u

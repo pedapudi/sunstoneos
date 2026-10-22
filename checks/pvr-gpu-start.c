@@ -16,11 +16,12 @@ static size_t image_bytes;
 static struct pvr_mips_boot boot;
 static unsigned refusals, fault_trials;
 static int operation(struct model *m) { return ++m->io != m->fail_at; }
+/* Each clock read takes one microsecond, so waits inside a step end. */
 static int now(void *ctx, uint64_t *value)
 {
     struct model *m = ctx; ++m->clock_calls;
     if (m->clock_calls == m->fail_clock) return 0;
-    *value = m->now; return 1;
+    *value = m->now++; return 1;
 }
 static void event(struct model *m, unsigned kind, unsigned off, unsigned width, uint64_t value)
 {
@@ -73,9 +74,10 @@ static void prepare(struct pvr_gpu_start *s, struct model *m, const void *fw)
 static enum pvr_gpu_start_result run(struct pvr_gpu_start *s, struct model *m)
 {
     for (unsigned i = 0; i < 1000; ++i) {
-        unsigned io = m->io;
+        unsigned io = m->io, reads = m->reads_started;
         enum pvr_gpu_start_result r = pvr_gpu_start_poll(s);
-        assert(m->io - io <= 1);
+        /* One device access per poll; only the readiness byte is re-read. */
+        assert(m->io - io <= 1 || m->io - io == m->reads_started - reads);
         if (r != PVR_GPU_START_AGAIN) return r;
         ++m->now;
     }
@@ -178,7 +180,7 @@ int main(int argc, char **argv)
     prepare(&s,&m,image);
     assert(pvr_gpu_start_begin(&s,100)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_TIMEOUT);
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
-    --m.now; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_CLOCK);
+    m.now-=2; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.io); retained(&s,&m,PVR_GPU_START_CLOCK);
     for(unsigned bad=1;bad<=2;++bad) {
         prepare(&s,&m,image); m.flag=bad;
         assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_FAULT);
@@ -187,12 +189,21 @@ int main(int argc, char **argv)
     prepare(&s,&m,image); m.auto_ready=0;
     assert(pvr_gpu_start_begin(&s,300)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_FAULT);
     assert(m.released && m.reads_started>2); retained(&s,&m,PVR_GPU_START_TIMEOUT);
+    /* A readiness wait re-reads for at most PVR_GPU_SPIN_US per poll. */
+    prepare(&s,&m,image); m.auto_ready=0; assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(s.index+1<s.count) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    unsigned reads=m.reads_started; uint64_t waited=m.now;
+    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.phase==PVR_GPU_START_RUNNING);
+    assert(m.reads_started-reads>1 && m.now-waited>=PVR_GPU_SPIN_US && m.now-waited<=2*PVR_GPU_SPIN_US+4);
+    m.flag=1; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_OK);
+    /* A delay waits inside its step and ends at the deadline. */
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
-    while(!m.aced) { assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN); ++m.now; }
-    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN); /* Starts first minimum delay. */
+    while(!m.aced) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
     uint32_t delay_index=s.index;
-    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.index==delay_index);
-    m.now=10000; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.released);
+    assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.index==delay_index+1 && m.now>=m.ace_done+3);
+    prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
+    while(!m.aced) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
+    m.now=10000-2; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_FAULT && !m.released);
     retained(&s,&m,PVR_GPU_START_TIMEOUT);
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
     assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);

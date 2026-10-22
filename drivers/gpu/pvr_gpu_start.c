@@ -142,18 +142,26 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
     switch (op->kind) {
     case PUBLISH: ok = s->ops.publish(s->context); break;
     case CHECK_CLEAR:
-    case WAIT_BOOT:
-        ok = s->ops.started(s->context, &started);
+    case WAIT_BOOT: {
+        /* Re-read the readiness byte for at most PVR_GPU_SPIN_US before
+         * leaving the wait to the caller's next poll. */
+        uint64_t start = now;
+        for (;;) {
+            ok = s->ops.started(s->context, &started);
+            if (!ok || started || op->kind == CHECK_CLEAR) break;
+            if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
+            if (now - start >= PVR_GPU_SPIN_US) return PVR_GPU_START_AGAIN;
+        }
         if (!ok) break;
         if (started > 1) return fail(s, PVR_GPU_START_BAD_FLAG);
         if (op->kind == CHECK_CLEAR) {
             if (started) return fail(s, PVR_GPU_START_STALE);
         } else {
-            if (!started) return PVR_GPU_START_AGAIN;
             if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
             s->phase = PVR_GPU_START_BOOTED;
         }
         break;
+    }
     case WRITE: ok = s->ops.write(s->context, op->offset, op->width, op->value); break;
     case READ_FENCE: ok = s->ops.read(s->context, op->offset, op->width, &value); break;
     case READ_SLC:
@@ -163,12 +171,14 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
     case WRITE_SLC:
         ok = s->ops.write(s->context, op->offset, op->width, op->value | s->slc_value);
         break;
-    case DELAY:
-        if (!s->wait_until) {
-            if (!a733_deadline_after(now, op->value, &s->wait_until)) return fail(s, PVR_GPU_START_TIMEOUT);
-        }
-        if (now < s->wait_until) return PVR_GPU_START_AGAIN;
-        s->wait_until = 0; ok = 1; break;
+    case DELAY: {
+        /* A few microseconds: wait on the counter inside the step. The
+         * deadline check in clock_now bounds the wait. */
+        uint64_t until;
+        if (!a733_deadline_after(now, op->value, &until)) return fail(s, PVR_GPU_START_TIMEOUT);
+        while (now < until) if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
+        ok = 1; break;
+    }
     default: return fail(s, PVR_GPU_START_IO);
     }
     if (!ok) return fail(s, PVR_GPU_START_IO);

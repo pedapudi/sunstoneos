@@ -4,6 +4,9 @@
 
 #define A733_GPU_INITIAL_HZ 400000000u
 #define A733_GPU_INITIAL_UV 800000u
+/* Longest time one poll re-reads an unsatisfied power-domain acknowledgement,
+ * in microseconds. */
+#define A733_GPU_POWER_SPIN_US 50u
 
 enum a733_gpu_power_bank { A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_PCK };
 enum a733_gpu_power_phase { A733_GPU_POWER_NEW, A733_GPU_POWER_STARTING,
@@ -45,7 +48,7 @@ struct a733_gpu_power_ops {
 struct a733_gpu_power {
     struct a733_gpu_power_ops ops;
     void *context;
-    uint64_t deadline, last_now, wait_until;
+    uint64_t deadline, last_now;
     enum a733_gpu_power_phase phase;
     enum a733_gpu_power_error error;
     uint32_t index, last_value, lease_attempted, lease_held;
@@ -66,8 +69,10 @@ enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *, uint64_t d
  * This controller MUST NOT implement pvr_gpu_stop_ops.isolate by itself.
  */
 enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t deadline);
-/* At most one resource or register callback per poll, plus clock reads. PCK
- * acknowledgement and clock settling share the absolute deadline. Failure
+/* Runs the resource and register steps back to back, with clock reads. The
+ * clock-settling delay waits on the clock inside the poll. An unsatisfied PCK
+ * acknowledgement is re-read for at most A733_GPU_POWER_SPIN_US and then
+ * returns AGAIN. Every wait ends at the absolute deadline. Failure
  * retains diagnostics and disables further I/O; no automatic rollback.
  * lease_held records completed acquire/release callbacks. Failed callbacks can
  * leave partial ownership; a late successful release leaves lease_held clear.

@@ -7,7 +7,7 @@ It has not accessed a physical GPU or booted firmware on the board.
 
 This document assumes familiarity with MMIO, cache maintenance, and device
 reset. The [API](../include/pvr_gpu_start.h) separates offline initialization,
-starting a deadline, and nonblocking polling. A privileged FreeRTOS worker must
+starting a deadline, and bounded polling. A privileged FreeRTOS worker must
 serialize calls. Board power, clocks, identity, allocation, and independent
 watchdog recovery remain prerequisites for physical use.
 
@@ -66,11 +66,12 @@ Writes must complete before their callback returns. Register readbacks fence
 preceding writes. Shared-memory callbacks must maintain visibility without
 writing stale CPU cache lines over firmware-owned data.
 
-A poll performs at most one register access, publication operation, or shared-byte
-read. Delay steps record a clock value after the preceding callback has finished.
-Repeated polls at the same time do not shorten the delay. There are no internal
-busy-wait loops. The service must continue polling and keep its independent
-watchdog protection active.
+A poll performs at most one register access or publication operation. A delay
+step starts after the preceding callback has finished and waits on the clock
+inside the step for its 3 µs. The readiness check re-reads the shared byte for
+up to 50 µs (`PVR_GPU_SPIN_US`) and then returns to the caller, which polls
+again on its next wake. Every wait ends at the startup deadline. The service
+must continue polling and keep its independent watchdog protection active.
 
 The caller supplies one absolute deadline for the complete startup. Clock
 regression, callback failure, stale readiness, an invalid readiness byte,
@@ -92,8 +93,10 @@ controller state after independently verified shutdown.
 
 The [sanitizer check](../checks/pvr-gpu-start.c) uses the pinned firmware and a
 saved wrapper plan from the existing MIPS preparation evidence. Its device model
-charges time for callbacks and checks publication before register access, minimum
-delays, and the one-operation-per-poll bound. A synthetic feature variant covers
+charges one microsecond for each clock read and two for each device callback. It
+checks publication before register access, minimum delays waited inside one
+poll, a readiness wait bounded to 50 µs per poll, a deadline that expires during
+a delay, and at most one register access per poll. A synthetic feature variant covers
 alternate reset-mask selection, omission of secure-bus/reset2 operations, a
 1,024-bit cache line, and the lazy-writeback workaround. It is not another
 physically supported board profile.

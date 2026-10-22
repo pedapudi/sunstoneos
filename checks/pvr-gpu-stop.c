@@ -171,7 +171,9 @@ int main(int argc,char **argv)
     }
     prepare(image); m.no_ack=1;
     while(s.phase!=PVR_GPU_STOP_WAIT_IDLE)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    uint64_t waited=m.now;
     assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && !m.events_count && !m.isolation);
+    assert(s.phase==PVR_GPU_STOP_WAIT_IDLE && m.now-waited>=PVR_GPU_SPIN_US);
     m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
     prepare(image);
     while(s.phase!=PVR_GPU_STOP_CLEAR_OFF)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
@@ -187,8 +189,10 @@ int main(int argc,char **argv)
         prepare(image); m.hold_register=held[i];
         while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[i])
             assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
-        unsigned index=s.index;
+        unsigned index=s.index,reads=m.register_reads; uint64_t start=m.now;
         assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==index && !m.reset && !m.isolation);
+        /* The held register is re-read for PVR_GPU_SPIN_US within one poll. */
+        assert(m.register_reads-reads>1 && m.now-start>=PVR_GPU_SPIN_US && m.now-start<=3*PVR_GPU_SPIN_US);
         m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
     }
     prepare(image); m.late_isolation=1;

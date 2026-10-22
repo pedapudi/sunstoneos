@@ -1250,6 +1250,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
   cores, queue saturation, backlog draining, deferred rearm, and retained failures.
   Physical GPU power and interrupt behavior remain unqualified.
+  The [service worker](gpu-service.md#worker-pacing-measured-in-the-emulator)
+  has one wait: one tick in lifecycle phases, the job deadline or 4 ms while a
+  job is in flight, and an interrupt or request otherwise. Startup delays,
+  shutdown polls and power-domain sequencing wait inside their steps for up to
+  50 µs. In the emulator, power-on to READY falls from 34 ticks to 3 and timed
+  wake-ups during a job from 1,000 to about 250 per second. Concurrent sessions,
+  bounded reset, idle power-off and firmware loading from the FAT volume remain
+  required ([runtime design](designs/gpu-runtime.md)).
   The [translation-cache invalidation protocol](gpu-flush.md) has host evidence
   for publication ordering, bounded command completion, and retained failures.
   Actual mapping changes and physical invalidation remain unqualified.

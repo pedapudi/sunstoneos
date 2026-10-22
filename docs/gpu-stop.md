@@ -41,8 +41,9 @@ the reference handshake. Unresolved return tokens remain recorded and cannot be
 reported as successful merely because shutdown completed.
 
 One absolute deadline covers both handshakes, hardware polls, reset, and isolation.
-There are no internal wait loops. During a firmware wait, one poll services at
-most four events and one command-return scan before reading power-sync. A full
+During a firmware wait, one poll services at most four events and one
+command-return scan, then re-reads power-sync for up to 50 µs
+(`PVR_GPU_SPIN_US`) before returning. A full
 command queue also receives bounded service before another submission attempt.
 The owner must continue collecting unrelated command results so their slots can
 be reused during shutdown.
@@ -56,8 +57,9 @@ feature bits select the reset mask and whether the external BIF read-status chec
 is required. The pinned A733 profile uses fifteen register operations, including
 the added reset readback.
 
-Each hardware-stage poll performs one register access. A mismatched idle value
-leaves the controller at that step until the deadline. Writes complete before
+Each hardware-stage poll performs one register step. An idle check re-reads its
+register for up to 50 µs; a value that stays mismatched leaves the controller at
+that step for the next poll, until the deadline. Writes complete before
 their callbacks return. The final reset readback fences the write; it is not
 interpreted as proof of interconnect isolation.
 
@@ -104,9 +106,10 @@ clears, idle/reset ordering, and isolation are exercised through callbacks.
 A synthetic feature variant checks alternate reset selection and omission of
 the external BIF read-status operation; it does not establish another board profile.
 
-The check passes 115 retained-failure cases. These include callback failures,
+The check passes 120 retained-failure cases. These include callback failures,
 each distinct idle-register wait, missing acknowledgements, clock regression,
-command errors, and late isolation. It verifies that terminal states make no
+command errors, and late isolation. A held idle register and a missing
+acknowledgement are each re-read for at least 50 µs within one poll. It verifies that terminal states make no
 callbacks, that recorded results survive retirement, and that a power acknowledgement
 can arrive without a command-return flag.
 
