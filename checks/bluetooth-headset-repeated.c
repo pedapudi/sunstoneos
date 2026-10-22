@@ -27,14 +27,14 @@ static void take(uint64_t ticket,const uint8_t *expected,size_t length,FILE *out
     assert(bluetooth_headset_segment_ack(&app,ticket+1)==-1);
     assert(bluetooth_headset_segment_ack(&app,ticket)==1&&bluetooth_headset_segment_ack(&app,ticket)==-1);current_task=owner;
 }
-static void closed(void)
+static void disconnect(void)
 {
-    assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);
     for(unsigned n=0;n<8;++n)assert(pump()>=0);
     assert(!atomic_load(&voice.segment_disconnected)&&voice.audio.links[0].phase==BT_SCO_DISCONNECT_WAIT);
     const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(DONE);
     assert(atomic_load(&voice.segment_disconnected));
 }
+static void closed(void){assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);disconnect();}
 /* Resident lifetime: the firmware becomes ready at 100 s, which moves the
  * schedule origin to 70 s. Capture then runs past the supervised 38 s window
  * with one segment every 300 ms, and a stop closes within 2 s of itself. */
@@ -65,6 +65,17 @@ int main(int argc,char **argv)
         puts("PASS resident lifetime: origin at firmware readiness, capture past the supervised window, bounded close");return 0;
     }
     connected();
+    /* A stop stored after the poll's first check, while the owner publishes
+     * the first segment, still closes the stream within the close bound. */
+    if(!strcmp(argv[1],"stop-in-poll")){
+        for(unsigned n=0;n<50;++n)assert(pump()>=0);
+        assert(voice.audio.active_tx==BT_SCO_PACKETS&&app.hci.transport.tx_offset==app.hci.transport.tx_length&&wire.now+100<voice.next_silence);
+        stop_at_publication=1;inject_pcm(pcm,8,0);
+        for(unsigned n=0;n<40&&voice.stage==CAPTURE;++n)assert(pump()>=0);
+        assert(!stop_at_publication&&voice.stage==CLOSE&&atomic_load(&voice.segment_head)==1&&
+            atomic_load(&voice.segment_flags)==BLUETOOTH_SEGMENT_CANCEL&&voice.operation_deadline==app.started+40000000);
+        disconnect();puts("PASS stop stored during a capture poll closes cleanly");return 0;
+    }
     if(speech){
         assert(argc==4);FILE *in=fopen(argv[2],"rb"),*out=fopen(argv[3],"wb");assert(in&&out);
         uint8_t input[96000];assert(fread(input,1,sizeof(input),in)==sizeof(input)&&fgetc(in)==EOF&&!fclose(in));

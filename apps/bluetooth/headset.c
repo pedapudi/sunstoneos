@@ -475,6 +475,8 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
 #endif
         if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
             if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
+            /* Another task may store a stop after this poll's first check. */
+            if(!voice.operation_deadline)segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
             if(bt_sco_close(&voice.audio,voice.stream,voice.operation_deadline)!=1)return fail();voice.stage=CLOSE;return 0;
         }
 #ifdef SUNSTONE_BLUETOOTH_MSBC

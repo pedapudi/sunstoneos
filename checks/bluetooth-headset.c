@@ -3,7 +3,24 @@
 #define BLUETOOTH_APPLICATION_FIXTURE_ENTRY archived_application_main
 #include "bluetooth-application.c"
 #undef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
+#ifdef BLUETOOTH_CHECK_REPEATED
+/* A repeated case may store a capture stop inside one owner poll, after the
+ * poll's first stop check, as another task can. The stop is stored when the
+ * owner publishes segment stop_at_publication and reads the capture window. */
+static uint64_t stop_at_publication;
+static uint64_t publication_window(const struct bluetooth_application *);
+#define bluetooth_capture_window publication_window
+#endif
 #include "../apps/bluetooth/headset.c"
+#ifdef BLUETOOTH_CHECK_REPEATED
+#undef bluetooth_capture_window
+static uint64_t publication_window(const struct bluetooth_application *a)
+{
+    if(stop_at_publication&&atomic_load(&voice.segment_head)==stop_at_publication){
+        stop_at_publication=0;assert(bluetooth_headset_segment_stop(&app)==1);}
+    return bluetooth_capture_window(a);
+}
+#endif
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
 void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine completion. */
 #endif

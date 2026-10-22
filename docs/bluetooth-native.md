@@ -216,7 +216,11 @@ that client failure, identification on the
 module's generation in the resident lifetime with the moved origin, and a
 module fault that ends the client. The repeated headset model
 (`checks/bluetooth-headset.py --repeated --case resident`) runs resident
-capture past the supervised window and checks the 2 s close bound.
+capture past the supervised window and checks the 2 s close bound. Its
+`stop-in-poll` case requests cancellation from inside an owner poll, after
+that poll's first stop check, while the owner publishes a segment with the
+audio transmit path idle. The owner must set the close bound before it asks
+the controller to close, so the close succeeds in that same poll.
 
 ## Bounded native headset capture
 
