@@ -9,14 +9,19 @@ static size_t md_rounded(void){return (md_bytes()+4095)&~(size_t)4095;}
 static unsigned allocations(void){return motion()?6:3;}
 static uint8_t *image(unsigned i)
 {return i==1?deinterlace.input:i==2?deinterlace.output:i==3?deinterlace.current:i==4?deinterlace.flag_input:deinterlace.flag_output;}
+/* WEAVE keeps every frame in its one input allocation. The temporal modes
+ * alternate even frames in the source and odd frames in the current one. */
+static unsigned slot(unsigned frame){return motion()&&(frame&1)?3:1;}
+static size_t frames(void){return a733_deinterlace_input_bytes(&deinterlace.session)/deinterlace.bytes;}
 int deinterlace_upload_allocate(void)
 {
     if(deinterlace.wb_pool||!a733_deinterlace_geometry_valid(&deinterlace.session))return 0;
-    deinterlace.bytes=A733_DEINTERLACE_OUTPUT_CAPACITY;
+    deinterlace.bytes=A733_DEINTERLACE_FRAME_BYTES;
     deinterlace.rounded=(deinterlace.bytes+4095)&~(size_t)4095;
+    size_t outputs=a733_deinterlace_jobs(&deinterlace.session)*deinterlace.bytes;
     deinterlace.wb_pool=a733_memory_reservations_init();if(!deinterlace.wb_pool)return 0;
     for(unsigned i=0;i<2;++i){struct device_memory_extent e;
-        size_t n=i?deinterlace.rounded:(a733_deinterlace_input_bytes(&deinterlace.session)+4095)&~(size_t)4095;
+        size_t n=((i?outputs:a733_deinterlace_input_bytes(&deinterlace.session))+4095)&~(size_t)4095;
         if(!device_memory_acquire_aligned(deinterlace.wb_pool,deinterlace.session.owner,n,4096,
            &deinterlace.wb_leases[i],&e)||e.bytes!=n||e.cpu%4096)return 0;
         memset((void *)e.cpu,0,e.bytes);
@@ -66,12 +71,41 @@ __attribute__((noinline)) int deinterlace_allocate(void)
         {A733_DEINTERLACE_OUTPUT_IOVA,(uintptr_t)deinterlace.output,deinterlace.rounded,A733_IOMMU_READ|A733_IOMMU_WRITE}};
     if(motion()){
         spans[2]=(struct a733_iommu_span){A733_DEINTERLACE_CURRENT_IOVA,(uintptr_t)deinterlace.current,deinterlace.rounded,A733_IOMMU_READ};
-        spans[3]=(struct a733_iommu_span){A733_DEINTERLACE_FLAG_IN_IOVA,(uintptr_t)deinterlace.flag_input,md_rounded(),A733_IOMMU_READ};
+        /* Repeated jobs alternate which MD flag buffer DI writes. */
+        spans[3]=(struct a733_iommu_span){A733_DEINTERLACE_FLAG_IN_IOVA,(uintptr_t)deinterlace.flag_input,md_rounded(),
+            A733_IOMMU_READ|(deinterlace.session.repeats?A733_IOMMU_WRITE:0)};
         spans[4]=(struct a733_iommu_span){deinterlace.session.mode==A733_DEINTERLACE_TNR?A733_DEINTERLACE_TNR_FLAG_OUT_IOVA:A733_DEINTERLACE_FLAG_OUT_IOVA,(uintptr_t)deinterlace.flag_output,md_rounded(),A733_IOMMU_READ|A733_IOMMU_WRITE};
     }
     if(a733_iommu_build(&deinterlace.tables,deinterlace.table,(uintptr_t)deinterlace.table,spans,motion()?5:2)!=1)return 0;
     __asm__ volatile("dsb sy":::"memory");
     for(unsigned i=0;i<allocations();++i){struct device_memory_allocation *a=device_memory_lookup(deinterlace.pool,deinterlace.leases[i]);
         if(!a||a->state!=DEVICE_MEMORY_CPU)return 0;a->state=DEVICE_MEMORY_DEVICE;}
+    return deinterlace_guards();
+}
+/* Both inputs of the current job still equal their authenticated frames;
+ * neither DMA source may be CPU-written while DI owns it. */
+int deinterlace_inputs_intact(void)
+{
+    for(unsigned f=deinterlace.job;f<deinterlace.job+(motion()?2u:1u);++f)
+        if(memcmp(image(slot(f)),deinterlace.supplied.bytes+(size_t)f*deinterlace.bytes,deinterlace.bytes))return 0;
+    return 1;
+}
+/* Retire the finished job's oldest input and its copied output, and prepare
+ * them for the next job. The caller holds the matched finish with busy clear,
+ * a clean fault scan and the private copy; the pinned driver returns a job's
+ * buffers at that point. Both stay mapped for master9 only and owned by this
+ * session. Any refusal leaves them retained with no further job. */
+int deinterlace_refill(void)
+{
+    unsigned frame=deinterlace.job+(motion()?2u:1u),leases[2]={slot(frame),2};
+    struct device_memory_allocation *a[2];
+    if(frame>=frames()||!deinterlace_guards()||!deinterlace_inputs_intact())return 0;
+    for(unsigned i=0;i<2;++i){a[i]=device_memory_lookup(deinterlace.pool,deinterlace.leases[leases[i]]);
+        if(!a[i]||a[i]->state!=DEVICE_MEMORY_DEVICE)return 0;}
+    for(unsigned i=0;i<2;++i)a[i]->state=DEVICE_MEMORY_CPU;
+    memcpy(image(slot(frame)),deinterlace.supplied.bytes+(size_t)frame*deinterlace.bytes,deinterlace.bytes);
+    memset(deinterlace.output,0,deinterlace.bytes);
+    __asm__ volatile("dsb sy":::"memory");
+    for(unsigned i=0;i<2;++i)a[i]->state=DEVICE_MEMORY_DEVICE;
     return deinterlace_guards();
 }
