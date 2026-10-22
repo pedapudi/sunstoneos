@@ -1,7 +1,7 @@
 # Measurements: NPU cold boot, recovery and power management
 
 These measurements compare this branch with its base revision,
-`audit/integration` at commit `c45a76e`, against the budgets in
+the commit where it leaves the integration branch, `6cd12f0`, against the budgets in
 [the design](npu-platform.md). The branch implements the parts of the design
 whose code lies in the NPU startup, platform and PLL controllers, the
 convolution application's clock adapter and its session admission. The
@@ -32,16 +32,15 @@ USB devices or the board.
   the number of calls and FreeRTOS ticks from the first acquisition step to
   READY; the base revision received the same counting lines in a copy outside
   the repository. Each fixture ran three times per revision; the table gives the range.
+  The base revision's counting lines match those the branch adds to the two
+  fixtures, and change no assertion or startup call.
 - **Sizes.** Code sizes are the summed sizes of function symbols in each image
   and the `.text` size of each controller's object file in the multicore
   image, both read with `llvm-nm` and `llvm-size`. Source sizes are line
   counts of each file. Barriers are `dsb` and `dmb` instructions in those
-  object files, counted with `llvm-objdump`.
-  The branch's image sizes include later integrated work that changes no NPU
-  controller source but changes other code in the images. Without the
-  branch's last size reductions, the same revision's images measure 185,936,
-  176,552 and 339,248 bytes of function code; the reductions save 428, 428
-  and 424 bytes.
+  object files, counted with `llvm-objdump`. Image data and BSS sizes are
+  read with `llvm-size`. Both revisions contain the same integrated work, so
+  the image differences come from the branch's NPU changes alone.
 - **Counted items** come from the code: session-page hashes, ownership checks
   and bytes hashed before activation.
 
@@ -60,16 +59,16 @@ USB devices or the board.
 | PLL mutex acquisitions | Combined: ≤ 3 | 12 | 5 | No |
 | Local gate (local stop) | 1 call, ≤ 12 reads, 5 writes, ≤ 6 clock samples, 1 lock | 6 polls, 102 reads, 5 writes, 238 clock samples, 6 locks | 1 call, 10 reads, 5 writes, 4 clock samples, 1 lock | Yes |
 | Ownership checks per register access | 0; one per startup call | Startup: owner-task check on every read, write and clock sample. Adapter: EL read, health query, scheduler query and task compare on every read, write and clock sample | 0 in both; checked at each startup step, acquisition and mutex entry and release | Yes |
-| Startup calls in the two-core fixture | ≤ 3 | 28, over 30 ticks | 9 or 10, over 12 to 14 ticks | No |
-| PLL and startup calls with PLL adoption | ≤ 3 startup calls | 13 PLL and 28 startup | 6 PLL and 10 or 11 startup | No |
-| Bootstrap ticks to READY with PLL adoption | ≤ 4 without PENDING | 40 or 41 | 18 or 19 | No |
+| Startup calls in the two-core fixture | ≤ 3 | 28, over 30 ticks | 9 or 10, over 13 or 14 ticks | No |
+| PLL and startup calls with PLL adoption | ≤ 3 startup calls | 13 PLL and 28 startup | 6 PLL and 11 startup | No |
+| Bootstrap ticks to READY with PLL adoption | ≤ 4 without PENDING | 41 | 19 | No |
 | Bytes hashed before activation, accelerator image | 0 | 28 calls × 1,881,936 bytes, 52.7 MB | 11 calls × 1,881,936 bytes, 20.7 MB | No |
 | Startup PMIC traffic | None | 12 register reads, 6 bus-state reads, 5,160 µs wait | Unchanged | No |
 | Source lines, code and header | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup 445 + 131; platform 223 + 96; PLL 204 + 109; adapter 128 + 19 | No; startup 9 lines above the base, the others at or below it |
-| Function code bytes | No budget | Multicore 190,364; single-core 181,020; accelerators 341,432 | 185,508; 176,124; 338,824 | Smaller in each image |
+| Function code bytes | No budget | Multicore 190,004; single-core 180,648; accelerators 343,244 | 185,508; 176,124; 338,824 | Smaller in each image, by 4,496, 4,524 and 4,420 bytes |
 | Controller object `.text`, multicore image | No budget | Startup 10,152; platform 7,260; PLL 5,436; adapter 3,208; admission 992 | 9,948; 5,280; 3,884; 2,524; 916 | Each smaller |
 | Barriers in the controller objects, multicore image | No startup budget; per-job `DSB SY` has its own row in the design | Admission 0; startup, platform, PLL and adapter 0 | 0 in each | Same as base |
-| Data and BSS | No budget | Images unchanged; admission object 706 bytes | Images unchanged; admission object 674 bytes, without the retained 32-byte digest | Not applicable |
+| Data and BSS | No budget | Multicore 2,700,721; single-core 2,426,144; accelerators 8,571,760; admission object 706 | Multicore and accelerators unchanged; single-core 2,426,112; admission object 674 | Yes: the 32-byte retained digest is gone, and nothing grew |
 
 The local startup and PLL rows count each controller alone. The design's
 startup targets count both together, because it replaces the two controllers
