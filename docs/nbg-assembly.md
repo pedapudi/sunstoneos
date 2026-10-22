@@ -86,6 +86,26 @@ unchanged, so it needs no per-channel metadata. Input and output padding
 follows the same rule for every tensor type: logical bytes rounded up to 64,
 plus 64.
 
+## A stepwise form assembles in bounded steps
+
+`nbg_assembly_begin` and `nbg_assembly_next` let a loader assemble into memory
+that no device or other task uses while it runs, a few operations per call.
+The NPU runtime uses them to load a model into a slot without a long
+non-yielding block ([design](designs/npu-breadth.md)). The file must be an
+authenticated copy of one that `nbg_assembly_layout` accepted: `begin`
+repeats the profile and placement checks without the CRC-32 pass, which the
+digest supersedes, and writes nothing. Each `next` call validates and writes up
+to the requested number of operations: the command prefix before the first,
+each 192-byte descriptor in place and each command state after the previous
+one. After the last operation it checks that every patch was consumed, writes
+the footer and fills in the patch counts. The caller writes everything else:
+coefficients, END pairs after the stream, padding, and the tensor and pool
+allocations. A refusal can leave earlier operations written, so the caller
+discards the assembly. The runtime check compares the bytes of every catalogue
+model loaded this way with a one-call `nbg_assemble_layout` at the same device
+addresses: descriptors, coefficients with padding and the complete command fetch
+span match.
+
 ## Reserve buffers before modifying caller memory
 
 `nbg_assembly_requirements` validates the supported profile and all relocations

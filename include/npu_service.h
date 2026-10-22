@@ -13,7 +13,7 @@
 enum npu_service_operation {
     NPU_SERVICE_STATUS, NPU_SERVICE_OPEN, NPU_SERVICE_SUBMIT,
     NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE,
-    NPU_SERVICE_WAIT
+    NPU_SERVICE_WAIT, NPU_SERVICE_LOAD /* Runtime mode only. */
 };
 enum npu_service_result {
     NPU_SERVICE_OK, NPU_SERVICE_INVALID, NPU_SERVICE_DENIED,
@@ -21,7 +21,9 @@ enum npu_service_result {
 };
 struct npu_service_request {
     enum npu_service_operation operation;
-    unsigned command; /* Index in the private startup command table; zero is bootstrap. */
+    /* SUBMIT: index in the private startup command table; zero is bootstrap.
+     * LOAD: the runtime's catalogue index. Zero for other operations. */
+    unsigned command;
     uint64_t timeout_us; /* OPEN/SUBMIT/CANCEL only; zero for other operations. */
 };
 struct npu_service_reply {
@@ -73,6 +75,23 @@ struct npu_service_irq_ops {
     int (*rearm)(void *);
     int (*stop)(void *);
 };
+/* Runtime mode callbacks, all called by the worker only. request receives a
+ * member's LOAD or SUBMIT: return 1 to hold the reply until
+ * npu_service_release, or 0 with *result for an immediate reply. step runs at
+ * most one bounded step of the runtime's bulk work and returns 1 when it did
+ * work, 0 when none remains. finished reports a completed job of client,
+ * already reaped, whose reply stays held; with faulted set it reports a
+ * controller fault, client being NPU_SERVICE_CLIENTS when no job ran.
+ * closed reports a member's successful CLOSE. idle_hint enables the
+ * idle-register completion hint while interrupt delivery is unqualified. */
+struct npu_service_runtime {
+    int (*request)(void *, unsigned client, const struct npu_service_request *,
+                   enum npu_service_result *);
+    int (*step)(void *);
+    void (*finished)(void *, unsigned client, int faulted);
+    void (*closed)(void *, unsigned client);
+    unsigned idle_hint;
+};
 struct npu_service {
     struct a733_npu_controller controller;
     struct a733_npu_ops ops;
@@ -101,6 +120,9 @@ struct npu_service {
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
     unsigned shared, members, running, next;
     struct npu_service_member member[NPU_SERVICE_CLIENTS];
+    struct npu_service_runtime runtime;
+    void *runtime_context;
+    unsigned runtime_mode, runtime_failed, idle_hints;
 };
 
 /* One statically configured service for the single NPU. Call init/bind before
@@ -150,6 +172,31 @@ int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t
  * member. CLOSE leaves the session; the last member's CLOSE closes the
  * controller as in exclusive mode. Commands must lie outside internal SRAM. */
 int npu_service_share(struct npu_service *);
+/* Optional runtime mode, after npu_service_share and before scheduling; the
+ * interrupt must also be bound before activation. Members still OPEN and
+ * CLOSE as in shared mode. LOAD and SUBMIT go to the runtime's request
+ * callback, which normally holds the reply; WAIT, CANCEL and REAP are
+ * refused. The worker starts no job by itself: the runtime starts one with
+ * npu_service_start once its preparation is done and releases each held
+ * reply with npu_service_release. Each worker pass handles interrupt
+ * progress, at most one request with a zero wait and one runtime step. While
+ * steps remain the worker does not block; with none left it blocks on its
+ * notification, for at most one tick while the controller is active. With
+ * idle_hint set, it reads the idle register (offset 0x4, which acknowledges
+ * nothing) after each step and after each such tick while the controller is
+ * active; full idle then runs the masked interrupt progress sequence as for a
+ * notification. A controller fault releases every held reply with FAULT. */
+int npu_service_runtime(struct npu_service *, const struct npu_service_runtime *, void *context);
+/* Worker only, from a runtime callback. start masks the interrupt and
+ * submits command for client, whose request is held, while the controller is
+ * READY with no job: 1 started, 0 mask deferred (retry later), -1 refused or
+ * faulted. release sends client's held reply with result and state.
+ * retain faults the controller after a runtime integrity failure, which then
+ * releases every held reply with FAULT and refuses all later requests. */
+int npu_service_start(struct npu_service *, unsigned client, unsigned command, uint64_t timeout_us);
+void npu_service_release(struct npu_service *, unsigned client, enum npu_service_result,
+                         enum a733_npu_state);
+void npu_service_retain(struct npu_service *);
 
 /* Optional private binding after init, before scheduling. The route/cookie and
  * worker remain pinned. ISR entry follows root-owned mask of INTID97; it never

@@ -1,6 +1,10 @@
 # Design: loading, switching and sharing compiled NPU models at runtime
 
-Status: **design**; no code exists. Section numbers refer to
+Status: **implemented and host-modeled**; physical behavior is pending, and
+no board image links the runtime yet. The section
+[Implementation, measurements and remaining work](#implementation-measurements-and-remaining-work)
+records how the code differs from this design and what the emulator counts.
+Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 
 The runtime, `drivers/npu/a733_npu_runtime.c` with the interface
@@ -306,3 +310,112 @@ interim, so the writer and the extent of the damage are unknown.
 - A client kernel's time with and without the runtime running.
 - `ID_AA64ISAR0_EL1`, `DCZID_EL0`, the per-line maintenance, copy and
   streaming rates, and D, G, H, P and W, timed with the generic timer.
+
+## Implementation, measurements and remaining work
+
+The runtime is [a733_npu_runtime.c](../../drivers/npu/a733_npu_runtime.c)
+with the interface [npu_runtime.h](../../include/npu_runtime.h); the interim
+checks T, A and H are in
+[a733_npu_runtime_interim.c](../../drivers/npu/a733_npu_runtime_interim.c).
+The service gains a runtime mode (`npu_service_runtime`, `npu_service_start`,
+`npu_service_release` and `npu_service_retain`, described in
+[npu-service.md](../npu-service.md#runtime-mode-holds-load-and-submit-replies)),
+and the assembler gains a stepwise form (`nbg_assembly_begin` and
+`nbg_assembly_next`, described in
+[nbg-assembly.md](../nbg-assembly.md#a-stepwise-form-assembles-in-bounded-steps)).
+
+### Differences from the design
+
+- **LOAD reads the model through a staging copy.** The decoder and assembler
+  need the complete file in contiguous memory, so a LOAD copies the catalogue model into a
+  CPU-only staging area in the read-only group, 1 KiB per step, and hashes each
+  chunk after copying it. The source is read once, and the digest is the
+  catalogue's existing whole-file SHA-256, so the session catalogue needs no
+  per-section digests. A source byte changed before its chunk is copied fails
+  the digest; a change after it does not affect the load. The staging area is
+  the size of the largest catalogue model (964,224 bytes for ShuffleNetV2),
+  and coefficients are copied a second time, from staging into the slot. The
+  4 KiB section buffer of the design needs a decoder that reads sections in
+  order, which is not written.
+- **One LOAD step exceeds C.** The step that decodes the staged copy and checks
+  the plan runs 58,000 instructions for ShuffleNetV2 in an instrumented QEMU
+  count with `-icount`, an estimated 0.12 ms at one cycle per instruction and
+  494 MHz. The bound check takes it at two cycles per instruction, 0.235 ms,
+  as the longest step L in place of C. Assembly steps of eight operations run
+  29,000 instructions in the same count.
+- **The worker handles every completion at once.** Interrupt progress runs on
+  every pass, so a completion is handled between the steps of a running
+  post-job check; only the next start and the next check wait for that check.
+  The reply bound of the design still holds.
+- **Relocated fields are bounded by construction.** The assembler places each
+  allocation inside the region of its role and refuses a relocation outside
+  its allocation, so the runtime adds no separate comparison per field.
+- **The session check is kept.** [npu-session.c](../../checks/npu-session.c)
+  still checks the session code until that code is deleted, and now prints the
+  baseline counters. The runtime has its own check,
+  [npu-session-runtime.c](../../checks/npu-session-runtime.c), run by
+  [npu-session.py](../../checks/npu-session.py) `--mode runtime`.
+
+### Emulator measurements
+
+QEMU runs two Cortex-A55 cores with a register model in place of the NPU. The
+baseline is the session code in the five-model reserved configuration; the
+runtime runs the same five models in four slots. Figures are per ShuffleNetV2
+inference, from the COUNT lines of three jobs each.
+
+| Metric | Session code | Runtime |
+| --- | ---: | ---: |
+| Requests and replies | 3 and 3 | 1 and 1 |
+| Address translations | 3,216 | 0 |
+| SHA-256 bytes | 920,616 | 0 |
+| Integrity-check bytes read: tables, address-bearing bytes, END tail, read-only bytes | 541,656 | 1,509,856 |
+| CPU bytes zeroed or copied | 1,244,162 | 1,093,632 zeroed |
+| Cache lines maintained | 36,672 | 19,442 |
+| Worker steps: preparation, pool, post-job check | none | 11, 67 and 31 |
+
+The baseline's translations cover the buffers of all five models; the design's
+figure of 2,126 counts ShuffleNetV2 alone. The runtime's integrity bytes are
+two table scans of 20,480 bytes, 27,112 address-bearing bytes, an END tail of
+521,168 bytes and 920,616 read-only bytes. One ShuffleNetV2 LOAD runs 1,105
+steps, hashes 964,224 bytes, copies 1,856,832 bytes and reads 920,616 bytes for
+the check references; the three other slots completed 1,142 jobs while it ran.
+
+[npu-runtime-bounds.py](../../checks/npu-runtime-bounds.py) computes the
+bounds from these byte counts at the design's rates and compares its byte
+counts with the COUNT line. For the emulator check image (four slots, a 1 s
+deadline cap) the start wait is at most 3.01 s and the reply 4.02 s, inside the
+20 s collect timeout. The planned first consumer has one ShuffleNetV2 slot,
+USB0 on core 0 and a 1 s deadline cap. With the USB0 factor, G is 1.44 ms,
+P 5.41 ms, H 2.52 ms and W 8.22 ms; the start wait is at most 7.15 ms and the
+reply 1.02 s, inside the host's 5 s request deadline. H is bounded by the model file size;
+the counted read-only bytes are smaller.
+
+Reproduce, with the session artifacts map of
+[npu-session.md](../npu-session.md#emulator-checks):
+
+```sh
+checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode runtime --artifacts ARTIFACTS.json
+checks/npu-runtime-bounds.py --output NEW_OUTPUT_DIRECTORY --evidence RUNTIME_OUTPUT/result.json
+```
+
+All five runtime cases pass; the cases are listed at the top of the check.
+Removing the END fill of a LOAD fails case 0, and removing the pool's
+`DC ZVA` fails case 1. The emulator cannot change `DCZID_EL0`, so the refusal
+of a wrong DC ZVA block size is not exercised. The `longest` step times that
+the runtime records use the generic timer; in QEMU they include the other
+core's time slices and are diagnostic only, and on the board they give D, G, P
+and H.
+
+### Remaining work
+
+- **First consumer.** `apps/npu-convolution/native.c` must construct the
+  runtime for `apps/npu-runtime-large`, and the client in
+  `apps/npu-runtime/main.c` then sends one LOAD and one SUBMIT per inference and
+  blocks on a USB0 notification instead of `vTaskDelay(1)`.
+- **Shader and kind-3 templates.** The assembler does not yet accept shader
+  operations or kind-3 records, and `nbg_sh_nt.c` remains separate, so the
+  relative-shift graph cannot be loaded into a slot.
+- **A section-order decoder** would remove the staging copy and its memory.
+- **Other owners:** the deletion of `npu_session.c`, the fixed mappings with
+  the EL1 alias, per-buffer mapping checks once at initialization, A76
+  admission, the hang-reset quiesce and the pool comparison, as listed above.

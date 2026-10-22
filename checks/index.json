@@ -6383,6 +6383,19 @@
   "summary": "Run the native reserved-convolution preparation modes, without NPU commands.",
   "usb": false
  },
+ "npu-runtime-bounds.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-breadth.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Compute the NPU runtime's start, reply and load bounds per image and refuse a short collect timeout.",
+  "usb": false
+ },
  "npu-runtime-host.py": {
   "cache_areas": [
    "evidence",
@@ -6417,6 +6430,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/npu-breadth.md",
    "docs/designs/npu-conformance.md",
    "docs/handoff.md",
    "docs/npu-conformance.md",
