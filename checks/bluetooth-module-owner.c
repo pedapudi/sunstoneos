@@ -4,11 +4,12 @@
  * over the bt-hci wire model; the module platform, session and native adapter
  * are modeled at their interfaces. The cases check that the attached client
  * refuses a module its profile does not name, authenticates the wake pins in
- * the added admission, never polls or retains the module, gives up when the
- * module's firmware is not ready by its own bound, identifies the controller
- * on the shared firmware generation, moves the schedule origin to firmware
- * readiness in the resident lifetime, and ends on a module fault while
- * leaving the module and the board's latch alone. */
+ * the added admission whatever the client's state, never polls or retains
+ * the module, gives up when the module's firmware is not ready by its own
+ * bound, identifies the controller on the shared firmware generation, moves
+ * the schedule origin to firmware readiness in the resident lifetime, and
+ * ends on a module fault while leaving the module and the board's latch
+ * alone. */
 #define main bluetooth_archived_hci_main
 #include "bt-hci.c"
 #undef main
@@ -139,22 +140,23 @@ int main(void)
     reset();assert(!attach(0,59000000)&&!native.extension);
 
     /* Supervised attachment: the wake pins join the module platform and the
-     * added admission accepts only them, with the client latch clear. */
+     * added admission accepts only them. */
     reset();assert(attach(0,60000000)==1&&app.attached&&app.module_session==&module&&app.module_radio==&platform);
     assert(native.extension&&native.extension_cookie==&app&&platform.bluetooth.authority==5&&app.bootstrap_deadline==40000000);
     struct a733_clock_token token={.owner=20};
     assert(native.extension(native.extension_cookie,&platform.config,&token)==1);
     platform.bluetooth.desired[0].pull^=1;assert(!native.extension(native.extension_cookie,&platform.config,&token));
     platform.bluetooth.desired[0].pull^=1;token.owner=21;assert(!native.extension(native.extension_cookie,&platform.config,&token));
-    token.owner=20;atomic_store(&latch,4);assert(!native.extension(native.extension_cookie,&platform.config,&token));
-    atomic_store(&latch,0);
+    token.owner=20;
     /* The module's firmware is not ready by the client's bound: the client
-     * retains its own transports; the module and the board latch stay. */
+     * retains its own transports; the module and the board latch stay, and
+     * the module's admission still accepts the wake pins. */
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;
     assert(bluetooth_application_poll(&app)==0&&app.stage==1);
     wire.now=39999999;assert(bluetooth_application_poll(&app)==0);
     wire.now=40000000;assert(bluetooth_application_poll(&app)==-1&&(atomic_load(&latch)&4)&&uart_retains==1&&
         !module.fault&&atomic_load(&board_latch)==1&&!wake_reads);
+    assert(native.extension(native.extension_cookie,&platform.config,&token)==1);
 
     /* Resident attachment identifies the controller on the module's firmware
      * generation. Readiness at 50 s moves the origin to 10 s, where the

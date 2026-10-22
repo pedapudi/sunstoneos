@@ -149,13 +149,14 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
     atomic_store_explicit(&a->failed,0,memory_order_release);return 1;
 }
 /* The attached module's own admission checks its platform configuration;
- * this added one authenticates the Bluetooth wake extension. */
+ * this added one authenticates the Bluetooth wake extension. The pins belong
+ * to the module platform once attached, so a client failure does not refuse
+ * them: that would end the module and Wi-Fi with the client. */
 static int wake_admit(void *cookie,const struct a733_radio_platform_config *c,const struct a733_clock_token *token)
 {
     struct bluetooth_application *a=cookie;
     return a->self==a&&a->attached&&c==&a->module_radio->config&&token->owner==c->owner&&
         a->profile->radio_authority&&a->profile->wake_authority&&
-        !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)&&
         !memcmp(&a->module_radio->bluetooth,&a->profile->wake,sizeof(a->profile->wake));
 }
 int bluetooth_application_attach(struct bluetooth_application *a,const struct bluetooth_profile *p,

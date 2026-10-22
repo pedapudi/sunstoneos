@@ -168,8 +168,10 @@ It adds the profile's wake pins to the module platform and registers an
 added admission with the native adapter
 (`a733_radio_platform_native_extend`). After the module's own admission
 accepts the platform configuration, the added admission accepts only the
-profile's exact wake pins with the platform owner's clock token, while the
-client's recovery latch is clear.
+profile's exact wake pins with the platform owner's clock token. Once
+attached, the wake pins belong to the module platform, so the added admission
+does not read the client's recovery latch. A client failure before the
+module's admission therefore leaves that admission and Wi-Fi unaffected.
 
 The Bluetooth client owns UART1, the H4/HCI binding and its own recovery
 latch. The module's owner task polls the session first and the client after
@@ -209,7 +211,8 @@ UART, H4 and HCI over the HCI wire model. It refuses a bootstrap-only or
 faulted session, another owner task or adapter, other session or platform
 owners, another topology, radio identity or firmware span and another
 lifetime. It checks the added admission, the client's own bootstrap bound
-without touching the module or the board latch, identification on the
+without touching the module or the board latch, the added admission after
+that client failure, identification on the
 module's generation in the resident lifetime with the moved origin, and a
 module fault that ends the client. The repeated headset model
 (`checks/bluetooth-headset.py --repeated --case resident`) runs resident

@@ -354,7 +354,9 @@ Each client has its own lease and its own failure:
   the radio's native adapter authenticates them, as the platform's admission
   contract requires.
 - A Bluetooth failure retains UART1 and the Bluetooth stack and leaves the
-  module, the Wi-Fi session and the board's recovery latch to the radio.
+  module, the Wi-Fi session and the board's recovery latch to the radio. The
+  added admission does not read the Bluetooth recovery latch, so a Bluetooth
+  failure before the radio's admission does not block that admission.
 - A module failure, including a radio failure that retains the session,
   ends the Bluetooth client at its next poll.
 
