@@ -35,6 +35,18 @@ budgets are in [cpu-pmu.md](cpu-pmu.md).
   pinned sources, then fails on the continuation sources, as the design
   requires until both continuation paths copy `PMCR_EL0.N` into
   `MDCR_EL2.HPMN`. `checks/cpu-clock-check.py` passes unchanged.
+- Repeat measurement: a second, independent run built the base tree and
+  commit `bdce0fa` from `git archive` exports in separate directories. That
+  commit changes only documentation after `1aa1493`. The run reproduced every
+  figure in the table: the base harness under QEMU (4 and 64 instructions on
+  both models), the base Unicorn count (22 accesses, 2 `ISB`, 56
+  instructions), the 224-byte base object, the module's 14 + 14 accesses and
+  70 / 95 instructions, the 1,488-byte module code, the 512-byte state, and
+  20 instructions per empty region on both cores of both QEMU models. The
+  `-board`, `-smp-cached-devices` and `-storage-maintenance` images again
+  differ only inside `a733_smp_build_id`, and no image contains a module
+  symbol. The base harness needs `-mstrict-align`, because its output buffer
+  is written with unaligned stores while the MMU is off.
 
 ## Results
 
