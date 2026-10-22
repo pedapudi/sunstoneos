@@ -378,12 +378,17 @@ design. Each package's design and measurement table are in
 | A placement table for mimus linear layers across the CPU and GPU in the OS image; the modeled linear stage takes 0.414 s on the A76 pair and 0.812 s on the A55 pair, with exact integer sums | `recognition-dispatch` | Partial. The GPU build compiles only after the mimus port shrinks its arena to 12 MiB, and linking needs four GPU runtime functions and an EL0 translation from the page-table owner. Default images are unchanged. |
 | One owner for the supply rails, with PMIC transactions routed through it; the rail ledger is 1,752 bytes smaller and no image grows | `power-authority` | Partial. The power-domain owner, the PMIC service task and moving the GPU, NPU and display onto domain rows remain. Barrier placement and all rail and power-domain behavior need a board run. |
 | Sandboxed [board-test bundles](board-test-plan.md) for the memory, GPU and NPU paths, with fault injection for the monitor and admission steps | `board-bundles` | Done. Every real row stays refused until its owner supplies admission values and completion counts. |
+| NPU model breadth: one request and one reply per inference instead of three, no SHA-256 per inference, no address translation per inference, and 19,442 maintained cache lines instead of 36,672 | `npu-breadth` | Done. The worker's post-job check, its bulk work per job, its longest step and one ShuffleNetV2 load exceed their estimated budgets; the design gives the reason for each, and board timing replaces the estimates. No board image links the runtime yet. |
+| NPU cold boot and recovery: startup takes 3 polls instead of 17 and 2 mutex acquisitions instead of 15; PLL retuning takes 6 polls instead of 13; startup code is about 4.5 KB smaller per image | `npu-platform` | Partial. One startup sequencer, the reduced session record and removal of the PMIC-path adoption wait on the power-domain owner; the design lists them. |
+| Bit-exact mimus matrix products on the GPU: 204 jobs per utterance with no copies and exact integer sums | `gpu-mimus-compute` | Done. The pinned shader compiler emits 3.39 instruction groups per multiply-accumulate against a budget of 1.75, so the program is 7,624 bytes and the modeled linear stage is at least 0.997 s at 494 MHz; the design records the cause. The GPU runtime must call the new session command before an image uses it. |
+| A returning [memory qualification image](../memory-qualification.md) that marches over the 12 GiB tested map at 12.19, 21.19 and 33.19 cycles per line | `memory-qualification` | Partial. The main build does not include it yet, and `platform/a733/platform.c` lacks the tested-map entries, so its mapping check refuses every run until both land. |
+| Per-core CPU cycle and event counting at EL1; startup now copies `PMCR_EL0.N` into `MDCR_EL2.HPMN`, so EL1 sees all six event counters | `cpu-pmu` | Done. Which events the A55 implements, and empty-region costs on both core types, need a board run. |
+| Idle cores wait in WFI at EL0: the kernel no longer time-slices a core whose only ready idle-priority task is its own idle task, so idle secondaries receive no SGI and execute nothing for 64 emulated ticks | `cpu-power-states` | Partial. Turning cores off and on through EL3 and powering down a cluster are deferred; the design states the conditions for adding them. |
+| Cacheable EL1 table walks for the boot-CPU-only images, one builder for every EL1 table, and a per-core table checksum that refuses before any translation register is written | `cpu-table-walks` | Partial. The eight-core images keep non-cacheable walks until a board A/B run on core 6. The cache flush around the tables that `platform.c` writes, two redundant maintenance passes and the DRAM decode check remain. |
 
-Four packages passed review but are held because their measurements are
-worse than the base without a reason in the design: NPU model breadth; NPU
-cold boot, recovery and power; bit-exact mimus matrix products on the GPU;
-and the 12 GiB memory qualification image. A follow-up either removes each
-regression or records its measured reason.
+The CPU startup, scheduler and EL3 monitor files are reserved for the
+integrator, so the last three packages delivered their edits to those files
+as patches, and the integrator applied them with the merge.
 
 ## Deferred findings
 
