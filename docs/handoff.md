@@ -335,6 +335,8 @@ functions and modes beyond these bounded applications.
    words that boot0 leaves, the longest pause of each resident service loop,
    PMIC BUSY durations, mimus load and recognition time, the DMA0 and GPU
    interrupt delivery, whether a headset stop during capture closes cleanly,
+   whether the target headset stays connected to an audio gateway that
+   advertises no call feature, whether its voice button starts a recording,
    and whether the AIC8800 module is still admitted when Bluetooth fails
    first.
 5. Tests that need more physical recovery come last, after the user confirms

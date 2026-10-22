@@ -1560,10 +1560,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks and native compilation pass. [Synchronous headset transport](bluetooth-audio.md)
   adds actual SCO/eSCO setup and acceptance, CVSD with signed 16-bit PCM over HCI,
   copied audio buffers and separate controller credits. Focused host checks and
-  nine native consumer compilations pass. Optional call control adds the
-  mandatory HFP call procedures, including answering, rejecting, terminating
-  and placing calls, redial, memory dialing, DTMF and the status queries; the
-  native application answers headset call queries. An [A2DP sink](bluetooth-a2dp.md)
+  nine native consumer compilations pass. The gateway answers the headset's
+  status queries without call control. Call control, which adds the mandatory
+  HFP call procedures (answering, rejecting, terminating and placing calls,
+  redial, memory dialing and DTMF), exists only for HFP conformance and is a
+  build option that is off by default. The headset's voice button starts one
+  recording through HFP voice-recognition activation (`AT+BVRA`) in the
+  Bluetooth image and the integrated OS image; host checks pass and physical
+  button behavior remains unqualified. An [A2DP sink](bluetooth-a2dp.md)
   for SBC streams is **implemented** in the AVDTP layer, with an optional SDP
   record and a link security check on every step; no native application uses
   it. Host checks pass. Physical controller capabilities, headset audio, wired
