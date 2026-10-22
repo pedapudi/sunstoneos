@@ -1,7 +1,7 @@
 # Memory qualification measurements
 
 These measurements compare the tree before the memory qualification image
-(commit `d40ca4b`) with the tree that adds it, against the budgets in the
+(commit `6cd12f0`, the integration tree it branches from) with the tree that adds it, against the budgets in the
 [memory qualification design](memory-qualification.md). The image is
 described in [memory-qualification.md](../memory-qualification.md). No board
 was used; every figure comes from a host model, and figures marked
@@ -47,7 +47,7 @@ was used; every figure comes from a host model, and figures marked
 | Page signature | 3,129,344 each of `DC ZVA`, store, `DC CIVAC`, load; 6,113 `DSB SY`; no linefill read; ≤ 7 instructions per page per pass | None | 3,129,344 each; 6,112 `DSB SY`; no load in the write pass; 5.58 and 3.72 instructions per page | Yes; see below |
 | Recovery digest | 192 `DC CIVAC`, 1 `DSB SY`, 12 KiB of loads | None | 192, 1, 12,288 bytes | Yes |
 | Harness instructions | Read ≤ 2, write ≤ 3, copy ≤ 5 per line; chase ≤ 1.25 per load | None | 1.5 (both directions), 2.75, 4.5; 1.25 | Yes |
-| Wall time and renewal | ≤ 20 s, with a fault in every march block too; gap ≤ 200 ms plus one block | None | Admission clamps to 20 s; with 11 ms of counter per block and a 1 s budget the march stopped at a group boundary, and renewals were at most 209 ms apart. With 0.1 s of counter per read, a 1 s budget and one bad word in every block, the run returned at 1.20 s with its mismatches, as a clean run does; an image without the deadline check after a rescan returned at 4.70 s | Yes |
+| Wall time and renewal | ≤ 20 s, with a fault in every march block too; gap ≤ 200 ms plus one block | None | Admission clamps to 20 s; with 11 ms of counter per block and a 1 s budget the march stopped at a group boundary, and renewals were at most 209 ms apart. With 0.1 s of counter per read, a 1 s budget and one bad word in every block, the run returned at 1.20 s with its mismatches, as a clean run does | Yes |
 | March eviction distance | ≥ 256 MiB (128 blocks) between a write and the next read | None | 128 blocks in every group of the board plan; reversing the down elements' member order gives 0 | Yes |
 | DMA0 cases | ≤ 8 transfers of ≤ 1 MiB | None | Not built; admission refuses the bits | Not measurable |
 
