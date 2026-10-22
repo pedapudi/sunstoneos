@@ -5,8 +5,9 @@
 #define A733_H264_ENCODE_SESSION_MAGIC UINT64_C(0x4153373348454131)
 #define A733_H264_ENCODE_INPUT_BYTES 921600u
 #define A733_H264_ENCODE_OUTPUT_CAPACITY 1048576u
-/* Fixed two-picture VGA NV12 Baseline/CAVLC/QP26. input_digest authenticates
- * both tightly packed460800-byte frames in decode order before device use.
+/* VGA NV12 Baseline/CAVLC/QP26 sequence of 1..30 pictures from two supplied
+ * frames. input_digest authenticates both tightly packed 460800-byte frames
+ * in order before device use; the upload header names the sequence length.
  * reserved_reference is zero: normal encoding has no supplied numeric oracle.
  * First592 bytes and resource facts retain the ordinary supervised board ABI. */
 struct a733_h264_encode_session {
