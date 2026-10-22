@@ -109,21 +109,28 @@ run only on core 0 are:
 - Display image (`apps/gpu-display`): none. Its render client (priority 2) has
   no core affinity and can run on another core.
 
-Outside a compute job or render, once consecutive bursts with CPU work left
-have run for 1 ms (`PVR_GPU_SERVICE_CPU_RUN_US`), the worker blocks for one
-tick, so those tasks run for the rest of that tick. When none of them is
-ready, core 0 is idle for that tick. OPEN preparation, startup, the health
-check, cleanup, shutdown and disposal take these blocks.
+Once consecutive bursts with CPU work left have run for 1 ms
+(`PVR_GPU_SERVICE_CPU_RUN_US`), the worker blocks for one tick, so those tasks
+run for the rest of that tick. When none of them is ready, core 0 is idle for
+that tick. OPEN preparation, startup, the health check, texture preparation,
+the cache invalidation and output check after a render, cleanup, shutdown and
+disposal take these blocks.
 
-A compute job, from its admission until it completes, and a render, from
-geometry formatting until its output check, are exempt from the 1 ms bound.
-No timed wait or tick block therefore lies between the admission of a COMPUTE,
-COMPUTE_INPUT or RENDER request and its kick. The fixed submission bounds that
-CPU work: a compute job copies at most 4,096 input bytes and writes 368 bytes
-of ring commands; a render writes 200 bytes of geometry and 616 bytes of
-fragment commands. While it runs, the tasks listed above do not run on core 0.
-The board time of this work is not measured; it is a board item in the
-[runtime design](designs/gpu-runtime.md).
+Only the ring writes before a kick are exempt from the 1 ms bound: a compute
+job from its admission until its kick, and a render from geometry formatting
+until its kick. The fixed submission sizes bound that CPU work: a compute job
+copies at most 4,096 input bytes and writes 368 bytes of ring commands; a
+render writes 200 bytes of geometry and 616 bytes of fragment commands. No
+timed wait or tick block lies between the admission of a COMPUTE,
+COMPUTE_INPUT or RENDER request and its kick. While the exempt work runs, the
+tasks listed above do not run on core 0. Its board time is not measured; it is
+a board item in the [runtime design](designs/gpu-runtime.md).
+
+A TEXTURE submission prepares its output before geometry formatting. The
+render service writes the guard and poison words over the output allocation in
+1 MiB steps and cleans each step from the cache; at 1920x1080 the allocation
+is about 8 MB. Its size grows with the frame, so this preparation takes tick
+blocks, and a TEXTURE submission can see tick blocks before its kick.
 
 Hardware waits shorter than 50 µs (`A733_GPU_SPIN_US`) end inside a step.
 Startup waits on the clock for its two 3 µs delays and re-reads the firmware
@@ -320,6 +327,9 @@ The fixtures assert these worker counters:
 - From the admission of a COMPUTE or COMPUTE_INPUT request to its job kick,
   and from the admission of a RENDER request to its kick: 0 timed waits and 0
   tick blocks. The compute and render fixtures check this at every kick.
+- From a 1920x1080 TEXTURE submission to its geometry kick: at least one tick
+  block, because texture preparation takes them. The batch fixture
+  (`checks/gpu-batch.c`) checks this for each frame.
 - A COMPUTE_INPUT request refused while a job runs, with a longer timeout than
   the job, leaves the job deadline that bounds the worker's wait unchanged.
 
@@ -328,21 +338,27 @@ window can split one wait period. Without interrupt delivery, a job completes
 up to 4 ms after its fence instead of within one tick; with interrupt delivery
 the interrupt wakes the worker at once.
 
-Admission to kick took 2.9 to 3.4 ms of emulator time for a compute job and
-20 to 21 ms for a render. The longest run of CPU-only bursts outside a job or
-render lasted about 1.7 ms in the service fixtures and 1.2 to 1.8 ms in the
-compute fixture. A run is checked against the 1 ms bound after each burst, and
-it includes time that tasks of the worker's priority used after each yield, so
-it can exceed the bound by one burst plus that time. Service case 1, which
-opens the service three times, blocked for a tick four times. Each compute case
-blocked five or six times, all during OPEN, which took 10 to 12 ticks.
+Admission to kick took 2.9 to 3.1 ms of emulator time for a compute job and
+19.6 to 20.7 ms for a render. A 1920x1080 TEXTURE submission took 21 to 26 ms
+to its geometry kick and blocked for a tick four times on the way; a 640x360
+or smaller one took about 19 ms and did not block. The longest run of CPU-only
+bursts outside the ring writes before a kick lasted 1.5 to 2.3 ms in the
+service fixtures, 1.2 to 1.7 ms in the compute fixture and 2.2 ms in the
+1920x1080 batch fixture. A run is checked against the 1 ms bound after each
+burst. A burst ends only between steps, and a run includes time that tasks of
+the worker's priority used after each yield, so a run can exceed the bound by
+one burst, its last step and that time. A texture preparation step covers
+1 MiB. Service case 1, which opens the service three times, blocked for a tick
+four times. Each compute case blocked five or six times, all during OPEN,
+which took 10 to 12 ticks.
 
 Logs and the hashes of the measured executables are under
-`~/.cache/sunstoneos/evidence/gpu-runtime-pacing-submit-20261022/`; the one-tick
-column comes from `~/.cache/sunstoneos/evidence/gpu-runtime-pacing-20261022/`.
+`~/.cache/sunstoneos/evidence/gpu-runtime-pacing-texture-20261022/`; the
+one-tick column comes from
+`~/.cache/sunstoneos/evidence/gpu-runtime-pacing-20261022/`.
 No board measurement exists; unpark wall-clock time, the length of CPU-only
-runs, the CPU time from admission to kick and interrupt-driven completion
-remain board items in the [runtime design](designs/gpu-runtime.md).
+runs, the CPU time from admission to kick, texture preparation time and
+interrupt-driven completion remain board items in the [runtime design](designs/gpu-runtime.md).
 
 Reproduce only after relevant inputs change, using the configured toolchain:
 

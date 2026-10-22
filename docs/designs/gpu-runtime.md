@@ -102,16 +102,21 @@ Start, stop and job preparation are paced by the hardware:
   bound) in place of 16 steps. A step of the compatibility and health check
   counts as progress, and so does each command header or payload chunk written
   to a client ring. With CPU work left, it checks the request queue without
-  waiting and calls `taskYIELD()`. Outside a compute job or render, after 1 ms
-  of such bursts it blocks for one tick, so tasks below its priority on core 0
-  (the GPU, NPU, PMIC and USB clients at priority 2) still run during long
-  preparation or disposal; core 0 is idle for that tick when none is ready.
-- A compute job from admission to completion and a render from geometry
-  formatting to its output check are exempt from the 1 ms bound, so no tick
-  wait lies between a request and its kick. The fixed submission bounds that
-  CPU work: at most 4,096 input bytes and 368 bytes of ring commands per
-  compute job; 200 bytes of geometry and 616 bytes of fragment commands per
-  render. The tasks below the worker's priority on core 0 wait for it. A
+  waiting and calls `taskYIELD()`. After 1 ms of such bursts it blocks for one
+  tick, so tasks below its priority on core 0 (the GPU, NPU, PMIC and USB
+  clients at priority 2) still run during long preparation or disposal; core 0
+  is idle for that tick when none is ready.
+- Only the ring writes before a kick are exempt from the 1 ms bound: a compute
+  job from admission to its kick and a render from geometry formatting to its
+  kick. No tick wait lies between a request and its kick. The fixed submission
+  sizes bound that CPU work: at most 4,096 input bytes and 368 bytes of ring
+  commands per compute job; 200 bytes of geometry and 616 bytes of fragment
+  commands per render. Work that grows with the frame takes the block: texture
+  preparation before geometry formatting (about 8 MB of guard and poison
+  writes with cache cleaning at 1920x1080), and the cache invalidation and
+  output check after the kick. A TEXTURE submission can therefore see tick
+  blocks before its kick. The tasks below the worker's priority on core 0
+  wait for the exempt work. A
   shorter wait for them, without a tick wait on the submit path, would lower
   the worker to priority 2 around its yield; that needs `vTaskPrioritySet`,
   which the shared FreeRTOS configuration does not enable.
@@ -315,7 +320,12 @@ interrupt callbacks.
 - `drivers/gpu/pvr_mips.c` takes the decoded plan.
 - Graphics and display packages: range classes in `pvr_render_service.c`, no
   per-frame depth fill, scanout without the RGB565 copy, the return of a
-  DISPLAY target after vblank.
+  DISPLAY target after vblank. Texture preparation in `pvr_render_service.c`
+  writes guard and poison words over the full output with 4-byte stores and
+  cleans each step by address. Writing only the guard bands once the board
+  shows full tile coverage, or filling with `DC ZVA` or NEON stores, would
+  shorten it; it moves to an A76 core once the multicore work admits those
+  cores, and is then budgeted and measured on the board.
 - `apps/accelerators/gpu.c` and the render applications use completion
   messages.
 
@@ -332,8 +342,11 @@ interrupt callbacks.
 - The readiness byte set after each warm boot, and unpark time and fallback
   ticks over 100 park-unpark cycles.
 - The CPU time from the admission of a COMPUTE, COMPUTE_INPUT or RENDER
-  request to its kick, and the longest CPU run outside a job or render. Either
-  above 1 ms delays the PMIC and USB tasks of the render image by that long.
+  request to its kick, and the longest worker CPU run outside those ring
+  writes, including during a 1920x1080 TEXTURE draw. An exempt run above 1 ms
+  delays the PMIC and USB tasks of the render image by that long.
+- The CPU time of texture preparation per frame at 1920x1080 for profiles 3
+  and 4, and the number of tick blocks it takes.
 - An injected hang followed by an acknowledged stop, restart and correct job;
   a denied handshake ending in FAILED with no further I/O.
 - Card-loaded firmware matching the pinned hash on a cold boot.

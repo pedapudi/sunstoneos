@@ -79,6 +79,18 @@ static void stream(unsigned frame)
     }
     configASSERT(*w==0xc0000000u);
 }
+/* Texture preparation pacing: SUBMIT samples the worker's tick blocks and the
+ * clock, and the geometry kick samples them again. Preparation fills the whole
+ * output, so it takes a tick block after each 1 ms of CPU run. */
+static uint32_t submitted_blocks,prepare_blocks;
+static uint64_t submitted_us,submit_to_kick_us;
+/* The service clock without its worker-only callback check. */
+static uint64_t clock_us(void)
+{
+    uint64_t counter,frequency;
+    __asm__ volatile("mrs %0,cntpct_el0\n mrs %1,cntfrq_el0":"=r"(counter),"=r"(frequency));
+    return counter/frequency*1000000+counter%frequency*1000000/frequency+offset_time;
+}
 static int batch_kick(void *ctx,uint32_t off,uint32_t value)
 {
     callback(ctx);configASSERT(running && off==0xb00 && !value);
@@ -90,6 +102,7 @@ static int batch_kick(void *ctx,uint32_t off,uint32_t value)
         if(word(command+8,4)==1)stopping=1;
     } else if(type==(PVR_CCB_MAGIC|117)) {
         unsigned frame=++kicks;configASSERT(graphics.submission.sequence==frame);
+        prepare_blocks=service.yield_blocks-submitted_blocks;submit_to_kick_us=clock_us()-submitted_us;
         unsigned rt=(frame-1)&1;uint32_t hwrt=graphics.target.data_firmware[rt];
         configASSERT(word(command+20,4)==1 && word(command+24,4)==hwrt+320 && !word(command+52,4));
         const unsigned types[]={PVR_CCB_MAGIC|215,PVR_CCB_MAGIC|PVR_CCCB_TASK|204,PVR_CCB_MAGIC|213};
@@ -110,11 +123,8 @@ static int batch_kick(void *ctx,uint32_t off,uint32_t value)
         const unsigned char *fragment=graphics.submission.image.fragment;
         configASSERT((word(fragment+464,4)&0x180)==0x180 && word(fragment+468,4)==x*y*8 && word(fragment+472,4)==x*y*8);
         configASSERT(((word(fragment+136,8)>>23)&15)==15 && word(fragment+152,8)==PVR_RENDER_DEPTH_ADDRESS);
-        /* Packed depth starts at one with stencil zero between guard pages. */
-        configASSERT(word((void *)(base()+l.depth),4)==PVR_RENDER_GUARD &&
-            word((void *)(base()+l.depth+4096),4)==0x3f800000 && !word((void *)(base()+l.depth+4100),4) &&
-            word((void *)(base()+l.depth+4096+l.depth_bytes-8),4)==0x3f800000 &&
-            word((void *)(base()+l.depth+l.depth_bytes+4096),4)==PVR_RENDER_GUARD);
+        /* Packed depth and stencil stay in tile memory: no load, store or force bit. */
+        configASSERT(!(word(fragment+136,8)&((1u<<19)|(1u<<18)|(1u<<15)|(1u<<14)|6u)));
         stream(frame);
         uint64_t sampler=word((void *)(base()+8192+0x10100+32),8),image=word((void *)(base()+8192+0x10100),8);
         configASSERT(((sampler>>36)&15)==((frames[frame-1]&PVR_RENDER_BATCH_LINEAR)?5u:0u));
@@ -175,6 +185,7 @@ static uint64_t upload(unsigned previous,uint32_t state,unsigned total)
 static struct pvr_gpu_service_reply submit(unsigned previous,uint64_t generation)
 {
     uint64_t ticket;struct pvr_render_texture_request q={.operation=PVR_TEXTURE_SUBMIT,.previous=previous,.generation=generation};
+    submitted_blocks=__atomic_load_n(&service.yield_blocks,__ATOMIC_ACQUIRE);submitted_us=clock_us();
     return texture(&q,NULL,&ticket);
 }
 static void readback(unsigned frame)
@@ -272,9 +283,16 @@ static void batch_client(void *unused)
         unsigned total=input(frame,frames[frame-1],tables[frame-1]);
         uint64_t generation=upload(frame-1,frames[frame-1],total);
         r=submit(frame-1,generation);configASSERT(r.result==PVR_GPU_SERVICE_OK && r.render_sequence==frame);
-        wait_complete(frame);readback(frame);
+        wait_complete(frame);
+        platform_puts("metric texture-submit-to-kick-us ");platform_hex(submit_to_kick_us);
+        platform_puts("\nmetric texture-prepare-yield-blocks ");platform_hex(prepare_blocks);platform_puts("\n");
+        /* A 1080p output is about 8 MiB; its preparation runs past 1 ms. */
+        if(frame_width==1920)configASSERT(prepare_blocks);
+        readback(frame);
         if(gpu_render_case==1){refused();break;}
     }
+    platform_puts("metric longest-yield-us ");platform_hex(__atomic_load_n(&service.longest_yield_us,__ATOMIC_ACQUIRE));
+    platform_puts("\nmetric yield-blocks ");platform_hex(__atomic_load_n(&service.yield_blocks,__ATOMIC_ACQUIRE));platform_puts("\n");
     if(!gpu_render_case)present(2);
     r=request(PVR_GPU_SERVICE_CLOSE,1000000);configASSERT(r.result==PVR_GPU_SERVICE_OK);
     for(unsigned i=0;i<2000;++i){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);if(r.phase==PVR_GPU_SERVICE_STOPPED)break;}
