@@ -11,18 +11,11 @@
 #undef client
 #undef kernel_main
 void kernel_main(void);
-static unsigned model_commits,model_ready,stopping,isolated,frame_width,frame_height;
+static unsigned model_ready,stopping,isolated,frame_width,frame_height;
 static unsigned char source[PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES];
-extern int a733_memory_reservations_commit_verified(void);
-extern int a733_memory_uncached_commit_verified(void);
+/* READY is modeled: the pools are prepared directly, without the boot record
+ * and table-profile checks of a733_device_memory_prepare(). */
 int a733_device_memory_ready(void){return model_ready;}
-int a733_device_memory_commit_allowed(unsigned nc,uintptr_t start,uintptr_t end)
-{
-    configASSERT(!model_ready && nc==model_commits);
-    configASSERT(start==(nc?UINT64_C(0x78000000):UINT64_C(0x48000000)) &&
-        end==(nc?UINT64_C(0x79000000):UINT64_C(0x78000000)));
-    ++model_commits;return 1;
-}
 static uint32_t pixel(unsigned frame,unsigned i)
 {return ((graphics.draw==3 && frame==2)?0x80000000u:0xff000000u) | ((frame*17)&255)<<16 | ((i/frame_width)&255)<<8 | ((i%frame_width+frame)&255);}
 static int texture_read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *out)
@@ -251,8 +244,8 @@ static void texture_client(void *unused)
 void kernel_main(void)
 {
     platform_init();configASSERT(gpu_render_case<6);
-    configASSERT(a733_memory_reservations_commit_verified() && a733_memory_uncached_commit_verified());
-    configASSERT(model_commits==2);model_ready=1;
+    configASSERT(!a733_memory_reservations_init() && !a733_memory_uncached_init());
+    configASSERT(a733_memory_reservations_prepare() && a733_memory_uncached_prepare());model_ready=1;
     configASSERT(a733_memory_reservations_init() && a733_memory_uncached_init());
     frame_width=gpu_render_case==4?1280:1920;frame_height=gpu_render_case==4?720:1080;
     const struct a733_gpu_graphics_profile profile={{frame_width,frame_height,16384},1024,1024,25,5000000};
