@@ -60,10 +60,13 @@ bool model_hash(unsigned i)
     uint8_t hash[32];storage_digest_end(&digest,hash);
     return live()&&!std::memcmp(hash,retained.models.sha256[i],32);
 }
-// Published repeated segments are loss-free; the finite path checks loss itself.
+// The codec must match the wideband setting. bluetooth_headset_segment_take
+// admits a repeated segment's shape, so that path checks only the codec.
+bool codec(const bluetooth_pcm_snapshot &c)
+{return c.state>=1&&c.state<=(bluetooth_headset_wideband(retained.app)?2u:1u);}
+// The finite capture's shape; that path also checks loss itself.
 bool valid(const bluetooth_pcm_snapshot &c)
-{return live()&&c.state>=1&&c.state<=(bluetooth_headset_wideband(retained.app)?2u:1u)&&c.bytes&&!(c.bytes&1)&&
-    c.bytes<=BLUETOOTH_PCM_BYTES;}
+{return live()&&codec(c)&&c.bytes&&!(c.bytes&1)&&c.bytes<=BLUETOOTH_PCM_BYTES;}
 // mSBC PCM is already 16 kHz; CVSD PCM is interpolated.
 size_t convert(const uint8_t *pcm,const bluetooth_pcm_snapshot &c)
 {
@@ -148,7 +151,7 @@ void recognize(void *)
             if(requested<0){failed();}if(requested)request=BLUETOOTH_SEGMENT_ACCEPT;
             (void)ulTaskNotifyTake(pdTRUE,kWait);
         }
-        if(result!=1||!valid(segment.capture)){failed();}
+        if(result!=1||!codec(segment.capture)){failed();}
         // The borrowed slot is released after conversion, so the next
         // segment can record during transcription.
         const size_t wav_bytes=convert(pcm,segment.capture);

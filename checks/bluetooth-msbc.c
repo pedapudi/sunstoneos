@@ -65,9 +65,9 @@ static void encode(sbc_t *encoder,const uint8_t pcm[240],unsigned sequence,uint8
     assert(sbc_encode(encoder,pcm,240,frame+2,57,&written)==240&&written==57);
 }
 /* From a running activation: two activations on one open link, separated by
- * three released frames, with 7-byte packets that split frames. The
- * resynchronized decoder discards at most 59 bytes and decodes the first
- * whole frame after the gap. */
+ * three released frames, with 7-byte packets that split frames. The second
+ * activation skips to the next frame boundary and decodes the first whole
+ * frame after the gap. */
 static void activations(sbc_t *encoder)
 {
     enum {FRAMES=10};uint8_t stream[3+60*FRAMES]={0x74,0x22,0x00},pcm[240];
@@ -78,7 +78,9 @@ static void activations(sbc_t *encoder)
     /* Frames 1 to 3 and 23 bytes of frame 4 are released without decoding. */
     while(at<3+60*4+23){inject(stream+at,7,0);for(unsigned k=0;k<4;++k)assert(pump()>=0);at+=7;}
     assert(at==266&&segments()==1&&!voice.segment_bytes);take(1,NULL);
-    activate();const unsigned next=3+60*5;
+    /* The released bytes end 23 bytes into frame 4, so the next activation
+     * skips its other 37 bytes and decodes frame 5 without a header search. */
+    activate();const unsigned next=3+60*5;assert(voice.skip==37&&voice.boundary==63);
     while(segments()<2){assert(at+7<=next+60+6);inject(stream+at,7,0);for(unsigned k=0;k<4;++k)assert(pump()>=0);at+=7;}
     assert(at>=next+60&&at-7<next+60&&!atomic_load(&voice.segment_flags));take(2,NULL);
 }

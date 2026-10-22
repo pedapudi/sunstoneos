@@ -1,8 +1,9 @@
 # Headset voice-recognition activation and optional call control
 
-Status: implemented, with the differences below. Five budget rows are
-missed; their revised targets await approval by the performance reviewer and
-are not accepted by this document.
+Status: implemented, with the differences below. Five budget rows missed
+their original targets. The performance review accepted revised targets for
+them, and the Performance budgets table lists every target with its measured
+value.
 
 - The finite-capture branch of `recognition.cc` remains. Profile version 3
   admits mode 1 (`bluetooth_profile_valid` and `prepare.py`), and
@@ -11,44 +12,48 @@ are not accepted by this document.
   `retained.pcm` is still removed.
 - The application admits `AT+BVRA=1` by writing the AG field `voice_admit`
   before each AG step, which keeps the call-control build within its size
-  budget. The owner clears it at every stop and at DONE.
+  budget. One rule computes the field on every poll from the first entry into
+  idle, through CLOSE and DONE. A stop persists until DONE, so it closes
+  admission at the next AG step.
 - The consumer's request carries the published-segment count it last
   observed (see Synchronization across cores).
-- Measured misses, with the full recognition part of the owner step counted
-  (admission, recognition and the repeated-capture step; the base figures
-  count the repeated-capture step alone):
-  - a packet between activations costs 246 instructions for CVSD and 251 for
-    mSBC, against 188 and 191. Receiving and releasing the packet in `bt_sco`
-    costs 109 of them, the per-poll admission and recognition checks about
-    60, and the open link's window, deadline and stop checks and silence
-    pacing the rest;
-  - a CVSD packet in a segment costs at most 3,024 instructions, against
-    3,000. The packet that completes a SHA-256 block costs 2,231 in the
-    compression; the runtime `memcpy` copies byte by byte when source and
-    destination differ in alignment modulo 8, which costs 264 for every other
-    60-byte packet;
-  - `AT+BVRA=1` commits 4 owner polls after its line arrives, against 2. The
-    AG commits when RFCOMM reports the `OK` transmitted, which takes three
-    polls through L2CAP, ACL and the UART after the poll that parses the
-    line;
-  - commit to the synchronous-connection setup accepted by the UART takes 4
-    polls, against 2, because `bt_sco` reads the remote features before the
+- Causes of the revised targets:
+  - The original row for a packet between activations counted only the
+    repeated-capture step, which still meets its target. Admission and
+    recognition add about 64 instructions per poll that the base did not
+    have. The table gives them a row, and another to the recognition step
+    that includes them. Receiving and releasing the packet in `bt_sco` costs
+    109 of the 247 CVSD instructions.
+  - A CVSD packet in a segment costs at most 3,022 instructions. The packet
+    that completes a SHA-256 block costs 2,231 in the compression, and the
+    runtime `memcpy` copies byte by byte when source and destination differ
+    in alignment modulo 8, which costs 264 for every other 60-byte packet.
+    The target returns to 3,000 when the `memcpy` change (Left out) lands.
+  - `AT+BVRA=1` commits 4 owner polls after its line arrives. The AG commits
+    when RFCOMM reports the `OK` transmitted, which takes three polls through
+    L2CAP, ACL and the UART after the poll that parses the line.
+  - The commit to the synchronous-connection setup accepted by the UART takes
+    4 polls, because `bt_sco` reads the peer's remote features before the
     setup command. After a codec list change while idle it takes 13 polls,
-    which include the `+BCS` exchange;
-  - `apps/os/headset.c` static data is 500,184 bytes, against 500,000. It is
-    48,008 bytes below its base, but the base itself grew by 192 bytes to
-    548,192 when the integration branch enlarged `struct
-    bluetooth_application`.
+    which include the `+BCS` exchange.
+  - `apps/os/headset.c` static data is 500,184 bytes. Its base grew by 192
+    bytes to 548,192 when the integration branch enlarged `struct
+    bluetooth_application`, so the target is that base minus the removed
+    48,000-byte buffer.
+- Both 4-poll latencies are the heavier form that section 1.3 of
+  `docs/performance-architecture.md` describes: one step per 1 ms tick. The
+  Bluetooth owner advances RFCOMM, L2CAP, ACL, HCI and the UART one step per
+  poll, and no qualified UART receive interrupt can wake it sooner. Two
+  changes to code owned elsewhere remove them: an owner loop that repeats
+  transport steps while they make progress, and a remote-features read before
+  the press (Left out).
 - Per-second cost of the recognition part of the owner step, excluding
   silence sends, which are unchanged. With the link open between activations,
-  CVSD has 266.7 packet polls at 246 instructions and 733.3 polls without a
-  packet at 162, about 184,000 instructions per second. mSBC has 133.3 packet
-  polls at 251 and 866.7 others at 162, about 174,000. In idle before the
-  first press, with no link, each of the 1,000 polls costs 71 instructions,
-  about 71,000 per second.
-- The rows that are met: a packet reaches its slot in the poll that holds it,
-  for CVSD and for the first valid mSBC frame, and `+BVRA: 0` is queued in the
-  first poll after publication.
+  CVSD has 266.7 packet polls at 247 instructions and 733.3 polls without a
+  packet at 164, about 186,000 instructions per second. mSBC has 133.3 packet
+  polls at 252 and 866.7 others at 164, about 176,000. In idle before the
+  first press, with no link, each of the 1,000 polls costs 66 instructions,
+  about 66,000 per second.
 
 The board is the Hands-Free Profile (HFP) Audio Gateway (AG) so that it can
 record a headset microphone for mimus. Pressing the headset's voice button
@@ -149,6 +154,10 @@ segments therefore do not test `loss_packets`.
   `segment_disconnected` set and no retention. Idle, and DONE with no audio
   link, run the existing `control_step` (SDP discovery, SDP server, AG or
   RFCOMM, security) and `bt_sco_step`, and skip only the stream lookup.
+- Every path to DONE follows a stop or the window, and none leaves the
+  headset recognizing. When recognition is committed on, the owner queues
+  `+BVRA: 0` first; DONE follows once no AG response is in flight. The AG
+  response timeout and the close bound limit the wait.
 - An activation is admitted only while now plus the line timeout is within
   the window. The owner computes that admission limit once, on entering idle.
 - The first link open, from activation start, is bounded by two line timeouts
@@ -168,6 +177,13 @@ segments therefore do not test `loss_packets`.
   capped by the window.
 - With the link open, a stop or the window closes it through the existing
   sequence and discards a partial segment.
+- The owner never closes the AG. From the first entry into idle through
+  CAPTURE, an AG that leaves the ready state, as when the headset closes the
+  service-level connection, is a release the owner did not request. It calls
+  `fail()` in the same poll, in either lifetime, unless a stop or the window
+  is already ending the session, which then ends cleanly. Without this rule a
+  resident owner with only ACCEPT armed would wait idle forever, with no link
+  and no failure.
 - Any release of the audio link that the owner did not request, in either
   lifetime, calls `fail()`, as a release during capture does today. The owner
   retains its transports, the OS client calls `board_fail`, and in the
@@ -191,20 +207,27 @@ During an activation, CVSD bytes go from the SCO packet into a slot with one
 counts are multiples of 120, so a whole frame always fits. The owner hashes the
 slot with `storage_digest_add` as it writes, over the even-length prefix, and
 calls `storage_digest_end` at publication. Between activations it releases
-each packet without copying, decoding or hashing it, and keeps the next
-activation aligned:
+each packet without copying, decoding or hashing it. It counts the bytes
+released since the stream opened, one addition per packet, and an activation
+starts by skipping to the next sample or frame boundary:
 
 - **CVSD.** [bt_sco.h](../../include/bt_sco.h) allows odd packet lengths, so a
-  packet can split a 16-bit sample. The owner keeps the parity of all bytes
-  received since the stream opened, one exclusive-or per packet, and an
-  activation that starts after an odd count skips one byte.
+  packet can split a 16-bit sample. An activation that starts after an odd
+  count skips one byte.
 - **mSBC.** The decoder in [msbc.c](../../apps/bluetooth/msbc.c) carries its
   H2 sequence lock and a partial frame across packets. A new
   `bluetooth_msbc_resync`, called at activation start, clears the partial
-  frame, the lock, the expected sequence and the discard count; the existing
-  search then locks onto the first valid H2 header. The libsbc synthesis
-  history is kept, so only the first decoded frame of a segment can carry
-  audio from before the gap.
+  frame, the lock, the expected sequence and the discard count. Each decoded
+  frame records the stream position at its end. Frames are 60 bytes, so an
+  activation after the first decoded frame on the link skips the bytes up to
+  the next frame boundary, and the decoder starts at a frame. Only the first
+  activation on a link uses the header search, as the base did once per
+  stream. That search can accept a misaligned window as a header, which ends
+  the session; on random payload this happens with probability of about
+  10⁻⁵. If an HCI packet between activations were lost without a reported
+  status, the skip would end inside a frame, and the header search would then
+  find the next one. The libsbc synthesis history is kept, so only the first
+  decoded frame of a segment can carry audio from before the gap.
 
 A consumer borrows the oldest segment with
 `bluetooth_headset_segment_take(app, &pcm, &snapshot)`, which returns 0 when
@@ -250,8 +273,9 @@ ownership and cache maintenance do not change. `retained.pcm` in
 [recognition.cc](../../apps/bluetooth/recognition.cc), `headset.pcm` in
 [apps/os/headset.c](../../apps/os/headset.c) (48,000 bytes each) and the
 consumers' 1 KiB stack chunks are removed. New state: the request word, the
-published-sample total, the parity bit, a 112-byte digest state and a few AG
-words; OFF drops the call fields. Hashing each packet right after its copy
+published-sample total, the released-byte count, the end of the last decoded
+mSBC frame, a 112-byte digest state and a few AG words; OFF drops the call
+fields. Hashing each packet right after its copy
 reads it from L1, where today's publication re-reads 48,000 bytes.
 
 ## Synchronization across cores
@@ -312,29 +336,37 @@ before-and-after measurement only. Poll, wake-up and byte counts come from the
 `bluetooth-headset.py` and `os-image-headset.py` host models. The implementing
 commit message records the after value of every row and every AT command.
 
-| Metric | Baseline | Target |
-| --- | --- | --- |
-| `bt_hfp_ag.c` code, OFF | 15,066 B; 11,938 B with all call handling removed | ≤ 13,000 B |
-| `bt_hfp_ag.c` code, ON | 15,066 B | ≤ 15,800 B |
-| `apps/bluetooth/headset.c` code; static data | 11,879 B; 440,320 B | ≤ 13,400 B; ≤ 160 B more |
-| `msbc.c` code | 1,012 B | ≤ 1,076 B |
-| `apps/os/headset.c` code; static data | 2,069 B; 548,000 B | ≤ 2,100 B; ≤ 500,000 B |
-| `recognition.cc` static data | includes `retained.pcm`, 48,000 B | 48,000 B smaller |
-| `bt_sdp_server.c` code | 10,333 B | unchanged |
-| Existing AT line, both settings | per command, below | ≤ 2% over each |
-| `AT+BVRA` line | none | ≤ 1,400 instructions |
-| Activation start: word exchange, digest restart, parity, resync | none | ≤ 400 instructions |
-| Owner step, packet between activations | 171 CVSD, 174 mSBC | ≤ 188 CVSD, ≤ 191 mSBC |
-| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B | ≤ 3,000 CVSD, ≤ 46,500 mSBC, hashed |
-| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | ≤ 8,000 CVSD, ≤ 52,000 mSBC |
-| Consumer work per 48,000 B segment | 47 chunks × 1,699 plus SHA-256 (about 1,763,000) plus WAV conversion | ≤ 600 plus WAV conversion; no PCM copy |
-| Owner wake-ups per second, idle | 1,000 | 1,000; ≤ 10 plus 1 per HCI packet after the UART receive interrupt |
-| Consumer wake-ups while waiting | 1,000 per second | ≤ 10 per second per recognizer wait, ≤ 4 in the OS client, plus 1 per event |
-| `AT+BVRA=1` line to committed on | none | ≤ 2 owner polls |
-| Commit to HCI synchronous-connection setup accepted by the UART, link closed | none | ≤ 2 owner polls |
-| Link open to first PCM byte in a slot | none | the poll holding the first CVSD packet or completing the first valid mSBC frame |
-| mSBC bytes discarded after resync, intact stream | none | ≤ 59 |
-| Publication to `+BVRA: 0` queued | none | first owner poll with the serial stream free |
+| Metric | Baseline | Target | Measured |
+| --- | --- | --- | --- |
+| `bt_hfp_ag.c` code, OFF | 15,066 B; 11,938 B with all call handling removed | ≤ 13,000 B | 11,572 B |
+| `bt_hfp_ag.c` code, ON | 15,066 B | ≤ 15,800 B | 15,800 B |
+| `apps/bluetooth/headset.c` code; static data, OFF | 11,879 B; 440,320 B | ≤ 13,400 B; ≤ 160 B more | 12,763 B; 440,392 B |
+| `apps/bluetooth/headset.c` static data, OFF with mSBC | 440,320 B | ≤ 160 B more | 440,456 B |
+| `apps/bluetooth/headset.c` static data, ON | 440,320 B | ≤ 440,700 B | 440,648 B |
+| `msbc.c` code | 1,012 B | ≤ 1,076 B | 1,036 B |
+| `apps/os/headset.c` code; static data | 2,069 B; 548,192 B | ≤ 2,100 B; ≤ 500,192 B | 1,861 B; 500,184 B |
+| `recognition.cc` static data | 438,985 B, including `retained.pcm` | 48,000 B smaller | 390,985 B |
+| `bt_sdp_server.c` code | 10,333 B | unchanged | 10,333 B |
+| Existing AT line, both settings | per command, below | ≤ 2% over each | at most 1.9% over (`AT+NREC`, ON) |
+| `AT+BVRA` line | none | ≤ 1,400 instructions | 808 OFF, 1,240 ON |
+| Activation start: word exchange, digest restart, skip, resync | none | ≤ 400 instructions | 117 CVSD; 128 mSBC, 146 with a frame-boundary skip |
+| Owner repeated-capture step, packet between activations | 171 CVSD, 174 mSBC | ≤ 188 CVSD, ≤ 191 mSBC | 183 CVSD, 188 mSBC |
+| Owner admission and recognition, per poll | none | ≤ 75 | about 64; 66 in idle |
+| Owner recognition step, packet between activations | none | ≤ 250 CVSD, ≤ 255 mSBC | 247 CVSD, 252 mSBC |
+| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B | ≤ 3,030 CVSD until the `memcpy` change, then ≤ 3,000; ≤ 46,500 mSBC; hashed | 3,022 CVSD, 40,972 mSBC |
+| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | ≤ 8,000 CVSD, ≤ 52,000 mSBC | 5,990 CVSD, 41,507 mSBC |
+| Consumer work per 48,000 B segment | 47 chunks × 1,699 plus SHA-256 (about 1,763,000) plus WAV conversion | ≤ 600 plus WAV conversion; no PCM copy | 372 plus WAV conversion |
+| Owner wake-ups per second, idle | 1,000 | 1,000; ≤ 10 plus 1 per HCI packet after the UART receive interrupt | 1,000 |
+| Consumer wake-ups while waiting | 1,000 per second | ≤ 10 per second per recognizer wait, ≤ 4 in the OS client, plus 1 per event | 100 ms and 250 ms waits |
+| `AT+BVRA=1` line to committed on | none | ≤ 4 owner polls | 4 |
+| Commit to HCI synchronous-connection setup accepted by the UART, link closed | none | ≤ 4 owner polls; ≤ 13 after a codec list change while idle | 4; 13 |
+| Link open to first PCM byte in a slot | none | the poll holding the first CVSD packet or completing the first valid mSBC frame | 1 poll, the one holding it |
+| mSBC bytes skipped or discarded at activation start, intact stream | none | ≤ 59 | ≤ 59; 37 in the host case |
+| Publication to `+BVRA: 0` queued | none | first owner poll with the serial stream free | 1 poll |
+
+OFF and ON are the call-control settings; OFF is the default build. The base
+was built with call control, so the ON row is the like-for-like static-data
+comparison: 328 bytes over the base, of which 256 are the call state.
 
 AT baselines in instructions, with call control as built today: `AT+BRSF`
 1,292; `AT+BAC` 1,205; `AT+CIND=?` 2,441; `AT+CIND?` 1,427; `AT+CMER` 1,567;
@@ -354,8 +386,13 @@ New host cases:
 - zero-sample and odd-byte early ends against the digest of the even prefix;
 - odd-length CVSD packets released between two activations;
 - two activations on one open mSBC link separated by an odd number of
-  released frames, with a packet length that does not divide 60;
+  released frames, with a packet length that does not divide 60, where the
+  second activation skips to the next frame boundary;
 - a resident peer release after `+BVRA: 0`, which must report a failure;
+- a headset that closes the service-level connection while the owner is idle
+  with only ACCEPT armed, in both lifetimes, which must report a failure;
+- a stop during a link open and a loss during capture, each in an activation
+  started with `+BVRA`, which must send `+BVRA: 0` before DONE;
 - both call-control settings in `bt-hfp-ag.py` and `bluetooth-headset.py`.
 
 The builds are the Bluetooth image with recognition, with and without mSBC,
@@ -376,6 +413,21 @@ and the OS headset image.
   byte into a `bt_sco` packet is also a `bt_sco.c` change.
 - Owner wake-up from the UART receive interrupt is a UART driver change
   ([performance findings](../audit/performance.md), UART and SPI).
+- The Bluetooth owner loop could repeat transport steps while they make
+  progress, within a per-poll instruction budget, as the radio finding
+  "Repeat transport steps while they progress" in the
+  [performance findings](../audit/performance.md) proposes for the radio
+  owner. A response could then pass through RFCOMM, L2CAP, ACL and the UART
+  in one poll, which removes most of the 4 polls from `AT+BVRA=1` to
+  commit and from commit to the setup accepted by the UART. The change
+  belongs to the owners of the Bluetooth owner loop
+  ([application.c](../../apps/bluetooth/application.c) and
+  `bluetooth_application_poll` in
+  [bluetooth.c](../../apps/bluetooth/bluetooth.c)) and of the transports it
+  steps.
+- `bt_sco` reads the peer's remote features after the first commit, which
+  adds polls after the button press. Reading them when the owner enters idle
+  is a change for the owner of [bt_sco.c](../../drivers/bluetooth/bt_sco.c).
 - The OS recognizer's capture wait in
   [recognition.patch](../../apps/os/recognition.patch) still wakes every tick.
   A 250 ms notification wait needs `apps/mimus-board` to expose the

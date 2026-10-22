@@ -359,11 +359,8 @@ int bt_hfp_ag_voice(struct bt_hfp_ag *q,unsigned on)
     if(!q || !q->rfcomm || !identity(q) || q->phase!=BT_HFP_AG_READY || !q->voice ||
        !(q->hf_features&BT_HFP_AG_HF_VOICE) || on>1 || on==q->recognition)return -1;
     if(q->response_length || q->line_deadline)return 0;
-    /* No response is queued, so the twelve bytes start the buffer. */
-    static const char bvra[]="\r\n+BVRA: 0\r\n";
     hold(q);q->notify_index=0;q->pending_recognition=on;
-    for(unsigned i=0;i<12;++i)q->response[i]=(uint8_t)bvra[i];
-    q->response[9]=(uint8_t)('0'+on);q->response_length=12;
+    text(q,on?"\r\n+BVRA: 1\r\n":"\r\n+BVRA: 0\r\n");
     q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);return 1;
 }
 int bt_hfp_ag_indicators(struct bt_hfp_ag *q,const uint8_t *p)

@@ -99,11 +99,11 @@ static void button(const uint8_t *pcm)
     unsigned woken=notifications;first_pcm(pcm,13);ended(1);
     /* A request that has not seen the new segment is refused. */
     current_task=segment_reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_ACCEPT,0)==0&&!word());current_task=owner;
-    assert(notifications==woken+1&&voice.parity==1&&!voice.segment_bytes&&!voice.partial_serial);
+    assert(notifications==woken+1&&(voice.position&1)&&!voice.segment_bytes&&!voice.partial_serial);
     take(1,pcm,8,0,NULL);
     /* Between activations packets are released without a copy. */
     inject_pcm(pcm+13,3,0);pumps(5);inject_pcm(pcm,5,0);pumps(5);
-    assert(voice.parity==1&&!voice.segment_bytes&&head()==1&&voice.stage==CAPTURE);
+    assert((voice.position&1)&&!voice.segment_bytes&&head()==1&&voice.stage==CAPTURE);
     /* The next activation reuses the open link and skips the split byte. */
     assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);hf("AT+BVRA=1\r");UNTIL(voice.active);
     assert(voice.skip==1&&sco_setups==1);
@@ -111,9 +111,25 @@ static void button(const uint8_t *pcm)
     take(2,next+1,8,4,NULL);
     assert(bvra_off==2&&!bvra_on&&notifications==woken+2);
 }
+/* With only ACCEPT armed and no link, the headset closes HFP: DISC on its
+ * DLC and on DLCI 0, then an L2CAP disconnection request, then the ACL
+ * disconnection. The AG leaves the ready state, which the owner never
+ * requests, so the session fails with retention at once. */
+static void idle_disconnect(void)
+{
+    assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);pumps(5);assert(voice.stage==IDLE&&voice.ag.phase==BT_HFP_AG_READY);
+    rf_in(14,0x53,NULL,0,-1);int r=0;unsigned n=0;
+    for(;n<5&&r>=0;++n)r=pump();
+    if(r>=0){rf_in(0,0x53,NULL,0,-1);for(n=0;n<5&&r>=0;++n)r=pump();}
+    if(r>=0){uint8_t disc[4];put16(disc,local_cid);put16(disc+2,0x61);sig_in(6,77,disc,4);for(n=0;n<20&&r>=0;++n)r=pump();}
+    if(r>=0){const uint8_t lost[]={0,0x23,0,0x13};event(&wire,5,lost,sizeof(lost));for(n=0;n<20&&r>=0;++n)r=pump();}
+    assert(r==-1&&(atomic_load(&recovery)&4)&&!atomic_load(&voice.segment_disconnected)&&voice.stage==IDLE&&!sco_setups);
+    fprintf(stderr,"idle disconnect: AG phase %u, RFCOMM phase %u\n",(unsigned)voice.ag.phase,(unsigned)voice.rfcomm.phase);
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");resident_lifetime=!strcmp(argv[1],"resident")||!strcmp(argv[1],"peer-release");setup();
+    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");
+    resident_lifetime=!strcmp(argv[1],"resident")||!strcmp(argv[1],"peer-release")||!strcmp(argv[1],"idle-disconnect-resident");setup();
     scheduler=taskSCHEDULER_NOT_STARTED;assert(bluetooth_headset_segment_bind(&app,segment_reader)==1);scheduler=taskSCHEDULER_RUNNING;
     uint8_t pcm[17];for(unsigned n=0;n<17;++n)pcm[n]=(uint8_t)(n+1);
     if(!strcmp(argv[1],"setup-stop")||!strcmp(argv[1],"ag-stop")){
@@ -131,6 +147,8 @@ int main(int argc,char **argv)
         assert(pump()==0&&app.stage==1);wire.now=100000000;bootstrap_ready=1;
         connected(BT_HFP_AG_HF_VOICE);assert(app.started>=70000000&&app.started<70001000&&app.hci_deadline==app.started+35000000&&
             bluetooth_capture_window(&app)==UINT64_MAX);
+        if(!strcmp(argv[1],"idle-disconnect-resident")){idle_disconnect();
+            puts("PASS a headset that closes HFP while the resident owner is idle fails the session");return 0;}
         if(!strcmp(argv[1],"peer-release")){
             /* A headset that releases the link after +BVRA: 0 fails the session. */
             started();inject_pcm(pcm,8,0);ended(1);take(1,pcm,8,0,NULL);
@@ -167,6 +185,10 @@ int main(int argc,char **argv)
         pumps(20);assert(!voice.active&&!word()&&!bvra_off&&!voice.voice_off);take(1,pcm,8,0,NULL);closed();
         puts("PASS a headset without voice recognition records on START without +BVRA");return 0;
     }
+    if(!strcmp(argv[1],"idle-disconnect")){
+        connected(BT_HFP_AG_HF_VOICE);idle_disconnect();
+        puts("PASS a headset that closes HFP while the owner is idle fails the session");return 0;
+    }
     if(!strcmp(argv[1],"window")){
         /* The supervised window ends idle cleanly, without retention. */
         connected(BT_HFP_AG_HF_VOICE);assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);
@@ -192,9 +214,11 @@ int main(int argc,char **argv)
     if(!strcmp(argv[1],"open-stop")){
         /* A stop while the link opens waits for it, then closes it. */
         connected(BT_HFP_AG_HF_VOICE);assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);hf("AT+BVRA=1\r");UNTIL(voice.stage==AUDIO);
-        assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);disconnect();
+        assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);assert(voice.ag.recognition&&!bvra_off);disconnect();
         assert(!head()&&atomic_load(&voice.segment_flags)==BLUETOOTH_SEGMENT_CANCEL&&!atomic_load(&app.failed));
-        puts("PASS a stop during the link open closes the opened link");return 0;
+        /* The stop turned the headset's recognition off before DONE. */
+        assert(bvra_off==1&&!voice.ag.recognition&&!voice.ag.response_length);
+        puts("PASS a stop during the link open closes the opened link and sends +BVRA: 0");return 0;
     }
     if(!strcmp(argv[1],"early")){
         /* AT+BVRA=0 ends an activation early: an odd byte count publishes
@@ -208,7 +232,7 @@ int main(int argc,char **argv)
         const uint8_t split[]={6,7};inject_pcm(split,2,0);UNTIL(voice.segment_bytes==1);hf("AT+BVRA=0\r");UNTIL(!voice.active);
         assert(head()==1&&!word()&&notifications==woken+1);
         assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);hf("AT+BVRA=1\r");UNTIL(voice.active);hf("AT+BVRA=0\r");UNTIL(!voice.active);
-        assert(head()==1&&!word()&&notifications==woken+2&&voice.parity==1);
+        assert(head()==1&&!word()&&notifications==woken+2&&(voice.position&1));
         assert(request(BLUETOOTH_SEGMENT_ACCEPT)==1);hf("AT+BVRA=1\r");UNTIL(voice.active);
         const uint8_t next[]={8,31,32,33,34,35,36,37,38};inject_pcm(next,9,0);UNTIL(head()==2);
         take(2,next+1,8,2,NULL);closed();assert(!bvra_on);
@@ -258,7 +282,8 @@ int main(int argc,char **argv)
     started();
     if(!strcmp(argv[1],"loss")){
         inject_pcm(pcm,8,1);until(CLOSE);assert(!head()&&(atomic_load(&voice.segment_flags)&BLUETOOTH_SEGMENT_LOSS));
-        disconnect();puts("PASS loss stops capture without publishing");return 0;
+        disconnect();assert(bvra_off==1&&!voice.ag.recognition);
+        puts("PASS loss stops capture without publishing and sends +BVRA: 0");return 0;
     }
     if(!strcmp(argv[1],"backlog")){
         /* Two unacknowledged segments fill both slots; a third activation

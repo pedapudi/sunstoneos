@@ -22,9 +22,10 @@
  * without a segment, as after a headset cancel, the button records it
  * instead. The next published segment is converted from the borrowed slot to
  * a 16 kHz WAV for the newest generation (apps/os/recognition.patch) and
- * acknowledged. A refused take, a lost packet, capture stopped for any reason
- * but the supervised capture window, a failed Bluetooth owner or a failed
- * board ends the session through board_fail. The Bluetooth owner then retains
+ * acknowledged. A lost packet stops capture, and its stop flag, like any
+ * stop but the supervised capture window, ends the session through
+ * board_fail, as do a refused take, a failed Bluetooth owner and a failed
+ * board. The Bluetooth owner then retains
  * its transports and the client keeps its buffers. The supervised image waits
  * for manual power removal; in the resident image both tasks stop reporting
  * progress and the watchdog resets the board. */

@@ -523,10 +523,10 @@ The host tool therefore defaults to one transcript for modes 2 and 3.
 Between activations the task releases each received packet without copying,
 decoding or hashing it. Silence transmission continues, each packet bounded by
 the profile's response timeout and the capture window. CVSD packets may have
-odd lengths, so a packet can split a sample. The task keeps the parity of all
-bytes received since the link opened, and an activation that starts after an
-odd count skips one byte. An mSBC activation restarts the decoder's frame
-search; see the wideband section below.
+odd lengths, so a packet can split a sample. The task counts the bytes
+released since the link opened, and an activation that starts after an odd
+count skips one byte. An mSBC activation skips to the next frame boundary;
+see the wideband section below.
 
 ### Two slots, borrowed in place
 
@@ -571,6 +571,11 @@ session deadline.
 - While idle, a stop or the capture window ends the session at the first poll
   with no AG response or codec offer in flight, within the close bound, and
   reports a confirmed disconnect without retention.
+- No stop leaves the headset recognizing: when recognition is committed on,
+  the task sends `+BVRA: 0` before it reports the end.
+- From idle through capture, a headset that closes the service-level
+  connection fails the session in both lifetimes, unless a stop or the
+  capture window is already ending it.
 - A stop while the link opens waits for the result: an open link closes
   through the normal sequence, a confirmed setup failure ends cleanly, and a
   retained setup fails as before.
@@ -640,6 +645,9 @@ a modeled headset and controller. Its cases cover:
   the link open and during capture, and the capture window while idle;
 - backlog, loss, revocation, late disconnect, resident activations and an
   unrequested link release after `+BVRA: 0`;
+- a headset that closes the service-level connection while the task is idle,
+  in both lifetimes, and `+BVRA: 0` sent before the end after a stop during
+  the link open or a loss during capture;
 - a request refused because a segment was published after the consumer's
   last observation, and `AT+BVRA=1` refused after a stop;
 - with `--msbc`, the button on an mSBC link, and a stop after a headset
@@ -750,10 +758,12 @@ reuse decoder state after a failed candidate or conceal missing samples.
 
 Between activations no packet reaches the decoder. Each activation starts with
 `bluetooth_msbc_resync`, which clears the partial frame, the sequence lock and
-the discard count; the header search then locks onto the first valid frame.
-On an intact stream it discards at most 59 bytes. The libsbc synthesis history
-is kept, so only the first decoded frame of a segment can carry audio from
-before the gap. Mode 5, with caller playback, records continuously and does
+the discard count. Each decoded frame records where the next frame starts, so
+after the first decoded frame on a link an activation skips at most 59 bytes
+to the next frame boundary and decodes from there. The first activation on a
+link uses the header search, which discards at most 59 bytes on an intact
+stream. The libsbc synthesis history is kept, so only the first decoded frame
+of a segment can carry audio from before the gap. Mode 5, with caller playback, records continuously and does
 not advertise voice recognition, because its playback pacing and cancellation
 depend on an open capture.
 
