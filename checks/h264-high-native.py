@@ -90,7 +90,7 @@ def main():
         planbase=streambase+streamtype['plan'];slots_live={}
         def pf(name):return get(planbase+plan_type[name],4)
         fifo=bytearray();time=[1000];mmio={0:1,0x1c:0,0xb0:0,0xec:0,0x228:0,0x5c:0,0x804:0,0xf0:0,0xe0:0x33310,0xe4:0x21320}
-        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];corrupt_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];parked=[];guard_reads=[];wakes=[0]
+        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];corrupt_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];cleans=[];parked=[];guard_reads=[];wakes=[0]
         def buffers():return list(struct.unpack('<6Q',cpu.mem_read(base+app['buffers'],48)))
         def hook(m,address,size,unused):
             if address==STOP:parked.append('return');m.emu_stop();return
@@ -162,11 +162,15 @@ def main():
                 # Both clock outputs are fields of the actual application.
                 pointer=m.reg_read(REGS[7]);setfield(pointer,'a733_clock_token','id',1);returned(0)
             elif name=='a733_gpu_resources_acquire':m.mem_write(m.reg_read(REGS[4]),struct.pack('<Q',1));returned(0)
-            elif name=='a733_memory_uncached_init':returned(syms['uncached_pool'])
-            elif name=='a733_memory_reservations_init':returned(syms['boot_pool'])
+            elif name=='a733_device_memory_ready':returned(1) # Modeled READY: the actual getters return the prepared pools.
+            elif name in ('vTaskEnterCritical','vTaskExitCritical'):returned(0) # One emulated core: the ledger's critical section has no effect.
+            elif name=='aarch64_device_cache':cleans.append([m.reg_read(r) for r in REGS[:3]]);returned(1) # Modeled clean of a recycled write-back extent.
             elif name=='a733_video_platform_h264_ops':returned(OPS)
             elif name=='aarch64_device_translate':
-                m.mem_write(m.reg_read(REGS[2]),struct.pack('<QII',m.reg_read(REGS[0]),0,2));returned(1)
+                # The extended pools carry their MAIR attribute and inner
+                # shareability; other addresses keep the attribute-free model.
+                va=m.reg_read(REGS[0]);attributes=(0x44,3) if 0x78000000<=va<0x79000000 else (0xff,3) if 0x48000000<=va<0x78000000 else (0,2)
+                m.mem_write(m.reg_read(REGS[2]),struct.pack('<QII',va,*attributes));returned(1)
             elif name=='h264_device':returned(int(m.reg_read(REGS[0]) in list(range(0x17000,0x22000,4096))+[0x01c0e000]))
             elif name=='h264_load':
                 value=0x10007 if m.reg_read(REGS[0]) in (0x0200258c,0x020025b4) else mmio[0x228] if not active[0] else 0
@@ -177,7 +181,7 @@ def main():
                 returned(-1 if scan_fail_at[0]==get(streambase+streamtype['active'],4) else 1)
             elif name=='a733_iommu_poll':
                 setfield(base+app['iommu']+types['a733_iommu']['fault'],'a733_iommu_fault','scanned_masters',0xc0,2);setfield(base+app['iommu']+types['a733_iommu']['fault'],'a733_iommu_fault','complete',1,1);returned(1)
-        hooks=['board_live','board_fail','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','a733_usb_prepare','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','a733_counter_clock_now','a733_rail_acquire','a733_rail_poll','a733_pmic_submit','a733_pmic_result','a733_clock_acquire','a733_gpu_resources_acquire','a733_memory_uncached_init','a733_memory_reservations_init','a733_h264_platform_init','a733_video_platform_h264_ops','h264_load','h264_device','a733_iommu_scan','a733_iommu_poll','aarch64_device_translate']
+        hooks=['board_live','board_fail','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','a733_usb_prepare','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','a733_counter_clock_now','a733_rail_acquire','a733_rail_poll','a733_pmic_submit','a733_pmic_result','a733_clock_acquire','a733_gpu_resources_acquire','a733_device_memory_ready','vTaskEnterCritical','vTaskExitCritical','aarch64_device_cache','a733_h264_platform_init','a733_video_platform_h264_ops','h264_load','h264_device','a733_iommu_scan','a733_iommu_poll','aarch64_device_translate']
         assert all(n in syms for n in hooks),[n for n in hooks if n not in syms]
         cpu.mem_write(OPS,struct.pack('<6Q',*[STUB+16*i for i in range(6)]))
         # Only modeled service boundaries need hooks; CPU parser/hash/copy loops
@@ -218,8 +222,8 @@ def main():
             restore(resumed['memory']);mmio.clear();mmio.update(resumed['mmio']);sram[:]=resumed['sram'];calls[:]=resumed['calls'];triggers[:]=resumed['triggers'];tables[:]=resumed['tables'];snapshots=resumed['snapshots'];branches=resumed['branches'];backpressure=[resumed['backpressure']]
             for present,raw in snapshots.items():(args.output/f'{variant}-frame{present}.bin').write_bytes(raw)
         else:
-            assert invoke('device_memory_pool_init',syms['uncached_pool'],0x78000000,0x78000000,0x1000000)==1
-            assert invoke('device_memory_pool_init',syms['boot_pool'],0x48000000,0x48000000,0x30000000)==1
+            # The actual extended preparations type the pools: dma32 write-back and Normal non-cacheable.
+            assert invoke('a733_memory_reservations_prepare')&0xffffffff==1 and invoke('a733_memory_uncached_prepare')&0xffffffff==1
             assert invoke('h264_stream_storage_init',12)==1 and invoke('h264_stream_storage_valid')==1
             usb(wire[:24]);invoke('h264_task',0);assert not get(base+app['stage'],4) and not calls.count('a733_rail_acquire')
             usb(wire[24:]);assert get(streambase+streamtype['manifest_ready'],4)==1
