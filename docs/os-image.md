@@ -10,9 +10,12 @@ thermal service together. Three optional builds add more services:
   association, WPA2 with crypto engine entropy, DHCP or fixed addressing and
   one TCP exchange;
 - the headset build recognizes speech from a Bluetooth headset in place of
-  the recorded WAV. It combines with the radio build: one owner of the
-  AIC8800 module then loads the firmware once and serves the Wi-Fi station
-  and the Bluetooth headset. An mSBC option adds wideband headset speech.
+  the recorded WAV. An mSBC option adds wideband headset speech.
+
+The radio build combines with either capture build. With the headset, one
+owner of the AIC8800 module loads the firmware once and serves the Wi-Fi
+station and the Bluetooth headset. The microphone and the headset exclude each
+other, because the recognizer takes one capture source.
 
 The mimus board application already combines the
 USB0 device service, the USB2 host with keyboard and read-only USB storage,
@@ -26,10 +29,9 @@ adds three fixed parts to it:
 - a resident lifetime, in which the armed hardware watchdog is renewed only
   while every listed service makes progress.
 
-Status: implemented, built and host-modeled in both lifetimes, each with and
-without microphone recognition, the radio station and headset recognition
-(the microphone excludes the headset), and the headset with and without
-wideband mSBC speech. No board has run any of these builds. The sources are in
+Status: implemented. Every build listed under [Build and checks](#build-and-checks)
+configures and links in both lifetimes, and the host checks listed there model
+them. No board has run any of these builds. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
@@ -412,6 +414,25 @@ authority or PM latch other than the radio's.
 
 ## Build and checks
 
+Each row below builds in the supervised lifetime and, with
+`SUNSTONE_A733_OS_RESIDENT=ON`, in the resident lifetime. The start list and
+the interrupt table follow the options:
+
+| Options | Start list | Table INTIDs |
+| --- | --- | --- |
+| None | `mimus`, `thermal` | 71 |
+| `SUNSTONE_A733_OS_AUDIO` | `mimus`, `thermal`, `audio` | 71, 143 |
+| `SUNSTONE_A733_OS_RADIO` | `mimus`, `thermal`, `radio` | 71 |
+| `SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO` | `mimus`, `thermal`, `audio`, `radio` | 71, 143 |
+| `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `headset` | 71 |
+| `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
+
+Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
+`SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
+set without the headset. The supervised radio and headset builds link, but at
+the admitted SDIO clock firmware loading cannot finish within their bootstrap
+bounds (see [Radio station](#radio-station)).
+
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
   [-DSUNSTONE_A733_OS_RESIDENT=ON] [-DSUNSTONE_A733_OS_AUDIO=ON] [-DSUNSTONE_A733_OS_RADIO=ON]
@@ -421,6 +442,9 @@ cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS
   [-DSUNSTONE_A733_OS_MSBC=ON -DSUNSTONE_BT_SBC_DIR=<pinned BlueZ libsbc sources>]
 cmake --build BUILD --target sunstone-a733-os
 ```
+
+`SUNSTONE_BT_SBC_DIR` names the directory that holds `COPYING.LIB` and the
+`sbc` source directory, the paths that `apps/bluetooth/msbc-source.json` lists.
 
 The configuration needs the same inputs as the mimus board image; the radio
 build also uses the radio stacks that the board image already compiles. The
@@ -439,9 +463,8 @@ and fails the build unless:
 - every table INTID is a distinct SPI with a valid core and priority, and its
   handler is a linked function;
 - every start entry has a distinct name and distinct linked functions;
-- the start list is `mimus`, `thermal` and, by build, `audio`, `radio`,
-  `headset` or `radio` followed by `headset`, and the table holds INTID 71
-  and, in the microphone build, INTID 143;
+- the start list and the table INTIDs are those of the build in the table
+  above;
 - the base and overlay models, the recorded WAV and the recognizer arena do
   not overlap one another or any allocated image section, and lie inside the
   stage-2 loader's load window `0x41000000..0x47000000`, below the monitor
