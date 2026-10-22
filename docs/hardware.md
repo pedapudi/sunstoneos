@@ -1750,10 +1750,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [SNTP client](radio-network.md#an-sntp-client-supplies-utc-to-the-rtc-service)
   resolves its server, validates replies and exports an RTC SET request; host
   checks and an actual-stack composition pass, but no image runs it yet.
-  WPA3 personal is not implemented: the pinned wpa_supplicant release has no
-  elliptic-curve back end usable here, and SAE external authentication and
-  protected management frames are missing
-  ([details](radio-security.md#wpa3-personal-needs-three-missing-parts)).
+  WPA3 personal is not usable yet: the SAE exchange runs on a pinned minimal
+  OpenSSL build in host and AArch64 model checks, but SAE external
+  authentication, protected management frames and SAE association are missing
+  ([details](radio-security.md#wpa3-personal-authenticates-but-cannot-yet-associate)).
   Physical power save, roaming, time accuracy and loss timing remain unqualified.
   A full Wi-Fi session can also [serve a Bluetooth client](radio-session.md#a-bluetooth-client-shares-the-firmware-generation)
   on the same module. The session reports its firmware generation while it
