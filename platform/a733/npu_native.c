@@ -20,25 +20,15 @@ static _Noreturn void fatal(struct a733_npu_native *n)
     if (n && n->fatal) n->fatal(n->fatal_cookie);
     __builtin_trap();
 }
-static int translate(void *unused, uintptr_t cpu, int write, struct a733_npu_translation *out)
+static int translate(void *unused, uintptr_t cpu, int write, struct aarch64_translation *out)
 {
     (void)unused;
-    struct aarch64_translation t;
-    if (!out || !aarch64_device_translate(cpu, write, &t)) return 0;
-    *out = (struct a733_npu_translation){t.physical, t.attributes, t.shareability};
-    return 1;
+    return aarch64_device_translate(cpu, write, out);
 }
-static int cache(void *cookie, enum a733_npu_cache_op operation, uintptr_t cpu, size_t bytes)
+static int cache(void *cookie, enum aarch64_cache_op operation, uintptr_t cpu, size_t bytes)
 {
     struct a733_npu_native *n = cookie;
-    enum aarch64_cache_op op;
-    switch (operation) {
-    case A733_NPU_CACHE_CLEAN: op = AARCH64_CACHE_CLEAN; break;
-    case A733_NPU_CACHE_CLEAN_INVALIDATE: op = AARCH64_CACHE_CLEAN_INVALIDATE; break;
-    case A733_NPU_CACHE_INVALIDATE: op = AARCH64_CACHE_INVALIDATE; break;
-    default: return refuse(n);
-    }
-    return ready(n) && aarch64_device_cache(op, cpu, bytes) ? 1 : refuse(n);
+    return ready(n) && aarch64_device_cache(operation, cpu, bytes) ? 1 : refuse(n);
 }
 static void barrier(void *cookie)
 {

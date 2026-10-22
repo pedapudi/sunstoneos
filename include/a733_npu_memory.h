@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_A733_NPU_MEMORY_H
 #define SUNSTONE_A733_NPU_MEMORY_H
 #include "a733_npu_controller.h"
+#include "aarch64_device_memory.h"
 
 #define A733_NPU_MEMORY_MAX_BUFFERS 64u
 
@@ -13,10 +14,6 @@ enum a733_npu_buffer_role {
     A733_NPU_BUFFER_COMMAND, A733_NPU_BUFFER_BOOTSTRAP,
     A733_NPU_BUFFER_CONSTANT
 };
-enum a733_npu_cache_op {
-    A733_NPU_CACHE_CLEAN, A733_NPU_CACHE_CLEAN_INVALIDATE,
-    A733_NPU_CACHE_INVALIDATE
-};
 enum a733_npu_memory_state {
     A733_NPU_MEMORY_EMPTY, A733_NPU_MEMORY_IDLE,
     A733_NPU_MEMORY_DEVICE, A733_NPU_MEMORY_FAULT
@@ -28,13 +25,9 @@ struct a733_npu_buffer {
     uint32_t device;
     enum a733_npu_buffer_role role;
 };
-struct a733_npu_translation {
-    uint64_t physical;
-    unsigned attributes, shareability;
-};
 struct a733_npu_memory_ops {
-    int (*translate)(void *, uintptr_t, int write, struct a733_npu_translation *);
-    int (*cache)(void *, enum a733_npu_cache_op, uintptr_t, size_t);
+    int (*translate)(void *, uintptr_t, int write, struct aarch64_translation *);
+    int (*cache)(void *, enum aarch64_cache_op, uintptr_t, size_t);
     void (*barrier)(void *);
 };
 struct a733_npu_memory {

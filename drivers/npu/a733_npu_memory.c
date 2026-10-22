@@ -1,21 +1,26 @@
 #include "a733_npu_memory.h"
 #include "a733_range.h"
+#include "a733_mapping_check.h"
 
 #define PAGE 4096u
 #define TABLE 16384u
 #define PA_LIMIT (UINT64_C(1) << 40)
 #define VA_LIMIT (UINT64_C(1) << 32)
 
+/* Write-back, inner shareable, at the expected physical address. The walk
+ * keeps its own loop because translation goes through the callback cookie. */
+static const struct a733_mapping_rule private_memory = {A733_MAPPING_READ_WRITE, 1,
+    {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
 static int translated(const struct a733_npu_memory *m, uintptr_t cpu,
                        uint64_t pa, size_t bytes, int write)
 {
     for (size_t offset = 0; offset < bytes; offset += PAGE) {
-        struct a733_npu_translation t;
+        struct aarch64_translation t;
         if (!m->ops.translate(m->cookie, cpu + offset, 0, &t) ||
-            t.physical != pa + offset || t.attributes != 0xff || t.shareability != 3)
+            !a733_mapping_translation_ok(&t, pa + offset, &private_memory))
             return 0;
         if (write && (!m->ops.translate(m->cookie, cpu + offset, 1, &t) ||
-            t.physical != pa + offset || t.attributes != 0xff || t.shareability != 3))
+            !a733_mapping_translation_ok(&t, pa + offset, &private_memory)))
             return 0;
     }
     return 1;
@@ -204,15 +209,15 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
      * retains the complete session even if the controller never triggers.
      * Immutable tables, streams and CONSTANT data were cleaned by the
      * bootstrap publication; canonical() still checks the tables per job. */
-    if (bootstrap && !m->ops.cache(m->cookie, A733_NPU_CACHE_CLEAN, m->arena, m->image.bytes))
+    if (bootstrap && !m->ops.cache(m->cookie, AARCH64_CACHE_CLEAN, m->arena, m->image.bytes))
         return fault(m);
     for (size_t i = 0; i < m->count; ++i) {
         b = &m->buffers[i];
         if (!bootstrap && ((b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE) ||
                            !maintained(m, i, found)))
             continue;
-        enum a733_npu_cache_op op = b->role == A733_NPU_BUFFER_WRITE ?
-            A733_NPU_CACHE_CLEAN_INVALIDATE : A733_NPU_CACHE_CLEAN;
+        enum aarch64_cache_op op = b->role == A733_NPU_BUFFER_WRITE ?
+            AARCH64_CACHE_CLEAN_INVALIDATE : AARCH64_CACHE_CLEAN;
         if (!m->ops.cache(m->cookie, op, b->cpu, b->bytes)) return fault(m);
     }
     m->ops.barrier(m->cookie);
@@ -229,7 +234,7 @@ int a733_npu_memory_finish(struct a733_npu_memory *m, const struct a733_npu_comm
     for (size_t i = 0; i < m->count; ++i) {
         const struct a733_npu_buffer *b = &m->buffers[i];
         if (b->role == A733_NPU_BUFFER_WRITE && (bootstrap || maintained(m, i, m->active_index)) &&
-            !m->ops.cache(m->cookie, A733_NPU_CACHE_INVALIDATE, b->cpu, b->bytes)) return fault(m);
+            !m->ops.cache(m->cookie, AARCH64_CACHE_INVALIDATE, b->cpu, b->bytes)) return fault(m);
     }
     m->ops.barrier(m->cookie);
     m->active = (struct a733_npu_command){0}; m->state = A733_NPU_MEMORY_IDLE;
