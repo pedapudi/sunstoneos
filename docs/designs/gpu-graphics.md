@@ -1,454 +1,428 @@
 # Design: GPU graphics features and zero-copy presentation
 
-Status: **design**. No code implements it yet. Every item below ends at
-implemented and host-modeled; physical behavior stays pending until the board
-evidence listed at the end exists.
+Status: **design**. No code implements it yet. Every item ends at implemented
+and host-modeled; physical behavior stays pending until the board evidence at
+the end exists.
 
-The design adds graphics profile 5 to the retained renderer described in
-[gpu-render.md](../gpu-render.md). Profile 5 adds:
+Graphics profile 5 extends the retained renderer of
+[gpu-render.md](../gpu-render.md). It adds trusted shader programs compiled on
+the host by the pinned Mesa compiler, general blend factors and equations,
+hardware clipping, several textures per session with mipmaps and more formats,
+and 4× multisampling resolved on chip. The display engine (DE) scans the rendered
+frame in place, with one ownership hand-off and no copy.
 
-- trusted shader programs compiled on the host by the pinned Mesa compiler;
-- general blend factors and equations;
-- hardware clipping;
-- several textures per session, mipmaps and more texture formats;
-- 4× multisampling resolved on chip.
-
-The display engine (DE) scans the GPU's rendered frame in place, with one
-ownership hand-off and no copy.
-
-**One frame path.** The fixed-clear, triangle and texture renderers of draw
-modes 0 to 4 (profiles 2, 3 and 4 among them) become program sets of profile 5.
-The change that lands profile 5 deletes their per-frame code from
-`pvr_render_service.c`: the draft, the snapshot, the per-reply pixel output,
-the poison fill, the per-page `mapped()` checks and the per-word guard loop.
-The upload-chunk copy in `pvr_gpu_service.c` is deleted in the same change
-sequence by its owner. The images used for the first physical GPU qualification
-are not rebuilt from the live tree. Each is pinned by the source commit and
-image SHA-256 already recorded in [gpu-render.md](../gpu-render.md) and
-[gpu-display.md](../gpu-display.md), and the board session loads the preserved
-bytes after checking the SHA-256. A new `checks/gpu-render-frozen.py` rebuilds
-each pinned image from its recorded commit under the package build directory
-and compares objects and the image SHA-256 with the record, in the way
-gpu-display.md already compares objects between its two images.
+The fixed-clear, triangle and texture renderers (draw modes 0 to 4) become
+program sets of profile 5, and the change that lands profile 5 deletes their
+per-frame code from `pvr_render_service.c`. The images used for the first
+physical GPU qualification stay pinned by the source commit and image SHA-256
+recorded in [gpu-render.md](../gpu-render.md) and
+[gpu-display.md](../gpu-display.md). The board session checks that SHA-256
+before it loads the preserved bytes. If provenance has to be reconfirmed, the
+image is rebuilt once at the recorded commit under the package build directory
+and the result is recorded in gpu-render.md.
 
 ## Data flow and ownership
 
-The graphics owner's write-back lease is acquired with 2 MiB alignment and
-holds three regions. Their sizes are fixed when the session opens. Each limit
-below names the consumer that needs it. The consumers are the gpu-display demo
-(1280 × 720 RGB565 scanout), the gpu-render evidence frames (read-back), and
-the gpu-conformance package, which compares rendered pixels with host Mesa
-software rendering.
+The graphics owner's write-back lease is acquired with 2 MiB alignment. Its
+sizes are fixed at OPEN, and each limit names its consumer: the gpu-display
+demo (1280 × 720 RGB565 scanout), the gpu-render evidence frames (read-back),
+and the gpu-conformance scenes, which are compared with host Mesa software
+rendering.
 
-- **Small region**, one 2 MiB block. It holds the unified shader core (USC)
-  programs (at most 32 KiB), the programmable data sequencer (PDS) programs (at
-  most 8 KiB), one end-of-tile program per output slot and the command pages
-  (at most 16 KiB). It also holds the 128 KiB index area and the batch table of
-  at most 16 batches, the profile-4 limit that the evidence frames use.
-- **Vertex area**, one 2 MiB block: 65,536 vertices of at most 32 bytes. Four
-  attributes at most (position, texture coordinate, colour and one spare);
-  profile 4 already uses 24-byte vertices.
-- **Texture area**, at most 8 MiB, which holds the 1920 × 1080 RGBA8 texture
-  of the profile-2 to profile-4 program sets. At most 4 textures per session;
-  the mip and format evidence frame samples four. Required formats are
-  R8G8B8A8 UNORM and sRGB, B5G6R5 UNORM, ETC2 RGB8 and EAC R11 UNORM, all
-  sampleable in the pinned Mesa table (`pvr_arch_formats.c:89–105, 160–169`).
-  The other formats in that table are optional and are not in the first
-  implementation.
-- **Output slots.** Two for read-back sessions and four for scanout. Each slot
-  is a run of 2 MiB blocks. The frame starts 4 KiB into the run, with a 64-byte
-  guard line directly before and directly after it.
+- **Small region**, one 2 MiB block: unified shader core (USC) programs (at
+  most 32 KiB), programmable data sequencer (PDS) programs (at most 8 KiB), one
+  end-of-tile program per output slot, command pages (at most 16 KiB), the
+  128 KiB index area, and a table of at most 16 batches.
+- **Vertex area**, one 2 MiB block: 65,536 vertices of at most 32 bytes with
+  three attributes, position, texture coordinate and colour.
+- **Texture area**, at most 8 MiB and 4 textures. It holds the 1920 × 1080
+  RGBA8 texture of the profile-2 to profile-4 program sets. Formats: R8G8B8A8
+  UNORM and sRGB, B5G6R5 UNORM, ETC2 RGB8 and EAC R11 UNORM, all sampleable in
+  the pinned Mesa table (`pvr_arch_formats.c:89–105, 160–169`).
+- **Output slots**, two for read-back and four for scanout. Each slot is a run
+  of 2 MiB blocks, and the frame ends at the end of its run. A 720p RGB565
+  frame is 450 pages and a 1080p RGBA8 frame is 2,025 pages, so both start on
+  a page boundary.
 
-There is no depth or stencil attachment in DRAM. Depth and stencil live in
-on-chip tile memory: the background object clears them, the final kick neither
-loads nor stores them (`zloaden` and `zstoreen` clear), and the ZLS base
-addresses point at an unmapped GPU address. Multisampled colour resolves on
-chip through the pixel back end (PBE) box-filter downscale (`down_scale`), so
-no multisampled colour buffer exists in DRAM either.
-
-The authenticated session envelope carries one program set of at most 8
-pipelines. The largest set is the 1× evidence set: the profile-4 opaque
-pipeline and five blends, the clipped-triangle pipeline and the mip and format
-pipeline. All pipelines in a session share its sample count. Each pipeline is
-a vertex and fragment program pair with metadata: attribute layout, uniform
-bytes (at most 128, one 4 × 4 matrix and four vec4 constants), texture slots
-(at most 4), register counts, and whether the fragment program reads the
-destination colour. At OPEN the worker validates the metadata once and
-refuses:
-
-- programs that declare scratch memory, spills, barriers, atomics or storage
-  writes;
-- an attribute whose offset plus size exceeds the stride;
-- a PDS data-segment template with a nonzero address field.
-
-It then copies the programs into the small region, builds one end-of-tile
-program per slot, writes the slot guards, and cleans and invalidates every
-slot's full page range and the small region once. That pass runs after the
-lease zeroing in `gpu_graphics_memory.c`, which uses cacheable stores, and
-before the first kick. Blend state is compiled into fragment variants on the
-host by Mesa's blend lowering, so a general blend is the selection of one
-pipeline.
-
-**Output format.** The per-slot end-of-tile program carries the PBE pack mode
-and swizzle. Mesa accumulates both R8G8B8A8 UNORM and B5G6R5 UNORM as U8
+Depth and stencil live only in on-chip tile memory. The background object
+clears them, and both the partial-render and the final fragment commands carry
+`zloaden` and `zstoreen` clear. The ZLS base addresses point at an unmapped GPU
+address. Multisampled colour resolves on chip through the pixel back end (PBE)
+downscale (`down_scale`). The per-slot end-of-tile program carries the PBE pack
+mode. Mesa accumulates both R8G8B8A8 and B5G6R5 as U8
 (`pvr_arch_formats.c:199, 211`), so one fragment program serves both outputs.
-The R5G6B5 pack mode places red in bits 15–11, the layout that TV0's RGB565
-path reads, and the swizzle stays the identity.
 
-**Program trust.** The board does not verify shader behavior. Programs are
-trusted for three reasons. The envelope authentication admits only host-signed
-program sets. The host producer decodes every USC and PDS instruction with the
-pinned Mesa disassembler and refuses store, atomic, scratch and DMA-write
-instructions before signing. OPEN refuses the metadata flags listed above. A
-program that wrote memory anyway could reach these writable GPU mappings: the
-general-heap fence and static data (`0x8000000000`), the render-target state
-(`0x8004000000` onward), the context-switch state and border table
-(`0x8008000000`), and the output slots. The worker writes every address in a
-PDS data segment (vertex base, index base, texture descriptors, uniform
-blocks) from validated batch fields. Host programs carry no absolute
-addresses. The read-only GPU mappings of programs and input are an additional
-barrier; the design does not rely on them.
+**Program sets.** The authenticated session envelope carries one program set of
+at most 8 pipelines that share one sample count. Each pipeline is a vertex and
+fragment program pair with metadata: attribute layout, at most 128 uniform
+bytes, at most 4 texture slots, register counts and destination-colour reads.
+Blends are compiled into fragment variants on the host. At OPEN the worker
+validates the metadata once, copies the programs into the small region, builds
+the end-of-tile programs, and cleans the small region once. The appendix gives
+the trust argument.
 
-**Input lending.** The small region's index and batch areas, the vertex area
-and the texture area are lent to their producer (the USB task, or the
-application task in the display image) while CPU-owned. The producer writes
-each byte once, in place. SUBMIT returns them to the worker. The worker copies
-each batch record once into its own memory, validates the copy and encodes
-from it, so a producer that keeps writing cannot change what was validated. It
-builds texture descriptors from validated fields and checks that each
-texture's extent fits its texture slot. The extent includes the mip chain, the
-twiddle padding and ETC2 and EAC 4 × 4 block rounding. It then cleans the
-written byte ranges. A texture is written once per upload.
+**Input lending.** The index, batch, vertex and texture areas are lent to their
+producer (the USB task, or the application task in the display image) while
+CPU-owned. The producer writes each byte once, in place, and SUBMIT returns the
+areas to the worker. The worker copies each batch record once into its own
+memory and validates and encodes from the copy. It builds texture descriptors
+from validated fields and checks each texture's extent, including the mip
+chain, twiddle padding and 4 × 4 block rounding, against its slot. It then
+cleans the written ranges. Indices need no per-index check: the vertex stride
+bounds every attribute, batch records have no base-vertex field, and indices
+are 16-bit, so every index addresses the 2 MiB vertex block, which an unmapped
+2 MiB GPU gap follows.
 
-**Indices.** The per-index check goes away under three rules checked at OPEN
-or in each batch: the attribute bound above, no base-vertex field in a batch
-record, and a fixed 16-bit index type. Every index then addresses a vertex
-inside the 2 MiB vertex block. An unmapped 2 MiB GPU address gap follows it.
-
-**Output slots** have four states, and only the worker writes a slot's state:
+**Output slots.** Only the worker writes a slot's state:
 
 1. FREE: the GPU may be given the slot.
 2. RENDERING: the slot belongs to one submitted frame.
-3. COMPLETE: both timelines reached the frame, the partial-render count is
-   zero and both guard lines are intact.
+3. COMPLETE: both timelines reached the frame, both freshness markers were
+   overwritten, and no partial-render signal is set.
 4. LENT: one consumer holds the slot under a PRESENT or READ ticket. Returning
    the ticket moves the slot back to FREE.
 
-**Present and retire.** The display task holds a PRESENT request open. The
+**Present and retire.** The display task holds a PRESENT request open, and the
 worker answers it with a task notification when a frame reaches COMPLETE. The
 display task runs the TV0 register command queue (RCQ) replay for the slot's
-address. The pinned display driver issues an RCQ update and polls for RCQ
-finish (`sunxi_de.c:715–775`, `de_top.c:1077–1082`) before it signals the
-vertical-blank event. Neither it nor gpu-display.md establishes when the DE
-stops fetching the old address, and it is not known whether the UCH3
-source-address readback returns the pending or the active register. The
-retire rule is therefore conservative. The display returns the previous slot
-only after three observations:
+address. It returns the previous slot only after RCQ finish, a source-address
+readback that shows the new slot in the same burst as the frame-end clear, and
+two later frame-end observations. A read-back consumer receives the whole
+completed slot in one reply; the worker invalidates the frame once before
+lending it.
 
-1. RCQ finish;
-2. the source-address readback that shows the new slot, in the same burst as a
-   write-to-clear of the frame-end status bit;
-3. two later frame-end observations.
+**Parameter buffer.** The global free list has initial pages equal to maximum
+pages, 16,384 (64 MiB), and zero grow pages. The backing is reserved at OPEN
+today (`gpu_graphics_memory.c:229`), so growing would save no memory. The bound for
+the largest consumer frames assumes 16 × 16-pixel tiles, doubled in each axis
+at 4× (Mesa `pvr_arch_job_render.c:156–157`), and 128-byte control-stream
+blocks (Mesa `ipf.xml:29`). A primitive block holds at most 128 primitives
+(`cs_prim_total`, `ipf.xml:241`). The bound also assumes at most 24 bytes per
+tile entry of a block, which no pinned source states:
 
-A missed frame-end observation only delays the return. Four scanout slots
-(displayed, pending, retiring and rendering) keep 60 Hz possible under this
-rule. Board evidence that isolates retirement (below) may later qualify a
-one-frame-end rule, which reduces scanout to three slots.
+- 16 full-screen batches at 720p 4× (14,400 tiles): 16 × 14,400 × 24 bytes =
+  5.5 MB of entries plus 1.8 MB of first blocks, about 7.4 MB.
+- 16 full-screen batches at 1080p (8,160 tiles): about 4.2 MB.
+- 1,000 non-overlapping triangles at 1920 × 384: under 1 MB.
 
-A read-back consumer receives the whole completed slot in one reply. The worker
-invalidates the frame range once before lending it, and the consumer streams
-it into the USB FIFO.
-
-**Partial renders are refused.** The global free-list maximum is sized at OPEN
-to a parameter-buffer bound computed from the admitted limits: vertex output
-bytes plus control-stream bytes per tile for the worst primitive-block count.
-OPEN refuses limits whose bound exceeds the 16,384-page free-list maximum.
-After both timelines complete, the worker reads the render target's
-partial-render count from the firmware HWRT data (`pvr_rogue_fwif.h:2049–2050`).
-A nonzero count means the frame lost the geometry rendered before the partial
-render. The frame is reported as failed and its slot returns to FREE. The
-first render clears depth, and no frame loads stored depth, so the CPU depth
-initialization goes away.
+The 64 MiB maximum is about 9 times the largest of these. The admitted index
+limit has no bound that fits. 65,535 indices are 21,845 triangles. Clipping
+against near, far and four guard-band planes adds at most one vertex per plane,
+so each triangle yields at most 7 triangles, giving 152,915 primitives and at
+least 1,195 blocks. If every block reaches every tile at 720p 4×, that is
+1,195 × 14,400 × 24 bytes, about 413 MB. A frame larger than the consumer frames
+can therefore cause a partial render. It stays memory-safe, because both fragment
+commands leave ZLS untouched and the PBE writes only the slot. It is visibly
+wrong, because the final render clears colour with no load program. After each
+completion the worker reads three firmware words: the geometry context's
+out-of-memory and partial-render statistics (`pvr_rogue_fwif.h:693, 695`) and a
+one-entry partial-render array registered with `max_rts` = 1
+(`pvr_rogue_fwif.h:2049–2052`). Pinned Linux registers no array for one layer
+(`pvr_hwrt.c:388–406`), and nothing yet shows that this firmware writes any of
+the three for a single-layer target. Any nonzero word, and any free-list GROW
+event, is unknown device state. An absent signal proves nothing until the board
+item below qualifies one; until then conformance comparison is the only
+detection.
 
 **Shutdown.** The display stops issuing replays. Then, in order:
 
 1. Stop TV0 and the DE, and observe the stop.
 2. Remove the master-8 IOMMU translations of the slot extents and invalidate
-   the IOMMU TLB. The display owner holds these translations.
+   the IOMMU TLB.
 3. Return every LENT slot.
-4. Close the GPU. CLOSE is refused while a slot is LENT, and DISPOSE is refused
-   while any extent is imported.
+4. Close the GPU. CLOSE is refused while a slot is LENT, and DISPOSE while any
+   extent is imported.
 5. Park the PMIC.
 
-The sequence must finish inside the existing 2-second HDMI stop reserve.
-Step 1 takes at most one frame plus the existing HDMI stop, and step 2 is about
-1,800 PTE writes and one invalidation. If any step is not observed, the display
-bank and the GPU lease are both retained.
+Steps 1 and 2 take one frame plus the HDMI stop, then about 1,800 PTE writes
+and one invalidation, inside the existing 2-second HDMI stop reserve. If any
+step is not observed, the display bank and the GPU lease are both retained.
 
 **Failure classes** (section 1.8 of the performance architecture):
 
 - Known state, no retention: an invalid batch, pipeline, texture, extent or
   state word, a full slot ring at the request deadline, or an invalid program
-  set at OPEN is refused before any device access. A frame with a nonzero
-  partial-render count is failed after completion. The input returns to its
+  set at OPEN. Each is refused before device access; the input returns to its
   producer and the session stays usable.
-- Unknown device state: an uncertain kick, a missing timeline at the deadline,
-  a damaged guard line or a GPU MMU fault. The worker retains the rings, slots,
-  input, programs and lease, which is the existing behavior.
-- Display replay past its deadline: the previous and the pending slot both stay
-  LENT, and the display refuses further replays and MMIO, which is the existing
-  gpu-display behavior. The GPU may still render into the remaining slots for
-  read-back. CLOSE retains the lease and the display bank stays retained.
+- Unknown device state: an uncertain kick, a missing timeline at the deadline
+  (which also covers a rejected or unexecuted kick), a freshness marker still
+  present after completion, any partial-render signal or GROW event, or a GPU
+  MMU fault. The worker retains rings, slots, input, programs and lease.
+- Display replay past its deadline, or an IOMMU fault: every slot not yet
+  retired under the retire rule stays LENT, the display refuses further replays
+  and MMIO, and the display bank, the imported master-8 extents and the GPU
+  lease are retained. The GPU may still render into FREE slots for read-back.
 
 ## Interrupts and polling
 
-**GPU kicks.** Each frame writes geometry plus UPDATE into the geometry ring.
-It writes FENCE_PR, the partial-render fragment command and UPDATE, followed by
-the final FRAG and UPDATE, into the fragment ring. One combined KCCB kick
-covers both rings, as in pinned Linux `pvr_queue.c:626–780`. The frame path
-waits on no KCCB return slot. Ring space comes from the firmware read offset.
-Completion is detected only from the timelines after the firmware interrupt.
-The firmware-executing checks (`checks/pvr-batch-fw.c` and
-`pvr-depth-blend-fw.c`) confirm the single-kick sequence before the
-frame path switches to it. If the firmware refuses it, the frame keeps two
-kicks, written back to back with no return-slot wait between them; Linux issues
-its final fragment kick in the same way.
+**GPU kicks.** The pinned Linux sequence (`pvr_job.c:697–741`,
+`pvr_queue.c:744–760`), which the renderer already follows: one combined kick
+for the geometry command and the paired partial-render fragment command, then
+the final-fragment kick, which carries the render-target cleanup reference.
+The two kicks are written back to back with no KCCB return-slot wait. Ring
+space comes from the firmware read offset. A rejected kick is therefore
+detected only at the timeline deadline and falls in the retained class.
 
 **Worker waits.** While GPU interrupt delivery is unqualified, the worker waits
-at most one tick on its queue while a frame renders. After the board evidence
-shows every completion arriving by interrupt, the worker blocks until the
-frame deadline. This is the timeout form that section 1.3 permits, with its
-removal condition stated.
+at most one tick on its queue while a frame renders. Once board evidence shows
+every completion arriving by interrupt, it blocks until the frame deadline
+(section 1.3 timeout form).
 
-**Display task.** The display task blocks on the PRESENT reply or a task
-notification, with no `vTaskDelay(1)` between steps. It runs the DE replay
-steps back to back in one burst. It polls at 1 ms only at the two real device
-waits, RCQ finish and frame-end, because no display interrupt is bound or
-qualified. The polls go when the display owner binds the vertical-blank
-interrupt. The IOMMU fault scan runs once at admission. After that it runs
-once per present, in the burst that observes a frame-end, as one burst of
-register reads. It is no longer a gate before each replay request; it only has
-to be exclusive with RCQ polling. The next replay is requested as soon as the
-PRESENT reply arrives and the previous replay has passed its readback. The
-RCQ then loads at the next frame boundary. While frames are presented, the
-display task wakes about 1,000 times a second, once per tick, and each wake
-reads one status register.
+**Display task.** The display task blocks on the PRESENT reply and runs each
+replay as one burst. No display interrupt is bound, so it polls only near frame
+boundaries. After each observed frame-end it blocks with `vTaskDelayUntil`
+until the tick that starts at most 1 ms before the next predicted boundary. The
+prediction is the last observed frame-end plus 16.667 ms. It then reads the
+status word once per tick until it sees RCQ finish or frame-end. A missed
+observation only delays retirement. Each frame costs about 3 wakes: the
+PRESENT notification and two status reads around the boundary.
+
+The status word is `RTMX_GLB_STS` of display 1, DE + `0x8144`: bit 0 frame-end,
+bit 2 RCQ finish, bit 3 RCQ accept (pinned `de_top.c:131–141`). On DE352
+(`de_top.c:270, 299`) one write-one-to-clear clears it (`de_top.c:1030–1042`).
+The write-1-then-0 sequence at `de_top.c:1060–1068` applies only to DE210. The
+frame-end clear writes 1 to bit 0 and 0 to bits 2 and 3, as
+`a733_display_engine.c:196` does today, so it leaves RCQ finish and accept
+untouched.
+
+**IOMMU fault check.** The display image admits only master 8 (access mask
+`0x100`), so the full fault scan is 22 reads: 18 bank registers and 4 micro
+registers. In each burst that observes a frame-end, before any slot return,
+the task reads the bank, L1 and L2 status of both banks and master 8's micro
+status, 7 reads. It runs the full scan only when one is nonzero. A fault stops
+further replays and MMIO and retains as stated above. A replay issued between
+a fault and its detection is safe: master 8 is read-only and the slots stay
+LENT. The full scan also runs at admission and shutdown.
 
 ## Memory placement and cache policy
 
-| Region | GPU page size and mapping | CPU writes | Cache maintenance per frame |
+| Region | GPU mapping | CPU writes | Cache maintenance per frame |
 | --- | --- | --- | --- |
-| Small region | 4 KiB pages, read-only to the GPU, about 48 leaf PTEs | Programs once at OPEN; commands by the worker; indices and batches by the producer | Clean the bytes written |
-| Vertex area | One 2 MiB page, read-only | By the producer | Clean the byte ranges written |
-| Texture area | 2 MiB pages, read-only | By the producer, once per upload | Clean the byte ranges written |
-| Output slots | 2 MiB pages, read-write, each followed by an unmapped 2 MiB gap | Guard lines once at OPEN | Invalidate the two guard lines of the rendered slot; invalidate a read-back frame once before lending it |
+| Small region | 4 KiB pages, read-only, about 48 PTEs | Programs at OPEN; commands; indices and batches | Clean bytes written |
+| Vertex area | One 2 MiB page, read-only | Producer | Clean ranges written |
+| Texture area | 2 MiB pages, read-only | Producer, once per upload | Clean ranges written |
+| Output slots | 4 KiB pages over the frame only, read-write | Two marker lines per frame | Clean markers before the kick; invalidate them after; invalidate a read-back frame once |
 | Depth and stencil | None; ZLS base unmapped | None | None |
 | Firmware contexts, rings, timelines | Existing non-cacheable pool | Existing | None |
 
-Within a 2 MiB GPU address region all mappings share one page size
-(`pvr_gpu_vm.c:43`). The pinned Linux driver supports device pages from 4 KiB
-to 2 MiB (`pvr_mmu.c:32–57`), so 2 MiB pages are within the reference driver's
-range, but they are unqualified on this board. The DE reads slots through
-system-IOMMU master 8, which has only 4 KiB pages. The pinned
-`sunxi-iommu-pgtable.c:173–199` writes 4 KiB PTEs under 1 MiB directory
-entries, whatever size the IOMMU core passes. A 720p RGB565 frame is 450 pages,
-so the DE fetch costs at most 450 page walks per scanned frame. That is 27,000
-a second at 60 Hz, about one every 35 µs or every 1.6 scanlines.
+Every region and slot is preceded and followed by unmapped GPU address space of
+at least 2 MiB, so any GPU write outside a frame faults. Within one 2 MiB GPU
+region all mappings share a page size (`pvr_gpu_vm.c:43`). Pinned Linux pegs
+the device page to the host page size (`pvr_mmu.c:25–30`), so 2 MiB device pages
+are unexercised by the reference driver. Writable slots therefore keep 4 KiB
+pages, written once at OPEN. The read-only vertex and texture areas use 2 MiB
+pages after the board item below passes. The fallback is 64 KiB pages, also
+listed in `pvr_mmu.c`, with the same unmapped gaps. Slots move to 2 MiB pages
+only after that item passes. The DE reads slots through system-IOMMU master 8
+with 4 KiB pages (`sunxi-iommu-pgtable.c:173–199`): 450 page walks per 720p
+frame, about 27,000 a second.
 
-No CPU stores reach slot pixels after OPEN. A line that the CPU prefetches
-speculatively stays clean, so it cannot overwrite GPU output, and the display
-reads DRAM directly. The firmware's job-coherency flush precedes the final
-timeline update, and the display reads a slot only after that update.
+**Freshness markers.** Before each kick the worker writes a 64-byte marker that
+includes the frame sequence number into the first and last lines of the frame,
+and cleans both lines. After completion it invalidates them and requires that
+the GPU overwrote both. A CPU line prefetched later stays clean, so it cannot
+overwrite GPU output. Read-back sessions also keep today's full poison fill
+(`pvr_render_service.c:187, 320`), so an unwritten tile shows as poison in the
+host comparison. They drop it only after board evidence shows full tile
+coverage. Scanout skips it.
 
-**Barriers.** These are the targets once weaker barriers are qualified in
-`a733_mmio.h`. Until then the existing `DSB SY` forms stay.
-
-- CCCB command words are plain stores into non-cacheable memory, in place of
-  today's store-release per 32-bit word in `transfer()`.
-- One `DMB OSHST` after the command words and before the ring write offsets.
-  One more before the KCCB doorbell, which is the Linux `writel` ordering.
-- One cache-maintenance pass over every range cleaned for the frame, then one
-  `DSB SY` to complete it. Today each `aarch64_device_cache` call issues a
-  leading and a trailing `DSB SY`.
+**Barriers.** Until weaker forms are qualified in `a733_mmio.h`, the existing
+`DSB SY` forms stay. The targets: plain stores for CCCB words in place of a
+store-release per word; one `DMB OSHST` before the ring write offsets and one
+before the KCCB doorbell.
 
 ## Synchronization across cores
 
-The GPU worker is the only writer of render state, slot states, batch copies
-and command pages. Producers and consumers communicate with it only through the
-existing service request queue, whose critical sections order a producer's
-stores before the worker's receive. Data-cache maintenance by virtual address
-to the point of coherency is broadcast to every core in the shareable domain.
-The worker can therefore clean bytes that a producer on another core wrote. The
-worker reads the timelines and the partial-render count with acquire loads,
-the fragment timeline first, as it does today. The interrupt handler only posts
-a wake message. The display returns a slot only after the retire rule above,
-so that hand-off needs no CPU-side ordering beyond the request queue.
+The GPU worker alone writes render state, slot states, batch copies and
+command pages. Producers and consumers reach it only through the service request
+queue, whose critical sections order a producer's stores before the worker's
+receive. Cache maintenance by virtual address to the point of coherency is
+broadcast in the shareable domain, so the worker can clean bytes another core
+wrote. The worker reads timelines and firmware words with acquire loads,
+fragment timeline first. The interrupt handler only posts a wake message.
 
-**Placement.** Once the multicore work admits the A76 cores for the graphics
-images, the GPU worker runs on core 6 and the display task on core 7. Until
-then they run on A55 core 1, because USB and the service tasks stay on core
-0. GPU SPI 95 is routed to the worker's core, so a completion wake needs no
-inter-processor interrupt (IPI). The worker's PRESENT notification to the
-display task costs at most one IPI per frame.
+**Placement.** Once the multicore work admits the A76 cores, the GPU worker
+runs on core 6 with GPU SPI 95 routed there, so a completion wake needs no
+inter-processor interrupt (IPI). The display task does register replay and
+polling, which is service work, and runs on A55 core 1. The PRESENT
+notification crosses from core 6 to core 1 at one IPI per frame. Until the A76
+cores are admitted both run on core 1, and USB and the service tasks stay on
+core 0.
 
 ## Reuse and removal
 
-The design reuses the paired geometry and fragment rings, the timelines, the
-second render-target record, the PRESENT and RELEASE tickets, the Mesa
-producer scripts, the TV0 RCQ replay, the authenticated envelope, the graphics
-lease and the existing free-list grow path.
+Reused: the paired rings and timelines, the second render-target record, the
+PRESENT and RELEASE tickets, the Mesa producer scripts, the TV0 RCQ replay, the
+authenticated envelope, the graphics lease, free-list reconstruction, and the
+read-back poison fill.
 
-It removes:
+Removed:
 
-- the draft, the snapshot copy, the 64 KiB upload and download slots and the
-  per-reply pixel output, for every draw mode;
-- the poison fill of the output. The background clear writes every pixel of
-  every frame;
+- the draft, snapshot copy, 64 KiB upload and download slots and per-reply
+  pixel output, for every draw mode;
+- free-list grow dispatch and its shutdown drain, and the `initial_pages`,
+  `grow_pages` and `threshold` fields of the profile-5 lease profile;
 - the zero-fill and copy of the maximum-size texture and geometry areas;
-- the DRAM depth attachment, its guard pages, its CPU initialization (32 MiB
-  plus 8 KiB per frame at 1080p) and its store;
-- the per-page `a733_gpu_identity_mapped` translations. They run once at OPEN,
-  and the mappings cannot change before DISPOSE;
-- the per-word guard loop over the frame, replaced by two guard lines;
-- the per-vertex position check. Programmable vertex shaders compute positions
-  on the GPU, so no CPU check can see them. The PBE render-target bounds and
-  the GPU MMU confine writes. A hang or garbage geometry reaches the timeline
-  deadline and is retained. Clipped-triangle conformance stays pending board
-  evidence;
-- the per-index check, covered by the three index rules above;
+- the DRAM depth attachment, its guard pages, its CPU initialization and store;
+- the per-page `a733_gpu_identity_mapped` translations, which run once at OPEN;
+- the per-word guard loop over the frame; unmapped neighbours confine
+  overruns, and the markers detect unwritten output;
+- the scanout poison fill;
+- the per-vertex position check, which cannot see shader-computed positions;
+  the PBE render-target bounds and the GPU MMU confine writes;
+- the per-index check, covered by the three index rules;
 - the RGBA8-to-RGB565 conversion and the frame copies in `apps/gpu-display`;
-- the second KCCB kick's return-slot wait and the per-word store-release.
-
-Guard coverage is reduced in one place. A write into a slot's page-rounding
-padding after the trailing guard line is not detected. That padding belongs to
-the same slot and holds no other data. Anything beyond it reaches the unmapped
-gap and faults in the GPU MMU.
+- the KCCB return-slot waits and the per-word store-release;
+- the per-replay IOMMU scan gate and per-tick display polling between
+  boundaries.
 
 ## Budgets
 
-The baselines are counted from the code at the integration base, for a
-1920 × 1080 profile-4 frame and the 1280 × 720 profile-2 display frame. They
-become measured when the existing harnesses gain the counters.
-`checks/gpu-texture-runtime.py` already runs the linked image's frame path
-under Unicorn. It gains hooks that count:
+Baselines are counted from the integration base for a 1920 × 1080 profile-4
+frame and the 1280 × 720 profile-2 display frame. They become measured
+baselines when the existing harnesses gain counters; no new harness is added.
 
-- instructions, `AT` instructions, `DSB` and `DMB` instructions, cache
-  maintenance calls, and `DC` operations multiplied by 64 bytes;
-- bytes stored by region;
-- KCCB kicks, return-slot waits, worker wake-ups and IPIs;
-- instructions and context switches between completion and the next kick.
+- **Frame-path emulation**, `checks/gpu-texture-runtime.py`, runs the linked
+  frame path under Unicorn and gains hooks for instructions, `AT`, `DSB`,
+  `DMB`, cache-maintenance calls and bytes, bytes stored by region, kicks,
+  waits, wake-ups, IPIs and context switches.
+- **Display replay model**, `checks/gpu-display-replay.py`, gains counters for
+  task wakes, register accesses and IOMMU reads, an assertion that frame-end
+  clears never set bits 2 or 3, and a slot-ring model. The model replays the
+  retire rule over frame-end timestamps. It reports how long after each
+  frame-end a slot becomes FREE and the largest render time that sustains
+  60 Hz.
+- **VM check**, `checks/pvr-gpu-vm.c`, counts leaf PTEs and checks that each
+  slot's neighbours are unmapped.
 
-`checks/gpu-display-replay.py` gains counters for display-task ticks, register
-accesses and IOMMU scans per present, and for the master-8 PTEs that the DE
-fetch touches. No new harness is added.
-
-| Metric | Baseline | Target |
-| --- | --- | --- |
-| CPU bytes stored by the worker per frame | 60.2 MB at 1080p; 17.4 MB at 720p | At most 17 KiB: command words plus batch copies |
-| CPU cache maintenance per frame | 68.5 MB at 1080p; 21.1 MB at 720p | Bytes written plus 128 bytes of guards; zero slot bytes on scanout |
-| `AT` translations per frame | About 38,000 at 1080p, plus about 8,100 for read-back | Zero |
-| Worker tick waits caused by CPU work | About 65 at 1080p; about 20 at 720p | Zero |
-| Guard-loop iterations per frame | 2,074,624 at 1080p, plus 2,048 for depth guards | 32 |
-| KCCB kicks and return-slot waits per frame | Two kicks, two waits | One kick, no wait (two kicks if the firmware refuses one) |
-| Worker wake-ups per frame beyond interrupts | One per tick of rendering | At most two once delivery is qualified (SUBMIT, RELEASE) |
-| Client wake-ups per frame | One per tick of rendering (STATUS poll) | At most two |
-| Worker instructions per frame, 16 batches | Not measured | At most 100,000 |
-| `DSB` and `DMB` per frame | Not measured; two `DSB SY` per maintenance call plus one at each ring publish | Once qualified: one `DSB SY` and two `DMB OSHST` per kick |
-| GPU idle gap per frame, completion to next kick | Not measured | No tick wait; counted in instructions and context switches |
-| Copies per input byte after transport | Three; the texture is copied every frame | At most one; the texture once per upload |
-| Copies per displayed pixel byte | Three, plus two SHA-256 passes | Zero |
-| Copies per read-back byte | Three, including the USB FIFO write | One, the USB FIFO write |
-| Queue round trips to read back a frame | 254 at 1080p; 114 at 720p | Two |
-| GPU interrupt to RCQ submit | Not applicable; frames are presented after CLOSE | No tick wait, at most two context switches and one IPI |
-| Display-task ticks per present outside device waits | About 40: 22 scan steps and 18 replay steps, one per tick | Zero; RCQ-finish and frame-end waits within one frame period |
-| Register accesses and IOMMU scans per present | About 38 accesses; one scan that gates the replay | About 38 accesses in bursts plus one status read per tick of device wait; one scan, not gating |
-| GPU leaf PTEs per session | About 9,000 at 1080p profile 2 (4 KiB pages) | About 60, checked in `checks/pvr-gpu-vm.c` |
-| Master-8 page walks per scanned 720p frame | 450 (4 KiB IOMMU pages) | 450; the IOMMU has no larger page |
-| CPU depth initialization per frame | 32 MiB plus 8 KiB at 1080p | Zero; no DRAM depth |
-| Partial renders per admitted frame | Not checked | Zero; a nonzero count fails the frame |
-| Shutdown, stop request to PMIC park | GPU closed before TV0 fetch | Inside the 2-second HDMI stop reserve |
-| Lease bytes | 36.7 MB at 1080p profile 2 | 29.4 MB at 1080p read-back; 21.0 MB at 720p scanout |
+| Metric | Baseline | Target | Measured by |
+| --- | --- | --- | --- |
+| CPU bytes stored by the worker per frame | 60.2 MB at 1080p; 17.4 MB at 720p | Scanout: at most 17 KiB plus 128 bytes of markers. Read-back adds the 8.3 MB poison at 1080p until tile coverage is shown | Frame-path emulation |
+| CPU cache maintenance per frame | 68.5 MB at 1080p; 21.1 MB at 720p | Bytes written plus 256 bytes for markers; a read-back frame once | Frame-path emulation |
+| `AT` translations per frame | About 38,000 at 1080p, plus about 8,100 for read-back | Zero | Frame-path emulation |
+| Worker tick waits caused by CPU work | About 65 at 1080p; about 20 at 720p | Zero | Frame-path emulation |
+| Output check iterations per frame | 2,074,624 guard words at 1080p, plus 2,048 depth guards | Two 64-byte marker comparisons | Frame-path emulation |
+| KCCB kicks and return-slot waits per frame | Two kicks, two waits | Two kicks, no wait | Frame-path emulation |
+| Worker wake-ups per frame beyond interrupts | One per tick of rendering | At most two once delivery is qualified | Frame-path emulation |
+| Client wake-ups per frame | One per tick of rendering | At most two | Frame-path emulation |
+| Worker instructions per frame, 16 batches | Not measured | At most 100,000 | Frame-path emulation |
+| GPU idle gap, completion interrupt to next kick, excluding producer time | Not measured | At most 5,000 instructions to the input return, at most 100,000 from SUBMIT to kick, at most 2 worker context switches, no tick wait | Frame-path emulation |
+| `DSB` and `DMB` per frame | Not measured; two `DSB SY` per maintenance call, one per ring publish | Measured first; then two `DMB OSHST` per kick and one `DSB SY` per maintenance call | Frame-path emulation |
+| Copies per input byte after transport | Three; texture every frame | At most one; texture once per upload | Frame-path emulation |
+| Copies per displayed pixel byte | Three, plus two SHA-256 passes | Zero | Frame-path emulation |
+| Copies per read-back byte | Three, including the USB FIFO write | One | Frame-path emulation |
+| Queue round trips to read back a frame | 254 at 1080p; 114 at 720p | Two | Frame-path emulation |
+| GPU interrupt to RCQ submit | Not applicable; frames are presented after CLOSE | No tick wait, at most two context switches and one IPI | Frame-path emulation |
+| Display-task wakes per second while presenting | About 1,000 | At most 180 (3 per frame) | Display replay model |
+| Display-task ticks per present outside device waits | About 40 | Zero | Display replay model |
+| Register accesses per present | 14 replay accesses, one status read per tick of each wait, a 22-read scan before each replay | 14 replay accesses, 7 IOMMU reads, at most 2 status reads per boundary; 22-read scan only on a nonzero status | Display replay model |
+| Delay from frame-end to slot return; largest render time at 60 Hz with four slots | Not modeled | At most 1.2 ms; at least 15 ms | Display replay model |
+| GPU leaf PTEs per session, written at OPEN | About 9,000 at 1080p profile 2 | About 4,100 at 1080p read-back, 1,850 at 720p scanout; about 4,260 and 2,010 with 64 KiB fallback pages | VM check |
+| Master-8 page walks per 720p frame | 450 | 450; the IOMMU has no larger page | VM check |
+| CPU depth initialization per frame | 32 MiB plus 8 KiB at 1080p | Zero | Frame-path emulation |
+| Partial-render signal reads per frame | None | Three words; a nonzero word retains | Frame-path emulation |
+| Parameter-buffer backing reserved at OPEN | (maximum + 28) × 4 KiB, grown inside it | (16,384 + 28) × 4 KiB, 67.2 MB; no grow event | Frame-path emulation |
+| Lease bytes, excluding the parameter buffer | 36.7 MB at 1080p profile 2 | 29.4 MB at 1080p read-back; 21.0 MB at 720p scanout | VM check |
+| Shutdown, stop request to PMIC park | GPU closed before TV0 stops | Inside the 2-second HDMI stop reserve | Display replay model |
 
 ## Changes needed from other owners
 
-- **GPU runtime** (`pvr_gpu_service.c`, `pvr_cccb.c`,
-  `gpu_graphics_memory.c`, `gpu_disposal.c`, `pvr_gpu_service.h`):
-  - held PRESENT and READ replies, answered by task notification;
-  - a `timed()` with the two wait forms stated under "Worker waits";
-  - the single combined kick, ring space from the firmware read offset, and
-    plain stores for CCCB words;
+- **GPU runtime** (`pvr_gpu_service.c`, `pvr_cccb.c`, `pvr_free_list.c`,
+  `gpu_graphics_memory.c`, `gpu_disposal.c`):
+  - held PRESENT and READ replies answered by task notification, and the two
+    worker wait forms;
+  - ring space from the firmware read offset, no return-slot wait, and plain
+    stores for CCCB words;
   - deletion of the TEXTURE WRITE upload-chunk copy (`pvr_gpu_service.c:1020`)
-    and the 64 KiB output accessor, in the change sequence that lands profile 5;
-  - the lease acquired with `device_memory_acquire_aligned` at 2 MiB, the VM
-    plans of the table above, no depth region, an import count, and DISPOSE
-    refused while any extent is imported.
-- **GPU checks** (`checks/pvr-batch.c`, `pvr-texture.c`, `pvr-depth-blend.c`,
-  `pvr-gpu-vm.c`, `gpu-batch.*`, `gpu-resource-disposal.py`): `pvr-batch.c`
-  gains the profile-5 assertions, using the pinned Mesa packers it already
-  uses: `clip_mode` and `wclampen`, `zloaden` and `zstoreen` clear,
-  `down_scale`, and the PBE pack mode and swizzle. The profile-3 and profile-4
-  cases in `pvr-texture.c` and `pvr-depth-blend.c` are deleted with their
-  code. `pvr-gpu-vm.c` counts leaf PTEs.
-- **Build** (`cmake/gpu.cmake`, `a733-gpu-application.cmake`,
-  `a733-accelerators.cmake`): draw-mode selection becomes program-set
-  selection.
-- **Display and IOMMU** (`a733_display_engine.c`, `a733_display_framebuffer.c`,
-  `a733_iommu.c`):
-  - a poll result that separates progress from a device wait, so the caller
-    can run bursts;
-  - a replay that ends at RCQ finish and readback, and a separate frame-end
-    step of one read and one write-to-clear;
-  - an IOMMU scan that runs as one burst;
-  - import of N read-only slot extents into the master-8 tables at admission,
-    and their removal with a TLB invalidation at shutdown.
-- **Primary agent:**
-  - route SPI 95 to the GPU worker's core;
-  - admit cores 6 and 7 for the graphics images;
-  - a multi-range cache-maintenance call in `arch/aarch64/device_memory.c` with
-    one trailing `DSB SY`.
+    and the 64 KiB output accessor;
+  - the lease at 2 MiB alignment with the VM plans above, no depth region, an
+    import count, and DISPOSE refused while an extent is imported;
+  - the global free list at initial = maximum with zero grow, the three profile
+    fields dropped, GROW treated as unknown state, and grow dispatch and its
+    shutdown drain removed;
+  - the one-entry partial-render array and the three signal reads.
+- **GPU checks**: `pvr-batch.c` asserts `clip_mode`, `wclampen`,
+  `down_scale`, the PBE pack mode, and `zloaden` and `zstoreen` clear in both
+  fragment commands; the profile-3 and profile-4 cases in `pvr-texture.c` and
+  `pvr-depth-blend.c` are deleted with their code; `pvr-gpu-vm.c` gains the
+  counts above.
+- **Build** (`cmake/gpu.cmake` and the image files): draw-mode selection
+  becomes program-set selection.
+- **Display and IOMMU**:
+  - a replay that ends at RCQ finish and readback, with a separate frame-end
+    step of one read and one clear of bit 0;
+  - the 7-read IOMMU status check, and import and removal of slot extents in
+    the master-8 tables;
+  - binding and qualification of the TCON TV vertical-blank interrupt, which
+    removes the remaining tick poll;
+  - qualification of IOMMU interrupts SPI 170 and 171, which removes the
+    per-present status reads.
+- **Primary agent**: route SPI 95 to core 6 and admit cores 6 and 7 for the
+  graphics images. A multi-range cache-maintenance call with one trailing
+  `DSB SY` is requested only if the frame-path counters show the existing
+  `aarch64_device_cache` calls within the frame budget.
 
 ## Left out
 
-- **More than one frame in flight on the GPU.** The second render-target
-  record already exists. The blockers are the single input region and the
-  parameter-buffer bound, which would double. The GPU idle-gap row measures
-  the cost of waiting.
-- **Partial renders.** Mesa's scratch path for them would need 14.7 MB for
-  unresolved 4× colour at 720p, a DRAM depth attachment, and load programs.
-- **4× multisampling above 1280 × 720, and 8×.** No consumer needs them.
-- **Double-buffered input.** With resident textures the producer writes a few
-  kilobytes per frame.
-- **On-board shader compilation, untrusted shaders and a board-side
-  instruction scan.** The scan would repeat the host decode with a second
-  decoder for the same instruction set.
-- **sRGB render targets.** Mesa accumulates them as F16, which would need a
-  second fragment variant of every pipeline.
-- **Other topologies, instancing, primitive restart, storage resources and the
-  optional texture formats.** No consumer uses them.
-- **On-board mipmap generation.** The host generates mip chains.
-- **Mailbox presentation, framebuffer compression and evidence hashing on the
-  scanout path.** The DE cannot read compressed frames, and hashing stays in
-  the evidence image.
-- **Display modes other than 1280 × 720 RGB565, and the vertical-blank
-  interrupt.** They belong to the display owner.
+- **More than one frame in flight on the GPU.** It needs a second input region
+  and doubles the parameter buffer; the idle-gap row measures the cost.
+- **Partial-render support.** Mesa's path needs 14.7 MB of unresolved 4× colour
+  at 720p, DRAM depth and load programs.
+- **4× above 1280 × 720, 8×, sRGB render targets** (a second F16 fragment
+  variant per pipeline), other topologies, instancing, primitive restart,
+  storage resources, optional formats, on-board mip generation and on-board
+  shader compilation. No consumer uses them.
+- **Double-buffered input.** Resident textures leave a few kilobytes per frame.
+- **Mailbox presentation, framebuffer compression and scanout hashing.** The DE
+  cannot read compressed frames, and hashing stays in the evidence image.
 
 ## Board evidence that confirms the design
 
 - HDMI capture of a 60 Hz sequence of alternating high-contrast frames, with
-  the GPU rendering while the DE scans, shows no torn or stale lines.
-- Retirement isolation: the GPU writes a frame-unique marker into a slot's
-  first and last rows as soon as the slot returns. The HDMI capture never shows
-  a marker in a frame presented before that return. One run uses the
-  conservative rule and one a one-frame-end candidate.
-- DE underflow status stays clear during the sequence.
-- Every completion arrives by interrupt, and none is detected first by the
-  one-tick poll.
-- Guard lines stay intact. The partial-render count stays zero at the admitted
-  limits. No GPU MMU fault occurs, which shows that 2 MiB pages work and that
-  the unmapped ZLS base is never accessed.
-- The shutdown sequence completes inside the HDMI stop reserve and the lease
-  returns to the pool.
-- Frames from each feature (clipped triangles, mip levels, ETC2 and EAC
-  textures, 4× multisampling, the blend variants) match the host software
-  renderer within the conformance tolerances.
-- Frame times are measured under [validation.md](../validation.md).
+  the GPU rendering while the DE scans, shows no torn or stale lines, and DE
+  underflow status stays clear.
+- Retirement isolation: the GPU writes a frame-unique marker into a slot's first
+  and last rows as soon as the slot returns, and the capture never shows it in
+  a frame presented before that return. One run uses the conservative rule and
+  one a one-frame-end candidate, which would reduce scanout to three slots.
+- Large pages: a texture drawn from a known pattern at a known physical offset
+  inside a 2 MiB read-only page renders that pattern, and canary values placed
+  just outside the page never appear in the frame. Slots move to 2 MiB pages
+  only after this passes, and a second run then confirms that canaries just
+  past each slot's physical run are unchanged.
+- Partial-render signals: a session with a 28-page free list and a 16-batch
+  full-screen frame records which of the three words or a GROW event changes.
+- Full tile coverage: every conformance frame read back over poison contains
+  no poison, which removes the read-back poison fill.
+- Every completion arrives by interrupt before the one-tick poll sees it. No
+  freshness marker survives. No GPU MMU fault occurs, so the unmapped ZLS base
+  is never accessed.
+- Shutdown completes inside the HDMI stop reserve and the lease returns to the
+  pool.
+- Frames from each feature match the host software renderer within the
+  conformance tolerances. Frame times are measured under
+  [validation.md](../validation.md).
+
+## Appendix: reasons for selected decisions
+
+**Program trust.** The board does not verify shader behavior. The envelope
+admits only host-signed program sets. Before signing, the host producer decodes
+every USC and PDS instruction with the pinned Mesa disassembler and refuses
+store, atomic, scratch and DMA-write instructions. At OPEN the worker refuses
+metadata that declares scratch memory, spills, barriers, atomics or storage
+writes, an attribute past the stride, or a PDS data-segment template with a
+nonzero address field. The worker writes every address in a PDS data segment
+from validated batch fields. A program that wrote memory anyway could reach the
+general-heap fence and static data (`0x8000000000`), the render-target state
+(`0x8004000000` onward), the context-switch state and border table
+(`0x8008000000`), and the output slots.
+
+**Retire rule.** The pinned display driver issues an RCQ update and polls for
+RCQ finish (`sunxi_de.c:715–775`, `de_top.c:1077–1082`) before it signals the
+vertical-blank event. Neither it nor gpu-display.md establishes when the DE
+stops fetching the old address, or whether the source-address readback returns
+the pending or the active register. Two frame-ends after the readback cover
+both cases. With one present per 16.667 ms period, slot X loaded at boundary
+B(k) returns at B(k+3) plus the observation delay, and is next presented at
+B(k+4). The render window is the period minus that delay and the replay burst,
+which is the 15 ms budget.
