@@ -2,6 +2,7 @@
 /* Register definitions and sequences adapted from the A733 HDMI driver.
  * Copyright (C) 2016 Allwinner. */
 #include "a733_hdmi_phy.h"
+#include "a733_range.h"
 
 int a733_hdmi_timing(enum a733_hdmi_mode m,struct a733_hdmi_timing *t){
     if(!t)return -1;
@@ -145,12 +146,10 @@ static int phy_transaction(struct a733_hdmi_phy *p){
         if(a733_hdmi_write(b,A733_HDMI_BASE+(q==2?0x3022:0x3023),1,
             q==2?v>>8:v&255)!=1)return -1;
     }else if(q==4 || q==8){
-        if(b->now>UINT64_MAX-5000)return a733_hdmi_fail(b);
-        p->operation_deadline=b->now+5000;
+        if(!a733_deadline_after(b->now,5000,&p->operation_deadline))return a733_hdmi_fail(b);
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x3026,1,q==4?0x10:1)!=1)return -1;
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
-        if(b->now>UINT64_MAX-10)return a733_hdmi_fail(b);
-        p->until=b->now+10;
+        if(!a733_deadline_after(b->now,10,&p->until))return a733_hdmi_fail(b);
     }else if(q==5 || q==9){
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
         if(b->now<p->until)return 0;
@@ -184,8 +183,8 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         if(p->index==4)s.value=b->request.mode==A733_HDMI_720P60?0x1f0000:0x0f0000;
         if(a733_hdmi_field(b,&s)!=1)return -1;
         if(++p->index==sizeof(pll_steps)/sizeof(pll_steps[0])){
-            if(b->now>UINT64_MAX-20000)return a733_hdmi_fail(b);
-            p->operation_deadline=b->now+20000;p->stage=4;p->index=0;}
+            if(!a733_deadline_after(b->now,20000,&p->operation_deadline))return a733_hdmi_fail(b);
+            p->stage=4;p->index=0;}
         return 0;
     }
     case 4:
@@ -194,16 +193,16 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
         if(!(x&1)){p->locks=0;return 0;}
         if(++p->locks<2)return 0;
-        if(b->now>UINT64_MAX-20)return a733_hdmi_fail(b);
-        p->until=b->now+20;p->stage=5;return 0;
+        if(!a733_deadline_after(b->now,20,&p->until))return a733_hdmi_fail(b);
+        p->stage=5;return 0;
     case 5:
         if(b->now<p->until)return 0;
         if(field(b,A733_HDMI_PHY_BASE+0x20,4,0x08000000,0x08000000)!=1)return -1;
         p->stage=6;return 0;
     case 6:
         if(field(b,A733_HDMI_BASE+0x3000,1,0x20,0)!=1)return -1;
-        if(b->now>UINT64_MAX-5)return a733_hdmi_fail(b);
-        p->until=b->now+5;p->stage=7;return 0;
+        if(!a733_deadline_after(b->now,5,&p->until))return a733_hdmi_fail(b);
+        p->stage=7;return 0;
     case 7:
         if(b->now<p->until)return 0;
         if(field(b,A733_HDMI_BASE+0x3000,1,0x20,0x20)!=1)return -1;
@@ -229,8 +228,8 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         p->stage=14;return 0;
     case 14:
         if(field(b,A733_HDMI_BASE+0x3000,1,8,8)!=1)return -1;
-        if(b->now>UINT64_MAX-2500)return a733_hdmi_fail(b);
-        p->operation_deadline=b->now+2500;p->until=b->now+5;
+        if(!a733_deadline_after(b->now,2500,&p->operation_deadline))return a733_hdmi_fail(b);
+        p->until=b->now+5;
         p->locks=0;p->index=0;p->stage=15;return 0;
     case 15:
         /* The source samples lock every 5us for 2.5ms. A tick-paced owner may

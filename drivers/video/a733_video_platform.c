@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_platform.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07062000)
 #define R_CCU UINT32_C(0x07010000)
@@ -140,7 +141,7 @@ static int prep_step(struct a733_video_decoder *p,unsigned codec)
     case 0:return update(u,VE,15,7);
     case 1:
         if(!update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?BIT(16):0))return 0;
-        if(!local) {if(u->last_now>UINT64_MAX-10)return 0;p->reset_until=u->last_now+10;}
+        if(!local&&!a733_deadline_after(u->last_now,10,&p->reset_until))return 0;
         return 1;
     case 2:return update(u,local?VE+4:CCU+0xa8c,local?BIT(16):BIT(18),local?0:BIT(18));
     case 3:return local?1:update(u,VE+0x804,0x11,0x11);

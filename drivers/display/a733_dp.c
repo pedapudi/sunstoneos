@@ -4,9 +4,8 @@
  * Copyright (c) 2007-2022 Allwinnertech Co., Ltd. */
 #include "a733_dp_internal.h"
 #include "a733_dp_regs.h"
+#include "a733_range.h"
 #include <string.h>
-static int separate(const void *a,size_t n,const void *b,size_t m)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 int a733_dp_fault(struct a733_dp *d,enum a733_dp_error e)
 {if(d&&!d->failed){d->failed=1;d->result.error=e;d->result.state=A733_DP_FAILED_RETAINED;d->result.retained=1;}return 0;}
 static int live(struct a733_dp *d)
@@ -14,8 +13,8 @@ static int live(struct a733_dp *d)
  uint64_t now;
  if(!d||d->self!=d||d->failed)return 0;
  if(memcmp(&d->config,&d->sealed,sizeof(d->config))||d->config.ops.admit(d->config.context,0)!=1)return a733_dp_fault(d,A733_DP_AUTHORITY);
- if(d->config.ops.now(d->config.context,&now)!=1||now<d->last_now||now>=d->config.deadline)return a733_dp_fault(d,A733_DP_TIME);
- d->last_now=now;return 1;
+ if(d->config.ops.now(d->config.context,&now)!=1||!a733_deadline_admit(now,&d->last_now,d->config.deadline))return a733_dp_fault(d,A733_DP_TIME);
+ return 1;
 }
 int a733_dp_read(struct a733_dp *d,uintptr_t a,unsigned n,uint32_t *v)
 {if(!live(d))return 0;if(d->config.ops.read(d->config.context,a,n,v)!=1)return a733_dp_fault(d,A733_DP_IO);return live(d);}
@@ -124,7 +123,7 @@ static int training(struct a733_dp *d,unsigned eq)
 }
 int a733_dp_init(struct a733_dp *d,const struct a733_dp_config *c)
 {
- if(!d||!c||!separate(d,sizeof(*d),c,sizeof(*c))||d->self||!c->owner||!c->deadline||c->polarity<1||c->polarity>2||c->apb_hz<10000000||c->apb_hz>400000000||c->apb_hz%1000000||!c->ops.admit||!c->ops.read||!c->ops.write||!c->ops.barrier||!c->ops.now||!c->ops.wait)return 0;
+ if(!d||!c||!a733_extents_disjoint_checked((uintptr_t)d,sizeof(*d),(uintptr_t)c,sizeof(*c))||d->self||!c->owner||!c->deadline||c->polarity<1||c->polarity>2||c->apb_hz<10000000||c->apb_hz>400000000||c->apb_hz%1000000||!c->ops.admit||!c->ops.read||!c->ops.write||!c->ops.barrier||!c->ops.now||!c->ops.wait)return 0;
  d->self=d;d->config=*c;d->sealed=*c;d->result.retained=1;return 1;
 }
 int a733_dp_prepare(struct a733_dp *d)
@@ -190,4 +189,4 @@ int a733_dp_stop(struct a733_dp *d)
  d->entered=0;return ok?1:a733_dp_fault(d,A733_DP_STATUS);
 }
 int a733_dp_copy_result(struct a733_dp *d,struct a733_dp_result *out)
-{if(!d||d->self!=d||!out||d->entered||!separate(d,sizeof(*d),out,sizeof(*out)))return 0;*out=d->result;return 1;}
+{if(!d||d->self!=d||!out||d->entered||!a733_extents_disjoint_checked((uintptr_t)d,sizeof(*d),(uintptr_t)out,sizeof(*out)))return 0;*out=d->result;return 1;}

@@ -4,6 +4,7 @@
  * Copyright (C) 2017 Allwinner.
  */
 #include "a733_display_engine.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
 #define DE A733_DE_BASE
@@ -11,15 +12,11 @@
 #define BLD UINT32_C(0x2a1000)
 #define COUNT(a) (sizeof(a) / sizeof(*(a)))
 struct word { uint32_t offset, mask, value; };
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y || (x < y + bn && y < x + an);
-}
 static int plan(unsigned width,unsigned height,unsigned pixel_bytes,unsigned format,
                 const struct a733_de_surface *s,struct a733_de_plan *out)
 {
-    if(!s||!out||overlap(s,sizeof(*s),out,sizeof(*out))||!s->owner||!s->device_address||
+    if(!s||!out||a733_ranges_overlap_or_wrap(s,sizeof(*s),out,sizeof(*out))||
+       !s->owner||!s->device_address||
        (s->device_address&3)||(s->pitch&3)||s->pitch<pixel_bytes*width)return 0;
     uint64_t bytes=(uint64_t)s->pitch*height,limit=UINT64_C(1)<<40;
     if(!bytes||s->device_address>=limit||bytes>limit-s->device_address||
@@ -37,7 +34,8 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surfa
                  struct a733_de_plan *out)
 {
     struct a733_tcon_lcd_plan lcd;
-    if(!t||!out||overlap(t,sizeof(*t),out,sizeof(*out))||!a733_tcon_lcd_plan(t,&lcd))return 0;
+    if(!t||!out||a733_ranges_overlap_or_wrap(t,sizeof(*t),out,sizeof(*out))||
+       !a733_tcon_lcd_plan(t,&lcd))return 0;
     return plan(t->dsi.width,t->dsi.height,4,4,s,out);
 }
 int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
@@ -45,7 +43,8 @@ int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
 static unsigned ring_slots(const struct a733_de_config *,const struct a733_de_plan *,uint64_t *);
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {
-    if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
+    if (!d || !c || a733_ranges_overlap_or_wrap(d, sizeof(*d), c, sizeof(*c)) ||
+        d->initialized || !deadline ||
         !c->lease || !c->ops.admit || !c->ops.read32 || !c->ops.write32 ||
         !c->ops.barrier || !c->ops.now_us) return 0;
     struct a733_de_plan p;
@@ -74,10 +73,9 @@ static void fail(struct a733_de *d, enum a733_de_error error)
 static int time_ok(struct a733_de *d)
 {
     uint64_t n = 0;
-    if (d->config.ops.now_us(d->config.context, &n) != 1 || n < d->last_now || n >= d->deadline) {
+    if (d->config.ops.now_us(d->config.context, &n) != 1 || !a733_deadline_admit(n, &d->last_now, d->deadline)) {
         fail(d, A733_DE_TIME); return 0;
     }
-    d->last_now = n;
     return d->state == A733_DE_PENDING;
 }
 /* Checks supplement authenticated cold/quiescent provenance. They do not

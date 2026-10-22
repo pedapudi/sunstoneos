@@ -1,4 +1,5 @@
 #include "a733_display_native.h"
+#include "a733_range.h"
 #include <string.h>
 
 /* The full walk reads all 8192 uncached table words and translates every
@@ -32,8 +33,8 @@ static int live(struct a733_display_native *n)
 static int now(void *v,uint64_t *out)
 {
     struct a733_display_native *n=v;uint64_t t;
-    if(!live(n)||n->config.now_us(n->config.context,&t)!=1||t<n->last_now)return 0;
-    n->last_now=t;*out=t;return 1;
+    if(!live(n)||n->config.now_us(n->config.context,&t)!=1||!a733_monotonic_advance(t,&n->last_now))return 0;
+    *out=t;return 1;
 }
 static int authority(struct a733_display_native *n,uint64_t d)
 {
@@ -125,11 +126,6 @@ static int panel(void *v,const struct display_request *r,const struct display_ow
 static int unsupported(void *v,const struct display_request *r,const struct display_ownership *o,
                        uint64_t d,struct display_proof *out)
 {(void)v;(void)r;(void)o;(void)d;(void)out;return -1;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 int a733_display_native_init(struct a733_display_native *n,const struct a733_display_native_config *c)
 {
     if(!n||!c||n->initialized||!c->pool||!c->iommu||!c->locks||!c->task||!c->now_us||!c->authorize||!c->panel||
@@ -149,9 +145,9 @@ int a733_display_native_init(struct a733_display_native *n,const struct a733_dis
     const void *objects[]={n,c,c->media,c->pll,c->iommu,c->pool};
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->media),sizeof(*c->pll),sizeof(*c->iommu),sizeof(*c->pool)};
     for(unsigned i=0;i<6;++i){
-        for(unsigned j=i+1;j<6;++j)if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
-        if(!separate(objects[i],sizes[i],(void *)f.cpu,f.bytes)||
-           !separate(objects[i],sizes[i],(void *)t.cpu,t.bytes))return 0;
+        for(unsigned j=i+1;j<6;++j)if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+        if(!a733_ranges_disjoint(objects[i],sizes[i],(void *)f.cpu,f.bytes)||
+           !a733_ranges_disjoint(objects[i],sizes[i],(void *)t.cpu,t.bytes))return 0;
     }
     n->config=*c;n->frame_extent=f;n->table_extent=t;n->tables=c->iommu->tables;
     n->frame_token=(struct display_frame_token){.id=c->frame.generation,.generation=c->frame.generation,
