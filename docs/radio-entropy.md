@@ -75,6 +75,11 @@ erase after a fault. The word and sequence callbacks return three results:
 held after the retries), and -1 for a fault or an invalid caller. The byte
 callback returns 1 or 0; the supplicant treats every refusal as a failure.
 
+In images built with SAE, OpenSSL's random generator requests bytes through
+the supplicant byte callback only while a supplicant is entered: for its seed
+and nonces when it first runs, and again after a fixed number of requests
+([details](radio-security.md#openssl-supplies-the-elliptic-curve-arithmetic)).
+
 The network service treats a temporary word refusal as the failure of one
 FreeRTOS+TCP random-number call and keeps output open. A permanent refusal,
 or any refusal from the sequence callback, closes output. The TCP
