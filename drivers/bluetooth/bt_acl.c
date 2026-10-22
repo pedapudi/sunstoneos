@@ -3,11 +3,11 @@
  * BR/EDR link commands. Reference structures remain external. */
 #include "bt_acl.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
-static int span(const void *p,size_t n) { return p && n && (uintptr_t)p<=UINTPTR_MAX-(n-1); }
 static int private(const struct bt_acl *a,const void *p,size_t n)
 {
-    if(!span(p,n) || !bt_range_disjoint_empty(a,sizeof(*a),p,n) || !bt_range_disjoint_empty(a->hci,sizeof(*a->hci),p,n) ||
+    if(!a733_span_incl_nonempty(p,n) || !bt_range_disjoint_empty(a,sizeof(*a),p,n) || !bt_range_disjoint_empty(a->hci,sizeof(*a->hci),p,n) ||
        !bt_range_disjoint_empty(a->hci->transport.binding.uart,sizeof(struct a733_uart),p,n)) return 0;
     for(unsigned i=0;i<a->hci->transport.count;++i)
         if(!bt_range_disjoint_empty(p,n,a->hci->transport.records[i].storage.bytes,
@@ -209,8 +209,8 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
      * controller's connection accept timeout refuses the peer on air. */
     if(p[11]!=1 || !a->incoming_timeout_us) return release_record(a,r);
     unsigned any=0;for(unsigned j=0;j<6;++j) any|=p[2+j];
-    if(!any || a->hci->transport.now>UINT64_MAX-a->incoming_timeout_us) return fault(a);
-    uint64_t deadline=a->hci->transport.now+a->incoming_timeout_us;
+    uint64_t deadline;
+    if(!any || !a733_deadline_after(a->hci->transport.now,a->incoming_timeout_us,&deadline)) return fault(a);
     struct bt_acl_link *l=0,*unused=0;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) {
         struct bt_acl_link *candidate=&a->links[i];

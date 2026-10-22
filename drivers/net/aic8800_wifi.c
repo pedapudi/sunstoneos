@@ -1,12 +1,10 @@
 /* Native normal-mode D80 management and passive scan. Published ABI/sequence
  * references and explicit RF/channel admission are in docs/radio-wifi.md. */
 #include "aic8800_wifi.h"
+#include "a733_range.h"
 enum { POWER, CALIBRATE, MAC, RESET, VERSION, ME_CONFIG, CHANNELS, START, ADD_IF, SCAN, CONNECT, DISCONNECT };
 static const uint16_t ids[]={0x77,0x69,0x73,0,4,0x1400,0x1402,2,6,0x1000,0x1800,0x1803};
 static const uint16_t sizes[]={69,24,4,0,0,112,254,72,10,376,320,4};
-static int span(const void *p,size_t n){return p&&n<=UINTPTR_MAX-(uintptr_t)p;}
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{return (uintptr_t)a<(uintptr_t)b+bn&&(uintptr_t)b<(uintptr_t)a+an;}
 static uint16_t le16(const uint8_t *p){return (uint16_t)(p[0]|(uint16_t)p[1]<<8);}
 static uint32_t le32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static void put16(uint8_t *p,uint16_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);}
@@ -28,7 +26,8 @@ void aic8800_wifi_observe(struct aic8800_wifi *w,const void *owner,uint64_t now)
 }
 int aic8800_wifi_init(struct aic8800_wifi *w,const struct aic8800_wifi_config *c)
 {
-    if(!span(w,sizeof(*w))||!span(c,sizeof(*c))||overlap(w,sizeof(*w),c,sizeof(*c))||w->initialized||
+    if(!a733_span_excl(w,sizeof(*w))||!a733_span_excl(c,sizeof(*c))||
+        a733_extents_overlap_prechecked((uintptr_t)w,sizeof(*w),(uintptr_t)c,sizeof(*c))||w->initialized||
         c->profile!=1||!c->rf_profile_record||!c->channel_policy_record||!c->command_timeout||
         !c->channel_count||c->channel_count>AIC8800_WIFI_CHANNELS||c->power_save>AIC8800_WIFI_POWER_DYNAMIC||
         c->reserved[0]||c->reserved[1]||c->reserved[2])return 0;
@@ -59,8 +58,8 @@ int aic8800_wifi_connect(struct aic8800_wifi *w,const void *owner,const struct a
     uint64_t now,uint64_t deadline)
 {
     if(!w||!w->initialized||w->owner!=owner||w->state!=AIC8800_WIFI_READY||w->held||w->station_held||
-        w->link!=AIC8800_WIFI_LINK_DOWN||w->association_generation==UINT64_MAX||!span(target,sizeof(*target))||
-        overlap(w,sizeof(*w),target,sizeof(*target))||!target->connection_authority||!target->beacon_evidence||
+        w->link!=AIC8800_WIFI_LINK_DOWN||w->association_generation==UINT64_MAX||!a733_span_excl(target,sizeof(*target))||
+        a733_extents_overlap_prechecked((uintptr_t)w,sizeof(*w),(uintptr_t)target,sizeof(*target))||!target->connection_authority||!target->beacon_evidence||
         target->channel_index>=w->config.channel_count||!target->ssid_bytes||target->ssid_bytes>32||
         (target->security!=AIC8800_WIFI_OPEN&&target->security!=AIC8800_WIFI_WPA2_PSK_CCMP)||
         (target->bssid[0]&1)||now<w->last_now||deadline<=now)return 0;

@@ -4,6 +4,7 @@
  * Linux reference structures; no Linux implementation code is included. */
 #include "bt_hci.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 #define HCI_OP_RESET 0x0c03u
 #define HCI_OP_READ_LOCAL_VERSION 0x1001u
 #define HCI_OP_READ_LOCAL_COMMANDS 0x1002u
@@ -261,8 +262,7 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
        !h->transport.staged && h->transport.assembling==h->transport.count &&
        !bt_h4_next(&h->transport,BT_H4_COMPLETE)) {
         uint64_t now=h->transport.now;
-        if(now>UINT64_MAX-h->command_timeout_us) return fail(h);
-        h->command_deadline=now+h->command_timeout_us;
+        if(!a733_deadline_after(now,h->command_timeout_us,&h->command_deadline)) return fail(h);
         if(h->command_deadline>h->initialization_deadline) h->command_deadline=h->initialization_deadline;
         h->opcode=opcodes[h->stage];h->command_tag=h->stage+1;h->command_accepted=0;
         if(bt_h4_command(&h->transport,h->opcode,0,0,h->command_deadline)!=1) return fail(h);
@@ -283,8 +283,7 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
             params[2]=(uint8_t)c->page_window_slots;params[3]=(uint8_t)(c->page_window_slots>>8);n=4;
         } else if(op==0x0c1a) {params[0]=2;n=1;}
         else if(op==0x0c2f || op==0x0c5b) {params[0]=1;n=1;}
-        if(h->transport.now>UINT64_MAX-h->command_timeout_us) return fail(h);
-        h->command_deadline=h->transport.now+h->command_timeout_us;
+        if(!a733_deadline_after(h->transport.now,h->command_timeout_us,&h->command_deadline)) return fail(h);
         if(h->command_deadline>h->configuration_deadline) h->command_deadline=h->configuration_deadline;
         h->opcode=(uint16_t)op;++h->command_tag;h->command_accepted=0;
         if(bt_h4_command(&h->transport,h->opcode,params,n,h->command_deadline)!=1) return fail(h);

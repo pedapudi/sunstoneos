@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_sdp_server.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 static unsigned b16(const uint8_t *p){return ((unsigned)p[0]<<8)|p[1];}
 static uint32_t b32(const uint8_t *p){return ((uint32_t)b16(p)<<16)|b16(p+2);}
 static void p16(uint8_t *p,unsigned v){p[0]=(uint8_t)(v>>8);p[1]=(uint8_t)v;}
@@ -159,8 +160,7 @@ static void request(struct bt_sdp_server *s,struct bt_sdp_server_session *q,
 {
     unsigned n=(unsigned)rx->length-4;const uint8_t *p=rx->bytes+4;
     q->held_rx=rx->serial;uint64_t now=s->l2cap->acl->hci->transport.now;
-    if(now>UINT64_MAX-s->response_us){q->error=BT_SDP_SERVER_EXPIRED;return;}
-    q->deadline=now+s->response_us;
+    if(!a733_deadline_after(now,s->response_us,&q->deadline)){q->error=BT_SDP_SERVER_EXPIRED;return;}
     if(n<5){q->error=BT_SDP_SERVER_SHORT;return;}
     unsigned tid=b16(p+1),kind=p[0],at=5,mask=0,maximum;
     if(b16(p+3)!=n-5){error(q,tid,4);return;}
@@ -182,8 +182,8 @@ static void request(struct bt_sdp_server *s,struct bt_sdp_server_session *q,
            now>=q->query_deadline || q->request_length!=key_length || q->request[0]!=kind ||
            !eq(q->request+1,p+5,key_length-1)||!eq(p+at+1,expected,12)) {error(q,tid,5);return;}
     } else {
-        if(s->next_query==UINT64_MAX || now>UINT64_MAX-s->query_us){error(q,tid,6);return;}
-        q->query=s->next_query++;q->query_deadline=now+s->query_us;q->offset=0;
+        if(s->next_query==UINT64_MAX || !a733_deadline_after(now,s->query_us,&q->query_deadline)){error(q,tid,6);return;}
+        q->query=s->next_query++;q->offset=0;
         q->request[0]=(uint8_t)kind;cp(q->request+1,p+5,key_length-1);q->request_length=key_length;
         struct enc e={q->result,0};
         if(kind==2) {

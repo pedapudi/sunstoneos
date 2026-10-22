@@ -1,14 +1,9 @@
 #include "a733_radio_entropy.h"
+#include "a733_range.h"
 /* Public FreeRTOS+TCP 4.4.2 accessor, declared in FreeRTOS_IP.h. Keeping this
  * declaration local avoids importing the stack configuration into CE users. */
 extern TaskHandle_t FreeRTOS_GetIPTaskHandle(void);
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an && bn && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y &&
-        (x+an<=y || y+bn<=x);
-}
 static int contains(const void *a,size_t n,const void *p,size_t bytes)
 {return a && n && bytes && n<=UINTPTR_MAX-(uintptr_t)a && (uintptr_t)p>=(uintptr_t)a &&
     (uintptr_t)p-(uintptr_t)a<n && bytes<=n-((uintptr_t)p-(uintptr_t)a);}
@@ -20,9 +15,9 @@ static void unlock(atomic_uint *p)
 {atomic_store_explicit(p,0,memory_order_release);}
 static int outside(struct a733_radio_entropy *s,const void *p,size_t n)
 {
-    return separate(s,sizeof(*s),p,n) && separate(s->config.source,sizeof(*s->config.source),p,n) &&
-        separate(s->config.provider_state,s->config.provider_bytes,p,n) &&
-        separate(s->config.qualification_context,s->config.qualification_bytes,p,n) &&
+    return a733_ranges_disjoint_nonempty(s,sizeof(*s),p,n) && a733_ranges_disjoint_nonempty(s->config.source,sizeof(*s->config.source),p,n) &&
+        a733_ranges_disjoint_nonempty(s->config.provider_state,s->config.provider_bytes,p,n) &&
+        a733_ranges_disjoint_nonempty(s->config.qualification_context,s->config.qualification_bytes,p,n) &&
         a733_ce_session_outside(s->engine,p,n);
 }
 static int identity(struct a733_radio_entropy *s)
@@ -45,7 +40,7 @@ static void fault(struct a733_radio_entropy *s)
 int a733_radio_entropy_init(struct a733_radio_entropy *s,const struct a733_radio_entropy_config *input)
 {
     if(!s || s->self || !input || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
-        !separate(s,sizeof(*s),input,sizeof(*input)))return 0;
+        !a733_ranges_disjoint_nonempty(s,sizeof(*s),input,sizeof(*input)))return 0;
     struct a733_radio_entropy_config c=*input;
     if(!c.source || !c.source->initialized || c.source->self!=(uintptr_t)c.source ||
         c.source->engine!=c.source->bound_engine || c.source->active || c.source->fault ||
@@ -60,9 +55,9 @@ int a733_radio_entropy_init(struct a733_radio_entropy *s,const struct a733_radio
     if(e->binding.registry->now!=a733_counter_clock_now || e->binding.registry->context!=c.clock)return 0;
     const void *objects[]={s,input};const size_t sizes[]={sizeof(*s),sizeof(*input)};
     for(unsigned i=0;i<2;++i)
-        if(!separate(objects[i],sizes[i],c.source,sizeof(*c.source)) ||
-            !separate(objects[i],sizes[i],c.provider_state,c.provider_bytes) ||
-            !separate(objects[i],sizes[i],c.qualification_context,c.qualification_bytes) ||
+        if(!a733_ranges_disjoint_nonempty(objects[i],sizes[i],c.source,sizeof(*c.source)) ||
+            !a733_ranges_disjoint_nonempty(objects[i],sizes[i],c.provider_state,c.provider_bytes) ||
+            !a733_ranges_disjoint_nonempty(objects[i],sizes[i],c.qualification_context,c.qualification_bytes) ||
             !a733_ce_session_outside(e,objects[i],sizes[i]))return 0;
     if(c.qualified(c.qualification_context,e,c.qualification_record)!=1 ||
         c.source->engine!=e || c.source->bound_engine!=e || c.source->active || c.source->fault ||
@@ -117,13 +112,9 @@ enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy
         xSemaphoreTake(s->config.pool_mutex,0)!=pdTRUE)return finish(s,A733_RADIO_ENTROPY_BUSY);
     unsigned failed=0;
     if(!a733_ce_session_bound(s->engine) || s->config.source->engine!=s->engine ||
-        s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)!=1 || now<s->last_now)failed=1;
+        s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)!=1 || !a733_monotonic_advance(now,&s->last_now))failed=1;
     else {
-        s->last_now=now;
-        if(!s->deadline) {
-            if(s->config.request_timeout_us>UINT64_MAX-now)failed=1;
-            else s->deadline=now+s->config.request_timeout_us;
-        }
+        if(!s->deadline && !a733_deadline_after(now,s->config.request_timeout_us,&s->deadline))failed=1;
         if(now>=s->deadline)failed=1;
     }
     enum a733_radio_entropy_result result=A733_RADIO_ENTROPY_PENDING;
@@ -146,9 +137,8 @@ enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy
     if(s->config.source->fault || s->engine->fault || s->engine->controller.fault)failed=1;
     if(!failed && s->staged) {
         if(s->engine->binding.ops.now_us(s->engine->binding.cookie,&now)!=1 ||
-            now<s->last_now || now>=s->deadline)failed=1;
+            !a733_deadline_admit(now,&s->last_now,s->deadline))failed=1;
         else {
-            s->last_now=now;
             enum a733_clock_result r=a733_clock_token_status(s->engine->binding.registry,&s->engine->binding.token);
             if(r==A733_CLOCK_BUSY)result=A733_RADIO_ENTROPY_BUSY;
             else if(r!=A733_CLOCK_OK)failed=1;

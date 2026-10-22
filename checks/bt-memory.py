@@ -11,7 +11,7 @@ p.add_argument('--output',type=pathlib.Path,required=True)
 a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1]
 a.output.mkdir(parents=True,exist_ok=False)
-files=['include/bt_memory.h','checks/bt-memory.c','checks/bt-memory.py']
+files=['include/bt_memory.h','include/a733_range.h','checks/bt-memory.c','checks/bt-memory.py']
 manifest={f:hashlib.sha256((root/f).read_bytes()).hexdigest() for f in files}
 cc=shutil.which('clang-21');assert cc
 exe=a.output/'bt-memory-model'

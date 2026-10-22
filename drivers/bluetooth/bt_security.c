@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_security.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 static struct bt_security *active;
 const bt_addr_t bt_security_any_address={{0}};
 static int fault(struct bt_security *s)
@@ -14,8 +15,8 @@ static int live(struct bt_security *s)
     struct bt_h4 *h=&s->acl->hci->transport;
     if(h->binding.firmware_generation!=s->firmware_generation||h->binding.uart_generation!=s->uart_generation||
         h->binding.current(h->binding.context,s->firmware_generation,s->uart_generation)!=1||
-        h->now<s->now||h->now>=s->deadline)return 0;
-    s->now=h->now;return 1;
+        !a733_deadline_admit(h->now,&s->now,s->deadline))return 0;
+    return 1;
 }
 static struct bt_acl_link *actual(struct bt_security *s,const struct bt_conn *c)
 {

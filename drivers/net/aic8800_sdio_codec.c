@@ -3,17 +3,7 @@
  * aic_bsp_8800d80.c,aic_bsp_export.h}. See docs/radio-codec.md.
  */
 #include "aic8800_sdio_codec.h"
-
-static int span(const void *p, size_t bytes)
-{
-    return p != NULL && bytes <= UINTPTR_MAX - (uintptr_t)p;
-}
-
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t av = (uintptr_t)a, bv = (uintptr_t)b;
-    return av < bv + bn && bv < av + an;
-}
+#include "a733_range.h"
 
 static uint16_t le16(const uint8_t *p)
 {
@@ -81,7 +71,7 @@ enum aic8800_codec_result aic8800_sdio_encode_identity_read(
         0x64, 0x00, 0x04, 0x00, /* DRV_TASK_ID, four-byte payload. */
         0x00, 0x00, 0x00, 0x00
     };
-    if (!address_for(which, &address) || !span(output, sizeof(bytes)))
+    if (!address_for(which, &address) || !a733_span_excl(output, sizeof(bytes)))
         return AIC8800_CODEC_INVALID;
     if (capacity < sizeof(bytes))
         return AIC8800_CODEC_TRUNCATED;
@@ -100,8 +90,8 @@ enum aic8800_codec_result aic8800_sdio_decode_identity_response(
     struct aic8800_sdio_response result = {0};
     uint32_t expected_address;
     size_t payload, consumed;
-    if (!address_for(expected, &expected_address) || !span(input, available) ||
-        !span(output, sizeof(*output)) || overlap(input, available, output, sizeof(*output)))
+    if (!address_for(expected, &expected_address) || !a733_span_excl(input, available) ||
+        !a733_span_excl(output, sizeof(*output)) || a733_extents_overlap_prechecked((uintptr_t)input, available, (uintptr_t)output, sizeof(*output)))
         return AIC8800_CODEC_INVALID;
     if (available < 4)
         return AIC8800_CODEC_TRUNCATED;
@@ -150,7 +140,7 @@ enum aic8800_codec_result aic8800_sdio_encode_bootstrap_setup(void *output, size
         0, 0, 0, 0, 0x02, 0x04, 0x01, 0x00, /* DBG_MEM_WRITE_REQ, TASK_DBG. */
         0x64, 0x00, 0x08, 0x00, 0, 0, 0, 0, 0, 0, 0, 0
     };
-    if (!span(output, sizeof(bytes))) return AIC8800_CODEC_INVALID;
+    if (!a733_span_excl(output, sizeof(bytes))) return AIC8800_CODEC_INVALID;
     if (capacity < sizeof(bytes)) return AIC8800_CODEC_TRUNCATED;
     bytes[3] = aic8800_sdio_header_crc(bytes);
     put32(bytes + 16, AIC8800_SDIO_SETUP_ADDRESS);
@@ -163,8 +153,8 @@ enum aic8800_codec_result aic8800_sdio_decode_bootstrap_setup_response(
     const void *input, size_t available, struct aic8800_sdio_response *output)
 {
     struct aic8800_sdio_response r;
-    if (!span(input, available) || !span(output, sizeof(*output)) ||
-        overlap(input, available, output, sizeof(*output))) return AIC8800_CODEC_INVALID;
+    if (!a733_span_excl(input, available) || !a733_span_excl(output, sizeof(*output)) ||
+        a733_extents_overlap_prechecked((uintptr_t)input, available, (uintptr_t)output, sizeof(*output))) return AIC8800_CODEC_INVALID;
     enum aic8800_codec_result result = aic8800_sdio_decode_identity_response(
         input, available, AIC8800_IDENTITY_CHIP, &r);
     if (result != AIC8800_CODEC_OK && result != AIC8800_CODEC_UNRELATED) return result;
@@ -182,9 +172,9 @@ enum aic8800_codec_result aic8800_sdio_identity(
     struct aic8800_radio_identity *output)
 {
     struct aic8800_radio_identity result = {0};
-    if (!span(chip, sizeof(*chip)) || !span(subrevision, sizeof(*subrevision)) ||
-        !span(output, sizeof(*output)) || overlap(chip, sizeof(*chip), output, sizeof(*output)) ||
-        overlap(subrevision, sizeof(*subrevision), output, sizeof(*output)))
+    if (!a733_span_excl(chip, sizeof(*chip)) || !a733_span_excl(subrevision, sizeof(*subrevision)) ||
+        !a733_span_excl(output, sizeof(*output)) || a733_extents_overlap_prechecked((uintptr_t)chip, sizeof(*chip), (uintptr_t)output, sizeof(*output)) ||
+        a733_extents_overlap_prechecked((uintptr_t)subrevision, sizeof(*subrevision), (uintptr_t)output, sizeof(*output)))
         return AIC8800_CODEC_INVALID;
     if (!chip->is_memory_read || !subrevision->is_memory_read ||
         chip->address != AIC8800_SDIO_CHIP_ADDRESS ||
