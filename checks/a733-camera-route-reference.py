@@ -51,15 +51,14 @@ names=['vipp_set_base_addr','vipp_top_clk_en','vipp_cap_enable','vipp_cap_disabl
 'vipp_map_reg_load_addr','vipp_scaler_en','vipp_scaler_cfg','vipp_scaler_output_size','vipp_output_fmt_cfg',
 'vipp_set_crop','vipp_clear_status']
 main=r'''
-int main(int argc,char **argv){assert(argc==2);FILE *f=fopen(argv[1],"wb");assert(f);
- for(unsigned parser=0;parser<2;parser++){
+static void route(FILE *f,unsigned parser,unsigned width,unsigned height){
   memset(regs,0,sizeof(regs));memset(params,0,sizeof(params));
   regs[0][0x40/4]=4;regs[1][0]=0x80;regs[1][0x30/4]=0xffffff03;
   csic_top_base[0]=regs[0];vipp_set_base_addr(0,(unsigned long)regs[1]);
   vipp_map_reg_load_addr(0,(unsigned long)params);
   struct vipp_scaler_config cfg={.sc_out_fmt=YUV422,.sc_x_ratio=256,.sc_y_ratio=256,
    .sc_w_shift=__scaler_w_shift(256,256)};
-  struct vipp_scaler_size size={640,480};struct vipp_crop crop={.width=640,.height=480};
+  struct vipp_scaler_size size={width,height};struct vipp_crop crop={.width=width,.height=height};
   vipp_scaler_en(0,1);vipp_scaler_cfg(0,&cfg);vipp_scaler_output_size(0,&size);
   vipp_output_fmt_cfg(0,YUV422);vipp_set_crop(0,&crop);
   csic_isp_input_select(0,1,0,parser,0);csic_vipp_input_select(0,0,1,0);
@@ -67,7 +66,10 @@ int main(int argc,char **argv){assert(argc==2);FILE *f=fopen(argv[1],"wb");asser
   vipp_clear_status(0,0xffffff03);vipp_chn_cap_disable_para_notready(0);vipp_chn_bypass_mode(0,0);
   vipp_set_reg_load_addr(0,0x48000000);vipp_cap_enable(0);vipp_set_para_ready(0,HAS_READY);vipp_chn_cap_enable(0);
   assert(fwrite(params,1,sizeof(params),f)==sizeof(params));assert(fwrite(regs,1,sizeof(regs),f)==sizeof(regs));
- }assert(!fclose(f));return 0;
+}
+int main(int argc,char **argv){assert(argc==2);FILE *f=fopen(argv[1],"wb");assert(f);
+ for(unsigned parser=0;parser<2;parser++)route(f,parser,640,480);
+ assert(!fclose(f));return 0;
 }
 '''
 route=preamble+vi+vh+ti+vc[:vc.index('int vipp_set_base_addr')]+tc[:tc.index('#if IS_ENABLED(CONFIG_ARCH_SUN50IW9)')]
@@ -89,6 +91,24 @@ for path in values['paths']:
 m=values['main'].replace('for(unsigned port=0;port<2;port++){','for(unsigned port=0;port<2;port++)for(unsigned image=0;image<2;image++){')
 m=m.replace('regs[0][1]=0xdeadbeef;','').replace('regs[1][0]=0x2000;regs[2][0]=0x100000;regs[3][0]=0x20;','')
 m=m.replace('port?255:42','42').replace('port?7:2','2').replace('.mode=VCAP','.mode=image?SCAP:VCAP')
+# The same receiver sequence for further sizes and byte orders: a function of
+# the size and sequence codes, writing SCAP images only after the VGA set.
+for old,new in [('int main(int argc,char **argv){\n assert(argc==2);FILE *f=fopen(argv[1],"wb");assert(f);',
+             'static unsigned W=640,H=480,SEQ=SEQ_UYVY,YSEQ=UYVY;\nstatic void receivers(FILE *f,unsigned first){'),
+            ('for(unsigned image=0;image<2;image++){','for(unsigned image=first;image<2;image++){'),
+            ('.seq=SEQ_UYVY','.seq=SEQ'),('cmb_port_mipi_cfg(port,UYVY)','cmb_port_mipi_cfg(port,YSEQ)'),
+            ('.hor_len=640,.ver_len=480','.hor_len=W,.ver_len=H'),
+            (' assert(!fclose(f));return 0;\n}',' (void)0;\n}')]:
+    assert old in m,old
+    m=m.replace(old,new)
+FORMATS=[(320,240,0),(1280,720,1),(2592,1944,0),(176,144,1)]
+m+=('int main(int argc,char **argv){assert(argc==2);FILE *f=fopen(argv[1],"wb");assert(f);receivers(f,0);\n'+
+    ''.join(f' W={w};H={h};SEQ={"SEQ_YUYV" if y else "SEQ_UYVY"};YSEQ={"YUYV" if y else "UYVY"};receivers(f,1);\n'
+            for w,h,y in FORMATS)+' assert(!fclose(f));return 0;\n}\n')
+route=route.replace(' for(unsigned parser=0;parser<2;parser++)route(f,parser,640,480);',
+    ' for(unsigned parser=0;parser<2;parser++)route(f,parser,640,480);\n'+
+    ''.join(f' route(f,{i&1},{w},{h});\n' for i,(w,h,y) in enumerate(FORMATS)))
+(a.evidence/'route-reference.c').write_text(route)
 (a.evidence/'receiver-reference.c').write_text(values['preamble']+'\n'.join(parts)+m)
 flags=['-std=c11','-O1','-g','-Wall','-Wextra','-Werror']
 commands=[]
@@ -105,13 +125,14 @@ for command in commands:
  (a.evidence/'commands.json').write_text(json.dumps(logs,indent=2)+'\n')
  if r.returncode:print(r.stdout+r.stderr);raise SystemExit(r.returncode)
 x=(a.evidence/'route-reference.bin').read_bytes()+(a.evidence/'receiver-reference.bin').read_bytes()
-y=(a.evidence/'native.bin').read_bytes();assert len(x)==len(y)==22528
+y=(a.evidence/'native.bin').read_bytes();assert len(x)==len(y)==22528+len(FORMATS)*(3072+2*4096)
 assert x==y,[(hex(i),u,v) for i,(u,v) in enumerate(zip(x,y)) if u!=v]
 for name in ['include/a733_camera_route.h','drivers/camera/a733_camera_route.c','include/a733_csi_receiver.h',
 'drivers/camera/a733_csi_receiver.c','checks/a733-camera-route.c','checks/a733-camera-route-reference.py',
 str(a.evidence/'route-reference.c'),str(a.evidence/'receiver-reference.c')]:
  inputs[name]=hashlib.sha256(Path(name).read_bytes()).hexdigest()
 (a.evidence/'results.json').write_text(json.dumps({'result':'PASS','inputs':inputs,'native_sanitizers':['address','undefined'],
- 'comparison':'Complete route and parameter images for two parsers; complete receiver images for both ports and SCAP/VCAP',
+ 'comparison':'Complete route and parameter images for two parsers; complete receiver images for both ports and SCAP/VCAP; '
+ 'route and SCAP receiver images for further sizes and both YUV422 byte orders',
  'image_sha256':hashlib.sha256(y).hexdigest(),'board_access':False},indent=2)+'\n')
 print(logs[-1]['stdout'].strip());print('PASS camera route, parameter and SCAP source comparison')

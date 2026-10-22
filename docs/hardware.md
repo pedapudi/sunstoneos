@@ -1633,9 +1633,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Its retention adapter has the same host-checked mutex-ownership correction
   described under combined monitoring; prior native images retain their original
   scope and do not include that source fix.
-  The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
-  640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
-  model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)
+  The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for the
+  reference driver's ten two-lane output sizes, from 160 × 120 to 2592 × 1944, in
+  UYVY, YUYV and 8-bit raw Bayer, with a selectable frame length. Complete register
+  images and derived rates of 36 modes match the pinned driver's own mode
+  functions; lifecycle checks and native compilation pass. The native application
+  uses 640 × 480 UYVY at nominal 30 frames/s. The [CSI controller](csi-receiver.md)
   configures local PHY, packet-port and parser state for both exposed port groups;
   complete register images match source functions. The [camera DMA controller](camera-dma.md)
   configures one NV16 image and retains buffers until capture, drain and cache
@@ -1657,8 +1660,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   focused cases pass; five native units and two existing embedding fixtures
   compile. Completed payload is copied into a CPU-owned destination while source
   buffers, tables and hardware leases remain reserved. Complete image admission,
-  module electrical binding, physical DMA/coherence and drain, additional modes
-  and physical qualification remain outstanding.
+  module electrical binding, physical DMA/coherence and drain, native use of
+  further modes and physical qualification remain outstanding.
   Repeated capture is **implemented**. The coordinator rearms a retained,
   readable capture into the same planes, mappings and leases with the sensor
   stopped, after two 100 ms quiet intervals and checked receiver and DMA status.
@@ -1669,6 +1672,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass. Register auto-increment, the quiet intervals and exposure behavior
   while packets are disabled need a module on the board.
   No MIPI camera is connected; physical capture qualification awaits a module.
+  Continuous capture is **implemented** in the [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
+  for any UYVY or YUYV mode, whose size now reaches the receiver, VIPP and DMA.
+  Frames stream into two to four slots; each frame start delivers the previous
+  complete slot and programs the next free one, and frames overwritten for lack
+  of a free slot, incomplete or unattributable after a start that raced the
+  address writes are counted as dropped. A modeled frame engine checks delivery,
+  held slots, both races, faults and refusals; route, receiver and DMA register
+  images for four further sizes match the pinned functions. Address latching at
+  frame start and frame-done timing need a module; the native application does
+  not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
+  parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
   640×480 BGGR12 frame and produces an immutable copied NV16 frame through
   TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned

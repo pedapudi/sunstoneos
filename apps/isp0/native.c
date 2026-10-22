@@ -165,7 +165,7 @@ static int step(void)
   struct a733_isp0_ops ops={now,engine_read,engine_write};
   if(!a733_isp0_init(&isp0.engine,&ops,&isp0,deadline()))return -1;isp0.stage=2;return 0;}
  if(isp0.stage==2){r=a733_isp0_poll(&isp0.engine);if(r!=1)return r;
-  struct a733_camera_dma_ops ops={now,dma_admit,dma_read,dma_write,start,fence,never_release,sync_cpu,never_release};
+  struct a733_camera_dma_ops ops={now,dma_admit,dma_read,dma_write,start,fence,never_release,sync_cpu,never_release,NULL,NULL};
   struct a733_camera_dma_config c={.y={A733_ISP0_Y_IOVA,A733_ISP0_PLANE_BYTES},
     .uv={A733_ISP0_UV_IOVA,A733_ISP0_PLANE_BYTES},.frame_id=isp0.session.authority,.block=0};
   if(a733_camera_dma_init(&isp0.dma,&ops,&isp0,&c)!=1||a733_camera_dma_open(&isp0.dma,deadline())!=1)return -1;

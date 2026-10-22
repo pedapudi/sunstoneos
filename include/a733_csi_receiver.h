@@ -2,8 +2,9 @@
 #ifndef SUNSTONE_A733_CSI_RECEIVER_H
 #define SUNSTONE_A733_CSI_RECEIVER_H
 #include <stdint.h>
+#include "a733_camera_common.h"
 
-/* Local D-PHY, packet-port and parser controller for the OV5640 VGA profile.
+/* Local D-PHY, packet-port and parser controller for two-lane OV5640 YUV422.
  * One privileged serialized owner. Fresh zeroed storage; no callback reentry.
  * All callbacks are bounded by deadline (absolute monotonic microseconds).
  * Returns: 1 complete, 0 pending for admission/producer/drain/release only,
@@ -14,7 +15,7 @@ enum a733_csi_state {
     A733_CSI_NEW, A733_CSI_ADMIT, A733_CSI_PRECHECK, A733_CSI_CONFIGURE,
     A733_CSI_ARMED, A733_CSI_SAMPLE, A733_CSI_PRODUCER_STOP,
     A733_CSI_DISABLE, A733_CSI_DRAIN, A733_CSI_RELEASE,
-    A733_CSI_CLOSED, A733_CSI_FAULT, A733_CSI_REARM
+    A733_CSI_CLOSED, A733_CSI_FAULT, A733_CSI_REARM, A733_CSI_VIDEO_STOP
 };
 struct a733_csi_config {
     /* CAM1=port/parser 0, CAM2=1. Native routing must verify this mapping.
@@ -60,12 +61,19 @@ struct a733_csi_receiver {
     void *context;
     uint64_t token, deadline, now;
     uint32_t saved, mipi_events, parser_events;
+    struct a733_camera_format format;
     enum a733_csi_state state;
     uint16_t index;
     uint8_t phase, initialized, image_mode;
 };
+/* The 640x480 UYVY profile. */
 int a733_csi_init(struct a733_csi_receiver *, const struct a733_csi_ops *,
                   void *context, const struct a733_csi_config *);
+/* Any valid YUV422 format: the packet port and parser take its byte order
+ * and the parser its output size. */
+int a733_csi_init_format(struct a733_csi_receiver *, const struct a733_csi_ops *,
+                         void *context, const struct a733_csi_config *,
+                         const struct a733_camera_format *);
 int a733_csi_open(struct a733_csi_receiver *, uint64_t deadline);
 /* Prepare SCAP instead of continuous video. Producer must stay quiet through
  * ARMED. SCAP captures one frame and self-clears; never re-arm automatically.
@@ -84,6 +92,10 @@ int a733_csi_rearm_image(struct a733_csi_receiver *, uint64_t deadline);
  * A frame-end flag alone does not count or complete a DMA frame.
  */
 int a733_csi_sample(struct a733_csi_receiver *, uint64_t deadline);
+/* Video capture end, as the source's capture stop: from ARMED in video mode
+ * with the producer stopped, clear every channel's capture field with read,
+ * write and verification polls. The receiver stays ARMED with capture off. */
+int a733_csi_stop_video(struct a733_csi_receiver *, uint64_t deadline);
 int a733_csi_close(struct a733_csi_receiver *, uint64_t deadline);
 /* At most one read/write/platform callback per poll plus pre/post time checks.
  * Every configuration RMW uses read, write and verification polls.

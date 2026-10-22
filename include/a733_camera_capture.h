@@ -52,6 +52,14 @@ struct a733_camera_capture_config {
     uint32_t *table_words; /* Exclusive 32KiB CPU/physical arena, 16KiB aligned. */
     uint64_t table_physical,frame_id;
     struct a733_csi_config receiver; /* Matching port/parser 0 or 1. */
+    /* From ov5640_mode_get in UYVY or YUYV; sets every controller's frame
+     * size, and each image span must cover one width x height plane. */
+    struct ov5640_mode mode;
+    /* Continuous capture only: 2..A733_CAMERA_DMA_SLOTS ring slots, each
+     * taking slot_bytes (a multiple of 4096 covering one plane) of both
+     * image spans. Zero keeps the single-image paths. */
+    uint8_t slots;
+    uint32_t slot_bytes;
     int color_bars;
     /* Existing native components execute through these platform operations.
      * now_us members are ignored in favor of the shared clock above.
@@ -82,11 +90,14 @@ enum a733_capture_state {
     A733_CAPTURE_IOMMU_SCAN,A733_CAPTURE_DMA_FINISH,A733_CAPTURE_DMA_CLOSE,
     A733_CAPTURE_READY,A733_CAPTURE_FAULT,A733_CAPTURE_READABLE,A733_CAPTURE_READOUT_ROUTE,
     A733_CAPTURE_REARM_QUIET,A733_CAPTURE_REARM_SAMPLE,A733_CAPTURE_REARM_DMA,
-    A733_CAPTURE_REARM_WAIT,A733_CAPTURE_REARM_RECEIVER
+    A733_CAPTURE_REARM_WAIT,A733_CAPTURE_REARM_RECEIVER,A733_CAPTURE_STREAMING,
+    A733_CAPTURE_VIDEO_STOP
 };
-/* Stopped-producer interval before each rearm status check: three periods of
- * the nominal 30 frame/s profile, so a frame the sensor finishes after its
- * stop readback ends inside the first interval. */
+/* Shortest stopped-producer interval before each rearm status check. The
+ * interval is three frame periods of the mode the sensor driver derived,
+ * rounded up to whole microseconds, and at least this, so a frame the sensor
+ * finishes after its stop readback ends inside the first interval. Three
+ * periods of the 30 frame/s VGA mode equal it exactly. */
 #define A733_CAPTURE_QUIET_US 100000u
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
@@ -97,14 +108,17 @@ struct a733_camera_capture {
     struct a733_camera_route route;
     struct a733_csi_receiver receiver;
     struct a733_camera_dma dma;
-    uint64_t token,deadline,now,quiet_from;
+    uint64_t token,deadline,now,quiet_from,quiet_us;
+    /* Longest time between two DMA status reads while streaming: half a
+     * frame period of the derived mode, rounded down. */
+    uint64_t status_us;
     /* Packet-port 0x118 and parser 0x44 status read after CAPTURE_DONE and
      * before the sensor stop, for each image. Diagnostic only: an error
      * found by the later sample but absent here arrived during the stop. */
     uint32_t frame_status[2];
     enum a733_capture_state state;
     uint8_t initialized,entered,started,local_granted,packets_granted;
-    uint8_t quiet,sampled,fenced,drained,scanned,retained_readout;
+    uint8_t quiet,sampled,fenced,drained,scanned,retained_readout,streaming;
 };
 /* Fresh zero storage; private immutable config/callback storage; one privileged
  * serialized caller; bounded non-reentrant callbacks. CPU-only table construction
@@ -124,7 +138,7 @@ int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
  * scan IOMMU faults, and perform fresh DMA status and CPU cache
  * synchronization. No packet-quiet/drain/close/release callback
  * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
- * Only the 307,200-byte payload per plane may be read, without mutation. Only
+ * Only the width x height payload per plane may be read, without mutation. Only
  * the rearm below reuses the planes.
  * A privileged const view cannot be revoked: its consumer must serialize use
  * with this owner and stop on a later fault. Only a completed separate copy
@@ -139,8 +153,35 @@ int a733_camera_capture_open_retained(struct a733_camera_capture *,uint64_t dead
  * readout above then repeat. Faults retain every resource, as for the first
  * image; global, analog and IOMMU leases and mappings stay held throughout. */
 int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
+/* Continuous capture into the configured ring through the same preparation,
+ * with the parser in video capture mode. The DMA enters its ring mode just
+ * before the sensor starts. Polls return 1 once STREAMING is reached and
+ * after each further step. DMA status decides delivery: see
+ * a733_camera_dma_stream. DMA status reads lie up to four polls apart.
+ * Once two of them are more than status_us apart, nothing more is delivered
+ * until the stream stops, so the owner must poll more often than every
+ * eighth of a frame period. The deadline bounds the preparation and then
+ * the stream itself until renew replaces it; at the deadline the stream
+ * faults. Faults retain every resource, as for still images. */
+int a733_camera_capture_open_stream(struct a733_camera_capture *,uint64_t deadline);
+/* From STREAMING only: replace the coordinator's and the DMA's deadline with
+ * one later than the last clock reading, so the owner can keep a short
+ * watchdog of a few frame periods and renew it while it keeps polling.
+ * No I/O; returns 1, or -1 with both deadlines unchanged. */
+int a733_camera_capture_renew(struct a733_camera_capture *,uint64_t deadline);
+/* The oldest delivered frame: its slot, frame-start count, and CPU views of
+ * its Y and UV planes (width x height bytes each, stride width). The views
+ * are read-only and stay valid until give; returns 1, 0 if none, -1. */
+int a733_camera_capture_take(struct a733_camera_capture *,unsigned *slot,uint32_t *sequence,
+                             const uint8_t **y,const uint8_t **uv);
+int a733_camera_capture_give(struct a733_camera_capture *,unsigned slot);
+/* End continuous capture with every slot given back: the sensor stops,
+ * packet quiet is proved, the receiver samples status and stops video
+ * capture, and the close path of a still image follows, ending in READY
+ * with both complete image spans returned to the caller. */
+int a733_camera_capture_stop(struct a733_camera_capture *,uint64_t deadline);
 /* One platform/MMIO/cache operation at most, plus nested monotonic clock reads.
- * READY transfers the 640x480 NV16 Y/UV payloads to this caller, stride640 each.
+ * READY transfers the NV16 Y/UV payloads to this caller, stride width each.
  * Global/analog/IOMMU tokens and mappings remain retained even after READY.
  * No close-path restart, dispose, cancellation or automatic rollback; only the
  * retained readout can rearm. FAULT retains every unreleased sublease and the

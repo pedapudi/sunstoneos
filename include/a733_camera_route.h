@@ -2,8 +2,10 @@
 #ifndef SUNSTONE_A733_CAMERA_ROUTE_H
 #define SUNSTONE_A733_CAMERA_ROUTE_H
 #include <stdint.h>
+#include "a733_camera_common.h"
 /* Parser0/1 CH0 -> pass-through ISP1 CH0 -> VIPP0 CH0 -> DMA0.
- * Fixed progressive 640x480 YUV422, unity scaling, no overlays/conversion.
+ * Progressive YUV422 of one configured size, unity scaling, no overlays or
+ * conversion. a733_camera_route_init selects 640x480.
  * One serialized privileged owner; fresh zeroed storage; no callback reentry.
  */
 enum a733_route_region { A733_ROUTE_TOP, A733_ROUTE_VIPP };
@@ -61,6 +63,8 @@ struct a733_camera_route {
 };
 int a733_camera_route_init(struct a733_camera_route *,const struct a733_route_ops *,
                           void *,const struct a733_route_config *);
+int a733_camera_route_init_format(struct a733_camera_route *,const struct a733_route_ops *,
+    void *,const struct a733_route_config *,const struct a733_camera_format *);
 int a733_camera_route_open(struct a733_camera_route *,uint64_t deadline);
 /* Only after one completed image. Errors/interruption require coordinator
  * recovery. This component does not start the producer or release frame data.

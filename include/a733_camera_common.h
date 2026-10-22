@@ -35,15 +35,34 @@ static inline int a733_camera_adopt(uint64_t *held,uint64_t token,int r)
     return r<0 || r>1 || (r && !*held)?-1:r;
 }
 
-/* Complete 1 KiB VIPP parameter image for unity 640x480 YUV422 output with
- * no conversion or overlays, including reserved bytes. The separate Radxa A733
- * source has no SC_CFG1 precision field, so offset 0x20c stays zero. The
- * source unity ratio calculation returns weight shift 1. */
-static inline void a733_vipp_unity_parameters(uint8_t p[1024])
+/* Progressive YUV422 frame geometry carried from the sensor mode through the
+ * receiver, VIPP and DMA. The order names the byte sequence on the CSI-2
+ * link; both orders reach memory as NV16: a width x height luminance plane
+ * and an interleaved U/V plane of the same size, each with stride width.
+ * The width is a multiple of 16 and the height even, within the OV5640's
+ * 2592 x 1944 maximum. */
+enum a733_camera_order { A733_CAMERA_UYVY, A733_CAMERA_YUYV };
+struct a733_camera_format { uint16_t width,height;uint8_t order; };
+#define A733_CAMERA_VGA ((struct a733_camera_format){640,480,A733_CAMERA_UYVY})
+static inline int a733_camera_format_valid(const struct a733_camera_format *f)
 {
-    static const struct { uint16_t off;uint32_t value; } words[]={
-        {0x200,1},{0x204,256u|(256u<<14)|(1u<<27)},{0x208,640u|(480u<<16)},
-        {0x220,0xd0},{0x234,640u|(480u<<16)}
+    return f && f->width>=16 && f->width<=2592 && !(f->width&15) &&
+        f->height>=2 && f->height<=1944 && !(f->height&1) && f->order<=A733_CAMERA_YUYV;
+}
+/* Bytes in each NV16 plane. */
+static inline uint32_t a733_camera_plane_bytes(const struct a733_camera_format *f)
+{
+    return (uint32_t)f->width*f->height;
+}
+/* Complete 1 KiB VIPP parameter image for unity YUV422 output of the given
+ * size with no conversion or overlays, including reserved bytes. The
+ * separate Radxa A733 source has no SC_CFG1 precision field, so offset 0x20c
+ * stays zero. The source unity ratio calculation returns weight shift 1. */
+static inline void a733_vipp_unity_parameters(uint8_t p[1024],uint16_t width,uint16_t height)
+{
+    const struct { uint16_t off;uint32_t value; } words[]={
+        {0x200,1},{0x204,256u|(256u<<14)|(1u<<27)},{0x208,width|((uint32_t)height<<16)},
+        {0x220,0xd0},{0x234,width|((uint32_t)height<<16)}
     };
     for(unsigned i=0;i<1024;i++)p[i]=0;
     for(unsigned i=0;i<sizeof(words)/sizeof(words[0]);i++)

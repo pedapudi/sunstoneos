@@ -35,7 +35,7 @@ int a733_isp0_parameters(void *load,size_t ln,void *save_load,size_t sn,void *vi
  /* Source module0/module1 disable-all setters. No 3A, WB, lens, gamma,
   * CEM, temporal history or auxiliary image addressing is enabled. */
  put(p+0x130,0);put(p+0x134,0);
- a733_vipp_unity_parameters(v);
+ a733_vipp_unity_parameters(v,640,480);
  return 1;
 }
 struct step {uintptr_t address;uint32_t mask,value;unsigned kind;};

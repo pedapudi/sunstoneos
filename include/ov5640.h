@@ -20,12 +20,33 @@ enum ov5640_state {
 };
 enum ov5640_result { OV5640_ERROR = -1, OV5640_PENDING = 0, OV5640_DONE = 1 };
 enum ov5640_line { OV5640_PWDN_LINE, OV5640_RESET_LINE };
+/* Output sizes of the reference driver's mode table, in its order. */
+enum ov5640_size {
+    OV5640_QQVGA, OV5640_QCIF, OV5640_QVGA, OV5640_VGA, OV5640_NTSC,
+    OV5640_PAL, OV5640_XGA, OV5640_720P, OV5640_1080P, OV5640_QSXGA,
+    OV5640_SIZES
+};
+/* CSI-2 pixel formats: YUV422 8-bit in two byte orders, and raw Bayer
+ * 8-bit starting with a blue/green row. */
+enum ov5640_format { OV5640_UYVY, OV5640_YUYV, OV5640_SBGGR8, OV5640_FORMATS };
+/* pixel_hz is the sensor timing clock; one frame takes htotal * vtotal of
+ * its periods. link_hz is the CSI-2 clock lane frequency. */
 struct ov5640_mode {
     uint32_t xclk_hz, link_hz, pixel_hz;
     uint16_t width, height, htotal, vtotal;
     uint8_t lanes, virtual_channel, csi_data_type, bytes_per_pixel;
+    uint8_t size, format; /* enum ov5640_size, enum ov5640_format */
 };
+/* The default: 640x480 UYVY at nominal 30 frames/s. */
 extern const struct ov5640_mode ov5640_vga_mode;
+/* Derive a two-lane mode with a 24 MHz XCLK, using the reference driver's
+ * crop, timing, pixel-rate and PLL calculation. vtotal 0 keeps the
+ * reference frame length; otherwise it must lie in height+24..3375 and sets
+ * the frame rate to pixel_hz / (htotal * vtotal). Automatic exposure limits
+ * and banding steps stay those of the reference frame length.
+ * Returns 1, or -1 without writing *mode. */
+int ov5640_mode_get(struct ov5640_mode *mode, enum ov5640_size size,
+                    enum ov5640_format format, unsigned vtotal);
 
 struct ov5640_ops {
     int (*now_us)(void *context, uint64_t *now);
@@ -77,9 +98,11 @@ struct ov5640 {
     struct ov5640_ops ops;
     void *context;
     uint64_t token, receiver_token, deadline, now, wait_until;
+    struct ov5640_mode mode;
     enum ov5640_state state;
     uint16_t index;
     uint8_t phase, saved, test_pattern, pwdn_only, initialized;
+    uint8_t pll[3], band[6]; /* 0x3035, 0x3036, 0x4837; AEC band steps. */
 };
 /* All invalid requests return ERROR without callbacks or changes. */
 int ov5640_init(struct ov5640 *, const struct ov5640_ops *, void *context,
@@ -88,6 +111,9 @@ int ov5640_init(struct ov5640 *, const struct ov5640_ops *, void *context,
  * driver then never drives the RESET line; the 1 ms and 20 ms waits after PWDN
  * release are unchanged. Linux uses the same sequence without a reset GPIO. */
 int ov5640_pwdn_only(struct ov5640 *);
+/* Before open, replace the default VGA mode with one from ov5640_mode_get.
+ * The receiver callback is then given this mode. */
+int ov5640_select(struct ov5640 *, const struct ov5640_mode *);
 int ov5640_open(struct ov5640 *, uint64_t deadline);
 int ov5640_start(struct ov5640 *, uint64_t receiver_token, uint64_t deadline);
 int ov5640_stop(struct ov5640 *, uint64_t deadline);

@@ -52,13 +52,23 @@ static int release(void *p,uint64_t t,uint64_t d){
     struct model *m=p;assert(m->drains);++m->releases;return cb(m,4,t,d);
 }
 static const struct a733_route_ops ops={now,admit,publish,rd,wr,stop,drain,release};
-static void setup(struct a733_camera_route *s,struct model *m,unsigned parser){
+/* Further sizes and byte orders after the VGA images. */
+static const struct a733_camera_format formats[]={
+    {320,240,A733_CAMERA_UYVY},{1280,720,A733_CAMERA_YUYV},
+    {2592,1944,A733_CAMERA_UYVY},{176,144,A733_CAMERA_YUYV}
+};
+#define FORMATS (sizeof(formats)/sizeof(formats[0]))
+static void setup_format(struct a733_camera_route *s,struct model *m,unsigned parser,
+                         const struct a733_camera_format *f){
     memset(s,0,sizeof(*s));memset(m,0,sizeof(*m));m->now=1;
     m->regs[0][0x40/4]=4;m->regs[0][0xa0/4]=0;
     m->regs[1][0]=0x80;m->regs[1][0x30/4]=0xffffff03;
     struct a733_route_config c={0x48000000,1088,(uint8_t)parser};
-    assert(a733_camera_route_init(s,&ops,m,&c)==1);
+    assert(f?a733_camera_route_init_format(s,&ops,m,&c,f)==1:a733_camera_route_init(s,&ops,m,&c)==1);
     assert(a733_camera_route_open(s,10000)==1);
+}
+static void setup(struct a733_camera_route *s,struct model *m,unsigned parser){
+    setup_format(s,m,parser,NULL);
 }
 static int step(struct a733_camera_route *s,struct model *m){
     unsigned n=m->calls;int r=a733_camera_route_poll(s);assert(m->calls-n<=1);++m->now;return r;
@@ -89,12 +99,12 @@ static int rwrite(void *p,uint64_t t,enum a733_csi_region r,uint16_t off,uint32_
 static int rcb(void *p,uint64_t t,uint64_t d){
     struct receiver_model *m=p;assert(t==41 && m->now<d);++m->calls;return 1;
 }
-static void receiver(FILE *f,unsigned port,unsigned image){
+static void receiver_format(FILE *f,unsigned port,unsigned image,const struct a733_camera_format *format){
     struct receiver_model m={.now=1};struct a733_csi_receiver s={0};
     struct a733_csi_ops o={rnow,radmit,rread,rwrite,rcb,rcb,rcb};
     struct a733_csi_config c={(uint8_t)port,(uint8_t)port,42,2,324000000};
     m.regs[0][0]=0xb0f;
-    assert(a733_csi_init(&s,&o,&m,&c)==1);
+    assert(format?a733_csi_init_format(&s,&o,&m,&c,format)==1:a733_csi_init(&s,&o,&m,&c)==1);
     assert((image?a733_csi_open_image(&s,10000):a733_csi_open(&s,10000))==1);
     while(s.state!=A733_CSI_ARMED){unsigned n=m.calls;assert(a733_csi_poll(&s)>=0);assert(m.calls-n<=1);++m.now;}
     assert(m.regs[3][3]==(image?1u:2u));
@@ -106,6 +116,7 @@ static void receiver(FILE *f,unsigned port,unsigned image){
         assert(!m.regs[3][3] && a733_csi_open_image(&s,10000)==-1);
     }
 }
+static void receiver(FILE *f,unsigned port,unsigned image){receiver_format(f,port,image,NULL);}
 int main(int argc,char **argv){
     FILE *f=NULL;struct model m;struct a733_camera_route s;
     if(argc==2){f=fopen(argv[1],"wb");assert(f);}
@@ -118,7 +129,25 @@ int main(int argc,char **argv){
         assert(complete(&s,&m)==1 && s.state==A733_ROUTE_CLOSED && !s.token);
         assert(m.releases==3 && s.events==0x100 && a733_camera_route_open(&s,10000)==-1);
     }
+    /* Route images for every format precede all receiver images. */
+    for(unsigned i=0;i<FORMATS;i++){
+        setup_format(&s,&m,i&1,&formats[i]);assert(complete(&s,&m)==1);
+        if(f){assert(fwrite(m.parameters,1,1024,f)==1024);assert(fwrite(m.regs,1,sizeof(m.regs),f)==sizeof(m.regs));}
+    }
     for(unsigned port=0;port<2;port++)for(unsigned image=0;image<2;image++)receiver(f,port,image);
+    for(unsigned i=0;i<FORMATS;i++)for(unsigned port=0;port<2;port++)receiver_format(f,port,1,&formats[i]);
+    /* Invalid sizes and orders are refused before any callback. */
+    static const struct a733_camera_format bad[]={
+        {0,480,0},{648,480,0},{2608,480,0},{640,481,0},{640,1946,0},{640,480,2}
+    };
+    for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++){
+        struct a733_camera_route r={0};struct a733_csi_receiver v={0};
+        struct a733_route_config c={0x48000000,1088,0};
+        struct a733_csi_ops o={rnow,radmit,rread,rwrite,rcb,rcb,rcb};
+        struct a733_csi_config k={0,0,42,2,324000000};
+        assert(a733_camera_route_init_format(&r,&ops,&m,&c,&bad[i])==-1 && !r.initialized);
+        assert(a733_csi_init_format(&v,&o,&m,&k,&bad[i])==-1 && !v.initialized);
+    }
     if(f)assert(!fclose(f));
     for(unsigned i=0;i<4;i++){
         memset(&s,0,sizeof(s));struct a733_route_config c={0x48000000,1088,0};
