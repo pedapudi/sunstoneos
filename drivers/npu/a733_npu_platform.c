@@ -10,8 +10,7 @@
 #define BUSY A733_NPU_PLATFORM_BUSY
 #define PENDING A733_NPU_PLATFORM_PENDING
 #define RETAINED A733_NPU_PLATFORM_RETAINED
-/* Numbering is shared with the host fixtures: SETTLE is 4 and COMPLETE is 5. */
-enum { ACQUIRE, BASELINE, POWER_WAIT=3, SETTLE, COMPLETE };
+enum { ACQUIRE, BASELINE, POWER_WAIT=3, SETTLE, COMPLETE }; /* Host fixtures use these values. */
 static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 static const uint32_t fabric_masks[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
@@ -56,8 +55,7 @@ static int timely(struct a733_npu_platform *p)
 static enum a733_npu_platform_result fault(struct a733_npu_platform *p)
 {p->failed=1;return RETAINED;}
 /* Register accesses take no clock sample of their own. Each locked pass checks
- * the deadline after taking the lock, before its first write and before
- * releasing the lock; one pass is a bounded run of register accesses. */
+ * the deadline after taking the lock, before its first write and before release. */
 static int rd(struct a733_npu_platform *p,uintptr_t address,uint32_t *value)
 {return p->ops.read(p->cookie,address,value)==1;}
 static int update(struct a733_npu_platform *p,uintptr_t address,uint32_t mask,uint32_t value)
@@ -141,31 +139,6 @@ static int preserved(const struct a733_npu_platform_resources *a,const struct a7
 }
 static int equal(const struct a733_npu_platform_resources *a,const struct a733_npu_platform_resources *b)
 {return clock_equal(&a->clock,&b->clock) && a->rail==b->rail && a->pck==b->pck && a->supply_uv==b->supply_uv;}
-/* Apply the open table: AHB, AXI and core resets released, module rate set,
- * bus then module gates opened, domain timings written and domain 4 requested. */
-static int open(struct a733_npu_platform *p)
-{
-    unsigned count=p->adopt_on ? 6 : sizeof(steps)/sizeof(*steps);
-    if (!timely(p)) return 0;
-    for (; p->step<count; ++p->step) {
-        const struct step *s=&steps[p->step];
-        if (!update(p,s->address,s->mask,p->step==3 ? p->divisor-1 : s->value)) return 0;
-    }
-    return 1;
-}
-/* Domain 4 status: ON arms the 2 ms settle from a clock sample taken after
- * the read; OFF keeps waiting unless the domain was adopted ON. */
-static int power(struct a733_npu_platform *p)
-{
-    uint32_t value;
-    if (!rd(p,PCK+8,&value) || !timely(p)) return 0;
-    value&=0xf;
-    if (value==8) {
-        if (!a733_deadline_after(p->last_now,2000,&p->settle_until)) return 0;
-        p->stage=SETTLE;return 1;
-    }
-    return value==0 && !p->adopt_on;
-}
 enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p)
 {
     if (!p || !p->initialized) return RETAINED;
@@ -190,12 +163,19 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
     if (!locked) return timely(p) ? BUSY : fault(p);
     if (locked!=1) return fault(p);
     int ok=timely(p);
+    uint32_t value;
     if (ok && p->stage==BASELINE) {
-        ok=baseline(p) && open(p);
+        unsigned count=p->adopt_on ? 6 : sizeof(steps)/sizeof(*steps);
+        ok=baseline(p) && timely(p);
+        for (; ok && p->step<count; ++p->step)
+            ok=update(p,steps[p->step].address,steps[p->step].mask,p->step==3 ? p->divisor-1 : steps[p->step].value);
         if (ok) p->stage=POWER_WAIT;
     }
-    if (ok && p->stage==POWER_WAIT) ok=power(p);
-    else if (ok && p->stage==SETTLE) {
+    /* Domain 4 ON arms the 2 ms settle from a sample taken after the read; OFF waits unless adopted ON. */
+    if (ok && p->stage==POWER_WAIT) {
+        ok=rd(p,PCK+8,&value) && timely(p) && ((value&=0xf)==8 || (value==0 && !p->adopt_on));
+        if (ok && value==8) {ok=a733_deadline_after(p->last_now,2000,&p->settle_until);if(ok)p->stage=SETTLE;}
+    } else if (ok && p->stage==SETTLE) {
         ok=check(p,PCK+8,0xf,8) && (!p->adopt_on || check(p,PCK,0xf,8)) && check(p,CCU+0xb04,0xf0001,0xf0001) &&
             check(p,CCU+0xb00,0x8700001f,BIT(31)|(p->divisor-1));
         if(ok)p->stage=COMPLETE;
@@ -209,20 +189,8 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
 }
 int a733_npu_platform_ready(const struct a733_npu_platform *p)
 {return p && p->initialized && !p->failed && p->stage==COMPLETE && !p->stopping;}
-
-/* Write a word whose current value is known, then read it back. */
-static int put(struct a733_npu_platform *p,uintptr_t address,uint32_t *word,uint32_t mask,uint32_t value)
-{
-    uint32_t next=(*word&~mask)|(value&mask),actual;
-    p->wrote=1;
-    if (p->ops.write(p->cookie,address,next)!=1 || !rd(p,address,&actual) || actual!=next) return 0;
-    *word=next;return 1;
-}
-/* Local subset of npu_clk_uninit in the pinned Allwinner VIPLite platform:
- * module gate, bus gate, then AHB, AXI and core resets, in one locked pass.
- * Critical shared leaves, PLL_NPU, the rail and the ON SRAM domain keep their
- * owners. The pass first requires the state startup left: PLL_NPU enabled and
- * locked with its output open, domain 4 ON, SRAM reset released. */
+/* Local subset of npu_clk_uninit in the pinned Allwinner VIPLite platform, in one locked pass
+ * from the state startup left. Shared leaves, PLL_NPU, the rail and the ON SRAM domain keep owners. */
 enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platform *p)
 {
     if(!p || !p->initialized || p->failed || p->stage!=COMPLETE)return RETAINED;
@@ -243,7 +211,9 @@ enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platfo
         rd(p,CCU+0xb04,&bus) && (bus&0xf0001)==0xf0001;
     for(; ok && p->stop_step<sizeof(stop)/sizeof(*stop); ++p->stop_step) {
         const struct step *s=&stop[p->stop_step];
-        ok=put(p,s->address,s->address==CCU+0xb00 ? &module : &bus,s->mask,s->value);
+        uint32_t *word=s->address==CCU+0xb00 ? &module : &bus,next=(*word&~s->mask)|(s->value&s->mask);
+        p->wrote=1; /* Known value written, then read back. */
+        ok=p->ops.write(p->cookie,s->address,next)==1 && rd(p,s->address,word) && *word==next;
     }
     if(ok)p->stopped=1;
     if(!ok || !timely(p))(void)fault(p);

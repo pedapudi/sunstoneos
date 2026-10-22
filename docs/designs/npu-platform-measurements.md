@@ -37,6 +37,11 @@ USB devices or the board.
   image, both read with `llvm-nm` and `llvm-size`. Source sizes are line
   counts of each file. Barriers are `dsb` and `dmb` instructions in those
   object files, counted with `llvm-objdump`.
+  The branch's image sizes include later integrated work that changes no NPU
+  controller source but changes other code in the images. Without the
+  branch's last size reductions, the same revision's images measure 185,936,
+  176,552 and 339,248 bytes of function code; the reductions save 428, 428
+  and 424 bytes.
 - **Counted items** come from the code: session-page hashes, ownership checks
   and bytes hashed before activation.
 
@@ -56,14 +61,14 @@ USB devices or the board.
 | Local gate (local stop) | 1 call, ≤ 12 reads, 5 writes, ≤ 6 clock samples, 1 lock | 6 polls, 102 reads, 5 writes, 238 clock samples, 6 locks | 1 call, 10 reads, 5 writes, 4 clock samples, 1 lock | Yes |
 | Ownership checks per register access | 0; one per startup call | Startup: owner-task check on every read, write and clock sample. Adapter: EL read, health query, scheduler query and task compare on every read, write and clock sample | 0 in both; checked at each startup step, acquisition and mutex entry and release | Yes |
 | Startup calls in the two-core fixture | ≤ 3 | 28, over 30 ticks | 9 or 10, over 12 to 14 ticks | No |
-| PLL and startup calls with PLL adoption | ≤ 3 startup calls | 13 PLL and 28 startup | 6 PLL and 11 startup | No |
+| PLL and startup calls with PLL adoption | ≤ 3 startup calls | 13 PLL and 28 startup | 6 PLL and 10 or 11 startup | No |
 | Bootstrap ticks to READY with PLL adoption | ≤ 4 without PENDING | 40 or 41 | 18 or 19 | No |
 | Bytes hashed before activation, accelerator image | 0 | 28 calls × 1,881,936 bytes, 52.7 MB | 11 calls × 1,881,936 bytes, 20.7 MB | No |
 | Startup PMIC traffic | None | 12 register reads, 6 bus-state reads, 5,160 µs wait | Unchanged | No |
-| Source lines, code and header | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup 450 + 131; platform 253 + 96; PLL 208 + 109; adapter 132 + 19 | No |
-| Function code bytes | No budget | Multicore 190,364; single-core 181,020; accelerators 341,432 | 186,296; 176,924; 337,436 | About 4 KB smaller in each image |
-| Controller object `.text`, multicore image | No budget | Startup 10,152; platform 7,260; PLL 5,436; adapter 3,208; admission 992 | 10,184; 5,464; 3,888; 2,524; 920 | Startup 32 bytes larger; the others smaller |
-| Barriers in the controller objects, multicore image | No startup budget; per-job `DSB SY` has its own row in the design | Admission 0; startup, platform, PLL and adapter 0 | Admission 1 `DSB SY`, once per boot at EL3; the others 0 | One more barrier per boot |
+| Source lines, code and header | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup 445 + 131; platform 223 + 96; PLL 204 + 109; adapter 128 + 19 | No; startup 9 lines above the base, the others at or below it |
+| Function code bytes | No budget | Multicore 190,364; single-core 181,020; accelerators 341,432 | 185,508; 176,124; 338,824 | Smaller in each image |
+| Controller object `.text`, multicore image | No budget | Startup 10,152; platform 7,260; PLL 5,436; adapter 3,208; admission 992 | 9,948; 5,280; 3,884; 2,524; 916 | Each smaller |
+| Barriers in the controller objects, multicore image | No startup budget; per-job `DSB SY` has its own row in the design | Admission 0; startup, platform, PLL and adapter 0 | 0 in each | Same as base |
 | Data and BSS | No budget | Images unchanged; admission object 706 bytes | Images unchanged; admission object 674 bytes, without the retained 32-byte digest | Not applicable |
 
 The local startup and PLL rows count each controller alone. The design's
@@ -76,26 +81,31 @@ In the two-core fixtures the 5,160-microsecond DCDC2 settle accounts for about
 six startup calls. The design removes that wait with the power authority's
 domain row, which has not landed.
 
-## Results worse than the base revision or outside the design's targets
+## Results outside the design's targets
 
-The design states targets for the finished sequencer and states no target
-for an intermediate step. These results therefore have no reason in the
-design itself:
+The design's budget table states, beside each of these rows, the measured
+result and the change the target still needs:
 
-- **Source lines grew** in every controller: startup by 14 lines, platform by
-  28, PLL by 4 and the adapter by 2, while the targets require each to shrink
-  by more than half. Compiled function code shrank by about 4 KB per image.
-- **Startup object code grew by 32 bytes**, from the loop that runs
-  acquisition steps until one waits.
-- **One `DSB SY` was added per boot.** EL3 now copies the session page into
-  private memory and must complete that write before EL1 adopts write-back
-  caching; the single-core seal already uses the same barrier for the same
-  reason. The copy replaces a second hash of the session page.
 - **Startup calls, PLL polls, reads, mutex acquisitions and bootstrap ticks
-  remain above the combined targets.** Each improved on the base revision; the
-  targets need the single sequencer described in the last section.
+  remain above the combined targets.** Each improved on the base revision.
+  The targets need the single sequencer described in the last section.
 - **Startup PMIC traffic is unchanged**, and the design places its removal
   with the power authority.
+- **Bytes hashed before activation** follow the startup call count; the hash
+  belongs to the session runtime.
+- **Source lines stay above the targets.** Platform, PLL and adapter are at or
+  below the base revision. Startup is 9 lines above it: 5 lines of the loop
+  that runs acquisition steps until one waits, which cut two-core startup
+  calls from 28 to 9 or 10, and 4 comment lines that state where the ownership
+  check now runs.
+
+Object code and barriers are no worse than the base revision. The
+acquisition loop has no iteration counter, because the startup stage only
+advances; the compiler therefore does not unroll it, and the startup object
+is 204 bytes smaller than the base revision. EL3 admission issues no barrier
+of its own: the single-core seal's `DSB SY`, or the multicore boot's `DSB SY`
+before its next register access, completes the copy before EL1 enables
+caching.
 
 ## Changes
 
@@ -115,8 +125,9 @@ design itself:
   after releasing the mutex, and inside each locked pass before the first
   write, after each LOCK observation and before release. Individual register
   accesses take no clock sample.
-- **Startup binding.** One call runs acquisition steps until one waits, at
-  most six. The register and clock callbacks drop their per-access owner check;
+- **Startup binding.** One call runs acquisition steps until one waits. A
+  further step runs only after the previous one advanced the acquisition
+  stage, so at most seven steps run. The register and clock callbacks drop their per-access owner check;
   register access still needs the mutex, which `enter` takes after its owner
   check.
 - **Clock adapter.** Ownership is checked in acquisition, mutex entry and mutex

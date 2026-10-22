@@ -39,9 +39,10 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
        memcmp(session.image,a733_smp_build_id,32) || c->epoch!=session.epoch ||
        c->generation!=session.generation || c->lease!=session.lease ||
        c->reserved[0]!=session.supervisor)return 0;
-    /* EL3 boot publishes the copy before the existing cache-adoption and
-     * eight-core barriers. EL1 never reads the protected monitor contract. */
-    admitted=1;__asm__ volatile("dsb sy":::"memory");return 1;
+    /* No barrier here: the single-core seal's DSB, or the multicore boot's DSB
+     * before its next register access, publishes the copy before EL1 adopts WB.
+     * EL1 never reads the protected monitor contract. */
+    admitted=1;return 1;
 }
 #ifdef SUNSTONE_NPU_SINGLE_CORE
 int npu_single_core_seal(const struct a733_smp_contract *c)

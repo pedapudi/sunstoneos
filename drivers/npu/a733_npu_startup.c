@@ -240,9 +240,8 @@ static int leave(void *v)
     }
     a733_platform_lock_leave(b->shared->locks,A733_PLATFORM_REGISTER_LOCK);b->register_held=0;return 1;
 }
-/* The platform calls these only from a startup or stop step, which checks the
- * owner task first; register access additionally needs the lock that enter()
- * took after its own owner check. */
+/* Called only from a startup or stop step, which checks the owner task first;
+ * register access also needs the lock that enter() took after its owner check. */
 static int now(void *v,uint64_t *out)
 {struct a733_npu_startup *b=v;return resource_now(b->shared,out);}
 static int read_reg(void *v,uintptr_t address,uint32_t *out)
@@ -385,17 +384,13 @@ static enum a733_npu_platform_result platform_step(struct a733_npu_startup *b,in
     }
     return r;
 }
-/* One call runs acquisition steps until one waits: on the PLL, the PMIC
- * provider, the settle time, a busy owner or the platform's own time or power
- * waits. Once acquisition completes, the platform runs its register pass in
- * the same call. Each step repeats every entry check of platform_step. */
+/* Run acquisition steps, each with every entry check, until one waits; the platform's
+ * register pass then follows. Stage only advances, so at most six steps repeat. */
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
 {
-    unsigned stage=b ? b->stage : 0;
-    enum a733_npu_platform_result r=platform_step(b,0);
-    for(unsigned i=0;i<RESOURCES_READY && r==PENDING && !b->platform.stage && b->stage!=stage;++i) {
-        stage=b->stage;r=platform_step(b,0);
-    }
+    enum a733_npu_platform_result r;unsigned stage;
+    do {stage=b ? b->stage : 0;r=platform_step(b,0);}
+    while(r==PENDING && !b->platform.stage && b->stage>stage);
     return r;
 }
 enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *b)

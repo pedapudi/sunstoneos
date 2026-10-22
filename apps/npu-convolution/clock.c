@@ -9,13 +9,9 @@ static int context(struct npu_application_clock *p)
     return p && p->initialized && el==4 && a733_npu_application_health() &&
         xTaskGetSchedulerState()==taskSCHEDULER_RUNNING && xTaskGetCurrentTaskHandle()==p->task;
 }
-/* Ownership is checked once per locked pass, by acquire, enter and leave.
- * Clock samples and register accesses need only the lock that enter took. */
+/* Ownership is checked by acquire, enter and leave; accesses need only the lock enter took. */
 static int now(void *cookie,uint64_t *out)
-{
-    struct npu_application_clock *p=cookie;
-    return a733_counter_clock_now(p->counter,out);
-}
+{struct npu_application_clock *p=cookie;return a733_counter_clock_now(p->counter,out);}
 static int enter(void *cookie,uint64_t deadline)
 {
     struct npu_application_clock *p=cookie;

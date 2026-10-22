@@ -99,7 +99,9 @@ request, the 5,160-microsecond DCDC2 settle, a busy owner, or the platform's
 own power and settle waits. When acquisition completes, the platform runs its
 locked register pass in the same call. Each step repeats the entry checks of
 a call: owner task, deadline, PMIC binding and health, PLL binding and the
-adopted clock token. At most six steps run in one call.
+adopted clock token. A further step runs only after the previous step
+advanced the acquisition stage, and the stage only advances through six
+values, so at most seven steps run in one call.
 
 The owner task, the EL1 exception level and the scheduler state are checked
 at the start of each step and again when the register mutex is taken.

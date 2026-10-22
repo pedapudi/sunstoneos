@@ -82,9 +82,8 @@ static enum a733_npu_pll_result fault(struct a733_npu_pll *p)
     p->ops.retain(p->cookie,&p->resources,&p->observed,p->lock_state);
     return RETAINED;
 }
-/* Register accesses take no clock sample of their own. Each locked pass checks
- * the deadline before its first write, after each LOCK observation and before
- * releasing the lock; one pass is a bounded run of register accesses. */
+/* Register accesses take no clock sample of their own. Each locked pass checks the
+ * deadline before its first write, after each LOCK observation and before release. */
 static int rd(struct a733_npu_pll *p,uintptr_t a,uint32_t *v)
 {return p->ops.read(p->cookie,a,v)==1;}
 static int check(struct a733_npu_pll *p,uintptr_t a,uint32_t mask,uint32_t expected)
@@ -165,20 +164,17 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
     if (!held) return timely(p) ? BUSY : fault(p);
     p->lock_state=held==1 ? 1 : 2;
     if (held!=1) return fault(p);
-    int ok=1,complete=0,sampled=0;
+    int ok=1,complete=0,sampled=p->stage!=SETTLE; /* Pass ends with a clock sample. */
     if (p->stage==BASELINE) {
-        /* Entry checks, then the whole step table, then arm the first LOCK
-         * observation from a clock sample taken after the last write. */
+        /* Entry checks, the step table, then a sample after the last write arms LOCK polling. */
         const struct step *table=p->config.mode==A733_NPU_PLL_ENABLED_RETUNE ? retune : cold;
         ok=baseline(p) && timely(p);
         for (; ok && p->step<6; ++p->step) ok=update(p,table[p->step].address,table[p->step].mask,table[p->step].value);
         ok=ok && timely(p) && a733_deadline_after(p->last_now,3,&p->next_sample);
         if (ok) p->stage=LOCK_WAIT;
-        sampled=1;
     } else if (p->stage==LOCK_WAIT) {
         uint32_t v;
         ok=rd(p,CTRL,&v) && timely(p) && (v&~LOCK)==p->expected_control;
-        sampled=1;
         if(ok) {
             p->consecutive=(v&LOCK) ? p->consecutive+1 : 0;
             ++p->samples;

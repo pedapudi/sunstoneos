@@ -478,48 +478,51 @@ measured by running the compiled digest under Unicorn, as
 `checks/lradc-native.py` runs native code. Rows marked *bound* apply to the
 single-core profiles that route interrupt 97; rows marked *multicore* apply to
 the multicore image until the SPI 65 binding step, and the host model of
-`npu_service.c` measures their baselines.
+`npu_service.c` measures their baselines. The last column gives the
+host-modeled result of the code as implemented and, where it misses the target,
+the change that the target still needs; [the measurements](npu-platform-measurements.md)
+give the conditions.
 
-| Metric | Baseline | Target |
-| --- | --- | --- |
-| Session-page hashes at admission | 2 (live page, copy), counted | 1 (copy) |
-| Startup calls, acquisition to READY | Platform 17 measured; PLL 13 counted | ≤ 3; one tick wait |
-| Startup register reads and writes | Platform 51 and 12 measured; PLL and adapter about 58 and 7 counted | ≤ 60 reads excluding LOCK samples; ≤ 12 writes |
-| Counter-clock reads at startup | Platform 190 measured; PLL about 110 counted | ≤ 16 plus one per LOCK sample |
-| Register-lock acquisitions at startup | Platform 15 measured; PLL 13 counted | ≤ 3 |
-| Ownership checks per register access | `task_owner` (startup); EL read, scheduler query, task compare and health query (adapter) | 0; one per startup call |
-| Bytes hashed before activation | About 30 calls × 1,881,936 bytes, about 56 MB, counted | 0; the first bootstrap publication hashes once |
-| Startup PMIC traffic | 12 register reads, 6 bus-state reads, 5,160 µs wait | None |
-| Source size, lines (code + header) | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted |
-| Bootstrap ticks to activation | About 42 counted | ≤ 4 without PENDING |
-| Local gate | 6 polls, 102 reads, 5 writes, 238 clock reads, 6 lock acquisitions, measured | 1 call, ≤ 12 reads, 5 writes, ≤ 6 clock reads, 1 lock |
-| Per-job digest, bytes and place | 917,504 plus stream, worker `publish` | Same until read-only mappings; then 0 |
-| Per-job digest time, 1.8 GHz | 7.6–12.7 ms estimated, portable | 1.0–2.0 ms with SHA2; 0 after read-only mappings |
-| CPU0 digest time per job, single-core images | 7.6–12.7 ms at 1.8 GHz, 28–46 ms at 494 MHz | 1.0–2.0 ms and 3.7–7.4 ms with SHA2; 0 after read-only mappings |
-| Per-job `AT` | 2,139 | Same until read-only EL1 tables; then 0 |
-| Per-job table scan | 4,352 words | Same until read-only arena; then 0 |
-| Copies per input byte | 1 | ≤ 1 |
-| Copies per output byte | 1 | 0 |
-| Bytes written by the pool clear per job | 1,093,632 | Same until the pool evidence; then 0 |
-| Per-job cache maintenance in the worker | 2,347,008 bytes | 8,192 (output clean-invalidate and invalidate) |
-| Per-job maintenance in the client | 0 | 151,552 input bytes; plus 1,093,632 pool bytes while the clear exists |
-| Engine register accesses per job, bound | 11 reads and 2 writes, plus 5 reads per poll, measured | 11 and 2; one `a733_npu_poll` pass per 10 ms fallback |
-| Worker poll passes while the engine is active, multicore | One per 1 ms tick, counted | Same; after the binding step, one per 10 ms fallback |
-| Completion latency after DONE, multicore | Up to 1 tick | Same; after the binding step, interrupt delivery |
-| Worker wakes per second while a job runs, multicore | 1,000 | Same; after the binding step, one per interrupt plus at most 100 fallback wakes |
-| Tick waits per bootstrap and per cancel, multicore | One poll per tick until done | Same; after the binding step, 0 |
-| `DSB SY` per job | 17 counted | ≤ 17 across both cores; after qualification, 2 `DMB` plus the barriers that complete cache maintenance |
-| Client round trips and tick polls per job | 3 round trips plus one STATUS poll per tick | 2 round trips; 0 tick polls |
-| Client tick polls during startup and local stop | One per tick | 0 |
-| Wake publication work | 1,881,936 bytes hashed, 2,126 `AT`, 3,235,840 bytes cleaned, 1,097,728 invalidated | 0 of each |
-| Wake, gated to bootstrap complete, bound | Not possible | ≤ 0.6 ms modeled, no tick wait |
-| Worker core busy per wake | Not possible | ≤ 0.35 ms |
-| Worker wakes per second while gated | 1 | 0 |
-| Two clients submitting during a wake | Not possible | 0 refusals, 0 tick waits |
-| Missed notification, completed job, bound | TIMEOUT | Finished; counter 1; no cancel |
-| Deadline to recovered READY, acknowledgement within 1 ms, bound | Not possible | ≤ 1.5 ms, 0 tick waits; before the read-only mappings, plus one bootstrap publication |
-| Hung bootstrap after a wake | Bounded only by the deleted elapsed test | Cancelled at 10 ms; recovered or retained within 30 ms; counts toward the cap |
-| Cancel on an already idle engine | Not modeled | Completes or faults within 20 ms |
+| Metric | Baseline | Target | Implemented code, host-modeled |
+| --- | --- | --- | --- |
+| Session-page hashes at admission | 2 (live page, copy), counted | 1 (copy) | 1, the EL3 copy. Met |
+| Startup calls, acquisition to READY | Platform 17 measured; PLL 13 counted | ≤ 3; one tick wait | Local startup 3 polls and PLL 6 in the register models; 9 or 10 startup calls in the two-core fixture, and 6 PLL plus 10 or 11 startup calls with PLL adoption. The single sequencer that reaches this target replaces the platform and PLL interfaces that `npu_convolution.c`, `npu_session.c`, the CMake fragments and the convolution, stop and PMIC-consumer checks use, so it needs those owners. The 5,160 µs DCDC2 settle accounts for about six fixture calls and leaves with the power authority's domain row |
+| Startup register reads and writes | Platform 51 and 12 measured; PLL and adapter about 58 and 7 counted | ≤ 60 reads excluding LOCK samples; ≤ 12 writes | Local startup 51 reads and 12 writes; PLL 43 and 7 when retuning; 94 reads together, because each controller runs its own entry checks. The single sequencer that reaches this target replaces the platform and PLL interfaces that `npu_convolution.c`, `npu_session.c`, the CMake fragments and the convolution, stop and PMIC-consumer checks use, so it needs those owners |
+| Counter-clock reads at startup | Platform 190 measured; PLL about 110 counted | ≤ 16 plus one per LOCK sample | Local startup 12; PLL 19 with 3 LOCK samples. Each controller alone is within the target; together, 31 exceed it until the single sequencer lands |
+| Register-lock acquisitions at startup | Platform 15 measured; PLL 13 counted | ≤ 3 | Local startup 2; PLL 5; 7 together. The PLL takes its acquisition in a poll of its own, so the provider's admission is observable before any PLL access. The single sequencer that reaches this target replaces the platform and PLL interfaces that `npu_convolution.c`, `npu_session.c`, the CMake fragments and the convolution, stop and PMIC-consumer checks use, so it needs those owners |
+| Ownership checks per register access | `task_owner` (startup); EL read, scheduler query, task compare and health query (adapter) | 0; one per startup call | 0 per access; one at each startup step, acquisition and lock entry and release. Met |
+| Bytes hashed before activation | About 30 calls × 1,881,936 bytes, about 56 MB, counted | 0; the first bootstrap publication hashes once | 11 startup calls × 1,881,936 bytes, 20.7 MB, derived from the startup call count. The per-call hash is in `npu_convolution.c` and `npu_session.c`, which the session runtime owns |
+| Startup PMIC traffic | 12 register reads, 6 bus-state reads, 5,160 µs wait | None | Unchanged. Removing it needs the power authority's domain row and supply read |
+| Source size, lines (code + header) | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted | Startup 445 + 131; platform 223 + 96; PLL 204 + 109; adapter 128 + 19. Platform, PLL and adapter are at or below the baseline. Startup is 9 lines above it: 5 lines of the loop that runs acquisition steps until one waits, which cut two-core startup calls from 28 to 9 or 10, and 4 comment lines that state where the ownership check now runs. The targets need the single sequencer, which deletes the PLL stage machine and the adapter |
+| Bootstrap ticks to activation | About 42 counted | ≤ 4 without PENDING | 13 or 14 in the two-core fixture; 18 or 19 with PLL adoption. Reaching 4 needs the single sequencer and the power authority's domain row, as for startup calls |
+| Local gate | 6 polls, 102 reads, 5 writes, 238 clock reads, 6 lock acquisitions, measured | 1 call, ≤ 12 reads, 5 writes, ≤ 6 clock reads, 1 lock | 1 call, 10 reads, 5 writes, 4 clock reads, 1 lock. Met |
+| Per-job digest, bytes and place | 917,504 plus stream, worker `publish` | Same until read-only mappings; then 0 | Unchanged; session runtime and service |
+| Per-job digest time, 1.8 GHz | 7.6–12.7 ms estimated, portable | 1.0–2.0 ms with SHA2; 0 after read-only mappings | Unchanged; session runtime and service |
+| CPU0 digest time per job, single-core images | 7.6–12.7 ms at 1.8 GHz, 28–46 ms at 494 MHz | 1.0–2.0 ms and 3.7–7.4 ms with SHA2; 0 after read-only mappings | Unchanged; session runtime and service |
+| Per-job `AT` | 2,139 | Same until read-only EL1 tables; then 0 | Unchanged; session runtime and service |
+| Per-job table scan | 4,352 words | Same until read-only arena; then 0 | Unchanged; session runtime and service |
+| Copies per input byte | 1 | ≤ 1 | Unchanged; session runtime and service |
+| Copies per output byte | 1 | 0 | Unchanged; session runtime and service |
+| Bytes written by the pool clear per job | 1,093,632 | Same until the pool evidence; then 0 | Unchanged; session runtime and service |
+| Per-job cache maintenance in the worker | 2,347,008 bytes | 8,192 (output clean-invalidate and invalidate) | Unchanged; session runtime and service |
+| Per-job maintenance in the client | 0 | 151,552 input bytes; plus 1,093,632 pool bytes while the clear exists | Unchanged; session runtime and service |
+| Engine register accesses per job, bound | 11 reads and 2 writes, plus 5 reads per poll, measured | 11 and 2; one `a733_npu_poll` pass per 10 ms fallback | Unchanged; session runtime and service |
+| Worker poll passes while the engine is active, multicore | One per 1 ms tick, counted | Same; after the binding step, one per 10 ms fallback | Unchanged; session runtime and service |
+| Completion latency after DONE, multicore | Up to 1 tick | Same; after the binding step, interrupt delivery | Unchanged; session runtime and service |
+| Worker wakes per second while a job runs, multicore | 1,000 | Same; after the binding step, one per interrupt plus at most 100 fallback wakes | Unchanged; session runtime and service |
+| Tick waits per bootstrap and per cancel, multicore | One poll per tick until done | Same; after the binding step, 0 | Unchanged; session runtime and service |
+| `DSB SY` per job | 17 counted | ≤ 17 across both cores; after qualification, 2 `DMB` plus the barriers that complete cache maintenance | Unchanged. Admission adds no barrier: the single-core seal's `DSB SY`, or the multicore boot's `DSB SY` before its next register access, completes the EL3 copy before EL1 enables caching |
+| Client round trips and tick polls per job | 3 round trips plus one STATUS poll per tick | 2 round trips; 0 tick polls | Unchanged; session runtime and service |
+| Client tick polls during startup and local stop | One per tick | 0 | Unchanged; session runtime and service |
+| Wake publication work | 1,881,936 bytes hashed, 2,126 `AT`, 3,235,840 bytes cleaned, 1,097,728 invalidated | 0 of each | Unchanged; session runtime and service |
+| Wake, gated to bootstrap complete, bound | Not possible | ≤ 0.6 ms modeled, no tick wait | Unchanged; session runtime and service |
+| Worker core busy per wake | Not possible | ≤ 0.35 ms | Unchanged; session runtime and service |
+| Worker wakes per second while gated | 1 | 0 | Unchanged; session runtime and service |
+| Two clients submitting during a wake | Not possible | 0 refusals, 0 tick waits | Unchanged; session runtime and service |
+| Missed notification, completed job, bound | TIMEOUT | Finished; counter 1; no cancel | Unchanged; session runtime and service |
+| Deadline to recovered READY, acknowledgement within 1 ms, bound | Not possible | ≤ 1.5 ms, 0 tick waits; before the read-only mappings, plus one bootstrap publication | Unchanged; session runtime and service |
+| Hung bootstrap after a wake | Bounded only by the deleted elapsed test | Cancelled at 10 ms; recovered or retained within 30 ms; counts toward the cap | Unchanged; session runtime and service |
+| Cancel on an already idle engine | Not modeled | Completes or faults within 20 ms | Unchanged; session runtime and service |
 
 ## Changes owned elsewhere
 
