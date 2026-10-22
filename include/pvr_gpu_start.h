@@ -1,9 +1,9 @@
 #ifndef SUNSTONE_PVR_GPU_START_H
 #define SUNSTONE_PVR_GPU_START_H
 #include "pvr_mips.h"
+#include "a733_gpu_spin.h"
 
 #define PVR_GPU_START_MAX_STEPS 35u
-
 enum pvr_gpu_start_phase { PVR_GPU_START_NEW, PVR_GPU_START_PREPARED,
     PVR_GPU_START_RUNNING, PVR_GPU_START_BOOTED, PVR_GPU_START_FAILED };
 enum pvr_gpu_start_result { PVR_GPU_START_OK, PVR_GPU_START_AGAIN,
@@ -35,7 +35,7 @@ struct pvr_gpu_start_step { uint32_t kind, offset, width; uint64_t value; };
 struct pvr_gpu_start {
     struct pvr_gpu_start_ops ops;
     void *context;
-    uint64_t deadline, last_now, wait_until;
+    uint64_t deadline, last_now;
     uint32_t phase, error, index, count, slc_value;
     struct pvr_gpu_start_step steps[PVR_GPU_START_MAX_STEPS];
 };
@@ -55,9 +55,14 @@ int pvr_gpu_start_init(struct pvr_gpu_start *, const void *image, size_t bytes,
  * clock. A failed clock or expired deadline latches FAILED. Re-entry is refused.
  */
 enum pvr_gpu_start_result pvr_gpu_start_begin(struct pvr_gpu_start *, uint64_t deadline);
-/* One nonblocking step: at most one register access, publication, or shared-byte
- * read, plus clock reads. Delay steps wait at least 3 us after the preceding
- * operation completes. Service until BOOTED or FAILED; no internal retry loops.
+/* One bounded step: at most one register access or publication, plus clock
+ * reads. The clock may round down to whole microseconds. A delay step waits
+ * on the clock inside the step until the clock passes the start sample by more
+ * than 3, so at least 3 us elapse after the preceding operation completes. A
+ * readiness check re-reads the shared byte for at most A733_GPU_SPIN_US and then
+ * returns AGAIN. A wait whose clock stops advancing returns AGAIN without
+ * advancing the step. Every wait ends at the deadline. Service until BOOTED or
+ * FAILED.
  * BOOTED proves only an acquired firmware-started flag, not compatibility,
  * queue health, GPU workload completion, or physical qualification.
  * Failure latches the error/index and prevents further callback access. Keep
