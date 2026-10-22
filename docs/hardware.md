@@ -698,9 +698,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the conditions. The second board also passes 21 register reads, including
   the DCDC2 system-supply selector, with normal ROM return and automatic USB
   access under `sys-supply-probe-20261018/runtime/`. No regulator settings change.
-  The [rail ledger](rail-leases.md) coordinates all 39 source-defined
-  outputs with the existing DCDC2 and GPU DCDC4 owners. Host checks and native
-  compilation pass for shared selectors, snapshot ownership and retained faults.
+  The [rail ledger](rail-leases.md) is the only rail authority for the fifteen
+  outputs the images use and refuses the others; it no longer reaches DCDC2 or
+  DCDC4 through the clock registry or GPU manager. Rail status costs 37 AArch64
+  instructions on three cache lines at any holder count, and the ledger uses
+  1,600 bytes. One [power-authority state word](power.md) carries provider,
+  registry and ledger readiness and faults. A single owner for PCK600 domains
+  1, 4, 5 and 10 is **planned** and lands with its first consumer. CPU rail
+  lowering stops at the boot baseline.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
   and native compilation pass. A physical returning test now completes production
@@ -709,7 +714,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   decodes as an enabled, programmed 3.3 V; this is not a voltage measurement.
   Evidence: `pmic-provider-probe-20261018/physical/runtime/session.json`.
   It adopts either supported 24 MHz APBS1 parent
-  and rejects later route changes; focused reference-parent checks pass.
+  and rejects later route changes at request admission; focused
+  reference-parent checks pass. Between bus phases it checks only the state
+  word; around each register access it checks the deadline on the raw counter
+  and takes no lock.
   [GPU/NPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared
   provider disables their competing inherited-bus readers. Emulator checks pass

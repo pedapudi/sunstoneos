@@ -13,19 +13,42 @@ static int current(void *v)
     struct a733_pmic_native *n=v;
     return n && n->initialized && a733_task_context_owner_el1((TaskHandle_t)n->task);
 }
+/* The provider checks its deadline before and after every register access.
+ * a733_counter_clock_now takes a global ticket lock with interrupts masked,
+ * so this reads the architectural counter directly: the same microseconds as
+ * the counter clock (counter ticks over ticks per microsecond, no origin),
+ * with no lock. The provider faults on a value that runs backwards, and a
+ * fault latched in the shared counter clock refuses the read. */
 static int now(void *v,uint64_t *out)
-{struct a733_pmic_native *n=v;return n->locks->now(n->locks->context,out);}
+{
+    const struct a733_pmic_native *n=v;const struct a733_counter_clock *c=n->locks->context;
+    if(!c->initialized || atomic_load_explicit(&c->failed,memory_order_acquire) ||
+       !c->frequency || c->frequency%1000000u)return 0;
+    uint64_t t;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(t) :: "memory");
+    *out=t/(c->frequency/1000000u);return 1;
+}
+/* The kernel's mutex holder is queried once, when the bus is entered. A
+ * FreeRTOS mutex changes holder only when its holder gives it, and only
+ * leave() gives the I2C mutex on this task, so the holding flag stays exact
+ * until then. A retain anywhere sets the retained bit, which every access
+ * reads with one acquire load. */
 static int enter(void *v,uint64_t deadline)
-{struct a733_pmic_native *n=v;return current(n) && a733_platform_lock_enter(n->locks,A733_PLATFORM_I2C_LOCK,deadline);}
+{
+    struct a733_pmic_native *n=v;
+    if(!current(n) || n->holding || !a733_platform_lock_enter(n->locks,A733_PLATFORM_I2C_LOCK,deadline))return 0;
+    configASSERT(xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->task);
+    n->holding=1;return 1;
+}
 static void leave(void *v)
-{struct a733_pmic_native *n=v;a733_platform_lock_leave(n->locks,A733_PLATFORM_I2C_LOCK);}
+{struct a733_pmic_native *n=v;n->holding=0;a733_platform_lock_leave(n->locks,A733_PLATFORM_I2C_LOCK);}
 static void retain(void *v)
 {struct a733_pmic_native *n=v;configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_I2C_LOCK)==1);}
 static int owned(struct a733_pmic_native *n)
 {
-    return current(n) && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u) &&
-        xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->task;
+    return n->holding && current(n) && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u);
 }
+/* DSB SY before and after every access, as the shared MMIO rules require
+ * until a lighter placement is qualified on the board (docs/pmic-runtime.md). */
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     if(!out || !owned(v) || !a733_pmic_native_address(a,0))return 0;
@@ -49,7 +72,7 @@ int a733_pmic_native_init(struct a733_pmic_native *n,struct a733_platform_locks 
        locks->now!=a733_counter_clock_now || !locks->context ||
        !a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks)) ||
        !a733_ranges_disjoint(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
-    n->locks=locks;n->task=task;
+    n->locks=locks;n->task=task;n->holding=0;
     n->operations=(struct a733_pmic_ops){now,current,enter,leave,retain,read32,write32,outside};
     n->initialized=1;return 1;
 }
