@@ -3270,6 +3270,7 @@
    "docs/board-wiring.md",
    "docs/build.md",
    "docs/gpu.md",
+   "docs/radio-security.md",
    "docs/runtime.md",
    "docs/smp-runtime.md",
    "docs/sources.md",
@@ -7519,7 +7520,8 @@
  "radio-network.py": {
   "cache_areas": [],
   "docs": [
-   "docs/radio-network.md"
+   "docs/radio-network.md",
+   "docs/radio-security.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7864,6 +7866,17 @@
    "--output"
   ],
   "summary": "Differential and access check of runtime memcpy, memmove and memset.",
+  "usb": false
+ },
+ "sae-openssl.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-security.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Authenticate the pinned OpenSSL source; build its minimal host library and run the SAE cases.",
   "usb": false
  },
  "sdio-controller.py": {
