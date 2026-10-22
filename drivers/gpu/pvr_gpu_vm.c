@@ -4,20 +4,13 @@
  * See LICENSE.pvr for retained terms.
  */
 #include "pvr_gpu_vm.h"
+#include "a733_range.h"
 #include <string.h>
 
 #define VA_LIMIT (UINT64_C(1) << 40)
 #define PA_LIMIT (UINT64_C(1) << 36)
 #define TABLE_BYTES 4096u
 
-static int range(const void *p, size_t n)
-{
-    return p && n && n <= UINTPTR_MAX - (uintptr_t)p;
-}
-static int separate(const void *a, size_t an, const void *b, size_t bn)
-{
-    return (uintptr_t)a + an <= (uintptr_t)b || (uintptr_t)b + bn <= (uintptr_t)a;
-}
 static int size_code(uint32_t shift)
 {
     switch (shift) {
@@ -30,7 +23,7 @@ static int plan(const struct pvr_gpu_mapping *maps, size_t count,
                  struct pvr_gpu_vm_requirements *out)
 {
     if (count > VA_LIMIT / 4096 || count > SIZE_MAX / sizeof(*maps) ||
-        (count && !range(maps, count * sizeof(*maps)))) return 0;
+        (count && !a733_span_excl_nonempty(maps, count * sizeof(*maps)))) return 0;
     struct pvr_gpu_vm_requirements r = {0};
     uint64_t end = 0;
     uint32_t last_catalogue = UINT32_MAX, last_region = UINT32_MAX, last_shift = 0;
@@ -64,16 +57,17 @@ int pvr_gpu_vm_require(const struct pvr_gpu_mapping *maps, size_t count,
                         struct pvr_gpu_vm_requirements *out)
 {
     struct pvr_gpu_vm_requirements r;
-    if (!range(out, sizeof(*out)) || !plan(maps, count, &r) ||
-        (count && !separate(out, sizeof(*out), maps, count * sizeof(*maps)))) return 0;
+    if (!a733_span_excl_nonempty(out, sizeof(*out)) || !plan(maps, count, &r) ||
+        (count && !a733_extents_disjoint_prechecked((uintptr_t)out, sizeof(*out), (uintptr_t)maps, count * sizeof(*maps)))) return 0;
     *out = r;
     return 1;
 }
 static int outputs_separate(const struct pvr_gpu_vm_tables *t, void *context,
                              const void *input, size_t bytes)
 {
-    return range(input, bytes) && separate(t->cpu, t->bytes, input, bytes) &&
-        separate(context, PVR_GPU_VM_CONTEXT_BYTES, input, bytes);
+    return a733_span_excl_nonempty(input, bytes) &&
+        a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)input, bytes) &&
+        a733_extents_disjoint_prechecked((uintptr_t)context, PVR_GPU_VM_CONTEXT_BYTES, (uintptr_t)input, bytes);
 }
 static void put(unsigned char *p, uint64_t value, unsigned n)
 {
@@ -88,10 +82,11 @@ int pvr_gpu_vm_build(const struct pvr_gpu_mapping *maps, size_t count,
                       const struct pvr_gpu_vm_tables *t, void *context, size_t context_bytes)
 {
     struct pvr_gpu_vm_requirements r;
-    if (!range(t, sizeof(*t)) || !plan(maps, count, &r) ||
-        context_bytes != PVR_GPU_VM_CONTEXT_BYTES || !range(context, context_bytes) ||
+    if (!a733_span_excl_nonempty(t, sizeof(*t)) || !plan(maps, count, &r) ||
+        context_bytes != PVR_GPU_VM_CONTEXT_BYTES || !a733_span_excl_nonempty(context, context_bytes) ||
         t->bytes != r.table_bytes || t->page_count != r.table_pages ||
-        !range(t->cpu, t->bytes) || !separate(t->cpu, t->bytes, context, context_bytes) ||
+        !a733_span_excl_nonempty(t->cpu, t->bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)context, context_bytes) ||
         !outputs_separate(t, context, t, sizeof(*t)) ||
         !outputs_separate(t, context, t->physical_pages, t->page_count * sizeof(uint64_t)) ||
         (count && !outputs_separate(t, context, maps, count * sizeof(*maps)))) return 0;

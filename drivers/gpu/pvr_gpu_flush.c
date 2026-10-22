@@ -3,14 +3,13 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_flush.h"
+#include "a733_range.h"
 #include "pvr_fw_state.h"
 
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int outside(const struct pvr_gpu_flush *s, const void *p, size_t n)
 {
-    return range(p,n) && ((uintptr_t)s+sizeof(*s)<=(uintptr_t)p ||
-                         (uintptr_t)p+n<=(uintptr_t)s);
+    return a733_span_excl_nonempty(p,n) &&
+        a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)p,n);
 }
 static void put32(unsigned char *p, uint32_t value)
 { for (unsigned i=0;i<4;++i) p[i]=(unsigned char)(value>>(8*i)); }
@@ -19,7 +18,7 @@ int pvr_gpu_flush_init(struct pvr_gpu_flush *s, struct pvr_gpu_control *c,
                        const struct pvr_gpu_flush_ops *ops, void *ctx,
                        enum pvr_gpu_flush_level level, uint64_t deadline)
 {
-    if (!range(s,sizeof(*s)) || s->phase!=PVR_GPU_FLUSH_NEW ||
+    if (!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase!=PVR_GPU_FLUSH_NEW ||
         !outside(s,c,sizeof(*c)) || !outside(s,ops,sizeof(*ops)) ||
         !outside(s,c->queue,sizeof(*c->queue)) ||
         c->phase!=PVR_GPU_CONTROL_READY || c->queue->phase!=PVR_CCB_ACTIVE ||

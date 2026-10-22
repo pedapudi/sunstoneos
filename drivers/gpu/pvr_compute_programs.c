@@ -21,6 +21,7 @@
  * SOFTWARE.
  */
 #include "pvr_compute_programs.h"
+#include "a733_range.h"
 #include "pvr_compute_usc.inc"
 _Static_assert(sizeof(usc_store) == PVR_COMPUTE_USC_STORE_BYTES, "USC store size");
 _Static_assert(sizeof(usc_load) == PVR_COMPUTE_USC_LOAD_BYTES, "USC load size");
@@ -28,10 +29,6 @@ _Static_assert(sizeof(usc_load) == PVR_COMPUTE_USC_LOAD_BYTES, "USC load size");
 const uint32_t pvr_compute_program_bytes[PVR_PROGRAM_REGIONS] = {
     576, 576, 128, 128, 128, 128, 64, 16448, 16448, 512
 };
-static int overlap(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
-{ return a < b + m && b < a + n; }
-static int cpu_range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int gpu_range(uint64_t a, uint64_t n)
 { return a && n && a < (UINT64_C(1) << 40) && n <= (UINT64_C(1) << 40) - a; }
 static int heap(const struct pvr_compute_program_heap *h, int relative)
@@ -41,10 +38,7 @@ static int heap(const struct pvr_compute_program_heap *h, int relative)
 }
 static int contains(const struct pvr_compute_program_heap *h,
                     const struct pvr_compute_program_span *s)
-{ return s->gpu >= h->base && s->gpu - h->base <= h->bytes &&
-         s->bytes <= h->bytes - (s->gpu - h->base); }
-static int cpu_overlap(const void *a, size_t n, const void *b, size_t m)
-{ return overlap((uintptr_t)a, n, (uintptr_t)b, m); }
+{ return a733_extent_within(h->base, h->bytes, s->gpu, s->bytes); }
 static void put32(void *p, size_t off, uint32_t v)
 {
     unsigned char *d = p;
@@ -77,39 +71,39 @@ static uint64_t pds0(const struct pvr_compute_program_config *c, unsigned i,
 int pvr_compute_programs_build(const struct pvr_compute_program_config *c,
                               struct pvr_compute_program_result *out)
 {
-    if (!cpu_range(c, sizeof(*c)) || !cpu_range(out, sizeof(*out)) ||
+    if (!a733_span_excl_nonempty(c, sizeof(*c)) || !a733_span_excl_nonempty(out, sizeof(*out)) ||
         (uintptr_t)c % _Alignof(struct pvr_compute_program_config) ||
         (uintptr_t)out % _Alignof(struct pvr_compute_program_result) ||
-        cpu_overlap(c, sizeof(*c), out, sizeof(*out)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, sizeof(*c), (uintptr_t)out, sizeof(*out)) ||
         c->bvnc != PVR_FW_A733_BVNC || c->execution_cores != 1 ||
         !c->admission_token || !c->admit ||
         c->excluded_count < 5 || c->excluded_count > PVR_COMPUTE_PROGRAM_EXCLUSIONS ||
         !heap(&c->pds, 1) || !heap(&c->usc, 1) || !heap(&c->general, 0) ||
-        overlap(c->pds.base, c->pds.bytes, c->usc.base, c->usc.bytes) ||
-        overlap(c->pds.base, c->pds.bytes, c->general.base, c->general.bytes) ||
-        overlap(c->usc.base, c->usc.bytes, c->general.base, c->general.bytes)) return 0;
+        a733_extents_overlap_prechecked(c->pds.base, c->pds.bytes, c->usc.base, c->usc.bytes) ||
+        a733_extents_overlap_prechecked(c->pds.base, c->pds.bytes, c->general.base, c->general.bytes) ||
+        a733_extents_overlap_prechecked(c->usc.base, c->usc.bytes, c->general.base, c->general.bytes)) return 0;
     for (unsigned i = 0; i < c->excluded_count; ++i) {
         const struct pvr_compute_program_span *s = &c->excluded[i];
-        if (!cpu_range(s->cpu, s->bytes) || !gpu_range(s->gpu, s->bytes) ||
-            cpu_overlap(s->cpu, s->bytes, out, sizeof(*out))) return 0;
+        if (!a733_span_excl_nonempty(s->cpu, s->bytes) || !gpu_range(s->gpu, s->bytes) ||
+            a733_extents_overlap_prechecked((uintptr_t)s->cpu, s->bytes, (uintptr_t)out, sizeof(*out))) return 0;
     }
     for (unsigned i = 0; i < PVR_PROGRAM_REGIONS; ++i) {
         const struct pvr_compute_program_span *s = &c->buffers[i];
         const struct pvr_compute_program_heap *h = i < 2 ? &c->usc :
             (i == PVR_PROGRAM_CDM_RESUME ? &c->general : &c->pds);
-        if (s->bytes != pvr_compute_program_bytes[i] || !cpu_range(s->cpu, s->bytes) ||
+        if (s->bytes != pvr_compute_program_bytes[i] || !a733_span_excl_nonempty(s->cpu, s->bytes) ||
             !gpu_range(s->gpu, s->bytes) || (s->gpu & 63u) || !contains(h, s) ||
-            cpu_overlap(s->cpu, s->bytes, c, sizeof(*c)) ||
-            cpu_overlap(s->cpu, s->bytes, out, sizeof(*out))) return 0;
+            a733_extents_overlap_prechecked((uintptr_t)s->cpu, s->bytes, (uintptr_t)c, sizeof(*c)) ||
+            a733_extents_overlap_prechecked((uintptr_t)s->cpu, s->bytes, (uintptr_t)out, sizeof(*out))) return 0;
         for (unsigned j = 0; j < i; ++j) {
             const struct pvr_compute_program_span *b = &c->buffers[j];
-            if (cpu_overlap(s->cpu, s->bytes, b->cpu, b->bytes) ||
-                overlap(s->gpu, s->bytes, b->gpu, b->bytes)) return 0;
+            if (a733_extents_overlap_prechecked((uintptr_t)s->cpu, s->bytes, (uintptr_t)b->cpu, b->bytes) ||
+                a733_extents_overlap_prechecked(s->gpu, s->bytes, b->gpu, b->bytes)) return 0;
         }
         for (unsigned j = 0; j < c->excluded_count; ++j) {
             const struct pvr_compute_program_span *b = &c->excluded[j];
-            if (cpu_overlap(s->cpu, s->bytes, b->cpu, b->bytes) ||
-                overlap(s->gpu, s->bytes, b->gpu, b->bytes)) return 0;
+            if (a733_extents_overlap_prechecked((uintptr_t)s->cpu, s->bytes, (uintptr_t)b->cpu, b->bytes) ||
+                a733_extents_overlap_prechecked(s->gpu, s->bytes, b->gpu, b->bytes)) return 0;
         }
     }
     /* All validation, including the external proof, precedes output mutation. */

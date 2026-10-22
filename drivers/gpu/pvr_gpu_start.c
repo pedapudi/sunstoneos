@@ -4,13 +4,10 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_start.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { PUBLISH, CHECK_CLEAR, WRITE, READ_FENCE, READ_SLC, WRITE_SLC, DELAY, WAIT_BOOT };
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static uint64_t read64(const unsigned char *p)
 {
     uint64_t v = 0;
@@ -79,12 +76,14 @@ int pvr_gpu_start_init(struct pvr_gpu_start *s, const void *image, size_t bytes,
 {
     struct pvr_fw_plan p;
     uint32_t options, slc;
-    if (!range(s, sizeof(*s)) || s->phase != PVR_GPU_START_NEW ||
-        !range(b, sizeof(*b)) || !range(ops, sizeof(*ops)) ||
-        !separate(s, sizeof(*s), b, sizeof(*b)) || !separate(s, sizeof(*s), ops, sizeof(*ops)) ||
+    if (!a733_span_excl_nonempty(s, sizeof(*s)) || s->phase != PVR_GPU_START_NEW ||
+        !a733_span_excl_nonempty(b, sizeof(*b)) || !a733_span_excl_nonempty(ops, sizeof(*ops)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)b, sizeof(*b)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)ops, sizeof(*ops)) ||
         !ops->now || !ops->read || !ops->write || !ops->started || !ops->publish ||
         !pvr_fw_requirements(image, bytes, PVR_FW_A733_BVNC, &p) ||
-        !separate(s, sizeof(*s), image, bytes) || !features(image, &p, &options, &slc) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)image, bytes) ||
+        !features(image, &p, &options, &slc) ||
         !valid_boot(b)) return 0;
     struct pvr_gpu_start result = {0};
     result.ops = *ops; result.context = ctx; result.phase = PVR_GPU_START_PREPARED;

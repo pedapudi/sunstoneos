@@ -1,10 +1,8 @@
 #include "a733_gpu_reserved.h"
+#include "a733_range.h"
 #include "aarch64_device_memory.h"
 
 extern unsigned char __device_pool_start[];
-
-static int separate(uintptr_t a, size_t n, uintptr_t b, size_t m)
-{ return a + n <= b || b + m <= a; }
 
 /* Identity-only native image storage excludes aliases into either pool and
  * model/recording/result ranges. Translation verifies the complete input span. */
@@ -47,7 +45,7 @@ struct pvr_gpu_service_config *a733_gpu_reserved_prepare(struct a733_gpu_reserve
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         !private_image((uintptr_t)s, sizeof(*s), 1) ||
         !private_image((uintptr_t)firmware, bytes, 0) ||
-        !separate((uintptr_t)s, sizeof(*s), (uintptr_t)firmware, bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)firmware, bytes) ||
         s->admitted || s->prepared || s->memory.phase != A733_GPU_MEMORY_NEW) return NULL;
     struct pvr_fw_plan plan;
     if (!pvr_fw_requirements(firmware, bytes, PVR_FW_A733_BVNC, &plan) ||
@@ -55,10 +53,10 @@ struct pvr_gpu_service_config *a733_gpu_reserved_prepare(struct a733_gpu_reserve
     struct device_memory_pool *wb = a733_memory_reservations_init();
     struct device_memory_pool *nc = a733_memory_uncached_init();
     if (!wb || !nc ||
-        !separate((uintptr_t)s, sizeof(*s), (uintptr_t)wb, sizeof(*wb)) ||
-        !separate((uintptr_t)s, sizeof(*s), (uintptr_t)nc, sizeof(*nc)) ||
-        !separate((uintptr_t)firmware, bytes, (uintptr_t)wb, sizeof(*wb)) ||
-        !separate((uintptr_t)firmware, bytes, (uintptr_t)nc, sizeof(*nc))) return NULL;
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)wb, sizeof(*wb)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)nc, sizeof(*nc)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)firmware, bytes, (uintptr_t)wb, sizeof(*wb)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)firmware, bytes, (uintptr_t)nc, sizeof(*nc))) return NULL;
     struct device_memory_lease lease;
     struct device_memory_extent extent;
     if (!device_memory_acquire(wb, owner, A733_GPU_RESERVED_WB_BYTES, &lease, &extent)) return NULL;

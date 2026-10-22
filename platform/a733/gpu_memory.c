@@ -1,11 +1,8 @@
 #include "a733_gpu_memory.h"
+#include "a733_range.h"
 #include "a733_gpu_mapping.h"
 #include <string.h>
 
-static int span(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static const struct pvr_mips_buffer *buffer(const struct a733_gpu_memory *m, unsigned i)
 { return i < 3 ? &m->firmware[i] : &m->resources[i - 3]; }
 static int mapped(const struct pvr_mips_buffer *b, size_t off, size_t n, unsigned attributes, int write)
@@ -19,11 +16,12 @@ static int mapped(const struct pvr_mips_buffer *b, size_t off, size_t n, unsigne
 }
 static int external(const struct a733_gpu_memory *m, const void *p, size_t n)
 {
-    if (!span(p, n) || !separate(m, sizeof(*m), p, n)) return 0;
+    if (!a733_span_excl_nonempty(p, n) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)p, n)) return 0;
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *b = buffer(m, i);
-        if (!separate(p, n, b->storage.cpu, b->storage.bytes) ||
-            !separate(p, n, b->pages, b->page_count * sizeof(uint64_t))) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)p, n, (uintptr_t)b->storage.cpu, b->storage.bytes) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)p, n, (uintptr_t)b->pages, b->page_count * sizeof(uint64_t))) return 0;
     }
     return 1;
 }
@@ -37,24 +35,25 @@ static int ready(struct a733_gpu_memory *m)
 int a733_gpu_memory_init(struct a733_gpu_memory *m, const struct pvr_mips_buffer fw[3],
                          const struct pvr_mips_buffer resources[PVR_FW_RESOURCE_COUNT])
 {
-    if (!span(m, sizeof(*m)) || m->phase != A733_GPU_MEMORY_NEW ||
-        !span(fw, 3 * sizeof(*fw)) || !span(resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources)) ||
-        !separate(m, sizeof(*m), fw, 3 * sizeof(*fw)) ||
-        !separate(m, sizeof(*m), resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources)) ||
+    if (!a733_span_excl_nonempty(m, sizeof(*m)) || m->phase != A733_GPU_MEMORY_NEW ||
+        !a733_span_excl_nonempty(fw, 3 * sizeof(*fw)) ||
+        !a733_span_excl_nonempty(resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)fw, 3 * sizeof(*fw)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources)) ||
         !aarch64_device_cache_stride()) return 0;
     struct a733_gpu_memory candidate = {0};
     memcpy(candidate.firmware, fw, sizeof(candidate.firmware));
     memcpy(candidate.resources, resources, sizeof(candidate.resources));
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *b = buffer(&candidate, i);
-        if (!span(b->storage.cpu, b->storage.bytes) || ((uintptr_t)b->storage.cpu & 4095) ||
+        if (!a733_span_excl_nonempty(b->storage.cpu, b->storage.bytes) || ((uintptr_t)b->storage.cpu & 4095) ||
             !b->page_count || b->page_count > PVR_FW_MAX_ALLOCATION / 4096 ||
             b->storage.bytes != (size_t)b->page_count * 4096 ||
-            !span(b->pages, b->page_count * sizeof(uint64_t)) || ((uintptr_t)b->pages & 7) ||
-            !separate(m, sizeof(*m), b->pages, b->page_count * sizeof(uint64_t)) ||
-            !separate(b->storage.cpu, b->storage.bytes, m, sizeof(*m)) ||
-            !separate(b->storage.cpu, b->storage.bytes, fw, 3 * sizeof(*fw)) ||
-            !separate(b->storage.cpu, b->storage.bytes, resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources))) return 0;
+            !a733_span_excl_nonempty(b->pages, b->page_count * sizeof(uint64_t)) || ((uintptr_t)b->pages & 7) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)b->pages, b->page_count * sizeof(uint64_t)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, b->storage.bytes, (uintptr_t)m, sizeof(*m)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, b->storage.bytes, (uintptr_t)fw, 3 * sizeof(*fw)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, b->storage.bytes, (uintptr_t)resources, PVR_FW_RESOURCE_COUNT * sizeof(*resources))) return 0;
         if ((i == 2 && b->storage.bytes != PVR_MIPS_TABLE_BYTES) ||
             (i >= 3 && b->storage.bytes != pvr_fw_state_layout((enum pvr_fw_resource)(i - 3))->allocation_bytes)) return 0;
     }
@@ -62,8 +61,8 @@ int a733_gpu_memory_init(struct a733_gpu_memory *m, const struct pvr_mips_buffer
         const struct pvr_mips_buffer *b = buffer(&candidate, i);
         for (unsigned j = 0; j < 3 + PVR_FW_RESOURCE_COUNT; ++j) {
             const struct pvr_mips_buffer *a = buffer(&candidate, j);
-            if (!separate(b->storage.cpu, b->storage.bytes, a->pages, a->page_count * sizeof(uint64_t)) ||
-                (j < i && !separate(b->storage.cpu, b->storage.bytes, a->storage.cpu, a->storage.bytes))) return 0;
+            if (!a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, b->storage.bytes, (uintptr_t)a->pages, a->page_count * sizeof(uint64_t)) ||
+                (j < i && !a733_extents_disjoint_prechecked((uintptr_t)b->storage.cpu, b->storage.bytes, (uintptr_t)a->storage.cpu, a->storage.bytes))) return 0;
         }
         for (unsigned p = 0; p < b->page_count; ++p) {
             uint64_t pa = b->pages[p];

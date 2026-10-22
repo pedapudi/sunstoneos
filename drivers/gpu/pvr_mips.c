@@ -4,24 +4,13 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_mips.h"
+#include "a733_range.h"
 #include <string.h>
 
 #define HEAP_BASE UINT32_C(0xc0000000)
 #define HEAP_BYTES UINT32_C(0x01000000)
 #define PAGE PVR_MIPS_PAGE_BYTES
 
-static int range(const void *p, size_t n)
-{
-    return p && n && n <= UINTPTR_MAX - (uintptr_t)p;
-}
-static int overlap(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
-{
-    return a < b + bn && b < a + an;
-}
-static int separate(const void *a, size_t an, const void *b, size_t bn)
-{
-    return !overlap((uintptr_t)a, an, (uintptr_t)b, bn);
-}
 static uint64_t read64(const unsigned char *p)
 {
     uint64_t value = 0;
@@ -87,9 +76,9 @@ static int valid_page(uint64_t p)
 static int outputs_separate(const struct pvr_fw_buffer outputs[4],
                              const void *input, size_t bytes)
 {
-    if (!range(input, bytes)) return 0;
+    if (!a733_span_excl_nonempty(input, bytes)) return 0;
     for (unsigned i = 0; i < 4; ++i)
-        if (!separate(outputs[i].cpu, outputs[i].bytes, input, bytes)) return 0;
+        if (!a733_extents_disjoint_prechecked((uintptr_t)outputs[i].cpu, outputs[i].bytes, (uintptr_t)input, bytes)) return 0;
     return 1;
 }
 
@@ -99,9 +88,9 @@ int pvr_mips_prepare(const void *image, size_t bytes,
                      struct pvr_mips_boot *boot)
 {
     struct pvr_fw_plan p;
-    if (!range(b, 3 * sizeof(*b)) || count > PVR_MIPS_MAX_OBJECTS ||
-        (count && !range(objects, count * sizeof(*objects))) ||
-        !range(boot, sizeof(*boot)) ||
+    if (!a733_span_excl_nonempty(b, 3 * sizeof(*b)) || count > PVR_MIPS_MAX_OBJECTS ||
+        (count && !a733_span_excl_nonempty(objects, count * sizeof(*objects))) ||
+        !a733_span_excl_nonempty(boot, sizeof(*boot)) ||
         !pvr_fw_requirements(image, bytes, PVR_FW_A733_BVNC, &p) ||
         !compatible(image, &p)) return 0;
 
@@ -119,9 +108,9 @@ int pvr_mips_prepare(const void *image, size_t bytes,
     struct pvr_fw_buffer out[4] = {b[0].storage, b[1].storage, b[2].storage,
                                    {boot, sizeof(*boot)}};
     for (unsigned i = 0; i < 4; ++i) {
-        if (!range(out[i].cpu, out[i].bytes)) return 0;
+        if (!a733_span_excl_nonempty(out[i].cpu, out[i].bytes)) return 0;
         for (unsigned j = 0; j < i; ++j)
-            if (!separate(out[i].cpu, out[i].bytes, out[j].cpu, out[j].bytes)) return 0;
+            if (!a733_extents_disjoint_prechecked((uintptr_t)out[i].cpu, out[i].bytes, (uintptr_t)out[j].cpu, out[j].bytes)) return 0;
     }
     if (!outputs_separate(out, image, bytes) ||
         !outputs_separate(out, b, 3 * sizeof(*b)) ||
@@ -150,7 +139,7 @@ int pvr_mips_prepare(const void *image, size_t bytes,
         if (mapped > HEAP_BYTES / PAGE) return 0;
         for (size_t j = 0; j < i; ++j) {
             struct pvr_mips_object other = mapping(&p, b, objects, j);
-            if (overlap(m.address, size, other.address, (uint64_t)other.page_count * PAGE))
+            if (a733_extents_overlap_prechecked(m.address, size, other.address, (uint64_t)other.page_count * PAGE))
                 return 0;
         }
     }
@@ -210,17 +199,18 @@ int pvr_mips_prepare(const void *image, size_t bytes,
 int pvr_mips_unmap_stopped(const struct pvr_mips_buffer *table,
     const struct pvr_mips_object *objects,size_t count)
 {
-    if(!range(table,sizeof(*table)) || !range(table->storage.cpu,PVR_MIPS_TABLE_BYTES) ||
+    if(!a733_span_excl_nonempty(table,sizeof(*table)) ||
+       !a733_span_excl_nonempty(table->storage.cpu,PVR_MIPS_TABLE_BYTES) ||
        table->storage.bytes!=PVR_MIPS_TABLE_BYTES || !count || count>PVR_MIPS_MAX_OBJECTS ||
-       !range(objects,count*sizeof(*objects)) ||
-       !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,table,sizeof(*table)) ||
-       !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,objects,count*sizeof(*objects)))return 0;
+       !a733_span_excl_nonempty(objects,count*sizeof(*objects)) ||
+       !a733_extents_disjoint_prechecked((uintptr_t)table->storage.cpu,PVR_MIPS_TABLE_BYTES,(uintptr_t)table,sizeof(*table)) ||
+       !a733_extents_disjoint_prechecked((uintptr_t)table->storage.cpu,PVR_MIPS_TABLE_BYTES,(uintptr_t)objects,count*sizeof(*objects)))return 0;
     unsigned char *bytes=table->storage.cpu;
     for(size_t i=0;i<count;++i) {
         const struct pvr_mips_object *o=objects+i;
         if(!o->page_count || o->page_count>PVR_MIPS_TABLE_BYTES/4 ||
-           !range(o->pages,o->page_count*sizeof(*o->pages)) ||
-           !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,o->pages,o->page_count*sizeof(*o->pages)) ||
+           !a733_span_excl_nonempty(o->pages,o->page_count*sizeof(*o->pages)) ||
+           !a733_extents_disjoint_prechecked((uintptr_t)table->storage.cpu,PVR_MIPS_TABLE_BYTES,(uintptr_t)o->pages,o->page_count*sizeof(*o->pages)) ||
            (o->cache_policy!=PVR_MIPS_UNCACHED && o->cache_policy!=PVR_MIPS_WRITE_THROUGH) ||
            o->address<UINT32_C(0xc0000000) ||
            (o->address&4095) || (uint64_t)o->address+(uint64_t)o->page_count*4096>UINT64_C(0xc1000000))return 0;

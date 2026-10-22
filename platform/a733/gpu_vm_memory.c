@@ -1,4 +1,5 @@
 #include "a733_gpu_vm_memory.h"
+#include "a733_range.h"
 #include "aarch64_device_memory.h"
 #include "a733_gpu_mapping.h"
 
@@ -6,10 +7,6 @@
 #define PA_LIMIT (UINT64_C(1) << 36)
 #define MAX_TABLE_PAGES (1u + 1024u + 524288u)
 
-static int span(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int apart(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static int physical(uint64_t p)
 { return p && p < PA_LIMIT && !(p >= 0x1fc00000 && p < 0x1fc04000); }
 static int mapped(uintptr_t cpu, uint64_t pa, unsigned attributes)
@@ -33,24 +30,25 @@ static enum a733_gpu_vm_memory_result fail(struct a733_gpu_vm_memory *m)
 int a733_gpu_vm_memory_init(struct a733_gpu_vm_memory *m, const struct pvr_gpu_vm_tables *t,
                             void *context, uint64_t pa)
 {
-    if (!span(m, sizeof(*m)) || m->phase != A733_GPU_VM_MEMORY_NEW ||
-        !span(t, sizeof(*t)) || !apart(m, sizeof(*m), t, sizeof(*t)) ||
+    if (!a733_span_excl_nonempty(m, sizeof(*m)) || m->phase != A733_GPU_VM_MEMORY_NEW ||
+        !a733_span_excl_nonempty(t, sizeof(*t)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)t, sizeof(*t)) ||
         !t->page_count || t->page_count > MAX_TABLE_PAGES ||
-        t->bytes != (size_t)t->page_count * PAGE || !span(t->cpu, t->bytes) ||
+        t->bytes != (size_t)t->page_count * PAGE || !a733_span_excl_nonempty(t->cpu, t->bytes) ||
         ((uintptr_t)t->cpu & (PAGE - 1)) ||
-        !span(t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
-        ((uintptr_t)t->physical_pages & 7) || !span(context, PVR_GPU_VM_CONTEXT_BYTES) ||
+        !a733_span_excl_nonempty(t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
+        ((uintptr_t)t->physical_pages & 7) || !a733_span_excl_nonempty(context, PVR_GPU_VM_CONTEXT_BYTES) ||
         ((uintptr_t)context & 7) || ((uintptr_t)context & (PAGE - 1)) > PAGE - PVR_GPU_VM_CONTEXT_BYTES ||
         !physical(pa & ~(uint64_t)(PAGE - 1)) ||
         (pa & (PAGE - 1)) != ((uintptr_t)context & (PAGE - 1)) ||
-        !apart(t->cpu, t->bytes, context, PVR_GPU_VM_CONTEXT_BYTES) ||
-        !apart(t->cpu, t->bytes, m, sizeof(*m)) ||
-        !apart(t->cpu, t->bytes, t, sizeof(*t)) ||
-        !apart(t->cpu, t->bytes, t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
-        !apart(context, PVR_GPU_VM_CONTEXT_BYTES, m, sizeof(*m)) ||
-        !apart(context, PVR_GPU_VM_CONTEXT_BYTES, t, sizeof(*t)) ||
-        !apart(context, PVR_GPU_VM_CONTEXT_BYTES, t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
-        !apart(m, sizeof(*m), t->physical_pages, (size_t)t->page_count * sizeof(uint64_t))) return 0;
+        !a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)context, PVR_GPU_VM_CONTEXT_BYTES) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)m, sizeof(*m)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)t, sizeof(*t)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)t->cpu, t->bytes, (uintptr_t)t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)context, PVR_GPU_VM_CONTEXT_BYTES, (uintptr_t)m, sizeof(*m)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)context, PVR_GPU_VM_CONTEXT_BYTES, (uintptr_t)t, sizeof(*t)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)context, PVR_GPU_VM_CONTEXT_BYTES, (uintptr_t)t->physical_pages, (size_t)t->page_count * sizeof(uint64_t)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)t->physical_pages, (size_t)t->page_count * sizeof(uint64_t))) return 0;
     for (unsigned i = 0; i < t->page_count; ++i) {
         uint64_t p = t->physical_pages[i];
         if (!physical(p) || (p & (PAGE - 1)) || (i && p <= t->physical_pages[i - 1]) ||
@@ -67,8 +65,9 @@ enum a733_gpu_vm_memory_result a733_gpu_vm_memory_build(struct a733_gpu_vm_memor
 {
     if (!m || m->phase == A733_GPU_VM_MEMORY_FAILED) return A733_GPU_VM_MEMORY_FAULT;
     if (m->phase != A733_GPU_VM_MEMORY_OFFLINE || count > SIZE_MAX / sizeof(*maps) ||
-        (count && (!span(maps, count * sizeof(*maps)) || ((uintptr_t)maps % _Alignof(struct pvr_gpu_mapping)) ||
-                   !apart(m, sizeof(*m), maps, count * sizeof(*maps))))) return A733_GPU_VM_MEMORY_INVALID;
+        (count && (!a733_span_excl_nonempty(maps, count * sizeof(*maps)) ||
+        ((uintptr_t)maps % _Alignof(struct pvr_gpu_mapping)) ||
+                   !a733_extents_disjoint_prechecked((uintptr_t)m, sizeof(*m), (uintptr_t)maps, count * sizeof(*maps))))) return A733_GPU_VM_MEMORY_INVALID;
     struct pvr_gpu_vm_requirements required;
     if (!pvr_gpu_vm_require(maps, count, &required) || required.table_bytes != m->tables.bytes)
         return A733_GPU_VM_MEMORY_INVALID;

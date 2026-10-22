@@ -4,12 +4,9 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_render_context.h"
+#include "a733_range.h"
 #include <string.h>
 
-static int span(const void *p, size_t bytes)
-{ return p && bytes && bytes <= UINTPTR_MAX - (uintptr_t)p; }
-static int separate(const void *a, size_t as, const void *b, size_t bs)
-{ return (uintptr_t)a + as <= (uintptr_t)b || (uintptr_t)b + bs <= (uintptr_t)a; }
 static uint64_t get(const unsigned char *p, unsigned bytes)
 {
     uint64_t value = 0;
@@ -22,22 +19,23 @@ static void put(unsigned char *p, uint64_t value, unsigned bytes)
 int pvr_render_context_build(const struct pvr_render_context_config *c,
     const struct pvr_compute_buffer b[PVR_RENDER_CONTEXT_REGIONS])
 {
-    if (!span(c, sizeof(*c)) || !span(b, sizeof(*b) * PVR_RENDER_CONTEXT_REGIONS) ||
+    if (!a733_span_excl_nonempty(c, sizeof(*c)) ||
+        !a733_span_excl_nonempty(b, sizeof(*b) * PVR_RENDER_CONTEXT_REGIONS) ||
         c->bvnc != PVR_FW_A733_BVNC || c->priority > 2 || !c->callstack ||
         (c->callstack & 63) || c->callstack >= (UINT64_C(1) << 40)) return 0;
     static const uint32_t required[] = {680, 160, 32, 32, 0, 32, 0, 32};
     for (unsigned i = 0; i < PVR_RENDER_CONTEXT_REGIONS; ++i) {
         const struct pvr_compute_buffer *x = b + i;
-        if (!span(x->cpu, x->bytes) ||
-            !separate(x->cpu, x->bytes, c, sizeof(*c)) ||
-            !separate(x->cpu, x->bytes, b, sizeof(*b) * PVR_RENDER_CONTEXT_REGIONS)) return 0;
+        if (!a733_span_excl_nonempty(x->cpu, x->bytes) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)x->cpu, x->bytes, (uintptr_t)c, sizeof(*c)) ||
+            !a733_extents_disjoint_prechecked((uintptr_t)x->cpu, x->bytes, (uintptr_t)b, sizeof(*b) * PVR_RENDER_CONTEXT_REGIONS)) return 0;
         if (i == PVR_RENDER_GEOM_RING || i == PVR_RENDER_FRAG_RING) {
             if (x->bytes < 2048 || x->bytes > PVR_CCCB_MAX_BYTES || (x->bytes & (x->bytes - 1))) return 0;
         } else if (x->bytes != required[i]) return 0;
         if ((x->address & 7) || x->address < UINT32_C(0xc0000000) ||
             (uint64_t)x->address + x->bytes > UINT64_C(0xc1000000)) return 0;
         for (unsigned j = 0; j < i; ++j)
-            if (!separate(x->cpu, x->bytes, b[j].cpu, b[j].bytes) ||
+            if (!a733_extents_disjoint_prechecked((uintptr_t)x->cpu, x->bytes, (uintptr_t)b[j].cpu, b[j].bytes) ||
                 !((uint64_t)x->address + x->bytes <= b[j].address ||
                   (uint64_t)b[j].address + b[j].bytes <= x->address)) return 0;
     }

@@ -4,13 +4,10 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See drivers/gpu/LICENSE.pvr.
  */
 #include "a733_gpu_backend.h"
+#include "a733_range.h"
 #include "aarch64_device_memory.h"
 #include "a733_gpu_platform_native.h"
 
-static int span(const void *p, size_t n)
-{ return p && n && (uintptr_t)p <= UINTPTR_MAX - n; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return span(a, n) && span(b, m) && ((uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a); }
 static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
 {
     unsigned expected = 0;
@@ -41,17 +38,17 @@ static int device_pages(void)
 }
 static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int queue_event)
 {
-    if (!span(p, bytes) || !separate(b, sizeof(*b), p, bytes) ||
-        (b->external.revoked && !separate(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
-        !separate(b->memory, sizeof(*b->memory), p, bytes) ||
-        !separate(b->power, sizeof(*b->power), p, bytes) ||
-        !separate(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
-        (!queue_event && !separate(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
-        !separate(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
+    if (!a733_span_excl_nonempty(p, bytes) || !a733_ranges_disjoint_nonempty(b, sizeof(*b), p, bytes) ||
+        (b->external.revoked && !a733_ranges_disjoint_nonempty(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
+        !a733_ranges_disjoint_nonempty(b->memory, sizeof(*b->memory), p, bytes) ||
+        !a733_ranges_disjoint_nonempty(b->power, sizeof(*b->power), p, bytes) ||
+        !a733_ranges_disjoint_nonempty(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
+        (!queue_event && !a733_ranges_disjoint_nonempty(b->service, offsetof(struct pvr_gpu_service, worker_stack), p, bytes)) ||
+        !a733_ranges_disjoint_nonempty(b->service->config.firmware, b->service->config.firmware_bytes, p, bytes)) return 0;
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *buffer = i < 3 ? &b->memory->firmware[i] : &b->memory->resources[i - 3];
-        if (!separate(buffer->storage.cpu, buffer->storage.bytes, p, bytes) ||
-            !separate(buffer->pages, buffer->page_count * sizeof(uint64_t), p, bytes)) return 0;
+        if (!a733_ranges_disjoint_nonempty(buffer->storage.cpu, buffer->storage.bytes, p, bytes) ||
+            !a733_ranges_disjoint_nonempty(buffer->pages, buffer->page_count * sizeof(uint64_t), p, bytes)) return 0;
     }
     uintptr_t first = (uintptr_t)p, end = first + bytes - 1;
     for (uintptr_t address = first;; address = (address & ~(uintptr_t)4095) + 4096) {
@@ -436,7 +433,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     if (!b || !s || !c || !m || !p || !external || b->phase != A733_GPU_BACKEND_NEW ||
         s->initialized || m->phase != A733_GPU_MEMORY_OFFLINE || !p->initialized || !p->manager ||
         p->phase != A733_GPU_PLATFORM_NEW || c->state.gpu_clock_hz != A733_GPU_INITIAL_HZ ||
-        c->state.bvnc != PVR_FW_A733_BVNC || !span(c->firmware, c->firmware_bytes)) return 0;
+        c->state.bvnc != PVR_FW_A733_BVNC || !a733_span_excl_nonempty(c->firmware, c->firmware_bytes)) return 0;
     if (c->free_lists.count && (!c->free_lists.ops.allocate || !c->free_lists.ops.publish_page ||
         !c->free_lists.ops.read || !c->free_lists.ops.write || !c->free_lists.ops.publish ||
         !c->free_lists.ops.recover_targets)) return 0;
@@ -446,22 +443,22 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
         struct aarch64_translation t;
         if ((uintptr_t)external->revoked % _Alignof(atomic_uint) ||
             !aarch64_device_translate((uintptr_t)external->revoked, 0, &t) || t.attributes != 0xff ||
-            !separate(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
+            !a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
         for (unsigned i = 0; i < 7; ++i)
-            if (!separate(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;
+            if (!a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;
     }
     for (unsigned i = 0; i < 7; ++i) {
-        if (!separate(objects[i], sizes[i], c->firmware, c->firmware_bytes)) return 0;
-        for (unsigned j = 0; j < i; ++j) if (!separate(objects[i], sizes[i], objects[j], sizes[j])) return 0;
+        if (!a733_ranges_disjoint_nonempty(objects[i], sizes[i], c->firmware, c->firmware_bytes)) return 0;
+        for (unsigned j = 0; j < i; ++j) if (!a733_ranges_disjoint_nonempty(objects[i], sizes[i], objects[j], sizes[j])) return 0;
     }
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *a = i < 3 ? &c->firmware_buffers[i] : &c->resources[i - 3];
         const struct pvr_mips_buffer *d = i < 3 ? &m->firmware[i] : &m->resources[i - 3];
         if (a->storage.cpu != d->storage.cpu || a->storage.bytes != d->storage.bytes || a->pages != d->pages || a->page_count != d->page_count) return 0;
-        if (external->revoked && (!separate(external->revoked, sizeof(*external->revoked), a->storage.cpu, a->storage.bytes) ||
-            !separate(external->revoked, sizeof(*external->revoked), a->pages, a->page_count * sizeof(uint64_t)))) return 0;
-        for (unsigned j = 0; j < 7; ++j) if (!separate(objects[j], sizes[j], a->storage.cpu, a->storage.bytes) ||
-            !separate(objects[j], sizes[j], a->pages, a->page_count * sizeof(uint64_t))) return 0;
+        if (external->revoked && (!a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), a->storage.cpu, a->storage.bytes) ||
+            !a733_ranges_disjoint_nonempty(external->revoked, sizeof(*external->revoked), a->pages, a->page_count * sizeof(uint64_t)))) return 0;
+        for (unsigned j = 0; j < 7; ++j) if (!a733_ranges_disjoint_nonempty(objects[j], sizes[j], a->storage.cpu, a->storage.bytes) ||
+            !a733_ranges_disjoint_nonempty(objects[j], sizes[j], a->pages, a->page_count * sizeof(uint64_t))) return 0;
     }
     uint64_t frequency;
     if (!aarch64_device_cache_stride() || !device_pages()) return 0;
