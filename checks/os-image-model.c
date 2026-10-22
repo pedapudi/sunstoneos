@@ -6,7 +6,7 @@
  *   clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
  *     -Iinclude -Iplatform/a733-smp-cached -Iapps/os -DSUNSTONE_BOARD_SUPERVISED=1 \
  *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1] [-DSUNSTONE_A733_OS_AUDIO=1] \
- *     [-DSUNSTONE_A733_OS_RADIO=1 | -DSUNSTONE_A733_OS_HEADSET=1] \
+ *     [-DSUNSTONE_A733_OS_RADIO=1] [-DSUNSTONE_A733_OS_HEADSET=1] \
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
@@ -99,14 +99,17 @@ static void irq_cases(void)
         ROUTES==2?"thermal INTID 71 and DMA0 INTID 143":"thermal INTID 71",988u-ROUTES);
 }
 
-/* Report periods: the board owners, the capture client and the radio owner
- * and network client every tick, the recognizer every 5 ms and the thermal
- * reader every 25 ms. */
+/* Report periods: the board owners, the capture client, the radio owner and
+ * network client, and the Bluetooth owner and headset client every tick, the
+ * recognizer every 5 ms and the thermal reader every 25 ms. */
 static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25,
 #ifdef SUNSTONE_A733_OS_AUDIO
     1,
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
+    1,1,
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
     1,1,
 #endif
 };

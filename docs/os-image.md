@@ -10,7 +10,9 @@ thermal service together. Three optional builds add more services:
   association, WPA2 with crypto engine entropy, DHCP or fixed addressing and
   one TCP exchange;
 - the headset build recognizes speech from a Bluetooth headset in place of
-  the recorded WAV.
+  the recorded WAV. It combines with the radio build: one owner of the
+  AIC8800 module then loads the firmware once and serves the Wi-Fi station
+  and the Bluetooth headset. An mSBC option adds wideband headset speech.
 
 The mimus board application already combines the
 USB0 device service, the USB2 host with keyboard and read-only USB storage,
@@ -25,9 +27,9 @@ adds three fixed parts to it:
   while every listed service makes progress.
 
 Status: implemented, built and host-modeled in both lifetimes, each with and
-without microphone recognition and with and without the radio station. The
-headset build is implemented, built and host-modeled in the supervised
-lifetime. No board has run any of these builds. The sources are in
+without microphone recognition, the radio station and headset recognition
+(the microphone excludes the headset), and the headset with and without
+wideband mSBC speech. No board has run any of these builds. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
@@ -38,8 +40,8 @@ session to 992 bytes and adds its capture client to the services, in either
 lifetime; the stage-2 loader admits both session sizes. The radio build keeps
 the session size and adds the radio owner and the network client to the
 services, in either lifetime. The headset build keeps the session size and
-is supervised only, because the Bluetooth application ends 60 seconds after
-it starts.
+adds the Bluetooth owner and the headset capture client to the services, in
+either lifetime.
 
 | | Supervised | Resident |
 | --- | --- | --- |
@@ -86,6 +88,8 @@ A failed service parks or suspends without recording.
 | Microphone capture client (microphone build) | Each task pass that ends with no unanswered DMA service request, one pass per tick | 1 s |
 | Radio owner (radio build) | Each pass while the radio has not failed, one pass per tick | 1 s |
 | Network client (radio build) | Each pass while the board is live and the radio has not failed, one pass per tick | 1 s |
+| Bluetooth owner (headset build) | Each Bluetooth poll while the application has not failed, one per tick; with the radio, the radio owner makes it after each radio poll | 1 s |
+| Headset capture client (headset build) | Each task pass while capture has not failed, one pass per tick | 1 s |
 
 The windows are configuration. No board measurement of the longest pause of
 each loop exists yet. One radio owner pass repeats session polls for at most
@@ -95,7 +99,9 @@ socket queues. The radio owner and network client are the board's own tasks
 in `apps/board/main.c`; the radio build compiles that file with a build patch
 ([main.patch](../apps/os/main.patch)) that adds the two reports. A radio
 failure, including an absent access point, a refused association or a failed
-TCP exchange, stops both reports, and the watchdog resets the board. The DMA worker answers a request in its next
+TCP exchange, stops both reports, and the watchdog resets the board. A
+headset failure, including a lost link or a capture that stops, stops the
+Bluetooth owner's or the capture client's report in the same way. The DMA worker answers a request in its next
 iteration, so a capture client waiting longer on an unanswered request means
 the worker has stopped, and the client's record then expires.
 
@@ -159,7 +165,7 @@ returns failure at the first refusal, so `main.c` keeps its panic codes 10 and
 | `thermal` | The thermal task | Validates the sealed OS session | Validates the sealed OS session, acquires its clocks and starts its task |
 | `audio` (microphone build) | The capture client, the DMA bootstrap task and the DMA worker | Validates the sealed OS session and adds PB5, PB6 and PB8 to the board pin authority | Starts the capture client, the audio clock and pin bindings, the DMA service and its interrupt |
 | `radio` (radio build) | None; `main.c` grants the radio owner and network client | Authenticates the radio profile and refuses radio or crypto engine owners equal to the thermal or DMA owner | Requires the radio owner and network client tasks that `main.c` created |
-| `headset` (headset build) | The Bluetooth owner; the capture client runs unprivileged | Applies the headset profile rules, refuses owners equal to a board or the thermal owner, and adds PG0..PG9, PM0, PM1, PM3, PM4 and the profile's PM latch | Starts the Bluetooth owner and the capture client and binds the client as segment consumer |
+| `headset` (headset build) | The Bluetooth owner; the capture client runs unprivileged. With the radio, none: the radio owner is the Bluetooth owner | Applies the headset profile rules, refuses owners equal to a board or the thermal owner, and adds PG0..PG9, PM0, PM1, PM3, PM4 and the profile's PM latch. With the radio, requires the board's radio pins and PM latch and the radio's module owners, and adds PG6..PG9, PM3 and PM4 | Starts the capture client and either the Bluetooth owner or, with the radio, the attachment to the radio's module, and binds the client as segment consumer |
 
 The mimus board image binds the same three named mimus functions directly to
 the board hooks, so its behavior is unchanged. The OS build compiles the
@@ -186,12 +192,13 @@ by the thermal owner's facts ([os.h](../apps/os/os.h)):
 | 808..991 | Microphone build only: the I2S receive facts below |
 
 The board session's workload is 0 or 4 in the base, microphone and headset
-builds and 1 in the radio build. Workload 1 is workload 0 with the board's
+builds and 1 in the radio build, with or without the headset. Workload 1 is workload 0 with the board's
 radio: the board session then carries the SID authority, the radio profile
 address `0x43000000`, its size and SHA-256, and the PM latch, under the
 board's own radio rules. The headset build uses the board session's SID
 authority and SID evidence as the Bluetooth image does: the evidence is the
-SHA-256 of the Bluetooth profile at `0x43000000`.
+SHA-256 of the Bluetooth profile at `0x43000000`. With the radio, the radio
+profile occupies `0x43000000` and the Bluetooth profile is at `0x43008000`.
 
 The OS admission ([admission.c](../apps/os/admission.c)) requires the OS
 contract magic, `reserved[0] = 0x41f00000`, `reserved[1]` equal to the session
@@ -308,37 +315,98 @@ A resident slot needs the radio profile and firmware span as a third asset at
 ## Bluetooth headset recognition
 
 The headset build runs the [native Bluetooth application](bluetooth-native.md)
-unchanged on the board's shared providers, with one owner task as in the
-Bluetooth image. The application loads the AIC8800 firmware over SDIO, runs
-H4/HCI over UART1, pairs securely with the headset, serves the hands-free
-audio gateway and receives CVSD audio over SCO or eSCO. The image admits only
-the repeated CVSD profile (version 3, mode 2), in which the
-application publishes fixed-length 8 kHz segments into two slots. Its USB0
-output and its own recognizer are not linked; the profile's recognition
-models are the mimus board's own.
+on the board's shared providers. The application runs H4/HCI over UART1,
+pairs securely with the headset, serves the hands-free audio gateway and
+receives audio over SCO or eSCO. The image admits the repeated profiles
+(version 3). In CVSD (mode 2), the application publishes fixed-length 8 kHz
+segments into two slots. In the mSBC build, wideband speech (mode 3) adds
+16 kHz segments decoded by the pinned libsbc, with a fallback to CVSD when
+the headset or the controller cannot use mSBC. Its USB0 output and its own
+recognizer are not linked; the profile's recognition models are the mimus
+board's own.
+
+### One owner serves the AIC8800 module
+
+The AIC8800 module carries Wi-Fi on its SDIO function and Bluetooth on UART1.
+Its power and enable pins, its SDIO card and its firmware are one resource:
+the firmware upload applies the Bluetooth patch and then loads the Wi-Fi
+image, and the module has no second independent load.
+
+- Without the radio, the Bluetooth application owns the module, as in the
+  Bluetooth image. Its owner task powers the module, loads the firmware with a
+  bootstrap-only radio session and runs HCI.
+- With the radio, the board's radio owner owns the module and loads the
+  firmware once with its full Wi-Fi session
+  ([radio session](radio-session.md)). The Bluetooth application attaches to
+  that module as a second client (`bluetooth_application_attach`). The radio
+  owner task polls the application after each radio poll through
+  `os_module_poll`, which the radio build's [main.patch](../apps/os/main.patch)
+  adds to `apps/board/main.c`. The client takes the session's firmware
+  generation while Wi-Fi is up, reconnecting or recovering.
+
+Each client has its own lease and its own failure:
+
+- The Wi-Fi station holds the session's runtime lease, as in the radio
+  build.
+- The Bluetooth client holds UART1, the H4/HCI binding to the firmware
+  generation, the wake pins PM3 and PM4 and its own recovery latch. The wake
+  pins join the radio platform before its first poll. An added admission in
+  the radio's native adapter authenticates them, as the platform's admission
+  contract requires.
+- A Bluetooth failure retains UART1 and the Bluetooth stack and leaves the
+  module, the Wi-Fi session and the board's recovery latch to the radio.
+- A module failure, including a radio failure that retains the session,
+  ends the Bluetooth client at its next poll.
+
+The image still ends the session on a headset failure, as described below,
+so in this image either failure ends the session; the separation keeps each
+client's retention to its own resources. The attachment refuses a module that
+the Bluetooth profile does not name: the profile's radio platform and session
+owners, topology, radio identity and firmware spans must equal the radio's.
+
+### Capture client
 
 The capture client ([headset.c](../apps/os/headset.c)) is the segment
 consumer. It copies and acknowledges every segment as it arrives, so the
 application never stops for backlog. When a recognition generation is
 requested, the client notes the published segment count; the segment being
 filled then has the next ticket. The first segment with a later ticket starts
-after the request. The client copies it, checks its SHA-256 and the
-unchanged segment record, converts it to a 16 kHz WAV with the Bluetooth
-image's 8-to-16 kHz conversion, and publishes it for that generation. Every
-other segment is discarded. The recognizer takes the WAV through the same
+after the request. The client copies it and checks its SHA-256 and the
+unchanged segment record. It converts a CVSD segment to a 16 kHz WAV with the
+Bluetooth image's 8-to-16 kHz conversion, or wraps a 16 kHz mSBC segment
+unchanged, and publishes the WAV for that generation. Every other segment is
+discarded. The recognizer takes the WAV through the same
 [recognition.patch](../apps/os/recognition.patch) as the microphone build.
-After the application closes the audio link, a pending request is never
-answered, and the session ends at its deadline.
 
-A refused copy, a segment with a lost packet, a failed Bluetooth owner or a
+A refused copy, a segment with a lost packet, capture stopped for any reason
+other than the supervised capture window, a failed Bluetooth owner or a
 failed board ends the session through `board_fail`. The owner retains its
-transports and the client keeps its buffers until manual power removal.
+transports and the client keeps its buffers. In the supervised lifetime they
+stay held until manual power removal. In the resident lifetime both headset
+services stop reporting and the watchdog resets the board.
 
-The configuration refuses the headset together with the radio, because both
-own the AIC8800 module: its SDIO function, its enable pins and the profile
-span at `0x43000000`. It refuses the headset together with the microphone,
-because the recognizer takes one capture source. At run time, the headset
-pin entry also refuses PG or PM pins that another owner already holds.
+### The schedule follows the lifetime
+
+In the supervised lifetime the application keeps the 60-second schedule of
+the Bluetooth image: firmware by 30 s, HCI identification by 35 s, headset
+setup by 40 s and capture until 38 s; the recognizer has the remaining time.
+After the capture window closes, a pending request is never answered and the
+session ends at its deadline.
+
+In the resident lifetime the application has no end. Firmware loading has
+120 s from the session start, the bound of the resident radio. When the
+firmware first becomes ready, the stage schedule moves so that its 30 s
+firmware bound falls at that moment. HCI identification and headset setup
+then keep their supervised budgets of 5 s and 10 s after the firmware.
+Capture has no window: the application publishes segments until the link
+fails, and a stop for any reason closes the audio link within 2 s. These
+bounds are configuration, not a board measurement.
+
+The configuration refuses the headset together with the microphone, because
+the recognizer takes one capture source, and the mSBC option without the
+headset. At run time, the headset pin entry refuses PG or PM pins that
+another owner already holds. With the radio, it refuses a module pin
+authority or PM latch other than the radio's.
 
 ## Build and checks
 
@@ -346,14 +414,19 @@ pin entry also refuses PG or PM pins that another owner already holds.
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
   [-DSUNSTONE_A733_OS_RESIDENT=ON] [-DSUNSTONE_A733_OS_AUDIO=ON] [-DSUNSTONE_A733_OS_RADIO=ON]
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  -DSUNSTONE_A733_OS_HEADSET=ON -DSUNSTONE_BT_SECURITY_DIR=<pinned Zephyr BR/EDR sources>
+  -DSUNSTONE_A733_OS_HEADSET=ON -DSUNSTONE_BT_SECURITY_DIR=<pinned Zephyr BR/EDR sources> \
+  [-DSUNSTONE_A733_OS_RESIDENT=ON] [-DSUNSTONE_A733_OS_RADIO=ON] \
+  [-DSUNSTONE_A733_OS_MSBC=ON -DSUNSTONE_BT_SBC_DIR=<pinned BlueZ libsbc sources>]
 cmake --build BUILD --target sunstone-a733-os
 ```
 
 The configuration needs the same inputs as the mimus board image; the radio
 build also uses the radio stacks that the board image already compiles. The
 headset build verifies the pinned Zephyr security sources with
-`apps/bluetooth/security-source.py`, as the Bluetooth image does. Each link
+`apps/bluetooth/security-source.py`, as the Bluetooth image does, and the
+mSBC build checks each libsbc source against
+`apps/bluetooth/msbc-source.json` and compiles it with
+`SBC_HIGH_PRECISION`, as the Bluetooth image's mSBC build does. Each link
 runs [os-image-link.py](../checks/os-image-link.py), which reads the final ELF
 and fails the build unless:
 
@@ -364,9 +437,9 @@ and fails the build unless:
 - every table INTID is a distinct SPI with a valid core and priority, and its
   handler is a linked function;
 - every start entry has a distinct name and distinct linked functions;
-- the start list is `mimus`, `thermal` and, by build, `audio`, `radio` or
-  `headset`, and the table holds INTID 71 and, in the microphone build,
-  INTID 143;
+- the start list is `mimus`, `thermal` and, by build, `audio`, `radio`,
+  `headset` or `radio` followed by `headset`, and the table holds INTID 71
+  and, in the microphone build, INTID 143;
 - the base and overlay models, the recorded WAV and the recognizer arena do
   not overlap one another or any allocated image section, and lie inside the
   stage-2 loader's load window `0x41000000..0x47000000`, below the monitor
@@ -382,7 +455,7 @@ supervised preparation uses it as the image manifest.
 
 [os-image-model.c](../checks/os-image-model.c) compiles the image's table,
 supervision and admission sources on the host, for each lifetime with and
-without the microphone and the radio, and for the supervised headset build:
+without the microphone, the radio and the headset:
 
 - every INTID from 32 to 1019 is delivered; only INTID 71 on CPU0 reaches the
   thermal handler and, in the microphone build, only INTID 143 on CPU0 reaches
@@ -394,9 +467,9 @@ without the microphone and the radio, and for the supervised headset build:
 - when USB0 first reports at 1.5 s, nothing closes, the first renewal follows
   within 20 ms of that report, and renewal continues;
 - each service stalling at 70 s stops renewal within its window: seven
-  services, eight with the microphone, nine with the radio and ten with
-  both,
-  and the watchdog expires four seconds after the last renewal;
+  services, eight with the microphone, nine with the radio or the headset,
+  ten with the microphone and the radio and eleven with the radio and the
+  headset, and the watchdog expires four seconds after the last renewal;
 - for each of those services, never reporting leads to expiry at four
   seconds with no earlier close, and the task closes at that expiry if the
   watchdog has not reset the board;
@@ -406,7 +479,8 @@ without the microphone and the radio, and for the supervised headset build:
 - the nominal session and contract are admitted, with refusals of single
   changed fields: 25 supervised, 27 resident, 46 supervised microphone, 48
   resident microphone, 28 supervised radio, 30 resident radio, 49 and 51 for
-  the radio with the microphone, and 27 for the headset. The microphone
+  the radio with the microphone, 27 supervised and 29 resident for the
+  headset, and 30 and 32 for the radio with the headset. The microphone
   refusals include the other lifetime's DMA established facts. The radio
   refusals include workloads 0 and 4 and two board radio rules; the other
   builds refuse workload 1. The headset refusals include a missing SID
@@ -427,20 +501,30 @@ fixed bootstrap and startup offsets and the session's lifetime, and refuse a
 profile.
 
 [os-image-headset.py](../checks/os-image-headset.py) compiles
-`apps/os/headset.c` with the headset build's flags, links the real 8-to-16 kHz
-conversion and runs it under unicorn against a modeled segment publisher
-with the Bluetooth application's copy, acknowledgment and ticket rules. It
-covers the pin entry and its 18 refusals and startup with the 60-second
-application lifetime. Two generations each discard the segments before and
-during the request and keep their WAV while later segments drain. A lost
-packet, a changed segment record, a wrong digest and a failed application
-each end the session; the request rules are also checked.
+`apps/os/headset.c` with a headset build's flags, links the real WAV
+conversions and runs it under unicorn against a modeled segment publisher
+with the Bluetooth application's copy, acknowledgment and ticket rules. The
+model follows the build's radio, resident and mSBC options. It covers the
+pin entry with its 18 refusals, or 24 with the radio, and startup with the
+session's lifetime. With the radio, startup creates only the capture client
+and attaches the application to the radio's module with the radio owner as
+Bluetooth owner. Two generations each discard the segments before and during
+the request and keep their WAV while later segments drain. A lost packet, a
+changed segment record, a wrong digest, a failed application and capture
+stopped for a deadline, backlog or loss each end the session; the supervised
+capture window does not. One owner iteration polls a live application and
+retains it after a board failure, and the resident build reports progress
+only before a failure. The mSBC build wraps a wideband segment unchanged and
+refuses an unknown capture state; other builds refuse a wideband segment.
+The request rules are also checked.
 
 [os-image-identity.py](../checks/os-image-identity.py) runs the linked
 image's EL3 publication hook under unicorn. Each build admits its own
 workloads and publishes the recognition inputs; the radio build also
 publishes the profile and firmware span and the chip-ID record, and the
 headset build the copied Bluetooth profile, its span and the chip-ID record.
+With both, workload 1 is admitted and the Bluetooth profile is copied from
+`0x43008000`.
 A second call, a Bluetooth profile of another size and a refused profile
 publish nothing more.
 
@@ -505,13 +589,9 @@ No device, queue database or FEL program is opened.
 
 - **Continuous recognition.** Each generation captures one finite utterance.
   Streaming capture into the recognizer needs a pinned mimus change.
-- **Radio and headset together.** Both own the AIC8800 module. A combined
-  owner that loads the firmware once and serves Wi-Fi over SDIO and
-  Bluetooth over UART1 does not exist yet.
-- **Resident headset.** The Bluetooth application ends 60 seconds after it
-  starts and stops capture 38 seconds after it starts.
-- **Wideband headset audio.** The mSBC profile (mode 3) needs the pinned
-  libsbc decoder in the image.
+- **Headset failure without ending the session.** A Bluetooth client
+  failure is contained to its own resources at the module, but the image
+  ends the session on any headset failure, also while the radio is still up.
 - **SHA-256 and AES requests.** The crypto engine serves only radio entropy;
   no part of the image submits hash or cipher requests.
 - **HDMI, camera, GPU and NPU.** These are separate images.
@@ -519,9 +599,10 @@ No device, queue database or FEL program is opened.
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need
   supervised preparation that stages their profile and firmware, and a
-  reachable access point or paired headset. The supervised radio build also
-  needs a faster SDIO mode, because firmware loading cannot finish within its
-  40 s bootstrap bound. The resident image needs every
+  reachable access point or paired headset. The supervised radio and headset
+  builds also need a faster SDIO mode, because firmware loading cannot finish
+  within their 40 s and 30 s bootstrap bounds. The build with both needs a
+  staged span that holds both profiles and the shared firmware. The resident image needs every
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
   measured service windows; the resident microphone build also needs a
   reviewed audio entry record with the resident DMA facts.
