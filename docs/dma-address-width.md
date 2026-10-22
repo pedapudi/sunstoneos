@@ -112,14 +112,21 @@ and no consumer needs one.
 
 ## Measurements
 
-Baseline and final values come from the parent of the implementing commit and
-the commit itself, built from the same configuration. Raw records are under
-`~/.cache/sunstoneos/evidence/dma-address-width-20261022/`.
+Baseline and final values come from the parent of the implementing commits and
+the last of them, built from the same configuration. Instruction counts come
+from AArch64 emulation of one call per scenario, with the image's C flags.
+Raw records are under
+`~/.cache/sunstoneos/evidence/dma-address-width-20261022/` and
+`~/.cache/sunstoneos/build/dma-address-width-measure/`; the
+[measurement record](designs/dma-address-width-measurements.md) gives the
+method and every figure.
 
 | Metric | Before | After |
 | --- | --- | --- |
 | Width checks per DMA0 submit | Two per mapping, two per descriptor chain, two per FIFO endpoint, one per memory endpoint | One per descriptor chain; the others unchanged |
-| AArch64 code of `a733_dma_controller.c` | 7,248 bytes | 7,216 bytes |
+| AArch64 instructions per successful DMA0 submit: one-segment copy, four-segment copy, memory to FIFO | 1,148; 2,822; 1,017 | 1,121; 2,795; 990 |
+| AArch64 instructions per DMA0 submit refused for a descriptor chain that crosses `0xfffff800`: quiet channel, channel not quiet | 136; 136 | 710; 667 |
+| AArch64 code of `a733_dma_controller.c` | 7,248 bytes | 7,200 bytes |
 | AArch64 code of `a733_dma.c`, `dma_memory.c` | 2,228 and 1,588 bytes | Identical instructions |
 | Copies per byte for a buffer above 4 GiB | No such buffers | Zero |
 | IOMMU leaf words per 307,200-byte plane at physical `0xffff_f000` and `0x1_8000_0000` | 75 and 75 | 75 and 75 |
@@ -131,6 +138,12 @@ of six 4 KiB pages (24,576), the native camera allocation (663,552) and the
 PCIe endpoint test's two 12,288-byte buffers and one 4,096-byte buffer
 (28,672). The figure is an upper bound for one image, because no image links
 every driver.
+
+The DMA0 conflict scan walks the 16 channels by pointer and executes six
+instructions for each idle channel, one of them a stack load of the controller
+pointer. A scan in a separate, non-inlined function keeps that pointer in a
+register, but its call adds 15 instructions to each successful submit, so the
+scan stays inside `submit`.
 
 ## Failure handling
 
