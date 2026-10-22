@@ -27,6 +27,7 @@ struct os_placement os_dispatch_place(uint32_t ordinal)
 }
 void os_dispatch_placed(void){++os_dispatch_record.placed;}
 void os_dispatch_refused(void){++os_dispatch_record.refused;}
+void os_dispatch_incomplete(void){os_dispatch_record.incomplete=1;os_dispatch_active=0;}
 void os_dispatch_failed(unsigned state)
 {
     /* The models and the code span are trustworthy after a GPU fault only if

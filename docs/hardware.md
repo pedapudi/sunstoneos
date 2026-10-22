@@ -473,8 +473,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   places mimus linear layers on the CPU or the GPU from a generated table,
   with INTID 95 and the GPU worker on the recognition core; it is
   **implemented** and host-modeled, with exact sums equal to a CPU-only
-  reference on the bench call list, and does not link until the GPU runtime
-  and the page-table owner provide five functions and two build constants.
+  reference on the bench call list. It does not build until the mimus port
+  shrinks its arena to 12 MiB and the GPU runtime and the page-table owner
+  provide five functions and two build constants.
   A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
   refuses the radio and headset builds until it stages their profile and
   firmware. The supervised radio and headset builds cannot finish firmware

@@ -1,13 +1,15 @@
 /* Host model of mimus linear-layer placement in the integrated OS image
  * (docs/recognition-dispatch.md). It compiles apps/os/dispatch.c with a
  * generated placement table and runs a call list through a modeled GPU hook
- * and GPU worker. The hook follows the GPU kernel design: jobs of at most
- * job_rows rows on 32-row boundaries, two jobs for a call of more than 32
- * rows except a subsampling block, the CPU computing channels [n_gpu, N), a
- * refused job computed on the CPU, and RESET or LOST reported through
- * os_dispatch_failed before any CPU row. apps/os/services.c supervises the
- * recognizer while the hook waits, and a modeled EL0 translation checks the
- * sum slots' mapping rule. No hardware is modeled.
+ * and GPU worker. The hook follows the GPU kernel design: one job in flight,
+ * a call of more than job_rows rows split into consecutive jobs on 32-row
+ * boundaries, the CPU computing channels [n_gpu, N), a refused job or a job
+ * with a missing tag computed on the CPU, and RESET or LOST reported through
+ * os_dispatch_failed before any CPU row. The modeled worker refuses a job
+ * above its own bound, computed at OPEN with the kernel design's formula.
+ * apps/os/services.c supervises the recognizer while the hook waits, and a
+ * modeled EL0 translation checks the output region's mapping rule. No
+ * hardware is modeled.
  *
  *   clang -std=c11 -O2 -Iinclude -Iplatform/a733-smp-cached -Iapps/os -IOUT \
  *     -DSUNSTONE_BOARD_SUPERVISED=1 -DSUNSTONE_BOARD_USB2_DUAL=1 -DSUNSTONE_BOARD_RESIDENT=1 \
@@ -48,7 +50,7 @@ void os_dispatch_stop(void){++board_fails;longjmp(stop,1);}
 
 /* Modeled GPU worker. open_reply is OPEN's reply; script makes job `job` of
  * call `call` end in `status`. */
-enum { JOB_OK, JOB_REFUSED, JOB_RESET, JOB_LOST };
+enum { JOB_OK, JOB_REFUSED, JOB_RESET, JOB_LOST, JOB_INCOMPLETE };
 static int open_reply=1;
 static unsigned opens;
 static struct { unsigned call,job,status; } script={~0u,~0u,JOB_OK};
@@ -57,7 +59,7 @@ void a733_gpu_mimus_worker(void *context){(void)context;}
 int a733_gpu_mimus_start(unsigned core){return core==OS_RECOGNITION_CORE;}
 void a733_gpu_mimus_irq(void){}
 
-/* Modeled EL0 translation of the sum slots: every page EL0-readable as
+/* Modeled EL0 translation of the read-only span: every page EL0-readable as
  * inner-shareable write-back at its own address and not EL0-writable, except
  * the page faults that a case selects. */
 static uintptr_t writable_page=~(uintptr_t)0,unreadable_page=~(uintptr_t)0,device_page=~(uintptr_t)0;
@@ -73,19 +75,23 @@ static int translate_el0(uintptr_t address,int write,struct aarch64_translation 
 static void slot_mapping_cases(void)
 {
     translations=0;
-    assert(os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_SLOTS,OS_DISPATCH_SLOT_BYTES)&&translations==2048);
+    assert(os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_READ_ONLY,OS_DISPATCH_READ_ONLY_BYTES)&&translations==2048);
     /* One writable, unreadable or Device page among the 1,024 refuses. */
-    uintptr_t last=OS_DISPATCH_SLOTS+OS_DISPATCH_SLOT_BYTES-4096,middle=OS_DISPATCH_SLOTS+0x200000;
+    uintptr_t last=OS_DISPATCH_READ_ONLY+OS_DISPATCH_READ_ONLY_BYTES-4096,middle=OS_DISPATCH_READ_ONLY+0x200000;
     uintptr_t *faults[3]={&writable_page,&unreadable_page,&device_page};
     for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j){
-        *faults[i]=j==0?OS_DISPATCH_SLOTS:j==1?middle:last;
-        assert(!os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_SLOTS,OS_DISPATCH_SLOT_BYTES));
+        *faults[i]=j==0?OS_DISPATCH_READ_ONLY:j==1?middle:last;
+        assert(!os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_READ_ONLY,OS_DISPATCH_READ_ONLY_BYTES));
         *faults[i]=~(uintptr_t)0;
     }
-    assert(!os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_SLOTS+64,4096)&&
-        !os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_SLOTS,100)&&
-        !os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_SLOTS,0)&&
-        !os_dispatch_el0_read_only(NULL,OS_DISPATCH_SLOTS,4096));
+    assert(!os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_READ_ONLY+64,4096)&&
+        !os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_READ_ONLY,100)&&
+        !os_dispatch_el0_read_only(translate_el0,OS_DISPATCH_READ_ONLY,0)&&
+        !os_dispatch_el0_read_only(NULL,OS_DISPATCH_READ_ONLY,4096));
+    /* The output region is the first 2 MiB of the span; mimus's arena ends
+     * where the span begins. */
+    assert(OS_DISPATCH_OUTPUT==OS_DISPATCH_READ_ONLY&&OS_DISPATCH_OUTPUT_BYTES<=OS_DISPATCH_READ_ONLY_BYTES&&
+        OS_DISPATCH_ARENA+OS_DISPATCH_CODE_BYTES==OS_DISPATCH_READ_ONLY);
 }
 
 struct call { uint32_t ordinal,rows,k,n,residual,block; };
@@ -95,7 +101,7 @@ static unsigned call_count;
 /* Counts over one run of the call list. */
 static struct {
     uint64_t placed,jobs,block_jobs,block_padded,block_codes,block_lines,cpu_fallback_rows,
-        outputs,written,mismatched,max_jobs_per_call,zero_row_jobs,place_lookups;
+        outputs,written,mismatched,max_jobs_per_call,zero_row_jobs,place_lookups,worker_refusals;
 } count;
 
 /* Codes and outputs of the current call. */
@@ -132,24 +138,23 @@ static void cpu_rows(const struct call *c,uint32_t first,uint32_t rows,uint32_t 
     for(uint32_t r=first;r<first+rows;++r)for(uint32_t ch=c0;ch<c1;++ch)output(c,r,ch,numeric?dot(c,r,ch):0);
 }
 
-/* Jobs of one call, as apps/os/placement.py split() issues them. */
+/* Jobs of one call, as apps/os/placement.py split() issues them: job_rows
+ * rows each and a last job with the rest. */
 static unsigned split(const struct call *c,uint32_t job_rows,uint32_t *jobs)
 {
-    unsigned parts=(c->rows+job_rows-1)/job_rows;
-    if(parts==1&&c->rows>32&&!c->block)parts=2;
-    uint32_t left=c->rows;
-    for(unsigned i=parts,j=0;i>0;--i,++j){
-        uint32_t take=left;
-        if(i>1){
-            double half=(double)left/i/32;uint32_t t=32*(uint32_t)(half+0.5);
-            /* Python's round() rounds halves to even. */
-            if(half-(uint32_t)half==0.5&&((uint32_t)half&1)==0)t-=32;
-            if(t<32)t=32;
-            take=t<job_rows?t:job_rows;
-        }
-        jobs[j]=take;left-=take;
-    }
+    unsigned parts=0;
+    for(uint32_t left=c->rows;left;left-=jobs[parts++])jobs[parts]=left<job_rows?left:job_rows;
     return parts;
+}
+/* The GPU worker's bound at OPEN (GPU kernel design): the 64 Mi MAC cap, the
+ * 2 MiB output region less its 64 KiB tag area, and the 512 workgroups of
+ * 32 rows by 16 channels whose lanes' tags fill the tag area. */
+static uint64_t worker_job_rows(uint64_t k,uint64_t n_gpu)
+{
+    uint64_t width=k<=512?4:8,macs=(UINT64_C(1)<<26)/(k*n_gpu),
+        sums=(OS_DISPATCH_OUTPUT_BYTES-(64u<<10))/(n_gpu*width),tags=32*(512/((n_gpu+15)/16));
+    uint64_t rows=macs<sums?macs:sums;
+    return rows<tags?rows:tags;
 }
 
 /* The GPU hook for one call. */
@@ -159,7 +164,8 @@ static void hook(unsigned index,const struct call *c)
     if(!p.n_gpu){cpu_rows(c,0,c->rows,0,c->n);return;}
     assert(p.n_gpu<=c->n&&p.job_rows>=32&&p.job_rows%32==0);
     unsigned width=c->k<=512?4:8;
-    assert((uint64_t)p.job_rows*c->k*p.n_gpu<=(UINT64_C(1)<<26)&&(uint64_t)p.job_rows*p.n_gpu*width<=(2u<<20));
+    uint64_t bound=worker_job_rows(c->k,p.n_gpu);
+    assert(p.job_rows<=bound&&p.job_rows+32>bound);
     os_dispatch_placed();++count.placed;
     /* Both inference workers compute the CPU channels while the GPU runs. */
     cpu_rows(c,0,c->rows,p.n_gpu,c->n);
@@ -170,6 +176,8 @@ static void hook(unsigned index,const struct call *c)
         uint32_t r=jobs[j];
         if(!r)++count.zero_row_jobs;
         assert(r&&r<=p.job_rows&&(j+1==parts||r%32==0));
+        /* The worker refuses rows above its own bound; none may reach it. */
+        if(r>bound)++count.worker_refusals;
         ++count.jobs;
         if(c->block){
             ++count.block_jobs;count.block_padded+=(32-r%32)%32;
@@ -181,6 +189,13 @@ static void hook(unsigned index,const struct call *c)
             os_dispatch_refused();cpu_rows(c,first,r,0,p.n_gpu);count.cpu_fallback_rows+=r;continue;
         }
         if(status==JOB_RESET||status==JOB_LOST)os_dispatch_failed(status==JOB_RESET?OS_DISPATCH_RESET:OS_DISPATCH_LOST);
+        if(status==JOB_INCOMPLETE){
+            /* A missing tag: after the worker's stop the session closes and
+             * the CPU computes the rest of the call; later calls stay on the
+             * CPU. */
+            os_dispatch_incomplete();cpu_rows(c,first,c->rows-first,0,p.n_gpu);
+            count.cpu_fallback_rows+=c->rows-first;break;
+        }
         /* The worker's exact sums land in a slot; the hook reads them out. */
         for(uint32_t row=first;row<first+r;++row)for(uint32_t ch=0;ch<p.n_gpu;++ch){
             int64_t sum=numeric?dot(c,row,ch):0;
@@ -280,7 +295,7 @@ int main(int argc,char **argv)
 
     /* Nominal: OPEN once, then every placed call on the GPU. */
     reset();assert(os_dispatch_open()&&os_dispatch_open()&&opens==1);
-    assert(run()&&!count.mismatched&&!count.zero_row_jobs&&!board_fails);
+    assert(run()&&!count.mismatched&&!count.zero_row_jobs&&!count.worker_refusals&&!board_fails);
     assert(os_dispatch_record.placed==count.placed&&!os_dispatch_record.refused);
     __typeof__(count) nominal=count;
 
@@ -292,6 +307,12 @@ int main(int argc,char **argv)
     reset();assert(os_dispatch_open());script.call=refused_call;script.job=0;script.status=JOB_REFUSED;
     assert(run()&&!count.mismatched&&os_dispatch_record.refused==1&&count.cpu_fallback_rows>0);
     assert(os_dispatch_record.placed==nominal.placed&&!board_fails&&!os_dispatch_record.failure);
+
+    /* A job with a missing tag runs on the CPU, and every later call stays on
+     * the CPU without ending the boot. */
+    reset();assert(os_dispatch_open());script.call=refused_call;script.job=0;script.status=JOB_INCOMPLETE;
+    assert(run()&&!count.mismatched&&os_dispatch_record.incomplete==1&&count.placed==1&&!board_fails);
+    for(uint32_t i=0;i<OS_PLACEMENT_TENSORS;++i)assert(!os_dispatch_place(i).n_gpu);
 
     /* RESET and LOST end the boot before any CPU row of the failed job, and
      * nothing is placed afterwards. The fault hits the last call's last job. */

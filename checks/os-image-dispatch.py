@@ -4,20 +4,26 @@
 The check covers docs/recognition-dispatch.md on the host; no device is used:
 
 - apps/os/placement.py emits the placement table for the A55 pair at 494 MHz
-  and the A76 pair at 2,002 MHz from the bench models, and the table, the
-  call and job counts and the modeled linear-stage time equal the recorded
-  values below;
+  and the A76 pair at 2,002 MHz from the bench models; the table and the
+  call and job counts equal the values the design records, and the modeled
+  linear-stage time is within the design's regression bound;
+- every row's job_rows is at most the GPU worker's own bound, computed here
+  with the GPU kernel design's formula;
 - a placement bound that rounds to zero rows gives n_gpu = 0;
 - checks/os-image-dispatch.c, built with AddressSanitizer and
   UndefinedBehaviorSanitizer, runs apps/os/dispatch.c over the bench call
   list with exact integer sums compared against a CPU-only reference, and
-  over the longest accepted input (the 1 MiB WAV slot), where the A55
-  table splits a call into three jobs. It covers no OPEN before the model
-  hashes, a refused OPEN, a refused job, RESET and LOST, a reply that never
-  comes, two jobs that end at the worker's deadline, and the slot mapping
-  rule with one writable, unreadable or Device page among 1,024;
+  over the longest accepted input (the 1 MiB WAV slot), where both tables
+  split a call into three or more jobs. It covers no OPEN before the model
+  hashes, a refused OPEN, a refused job, a job with a missing tag, RESET and
+  LOST, a reply that never comes, two jobs that end at the worker's deadline,
+  and the read-only mapping rule with one writable, unreadable or Device page
+  among 1,024;
 - the recognizer patch applies with and without the capture patch and opens
   the session only after every model hash has matched;
+- the patch's arena assertion compiles for a 12 MiB mimus arena at
+  0x46000000 and refuses a larger arena or another base; the result records
+  whether apps/mimus/recorded.h already fits;
 - os_dispatch_place compiles for AArch64 to two loads and one compare;
 - with --configure-from, CMake refuses the option without the resident
   lifetime or either build constant, and configures with both.
@@ -26,6 +32,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -39,17 +46,17 @@ spec = importlib.util.spec_from_file_location('placement', ROOT / 'apps/os/place
 placement = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(placement)
 
-# Emitted tables by shape (K x N: n_gpu, job_rows) for the bench recording.
+# Emitted tables by shape (K x N: n_gpu, job_rows) for the bench recording,
+# as docs/designs/recognition-dispatch.md records them.
 EXPECTED = {
-    'a55': {'1584x176': (176, 224), '3520x176': (176, 96), '176x704': (688, 544), '704x176': (176, 512),
-            '176x176': (176, 2144), '176x352': (352, 1056), '176x1025': (993, 352)},
-    'a76': {'1584x176': (112, 352), '3520x176': (112, 160), '176x704': (448, 832), '704x176': (112, 832),
-            '176x176': (112, 3392), '176x352': (224, 1696), '176x1025': (641, 576)},
+    'a55': {'1584x176': (176, 224), '3520x176': (176, 96), '176x704': (704, 352), '704x176': (176, 512),
+            '176x176': (176, 1472), '176x352': (352, 736), '176x1025': (1025, 224)},
+    'a76': {'1584x176': (112, 352), '3520x176': (112, 160), '176x704': (432, 576), '704x176': (112, 832),
+            '176x176': (112, 2336), '176x352': (208, 1248), '176x1025': (625, 384)},
 }
-# Modeled linear stage at the seeds, and the design's regression bounds.
-MODELED_BOUND = {'a55': 0.815, 'a76': 0.408}
-DESIGN_BOUND = {'a55': 0.79, 'a76': 0.39}
-BENCH = {'placed_calls': 204, 'jobs': 381, 'block_jobs': 20, 'block_padded_rows': 8,
+# The design's regression bound on the modeled linear stage, in seconds.
+DESIGN_BOUND = {'a55': 0.82, 'a76': 0.42}
+BENCH = {'placed_calls': 204, 'jobs': 204, 'block_jobs': 20, 'block_padded_rows': 8,
          'block_codes': 7032960, 'block_clean_lines': 219780, 'outputs': 12923134}
 BENCH_FRAMES = 222
 # The recorded WAV slot holds at most 1 MiB (apps/mimus-board/configure.py):
@@ -84,6 +91,36 @@ def recognizer_order(out):
     return ['recorded', 'capture']
 
 
+def worker_job_rows(k, n_gpu):
+    """The GPU worker's bound at OPEN, as the GPU kernel design states it."""
+    width = 4 if k <= 512 else 8
+    return min((1 << 26) // (k * n_gpu), ((2 << 20) - (64 << 10)) // (n_gpu * width),
+               32 * (512 // -(-n_gpu // 16)))
+
+
+def arena_bound(out):
+    """The recognizer patch's assertion that mimus's arena ends where the GPU
+    output region begins, compiled with three arenas."""
+    text = (out / 'recognition-gpu-recorded.cc').read_text()
+    start = text.index('static_assert(kMimusArenaBase')
+    assertion = text[start:text.index(';', start) + 1]
+    source = out / 'arena.cc'
+    results = {}
+    for name, base, size in (('12 MiB', 0x46000000, 12 << 20), ('16 MiB', 0x46000000, 16 << 20),
+                             ('moved base', 0x46001000, 12 << 20)):
+        source.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" {\n#include "dispatch.h"\n}\n'
+                          'inline constexpr uintptr_t kMimusArenaBase = %#x;\n'
+                          'inline constexpr size_t kMimusArenaBytes = %d;\n%s\n' % (base, size, assertion))
+        result = subprocess.run(['clang++', '-std=c++20', '-fsyntax-only', '-Iapps/os', str(source)], cwd=ROOT,
+                                capture_output=True, text=True)
+        results[name] = result.returncode == 0
+    assert results == {'12 MiB': True, '16 MiB': False, 'moved base': False}, results
+    header = (ROOT / 'apps/mimus/recorded.h').read_text()
+    size = re.search(r'kMimusArenaBytes = ([0-9 *]+);', header).group(1)
+    arena = math.prod(int(factor) for factor in size.split('*'))
+    return {'compiles': results, 'recorded_arena_bytes': arena, 'recorded_arena_fits': arena <= 12 << 20}
+
+
 def run_model(out, cores, models, numeric_frames):
     clocks = placement.Clocks(cores)
     tensors = placement.merged_tensors(*models)
@@ -94,7 +131,9 @@ def run_model(out, cores, models, numeric_frames):
     summary = placement.summary(tensors, table, clocks, BENCH_FRAMES)
     shapes = {k: (v['n_gpu'], v['job_rows']) for k, v in summary['shapes'].items()}
     assert shapes == EXPECTED[cores], (cores, shapes)
-    assert summary['linear_seconds'] <= MODELED_BOUND[cores], (cores, summary['linear_seconds'])
+    assert summary['linear_seconds'] <= DESIGN_BOUND[cores], (cores, summary['linear_seconds'])
+    for t, (n_gpu, rows) in zip(tensors, table):
+        assert not n_gpu or 32 <= rows <= worker_job_rows(t['k'], n_gpu), (t['name'], n_gpu, rows)
     core = placement.CORES[cores]['pair'][0]
     binary = directory / 'dispatch'
     subprocess.run(['clang'] + COMPILE + ['-I' + str(directory), '-DOS_RECOGNITION_CORE=%d' % core,
@@ -114,9 +153,9 @@ def run_model(out, cores, models, numeric_frames):
     if cores == 'a55':
         for key, value in BENCH.items():
             assert bench[key] == value, (key, bench[key], value)
-    # On the A55 pair the output head's 352-row bound splits the longest
-    # input into three jobs; on the A76 pair every bound exceeds half of it.
-    assert results[LONGEST_FRAMES]['max_jobs_per_call'] >= (3 if cores == 'a55' else 2), results[LONGEST_FRAMES]
+    # The output head's bound (224 rows on the A55 pair, 384 on the A76
+    # pair) splits the longest input's 820-row call into three or more jobs.
+    assert results[LONGEST_FRAMES]['max_jobs_per_call'] >= 3, results[LONGEST_FRAMES]
     return {'summary': summary, 'bench': bench, 'longest': results[LONGEST_FRAMES],
             'design_bound_s': DESIGN_BOUND[cores],
             'placement_h_sha256': hashlib.sha256((directory / 'placement.h').read_bytes()).hexdigest()}
@@ -160,17 +199,17 @@ def configure_cases(out, build, models):
         ['-D%s=%s' % item for item in sorted(cache.items())]
     env = dict(os.environ, PATH=str(Path(cache['SUNSTONE_LLD']).parent) + os.pathsep + os.environ['PATH'])
     cases = [
-        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', '-DA733_GPU_SLOTS_EL0_READ_ONLY=ON',
-                        '-DA733_GPU_SLOTS_CLEAN_INVALIDATE=ON'], 'resident lifetime'),
+        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
+                        '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON'], 'resident lifetime'),
         ('no-constants', ['-DSUNSTONE_A733_OS_RESIDENT=ON'], 'read-only at EL0'),
-        ('no-clean-invalidate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_SLOTS_EL0_READ_ONLY=ON'],
+        ('no-clean-invalidate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON'],
          'clean-and-invalidate'),
-        ('no-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_SLOTS_CLEAN_INVALIDATE=ON'],
+        ('no-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON'],
          'read-only at EL0'),
-        ('both', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_SLOTS_EL0_READ_ONLY=ON',
-                  '-DA733_GPU_SLOTS_CLEAN_INVALIDATE=ON', '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)], None),
+        ('both', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
+                  '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON', '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)], None),
         ('both-audio', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON',
-                        '-DA733_GPU_SLOTS_EL0_READ_ONLY=ON', '-DA733_GPU_SLOTS_CLEAN_INVALIDATE=ON',
+                        '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON', '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON',
                         '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)], None),
     ]
     results = {}
@@ -200,6 +239,7 @@ def main():
     models = [args.models / 'base.mimus', args.models / 'overlay.mimus']
     result = {'passed': True, 'physical_access': False, 'recognizer_patch': recognizer_order(out),
               'zero_bound': zero_bound()}
+    result['arena'] = arena_bound(out)
     for cores in ('a55', 'a76'):
         result[cores] = run_model(out, cores, models, BENCH_FRAMES)
     result['lookup'] = lookup_instructions(out)
@@ -211,13 +251,16 @@ def main():
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     for cores in ('a55', 'a76'):
         s, b = result[cores]['summary'], result[cores]['bench']
-        print('PASS %s pair: %d calls placed, %d jobs, linear stage %.3f s modeled (design bound %.2f s), '
+        print('PASS %s pair: %d calls placed, %d jobs, linear stage %.3f s modeled (bound %.2f s), '
               '%.1f%% of MACs on the GPU; longest input %d jobs at most per call' %
               (cores.upper(), b['placed_calls'], b['jobs'], s['linear_seconds'], DESIGN_BOUND[cores],
                100 * s['gpu_share'], result[cores]['longest']['max_jobs_per_call']))
     print('PASS dispatcher cases, exact sums, supervision, lookup %d loads and %d compare%s' %
           (result['lookup']['loads'], result['lookup']['compares'],
            ', configure gate' if args.configure_from else ''))
+    print('PASS arena assertion; the mimus arena in apps/mimus/recorded.h is %d bytes, %s' %
+          (result['arena']['recorded_arena_bytes'], 'within the 12 MiB span' if result['arena']['recorded_arena_fits']
+           else 'above the 12 MiB span, so the GPU build stops at the assertion until the mimus port shrinks it'))
     return 0
 
 

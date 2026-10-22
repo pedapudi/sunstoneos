@@ -1,14 +1,18 @@
 --- recognition.cc
 +++ recognition-gpu.cc
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,11 @@
  #include "../mimus/recorded.h"
  #include "runtime.h"
  extern "C" {
 +#include "dispatch.h"
++/* mimus allocates only from the first 12 MiB; the GPU owns the output region
++ * above it while the session is open (docs/recognition-dispatch.md). */
++static_assert(kMimusArenaBase==OS_DISPATCH_ARENA&&kMimusArenaBytes<=OS_DISPATCH_CODE_BYTES,
++    "the mimus arena overlaps the GPU output region");
  #include "a733_storage_digest.h"
  #include "FreeRTOS.h"
  #include "task.h"
-@@ -35,6 +36,9 @@
+@@ -35,6 +40,9 @@
          uint8_t hash[32];storage_digest_end(&digest,hash);
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
      }
@@ -18,7 +22,7 @@
      std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
          input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
      /* Only this task mutates recognizer/transcript storage. USB0 publishes an
-@@ -65,6 +69,8 @@
+@@ -65,6 +73,8 @@
      }
  }
  }
@@ -27,7 +31,7 @@
  extern "C" void mimus_native_checkpoint(void)
  {if(!mimus_board_live())failed();mimus_board_progress();}
  extern "C" void platform_puts(const char *text)
-@@ -78,7 +84,13 @@
+@@ -78,7 +88,13 @@
  extern "C" void platform_hex(uint64_t x)
  {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
  extern "C" int mimus_board_start(void)

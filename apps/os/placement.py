@@ -11,9 +11,10 @@ tensor's index in that list is its ordinal.
 For every tensor that a bench-recording call reaches and that the GPU kernel
 can run (int8 weights, int16 activations, K a multiple of 4), the time model
 below chooses n_gpu, the output channels the GPU computes, from the core set,
-the CPU and GPU clocks and their MAC rates. job_rows is the largest multiple
-of 32 rows that keeps a job within the kernel's 64 Mi MAC cap and one 2 MiB
-sum slot. Every other tensor gets n_gpu = 0 and stays on the CPU.
+the CPU and GPU clocks and their MAC rates. job_rows is the GPU worker's own
+bound for the tensor (kernel_job_rows) rounded down to a multiple of 32, so
+every job the hook issues passes the worker's rows <= job_rows check. Every
+other tensor gets n_gpu = 0 and stays on the CPU.
 
   placement.py --models BASE OVERLAY --cores a55 --output placement.h
   placement.py --models BASE OVERLAY --cores a55 --calls 222   # call list
@@ -39,10 +40,13 @@ HEADER = struct.Struct('<4sHHIIIIIIIIQ32s32s')
 ENTRY = struct.Struct('<IBBHI4IIIIIIIIII')
 DTYPE_I8, ACT_INT16 = 2, 3
 
-# Kernel limits from the GPU kernel design.
+# Kernel limits from the GPU kernel design: one output region of 2 MiB, a
+# 64 KiB tag area (one word per lane) followed by the sums.
 MAX_JOB_MACS = 1 << 26
-SLOT_BYTES = 2 << 20
+SUM_BYTES = (2 << 20) - (64 << 10)
+MAX_WORKGROUPS = (64 << 10) // 4 // 32
 TILE_ROWS, TILE_CHANNELS, LANES = 32, 16, 32
+JOB_WORD_LINES = 2        # 128-byte argument record and CDM block
 SUBSAMPLING_BLOCK = 224   # rows per subsampling producer block
 OUT_CHUNK = 32            # mimus kOutChunk: subsampling output rows per call
 SUBSAMPLING = 'encoder.pre_encode.conv.2.weight'
@@ -95,9 +99,15 @@ def width(k):
     return 4 if k <= 512 else 8
 
 
+def kernel_job_rows(k, n):
+    """The worker's bound at OPEN: the 64 Mi MAC cap, the sum area and the
+    512 workgroups whose tags fill the tag area."""
+    return min(MAX_JOB_MACS // (k * n), SUM_BYTES // (n * width(k)),
+               TILE_ROWS * (MAX_WORKGROUPS // math.ceil(n / TILE_CHANNELS)))
+
+
 def job_rows(k, n):
-    rows = min(MAX_JOB_MACS // (k * n), SLOT_BYTES // (n * width(k)))
-    return rows // TILE_ROWS * TILE_ROWS
+    return kernel_job_rows(k, n) // TILE_ROWS * TILE_ROWS
 
 
 def eligible(t):
@@ -126,21 +136,11 @@ def residual(name):
     return name.endswith(('linear2.weight', 'linear_out.weight', 'pointwise_conv2.weight'))
 
 
-def split(rows, k, n, block=False):
-    """Jobs of one call as the GPU hook issues them: at most job_rows rows,
-    boundaries on multiples of 32, and two jobs for a call of more than 32
-    rows so that the first job's read-out overlaps the second job's GPU work.
-    A subsampling producer block (block=True) is one job."""
+def split(rows, k, n):
+    """Jobs of one call as the GPU hook issues them: one job, or consecutive
+    jobs of job_rows rows (a multiple of 32) and a last job with the rest."""
     limit = job_rows(k, n)
-    parts = math.ceil(rows / limit)
-    if parts == 1 and rows > TILE_ROWS and not block:
-        parts = 2
-    jobs, left = [], rows
-    for i in range(parts, 0, -1):
-        take = left if i == 1 else min(limit, max(TILE_ROWS, round(left / i / TILE_ROWS) * TILE_ROWS))
-        jobs.append(take)
-        left -= take
-    return jobs
+    return [limit] * (rows // limit) + ([rows % limit] if rows % limit else [])
 
 
 class Clocks:
@@ -157,41 +157,48 @@ def gpu_seconds(rows, k, n, clocks):
     return FIRMWARE_US * 1e-6 + padded * k / clocks.gpu_rate
 
 
-def call_seconds(rows, k, n_all, n, clocks, block=False, totals=None):
+def call_seconds(rows, k, n_all, n, clocks, totals=None):
     """One call on the recognizer core (A), the second inference worker (B)
-    and the GPU. A cleans each job's codes and submits it, then both cores
-    compute half of the CPU channels; A then invalidates and reads out each
-    job's sums in order as it completes."""
-    hz = clocks.hz
+    and the GPU, with one job in flight (GPU kernel design). Per job, A
+    cleans the job's codes and job words and submits it. While the first job
+    runs, A and B each compute half of the CPU channels and join. After each
+    completion A invalidates the job's tags and sums and reads them out: alone
+    when the call splits channels, with B when the GPU has every channel. The
+    next job is submitted only after that read-out, because it reuses the
+    output region."""
+    hz, line = clocks.hz, LINE_CYCLES / clocks.hz
     cpu_half = (n_all - n) * rows * k / 2 / clocks.cpu_rate
-    a = gpu = 0.0
-    done = []
-    for r in (split(rows, k, n, block) if n else []):
+    if not n:
+        return DISPATCH_US * 1e-6 + cpu_half
+    a = 0.0
+    for i, r in enumerate(split(rows, k, n)):
         clean = math.ceil(r * 2 * k / 64)
-        a += clean * LINE_CYCLES / hz + SUBMIT_US * 1e-6
-        gpu = max(gpu, a) + gpu_seconds(r, k, n, clocks)
-        done.append((gpu, r))
+        a += (clean + JOB_WORD_LINES) * line + SUBMIT_US * 1e-6
+        finish = a + gpu_seconds(r, k, n, clocks)
+        if i == 0 and n < n_all:
+            a += DISPATCH_US * 1e-6 + cpu_half
+        tags = math.ceil(r / TILE_ROWS) * math.ceil(n / TILE_CHANNELS) * LANES
+        invalidate = math.ceil((tags * 4 + r * n * width(k)) / 64)
+        readout = r * n * READOUT_INSTRUCTIONS / (clocks.ipc * hz)
+        a = max(a, finish + WAKE_US * 1e-6) + invalidate * line + \
+            (readout if n < n_all else DISPATCH_US * 1e-6 + readout / 2)
         if totals is not None:
             totals['jobs'] = totals.get('jobs', 0) + 1
             totals['clean_lines'] = totals.get('clean_lines', 0) + clean
+            totals['invalidate_lines'] = totals.get('invalidate_lines', 0) + invalidate
+            totals['gpu_seconds'] = totals.get('gpu_seconds', 0.0) + gpu_seconds(r, k, n, clocks)
             totals['gpu_macs'] = totals.get('gpu_macs', 0) + r * k * n
             totals['padded_rows'] = totals.get('padded_rows', 0) + (-r) % TILE_ROWS
-    b = a + DISPATCH_US * 1e-6 + cpu_half
-    a += cpu_half
-    for finish, r in done:
-        invalidate = math.ceil(r * n * width(k) / 64)
-        a = max(a, finish + WAKE_US * 1e-6) + invalidate * LINE_CYCLES / hz + \
-            r * n * READOUT_INSTRUCTIONS / (clocks.ipc * hz)
-    return max(a, b)
+    return a
 
 
-def choose(rows, k, n_all, clocks, block=False):
+def choose(rows, k, n_all, clocks):
     """n_gpu with the shortest modeled call, among N and N minus multiples of
     16 (NEON computes 16 channels at a time); ties go to more CPU channels."""
     if job_rows(k, n_all) == 0:
         return 0
     candidates = [n for n in range(n_all, 0, -TILE_CHANNELS) if job_rows(k, n) > 0]
-    return min(candidates, key=lambda n: (round(call_seconds(rows, k, n_all, n, clocks, block), 12), n))
+    return min(candidates, key=lambda n: (round(call_seconds(rows, k, n_all, n, clocks), 12), n))
 
 
 def table(tensors, clocks, frames):
@@ -201,7 +208,7 @@ def table(tensors, clocks, frames):
         if not reached or not eligible(t):
             rows.append((0, 0))
             continue
-        n = choose(max(reached), t['k'], t['n'], clocks, t['name'] == SUBSAMPLING)
+        n = choose(max(reached), t['k'], t['n'], clocks)
         rows.append((n, job_rows(t['k'], n) if n else 0))
     return rows
 
@@ -220,9 +227,9 @@ def call_list(tensors, frames):
 
 def summary(tensors, placement, clocks, frames):
     totals, seconds, macs = {}, 0.0, 0
-    for ordinal, rows, k, n_all, _, block in call_list(tensors, frames):
+    for ordinal, rows, k, n_all, _, _ in call_list(tensors, frames):
         n = placement[ordinal][0]
-        seconds += call_seconds(rows, k, n_all, n, clocks, block, totals)
+        seconds += call_seconds(rows, k, n_all, n, clocks, totals)
         macs += rows * k * n_all
     shapes = {}
     for t, (n, j) in zip(tensors, placement):

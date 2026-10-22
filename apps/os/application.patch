@@ -7,7 +7,7 @@
  #include "assets.h"
  #include "keyboard.h"
  #include <string.h>
-@@ -54,16 +55,24 @@
+@@ -54,16 +55,25 @@
  {(void)entry;(void)context;return 0;}
  int mimus_board_pins(struct a733_pin_handoff *pins)
  {
@@ -20,11 +20,12 @@
          if(!a733_mapping_check_pages(aarch64_device_translate,mimus_asset_address[i],mimus_asset_address[i],
                 mimus_asset_bytes[i],&readable))return 0;
 +#ifdef SUNSTONE_A733_OS_GPU_LINEAR
-+    /* Codes stay writable; the GPU's two sum slots must be EL0-readable and
-+     * not EL0-writable on every page (docs/recognition-dispatch.md). */
++    /* The arena's first 12 MiB stay writable; the 4 MiB that hold the GPU's
++     * output region must be EL0-readable and not EL0-writable on every page
++     * (docs/recognition-dispatch.md). */
 +    return a733_mapping_check_pages(aarch64_device_translate,OS_DISPATCH_ARENA,OS_DISPATCH_ARENA,
 +               OS_DISPATCH_CODE_BYTES,&writable)&&
-+        os_dispatch_el0_read_only(aarch64_device_translate_el0,OS_DISPATCH_SLOTS,OS_DISPATCH_SLOT_BYTES);
++        os_dispatch_el0_read_only(aarch64_device_translate_el0,OS_DISPATCH_READ_ONLY,OS_DISPATCH_READ_ONLY_BYTES);
 +#else
      return a733_mapping_check_pages(aarch64_device_translate,0x46000000,0x46000000,0x01000000,&writable);
 +#endif

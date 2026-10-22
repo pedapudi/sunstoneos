@@ -38,14 +38,15 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
     message(FATAL_ERROR "GPU linear layers need the resident lifetime, whose watchdog bounds every GPU wait")
   endif()
   # The page-table owner sets this once 0x46C00000-0x47000000 is mapped
-  # read-only at EL0 as two 2 MiB blocks, so no CPU store can dirty a sum line.
-  if(NOT A733_GPU_SLOTS_EL0_READ_ONLY)
-    message(FATAL_ERROR "GPU linear layers need the sum slots mapped read-only at EL0 (A733_GPU_SLOTS_EL0_READ_ONLY)")
+  # read-only at EL0 as two 2 MiB blocks, so no CPU store can dirty a line of
+  # the GPU's output region.
+  if(NOT A733_GPU_OUTPUT_EL0_READ_ONLY)
+    message(FATAL_ERROR "GPU linear layers need the GPU output region mapped read-only at EL0 (A733_GPU_OUTPUT_EL0_READ_ONLY)")
   endif()
   # The GPU kernel owner sets this once its completion uses DC CIVAC on the
-  # slots: DC IVAC is checked as a write and faults on a read-only slot.
-  if(NOT A733_GPU_SLOTS_CLEAN_INVALIDATE)
-    message(FATAL_ERROR "GPU linear layers need clean-and-invalidate completion on the sum slots (A733_GPU_SLOTS_CLEAN_INVALIDATE)")
+  # output region: DC IVAC is checked as a write and faults on a read-only page.
+  if(NOT A733_GPU_OUTPUT_CLEAN_INVALIDATE)
+    message(FATAL_ERROR "GPU linear layers need clean-and-invalidate completion on the GPU output region (A733_GPU_OUTPUT_CLEAN_INVALIDATE)")
   endif()
 endif()
 if(NOT TARGET sunstone-a733-mimus-board)

@@ -13,8 +13,8 @@ thermal service together. Four optional builds add more services:
   the recorded WAV. An mSBC option adds wideband headset speech;
 - the GPU linear build places mimus linear layers on the CPU or the GPU
   ([recognition dispatch](recognition-dispatch.md)). It needs the resident
-  lifetime and does not link until the GPU runtime and the page-table owner
-  provide their parts.
+  lifetime and does not build until the mimus port shrinks its arena to
+  12 MiB and the GPU runtime and the page-table owner provide their parts.
 
 The radio build combines with either capture build. With the headset, one
 owner of the AIC8800 module loads the firmware once and serves the Wi-Fi
@@ -35,7 +35,7 @@ adds three fixed parts to it:
 
 Status: implemented. Every build listed under [Build and checks](#build-and-checks)
 configures and links in both lifetimes, except the GPU linear build, which is
-resident only and does not link yet; the host checks listed there model
+resident only and does not build yet; the host checks listed there model
 them. No board has run any of these builds. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
@@ -470,9 +470,10 @@ Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 set without the headset. With `SUNSTONE_A733_OS_GPU_LINEAR` it stops unless
 the lifetime is resident, the two build constants that
 [recognition dispatch](recognition-dispatch.md#build-gate) names are set and
-`SUNSTONE_A733_OS_MODEL_DIR` holds the models; that build compiles but does
-not link until the GPU runtime and the page-table owner provide five
-functions. The supervised radio and headset builds link, but at
+`SUNSTONE_A733_OS_MODEL_DIR` holds the models. That build stops at the
+recognizer's assertion that mimus's arena is at most 12 MiB until the mimus
+port shrinks it, and then does not link until the GPU runtime and the
+page-table owner provide five functions. The supervised radio and headset builds link, but at
 the admitted SDIO clock firmware loading cannot finish within their bootstrap
 bounds (see [Radio station](#radio-station)).
 
@@ -615,8 +616,8 @@ build reports none. The build directory must export its compile commands
 (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
 
 [os-image-dispatch.py](../checks/os-image-dispatch.py) checks the GPU linear
-build's placement table, dispatcher, slot mapping rule, supervision of GPU
-waits and configuration gate on the host
+build's placement table, dispatcher, read-only mapping rule, arena
+assertion, supervision of GPU waits and configuration gate on the host
 ([recognition dispatch](recognition-dispatch.md#host-checks)).
 
 ## Supervised preparation and launch
