@@ -48,19 +48,25 @@ static struct memtest_plan plan;
 static struct memtest_walk walk;
 static uint64_t start, deadline;
 static unsigned clock_reads;
+/* Mismatch total, kept in cacheable memory; the record's copy is written once
+ * per rescanned block and in finish. */
+static uint64_t mismatches;
 
 static void barrier_dsb(void) { __asm__ volatile("dsb sy" ::: "memory"); }
 static void clean_invalidate(uint64_t address)
 { __asm__ volatile("dc civac, %0" :: "r"(address) : "memory"); }
 
-static void renew(void)
+/* Read the counter, renew the secure timer once 200 ms have passed and
+ * return the counter value. */
+static uint64_t renew(void)
 {
     uint64_t now = counter();
-    if (now < walk.renew_at) return;
+    if (now < walk.renew_at) return now;
     register uint64_t x0 __asm__("x0") = 0x734;
     __asm__ volatile("smc #0" : "+r"(x0) :: "x1", "x2", "x3", "memory");
     walk.renew_at = now + MEMTEST_RENEW_TICKS;
     walk.renewals++;
+    return now;
 }
 
 static _Noreturn void finish(unsigned status, unsigned stop)
@@ -69,6 +75,7 @@ static _Noreturn void finish(unsigned status, unsigned stop)
     r->status = status;
     r->stop = stop;
     r->renewals = walk.renewals;
+    r->mismatch_count = mismatches;
     r->end_ticks = counter();
     r->checksum = memtest_hash(MEMTEST_HASH_SEED, (const volatile uint64_t *)r,
                                offsetof(struct memtest_record, checksum) / 8u);
@@ -82,12 +89,13 @@ static _Noreturn void refuse(enum memtest_refusal reason)
     finish(MEMTEST_RUN_REFUSED, MEMTEST_STOP_NONE);
 }
 
+/* Count a mismatch; only the first MEMTEST_MISMATCHES reach the
+ * non-cacheable record. */
 static void mismatch(uint64_t address, uint64_t expected, uint64_t observed, unsigned test, unsigned element)
 {
-    volatile struct memtest_record *r = RECORD;
-    uint64_t n = r->mismatch_count++;
+    uint64_t n = mismatches++;
     if (n < MEMTEST_MISMATCHES)
-        r->mismatch[n] = (struct memtest_mismatch){address, expected, observed, test, element};
+        RECORD->mismatch[n] = (struct memtest_mismatch){address, expected, observed, test, element};
 }
 
 static void result(unsigned test, unsigned status, uint64_t words, uint64_t ticks)
@@ -302,7 +310,9 @@ static int signature_read_span(uint64_t from, uint64_t to)
         if (status == MEMTEST_WALK_BUDGET) finish(MEMTEST_RUN_STOPPED, MEMTEST_STOP_BUDGET);
         /* The kernel stopped inside block walk.cursor at batch walk.found. */
         signature_classify(walk.found, walk.cursor + MEMTEST_BLOCK_BYTES);
-        renew();
+        RECORD->mismatch_count = mismatches;
+        /* The kernel returned before its deadline check. */
+        if (renew() >= deadline) finish(MEMTEST_RUN_STOPPED, MEMTEST_STOP_BUDGET);
         walk.cursor += MEMTEST_BLOCK_BYTES;
     }
 }
@@ -320,8 +330,10 @@ static void signature(void)
 }
 
 /* 5. March C-: up(w P); up(r P, w ~P); up(r ~P, w P); down(r P, w ~P);
- * down(r ~P, w P); down(r P). Each element runs over every member of a group
- * before the next element starts. */
+ * down(r ~P, w P); down(r P). Each element runs over every member of a group,
+ * in member order, before the next element starts; a down element walks each
+ * member from its top. Between a write to a line and its next read the other
+ * members of the group therefore stream through the caches. */
 struct element { int (*kernel)(struct memtest_walk *); unsigned down, complement, writes; };
 static const struct element elements[6] = {
     {memtest_march_w, 0, 0, 1}, {memtest_march_rw, 0, 0, 1}, {memtest_march_rw, 0, 1, 1},
@@ -351,6 +363,7 @@ static void march_rescan(uint64_t block, unsigned index)
         found++;
     }
     if (!found) RECORD->unconfirmed++;
+    RECORD->mismatch_count = mismatches;
     march_bad += found ? found : 1u;
 }
 
@@ -371,7 +384,9 @@ static int march_member(unsigned index, const struct memtest_piece *piece, uint6
         if (status == MEMTEST_WALK_DONE) break;
         if (status == MEMTEST_WALK_BUDGET) return 0;
         march_rescan(walk.found, index);
-        renew();
+        /* The kernel returns a hit before its deadline check, so a fault in
+         * every block cannot hold the march past the deadline. */
+        if (renew() >= limit) return 0;
     }
     march_words += (high - low) / 8u * (index ? 1u : 0u);
     return 1;
@@ -392,8 +407,7 @@ static void march(uint64_t limit)
         for (unsigned index = 0; index < 6; ++index) {
             r->phase = (MEMTEST_TEST_MARCH << 4) | index;
             for (unsigned i = 0; i < group->pieces; ++i) {
-                unsigned member = elements[index].down ? group->pieces - 1u - i : i;
-                if (!march_member(index, &plan.piece[group->first_piece + member], limit)) {
+                if (!march_member(index, &plan.piece[group->first_piece + i], limit)) {
                     /* The group is incomplete; the next run repeats it. */
                     result(MEMTEST_TEST_MARCH, march_bad ? MEMTEST_FAIL : status, march_words, counter() - begin);
                     return;
@@ -538,7 +552,7 @@ static void run(void *unused)
                                                                                      : deadline);
     if (contract.mask & MEMTEST_HARNESS) harness();
     volatile struct memtest_record *r = RECORD;
-    unsigned failed = r->mismatch_count || r->unconfirmed;
+    unsigned failed = mismatches || r->unconfirmed;
     for (unsigned i = 0; i < MEMTEST_TESTS; ++i) failed |= r->test[i].status == MEMTEST_FAIL;
     finish(failed ? MEMTEST_RUN_FAIL : MEMTEST_RUN_PASS, MEMTEST_STOP_NONE);
 }

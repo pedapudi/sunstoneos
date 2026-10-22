@@ -52,6 +52,9 @@ def layout_matches(out):
     subprocess.run(['clang-21', '-fsyntax-only', '-Wall', '-Werror', f'-I{ROOT}/apps/memtest', str(source)], check=True)
 
 
+ACCEPTED = {'by': 'model user', 'date': '2026-10-22', 'residuals': list(host.RESIDUALS)}
+
+
 def good(**changes):
     values = dict(sequence=1, mask=0x1f, seed=0x0123456789abcdef, budget_ticks=host.BUDGET_LIMIT,
                   slice_blocks=(32, 6144), excluded=())
@@ -166,15 +169,122 @@ def excluded_ranges(lib):
     assert host.admit(lib, good(slice_blocks=(1004, 3000), excluded=excluded))[0] == 'admitted'
     assert host.admit(lib, good(slice_blocks=(3001, 6144), excluded=excluded))[0] == 'admitted'
     assert host.admit(lib, good(slice_blocks=(999, 1600), excluded=excluded))[0] == 'slice-excluded'
-    log = {'session': 1, 'excluded': excluded, 'runs': [
+    log = {'session': 1, 'acceptance': ACCEPTED, 'excluded': excluded, 'runs': [
         {'session': 1, 'sequence': 1, 'status': 'pass', 'resume': host.DRAM_BASE + 1000 * BLOCK}]}
     contract, _ = host.next_contract(log, lib, [], 20)
     assert (contract.slice_start, contract.slice_end) == (1004, 3000) and contract.excluded_count == 2
     assert not contract.mask & (host.MASK['signature'] | host.MASK['harness'])
-    first, _ = host.next_contract({'session': 2, 'excluded': excluded, 'runs': log['runs']}, lib, [], 20)
+    first, _ = host.next_contract({'session': 2, 'acceptance': ACCEPTED, 'excluded': excluded, 'runs': log['runs']},
+                                  lib, [], 20)
     assert first.mask & host.MASK['signature'] and (first.slice_start, first.slice_end) == (32, 1000)
     assert first.sequence == 2 and not host.near_k(first.seed)
     return {'spans': [[32, 1000], [1004, 3000], [3001, 6144]]}
+
+
+def refused_contract(log, lib):
+    """The message next_contract refuses with, or None when it prepares one."""
+    try:
+        host.next_contract(log, lib, [], 20)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+def upload_gate(lib):
+    """Runs that need review block every later contract, in any session, until
+    the log holds a review entry; an abort exclusion alone lets a new session
+    continue."""
+    def log(session, *runs, **extra):
+        return {'session': session, 'acceptance': ACCEPTED, 'excluded': [], 'runs': list(runs), **extra}
+    passed = {'session': 1, 'sequence': 1, 'status': 'pass', 'resume': host.DRAM_BASE + 160 * BLOCK}
+    review = {'by': 'model user', 'date': '2026-10-22'}
+    cases = {}
+    for name, run in (('scan', {'status': 'stopped', 'stop': 'scan'}),
+                      ('decode', {'status': 'stopped', 'stop': 'decode'}),
+                      ('digest', {'status': 'stopped', 'stop': 'digest'}),
+                      ('dma_phase', {'status': 'pass', 'dma_phase': 1}),
+                      ('untrusted', {'status': 'untrusted'}),
+                      ('missing', {})):
+        run = {'session': 1, 'sequence': 2, **run}
+        # The stop blocks the same session and the next one.
+        assert refused_contract(log(1, passed, run), lib), name
+        assert refused_contract(log(2, passed, run), lib), name
+        # A review entry releases it; an incomplete one does not.
+        assert refused_contract(log(2, passed, {**run, 'reviewed': {'by': 'model user'}}), lib), name
+        assert refused_contract(log(2, passed, {**run, 'reviewed': review}), lib) is None, name
+        cases[name] = 'blocks every session until reviewed'
+    # An abort exclusion: blocked in its own session, released by a boot0 upload.
+    abort = {'session': 1, 'sequence': 2, 'status': 'untrusted', 'abort_excluded': True}
+    assert refused_contract(log(1, passed, abort), lib)
+    assert refused_contract(log(2, passed, abort, excluded=[(1000, 1002)]), lib) is None
+    cases['abort_excluded'] = 'blocks its session only'
+    # A mismatch, a refusal or a deadline stop blocks its own session until reviewed.
+    for name, run in (('fail', {'status': 'fail', 'resume': host.DRAM_BASE + 32 * BLOCK}),
+                      ('refused', {'status': 'refused'}), ('budget', {'status': 'stopped', 'stop': 'budget'})):
+        run = {'session': 1, 'sequence': 2, **run}
+        assert refused_contract(log(1, passed, run), lib), name
+        assert refused_contract(log(2, passed, run), lib) is None, name
+        contract, _ = host.next_contract(log(1, passed, {**run, 'reviewed': review}), lib, [], 20)
+        assert contract.sequence == 3 and not contract.mask & host.MASK['signature'], name
+        cases[name] = 'blocks its session until reviewed'
+    # A reviewed failure resumes from the last resume address of the session.
+    contract, _ = host.next_contract(log(1, passed, {'session': 1, 'sequence': 2, 'status': 'refused',
+                                                     'reviewed': review}), lib, [], 20)
+    assert contract.slice_start == 160
+    return cases
+
+
+def acceptance_gate(lib):
+    """No contract without the user's acceptance of every residual."""
+    runs = {'session': 1, 'excluded': [], 'runs': []}
+    assert 'acceptance' in refused_contract(runs, lib)
+    assert 'acceptance' in refused_contract({**runs, 'acceptance': {'residuals': list(host.RESIDUALS)}}, lib)
+    refusals = {}
+    for residual in host.RESIDUALS:
+        partial = {**ACCEPTED, 'residuals': [r for r in host.RESIDUALS if r != residual]}
+        message = refused_contract({**runs, 'acceptance': partial}, lib)
+        assert message and residual in message, (residual, message)
+        refusals[residual] = message
+    assert refused_contract({**runs, 'acceptance': ACCEPTED}, lib) is None
+    return sorted(refusals)
+
+
+def march_eviction(lib, geometry=None, reverse_down=False):
+    """Walk the image's element, member and block order over every group of the
+    board plan. Return the fewest whole blocks streamed between a block's write
+    and its next read; the eviction rule needs at least others_blocks."""
+    geometry = geometry or host.board_geometry()
+    _, plan = host.admit(lib, good(), geometry=geometry)
+    elements = [(0, 0, 1), (1, 0, 1), (1, 0, 1), (1, 1, 1), (1, 1, 1), (1, 1, 0)]  # (reads, down, writes)
+    fewest = None
+    for g in range(plan.groups):
+        group = plan.group[g]
+        members = [plan.piece[group.first_piece + i] for i in range(group.pieces)]
+        written, t = {}, 0
+        for reads, down, writes in elements:
+            order = list(reversed(members)) if down and reverse_down else members
+            for member in order:
+                blocks = range(member.first, member.first + member.blocks)
+                for block in (reversed(blocks) if down else blocks):
+                    if reads:
+                        gap = t - written[block] - 1
+                        fewest = gap if fewest is None else min(fewest, gap)
+                    if writes:
+                        written[block] = t
+                    t += 1
+    return fewest
+
+
+def eviction_order(lib):
+    geometry = host.board_geometry()
+    fewest = march_eviction(lib, geometry)
+    assert fewest >= geometry.others_blocks, fewest
+    # Reversing the member order of the down elements reads the last written
+    # blocks of a group straight back, which the check must catch.
+    reversed_fewest = march_eviction(lib, geometry, reverse_down=True)
+    assert reversed_fewest == 0, reversed_fewest
+    return {'fewest_blocks_between_write_and_read': fewest, 'others_blocks': geometry.others_blocks,
+            'with_down_members_reversed': reversed_fewest}
 
 
 def budget_clamp(lib):
@@ -239,7 +349,8 @@ def main():
     lib = host.library(args.out)
     result = {'refusals': refusals(lib), 'seeds_refused_near_k': seed_rule(lib), 'board_plan': board_plan(lib),
               'excluded_ranges': excluded_ranges(lib), 'dcache_bytes_a55_model': dcache_model(lib),
-              'runs_for_march': runs_model(lib)}
+              'runs_for_march': runs_model(lib), 'eviction_order': eviction_order(lib),
+              'upload_gate': upload_gate(lib), 'acceptance_refusals': acceptance_gate(lib)}
     budget_clamp(lib)
     harness.save(args.out / 'memtest-plan.json', result)
     print(json.dumps(result, indent=2))

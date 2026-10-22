@@ -51,7 +51,8 @@ reset as the first of a new session.
   row), and does not run while the image does. This departs from that
   document's caller rule: each exclusion holds only at the sampling instant,
   and a write by OR100, CE or USB0 during the run would look like a DRAM
-  fault. The host profile records the user's acceptance of these residuals.
+  fault. `apps/memtest/check.py` prepares no contract until the run log
+  holds the user's acceptance of this residual and the two below.
 - **Protected window and tested map.** The window, offsets `0`–`0x400_0000`,
   holds boot0 and launcher memory, the image at `0x4100_0000` and the result
   block at `0x4200_0000`. The other 12,224 MiB, less excluded ranges, form the
@@ -138,12 +139,21 @@ reset as the first of a new session.
    write P); down (read P, write ¬P); down (read ¬P, write P); down (read P).
    The planner forms groups of two or three sub-slices of at most 256 MiB,
    such that the members other than any one total at least 256 MiB, and runs
-   each element on every member before the next element. Between a write to a
-   line and its next read, at least 256 MiB streams through at most 8 MiB of
-   cache; under LRU, pseudo-LRU or random replacement a line survives with
-   probability below e^-32. The march therefore needs no maintenance or
-   barrier, and a write that lands in another member's cells shows at that
-   member's next read.
+   each element on every member, in member order, before the next element. A
+   down element walks each member from its top block to its bottom. Between a
+   write to a line and its next read the line's other members stream through
+   the caches, so at least 256 MiB streams through at most 8 MiB of cache;
+   under LRU, pseudo-LRU or random replacement a line survives with
+   probability below e^-32. `checks/memtest-plan.py` walks the element,
+   member and block order over every group of the board plan and confirms
+   that distance. The march therefore needs no maintenance or barrier, and a
+   write that lands in another member's cells shows at that member's next
+   read. Reversing the member order of the down elements would make them the
+   exact reverse of the up elements, but the last lines that element 2 writes
+   would then be the first that element 3 reads, from the cache. With one
+   member order, the down elements visit cells in different members in the
+   same order as the up elements, so between members the march detects only
+   the coupling faults its up elements detect.
 
    The loop alternates two register sets, v0–v3 and v8–v11, so each line's
    `LD1` issues one line, 20–33 cycles, before its first use. One
@@ -172,8 +182,13 @@ reset as the first of a new session.
    scalar loads. A word that reads P(b) or ¬P(b) for an address b other than
    its own proves a decode fault, and the image calls `platform_exit` before
    the next write. Other differing words are recorded and rewritten with the
-   value the element should have left. A hit whose rescan finds nothing is an
-   unconfirmed hit and fails the run. A group starts only if the slowest group
+   value the element should have left. The rescan counts mismatches in
+   cacheable memory and writes the non-cacheable record's count once per
+   block, with entries for the first 32 only. A hit whose rescan finds nothing
+   is an unconfirmed hit and fails the run. A kernel returns a hit before its
+   deadline check, so the image checks the deadline after each rescan; a fault
+   in every block then ends the run within one block and one rescan of the
+   deadline. A group starts only if the slowest group
    so far still fits the budget, and the image records the resume address.
    After each group and after the signature write pass, the image cleans and
    invalidates the recovery region's vector, code and beacon lines, issues
@@ -308,7 +323,8 @@ Changes needed from the primary agent, all under the memtest build definition:
 | Page signature, first run | none | 3,129,344 each of `DC ZVA`, store, `DC CIVAC` and load; 6,113 `DSB SY`; no linefill read; ≤ 7 instructions per page per pass; ≤ 1.5 s *estimated* | Unicorn counters and load-to-use trace |
 | Recovery digest | none | 192 `DC CIVAC`, one `DSB SY`, 12 KiB of loads, per group and after the signature write pass | Unicorn counters |
 | Harness, first run | none | read ≤ 2, write ≤ 3, copy ≤ 5 instructions per line; chase ≤ 1.25 per load; ≤ 1.9 s *estimated*; samples ≥ 50 ms; read ascending and descending | Unicorn count over 1 MiB |
-| Wall time per run | none | ≤ 20 s; renewal gap ≤ 200 ms plus one block, sample or chase point | Budget logic in Unicorn with a modeled counter |
+| Wall time per run | none | ≤ 20 s, with a fault in every march block too; renewal gap ≤ 200 ms plus one block, sample or chase point | Budget logic in Unicorn with a modeled counter |
+| March eviction distance | none | ≥ 256 MiB between each write and the next read of a line | Element, member and block walk over the board plan in `checks/memtest-plan.py` |
 | DMA0 cases | none | ≤ 8 transfers of ≤ 1 MiB; maintenance on buffer and guard lines only; phase marker set across every transfer | Case code with the `checks/dma-controller.c` model |
 
 Unicorn memory hooks inject a stuck and an open bit in 6–25; a single-bit
@@ -331,10 +347,12 @@ marker set.
   USB0, which the record names: before any write outside the window. Nothing
   is retained.
 - **Scan hit or proven decode fault:** the run stops before its next write
-  outside the window. The host makes no further upload until the user
-  reviews the record.
+  outside the window. The host makes no further upload, in this session or a
+  later one, until the run log holds a review entry (reviewer and date) for
+  the run.
 - **Digest mismatch:** recorded if the exit still works; a damaged monitor
-  can hang the exit or the secure timer. No further upload until review.
+  can hang the exit or the secure timer. No further upload until the review
+  entry exists.
 - **Alias onto the rest of the window:** the scan does not cover the EL1
   image, its translation tables or the result block, so the signature write
   pass or the march may corrupt them. Recovery then depends on the secure
@@ -347,11 +365,13 @@ marker set.
   FAR, with ESR.FnV set, or as an SError. A denied write surfaces at a
   write-back. The host therefore relies on the progress word written per 2 MiB
   block and excludes that block and the one before it, at the cost of one
-  run. The earlier block covers an SError arriving after the block's
+  run; in the march, which walks members both ways, it excludes both
+  neighbors. A run with an untrusted record blocks its own session; once its
+  blocks are excluded, the next session continues without review. The earlier block covers an SError arriving after the block's
   `DSB SY`; no A733 source bounds that delay. A denied access is assumed to
   get an error or ignored-write response. If it stalled the bus, the core
-  would hang with no watchdog; the host profile records the user's acceptance
-  of that residual before the first full-map scan.
+  would hang with no watchdog; the run log holds the user's acceptance of
+  that residual before any contract is prepared.
 - **Time budget reached:** not a failure; the resume address is recorded.
 - **DMA0 deadline expired:** state unknown. The recovery path stops the
   channel and records whether it reads quiet; the image skips the remaining
@@ -360,16 +380,17 @@ marker set.
 - **Any other return with the DMA0 phase marker set,** by exception, by the
   secure timer or with no valid record: neither the exception path nor the
   monitor's exit stops DMA0. The host treats it as a deadline expiry and
-  makes no upload until a FEL read shows DMA0 quiet. Tests 1–6 never start
-  DMA0.
+  makes no upload until a FEL read shows DMA0 quiet and the run log holds a
+  review entry for the run. Tests 1–6 never start DMA0.
 
 Residual: a line mapping outside the two classes the scan covers can send
 lines 31 and 63 of a tested page to non-beacon words of a recovery page while
 another line reaches monitor code. Examples are two or more stuck line-index
 bits, such as bits 6 and 11 both stuck at 0, and an alias that moves only some
 lines of a page. The signature write pass, and later the march, would then
-overwrite the monitor and lose the board. The host profile records the user's
-acceptance of this residual alongside OR100, CE and USB0.
+overwrite the monitor and lose the board. The run log's acceptance record
+names this residual alongside OR100, CE and USB0 and the bus stall, and
+`prepared.json` carries a copy.
 
 ## Left out
 

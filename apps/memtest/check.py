@@ -47,6 +47,15 @@ STOPS = ['none', 'scan', 'decode', 'digest', 'budget']
 # Refusals that depend on the CPU, the monitor or the live translation tables;
 # only the image can decide them.
 IMAGE_ONLY = {'dczid', 'dcache', 'writers-unsampled', 'writers', 'mapping', 'record'}
+# Residuals the user accepts, in the run log, before any run: a write by
+# OR100, CE or USB0 during a run; a denied access that stalls the bus with no
+# watchdog; a partial-page or multi-stuck-bit alias that the scan misses and a
+# later write sends into the monitor.
+RESIDUALS = ('remote-writers-or100-ce-usb0', 'bus-stall', 'partial-page-alias')
+# Stops after which the recovery pages or the address decode are in doubt.
+REVIEW_STOPS = {'scan', 'decode', 'digest'}
+# Run statuses a verified record can carry; any other entry has no trusted record.
+TRUSTED_STATUS = {'pass', 'fail', 'refused', 'stopped'}
 
 
 class Range(ctypes.Structure):
@@ -213,31 +222,79 @@ def decode(raw, contract=None):
 
 def abort_exclusion(progress, phase):
     """Blocks to exclude after an abort or SError: the block the progress word
-    names and the one before it in the pass's travel order."""
+    names and the one before it in the pass's travel order. A march walk may
+    run either way through a member, so for the march both neighbors are
+    excluded."""
     block = (progress - DRAM_BASE) >> BLOCK_SHIFT
-    down = (phase >> 4) == TESTS.index('march') and (phase & 15) >= 3
-    before = block + 1 if down else block - 1
-    return sorted({block, before} & set(range(FIRST_BLOCK, END_BLOCK)))
+    near = {block - 1, block, block + 1} if (phase >> 4) == TESTS.index('march') else {block - 1, block}
+    return sorted(near & set(range(FIRST_BLOCK, END_BLOCK)))
+
+
+def reviewed(run):
+    """True when the run carries a review entry naming who reviewed it and when."""
+    review = run.get('reviewed')
+    return isinstance(review, dict) and bool(review.get('by')) and bool(review.get('date'))
+
+
+def review_reason(run, session):
+    """Why a run blocks further uploads until it is reviewed, or None.
+
+    Any session: a scan hit, decode fault or digest mismatch; a DMA0 phase
+    marker left set; an untrusted or missing record, unless an abort exclusion
+    explains it and a later boot0 upload started a new session. Current
+    session: any other run that did not pass."""
+    if reviewed(run):
+        return None
+    status = run.get('status')
+    if status == 'stopped' and run.get('stop') in REVIEW_STOPS:
+        return f"stopped: {run.get('stop')}"
+    if run.get('dma_phase'):
+        return 'DMA0 phase marker set'
+    if status not in TRUSTED_STATUS:
+        if run.get('abort_excluded') and run['session'] < session:
+            return None
+        return 'untrusted or missing record'
+    if run['session'] == session and status != 'pass':
+        return f'{status} in the current session'
+    return None
+
+
+def acceptance(log):
+    """The user's acceptance of every residual, from the run log."""
+    record = log.get('acceptance')
+    if not isinstance(record, dict) or not record.get('by') or not record.get('date'):
+        raise ValueError('the run log holds no acceptance record with "by" and "date"')
+    missing = [name for name in RESIDUALS if name not in record.get('residuals', [])]
+    if missing:
+        raise ValueError(f'the acceptance record does not name: {", ".join(missing)}')
+    return {'by': record['by'], 'date': record['date'], 'residuals': list(RESIDUALS)}
 
 
 def next_contract(log, lib, mask_names, budget_seconds):
     """Contract for the next run from the session run log.
 
-    The log holds 'session' (boot0 upload count), 'runs' (each with 'session',
-    'sequence', 'resume' and 'status') and 'excluded' ranges. Every run checks
-    the data and address lines and marches from the last resume address up to
-    the next excluded range or the end of the map; the first run of a session
-    adds the page signature and the harness.
+    The log holds 'session' (boot0 upload count), 'acceptance' (see
+    acceptance()), 'runs' (each with 'session', 'sequence', 'status', and when
+    the record was trusted 'stop', 'resume' and 'dma_phase'; optionally
+    'abort_excluded' and 'reviewed': {'by', 'date'}) and 'excluded' ranges.
+    Every run checks the data and address lines and marches from the last
+    resume address up to the next excluded range or the end of the map; the
+    first run of a session adds the page signature and the harness.
     """
+    acceptance(log)
+    blocked = [(r['sequence'], reason) for r in log.get('runs', [])
+               if (reason := review_reason(r, log['session']))]
+    if blocked:
+        raise ValueError('review the record of run ' + ', '.join(f'{s} ({why})' for s, why in blocked) +
+                         ' and add a "reviewed" entry before another upload')
     runs = [r for r in log.get('runs', []) if r['session'] == log['session']]
-    if any(r['status'] != 'pass' for r in runs):
-        raise ValueError('a run of this session did not pass; review the record before another upload')
+    resumes = [r['resume'] for r in runs if r.get('resume')]
     sequence = 1 + max((r['sequence'] for r in log.get('runs', [])), default=0)
     excluded = [tuple(x) for x in log.get('excluded', [])]
     mask = sum(MASK[name] for name in mask_names) | MASK['march'] | MASK['data'] | MASK['address']
     if not runs:
         mask |= MASK['signature'] | MASK['harness']
-    resume = (runs[-1]['resume'] - DRAM_BASE) >> BLOCK_SHIFT if runs else FIRST_BLOCK
+    resume = (resumes[-1] - DRAM_BASE) >> BLOCK_SHIFT if resumes else FIRST_BLOCK
     end = min([s for s, _ in excluded if s >= resume] + [END_BLOCK])
     for start, stop in excluded:
         if start <= resume < stop:
@@ -265,6 +322,7 @@ def prepare(args):
     lib = library(args.output / 'host-build')
     log = json.loads(args.run_log.read_text())
     contract, plan = next_contract(log, lib, args.mask, args.budget)
+    accepted = acceptance(log)
     layout = image_layout(args.elf)
     image = args.image.read_bytes()
     (args.output / 'image.bin').write_bytes(image)
@@ -275,7 +333,7 @@ def prepare(args):
                 'record_address': RECORD_ADDRESS, 'sequence': contract.sequence, 'mask': contract.mask,
                 'slice': [contract.slice_start, contract.slice_end], 'seed': contract.seed,
                 'budget_ticks': plan.budget_ticks, 'groups': plan.groups,
-                'contract_digest': contract_digest(contract), 'physical_access': False}
+                'contract_digest': contract_digest(contract), 'acceptance': accepted, 'physical_access': False}
     (args.output / 'prepared.json').write_text(json.dumps(prepared, indent=2) + '\n')
     print(json.dumps(prepared, indent=2))
 

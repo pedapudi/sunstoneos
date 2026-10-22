@@ -12,7 +12,8 @@ written into the platform's tables. Cases:
   distances, against the budgets of docs/memory-qualification.md;
 - complete runs: pass, the current platform's mapping and an absent writer
   sample refused, a non-empty excluded-range list, the time budget with
-  renewal gaps, and a damaged recovery page;
+  renewal gaps, the time budget with a fault in every march block, and a
+  damaged recovery page;
 - injected faults: address bits 6-25 stuck and open; a single-bit wrap at each
   of bits 26-33, a multi-bit fold, a line-delta alias for each delta 0-63 and
   stuck line-index bits 6-11 with page aliases onto each recovery page, a
@@ -320,6 +321,32 @@ def full_runs(elf):
     out['budget'] = {'groups': rec['groups'], 'resume_block': (rec['resume'] - 0x40000000) // BLOCK,
                      'wall_ticks': rec['end_ticks'] - rec['start_ticks'], 'max_renewal_gap_ticks': max(gaps),
                      'counter_step_ticks': step}
+    # A fault in every block: one word per block reads as a value that is not
+    # another address's pattern, so every block hits and is rescanned. Once
+    # the march starts the counter moves 0.1 s per read. The run still ends
+    # within the budget plus one block, as a clean run does.
+    def every_block(faulted):
+        r = Run(elf, mask=0x08, slice_blocks=(32, 40), budget=TICK)
+        m = r.m
+        def slow(uc, a, s, d):
+            m.step = TICK // 10
+        m.uc.hook_add(UC_HOOK_CODE, slow, begin=m.address('memtest_march_w'), end=m.address('memtest_march_w'))
+        if faulted:
+            for block in range(32, 40):
+                word = 0x40000000 + block * BLOCK + 0x108
+                m.uc.hook_add(UC_HOOK_MEM_READ, lambda uc, acc, a, s, v, d, word=word: uc.mem_write(
+                    word, (0x5555555555555555).to_bytes(8, 'little')), begin=word, end=word + 7)
+        return r.go()
+    clean, faulted = every_block(False), every_block(True)
+    step = TICK // 10
+    assert clean['status'] == 'pass' and faulted['status'] == 'fail' and faulted['mismatch_count'] >= 1
+    assert faulted['tests']['march']['status'] == 'fail'
+    wall = {name: rec['end_ticks'] - rec['start_ticks'] for name, rec in (('clean', clean), ('faulted', faulted))}
+    # The model adds a step at every counter read: one for the block in which
+    # the deadline passes and one each for the closing result and record.
+    assert wall['faulted'] <= TICK + 3 * step and wall['faulted'] <= wall['clean'], wall
+    out['fault_in_every_block'] = {'budget_ticks': TICK, 'counter_step_ticks': step, 'wall_ticks': wall,
+                                   'mismatches': faulted['mismatch_count'], 'groups': faulted['groups']}
     # A damaged recovery page after admission stops the run at the next digest.
     r = Run(elf, mask=0x08)
     damaged = []
@@ -568,13 +595,14 @@ def host_round_trip(elf, binary, out):
     bundle = out / 'host-bundle'
     shutil.rmtree(bundle, ignore_errors=True)
     log = out / 'run-log.json'
-    log.write_text(json.dumps({'session': 1, 'runs': []}))
+    accepted = {'by': 'model user', 'date': '2026-10-22', 'residuals': list(host.RESIDUALS)}
+    log.write_text(json.dumps({'session': 1, 'runs': [], 'acceptance': accepted}))
     bundle.mkdir(parents=True)
     with contextlib.redirect_stdout(io.StringIO()):
         host.prepare(ap.Namespace(elf=elf, image=binary, run_log=log, output=bundle, mask=[], budget=30.0))
     p = json.loads((bundle / 'prepared.json').read_text())
     assert p['entry'] == 0x41000000 and p['contract_address'] == 0x41005000 and p['budget_ticks'] == 20 * TICK
-    assert p['mask'] == 0x1f and p['slice'] == [32, 6144] and p['groups'] == 23
+    assert p['mask'] == 0x1f and p['slice'] == [32, 6144] and p['groups'] == 23 and p['acceptance'] == accepted
     m = machine.Machine(elf)
     m.platform_tables(golden=False)
     requests = []
