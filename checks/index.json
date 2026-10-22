@@ -5978,6 +5978,7 @@
  "nbg-layout-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-conformance.md",
    "docs/nbg-assembly.md"
   ],
   "library": false,
@@ -6126,10 +6127,25 @@
   "summary": "One native NPU application link and focused constructor/client/frame/host composition.",
   "usb": false
  },
+ "npu-conformance.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-conformance-measurements.md",
+   "docs/designs/npu-conformance.md",
+   "docs/npu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the NPU conformance harness's vectors, comparisons and identity pins; host only.",
+  "usb": false
+ },
  "npu-conv-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu-compiler.md"
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6160,7 +6176,9 @@
  "npu-dual-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu-compiler.md"
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6399,7 +6417,9 @@
    "host"
   ],
   "docs": [
+   "docs/designs/npu-conformance.md",
    "docs/handoff.md",
+   "docs/npu-conformance.md",
    "docs/npu-service.md",
    "docs/npu-session.md"
   ],
