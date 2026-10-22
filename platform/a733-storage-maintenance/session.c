@@ -1,5 +1,6 @@
 #include "session.h"
 #include "a733_storage_update_native.h"
+#include "a733_range.h"
 #include <string.h>
 static int present(const uint8_t *p,size_t n)
 {unsigned v=0;for(size_t i=0;i<n;++i)v|=p[i];return v!=0;}
@@ -33,8 +34,8 @@ int a733_storage_session_decode(struct a733_storage_native_boot *out,
        ticks>=b.grant.deadline_us*24)return 0;
     t.reload_before_us=before/24;t.reload_after_us=after/24;
     uint64_t window=t.minimum_reload_us-t.guard_us-A733_MAINTENANCE_OPERATION_US;
-    if(t.reload_before_us>UINT64_MAX-window)return 0;
-    uint64_t startup=t.reload_before_us+window;
+    uint64_t startup;
+    if(!a733_deadline_after(t.reload_before_us,window,&startup))return 0;
     if(startup>b.grant.deadline_us)startup=b.grant.deadline_us;
     if(!startup||ticks/24>=startup)return 0;
     b.identity=t.generation;b.topology=a733_storage_wire64(raw+416);

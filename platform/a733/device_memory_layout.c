@@ -14,6 +14,7 @@ int a733_device_memory_handoff_valid(const struct a733_device_memory_layout *p, 
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_memory_reservations.h"
 #include "a733_memory_uncached.h"
 #include "boot.h"
@@ -104,6 +105,12 @@ static int prepared_profile(void)
         a733_cached_runtime[0].startup_deadline==binding.startup_deadline &&
         aarch64_device_cache_stride() && a733_smp_device_preparation_admitted();
 }
+/* Identity pages read and write with one attribute and one shareability:
+ * write-back inner shareable, or Normal-NC outer or inner shareable. */
+static const struct a733_mapping_rule wb_page={A733_MAPPING_READ_WRITE,1,
+    {{A733_MAIR_NORMAL_WB,A733_SH_INNER}},1,1};
+static const struct a733_mapping_rule nc_page={A733_MAPPING_READ_WRITE,1,
+    {{A733_MAIR_NORMAL_NC,A733_SH_OUTER|A733_SH_INNER}},1,1};
 int a733_device_memory_prepare(void)
 {
     /* Only the primary may mutate progress. Other contexts refuse without
@@ -124,11 +131,8 @@ int a733_device_memory_prepare(void)
             if(binding.nc)break;
             binding.nc=1;binding.cursor=binding.layout.nc_start;
         }
-        struct aarch64_translation r,w;
-        if(!aarch64_device_translate(binding.cursor,0,&r) || !aarch64_device_translate(binding.cursor,1,&w) ||
-            r.physical!=binding.cursor || w.physical!=binding.cursor || r.attributes!=(binding.nc?0x44u:0xffu) ||
-            w.attributes!=r.attributes || r.shareability!=w.shareability ||
-            (binding.nc?(r.shareability!=2 && r.shareability!=3):r.shareability!=3))goto fail;
+        if(!a733_mapping_check(aarch64_device_translate,binding.cursor,binding.cursor,
+            binding.nc?&nc_page:&wb_page))goto fail;
         binding.cursor+=4096;
     }
     if(!prepared_profile())goto fail;

@@ -1,13 +1,15 @@
 #include "device_memory_pool.h"
+#include "a733_range.h"
 
-static int overlap(uintptr_t a, size_t an, uintptr_t b, size_t bn)
-{ return a < b + bn && b < a + an; }
+/* The overlap tests use the unchecked form: device_memory_pool_init() refuses
+ * a pool or backing range that wraps, and output_ok() refuses a wrapping
+ * output before any overlap test of that output. */
 static int output_ok(const struct device_memory_pool *p, const void *out, size_t bytes)
 {
     uintptr_t a = (uintptr_t)out;
     return out && a <= UINTPTR_MAX - bytes &&
-        !overlap(a, bytes, (uintptr_t)p, sizeof(*p)) &&
-        !overlap(a, bytes, p->backing.cpu, p->backing.bytes);
+        !a733_extents_overlap_prechecked(a, bytes, (uintptr_t)p, sizeof(*p)) &&
+        !a733_extents_overlap_prechecked(a, bytes, p->backing.cpu, p->backing.bytes);
 }
 
 int device_memory_pool_init(struct device_memory_pool *p, uintptr_t cpu,
@@ -18,7 +20,7 @@ int device_memory_pool_init(struct device_memory_pool *p, uintptr_t cpu,
         bytes > DEVICE_MEMORY_MAX_PAGES * DEVICE_MEMORY_PAGE ||
         cpu > UINTPTR_MAX - bytes || physical > UINT64_MAX - bytes ||
         (uintptr_t)p > UINTPTR_MAX - sizeof(*p) ||
-        (cpu < (uintptr_t)p + sizeof(*p) && (uintptr_t)p < cpu + bytes)) return 0;
+        a733_extents_overlap_prechecked(cpu, bytes, (uintptr_t)p, sizeof(*p))) return 0;
     *p = (struct device_memory_pool){.backing = {cpu, physical, bytes},
                                     .next_generation = 1, .initialized = 1};
     return 1;
@@ -40,7 +42,7 @@ int device_memory_describe(const struct device_memory_pool *p, struct device_mem
     if (!p || !p->initialized || l.pool != (uintptr_t)p || !output_ok(p, out, sizeof(*out)) || !l.owner || !l.generation ||
         l.slot >= DEVICE_MEMORY_MAX_ALLOCATIONS ||
         (state && (!output_ok(p, state, sizeof(*state)) ||
-         overlap((uintptr_t)state, sizeof(*state), (uintptr_t)out, sizeof(*out))))) return 0;
+         a733_extents_overlap_prechecked((uintptr_t)state, sizeof(*state), (uintptr_t)out, sizeof(*out))))) return 0;
     const struct device_memory_allocation *a = &p->allocations[l.slot];
     if (a->state == DEVICE_MEMORY_FREE || a->owner != l.owner || a->generation != l.generation) return 0;
     size_t offset = (size_t)a->first * DEVICE_MEMORY_PAGE;
@@ -59,7 +61,7 @@ int device_memory_acquire_aligned(struct device_memory_pool *p, uint64_t owner, 
         ((p->backing.cpu ^ p->backing.physical) & (alignment - 1)) ||
         bytes > p->backing.bytes || !p->next_generation ||
         !output_ok(p, lease, sizeof(*lease)) || !output_ok(p, out, sizeof(*out)) ||
-        overlap((uintptr_t)lease, sizeof(*lease), (uintptr_t)out, sizeof(*out))) return 0;
+        a733_extents_overlap_prechecked((uintptr_t)lease, sizeof(*lease), (uintptr_t)out, sizeof(*out))) return 0;
     unsigned pages = (unsigned)((bytes + DEVICE_MEMORY_PAGE - 1) / DEVICE_MEMORY_PAGE);
     unsigned total = (unsigned)(p->backing.bytes / DEVICE_MEMORY_PAGE), slot = 0;
     while (slot < DEVICE_MEMORY_MAX_ALLOCATIONS && p->allocations[slot].state != DEVICE_MEMORY_FREE) ++slot;
