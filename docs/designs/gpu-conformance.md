@@ -1,8 +1,10 @@
 # Design: GPU output conformance against a host software renderer
 
-Status: **designed**, not implemented. No board run has produced GPU output,
-so every comparison ends at host-modeled, with physical behavior pending
-until scheduled board captures pass the same comparison.
+Status: **implemented and host-modeled**. The harness and its host check
+exist, and the check passes. No board capture has been compared, so physical
+behavior stays pending until scheduled board captures pass the same
+comparison. Board comparison also waits for the capture-function change in
+the last section.
 
 The GPU driver implements a fixed clear, a colored-triangle profile, three
 indexed-texture profiles (2, 3 and 4, in [gpu-render.md](../gpu-render.md))
@@ -33,14 +35,15 @@ closed-form reference.
    described twice and no reference frame is cached.
 3. **Capture.** The existing capture functions run under the board
    coordinator; the harness opens no USB device. The capturing host computes
-   SHA-256 over the bytes it passes to the capture function and records it
-   with the state word, frame sequence, generation, the reply result and, for
-   a failed compute job, the job phase and error. The board does not attest
-   the hash.
+   SHA-256 over the bytes it passes to the capture function. It records the
+   hash with the state word, the reply's frame sequence and result, the
+   input generation for texture launches (the triangle protocol has none)
+   and, for a failed compute job, the job phase and error. The board does
+   not attest the hash.
 4. **Comparison.** The comparator refuses a capture whose recorded hash or
-   state differs from the plan or whose sequences do not advance by one per
-   frame, records a frame with a failed reply result, then compares pixels or
-   words.
+   state differs from the plan, whose sequences do not advance by one per
+   frame or whose texture frames lack a generation. It records a frame with
+   a failed reply result, then compares pixels or words.
 
 Inputs and captures are read-only. Only comparison results are kept, under
 `~/.cache/sunstoneos/evidence/gpu-conformance-<date>/`, and they are
@@ -116,6 +119,8 @@ any of these:
   lies within 2⁻⁷ texel of a texel boundary (2⁻⁸ for subtexel quantization
   plus the coordinate error below). Exact vertices make every texel
   coordinate an exact rational, so the reference needs one sampling path.
+  The 2⁻⁸ figure is an assumption about the hardware; if the board samples
+  a different texel, the comparison fails.
 - **Depth.** Two surfaces covering one pixel centre differ in depth by zero or
   by at least 2⁻¹⁶. A zero difference is allowed only for the same vertex
   positions drawn twice, which Vulkan's invariance rules require to give
@@ -129,12 +134,11 @@ any of these:
 
 ## Comparison and tolerances
 
-Vulkan lets a float-to-UNORM8 conversion return either neighbouring value; the
-reference rounds to nearest, so one conversion differs by at most 1. Blending
-is assumed to run at destination precision or better with one final rounding,
-and linear filtering to use the 8 subtexel bits the pinned PowerVR driver
-reports. Closed-form board scenes confirm both, as described at the end of
-this section.
+Vulkan lets a float-to-UNORM8 conversion return either neighbouring value, so
+a board conversion lies less than 1 from the value it converts. Blending is
+assumed to run at destination precision or better with one final rounding.
+Closed-form board scenes confirm the blending assumption and bound the
+board's filter weight error, as described at the end of this section.
 
 Each covered pixel passes through at most one inexact stage, so tolerances do
 not compose. Linear-filtered pixels are opaque and not sRGB-decoded; sRGB uses
@@ -145,38 +149,68 @@ and later batches over it are opaque or write no colour.
 | --- | --- |
 | Clear, opaque nearest texel without sRGB, compute word | Exact |
 | Interpolated colour, one blended layer, sRGB decode | ±1 |
-| Linear filtering | ±(1 + ⌈9Δ/1024⌉) |
+| Linear filtering | ±(1 + ⌈2Δ(e_b + e_r)⌉): 9 in the profile 4 linear frames, 2 in the 1920 × 384 frame |
 
 Δ is the largest channel difference between two texels that can be filtering
-neighbours under the scene's address modes, computed once per texture. Board
-and reference each quantize both bilinear weights to 2⁻⁸, so each weight
-differs by less than 2⁻⁸, and the result changes by at most Δ per unit of
-either weight, giving Δ/128. With |u| ≤ 4 and at most 256 texels, the texel
-coordinate is below 1024 in magnitude; four fp32 roundings bound its error by
-2⁻¹¹ texel, adding 2 × 2⁻¹¹ Δ = Δ/1024 over two axes. The final conversion
-adds 1.
+neighbours under the scene's address modes, computed once per texture. A
+bilinear result changes by at most Δ per unit change of either axis's
+filter weight, so weights that differ by at most d on each axis give results
+within 2dΔ. The per-axis bound d is e_b + e_r:
 
-The profile 4 bound assumes that the hardware's perspective division adds no
-more than that 2⁻¹¹ texel.
+- e_b, the board's weight error, is what a passing confirmation scene
+  admits: just under 2⁻⁸ + 2⁻¹¹ + 2/255, about 3.1 × 2⁻⁸ (derived below).
+- e_r, llvmpipe's weight error, is at most 2⁻⁹ + 2⁻¹¹. When both address
+  modes are repeat or clamp to edge, llvmpipe filters 8-bit texels on an
+  integer path that rounds the texel coordinate to 1/256
+  (`lp_bld_sample_aos.c` in the pinned source); otherwise it filters in
+  fp32. With |u| ≤ 4 and at most 256 texels, the texel coordinate is below
+  1024 in magnitude, and four fp32 roundings bound its error by 2⁻¹¹ texel.
 
-The last batch of each profile 4 frame holds confirmation scenes, whose
-pixels the comparator checks against exact rational values rather than the
-reference. Texels 0 and 1 of the profile 4 texture are black and white, and
-so are texels 8 and 9 below them, so a linear-filtered pixel between them
-reads its weight directly: a weight error e moves each channel by 255e. Each
-linear frame draws a ramp from texel 0 to texel 1 on a quad with w = 1 at one
-edge and w = 4 at the other, and four constant-w bands that each span a
-quarter texel over 64 pixels. A single 256-pixel ramp does not fit the
-128-pixel frame; the four bands place their 256 pixel centres midway between
-consecutive multiples of 2⁻⁸ texel, so they show every 8-bit subtexel step. A
-ramp pixel passes when each channel is within 1 + 255 × 2⁻⁸ of its exact
-value, which holds when the texel coordinate is within 2⁻⁸ of the exact
-rational value. Each nearest frame's blended quad is the blending
-confirmation: each channel within 1 of the exact blended value. If any
-confirmation pixel fails, the profile 4 launch is reported as unconfirmed and
-none of its frames is compared until the tolerance is revised. The 1920 × 384
-launch rests on the same filtering assumption, so its comparison requires
-the passed comparison of the profile 4 launch.
+The board's conversion adds less than 1. llvmpipe's adds at most 1: its
+integer path rounds each of its three lerps (`lp_build_lerp_simple`), and
+its fp32 path rounds once. The integer channels therefore differ by less
+than 2 + 2dΔ, which is at most 1 + ⌈2dΔ⌉.
+
+The confirmation scenes vary the texel coordinate along u only. The
+tolerance applies e_b to v as well, on the assumption that the sampler
+treats both axes alike. If the board's v weights are less accurate, the
+linear-filter comparison fails.
+
+The last batch of each nearest and linear profile 4 frame holds confirmation
+scenes, whose pixels the comparator checks against exact rational values
+rather than the reference; the sRGB frames have none. Texels 0 and 1 of the
+profile 4 texture are black and white, and so are texels 8 and 9 below them,
+so a linear-filtered pixel between them reads its weight directly: a weight
+error e moves each channel by 255e. Each linear frame draws a ramp from
+texel 0 to texel 1 on a quad with w = 1 at one edge and w = 4 at the other,
+and four constant-w bands that each span a quarter texel over 64 pixels. A
+single 256-pixel ramp does not fit the 128-pixel frame; the four bands place
+their 256 pixel centres midway between consecutive multiples of 2⁻⁸ texel.
+
+A band pixel passes when each channel is within 1 + 255 × 2⁻⁸ of 255 times
+its exact weight. A ramp pixel also allows 2⁻¹¹ texel for perspective
+division and passes within 1 + 255 × (2⁻⁸ + 2⁻¹¹), so a sampler that
+truncates to 8 subtexel bits after a perspective division accurate to
+2⁻¹¹ texel passes. The board's own conversion can move a pixel by up to 1,
+so a passing pixel shows only that its weight lies within (bound + 1)/255
+of the exact value; that ramp figure is e_b. UNORM8 output cannot resolve a
+2⁻⁸ weight step against this conversion allowance, so the scenes do not
+establish the number of subtexel bits or the perspective-division error.
+The host self-check shows that 7-bit weights rounded to nearest and 8-bit
+weights after a 2⁻⁹ texel coordinate bias both pass the scenes, and that
+the linear tolerance accepts both against the reference. Weights truncated
+to 2⁻⁶ fail them.
+
+Each nearest frame's blended quad is the blending confirmation: each channel
+within 1 of the exact blended value. If any confirmation pixel fails, the
+profile 4 launch is reported as unconfirmed and none of its frames is
+compared until the tolerance is revised. The profile 3 source-over frames
+rest on the same blending assumption and the 1920 × 384 launch on the same
+filter bound. The comparison of either launch therefore requires the
+`comparison.json` of a passed profile 4 launch with no failed or uncaptured
+confirmation scene, whose plan digest matches the current plan. The plan
+digest is the SHA-256 over the profile 4 frames' planned input hashes and
+state words.
 
 An edge tie is a pixel centre whose edge function is exactly zero in the
 plan's arithmetic, so the implementation's tie-break rule decides coverage.
@@ -205,12 +239,16 @@ STATUS poll (section 1.3 of
 
 | Launch: image, envelope | Session | Frames | Readback | Worst-case modeled time |
 | --- | --- | --- | --- | --- |
-| Triangle profile: `sunstone-a733-gpu-draw-single-core` | 64 × 64 | Background only; three flat triangles sharing edges; 126-vertex fan; a degenerate triangle | 64 KiB | 1.4 s |
-| Profile 2: texture image, version 1 | 255 × 129, stride 256 | Six: copy, mirrored copy and three texture sizes as full-screen quads, and triangles on the 1/8 NDC lattice | 0.8 MB | 5.5 s |
-| Profile 3: texture image, version 2 | 256 × 256 | Eight: three comparisons with and without depth writes, and two source-over scenes | 2.1 MB | 8.9 s |
-| Profile 4: texture image, version 3 | 128 × 128 | 18 frame states: nearest with and without sRGB, and linear, each with six address-mode pairs; up to 16 batches covering depth, stencil, blend, cull and colour write | 1.2 MB | 5.5 s |
-| Profile 4 maximum width: texture image, version 3 | 1920 × 384 | One frame of 1,000 non-overlapping linear-filtered triangles | 2.9 MB | 12.9 s, frame stream 11.7 s |
-| Compute, one per kernel: program application with runtime input | Package geometry | Three inputs each | 12 KB each | 0.7 s each |
+| Triangle profile: `sunstone-a733-gpu-draw-single-core` | 64 × 64 | Background only; three flat triangles sharing edges; 126-vertex fan; a degenerate triangle | 64 KiB | 1.3 s |
+| Profile 2: texture image, version 1 | 255 × 129, stride 256 | Six: copy, mirrored copy and three texture sizes as full-screen quads, and triangles on the 1/8 NDC lattice | 0.8 MB | 5.1 s |
+| Profile 3: texture image, version 2 | 256 × 256 | Eight: three comparisons with and without depth writes, and two source-over scenes | 2.1 MB | 8.5 s |
+| Profile 4: texture image, version 3 | 128 × 128 | 18 frame states: nearest with and without sRGB, and linear, each with six address-mode pairs; up to 16 batches covering depth, stencil, blend, cull and colour write | 1.2 MB | 5.3 s |
+| Profile 4 maximum width: texture image, version 3 | 1920 × 384 | One frame of 1,000 non-overlapping linear-filtered triangles | 2.9 MB | 12.1 s, frame stream 11.7 s |
+| Compute, one per kernel: program application with runtime input | Package geometry | Three inputs each | 12 KB each | At most 0.52 s |
+
+The modeled times are the values `gpu-conformance.py plan` computes from the
+tick parameters below; a session adds the 15-second OPEN budget and the
+one-second CLOSE allowance.
 
 The modeled time covers uploads, submissions, completions and readback. The
 plan check asserts each of these at half its board limit:
@@ -264,8 +302,13 @@ parameters are updated from the measured value before the next board session.
   fixed table of stencil test states across the 18 profile 4 frames meets
   this, because a frame's compare operation decides which paths each start
   value takes.
-- **Confirmation.** The reference meets the confirmation bounds on the
-  closed-form frames.
+- **Confirmation.** The exact frames and the reference meet the
+  confirmation bounds. Three modeled board filters, each a rule for the
+  texel coordinate used in linear filtering, are evaluated in closed form:
+  weights truncated to 2⁻⁶ must fail the confirmation in every linear frame.
+  7-bit weights rounded to nearest and 8-bit weights after a 2⁻⁹ texel
+  coordinate bias pass it, so each must stay within the linear tolerance of
+  the reference frame.
 - **Mutations.** Each must fail at least one scene. Five set one reference
   render parameter: a half-pixel viewport offset, the other filter, the other
   interpolation mode, mirrored repeat for mirror clamp to edge, and skipped
@@ -274,6 +317,13 @@ parameters are updated from the measured value before the next board session.
   one exact pixel changed by 2, one compute word changed, and a compute
   capture whose recorded job error is `PVR_JOB_RESULT`.
 - **Plan refusals.** One scene violating each plan check is refused.
+- **Capture comparison.** On synthesized captures, exact profile 4 frames
+  pass, coarse filter weights leave the launch unconfirmed, a failed frame
+  is recorded with its result, and a wrong input hash, state or sequence or
+  a texture frame without its generation is refused. The profile 3
+  comparison is unconfirmed without a profile 4 comparison, with one from
+  another plan digest and with an unconfirmed one, and passes with the
+  passed one.
 
 Transport and driver paths stay with their owners: `checks/gpu-draw-runtime.py`
 and `checks/gpu-texture-runtime.py` model the draw and 1920 × 1080 texture
@@ -316,10 +366,10 @@ reporting system.
 | Implemented features with an independent output comparison | 0 (counted) | Every feature row in `docs/gpu-conformance.md` | Coverage table from the check |
 | Mutations detected | None | All ten | Check result |
 | Board launches | No plan | 12; 13 once the 1920 × 1080 launch is admitted | Plan |
-| Readback for all launches | No plan | At most 8 MiB, 7.2 MB planned; 15.5 MB with 1920 × 1080 | Sum of frame extents |
+| Readback for all launches | No plan | At most 8 MiB, 7.1 MB planned; 15.4 MB with 1920 × 1080 | Sum of frame extents |
 | Ticks per 512-byte packet, GPU image | 1 to 2 (counted from `apps/gpu-render/usb.c`) | Plan parameter 2 | Per-slot board wall time |
 | Worst-case frame stream | None | At most 15 s; 11.7 s planned | Plan check |
-| Worst-case session, OPEN 15 s and CLOSE 1 s included | None | At most 30 s; 28.9 s planned | Plan check |
+| Worst-case session, OPEN 15 s and CLOSE 1 s included | None | At most 30 s; 28.1 s planned | Plan check |
 | Worst-case slot delivery and request upload | None | At most 0.5 s each; 0.26 s planned | Plan check |
 | Board wall time per launch and slot | Not recorded | At most the modeled worst case, else a model discrepancy | Board evidence |
 | Changes to board images | 0 | 0 | Review of the diff |
@@ -332,7 +382,8 @@ reporting system.
 ## Left out
 
 - **Board captures.** This work has no board access; the scheduled board
-  session runs the twelve launches. A launch confirms conformance when its
+  session runs the twelve launches once the capture-function change below
+  lands. A launch confirms conformance when its
   recorded input hashes and states match the plan, its confirmation scenes
   pass, the driver's guard and timeline checks pass, every scene passes, and
   tie-accepted counts and wall times are recorded.
@@ -360,6 +411,17 @@ reporting system.
 
 No change to code reserved for the primary agent is needed.
 
+- **Capture provenance from the capture functions.** `capture_frames()` in
+  `apps/gpu-render/texture.py` and `apps/gpu-render/draw.py` returns, for
+  each frame, the reply's frame sequence (`h[4]` in texture replies, the
+  decoded sequence in draw replies), the input generation for texture frames
+  (`h[13]` of the BEGIN reply) and the reply state. On a failed reply or a
+  failed CLOSE it raises with the frames captured so far and the failing
+  frame's reply state attached. Today both functions return only pixels and
+  raise without the earlier frames, so a capture record cannot carry the
+  sequence, generation and result that the comparison checks. Board
+  comparison is blocked until this lands. Owner: the GPU render transport
+  work.
 - **GPU image on the shared USB0 loop.** `apps/gpu-render/usb.c` moves to the
   loop in `apps/board/usb0_service.h` and meets the section 3 figure of 13
   ticks per 64 KiB. Owner: the USB0 evidence channel work. The plan then
