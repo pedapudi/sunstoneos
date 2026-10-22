@@ -26,9 +26,12 @@ records the contract's page digest and supervisor identity in the retained
 receipt and reads nothing from the live page. The copy step
 (`npu_single_core_seal` at EL3, `npu_session_copy` at EL1 in the multicore
 build) copies the page into retained private memory, hashes the copy once and
-compares the hash with the receipt. It then validates the copy: the image
-digest must equal the build ID, the epoch, generation and lease must equal the
-contract's, and the supervisor must equal the receipt's. Startup reads only that copy. The live
+compares the hash with the receipt; that comparison authenticates the copy.
+One combined compare then requires the copy's image digest to equal the build
+ID, its epoch, generation and lease to equal the contract's, and its
+supervisor to equal the receipt's. The digest already binds those values, so
+the compare only catches a preparer that wrote a page for another session.
+Startup reads only that copy. The live
 page is hashed zero times instead of once, and a writer that changes it after
 the copy cannot affect startup.
 
@@ -39,8 +42,6 @@ page carries:
   whole-platform reservation;
 - the four reviewed-evidence digests: admission (platform and DDR
   conditions), clock, power and supervision; and the supervisor identity;
-- the PLL entry (`ENABLE` or `ADOPT`), which selects the clock conditions the
-  host preparer requires;
 - the owner identities that still have a consumer: `npu_owner` (clock-registry
   token owner), `usb_owner` and `usb_evidence` (the USB platform configuration
   in `native.c`), `bridge_owner` (the rail binding) and `command_admission`
@@ -61,12 +62,11 @@ only recovery contract is supervised whole-board power removal. The supervision
 digest is therefore required on every session, and the host preparer
 (`apps/npu-convolution/prepare-supervised.py`) keeps its three supervision
 conditions: `manual-whole-board-power-removal`,
-`retain-all-resources-until-power-removal` and `stop-after-first-failure`. An
-`ENABLE` entry also requires the clock condition
-`supervised-cross-pll-disturbance-risk`. Its reason is the reference manual's
-warning that enabling a PLL can disturb other PLLs, which no register read can
-rule out for a live DRAM PLL. An `ADOPT` entry writes no PLL register and does
-not require that condition.
+`retain-all-resources-until-power-removal` and `stop-after-first-failure`.
+Every session also requires the clock condition
+`supervised-cross-pll-disturbance-risk`, because startup always enables
+PLL_NPU. Its reason is the reference manual's warning that enabling a PLL can
+disturb other PLLs, which no register read can rule out for a live DRAM PLL.
 
 **Handoff flags map to evidence conditions.** The numeric flag word
 (`A733_NPU_HANDOFF_*`) proves nothing by itself, as its header states. Each
@@ -84,38 +84,51 @@ checks before it writes the digest:
 
 No flag is covered by the register pass below.
 
-**Fixed board rules replace snapshots.** The two admitted PLL_NPU states and
-the local CCU baseline become compile-time constants taken from the pinned
+**Fixed board rules replace snapshots.** The admitted PLL_NPU state and the
+local CCU baseline become compile-time constants taken from the pinned
 Allwinner driver and confirmed by the first board-evidence item. The 13 exact
 consumer snapshots become masked field checks, the pattern that
 [a733_i2s_platform.c](../../drivers/audio/a733_i2s_platform.c) uses. The
-checks test only what the enable needs:
+masks keep every refusal that `a733_npu_pll_scopes` and `baseline()` apply
+today, including the live-DRAM enable conditions in
+[docs/npu-pll.md](../npu-pll.md):
 
-- no consumer source-select field selects PLL_NPU;
-- the DRAM and DRAM-bus source-select fields select DDRPLL;
-- AHB, NSI and MBUS select SYS24 or PERI0;
+- AHB, NSI and MBUS (`0x500`, `0x580`, `0x588`) select SYS24 or an admitted
+  PERI0 output, and NSI and MBUS have no DFS update pending (bits 27 and 28
+  clear);
+- DRAM0 (`0xc00`) has its gate on, DDRPLL selected (select field 0), bit 16
+  clear and no update pending (bit 27 clear), and the DRAM bus (`0xc0c`) has
+  bit 16 set: the external memory clock comes from the separate PHY PLL;
+- the video encode and decode clocks (`0xa80`, `0xa88`) have their gates
+  closed and a select field of at most 6, and their bus word (`0xa8c`) has the
+  gates closed and the resets asserted (`0x50005` clear);
+- the autonomous clock modes (`0x1b10`, `0x1b14`, `0x1b1c` bit 0) are off;
 - `0xb00` and `0xb04` hold the local baseline: module and bus gates closed,
   core, AXI and AHB resets asserted, SRAM reset released;
-- PLL_NPU is either disabled (enable, LDO, lock detector, output and LOCK
-  clear) or locked at 492 MHz with the control, `0x1920` and `0x19a0` fields
-  that the enable sequence writes.
+- PLL_NPU is disabled: enable, LDO, lock detector, output and LOCK clear,
+  and the rest of the control word equal to its constant;
+- the four PLL_NPU tuning words hold modulation, fractional interpolation,
+  smooth update and dithering off and both biases at reset: `0x2a4` bit 0
+  and `0x2a8` bit 31 clear, `0x2ac` under `0xff100000` equal to `0x30000000`,
+  and `0x2b0` under `0x001f0000` equal to `0x000b0000`. The unlock-interrupt
+  enable, which [docs/npu-pll.md](../npu-pll.md) requires off and no current
+  check reads, joins the same compare.
 
-Dividers and gates of VE, DRAM, DRAM bus and MBUS are not compared. Those
-registers belong to other drivers, and a divider change there no longer stops
-NPU startup.
+Only the divider fields of these words are not compared. They belong to the
+DRAM, video and fabric drivers and do not affect whether enabling PLL_NPU is
+safe, so a divider change by those drivers does not stop NPU startup.
 
 **One register pass.** Before its first write, startup reads the 24 MHz
 reference (two words), the PERI0 parent and its gate words (five), the 13
 consumer words, PLL_NPU control and its four tuning words, `0x1920`, `0x19a0`
-and the two domain-4 status words. That is 29 reads under one register-lock
-acquisition, each compared under its mask with the constants. The pass also
-checks that the observed PLL state matches the record's PLL entry. It replaces
-three overlapping passes: the PLL controller's `baseline()`, the application
+and the two domain-4 status words. That is 29 reads, or 30 if the
+unlock-interrupt enable sits in another word, under one register-lock
+acquisition, each compared under its mask with the constants. The pass
+replaces three overlapping passes: the PLL controller's `baseline()`, the application
 adapter's `parents()` and the platform's `parents_stable()`.
 
-**Entry states.** Startup admits domain 4 OFF with PLL_NPU disabled
-(`ENABLE`) or locked at 492 MHz (`ADOPT`). Any other state is refused before
-the first write. Domain 4 found ON is refused: the shared SRAM aliases
+**Entry state.** Startup admits only domain 4 OFF with PLL_NPU disabled. Any
+other state is refused before the first write. Domain 4 found ON is refused: the shared SRAM aliases
 (`0x74000`–`0xf3fff`) are powered by domain 4, and with the domain OFF no
 bootloader, FEL continuation, CPU or DMA user can hold data in them. Two
 consequences follow:
@@ -129,8 +142,8 @@ consequences follow:
   the current quiescent-ON profile returns unchanged, with its clock
   conditions `live-disabled-pll-quiescent-on-snapshot` and
   `native-dram-continuations-and-shared-sram-abandonment`. If boot leaves
-  PLL_NPU locked at another rate, the existing retune sequence returns as a
-  startup step.
+  PLL_NPU locked, an adopt entry (at 492 MHz) or the existing retune sequence
+  (at another rate) is designed then, with that evidence.
 
 ## Startup is the only sequencer
 
@@ -142,7 +155,7 @@ checks replace, and one retain path. It runs these steps:
 1. Acquire the DCDC2 token and one clock-registry token: exclusive PLL_NPU and
    NPU-local scopes, shared reference, oscillator, fabric and PERI0.
 2. Run the register pass.
-3. For `ENABLE`, apply the method-2 enable step table under the same lock
+3. Apply the method-2 enable step table under the same lock
    acquisition (the sequence of the mode now named `LIVE_ENABLE`), then
    release the lock and spin on LOCK: three observations 3 µs apart, then
    20 µs apart, at most 100 observations. The spin holds no lock, because the
@@ -168,13 +181,15 @@ between two DCDC2 snapshots. The domain owner reads DCDC2 enable and selector
 after the power authority's settle deadline (provider start plus 5,160 µs)
 and reports ON. It spins up to 50 µs for the PCK600 acknowledgement with no
 lock held, then returns PENDING; startup retries once per tick for up to
-10 ms.
+10 ms. The PMIC-path removal lands with or after the power authority's domain
+row and its supply read; until then startup keeps its current DCDC2 check.
 
 **Removed, with the check that still covers each:**
 
 | Removed | Covered by |
 | --- | --- |
-| PLL modes `COLD_ENABLE` (no image has the SRAM-resident pre-DRAM code) and `ENABLED_RETUNE` (until the 852 MHz point) | Constants admit disabled or locked at 492 MHz |
+| PLL modes `COLD_ENABLE` (no image has the SRAM-resident pre-DRAM code) and `ENABLED_RETUNE` (until the 852 MHz point) | Constants admit only a disabled PLL_NPU |
+| Exact equality of the 13 consumer words with the record's snapshots | The masked compare, which keeps every refusal listed above |
 | `a733_npu_platform_adopt_on` and the `adopt_on` field | Register pass requires domain 4 OFF |
 | Platform `acquire` operation, `struct a733_npu_platform_resources`, `resources` and `observed` copies, ACQUIRE stage | Startup step 1: one registry call grants every scope or the step retains |
 | Platform BASELINE stage, `parents_stable()` | Register pass |
@@ -189,14 +204,20 @@ lock held, then returns PENDING; startup retries once per tick for up to
 | PCK600 lease `pck_token`, `struct a733_npu_startup_resources` and its GPU resource-manager wrapper | Domain owner holds the PCK600 bus-clock lease |
 | `A733_NPU_HANDOFF_*`, `a733_npu_handoff_established`, `handoff.established`, `A733_NPU_APPLICATION_USB_REQUIRED`, `A733_NPU_APPLICATION_USB_SUPERVISED` | Evidence conditions in the table above |
 | The `A733_NPU_SUPERVISED` option and the `A733_NPU_HANDOFF_SOURCE` file path | The page path, which every image already uses, builds unconditionally |
-| Live token status read in `prepared` | Nothing revokes the tokens before activation; only the bootstrap task holds them |
+| Live token status read in `prepared` | Nothing revokes the tokens before activation; one acquire load of the registry's `failed` flag in `prepared` catches a registry fault |
+| `backend`, `backend_cookie`, `image`, `commands` and `command_count` in `struct a733_npu_handoff`; `backend_equal` and the metadata loop in `a733_npu_startup_prepared`; `metadata()` and its calls at bind, in each startup and stop poll and in `prepared` | One copy in the service, fixed before the scheduler starts in private memory and checked once by `npu_service_init_deferred` with the `valid_backend` conditions |
 | Hash of every model, constant and stream on each startup poll and at activation (`unchanged(c,0)` in `npu_convolution_startup_poll` and `prepared`; `all_intact` in `npu_session.c` `platform_step`) | The first bootstrap publication hashes the same bytes before the device reads them |
 
-`prepared` keeps its metadata comparison: the activation's operations,
-backend cookie, MMU image (physical address, size, page directory entry,
-tables) and command table (device address, readable size, token) must equal
-the authenticated handoff. That is a few dozen word comparisons once per
-activation. The page-path files (`prepare-supervised.py`,
+**One copy of the activation metadata.** The operations, backend cookie, MMU
+image and command table exist today in three copies: the convolution object,
+the startup handoff and the service. `npu_convolution_handoff` fills the
+handoff's copy from the convolution object, so no boot authority stands behind
+it, and comparing the copies proves nothing; today they are compared at bind,
+twice per startup poll, twice per stop poll and twice at activation. The
+service keeps the only copy and checks it once at initialization. `prepared`
+then checks only startup's own state: not failed, the register lock not
+retained, and the counter clock's and the clock registry's `failed` flags
+clear. The page-path files (`prepare-supervised.py`,
 `boot-supervised.patch`, `checks/npu-supervised.py`,
 `checks/npu-supervised-host.py`) implement the only admission path left and
 produce the supervision evidence above, so they stay, reduced to the new
@@ -222,14 +243,22 @@ wakes it with no inter-processor interrupt. The multicore image defines no
 `a733_irq_routes` table, so SPI 65 stays as common boot leaves every SPI:
 disabled, inactive and not pending (the precondition that
 `platform/a733-smp-cached/irq_table.c` checks). Its worker runs on core 1
-with the service unbound and polls, and it keeps polling in this design.
-The I2S and OS images already bind SPIs in the multicore build through that
-route table: an application-owned table, programmed by EL3 boot through the
-application's boot patch. That image never returns, so no restore is needed.
-Binding SPI 65 to core 1 that way is a separate step with its own design
-gate. If it needs any change to reserved vector, monitor or platform code, it
-goes to the primary agent. The unbound poll branch in `npu_service.c` stays
-while the multicore image and the polled single-core profile use it.
+with the service unbound and keeps polling in this design. While the engine
+is active (job, bootstrap or cancel), the worker runs one `a733_npu_poll` pass
+per 1 ms tick (`wait = 1` in `npu_service.c`): completion is seen up to one
+tick late, and the worker wakes 1,000 times per second while a job runs.
+
+The step that removes that poll is a separate change with its own design
+gate: an `a733_irq_routes` table in `apps/npu-convolution/irq.c` that routes
+SPI 65 to core 1, and the route call in the application's boot patches, as
+`apps/os/irq.c` and `apps/os/boot.patch` do. The multicore convolution image
+never returns (its client suspends itself at the end of `main.c`), so the step
+needs no GIC restore path. It changes no reserved code: the installer and
+dispatcher in `platform/a733-smp-cached/irq_table.c` already serve the OS and
+I2S images. Its target is the bound
+figures in the budget table: no tick polls per job and one poll pass per 10 ms
+fallback. The unbound poll branch in `npu_service.c` stays while the
+multicore image and the polled single-core profile use it.
 
 **Cross-core synchronization.** Requests and replies travel through FreeRTOS
 queues, whose kernel critical sections order the data. The worker reads the
@@ -275,20 +304,20 @@ full-idle read.
 
 | Work per job, accelerator image | Today, counted | After this design |
 | --- | --- | --- |
-| SHA-256 of NN and coefficient buffers (`unchanged(c,1)`, `model_intact(s,m,0)`) | 917,504 bytes, plus the stream payload and an END scan of the rest of the 524,288-byte command allocation, on CPU0 | Same bytes, on the client core just before SUBMIT, with SHA2 instructions where every core reports them; 0 after the read-only mappings |
+| SHA-256 of NN and coefficient buffers (`unchanged(c,1)`, `model_intact(s,m,0)`) | 917,504 bytes, plus the stream payload and an END scan of the rest of the 524,288-byte command allocation, in the worker's `publish` | Same bytes and place, with SHA2 instructions where every core reports them; 0 after the read-only mappings |
 | `AT` translations (`live_mappings` in publish and finish, `register_access`) | 1,063 per walk × 2 + 13 = 2,139 | Same until the EL1 table pages are read-only; then 0 |
 | MMU table scan (`canonical`) | 4,352 words and 3,072 padding bytes | Same until the arena is read-only; then 0 |
 | Input copy (`memcpy` in `npu_convolution_send`) | 151,552 bytes, one copy per byte | At most one copy per byte |
 | Output copy (`npu_convolution_output`) | Up to 4,096 bytes, one copy per byte | 0 |
-| Pool clear (`memset` in `npu_convolution_send`) | 1,093,632 bytes | Same, on the client core, until the pool evidence; then 0 |
-| Cache maintenance | Clean 151,552 (input); clean-invalidate and later invalidate 1,097,728 each (pool and output): 2,347,008 bytes, on CPU0 | Client core: clean of the input, plus the pool while its clear exists. CPU0: clean-invalidate 4,096 output bytes before the job and invalidate them after |
+| Pool clear (`memset` in `npu_convolution_send`) | 1,093,632 bytes | Same, in the client, until the pool evidence; then 0 |
+| Cache maintenance | Clean 151,552 (input); clean-invalidate and later invalidate 1,097,728 each (pool and output): 2,347,008 bytes, in the worker | Client: clean of the input, plus the pool while its clear exists. Worker: clean-invalidate 4,096 output bytes before the job and invalidate them after |
 
-**Digest placement and cost.** The constant-buffer digest runs in
-`npu_convolution_send` on the submitting client's core, next to its input
-clean. The worker accepts SUBMIT only from the session's bound client task, so
-the digest runs in the code path that every SUBMIT passes through. The window
-between check and device read is the same as for a check in `publish` against
-a writer on another core. The build selects the SHA2-instruction
+**Digest placement and cost.** In every build the client and the worker
+share a core: core 1 in the multicore build, CPU0 in the single-core images.
+The constant-buffer digest therefore stays in the worker's `publish`, which
+every job passes through; moving it to the client would save no time on any
+core and would let a SUBMIT sent directly through `npu_service_send` skip it.
+The build selects the SHA2-instruction
 implementation for `unchanged`, `model_intact`, `all_intact` and the
 bootstrap-publication digest when `ID_AA64ISAR0_EL1` reports SHA2 on every
 core type. The estimates use 15–25 cycles per byte for portable SHA-256
@@ -299,15 +328,13 @@ core type. The estimates use 15–25 cycles per byte for portable SHA-256
 | Per job, 917,504 bytes | 7.6–12.7 ms / 28–46 ms | 1.0–2.0 ms / 3.7–7.4 ms |
 | Bootstrap publication, 1,881,936 bytes | 15.7–26.1 ms / 57–95 ms | 2.1–4.2 ms / 7.6–15.2 ms |
 
-In the multicore build the per-job digest leaves CPU0 entirely. In the
-single-core images the client runs on CPU0, so CPU0 still pays it.
+CPU0 pays this digest only in the single-core images.
 
-**Maintenance placement.** The client cleans the bytes it wrote (`DC CVAC`)
-on its own core, then issues `DSB SY` before the SUBMIT send. The device that
-reads the data sits outside the inner-shareable domain, and the start write
-comes from the worker on another core. The barrier must complete the clean to
-the point of coherency before the queue send releases the buffer, and the
-queue's inner-shareable ordering does not wait for that completion. `DSB OSH`
+**Maintenance placement.** The client cleans the bytes it wrote (`DC CVAC`), then issues `DSB SY` before the
+SUBMIT send. The device that reads the data sits outside the inner-shareable
+domain, so the barrier must complete the clean to the point of coherency
+before the queue send releases the buffer; the queue's ordering does not wait
+for that completion. `DSB OSH`
 replaces it if the shared-helpers qualification shows it sufficient. The
 worker clean-invalidates the 4,096 output bytes before each job. No mapping
 stops a CPU write to the output buffer, and a dirty line left by such a write
@@ -320,7 +347,9 @@ the board shows identical outputs from a pool prefilled with zeros and with
 
 ## Idle gating closes the engine and its local clocks
 
-Idle gating is off until two conditions hold. First, the primary agent maps
+Idle gating is off until two conditions hold. One `const` in the worker
+switches it, with no build option or per-image variant; the gate and wake code
+is reachable only from the 100 ms idle branch that the constant guards. First, the primary agent maps
 the admitted model, coefficient, stream and MMU-table regions, and the EL1
 translation-table pages, read-only at EL1 and EL0, with no writable EL1 or
 EL0 alias of any of them in the linear map, the uncached pool or any other
@@ -355,15 +384,19 @@ and the 208-byte bootstrap stream. Submits that arrive during a wake are
 queued as submits during a running job are queued today (`MEMBER_QUEUED`,
 `dispatch`) and start when the bootstrap completes. Refusal before device
 access remains only for invalid commands and the Critical thermal level. The
+worker unmasks interrupt 97 after controller open returns, as recovery does;
+a pending state left from before the gate is consumed only through an
+`a733_npu_poll` pass. The
 soft reset stays on the wake path until the board shows that a wake with only
 the CCU reset release and the bootstrap stream gives identical outputs; recovery
 keeps it in any case.
 
-**CPU0 occupancy.** The reset spins and the cancel spins run at worker
+**Worker core occupancy.** The reset spins and the cancel spins run at worker
 priority with interrupts enabled and without the platform register mutex; the
-engine registers are not CCU registers. CPU0 is unavailable to tasks at
-priority 4 or lower for at most 0.35 ms per wake and 1.1 ms per cancel. In the
-single-core images CPU0 also runs the per-job digest in the client task until
+engine registers are not CCU registers. The worker's core (CPU0 in the
+single-core images, core 1 in the multicore build) is unavailable to tasks at
+priority 4 or lower for at most 0.35 ms per wake and 1.1 ms per cancel. That
+core also runs the per-job digest until
 the read-only mappings exist: 7.6–12.7 ms per job at 1.8 GHz portable, or
 1.0–2.0 ms with SHA2 instructions (28–46 ms and 3.7–7.4 ms at 494 MHz).
 
@@ -439,13 +472,16 @@ code. The implementation adds these counters to `checks/npu-platform.c`,
 `checks/npu-pll.c`, `checks/npu-controller.c` and `checks/npu-startup.c`.
 Digest instruction counts per byte, for the portable and SHA2 forms, are
 measured by running the compiled digest under Unicorn, as
-`checks/lradc-native.py` runs native code.
+`checks/lradc-native.py` runs native code. Rows marked *bound* apply to the
+single-core profiles that route interrupt 97; rows marked *multicore* apply to
+the multicore image until the SPI 65 binding step, and the host model of
+`npu_service.c` measures their baselines.
 
 | Metric | Baseline | Target |
 | --- | --- | --- |
 | Session-page hashes at admission | 2 (live page, copy), counted | 1 (copy) |
 | Startup calls, acquisition to READY | Platform 17 measured; PLL 13 counted | ≤ 3; one tick wait |
-| Startup register reads and writes | Platform 51 and 12 measured; PLL and adapter about 58 and 7 counted | ≤ 60 reads excluding LOCK samples; ≤ 12 writes (6 when adopted) |
+| Startup register reads and writes | Platform 51 and 12 measured; PLL and adapter about 58 and 7 counted | ≤ 60 reads excluding LOCK samples; ≤ 12 writes |
 | Counter-clock reads at startup | Platform 190 measured; PLL about 110 counted | ≤ 16 plus one per LOCK sample |
 | Register-lock acquisitions at startup | Platform 15 measured; PLL 13 counted | ≤ 3 |
 | Ownership checks per register access | `task_owner` (startup); EL read, scheduler query, task compare and health query (adapter) | 0; one per startup call |
@@ -454,44 +490,49 @@ measured by running the compiled digest under Unicorn, as
 | Source size, lines (code + header) | Startup 436 + 131; platform 225 + 96; PLL 204 + 109; adapter 130 + 19 | Startup ≤ 260 + 60; platform ≤ 90 + 30; PLL ≤ 60 + 25; adapter deleted |
 | Bootstrap ticks to activation | About 42 counted | ≤ 4 without PENDING |
 | Local gate | 6 polls, 102 reads, 5 writes, 238 clock reads, 6 lock acquisitions, measured | 1 call, ≤ 12 reads, 5 writes, ≤ 6 clock reads, 1 lock |
-| Per-job digest, bytes and core | 917,504 plus stream, CPU0 | Same bytes on the client core until read-only mappings; then 0 |
+| Per-job digest, bytes and place | 917,504 plus stream, worker `publish` | Same until read-only mappings; then 0 |
 | Per-job digest time, 1.8 GHz | 7.6–12.7 ms estimated, portable | 1.0–2.0 ms with SHA2; 0 after read-only mappings |
 | CPU0 digest time per job, single-core images | 7.6–12.7 ms at 1.8 GHz, 28–46 ms at 494 MHz | 1.0–2.0 ms and 3.7–7.4 ms with SHA2; 0 after read-only mappings |
-| CPU0 digest time per job, multicore build | Same as above | 0 |
 | Per-job `AT` | 2,139 | Same until read-only EL1 tables; then 0 |
 | Per-job table scan | 4,352 words | Same until read-only arena; then 0 |
 | Copies per input byte | 1 | ≤ 1 |
 | Copies per output byte | 1 | 0 |
 | Bytes written by the pool clear per job | 1,093,632 | Same until the pool evidence; then 0 |
-| Per-job cache maintenance on CPU0 | 2,347,008 bytes | 8,192 (output clean-invalidate and invalidate) |
-| Per-job maintenance on the client core | 0 | 151,552 input bytes; plus 1,093,632 pool bytes while the clear exists |
-| Engine register accesses per job | 11 reads and 2 writes, plus 5 reads per poll, measured | 11 and 2; one `a733_npu_poll` pass per 10 ms fallback |
+| Per-job cache maintenance in the worker | 2,347,008 bytes | 8,192 (output clean-invalidate and invalidate) |
+| Per-job maintenance in the client | 0 | 151,552 input bytes; plus 1,093,632 pool bytes while the clear exists |
+| Engine register accesses per job, bound | 11 reads and 2 writes, plus 5 reads per poll, measured | 11 and 2; one `a733_npu_poll` pass per 10 ms fallback |
+| Worker poll passes while the engine is active, multicore | One per 1 ms tick, counted | Same; after the binding step, one per 10 ms fallback |
+| Completion latency after DONE, multicore | Up to 1 tick | Same; after the binding step, interrupt delivery |
+| Worker wakes per second while a job runs, multicore | 1,000 | Same; after the binding step, one per interrupt plus at most 100 fallback wakes |
+| Tick waits per bootstrap and per cancel, multicore | One poll per tick until done | Same; after the binding step, 0 |
 | `DSB SY` per job | 17 counted | ≤ 17 across both cores; after qualification, 2 `DMB` plus the barriers that complete cache maintenance |
 | Client round trips and tick polls per job | 3 round trips plus one STATUS poll per tick | 2 round trips; 0 tick polls |
 | Client tick polls during startup and local stop | One per tick | 0 |
 | Wake publication work | 1,881,936 bytes hashed, 2,126 `AT`, 3,235,840 bytes cleaned, 1,097,728 invalidated | 0 of each |
-| Wake, gated to bootstrap complete | Not possible | ≤ 0.6 ms modeled, no tick wait |
-| CPU0 busy per wake | Not possible | ≤ 0.35 ms |
+| Wake, gated to bootstrap complete, bound | Not possible | ≤ 0.6 ms modeled, no tick wait |
+| Worker core busy per wake | Not possible | ≤ 0.35 ms |
 | Worker wakes per second while gated | 1 | 0 |
 | Two clients submitting during a wake | Not possible | 0 refusals, 0 tick waits |
-| Missed notification, completed job | TIMEOUT | Finished; counter 1; no cancel |
-| Deadline to recovered READY, acknowledgement within 1 ms | Not possible | ≤ 1.5 ms, 0 tick waits; before the read-only mappings, plus one bootstrap publication |
+| Missed notification, completed job, bound | TIMEOUT | Finished; counter 1; no cancel |
+| Deadline to recovered READY, acknowledgement within 1 ms, bound | Not possible | ≤ 1.5 ms, 0 tick waits; before the read-only mappings, plus one bootstrap publication |
 | Hung bootstrap after a wake | Bounded only by the deleted elapsed test | Cancelled at 10 ms; recovered or retained within 30 ms; counts toward the cap |
 | Cancel on an already idle engine | Not modeled | Completes or faults within 20 ms |
 
 ## Changes owned elsewhere
 
-- **Power authority:** the only open dependency is the order of the domain
-  request, made after the NPU's local clocks are open (its design powers the
-  domain before the consumer ungates). If the power authority does not accept
-  that order, startup keeps only its current domain-power step, and every
-  other change here still lands.
+- **Power authority:** two dependencies. The domain row with its DCDC2
+  supply read must land first, or with this change, because the PMIC-path
+  removal relies on it. The domain request is made after the NPU's local
+  clocks are open (its design powers the domain before the consumer ungates);
+  if the power authority does not accept that order, startup keeps only its
+  current domain-power step, and every other change here still lands.
 - **Session runtime and service** (`npu_service.c`, `npu_session.c`,
   `npu_convolution.c`, `a733_npu_memory.c`): the 10 ms fallback and the job,
   bootstrap and cancel deadlines in the worker; removal of the 1000 ms wake;
   blocking while gated; queuing during a wake; REAP folded into SUBMIT and
   CLOSE; removal of the output copy in `npu_convolution_output`; no hash per
-  startup poll or at activation; the per-job digest on the client core;
+  startup poll or at activation; `metadata()` and its calls removed, with the
+  `valid_backend` conditions checked once in `npu_service_init_deferred`;
   `live_mappings`, `unchanged`, `stream_intact`, `model_intact` and
   `canonical` per job until the read-only mappings, then removed; client clean
   of input; output clean-invalidate before and invalidate after each job; no
