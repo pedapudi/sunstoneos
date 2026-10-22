@@ -2,17 +2,16 @@
 
 These measurements check the [GPU matrix-product component](../gpu-mimus.md)
 against the budgets in its [design](gpu-mimus-compute.md). They compare the
-integration base (`audit/integration`, commit `d40ca4b`) with the change at
-commit `81a84ba`. All values come from host builds, host checks and
+integration base (the merge base with `audit/integration`, commit `6cd12f0`)
+with the change at commit `3311a81`. All values come from host builds, host checks and
 the time model; no board or GPU was used, and no USC instruction was executed.
 
 ## Method
 
-- **Builds.** The base commit and the change (commit `81a84ba`) were each
-  exported with `git archive`, configured with the shared configuration
+- **Builds.** The base commit and the change were each exported with `git archive`, configured with the shared configuration
   script and `-DSUNSTONE_GPU_COMPUTE_APPLICATION=ON`, and built in separate
   directories with `-j 6` under
-  `~/.cache/sunstoneos/build/gpu-mimus-compute-measure/`. The seven targets
+  `~/.cache/sunstoneos/build/gpu-mimus-compute-measure/r3/`. The seven targets
   that compile `drivers/gpu/pvr_compute_job.c` were built at both commits:
   the GPU, compute, free-list, IRQ, memory and power service models and the
   GPU render application. `llvm-size -A` gave section sizes.
@@ -22,10 +21,10 @@ the time model; no board or GPU was used, and no USC instruction was executed.
   profile three, and `checks/pvr-compute-package.py` compared the native PDS
   and CDM bytes of the resulting packages with the pinned Mesa generators.
   `checks/pvr-compute-service.py` ran its first three emulator cases at both
-  commits. At the change, `checks/pvr-compute-job.py` compared the fixed job
-  with Mesa's reference; its reference build now receives the project's
-  include directory, without which it stopped at a missing header at both
-  commits.
+  commits. `checks/pvr-compute-job.py` compared the fixed job with Mesa's
+  reference at both commits. At the change its reference build receives the
+  project's include directory; at the base it stops at the missing header
+  `pvr_ccb.h`.
 - **New checks.** `checks/gpu-mimus-program.py`, `checks/gpu-mimus-layers.py`
   and `checks/gpu-mimus-readout.py` ran as listed in
   [gpu-mimus.md](../gpu-mimus.md#checks), with mimus at commit `3e05158`.
@@ -149,63 +148,54 @@ the design's 2% rule at every latency in the table above.
 
 ## Images
 
-The change column was rebuilt after the shared encoders lost their
-`noinline` attribute, in a third directory,
-`~/.cache/sunstoneos/build/gpu-mimus-compute-fix/`, from the same
-configuration.
+| Target | Base `.text` | Change `.text` | Base `.rodata` | Change `.rodata` |
+| --- | --- | --- | --- | --- |
+| GPU service model | 148,480 | 148,480 | 135,416 | 135,416 |
+| Compute service model | 184,440 | 183,928 | 137,684 | 137,684 |
+| Free-list service model | 151,504 | 151,504 | 135,362 | 135,362 |
+| IRQ model | 147,712 | 147,712 | 135,304 | 135,304 |
+| Memory model | 153,776 | 153,776 | 135,432 | 135,432 |
+| Power service model | 153,680 | 153,680 | 136,244 | 136,244 |
+| GPU render application | 290,268 | 289,968 | 150,768 | 150,848 |
 
-| Target | Base `.text` | Change `.text` |
-| --- | --- | --- |
-| GPU service model | 148,480 | 148,480 |
-| Compute service model | 184,440 | 183,928 |
-| Free-list service model | 151,504 | 151,504 |
-| IRQ model | 147,712 | 147,712 |
-| Memory model | 153,776 | 153,776 |
-| Power service model | 153,680 | 153,680 |
-| GPU render application | 290,272 | 289,968 |
+`.data` and `.bss` are equal at both commits in every image. The compute
+service model's `.text` is 512 bytes smaller. The render application's
+`.text` is 300 bytes smaller and its `.rodata` 80 bytes larger, 220 bytes
+smaller in total.
 
 The profile-three PDS and CDM encoders, the fence program and the firmware
 command are external functions that the mimus session shares. In every
 image the job builder inlines all four, and the linker drops the external
-copies, because no image links the mimus session yet. The two grid encoders
-are `always_inline`, since the render application's options otherwise keep
-them out of line. The word-copy loop is not unrolled, so the constant PDS
-tables stay in `.rodata` instead of becoming immediate stores. `.rodata`
-is unchanged except in the render application, which gains 80 bytes;
-its `.text` and `.rodata` together are 224 bytes smaller than the base's.
-`image` keeps `noinline`; without it the compiler inlines one of its two
-calls and `pvr_compute_job.o` grows by 2,644 bytes.
-
-With `noinline` on the four encoders, the IRQ model's `.text` grew by 256
-bytes (28 bytes of call overhead, rounded up by section alignment) and the
-render application's by 324 bytes. At the change, the compiled-package
-bytes equal Mesa's for profiles two and three, the fixed job's 267,368
-bytes equal both Mesa's reference and the earlier evidence, and the compute
-service's three emulator cases pass. The mimus program, layer, read-out and
-time-model results are unchanged.
+copies, because no image links the mimus session yet. Those copies make
+`pvr_compute_job.c`'s object larger before linking: 21,148 bytes against
+20,120 in the service models and 11,672 against 10,820 in the render
+application. The two grid encoders are `always_inline`, since the render
+application's options otherwise keep them out of line. The word-copy loop
+is not unrolled, so the constant PDS tables stay in `.rodata` instead of
+becoming immediate stores. `image` keeps `noinline`; without it the
+compiler inlines one of its two calls and `pvr_compute_job.o` grows by
+2,644 bytes. With `noinline` on the four encoders, the IRQ model's `.text`
+grew by 256 bytes (28 bytes of call overhead, rounded up by section
+alignment) and the render application's by 324 bytes.
 
 ## Evidence
 
 Raw outputs are under
-`~/.cache/sunstoneos/build/gpu-mimus-compute-measure/`: `images.txt` (section
-sizes of both builds and of `pvr_compute_job.o`), and under `evidence/`:
-`program/`, `layers/` (with `calls.txt`), `readout/`,
+`~/.cache/sunstoneos/build/gpu-mimus-compute-measure/r3/`: `images.txt`
+(section sizes of both builds and of `pvr_compute_job.c`'s object), and
+under `evidence/`: `program/`, `layers/` (with `calls.txt`), `readout/`,
 `package-{base,head}-p{2,3}/` (the compiled programs, packages and check
 results of each commit), `service-{base,head}/`, `jobcheck-{base,head}/`,
-`time-model-design.txt` and `time-model-measured.txt`. The rebuild
-without `noinline` on the encoders is under
-`~/.cache/sunstoneos/build/gpu-mimus-compute-fix/evidence/`: `images.txt`,
-`p2/` and `p3/` (package checks), `jobcheck/`, `service/`, `program/`,
-`layers/`, `readout/` and `time-model.txt`.
+`time-model-design.txt` and `time-model-measured.txt`.
 
 At both commits every package check and every service case passed. The 12
-packages that the package check builds, six per profile, are byte-identical
-between the commits, and the service cases report the same yield and
-timed-wait counts. The yield count of the first service case varies
+packages that the package check builds, six per profile, and their four
+programs are byte-identical between the commits. In the service cases the
+open path made no timed waits at either commit. The yield count of the
+first two cases is 6 and 5 at the base and 5 and 6 at the change; it varies
 between 5 and 6 from run to run of the emulator at the same commit.
 
 At the change, both 267,368-byte fixed jobs of `checks/pvr-compute-job.py`
-equal Mesa's reference; at the base that check stops at the missing header.
-The check reads its instrumented probe source (`probe.c`, `probe.h`,
-`probe.spv`) from its output directory, so those three files were copied from
-the change's earlier run of the check.
+equal Mesa's reference. The check reads its instrumented probe source
+(`probe.c`, `probe.h`, `probe.spv`) from its output directory, so those
+three files were copied from an earlier run of the check at the change.
