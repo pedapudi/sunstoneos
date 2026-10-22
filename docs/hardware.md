@@ -55,9 +55,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the function between D0 and D3hot and stops it in order. A read-only NVMe
   driver uses it, and the port can stop by disabling link training and
   asserting PERST. Twenty-four host-model cases pass, and both units compile
-  for AArch64. No image links them, and no endpoint, NVMe device, interrupt or
-  power transition has run on hardware; the endpoint test driver keeps its own
-  BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
+  for AArch64. The supervised board image
+  [`sunstone-a733-pcie-nvme`](pcie-nvme.md) links both. One task brings the
+  port up at 2.5 GT/s, reads one admitted 4096-byte block with polled
+  completion, shuts the controller down, stops the port with PERST held and
+  reports the copied block through USB0. Any failure retains the port's leases
+  and the queue and data pages. Linked-image and host checks pass against a
+  modeled controller. Interrupt completion in that image needs GIC routing for
+  INTID 184 or 185. No endpoint, NVMe device, interrupt or power transition has
+  run on hardware; the endpoint test driver keeps its own BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
   selection by the applications and physical Gen2/Gen3 links remain required.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
@@ -445,19 +451,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   loader and renews the armed WDT0 only while every listed service reports
   progress within its window. Optional builds add I2S microphone capture, with
   the DMA0 interrupt (INTID 143) in the table; the board's Wi-Fi station, with
-  crypto engine entropy for WPA2; or Bluetooth headset recognition. The image
-  builds in six checked variants: supervised, resident, resident with I2S
-  audio, radio, resident with radio, and supervised Bluetooth headset, which
-  needs `SUNSTONE_BT_SECURITY_DIR`. The headset and radio builds exclude each
-  other, and the headset build is supervised only. Each variant passes its link
-  check and host models of interrupt delivery, supervision and admission. A
-  supervised launcher and session preparation exist; preparation needs a
-  reviewed entry record from physical evidence and refuses the radio and
-  headset builds until it stages their profile and firmware. The supervised
-  radio build cannot finish firmware loading within its 40 s bootstrap bound at
-  the admitted SDIO clock, and the resident image depends on the stage-2 entry
-  prerequisites. No board has run any variant. Display, camera, GPU and NPU are
-  not part of the image.
+  crypto engine entropy for WPA2; or Bluetooth headset recognition, which needs
+  `SUNSTONE_BT_SECURITY_DIR`. With both the radio and the headset, the board's
+  radio owner owns the AIC8800 module and loads its firmware once, and the
+  Bluetooth application attaches to that session as a second client with its
+  own UART1, H4/HCI and wake-pin leases. The headset runs in either lifetime,
+  an mSBC option admits wideband speech, and the headset excludes the
+  microphone. Nine variants build: supervised, resident, resident with I2S
+  audio, resident with radio, resident with radio and audio, supervised
+  headset, resident headset, radio with headset, and resident radio with
+  headset. Each build runs the image's link check, and host models cover
+  interrupt delivery, supervision and admission for each combination of
+  lifetime and options. A supervised launcher and session preparation
+  exist; preparation needs a reviewed entry record from physical evidence and
+  refuses the radio and headset builds until it stages their profile and
+  firmware. The supervised radio and headset builds cannot finish firmware
+  loading within their 40 s and 30 s bootstrap bounds at the admitted SDIO
+  clock, and the resident image depends on the stage-2 entry prerequisites.
+  No board has run any variant. Display, camera, GPU and NPU are not part of
+  the image.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -780,6 +792,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The complete application has a boot-CPU-only profile under
   `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and
   focused host checks pass. Physical waveform and delivery remain unqualified.
+  This image and the board, thermal, RTC and crypto boot-CPU-only images now
+  build from [one shared recipe](single-core-images.md). A comparison with the
+  previous build finds identical object code in all five; the PWM and crypto
+  images link in a different order, so their frozen evidence keeps its earlier
+  image. The central build configures `SUNSTONE_A733_PWM` again.
   PWM0 channel 5 on PD5 supports 40 kHz duty changes, verified GPIO-low stop and
   restart under retained ownership. Optional PL7 LED commands preserve neighboring
   outputs. Actual provider/pin, four linked cases and host command/admission
@@ -843,8 +860,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   redirect, before entry. The resident lifetime of the [integrated OS image](os-image.md)
   renews it only while every listed service makes progress, through its own
   reload with the register mutex and mode readback. Host models cover renewal,
-  each service stalling or never reporting, and a refused renewal. Watchdog
-  expiry after a cold boot has not run on a board.
+  each service stalling or never reporting, and a refused renewal. After a
+  refused renewal the supervising task suspends itself instead of waking every
+  tick, and the armed watchdog resets the board. Every runtime image that runs
+  under the watchdog finds WDT0 already armed by its SRAM launcher or by the
+  stage-2 loader. The [watchdog record](watchdog.md#launchers-arm-the-watchdog-for-runtime-images)
+  lists the five files that write the four-second mode and the validators that
+  require it; a different interval must change all of them together. The
+  save-and-restore driver is linked only by the protected expiry diagnostic.
+  Watchdog expiry after a cold boot has not run on a board.
 - DMA: **tested** finite descriptor encoding in a host execution model, including
   memory/FIFO streams, 35-bit addresses, and invalid-chain refusal.
   The polled controller core also passes host checks for noncoherent transfers,
@@ -1615,6 +1639,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   transport timing, scheduling and USB effects are modeled. Physical playback,
   capture/duplex, audible output, wider rates/codecs and wire-drained completion
   remain unqualified or required work.
+  The application can also [attach to an AIC8800 module](bluetooth-native.md#attachment-to-a-wi-fi-module-owner)
+  that a full Wi-Fi session owns. The Bluetooth client then holds UART1,
+  H4/HCI, the wake pins and its own recovery latch. Its failure leaves the
+  module and Wi-Fi running, and a module fault ends the client. Besides the
+  60 s supervised lifetime, the application admits a resident lifetime with
+  120 s for firmware loading, no capture window and a 2 s audio close after a
+  stop. Module-owner and repeated-headset model cases pass, including a stop
+  that another task stores during a capture poll. No board has run either
+  mode. The stack's saturating deadline sums now use the shared
+  `a733_deadline_after_saturating()`.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
@@ -1721,6 +1755,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   protected management frames are missing
   ([details](radio-security.md#wpa3-personal-needs-three-missing-parts)).
   Physical power save, roaming, time accuracy and loss timing remain unqualified.
+  A full Wi-Fi session can also [serve a Bluetooth client](radio-session.md#a-bluetooth-client-shares-the-firmware-generation)
+  on the same module. The session reports its firmware generation while it
+  reconnects or recovers a lost link, so the client keeps its H4 binding, and
+  the native adapter accepts one added admission, for the Bluetooth wake pins,
+  after the owner's own admission. The reconnect model covers the firmware
+  generation after a healthy reconnect. The integrated OS image uses this to
+  serve Wi-Fi and the headset from one module owner.
 
 - Camera: The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes
@@ -1998,7 +2039,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   catalogue graph. Sessions reserve memory from the platform pool by model
   size, which is DDR in the extended cached profile. QEMU checks with modeled
   device output pass for polled, interrupt, integrity-fault and 6.2 MiB
-  reserved cases. No board image links the runtime. A
+  reserved cases. No board image links the runtime. An image derived from the
+  board image would construct a second GPU/PCK resource manager beside the
+  board's, and its 2 MiB device pool is smaller than the 2,195,456 bytes that
+  the three small catalogue models need. An image derived from the single-core
+  NPU images needs their provider setup to select the session runtime
+  ([remaining work](npu-session.md#remaining-work)). The NPU startup and
+  clock-handoff QEMU models pass again now that their fixtures report the
+  enabled, stable 24 MHz DCXO that the drivers require. A
   [mimus linear-layer study](npu-mimus-linear.md) finds the simulator's integer
   arithmetic exact but its INT16 output not bit-exact with mimus, and the
   compiler refuses the INT32 output that a bit-exact split would need. Physical
@@ -2166,20 +2214,30 @@ implementation is **planned**. Partial results apply only to the stated scope:
   USB0 DEVICE output and does not establish those newer functions. Broader
   dimensions, formats, qualities and broader encoding remain required.
   The [native H.264 encoder](h264-encode-native.md) implements one retained
-  two-picture job from caller-supplied 640×480 NV12 frames: Baseline level 3.1,
-  CAVLC, QP 26, IDR followed by P. Actual provider, lower-MMIO, IOMMU, copied
-  output and USB durability/ACK checks pass with entropy, completion and resource
-  observations modeled. ACK of immutable output zero permits P submission without
-  releasing that output or its reconstructed reference. All resources remain
-  retained. The 140 native programming writes match the pinned opaque A733 SDK
-  instruction reference; no opaque CPU library is linked or loaded natively.
-  The [source record](../apps/h264-encode/sources.json) pins that development-only
-  dependency and its notices. Root verifies 2,328 frozen files, 170 objects and
-  451 compiled inputs, including all 185 repository inputs, under
-  `h264-encode-20261020/root/integration.json`; final image is `2e4a93b0…`.
-  Real entropy, reconstructed-reference contents, numerical encoding, DMA
-  visibility, confinement and safe drain remain unqualified. Wider dimensions,
-  formats, counts, rate control, High/CABAC/B pictures, multiple references,
+  sequence of 1 to 30 pictures from two caller-supplied 640×480 NV12 frames;
+  picture k encodes frame k mod 2. The sequence is Baseline level 3.1, CAVLC,
+  fixed QP 26, and one IDR picture followed by P pictures, each referencing the
+  previous reconstructed picture. Each picture starts in the 4 MiB bitstream
+  ring after the previous picture, whose bytes are copied first, and returns to
+  the ring start before the device would need to wrap. A copied output slot is
+  reused only after the host acknowledges the picture two earlier. Actual
+  provider, lower-MMIO, IOMMU, copied output and USB durability/ACK checks pass
+  with entropy, completion and resource observations modeled. All resources
+  remain retained. For 30 pictures, the 2,128 native programming writes and
+  every CPU-written slice header match a run of the pinned opaque A733 SDK
+  library; no opaque CPU library is linked or loaded natively. The
+  [source record](../apps/h264-encode/sources.json) pins that development-only
+  dependency and its notices. The frozen evidence covers the earlier
+  two-picture image `2e4a93b0…`, whose 140 programming writes match the same
+  library: root verifies 2,328 frozen files, 170 objects and 451 compiled
+  inputs, including all 185 repository inputs, under
+  `h264-encode-20261020/root/integration.json`. A two-picture run of the
+  current image programs the same writes and produces the same outputs; the
+  current image is not frozen, and the supervised capture tool still captures
+  two pictures. Real entropy, reconstructed-reference contents, numerical
+  encoding, DMA visibility, confinement and safe drain remain unqualified.
+  Wider dimensions and formats, sequences longer than 30 pictures, a new frame
+  for each picture, rate control, High/CABAC/B pictures, multiple references,
   unrestricted streaming and H.265 encoding remain required.
   [HEVC decoding](hevc-native.md) is **implemented** for one uploaded
   two-picture clip: progressive Main profile, 8-bit 4:2:0, 640×480, one IDR
@@ -2279,7 +2337,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A boot-CPU-only SHA/AES application is integrated under
   `crypto-single-core-20261018/`, with twelve startup groups and six host groups
   passing. This permits independent device validation; physical CE operation and
-  entropy quality remain unqualified.
+  entropy quality remain unqualified. The image now builds from the
+  [shared single-core recipe](single-core-images.md) with unchanged object
+  code, and the central build configures `SUNSTONE_A733_CRYPTO` again.
   The [native SHA/AES application](crypto-application.md) now connects actual
   shared providers, the singleton retained page and copied USB results. Its
   native link and focused admission, orchestration, publication and host checks

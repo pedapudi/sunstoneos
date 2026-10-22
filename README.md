@@ -12,13 +12,14 @@ first FreeRTOS task on the board; sustained eight-core scheduling has passed
 only in emulators.
 
 An [integrated OS image](docs/os-image.md) runs the mimus board application
-with a thermal service. It builds in six checked variants: supervised,
-resident, resident with I2S audio, radio, resident with radio, and supervised
-Bluetooth headset. The resident variants are entered by a stage-2 microSD
-loader. Every variant passes host models; no board has run any of them. A
-[source audit](docs/audit/README.md) and six rounds of fixes and features based
-on it are merged. They were checked on the host only, and nothing in them ran
-on the board. A CPU clock and voltage driver coupled to the thermal policy
+with a thermal service. Optional builds add I2S microphone capture, the Wi-Fi
+station and Bluetooth headset recognition; Wi-Fi and the headset share one
+owner of the radio module. Nine variants build, and the resident ones are
+entered by a stage-2 microSD loader. Every variant passes host models; no
+board has run any of them. A [source audit](docs/audit/README.md) and eight
+rounds of fixes, features and consolidation onto shared helpers based on it
+are merged. They were checked on the host only, and nothing in them ran on
+the board. A CPU clock and voltage driver coupled to the thermal policy
 exists, but no image grants a clock or voltage change. Persistent boot,
 application qualification and complete hardware qualification remain
 outstanding. Mimus matches the host on 32 development recordings. One board run of
