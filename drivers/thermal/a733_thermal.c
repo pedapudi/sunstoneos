@@ -262,9 +262,13 @@ enum a733_thermal_result a733_thermal_stop(struct a733_thermal *p,uint64_t deadl
 
 /* sun60iw2p1.dtsi thermal-zones: the second passive trip of each CPU/GPU zone
  * is the one bound to a CPU or GPU cooling device; the first only starts fans
- * and power accounting. NPU and DDR zones have critical trips only. */
+ * and power accounting. The NPU zone has a critical trip only. The DDR zone
+ * has only the 110 C critical trip there; the passive trip at 85 C is this
+ * board's, because JEDEC LPDDR5 standard refresh covers die temperatures up
+ * to 85 C and no decoded boot0 field shows derated refresh
+ * (docs/designs/dram-controller.md). */
 static const struct { int32_t passive,hysteresis,critical; } trips[A733_THERMAL_SENSORS]={
-    {90000,2000,110000},{0,0,110000},{0,0,110000},{90000,2000,110000},{90000,0,110000}};
+    {90000,2000,110000},{85000,2000,110000},{0,0,110000},{90000,2000,110000},{90000,0,110000}};
 #define STALE_US UINT64_C(1000000) /* The zones' 1000 ms polling delay. */
 #define LOST_US UINT64_C(5000000)
 int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,

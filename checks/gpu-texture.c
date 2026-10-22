@@ -96,13 +96,15 @@ static int texture_kick(void *ctx,uint32_t off,uint32_t value)
             configASSERT(word((void *)(base()+8192+0xf114),4)==(frame==1?2304u:2560u));
             configASSERT(word(graphics.submission.image.fragment+144,8)==PVR_RENDER_DEPTH_ADDRESS);
             configASSERT(word(graphics.submission.image.fragment+464,4)&128);
-            configASSERT(word((void *)(base()+l.depth+4096),4)==0x3f800000);
+            /* Depth stays in tile memory: no load, store or force bit. */
+            configASSERT(!(word(graphics.submission.image.fragment+136,8)&((1u<<19)|(1u<<18)|(1u<<15)|(1u<<14)|6u)));
         }
         for(unsigned i=0;i<frame_width*frame_height;++i) {
             configASSERT(input[i]==pixel(frame,i) && output[i]==PVR_RENDER_POISON);
             output[i]=result_pixel(frame,i); /* Explicit model; no USC execution. */
         }
-        if(gpu_render_case==2 && frame==2)put((void *)(base()+l.depth),4,0);
+        /* A stray write one word past the frame hits the tail guard. */
+        if(gpu_render_case==2 && frame==2)put((void *)(base()+l.output+64+frame_width*frame_height*4),4,0);
         __atomic_store_n((uint32_t *)(shared+1348),graphics.submission.fragment.cursor,__ATOMIC_RELEASE);
         __atomic_store_n((uint32_t *)(shared+1412),frame*2,__ATOMIC_RELEASE);
     } else if(type==(PVR_CCB_MAGIC|106))cleanup_record(command,slot);
@@ -145,9 +147,9 @@ static void invalid_drafts(void)
     configASSERT(!atomic_load(&graphics.submission.texture_state) && !service.clients[0].pending);
     for(unsigned i=0;i<filled;++i)configASSERT(xQueueReceive(service.requests,&message,0)==pdTRUE);
     vTaskResume(service.worker);
-    /* A fresh valid draft still cannot overwrite backing without both acquired
-     * previous timelines. Repairing an invalid draft uses a new generation.
-     * Its short bound lets the held draft expire before CLOSE below. */
+    /* Without both acquired previous timelines a valid upload cannot be
+     * submitted. Repairing an invalid upload uses a new generation. Its short
+     * bound lets it expire before CLOSE below. */
     put(source+100,2,3);configASSERT(pvr_gpu_service_texture(&service,1,&q,NULL,200000,0,&ticket));
     configASSERT(pvr_gpu_service_collect(&service,ticket,&r,1000) && r.result==PVR_GPU_SERVICE_OK);generation=r.texture_generation;
     q=(struct pvr_render_texture_request){.operation=PVR_TEXTURE_WRITE,.previous=1,.generation=generation,.bytes=116};
@@ -243,8 +245,8 @@ static void texture_client(void *unused)
     r=request(PVR_GPU_SERVICE_CLOSE,1000000);configASSERT(r.result==PVR_GPU_SERVICE_OK);
     for(unsigned i=0;i<2000;++i){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);if(r.phase==PVR_GPU_SERVICE_STOPPED)break;}
     configASSERT(r.phase==PVR_GPU_SERVICE_STOPPED && isolated && !running);
-    platform_puts(gpu_render_case==3?"PASS texture: invalid indices, generation/ticket bounds, queue-full and missing timeline preserve prior copied output\n":
-        "PASS texture: display-sized two inputs, real owner/VM/publication, scoped copied output and healthy CLOSE\n");platform_exit(0);
+    platform_puts(gpu_render_case==3?"PASS texture: invalid indices, generation/ticket bounds, queue-full and missing timeline preserve the prior output\n":
+        "PASS texture: display-sized two inputs, real owner/VM/publication, scoped in-place read-back and healthy CLOSE\n");platform_exit(0);
 }
 void kernel_main(void)
 {
