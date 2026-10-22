@@ -35,11 +35,36 @@ static void closed(void)
     const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(DONE);
     assert(atomic_load(&voice.segment_disconnected));
 }
+/* Resident lifetime: the firmware becomes ready at 100 s, which moves the
+ * schedule origin to 70 s. Capture then runs past the supervised 38 s window
+ * with one segment every 300 ms, and a stop closes within 2 s of itself. */
+static void resident(const uint8_t *pcm)
+{
+    assert(pump()==0&&app.stage==1);wire.now=100000000;bootstrap_ready=1;
+    connected();assert(app.started>=70000000&&app.started<70001000&&app.hci_deadline==app.started+35000000&&
+        bluetooth_capture_window(&app)==UINT64_MAX);
+    uint64_t stop=app.started+38000000+5000000;
+    for(uint64_t ticket=1;wire.now<stop;++ticket){
+        inject_pcm(pcm,8,0);jittered(300000);
+        assert(atomic_load(&voice.segment_head)==ticket&&!atomic_load(&voice.segment_flags)&&voice.stage==CAPTURE);
+        take(ticket,pcm,8,NULL);
+    }
+    uint64_t stopped_at=wire.now;assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);
+    assert(voice.operation_deadline>stopped_at&&voice.operation_deadline<=stopped_at+2000000+10);
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");setup();
+    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");resident_lifetime=!strcmp(argv[1],"resident");setup();
     scheduler=taskSCHEDULER_NOT_STARTED;assert(bluetooth_headset_segment_bind(&app,segment_reader)==1);scheduler=taskSCHEDULER_RUNNING;
-    connected();uint8_t pcm[17];for(unsigned n=0;n<17;++n)pcm[n]=(uint8_t)(n+1);
+    uint8_t pcm[17];for(unsigned n=0;n<17;++n)pcm[n]=(uint8_t)(n+1);
+    if(resident_lifetime){
+        bootstrap_ready=0;resident(pcm);
+        for(unsigned n=0;n<8;++n)assert(pump()>=0);
+        const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(DONE);
+        assert(atomic_load(&voice.segment_disconnected));
+        puts("PASS resident lifetime: origin at firmware readiness, capture past the supervised window, bounded close");return 0;
+    }
+    connected();
     if(speech){
         assert(argc==4);FILE *in=fopen(argv[2],"rb"),*out=fopen(argv[3],"wb");assert(in&&out);
         uint8_t input[96000];assert(fread(input,1,sizeof(input),in)==sizeof(input)&&fgetc(in)==EOF&&!fclose(in));

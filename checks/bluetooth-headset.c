@@ -10,6 +10,7 @@ void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss,retry,retry_limit,retried;
 static uint16_t local_cid;static unsigned handoff,speech,informational,brsf;static uint64_t sco_bytes;
+static unsigned resident_lifetime; /* The application starts with the resident lifetime. */
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -190,10 +191,15 @@ static void setup(void)
     if(playback_fixture_mode==4){profile.version=2;profile.bytes=752;}
 #endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
-    assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest));
+    assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,
+        resident_lifetime?BLUETOOTH_RESIDENT_END_US:60000000,digest));
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    if(resident_lifetime)assert(app.resident&&app.radio_config.deadline_us==BLUETOOTH_RESIDENT_BOOTSTRAP_US&&
+        app.session_config.bootstrap_deadline==BLUETOOTH_RESIDENT_BOOTSTRAP_US&&app.deadline==BLUETOOTH_RESIDENT_END_US-10000);
+    else {
     assert(app.radio_config.deadline_us==30000000&&app.session_config.bootstrap_deadline==30000000&&app.hci_deadline==35000000&&app.deadline==59990000);
     assert(stage_deadline(&app,48000000)==40000000&&stage_deadline(&app,59500000)==40000000);
+    }
     if(profile.version==3){profile.recognition.sha256[0][0]^=1;storage_digest_bytes(&profile,profile.bytes,digest);
     assert(!bluetooth_profile_valid(&profile,digest));profile.recognition.sha256[0][0]^=1;
     storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));}

@@ -47,8 +47,26 @@ struct bluetooth_profile {
 };
 _Static_assert(sizeof(struct bluetooth_profile)==832&&offsetof(struct bluetooth_profile,recognition)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
     "Bluetooth offline profile geometry");
+/* Session lifetimes: supervised, exactly 60 s after the session start, or
+ * resident, ending at UINT64_MAX/24 us like the board's resident session. */
+#define BLUETOOTH_SUPERVISED_US UINT64_C(60000000)
+#define BLUETOOTH_RESIDENT_END_US (UINT64_MAX/24)
+/* Resident firmware bootstrap bound after the session start. Loading needs
+ * about 47 s of bus time at the admitted one-bit 400 kHz SDIO clock; the
+ * bound matches the integrated OS radio's. Configuration, not a measurement. */
+#define BLUETOOTH_RESIDENT_BOOTSTRAP_US UINT64_C(120000000)
 /* One actual owner task. Providers, profiles, identity and all buffers remain
- * disjoint and retained through terminal failure and manual power removal. */
+ * disjoint and retained through terminal failure and manual power removal.
+ *
+ * The module (power, SDIO card, firmware and runtime) is the application's
+ * own radio platform and bootstrap session, or, after
+ * bluetooth_application_attach, a full Wi-Fi session that another owner built
+ * on the same task. module_radio and module_session name the one in use.
+ *
+ * started is the origin of the stage schedule, which keeps the offsets of the
+ * supervised 60 s session. In the resident lifetime the origin moves when the
+ * firmware first becomes ready, to the point where the supervised bootstrap
+ * bound would fall, so each later stage keeps its supervised time budget. */
 struct bluetooth_application {
     struct bluetooth_application *self;
     const struct bluetooth_profile *profile;
@@ -70,8 +88,10 @@ struct bluetooth_application {
     uint8_t packets[4][1024];
     struct aic8800_dispatch_event event;
     struct aic8800_dispatch_record diagnostic;
-    uint64_t firmware_generation,uart_generation,deadline,hci_deadline;
-    unsigned stage,iteration_live,host_wake;
+    struct a733_radio_platform *module_radio;
+    struct a733_radio_session *module_session;
+    uint64_t firmware_generation,uart_generation,deadline,hci_deadline,bootstrap_deadline;
+    unsigned stage,iteration_live,host_wake,attached,resident;
     uint64_t started;
     atomic_uint failed,result_lock,result;
     struct bt_hci_identity identity;
@@ -88,10 +108,32 @@ static inline uint64_t bluetooth_cadence(uint64_t slot,uint64_t now,uint64_t per
     if(now>next&&now-next>=2*period){next=now;++*restarts;}
     return next<limit?next:limit;
 }
+/* End of repeated capture: 38 s after the schedule origin when supervised;
+ * none when resident. */
+static inline uint64_t bluetooth_capture_window(const struct bluetooth_application *a)
+{return a->resident?UINT64_MAX:a->started+38000000;}
+/* Bound for closing the stream once capture stops: 40 s after the origin when
+ * supervised; 2 s after the stop when resident. */
+static inline uint64_t bluetooth_close_deadline(const struct bluetooth_application *a,uint64_t now)
+{return a->resident?a733_deadline_after_saturating(now,2000000):a->started+40000000;}
 int bluetooth_profile_valid(const struct bluetooth_profile *,const uint8_t[32]);
+/* Before scheduling. end_us - start_us is 60 s, or end_us is
+ * BLUETOOTH_RESIDENT_END_US. The application builds and owns the module. */
 int bluetooth_application_init(struct bluetooth_application *,const struct bluetooth_profile *,
     struct a733_native_usb *,const struct board_radio_chip_id *,TaskHandle_t,atomic_uint *,uint64_t start_us,uint64_t end_us,
     const uint8_t profile_digest[32]);
+/* Before scheduling, with the lifetime rules of init: attach to a module
+ * owned by a full Wi-Fi session that no task has polled yet. The profile must
+ * name that module: its platform and session owners, topology, radio identity
+ * and firmware spans. The Bluetooth wake pins join the module platform, and
+ * its native adapter authenticates them in an added admission. The Bluetooth
+ * owner must be the session's owner task, which polls the application after
+ * the session. The application owns only UART1, H4/HCI and its upper layers;
+ * latch is the client's own recovery latch. A Bluetooth failure retains those
+ * and leaves the module and Wi-Fi running; a module fault ends Bluetooth. */
+int bluetooth_application_attach(struct bluetooth_application *,const struct bluetooth_profile *,
+    struct a733_native_usb *,const struct board_radio_chip_id *,TaskHandle_t,atomic_uint *latch,uint64_t start_us,uint64_t end_us,
+    const uint8_t profile_digest[32],struct a733_radio_platform_native *,struct a733_radio_session *);
 /* 0 pending,1 actual six-command identity captured,-1 retained failure. */
 int bluetooth_application_poll(struct bluetooth_application *);
 int bluetooth_application_retain(struct bluetooth_application *);
