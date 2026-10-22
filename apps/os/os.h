@@ -160,6 +160,11 @@ struct board_radio *os_board_radio(void);
 void os_module_poll(void);
 #endif
 #endif
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+/* mimus linear layers on the GPU: the gpu-linear start entry and INTID 95 on
+ * the recognition core OS_RECOGNITION_CORE (docs/recognition-dispatch.md). */
+#include "dispatch.h"
+#endif
 #if defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_HEADSET)
 /* The recognizer's capture source: the I2S microphone or the headset. */
 int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
