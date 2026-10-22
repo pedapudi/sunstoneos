@@ -189,9 +189,9 @@ that many frame slots of `slot_bytes` each. `slot_bytes` is a multiple of 4096
 that covers one plane, so no cache line holds bytes of two slots, and the
 slots must fit both spans. `a733_camera_capture_open_stream` runs the same
 preparation as a still image, except that the receiver uses continuous video
-capture (`VCAP`) and the DMA enters its ring mode before the packet handoff.
-After the sensor starts, the coordinator returns 1 from each poll and the DMA
-reads its status once per poll.
+capture (`VCAP`) and the DMA enters its ring mode just before the sensor
+starts. The coordinator returns 1 from each poll once the sensor has started,
+and each poll performs one DMA operation.
 
 The absolute deadline given to `a733_camera_capture_open_stream` bounds the
 preparation, including admissions and handoffs that stay pending. It then
@@ -218,8 +218,10 @@ assumption. On each observed frame start the DMA controller:
    start therefore pays the debt of its own frame and cannot make a later,
    unfinished frame look complete. Two flags that merge into one status read
    leave one flag owed for the rest of the stream, so every later frame is
-   dropped; the owner sees the drop count rise with nothing delivered and can
-   stop and reopen the stream.
+   dropped. The owner sees the drop count rise with nothing delivered. To
+   recover, it stops the stream and then initializes a new coordinator, or
+   the same object again from fresh zeroed storage, before opening another
+   stream; a stopped coordinator cannot be reopened.
 3. Programs the first free slot after the active one into both address
    registers. With no free slot, the registers keep naming the active slot;
    the next frame overwrites it, and the overwritten frame counts as dropped.
@@ -230,18 +232,34 @@ assumption. On each observed frame start the DMA controller:
    unattributable: it delivers nothing at this start or the next, and the
    programmed slot becomes active at the next start.
 
-A delivered slot is therefore never one that either address register names or
-that any frame may still write: its frame-done flag, and those of all earlier
-frames, were observed before delivery. A slot freed without delivery stays
+The owed count is exact only while every frame start appears in a status read
+of its own. The coordinator sets the DMA status interval to half the frame
+period of the mode the sensor derived, rounded down to whole microseconds; the
+QVGA mode's 33.3 ms period gives 16.6 ms. Consecutive DMA status reads are at
+most four polls apart: after a frame start the acknowledgement and two address
+writes come before the next read, and a slot invalidation may come before any
+read. The owner must therefore poll more often than every eighth of a frame
+period. If two status reads lie further apart than the interval, two frame
+starts may have merged into one observation and the count may be short. A short count
+would let a late flag pay for a frame the device is still writing. The DMA
+then marks the count unknown, and from that point every frame is dropped, as
+after merged flags, until the owner stops the stream. The DMA's first
+interval starts with a clock reading taken just before the sensor start, when
+no frame can have started.
+
+While the owner polls within that bound, a delivered slot is never one that
+either address register names or that any frame may still write: its
+frame-done flag, and those of all earlier frames, were observed before
+delivery. A slot freed without delivery stays
 device-owned, so a late frame may still finish writing it. Before the caller sees it, the platform's
 `sync_slot` operation invalidates the CPU cache over both of its planes. The
 consumer takes delivered slots in capture order with their frame-start count,
 reads the two planes through `a733_camera_capture_take`, and returns each slot
 with `a733_camera_capture_give`. The ring records frame starts, delivered
 frames and dropped frames; dropped frames equal starts minus delivered frames
-minus the active frame. A status read that misses one of two frame starts
-undercounts both starts and drops; the owner must poll well within one frame
-period. Any error flag faults and retains every resource.
+minus the active frame. Frame starts merged during a polling gap are missing
+from both the start and the drop counts. Any error flag faults and retains
+every resource.
 
 `a733_camera_capture_stop`, with every slot given back, stops the sensor,
 waits for the packet-quiet proof, samples receiver status, clears the parser's
@@ -332,13 +350,18 @@ are:
   delivers nothing;
 - one late frame done that merges with the next frame's flag in one status
   read, which drops every later frame;
+- an owner that stalls after the fifth frame start until two more frames have
+  started, with every frame done 3 ms late, which delivers nothing, and with
+  frame done on time, which delivers the four frames before the stall and none
+  after it;
 - a stream renewed on every poll by three frame periods, which runs past its
   open deadline, refused renewals before `STREAMING` and for a reached
   deadline, and a stream without renewal, which faults at the open deadline
   and keeps every lease;
 - a QSXGA mode given with frame length 0, whose quiet interval follows the
   derived reference frame length, and the VGA interval of 100 ms;
-- missing frame-done flags, which deliver nothing;
+- missing frame-done flags, which deliver nothing, and an owed count set one
+  below its ceiling, which saturates instead of wrapping to zero;
 - an error flag and a failed invalidation, which fault and retain every lease;
 - refused slot counts, slot sizes, spans and the raw format.
 
@@ -346,7 +369,10 @@ Removing the status read after the address writes, delivering without
 a frame-done flag, delivering an unattributable slot, or delivering whenever
 a frame-done flag followed the slot's start without counting owed flags each
 makes the model fail. Computing the quiet interval from the given mode instead of
-the derived one also fails it. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
+the derived one also fails it. The check script also builds the model with the
+status-interval comparison removed and requires it to fail: the stalled owner
+with late frame done then gets slots delivered while the device still writes
+their last bytes. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 Its results are under
 `~/.cache/sunstoneos/build/audit-camera-streaming/dev/stream-check/`.
 
