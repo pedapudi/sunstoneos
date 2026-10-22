@@ -2071,10 +2071,26 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ([remaining work](npu-session.md#remaining-work)). The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A
-  [mimus linear-layer study](npu-mimus-linear.md) finds the simulator's integer
-  arithmetic exact but its INT16 output not bit-exact with mimus, and the
-  compiler refuses the INT32 output that a bit-exact split would need. Physical
-  execution remains unqualified.
+  [mimus linear-layer study](npu-mimus-linear.md) finds that none of the eight
+  three-bit output type codes of the NN descriptor returns 32-bit sums in the
+  SDK simulator; a fourth type bit, if one exists, was not located, and its
+  codes 8–15 are untested. Base-16 digit partial sums return exact sums in the
+  simulator, and their CPU read-out is bit-identical to the mimus kernel. On
+  today's session runtime one such layer is estimated to cost about 13 times
+  the A76 kernel's CPU cycles, mostly per-job integrity checks, so mimus keeps
+  its CPU kernel. The A76 figure is an emulated instruction count, not a
+  measurement. The INT16 layer, recorded as a separate variant, meets the
+  float32 word-error-rate criterion on three held-out sets in simulation.
+  Physical execution remains unqualified.
+  The [conformance harness](npu-conformance.md) is implemented and runs every
+  catalogue model in the SDK simulator on fixed vectors, 84 jobs in one
+  container. The four models from the pinned compiler match compiler or
+  integer references bit for bit on every vector. Each input cache line has a
+  job that changes only that line and whose output differs from the preceding
+  job's, and each output cache line changes between some consecutive pair of
+  jobs. ConcatLayer and TensorCopy occur only in ShuffleNetV2 and have no
+  reference. Comparison of board captures with the simulator is pending a
+  board application.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
   and native compilation pass. Identity admission precedes reset/engine setup;
