@@ -169,7 +169,9 @@ static unsigned iso_missed_every,iso_services,iso_stalled,iso_frames_lost;
 static unsigned iso_miss_kind,iso_silent,iso_tds_missed;
 /* The controller finds the ring empty just before the refill and posts Ring
  * Overrun only after the refill's doorbell, which it then ignores. */
-static unsigned iso_late_overrun;
+/* Overrun at the next interval: after the refill, without a TRB pointer, or
+ * with the Event Ring Full code 21 in place of Ring Overrun 15. */
+static unsigned iso_late_overrun,iso_overrun_no_trb,iso_overrun_code=15;
 static uint8_t *event_ring(void){return cpu(get64(cpu(get64(&reg[0x1030/4]),16)),16*A733_XHCI_EVENT_TRBS);}
 static void event(unsigned type,uint64_t pointer,unsigned code,unsigned remaining,unsigned dci,unsigned slot)
 {
@@ -375,7 +377,7 @@ static void service(unsigned slot,unsigned dci,uint64_t now)
         if((control&1)!=e->cycle){
             if(e->type==5&&e->scheduled&&now>=e->next){
                 /* Ring Overrun: the ring was empty at a service interval. */
-                if(iso_late_overrun)e->late=1;else event(32,e->deq,21,0,dci,slot);
+                if(iso_late_overrun)e->late=1;else event(32,iso_overrun_no_trb?0:e->deq,iso_overrun_code,0,dci,slot);
                 e->scheduled=0;
             }
             break;
@@ -470,7 +472,7 @@ static int ww(void *v,uint32_t off,uint32_t value)
     if(off==0x2000){command_kick=1;return 1;}
     if(off>0x2000&&off<0x2010){
         unsigned slot=(off-0x2000)/4;assert(slot_used&BIT(slot)&&value&&value<32);struct ep *e=&eps[slot][value];
-        if(e->late){e->late=0;event(32,e->deq,21,0,value,slot);}else e->kick=1;
+        if(e->late){e->late=0;event(32,e->deq,15,0,value,slot);}else e->kick=1;
         return 1;
     }
     reg[off/4]=value;
@@ -658,6 +660,7 @@ int main(int argc,char **argv)
         mic->audio_hs=has("audio-hs");mic->audio_big=has("large");mic->audio_hid=has("hid-interface");
         iso_missed_every=has("missed")?10:0;
         iso_miss_kind=has("batch")?1:has("null")?2:has("silent")?3:0;iso_late_overrun=has("refill");
+        iso_overrun_no_trb=has("no-trb");if(has("ring-full"))iso_overrun_code=21;
         finish_devices();start_core();attach_root();
         if(has("disabled")||has("large")||has("hid-interface")){
             retained();if(mic->configured||!mic->slot)FAIL("refused at the wrong stage");
@@ -687,11 +690,19 @@ int main(int argc,char **argv)
              * isochronous bound: eight TDs complete, then the ring is empty.
              * Their events wait in the event ring until the owner polls. */
             for(unsigned i=0;i<(has("late-poll")?1500u:300u);++i){m.now+=100;tick();}
+            if(has("ring-full")){
+                struct a733_usb2_audio_block b;
+                for(unsigned i=0;i<20000&&!n.failed;++i){poll();(void)a733_usb2_audio_read(&n,&b);}
+                if(!n.failed||n.core.isoch.overruns||parent_state()!=DEVICE_MEMORY_RETAINED)FAIL("code 21 not retained");
+                puts("PASS an Event Ring Full code on the isochronous endpoint is not taken for a Ring Overrun; the session is retained");return 0;
+            }
             if(!audio_collect(channels,200))FAIL("capture after overrun failed");
             if(n.failed||n.core.isoch.overruns!=1||!gaps||n.core.isoch.dropped)
                 FAIL("failed %u overruns %u gaps %u dropped %u",n.failed,n.core.isoch.overruns,gaps,n.core.isoch.dropped);
             if(has("late-poll"))
                 printf("PASS a 150 ms owner gap consumes the waiting ring events first; one overrun and a %u-frame gap, the stream continues\n",gap_frames);
+            else if(has("no-trb"))
+                printf("PASS an overrun without a TRB pointer after every queued TD completed; the stream restarts with a %u-frame gap\n",gap_frames);
             else if(has("refill"))
                 printf("PASS an overrun posted after the refill names the first new TD; the core rings again and the stream continues after a %u-frame gap\n",gap_frames);
             else printf("PASS an empty isochronous ring reports one overrun; the stream restarts at the next TD with a %u-frame gap\n",gap_frames);

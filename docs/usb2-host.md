@@ -904,14 +904,17 @@ as the pinned Linux `handle_tx_event` does (xHCI 1.2 sections 4.10.2.8,
   capability may skip further TDs without an event. Until the next event of
   another kind, that event may therefore name a later TD. The queued TDs before
   it end without data and are counted the same way.
-- **Ring Overrun.** The controller found the ring empty and removed the
-  endpoint from its schedule. The event names where the ring was empty. This is
-  the enqueue position when every queued TD completed. It is the oldest queued
-  TD when the controller looked just before a late refill was written. It may be
-  a later TD after missed service intervals, or have no pointer on a pre-1.1
-  controller. TDs before the named position end without data. The core counts
-  the event in `isoch.overruns`. While TDs remain queued, it rings the endpoint
-  doorbell again so that the controller schedules the endpoint again.
+- **Ring Overrun (completion code 15).** The controller found the ring empty
+  and removed the endpoint from its schedule. The event names where the ring
+  was empty. This is the enqueue position when every queued TD completed. It is
+  the oldest queued TD when the controller looked just before a late refill was
+  written. It may be a later TD after missed service intervals, or have no
+  pointer on a pre-1.1 controller. An event at the enqueue position or without
+  a pointer is accepted only when no TD is queued or the controller is skipping
+  missed TDs; otherwise it would hide lost completion events. TDs before the
+  named position end without data. The core counts the event in
+  `isoch.overruns`. While TDs remain queued, it rings the endpoint doorbell
+  again so that the controller schedules the endpoint again.
 
 Any other completion code, or an event that names a TD the rules above do not
 allow, retains the session and its DMA parent. So does a poll that finds the
@@ -1105,11 +1108,15 @@ Successful cases cover:
 - injected missed-service intervals in four forms: one event per missed TD,
   one event for three missed TDs, events without a TRB pointer, and one event
   followed by two missed TDs without events;
-- a ring overrun after a 30 ms owner stall, an overrun posted after the refill
-  that names the first new TD, and a 150 ms owner gap whose waiting events are
-  processed without retaining the session;
+- a ring overrun after a 30 ms owner stall, the same overrun without a TRB
+  pointer, an overrun posted after the refill that names the first new TD, and
+  a 150 ms owner gap whose waiting events are processed without retaining the
+  session;
 - retention 100 ms after the ring stops producing events, and a root disconnect
   followed by a replugged stream.
+
+A further case posts the Event Ring Full code 21 where the ring overrun belongs
+and checks that the session is retained.
 
 Refusal cases cover a second tier without admission, a third tier, unadmitted
 bus power, a seven-port bus-powered hub, an over-budget leaf and a mismatched

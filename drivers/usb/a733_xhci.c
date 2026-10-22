@@ -332,19 +332,21 @@ static int isoch_finished(struct a733_xhci *x,struct a733_xhci_device *d,struct 
  * every queued TD up to the named one ends without data. A controller may skip
  * further TDs without an event, so until the next other event, that event may
  * name a later TD and the TDs before it end without data.
- * Ring Overrun names where the controller found the ring empty (section
- * 4.10.3.1): the enqueue position, the oldest queued TD when a refill came late,
- * a later TD after missed intervals, or none on pre-1.1 controllers. The
- * controller removed the endpoint from its schedule, so while TDs remain the
- * core rings the doorbell again. */
+ * Ring Overrun (completion code 15) names where the controller found the ring
+ * empty (section 4.10.3.1): the enqueue position, the oldest queued TD when a
+ * refill came late, a later TD after missed intervals, or none on pre-1.1
+ * controllers. The enqueue position and no pointer say nothing about queued
+ * TDs, so they are accepted only when no TD is queued or the controller is
+ * skipping. The controller removed the endpoint from its schedule, so while TDs
+ * remain the core rings the doorbell again. */
 static int isoch_event(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e,
     unsigned code,unsigned residual,uint64_t pointer)
 {
     struct a733_xhci_isoch *s=&x->isoch;
     unsigned k=isoch_position(s,pointer);
-    if(code==21){
-        if(pointer==e->ring_pa+16*e->index&&(s->done==s->count||s->skip))k=s->count;
-        else if(pointer&&(k==A733_XHCI_ISOCH_TDS||(k>s->done&&!s->skip)))return 0;
+    if(code==15){
+        if((!pointer||pointer==e->ring_pa+16*e->index)&&(s->done==s->count||s->skip))k=s->count;
+        else if(!pointer||k==A733_XHCI_ISOCH_TDS||(k>s->done&&!s->skip))return 0;
         if(pointer){isoch_skip(s,k);s->skip=0;}
         ++s->overruns;
         if(s->done==s->count){e->pending=0;return 1;}
