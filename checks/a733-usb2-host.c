@@ -347,7 +347,7 @@ static void wire(void)
         if(hub_mode&&!j&&i){
             if(dual_mode)hub_bitmap=(dual_changes[2]?1u<<2:0)|(dual_changes[3]?1u<<3:0);
             if(!hub_bitmap)continue;
-            assert(m.now>=n.hub.power_good_deadline&&d->hub_configured&&e->length==1);
+            assert(m.now>=n.hubs[0].power_good_deadline&&d->hub_configured&&e->length==1);
             e->bounce[0]=(uint8_t)hub_bitmap;hub_bitmap=0;
         }else if(i&&hold_bulk)continue;
         last_transfer[j][i]=e->pending_trb;++transfers;unsigned residual=0;
@@ -506,7 +506,7 @@ static void unplug_root(void)
     }
     assert(!n.failed&&!n.core.failed&&polls<100&&disables==(hub_mode?2u:1u)&&parent_state()==DEVICE_MEMORY_DEVICE);
     for(unsigned j=0;j<A733_XHCI_DEVICES;++j)assert(!n.core.devices[j].port_ready&&!n.core.devices[j].slot);
-    assert(!n.mounted&&a733_usb2_device_kind(&n)==A733_USB2_DEVICE_NONE&&!n.msc_seen&&!n.hid_seen&&!n.hub.present);
+    assert(!n.mounted&&a733_usb2_device_kind(&n)==A733_USB2_DEVICE_NONE&&!n.msc_seen&&!n.hid_seen&&!n.hubs[0].present);
 }
 /* The next connection is announced again and enumerates on the same pages. */
 static void replug_root(void)
@@ -528,7 +528,7 @@ static void unplug_child(void)
     hub_after_fault=1;hub_reset=0;hub_changed_port=hub_port;hub_bitmap=1u<<hub_port;hub_changes=1;
     for(unsigned i=0;i<20000&&!n.failed&&(n.mounted||child->port_ready);++i)poll();
     assert(!n.failed&&!n.core.failed&&!n.mounted&&!child->port_ready&&!child->slot&&disables==1&&!removals);
-    assert(n.core.devices[0].port_ready==3&&n.core.devices[0].hub_configured&&n.hub.present&&!n.hub.connected_mask);
+    assert(n.core.devices[0].port_ready==3&&n.core.devices[0].hub_configured&&n.hubs[0].present&&!n.hubs[0].connected_mask);
     assert(a733_usb2_device_kind(&n)==A733_USB2_DEVICE_NONE&&!n.msc_seen&&!n.hid_seen&&parent_state()==DEVICE_MEMORY_DEVICE);
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)assert(!child->endpoints[i].caller);
 }
@@ -536,7 +536,7 @@ static void replug_child(void)
 {
     hold_bulk=0;hub_after_fault=0;hub_changes=1;hub_bitmap=1u<<hub_port;
     for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();
-    assert(n.mounted&&!n.failed&&n.core.devices[1].port_ready==3&&n.hub.connected_mask==1u<<hub_port&&disables==1);
+    assert(n.mounted&&!n.failed&&n.core.devices[1].port_ready==3&&n.hubs[0].connected_mask==1u<<hub_port&&disables==1);
 }
 static void read_again(void)
 {
@@ -546,7 +546,7 @@ static void read_again(void)
     for(unsigned i=0;i<512;++i)assert(sector[i]==(uint8_t)(i*17+3));
 }
 static void mounted(void)
-{for(unsigned i=0;i<10000&&!n.mounted&&!n.failed;++i)poll();if(!n.mounted||n.failed||commands!=(hub_mode?8u:4u))fprintf(stderr,"mount failed mounted%u failed%u phase%u now%llu cmds%u xfers%u kind%u hub addr%u ports%u power%u local%u mask%x port%u defer%u requested%u root slot%u addr%u ready%u hubcfg%u ep0%u ctl%u child slot%u addr%u ready%u\n",n.mounted,n.failed,n.core.phase,(unsigned long long)m.now,commands,transfers,n.kind,n.hub.address,n.hub.ports,n.hub.device_power,n.hub.local_power,n.hub.powered_mask,n.hub.selected_port,n.hub.status_deferred,n.hub.status_requested,n.core.devices[0].slot,n.core.devices[0].address,n.core.devices[0].port_ready,n.core.devices[0].hub_configured,n.core.devices[0].endpoints[0].pending,n.core.devices[0].control_stage,n.core.devices[1].slot,n.core.devices[1].address,n.core.devices[1].port_ready);
+{for(unsigned i=0;i<10000&&!n.mounted&&!n.failed;++i)poll();if(!n.mounted||n.failed||commands!=(hub_mode?8u:4u))fprintf(stderr,"mount failed mounted%u failed%u phase%u now%llu cmds%u xfers%u kind%u hub addr%u ports%u power%u local%u mask%x port%u defer%u requested%u root slot%u addr%u ready%u hubcfg%u ep0%u ctl%u child slot%u addr%u ready%u\n",n.mounted,n.failed,n.core.phase,(unsigned long long)m.now,commands,transfers,n.kind,n.hubs[0].address,n.hubs[0].ports,n.hubs[0].device_power,n.hubs[0].local_power,n.hubs[0].powered_mask,n.hubs[0].selected_port,n.hubs[0].status_deferred,n.hubs[0].status_requested,n.core.devices[0].slot,n.core.devices[0].address,n.core.devices[0].port_ready,n.core.devices[0].hub_configured,n.core.devices[0].endpoints[0].pending,n.core.devices[0].control_stage,n.core.devices[1].slot,n.core.devices[1].address,n.core.devices[1].port_ready);
  assert(n.mounted&&!n.failed&&n.blocks==128&&n.block_bytes==512&&commands==(hub_mode?8u:4u));}
 int main(int argc,char **argv)
 {
@@ -669,7 +669,7 @@ int main(int argc,char **argv)
         for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();
         if(topology_fault){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS bounded SS hub setup refusal retains");return 0;}
         assert(n.mounted&&!n.failed&&n.core.usb2_port==(companion_mode?1u:2u));
-        if(ss_hub){assert(n.hub.depth_set&&n.hub.delay_ns==400&&n.core.devices[0].hub_configured);
+        if(ss_hub){assert(n.hubs[0].depth_set&&n.hubs[0].delay_ns==400&&n.core.devices[0].hub_configured);
             assert(n.descriptors[0].ss.ss_control==4&&n.descriptors[1].ss.ss_control==3&&n.descriptors[1].ss.ss_ready);}
         if(hub_fault_case==1){
             unplug_child();replug_child();
@@ -753,7 +753,7 @@ int main(int argc,char **argv)
     if(dual_mode){
         for(unsigned i=0;i<20000&&!n.mounted&&!n.failed;++i)poll();
         if(dual_duplicate){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS duplicate leaf class retains whole session");return 0;}
-        if(!n.mounted||n.failed)fprintf(stderr,"dual mount failed %u %u msc%u hid%u kind%u connected%x default%u cmds%u now%llu\n",n.mounted,n.failed,n.msc_mounted,n.hid_mounted,n.kind,n.hub.connected_mask,n.core.default_device,commands,(unsigned long long)m.now);
+        if(!n.mounted||n.failed)fprintf(stderr,"dual mount failed %u %u msc%u hid%u kind%u connected%x default%u cmds%u now%llu\n",n.mounted,n.failed,n.msc_mounted,n.hid_mounted,n.kind,n.hubs[0].connected_mask,n.core.default_device,commands,(unsigned long long)m.now);
         assert(n.mounted&&!n.failed&&n.kind==A733_USB2_DEVICE_DUAL&&n.msc_mounted&&n.hid_mounted&&n.address!=n.hid_address);
         assert(n.address==(dual_reverse?1u:2u)&&n.hid_address==(dual_reverse?2u:1u));
         /* Every permanently published ring/bounce page is disjoint and within
