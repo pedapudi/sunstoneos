@@ -1,27 +1,23 @@
 #include "a733_radio_session.h"
+#include "a733_range.h"
 #include <string.h>
 #ifndef SUNSTONE_AIC8800_RSN
 #error "Native radio session requires the actual RSN integration"
 #endif
 enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP,RECONNECT };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int platform_outside(struct a733_radio_platform *b,const void *p,size_t n)
 {
-    return separate(b,sizeof(*b),p,n)&&separate(b->clocks,sizeof(*b->clocks),p,n)&&
-        separate(b->pins,sizeof(*b->pins),p,n)&&separate(b->rails,sizeof(*b->rails),p,n)&&
-        separate(b->pmic,sizeof(*b->pmic),p,n)&&
-        separate(b->rails->binding.gpu,sizeof(*b->rails->binding.gpu),p,n)&&
+    return a733_ranges_disjoint(b,sizeof(*b),p,n)&&a733_ranges_disjoint(b->clocks,sizeof(*b->clocks),p,n)&&
+        a733_ranges_disjoint(b->pins,sizeof(*b->pins),p,n)&&a733_ranges_disjoint(b->rails,sizeof(*b->rails),p,n)&&
+        a733_ranges_disjoint(b->pmic,sizeof(*b->pmic),p,n)&&
+        a733_ranges_disjoint(b->rails->binding.gpu,sizeof(*b->rails->binding.gpu),p,n)&&
         b->pmic->ops.outside(b->pmic->cookie,p,n)==1;
 }
 static int outside(struct a733_radio_session *s,const void *p,size_t n)
 {
-    if(!separate(s,sizeof(*s),p,n)||!platform_outside(s->platform,p,n))return 0;
+    if(!a733_ranges_disjoint(s,sizeof(*s),p,n)||!platform_outside(s->platform,p,n))return 0;
     for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
-        if(!separate(s->config.firmware.blobs[i].data,s->config.firmware.blobs[i].bytes,p,n))return 0;
+        if(!a733_ranges_disjoint(s->config.firmware.blobs[i].data,s->config.firmware.blobs[i].bytes,p,n))return 0;
     return 1;
 }
 static int owner(struct a733_radio_session *s)
@@ -50,9 +46,8 @@ static enum a733_radio_session_result fail(struct a733_radio_session *s)
 }
 static int now(struct a733_radio_session *s,uint64_t *out)
 {
-    if(s->platform->ops.now_us(s->platform->cookie,out)!=1||*out<s->last_now||
-        *out>=s->platform->config.lifetime_deadline_us)return 0;
-    s->last_now=*out;return 1;
+    return s->platform->ops.now_us(s->platform->cookie,out)==1&&
+        a733_deadline_admit(*out,&s->last_now,s->platform->config.lifetime_deadline_us);
 }
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {
@@ -100,10 +95,10 @@ static int initialize(struct a733_radio_session *s,struct a733_radio_platform *p
         c->bootstrap_deadline>p->config.lifetime_deadline_us||!c->runtime_lease_us||
         !c->renew_margin_us||c->renew_margin_us>=c->runtime_lease_us||c->transport.ticks_per_ms!=1000||
         !platform_outside(p,s,sizeof(*s))||!platform_outside(p,c,sizeof(*c))||
-        !separate(s,sizeof(*s),c,sizeof(*c)))return 0;
+        !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)))return 0;
     for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i){
         const struct aic8800_firmware_blob *b=&c->firmware.blobs[i];
-        if(!separate(s,sizeof(*s),b->data,b->bytes)||!separate(c,sizeof(*c),b->data,b->bytes)||
+        if(!a733_ranges_disjoint(s,sizeof(*s),b->data,b->bytes)||!a733_ranges_disjoint(c,sizeof(*c),b->data,b->bytes)||
             !platform_outside(p,b->data,b->bytes))return 0;
     }
     /* Constructors consume this private lifetime even if a later profile fails.
