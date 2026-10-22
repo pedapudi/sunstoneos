@@ -149,37 +149,40 @@ the design's 2% rule at every latency in the table above.
 
 ## Images
 
+The change column was rebuilt after the shared encoders lost their
+`noinline` attribute, in a third directory,
+`~/.cache/sunstoneos/build/gpu-mimus-compute-fix/`, from the same
+configuration.
+
 | Target | Base `.text` | Change `.text` |
 | --- | --- | --- |
 | GPU service model | 148,480 | 148,480 |
-| Compute service model | 184,440 | 184,440 |
+| Compute service model | 184,440 | 183,928 |
 | Free-list service model | 151,504 | 151,504 |
-| IRQ model | 147,712 | 147,968 |
+| IRQ model | 147,712 | 147,712 |
 | Memory model | 153,776 | 153,776 |
 | Power service model | 153,680 | 153,680 |
-| GPU render application | 290,272 | 290,596 |
+| GPU render application | 290,272 | 289,968 |
 
 The profile-three PDS and CDM encoders, the fence program and the firmware
-command are out-of-line functions that the mimus session shares. The firmware
-command writes only its own fields into a command that its caller has zeroed.
-In the six service models, `pvr_compute_job.o` keeps the base's 19,156 bytes
-of `.text`: the four encoders take 1,380 bytes, and `image` and
-`pvr_compute_job_build` together shrink by the same amount. `image` keeps
-`noinline`; without it the compiler inlines one of its two calls and the
-object grows by 2,644 bytes. The IRQ model links `image` but not
-`pvr_compute_job_build`, so there `image` and the firmware command take 28
-bytes more than the base's `image`, and section alignment rounds the growth
-to 256 bytes. The render application compiles the file with other options;
-there the out-of-line encoders add 324 bytes. `.rodata` is unchanged apart
-from 64 fewer bytes in the render application and 16 more in the compute
-model. The compiled-package
-bytes equal Mesa's for profiles two and three, the fixed job's 267,368 bytes
-equal both Mesa's reference and the earlier evidence, and the compute
-service's three emulator cases pass at both commits.
+command are external functions that the mimus session shares. In every
+image the job builder inlines all four, and the linker drops the external
+copies, because no image links the mimus session yet. The two grid encoders
+are `always_inline`, since the render application's options otherwise keep
+them out of line. The word-copy loop is not unrolled, so the constant PDS
+tables stay in `.rodata` instead of becoming immediate stores. `.rodata`
+is unchanged except in the render application, which gains 80 bytes;
+its `.text` and `.rodata` together are 224 bytes smaller than the base's.
+`image` keeps `noinline`; without it the compiler inlines one of its two
+calls and `pvr_compute_job.o` grows by 2,644 bytes.
 
-The design states that the instruction and code-byte budgets are missed but
-not why; "The instruction-count miss" above gives the cause. The design does
-not mention the `.text` growth of the IRQ model and the render application.
+With `noinline` on the four encoders, the IRQ model's `.text` grew by 256
+bytes (28 bytes of call overhead, rounded up by section alignment) and the
+render application's by 324 bytes. At the change, the compiled-package
+bytes equal Mesa's for profiles two and three, the fixed job's 267,368
+bytes equal both Mesa's reference and the earlier evidence, and the compute
+service's three emulator cases pass. The mimus program, layer, read-out and
+time-model results are unchanged.
 
 ## Evidence
 
@@ -189,14 +192,17 @@ sizes of both builds and of `pvr_compute_job.o`), and under `evidence/`:
 `program/`, `layers/` (with `calls.txt`), `readout/`,
 `package-{base,head}-p{2,3}/` (the compiled programs, packages and check
 results of each commit), `service-{base,head}/`, `jobcheck-{base,head}/`,
-`time-model-design.txt` and `time-model-measured.txt`.
+`time-model-design.txt` and `time-model-measured.txt`. The rebuild
+without `noinline` on the encoders is under
+`~/.cache/sunstoneos/build/gpu-mimus-compute-fix/evidence/`: `images.txt`,
+`p2/` and `p3/` (package checks), `jobcheck/`, `service/`, `program/`,
+`layers/`, `readout/` and `time-model.txt`.
 
 At both commits every package check and every service case passed. The 12
 packages that the package check builds, six per profile, are byte-identical
 between the commits, and the service cases report the same yield and
-timed-wait counts. The change's `pvr_compute_job.o` holds 19,156 bytes of
-`.text` in the service models, as at the base, and 10,700 bytes in the render
-application against the base's 10,376.
+timed-wait counts. The yield count of the first service case varies
+between 5 and 6 from run to run of the emulator at the same commit.
 
 At the change, both 267,368-byte fixed jobs of `checks/pvr-compute-job.py`
 equal Mesa's reference; at the base that check stops at the missing header.

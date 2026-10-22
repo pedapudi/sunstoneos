@@ -50,7 +50,11 @@ static void put64(void *p,size_t off,uint64_t v)
 static void clear(void *p,size_t n)
 { unsigned char *b=p;for(size_t i=0;i<n;++i)b[i]=0; }
 static void words(void *p,size_t off,const uint32_t *w,size_t count)
-{ for(size_t i=0;i<count;++i)put32(p,off+4*i,w[i]); }
+{
+    /* A loop keeps constant tables in .rodata; unrolled stores take more .text. */
+#pragma clang loop unroll(disable)
+    for(size_t i=0;i<count;++i)put32(p,off+4*i,w[i]);
+}
 static int span(const struct pvr_compute_program_span *s)
 { return a733_span_excl_nonempty(s->cpu,s->bytes)&&gpu(s->gpu,s->bytes); }
 static int heap(const struct pvr_compute_program_heap *h,int relative)
@@ -117,8 +121,10 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
     }
     return 1;
 }
+/* Shared encoders: the job builder inlines each one, and images without the
+ * mimus session drop the external copies. */
 /* Writes only the fields it names; the caller zeroes the command first. */
-__attribute__((noinline)) void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
+void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
 {
     put64(compute,8,border>>2);
     put64(compute,40,cdm);
@@ -128,12 +134,12 @@ __attribute__((noinline)) void pvr_compute_job_command(unsigned char compute[96]
     /* Source flags: prevent all overlap and execute on one GPU core. */
     put32(compute,80,(1u<<2)|(1u<<5));
 }
-__attribute__((noinline)) void pvr_compute_job_fence_pds(void *fence)
+void pvr_compute_job_fence_pds(void *fence)
 {
     static const uint32_t code[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
     words(fence,16,code,5);
 }
-__attribute__((noinline)) void pvr_compute_job_grid_pds(void *pds,uint64_t task,const uint32_t groups[3],uint64_t input,uint64_t output)
+__attribute__((always_inline)) void pvr_compute_job_grid_pds(void *pds,uint64_t task,const uint32_t groups[3],uint64_t input,uint64_t output)
 {
     /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
      * Insert pointer writes at the ordinary entry. The relative branch10
@@ -151,7 +157,7 @@ __attribute__((noinline)) void pvr_compute_job_grid_pds(void *pds,uint64_t task,
     put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
     put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
 }
-__attribute__((noinline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
+__attribute__((always_inline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
 {
     /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
      * Three PDS temps ->1x16B;112 data bytes ->7x16B. */

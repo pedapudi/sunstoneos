@@ -3,7 +3,10 @@
 Status: **implemented** and host-modeled; physical behavior is pending until
 the board evidence at the end exists. Two budgets are **not met**: the program
 has 3.39 USC instruction groups per multiply-accumulate against 1.75, and
-7,624 code bytes against 4,000, so it takes two 4 KiB program pages.
+7,624 code bytes against 4,000, so it takes two 4 KiB program pages. The
+pinned compiler emits each signed field extraction as two groups and adds
+register moves; "Time model and budgets" gives the cause beside each budget
+that this miss affects.
 [gpu-mimus.md](../gpu-mimus.md) describes what was built, including two
 departures from this design: the chunk sums are combined with a cheaper
 exact rule, and each sum store carries a data fence because the pinned
@@ -297,9 +300,9 @@ the saving of each left-out change.
 | Output bytes differing from the CPU kernel | No GPU path | 0; checksums and text equal the host reference | `checks/gpu-mimus-layers` |
 | Copies per weight, code and sum byte | 1 weight expansion per call | 0, 0, 0 | Copy counter, same check |
 | Jobs per recording | Not possible: 3,968-byte output, 31 workgroups | 204, one per call | Same |
-| USC instructions per MAC; code bytes | None | At most 1.75; at most 4,000 | `checks/gpu-mimus-program` |
+| USC instructions per MAC; code bytes | None | At most 1.75; at most 4,000. **Not met:** 3.39 (217 groups per 64 MACs) and 7,624 bytes. The pinned compiler emits each of the 32 signed extractions as `ibfe` followed by a select on the field width, and adds 42 register moves; four rewrites of the kernel gave no shorter loop. The two remaining reductions, 16-byte loads and run-time shift amounts, each need a board measurement first | `checks/gpu-mimus-program` |
 | Temps per instance | None | At most 112, which keeps 8 tasks resident | Same |
-| GPU compute, all channels | 14.894 s on the A55 | 0.574 s issue-bound; 0.72 s or 0.90 s if an instruction assumption fails; 1.66 s with 200-clock loads | Time model; board |
+| GPU compute, all channels | 14.894 s on the A55 | 0.574 s issue-bound; 0.72 s or 0.90 s if an instruction assumption fails; 1.66 s with 200-clock loads. **Not met:** at least 1.111 s issue-bound, 1.726 s with 200-clock loads. Issue time scales with the measured 217 groups per pass of 4 K steps against the 112 that 1.75 per MAC allows | Time model; board |
 | DRAM bytes read per MAC | None | 0.75 per lane; 0.156 per workgroup with cache reuse | `checks/gpu-mimus-layers` |
 | Lines maintained on core 6 per recording, GPU only | None | 597,601 cleaned; 988,060 cleaned and invalidated, tags included | `aarch64_device_cache` wrap counters, same check |
 | `DSB SY` per job | None | 6, from three helper calls, including a barrier after the join and after the completion read | Barrier wraps in `checks/pvr-compute-service` and `checks/gpu-mimus-layers` |
@@ -307,9 +310,10 @@ the saving of each left-out change.
 | Read-out instructions per recording | Inside the CPU kernel | At most 43.3 M: 3 per int32 output, 4 per int64, 1 more per residual output; 155 M scalar | `checks/gpu-mimus-readout` under Unicorn, times outputs per call |
 | Checks per job | Native resource admission and a CPU mapping check | At most 12 compares; no translation, no hash | `checks/pvr-compute-service` |
 | Ring and record bytes per job | 368-byte bound | At most 300 | Same |
-| Linear stage, best channel split (the selected placement) | 14.894 s | 0.629 s, 90% of MACs on the GPU, at 494 MHz; 0.396 s, 63%, at 2,002 MHz | Time model; board |
-| Linear stage, GPU only (reference) | 14.894 s | 0.677 s at 494 MHz; 0.612 s at 2,002 MHz | Time model |
-| GPU leaf entries | 4 KiB only, at most 256 table pages | 17: fifteen 2 MiB, two 4 KiB | `checks/pvr-gpu-vm.c` |
+| Linear stage, best channel split (the selected placement) | 14.894 s | 0.629 s, 90% of MACs on the GPU, at 494 MHz; 0.396 s, 63%, at 2,002 MHz. **Not met:** at least 0.997 s, 80.6% on the GPU, at 494 MHz; at least 0.535 s, 45.5%, at 2,002 MHz, which misses the 0.4435 s pipeline goal. The slower GPU program moves channels back to the CPU; the gap closes only with the instruction-count reductions above | Time model; board |
+| Linear stage, GPU only (reference) | 14.894 s | 0.677 s at 494 MHz; 0.612 s at 2,002 MHz. **Not met:** at least 1.149 s at 2,002 MHz, from the same instruction count | Time model |
+| GPU leaf entries | 4 KiB only, at most 256 table pages | 17: fifteen 2 MiB, two 4 KiB. **Not met:** 18, because the 7,624-byte program needs a second 4 KiB program page and therefore one more leaf entry and one more 2 MiB virtual region | `checks/pvr-gpu-vm.c` |
+| `.text` of each image that links `pvr_compute_job.c`: the GPU, compute, free-list, IRQ, memory and power service models and the GPU render application | The base build: 147,712 to 290,272 bytes per image | No growth. Met: the IRQ, GPU, free-list, memory and power models are unchanged, the compute service model is 512 bytes smaller and the render application 304 bytes smaller (its `.rodata` is 80 bytes larger, 224 bytes smaller in total). The shared encoders are ordinary external functions that the job builder inlines, and the linker drops their unreferenced copies | `llvm-size -A` on builds of the base and the change |
 
 For comparison, the two A76 cores alone take 3.72 s at 494 MHz and 0.918 s
 at 2,002 MHz. The dispatcher design sets the linear stage's goal at 0.15 s;
@@ -446,9 +450,12 @@ Also left out:
 
 - **Removing `noinline` from `image` in `pvr_compute_job.c`:** not adopted.
   Without it the compiler inlines one of the function's two calls into
-  `pvr_compute_job_build`, and the object grows by 2,644 bytes; with it and
-  without the firmware command's redundant clear, the object keeps the
-  base's 19,156 bytes.
+  `pvr_compute_job_build`, and the object grows by 2,644 bytes. The shared
+  encoders carry no `noinline`: as out-of-line calls they added 256 bytes of
+  `.text` to the IRQ model and 324 bytes to the render application. The two
+  grid encoders are `always_inline`, and the word-copy loop is not unrolled,
+  so constant tables stay in `.rodata`; no image's `.text` is then larger
+  than the base's.
 - **About two resident tasks:** the model uses 8, from Mesa's formula for
   the unified store, which counts 8 banks of 256 rows per instance; the
   single-load latency probe settles the number.
