@@ -3,6 +3,8 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_counter_clock.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include "a733_rtc_application.h"
 #include "monitor.h"
 
@@ -40,7 +42,7 @@ static int quiet(void)
 static int read_reg(void *c,uint32_t offset,uint32_t *value)
 {
     if(c!=&initialized||!value||(offset>0x50&&offset!=0x160)||(offset&3)||!timely()||!quiet())return 0;
-    *value=mmio_read(0x07090000+offset);__asm__ volatile("dsb sy":::"memory");return timely();
+    *value=a733_mmio_read32_dsb_sy_after(0x07090000+offset);return timely();
 }
 static int write_reg(void *c,uint32_t offset,uint32_t value)
 {
@@ -51,13 +53,12 @@ static int write_reg(void *c,uint32_t offset,uint32_t value)
     /* The SOURCE-only helper may change mux/gate/switch controls, never gain,
      * calendar, RC prescaler/calibration, DCXO or wake configuration. */
     if(offset==0&&((value^mmio_read(0x07090000))&0xffff&~UINT32_C(0xc013))){invariant=1;return 0;}
-    ++writes;*(volatile uint32_t *)(uintptr_t)(0x07090000+offset)=value;
-    __asm__ volatile("dsb sy":::"memory");return timely();
+    ++writes;a733_mmio_write32_dsb_sy_after(0x07090000+offset,value);return timely();
 }
 static void probe(void *unused)
 {
     (void)unused;REQUIRE(a733_counter_clock_init(&clock,24000000),"counter init");
-    uint64_t start;REQUIRE(now(&initialized,&start)&&start<=UINT64_MAX-1500000,"counter sample");deadline=start+1500000;
+    uint64_t start;REQUIRE(now(&initialized,&start)&&a733_deadline_after(start,1500000,&deadline),"counter sample");
     step=1;REQUIRE(rtc_source_admission.ready,"original IRQ228 not admitted by EL3");
     REQUIRE(timely()&&(mmio_read(0x0701020c)&0x10001)==0x10001,"RTC bus unavailable");
     REQUIRE(quiet(),"IRQ228 not quiescent");
