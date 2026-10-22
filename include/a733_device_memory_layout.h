@@ -27,7 +27,6 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
 #define A733_DEVICE_WB_END UINT64_C(0x78000000)
 #define A733_DEVICE_NC_START UINT64_C(0x78000000)
 #define A733_DEVICE_NC_END UINT64_C(0x79000000)
-#define A733_DEVICE_MEMORY_BATCH_PAGES 64u
 struct a733_device_memory_layout {
     uint64_t profile, wb_start, wb_end, nc_start, nc_end;
 };
@@ -42,25 +41,26 @@ int a733_device_memory_handoff_valid(const struct a733_device_memory_layout *, c
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
 struct a733_smp_contract;
 /* Actual primary EL3 cold boot only. Validate the copied live v2 contract and
- * immutable linker geometry; refuse any second admission. Protected table
- * construction must consume this same binding before cache publication.
- * External DRAM qualification, resolved aliases and all-master exclusion remain
- * mandatory launch prerequisites. This routine does not manufacture them. */
+ * immutable linker geometry; refuse any second admission. External DRAM
+ * qualification, resolved aliases and all-master exclusion remain mandatory
+ * launch prerequisites. This routine does not manufacture them. */
 int a733_device_memory_boot_admit(const struct a733_smp_contract *);
+/* Transitional table-builder interface: the builder reads the admitted layout
+ * and reports completion. Once the builder reads the layout constants above
+ * directly, these two calls are removed. */
 int a733_device_memory_tables_admitted(struct a733_device_memory_layout *);
 int a733_device_memory_tables_complete(void);
-/* Primary EL1 only, after the real eight-core barrier and before kernel release.
- * Each call verifies at most 64 complete pages in both read/write directions.
- * Returns 0 pending, 1 published, -1 refused/retained. The actual startup deadline
- * applies before and after each batch. No allocation, clearing, DMA or MMIO.
- * Both singleton pools publish together only after every translation passes. */
+/* One call on core 0 at EL1, after the eight-core barrier and before the
+ * scheduler starts. It checks the installed table base, TCR, MAIR and the
+ * admitted epoch and deadline, then prepares the `dma32` and `uncached` pools
+ * (one write translation per 2 MiB block, 392 in all) and sets READY. It
+ * returns 1 when READY, -1 on refusal; a refusal is retained. Other cores and
+ * later calls change nothing. No allocation, clearing, DMA or MMIO. */
 int a733_device_memory_prepare(void);
-/* Callback-free retained publication state for native pool getters. All access
- * remains privileged and cooperative. It does not authorize EL0 payload access,
- * master reachability, cache coherence or device drain. */
+/* True once preparation has succeeded. The EL1 tables do not change after
+ * preparation, so READY also marks the final mapping. Starting the scheduler
+ * orders it before every task. It does not authorize EL0 access, master
+ * reachability, cache coherence or device drain. */
 int a733_device_memory_ready(void);
-/* Internal singleton commit guard, valid only inside preparation after both
- * complete mapping scans. The native pool owners use it before initialization. */
-int a733_device_memory_commit_allowed(unsigned nc, uintptr_t start, uintptr_t end);
 #endif
 #endif

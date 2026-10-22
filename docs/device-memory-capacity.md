@@ -55,43 +55,87 @@ table. Both EL3 and EL1 use identity mappings with matching inner-shareable
 attributes. Write-back blocks use the established MAIR value `0xff`;
 Non-cacheable blocks use `0x44`. The new blocks are non-executable. Their EL1
 permissions deny EL0 access. The EL3 mappings preserve the required non-secure
-physical-address selection. No additional table pages are needed.
+physical-address selection. No additional table pages are needed. The
+complete EL1 map, with the access each range allows, is in
+[memory protection](memory-protection.md).
 
-The actual primary continuation prepares the pools after all eight cores have
-passed the existing pre-scheduler barrier. Each call checks at most 64 pages,
-using actual read and write address-translation instructions for every page.
-Each page must resolve to its identity physical address with the expected memory
-attribute and matching read/write shareability. Write-back translations require
-inner shareability; Non-cacheable translations accept effective outer or inner
-shareability, matching the existing native uncached adapter. Calls verify the installed table address, translation
-control, MAIR, primary identity, cold scheduler state and admitted startup deadline.
-The runtime epoch and deadline must still match the original handoff.
+## One call prepares both pools
 
-Both singleton pools remain unavailable until all 200,704 pages pass. The final
-publication follows initialization of both allocation ledgers and another startup
-check. Any failed translation or admitted-profile check retains a preparation
-fault. Restoring metadata cannot resume it. Preparation does not clear payload
-memory; controllers must initialize their own allocations before device access.
+The primary core calls `a733_device_memory_prepare()` once at EL1, after all
+eight cores have passed the pre-scheduler barrier and before the scheduler
+starts. The call checks the installed table base, translation control and
+MAIR, the primary identity and the admitted epoch and startup deadline. It
+then prepares each pool with one write address translation per 2 MiB block,
+392 in all: each block must resolve to its identity address with the pool's
+memory attribute. Write-back blocks require inner shareability;
+Non-cacheable blocks accept outer or inner shareability. Both pools are
+initialized and a READY flag is set; until then both getters return NULL.
+
+One translation stands for a whole block because every pool entry is a
+level-2 block descriptor. The QEMU fixture fixes that property by comparing
+every EL1 level-1 and level-2 entry with the expected map. A refused check
+retains the refusal; restoring metadata cannot resume preparation.
+Preparation does not clear payload memory.
+
+The EL1 tables do not change after preparation, so READY also marks the
+final mapping. Starting the scheduler orders preparation before every task
+on every core, so READY is a plain flag and no pool is initialized
+concurrently.
 
 The new mappings provide privileged device backing. An application running at
 EL0 needs a concrete privileged service or a separately admitted mapping. The
 current DMA demonstration's refusal of an external pool remains necessary until
 its application interface and protected-range geometry support this profile.
 
-## Allocation cost depends on live extents
+## Allocation is first fit at the class alignment
 
-Each existing pool still has 32 parent-allocation records. Increasing capacity
-adds no per-page bitmap or metadata array. The allocator preserves first-fit
-placement by jumping past intersecting occupied extents. At most 33 candidate
-positions are examined, each against at most 32 records.
+Each pool has 32 allocation records and no per-page metadata. Acquire scans
+for a free record, then tries at most 33 placements, each compared with the
+32 records: at most 1,056 record comparisons. Placement is first fit.
 
-`device_memory_acquire_aligned()` additionally accepts a power-of-two alignment
-of at least 4 KiB. CPU and physical aliases must have the same alignment phase.
-The ordinary acquisition API retains 4 KiB alignment. Device and fault-retained
-allocations cannot be released through the CPU release API. All callers still
-serialize pool operations and consumer transitions under the actual service lock.
-Pool metadata provides cooperative ownership, not isolation against privileged
-code that can overwrite it.
+Each pool has a class that sets the minimum alignment of its extents, after
+the largest page of the device MMU that maps it. Acquire raises a smaller
+caller alignment to that minimum:
+
+- `dma32`, the write-back pool: 2 MiB for requests of at least 2 MiB,
+  64 KiB for requests of at least 64 KiB, otherwise 4 KiB. These are the
+  GPU MMU page sizes, so a GPU mapping of an extent uses large pages.
+- `uncached`: 4 KiB.
+- Local-layout pools and pools built inside a lease keep the caller's
+  alignment.
+
+Acquire, describe, set state, release and retain each run inside the kernel
+critical section, which serializes every core; initialization runs before any
+other task can reach the pool and takes no lock. Acquire holds the critical
+section for the placement search only, estimated from the compiled loop at
+about 15,000 instructions with 31 occupied records; the other operations hold
+it for about 100. No interrupt handler may call the ledger.
+The ledger accepts these state changes and refuses every other one, leaving
+the record unchanged:
+
+| Operation | Accepted from | Result |
+| --- | --- | --- |
+| `device_memory_set_state(DEVICE)` | CPU | DEVICE |
+| `device_memory_set_state(CPU)` | DEVICE | CPU |
+| `device_memory_retain()` | CPU, DEVICE | RETAINED |
+| `device_memory_retain()` | RETAINED | unchanged, success |
+| `device_memory_release()` | CPU | FREE |
+
+Nothing leaves RETAINED, so a timeout or device failure never authorizes
+reuse. Pool metadata records cooperative ownership. Code that can write it,
+including EL0 code, can corrupt it, because kernel data is writable at EL0 in
+this map.
+
+Acquire also cleans recycled memory. Each write-back pool records a
+watermark, the end of the highest page it has handed out. A page above it
+has never been handed out and holds no dirty line. Acquire cleans the part
+of the new extent below the watermark to the point of coherency, after the
+critical section, so a line a previous holder left dirty cannot later
+overwrite device output. A page below the watermark that was never handed
+out, such as one in an alignment gap, is cleaned as well. The Non-cacheable
+pool runs no clean. `device_memory_acquire_zeroed()` zeroes the extent with
+`DC ZVA` and then cleans all of it on a write-back pool; callers use it in
+place of `memset` over a fresh extent.
 
 A provisional concurrent 4K budget is about 653 MiB: three XRGB8888 display
 frames, three NV16 camera frames, eight NV12 codec frames, 320 MiB for GPU/NPU
@@ -109,24 +153,50 @@ future camera or codec modes may require further bounded consumer work.
 
 ## Focused validation covers the changed native path
 
-The capacity check compares allocation placement with an independent page-search
-oracle and covers alignment, fragmentation, finite records, generation exhaustion
-and retained ownership. It checks the real version-2 admission predicates.
+`checks/device-memory-capacity.py` runs a host check and a QEMU fixture.
 
-The native fixture uses the actual expanded linker, table constructor, cache-enable
-helpers, eight-core barrier, pool preparation and singleton constructors. It checks
-changed table entries, EL3 block boundaries, EL0 refusal and monitor isolation.
-Distinct executions cover successful publication, an interior missing mapping and
-a changed deadline after one preparation batch. No accelerator workloads or
-performance measurements are part of this check. Affected native consumers and
-compact conditional branches are compiled without replaying their device suites.
+The host check compares placement in a class-free pool with an independent
+page-search oracle and covers alignment, fragmentation, finite records,
+generation exhaustion, retained ownership and the version-2 admission
+predicates. It then replays the write-back admission order of each
+extended-layout image in a `dma32` pool and in a pool with 4 KiB alignment.
+The replay checks that every extent meets its class minimum, that no request
+is newly refused, that each acquire makes at most 1,056 record comparisons,
+and that closing and reopening the image's last session restores the same
+free extents and cleans each recycled page once.
 
-The recorded software checks passed the allocator/admission sanitizer run and
-all three native preparation cases. Nine affected reservation consumers and six
-compact conditional units compiled. The production target built successfully;
-its actual object files were reused in the instruction fixture. The launcher
-policy was checked separately against that production image. These results do
-not qualify physical DRAM, coherence, device transactions or sustained workloads.
+The QEMU fixture uses the production objects of the extended image: linker
+script, table builder, cache-enable helpers, eight-core barrier, pool
+preparation and getters. It compares all 1,024 EL1 level-1 and level-2
+entries with the map in [memory protection](memory-protection.md). It then
+runs a successful preparation, an interior missing mapping and a changed
+admitted deadline, and zeroes extents with `DC ZVA` in both pools. QEMU runs
+with `-icount shift=0`, so the PMU instruction counter is exact; a second
+image wraps the translation helper to count `AT` instructions.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Translations to prepare both pools | 401,408 in 3,136 calls | 392 in one call |
+| Instructions to prepare both pools | 27,474,026 | 23,736 |
+| Translations to prepare local pools, 2 MiB write-back and uncached | 1,536 | 3 |
+| Translations to prepare local pools, large NPU graph | 2,048 | 3 |
+| Record comparisons per acquire, worst replayed | 1,056 bound | 160; bound 1,056 |
+| GPU MMU entries for the replayed extents | one per 4 KiB page | 24 to 137 per image, against 354 to 4,568 |
+
+The alignment raises fragmentation. Before each allocation in the `dma32`
+replay, the largest free extent is compared with the same order at 4 KiB
+alignment. It is up to 1,056 pages (4.1 MiB) smaller for the high-profile
+H.264 image and up to 390 pages (1.5 MiB) smaller for the GPU image. For the
+other seven replayed orders it is at most 14 pages smaller. The gaps stay
+available to smaller extents. In the GPU image replay, the render payload
+fills an alignment gap below the watermark and its first use cleans 77,824
+bytes.
+
+These results do not qualify physical DRAM, coherence, device transactions,
+sustained workloads or any cycle count on the board. The kernel critical
+section is replaced by single-core stand-ins in the QEMU fixture, so the
+fixture does not show that the ledger serializes cores; the GPU model images,
+which run the SMP kernel, exercise the ledger with the real critical section.
 
 The architectural source is the project's pinned AArch64 coherence implementation
 and native translation helpers. Existing memory ownership and device-specific
