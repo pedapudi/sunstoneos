@@ -916,6 +916,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source comparisons and host checks pass, including refusal of inherited
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
+  [DMA address widths](dma-address-width.md) record one rule per DMA master.
+  DMA0 and the IOMMU enforce named limits at admission, and host checks pass.
+  The NVMe refusal of pools above 4 GiB is **planned**, and no transfer above
+  4 GiB has run on hardware.
 
   DMA-copy [host admission](dma-pool-session.md#the-host-command-reuses-the-sealed-compact-launcher)
   now requires external digest/session-bound authority for selected-channel
@@ -2557,7 +2561,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | Interrupt controller and timers | Interrupt dispatch, tick, monotonic time, deadlines | GICv3 distributor/redistributors; per-core timers |
 | Clocks, resets, regulators, power domains | Dependency-aware enable, disable, rate control, power transitions | Confirm power ICs and safe board operating points |
 | Pin control and GPIO | Pin functions, levels, pulls, interrupts | Confirm header routing, voltage domains, shared-pin exclusions |
-| DMA and device address translation | Transfers, mapped buffers, cache synchronization, completion, recovery | Address widths, alignment, ownership, IOMMU faults |
+| DMA and device address translation | Transfers, mapped buffers, cache synchronization, completion, recovery | Address widths and transfers above 4 GiB, alignment, ownership, IOMMU faults |
 | UART | Console and exposed serial channels | Pin routing, baud rates, flow control, receive overrun |
 | I2C | Transactions and recovery on exposed and internal buses | Clock dependencies, power devices, sensor control |
 | SPI | Transfers and exposed controller modes | Chip selects, DMA, shared pin functions |
