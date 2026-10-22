@@ -255,6 +255,7 @@ option(SUNSTONE_A733_PCIE_TEST "Build supervised PCIe endpoint DMA copy with MSI
 if(SUNSTONE_A733_PCIE_TEST)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pcie-test.cmake")
 endif()
+include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pcie-nvme.cmake")
 
 if(SUNSTONE_A733_STORAGE_READ)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-read.cmake")

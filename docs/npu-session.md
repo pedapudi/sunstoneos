@@ -170,6 +170,20 @@ cache visibility on the board, interrupt delivery or confinement.
 
 - A board application that links the session runtime, with its startup
   provider, USB client protocol and an image profile using the DDR pool.
+  Each way of building one first needs a change outside the runtime:
+  - The supervised board image already owns the one GPU/PCK resource manager,
+    and its PMIC rail ledger is bound to that manager.
+    `a733_npu_startup_resources_init` always constructs a second manager, and
+    `a733_npu_startup_bind_pmic` accepts only a PMIC whose rail ledger is bound
+    to that second manager. An image derived from the board therefore needs the
+    startup resources to adopt the board's existing manager and native resource
+    object. Its 2 MiB device pool is also smaller than the 2,195,456 bytes that
+    the three small catalogue models need.
+  - The single-core NPU images construct their providers in
+    `apps/npu-convolution/native.c`, which is written for the single-model
+    registration. An image derived from them needs that file to select the
+    session runtime instead of the convolution; a second copy of the file would
+    duplicate the startup, PMIC and clock ownership code.
 - Physical qualification of concurrent jobs, interrupt completion and the
   integrity and retention behavior on the board.
 - Models outside the catalogue's operation profile: tensor-processor, shader
