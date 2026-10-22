@@ -37,9 +37,10 @@ int h264_encode_input_feed(struct h264_encode_input *p,const struct a733_h264_en
         memcpy(p->header+p->header_used,bytes,n);p->header_used+=n;
         if(p->header_used!=32)return 0;
         if(le32(p->header)!=H264_ENCODE_UPLOAD_MAGIC||le32(p->header+4)!=1||
-           le32(p->header+8)!=A733_H264_ENCODE_INPUT_BYTES||le32(p->header+12)!=2||
+           le32(p->header+8)!=A733_H264_ENCODE_INPUT_BYTES||!le32(p->header+12)||
+           le32(p->header+12)>A733_H264_ENCODE_GOP_FRAMES||
            le64(p->header+16)!=p->epoch||le64(p->header+24)!=p->generation)return reject(p);
-        return 0;
+        p->frames=le32(p->header+12);return 0;
     }
     memcpy(p->bytes+p->received,bytes,n);p->received+=n;
     if(p->received!=A733_H264_ENCODE_INPUT_BYTES)return 0;

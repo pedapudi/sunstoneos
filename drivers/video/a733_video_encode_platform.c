@@ -201,6 +201,7 @@ int a733_h264_encode_platform_init(struct a733_h264_encode_platform *p,const str
 }
 static int h264_job_same(const struct a733_h264_encode_job *a,const struct a733_h264_encode_job *b)
 {
+ if(a->frames!=b->frames)return 0;
  for(unsigned i=0;i<2;++i)if(a->input[i]!=b->input[i])return 0;
  for(unsigned i=0;i<A733_H264_ENCODE_BUFFERS;++i)if(a->buffers[i].iova!=b->buffers[i].iova||a->buffers[i].bytes!=b->buffers[i].bytes)return 0;
  return 1;
@@ -225,7 +226,7 @@ static int h264_authorized(struct a733_h264_encode_platform *p,uint64_t t,uint64
 }
 static int h264_prime(void *v,uint64_t t,unsigned ordinal,size_t cursor,uint64_t d)
 {
- struct a733_h264_encode_platform *p=v;if(!h264_authorized(p,t,d)||ordinal>1||cursor>2097152)return p?fail(&p->encoder.unit):-1;
+ struct a733_h264_encode_platform *p=v;if(!h264_authorized(p,t,d)||ordinal>=A733_H264_ENCODE_GOP_FRAMES||cursor>2097152)return p?fail(&p->encoder.unit):-1;
  int r=p->ops.prime(p->cookie,t,ordinal,cursor,d);
  if(!h264_authorized(p,t,d)||r<0||r>1)return fail(&p->encoder.unit);return r;
 }
@@ -242,7 +243,7 @@ static int h264_write(void *v,uint64_t t,uint32_t off,uint32_t x,uint64_t d)
 static int h264_copied(void *v,uint64_t t,unsigned ordinal,size_t first,size_t end,uint64_t d)
 {
  struct a733_h264_encode_platform *p=v;
- if(!h264_authorized(p,t,d)||ordinal>1||first>=end||end>4194304||end-first>1048576)return p?fail(&p->encoder.unit):-1;
+ if(!h264_authorized(p,t,d)||ordinal>=A733_H264_ENCODE_GOP_FRAMES||first>=end||end>4194304||end-first>1048576)return p?fail(&p->encoder.unit):-1;
  int r=p->ops.copied(p->cookie,t,ordinal,first,end,d);
  if(!h264_authorized(p,t,d)||r<0||r>1)return fail(&p->encoder.unit);return r;
 }
