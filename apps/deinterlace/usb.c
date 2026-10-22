@@ -96,7 +96,7 @@ static void exchange(void)
     if(result==1)memcpy(response+96,deinterlace.digest,32);
     const uint32_t geometry[]={deinterlace.session.width,deinterlace.session.height,
       deinterlace.session.y_stride,deinterlace.session.uv_stride,deinterlace.session.format,
-      deinterlace.session.mode,deinterlace.session.top_field_first,deinterlace.session.reserved};
+      deinterlace.session.mode,deinterlace.session.top_field_first,deinterlace.session.strength};
     for(unsigned i=0;i<8;++i)put32(response+128+4*i,geometry[i]);
     if(result){put32(response+160,deinterlace.complete);put32(response+164,deinterlace.status);
       put32(response+168,deinterlace.iommu.fault.scanned_masters);put32(response+172,deinterlace.guards_ok);}

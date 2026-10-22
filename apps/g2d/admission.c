@@ -27,7 +27,7 @@ int a733_g2d_session_valid(const struct a733_g2d_session *s)
         s->iommu_gates[0]==0x10007&&s->iommu_gates[1]==0x10007&&
         present(s->initial,32)&&present(s->memory,32)&&present(s->electrical,32)&&
         present(s->supervision,32)&&present(s->fixture,32)&&
-        !present(s->reference,32)&&a733_g2d_geometry_valid(s);
+        a733_g2d_geometry_valid(s);
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {

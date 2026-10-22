@@ -27,24 +27,40 @@ def session_check(raw):
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373347324131,1,904),'Invalid G2D session extension.')
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid G2D owner.')
-    require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)) and not any(raw[800:832]),'Missing G2D physical or fixture evidence.')
+    require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)),'Missing G2D physical or fixture evidence.')
     module,hz,g0,g1,uv,rail=struct.unpack_from('<6I',raw,832)
     require((module,hz)==(0x01000003,100000000) and
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited G2D clock/rail state.')
-    geometry_check(struct.unpack_from('<12I',raw,856))
+    geometry_check(*session_geometry(raw))
 
-def geometry_check(geometry):
-    require(len(geometry)==12 and all(type(value) is int and 0<=value<=0xffffffff for value in geometry),
-        'G2D geometry requires twelve unsigned32-bit words.')
+def session_geometry(raw):
+    """Return the twelve geometry words and the eight operation-extension words."""
+    return struct.unpack_from('<12I',raw,856),struct.unpack_from('<8I',raw,800)
+
+def geometry_check(geometry,extension=(0,)*8):
+    """Mirror a733_g2d_geometry_valid; extension is sw,sh,bx,by,alpha,output_format,reserved*2."""
+    require(len(geometry)==12 and len(extension)==8 and
+        all(type(value) is int and 0<=value<=0xffffffff for value in (*geometry,*extension)),
+        'G2D geometry requires twelve and eight unsigned32-bit words.')
     width,height,stride,format_,operation,dx,dy,w,h,sx,sy,color=geometry
+    sw,sh,bx,by,alpha,output_format,*reserved=extension
     require(0<width<=1280 and 0<height<=720 and width*4<=stride<=5120 and not stride%4 and
-        stride*height<=3686400 and format_==0 and w>0 and h>0 and
-        dx<width and dy<height and w<=width-dx and h<=height-dy,'Invalid G2D destination geometry.')
+        stride*height<=3686400 and format_<=7 and output_format<=7 and not any(reserved) and
+        w>0 and h>0 and dx<width and dy<height and w<=width-dx and h<=height-dy,
+        'Invalid G2D destination geometry.')
+    require((operation in (2,5) or format_==output_format==0) and
+        (operation==5 or sw==sh==0) and (operation==6 or bx==by==alpha==0),
+        'G2D operation uses an unsupported extension word or format conversion.')
+    source=(w,h)
+    if operation==4:source=(w//2,h//2)
+    if operation==5:source=(sw,sh)
     require((operation==1 and sx==sy==0) or
-        (operation in (2,3) and (color==0 if operation==2 else color>>24==255) and
-         sx<width and sy<height and w<=width-sx and h<=height-sy) or
-        (operation==4 and color==0 and not w%2 and not h%2 and
-         sx<width and sy<height and w//2<=width-sx and h//2<=height-sy),
+        (operation in (2,3,4,5,6) and
+         (color==0 if operation!=3 else color>>24==255) and
+         (operation!=4 or (not w%2 and not h%2)) and
+         (operation!=5 or (sw>0 and sh>0 and (sw,sh)!=(w,h))) and
+         (operation!=6 or (0<alpha<=255 and bx<width and by<height and w<=width-bx and h<=height-by)) and
+         sx<width and sy<height and source[0]<=width-sx and source[1]<=height-sy),
         'Invalid G2D source rectangle or operation.')
     return stride*height
 
@@ -56,7 +72,7 @@ def embedded_reference(image,session):
 
 def upload_bytes(pixels,session):
     session_check(session)
-    require(len(pixels)==geometry_check(struct.unpack_from('<12I',session,856)),
+    require(len(pixels)==geometry_check(*session_geometry(session)),
         'G2D source size must equal stride times height, including padding.')
     require(hashlib.sha256(pixels).digest()==session[768:800],'G2D source digest differs.')
     epoch,generation=struct.unpack_from('<2Q',session,24)
@@ -108,7 +124,7 @@ def physical_authority(record):
 
 def allocation_check(proof,raw,table):
     """Check actual provider rows and every IOMMU descriptor, including holes."""
-    rounded=(geometry_check(struct.unpack_from('<12I',raw,856))+4095)&~4095
+    rounded=(geometry_check(*session_geometry(raw))+4095)&~4095
     require(proof.get('rounded')==rounded and proof.get('table_bytes')==32768,
         'G2D allocation geometry differs.')
     groups=proof.get('allocations',{})
