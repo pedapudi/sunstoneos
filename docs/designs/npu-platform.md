@@ -1,7 +1,10 @@
 # Design: NPU cold boot, recovery and power management
 
-Status: **design**; no code has changed. Every item ends implemented and
-host-modeled, with physical behavior unqualified until the board evidence at
+Status: **partly implemented**. The controller passes, local stop,
+per-call startup progress, per-call ownership checks and single-copy
+admission are implemented and host-modeled; the
+[measurements](npu-platform-measurements.md) list the parts that remain and the
+owners they need. Physical behavior is unqualified until the board evidence at
 the end exists. Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 

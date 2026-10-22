@@ -10,6 +10,7 @@ static struct a733_npu_pll pll, copied_pll;
 static struct a733_npu_pll_config pll_authority;
 static unsigned handoff_mode,pll_reads,pll_writes,publication_count;
 static struct a733_clock_token previous;
+static unsigned cost_pll,cost_startup;static TickType_t cost_first;
 enum a733_clock_result __real_a733_clock_publish_stable(struct a733_clock_leases *,
     const struct a733_clock_token *,a733_clock_mask_t,uint64_t,struct a733_clock_token *);
 enum a733_clock_result __wrap_a733_clock_publish_stable(struct a733_clock_leases *r,
@@ -82,9 +83,13 @@ static void handoff_bootstrap(void *unused)
     configASSERT(a733_npu_startup_poll(&startup)==A733_NPU_PLATFORM_PENDING);
     configASSERT(!startup.clock_token.id && !atomic_load(&platform_reads) && !rail_reads);
     configASSERT(npu_service_activate(&service)==NPU_SERVICE_BUSY);
+    /* No PMIC owner contends here; the first adopted startup call reaches the
+     * first DCDC2 snapshot. */
+    atomic_store(&holder_done,1);
     enum a733_npu_pll_result pr=A733_NPU_PLL_PENDING;
+    cost_first=xTaskGetTickCount();
     for(unsigned i=0;i<50 && pr!=A733_NPU_PLL_READY;++i) {
-        pr=a733_npu_pll_poll(&pll);configASSERT(pr!=A733_NPU_PLL_RETAINED);
+        ++cost_pll;pr=a733_npu_pll_poll(&pll);configASSERT(pr!=A733_NPU_PLL_RETAINED);
         if(pr!=A733_NPU_PLL_READY)vTaskDelay(1);
     }
     configASSERT(pr==A733_NPU_PLL_READY && pll_reads && pll_writes);previous=pll.resources.clock;
@@ -95,7 +100,7 @@ static void handoff_bootstrap(void *unused)
         atomic_store(&registry.busy,0);
         configASSERT(!publication_count && !startup.clock_token.id && !pll.transferred);
     }
-    enum a733_npu_platform_result r=a733_npu_startup_poll(&startup);
+    ++cost_startup;enum a733_npu_platform_result r=a733_npu_startup_poll(&startup);
     if(handoff_mode==1 || handoff_mode==2) {
         configASSERT(r==A733_NPU_PLATFORM_RETAINED && startup.failed && !rail_reads);
         if(handoff_mode==1)configASSERT(!publication_count && !startup.clock_token.id &&
@@ -111,18 +116,20 @@ static void handoff_bootstrap(void *unused)
         struct a733_clock_token denied;
         configASSERT(a733_clock_acquire(&registry,44,0,A733_CLOCK_PLL_NPU,deadline(),&denied)==A733_CLOCK_BUSY);
         configASSERT(a733_clock_acquire(&registry,44,0,A733_CLOCK_NPU,deadline(),&denied)==A733_CLOCK_BUSY);
-        configASSERT(!rail_reads && !atomic_load(&platform_reads));
+        configASSERT(rail_reads==6 && startup.settle_until && !atomic_load(&platform_reads));
         if(handoff_mode==3) {
             pll.cookie=0; /* Bound provider identity must remain immutable. */
             configASSERT(a733_npu_startup_poll(&startup)==A733_NPU_PLATFORM_RETAINED && startup.failed);
         } else {
-            atomic_store(&holder_done,1);
             for(unsigned i=0;i<80 && r!=A733_NPU_PLATFORM_READY;++i) {
-                r=a733_npu_startup_poll(&startup);configASSERT(r!=A733_NPU_PLATFORM_RETAINED);
+                ++cost_startup;r=a733_npu_startup_poll(&startup);configASSERT(r!=A733_NPU_PLATFORM_RETAINED);
                 if(r!=A733_NPU_PLATFORM_READY)vTaskDelay(1);
             }
             configASSERT(r==A733_NPU_PLATFORM_READY && rail_reads==12 && closes==2);
             configASSERT(npu_service_activate(&service)==NPU_SERVICE_OK);
+            /* One PLL or startup call per tick from PLL acquisition to READY. */
+            platform_puts("COST pll_polls=");platform_hex(cost_pll);platform_puts(" startup_polls=");platform_hex(cost_startup);
+            platform_puts(" ticks=");platform_hex(xTaskGetTickCount()-cost_first);platform_puts("\n");
         }
     }
     if(handoff_mode) {

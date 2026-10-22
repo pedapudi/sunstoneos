@@ -10,9 +10,10 @@
 #else
 #define RETAINED
 #endif
+/* The page is copied into private memory once, at EL3, and only the copy is
+ * hashed and validated; a later write to the uploaded page cannot reach startup. */
 static struct npu_session session RETAINED;
-static unsigned copied RETAINED,authenticated RETAINED;
-static uint8_t authenticated_digest[32] RETAINED;
+static unsigned copied RETAINED,admitted RETAINED;
 const uint64_t a733_npu_session_layout[8]={sizeof(struct npu_session),
     offsetof(struct npu_session,boot),sizeof(struct a733_npu_application_boot),
     offsetof(struct npu_session,pll),sizeof(struct a733_npu_pll_config),
@@ -20,36 +21,34 @@ const uint64_t a733_npu_session_layout[8]={sizeof(struct npu_session),
     offsetof(struct a733_npu_application_boot,pins)};
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {
-    const struct npu_session *s=(const void *)NPU_SESSION_ADDRESS;
     uint64_t el;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
-    if(el!=12)return 0;
+    if(el!=12 || copied)return 0;
     uint8_t digest[32];uint64_t window;
     if(!c || c->magic!=NPU_CONTRACT_MAGIC || c->version!=3 || c->bytes!=sizeof(*c) ||
        !c->epoch || !c->generation || c->inverse_generation!=~c->generation || !c->lease ||
-       memcmp(c->build_id,a733_smp_build_id,32) || !c->reserved[0] || c->reserved[1])return 0;
-    storage_digest_bytes(s,sizeof(*s),digest);
-    if(memcmp(digest,&c->reserved[2],32) || !npu_session_valid(s) ||
-       memcmp(s->image,a733_smp_build_id,32) || c->epoch!=s->epoch || c->generation!=s->generation ||
-       c->lease!=s->lease || c->reserved[0]!=s->supervisor || c->armed_at>now ||
-       !a733_deadline_after(c->armed_at,NPU_WINDOW_TICKS,&window) ||
+       memcmp(c->build_id,a733_smp_build_id,32) || !c->reserved[0] || c->reserved[1] ||
+       c->armed_at>now || !a733_deadline_after(c->armed_at,NPU_WINDOW_TICKS,&window) ||
        c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ || now>=c->startup_deadline ||
        c->diagnostic_deadline!=window || c->expires_at!=c->diagnostic_deadline)return 0;
     if(c->watchdog_mode || c->watchdog_configuration || c->watchdog_output ||
        c->fel_flag || c->redirect_flag || c->redirect_entry || c->alternate_flag)return 0;
-    /* EL3 boot publishes this receipt before the existing cache-adoption and
+    admitted=0;
+    memcpy(&session,(const void *)NPU_SESSION_ADDRESS,sizeof(session));
+    storage_digest_bytes(&session,sizeof(session),digest);
+    if(memcmp(digest,&c->reserved[2],32) || !npu_session_valid(&session) ||
+       memcmp(session.image,a733_smp_build_id,32) || c->epoch!=session.epoch ||
+       c->generation!=session.generation || c->lease!=session.lease ||
+       c->reserved[0]!=session.supervisor)return 0;
+    /* EL3 boot publishes the copy before the existing cache-adoption and
      * eight-core barriers. EL1 never reads the protected monitor contract. */
-    memcpy(authenticated_digest,digest,32);authenticated=1;return 1;
+    admitted=1;__asm__ volatile("dsb sy":::"memory");return 1;
 }
 #ifdef SUNSTONE_NPU_SINGLE_CORE
 int npu_single_core_seal(const struct a733_smp_contract *c)
 {
     uint64_t el;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
-    if(el!=12||copied||!authenticated)return 0;
-    memcpy(&session,(const void *)NPU_SESSION_ADDRESS,sizeof(session));
-    uint8_t digest[32];storage_digest_bytes(&session,sizeof(session),digest);
-    if(memcmp(digest,authenticated_digest,32)||!npu_session_valid(&session)||
-       memcmp(session.image,a733_smp_build_id,32)||session.epoch!=c->epoch||
-       session.generation!=c->generation||session.lease!=c->lease)return 0;
+    if(el!=12 || copied || !admitted || !c || session.epoch!=c->epoch ||
+       session.generation!=c->generation || session.lease!=c->lease)return 0;
     copied=1;
     /* EL3 is cache disabled; DSB publishes the retained bytes before EL1 adopts WB. */
     __asm__ volatile("dsb sy":::"memory");return 1;
@@ -60,11 +59,7 @@ int npu_session_copy(void)
 #ifdef SUNSTONE_NPU_SINGLE_CORE
     return copied&&a733_smp_device_preparation_admitted();
 #endif
-    if(copied || !authenticated || !a733_smp_device_preparation_admitted())return 0;
-    memcpy(&session,(const void *)NPU_SESSION_ADDRESS,sizeof(session));
-    uint8_t digest[32];storage_digest_bytes(&session,sizeof(session),digest);
-    if(memcmp(digest,authenticated_digest,32) || !npu_session_valid(&session) ||
-       memcmp(session.image,a733_smp_build_id,32) ||
+    if(copied || !admitted || !a733_smp_device_preparation_admitted() ||
        session.epoch!=a733_observe_identity.epoch || session.generation!=a733_observe_identity.generation ||
        session.lease!=a733_observe_identity.lease)return 0;
     copied=1;return 1;

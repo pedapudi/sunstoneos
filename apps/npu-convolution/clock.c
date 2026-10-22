@@ -9,10 +9,12 @@ static int context(struct npu_application_clock *p)
     return p && p->initialized && el==4 && a733_npu_application_health() &&
         xTaskGetSchedulerState()==taskSCHEDULER_RUNNING && xTaskGetCurrentTaskHandle()==p->task;
 }
+/* Ownership is checked once per locked pass, by acquire, enter and leave.
+ * Clock samples and register accesses need only the lock that enter took. */
 static int now(void *cookie,uint64_t *out)
 {
     struct npu_application_clock *p=cookie;
-    return context(p) && a733_counter_clock_now(p->counter,out);
+    return a733_counter_clock_now(p->counter,out);
 }
 static int enter(void *cookie,uint64_t deadline)
 {
@@ -41,15 +43,15 @@ static void retain(void *cookie,const struct a733_npu_pll_resources *a,
 static int read_reg(void *cookie,uintptr_t address,uint32_t *out)
 {
     struct npu_application_clock *p=cookie;
-    return context(p) && p->held && a733_npu_pll_native_read(NULL,address,out);
+    return p->held && a733_npu_pll_native_read(NULL,address,out);
 }
 static int write_reg(void *cookie,uintptr_t address,uint32_t value)
 {
     struct npu_application_clock *p=cookie;
-    return context(p) && p->held && a733_npu_pll_native_write(NULL,address,value);
+    return p->held && a733_npu_pll_native_write(NULL,address,value);
 }
 static int parent_read(struct npu_application_clock *p,unsigned off,uint32_t *out)
-{return context(p) && p->held && a733_npu_platform_native_read(NULL,CCU+off,out);}
+{return p->held && a733_npu_platform_native_read(NULL,CCU+off,out);}
 static int parents(struct npu_application_clock *p,a733_clock_mask_t shared)
 {
     uint32_t osc,ref,pll,a,b,automatic,status;

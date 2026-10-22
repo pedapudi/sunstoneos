@@ -240,18 +240,21 @@ static int leave(void *v)
     }
     a733_platform_lock_leave(b->shared->locks,A733_PLATFORM_REGISTER_LOCK);b->register_held=0;return 1;
 }
+/* The platform calls these only from a startup or stop step, which checks the
+ * owner task first; register access additionally needs the lock that enter()
+ * took after its own owner check. */
 static int now(void *v,uint64_t *out)
-{struct a733_npu_startup *b=v;return task_owner(b) && resource_now(b->shared,out);}
+{struct a733_npu_startup *b=v;return resource_now(b->shared,out);}
 static int read_reg(void *v,uintptr_t address,uint32_t *out)
 {
     struct a733_npu_startup *b=v;
-    if(!task_owner(b) || !b->register_held)return 0;
+    if(!b->register_held)return 0;
     int ok=a733_npu_platform_native_read(0,address,out);if(!ok)(void)fault(b);return ok;
 }
 static int write_reg(void *v,uintptr_t address,uint32_t value)
 {
     struct a733_npu_startup *b=v;
-    if(!task_owner(b) || !b->register_held)return 0;
+    if(!b->register_held)return 0;
     int ok=a733_npu_platform_native_write(0,address,value);if(!ok)(void)fault(b);return ok;
 }
 static int valid_backend(const struct a733_npu_handoff *h)
@@ -353,7 +356,7 @@ int a733_npu_startup_supply_sample(struct a733_npu_startup *b)
     if(r<0 || !timely(b,0)){fault(b);return -1;}
     return r;
 }
-static enum a733_npu_platform_result platform_poll(struct a733_npu_startup *b,int stop)
+static enum a733_npu_platform_result platform_step(struct a733_npu_startup *b,int stop)
 {
     if(!task_owner(b))return RETAINED;
     if((stop || !a733_npu_platform_ready(&b->platform)) && !timely(b,0))return fault(b);
@@ -382,10 +385,21 @@ static enum a733_npu_platform_result platform_poll(struct a733_npu_startup *b,in
     }
     return r;
 }
+/* One call runs acquisition steps until one waits: on the PLL, the PMIC
+ * provider, the settle time, a busy owner or the platform's own time or power
+ * waits. Once acquisition completes, the platform runs its register pass in
+ * the same call. Each step repeats every entry check of platform_step. */
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
-{return platform_poll(b,0);}
+{
+    unsigned stage=b ? b->stage : 0;
+    enum a733_npu_platform_result r=platform_step(b,0);
+    for(unsigned i=0;i<RESOURCES_READY && r==PENDING && !b->platform.stage && b->stage!=stage;++i) {
+        stage=b->stage;r=platform_step(b,0);
+    }
+    return r;
+}
 enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *b)
-{return platform_poll(b,1);}
+{return platform_step(b,1);}
 int a733_npu_startup_ready(const struct a733_npu_startup *b)
 {return b && b->initialized && !b->failed && pll_integrity(b) && a733_npu_platform_ready(&b->platform);}
 static int backend_equal(const struct a733_npu_ops *a,const struct a733_npu_ops *b)

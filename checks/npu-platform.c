@@ -186,13 +186,16 @@ static void ownership_and_time(void)
     setup(&m,2);m.partial=2;assert(run(&m)==RETAINED && m.p.resources.clock.id && m.p.resources.pck && !m.p.resources.rail && !m.reads);retained(&m);
     setup(&m,2);m.partial=1;assert(a733_npu_platform_poll(&m.p)==PENDING);m.corrupt=1;
     assert(run(&m)==RETAINED && m.p.resources.clock.id+1==m.p.observed.clock.id && !m.reads);retained(&m);
-    setup(&m,2);m.lock_busy=1;assert(a733_npu_platform_poll(&m.p)==PENDING);
+    /* Acquisition and the register pass share one call; a busy lock ends it
+     * after acquisition with no register access. */
+    setup(&m,2);m.lock_busy=1;assert(a733_npu_platform_poll(&m.p)==BUSY && m.p.resources.clock.id && !m.reads);
     assert(a733_npu_platform_poll(&m.p)==BUSY && !m.reads);m.lock_busy=0;assert(run(&m)==READY);
     setup(&m,2);m.fail_write=4;assert(run(&m)==RETAINED && m.nwrite==4 && m.p.wrote);retained(&m);
     setup(&m,2);m.no_ack=1;assert(run(&m)==RETAINED && m.nwrite==12);retained(&m);
     setup(&m,2);m.late_final=1;assert(run(&m)==RETAINED && m.nwrite==12);retained(&m);
     setup(&m,2);m.late_unlock=1;assert(run(&m)==RETAINED && m.nwrite==12);retained(&m);
-    setup(&m,2);m.fail_unlock=1;assert(run(&m)==RETAINED && !m.nwrite);retained(&m);
+    /* The first unlock follows the whole register pass, including its writes. */
+    setup(&m,2);m.fail_unlock=1;assert(run(&m)==RETAINED && m.nwrite==12);retained(&m);
     setup(&m,2);m.regress=1;assert(run(&m)==RETAINED && !m.reads);retained(&m);
 }
 static void gate_profile(struct model *m,unsigned route)
@@ -218,13 +221,11 @@ static void gate_admission(void)
     unsigned refusals=0;
     for(unsigned route=0;route<4;++route) {
         struct model m;gate_profile(&m,route);
-        assert(a733_npu_platform_poll(&m.p)==PENDING);
-        assert(a733_npu_platform_poll(&m.p)==PENDING && !m.nwrite && m.p.parent_hz==492000000);
+        assert(a733_npu_platform_poll(&m.p)==PENDING && m.nwrite==12 && m.p.parent_hz==492000000);
         for(unsigned bit=0;bit<12;++bit)if(masks[route]&(1u<<bit)) {
             for(unsigned kind=0;kind<3;++kind) {
                 gate_profile(&m,route);
                 *reg(&m,CCU+(kind==2 ? 0x1988 : 0x1908))&=~(1u<<(bit+(kind ? 16 : 0)));
-                assert(a733_npu_platform_poll(&m.p)==PENDING);
                 assert(a733_npu_platform_poll(&m.p)==RETAINED && !m.nwrite);retained(&m);++refusals;
             }
         }
@@ -232,7 +233,6 @@ static void gate_admission(void)
     for(unsigned kind=0;kind<3;++kind) {
         struct model m;gate_profile(&m,0);
         *reg(&m,CCU+(kind==2 ? 0x19a0 : 0x1920))&=~(1u<<(kind ? 16 : 0));
-        assert(a733_npu_platform_poll(&m.p)==PENDING);
         assert(a733_npu_platform_poll(&m.p)==RETAINED && !m.nwrite);retained(&m);++refusals;
     }
     assert(refusals==27);
