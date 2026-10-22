@@ -200,12 +200,12 @@ int main(int argc, char **argv)
     prepare(&s,&m,image); m.auto_ready=0;
     assert(pvr_gpu_start_begin(&s,300)==PVR_GPU_START_AGAIN && run(&s,&m)==PVR_GPU_START_FAULT);
     assert(m.released && m.reads_started>2); retained(&s,&m,PVR_GPU_START_TIMEOUT);
-    /* A readiness wait re-reads for at most PVR_GPU_SPIN_US per poll. */
+    /* A readiness wait re-reads for at most A733_GPU_SPIN_US per poll. */
     prepare(&s,&m,image); m.auto_ready=0; assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);
     while(s.index+1<s.count) assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN);
     unsigned reads=m.reads_started; uint64_t waited=m.now;
     assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_AGAIN && s.phase==PVR_GPU_START_RUNNING);
-    assert(m.reads_started-reads>1 && m.now-waited>=PVR_GPU_SPIN_US && m.now-waited<=2*PVR_GPU_SPIN_US+4);
+    assert(m.reads_started-reads>1 && m.now-waited>=A733_GPU_SPIN_US && m.now-waited<=2*A733_GPU_SPIN_US+4);
     m.flag=1; assert(pvr_gpu_start_poll(&s)==PVR_GPU_START_OK);
     /* A delay waits inside its step and ends at the deadline. */
     prepare(&s,&m,image); assert(pvr_gpu_start_begin(&s,10000)==PVR_GPU_START_AGAIN);

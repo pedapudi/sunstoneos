@@ -1,17 +1,10 @@
 #ifndef SUNSTONE_A733_GPU_POWER_H
 #define SUNSTONE_A733_GPU_POWER_H
 #include <stdint.h>
+#include "a733_gpu_spin.h"
 
 #define A733_GPU_INITIAL_HZ 400000000u
 #define A733_GPU_INITIAL_UV 800000u
-/* Longest time one poll re-reads an unsatisfied power-domain acknowledgement,
- * in microseconds from the first read. This is the same design bound as
- * PVR_GPU_SPIN_US; the power controller keeps its own copy so it does not
- * depend on the PowerVR headers. */
-#define A733_GPU_POWER_SPIN_US 50u
-/* Most consecutive clock samples without an advance inside one wait, as
- * PVR_GPU_SPIN_STALLED_READS. A stopped clock then returns AGAIN. */
-#define A733_GPU_POWER_STALLED_READS 1024u
 
 enum a733_gpu_power_bank { A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_PCK };
 enum a733_gpu_power_phase { A733_GPU_POWER_NEW, A733_GPU_POWER_STARTING,
@@ -79,8 +72,8 @@ enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t 
  * clock-settling delay waits on the clock inside the poll until the clock
  * passes the sample after the clock-gate write by more than one microsecond.
  * An unsatisfied PCK acknowledgement is re-read for at most
- * A733_GPU_POWER_SPIN_US from its first read and then returns AGAIN. A wait
- * whose clock stops advancing for A733_GPU_POWER_STALLED_READS samples returns
+ * A733_GPU_SPIN_US from its first read and then returns AGAIN. A wait
+ * whose clock stops advancing for A733_GPU_SPIN_STALLED_READS samples returns
  * AGAIN without advancing the step. Every wait ends at the absolute deadline.
  * Failure retains diagnostics and disables further I/O; no automatic rollback.
  * lease_held records completed acquire/release callbacks. Failed callbacks can

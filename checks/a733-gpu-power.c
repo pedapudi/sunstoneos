@@ -225,7 +225,7 @@ int main(int argc, char **argv)
     fresh(); m.stalled = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     uint64_t entered = m.now;
     assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_AGAIN && s.index == 17);
-    assert(m.now - entered >= A733_GPU_POWER_SPIN_US && m.now - entered <= 3 * A733_GPU_POWER_SPIN_US);
+    assert(m.now - entered >= A733_GPU_SPIN_US && m.now - entered <= 3 * A733_GPU_SPIN_US);
     m.stalled = 0; m.status_reads = 0; assert(drain() == A733_GPU_POWER_OK); off();
     /* Earlier steps in a poll do not consume the acknowledgement's re-read
      * budget: with 10 us register writes, one poll still completes startup. */

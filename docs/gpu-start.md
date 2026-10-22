@@ -71,9 +71,9 @@ step starts after the preceding callback has finished and waits on the clock
 inside the step for its 3 µs. The clock may report whole microseconds rounded
 down, so the step waits until the clock passes its first sample by more than
 3 µs. The readiness check re-reads the shared byte for up to 50 µs
-(`PVR_GPU_SPIN_US`) and then returns to the caller, which polls again on its
+(`A733_GPU_SPIN_US`) and then returns to the caller, which polls again on its
 next wake. A wait whose clock shows no advance for 1,024 consecutive samples
-(`PVR_GPU_SPIN_STALLED_READS`) also returns to the caller without advancing the
+(`A733_GPU_SPIN_STALLED_READS`) also returns to the caller without advancing the
 step; the next poll restarts the delay, so a stopped clock cannot shorten it.
 Every wait ends at the startup deadline. The service
 must continue polling and keep its independent watchdog protection active.

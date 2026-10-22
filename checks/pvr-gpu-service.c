@@ -56,17 +56,12 @@ static void callback(void *ctx)
 }
 static void metric(const char *name, uint64_t value)
 { platform_puts("metric "); platform_puts(name); platform_puts(" "); platform_hex(value); platform_puts("\n"); }
-/* Timed waits the worker began outside READY, or expiries in one phase. The
- * owner reads them after a reply or while the worker blocks. */
+/* Timed waits the worker began outside READY, and READY waits that expired.
+ * The owner reads them after a reply or while the worker blocks. */
 static uint32_t lifecycle_timed_waits(void)
-{
-    uint32_t sum = 0;
-    for (unsigned i = 0; i < PVR_GPU_SERVICE_PHASES; ++i)
-        if (i != PVR_GPU_SERVICE_READY) sum += __atomic_load_n(&service.timed_waits[i], __ATOMIC_ACQUIRE);
-    return sum;
-}
-static uint32_t expiries(enum pvr_gpu_service_phase phase)
-{ return __atomic_load_n(&service.wait_expiries[phase], __ATOMIC_ACQUIRE); }
+{ return __atomic_load_n(&service.lifecycle_timed_waits, __ATOMIC_ACQUIRE); }
+static uint32_t ready_expiries(void)
+{ return __atomic_load_n(&service.ready_wait_expiries, __ATOMIC_ACQUIRE); }
 /* Wait for a worker phase without sending requests, which would wake it. */
 static TickType_t observe_phase(enum pvr_gpu_service_phase phase)
 {
@@ -453,13 +448,13 @@ static void owner(void *arg)
         metric("open-active-ticks", measured);
         measured = lifecycle_timed_waits() - waits;
         metric("open-timed-waits", measured); configASSERT(measured == 0);
-        vTaskDelay(2); active = get(&active_ticks); uint32_t expired = expiries(PVR_GPU_SERVICE_READY);
+        vTaskDelay(2); active = get(&active_ticks); uint32_t expired = ready_expiries();
         vTaskDelay(200);
         measured = get(&active_ticks) - active;
         metric("idle-active-ticks-per-200", measured);
         /* Without interrupt callbacks the idle session wakes every
          * IDLE_POLL_US; the window can split one period. */
-        measured = expiries(PVR_GPU_SERVICE_READY) - expired;
+        measured = ready_expiries() - expired;
         metric("idle-expired-waits-per-200", measured);
         configASSERT(measured + 1 >= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US &&
                      measured <= 200000 / PVR_GPU_SERVICE_IDLE_POLL_US + 1);
@@ -470,7 +465,6 @@ static void owner(void *arg)
         metric("close-active-ticks", measured);
         measured = lifecycle_timed_waits() - waits;
         metric("close-timed-waits", measured); configASSERT(measured == 0);
-        metric("longest-yield-bursts", __atomic_load_n(&service.longest_yield_run, __ATOMIC_ACQUIRE));
         metric("longest-yield-us", __atomic_load_n(&service.longest_yield_us, __ATOMIC_ACQUIRE));
         metric("yield-blocks", __atomic_load_n(&service.yield_blocks, __ATOMIC_ACQUIRE));
         configASSERT(get(&isolated) == 3 && get(&published) == 3);

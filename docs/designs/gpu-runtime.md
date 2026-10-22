@@ -93,14 +93,28 @@ Start, stop and job preparation are paced by the hardware:
   re-reads the PCK acknowledgement for up to 50 µs from its first read. The
   platform binding in `a733_gpu_platform.c` still runs the PMIC health check
   before each power poll and before it reports the GPU on.
-- Every wait inside a step returns AGAIN when the clock shows no advance for
-  1,024 consecutive samples, so a stopped clock degrades to tick pacing.
+- The three controllers share one in-step wait (`include/a733_gpu_spin.h`):
+  the 50 µs re-read bound and a stall rule. A wait whose clock shows no advance
+  for 1,024 consecutive samples returns AGAIN without advancing its step,
+  instead of holding the worker inside it. The FreeRTOS tick comes from the
+  same counter as this clock, so a stopped counter also stops the tick.
 - The worker repeats progressing steps for up to 200 µs per burst (the USB0
   bound) in place of 16 steps. A step of the compatibility and health check
-  counts as progress. With CPU work left, it checks the request queue without
-  waiting and calls `taskYIELD()`. After 1 ms of such bursts it blocks for one
-  tick, so tasks below its priority on core 0 (the GPU, NPU, PMIC and USB
-  clients at priority 2) still run during long preparation or disposal.
+  counts as progress, and so does each command header or payload chunk written
+  to a client ring. With CPU work left, it checks the request queue without
+  waiting and calls `taskYIELD()`. Outside a compute job or render, after 1 ms
+  of such bursts it blocks for one tick, so tasks below its priority on core 0
+  (the GPU, NPU, PMIC and USB clients at priority 2) still run during long
+  preparation or disposal; core 0 is idle for that tick when none is ready.
+- A compute job from admission to completion and a render from geometry
+  formatting to its output check are exempt from the 1 ms bound, so no tick
+  wait lies between a request and its kick. The fixed submission bounds that
+  CPU work: at most 4,096 input bytes and 368 bytes of ring commands per
+  compute job; 200 bytes of geometry and 616 bytes of fragment commands per
+  render. The tasks below the worker's priority on core 0 wait for it. A
+  shorter wait for them, without a tick wait on the submit path, would lower
+  the worker to priority 2 around its yield; that needs `vTaskPrioritySet`,
+  which the shared FreeRTOS configuration does not enable.
 
 ## Memory placement and cache policy
 
@@ -317,6 +331,9 @@ interrupt callbacks.
   job completes with RESET and then succeeds on resubmission.
 - The readiness byte set after each warm boot, and unpark time and fallback
   ticks over 100 park-unpark cycles.
+- The CPU time from the admission of a COMPUTE, COMPUTE_INPUT or RENDER
+  request to its kick, and the longest CPU run outside a job or render. Either
+  above 1 ms delays the PMIC and USB tasks of the render image by that long.
 - An injected hang followed by an acknowledged stop, restart and correct job;
   a denied handshake ending in FAILED with no further I/O.
 - Card-loaded firmware matching the pinned hash on a cold boot.

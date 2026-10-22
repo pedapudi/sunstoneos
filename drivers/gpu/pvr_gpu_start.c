@@ -143,14 +143,14 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
     case PUBLISH: ok = s->ops.publish(s->context); break;
     case CHECK_CLEAR:
     case WAIT_BOOT: {
-        /* Re-read the readiness byte for at most PVR_GPU_SPIN_US before
+        /* Re-read the readiness byte for at most A733_GPU_SPIN_US before
          * leaving the wait to the caller's next poll. */
-        struct pvr_gpu_spin wait = {0};
+        struct a733_gpu_spin wait = {0};
         for (;;) {
             ok = s->ops.started(s->context, &started);
             if (!ok || started || op->kind == CHECK_CLEAR) break;
             if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
-            if (!pvr_gpu_spin_again(&wait, now)) return PVR_GPU_START_AGAIN;
+            if (!a733_gpu_spin_again(&wait, now)) return PVR_GPU_START_AGAIN;
         }
         if (!ok) break;
         if (started > 1) return fail(s, PVR_GPU_START_BAD_FLAG);
@@ -177,11 +177,11 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
          * delay. The deadline check in clock_now bounds the wait; a clock that
          * stops advancing returns AGAIN and repeats the delay on a later poll. */
         uint64_t until;
-        struct pvr_gpu_spin wait = {0};
+        struct a733_gpu_spin wait = {0};
         if (!a733_deadline_after(now, op->value + 1, &until)) return fail(s, PVR_GPU_START_TIMEOUT);
         while (now < until) {
             if (!clock_now(s, &now)) return PVR_GPU_START_FAULT;
-            if (!pvr_gpu_spin_advancing(&wait, now)) return PVR_GPU_START_AGAIN;
+            if (!a733_gpu_spin_advancing(&wait, now)) return PVR_GPU_START_AGAIN;
         }
         ok = 1; break;
     }

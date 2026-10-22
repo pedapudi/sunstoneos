@@ -355,6 +355,13 @@ static int render_polled(const struct pvr_gpu_service *s)
     return r && r->phase >= PVR_RENDER_SERVICE_FORMAT_GEOMETRY &&
         (r->phase < PVR_RENDER_SERVICE_COMPLETE || r->phase == PVR_RENDER_SERVICE_TEXTURE_PREPARE);
 }
+/* A compute job or render between its admission and its completion. */
+static int in_flight(const struct pvr_gpu_service *s)
+{
+    const struct pvr_compute_service *c = s->config.compute;
+    return (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
+        render_polled(s);
+}
 static void advance(struct pvr_gpu_service *s)
 {
     if (s->phase == PVR_GPU_SERVICE_FAILED) return;
@@ -717,10 +724,10 @@ static uint64_t progress(const struct pvr_gpu_service *s)
         s->free_lists.stage, s->free_lists.list, s->free_lists.cursor, s->free_lists.request_count,
         s->graphics_cleanup_index,
         c ? c->phase : 0, c ? c->job.phase : 0, c ? c->client.phase : 0, c ? c->client.index : 0,
-        c ? c->client.writing_payload : 0,
+        c ? c->client.cursor : 0,
         r ? r->phase : 0, r ? r->checked : 0, r ? r->texture_cursor : 0, r ? r->pair.phase : 0,
-        r ? r->geometry.phase : 0, r ? r->geometry.index : 0, r ? r->geometry.writing_payload : 0,
-        r ? r->fragment.phase : 0, r ? r->fragment.index : 0, r ? r->fragment.writing_payload : 0};
+        r ? r->geometry.phase : 0, r ? r->geometry.index : 0, r ? r->geometry.cursor : 0,
+        r ? r->fragment.phase : 0, r ? r->fragment.index : 0, r ? r->fragment.cursor : 0};
     uint64_t hash = UINT64_C(0xcbf29ce484222325);
     for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i)
         hash = (hash ^ values[i]) * UINT64_C(0x100000001b3);
@@ -745,7 +752,7 @@ static TickType_t ticks(uint64_t us)
     return n ? (TickType_t)n : 1;
 }
 /* The worker's one wait when no step is ready to run. A lifecycle phase waits
- * one tick: its hardware waits shorter than PVR_GPU_SPIN_US end inside the
+ * one tick: its hardware waits shorter than A733_GPU_SPIN_US end inside the
  * step. A ready session waits one tick while a masked event batch remains.
  * While a job, render or free-list operation is in flight it waits until the
  * earliest deadline of that work or PVR_GPU_SERVICE_JOB_POLL_US, whichever is
@@ -760,14 +767,17 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     default: return 1;
     }
     if (s->config.irq.mask && s->irq_masked) return 1;
-    /* s->deadline belongs to the latest client request; it bounds the wait
-     * only while that request's job or render is in flight. A free-list
-     * operation carries its own deadline. */
+    /* The job and the render keep their own deadlines. s->deadline belongs
+     * to the latest client request, which the worker may have refused while
+     * the job runs. A free-list operation carries its own deadline. */
     const struct pvr_compute_service *c = s->config.compute;
+    const struct pvr_render_service *r = s->config.render;
     uint64_t earliest = UINT64_MAX;
     int busy = 0;
-    if ((c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) ||
-        render_polled(s)) { busy = 1; earliest = s->deadline; }
+    if (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT || c->phase == PVR_COMPUTE_SERVICE_RUNNING)) {
+        busy = 1; earliest = c->deadline;
+    }
+    if (render_polled(s)) { busy = 1; if (r->deadline < earliest) earliest = r->deadline; }
     if (s->config.free_lists.count &&
         (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count)) {
         uint64_t operation = free_list_deadline(s);
@@ -810,24 +820,32 @@ static void worker(void *argument)
         uint64_t started;
         if (burst(s, &started)) {
             /* Bursts that end with CPU work left keep tasks below the worker's
-             * priority off its core. Once such a run reaches CPU_RUN_US the
-             * worker blocks for one tick, so those tasks run for the rest of
-             * the tick; otherwise it yields only to tasks of its priority. */
-            if (!s->yield_run++) s->yield_start = started;
-            if (s->yield_run > s->longest_yield_run) s->longest_yield_run = s->yield_run;
-            uint64_t run = s->last_now - s->yield_start;
-            if (run > s->longest_yield_us) s->longest_yield_us = run;
-            if (run >= PVR_GPU_SERVICE_CPU_RUN_US) {
-                s->yield_run = 0; ++s->yield_blocks;
-                if (xQueueReceive(s->requests, &message, 1) != pdTRUE) continue;
-            } else if (xQueueReceive(s->requests, &message, 0) != pdTRUE) { taskYIELD(); continue; }
+             * priority off its core. Outside a job or render, once such a run
+             * reaches CPU_RUN_US the worker blocks for one tick, so those tasks
+             * run for the rest of the tick; otherwise it yields only to tasks
+             * of its priority. A job or render is exempt, so no tick wait lies
+             * between a request and its kick; the fixed job and render sizes
+             * bound its CPU work. */
+            TickType_t block = 0;
+            if (in_flight(s)) s->yield_running = 0;
+            else {
+                if (!s->yield_running) { s->yield_running = 1; s->yield_start = started; }
+                uint64_t run = s->last_now - s->yield_start;
+                if (run > s->longest_yield_us) s->longest_yield_us = run;
+                if (run >= PVR_GPU_SERVICE_CPU_RUN_US) { s->yield_running = 0; ++s->yield_blocks; block = 1; }
+            }
+            if (xQueueReceive(s->requests, &message, block) != pdTRUE) {
+                if (!block) taskYIELD();
+                continue;
+            }
         } else {
-            s->yield_run = 0;
-            enum pvr_gpu_service_phase phase = s->phase;
+            s->yield_running = 0;
+            int ready = s->phase == PVR_GPU_SERVICE_READY;
             TickType_t wait = wait_ticks(s);
-            if (wait != portMAX_DELAY) ++s->timed_waits[phase];
+            if (wait != portMAX_DELAY) ++*(ready ? &s->ready_timed_waits : &s->lifecycle_timed_waits);
             if (xQueueReceive(s->requests, &message, wait) != pdTRUE) {
-                if (wait != portMAX_DELAY) ++s->wait_expiries[phase];
+                if (wait != portMAX_DELAY)
+                    ++*(ready ? &s->ready_wait_expiries : &s->lifecycle_wait_expiries);
                 continue;
             }
         }

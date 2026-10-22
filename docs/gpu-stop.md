@@ -43,7 +43,7 @@ reported as successful merely because shutdown completed.
 One absolute deadline covers both handshakes, hardware polls, reset, and isolation.
 During a firmware wait, one poll services at most four events and one
 command-return scan, then re-reads power-sync for up to 50 µs
-(`PVR_GPU_SPIN_US`), counted from the first read, before returning. A full
+(`A733_GPU_SPIN_US`), counted from the first read, before returning. A full
 command queue also receives bounded service before another submission attempt.
 The owner must continue collecting unrelated command results so their slots can
 be reused during shutdown.
@@ -60,7 +60,7 @@ the added reset readback.
 Each hardware-stage poll performs one register step. An idle check re-reads its
 register for up to 50 µs; a value that stays mismatched leaves the controller at
 that step for the next poll, until the deadline. A re-read whose clock shows no
-advance for 1,024 consecutive samples (`PVR_GPU_SPIN_STALLED_READS`) also
+advance for 1,024 consecutive samples (`A733_GPU_SPIN_STALLED_READS`) also
 returns, so a stopped clock cannot hold the worker inside one poll. Writes complete before
 their callbacks return. The final reset readback fences the write; it is not
 interpreted as proof of interconnect isolation.

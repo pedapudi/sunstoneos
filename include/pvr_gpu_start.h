@@ -1,34 +1,9 @@
 #ifndef SUNSTONE_PVR_GPU_START_H
 #define SUNSTONE_PVR_GPU_START_H
 #include "pvr_mips.h"
+#include "a733_gpu_spin.h"
 
 #define PVR_GPU_START_MAX_STEPS 35u
-/* Longest time one startup or shutdown poll re-reads a register or a firmware
- * word before returning AGAIN, in microseconds, counted from the first read. */
-#define PVR_GPU_SPIN_US 50u
-/* Most consecutive clock samples without an advance inside one wait. A clock
- * that stops advancing then returns AGAIN, so the caller paces the wait by its
- * own timer instead of staying inside the step. */
-#define PVR_GPU_SPIN_STALLED_READS 1024u
-
-/* Clock samples of one wait inside a startup or shutdown step. */
-struct pvr_gpu_spin { uint64_t start, seen; unsigned samples, still; };
-/* Record a sample taken during a wait. Return 0 once PVR_GPU_SPIN_STALLED_READS
- * consecutive samples show no advance. */
-static inline int pvr_gpu_spin_advancing(struct pvr_gpu_spin *w, uint64_t now)
-{
-    if (!w->samples++ || now != w->seen) { w->seen = now; w->still = 0; return 1; }
-    return ++w->still < PVR_GPU_SPIN_STALLED_READS;
-}
-/* Record a sample taken after an unsatisfied read. Return 1 while the read may
- * repeat: within PVR_GPU_SPIN_US of the first sample and with the clock
- * advancing. */
-static inline int pvr_gpu_spin_again(struct pvr_gpu_spin *w, uint64_t now)
-{
-    if (!w->samples) w->start = now;
-    return pvr_gpu_spin_advancing(w, now) && now - w->start < PVR_GPU_SPIN_US;
-}
-
 enum pvr_gpu_start_phase { PVR_GPU_START_NEW, PVR_GPU_START_PREPARED,
     PVR_GPU_START_RUNNING, PVR_GPU_START_BOOTED, PVR_GPU_START_FAILED };
 enum pvr_gpu_start_result { PVR_GPU_START_OK, PVR_GPU_START_AGAIN,
@@ -84,7 +59,7 @@ enum pvr_gpu_start_result pvr_gpu_start_begin(struct pvr_gpu_start *, uint64_t d
  * reads. The clock may round down to whole microseconds. A delay step waits
  * on the clock inside the step until the clock passes the start sample by more
  * than 3, so at least 3 us elapse after the preceding operation completes. A
- * readiness check re-reads the shared byte for at most PVR_GPU_SPIN_US and then
+ * readiness check re-reads the shared byte for at most A733_GPU_SPIN_US and then
  * returns AGAIN. A wait whose clock stops advancing returns AGAIN without
  * advancing the step. Every wait ends at the deadline. Service until BOOTED or
  * FAILED.

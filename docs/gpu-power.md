@@ -14,11 +14,11 @@ for the one-microsecond clock-settling delay. The board clock reports whole
 microseconds rounded down, so the delay ends only when the clock passes the
 sample taken after the clock-gate write by more than one microsecond. An
 unsatisfied power-domain acknowledgement is re-read for up to 50 µs
-(`A733_GPU_POWER_SPIN_US`, the same bound as the startup and shutdown
+(`A733_GPU_SPIN_US`, the bound shared with the startup and shutdown
 controllers) from its first read before the poll returns to the owner. The
 lease callback and earlier register steps in the same poll therefore do not
 consume that budget. A wait whose clock shows no advance for 1,024 consecutive
-samples (`A733_GPU_POWER_STALLED_READS`) returns to the owner without advancing
+samples (`A733_GPU_SPIN_STALLED_READS`) returns to the owner without advancing
 the step, and the next poll restarts the delay. Clock settling and domain
 acknowledgement share one absolute deadline. An expired deadline, clock
 regression, callback failure, or unexpected register value stops further I/O.

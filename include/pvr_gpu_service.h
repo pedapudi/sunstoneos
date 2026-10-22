@@ -27,9 +27,10 @@ struct pvr_render_texture_frame;
 #define PVR_GPU_SERVICE_BURST_US 200u
 #define PVR_GPU_SERVICE_JOB_POLL_US 4000u
 #define PVR_GPU_SERVICE_IDLE_POLL_US 50000u
-/* Longest run of CPU-only bursts before the worker blocks for one tick, so
- * tasks below its priority on its core still run during long preparation or
- * disposal. */
+/* Longest run of CPU-only bursts outside a job or render before the worker
+ * blocks for one tick, so tasks below its priority on its core still run
+ * during long preparation or disposal. Submitting and completing a job or
+ * render is exempt: no tick wait lies between a request and its kick. */
 #define PVR_GPU_SERVICE_CPU_RUN_US 1000u
 /* Firmware UPDATE_STATS counters: partial renders, out-of-memory events and
  * TA, 3D, CDM and TDM context stores, in firmware statistic order 1..6. */
@@ -40,7 +41,6 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
     PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP, PVR_GPU_SERVICE_DISPOSING, PVR_GPU_SERVICE_DISPOSED,
     PVR_GPU_SERVICE_RECONSTRUCTING };
-#define PVR_GPU_SERVICE_PHASES (PVR_GPU_SERVICE_RECONSTRUCTING + 1u)
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
@@ -222,12 +222,14 @@ struct pvr_gpu_service {
     struct pvr_ccb_token graphics_cleanup_tokens[6];
     uint32_t graphics_cleanup_address[6], graphics_cleanup_type[6], graphics_cleanup_status[6];
     unsigned graphics_cleanup_count, graphics_cleanup_index, graphics_events_retired;
-    /* Worker pacing counters. By phase: waits with a timeout and those that
-     * expired without a request or interrupt wake. The longest run of bursts
-     * that ended with CPU work left, in bursts and in clock microseconds, and
-     * the number of runs that reached CPU_RUN_US and blocked for a tick. */
-    uint32_t timed_waits[PVR_GPU_SERVICE_PHASES], wait_expiries[PVR_GPU_SERVICE_PHASES];
-    uint32_t yield_run, longest_yield_run, yield_blocks;
+    /* Worker pacing counters. Timed waits the worker began and those that
+     * expired without a request or interrupt wake, in READY and in every other
+     * phase. The longest run of bursts outside a job or render that ended with
+     * CPU work left, in clock microseconds, and the number of such runs that
+     * reached CPU_RUN_US and blocked for a tick. */
+    uint32_t ready_timed_waits, lifecycle_timed_waits;
+    uint32_t ready_wait_expiries, lifecycle_wait_expiries;
+    uint32_t yield_running, yield_blocks;
     uint64_t yield_start, longest_yield_us;
     QueueHandle_t requests;
     StaticQueue_t request_state;

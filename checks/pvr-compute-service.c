@@ -23,9 +23,17 @@ static struct pvr_gpu_mapping maps[PVR_COMPUTE_SERVICE_MAPS];
 static uint64_t backing_pages[128],table_pages[PVR_COMPUTE_SERVICE_TABLE_PAGES];
 static uint32_t job_kicks,peer_checked,allow_complete,event_forwarded;
 static unsigned backing_used,mode_calls,cleanup_kicks,power_after_cleanup;
+/* Submission pacing: the worker calls the mode callback when it admits a
+ * COMPUTE or COMPUTE_INPUT request and the queue kick when the job is sent.
+ * Between them it must neither begin a timed wait nor block for a tick. */
+static uint32_t admitted_pauses,checked_kicks;
+static uint64_t admitted_us,longest_admission_to_kick_us;
+static uint32_t pauses(void)
+{ return service.ready_timed_waits+service.lifecycle_timed_waits+service.yield_blocks; }
 static int observed_mode(void *ctx)
 {
     callback(ctx); ++mode_calls;
+    admitted_pauses=pauses();configASSERT(now(ctx,&admitted_us));
     configASSERT(get(&enabled)&&vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&(compute.phase==PVR_COMPUTE_SERVICE_READY||compute.phase==PVR_COMPUTE_SERVICE_COMPLETE));
     if(compute_service_case==4)return 0;
     if(compute_service_case==5&&mode_calls==2)return -1;
@@ -135,6 +143,9 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     if(word(command,4)!=(PVR_CCB_MAGIC|101u))return firmware_fixture_kick(ctx,off,value);
     callback(ctx);configASSERT(off==0xb00&&!value&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&get(&published));
+    uint64_t kicked;configASSERT(now(ctx,&kicked)&&pauses()==admitted_pauses);
+    if(kicked-admitted_us>longest_admission_to_kick_us)longest_admission_to_kick_us=kicked-admitted_us;
+    ++checked_kicks;
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
     if((compute_service_case>=12&&compute_service_case<=14)&&fixture_package.profile>=2) {
         const struct pvr_mips_buffer *pds=&computation.buffers[PVR_JOB_PDS];
@@ -240,7 +251,6 @@ static void compute_owner(void *unused)
     TickType_t opening=xTaskGetTickCount()-opened;
     platform_puts("compute open ticks ");platform_hex(opening);platform_puts("\n");configASSERT(opening<=50);
     metric("compute-open-timed-waits",lifecycle_timed_waits());configASSERT(!lifecycle_timed_waits());
-    metric("longest-yield-bursts",__atomic_load_n(&service.longest_yield_run,__ATOMIC_ACQUIRE));
     metric("longest-yield-us",__atomic_load_n(&service.longest_yield_us,__ATOMIC_ACQUIRE));
     metric("yield-blocks",__atomic_load_n(&service.yield_blocks,__ATOMIC_ACQUIRE));
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
@@ -277,7 +287,17 @@ static void compute_owner(void *unused)
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
     if((compute_service_case>=12&&compute_service_case<=14)) {
         configASSERT(request(PVR_GPU_SERVICE_COMPUTE,1000000).result==PVR_GPU_SERVICE_OK);
-        wait_flag(&peer_checked,1);set(&allow_complete,1);completion_model();
+        wait_flag(&peer_checked,1);
+        if(compute_service_case==13||compute_service_case==14) {
+            /* An input refused while the job runs, with a longer timeout,
+             * leaves the job deadline that bounds the worker's wait. */
+            uint64_t bound=compute.deadline,ticket;
+            configASSERT(pvr_gpu_service_compute_input(&service,1,fixture_package.input,fixture_package.input_bytes,10000000,1,&ticket));
+            while(!pvr_gpu_service_collect(&service,ticket,&r,1))vTaskDelay(1);
+            configASSERT(r.result==PVR_GPU_SERVICE_INVALID&&r.compute_phase==PVR_COMPUTE_SERVICE_RUNNING&&
+                compute.deadline==bound&&!atomic_load(&compute.input_state));
+        }
+        set(&allow_complete,1);completion_model();
         do{vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
         unsigned total=fixture_package.output_bytes/4;
         for(unsigned first=0;first<total;first+=32) {
@@ -353,6 +373,8 @@ static void compute_owner(void *unused)
         configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);
         /* Compute-only CLOSE cleans the firmware context before shutdown. */
         r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_CLEANED);
+        metric("compute-admitted-kicks",checked_kicks);
+        metric("compute-admission-to-kick-us",longest_admission_to_kick_us);
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; native package publication and paged copied output with modeled GPU writes\n");platform_exit(0);
     }
@@ -409,12 +431,12 @@ static void compute_owner(void *unused)
         if(compute_service_case==7) {
             /* Pacing while a job waits for its fence without interrupt delivery,
              * then completion observed without requests that would wake the worker. */
-            uint32_t active=get(&active_ticks),expired=expiries(PVR_GPU_SERVICE_READY);vTaskDelay(50);
+            uint32_t active=get(&active_ticks),expired=ready_expiries();vTaskDelay(50);
             uint32_t measured=get(&active_ticks)-active;
             metric("job-active-ticks-per-50",measured);
             /* Without interrupt delivery the worker wakes every JOB_POLL_US;
              * the window can split one period. */
-            measured=expiries(PVR_GPU_SERVICE_READY)-expired;
+            measured=ready_expiries()-expired;
             metric("job-expired-waits-per-50",measured);
             configASSERT(measured+1>=50000/PVR_GPU_SERVICE_JOB_POLL_US&&measured<=50000/PVR_GPU_SERVICE_JOB_POLL_US+1);
             completion_model();TickType_t fenced=xTaskGetTickCount();
@@ -462,6 +484,8 @@ static void compute_owner(void *unused)
                 word(computation.firmware[5].storage.cpu,4)==1&&compute.job.sequence==2);
             if(compute_service_case==9)configASSERT(compute.job.error==PVR_JOB_FENCE_VALUE);
         }
+        metric("compute-admitted-kicks",checked_kicks);
+        metric("compute-admission-to-kick-us",longest_admission_to_kick_us);
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; repeated native publication and acquired copied results or retained fault\n");platform_exit(0);
     }

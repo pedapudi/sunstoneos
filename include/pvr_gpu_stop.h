@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_PVR_GPU_STOP_H
 #define SUNSTONE_PVR_GPU_STOP_H
 #include "pvr_gpu_control.h"
-#include "pvr_gpu_start.h" /* PVR_GPU_SPIN_US */
+#include "a733_gpu_spin.h"
 #define PVR_GPU_STOP_MAX_STEPS 15u
 
 enum pvr_gpu_stop_phase { PVR_GPU_STOP_NEW, PVR_GPU_STOP_CLEAR_IDLE,
@@ -66,7 +66,7 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *, struct pvr_gpu_control *,
 /* Bounded poll. During a handshake, service at most four firmware events plus
  * one return scan, then read the power-sync word. During hardware shutdown,
  * perform one register step per poll. A power-sync or register poll re-reads
- * for at most PVR_GPU_SPIN_US from its first read and then returns AGAIN, or
+ * for at most A733_GPU_SPIN_US from its first read and then returns AGAIN, or
  * sooner when the clock stops advancing; every wait ends at the deadline.
  * Terminal states make no callbacks. Faults retain all buffers and ownership;
  * control and transport also latch failure. No reset/restart retries.
