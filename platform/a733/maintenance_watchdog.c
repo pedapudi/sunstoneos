@@ -4,6 +4,7 @@
 #include "a733_platform_locks.h"
 #include "a733_storage_update.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_mmio.h"
 #include "a733_task_context.h"
 #include "task.h"
@@ -13,13 +14,15 @@ static int mappings(void)
     static const uintptr_t addresses[]={0x0205000c,0x02050010,0x02050014,0x02050018,
         0x03000024,0x070501c0,0x070501c4,0x070501d4,0x07090108,
         0x07090000,0x07090060,0x07090160};
+    /* Only the first register, the feed register, is written; the others are read. */
+    static const struct a733_mapping_rule write={A733_MAPPING_WRITE,1,
+        {{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+    static const struct a733_mapping_rule read={A733_MAPPING_READ,1,
+        {{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
     uint64_t el;__asm__ volatile("mrs %0, CurrentEL":"=r"(el));
     if(el!=4)return 0;
-    for(unsigned i=0;i<sizeof(addresses)/sizeof(addresses[0]);++i) {
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(addresses[i],i==0,&t) ||
-           t.physical!=addresses[i] || t.attributes!=0)return 0;
-    }
+    for(unsigned i=0;i<sizeof(addresses)/sizeof(addresses[0]);++i)
+        if(!a733_mapping_check(aarch64_device_translate,addresses[i],addresses[i],i==0?&write:&read))return 0;
     return 1;
 }
 static uint32_t read32(uintptr_t a)
