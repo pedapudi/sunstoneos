@@ -226,8 +226,10 @@ static enum pvr_free_list_result free_list_progress(struct pvr_gpu_service *s, i
 static int deadline(struct pvr_gpu_service *s, uint64_t duration)
 {
     uint64_t now;
-    if (!sample(s, &now) || duration > UINT64_MAX - now) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
-    s->deadline = now + duration; return 1;
+    if (!sample(s, &now) || !a733_deadline_after(now, duration, &s->deadline)) {
+        fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
+    }
+    return 1;
 }
 static int opening_clock(struct pvr_gpu_service *s)
 {

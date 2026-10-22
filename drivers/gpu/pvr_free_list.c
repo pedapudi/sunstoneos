@@ -28,11 +28,12 @@ int pvr_free_lists_init(struct pvr_free_lists *s,const struct pvr_free_list_conf
     unsigned minimum,const struct pvr_free_list_ops *ops,void *ctx,struct pvr_ccb *q,
     uint64_t now,uint64_t timeout)
 {
+    uint64_t deadline;
     if(!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase!=PVR_FREE_LIST_NEW || !count || count>PVR_FREE_LISTS ||
        !minimum || minimum>PVR_FREE_LIST_MAX_PAGES || !a733_span_excl_nonempty(configs,count*sizeof(*configs)) ||
        !a733_span_excl_nonempty(ops,sizeof(*ops)) || !a733_span_excl_nonempty(q,sizeof(*q)) || !timeout ||
        timeout>INT64_MAX ||
-       timeout>UINT64_MAX-now || !q->epoch ||
+       !a733_deadline_after(now,timeout,&deadline) || !q->epoch ||
        (q->phase!=PVR_CCB_PREPARED && q->phase!=PVR_CCB_ACTIVE) ||
        !a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)configs,count*sizeof(*configs)) ||
        !a733_extents_disjoint_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)ops,sizeof(*ops)) ||
@@ -69,7 +70,7 @@ int pvr_free_lists_init(struct pvr_free_lists *s,const struct pvr_free_list_conf
     }
     struct pvr_free_lists result={0};
     result.ops=*ops; result.context=ctx; result.queue=q; result.epoch=q->epoch;
-    result.timeout=timeout; result.last_now=now; result.deadline=now+timeout; result.count=count;
+    result.timeout=timeout; result.last_now=now; result.deadline=deadline; result.count=count;
     for(unsigned i=0;i<count;++i)result.lists[i].config=configs[i];
     result.phase=PVR_FREE_LIST_BUILDING; result.stage=ZERO_TABLE; result.goal=configs[0].initial_pages;
     *s=result; return 1;
@@ -86,15 +87,16 @@ static unsigned find(const struct pvr_free_lists *s,const struct pvr_gpu_event_r
 int pvr_free_lists_event(void *ctx,const struct pvr_gpu_event *e,
     const struct pvr_gpu_event_resource *const *targets,unsigned count)
 {
-    struct pvr_free_lists *s=ctx;
+    struct pvr_free_lists *s=ctx; uint64_t deadline;
     if(!s || !e || s->phase==PVR_FREE_LIST_NEW || s->phase==PVR_FREE_LIST_FAILED)return 0;
     if(s->busy) { (void)fail(s,PVR_FREE_LIST_REENTRY); return 0; }
     if(s->phase==PVR_FREE_LIST_BUILDING || s->request_count==PVR_FREE_LIST_REQUESTS ||
        s->queue->epoch!=s->epoch || s->queue->phase!=PVR_CCB_ACTIVE ||
-       s->timeout>UINT64_MAX-s->last_now || count>PVR_GPU_EVENTS_RECONSTRUCT || (count&&!targets))return 0;
+       !a733_deadline_after(s->last_now,s->timeout,&deadline) ||
+       count>PVR_GPU_EVENTS_RECONSTRUCT || (count&&!targets))return 0;
     if((e->kind==PVR_GPU_EVENT_GROW ? count!=1 :
         e->kind!=PVR_GPU_EVENT_RECONSTRUCT || count!=e->data.reconstruct.count))return 0;
-    struct pvr_free_list_request r={.event=*e,.deadline=s->last_now+s->timeout,.count=count};
+    struct pvr_free_list_request r={.event=*e,.deadline=deadline,.count=count};
     for(unsigned i=0;i<count;++i) {
         r.lists[i]=find(s,targets[i]);
         uint32_t id=e->kind==PVR_GPU_EVENT_GROW ? e->data.id : e->data.reconstruct.ids[i];

@@ -165,8 +165,7 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
         break;
     case DELAY:
         if (!s->wait_until) {
-            if (now > UINT64_MAX - op->value) return fail(s, PVR_GPU_START_TIMEOUT);
-            s->wait_until = now + op->value;
+            if (!a733_deadline_after(now, op->value, &s->wait_until)) return fail(s, PVR_GPU_START_TIMEOUT);
         }
         if (now < s->wait_until) return PVR_GPU_START_AGAIN;
         s->wait_until = 0; ok = 1; break;
