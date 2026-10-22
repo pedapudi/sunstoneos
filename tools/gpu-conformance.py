@@ -5,7 +5,7 @@
   gpu-conformance.py plan [--output FILE]      check every scene and launch; print the plan
   gpu-conformance.py inputs --launch NAME --output DIR
                                                write the canonical device inputs for a capture
-  gpu-conformance.py compare --launch NAME --capture DIR --output DIR
+  gpu-conformance.py compare --launch NAME --capture DIR --output DIR [--confirmation FILE]
                                                compare one recorded board capture
 
 The plan builds each scene's device input with the existing builders in
@@ -20,6 +20,7 @@ from fractions import Fraction as Q
 import hashlib
 import importlib.util
 import json
+import functools
 import math
 from pathlib import Path
 import re
@@ -98,6 +99,7 @@ class Quad:
     w: tuple = (1, 1)                 # clip w at x0 and x1 edges
     colour: tuple = None              # triangle profile: RGBA at x0 and x1 edges
     clockwise: bool = True
+    confirm: bool = False             # board confirmation scene, compared with the exact value
 
 
 @dataclass
@@ -124,7 +126,8 @@ class Frame:
     texels: tuple = None               # (width, height, RGBA bytes)
     triangles: list = field(default_factory=list, repr=False)
     device: dict = field(default=None, repr=False)
-    host_only: bool = False
+    exact: list = field(default=None, repr=False)     # closed-form colours, for confirmation
+    analysis: object = field(default=None, repr=False)
 
     @property
     def stride(self):
@@ -228,8 +231,7 @@ def colour_host_frames():
     """Closed-form interpolated colour, checked on the host only."""
     return [Frame('triangle-gradient', 1, 64, 64, [Batch([
         Quad(8, 8, 56, 56, colour=((0.0, 0.25, 1.0, 1.0), (1.0, 0.75, 0.0, 1.0))),
-        Quad(8, 58, 56, 63, colour=((1.0, 0.0, 0.5, 1.0), (0.0, 1.0, 0.5, 1.0)), clockwise=False)])],
-        host_only=True)]
+        Quad(8, 58, 56, 63, colour=((1.0, 0.0, 0.5, 1.0), (0.0, 1.0, 0.5, 1.0)), clockwise=False)])])]
 
 
 # Profile 2: 255 x 129, stride 256 -----------------------------------------
@@ -291,10 +293,30 @@ def profile3_frames():
 
 ADDRESS_PAIRS = ((0, 1), (1, 2), (2, 3), (3, 4), (4, 0), (1, 4))
 FILTERS = ('nearest', 'srgb', 'linear')
+# Stencil test batch per frame: (compare, fail, depth fail, pass). Against
+# reference 0x5a, the start values 0, 0x5a and 0xff are greater, equal and
+# less, so a compare operation sends each column down a fixed subset of the
+# three paths. The table is chosen so that, over the 18 frames, each of the
+# eight operations runs on every path on start values that separate it from
+# the other seven operations (for example DECR from DECR_WRAP only at 0, INCR
+# from INCR_WRAP only at 0xff), and every compare operation runs unmasked.
+# stencil_separation() derives this from the closed-form evaluation.
+STENCIL_TESTS = ((0, 0, 1, 2), (1, 4, 4, 5), (2, 6, 5, 1), (3, 2, 6, 3), (4, 3, 5, 6), (5, 7, 0, 1),
+                 (6, 2, 7, 4), (7, 5, 2, 0), (0, 5, 1, 2), (1, 7, 4, 5), (2, 6, 1, 5), (3, 1, 2, 3),
+                 (4, 6, 5, 6), (5, 1, 3, 6), (6, 2, 4, 7), (7, 5, 0, 2), (0, 0, 1, 2), (7, 3, 4, 5))
+# Frame 2 compares EQUAL under mask 0xa5, which makes start 0 equal to the
+# reference; frames 5, 11 and 17 write through mask 0x0f.
+STENCIL_COMPARE_MASK = {2: 0xa5}
+STENCIL_WRITE_MASK = {5: 0x0f, 11: 0x0f, 17: 0x0f}
+STENCIL_REF = 0x5a
 
 
 def profile4_texture():
+    """8 x 8 texels. Columns 0 and 1 of rows 0 and 1 are black and white, so a
+    linear ramp between texels 0 and 1 reads its filter weight directly."""
     tex = bytearray(pattern(64, 'p4', alpha=255))
+    for t, value in ((0, 0), (1, 255), (8, 0), (9, 255)):
+        tex[4 * t:4 * t + 4] = bytes((value, value, value, 255))
     tex[4 * 60 + 3] = 0x80          # translucent texel for blending
     return 8, 8, bytes(tex)
 
@@ -305,9 +327,9 @@ def profile4_frame(index):
     linear, srgb = filt == 'linear', filt == 'srgb'
     state = 16 | linear << 5 | pair[0] << 6 | pair[1] << 9 | srgb << 12
 
-    def solid(x0, y0, x1, y1, t, z=Q(0), clockwise=True):
+    def solid(x0, y0, x1, y1, t, z=Q(0), clockwise=True, confirm=False):
         return Quad(x0, y0, x1, y1, (texel_centre(t % 8, 8),) * 2, (texel_centre(t // 8, 8),) * 2, z=z,
-                    clockwise=clockwise)
+                    clockwise=clockwise, confirm=confirm)
     w = {'nearest': (1, 1), 'srgb': (2, 2), 'linear': (4, 4)}[filt]
     batches = []
     # Address modes and filtering: 2 pixels per texel over u in [-2, 2].
@@ -328,16 +350,13 @@ def profile4_frame(index):
     batches.append(Batch([solid(85, 48, 106, 96, 0)], setup, 0x5a | 0xff << 16))
     batches.append(Batch([solid(106, 48, 128, 96, 0)], setup, 0xff | 0xff << 16))
     batches.append(Batch([solid(64, 72, 128, 96, 0, Q(1, 4))], depth_state(ALWAYS, True) | NO_COLOUR))
-    ops = (index % 8, (index + 3) % 8, (index + 5) % 8)
-    test = stencil_state(index % 8, *ops) | depth_state(LESS)
-    cmask = 0xf0 if index in (7, 15) else 0xff
-    wmask = 0x0f if index in (5, 11, 17) else 0xff
-    word = 0x5a | cmask << 8 | wmask << 16
+    test = stencil_state(*STENCIL_TESTS[index]) | depth_state(LESS)
+    word = STENCIL_REF | STENCIL_COMPARE_MASK.get(index, 0xff) << 8 | STENCIL_WRITE_MASK.get(index, 0xff) << 16
     batches.append(Batch([solid(64, 48, 128, 96, 5, Q(1, 2))], test, word))
     observe = []
     for (x0, x1), start in zip(cols, (0, 0x5a, 0xff)):
         for (y0, y1), depth_pass in zip(rows, (True, False)):
-            expected = stencil_result(start, 0x5a, test, word, depth_pass)
+            expected = stencil_result(start, STENCIL_REF, test, word, depth_pass)
             observe.append(Batch([solid(x0, y0, x0 + 10, y1, 6)],
                                  stencil_state(EQUAL, KEEP, KEEP, KEEP) | depth_state(ALWAYS), expected | 0xff << 8))
     batches += observe
@@ -345,12 +364,21 @@ def profile4_frame(index):
     batches.append(Batch([solid(64, 96, 96, 127, 7), solid(96, 96, 128, 127, 8, clockwise=False)],
                          depth_state(ALWAYS) | (index % 3) << 4))
     if filt == 'nearest':
+        # Blending confirmation: one translucent layer over the underlay and
+        # the background.
         eq = (1, 2, 3, 4, 1, 2)[index % 6]
-        batches.append(Batch([solid(16, 80, 48, 112, 60)], depth_state(ALWAYS) | blend_state(eq)))
+        batches.append(Batch([solid(16, 80, 48, 112, 60, confirm=True)], depth_state(ALWAYS) | blend_state(eq)))
     elif filt == 'linear':
-        # Perspective ramp between texels (0,0) and (1,0), w from 1 to 4.
-        batches.append(Batch([Quad(0, 64, 64, 127, (texel_centre(0, 8), texel_centre(1, 8)),
-                                   (texel_centre(0, 8),) * 2, w=(1, 4))], depth_state(ALWAYS)))
+        # Filter confirmation between the black texel 0 and the white texel 1.
+        # A perspective ramp with w from 1 to 4, then four constant-w bands of
+        # a quarter texel over 64 pixels each, so the 256 pixel centres of the
+        # bands fall midway between consecutive multiples of 2^-8 texel.
+        ramp = [Quad(0, 64, 64, 96, (texel_centre(0, 8), texel_centre(1, 8)), (texel_centre(0, 8),) * 2,
+                     w=(1, 4), confirm=True)]
+        for k in range(4):
+            ramp.append(Quad(0, 96 + 8 * k, 64, 104 + 8 * k, ((Q(k, 4) + Q(1, 2)) / 8, (Q(k + 1, 4) + Q(1, 2)) / 8),
+                             (texel_centre(0, 8),) * 2, confirm=True))
+        batches.append(Batch(ramp, depth_state(ALWAYS)))
     else:
         batches.append(Batch([solid(16, 80, 48, 112, 9)], depth_state(ALWAYS)))
     assert len(batches) == 16
@@ -653,11 +681,8 @@ def expand(frame):
     return triangles, device
 
 
-def identity(frame):
-    _, device = expand(frame)
-    h = hashlib.sha256(device['data'])
-    h.update(struct.pack('<5I', frame.profile, frame.state, frame.width, frame.height, frame.stride))
-    return h.hexdigest()
+def input_sha256(frame):
+    return hashlib.sha256(expand(frame)[1]['data']).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +792,12 @@ class Analysis:
 
 def analyze(frame):
     """Apply the plan checks to one frame; raise Refused on the first violation."""
+    if frame.analysis is None:
+        frame.analysis = plan_checks(frame)
+    return frame.analysis
+
+
+def plan_checks(frame):
     triangles, device = expand(frame)
     W, H = frame.width, frame.height
     p4 = frame.profile == 4
@@ -897,20 +928,28 @@ def unorm(x):
     return min(255, max(0, math.floor(x * 255 + 0.5)))
 
 
-def closed_form(frame):
-    """Exact expected frame for quad-only scenes, laid out at the device stride."""
+def closed_form_colours(frame, weight_bits=None, trace=None):
+    """Exact colour of every pixel of a quad-only scene, before UNORM8 rounding.
+
+    weight_bits quantizes bilinear weights down to that many bits, for the
+    self-check's coarse-filter mutation. trace, when a set, receives each
+    stencil compare and stencil operation whose stored value a later stencil
+    test at the same pixel reads, as (frame, 'compare', op, ref, start, mask)
+    or (frame, 'op', path, op, start, ref, write mask)."""
     W, H = frame.width, frame.height
     clear = [((CLEAR >> (8 * c)) & 255) / 255 for c in range(4)]
     colour = [list(clear) for _ in range(W * H)]
     depth = [Q(1)] * (W * H)
     stencil = [0] * (W * H)
+    pending = {}
     p4 = frame.profile == 4
     for batch in frame.batches:
         st = batch.state
+        ref, cmask, wmask = batch.stencil & 255, (batch.stencil >> 8) & 255, (batch.stencil >> 16) & 255
         for quad in batch.prims:
             if p4 and ((st >> 4) & 3) == (1 if quad.clockwise else 2):
                 continue
-            const = sampler(frame, quad) if frame.profile > 1 else None
+            const = sampler(frame, quad, weight_bits) if frame.profile > 1 else None
             for j in range(quad.y0, quad.y1):
                 for i in range(quad.x0, quad.x1):
                     p = j * W + i
@@ -918,11 +957,15 @@ def closed_form(frame):
                     if p4:
                         d_pass = compare_op(st & 7, z, depth[p])
                         s_on = st & (1 << 10)
-                        s_pass = compare_op((st >> 11) & 7, (batch.stencil & 255) & ((batch.stencil >> 8) & 255),
-                                            stencil[p] & ((batch.stencil >> 8) & 255)) if s_on else True
+                        s_pass = compare_op((st >> 11) & 7, ref & cmask, stencil[p] & cmask) if s_on else True
                         if s_on:
-                            stencil[p] = stencil_result(stencil[p], batch.stencil & 255, st, batch.stencil,
-                                                        d_pass)
+                            if trace is not None:
+                                trace.update(pending.pop(p, ()))
+                                path = 'fail' if not s_pass else 'zfail' if not d_pass else 'pass'
+                                op = (st >> {'fail': 14, 'zfail': 17, 'pass': 20}[path]) & 7
+                                pending[p] = [(frame.name, 'compare', (st >> 11) & 7, ref, stencil[p], cmask),
+                                              (frame.name, 'op', path, op, stencil[p], ref, wmask)]
+                            stencil[p] = stencil_result(stencil[p], ref, st, batch.stencil, d_pass)
                         if not (s_pass and d_pass):
                             continue
                         if st & 8:
@@ -947,28 +990,41 @@ def closed_form(frame):
                         src = const
                     else:
                         s = (Q(2 * j + 1, 2) - quad.y0) / (quad.y1 - quad.y0)
-                        inv = (1 - t) / quad.w[0] + t / quad.w[1]
-                        u = ((1 - t) * quad.u[0] / quad.w[0] + t * quad.u[1] / quad.w[1]) / inv
                         v = quad.v[0] + (quad.v[1] - quad.v[0]) * s
-                        src = sample(frame, u, v)
+                        src = sample(frame, quad_u(quad, t), v, weight_bits)
                     colour[p] = blend_values(eq, src, colour[p])
-    out = bytearray(4 * frame.stride * H)
+    return colour
+
+
+def closed_form(frame, weight_bits=None, trace=None):
+    """Expected frame for quad-only scenes, rounded to UNORM8 and laid out at
+    the device stride with PVR_RENDER_POISON in the padding."""
+    colour = closed_form_colours(frame, weight_bits, trace)
+    if weight_bits is None:
+        frame.exact = colour
+    W, H = frame.width, frame.height
+    pad = struct.pack('<I', POISON) * (frame.stride - W)
+    out = bytearray()
     for j in range(H):
-        for i in range(frame.stride):
-            if i < W:
-                out[4 * (j * frame.stride + i):4 * (j * frame.stride + i) + 4] = bytes(unorm(c) for c in colour[j * W + i])
-            else:
-                out[4 * (j * frame.stride + i):4 * (j * frame.stride + i) + 4] = struct.pack('<I', POISON)
+        for c in colour[j * W:(j + 1) * W]:
+            out += bytes(unorm(x) for x in c)
+        out += pad
     return bytes(out)
 
 
-def sampler(frame, quad):
+def quad_u(quad, t):
+    """Perspective-correct u at fraction t across a quad, exact."""
+    inv = (1 - t) / quad.w[0] + t / quad.w[1]
+    return ((1 - t) * quad.u[0] / quad.w[0] + t * quad.u[1] / quad.w[1]) / inv
+
+
+def sampler(frame, quad, weight_bits=None):
     if quad.u[0] == quad.u[1] and quad.v[0] == quad.v[1]:
-        return sample(frame, quad.u[0], quad.v[0])
+        return sample(frame, quad.u[0], quad.v[0], weight_bits)
     return None
 
 
-def sample(frame, u, v):
+def sample(frame, u, v, weight_bits=None):
     tw, th, tex = frame.texels
     p4 = frame.profile == 4
     modes = ((frame.state >> 6) & 7, (frame.state >> 9) & 7) if p4 else (2, 2)
@@ -985,10 +1041,75 @@ def sample(frame, u, v):
         return fetch(math.floor(tu), math.floor(tv))
     tu, tv = tu - Q(1, 2), tv - Q(1, 2)
     x0, y0 = math.floor(tu), math.floor(tv)
-    a, b = float(tu - x0), float(tv - y0)
+    a, b = tu - x0, tv - y0
+    if weight_bits:
+        a, b = (Q(math.floor(x * 2 ** weight_bits), 2 ** weight_bits) for x in (a, b))
+    a, b = float(a), float(b)
     t00, t10, t01, t11 = fetch(x0, y0), fetch(x0 + 1, y0), fetch(x0, y0 + 1), fetch(x0 + 1, y0 + 1)
     return [(1 - a) * (1 - b) * t00[c] + a * (1 - b) * t10[c] + (1 - a) * b * t01[c] + a * b * t11[c]
             for c in range(4)]
+
+
+def confirmation_pixels(frame):
+    """(x, y, exact RGBA scaled to 0..255, bound) for every pixel of the
+    frame's confirmation quads, which are drawn last and not overdrawn.
+
+    Blended pixels pass within 1 of the exact value: one rounding at
+    destination precision. Linear-filtered pixels sample the black and white
+    texels 0 and 1, so a filter weight error e moves a channel by 255e; they
+    pass within 1 + 255 * 2^-8, which holds when the weight, and so the texel
+    coordinate, is within 2^-8 of the exact value."""
+    quads = [q for b in frame.batches for q in b.prims if isinstance(q, Quad) and q.confirm]
+    if not quads:
+        return []
+    if frame.exact is None:
+        frame.exact = closed_form_colours(frame)
+    exact = frame.exact
+    bound = 1 + Q(255, 256) if frame.state & 32 else Q(1)
+    return [(i, j, [255 * min(1.0, max(0.0, x)) for x in exact[j * frame.width + i]], bound)
+            for q in quads for j in range(q.y0, q.y1) for i in range(q.x0, q.x1)]
+
+
+def confirm(frame, pixels, stride):
+    """Failures of a frame's confirmation pixels in an RGBA8 image."""
+    failures = []
+    for i, j, want, bound in confirmation_pixels(frame):
+        got = pixels[4 * (j * stride + i):4 * (j * stride + i) + 4]
+        if any(abs(got[c] - want[c]) > bound for c in range(4)):
+            failures.append([i, j, [round(x, 3) for x in want], list(got)])
+    return failures
+
+
+def stencil_separation(trace):
+    """Stencil behaviour the traced closed-form scenes cannot tell apart.
+
+    Returns the (path, op, other op) and ('compare', op, other op) triples for
+    which no traced execution gives the two a different outcome, and whether a
+    compare mask and a write mask each changed some traced outcome."""
+    ops, compares = {}, {}
+    for entry in trace:
+        if entry[1] == 'op':
+            ops.setdefault(entry[2:4], set()).add(entry[4:])
+        else:
+            compares.setdefault(entry[2], set()).add(entry[3:])
+
+    def stored(op, s, ref, wmask):
+        return (s & ~wmask | stencil_apply(op, s, ref) & wmask) & 255
+    missing = []
+    for path in ('fail', 'zfail', 'pass'):
+        for op in range(8):
+            runs = ops.get((path, op), ())
+            missing += [(path, op, other) for other in range(8) if other != op and
+                        not any(stored(op, *r) != stored(other, *r) for r in runs)]
+    for op in range(8):
+        runs = compares.get(op, ())
+        missing += [('compare', op, other) for other in range(8) if other != op and
+                    not any(compare_op(op, ref & m, s & m) != compare_op(other, ref & m, s & m) for ref, s, m in runs)]
+    compare_mask = any(m != 255 and compare_op(op, ref & m, s & m) != compare_op(op, ref, s)
+                       for op, runs in compares.items() for ref, s, m in runs)
+    write_mask = any(r[2] != 255 and stored(op, *r) != stored(op, r[0], r[1], 255)
+                     for (_, op), runs in ops.items() for r in runs)
+    return missing, compare_mask, write_mask
 
 
 def blend_values(eq, s, d):
@@ -1007,10 +1128,12 @@ def blend_values(eq, s, d):
 # ---------------------------------------------------------------------------
 # Coverage
 
-def coverage(closed, board, kernels):
+def coverage(closed, board, kernels, trace):
     """Feature row -> scenes that compare it. Graphics rows prefer closed-form
     scenes; rows that need general triangles use board scenes compared with
-    the reference. A row whose required values are not all present is empty."""
+    the reference. A row whose required values are not all present is empty.
+    Stencil rows come from trace, the stencil executions that the closed-form
+    evaluation of the closed scenes recorded."""
     def names(frames):
         return sorted({f.name for f in frames})
     p4 = [f for f in closed if f.profile == 4]
@@ -1021,7 +1144,8 @@ def coverage(closed, board, kernels):
 
     def complete(found, want, frames):
         return names(frames) if set(want) <= found else []
-    stencil = [(f, b) for f, b in batches if b.state & (1 << 10)]
+    missing, compare_mask, write_mask = stencil_separation(trace)
+    traced = sorted({entry[0] for entry in trace})
     depth_tested = values(lambda b: True, lambda b: b.state & 7) - {7} | values(lambda b: b.state & 8, lambda b: 7)
     rows = {
         'Fixed clear': ['fixed-clear'],
@@ -1042,13 +1166,10 @@ def coverage(closed, board, kernels):
         'Depth compare operations': complete(depth_tested, range(8), p4),
         'Depth writes': names([f for f, b in batches if b.state & 8] +
                               [f for f in closed if f.profile == 3 and f.state & 4]),
-        'Stencil compare operations': complete({(b.state >> 11) & 7 for _, b in stencil}, range(8), p4),
-        'Stencil operations on stencil fail, depth fail and pass': complete(
-            {(path, (b.state >> shift) & 7) for _, b in stencil for path, shift in (('fail', 14), ('zfail', 17),
-                                                                                  ('pass', 20))},
-            {(path, op) for path in ('fail', 'zfail', 'pass') for op in range(8)}, p4),
-        'Stencil compare and write masks': names(f for f, b in stencil if (b.stencil >> 8) & 255 not in (0, 255) or
-                                                 (b.stencil >> 16) & 255 not in (0, 255)),
+        'Stencil compare operations': [] if any(m[0] == 'compare' for m in missing) else traced,
+        'Stencil operations on stencil fail, depth fail and pass':
+            [] if any(m[0] != 'compare' for m in missing) else traced,
+        'Stencil compare and write masks': traced if compare_mask and write_mask else [],
         'Blend equations': complete(values(lambda b: True, lambda b: (b.state >> 6) & 7), range(5), p4),
         'Culling': complete(values(lambda b: True, lambda b: (b.state >> 4) & 3), range(3), p4),
         'Colour-write disable': names(f for f, b in batches if b.state & NO_COLOUR),
@@ -1087,7 +1208,10 @@ class Launch:
     session: tuple = None         # framebuffer width, height
 
 
+@functools.cache
 def launches():
+    """The planned launches. Built once per process, so each frame's device
+    input, analysis and closed-form colours are computed once."""
     out = [Launch('triangle', 'sunstone-a733-gpu-draw-single-core', 'GPU base session', 'triangle',
                   colour_frames(), profile=1, session=(64, 64)),
            Launch('profile2', 'sunstone-a733-gpu-texture-single-core', 'texture envelope version 1', 'texture',
@@ -1102,7 +1226,7 @@ def launches():
         out.append(Launch(f'compute-{k.name}', 'sunstone-a733-gpu-compute-single-core with '
                           'SUNSTONE_GPU_PROGRAM_APPLICATION and SUNSTONE_GPU_RUNTIME_INPUT',
                           'program envelope with runtime input', 'compute', kernel=k))
-    return out
+    return tuple(out)
 
 
 def refused_launches():
@@ -1198,8 +1322,7 @@ def plan(launch_list=None):
             entry['frames'] = []
             for frame in launch.frames:
                 a = analyze(frame)
-                entry['frames'].append({'name': frame.name, 'identity': identity(frame),
-                                        'input_sha256': hashlib.sha256(expand(frame)[1]['data']).hexdigest(),
+                entry['frames'].append({'name': frame.name, 'input_sha256': input_sha256(frame), 'state': frame.state,
                                         'covered': a.covered, 'ties': a.tie_pixels, 'closed_form': frame.closed_form,
                                         'linear_tolerance': a.linear_tol})
         timing = model(launch)
@@ -1257,13 +1380,11 @@ def build(build=BUILD):
             shutil.rmtree(build / d, ignore_errors=True)
         (build / 'mesa-src').mkdir()
         with tarfile.open(MESA_ARCHIVE) as tar:
-            members = tar.getmembers()
-            for m in members:
-                parts = Path(m.name).parts[1:]
-                if not parts or any(p == '..' for p in parts) or Path(m.name).is_absolute():
-                    continue
-                m.name = str(Path(*parts))
-                tar.extract(m, build / 'mesa-src', filter='data')
+            for m in tar.getmembers():
+                parts = Path(m.name).parts[1:]     # strip the archive's top directory
+                if parts:
+                    m.name = str(Path(*parts))
+                    tar.extract(m, build / 'mesa-src', filter='data')
         run(['nice', '-n', '10', str(PRODUCER_VENV / 'bin/meson'), 'setup', str(build / 'mesa-build'),
              str(build / 'mesa-src'), f'--prefix={install}'] + MESA_OPTIONS, build / 'mesa-configure.log', env)
         run(['nice', '-n', '10', str(PRODUCER_VENV / 'bin/ninja'), '-C', str(build / 'mesa-build'), f'-j{JOBS}',
@@ -1299,8 +1420,7 @@ def launch_file(entries):
         data = device['data']
         out += struct.pack('<10I', frame.profile, frame.width, frame.height, frame.stride, frame.state, tw, th,
                            nvert, nidx, len(data)) + data
-        out += struct.pack('<I', len(a.classes)) + a.classes + struct.pack('<I', a.linear_tol)
-        out += struct.pack('<I', 1) + a.ties
+        out += struct.pack('<I', len(a.classes)) + a.classes + struct.pack('<I', a.linear_tol) + a.ties
         if capture is None:
             out += struct.pack('<I', 0)
         elif capture == 'self':
@@ -1313,17 +1433,34 @@ def launch_file(entries):
     return bytes(out)
 
 
-def reference(entries, work, build=BUILD, frames_out=None):
-    """Render and compare in one reference process; returns parsed result lines."""
+def reference(entries, work, build=BUILD, frames=False):
+    """Render and compare in one reference process.
+
+    Returns the renderer identity, the loaded libraries, the parsed comparison
+    lines and, when frames is true, each entry's unmutated reference frame as
+    width x height RGBA8 bytes. The launch and frame files are deleted once
+    the process exits."""
     work.mkdir(parents=True, exist_ok=True)
     path = work / 'launch.bin'
+    out = work / 'frames.bin'
     path.write_bytes(launch_file(entries))
     lib = library_dir(build)
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(Path.home()), 'LD_LIBRARY_PATH': str(lib),
            'EGL_PLATFORM': 'surfaceless', 'LIBGL_ALWAYS_SOFTWARE': '1', 'GALLIUM_DRIVER': 'llvmpipe',
            'LP_NUM_THREADS': str(LP_NUM_THREADS), 'MESA_SHADER_CACHE_DISABLE': 'true', 'EGL_LOG_LEVEL': 'fatal'}
-    cmd = [str(build / 'reference'), str(path)] + ([str(frames_out)] if frames_out else [])
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    cmd = [str(build / 'reference'), str(path)] + ([str(out)] if frames else [])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        rendered = None
+        if frames and not result.returncode:
+            data, rendered, offset = out.read_bytes(), [], 0
+            for frame, *_ in entries:
+                size = 4 * frame.width * frame.height
+                rendered.append(data[offset:offset + size])
+                offset += size
+    finally:
+        path.unlink(missing_ok=True)
+        out.unlink(missing_ok=True)
     if result.returncode:
         raise RuntimeError(f'reference process failed: {result.stderr.strip()}')
     lines = [json.loads(line) for line in result.stdout.splitlines()]
@@ -1332,7 +1469,7 @@ def reference(entries, work, build=BUILD, frames_out=None):
     if 'llvmpipe' not in info['gl_renderer'] or 'Mesa 27.0.0-devel' not in info['gl_version'] or \
             not libs or not all(Path(l).resolve().is_relative_to((build / 'mesa-install').resolve()) for l in libs):
         raise RuntimeError(f'reference did not use the pinned Mesa build: {info} {libs}')
-    return info, libs, [l for l in lines if 'frame' in l]
+    return info, libs, [l for l in lines if 'frame' in l], rendered
 
 
 def judge(results, entries):
@@ -1358,7 +1495,8 @@ def check_sentinels(results, entries):
 # Command line
 
 def find_launch(name):
-    for launch in launches() + refused_launches():
+    """A planned launch by name; refused launches are not offered."""
+    for launch in launches():
         if launch.name == name:
             return launch
     if name == 'fixed-clear':
@@ -1367,7 +1505,9 @@ def find_launch(name):
 
 
 def write_inputs(launch, out):
-    """Canonical device inputs for the coordinator's capture functions."""
+    """Canonical device inputs for the coordinator's capture functions, written
+    only for a launch that passes every plan check, timing included."""
+    plan([launch])
     out.mkdir(parents=True, exist_ok=False)
     record = {'launch': launch.name, 'image': launch.image, 'envelope': launch.envelope}
     if launch.kind == 'compute':
@@ -1384,15 +1524,37 @@ def write_inputs(launch, out):
             _, device = expand(frame)
             (out / f'frame-{k}.input').write_bytes(device['data'])
             record['frames'].append({'name': frame.name, 'file': f'frame-{k}.input', 'state': device['state'],
-                                     'shape': device.get('shape'), 'identity': identity(frame),
-                                     'input_sha256': hashlib.sha256(device['data']).hexdigest()})
+                                     'shape': device.get('shape'), 'input_sha256': input_sha256(frame)})
     (out / 'inputs.json').write_text(json.dumps(record, indent=1) + '\n')
 
 
-def compare_capture(name, capture_dir, out, build=BUILD):
-    """Compare a recorded board capture with the plan and the reference."""
+def check_record(launch, frames):
+    """Refuse a capture record that does not belong to the plan: wrong input
+    hash or state, sequences that do not advance by one per frame, a missing
+    generation, extra frames, or frames recorded after a failed one."""
+    if len(frames) > len(launch.frames):
+        raise Refused(f'{launch.name}: capture has {len(frames)} frames, plan has {len(launch.frames)}')
+    first = frames[0].get('sequence') if frames else 0
+    for k, (frame, item) in enumerate(zip(launch.frames, frames)):
+        if item.get('input_sha256') != input_sha256(frame):
+            raise Refused(f'{frame.name}: recorded input hash differs from the plan')
+        if item.get('state') != frame.state:
+            raise Refused(f'{frame.name}: recorded state {item.get("state")} differs from the plan {frame.state}')
+        if not isinstance(first, int) or item.get('sequence') != first + k or item.get('generation') is None:
+            raise Refused(f'{frame.name}: recorded sequence or generation is missing or out of order')
+        if item.get('result') != 1 and k + 1 < len(frames):
+            raise Refused(f'{frame.name}: frames are recorded after a failed frame')
+
+
+def compare_capture(name, capture_dir, out, build=BUILD, confirmation=None):
+    """Compare a recorded board capture with the plan and the reference.
+
+    A profile 4 launch counts only when its confirmation pixels match their
+    exact values; the 1920 x 384 launch needs the comparison.json of a
+    confirmed profile 4 launch as confirmation."""
     record = json.loads((capture_dir / 'capture.json').read_text())
-    out.mkdir(parents=True, exist_ok=False)
+    if out.exists():
+        raise FileExistsError(f'{out} exists')
     launch = find_launch(name)
     if launch is None:
         frames = record['frames']
@@ -1408,21 +1570,47 @@ def compare_capture(name, capture_dir, out, build=BUILD):
             capture.append({**item, 'words': list(struct.unpack(f'<{len(raw) // 4}I', raw))})
         report = compare_compute(launch.kernel, expected, capture)
     else:
-        if len(record['frames']) != len(launch.frames):
-            raise Refused(f'{name}: capture has {len(record["frames"])} frames, plan has {len(launch.frames)}')
+        check_record(launch, record['frames'])
+        statuses = ['not captured'] * len(launch.frames)
         entries = []
-        for frame, item in zip(launch.frames, record['frames']):
-            want = hashlib.sha256(expand(frame)[1]['data']).hexdigest()
-            if item['input_sha256'] != want:
-                raise Refused(f'{frame.name}: recorded input hash differs from the plan')
-            if item.get('result') not in (None, 1):
-                raise Refused(f'{frame.name}: capture reply result {item.get("result")}')
-            entries.append((frame, analyze(frame), (capture_dir / item['file']).read_bytes(), 0))
-        info, libs, results = reference(entries, out / 'work', build)
-        check_sentinels(results, entries)
-        verdicts = judge(results, entries)
-        report = {'launch': name, 'renderer': info, 'libraries': libs, 'frames': verdicts,
-                  'passed': all(v['passed'] for v in verdicts)}
+        for k, (frame, item) in enumerate(zip(launch.frames, record['frames'])):
+            if item.get('result') != 1:
+                statuses[k] = f'failed at result {item.get("result")}'
+            else:
+                statuses[k] = 'not compared'
+                entries.append((frame, analyze(frame), (capture_dir / item['file']).read_bytes(), 0))
+        report = {'launch': name}
+        unconfirmed = None
+        if launch.name == 'profile4':
+            failed = {e[0].name: confirm(e[0], e[2], e[0].stride) for e in entries}
+            scenes = [f.name for f in launch.frames if any(q.confirm for b in f.batches for q in b.prims)]
+            report['confirmation'] = {'failed': {n: f[:16] for n, f in failed.items() if f},
+                                      'not_captured': [n for n in scenes if n not in failed]}
+            if any(report['confirmation'].values()):
+                unconfirmed = 'confirmation pixels differ from their exact values or were not captured'
+        elif launch.name == 'profile4-wide':
+            earlier = json.loads(confirmation.read_text()) if confirmation else {}
+            if earlier.get('launch') != 'profile4' or earlier.get('status') != 'passed':
+                unconfirmed = 'needs the passed comparison of the profile 4 launch'
+        verdicts = {}
+        if unconfirmed:
+            # The linear-filter and blending tolerances rest on the
+            # confirmation, so no other scene counts without it.
+            report['status'] = f'unconfirmed: {unconfirmed}'
+        elif entries:
+            info, libs, results, _ = reference(entries, out, build)
+            check_sentinels(results, entries)
+            report.update(renderer=info, libraries=libs)
+            verdicts = {v['frame']: v for v in judge(results, entries)}
+        report['frames'] = []
+        for frame, status in zip(launch.frames, statuses):
+            v = verdicts.get(frame.name, {})
+            if v:
+                status = 'pass' if v['passed'] else 'mismatch'
+            report['frames'].append({'frame': frame.name, 'status': status, **v})
+        report['passed'] = not unconfirmed and all(f['status'] == 'pass' for f in report['frames'])
+        report.setdefault('status', 'passed' if report['passed'] else 'failed')
+    out.mkdir(parents=True, exist_ok=True)
     (out / 'comparison.json').write_text(json.dumps(report, indent=1) + '\n')
     return report
 
@@ -1441,6 +1629,8 @@ def main():
     c.add_argument('--launch', required=True)
     c.add_argument('--capture', type=Path, required=True)
     c.add_argument('--output', type=Path, required=True)
+    c.add_argument('--confirmation', type=Path, help='comparison.json of a confirmed profile 4 launch, '
+                   'required by profile4-wide')
     a = p.parse_args()
     if a.command == 'build':
         print(json.dumps(build(a.build), indent=1))
@@ -1459,9 +1649,12 @@ def main():
         launch = find_launch(a.launch)
         if launch is None:
             raise SystemExit('the fixed clear has no input')
-        write_inputs(launch, a.output)
+        try:
+            write_inputs(launch, a.output)
+        except Refused as error:
+            raise SystemExit(f'refused: {error}')
     else:
-        report = compare_capture(a.launch, a.capture, a.output, a.build)
+        report = compare_capture(a.launch, a.capture, a.output, a.build, a.confirmation)
         print(json.dumps({'launch': report['launch'], 'passed': report['passed']}))
         sys.exit(0 if report['passed'] else 1)
 

@@ -24,19 +24,23 @@ closed-form reference.
 1. **Plan.** `tools/gpu-conformance.py` holds a fixed scene list. Each scene
    builds its canonical device input with the existing builders (`vertices()`
    in `apps/gpu-render/draw.py`, `input_bytes()` in `texture.py`, the package
-   input of `apps/gpu-program`). The scene identity is the SHA-256 of those
-   bytes plus profile, state word and framebuffer size. The plan also refuses
-   scenes that the comparison cannot judge (sections below).
+   input of `apps/gpu-program`). The plan records the SHA-256 of those bytes
+   and the frame's state word, which together identify the scene within its
+   launch. The plan also refuses scenes that the comparison cannot judge
+   (sections below).
 2. **Reference.** One reference process per launch parses the same bytes the
    board receives and renders every frame on every run, so no scene is
    described twice and no reference frame is cached.
 3. **Capture.** The existing capture functions run under the board
    coordinator; the harness opens no USB device. The capturing host computes
    SHA-256 over the bytes it passes to the capture function and records it
-   with frame sequence, generation, the reply result and, for a failed
-   compute job, the job phase and error. The board does not attest the hash.
-4. **Comparison.** The comparator refuses a capture whose recorded hash
-   differs from the plan, then compares pixels or words.
+   with the state word, frame sequence, generation, the reply result and, for
+   a failed compute job, the job phase and error. The board does not attest
+   the hash.
+4. **Comparison.** The comparator refuses a capture whose recorded hash or
+   state differs from the plan or whose sequences do not advance by one per
+   frame, records a frame with a failed reply result, then compares pixels or
+   words.
 
 Inputs and captures are read-only. Only comparison results are kept, under
 `~/.cache/sunstoneos/evidence/gpu-conformance-<date>/`, and they are
@@ -129,8 +133,8 @@ Vulkan lets a float-to-UNORM8 conversion return either neighbouring value; the
 reference rounds to nearest, so one conversion differs by at most 1. Blending
 is assumed to run at destination precision or better with one final rounding,
 and linear filtering to use the 8 subtexel bits the pinned PowerVR driver
-reports. Closed-form board scenes confirm both; a linear ramp over a 2 × 1
-texture across 256 pixels shows the subtexel step directly.
+reports. Closed-form board scenes confirm both, as described at the end of
+this section.
 
 Each covered pixel passes through at most one inexact stage, so tolerances do
 not compose. Linear-filtered pixels are opaque and not sRGB-decoded; sRGB uses
@@ -153,11 +157,26 @@ coordinate is below 1024 in magnitude; four fp32 roundings bound its error by
 adds 1.
 
 The profile 4 bound assumes that the hardware's perspective division adds no
-more than that 2⁻¹¹ texel. A closed-form board scene confirms it: the 2 × 1
-ramp drawn on a quad with w = 1 at one edge and w = 4 at the other yields each
-pixel's texel coordinate to 2⁻⁸, compared with the exact rational value. If it
-fails, the profile 4 launch is reported as unconfirmed and the tolerance is
-revised before its other scenes count.
+more than that 2⁻¹¹ texel.
+
+The last batch of each profile 4 frame holds confirmation scenes, whose
+pixels the comparator checks against exact rational values rather than the
+reference. Texels 0 and 1 of the profile 4 texture are black and white, and
+so are texels 8 and 9 below them, so a linear-filtered pixel between them
+reads its weight directly: a weight error e moves each channel by 255e. Each
+linear frame draws a ramp from texel 0 to texel 1 on a quad with w = 1 at one
+edge and w = 4 at the other, and four constant-w bands that each span a
+quarter texel over 64 pixels. A single 256-pixel ramp does not fit the
+128-pixel frame; the four bands place their 256 pixel centres midway between
+consecutive multiples of 2⁻⁸ texel, so they show every 8-bit subtexel step. A
+ramp pixel passes when each channel is within 1 + 255 × 2⁻⁸ of its exact
+value, which holds when the texel coordinate is within 2⁻⁸ of the exact
+rational value. Each nearest frame's blended quad is the blending
+confirmation: each channel within 1 of the exact blended value. If any
+confirmation pixel fails, the profile 4 launch is reported as unconfirmed and
+none of its frames is compared until the tolerance is revised. The 1920 × 384
+launch rests on the same filtering assumption, so its comparison requires
+the passed comparison of the profile 4 launch.
 
 An edge tie is a pixel centre whose edge function is exactly zero in the
 plan's arithmetic, so the implementation's tie-break rule decides coverage.
@@ -236,12 +255,24 @@ parameters are updated from the measured value before the next board session.
   the eight compare operations distinct patterns, and starting stencil values
   0, 0x5a and 255 separate the eight stencil operations. The 255 × 129
   scenes exercise the stride crop.
+- **Stencil separation.** The closed-form evaluation records each stencil
+  compare and operation whose stored value a later stencil test reads. Each
+  of the eight operations on each of the three paths must have run on start
+  values where its result differs from each other operation. Each compare
+  operation must differ from each other one on some recorded comparison, and
+  a compare mask and a write mask must each change some recorded outcome. A
+  fixed table of stencil test states across the 18 profile 4 frames meets
+  this, because a frame's compare operation decides which paths each start
+  value takes.
+- **Confirmation.** The reference meets the confirmation bounds on the
+  closed-form frames.
 - **Mutations.** Each must fail at least one scene. Five set one reference
   render parameter: a half-pixel viewport offset, the other filter, the other
   interpolation mode, mirrored repeat for mirror clamp to edge, and skipped
-  sRGB decoding. Four alter a capture: stride padding read as pixels, one
-  exact pixel changed by 2, one compute word changed, and a compute capture
-  whose recorded job error is `PVR_JOB_RESULT`.
+  sRGB decoding. Five alter a capture: filter weights truncated to 2⁻⁶, which
+  must leave the profile 4 launch unconfirmed, stride padding read as pixels,
+  one exact pixel changed by 2, one compute word changed, and a compute
+  capture whose recorded job error is `PVR_JOB_RESULT`.
 - **Plan refusals.** One scene violating each plan check is refused.
 
 Transport and driver paths stay with their owners: `checks/gpu-draw-runtime.py`
@@ -261,8 +292,12 @@ synchronization is involved.
 
 On the host, one reference process renders every frame of a launch,
 including its parameter mutations, so EGL setup and shader compilation happen
-once per launch. Each frame ends with `glFinish` and one `glReadPixels`, with
-no polling. llvmpipe's four worker threads are the only concurrency, within
+once per launch. Each frame is rendered twice: once for colour and once with
+an id program that writes the index of the last colour-writing triangle at
+each pixel under the same depth, stencil, culling and colour-mask state. The
+id pass selects each pixel's tolerance class without a coverage map computed
+in Python. Each pass ends with `glFinish` and one `glReadPixels`, with no
+polling. llvmpipe's four worker threads are the only concurrency, within
 the six-job limit. The comparator runs in the same process over the frame in
 memory, in one pass.
 
@@ -279,7 +314,7 @@ reporting system.
 | Metric | Baseline | Budget | Measurement |
 | --- | --- | --- | --- |
 | Implemented features with an independent output comparison | 0 (counted) | Every feature row in `docs/gpu-conformance.md` | Coverage table from the check |
-| Mutations detected | None | All nine | Check result |
+| Mutations detected | None | All ten | Check result |
 | Board launches | No plan | 12; 13 once the 1920 × 1080 launch is admitted | Plan |
 | Readback for all launches | No plan | At most 8 MiB, 7.2 MB planned; 15.5 MB with 1920 × 1080 | Sum of frame extents |
 | Ticks per 512-byte packet, GPU image | 1 to 2 (counted from `apps/gpu-render/usb.c`) | Plan parameter 2 | Per-slot board wall time |
@@ -290,7 +325,7 @@ reporting system.
 | Changes to board images | 0 | 0 | Review of the diff |
 | Reference processes per run | None | At most 5 | Counted |
 | Comparator time, 1920 × 384 frame | None | At most 50 ms | `clock_gettime` |
-| Host check wall time, Mesa built | None | At most 60 s | `time` |
+| Host check wall time after the Mesa build | None | At most 60 s | Clock started after the build |
 | Mesa rebuilds with unchanged stamp | None | 0 | Stamp |
 | Edge-tie pixels per scene | None | At most 5% of covered pixels; 0 in closed-form scenes | Report |
 
@@ -298,9 +333,9 @@ reporting system.
 
 - **Board captures.** This work has no board access; the scheduled board
   session runs the twelve launches. A launch confirms conformance when its
-  recorded input hashes match the plan, the driver's guard and timeline checks
-  pass, every scene passes, and tie-accepted counts and wall times are
-  recorded.
+  recorded input hashes and states match the plan, its confirmation scenes
+  pass, the driver's guard and timeline checks pass, every scene passes, and
+  tie-accepted counts and wall times are recorded.
 - **A 1920 × 1080 launch at the current USB rate.** Its worst-case readback
   exceeds the 30-second frame-stream limit until the GPU image uses the shared
   USB0 loop.

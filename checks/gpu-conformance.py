@@ -5,14 +5,25 @@ Builds pinned Mesa llvmpipe and the reference renderer (skipped when the stamp
 is unchanged), then checks that:
 
 - every closed-form scene, computed exactly in Python, matches the reference
-  within its tolerance class, with no edge-tie pixels;
-- each of the nine mutations fails at least one scene: five reference render
-  parameters, two altered graphics captures and two altered compute captures;
+  within its tolerance class, with no edge-tie pixels and no reference pixel
+  within its tolerance of PVR_RENDER_POISON;
+- the reference meets the profile 4 confirmation bound, and filter weights
+  truncated to 2^-6 fail it;
+- the traced closed-form stencil executions tell every stencil operation on
+  every path, and every compare operation, apart from the other seven;
+- each of the ten mutations fails at least one scene: five reference render
+  parameters, coarse filter weights, two altered graphics captures and two
+  altered compute captures;
 - one scene violating each plan check is refused;
 - the twelve launches meet their readback, frame-stream, session, slot and
-  upload budgets, and the 1920 x 1080 launch is refused at the current USB rate;
+  upload budgets, and the 1920 x 1080 launch is refused by the plan and by the
+  inputs command;
+- the capture comparison passes exact frames, reports coarse filter weights
+  as unconfirmed, records a failed frame and refuses a wrong input hash,
+  state or sequence;
 - the comparator handles a 1920 x 384 frame within 50 ms;
-- every feature row in docs/gpu-conformance.md has an output comparison.
+- every feature row in docs/gpu-conformance.md has an output comparison;
+- the checks after the Mesa build take at most 60 s.
 
 The board is never touched; see docs/gpu-conformance.md.
 """
@@ -108,28 +119,35 @@ def main():
     p.add_argument('--build', type=Path, default=gc.BUILD)
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
-    start = time.monotonic()
+    started = time.monotonic()
     result = {'build': gc.build(a.build)}
     result['build_repeat'] = gc.build(a.build)
     assert not result['build_repeat']['mesa_rebuilt'], 'unchanged stamp rebuilt Mesa'
+    # The 60-second budget is defined with Mesa already built.
+    start = time.monotonic()
+    result['build_s'] = round(start - started, 2)
     processes = 0
 
-    # Plan, budgets and launch refusal.
+    # Plan, budgets and launch refusal, on the plan and on the inputs path.
     planned = gc.plan()
     assert len(planned['launches']) == 12
     assert planned['readback_bytes'] <= 8 << 20
     result['plan'] = planned
     result['refusals'] = {'timing: 1920 x 1080 launch': refused(lambda: gc.plan(gc.refused_launches()), 'exceeds')}
+    result['refusals']['inputs: 1920 x 1080 launch'] = refused(
+        lambda: gc.write_inputs(gc.refused_launches()[0], a.output / 'refused-inputs'), 'exceeds')
+    assert not (a.output / 'refused-inputs').exists()
 
     # Process A: closed-form scenes, reference mutations and capture mutations.
     launch_list = gc.launches()
     board = [f for l in launch_list if l.frames for f in l.frames]
     closed = [f for f in board if f.closed_form] + gc.colour_host_frames()
     entries = []
+    trace = set()
     for frame in closed:
         analysis = gc.analyze(frame)
         assert analysis.tie_pixels == 0, f'{frame.name}: closed-form scene has edge ties'
-        entries.append((frame, analysis, gc.closed_form(frame), 31))
+        entries.append((frame, analysis, gc.closed_form(frame, trace=trace), 31))
     copy = next(i for i, e in enumerate(entries) if e[0].name == 'p2-copy')
     frame, analysis, capture, _ = entries[copy]
     entries.append((frame, analysis, stride_mutation(capture, frame.width, frame.height, frame.stride), 0))
@@ -137,10 +155,11 @@ def main():
     pixel = 4 * (50 * frame.stride + 100)
     changed[pixel] = (changed[pixel] + 2) % 256
     entries.append((frame, analysis, bytes(changed), 0))
-    info, libs, lines = gc.reference(entries, a.output / 'closed-form', a.build)
+    info, libs, lines, rendered = gc.reference(entries, a.output, a.build, frames=True)
     processes += 1
     result['renderer'] = info
     result['libraries'] = libs
+    gc.check_sentinels(lines, entries)
     verdicts = gc.judge(lines, entries)
     n = len(closed)
     base = [v for v, l in zip(verdicts, lines) if l['mutation'] == 0 and l['frame'] < n]
@@ -155,8 +174,36 @@ def main():
     assert len(capture_lines) == 2 and not any(v['passed'] for v in capture_lines)
     mutations['stride padding read as pixels'] = [capture_lines[0]['failed']]
     mutations['one exact pixel changed by 2'] = [capture_lines[1]['failed']]
-    result['closed_form'] = [{k: v[k] for k in ('frame', 'covered', 'exact', 'tolerant', 'failed', 'compare_ms')}
-                             for v in base]
+    result['closed_form'] = [{k: v[k] for k in ('frame', 'covered', 'exact', 'tolerant', 'failed', 'sentinel',
+                                                'compare_ms')} for v in base]
+
+    # Confirmation scenes: the exact frame and the reference meet the bound,
+    # and filter weights truncated to 2^-6 do not.
+    confirmed = {}
+    images = {}
+    for (frame, _, exact, _), image in zip(entries, rendered):
+        pixels = gc.confirmation_pixels(frame)
+        if not pixels or frame.name in confirmed:
+            continue
+        assert not gc.confirm(frame, exact, frame.stride), f'{frame.name}: exact frame'
+        failures = gc.confirm(frame, image, frame.width)
+        assert not failures, f'{frame.name}: reference confirmation pixels {failures[:4]}'
+        confirmed[frame.name] = len(pixels)
+        images[frame.name] = exact
+        if frame.state & 32:
+            coarse = gc.closed_form(frame, weight_bits=6)
+            if gc.confirm(frame, coarse, frame.stride):
+                images[frame.name + ' coarse'] = coarse
+    caught = [name for name in images if name.endswith(' coarse')]
+    assert len(confirmed) == 12 and len(caught) == 6, (confirmed, caught)
+    mutations['filter weights truncated to 2^-6'] = caught
+    result['confirmation_pixels'] = confirmed
+
+    # Stencil: every operation on every path, and every compare operation, is
+    # told apart from the other seven by some traced execution.
+    missing, compare_mask, write_mask = gc.stencil_separation(trace)
+    assert not missing, f'stencil behaviour not separated: {missing}'
+    assert compare_mask and write_mask, 'a stencil mask changes no traced outcome'
 
     # Compute: closed-form expressions, two capture mutations, sentinel refusal.
     compute = {}
@@ -180,7 +227,7 @@ def main():
         compute[k.name] = {'inputs': len(k.inputs), 'words': len(expected[0])}
     mutations['one compute word changed'] = list(compute)
     mutations['compute job error PVR_JOB_RESULT'] = list(compute)
-    assert len(mutations) == 9
+    assert len(mutations) == 10
     result['mutations'] = mutations
     result['compute'] = compute
     affine = next(l.kernel for l in launch_list if l.kernel and l.kernel.name == 'vector-affine')
@@ -196,7 +243,7 @@ def main():
     # comparator time.
     others = [f for f in board if not f.closed_form]
     entries = [(f, gc.analyze(f), 'self', 0) for f in others]
-    info, libs, lines = gc.reference(entries, a.output / 'board-scenes', a.build)
+    info, libs, lines, _ = gc.reference(entries, a.output, a.build)
     processes += 1
     gc.check_sentinels(lines, entries)
     verdicts = gc.judge(lines, entries)
@@ -212,30 +259,15 @@ def main():
     frame = gc.Frame('refuse-sentinel', 2, 255, 129, [gc.Batch([gc.Quad(0, 0, 255, 129, (Q(0), Q(1)), (Q(0), Q(1)))])],
                      texels=(255, 129, bytes(poison)))
     entries = [(frame, gc.analyze(frame), 'self', 0)]
-    _, _, lines = gc.reference(entries, a.output / 'sentinel', a.build)
+    _, _, lines, _ = gc.reference(entries, a.output, a.build)
     processes += 1
     result['refusals']['sentinel: reference pixel'] = refused(lambda: gc.check_sentinels(lines, entries), 'POISON')
 
-    # Process D: the capture comparison path, with a synthesized capture.
-    launch = gc.find_launch('profile3')
-    inputs = a.output / 'profile3-inputs'
-    gc.write_inputs(launch, inputs)
-    capture = a.output / 'profile3-capture'
-    capture.mkdir()
-    record = {'launch': 'profile3', 'frames': []}
-    for k, frame in enumerate(launch.frames):
-        (capture / f'frame-{k}.rgba').write_bytes(gc.closed_form(frame))
-        data = (inputs / f'frame-{k}.input').read_bytes()
-        record['frames'].append({'input_sha256': hashlib.sha256(data).hexdigest(), 'sequence': k + 1,
-                                 'generation': 1, 'result': 1, 'file': f'frame-{k}.rgba'})
-    (capture / 'capture.json').write_text(json.dumps(record))
-    report = gc.compare_capture('profile3', capture, a.output / 'profile3-comparison', a.build)
+    # Process D: the capture comparison path, with synthesized profile 4
+    # captures. Only the first comparison renders; the others stop before
+    # the reference.
+    result['capture_comparison'] = capture_comparisons(a.output, a.build, images)
     processes += 1
-    assert report['passed']
-    record['frames'][3]['input_sha256'] = '0' * 64
-    (capture / 'capture.json').write_text(json.dumps(record))
-    result['refusals']['capture input hash'] = refused(
-        lambda: gc.compare_capture('profile3', capture, a.output / 'profile3-wrong-hash', a.build), 'hash differs')
     clear = a.output / 'clear-capture'
     clear.mkdir()
     (clear / 'clear.rgba').write_bytes(struct.pack('<I', gc.CLEAR) * 4096)
@@ -243,9 +275,10 @@ def main():
     assert gc.compare_capture('fixed-clear', clear, a.output / 'clear-comparison')['passed']
     (clear / 'clear.rgba').write_bytes(struct.pack('<I', gc.CLEAR) * 4095 + struct.pack('<I', gc.POISON))
     assert not gc.compare_capture('fixed-clear', clear, a.output / 'clear-mutated')['passed']
+    shutil.rmtree(clear)
 
     # Coverage: every documented feature row has a comparison.
-    covered = gc.coverage(closed, board, [l.kernel for l in launch_list if l.kernel])
+    covered = gc.coverage(closed, board, [l.kernel for l in launch_list if l.kernel], trace)
     missing = [row for row in feature_rows() if not covered.get(row)]
     extra = [row for row in covered if row not in feature_rows()]
     assert not missing and not extra, f'coverage table differs: missing {missing}, undocumented {extra}'
@@ -253,20 +286,61 @@ def main():
     result['reference_processes'] = processes
     assert processes <= 5
     result['wall_s'] = round(time.monotonic() - start, 2)
-    assert result['wall_s'] <= 60, f'host check took {result["wall_s"]} s'
-    for d in ('closed-form', 'board-scenes', 'sentinel', 'profile3-comparison', 'profile3-capture', 'profile3-inputs'):
-        launch_bin = a.output / d / 'launch.bin'
-        if launch_bin.exists():
-            launch_bin.unlink()
-        if d in ('profile3-capture', 'profile3-inputs'):
-            shutil.rmtree(a.output / d)
+    assert result['wall_s'] <= 60, f'host check took {result["wall_s"]} s after the build'
     (a.output / 'result.json').write_text(json.dumps(result, indent=1) + '\n')
-    print(json.dumps({'passed': True, 'wall_s': result['wall_s'], 'reference_processes': processes,
-                      'comparator_ms_1920x384': result['comparator_ms_1920x384'],
+    print(json.dumps({'passed': True, 'build_s': result['build_s'], 'wall_s': result['wall_s'],
+                      'reference_processes': processes, 'comparator_ms_1920x384': result['comparator_ms_1920x384'],
                       'worst_frame_stream_s': planned['worst_frame_stream_s'],
                       'worst_session_s': planned['worst_session_s'], 'readback_bytes': planned['readback_bytes'],
                       'mutations': len(mutations), 'refusals': len(result['refusals']),
                       'features': len(covered)}))
+
+
+def capture_comparisons(output, build, images):
+    """Run compare_capture on synthesized profile 4 captures: exact frames
+    pass and confirm; coarse filter weights leave the launch unconfirmed; a
+    failed frame is recorded with its result; and a wrong input hash, state
+    or sequence is refused. images maps a frame name to its closed-form
+    capture, and 'name coarse' to the capture with coarse filter weights.
+    Returns each case's status."""
+    launch = gc.find_launch('profile4')
+    inputs = output / 'profile4-inputs'
+    gc.write_inputs(launch, inputs)
+    capture = output / 'profile4-capture'
+    capture.mkdir()
+    frames = []
+    for k, frame in enumerate(launch.frames):
+        (capture / f'frame-{k}.rgba').write_bytes(images.get(frame.name) or gc.closed_form(frame))
+        data = (inputs / f'frame-{k}.input').read_bytes()
+        frames.append({'input_sha256': hashlib.sha256(data).hexdigest(), 'state': frame.state,
+                       'sequence': k + 1, 'generation': 1, 'result': 1, 'file': f'frame-{k}.rgba'})
+
+    def compare(case, records):
+        (capture / 'capture.json').write_text(json.dumps({'launch': 'profile4', 'frames': records}))
+        return gc.compare_capture('profile4', capture, output / f'profile4-{case}', build)
+    statuses = {}
+    report = compare('exact', frames)
+    assert report['passed'] and report['status'] == 'passed', report['status']
+    statuses['exact frames'] = report['status']
+    for k, frame in enumerate(launch.frames):
+        if frame.state & 32:
+            (capture / f'frame-{k}.rgba').write_bytes(images[frame.name + ' coarse'])
+    report = compare('coarse', frames)
+    assert not report['passed'] and report['status'].startswith('unconfirmed'), report['status']
+    statuses['filter weights truncated to 2^-6'] = report['status']
+    report = compare('failed', [dict(frames[0], result=3)])
+    assert not report['passed'] and report['frames'][0]['status'] == 'failed at result 3'
+    assert report['status'].startswith('unconfirmed'), report['status']
+    statuses['first frame failed with result 3'] = report['frames'][0]['status']
+    for case, change, reason in (('hash', {'input_sha256': '0' * 64}, 'hash differs'),
+                                 ('state', {'state': frames[3]['state'] ^ 1}, 'state'),
+                                 ('sequence', {'sequence': 9}, 'sequence')):
+        records = [dict(f) for f in frames]
+        records[3].update(change)
+        statuses[f'wrong {case}'] = refused(lambda: compare(f'wrong-{case}', records), reason)
+    shutil.rmtree(inputs)
+    shutil.rmtree(capture)
+    return statuses
 
 
 if __name__ == '__main__':

@@ -9,7 +9,8 @@
  * process renders every frame with OpenGL 4.5 on surfaceless EGL, then
  * compares the capture in one pass over the frame in memory. It prints one
  * JSON line per comparison. FRAMES-OUT, when given, receives each unmutated
- * reference frame as width x height RGBA8 bytes, in frame order.
+ * reference frame as width x height RGBA8 bytes, in frame order; the host
+ * self-check reads it to check the reference's own confirmation pixels.
  */
 #define _GNU_SOURCE
 #include <EGL/egl.h>
@@ -391,7 +392,7 @@ static void compare(const struct frame *f, unsigned index, unsigned mutation, co
             size_t i = (size_t)y * w + x;
             const uint8_t *r = ref + 4 * i, *c = capture + 4 * ((size_t)y * f->stride + x);
             unsigned tol = tolerance(f, ids, i);
-            int is_tie = f->ties && ((f->ties[i >> 3] >> (i & 7)) & 1);
+            int is_tie = (f->ties[i >> 3] >> (i & 7)) & 1;
             covered += ids[i] != 0;
             ties += is_tie;
             if (within(r, poison, tol)) ++sentinel;
@@ -516,7 +517,7 @@ int main(int argc, char **argv)
         f.nclass = take32();
         f.classes = take(f.nclass);
         f.linear_tol = take32();
-        f.ties = take32() ? take(((size_t)f.width * f.height + 7) / 8) : NULL;
+        f.ties = take(((size_t)f.width * f.height + 7) / 8);
         f.capture_mode = take32();
         f.capture = f.capture_mode == 1 ? take((size_t)f.stride * f.height * 4) : NULL;
         f.mutations = take32();

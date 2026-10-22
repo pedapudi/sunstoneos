@@ -16,14 +16,15 @@ run it and what it has shown.
   USB time model, the compute reference and the capture comparison. Each scene
   builds its device input with `vertices()` in `apps/gpu-render/draw.py` or
   `input_bytes()` in `apps/gpu-render/texture.py`, so the reference and the
-  board receive the same bytes. A scene's identity is the SHA-256 of those
-  bytes followed by profile, state word, framebuffer width, height and stride.
+  board receive the same bytes. The plan records the SHA-256 of those bytes
+  and the frame's state word, and a capture must record the same two values.
 - `tools/gpu-conformance/reference.c` is the reference renderer. It renders
   through OpenGL 4.5 on surfaceless EGL, parses the device input itself and
   compares a capture with its own frame in one pass. It also renders an id
   pass with the same depth, stencil, culling and colour-mask state, which
   names the last triangle that wrote each pixel and so selects that pixel's
-  tolerance.
+  tolerance. On request it writes its unmutated frames to a file, which the
+  host self-check reads to check the reference's confirmation pixels.
 - `checks/gpu-conformance.py` is the host self-check.
 
 `gpu-conformance.py build` extracts
@@ -72,6 +73,44 @@ The plan refuses a scene that breaks any of these conditions:
   expected compute word equals the output fill `0xa5a5a5a5`;
 - a launch exceeds half of any board time limit in the model below.
 
+### Hardware assumptions and their confirmation scenes
+
+Three tolerances rest on hardware behaviour that only the board can show:
+
+- linear filtering quantizes each bilinear weight to 8 subtexel bits, so a
+  weight is within 2⁻⁸ of the exact value;
+- perspective division adds at most 2⁻¹¹ texel to a texel coordinate;
+- blending runs at destination precision or better, with one final rounding.
+
+Each profile-4 frame draws confirmation scenes as its last batch, and the
+comparison checks their pixels against exact rational values computed in
+Python, independently of the reference:
+
+- **Filter weights and perspective division.** Texels 0 and 1 of the 8 × 8
+  texture are black and white, as are texels 8 and 9 below them, so a
+  linear-filtered pixel between them reads its filter weight directly: a
+  weight error e moves each colour channel by 255e. Each linear frame draws a
+  64 × 32 perspective ramp from texel 0 to texel 1 with w from 1 to 4, and
+  four constant-w bands of 64 × 8 pixels, each spanning a quarter texel. The
+  256 pixel centres of the bands lie midway between consecutive multiples of
+  2⁻⁸ texel, so together they cover every 8-bit subtexel step. A pixel passes
+  when every channel is within 1 + 255 × 2⁻⁸ of 255 times the exact weight,
+  which holds when the texel coordinate is within 2⁻⁸ of its exact value.
+- **Blending.** The blended 32 × 32 quad of each nearest frame passes when
+  every channel is within 1 of the exact blended value.
+
+If any confirmation pixel fails, or a frame holding confirmation scenes was
+not captured, the comparison reports the profile-4 launch as unconfirmed and
+compares none of its frames: the tolerances must be revised first. The
+1920 × 384 launch has no confirmation scenes of its own; its comparison
+requires the passed comparison of the profile-4 launch, and otherwise reports
+it as unconfirmed. Filter weights truncated to 2⁻⁶ fail the confirmation in
+every linear frame, and truncation to 2⁻⁷ fails it in some pixels. The
+pinned llvmpipe reference deviates by at most 0.5 from the exact value on the
+ramp pixels.
+
+### Closed-form scenes
+
 Closed-form scenes use rectangles with pixel-boundary edges and texture
 coordinates that vary along one axis each. Python computes their frames with
 rational and integer arithmetic, and the self-check requires the reference to
@@ -105,17 +144,28 @@ Each profile-4 frame divides the framebuffer into regions:
 - a depth region where two batches compare bands at depths 0.25, 0.5 and 0.75
   against a stored plane at 0.5;
 - a stencil region whose columns start at 0, `0x5a` and `0xff` and whose lower
-  row fails the depth test, so one test batch applies its stencil-fail,
-  depth-fail and pass operations; six observation batches then draw only where
-  the stored value equals the expected one;
+  row fails the depth test. The reference `0x5a` is greater than, equal to
+  and less than the three start values. One test batch applies its compare,
+  stencil-fail, depth-fail and pass operations, and six observation batches
+  then draw only where the stored value equals the expected one;
 - a clockwise and a counter-clockwise quad under the frame's culling mode;
-- a blended quad over an opaque underlay and the background in nearest
-  frames, or a perspective ramp between two texels with w from 1 to 4 in
-  linear frames.
+- the confirmation scenes: a blended quad over an opaque underlay and the
+  background in nearest frames, or the filter ramps in linear frames.
 
-Across the 18 frames every depth compare operation, stencil compare
-operation, stencil operation on each path, blend equation, culling mode and
-address mode on each axis appears at least once.
+Across the 18 frames every depth compare operation, blend equation, culling
+mode and address mode on each axis appears at least once. The stencil test
+batches follow a fixed table of compare and stencil operations. One frame
+compares through mask `0xa5`, which makes start value 0 equal to the
+reference and so changes the EQUAL outcome, and three frames write through
+mask `0x0f`. The closed-form evaluation records every stencil compare and
+operation whose stored value a later stencil test reads. From that record,
+the self-check requires each of the eight stencil operations, on each of the
+three paths, to run on start values where its result differs from each of
+the other seven operations. For example, DECR and DECR_WRAP differ only at
+start value 0, and INCR and INCR_WRAP only at `0xff`. It also requires each
+compare operation to give a different outcome from each other one on some
+recorded comparison, and each mask to change some recorded outcome. The
+stencil coverage rows come from this record.
 
 The compute reference is a closed-form Python expression of each kernel over
 the package geometry, compared word for word with the valid output range. A
@@ -142,23 +192,32 @@ throughout a stream.
 
 ## Running a board comparison
 
-1. `gpu-conformance.py inputs --launch NAME --output DIR` writes each frame's
-   device input, shape, state and identity.
+1. `gpu-conformance.py inputs --launch NAME --output DIR` applies every plan
+   check to the launch, timing included, and writes each frame's device
+   input, shape, state and input SHA-256. It refuses the 1920 × 1080 launch.
 2. The board coordinator passes those inputs to `capture_frames()` in
    `draw.py` or `texture.py`, or to `runtime.sequence()` for compute. It
    records `capture.json` beside the captured files: per frame the SHA-256 of
-   the bytes passed to the capture function, the frame sequence, generation,
-   reply result and file name; per compute input also the service phase and
-   compute job error. It records wall time per launch and per slot.
+   the bytes passed to the capture function, the state word, the frame
+   sequence, generation, reply result and file name; per compute input also
+   the service phase and compute job error. A capture stops at the first
+   failed frame. It records wall time per launch and per slot.
 3. `gpu-conformance.py compare --launch NAME --capture DIR --output DIR`
-   refuses a capture whose recorded hash differs from the plan, renders the
-   launch in one reference process and writes `comparison.json` with exact,
-   tolerant, tie-accepted, failed and stale pixel counts and the first 16
-   failures.
+   refuses a capture whose recorded hash or state differs from the plan,
+   whose sequences do not advance by one per frame, that lacks a generation,
+   or that records frames after a failed one. It records a frame whose reply
+   result is not 1 as failed with that result, and frames after it as not
+   captured. For the profile-4 launch it checks the confirmation scenes
+   first. It then renders the captured frames in one reference process and
+   writes `comparison.json` with the launch status (passed, failed or
+   unconfirmed), each frame's status, exact, tolerant, tie-accepted, failed
+   and stale pixel counts and the first 16 failures. The comparison of the
+   1920 × 384 launch takes `--confirmation` with the `comparison.json` of the
+   passed profile-4 launch.
 
-A launch confirms conformance when its input hashes match, the driver's guard
-and timeline checks pass, every frame passes, and its wall times are within
-the modeled values. A slower launch or slot is a model discrepancy: update
+A launch confirms conformance when its input hashes and states match, its
+confirmation scenes pass, the driver's guard and timeline checks pass, every
+frame passes, and its wall times are within the modeled values. A slower launch or slot is a model discrepancy: update
 `TICKS` in the tool from the measured value before the next board session.
 A refused, failed or uncertain capture is recorded with its stage and not
 retried.
@@ -171,18 +230,28 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/gpu-conform
 
 The check runs four reference processes and verifies the following:
 
-- every closed-form scene matches the reference with no edge ties;
-- each of nine mutations fails at least one scene. Five change the reference:
+- every closed-form scene matches the reference with no edge ties, and no
+  reference pixel lies within its tolerance of `PVR_RENDER_POISON`;
+- the reference and the exact frames meet the confirmation bounds;
+- the recorded stencil executions separate every stencil operation on every
+  path, and every compare operation, from the other seven;
+- each of ten mutations fails at least one scene. Five change the reference:
   a half-pixel viewport offset, the other filter, the other interpolation
   mode, mirrored repeat in place of mirror clamp to edge, and skipped sRGB
-  decoding. Four change a capture: stride padding read as pixels, one exact
-  pixel changed by 2, one compute word changed, and a compute job error of
-  `PVR_JOB_RESULT`;
-- one scene breaking each plan check is refused, as are a capture with a
-  wrong input hash and the 1920 × 1080 launch;
+  decoding. Five change a capture: filter weights truncated to 2⁻⁶, stride
+  padding read as pixels, one exact pixel changed by 2, one compute word
+  changed, and a compute job error of `PVR_JOB_RESULT`;
+- one scene breaking each plan check is refused, and the plan and the inputs
+  command both refuse the 1920 × 1080 launch;
+- the capture comparison passes exact profile-4 frames, reports the launch
+  as unconfirmed when filter weights are truncated to 2⁻⁶, records a frame
+  that failed with a reply result, and refuses a wrong input hash, state or
+  sequence;
 - the twelve launches meet their budgets;
 - the comparator handles the 1920 × 384 frame within 50 ms;
-- every row of the coverage table below has a comparing scene.
+- every row of the coverage table below has a comparing scene;
+- the checks after the Mesa build take at most 60 s. `result.json` records
+  the build time separately.
 
 ## Coverage
 
@@ -235,7 +304,7 @@ Results are kept under `~/.cache/sunstoneos/evidence/gpu-conformance-20261022/`:
 | Metric | Before | Budget | Result |
 | --- | --- | --- | --- |
 | Features with an independent output comparison | 0 | Every coverage row | 32 of 32 rows |
-| Mutations detected | None | All nine | Nine |
+| Mutations detected | None | All ten | Ten |
 | Board launches | No plan | 12 | 12 planned; 1920 × 1080 refused |
 | Planned readback | No plan | At most 8 MiB | 7.1 MB |
 | Worst-case frame stream | None | At most 15 s | 11.7 s |
@@ -244,7 +313,7 @@ Results are kept under `~/.cache/sunstoneos/evidence/gpu-conformance-20261022/`:
 | Edge-tie pixels | None | At most 5% of covered pixels; none in closed-form scenes | 2.1% in the 1920 × 384 frame; none elsewhere |
 | Reference processes per self-check | None | At most 5 | 4 |
 | Comparator time, 1920 × 384 frame | None | At most 50 ms | 1.9 ms |
-| Host check wall time, Mesa built | None | At most 60 s | 14.6 s |
+| Host check wall time after the Mesa build | None | At most 60 s | 12.4 s |
 | Mesa rebuilds with unchanged stamp | None | 0 | 0 |
 | Texture image SHA-256 | `fc39d18f…` | Unchanged | `fc39d18f…` |
 
