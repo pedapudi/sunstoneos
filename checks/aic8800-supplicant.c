@@ -4,6 +4,11 @@
 #include "aic8800-runtime.c"
 #undef AIC8800_RUNTIME_FIXTURE_MAIN
 #include "aic8800_supplicant.h"
+#ifdef SUNSTONE_AIC8800_SAE
+/* OpenSSL allocates from the FreeRTOS heap in images. */
+void *pvPortMalloc(size_t n){return malloc(n);}
+void vPortFree(void *p){free(p);}
+#endif
 static struct aic8800_wifi wifi;
 static struct aic8800_data data;
 static struct aic8800_security security;
