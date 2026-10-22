@@ -376,13 +376,16 @@ static int isoch_event(struct a733_xhci *x,struct a733_xhci_device *d,struct a73
 }
 /* The isochronous bound runs from the last ring activity the core observed.
  * It expires only when the event ring holds no further event, so a late poll
- * first consumes what the controller posted while the owner was away. */
+ * first consumes what the controller posted while the owner was away. Outside
+ * interrupt service the poll consumes no events, so waiting events would hold
+ * the bound open until an interrupt arrives; it expires instead. */
 static int isoch_expired(struct a733_xhci *x)
 {
     const struct a733_xhci_isoch *s=&x->isoch;
     if(!s->device)return 0;
     const struct a733_xhci_device *d=&x->devices[s->device-1];const struct a733_xhci_endpoint *e=&d->endpoints[1];
     if(d->detach||e->pending!=6||x->last_now<e->deadline)return 0;
+    if(x->irq_mode&&!x->irq_service)return 1;
     if(!barrier(x))return 1;
     return (x->events[x->event_index].control&1)!=x->event_cycle;
 }

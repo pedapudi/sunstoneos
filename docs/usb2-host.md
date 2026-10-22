@@ -920,7 +920,9 @@ Any other completion code, or an event that names a TD the rules above do not
 allow, retains the session and its DMA parent. So does a poll that finds the
 event ring empty 100 ms or more after the last ring activity while TDs are
 queued. Events that arrived while the owner was not polling are processed
-first, so a late poll by itself does not retain the session. A device teardown
+first, so a late poll by itself does not retain the session. With the CPU
+interrupt profile, a poll outside interrupt service consumes no events, so the
+bound expires on time even when events are waiting. A device teardown
 stops the endpoint. The TDs still queued end without completions when the
 dequeue pointer names one of them or the enqueue position.
 
