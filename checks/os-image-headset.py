@@ -3,7 +3,8 @@
 
 checks/os-image-headset.c includes apps/os/headset.c unchanged, links the real
 WAV conversions (apps/bluetooth/pcm.c) and models the Bluetooth application's
-segment publication with its copy, acknowledgment and ticket rules. This
+segment publication with its request word, borrow, acknowledgment and ticket
+rules. This
 runner compiles it with the exact flags of apps/os/headset.c from a configured
 headset OS build (configure it with CMAKE_EXPORT_COMPILE_COMMANDS=ON), so the
 model follows that build's radio, resident and mSBC options, and runs each
@@ -23,13 +24,17 @@ mode under unicorn:
   and only the Bluetooth owner runs privileged; with the radio it creates the
   client only and attaches the application to the radio's module, with the
   radio owner as Bluetooth owner and the client's own recovery latch;
-- 1: two generations; segments before a request and the segment being filled
-  at the request are discarded, the next one becomes the generation's WAV, and
-  later segments are drained without changing it;
-- 2, 3, 5: a segment with a lost packet, a record that changes during the copy
-  and a wrong digest each end the session, stop capture and leave the segment
-  unacknowledged;
-- 4: the recognizer's request rules;
+- 1: keyboard generations (workload 4): no request while no generation
+  waits; a new generation requests START and the next segment becomes its
+  WAV; a stray segment is acknowledged without touching that WAV; after a
+  headset cancel the client requests ACCEPT, so the button records the
+  generation; a newer generation upgrades a pending ACCEPT to START;
+- 2: an activation that publishes between the client's take and its request
+  refuses the request, and a START refused while an earlier activation runs
+  is requested again after that activation ends without a segment;
+- 3, 5: a refused borrow and a refused request each end the session, stop
+  capture and leave any segment unacknowledged;
+- 4: the recognizer's request rules, and the wake-up of the client;
 - 6: a failed Bluetooth application ends the session;
 - 7: one owner iteration (with the radio, the module poll that the radio
   owner runs) polls the live application, retains it once the board fails
@@ -37,7 +42,8 @@ mode under unicorn:
 - 8: capture stopped by the supervised window continues; a stop for a
   capture deadline, backlog or loss ends the session;
 - 9: with mSBC, a wideband segment becomes a 16 kHz WAV unchanged and an
-  unknown capture state is refused; without it, a wideband segment is refused.
+  unknown capture state is refused; without it, a wideband segment is refused;
+- 10: workload 0 admits the headset button only (ACCEPT), also after a cancel.
 
 No device, UART, radio or Bluetooth controller is modeled.
 """
@@ -52,9 +58,9 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ['pins-and-startup', 'two-generations', 'lost-packet-refused', 'changed-record-refused',
-         'request-rules', 'wrong-digest-refused', 'failed-application', 'owner-iteration',
-         'stopped-capture', 'wideband-segment']
+CASES = ['pins-and-startup', 'keyboard-generations', 'request-after-publication', 'refused-borrow',
+         'request-rules', 'refused-request', 'failed-application', 'owner-iteration',
+         'stopped-capture', 'wideband-segment', 'button-only-workload']
 
 
 def main():

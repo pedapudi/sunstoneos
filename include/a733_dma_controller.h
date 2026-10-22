@@ -3,6 +3,7 @@
 
 #include "a733_dma.h"
 #include "a733_range.h"
+#include "dma_address_width.h"
 
 #define A733_DMA_CHANNELS 16u
 #define A733_DMA_MAX_MAPPINGS (2u * A733_DMA_MAX_SEGMENTS)
@@ -33,12 +34,12 @@ struct a733_dma_mapping {
 };
 
 /* Shape every DMA0 mapping needs: nonempty 64-byte-aligned CPU and bus ranges,
- * no CPU address wrap, and a bus range below 2^35. */
+ * no CPU address wrap, and a bus range below A733_DMA0_DATA_LIMIT (2^35). */
 static inline int a733_dma_mapping_shape(const struct a733_dma_mapping *m)
 {
     return m->cpu && m->bytes && !((uintptr_t)m->cpu & 63) && !(m->bus & 63) &&
         !(m->bytes & 63) && (uintptr_t)m->cpu <= UINTPTR_MAX - m->bytes &&
-        m->bus < (UINT64_C(1) << 35) && m->bytes <= (UINT64_C(1) << 35) - m->bus;
+        m->bus < A733_DMA0_DATA_LIMIT && m->bytes <= A733_DMA0_DATA_LIMIT - m->bus;
 }
 /* Either the CPU or the bus ranges intersect; both mappings have valid shape. */
 static inline int a733_dma_mappings_overlap(const struct a733_dma_mapping *a,

@@ -51,6 +51,15 @@ set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
   target_include_directories(radio-network-model BEFORE PRIVATE "${network_root}/network/include" "${SUNSTONE_NETWORK_C_HEADERS}")
   target_include_directories(radio-network-model PRIVATE "${SUNSTONE_TCP_DIR}/source/include" "${SUNSTONE_TCP_DIR}/source/portable/Compiler/GCC")
   sunstone_enable_radio_security(radio-network-model "${SUNSTONE_RSN_DIR}")
+  # Optionally run every RSN primitive through the pinned OpenSSL library and
+  # add station SAE, as an SAE image would.
+  option(SUNSTONE_RADIO_SAE "Use OpenSSL and station SAE in radio-network-model" OFF)
+  if(SUNSTONE_RADIO_SAE)
+    include("${network_root}/cmake/openssl.cmake")
+    sunstone_enable_radio_sae(radio-network-model "${SUNSTONE_RSN_DIR}")
+    target_sources(radio-network-model PRIVATE "${network_root}/checks/sae-openssl-native.c")
+    set_source_files_properties("${network_root}/checks/sae-openssl-native.c" PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+  endif()
   set_source_files_properties(${tcp_sources} PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
   get_target_property(network_link_options radio-network-model LINK_OPTIONS)
   list(FILTER network_link_options EXCLUDE REGEX "Map,")

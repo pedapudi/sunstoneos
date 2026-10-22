@@ -21,7 +21,8 @@ static struct {uint8_t bytes[1514];unsigned length;} peer_rx[8];
 static unsigned peer_head,peer_count,udp_packets,tcp_packets,syn_packets;
 static uint64_t peer_pn;
 static uint32_t tcp_next,peer_next=9001;
-static int entropy_failure,case_entropy,case_late,case_alias,case_inbound,case_rekey;
+static int entropy_failure,case_entropy,case_late,case_alias,case_inbound,case_rekey,case_sae;
+int sae_native_case(void);
 static unsigned dns_queries;
 static unsigned inbound_resets,backlog_refusals;
 FreeRTOS_Socket_t *__real_prvHandleListen_IPV4(FreeRTOS_Socket_t *,NetworkBufferDescriptor_t *);
@@ -218,6 +219,13 @@ static void rekey_resume(void)
 static void application(void *context)
 {
     (void)context;
+    if(case_sae){
+#ifdef SUNSTONE_AIC8800_SAE
+        assert(sae_native_case());platform_exit(0);
+#else
+        platform_panic("sae case needs SUNSTONE_RADIO_SAE",0);
+#endif
+    }
     if(case_alias){
         static _Alignas(8) uint8_t immutable_blob[16];
         firmware.config.blobs[0]=(struct aic8800_firmware_blob){immutable_blob,sizeof(immutable_blob)};
@@ -397,6 +405,7 @@ static void arguments(void)
         if(!memcmp(command+i,"entropy",7))case_entropy=1;
         if(!memcmp(command+i,"late",4))case_late=1;
         if(!memcmp(command+i,"alias",5))case_alias=1;
+        if(i+3<=sizeof(command)&&!memcmp(command+i,"sae",3))case_sae=1;
         if(!memcmp(command+i,"inbound",7))case_inbound=1;
         if(i+5<=sizeof(command)&&!memcmp(command+i,"rekey",5))case_rekey=case_inbound=1;
         if(!memcmp(command+i,"cancel",6))inbound_cancel=1;

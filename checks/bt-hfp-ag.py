@@ -100,21 +100,24 @@ def run(args):
         print(error.output,end='')
         raise
 cc=shutil.which('clang-21');assert cc
-exe=a.output/'bt-hfp-ag-model'
-log=run([cc,'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-g','-Iinclude','-I'+str(a.output),'-Ichecks',
-         'drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c','drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_rfcomm.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_hfp_ag.c','checks/bt-hfp-ag.c','-o',str(exe)])
-log+=run([str(exe)]+(['--remaining'] if a.remaining else []))
-
-objects=[]
-for name in ['bt_hfp_ag','bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server']:
-    obj=a.output/(name+'.o');objects.append(obj)
-    log+=run([cc,'--target=aarch64-none-elf','-std=c11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-O2','-Iinclude',
-              '-c','drivers/bluetooth/'+name+'.c','-o',str(obj)])
+# Both call-control settings: the default build without it, and the option
+# that keeps it for HFP conformance.
+log='';executables=[];objects=[]
+for suffix,defines in (('',[]),('-calls',['-DSUNSTONE_BT_HFP_CALL_CONTROL=1'])):
+    exe=a.output/('bt-hfp-ag-model'+suffix);executables.append(exe)
+    log+=run([cc,'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-g',*defines,'-Iinclude','-I'+str(a.output),'-Ichecks',
+             'drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c','drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_rfcomm.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_hfp_ag.c','checks/bt-hfp-ag.c','-o',str(exe)])
+    log+=run([str(exe)]+(['--remaining'] if a.remaining else []))
+    for name in ['bt_hfp_ag','bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server']:
+        if suffix and name!='bt_hfp_ag':continue
+        obj=a.output/(name+suffix+'.o');objects.append(obj)
+        log+=run([cc,'--target=aarch64-none-elf','-std=c11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-O2',*defines,'-Iinclude',
+                  '-c','drivers/bluetooth/'+name+'.c','-o',str(obj)])
 (a.output/'model.log').write_text(log)
 manifest['commands']=commands
-manifest['artifacts']={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in [exe,*objects,a.output/'bt-ref.h',a.output/'l2cap-ref.h',a.output/'sdp-ref.h',a.output/'rfcomm-ref.h',a.output/'sdp-fixture.h',a.output/'rfcomm-fixture.h',a.output/'rfcomm-server-fixture.h',a.output/'bt-l2cap.c']}
+manifest['artifacts']={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in [*executables,*objects,a.output/'bt-ref.h',a.output/'l2cap-ref.h',a.output/'sdp-ref.h',a.output/'rfcomm-ref.h',a.output/'sdp-fixture.h',a.output/'rfcomm-fixture.h',a.output/'rfcomm-server-fixture.h',a.output/'bt-l2cap.c']}
 manifest['compiler']={'path':cc,'sha256':hashlib.sha256(pathlib.Path(cc).read_bytes()).hexdigest()}
 manifest['reused_command_indicator_evidence']=a.remaining
-manifest['result']='AG control source-defined responses over actual incoming UART/HCI/ACL/SDP/RFCOMM composition with ASan/UBSan and native AG plus lower ABI consumer compilation passed; prior scenarios not executed.'
+manifest['result']='AG control source-defined responses, voice recognition and both call-control settings over actual incoming UART/HCI/ACL/SDP/RFCOMM composition with ASan/UBSan and native AG plus lower ABI consumer compilation passed; prior scenarios not executed.'
 (a.output/'results.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(log,end='');print(manifest['result'])
