@@ -15,7 +15,10 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('gpu_disposal_image',ROOT/'checks/npu-large-native.py')
 base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 
+# Graphics profile 3 (depth/blend) or 4 (batches) selects the owner constructor.
+PREPARE={3:'a733_gpu_graphics_memory_prepare_depth_blend',4:'a733_gpu_graphics_memory_prepare_batches'}
 class Machine:
+    profile=3
     def __init__(self,path):
         self.path=Path(path);self.image=base.Image(path);self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         self.u.mem_map(0x40000000,0x04000000);self.u.mem_map(0x48000000,0x31000000)
@@ -124,7 +127,7 @@ class Machine:
         assert self.call('a733_gpu_compute_reserved_prepare',c,f,s,10)
         profile=d+self.image.layouts['a733_gpu_disposal']['profile']
         self.u.mem_write(profile,struct.pack('<6I Q',64,64,16384,1024,1024,25,5000000))
-        assert self.call('a733_gpu_graphics_memory_prepare_depth_blend',g,f,c,s,11,profile)==1
+        assert self.call(PREPARE[self.profile],g,f,c,s,11,profile)==1
         # Provider construction/OFF is inherited accepted evidence, not replayed.
         self.set(p,'a733_gpu_platform','initialized',1)
         self.set(p,'a733_gpu_platform','manager',self.at('shared')+self.image.layouts['a733_native_usb']['gpu'],8)
@@ -205,13 +208,14 @@ class Machine:
         raise AssertionError('disposal poll budget')
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',type=Path);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',type=Path)
+    p.add_argument('--profile',type=int,choices=(3,4),default=3);a=p.parse_args()
     a.output.mkdir(parents=True,exist_ok=False)
-    m=Machine(a.image);m.out=a.output
+    m=Machine(a.image);m.out=a.output;m.profile=a.profile
     # Resolve every called function, consumed type/field and modeled boundary
     # before constructors or worker code execute; inlined advance is not called.
     calls=['a733_memory_reservations_commit_verified','a733_memory_uncached_commit_verified',
-        'a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare','a733_gpu_graphics_memory_prepare_depth_blend',
+        'a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare',PREPARE[a.profile],
         'a733_gpu_backend_bind','pvr_gpu_service_init','pvr_gpu_service_bind','a733_gpu_graphics_memory_cleanup_records',
         'a733_gpu_backend_stopped','a733_gpu_disposal_begin','a733_gpu_disposal_poll','a733_gpu_disposal_rebuild','device_memory_lookup']
     resolved={name:m.image.address(name) for name in calls}
@@ -246,7 +250,7 @@ def main():
     m.checkpoint('reconstructed')
     m.worker_stop=None;m.publishing=True;m.call('worker',m.s,unit='/drivers/gpu/pvr_gpu_service.c')
     m.checkpoint('reopened-publication')
-    record={'passed':True,'old_epoch_open_refusal':refused,'new_open':opened,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'steps':steps,'scope':__doc__}
+    record={'passed':True,'profile':a.profile,'old_epoch_open_refusal':refused,'new_open':opened,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'steps':steps,'scope':__doc__}
     (a.output/'result.json').write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record))
 if __name__=='__main__':main()
