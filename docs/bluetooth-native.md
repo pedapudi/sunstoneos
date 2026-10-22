@@ -144,6 +144,84 @@ are copied and hashed before compilation and execution; raw results reside in
 `bluetooth-native-20261017/host-capture` under the evidence cache.
 
 
+## Attachment to a Wi-Fi module owner
+
+`bluetooth_application_init` builds the module itself: a radio platform with
+the wake pins and a bootstrap-only radio session. `bluetooth_application_attach`
+instead serves Bluetooth on a module that a full Wi-Fi radio session owns, so
+the module is powered and its firmware loaded once for both. The integrated
+OS image uses it when it has both the radio and the headset
+([OS image](os-image.md#one-owner-serves-the-aic8800-module)).
+
+The attachment runs before the scheduler and before any task has polled the
+session. It requires:
+
+- a full session that has not faulted, whose owner task is the Bluetooth
+  owner and whose radio platform uses the given native adapter with the same
+  owner task;
+- a profile that names that module: the platform and session owners, the
+  topology, the radio identity and the four firmware spans equal the
+  session's;
+- the same profile and lifetime rules as `bluetooth_application_init`.
+
+It adds the profile's wake pins to the module platform and registers an
+added admission with the native adapter
+(`a733_radio_platform_native_extend`). After the module's own admission
+accepts the platform configuration, the added admission accepts only the
+profile's exact wake pins with the platform owner's clock token. Once
+attached, the wake pins belong to the module platform, so the added admission
+does not read the client's recovery latch. A client failure before the
+module's admission therefore leaves that admission and Wi-Fi unaffected.
+
+The Bluetooth client owns UART1, the H4/HCI binding and its own recovery
+latch. The module's owner task polls the session first and the client after
+it; the client never polls, drains or retains the session. It takes the
+firmware generation from `a733_radio_session_bootstrap`, which a full session
+reports while Wi-Fi is in management, online, reconnecting or recovering. A
+client failure retains UART1, H4 and the upper layers and sets only the
+client latch. A session or platform fault ends the client at its next poll.
+Before the firmware first becomes ready, the client gives up at its own
+bootstrap bound.
+
+## Supervised and resident lifetimes
+
+The application admits two lifetimes. A supervised session ends exactly 60 s
+after its start, and the schedule below runs from the start. A resident
+session ends at `UINT64_MAX / 24` microseconds, the board's resident deadline,
+which no counter value reaches.
+
+| Bound | Supervised | Resident |
+| --- | --- | --- |
+| Firmware ready | 30 s for version 3 and wideband playback profiles, 40 s otherwise | 120 s after the session start |
+| Schedule origin | Session start | Firmware readiness minus the supervised firmware bound |
+| HCI identification, headset setup | Fixed offsets from the origin | The same offsets from the moved origin |
+| Repeated capture window | 38 s after the origin | None |
+| Closing after capture stops | 40 s after the origin | 2 s after the stop |
+
+The resident origin keeps each stage's supervised time budget after the
+firmware becomes ready. Firmware loading needs about 47 s of SDIO bus time at
+the admitted one-bit 400 kHz clock, which the supervised bounds do not allow;
+the resident 120 s bound matches the integrated OS radio. The resident bounds
+are configuration, not a board measurement. The Bluetooth image itself
+remains supervised.
+
+[bluetooth-application.py](../checks/bluetooth-application.py) runs
+[bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real
+UART, H4 and HCI over the HCI wire model. It refuses a bootstrap-only or
+faulted session, another owner task or adapter, other session or platform
+owners, another topology, radio identity or firmware span and another
+lifetime. It checks the added admission, the client's own bootstrap bound
+without touching the module or the board latch, the added admission after
+that client failure, identification on the
+module's generation in the resident lifetime with the moved origin, and a
+module fault that ends the client. The repeated headset model
+(`checks/bluetooth-headset.py --repeated --case resident`) runs resident
+capture past the supervised window and checks the 2 s close bound. Its
+`stop-in-poll` case requests cancellation from inside an owner poll, after
+that poll's first stop check, while the owner publishes a segment with the
+audio transmit path idle. The owner must set the close bound before it asks
+the controller to close, so the close succeeds in that same poll.
+
 ## Bounded native headset capture
 
 Building with `SUNSTONE_BT_SECURITY_DIR` enables the 752-byte headset profile.

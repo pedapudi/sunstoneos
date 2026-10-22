@@ -27,10 +27,10 @@ void aic8800_firmware_stop(struct aic8800_firmware *f, const void *owner, enum a
 }
 static int observe(struct aic8800_firmware *f, uint64_t now)
 {
-    if (now < f->last_now || now >= f->deadline) {
+    if (!a733_deadline_admit(now,&f->last_now,f->deadline)) {
         aic8800_firmware_stop(f,f->owner,AIC8800_FW_TIME_ERROR); return 0;
     }
-    f->last_now=now;return 1;
+    return 1;
 }
 int aic8800_firmware_init(struct aic8800_firmware *f, const struct aic8800_firmware_config *c)
 {

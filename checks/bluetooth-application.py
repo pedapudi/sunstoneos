@@ -138,7 +138,8 @@ def main():
                    'checks/bluetooth-wake.c', 'drivers/clock/a733_clock_leases.c', 'drivers/power/a733_rail_leases.c',
                    'drivers/power/a733_pmic.c', 'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
                    'drivers/pinctrl/a733_pin_tables.c', 'drivers/storage/sdio_card.c', 'drivers/storage/sunxi_sdio.c',
-                   'apps/bluetooth/result.c','checks/bluetooth-uart.c','drivers/uart/a733_uart_platform.c']
+                   'apps/bluetooth/result.c','checks/bluetooth-uart.c','drivers/uart/a733_uart_platform.c',
+                   'checks/bluetooth-module-owner.c']
         objects = [];setup_errors = []
         for index, source in enumerate(sources):
             obj = out / f'host-{index}.o';dep = out / f'host-{index}.d'
@@ -162,7 +163,7 @@ def main():
         if setup_errors:
             raise SystemExit('Independent setup failures (no runtime cases executed):\n' + '\n'.join(setup_errors))
         groups = {'application': [0, 1, 2, 3, 4, 15], 'session': [5],
-                  'wake': [6, 7, 8, 9, 10, 11, 12, 13, 14], 'uart': [0,7,11,12,16,17]}
+                  'wake': [6, 7, 8, 9, 10, 11, 12, 13, 14], 'uart': [0,7,11,12,16,17], 'module': [0, 1, 2, 3, 18]}
         for name, indices in groups.items():
             executable = out / ('bluetooth-' + name + '.elf')
             try:
@@ -179,7 +180,7 @@ def main():
         host = load('bluetooth_host_checks', ROOT / 'checks/bluetooth-host.py')
         host.check(out / 'host')
         (out / 'result.json').write_text(json.dumps({'passed': True, 'native_elf_sha256': sha(native_image),
-            'scope': 'New application with actual UART/H4/HCI over modeled native providers and firmware checkpoints; actual bootstrap-only session admission; actual PM3/PM4 shared pin acquisition; offline profile/admission/result boundaries.',
+            'scope': 'New application with actual UART/H4/HCI over modeled native providers and firmware checkpoints; actual bootstrap-only session admission; actual PM3/PM4 shared pin acquisition; offline profile/admission/result boundaries; attachment as a second client of a modeled Wi-Fi module owner and the resident lifetime.',
             'limits': 'No physical SID/radio/UART/HCI qualification, pairing/security, HFP, SCO or headset claim.'}, indent=2) + '\n')
     finally:
         preserve()

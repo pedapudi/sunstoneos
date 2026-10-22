@@ -8,7 +8,7 @@ the headers do not merge them.
 | Header | Mechanism |
 | --- | --- |
 | [a733_task_context.h](../include/a733_task_context.h) | Admission of the calling FreeRTOS task: EL, IRQ mask, interrupt and critical nesting, scheduler state, owner task |
-| [a733_range.h](../include/a733_range.h) | Address-range validity, disjointness and overlap; monotonic deadline samples; overflow-checked deadline sums |
+| [a733_range.h](../include/a733_range.h) | Address-range validity, disjointness and overlap; monotonic deadline samples; overflow-checked and saturating deadline sums |
 | [a733_mmio.h](../include/a733_mmio.h) | 8-, 16-, 32- and 64-bit register accessors with the DSB SY placement in the name |
 | [a733_mapping_check.h](../include/a733_mapping_check.h) | Stage-1 translation checks (AT S1E1R/W through a callback) with the attribute and shareability rule as a parameter |
 
@@ -98,6 +98,7 @@ zero length as disjoint), `drivers/net/a733_radio_entropy.c` `contains`, and the
 | Store, then compare | Refuse only a backward sample, store it, then compare with one or more deadlines | `a733_monotonic_advance(now, &last)` followed by the caller's comparisons | 4 | `drivers/pci/a733_pcie.c`, `drivers/pwm/a733_pwm.c`, `drivers/storage/a733_mmc_platform.c`, `drivers/usb/a733_usb2_platform.c` |
 | Plain comparison | `now < deadline` with no stored sample, or with extra state | none | 13 | `drivers/gpu/pvr_compute_service.c`, `apps/rtc-returning/main.c` |
 | Overflow-checked sum | `*out = now + delta` unless the sum overflows | `a733_deadline_after(now, delta, &out)` | 2 helpers, about 90 inline guards | `drivers/usb/a733_typec.c` `add`, `drivers/usb/a733_typec_pd.c` `limit` |
+| Saturating sum | `now + delta`, or UINT64_MAX when the sum overflows; a saturated bound never expires | `a733_deadline_after_saturating(now, delta)` | 8 | `after` in `drivers/bluetooth/bt_avdtp.c`, `bt_hfp_ag.c`, `bt_rfcomm.c` and `bt_sco.c`; `apps/board/radio.c` `later` |
 
 The caller samples its clock and refuses a failed sample before calling
 `a733_deadline_admit()`. Several samplers also record a failure reason or test a
@@ -228,6 +229,29 @@ These callers use the headers now:
   `a733_mmio_write32_dsb_sy_both()` and `a733_mmio_dsb_sy()`.
 - `platform/a733/memory_reservations.c` and `platform/a733/memory_uncached.c`:
   `a733_mapping_check_stride()` with the write-back and Normal-NC pool rules.
+- `drivers/net/a733_radio_platform_native.c`: `a733_task_context_owner_el1()`
+  after its instance check; `a733_mmio_read32_dsb_sy_both()`,
+  `a733_mmio_write32_dsb_sy_both()` and `a733_mmio_dsb_sy()` for the SDC1,
+  CCU and GIC registers.
+- The Wi-Fi stack (`drivers/net/aic8800_*.c`, `a733_radio_platform.c`,
+  `a733_radio_session.c`, `a733_radio_entropy.c` and `sunstone_net.c`):
+  `a733_span_excl()`, `a733_extents_overlap_prechecked()`,
+  `a733_ranges_disjoint()`, `a733_ranges_disjoint_nonempty()`,
+  `a733_ranges_disjoint_optional_second()` and
+  `a733_ranges_overlap_or_wrap()` for its buffer checks;
+  `a733_deadline_admit()` in the firmware, radio platform, radio session and
+  entropy samplers, and `a733_monotonic_advance()` for the first entropy
+  sample; `a733_deadline_after()` where a deadline sum is stored at once.
+- The Bluetooth stack (`drivers/bluetooth/*.c` and `include/bt_memory.h`):
+  `bt_range_disjoint()` and `bt_range_disjoint_empty()` call
+  `a733_ranges_disjoint()` and `a733_ranges_disjoint_or_empty()`; the ACL and
+  L2CAP span checks use `a733_span_incl_nonempty()` and the H4 span check
+  `a733_span_incl_or_empty()`; the security sampler uses
+  `a733_deadline_admit()`; stored deadline sums in the ACL, HCI, L2CAP and SDP
+  server units use `a733_deadline_after()`; the AVDTP, hands-free, RFCOMM,
+  SCO and security bounds use `a733_deadline_after_saturating()`.
+- `apps/bluetooth/headset.c` `cap()` and `bluetooth_cadence()` in
+  `apps/bluetooth/bluetooth.h`: `a733_deadline_after_saturating()`.
 
 ## Remaining callers
 
@@ -247,7 +271,7 @@ Counts per directory group after the migrated callers. Columns:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | drivers/adc | 1 | 2 | 0 | 2 | 0 | 1 | 7 | 0 | 0 |
 | drivers/audio | 0 | 1 | 0 | 0 | 3 | 1 | 2 | 0 | 0 |
-| drivers/bluetooth | 0 | 2 | 4 | 0 | 17 | 0 | 0 | 0 | 0 |
+| drivers/bluetooth | 0 | 0 | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | drivers/camera | 1 | 1 | 0 | 2 | 1 | 1 | 2 | 0 | 0 |
 | drivers/clock | 0 | 3 | 0 | 0 | 0 | 1 | 3 | 0 | 0 |
 | drivers/crypto | 0 | 0 | 4 | 1 | 0 | 1 | 6 | 0 | 0 |
@@ -256,7 +280,7 @@ Counts per directory group after the migrated callers. Columns:
 | drivers/gpu | 0 | 41 | 9 | 1 | 5 | 1 | 2 | 0 | 0 |
 | drivers/i2c | 1 | 2 | 0 | 0 | 0 | 1 | 2 | 0 | 0 |
 | drivers/iommu | 0 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 |
-| drivers/net | 1 | 18 | 5 | 1 | 11 | 1 | 3 | 0 | 0 |
+| drivers/net | 0 | 0 | 5 | 0 | 3 | 0 | 0 | 0 | 0 |
 | drivers/npu | 0 | 14 | 0 | 2 | 1 | 2 | 4 | 1 | 5 |
 | drivers/pci | 1 | 5 | 1 | 1 | 1 | 1 | 4 | 0 | 0 |
 | drivers/pinctrl | 0 | 0 | 0 | 0 | 0 | 1 | 2 | 0 | 0 |
@@ -273,7 +297,7 @@ Counts per directory group after the migrated callers. Columns:
 | apps/* (39 applications) | 0 | 3 | 3 | 5 | 23 | 29 | 53 | 48 | 3 |
 | boot/ | 0 | 1 | 0 | 0 | 0 | 2 | 9 | 0 | 0 |
 | runtime/ | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Total | 12 | 154 | 35 | 31 | 90 | 69 | 168 | 70 | 22 |
+| Total | 11 | 134 | 35 | 30 | 69 | 68 | 165 | 70 | 22 |
 
 The applications with the most remaining work are `apps/rtc` (five files with
 14 ordered accesses and three AT calls), `apps/os` and `apps/hdmi-audio` (five

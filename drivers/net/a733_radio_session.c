@@ -277,7 +277,9 @@ int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generati
         (void)leave(s,fail(s));return -1;
     }
     int result=0;
-    if(s->stage==BOOTSTRAP||s->stage==MANAGEMENT||s->stage==NETWORK){
+    /* Wi-Fi association, loss and recovery leave the firmware and runtime
+     * that a Bluetooth client of the same module uses unchanged. */
+    if(s->stage==BOOTSTRAP||s->stage==MANAGEMENT||s->stage==NETWORK||s->stage==RECONNECT){
         enum a733_radio_session_result health=live(s);
         if(health==A733_SESSION_RETAINED)result=-1;
         else if(health!=A733_SESSION_BUSY&&!s->renew_pending&&s->firmware.state==AIC8800_FW_START_CONFIRMED&&

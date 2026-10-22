@@ -96,7 +96,7 @@ int bluetooth_headset_retain(struct bluetooth_application *a)
 }
 static int fail(void){return bluetooth_headset_retain(voice.app);}
 static uint64_t cap(uint64_t now,uint64_t duration,uint64_t limit)
-{uint64_t end=now>UINT64_MAX-duration?UINT64_MAX:now+duration;return end<limit?end:limit;}
+{uint64_t end=a733_deadline_after_saturating(now,duration);return end<limit?end:limit;}
 static uint64_t stage_deadline(const struct bluetooth_application *a,uint64_t duration)
 {
     /* Recognition reserves the final20s of the existing60s supervised session.
@@ -383,25 +383,26 @@ int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticke
     if(!ticket||tail==UINT64_MAX||ticket!=tail+1||head<=tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;
     atomic_store_explicit(&voice.segment_tail,tail+1,memory_order_release);return 1;
 }
-static void segment_stopping(unsigned flag)
+/* The first stop sets the close bound; later stop reasons only add flags. */
+static void segment_stopping(unsigned flag,uint64_t now)
 {
     atomic_fetch_or_explicit(&voice.segment_flags,flag,memory_order_release);
     atomic_store_explicit(&voice.segment_stop,1,memory_order_release);
-    voice.operation_deadline=voice.app->started+40000000;
+    if(!voice.operation_deadline)voice.operation_deadline=bluetooth_close_deadline(voice.app,now);
 }
 static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,uint64_t now)
 {
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     if(voice.stage==CAPTURE){
         if(l->phase!=BT_SCO_OPEN)return fail();
-        if(now>=a->started+38000000)segment_stopping(BLUETOOTH_SEGMENT_WINDOW);
-        else if(p->mode!=4&&now>=voice.capture_deadline)segment_stopping(BLUETOOTH_SEGMENT_DEADLINE);
+        if(now>=bluetooth_capture_window(a))segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
+        else if(p->mode!=4&&now>=voice.capture_deadline)segment_stopping(BLUETOOTH_SEGMENT_DEADLINE,now);
         if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!voice.operation_deadline)
-            segment_stopping(BLUETOOTH_SEGMENT_CANCEL);
+            segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
     }
 #ifdef SUNSTONE_BLUETOOTH_MSBC
     if(bluetooth_playback_mode(a)){
-        if(voice.stage==CAPTURE&&bluetooth_playback_cancelled(a))segment_stopping(BLUETOOTH_SEGMENT_CANCEL);
+        if(voice.stage==CAPTURE&&bluetooth_playback_cancelled(a))segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
         if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
         if(bluetooth_playback_step(a,&voice.audio,voice.link,voice.stream,now,a->deadline)!=1)return fail();
     }
@@ -416,13 +417,13 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
 #endif
         if(voice.stage==CAPTURE&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
             voice.partial_serial=rx->serial;
-            if(rx->status)segment_stopping(BLUETOOTH_SEGMENT_LOSS);
+            if(rx->status)segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);
             while(voice.partial_offset<rx->length&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
                 uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_relaxed);
                 uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
                 if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS||head>=UINT64_MAX/p->samples)return fail();
                 if(head-tail==BLUETOOTH_SEGMENT_SLOTS||voice.segment_records==BLUETOOTH_PCM_RECORDS){
-                    segment_stopping(BLUETOOTH_SEGMENT_BACKLOG);break;}
+                    segment_stopping(BLUETOOTH_SEGMENT_BACKLOG,now);break;}
                 unsigned slot=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);
                 struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
                 if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->ticket=head+1;s->first_sample=head*p->samples;s->first_acquired=rx->acquired;}
@@ -430,7 +431,7 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
                 if(l->codec==2){
                     uint8_t decoded[240];uint64_t first=0;
                     int result=bluetooth_msbc_byte(rx->bytes[voice.partial_offset++],rx->acquired,decoded,&first);
-                    if(result<0){segment_stopping(BLUETOOTH_SEGMENT_LOSS);break;}
+                    if(result<0){segment_stopping(BLUETOOTH_SEGMENT_LOSS,now);break;}
                     if(!result)continue;
                     if(!voice.segment_bytes)s->first_acquired=first;
                     if(p->samples*2-voice.segment_bytes<sizeof(decoded))return fail();
@@ -454,7 +455,7 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
                     storage_digest_bytes(voice.segments[slot].pcm,voice.segment_bytes,s->capture.sha256);
                     atomic_store_explicit(&voice.segment_head,head+1,memory_order_release);
                     voice.segment_bytes=voice.segment_records=0;
-                    voice.capture_deadline=cap(now,p->capture_timeout_us,a->started+38000000);
+                    voice.capture_deadline=cap(now,p->capture_timeout_us,bluetooth_capture_window(a));
                 }
             }
         }
@@ -469,12 +470,14 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
 #ifdef SUNSTONE_BLUETOOTH_MSBC
         if(bluetooth_playback_mode(a)){
             if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!bluetooth_playback_done(a))bluetooth_playback_stop(a);
-            if(bluetooth_playback_done(a))segment_stopping(BLUETOOTH_SEGMENT_WINDOW);
+            if(bluetooth_playback_done(a))segment_stopping(BLUETOOTH_SEGMENT_WINDOW,now);
         }
 #endif
         if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
             if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
-            if(bt_sco_close(&voice.audio,voice.stream,a->started+40000000)!=1)return fail();voice.stage=CLOSE;return 0;
+            /* Another task may store a stop after this poll's first check. */
+            if(!voice.operation_deadline)segment_stopping(BLUETOOTH_SEGMENT_CANCEL,now);
+            if(bt_sco_close(&voice.audio,voice.stream,voice.operation_deadline)!=1)return fail();voice.stage=CLOSE;return 0;
         }
 #ifdef SUNSTONE_BLUETOOTH_MSBC
         if(l->codec==2){

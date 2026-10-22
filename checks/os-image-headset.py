@@ -2,20 +2,27 @@
 """Run the integrated OS image's headset capture client against a modeled headset.
 
 checks/os-image-headset.c includes apps/os/headset.c unchanged, links the real
-8-to-16 kHz conversion (apps/bluetooth/pcm.c) and models the Bluetooth
-application's segment publication with its copy, acknowledgment and ticket
-rules. This runner compiles it with the exact flags of apps/os/headset.c from
-a configured headset OS build (configure it with
-CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs each mode under unicorn:
+WAV conversions (apps/bluetooth/pcm.c) and models the Bluetooth application's
+segment publication with its copy, acknowledgment and ticket rules. This
+runner compiles it with the exact flags of apps/os/headset.c from a configured
+headset OS build (configure it with CMAKE_EXPORT_COMPILE_COMMANDS=ON), so the
+model follows that build's radio, resident and mSBC options, and runs each
+mode under unicorn:
 
 - 0: the pin entry admits the nominal profile and adds PG0..PG9, PM0, PM1, PM3,
-  PM4 and the profile's PM latch; it refuses pins already held, workloads 1
-  and 2, other headset modes and profile versions, another SID authority or
-  profile digest, owners that collide with a board, thermal or each other's
-  owner, another topology or fabric rate, other memory attributes and a
-  missing profile; startup creates both tasks, starts the Bluetooth
-  application for exactly the 60 s session and binds the client as consumer,
-  and only the Bluetooth owner runs privileged;
+  PM4 and the profile's PM latch; it refuses pins already held, other
+  workloads, other headset modes (mode 3 is admitted only with mSBC) and
+  profile versions, another SID authority or profile digest, owners that
+  collide with a board, thermal or each other's owner, another topology or
+  fabric rate, other memory attributes and a missing profile. With the radio
+  it also refuses a module the radio entry has not admitted, missing board
+  pin authority, another PM latch, other radio platform or session owners and
+  a UART owner equal to the crypto engine owner. Startup starts the Bluetooth
+  application for the session's lifetime (60 s, or unbounded when resident)
+  and binds the client as consumer. Without the radio it creates both tasks
+  and only the Bluetooth owner runs privileged; with the radio it creates the
+  client only and attaches the application to the radio's module, with the
+  radio owner as Bluetooth owner and the client's own recovery latch;
 - 1: two generations; segments before a request and the segment being filled
   at the request are discarded, the next one becomes the generation's WAV, and
   later segments are drained without changing it;
@@ -23,7 +30,14 @@ CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs each mode under unicorn:
   and a wrong digest each end the session, stop capture and leave the segment
   unacknowledged;
 - 4: the recognizer's request rules;
-- 6: a failed Bluetooth application ends the session.
+- 6: a failed Bluetooth application ends the session;
+- 7: one owner iteration (with the radio, the module poll that the radio
+  owner runs) polls the live application, retains it once the board fails
+  and, in the resident build, reports progress only while it has not failed;
+- 8: capture stopped by the supervised window continues; a stop for a
+  capture deadline, backlog or loss ends the session;
+- 9: with mSBC, a wideband segment becomes a 16 kHz WAV unchanged and an
+  unknown capture state is refused; without it, a wideband segment is refused.
 
 No device, UART, radio or Bluetooth controller is modeled.
 """
@@ -39,7 +53,8 @@ from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ['pins-and-startup', 'two-generations', 'lost-packet-refused', 'changed-record-refused',
-         'request-rules', 'wrong-digest-refused', 'failed-application']
+         'request-rules', 'wrong-digest-refused', 'failed-application', 'owner-iteration',
+         'stopped-capture', 'wideband-segment']
 
 
 def main():
@@ -55,6 +70,8 @@ def main():
     flags = shlex.split(unit['command'])
     flags = flags[:flags.index('-o')]
     assert '-DSUNSTONE_A733_OS_HEADSET=1' in flags, 'a headset OS build is required'
+    options = {name: '-D' + macro + '=1' in flags for name, macro in
+               (('radio', 'SUNSTONE_A733_OS_RADIO'), ('resident', 'SUNSTONE_BOARD_RESIDENT'), ('msbc', 'SUNSTONE_A733_OS_MSBC'))}
     image = out / 'os-image-headset.elf'
     command = flags + [str(ROOT / 'checks/os-image-headset.c'), str(ROOT / 'apps/bluetooth/pcm.c'),
                        str(ROOT / 'drivers/storage/storage_digest.c'), str(ROOT / 'runtime/memory.c'),
@@ -85,11 +102,11 @@ def main():
         results[case] = result
         assert result == 1, (case, result)
     (out / 'result.json').write_text(json.dumps({
-        'passed': True, 'physical_access': False, 'cases': results, 'command': command,
+        'passed': True, 'physical_access': False, 'options': options, 'cases': results, 'command': command,
         'sources': {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                     for name in ('apps/os/headset.c', 'apps/bluetooth/pcm.c', 'checks/os-image-headset.c')}},
         indent=2) + '\n')
-    print('PASS OS headset client: ' + ', '.join(CASES))
+    print('PASS OS headset client (%s): ' % ', '.join(k for k, v in options.items() if v) + ', '.join(CASES))
 
 
 if __name__ == '__main__':

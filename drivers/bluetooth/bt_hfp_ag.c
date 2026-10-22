@@ -2,7 +2,6 @@
 #include "bt_hfp_ag.h"
 #include "bt_memory.h"
 static uint64_t stamp(const struct bt_hfp_ag *q){return q->rfcomm->l2cap->acl->hci->transport.now;}
-static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static int fail(struct bt_hfp_ag *q,enum bt_hfp_ag_error e)
 {q->error=e;q->phase=BT_HFP_AG_FAULT;return -1;}
 static int values(const uint8_t *p)
@@ -189,7 +188,7 @@ static void response(struct bt_hfp_ag *q)
     if(!ok){hold(q);q->response_length=0;}
     if(!ok && cme && q->control.cmee){text(q,"\r\n+CME ERROR: ");number(q,cme);text(q,"\r\n");}
     else text(q,ok ? "\r\nOK\r\n" : "\r\nERROR\r\n");
-    q->response_deadline=after(q->now,q->timeout_us);q->line_length=0;q->discard=0;q->line_deadline=0;
+    q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);q->line_length=0;q->discard=0;q->line_deadline=0;
 }
 static void accepted(struct bt_hfp_ag *q)
 {
@@ -230,7 +229,7 @@ static int input(struct bt_hfp_ag *q,unsigned budget)
         uint8_t c=b->bytes[q->receive_cursor++];
         if(c=='\r'){response(q);break;}
         if(c=='\n' && !q->line_length && !q->discard)continue;
-        if(!q->line_deadline)q->line_deadline=after(q->now,q->timeout_us);
+        if(!q->line_deadline)q->line_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
         if(c<' ' || c>126){q->discard=1;continue;}
         if(q->discard || c==' ')continue;
         if(q->line_length==BT_HFP_AG_LINE){q->discard=1;continue;}
@@ -255,7 +254,7 @@ int bt_hfp_ag_select_codec(struct bt_hfp_ag *q,unsigned codec)
        codec<1||codec>2||!(q->peer_codecs&q->local_codecs&(1u<<codec)))return -1;
     if(q->response_length||q->line_deadline||q->offered_codec)return 0;
     hold(q);q->selected_codec=q->pending_codec=0;q->offered_codec=codec;
-    q->codec_deadline=after(q->now,q->timeout_us);
+    q->codec_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
     text(q,"\r\n+BCS: ");number(q,codec);text(q,"\r\n");q->response_deadline=q->codec_deadline;return 1;
 }
 static void notify(struct bt_hfp_ag *q)
@@ -264,14 +263,14 @@ static void notify(struct bt_hfp_ag *q)
     if(q->reporting)for(unsigned i=0;i<7;++i)if((q->changed&q->active)&(1u<<i)){
         hold(q);text(q,"\r\n+CIEV: ");number(q,i+1);text(q,",");number(q,q->indicators[i]);text(q,"\r\n");
         q->notify_value=q->indicators[i];q->notify_index=i+1;
-        q->response_deadline=after(q->now,q->timeout_us);return;}
+        q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);return;}
     /* Any unreported callsetup change returned above, so RING follows the
      * reported callsetup1, or starts at once without reports. */
     const struct bt_hfp_ag_call *c=&q->control.call;
     if(q->calls && c->setup==1 && q->now>=q->next_ring){
         hold(q);q->notify_index=0;text(q,"\r\nRING\r\n");
         if(q->control.clip && c->length){text(q,"\r\n+CLIP: ");quoted(q,c);text(q,"\r\n");}
-        q->next_ring=after(q->now,q->ring_us);q->response_deadline=after(q->now,q->timeout_us);
+        q->next_ring=a733_deadline_after_saturating(q->now,q->ring_us);q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
     }
 }
 int bt_hfp_ag_step(struct bt_hfp_ag *q,unsigned budget,unsigned bytes,uint64_t deadline)
