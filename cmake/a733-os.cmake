@@ -11,13 +11,17 @@
 # option feeds Bluetooth headset segments to the recognizer instead, in either
 # lifetime; with the radio, the board's radio owner owns the AIC8800 module
 # and serves Wi-Fi and the Bluetooth client from one firmware load. The mSBC
-# option adds wideband headset speech through the pinned libsbc.
+# option adds wideband headset speech through the pinned libsbc. The GPU
+# linear option places mimus linear layers on the CPU or the GPU from a
+# generated table (docs/recognition-dispatch.md); it needs the resident
+# lifetime and two build constants that other owners provide.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_HEADSET "Integrated OS with Bluetooth headset recognition" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
+option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
 if(NOT SUNSTONE_A733_OS)
   return()
 endif()
@@ -26,6 +30,23 @@ if(SUNSTONE_A733_OS_HEADSET AND SUNSTONE_A733_OS_AUDIO)
 endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
+endif()
+if(SUNSTONE_A733_OS_GPU_LINEAR)
+  # The recognizer waits for GPU replies without a timer of its own; only the
+  # resident lifetime's mimus service window and watchdog bound those waits.
+  if(NOT SUNSTONE_A733_OS_RESIDENT)
+    message(FATAL_ERROR "GPU linear layers need the resident lifetime, whose watchdog bounds every GPU wait")
+  endif()
+  # The page-table owner sets this once 0x46C00000-0x47000000 is mapped
+  # read-only at EL0 as two 2 MiB blocks, so no CPU store can dirty a sum line.
+  if(NOT A733_GPU_SLOTS_EL0_READ_ONLY)
+    message(FATAL_ERROR "GPU linear layers need the sum slots mapped read-only at EL0 (A733_GPU_SLOTS_EL0_READ_ONLY)")
+  endif()
+  # The GPU kernel owner sets this once its completion uses DC CIVAC on the
+  # slots: DC IVAC is checked as a write and faults on a read-only slot.
+  if(NOT A733_GPU_SLOTS_CLEAN_INVALIDATE)
+    message(FATAL_ERROR "GPU linear layers need clean-and-invalidate completion on the sum slots (A733_GPU_SLOTS_CLEAN_INVALIDATE)")
+  endif()
 endif()
 if(NOT TARGET sunstone-a733-mimus-board)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-mimus-board.cmake")
@@ -157,13 +178,47 @@ if(SUNSTONE_A733_OS_HEADSET)
     list(APPEND os_include_dirs "${SUNSTONE_BT_SBC_DIR}")
   endif()
 endif()
+set(os_recognition "${os_root}/apps/mimus-board/recognition.cc")
 if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_HEADSET)
   # The recognizer takes each generation's WAV from the microphone or headset capture.
-  apply_build_patch("${os_build}/recognition.cc" "${os_root}/apps/mimus-board/recognition.cc"
-    "${os_root}/apps/os/recognition.patch")
-  list(REMOVE_ITEM os_sources "${os_root}/apps/mimus-board/recognition.cc")
-  list(APPEND os_sources "${os_build}/recognition.cc")
+  apply_build_patch("${os_build}/recognition.cc" "${os_recognition}" "${os_root}/apps/os/recognition.patch")
+  set(os_recognition "${os_build}/recognition.cc")
   list(APPEND os_patches "${os_root}/apps/os/recognition.patch")
+endif()
+if(SUNSTONE_A733_OS_GPU_LINEAR)
+  # The placement table comes from the models the image embeds by hash, for
+  # the recognition core pair: cores 6 and 7 once the A76 cores are admitted,
+  # cores 2 and 3 until then.
+  set(SUNSTONE_A733_OS_MODEL_DIR "" CACHE PATH "Directory with base.mimus and overlay.mimus for the GPU placement table")
+  if(NOT SUNSTONE_A733_OS_MODEL_DIR)
+    message(FATAL_ERROR "The GPU linear build requires SUNSTONE_A733_OS_MODEL_DIR")
+  endif()
+  if(A733_A76_ADMITTED)
+    set(os_cores a76)
+    set(os_recognition_core 6)
+  else()
+    set(os_cores a55)
+    set(os_recognition_core 2)
+  endif()
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/placement.py"
+    --models "${SUNSTONE_A733_OS_MODEL_DIR}/base.mimus" "${SUNSTONE_A733_OS_MODEL_DIR}/overlay.mimus"
+    --cores ${os_cores} --output "${os_build}/placement.h" RESULT_VARIABLE os_placement_status)
+  if(NOT os_placement_status EQUAL 0)
+    message(FATAL_ERROR "GPU placement table generation failed")
+  endif()
+  # The recognizer opens the GPU session after the model hashes and runs on
+  # the recognition core; the hook ends the boot through its failure path.
+  apply_build_patch("${os_build}/recognition-gpu.cc" "${os_recognition}" "${os_root}/apps/os/recognition-dispatch.patch")
+  set(os_recognition "${os_build}/recognition-gpu.cc")
+  list(APPEND os_patches "${os_root}/apps/os/recognition-dispatch.patch")
+  list(APPEND os_added apps/os/dispatch.c)
+  list(APPEND os_external_inputs "${os_root}/apps/os/placement.py" "${os_build}/placement.h"
+    "${SUNSTONE_A733_OS_MODEL_DIR}/base.mimus" "${SUNSTONE_A733_OS_MODEL_DIR}/overlay.mimus")
+  list(APPEND os_include_dirs "${os_build}")
+endif()
+if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
+  list(REMOVE_ITEM os_sources "${os_root}/apps/mimus-board/recognition.cc")
+  list(APPEND os_sources "${os_recognition}")
 endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
 list(APPEND os_sources "${os_build}/boot.c" ${os_added})
@@ -184,9 +239,15 @@ target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
+if(SUNSTONE_A733_OS_GPU_LINEAR)
+  target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1
+    OS_RECOGNITION_CORE=${os_recognition_core})
+endif()
 target_include_directories(sunstone-a733-os BEFORE PRIVATE "${os_root}/apps/os")
 if(os_include_dirs)
   target_include_directories(sunstone-a733-os PRIVATE ${os_include_dirs})
+endif()
+if(SUNSTONE_A733_OS_HEADSET)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_RECOGNITION=1)
 endif()
 if(SUNSTONE_A733_OS_MSBC)
@@ -203,11 +264,11 @@ set(os_inputs ${mb_inputs} ${os_added} ${os_headers} ${os_generated} ${os_patche
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_thermal.h"
   "${os_root}/include/a733_thermal_native.h" "${os_root}/include/gicv3_spi.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES os_inputs)
-if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_HEADSET)
-  list(APPEND os_inputs "${os_build}/recognition.cc")
+if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
+  list(APPEND os_inputs "${os_recognition}")
 endif()
 list(REMOVE_ITEM os_inputs "${mb_build}/build-id.c")
-set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
+set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
 foreach(input IN LISTS os_inputs)
   file(SHA256 "${input}" hash)
   string(APPEND os_identity "${hash}")
@@ -228,6 +289,6 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --loader "${os_root}/boot/a733/stage2/loader.c"
     --lifetime "$<IF:$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>,resident,supervised>"
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
-    --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>"
+    --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
     --output "${os_build}/link-check.json"
   VERBATIM)

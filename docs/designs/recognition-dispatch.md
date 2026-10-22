@@ -1,8 +1,10 @@
 # Design: placing mimus linear layers on the CPU or GPU in the OS image
 
-Status: **design**; no code exists. Each item ends at implemented and
-host-modeled, with physical behavior pending until the board evidence at the
-end exists. It follows [performance-architecture.md](../performance-architecture.md).
+Status: **implemented** and host-modeled on the OS image side; physical
+behavior is pending until the board evidence at the end exists.
+[recognition-dispatch.md](../recognition-dispatch.md) describes what was
+built and [the measurements](recognition-dispatch-measurements.md) compare it
+with the budgets below. It follows [performance-architecture.md](../performance-architecture.md).
 
 The integrated OS image ([os-image.md](../os-image.md)) runs mimus at EL0 on
 the CPU. On the bench recording (8.87 s of audio, one Cortex-A55 at the

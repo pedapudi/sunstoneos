@@ -2,7 +2,7 @@
 
 `sunstone-a733-os` is one FreeRTOS image that runs the
 [mimus board application](../apps/mimus-board/README.md) and a continuous
-thermal service together. Three optional builds add more services:
+thermal service together. Four optional builds add more services:
 
 - the microphone build captures each utterance from an I2S microphone and
   recognizes it in place of the recorded WAV;
@@ -10,7 +10,11 @@ thermal service together. Three optional builds add more services:
   association, WPA2 with crypto engine entropy, DHCP or fixed addressing and
   one TCP exchange;
 - the headset build recognizes speech from a Bluetooth headset in place of
-  the recorded WAV. An mSBC option adds wideband headset speech.
+  the recorded WAV. An mSBC option adds wideband headset speech;
+- the GPU linear build places mimus linear layers on the CPU or the GPU
+  ([recognition dispatch](recognition-dispatch.md)). It needs the resident
+  lifetime and does not link until the GPU runtime and the page-table owner
+  provide their parts.
 
 The radio build combines with either capture build. With the headset, one
 owner of the AIC8800 module loads the firmware once and serves the Wi-Fi
@@ -30,7 +34,8 @@ adds three fixed parts to it:
   while every listed service makes progress.
 
 Status: implemented. Every build listed under [Build and checks](#build-and-checks)
-configures and links in both lifetimes, and the host checks listed there model
+configures and links in both lifetimes, except the GPU linear build, which is
+resident only and does not link yet; the host checks listed there model
 them. No board has run any of these builds. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
@@ -139,6 +144,11 @@ CPU0 with the same priority; CPU0 runs the DMA service worker. The OS boot patch
 groups, and stops with status 3, detail `0x310`, if routing is refused. The
 thermal service enables and masks its own source.
 
+The GPU linear build adds the GPU interrupt, INTID 95, with the same
+priority on the recognition core: core 2 until the A76 cores are admitted,
+then core 6. The recognizer and the GPU worker run on that core, and the link
+check requires the route's core to equal `os_recognition_core` in the image.
+
 The radio and the headset add no table entry. The radio owner polls SDC1
 with its interrupt, INTID 194, masked ([radio platform](radio-platform.md)),
 the crypto engine is polled, and the Bluetooth owner polls UART1 with its
@@ -163,11 +173,12 @@ returns failure at the first refusal, so `main.c` keeps its panic codes 10 and
 
 | Entry | Task privilege | Pins | Start |
 | --- | --- | --- | --- |
-| `mimus` | None; the recognizer runs at EL0 | Validates the model, WAV and arena mappings for workload 0 or 4 | Starts the recognizer for workload 0 or 4 |
+| `mimus` | None; the recognizer runs at EL0 | Validates the model, WAV and arena mappings for workload 0 or 4; in the GPU linear build, the arena's last 4 MiB read-only at EL0 | Starts the recognizer for workload 0 or 4 |
 | `thermal` | The thermal task | Validates the sealed OS session | Validates the sealed OS session, acquires its clocks and starts its task |
 | `audio` (microphone build) | The capture client, the DMA bootstrap task and the DMA worker | Validates the sealed OS session and adds PB5, PB6 and PB8 to the board pin authority | Starts the capture client, the audio clock and pin bindings, the DMA service and its interrupt |
 | `radio` (radio build) | None; `main.c` grants the radio owner and network client | Authenticates the radio profile and refuses radio or crypto engine owners equal to the thermal or DMA owner | Requires the radio owner and network client tasks that `main.c` created |
 | `headset` (headset build) | The Bluetooth owner; the capture client runs unprivileged. With the radio, none: the radio owner is the Bluetooth owner | Applies the headset profile rules, refuses owners equal to a board or the thermal owner, and adds PG0..PG9, PM0, PM1, PM3, PM4 and the profile's PM latch. With the radio, requires the board's radio pins and PM latch and the radio's module owners, and adds PG6..PG9, PM3 and PM4 | Starts the capture client and either the Bluetooth owner or, with the radio, the attachment to the radio's module, and binds the client as segment consumer |
+| `gpu-linear` (GPU linear build) | The GPU runtime's worker | Accepts the pin handoff | Creates the GPU worker on the recognition core |
 
 The mimus board image binds the same three named mimus functions directly to
 the board hooks, so its behavior is unchanged. The OS build compiles the
@@ -452,10 +463,16 @@ the interrupt table follow the options:
 | `SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO` | `mimus`, `thermal`, `audio`, `radio` | 71, 143 |
 | `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `headset` | 71 |
 | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
+| `SUNSTONE_A733_OS_GPU_LINEAR`, resident only, with any row above | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
 
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
-set without the headset. The supervised radio and headset builds link, but at
+set without the headset. With `SUNSTONE_A733_OS_GPU_LINEAR` it stops unless
+the lifetime is resident, the two build constants that
+[recognition dispatch](recognition-dispatch.md#build-gate) names are set and
+`SUNSTONE_A733_OS_MODEL_DIR` holds the models; that build compiles but does
+not link until the GPU runtime and the page-table owner provide five
+functions. The supervised radio and headset builds link, but at
 the admitted SDIO clock firmware loading cannot finish within their bootstrap
 bounds (see [Radio station](#radio-station)).
 
@@ -597,6 +614,11 @@ except while a DMA request is unanswered or after a failure; a supervised
 build reports none. The build directory must export its compile commands
 (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
 
+[os-image-dispatch.py](../checks/os-image-dispatch.py) checks the GPU linear
+build's placement table, dispatcher, slot mapping rule, supervision of GPU
+waits and configuration gate on the host
+([recognition dispatch](recognition-dispatch.md#host-checks)).
+
 ## Supervised preparation and launch
 
 [prepare.py](../apps/os/prepare.py) freezes one supervised session offline.
@@ -651,7 +673,9 @@ No device, queue database or FEL program is opened.
   ends the session on any headset failure, also while the radio is still up.
 - **SHA-256 and AES requests.** The crypto engine serves only radio entropy;
   no part of the image submits hash or cipher requests.
-- **HDMI, camera, GPU and NPU.** These are separate images.
+- **HDMI, camera, NPU and GPU graphics.** These are separate images. The
+  GPU linear build places mimus linear layers on the GPU, and the NPU does
+  not yet produce the exact sums that recognition needs.
 - **Physical use.** The supervised image needs a reviewed entry record
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need
