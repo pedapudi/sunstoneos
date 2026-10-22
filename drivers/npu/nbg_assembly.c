@@ -295,8 +295,10 @@ int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *o
     return 1;
 }
 
-/* Placement rules shared by the one-call and stepwise assemblers. */
-static int placed(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
+/* Placement rules shared by the one-call and stepwise assemblers. Forced
+ * inlining keeps the one-call assembler as compact as before the stepwise
+ * form existed; only images that link the stepwise form carry the copies. */
+static inline __attribute__((always_inline)) int placed(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
                   const struct nbg_assembly_layout *p, const void *out, size_t out_bytes)
 {
     const size_t metadata_bytes = count * sizeof(*b);

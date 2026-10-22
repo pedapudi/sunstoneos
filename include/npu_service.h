@@ -92,6 +92,17 @@ struct npu_service_runtime {
     void (*closed)(void *, unsigned client);
     unsigned idle_hint;
 };
+struct npu_service;
+/* Runtime mode state, installed by npu_service_runtime. It lives outside
+ * struct npu_service, and the worker reaches the runtime loop only through
+ * the loop pointer, so images that never call npu_service_runtime keep
+ * neither. */
+struct npu_service_runtime_state {
+    struct npu_service_runtime hooks;
+    void *context;
+    void (*loop)(struct npu_service *);
+    unsigned failed, idle_hints;
+};
 struct npu_service {
     struct a733_npu_controller controller;
     struct a733_npu_ops ops;
@@ -120,9 +131,7 @@ struct npu_service {
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
     unsigned shared, members, running, next;
     struct npu_service_member member[NPU_SERVICE_CLIENTS];
-    struct npu_service_runtime runtime;
-    void *runtime_context;
-    unsigned runtime_mode, runtime_failed, idle_hints;
+    struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
 };
 
 /* One statically configured service for the single NPU. Call init/bind before

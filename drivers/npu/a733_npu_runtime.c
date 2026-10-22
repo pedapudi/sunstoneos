@@ -773,7 +773,7 @@ int npu_runtime_bind_irq(struct npu_runtime *rt, const struct npu_service_irq_op
 {
     if (!good(rt) || !rt->bound || idle_hint > 1 ||
         !npu_service_bind_irq(&rt->service, ops, cookie, route)) return 0;
-    rt->service.runtime.idle_hint = idle_hint;
+    rt->service.runtime->hooks.idle_hint = idle_hint;
     return 1;
 }
 static enum a733_npu_platform_result platform_step(struct npu_runtime *rt, int stop)

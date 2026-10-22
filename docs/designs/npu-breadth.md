@@ -255,6 +255,29 @@ Estimated worst-case rates at 494 MHz, which the board replaces:
 | NPU idle per inference, S = 1 | About 57 ms | 7.3 ms plus client time | 0.46 ms plus client time |
 | Largest non-yielding worker block | No worker | G = 1.15 ms; other steps C | C |
 | One catalogue load, idle worker | Not supported | About 58 ms portable, 15 ms with SHA-2 | Same |
+| Images that link the service but not the runtime: `.text` and `.bss` growth, and instructions per worker pass | None | No growth beyond the runtime-mode check at worker entry | Same |
+
+Four interim figures are exceeded in the emulator measurements, each for a
+cause recorded under
+[Implementation, measurements and remaining work](#implementation-measurements-and-remaining-work):
+
+- **H, 2.01 ms against 1.86 ms (2.52 ms with USB0).** The bound uses the
+  model file size, 964,224 bytes, because any catalogue model can be loaded
+  into a slot. The budget used the 920,616 read-only bytes that the
+  ShuffleNetV2 run counts.
+- **W, 6.58 ms against 6.29 ms (8.22 ms against 7.86 ms with USB0).** W is
+  P + H + L, so it carries the larger H and the longest step L below.
+- **Longest non-yielding step other than G, 0.235 ms against C = 0.1 ms.**
+  The LOAD step that decodes the staged copy runs 58,000 instructions in the
+  QEMU instruction count, taken at two cycles per instruction (see "One LOAD
+  step exceeds C"). Splitting it needs a section-order decoder.
+- **One ShuffleNetV2 LOAD, 65.2 ms against about 58 ms.** The LOAD copies the
+  model into a staging area, checksums that copy again and copies the
+  coefficients a second time (see "LOAD reads the model through a staging
+  copy"): 1,856,832 bytes copied and 964,224 bytes checksummed beyond the
+  design.
+
+The board replaces the estimated rates in all four figures.
 
 D for ShuffleNetV2 is unmeasured, and W > D is likely in the interim. The
 derivation of each figure and the counter list sit in the header comment of
@@ -382,6 +405,16 @@ and the assembler gains a stepwise form (`nbg_assembly_begin` and
 - **Relocated fields are bounded by construction.** The assembler places each
   allocation inside the region of its role and refuses a relocation outside
   its allocation, so the runtime adds no separate comparison per field.
+- **Images without the runtime keep their size.** The runtime state sits in
+  a static object outside `struct npu_service`, which holds only a pointer to
+  it, and the worker calls the runtime loop through a function pointer that
+  `npu_service_runtime` installs. `--gc-sections` therefore drops the loop
+  and its state from images that never call `npu_service_runtime`. The
+  worker and the runtime loop each call `irq_progress` and `execute_shared`,
+  and the one-call and stepwise assemblers share `placed`. All three are
+  forced inline. The exclusive and shared worker paths and
+  `nbg_assemble_layout` then compile as they did with one caller, and only
+  images that link the runtime carry the extra copies.
 - **The session check is kept.** [npu-session.c](../../checks/npu-session.c)
   still checks the session code until that code is deleted, and now prints the
   baseline counters. The runtime has its own check,
@@ -433,6 +466,27 @@ Reproduce, with the session artifacts map of
 checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode runtime --artifacts ARTIFACTS.json
 checks/npu-runtime-bounds.py --output NEW_OUTPUT_DIRECTORY --evidence RUNTIME_OUTPUT/result.json
 ```
+
+Images that link the service but not the runtime were rebuilt at the
+integration base and on this branch. Their `.text` and `.bss` sections have
+the same sizes at both commits:
+
+| Image | `.text` | `.bss` |
+| --- | ---: | ---: |
+| `sunstone-a733-accelerators` | 350,280 | 1,361,168 |
+| `a733-npu-convolution-single-core` (ShuffleNetV2) | 194,360 | 1,243,936 |
+| `npu-service-model` (host check) | 56,576 | 1,769,200 |
+
+By symbol sizes the accelerators image grows by 20 bytes: 12 in the worker,
+whose entry reads the runtime pointer once, and 4 each in
+`nbg_assemble_layout` and `nbg_assembly_layout`, which pass the profile's
+checksum flag. Section alignment absorbs them. `struct npu_service` grows by
+the 8-byte runtime pointer, from 36,912 to 36,920 bytes, and alignment
+absorbs that too. The worker's disassembly has 1,059 instructions against
+1,056 at the base and makes no call to `irq_progress` or `execute_shared`.
+Five added instructions are the runtime check at task entry, which runs once;
+the remaining differences are block order, branch conditions and register
+moves. Instructions per pass were not counted.
 
 All five runtime cases pass; the cases are listed at the top of the check.
 Removing the END fill of a LOAD fails case 0, and removing the pool's

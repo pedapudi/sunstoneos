@@ -178,6 +178,10 @@ at offset `0x4`, which acknowledges nothing, after each step and after each
 tick timeout while the controller is active. Full idle queues the masked
 progress sequence that a notification runs, so the event register is never
 read while the source is unmasked. Exclusive and shared modes are unchanged.
+The runtime-mode state is a static object that `npu_service_runtime`
+installs, together with the pointer through which the worker enters the
+runtime loop. An image that never calls `npu_service_runtime` therefore links
+neither the loop nor its state.
 
 [npu-session-runtime.c](../checks/npu-session-runtime.c) checks the mode with
 the runtime; [npu-session.py](../checks/npu-session.py) runs it with
@@ -267,8 +271,8 @@ The final ELF has SHA-256
 `55323616f8c91cb26b77b8b105df3a37de9ce5a01774f35f2eaf1b22a2bc8575`.
 It contains 52,488 bytes of code/constants and 1,834,032 bytes of BSS and reserved
 stacks, with no initialized data. That ELF predates shared mode. The service
-object now occupies 36,912 bytes, including its 32 KiB task stack and eight
-64-byte shared-mode member records. The native adapter and fixture command/table
+object now occupies 36,920 bytes, including its 32 KiB task stack, eight
+64-byte shared-mode member records and the runtime-mode pointer. The native adapter and fixture command/table
 buffers are separate. Physical stack usage and latency remain unmeasured.
 
 Reproduce after relevant inputs change, using the [configured toolchain](build.md):

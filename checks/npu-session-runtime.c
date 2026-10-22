@@ -744,7 +744,7 @@ static void bootstrap_run(void *unused)
             /* The hint completes the job within one step of full idle. */
             configASSERT(model.finished_at_step <= model.completed_at_step + 1);
         }
-        configASSERT(rt.service.idle_hints >= 4 && model.delivered >= 4 && model.mask_calls > model.defer_mask);
+        configASSERT(rt.service.runtime->idle_hints >= 4 && model.delivered >= 4 && model.mask_calls > model.defer_mask);
         platform_puts("COUNT running_jobs=4 running_reads="); decimal(model.run_reads_total);
         platform_puts(" running_steps="); decimal(model.run_steps_total);
         platform_puts(" running_ticks="); decimal(model.run_ticks_total); platform_puts("\n");
@@ -857,7 +857,7 @@ void kernel_main(void)
     configASSERT(!npu_runtime_bind(&rt, &startup, duplicate, 4, 1));
     configASSERT(!npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
     configASSERT(npu_runtime_bind(&rt, &startup, clients, 4, 1));
-    configASSERT(rt.service.runtime_mode && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
+    configASSERT(rt.service.runtime && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
     vTaskStartScheduler(); platform_panic("scheduler returned", 0);
 }

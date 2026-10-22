@@ -84,7 +84,7 @@ The design states each excess:
   (964,224 bytes), copied 1,856,832 bytes and read 920,616 bytes for the
   check references. The three other slots completed 1,191 jobs while it ran.
 
-## Code and data size
+## Code and data size with the runtime loop linked into every service image
 
 The 13 default targets have byte-identical loadable images at both commits.
 No board image links the runtime, but every image that links the NPU
@@ -112,7 +112,7 @@ The runtime itself adds 13,968 bytes of code and 796 bytes of constants in
 the session code is deleted, its 9,516 bytes of code and 716 bytes of
 constants leave the images that use the runtime.
 
-## Instructions in images that do not use the runtime
+## Instructions with the runtime loop linked into every service image
 
 At the base commit the worker inlines `irq_progress` and `execute_shared`,
 each of which it calls once. On the branch the runtime worker also calls
@@ -124,17 +124,39 @@ instructions. Request validation adds one comparison for the LOAD operation.
 These are about 10 extra instructions per interrupt progress pass and per
 shared request. They were not measured in an instruction count.
 
+## Images without the runtime, remeasured
+
+The runtime state now sits in a static object outside `struct npu_service`,
+and the worker reaches the runtime loop only through a function pointer that
+`npu_service_runtime` installs, so `--gc-sections` drops both from images
+that never call it. `irq_progress`, `execute_shared` and the assembler's
+`placed` are forced inline. The accelerators application, its single-core
+ShuffleNetV2 image and `npu-service-model` were rebuilt at the integration
+base (commit `6cd12f0`) and on the branch with that change:
+
+| Image | `.text` base and branch | `.bss` base and branch |
+| --- | ---: | ---: |
+| `sunstone-a733-accelerators` | 350,280 | 1,361,168 |
+| `a733-npu-convolution-single-core` (ShuffleNetV2) | 194,360 | 1,243,936 |
+| `npu-service-model` (host check) | 56,576 | 1,769,200 |
+
+Function sizes in the accelerators image grow by 20 bytes, which section
+alignment absorbs: 12 in the worker for the runtime check at task entry and 4
+each in `nbg_assemble_layout` and `nbg_assembly_layout`. `execute_shared`,
+`irq_progress`, `view`, `placed` and `runtime_settle` no longer appear as
+functions. `struct npu_service` grows from 36,912 to 36,920 bytes for the
+runtime pointer. The worker has 1,059 instructions against 1,056 at the base
+and calls neither helper; five of its instructions are the runtime check,
+which runs once. The per-inference counts of the runtime check are unchanged,
+and all runtime, service-shared, session, reserved, exclusive and interrupt
+checks pass.
+
 ## Conclusion
 
 Every per-inference budget of the interim runtime is met, and the time-bound
 excesses (H, W, the longest step and the LOAD time) have reasons stated in
-the design. The design gives no reason for the cost to images that link the
-NPU service but not the runtime: 2,008 bytes of code, 64 bytes of `.bss` and
-about 10 instructions per interrupt progress pass and per shared request. One
-remedy is to call the runtime worker loop through a pointer that
-`npu_service_runtime` installs, so `--gc-sections` drops the loop where no
-image calls that function. The runtime fields would then move behind that
-pointer, and the existing worker would keep its inlined helpers.
+the design. Images that link the NPU service but not the runtime keep the
+section sizes of the integration base and the inlined worker helpers.
 
 ## Reproduce
 
