@@ -27,7 +27,7 @@ int main(int argc,char **argv)
  plan=plans[2];plan.self=(uintptr_t)&plan;plan.words[0x4000/4]=0x313131;assert(!a733_deinterlace_plan_valid(&plan));
  /* Out-of-range strength and strength outside TNR are refused before generation. */
  s.strength=4;memset(&plan,0,sizeof(plan));assert(!a733_deinterlace_geometry_valid(&s)&&!a733_deinterlace_commands(&plan,&s));
- s.strength=0xffffffff;assert(!a733_deinterlace_geometry_valid(&s));
+ s.strength=0xffff;assert(!a733_deinterlace_geometry_valid(&s));
  for(unsigned mode=A733_DEINTERLACE_WEAVE;mode<=A733_DEINTERLACE_MOTION;++mode){
   s.mode=mode;s.strength=1;memset(&plan,0,sizeof(plan));
   assert(!a733_deinterlace_geometry_valid(&s)&&!a733_deinterlace_commands(&plan,&s));

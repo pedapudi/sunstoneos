@@ -32,6 +32,10 @@ static int di_address(uintptr_t address,unsigned writing,uint32_t value)
  size_t n;const struct a733_deinterlace_word *w=deinterlace.session.mode==A733_DEINTERLACE_TNR?
   a733_deinterlace_tnr_words(&n):a733_deinterlace_words(&n);
  for(size_t i=0;i<n;i++)if(off==w[i].offset)return 1;
+ /* A sequence also reads, and never writes, the source's statistics. */
+ if(writing||!deinterlace.session.repeats)return 0;
+ w=a733_deinterlace_statistics(&n);
+ for(size_t i=0;i<n;i++)if(off==w[i].offset)return 1;
  return 0;
 }
 static int load(uintptr_t a,uint32_t *v)
@@ -167,7 +171,16 @@ static int launch(void)
  if(!bits(A733_DEINTERLACE_BASE+0x14,1,0)||
   !bits(A733_DEINTERLACE_BASE+0x18,0x101,0)||
   !store(A733_DEINTERLACE_BASE+0x10,1))return -1;
- deinterlace.armed=1;leave();return 1;
+ deinterlace.armed=1;deinterlace.strengths[deinterlace.job]=(uint8_t)deinterlace.plan.words[0x4000/4];
+ leave();return 1;
+}
+/* The finish interrupt of the pinned driver reads these after every job.
+ * Values land in the CPU register image, which DI never reads. */
+static int statistics(void)
+{
+ size_t n;const struct a733_deinterlace_word *w=a733_deinterlace_statistics(&n);
+ for(size_t i=0;i<n;++i)if(!load(A733_DEINTERLACE_BASE+w[i].offset,&deinterlace.plan.words[w[i].offset/4]))return 0;
+ return 1;
 }
 static int stable(void)
 {
@@ -186,22 +199,30 @@ static int step(void)
   if(!(status&1))return 0;
   if(!deinterlace.armed||(status&0x100))return -1;
   deinterlace.status=status;deinterlace.complete=1;
+  if(deinterlace.job<deinterlace.session.repeats&&!statistics())return -1;
   if(a733_iommu_scan(&deinterlace.iommu,deadline())!=1)return -1;deinterlace.stage=4;return 0;}
  int r=a733_iommu_poll(&deinterlace.iommu);if(r!=1)return r;
  if(deinterlace.iommu.fault.scanned_masters!=0x200||!stable())return -1;
+ uint8_t *copy=deinterlace.payload+(size_t)deinterlace.job*deinterlace.bytes;
  if(deinterlace.copied<deinterlace.bytes){size_t n=deinterlace.bytes-deinterlace.copied;if(n>32768)n=32768;
-  __asm__ volatile("dsb sy":::"memory");memcpy(deinterlace.payload+deinterlace.copied,deinterlace.output+deinterlace.copied,n);
+  __asm__ volatile("dsb sy":::"memory");memcpy(copy+deinterlace.copied,deinterlace.output+deinterlace.copied,n);
   __asm__ volatile("dsb sy":::"memory");if(!stable())return -1;deinterlace.copied+=n;
   if(a733_iommu_scan(&deinterlace.iommu,deadline())!=1)return -1;return 0;}
  /* Recheck both immutable DMA inputs against the retained authenticated
   * upload; neither source span may be CPU-written after publication. */
- if(memcmp(deinterlace.input,deinterlace.supplied.bytes,deinterlace.bytes)||
-    (deinterlace.session.mode!=A733_DEINTERLACE_WEAVE&&
-     memcmp(deinterlace.current,deinterlace.supplied.bytes+deinterlace.bytes,deinterlace.bytes)))return -1;
+ if(!deinterlace_inputs_intact())return -1;
+ if(deinterlace.job<deinterlace.session.repeats){
+  /* Generate the next plan from the statistics before touching any buffer,
+   * then retire and refill. Every refusal retains all resources. */
+  if(!stable()||!a733_deinterlace_next(&deinterlace.plan,&deinterlace.session)||
+     !deinterlace_refill()||!stable())return -1;
+  ++deinterlace.job;deinterlace.copied=0;deinterlace.complete=0;deinterlace.status=0;
+  deinterlace.armed=0;deinterlace.command_step=0;deinterlace.stage=2;return 0;
+ }
  uint8_t hash[32];storage_digest_bytes(deinterlace.supplied.bytes,
    a733_deinterlace_input_bytes(&deinterlace.session),hash);
  if(memcmp(hash,deinterlace.session.fixture,32)||!stable())return -1;
- storage_digest_bytes(deinterlace.payload,deinterlace.bytes,deinterlace.digest);
+ storage_digest_bytes(deinterlace.payload,a733_deinterlace_jobs(&deinterlace.session)*deinterlace.bytes,deinterlace.digest);
  if(!stable())return -1;deinterlace.guards_ok=1;return 1;
 }
 void deinterlace_task(void *unused)

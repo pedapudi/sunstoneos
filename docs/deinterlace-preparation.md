@@ -47,9 +47,10 @@ and device version `0x0100`. Entry validates the frozen bundle and matching
 reviewed software evidence before using the shared supervisor.
 
 `apps/deinterlace/capture.py` receives a 192-byte result header and, on success,
-the complete copied NV12 frame. It checks the epoch, generation, input/session
-hashes, fixed geometry, matched finish, cleared busy bit, DI master bitmap,
-guards and copied-output hash. Reserved result bytes must be zero. Full-speed
+the complete copied output of every job. It checks the epoch, generation,
+input/session hashes, fixed geometry, matched finish, cleared busy bit, DI
+master bitmap, guards and copied-output hash. Reserved result bytes must be
+zero; a sequence uses bytes 176–183 as described under repeated jobs below. Full-speed
 and high-speed responses require complete short-packet or zero-length-packet
 termination; truncated streams fail capture.
 
@@ -172,3 +173,42 @@ existing USB and durability coverage. Native device effects and authority were
 modeled; numerical TNR behavior and physical operation remain unqualified.
 Results and frozen inputs are retained beneath
 `~/.cache/sunstoneos/evidence/deinterlace-tnr-host-20261020/`.
+
+## Repeated jobs
+
+`--repeats 1`, `2` or `3` adds that many jobs to any mode. The producer writes
+`1 + repeats` frames for WEAVE and `2 + repeats` frames for motion and TNR;
+each later frame shifts the luma and chroma values of the pattern. It stores
+the count in the upper 16 bits of the session's last geometry word, above the
+TNR strength. For example, a four-job adaptive TNR input is generated with:
+
+```sh
+python3 apps/deinterlace/producer.py --mode tnr --strength high --repeats 3 --pattern-output /absolute/cache/input.nv12
+```
+
+Preparation requires geometry marker revision 5 for a nonzero count. Its
+allocation check expects the cached upload and result allocations to hold every
+frame and every output, and the first MD flag buffer of a motion or TNR
+sequence to map read/write. Physical admission of a sequence also requires the
+reviewed memory fact `di_finish_ends_job_buffer_access`. The fact is needed
+because the native task refills a finished job's oldest input and its output
+for the next job once the matched finish, a clean IOMMU scan and the copy are
+complete.
+
+A successful reply carries the outputs in job order after the header, and its
+digest covers all of them; a four-job reply is 1,843,392 bytes. Bytes 176–179
+of a terminal sequence header count the jobs whose finish was observed. In TNR,
+bytes 180–183 hold each started job's programmed strength, one byte per job;
+capture requires the first to be the session's initial strength and later
+adaptive values to stay within the level's bounds. Capture labels an adaptive
+TNR sequence `TNR-ADAPTIVE-LOW`, `TNR-ADAPTIVE-MIDDLE` or `TNR-ADAPTIVE-HIGH`,
+writes all outputs to one file and records the job count and frame size. A
+WEAVE sequence still compares its output with the sealed input, because each
+job reproduces its own frame.
+
+`checks/deinterlace-jobs.py` covers these preparation and capture rules with
+model sessions. `checks/deinterlace-jobs-native.py` decodes, captures and
+acknowledges the actual native replies of WEAVE, motion and TNR sequences and
+passes their actual allocation rows and page tables through the allocation
+check. No sequence bundle has been prepared from typed authority records, and
+no sequence has run on the board.

@@ -24,7 +24,8 @@ struct deinterlace_application {
     uint32_t *table;
     size_t bytes,rounded,copied;
     uint32_t status,guards_ok,complete;
-    unsigned stage,command_step,clock_step,armed;
+    unsigned stage,command_step,clock_step,armed,job;
+    uint8_t strengths[1+A733_DEINTERLACE_MAX_REPEATS];
     uint64_t last_now;
     atomic_uint result;
     uint8_t digest[32],session_digest[32];
@@ -34,6 +35,8 @@ extern struct deinterlace_application deinterlace;
 int deinterlace_upload_allocate(void);
 int deinterlace_allocate(void);
 int deinterlace_guards(void);
+int deinterlace_inputs_intact(void);
+int deinterlace_refill(void);
 void deinterlace_task(void *);
 void board_usb0_task(void *);
 #endif

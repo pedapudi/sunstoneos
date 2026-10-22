@@ -4,10 +4,11 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #define DEINTERLACE_UPLOAD_MAGIC UINT32_C(0x55494453)
-#define DEINTERLACE_INPUT_PADDED 921600u
+#define DEINTERLACE_INPUT_PADDED ((A733_DEINTERLACE_INPUT_CAPACITY+4095u)&~4095u)
 #define DEINTERLACE_RESULT_HEADER 192u
-/* One immutable job. Header LE32 magic/version/raw length/reserved0, then
- * LE64 epoch/generation. Each fragment is bound to the retained session.
+/* One immutable upload holding every frame of the session. Header LE32
+ * magic/version/raw length/reserved0, then LE64 epoch/generation.
+ * Each fragment is bound to the retained session.
  * Caller owns the complete private WB allocation before the first fragment;
  * its lease and every supplied byte remain retained after commit or failure. */
 struct deinterlace_input {
