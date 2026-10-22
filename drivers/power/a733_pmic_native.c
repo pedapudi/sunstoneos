@@ -2,28 +2,16 @@
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
 #include "task.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "PMIC provider requires scheduler, task and mutex-owner APIs"
 #endif
 static int current(void *v)
 {
-    struct a733_pmic_native *n=v;uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if(!n || !n->initialized || el!=4 || (flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->task;
+    struct a733_pmic_native *n=v;
+    return n && n->initialized && a733_task_context_owner_el1((TaskHandle_t)n->task);
 }
 static int now(void *v,uint64_t *out)
 {struct a733_pmic_native *n=v;return n->locks->now(n->locks->context,out);}
@@ -41,33 +29,26 @@ static int owned(struct a733_pmic_native *n)
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     if(!out || !owned(v) || !a733_pmic_native_address(a,0))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");*out=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    *out=a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
     if(!owned(v) || !a733_pmic_native_address(a,1) || value>255 ||
        (a==0x0708300cu && value!=0x48 && value!=0x58 && value!=0x68))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
-}
-static int separate(const void *p,size_t size,const void *q,size_t count)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    return p && q && size<=UINTPTR_MAX-a && count<=UINTPTR_MAX-b && (a+size<=b || b+count<=a);
+    a733_mmio_write32_dsb_sy_both(a,value);return 1;
 }
 static int outside(void *v,const void *p,size_t size)
 {
     struct a733_pmic_native *n=v;
-    return separate(p,size,n,sizeof(*n)) && separate(p,size,n->locks,sizeof(*n->locks)) &&
-        separate(p,size,n->locks->context,sizeof(struct a733_counter_clock));
+    return a733_ranges_disjoint(p,size,n,sizeof(*n)) && a733_ranges_disjoint(p,size,n->locks,sizeof(*n->locks)) &&
+        a733_ranges_disjoint(p,size,n->locks->context,sizeof(struct a733_counter_clock));
 }
 int a733_pmic_native_init(struct a733_pmic_native *n,struct a733_platform_locks *locks,void *task)
 {
     if(!n || n->initialized || !locks || !locks->initialized || !task ||
        locks->now!=a733_counter_clock_now || !locks->context ||
-       !separate(n,sizeof(*n),locks,sizeof(*locks)) ||
-       !separate(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
+       !a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
     n->locks=locks;n->task=task;
     n->operations=(struct a733_pmic_ops){now,current,enter,leave,retain,read32,write32,outside};
     n->initialized=1;return 1;

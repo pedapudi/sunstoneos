@@ -3,6 +3,11 @@
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
 #include "task.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
+#ifndef SUNSTONE_CAMERA_MODEL
+#include "a733_task_context.h"
+#endif
 #define CCU UINT32_C(0x02002000)
 static struct a733_twi_native *instance;
 #ifdef SUNSTONE_CAMERA_MODEL
@@ -15,23 +20,7 @@ static int current(struct a733_twi_native *n)
 #ifdef SUNSTONE_CAMERA_MODEL
     return n && n->self==n && instance==n && a733_camera_model_current(n->config.task);
 #else
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if(!n || n->self!=n || instance!=n || el!=4 || (flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->config.task;
+    return n && n->self==n && instance==n && a733_task_context_owner_el1((TaskHandle_t)n->config.task);
 #endif
 }
 static int now(void *v,uint64_t *out)
@@ -120,8 +109,7 @@ static uint32_t load(uintptr_t a)
 #ifdef SUNSTONE_CAMERA_MODEL
     return a733_camera_model_load(a);
 #else
-    __asm__ volatile("dsb sy" ::: "memory");uint32_t v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return v;
+    return a733_mmio_read32_dsb_sy_both(a);
 #endif
 }
 static void store(uintptr_t a,uint32_t v)
@@ -129,8 +117,7 @@ static void store(uintptr_t a,uint32_t v)
 #ifdef SUNSTONE_CAMERA_MODEL
     a733_camera_model_store(a,v);
 #else
-    __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(a,v);
 #endif
 }
 static int read32(void *v,uintptr_t a,uint32_t *out)
@@ -147,21 +134,19 @@ static int write32(void *v,uintptr_t a,uint32_t x)
        settled(n,n->until)!=1)return 0;
     store(a,x);return settled(n,n->until)==1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_twi_native_init(struct a733_twi_native *n,const struct a733_twi_native_config *c)
 {
     if(!n || n->self || instance || !c || !c->clocks || !c->pins || !c->rails || !c->rail ||
        !c->locks || !c->locks->initialized || !c->task || c->locks->now!=a733_counter_clock_now ||
        c->clocks->now!=c->locks->now || c->clocks->context!=c->locks->context ||
        (c->apb1&~UINT32_C(0x0300001f)) || (c->apb1>>24!=0 && c->apb1>>24!=3) ||
-       !separate(n,sizeof(*n),c,sizeof(*c)) || !separate(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
-       !separate(n,sizeof(*n),c->pins,sizeof(*c->pins)) || !separate(n,sizeof(*n),c->rails,sizeof(*c->rails)) ||
-       !separate(n,sizeof(*n),c->rail,sizeof(*c->rail)) || !separate(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
-       !separate(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)))return 0;
+       !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->pins,sizeof(*c->pins)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->rails,sizeof(*c->rails)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->rail,sizeof(*c->rail)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)))return 0;
     if(c->controller!=A733_TWI_MAIN11 && c->controller!=A733_TWI_MAIN9)return 0;
     /* Both controllers run from APB1 (manual 4.1.6.156/158). */
     const unsigned nine=c->controller==A733_TWI_MAIN9,first=nine?14:7;
