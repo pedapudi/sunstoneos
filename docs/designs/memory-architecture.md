@@ -1,173 +1,216 @@
-# Design: mapping 12 GiB, device reservation classes and memory protection
+# Design: GPU and NPU memory classes, boot mapping checks and EL1 protection
 
 Status: **design**; no code exists yet. Physical behavior is unqualified until the
 board evidence listed at the end exists.
 
-The cached eight-core image maps DRAM only up to `0x79000000`, about 1.9 GiB of
-the 12 GiB that boot0 reports. GPU, NPU and DMA buffers share one 768 MiB pool.
-Code and read-only data share one executable block. This design maps all DRAM,
-gives each large consumer its own reservation, and separates code from data.
-Readers are assumed to know AArch64 stage-1 translation and non-coherent DMA.
+The cached eight-core image maps DRAM up to `0x7900_0000`. GPU, NPU and 32-bit
+DMA buffers share one 768 MiB write-back pool. Boot checks that pool page by
+page with 401,408 address-translation (`AT`) instructions. Every low-DRAM block
+grants EL0 access. This design adds one 1 GiB class each for the GPU and the
+NPU, replaces the per-page check with one check per descriptor, and removes EL0
+access. Readers are assumed to know AArch64 stage-1 translation and
+non-coherent DMA.
 
-## The memory map is fixed at build time and checked once at boot
+## The map is a set of fixed constants and maps only owned memory
 
-DRAM starts at `0x40000000`, so 12 GiB ends at `0x3_4000_0000`. The existing
-translation settings already give a 39-bit virtual and 40-bit physical address
-space with level-1 entries of 1 GiB. Every mapping stays an identity mapping.
+DRAM starts at `0x4000_0000`; boot0 reports 12 GiB, which ends at
+`0x3_4000_0000`. All mappings are identity mappings in the existing 39-bit
+virtual, 40-bit physical configuration, with 1 GiB level-1 entries.
 
-| Physical range | Size | Use | EL1 attributes | Descriptors |
-| --- | --- | --- | --- | --- |
-| `0x0`–`0x4000_0000` | 1 GiB | MMIO | Device-nGnRnE, RW, execute-never (XN) | 1 level-1 block, unchanged |
-| `0x4000_0000`–`0x4100_0000` | 16 MiB | Low DRAM used by boot0 and the launcher | WB, RW, XN | level-2 blocks, unchanged |
-| `0x4100_0000`–`0x4120_0000` | 2 MiB | Text, then read-only data | Text RO executable; read-only data RO XN | 1 new level-3 table |
-| `0x4120_0000`–`0x4200_0000` | 14 MiB | Data, BSS, stacks, heap | WB, RW, XN | level-2 blocks, unchanged |
-| `0x4200_0000`–`0x4220_0000` | 2 MiB | Monitor and tables | Unmapped at EL1 | unchanged |
-| `0x4220_0000`–`0x4800_0000` | 94 MiB | Boot assets, 16 MiB recognizer arena at `0x46000000`, boot0 payload | WB, RW, XN | level-2 blocks, unchanged |
-| `0x4800_0000`–`0x7800_0000` | 768 MiB | Class `dma32` | WB, RW, XN | level-2 blocks, unchanged |
-| `0x7800_0000`–`0x7900_0000` | 16 MiB | Class `uncached` | Normal non-cacheable, RW, XN | level-2 blocks, unchanged |
-| `0x7900_0000`–`0x1_0000_0000` | 2.1 GiB | Free, below 4 GiB | WB, RW, XN | 56 level-2 blocks, 2 level-1 blocks |
-| `0x1_0000_0000`–`0x1_4000_0000` | 1 GiB | Class `gpu` | WB, RW, XN | 1 level-1 block |
-| `0x1_4000_0000`–`0x1_8000_0000` | 1 GiB | Class `npu` | WB, RW, XN | 1 level-1 block |
-| `0x1_8000_0000`–`0x1_c000_0000` | 1 GiB | Class `recognizer` | WB, RW, XN | 1 level-1 block |
-| `0x1_c000_0000`–`0x3_4000_0000` | 6 GiB | Free | WB, RW, XN | 6 level-1 blocks |
-| from `0x3_4000_0000` | | Not DRAM | Unmapped | none |
+| Physical range | Use | EL1 descriptor | Change |
+| --- | --- | --- | --- |
+| `0x0`–`0x4000_0000` | MMIO | 1 level-1 block, Device-nGnRnE, RW, XN | none |
+| `0x4000_0000`–`0x4100_0000` | boot0 and launcher | level-2 blocks, WB, RW, XN | EL0 access removed |
+| `0x4100_0000`–`0x4120_0000` | text, then read-only data | 1 level-2 block, read-only, executable at EL1 | EL0 access removed |
+| `0x4120_0000`–`0x4200_0000` | data, BSS, stacks, heap | level-2 blocks, WB, RW, XN | EL0 access removed |
+| `0x4200_0000`–`0x4220_0000` | monitor and tables | invalid | none |
+| `0x4220_0000`–`0x4800_0000` | boot assets, 16 MiB recognizer arena, boot0 payload | level-2 blocks, WB, RW, XN | EL0 access removed |
+| `0x4800_0000`–`0x7800_0000` | class `dma32` | 384 level-2 blocks, WB, RW, XN | none |
+| `0x7800_0000`–`0x7900_0000` | class `uncached` | 8 level-2 blocks, Normal non-cacheable, RW, XN | none |
+| `0x7900_0000`–`0x8000_0000` | no owner | invalid | none |
+| `0x8000_0000`–`0xC000_0000` | class `gpu` | 1 level-1 block, WB, RW, XN | new |
+| `0xC000_0000`–`0x1_0000_0000` | class `npu` | 1 level-1 block, WB, RW, XN | new |
+| `0x1_0000_0000`–`0x3_4000_0000` | no owner, 8 GiB | invalid | none |
 
-WB means Normal Write-Back Write-Allocate, Inner Shareable. No EL1 mapping
-grants EL0 access. Memory beyond the reported DRAM size is never mapped. A
-Normal mapping of absent memory would allow speculative accesses to it.
+WB means Normal Write-Back Write-Allocate, Inner Shareable. No EL1 descriptor
+grants EL0 access, and every descriptor except the text block is XN at both
+EL0 and EL1. A range with no owner stays invalid, so a stray access faults and
+speculation cannot reach it. Giving a range an owner is a build-time edit that
+adds the class constant and its descriptor together.
 
-Masters that address only 32 bits use `dma32`: DMA0 and DMA1 descriptors,
-camera and display I/O spans and, until the address-width survey records
-otherwise, the crypto engine. The GPU and NPU address
-40-bit physical memory, so their classes start at 4 GiB. That move leaves the
-768 MiB pool to 32-bit masters. The provisional 4K budget for display, camera,
-codec and DMA buffers needs 333 MiB of it. The `recognizer` class holds buffers that a GPU or
-NPU recognition path shares with the CPU. The current CPU recognizer keeps its
-fixed 16 MiB arena, whose measured peak is 1,761,840 bytes. Free ranges are mapped
-but have no owner. Giving them an owner is a build-time edit to the class table.
+The `gpu` and `npu` bases join `A733_DEVICE_WB_*` and `A733_DEVICE_NC_*` in
+`include/a733_device_memory_layout.h`, which stays the only source of these
+addresses. Both new classes lie below 4 GiB. The GPU's feature database records
+36-bit physical addressing; the vendor source for the NPU encodes 40-bit
+addresses. Neither width is qualified above 4 GiB on the board. Keeping every
+class below 4 GiB means no extent can be truncated by a 32-bit submission path,
+such as the MSI address write in `drivers/pci/a733_pcie_function.c`. A host check
+refuses any class whose end exceeds `0x1_0000_0000`. A class above 4 GiB
+requires a fail-closed address-width check in every master's submission path
+first.
 
-The map is one constant table of regions in `platform/a733/memory_map.c`. Each
-region has start, end, attribute, permission and class. The primary agent's
-table builder emits descriptors from this table. It uses the largest block that
-the region's alignment and attributes permit. The 12 GiB profile is version-2
-boot-record layout identifier `2`. That identifier is valid only when boot0
-reported 12,288 MiB and the DRAM firewall leaves every mapped range accessible
-from the nonsecure state. The record keeps its current size and fields.
+## Layout 2 is admitted only on decoded, firewall-cleared DRAM
 
-## Each class has its own allocator instance and lock
+A build option selects layout identifier `2`; layout 1 stays the default. The
+224-byte version-2 boot record keeps its six words. For layout 2 the DRAM
+reservation identity word holds the first 64 bits of SHA-256 over the four
+class ranges, their attributes and the 12,288 MiB DRAM size. The build computes
+the same constant, and `a733_device_memory_boot_admit()` compares the two.
 
-Each class reuses the existing `device_memory_pool` allocator unchanged in
-behavior. That allocator keeps up to 32 live extents, gives each a lease with a
-64-bit generation, and permanently retains device-owned or failed allocations.
-A class table entry adds a default alignment of 64 KiB or 2 MiB.
-`device_memory_acquire_aligned()` already implements both alignments.
+The record cannot prove that DRAM exists. Admission at EL3 therefore also
+requires a check from the DRAM-controller package. That check reads the
+controller's size and decode registers and the DRAM firewall. It passes only
+when `0x4000_0000`–`0x1_0000_0000` decodes linearly to distinct DRAM and is
+accessible from the nonsecure state, which EL1 uses (`SCR_EL3` = `0x535`).
+The linear decode is an assumption until that package establishes it. Until
+the check exists, layout 2 is always refused. A refusal takes the existing EL3
+stop with a new code before any table is built. There is no fallback to layout
+1, because a layout-2 image has no backing for its GPU and NPU services.
 
-An allocation in one class therefore never fragments another class or the boot
-regions. The search examines at most 33 candidate positions, each against at
-most 32 extents. The cost is constant in pool size, so a 1 GiB class costs the
-same as the 768 MiB pool. A buddy allocator would round a 300 MiB model buffer
-to 512 MiB, and allocations occur once per session rather than per job.
+## Each class has one allocator instance and one lock
 
-`DEVICE_MEMORY_MAX_PAGES` grows from 768 MiB to 4 GiB of 4 KiB pages. Page
-indices remain 32-bit. Ledger metadata stays about 1 KiB per class.
+Each class is one instance of the existing `device_memory_pool` allocator: up
+to 32 live extents, a lease with a 64-bit generation for each, and permanent
+retention of device-owned or failed allocations. Callers already pass 64 KiB or
+2 MiB to `device_memory_acquire_aligned()`; a class entry is base and size
+only. An allocation in one class never fragments another class or the boot
+regions. The worst-case search is 33 candidate positions against 32 extents,
+independent of pool size.
 
-Ownership and data flow are unchanged. A CPU-owned allocation becomes
-device-owned only through its consumer's completion and cache protocol, and
-returns to the CPU only after verified drain. The allocator never writes
-payload memory and performs no cache maintenance.
+`DEVICE_MEMORY_MAX_PAGES` rises from 196,608 to 262,144, the 1 GiB of the
+largest class. `device_memory_pool_init()` computes the size limit as a product
+of two `unsigned` constants; the product gains a `size_t` cast, as in
+`device_memory_acquire_aligned()`. A host check initializes a 1 GiB pool and
+refuses a pool one page larger.
 
-## Protection lives in descriptors and costs nothing per access
+The `gpu` and `npu` classes each have one consumer, so the GPU and NPU service
+locks serve as their class locks. `dma32` and `uncached` serve several services
+in one image, such as display with camera or GPU firmware with display, so
+each gets one FreeRTOS mutex. Every operation and state transition (acquire, CPU to device, device to
+CPU, release, retain) runs in task context under the owning class's lock. An
+interrupt handler records completion and wakes the task; it never calls the
+pool. A mutex lets a waiting task block, and separate locks keep one class's
+users from waiting on another's.
 
-- Text is read-only and executable. Read-only data, data, stacks, heap, device
-  classes and MMIO are execute-never. The linker aligns the text end to 64 KiB.
-  Uniform 64 KiB runs in the level-3 table carry the contiguous hint, so the
-  2 MiB code window needs at most 32 TLB entries plus the boundary run.
-- `SCTLR_EL1.WXN` makes every writable mapping execute-never in hardware. A
-  host check of the region table also refuses any writable executable region.
-- Kernel memory is not separated from task memory. The pinned FreeRTOS SMP port
-  (`ARM_CR82`) implements task isolation with a Cortex-R82 protection unit. The
-  A55 and A76 have a translation-table MMU instead, so the port's mechanism does
-  not apply. All tasks run at EL1.
+The lock order is: one service lock, then the `dma32` mutex, then the
+`uncached` mutex. No code holds two service locks or takes a service lock while
+it holds a class mutex. A GPU session holds leases in `gpu` and `uncached`
+under that order. A buffer reaches a second master only as an extent while the
+owning service keeps the lease and performs every transition. The
+`device_memory_pool.h` contract comment changes to match, and a host model runs
+a two-class GPU session against a second `dma32` consumer.
 
-## Synchronization across cores needs no runtime TLB maintenance
+## Device cache maintenance is one helper call per buffer range
 
-Core 0 builds the tables at EL3 before releasing the secondaries; all eight
-cores install the same tables. No mapping changes after the scheduler starts,
-so no break-before-make sequence or broadcast TLB invalidation is required.
-The region and class tables are constant data and need no lock.
+Write-back classes follow this sequence, with one `aarch64_device_cache()` call
+per buffer range; the helper issues `DSB SY` before and after its loop:
 
-Each class ledger is guarded by its consumer service's lock: the GPU service,
-the NPU service and the recognition dispatcher. The `dma32` and `uncached`
-classes have several consumers. Each gets one FreeRTOS mutex. A global critical
-section would stop interrupts on every core. Allocation happens only in task
-context. CPU-only sharing, such as the recognizer arena, relies on the DSU's
-hardware coherence and needs no cache maintenance.
+- Before a device reads: clean (`DC CVAC`) the range, then ring the doorbell.
+- Before a device writes: clean and invalidate (`DC CIVAC`) the range, so no
+  dirty line from an earlier CPU owner can be evicted over device output.
+- After completion is observed: invalidate (`DC IVAC`) the range before the CPU
+  reads, which also discards lines filled speculatively during the transfer.
 
-There is no interrupt or polling path in memory management. Boot preparation
-runs on core 0 under the existing startup deadline. Exhaustion is an immediate
-refusal with no retry or wait. Permission and translation faults are
-synchronous exceptions reported through the existing fault record.
+Pool extents are page-aligned, so every range is cache-line-aligned. The
+`uncached` class holds small structures that the CPU writes and a device polls,
+such as GPU firmware state and descriptor rings; it needs no maintenance. Each
+physical range has one memory attribute in every regime that maps it.
 
-## Device cache policy follows the consumer's access pattern
+## Boot checks each descriptor once, and consumers check ranges once
 
-Write-back memory serves buffers the CPU reads or writes in bulk. Before a
-non-coherent master reads, the consumer cleans the buffer by virtual address;
-after the master writes, it invalidates. One `DSB SY` follows the complete range.
-The `uncached` class serves small structures that the CPU writes and a device
-polls on every submission, such as GPU firmware state and descriptor rings.
-Each physical range has one memory attribute in every regime that maps it, so
-no cacheable and non-cacheable aliases exist.
+`a733_device_memory_tables_complete()` already runs at EL3 after the base builds
+the tables. It gains a compare of all 1,024 EL1 level-1 and level-2 entries
+against values derived from the layout constants. The compare checks each
+entry's type (block, table pointer or invalid), output address, attribute,
+`AP[1]` = 0 and execute-never bits. EL1 cannot read or write the tables, which
+lie in the monitor range. The entry for `0x4200_0000` must be invalid.
+
+`a733_device_memory_prepare()` becomes one call at EL1 that returns 1 or -1. It
+checks the admitted profile and the startup deadline, then runs one read and
+one write `AT` at the base of each of the nine mapped regions. Read-only text
+expects a write permission fault, and every other region expects read-write
+with its attribute. It checks the deadline again and commits. The `AT` pairs
+confirm the EL1 translation registers; the descriptor compare already proved
+each entry, so a per-page walk repeats it.
+
+The class constants and the boot check also give consumers a per-range test.
+`a733_device_memory_range_admitted(class, cpu, physical, bytes)` returns 1 only
+after preparation succeeded and when the identity range lies inside the class.
+It replaces per-page `AT` for buffers in a checked class. Adopting it, and one
+cache call per buffer range, are follow-ups for the GPU and NPU owners: the
+data phase of `drivers/gpu/pvr_compute_service.c`, `mapped()` in
+`platform/a733/gpu_memory.c` and `translated()` in
+`drivers/npu/a733_npu_memory.c` each work one 4 KiB page at a time.
+
+There is no interrupt or polling path in memory management. Exhaustion is an
+immediate refusal. No mapping changes after the scheduler starts, so no
+break-before-make sequence or TLB broadcast is needed. Permission and
+translation faults are synchronous exceptions reported through the existing
+fault record.
 
 ## Reused, changed and removed mechanisms
 
-- Reused: the pool allocator and leases, `a733_cpu_coherence_tables()` for MMIO
-  and low DRAM, the version-2 boot record, `a733_mapping_check.h` for
-  translation checks and `a733_range.h` for overlap tests.
-- Removed: the per-page translation check of 200,704 pages, which issues a read
-  and a write `AT` per page in 3,136 batches. Every page's translation is fixed
-  by its leaf descriptor, so one read and one write check per descriptor tests
-  the same thing. The admitted-profile and deadline checks still run on each
-call, and a host check of the descriptor data still runs. The
-  64-page batching state also goes, because one call completes the check.
-- Changed: GPU and NPU stop allocating from the 768 MiB pool.
-- EL3 does not map memory above `0x7900_0000`. EL3 never accesses it.
+- Reused: the pool allocator and leases, `a733_cpu_coherence_tables()`, the
+  base's level-2 device loop for `dma32` and `uncached`, the version-2 boot
+  record, `a733_mapping_check.h`, `a733_range.h` and `aarch64_device_cache()`.
+- Changed: GPU and NPU services allocate from their own classes. The pool limit
+  rises to 1 GiB with a widened size product.
+- Removed from `device_memory_layout.c`: the per-page check, its cursor and
+  `nc` fields, the `SCANNING` state, the pending return, the `busy` atomic
+  (only core 0 calls it, once) and `A733_DEVICE_MEMORY_BATCH_PAGES`.
+  `apps/storage-read-single-core/runtime.c` drops its retry loop.
 
 ## Performance budgets
 
+Instruction counts come from the native fixture in
+`checks/device-memory-capacity.py`, run in QEMU with `-icount shift=0`, reading
+the PMU instructions-retired event around each call. Baselines are measured
+before any change; the targets below derive from about 10 instructions per
+entry compare and about 42 per `AT` through `aarch64_device_translate()`.
+
 | Metric | Baseline | Target | Measurement |
 | --- | --- | --- | --- |
-| Boot mapping check | 401,408 `AT` for 784 MiB (from source); instruction count to be recorded first | At most 2,100 `AT` and 40,000 instructions for 12 GiB | QEMU instruction-count plugin on the native preparation fixture |
-| Translation-table pages | 5 | 6 | Host build of the region table |
-| Worst-case acquire | 1,056 extent comparisons | Unchanged per class; at most 6,000 instructions | Host model with 32 adversarial extents; QEMU instruction count at `-O2` |
-| Release or describe | Not recorded | At most 100 instructions | QEMU instruction count |
-| Locks taken per acquire | 1 shared service lock | 1 per-class lock | Host model |
-| Cross-class fragmentation | Shared pool | None | Host property test over random sequences |
-| TLB invalidations after scheduler start | Not recorded | 0 | QEMU instruction trace |
-| Per-access protection cost | 0 | 0 | By construction |
+| EL1 boot mapping check | 401,408 `AT`; about 17 million instructions estimated from source | 18 `AT`, at most 3,000 instructions | QEMU fixture |
+| EL3 descriptor compare | none | 1,024 entries, at most 15,000 instructions | QEMU fixture |
+| Worst-case acquire | 1,056 extent comparisons | no increase over the measured baseline at 1 GiB | host model with 32 adversarial extents; QEMU fixture |
+| Release or describe | to be measured | no increase | QEMU fixture |
+| Translation-table pages | 5 | 5 | host build |
+| TLB entries for text and read-only data | one 2 MiB block | one 2 MiB block | EL3 compare asserts the level |
+| Mapped DRAM with no owner | 0 | 0 | EL3 compare, host model |
+| Cache calls per buffer handoff | one per 4 KiB page in the GPU data phase | one per buffer range | host model of each adopting consumer |
+| Range admission per buffer | 2 `AT` per page | one range test | host model |
+| TLB invalidations after scheduler start | to be measured | 0 | QEMU `-d in_asm` log after the scheduler-start marker |
 
-## Deliberately left out
+## Left out of this design
 
-- EL0 tasks and per-task address spaces: no current task runs untrusted code,
-  and each context switch would need an address-space switch.
-- A null-pointer guard page: the MMIO block at address 0 would need a level-2
-  table, and boot SRAM use in low addresses is not yet inventoried.
-- Read-only boot assets: images that load assets from storage write that range.
-- Stack guard pages: they need 4 KiB mappings across the 14 MiB heap.
-- Runtime remapping, demand paging and DRAM discovery beyond boot0's report.
+- Mapping the 8 GiB above 4 GiB: no consumer exists, and neither accelerator's
+  addressing is qualified there.
+- Execute-never read-only data: the bytes are constant. Separating them costs a
+  level-3 table, which raises instruction-side TLB refills, or a 2 MiB block,
+  which grows flat images by about 2 MiB of padding.
+- `SCTLR_EL1.WXN`: the EL3 compare proves no writable entry is executable, and
+  EL1 cannot write the tables.
+- EL0 tasks, null-pointer guard pages and stack guard pages: no task runs
+  untrusted code, page 0 lies in the MMIO block, and guards need 4 KiB
+  mappings across the heap.
 
-## Changes the primary agent must make in the cached base
+## Changes the primary agent must make
 
-`platform/a733-smp-cached/memory.c` replaces its hand-written device loop with a
-loop over the region table, and fills level-1 entries 2 to 12 with 1 GiB blocks.
-It adds one EL1 level-3 table for the code block and sets `SCTLR_EL1.WXN`.
-`link-devices.ld` aligns the text end to 64 KiB. Admission accepts layout `2`.
+- `platform/a733/cpu_coherence.c`, EL1 regime: clear `AP[1]` (bit 6) on low-DRAM
+  blocks; give the code block AP = `10` (bit 7) and set UXN (bit 54).
+- `platform/a733-smp-cached/memory.c`, layout 2 only: set EL1 level-1 entries 2
+  and 3 to WB block descriptors with bits 53 and 54 set. EL3 entries stay
+  invalid; EL3 never accesses these classes.
+- `platform/a733-smp-cached/continue.c`: call `a733_device_memory_prepare()`
+  once, without the retry loop.
 
 ## Board evidence that would confirm the design
 
-- Boot0's size word reads 12,288 MiB and the DRAM controller decode agrees.
-- Distinct patterns at the first and last 4 KiB of every GiB read back without
-  aliasing, and the firewall decode shows nonsecure access to every mapped range.
-- A write to text, execution from data and an access above the top each raise
-  the expected fault class.
-- The GPU and NPU complete checksummed jobs in buffers above 4 GiB.
-- PMU TLB refill counts show the code-window budget holds.
+- The DRAM-controller check passes: 12,288 MiB, linear decode, and nonsecure
+  firewall access up to 4 GiB.
+- Distinct patterns at the first and last 4 KiB of each 256 MiB from
+  `0x8000_0000` to 4 GiB read back without aliasing into low DRAM.
+- The EL3 compare and preparation pass on the board.
+- A write to text, execution from data and an access to an unowned range each
+  raise the expected fault class.
+- The GPU and NPU complete checksummed jobs in buffers inside their classes.
