@@ -26,16 +26,22 @@ static int owned(struct a733_pmic_native *n)
     return current(n) && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u) &&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->task;
 }
+/* Device-nGnRnE accesses to one peripheral reach it in program order, so
+ * polled reads and the data-byte write need no barrier. A control write
+ * starts a timed bus phase, and the provider times that phase from the write
+ * reaching the controller: one DSB SY follows it. */
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     if(!out || !owned(v) || !a733_pmic_native_address(a,0))return 0;
-    *out=a733_mmio_read32_dsb_sy_both(a);return 1;
+    *out=a733_mmio_read32(a);return 1;
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
     if(!owned(v) || !a733_pmic_native_address(a,1) || value>255 ||
        (a==0x0708300cu && value!=0x48 && value!=0x58 && value!=0x68))return 0;
-    a733_mmio_write32_dsb_sy_both(a,value);return 1;
+    if(a==0x0708300cu)a733_mmio_write32_dsb_sy_after(a,value);
+    else a733_mmio_write32(a,value);
+    return 1;
 }
 static int outside(void *v,const void *p,size_t size)
 {

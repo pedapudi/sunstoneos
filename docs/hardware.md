@@ -698,9 +698,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the conditions. The second board also passes 21 register reads, including
   the DCDC2 system-supply selector, with normal ROM return and automatic USB
   access under `sys-supply-probe-20261018/runtime/`. No regulator settings change.
-  The [rail ledger](rail-leases.md) coordinates all 39 source-defined
-  outputs with the existing DCDC2 and GPU DCDC4 owners. Host checks and native
-  compilation pass for shared selectors, snapshot ownership and retained faults.
+  The [rail ledger](rail-leases.md) is the only rail authority for the fifteen
+  outputs the images use and refuses the others; it no longer reaches DCDC2 or
+  DCDC4 through the clock registry or GPU manager. Rail status costs 37 AArch64
+  instructions on three cache lines at any holder count, and the ledger uses
+  1,600 bytes. One [power-authority state word](power.md) carries provider,
+  registry, ledger, supply and domain readiness and faults. A
+  [domain owner](power.md) for PCK600 domains 1, 4, 5 and 10 verifies DCDC2,
+  DCDC4, CLDO2 and CLDO5 once per boot and counts rows without PMIC reads;
+  host models pass, and no image calls it yet. The NPU supply selection is the
+  verified 800 mV DCDC2 setting. CPU rail lowering stops at the boot baseline.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
   and native compilation pass. A physical returning test now completes production
@@ -709,7 +716,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   decodes as an enabled, programmed 3.3 V; this is not a voltage measurement.
   Evidence: `pmic-provider-probe-20261018/physical/runtime/session.json`.
   It adopts either supported 24 MHz APBS1 parent
-  and rejects later route changes; focused reference-parent checks pass.
+  and rejects later route changes at request admission; focused
+  reference-parent checks pass. Between bus phases it checks only the state
+  word, and it issues one `DSB SY` per control write.
   [GPU/NPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared
   provider disables their competing inherited-bus readers. Emulator checks pass
@@ -2068,8 +2077,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   An explicit supervised mode now enables a disabled PLL while DRAM remains
   active and adopts a quiescent, already-powered NPU domain. Its first native
   link and focused startup checks pass; modeled startup reaches service
-  activation without power-domain writes or changes to SRAM reset. Unsuitable
-  supply voltage remains unsupported. Concrete boot
+  activation without power-domain writes or changes to SRAM reset. The NPU
+  runs only at 492 MHz, where every speed bin needs 800 mV, so its supply
+  selection is the verified DCDC2 setting ([power.md](power.md)). A DCDC2 that
+  is not verified at 800 mV refuses the owner's domain-4 row, which the NPU
+  platform does not request yet. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 

@@ -35,8 +35,9 @@ normalized 24 MHz reference. The enabled bus must be idle with both lines
 released. Exact integer cross-products check the inherited TWI denominator
 against 10–400 kHz using the APBS1 parent, independently of the APBS0 divider.
 The first baseline records both buses' selector/divisor bits and the TWI divisor.
-When either bus uses source0, it also records the decoded DCXO rate. Later
-checks refuse changes to those values, including a supported source change.
+When either bus uses source0, it also records the decoded DCXO rate. The
+admission of each request reads this clock route again and refuses any change,
+including a supported source change.
 These are programmed clock
 settings; electrical timing is not measured.
 
@@ -61,8 +62,9 @@ The finite queue contains eight copied requests. Each request has an exact
 provider identity, owner and monotonically allocated request ID. Its rail
 ledger ticket stays at a fixed address and prevents the parent rail lease
 from being released. Only an authenticated shared or exclusive lease for
-the selected rail permits submission. The provider revalidates the ticket before access
-and publication.
+the selected rail permits submission. The provider checks the ticket once when
+it admits the request; afterwards only a ledger fault can invalidate it, and that
+fault appears in the power-authority state word.
 
 One snapshot reads AXP8191 address `0x36` in this order:
 
@@ -80,8 +82,21 @@ uses START, write address, register index, repeated START, read address, final
 NACK and STOP. Sending the register index does not write PMIC register data.
 One worker poll advances consecutive bus phases while the I2C mutex stays held.
 The poll ends at the first phase that waits for a completion flag that is still
-clear, and after at most eight phases. Clock and rail authority are checked
-again before each further phase; BUSY there ends the poll before any access.
+clear, and after at most eight phases. Before each further phase the provider
+makes one acquire load of the power-authority state word described in
+[power.md](power.md), which carries provider, clock registry and rail ledger
+faults. A set fault bit retains the provider before any further access. The
+provider holds its S_TWI0 lease and the request's borrow until reap, so only a
+fault can invalidate them between phases.
+
+Each request is admitted once. Admission queries the clock registry for the
+provider's S_TWI0 lease and the ledger for the request's borrow, rereads the
+clock route and divisor (four or five reads), and requires an idle bus (three
+reads). Startup alone verifies the S_TWI0 gate and reset, the idle legacy and
+autonomous engines, DMA and interrupt state: only the provider could change
+them while it holds S_TWI0, and the native adapter cannot write any of them.
+The bus-idle registers are read again after every STOP, which detects another
+master's activity.
 
 The [poll-count and BUSY check](../checks/a733-pmic-polls.c) models bus timing
 in software. Its clock advances 1 microsecond for each time read, and each
@@ -93,12 +108,25 @@ hardware.
 
 A poll holds the provider object, so a concurrent `a733_pmic_live()` caller
 observes BUSY while the poll runs. The HDMI and Type-C users treat that BUSY as
-a fault, so a poll must stay short. In the model, the longest poll is the one
-that also checks the bus baseline; it lasts 58 modeled microseconds. The polls
-of one snapshot last about 600 modeled microseconds in total, the same as with
-one phase per poll. The check counts each complete poll as BUSY time, so these
-figures are upper bounds. A caller deadline bounds the complete snapshot,
-including mutex acquisition and result publication.
+a fault, so a poll must stay short. In the model, the longest poll lasts 17
+modeled microseconds with 7 register accesses, and the polls of one snapshot
+last about 513 modeled microseconds in total. The check counts each complete
+poll as BUSY time, so these figures are upper bounds. A caller deadline bounds
+the complete snapshot, including mutex acquisition and result publication.
+`a733_pmic_live()` itself takes the provider object's try-lock and makes one
+load of the state word; it no longer queries the clock registry.
+
+[The cost check](../checks/a733-pmic-cost.c) counts the register accesses of one
+snapshot through the same model: 126 transaction reads, 60 writes and 25 other
+reads, which are the admission route and bus-idle reads and the bus-idle reads
+after each of the six STOPs. `docs/designs/power-authority.md` records these
+counts against the previous provider.
+
+The native adapter issues no barrier for a read or for the data-byte write:
+Device-nGnRnE accesses to one peripheral reach it in program order. Each
+control-register write starts a timed bus phase and is followed by one
+`DSB SY`. A read transaction therefore issues seven barriers and a selector
+write five.
 
 Request admission waits for two locks: the private pin-lease check waits for
 REGISTER_LOCK, and the bus access waits for the I2C mutex. The poll releases

@@ -1,136 +1,131 @@
-# Power consumers share exact rail reservations
+# The rail ledger is the only authority for PMIC outputs
 
-The rail ledger provides native metadata ownership for the 39 outputs in the
-AXP8191 source table. It performs no I2C transaction, voltage change, clock
-operation or electrical qualification. A usable lease still requires verified
-board wiring, voltage, enable state, settling time and exclusion of other
-firmware. The PMIC provider separately owns S_TWI0 and its pins.
+The rail ledger records which software owner holds each AXP8191 output that
+the images use, and in which mode. The PMIC provider writes an output only
+under an exclusive ledger token, and it writes only the CPU rails DCDC3 and
+DCDC5, so no other output changes after boot. The ledger performs no I2C
+transaction, voltage change, clock operation or electrical qualification. A
+usable lease still requires verified board wiring, voltage, enable state,
+settling time and exclusion of other firmware. The
+[PMIC provider](pmic-runtime.md) separately owns S_TWI0 and its pins.
 
 The public API is [a733_rail_leases.h](../include/a733_rail_leases.h). Private
-storage is initialized once before concurrent access and remains at its original
-address for platform lifetime. The ledger uses a nonblocking atomic lock,
-128 reservation slots and 64 snapshot tickets. Capacity exhaustion refuses
-admission without reclaiming another owner's resources.
+storage is initialized once before concurrent access and stays at its address
+for the platform lifetime. Status: implemented and host-modeled; no physical
+rail behavior is qualified by it.
 
-## Output ownership includes shared voltage selectors
+## Fifteen outputs are accepted
 
-The pinned U-Boot revision `b791be842935b27268ae3d00e943a9075495f30a`,
-`drivers/sunxi_power/pmu_axp8191.c`, defines nine DCDC, six ALDO, five BLDO,
-five CLDO, six DLDO, six ELDO and two DC1SW outputs. Their enum values follow
-that table. A rail mask uses `A733_RAIL_BIT(enum_value)`.
+The ledger accepts the fifteen outputs that production code acquires: DCDC1,
+DCDC2, DCDC3, DCDC4, DCDC5, DCDC8, DCDC9, BLDO1, BLDO2, BLDO5, CLDO1, CLDO2,
+CLDO3, CLDO5 and ELDO6. Every other output in the pinned U-Boot table
+(`drivers/sunxi_power/pmu_axp8191.c` at revision
+`b791be842935b27268ae3d00e943a9075495f30a`) is refused with `INVALID`. The rail
+enum keeps all 39 table entries in table order, and a rail mask uses
+`A733_RAIL_BIT(enum_value)`.
 
-DC1SW1 and DC1SW2 use DCDC1's voltage selector. Reserving any of these three
-outputs therefore reserves all three in the same mode. Exclusive ownership
-wins if shared and exclusive requests expand to the same alias group. This
-conservative rule also excludes concurrent switch-enable changes. Other output
-enable bits share PMIC bytes; the provider must serialize read-modify-write
-operations and preserve every unowned bit.
+DC1SW1 and DC1SW2 use DCDC1's voltage selector. They are accepted as aliases:
+reserving any of the three reserves all three in the same mode, and exclusive
+wins when shared and exclusive requests name the same group. Other outputs'
+enable bits share PMIC bytes; the provider serializes read-modify-write
+operations and preserves every unowned bit.
 
-DCDC2 retains its existing common clock-registry authority. The ledger obtains
-its own shared or exclusive `A733_POWER_DCDC2` guard. DCDC4 retains its existing
-GPU resource-manager authority. The ledger obtains a metadata-only RAIL guard
-in that same manager. Existing stable GPU leases conflict with a new exclusive
-DCDC4 request, and new stable guards exclude existing GPU change requests.
+## Exclusive excludes every other holder
 
-GPU metadata guards use separate slots 16–31. Existing fixed GPU client IDs
-remain 0–15, and conflict detection examines both sets. At most 16 DCDC4
-bridge guards can coexist; additional requests remain pending within their
-admission deadlines. Guard admission performs
-no GPU readiness or PMIC readback. Ordinary GPU release APIs cannot discard a
-bridge guard. The GPU manager's private layout changes, so all consumers must
-be compiled against the same header.
+A shared holder excludes exclusive holders of its outputs, and an exclusive
+holder excludes every other holder. The ledger keeps the union of exclusive
+masks and a count of shared holders per output, so admission compares two masks
+instead of scanning holders. An exclusive token grants a selector write only for
+DCDC3 and DCDC5; on any other output it only excludes other holders.
 
-These guards establish ownership against participating software. They do not
-make legacy direct I2C readers compatible with a new provider that exclusively
-owns the controller. Provider integration must replace or serialize those
-readers through the actual bus owner before concurrent operation.
+The ledger takes no lease in the clock registry or the GPU resource manager.
+The registry's `A733_POWER_DCDC2` scope and the GPU manager's DCDC4 guard
+remain for their existing callers but grant no rail authority: nothing writes
+DCDC2 or DCDC4.
 
-## Admission publishes authority only after both guards exist
+## A token names its slot
 
-`a733_rail_acquire` reserves a slot and returns `PENDING` with its exact token.
-The token records a fresh generation, trusted owner and expanded masks.
-`a733_rail_poll` obtains required DCDC2 and DCDC4 guards and checks their actual
-identities. It returns `READY` only after the final deadline check. Pending
-reservations exclude conflicting ledger requests but grant no device access.
+The ledger has 32 holder slots and 10 borrow slots. The images create 31
+holders; the borrows cover the provider's eight request slots, the camera's
+lifetime borrow and one spare. A token identifier holds its slot index in its
+low five bits and a never-reused generation above them, so status, poll,
+release and borrow compare one slot. A full table returns `BUSY` and leaves the
+output unchanged.
 
-A conflict in either legacy manager leaves admission pending. Partial admission
-keeps its first guard. Expiry or uncertainty after reservation retains the
-reservation and all remaining guards. A terminal ledger fault prevents new
-admission, release and device use; it does not reclaim ownership.
+`a733_rail_acquire` admits the request and returns `PENDING` with the token;
+`a733_rail_poll` returns `READY` on its first call without bus access. The
+pair keeps the existing poll call sites working. Changing acquire to return
+`READY` and removing the poll calls belongs to the consumers' packages.
 
-The timer uses the same provider and context as the common registry. It reports
-monotonic microseconds. Metadata lock ordering is ledger, then common registry
-or GPU manager. No callback may reenter the ledger. These calls never acquire
-the register mutex, PMIC mutex or scheduler lock.
+## Borrows and domain rows pin a token
 
-Only trusted privileged code handles these records. Exact authentication,
-address checks and a sealed binding detect stale tokens, copied ledgers and
-accidental rebinding. They do not provide a hostile-task memory sandbox.
+A borrow pins its parent token for one PMIC request. The ticket stays at its
+original address until `a733_rail_end_borrow`, and a copy cannot authenticate or
+end it. The [power-domain owner](power.md) pins a token the same way while a
+domain row is counted (`a733_rail_pin` and `a733_rail_unpin`). Release returns
+`BUSY` while any pin remains, so a rail cannot be released under a pending
+request or a powered domain. Borrow, status and pin operations make no timer or
+hardware callback.
 
-## A snapshot ticket prevents release during an I2C request
+## Faults latch in the power-authority state word
 
-The provider calls `a733_rail_borrow` with an active exact token and the selected
-rail mask before publishing a request. A successful borrow writes a ticket in
-private provider storage. That storage remains at the same address through
-completion. A copied ticket cannot authenticate or end the borrow.
+The ledger embeds the power-authority state word, one 64-byte line described in
+[power.md](power.md). A ledger fault (a clock that runs backwards, a replaced
+time source, a pinned parent that has disappeared, or `a733_rail_retain`) sets
+`A733_POWER_LEDGER_FAULT`. All later status, borrow, release and acquire calls
+then return `RETAINED`, and every reservation and borrow stays held.
+Initialization also binds the clock registry to this word, so a registry fault
+sets `A733_POWER_CLOCK_FAULT` there. One registry reports to one ledger.
 
-The provider validates the ticket before hardware access and before publishing
-copied results. It calls `a733_rail_end_borrow` after certain completion or
-cancellation before access. Duplicate completion and stale generations refuse.
-The parent cannot release while a ticket exists. An uncertain active request
-keeps the ticket and the provider's own hardware ownership until independent
-recovery. Borrow, status and completion operations make no timer or hardware
-callback and return `BUSY` rather than waiting for a metadata lock.
+The ledger lock is a nonblocking atomic flag; a busy ledger returns `BUSY`.
+The only callback is the time source, which acquire and release call once.
+Only trusted privileged code handles these records. Exact authentication and
+address checks detect stale tokens and copied ledgers; they do not provide a
+hostile-task memory sandbox.
 
-## Cleanup records each irreversible release
+## CPU rails keep a boot-baseline floor
 
-Release requires independently established consumer quiescence or cancellation
-before device access. It enters `CLOSING`, where no further device operation or
-snapshot may start. Repeated release calls resume metadata cleanup only.
+For DCDC3 and DCDC5, `a733_rail_floor` records the first selector voltage that
+the exclusive holder reads as the rail's boot baseline and returns it on every
+later call. The [CPU clock driver](cpu-clock.md) never sets a target below it.
+The floor stays in the ledger after the driver releases its token.
 
-The common DCDC2 guard is released first. Its successful removal is recorded
-before attempting the GPU DCDC4 release. Each guard release has a deadline
-admission check. A later failure retains only guards still held; the record
-never claims ownership of an already released guard. No fallible callback
-follows the final release and slot clear. A successfully released token is
-stale and cannot authenticate a new generation.
+## Measured cost
 
-## Radio and PMIC use independent local clock scopes
+`checks/rail-leases-cost.py` compiles the ledger, registry and GPU manager with
+the production flags (`-march=armv8-a -mstrict-align -O2`, tuned for the
+Cortex-A55) and runs each operation once under Unicorn. It counts the
+instructions outside the measuring wrappers and the 64-byte lines of the ledger,
+registry and GPU manager that each operation touches. The configurations hold
+42 clock and 16 rail leases, then 126 clock leases and a full rail table.
 
-Common scope bits 53, 54 and 55 are SDC1, RADIO_MODULE and S_TWI0. All are
-exclusive. S_TWI0 adds stable APBS1, REF and OSC ancestors. Its scope includes
-the legacy and autonomous PMU/DRV engines, DMA routes, controller, IRQ and
-local gate/reset. Idle legacy state alone cannot establish autonomous-engine
-exclusion. PL0/PL1 and remote-firmware handoff remain separate prerequisites.
+| Operation | Previous ledger, 16 / full | Current ledger, 16 / full |
+| --- | --- | --- |
+| Rail status, one-rail token | 222 / 888 instructions; 34 / 256 lines | 37 / 37 instructions; 3 / 3 lines |
+| Clock token status | 235 / 592 instructions | 45 / 45 instructions |
+| Acquire, poll and release | 1,643 / 3,565 instructions | 335 / 335 instructions |
+| Borrow | 823 / 1,531 instructions | 153 / 153 instructions |
+| End borrow | 271 / 923 instructions | 86 / 86 instructions |
+| Authority check per PMIC transaction | 498 / 1,507 instructions | 6 / 6 instructions, 1 line |
+| Ledger storage | 20,096 bytes | 1,600 bytes |
 
-SDC1 owns its dedicated host and local clock/reset. RADIO_MODULE owns the
-shared Wi-Fi/Bluetooth reset, firmware and power-sequencing lifetime. It has
-no clock parent and grants no rail or pin authority. Separate SDIO and UART
-consumers borrow that one module owner rather than acquire competing owners.
+The previous ledger, at merge base `d40ca4b72b42348880d89f1ebc4eaec61704b8d0`,
+had 128 slots, so its full configuration holds 127 rail leases; the current
+ledger holds 31. Equal costs in the two configurations show
+that no operation scans holders. With `--limits` the check enforces the budgets
+of `docs/designs/power-authority.md`.
 
-FABRIC includes the shared STORE_AHB and SD-monitor fields at CCU+0x5c0
-bits24/29, STORE_MBUS at +0x5e0 bit30, and MSI-LITE1 at +0x59c gate0 and
-reset16/17. A stable FABRIC lease permits observation. Changing these fields
-requires exclusion of every storage consumer and actual selected-parent
-ownership. SDC1 local authority cannot reset an active microSD/eMMC path.
+## Checks
 
-The source contracts are the pinned board kernel's `ccu-sun60iw2.c`,
-`ccu-sun60iw2-r.c` and `sun60iw2p1.dtsi`, plus manual sections 4.2.5.3 and
-4.2.5.16 for the S_TWI source and gate/reset words. Software ownership alone
-does not qualify the live bus, source rate, remote handoff or board supply.
+- `checks/rail-leases.c`, built with AddressSanitizer and
+  UndefinedBehaviorSanitizer, covers acquire, poll and release in production
+  order for all fifteen outputs with no registry or GPU lease and no bus
+  access; refusal of every other output; exclusion; aliases; a full table;
+  never-reused identifiers; borrow capacity; pins; and fault retention,
+  including a registry fault reported in the state word.
+- `checks/rail-leases.py` runs that model and compiles every affected native
+  unit with its recorded flags, archiving inputs and the executable.
+- `checks/rail-leases-cost.py` measures the costs above.
 
-## Focused ownership checks passed
-
-The composed host check passed with AddressSanitizer and UndefinedBehaviorSanitizer.
-It uses the actual common registry and GPU manager for cross-authority conflicts,
-fixed-client coexistence, alias exclusions, borrowed snapshot lifetime, partial
-cleanup, caller mutation and retained faults. The source comparison matches all
-39 output identifiers and the shared DCDC1 selector. All 16 affected native
-translation units compile. These checks establish metadata behavior only;
-physical PMIC, rail and peripheral qualification remains pending.
-
-Run this batch with `checks/rail-leases.py`, supplying a fresh evidence directory,
-the generated FreeRTOS SMP port directory and the pinned PMIC source file. The
-runner archives source identities and the executable before its one host
-execution, then records the native dependency closure. Prior clock, GPU, NPU and
-service execution suites are reused because their runtime behavior is unchanged.
+These checks establish metadata behavior only; physical PMIC, rail and
+peripheral qualification remains pending.

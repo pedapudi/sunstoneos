@@ -446,6 +446,13 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
+        /* The rail's first reading is its boot baseline, kept by the ledger:
+         * the target never falls below it, whatever the operating point. */
+        uint32_t floor;
+        enum a733_rail_result f=a733_rail_floor(c->rails,&c->rail,rail_of(c->cluster),c->from_uv,&floor);
+        if(f==A733_RAIL_BUSY)return A733_CPU_CLOCK_PENDING;
+        if(f!=A733_RAIL_READY)return fault(c);
+        if(c->to_uv<floor)c->to_uv=floor;
         /* Raise: voltage first. Lower: frequency first, then voltage unless
          * the thermal path keeps it. Enough voltage needs no write. */
         if(c->raise && c->to_uv>c->from_uv){c->state=S_VOLTAGE;c->after=S_PARK;}

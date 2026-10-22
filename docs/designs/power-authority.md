@@ -1,8 +1,9 @@
 # Design: one owner for supply rails and one for power domains
 
-Status: **design**, not implemented; physical behavior stays unqualified
-until the board evidence at the end exists. Section numbers refer to
-`docs/performance-architecture.md`.
+Status: **implemented in part and host-modeled**; the section "Implemented
+state and measurements" at the end lists what exists, what differs from this
+design and what remains. Physical behavior stays unqualified until the board
+evidence exists. Section numbers refer to `docs/performance-architecture.md`.
 
 Today the clock registry holds AXP8191 output DCDC2, the GPU resource manager
 holds DCDC4, and the rail ledger reaches both through bridges. Five drivers
@@ -302,3 +303,75 @@ configurations; busy time is the sum of modelled spin intervals.
   single-core image.
 - PMU cycles for rail and clock status on an A55 and an A76.
 - A schematic source for the DE_SYS, G2D and deinterlace supply.
+
+## Implemented state and measurements
+
+Implemented:
+
+- the state word in the rail ledger;
+- the fifteen-output ledger with direct-slot tokens, pins and no bridges;
+- clock token status that compares one slot;
+- the provider's state-word check between bus phases, and one `DSB SY` per
+  control write in its native adapter;
+- the domain owner with supply verification, rows, adoption, bounded
+  acknowledgement, retention and domain-5 power-off;
+- the NPU supply selection and the CPU-rail floor;
+- `checks/pmic-tree.py`, `checks/rail-leases-cost.py` and
+  `checks/a733-pmic-cost.c`.
+
+Baselines come from the merge base `d40ca4b72b42348880d89f1ebc4eaec61704b8d0`
+built from `git archive` output. Instruction and line counts come from
+`checks/rail-leases-cost.py`, which compiles with the production flags
+(`-march=armv8-a -mstrict-align -O2`, tuned for the Cortex-A55; the design's
+`-mcpu=cortex-a55` would emit LSE atomics the images do not use) and excludes
+the measuring wrappers. Bus counts come from `checks/a733-pmic-cost.c` with the
+model timing of `checks/a733-pmic-polls.c`.
+
+| Operation | Merge base | Now | Target |
+| --- | --- | --- | --- |
+| Rail status, one-rail token, 16 / full holders | 222 / 888 instructions; 34 / 256 lines | 37 / 37; 3 / 3 lines | ≤ 60, ≤ 3 lines |
+| Clock token status, 42 / 126 leases | 235 / 592 instructions | 45 / 45 | ≤ 50, no scan |
+| Acquire, poll and release | 1,643 / 3,565 instructions | 335 / 335, no bus access | ≤ 450 |
+| Authority check per PMIC transaction | 498 / 1,507 instructions | 6, one acquire load | ≤ 6 |
+| Setup reads per snapshot | 64 | 25 | 3, plus 3 after each STOP (21) |
+| `DSB SY` per six-transaction snapshot | 500, two per register access | 42, one per control write | 7 per read transaction, 5 per write |
+| Longest poll; BUSY per snapshot (model) | 58 µs; 591 µs | 17 µs; 513 µs | — |
+| Polls per snapshot (model) | 44 | 44 | 0 ticks with the service task |
+| Supply verification | Six drivers, each on use | 24 transactions once per boot | 16 transactions |
+| Row request | GPU: 27 polls and one supply read | 0 PMIC requests, 1 acquire load | Same |
+| Barriers per row request; per transition | About 10; 2 per status poll | 0; 1 | 0; 1 |
+| Ledger storage | 20,096 B | 1,600 B | ≤ 1,632 B |
+| Image `.bss`, board / HDMI / storage maintenance | 5,502,352 / 465,376 / 541,776 B | 5,481,872 / 446,944 / 523,344 B | — |
+
+Differences from the design, each with its reason:
+
+- Supply verification uses four ordinary snapshots, 24 transactions, so the
+  chip identity is read with each; a four-transaction read kind would reach 16.
+- `a733_pmic_live` keeps the provider object's try-lock and drops only the
+  registry query. The USB2, storage and Type-C checks, which this package does
+  not own, inject a busy provider object and expect BUSY.
+- Request admission rereads the clock route and divisor (four or five reads),
+  because `checks/a733-clock-reference-pmic.c` requires drift detection there.
+- Exclusive tokens remain accepted on all fifteen outputs as pure exclusion;
+  `checks/a733-radio-platform.c` expects BUSY, not INVALID, for an exclusive
+  DCDC8 request. DC1SW1 is accepted as a DCDC1 alias with DC1SW2.
+- The CPU floor lives in the ledger (`a733_rail_floor`), because
+  `include/a733_cpu_clock.h` is outside this package.
+- The owner's API is in `include/a733_power_authority_domains.h` until
+  `include/a733_power_domains.h` is approved. `a733_de_sys_power.c` is not
+  renamed: the framebuffer and G2D still call it; its domain-9 path is removed.
+- An open GPU gate makes domain-5 release return REFUSED and keep the row.
+
+Not implemented, with the dependency that blocks each:
+
+- The PMIC service task, its notifications, the raw-counter spins inside the
+  provider and the `vTaskDelete` and core-mask checks: they need
+  `configTASK_NOTIFICATION_ARRAY_ENTRIES` of 2 and a scheduled-core constant
+  from the primary agent, and the image PMIC loops belong to the image
+  packages. Until then a snapshot still takes 44 ticks in the model.
+- Consumer migration to rows and verified bits (GPU, NPU, display, HDMI,
+  DisplayPort) and removal of the NPU startup's direct S_TWI0 path, which the
+  NPU startup and clock-handoff models outside this package still use.
+- The settle spin and core placement for the CPU clock driver, which has no
+  production caller.
+
