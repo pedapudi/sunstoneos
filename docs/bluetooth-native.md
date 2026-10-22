@@ -532,8 +532,9 @@ see the wideband section below.
 
 The Bluetooth task owns two PCM slots of at most 24,000 samples and 1,024
 packet records each. It writes slot *head* mod 2 only while *head − tail* is
-less than 2, and hashes each write with SHA-256 as it copies the packet, over
-the even prefix. A published segment carries an increasing ticket, the number
+less than 2. As each write completes a 64-byte SHA-256 block, the task
+hashes that block in place in the slot; at publication it hashes the rest of
+the even-length prefix. A published segment carries an increasing ticket, the number
 of samples in earlier segments, transport identities, the codec and its
 SHA-256 digest. The task stores *head* with release after the slot and its
 snapshot.

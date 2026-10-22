@@ -2,10 +2,9 @@
 
 This record compares the integration base (commit `87da531`) with the
 implementation of [bluetooth-voice-recognition.md](bluetooth-voice-recognition.md)
-(commit `c953c87`) against that design's budgets. Every metric reproduces the
-design's measured value. One metric that has no budget row regressed without
-a reason in the design: the owner copies every PCM byte a second time, into
-the SHA-256 staging block.
+(commit `c8de9d1`) against that design's budgets. Every measured metric is
+within its budget in the design. The owner copies each PCM byte once, and the
+design gives a measured reason for each increase over the base.
 
 ## Method
 
@@ -27,10 +26,17 @@ headset image. Raw outputs are under
   records every function entered.
 - **Whole segment.** A loop in the same harness re-arms one 60-byte CVSD
   packet and runs the owner step until it publishes a 48,000-byte segment. A
-  memory-write hook counts the bytes stored, by storing function.
-- **Polls.** The `bluetooth-headset.py` host model, with the repeated
-  recognition profile, CVSD and mSBC, cases `button`, `start`, `activations`
-  and `bac-idle`. Each case prints its latencies in owner polls.
+  memory-write hook counts the bytes stored, and a code hook counts the
+  instructions executed, each by function.
+- **Polls and host checks.** The `bluetooth-headset.py` host model, with
+  the repeated recognition profile, CVSD and mSBC, cases `button`, `start`,
+  `activations` and `bac-idle`. Each case prints its latencies in owner
+  polls. Every case except `speech` passed in the repeated CVSD composition,
+  with call control off and on, and in the mSBC composition; the default
+  cases passed in the single-capture composition. Both repeated compositions
+  check each taken segment's digest against the slot's bytes. The CVSD
+  `early` case ends activations after zero and an odd number of bytes, so
+  publication hashes a remainder shorter than one 64-byte block.
   `os-image-headset.py` passed against the OS headset build.
 - **Wake-ups.** The wait calls in each consumer loop: `vTaskDelay(1)` wakes
   1,000 times per second; a notification wait with a 100 ms or 250 ms timeout
@@ -45,13 +51,13 @@ no call-control option and always builds call control in.
 | --- | --- | --- | --- | --- |
 | `bt_hfp_ag.c` code, OFF | 15,066 B | 11,572 B | ≤ 13,000 B | yes |
 | `bt_hfp_ag.c` code, ON | 15,066 B | 15,800 B | ≤ 15,800 B | yes |
-| `apps/bluetooth/headset.c` code; static data, OFF | 11,879 B; 440,320 B | 12,763 B; 440,392 B | ≤ 13,400 B; ≤ 440,480 B | yes |
-| `apps/bluetooth/headset.c` code; static data, OFF with mSBC | 13,139 B; 440,320 B | 13,619 B; 440,456 B | no code row; ≤ 440,480 B | yes |
+| `apps/bluetooth/headset.c` code; static data, OFF | 11,879 B; 440,320 B | 12,807 B; 440,392 B | ≤ 13,400 B; ≤ 440,480 B | yes |
+| `apps/bluetooth/headset.c` code; static data, OFF with mSBC | 13,139 B; 440,320 B | 13,663 B; 440,456 B | no code row; ≤ 440,480 B | yes |
 | `apps/bluetooth/headset.c` static data, ON | 440,320 B | 440,648 B | ≤ 440,700 B | yes |
 | `msbc.c` code | 1,012 B | 1,036 B | ≤ 1,076 B | yes |
 | `apps/os/headset.c` code; static data | 2,069 B; 548,192 B | 1,861 B; 500,184 B | ≤ 2,100 B; ≤ 500,192 B | yes |
 | `recognition.cc` static data | 438,985 B | 390,985 B | 48,000 B smaller | yes |
-| `recognition.cc` code, CVSD; mSBC | 5,527 B; 5,575 B | 6,003 B; 6,051 B | no row | not budgeted |
+| `recognition.cc` code, CVSD; mSBC | 5,527 B; 5,575 B | 6,003 B; 6,051 B (476 B more) | ≤ 500 B more | yes |
 | `bt_sdp_server.c` code | 10,333 B | 10,333 B | unchanged | yes |
 | Existing AT lines, ON | see below | largest increase 1.91% (`AT+NREC`) | ≤ 2% each | yes |
 | Existing AT lines, OFF | see below | every line fewer instructions than the base | ≤ 2% each | yes |
@@ -61,10 +67,10 @@ no call-control option and always builds call control in.
 | Admission and recognition per poll | none | 66 in idle; 64 between activations | ≤ 75 | yes |
 | Recognition step, packet between activations | none | 247 CVSD; 252 mSBC | ≤ 250; ≤ 255 | yes |
 | Recognition step, no packet between activations | none | 164 | no row | not budgeted |
-| Owner step, packet in a segment | 422 CVSD; 36,811 mSBC; unhashed | at most 3,022 CVSD; at most 40,972 mSBC; hashed | ≤ 3,030; ≤ 46,500 | yes |
-| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | 5,990; 41,507 | ≤ 8,000; ≤ 52,000 | yes |
-| Owner instructions per 48,000 B CVSD segment | 2,044,008 | 2,180,634 (+6.7%) | no row | see below |
-| Owner `memcpy` bytes per 48,000 B CVSD segment | 48,000 | 96,000 | no row; design counts one owner copy | no |
+| Owner step, packet in a segment | 422 CVSD; 36,811 mSBC; unhashed | at most 2,993 CVSD; at most 40,931 mSBC; hashed | ≤ 3,000; ≤ 46,500 | yes |
+| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | 6,025; 41,542 | ≤ 8,000; ≤ 52,000 | yes |
+| Owner instructions per 48,000 B CVSD segment | 2,044,008 | 2,090,169 (+2.3%) | ≤ 2,100,000 | yes |
+| Owner `memcpy` bytes per 48,000 B CVSD segment | 48,000 | 48,000 | each byte once, plus fewer than 64 at publication | yes |
 | Consumer work per 48,000 B segment | 1,763,367 (47 chunks × 1,699 plus SHA-256) | 372 | ≤ 600 | yes |
 | Consumer PCM copies per segment, before WAV conversion | 96,000 B (slot to chunk, chunk to buffer) | 0 | no PCM copy | yes |
 | Ordering instructions, CVSD packet in a segment | 5 `LDAR` | 1 `LDAR` | no row | yes |
@@ -91,33 +97,29 @@ each line in 420 to 882 fewer instructions than the base with call control.
 
 ## Findings
 
-**The owner copies each PCM byte into the digest's staging block.**
-`storage_digest_add` compresses a 64-byte block in place only when its
-staging block is empty and at least 64 bytes remain. The owner hashes each
-60-byte CVSD packet as it arrives, so every call starts with a partly filled
-staging block, and `storage_digest_add` copies all 48,000 bytes of the
-segment into it before compressing. mSBC frames of 240 bytes leave a
-partial block in the same way. The base hashed the finished segment in one
-call and compressed every block in place. The design's copy count lists one
-owner copy per byte, from the packet into the slot, and does not list this
-one. Across the system, bytes copied before the WAV conversion still fall
-from 144,000 to 96,000 per segment, because the consumers no longer copy.
+**Hashing whole blocks removes the staging copy.** `storage_digest_add`
+compresses a 64-byte block in place only when its staging block is empty.
+When the owner hashed each 60-byte CVSD packet as it arrived, every call
+began with a partly filled staging block, and the owner copied all 48,000
+bytes of a segment into it: 96,000 `memcpy` bytes and 2,180,634 instructions
+per segment. The owner now hashes only whole blocks while a segment records
+and hashes the rest of the even-length prefix, fewer than 64 bytes, at
+publication. A 48,000-byte segment is 750 whole blocks, so publication hashes
+nothing more, and the owner stores 48,000 `memcpy` bytes per segment, as the
+base did. Across the system, bytes copied before the WAV conversion fall from
+144,000 to 48,000 per segment, because the consumers no longer copy.
 
-The fix stays inside `apps/bluetooth/headset.c`: advance `voice.hashed` only
-in whole 64-byte blocks of the slot, and hash the remainder at publication.
-Every call then starts with an empty staging block, `storage_digest_add`
-compresses the slot in place. Only the final partial block, at most 63
-bytes, is copied at publication.
+**The owner spends 2.3% more instructions per CVSD segment than the base.**
+Counted by function over one segment, SHA-256 compression (1,675,481) and
+the packet `memcpy` (125,294) cost the same as in the base. Of the 46,161
+extra instructions, about 20,200 are the 750 one-block calls into
+`storage_digest_add`, which replace one call over the finished segment, and
+about 25,900 are the per-packet slot, ring and record checks of the capture
+step. The design's budget row covers both. Owner and consumer together fall
+from about 3.81 million to 2.09 million instructions per segment, because the
+consumer no longer hashes the segment again.
 
-**The owner spends 6.7% more instructions per CVSD segment.** Of the
-136,626 extra instructions, about 105,600 come from the byte-by-byte runtime
-`memcpy` on the 400 packets whose source and destination differ in alignment
-modulo 8 (264 each), which the design records under Left out. The rest is the
-staging copy above and the per-packet digest call. The system total per
-segment falls from about 3.81 million to 2.18 million instructions, because
-the consumer no longer hashes the segment again.
-
-**`recognition.cc` code grows by 476 bytes.** The design has no budget row
-for it. The growth comes from the request, status and notification-wait
-loop that replaces the chunk loop, which the design describes; a budget row
-would make it reviewable.
+**`recognition.cc` code grows by 476 bytes.** The repeated recognizer gains
+the loop that requests each activation, borrows and acknowledges the segment
+and waits on a task notification; the finite mode-1 copy loop stays beside
+it. The design's budget row allows 500 bytes.

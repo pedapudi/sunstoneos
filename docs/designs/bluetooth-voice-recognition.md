@@ -204,10 +204,14 @@ activation.
 
 During an activation, CVSD bytes go from the SCO packet into a slot with one
 `memcpy`, as today, and mSBC frames decode into the slot directly; mSBC sample
-counts are multiples of 120, so a whole frame always fits. The owner hashes the
-slot with `storage_digest_add` as it writes, over the even-length prefix, and
-calls `storage_digest_end` at publication. Between activations it releases
-each packet without copying, decoding or hashing it. It counts the bytes
+counts are multiples of 120, so a whole frame always fits. After each write,
+the owner passes the 64-byte SHA-256 blocks that the write completed to
+`storage_digest_add`, which compresses them in place from the slot. At
+publication the owner hashes the rest of the even-length prefix, fewer than
+64 bytes, and calls `storage_digest_end`. Hashing only whole blocks keeps the
+digest's 64-byte staging block empty between calls, so the owner copies each
+PCM byte once. Between activations it releases each packet without copying,
+decoding or hashing it. It counts the bytes
 released since the stream opened, one addition per packet, and an activation
 starts by skipping to the next sample or frame boundary:
 
@@ -275,8 +279,8 @@ ownership and cache maintenance do not change. `retained.pcm` in
 consumers' 1 KiB stack chunks are removed. New state: the request word, the
 published-sample total, the released-byte count, the end of the last decoded
 mSBC frame, a 112-byte digest state and a few AG words; OFF drops the call
-fields. Hashing each packet right after its copy
-reads it from L1, where today's publication re-reads 48,000 bytes.
+fields. Hashing each block as soon as a write completes it reads the block
+from L1, where today's publication re-reads 48,000 bytes.
 
 ## Synchronization across cores
 
@@ -340,12 +344,13 @@ commit message records the after value of every row and every AT command.
 | --- | --- | --- | --- |
 | `bt_hfp_ag.c` code, OFF | 15,066 B; 11,938 B with all call handling removed | ≤ 13,000 B | 11,572 B |
 | `bt_hfp_ag.c` code, ON | 15,066 B | ≤ 15,800 B | 15,800 B |
-| `apps/bluetooth/headset.c` code; static data, OFF | 11,879 B; 440,320 B | ≤ 13,400 B; ≤ 160 B more | 12,763 B; 440,392 B |
+| `apps/bluetooth/headset.c` code; static data, OFF | 11,879 B; 440,320 B | ≤ 13,400 B; ≤ 160 B more | 12,807 B; 440,392 B |
 | `apps/bluetooth/headset.c` static data, OFF with mSBC | 440,320 B | ≤ 160 B more | 440,456 B |
 | `apps/bluetooth/headset.c` static data, ON | 440,320 B | ≤ 440,700 B | 440,648 B |
 | `msbc.c` code | 1,012 B | ≤ 1,076 B | 1,036 B |
 | `apps/os/headset.c` code; static data | 2,069 B; 548,192 B | ≤ 2,100 B; ≤ 500,192 B | 1,861 B; 500,184 B |
 | `recognition.cc` static data | 438,985 B, including `retained.pcm` | 48,000 B smaller | 390,985 B |
+| `recognition.cc` code, CVSD; mSBC | 5,527 B; 5,575 B | ≤ 500 B more | 6,003 B; 6,051 B, 476 B more |
 | `bt_sdp_server.c` code | 10,333 B | unchanged | 10,333 B |
 | Existing AT line, both settings | per command, below | ≤ 2% over each | at most 1.9% over (`AT+NREC`, ON) |
 | `AT+BVRA` line | none | ≤ 1,400 instructions | 808 OFF, 1,240 ON |
@@ -353,8 +358,10 @@ commit message records the after value of every row and every AT command.
 | Owner repeated-capture step, packet between activations | 171 CVSD, 174 mSBC | ≤ 188 CVSD, ≤ 191 mSBC | 183 CVSD, 188 mSBC |
 | Owner admission and recognition, per poll | none | ≤ 75 | about 64; 66 in idle |
 | Owner recognition step, packet between activations | none | ≤ 250 CVSD, ≤ 255 mSBC | 247 CVSD, 252 mSBC |
-| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B | ≤ 3,030 CVSD until the `memcpy` change, then ≤ 3,000; ≤ 46,500 mSBC; hashed | 3,022 CVSD, 40,972 mSBC |
-| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | ≤ 8,000 CVSD, ≤ 52,000 mSBC | 5,990 CVSD, 41,507 mSBC |
+| Owner step, packet in a segment | 422 CVSD, 36,811 mSBC, unhashed; SHA-256 1,683,514 per 48,000 B | ≤ 3,030 CVSD until the `memcpy` change, then ≤ 3,000; ≤ 46,500 mSBC; hashed | at most 2,993 CVSD, 40,931 mSBC |
+| Owner step, publishing packet | 1,684,087 CVSD; 1,715,924 mSBC | ≤ 8,000 CVSD, ≤ 52,000 mSBC | 6,025 CVSD, 41,542 mSBC |
+| Owner instructions per 48,000 B CVSD segment | 2,044,008 | ≤ 2,100,000 | 2,090,169 |
+| Owner `memcpy` bytes per 48,000 B CVSD segment | 48,000 | each PCM byte once, plus fewer than 64 bytes at publication | 48,000 |
 | Consumer work per 48,000 B segment | 47 chunks × 1,699 plus SHA-256 (about 1,763,000) plus WAV conversion | ≤ 600 plus WAV conversion; no PCM copy | 372 plus WAV conversion |
 | Owner wake-ups per second, idle | 1,000 | 1,000; ≤ 10 plus 1 per HCI packet after the UART receive interrupt | 1,000 |
 | Consumer wake-ups while waiting | 1,000 per second | ≤ 10 per second per recognizer wait, ≤ 4 in the OS client, plus 1 per event | 100 ms and 250 ms waits |
@@ -367,6 +374,20 @@ commit message records the after value of every row and every AT command.
 OFF and ON are the call-control settings; OFF is the default build. The base
 was built with call control, so the ON row is the like-for-like static-data
 comparison: 328 bytes over the base, of which 256 are the call state.
+
+`recognition.cc` code grows because the repeated recognizer gains a loop that
+requests each activation, borrows and acknowledges the segment, and waits on
+a task notification with a 100 ms timeout. The finite mode-1 copy loop stays
+beside it as a separate function.
+
+The owner runs 46,161 more instructions per CVSD segment than the base, 2.3%.
+The base hashed the finished segment in one `storage_digest_add` call; the
+owner now makes 750 calls of one block each, about 20,200 instructions more.
+The per-packet slot, ring and record checks in the capture step add about
+25,900. SHA-256 compression and the packet `memcpy` cost the same as in the
+base. Per segment, owner and consumer together fall from about 3.81 million
+to 2.09 million instructions, because the consumer no longer hashes or copies
+the segment.
 
 AT baselines in instructions, with call control as built today: `AT+BRSF`
 1,292; `AT+BAC` 1,205; `AT+CIND=?` 2,441; `AT+CIND?` 1,427; `AT+CMER` 1,567;
