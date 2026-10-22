@@ -296,9 +296,11 @@ int pvr_render_texture_layout_profile(uint32_t width,uint32_t height,uint32_t pr
     struct pvr_render_texture_layout l={0};
     l.output=PVR_RENDER_PROGRAM_BYTES+4096;
     l.output_bytes=bytes+128;l.output_allocation=(l.output_bytes+4095)&~4095u;
+    /* The frame between the guards is presented and read in place. */
+    l.copy=l.output+64;
     l.image=l.output+l.output_allocation;
     l.geometry=l.image+((PVR_RENDER_TEXTURE_MAX_BYTES+4095)&~4095u);
-    l.draft=l.geometry+PVR_RENDER_TEXTURE_GEOMETRY_BYTES;
+    uint32_t next=l.geometry+PVR_RENDER_TEXTURE_GEOMETRY_BYTES;
     if(profile==3)l.depth_bytes=PVR_RENDER_DEPTH_BYTES;
     if(profile==4) {
         /* Packed D32S8 uses eight bytes per sample over the same twiddled
@@ -306,10 +308,8 @@ int pvr_render_texture_layout_profile(uint32_t width,uint32_t height,uint32_t pr
         uint32_t x=32,y=32;while(x<width)x*=2;while(y<height)y*=2;
         l.depth_bytes=x*y*8u;
     }
-    if(l.depth_bytes){l.depth=l.draft;l.draft+=l.depth_bytes+8192;}
-    l.copy=l.draft+((PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES+
-        (profile==4?PVR_RENDER_BATCH_MAX*PVR_RENDER_BATCH_BYTES:0)+4095)&~4095u);
-    l.upload=l.copy+((bytes+4095)&~4095u);
+    if(l.depth_bytes){l.depth=next;next+=l.depth_bytes+8192;}
+    l.upload=next;
     l.download=l.upload+PVR_RENDER_TEXTURE_CHUNK;
     l.total=l.download+PVR_RENDER_TEXTURE_CHUNK;
     *out=l;return 1;

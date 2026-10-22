@@ -1,7 +1,7 @@
 # Native offscreen rendering
 
 The optional indexed-texture application accepts caller-supplied vertices,
-uint16 indices and RGBA8 texels, then streams a copied framebuffer up to
+uint16 indices and RGBA8 texels, then streams the rendered framebuffer, up to
 1920 × 1080 pixels. It retains the graphics context between frames. Graphics
 profile 2 draws one textured triangle list, profile 3 adds depth testing and
 source-over blending, and profile 4 adds per-batch state, perspective-correct
@@ -40,42 +40,57 @@ Textures and framebuffers each admit widths 1 through 1920 and heights 1 through
 this padding; consumers use the reported width and stride. These are initial
 allocation policies, not hardware limits.
 
-`pvr_gpu_service_texture()` copies one scoped request and up to 64 KiB before
-enqueue. BEGIN binds a private draft to the session owner, previous frame,
-generation, texture shape and geometry counts. WRITE appends copied chunks at
-the next contiguous byte offset. The canonical input contains vertex bytes,
-index bytes and padded texture bytes in that order. A replacement BEGIN starts
-a new generation. Generation and ticket wrap are refused.
+`pvr_gpu_service_texture()` copies one scoped request and up to 64 KiB into
+the upload slot before enqueue. BEGIN opens an upload bound to the session
+owner, previous frame, generation, texture shape and geometry counts. The
+canonical input contains vertex bytes, index bytes, batch records (profile 4)
+and padded texture bytes in that order. WRITE takes the next contiguous chunk,
+and the worker moves each byte once to its final place. Vertices, indices and
+texels go to the vertex, index and texture areas, which are cleaned to the point
+of coherency as written; batch records go to the worker's private copy. A
+replacement BEGIN starts a new generation. Generation and ticket wrap
+are refused.
 
-SUBMIT requires the complete draft. The privileged worker validates its shape,
-all vertices and all indices, then checks native ownership, the original paired
-queues, the previous frame and both acquired completion timelines. Only accepted
-submission revokes prior copied output. It initializes and publishes active
-input, descriptors, draw count and guarded output before the combined kick.
-Input and commands remain immutable through completion. Invalid drafts preserve
-the prior frame; uncertain submission retains every allocation and context.
+The input areas belong to the last frame until both of its completion
+timelines are acquired. BEGIN and WRITE are therefore refused while a frame is
+in flight or while either timeline differs from the last frame. All current
+clients wait for completion before the next BEGIN.
 
-The existing graphics owner leases these allocations from the admitted write-back (WB) pool.
-Texture and geometry mappings are GPU-read-only; guarded output is writable.
-Upload drafts, copied output and transfer slots occupy CPU-only portions of the
-lease, absent from GPU mappings. At maximum geometry, the complete graphics VM
+SUBMIT requires the complete upload. The privileged worker validates the shape,
+all vertices and all indices in place, then checks native ownership, the
+original paired queues, the previous frame and both acquired completion
+timelines. Only the worker writes the input areas, and only for WRITE of an
+open upload, which acceptance closes; validated bytes therefore stay unchanged
+until completion. Accepted submission writes the output poison and guards, the
+descriptor and the draw count or batch commands before the combined kick.
+A refused upload leaves the prior frame's output readable. Uncertain
+submission retains every allocation and context.
+
+The existing graphics owner leases these allocations from the admitted
+write-back (WB) pool. Texture and geometry mappings are GPU-read-only; guarded
+output is writable. The upload and read-back slots occupy CPU-only portions of
+the lease, absent from GPU mappings. The worker translates the payload's CPU
+mapping once per lease, at the first texture request, and the admission check
+verifies the payload lease on every clock sample after that. At maximum
+geometry, the complete graphics VM
 needs 19 table pages: one root, three directories and fifteen leaf tables.
 Construction still derives and checks the complete actual mapping plan.
 Extended-memory ownership remains an external launch prerequisite; selecting
 this image does not establish physical DDR or GPU authority.
 
-Preparation and cache publication advance in batches of at most sixteen pages.
-Both acquired timelines precede output invalidation, guard checks and a complete
-CPU snapshot. Invalidation also advances by at most sixteen pages per step;
-snapshot copies advance by at most 64 KiB. Texture OPEN has a 15-second budget
+Output preparation and invalidation each advance by at most 64 KiB per worker
+step. Both acquired timelines precede output invalidation and the guard
+comparison. The guards are the 64 bytes before the frame and the rest of the
+page-rounded allocation after it; the comparison reads only those words, at
+most 1,024 per frame. Texture OPEN has a 15-second budget
 because initial free-list setup has separate allocate, zero and publish steps
-for 1,024 global pages. Submission has a five-second budget. Upload drafts and
+for 1,024 global pages. Submission has a five-second budget. Uploads and
 frame streams each have a 30-second limit; partial requests and client transfer
 waits have one-second limits. The inherited 60-second session deadline
 bounds all operations. Timeout retains uncertain device ownership.
 
-READ copies a bounded snapshot chunk into one scoped download slot.
-`pvr_gpu_service_texture_output()` lends that copy to the requesting client
+READ copies a bounded chunk of the completed frame into one scoped download
+slot. `pvr_gpu_service_texture_output()` lends that slot to the requesting client
 after its reply is collected. RELEASE must match its ticket, client, frame and
 offset. Replacement and CLOSE refuse a borrowed slot. The application releases
 each slot only after the final TinyUSB transfer callback, including automatic
@@ -117,23 +132,26 @@ computes RGB as `src.rgb * src.a + dst.rgb * (1 - src.a)` and alpha as
 `src.a + dst.a * (1 - src.a)`. Profile-3 vertex positions admit finite z in
 [0, 1], with w equal to one. The existing position/UV layout, texture bounds,
 index limits and framebuffer dimensions apply. State is captured with the
-copied draft and revalidated before input replacement or output revocation.
+upload at BEGIN and validated at SUBMIT.
 
 A single D32_SFLOAT depth attachment uses twiddled F32Z storage. Its physical
 width and height round up to powers of two, with a minimum of 32 pixels per
 axis from the pinned GPU's depth load/store tile geometry. The allocation
 reserves 16 MiB for depth plus two unmapped guard pages. At 1080p, the physical
-extent is 2048 × 2048 pixels. The GPU mapping at `0x800d000000` is writable;
-the CPU initializes and publishes it in bounded page batches before each frame.
+extent is 2048 × 2048 pixels. The GPU mapping at `0x800d000000` is writable.
 Hardware clears logical depth to one and stores it without an initial depth
-load. Depth contents do not persist between frames or appear in copied output.
+load, so the CPU never writes the attachment. Before the first frame it writes
+the two guard pages and cleans and invalidates the attachment once, so no CPU
+cache line can later overwrite a GPU store; it compares the guard pages after
+every frame. Depth
+contents do not persist between frames or appear in the output.
 
 The additional depth mapping increases the native maximum to sixteen mappings
 and 27 table pages. Actual construction and admission derive the entire VM
 plan, including the eight additional leaf tables. The existing graphics lease
 retains depth, shaders, input, commands and output through both final timelines
-and every uncertain failure. Completion precedes depth-guard acquisition and
-framebuffer copying. Existing output-slot ownership and healthy CLOSE apply.
+and every uncertain failure. Completion precedes the depth-guard comparison.
+Existing output-slot ownership and healthy CLOSE apply.
 
 The resident source-over fragment shader contains 344 instruction bytes plus
 32 prefetch bytes. It uses 32 temporaries, eight coefficients and 27 shared
@@ -234,12 +252,11 @@ format, eight bytes per sample. Its twiddled extents are the session width and
 height rounded up to powers of two, at least 32 each. A 1080p session needs a
 2048 × 2048 extent and 32 MiB; a 64 × 64 session needs 32 KiB. The background
 object clears depth to one and stencil to zero for every frame. Depth and
-stencil are stored without an initial load, as for profile 3. Before each
-frame the CPU initializes the attachment and its two guard pages in bounded
-batches. The writable GPU mapping at `0x800d000000` covers only the
+stencil are stored without an initial load, as for profile 3, so the CPU
+writes only the two guard pages, once. The writable GPU mapping at `0x800d000000` covers only the
 attachment, so a 1080p session needs at most 35 VM table pages.
 
-After previous completion, the worker validates the copied batch table again
+After previous completion, the worker validates its private batch table again
 and writes one 26-word programmable primitive pipeline (PPP) state block per
 batch at general offset `0x11200`, 128 bytes apart. The vertex data master
 (VDM) stream at general offset `0x11000` contains each block's state update,
@@ -266,7 +283,7 @@ words and depth/stencil registers using pinned Mesa packers, enumeration
 helpers and firmware structure offsets. It also covers refusals for every
 batch field, frame-state field and vertex bound. `checks/gpu-batch.py` runs the
 actual native owner, VM, allocator and service in QEMU. It covers two 1080p
-frames with stencil, perspective and sampler state, refused drafts that keep
+frames with stencil, perspective and sampler state, refused uploads that keep
 the previous frame, and a 63 × 17 session. `checks/gpu-texture-runtime.py
 --profile 4` drives the linked application and host helpers through modeled
 TinyUSB transfers. GPU, firmware and USB effects are modeled; none of these
@@ -279,19 +296,20 @@ multisampling and more than sixteen batches per frame remain unsupported.
 
 ## Lending a completed frame for presentation
 
-A PRESENT request lends the complete copied snapshot of the current frame to
-the requesting GPU client. It requires a completed frame, the matching
+A PRESENT request lends the GPU's output frame of the current frame, in place,
+to the requesting GPU client. It requires a completed frame, the matching
 previous-frame number and zero generation, offset and byte count. After the
 reply, `pvr_gpu_service_texture_present()` returns a
 `struct pvr_render_texture_frame` with the CPU address, physical address,
 byte count, width, height, row stride in pixels and frame number. Rows are
 RGBA8 and include the stride padding.
 
-The output stage cleans each copied 64 KiB chunk to the point of coherency.
-A non-coherent DMA reader, such as the display engine, can therefore fetch the
-snapshot by its physical address without further cache maintenance. The
-snapshot lies in the graphics owner's write-back lease, outside every GPU
-mapping. While it is lent, READ, BEGIN, WRITE, SUBMIT and CLOSE are refused,
+The CPU writes no byte of the frame after the clean that precedes the kick,
+and it invalidates the frame after completion, so it holds no dirty line. A
+non-coherent DMA reader, such as the display engine, can therefore fetch the
+frame by its physical address without further cache maintenance. The frame
+lies inside the writable GPU output mapping, but no frame is in flight while it
+is lent. While it is lent, READ, BEGIN, WRITE, SUBMIT and CLOSE are refused,
 so the bytes stay unchanged. The consumer stops reading, then sends RELEASE
 with the PRESENT ticket, the frame number and offset zero.
 
@@ -300,6 +318,43 @@ its own proof that scanout has stopped before RELEASE. The GPU-to-HDMI
 application still copies frames through READ slots, and the USB protocol does
 not expose PRESENT. `checks/gpu-batch.py` covers lending, refusal while lent,
 release and healthy CLOSE in QEMU.
+
+## CPU work per frame
+
+`checks/gpu-texture-frame.py` builds the worker and texture sources with the
+image's compiler flags and runs two frames per scene under Unicorn. The client
+rings, clock, ownership checks and GPU result are stubs; the counts cover the
+worker's requests and polls from BEGIN through COMPLETE, and then the READ or
+PRESENT requests. Each cache-maintenance call in the image also executes two
+`DSB SY`. The table gives the second frame of each scene for the sources before
+and after the in-place frame path. The 1080p scene is profile 4 with a
+1920 × 1080 texture, 65,535 indices and 16 batches; the 720p scene is profile 2
+with a 1280 × 720 texture and one quad, as `apps/gpu-display` submits.
+
+| Per frame | 1080p profile 4, before | after | 720p profile 2, before | after |
+| --- | --- | --- | --- | --- |
+| Bytes stored by the worker, excluding read-back | 77.0 MB | 16.7 MB | 24.7 MB | 7.4 MB |
+| Bytes of cache maintenance | 68.5 MB | 25.0 MB | 21.1 MB | 11.1 MB |
+| Cache-maintenance calls | 14,819 | 389 | 4,302 | 175 |
+| Stage-1 translations | 66,457 | 0 | 24,853 | 0 |
+| Output bytes loaded by the completion check | 8.3 MB | 4,096 | 3.7 MB | 4,096 |
+| Worker instructions, upload to COMPLETE | 619 million | 15.9 million | 79.4 million | 6.1 million |
+| Worker instructions for read-back | 5.6 million | 5.3 million | 2.5 million | 2.3 million |
+| Worker polls | 1,050 | 261 | 327 | 120 |
+| Store-release instructions | 600 | 254 | 460 | 114 |
+| Lease bytes after the render payload | 70.7 MB | 52.4 MB | 27.9 MB | 14.2 MB |
+
+After the change, the stored bytes are the texture and geometry once, the
+output poison and guards, and about 2 KiB of commands and ring words. The
+poison fill (8.3 MB at 1080p) remains until a board run shows that every tile
+is written. The 25,564 translations of the first 1080p frame (6,926 at 720p)
+check the payload mapping once per lease; that frame also cleans and
+invalidates the 32 MiB depth attachment once. Each input byte is copied twice, by
+the runtime into the upload slot and by the worker into its area; it was copied
+three times. A read-back byte is copied once by the worker; it was copied
+twice. A presented frame is not copied; it was copied once. The 127 READ and
+127 RELEASE requests per 1080p read-back remain, because the runtime lends a
+fixed 64 KiB slot.
 
 ## Geometry, partial renders and final completion
 
@@ -370,9 +425,9 @@ context-disposal qualification and allocation reclamation remain required work.
 
 The native graphics owner keeps its allocations throughout CLOSE. The service
 first closes submission admission and refuses staged input, an incomplete render,
-a texture draft or borrowed output. A completed render requires its exact paired
+an open texture upload or borrowed output. A completed render requires its exact paired
 queue identities, serials, acquired geometry and final-fragment timelines, and
-completed framebuffer copy. An unused context requires zero timelines and fresh
+completed guard comparison. An unused context requires zero timelines and fresh
 client rings; the existing formatter initializes both rings without a job.
 
 The service drains already-owned free-list responses until the manager is idle,
@@ -445,7 +500,7 @@ with fresh lease generations. It initializes new queues, timelines and event
 references, and publishes exactly the next queue epoch. Client ticket counters
 survive. The complete authenticated compute package stays outside disposed
 pools. Graphics reconstruction uses retained profile metadata; caller texture
-and geometry drafts require a fresh upload after OPEN.
+and geometry inputs require a fresh upload after OPEN.
 
 This profile admits only the source-audited standalone image. That image names
 its static disposal owner in the service configuration (`disposal`); every other

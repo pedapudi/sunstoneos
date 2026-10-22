@@ -1138,6 +1138,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Firmware, GPU pixels, MMIO and isolation remain modeled. Physical cleanup/visibility
   remains unqualified. Default retained profiles still do not unmap, reclaim or
   reopen; the optional standalone path below has separate disposal evidence.
+  The [texture frame path](gpu-render.md#cpu-work-per-frame) moves each upload
+  byte once into its GPU-read area, lends the output frame in place for PRESENT
+  and READ, and writes only guard pages around the depth attachment. Counted under
+  Unicorn, the worker's instructions for a 1080p profile-4 frame fall from 619
+  million to 16 million and its per-frame translations from 66,457 to none.
+  Profile-5 trusted programs, general blending, clipping, mipmaps, B5G6R5,
+  4× multisampling and scanout of the rendered frame without a copy remain
+  required.
   Optional [standalone child disposal/reopen](gpu-render.md#standalone-sessions-can-dispose-and-reconstruct-child-resources)
   is now implemented for the admitted sole-client single-core image. After healthy
   CLOSE, exact owner/epoch and stopped-backend checks precede child cache ownership,

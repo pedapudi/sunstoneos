@@ -8,9 +8,10 @@ The native caller submits two caller-selected canonical texture inputs through
 existing GPU service operations. Trusted graphics profile 2 supplies the resident
 vertex and fragment programs. It uses the corrected geometry plus partial-render
 kick followed by final fragment submission. The existing paired completion,
-cache acquisition, guard checks and copied snapshot precede output access.
+cache invalidation and guard checks precede output access.
 
-The caller borrows each sequence-matched copied output slot, converts its RGBA8
+The caller borrows each sequence-matched read-back slot, which holds one 64 KiB
+chunk of the GPU output frame, converts its RGBA8
 pixels to RGB565 and returns that exact ticket before borrowing another slot.
 The conversion drops alpha and uses the upper five, six and five bits of red,
 green and blue. It performs no scaling; the GPU already rendered the complete
