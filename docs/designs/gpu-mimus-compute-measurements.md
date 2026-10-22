@@ -2,25 +2,30 @@
 
 These measurements check the [GPU matrix-product component](../gpu-mimus.md)
 against the budgets in its [design](gpu-mimus-compute.md). They compare the
-integration base (`audit/integration`, commit `d40ca4b`) with the commit that
-last changed this document. All values come from host builds, host checks and
+integration base (`audit/integration`, commit `d40ca4b`) with the change at
+commit `81a84ba`. All values come from host builds, host checks and
 the time model; no board or GPU was used, and no USC instruction was executed.
 
 ## Method
 
-- **Base.** The base commit was exported with `git archive`, configured with
-  the shared configuration script and `-DSUNSTONE_GPU_COMPUTE_APPLICATION=ON`,
-  and built with `-j 6` under `~/.cache/sunstoneos/build/gpu-mimus-compute/`.
-  The seven targets that compile `drivers/gpu/pvr_compute_job.c` were built
-  at both commits: the GPU, compute, free-list, IRQ, memory and power service
-  models and the GPU render application. `llvm-size -A` gave section sizes.
-- **Unchanged job bytes.** At both commits, `checks/pvr-compute-package.py`
-  compared the native PDS and CDM bytes of compiled packages with the pinned
-  Mesa generators for profiles two and three, and `checks/pvr-compute-service.py`
-  ran its first three emulator cases. At the change,
-  `checks/pvr-compute-job.py` compared the fixed job with Mesa's reference;
-  its reference build now receives the project's include directory, without
-  which it stopped at a missing header at both commits.
+- **Builds.** The base commit and the change (commit `81a84ba`) were each
+  exported with `git archive`, configured with the shared configuration
+  script and `-DSUNSTONE_GPU_COMPUTE_APPLICATION=ON`, and built in separate
+  directories with `-j 6` under
+  `~/.cache/sunstoneos/build/gpu-mimus-compute-measure/`. The seven targets
+  that compile `drivers/gpu/pvr_compute_job.c` were built at both commits:
+  the GPU, compute, free-list, IRQ, memory and power service models and the
+  GPU render application. `llvm-size -A` gave section sizes.
+- **Unchanged job bytes.** At both commits, each tree's
+  `apps/gpu-program/compile.py` compiled the affine and vector-addition
+  programs for profile two and the transpose and neighbor programs for
+  profile three, and `checks/pvr-compute-package.py` compared the native PDS
+  and CDM bytes of the resulting packages with the pinned Mesa generators.
+  `checks/pvr-compute-service.py` ran its first three emulator cases at both
+  commits. At the change, `checks/pvr-compute-job.py` compared the fixed job
+  with Mesa's reference; its reference build now receives the project's
+  include directory, without which it stopped at a missing header at both
+  commits.
 - **New checks.** `checks/gpu-mimus-program.py`, `checks/gpu-mimus-layers.py`
   and `checks/gpu-mimus-readout.py` ran as listed in
   [gpu-mimus.md](../gpu-mimus.md#checks), with mimus at commit `3e05158`.
@@ -172,12 +177,29 @@ bytes equal Mesa's for profiles two and three, the fixed job's 267,368 bytes
 equal both Mesa's reference and the earlier evidence, and the compute
 service's three emulator cases pass at both commits.
 
+The design states that the instruction and code-byte budgets are missed but
+not why; "The instruction-count miss" above gives the cause. The design does
+not mention the `.text` growth of the IRQ model and the render application.
+
 ## Evidence
 
-Raw outputs are under `~/.cache/sunstoneos/build/gpu-mimus-compute/evidence/`:
-`baseline/` (base images, time model and package check), `program/`,
-`layers/` (with `calls.txt`), `readout/`, `package/`, `service/`,
-`jobcheck/job/`, `time-model-design.jsonl`, `time-model-measured.jsonl` and
-`images-fix.txt` (the change's image sizes). The job, package, service and
-mimus checks were rerun on the final source into `evidence-fix/`, and the
-time model gave identical output from those results.
+Raw outputs are under
+`~/.cache/sunstoneos/build/gpu-mimus-compute-measure/`: `images.txt` (section
+sizes of both builds and of `pvr_compute_job.o`), and under `evidence/`:
+`program/`, `layers/` (with `calls.txt`), `readout/`,
+`package-{base,head}-p{2,3}/` (the compiled programs, packages and check
+results of each commit), `service-{base,head}/`, `jobcheck-{base,head}/`,
+`time-model-design.txt` and `time-model-measured.txt`.
+
+At both commits every package check and every service case passed. The 12
+packages that the package check builds, six per profile, are byte-identical
+between the commits, and the service cases report the same yield and
+timed-wait counts. The change's `pvr_compute_job.o` holds 19,156 bytes of
+`.text` in the service models, as at the base, and 10,700 bytes in the render
+application against the base's 10,376.
+
+At the change, both 267,368-byte fixed jobs of `checks/pvr-compute-job.py`
+equal Mesa's reference; at the base that check stops at the missing header.
+The check reads its instrumented probe source (`probe.c`, `probe.h`,
+`probe.spv`) from its output directory, so those three files were copied from
+the change's earlier run of the check.
