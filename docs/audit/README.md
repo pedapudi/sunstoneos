@@ -5,7 +5,7 @@ operating system for the Orange Pi Zero 3W (Allwinner A733: eight CPU cores,
 six Cortex-A55 and two Cortex-A76, a GIC-600 interrupt controller and 12 GiB of DDR). The
 audit looked for four kinds of problem: performance limits, design and cleanup
 work, latent defects, and features still missing for bring-up. It then grouped
-the confirmed findings into implementation packages. Eight rounds of fixes,
+the confirmed findings into implementation packages. Nine rounds of fixes,
 features and consolidation based on those packages are merged; [Implementation rounds](#implementation-rounds)
 records what each package changed and which findings remain deferred.
 
@@ -119,7 +119,9 @@ counts above include every confirmed finding before merging.
 
 ## Implementation rounds
 
-Eight rounds of work followed the audit and are merged into `bringup`:
+Nine rounds of work followed the audit and are merged into `bringup`, followed
+by WPA3-Personal support and the first packages of a performance-gated
+completion tranche for the CPU, GPU, NPU and DDR:
 
 - **Round one** ran eighteen packages: seventeen implemented by parallel
   workers, and the multicore package implemented by the primary agent. Two of
@@ -148,6 +150,16 @@ Eight rounds of work followed the audit and are merged into `bringup`:
   Bluetooth headset, one build recipe for the boot-CPU-only images, board
   service task and watchdog cleanup, a PCIe NVMe board image, longer H.264
   sequences, and repairs to three model checks.
+- **Round nine** brought the shared-helper, PCIe, build, crypto and OS image
+  documents in line with the code, removed unused fuzzy-patch pins, and let
+  one DI301 deinterlacer session run up to four jobs with motion feedback from
+  the previous job.
+- **WPA3-Personal** pins OpenSSL 3.5.9 and builds a minimal static libcrypto
+  seeded only from the radio entropy pool. Host checks run the SAE exchange
+  against the IEEE 802.11 Annex J vectors and an access-point peer. Association
+  with SAE stays refused until external authentication and protected
+  management frames exist, and no board image links SAE yet.
+- **The performance-gated tranche** is described in its own section below.
 
 Each package owned a disjoint set of files, so packages in one round could be
 implemented in parallel and merged without conflicts. Every package except one
@@ -334,6 +346,39 @@ cpu-startup-9.
 | A [supervised board image](../pcie-nvme.md) that reads one 4096-byte NVMe block over the PCIe function client with polled completion, shuts the controller down, stops the port and reports through USB0; a record of what a board image for the NPU session runtime needs first | `accelerator-images` | None | Partial. The NPU session image was not built. A board-derived image would construct a second GPU/PCK resource manager beside the board's, and its 2 MiB device pool is smaller than the 2,195,456 bytes the catalogue models need. A single-core NPU image would need `apps/npu-convolution/native.c` to select the session runtime. Both changes are outside the package. |
 | [H.264 encoding](../h264-encode-native.md) of one sequence of 1 to 30 pictures: an IDR picture and up to 29 P pictures at fixed QP 26, bitstream ring reuse after each copy without device wrap, and header and register checks against the pinned library's 30-picture trace | `h264-gop` | None | Done. Frame-level rate control was not implemented, because checking it needs a rate-controlled run of the reference library. The supervised capture tool still captures and acknowledges two pictures. |
 | The NPU startup and clock-handoff models pass again with an enabled, stable 24 MHz DCXO in their fixtures; the DMA pool session check no longer drops the generated FreeRTOS port when its output path contains `checks/` | `model-check-repairs` | None | Done. No driver changed. `checks/dma-interrupt.py`, `checks/i2s-interrupt.py` and `checks/i2s-application.py` keep the same unanchored source filter, and the NPU models still have no runner in the check index. |
+
+### Performance-gated tranche
+
+Every package in this tranche follows
+[docs/performance-architecture.md](../performance-architecture.md). Before
+any code is written, a short design with measurable budgets goes to three
+reviewers: one for simplicity, one for hardware performance and one for
+correctness. A design proceeds when two of them approve and none reports a
+blocking issue. The same three lenses review the code. A final step measures
+the base and the package with host models or instruction emulation, and blocks
+a package when a metric is worse than the base without a reason stated in its
+design. Each package's design and measurement table are in
+[docs/designs/](../designs/).
+
+| Change | Package | Outcome |
+| --- | --- | --- |
+| One named address limit per DMA master and a per-master rule table in [docs/dma-address-width.md](../dma-address-width.md); the DMA0 conflict scan walks the channel array by pointer | `dma-address-width` | Done. A successful DMA0 submit runs 1,121 instructions instead of 1,148 for a one-segment copy. NVMe can still reach a wrong address above 4 GiB without an error, and 847,872 bytes of DRAM must stay below 4 GiB; both need changes by the PCIe and camera owners, which the document lists. |
+| The headset voice button starts recognition through HFP voice-recognition activation (`AT+BVRA`); call control is off by default behind `SUNSTONE_BT_HFP_CALL_CONTROL`; segments are hashed in place in whole 64-byte blocks | `bluetooth-voice-recognition` | Done. With call control off, the HFP audio gateway is 11,572 bytes of code instead of 15,066. Whether the target headset stays connected to a gateway that advertises no call feature needs a board run. |
+| The GPU frame path keeps depth in tile memory and writes output in place, so a 1080p frame stores 16.7 MB instead of 77.0 MB and cleans 25.0 MB of cache instead of 68.5 MB | `gpu-graphics` | Done. The render image's static data grows by 256 bytes for the worker's own copy of the batch records. |
+| A passive thermal trip at a DDR temperature of 85 °C | `dram-controller` | Partial. Memory-bus priority, the latency window and the copy-load measurement have designs but no code. |
+| A study of exact integer sums on the NPU for mimus linear layers: base-16 digit partial sums are exact in the SDK simulator, but one layer would cost about 13 times the A76 kernel's CPU cycles, so mimus keeps its CPU kernel | `npu-exact-sum` | Done. Host tools and checks only. |
+| A [conformance harness](../npu-conformance.md) that runs every catalogue model in the SDK simulator on fixed vectors and compares the results with compiler or integer references | `npu-conformance` | Done. Its measurement step objected only to the harness's status entry in docs/hardware.md, which the integrator accepted. |
+
+Ten packages are still under review and are not merged:
+
+- **Code written, review not settled:** the 12 GiB memory map with large
+  device reservations and memory protection; the GPU runtime (concurrency,
+  isolation, hang recovery and power); and the GPU conformance harness.
+- **Design not approved:** NPU model breadth; NPU cold boot, recovery and
+  power; placement of mimus layers on the CPU, GPU or NPU; one owner for
+  every rail and power domain; bit-exact mimus matrix products on the GPU;
+  the 12 GiB memory qualification image; and board-test bundles for the new
+  paths.
 
 ## Deferred findings
 

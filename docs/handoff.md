@@ -5,8 +5,11 @@ Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 new work. The [hardware matrix](hardware.md) remains the complete support
 inventory; component documents hold APIs, source provenance and detailed evidence.
 
-`bringup` contains the [implementation audit](audit/README.md) and eight
-rounds of fixes, features and consolidation based on it. The audit record
+`bringup` contains the [implementation audit](audit/README.md), nine rounds of
+fixes, features and consolidation based on it, WPA3-Personal host support, and
+the first packages of a performance-gated completion tranche for the CPU, GPU,
+NPU and DDR. New work follows the
+[performance architecture](performance-architecture.md). The audit record
 lists each package, the findings it addressed and the findings that remain
 deferred with their reasons. Every change was checked with host builds,
 emulators and host models. All 67 central build targets and nine integrated
@@ -484,7 +487,7 @@ function returns the same result for every input. These copies remain:
 | --- | --- | --- |
 | Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | Primary agent only. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
 | OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
-| Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 waits for the user's decision to pin an elliptic-curve library. |
+| Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
 | USB host | Adoption of a new Type-C attachment after VBUS removal; Bulk-Only Transport reset and bulk clear-halt recovery; a board workload and wire format for audio capture. | USB host owner. Storage recovery needs changes to the pinned TinyUSB storage class and to bulk-endpoint recovery in the core. |
 | Display | Add `drivers/power/a733_de_sys_power.c` to the DSI and deinterlace builds and power their DE_SYS domains; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
