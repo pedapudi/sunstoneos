@@ -1,7 +1,7 @@
 #include "thermal.h"
 #include "boot.h"
 #include "a733_thermal_native.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct thermal_application thermal;
@@ -18,8 +18,9 @@ static void leave(void *v)
 {if(v==&thermal)a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
 static void retain(void *v)
 {if(v==&thermal)(void)a733_platform_lock_retain(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int device(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&t.attributes==0&&t.shareability==2;}
+{return a733_mapping_check(aarch64_device_translate,a,a,&device_rule);}
 static int mappings(void)
 {
  static const uintptr_t a[]={0x02002000,0x02002518,0x02002fc0,0x02002fe4,0x02522000,0x03006244,0x03006248,0x0300624c,0x07090160,0x03400000,0x03400108};

@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_counter_clock.h"
+#include "a733_range.h"
 #include "a733_platform_locks.h"
 #include "a733_adc_native.h"
 #include "a733_thermal.h"
@@ -100,8 +101,8 @@ static void probe(void *unused)
 {
     (void)unused;platform_puts("BEGIN native calibrated thermal returning\n");
     REQUIRE(a733_counter_clock_init(&clock,24000000),"counter init");
-    uint64_t start;REQUIRE(now(NULL,&start)&&start<=UINT64_MAX-1500000,"counter sample");
-    deadline=start+1500000;sample_deadline=start+1200000;
+    uint64_t start;REQUIRE(now(NULL,&start)&&a733_deadline_after(start,1500000,&deadline),"counter sample");
+    sample_deadline=start+1200000;
     REQUIRE(a733_platform_locks_init(&locks,a733_counter_clock_now,&clock),"locks init");
     REQUIRE(a733_clock_leases_init(&clocks,a733_counter_clock_now,&clock),"clock registry");
     owner=xTaskGetCurrentTaskHandle();
