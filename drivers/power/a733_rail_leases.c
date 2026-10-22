@@ -1,16 +1,12 @@
 #include "a733_rail_leases.h"
+#include "a733_range.h"
 #include <stddef.h>
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static int external(const struct a733_rail_leases *m,const void *p,size_t n)
 {
-    return m && separate(m,sizeof(*m),p,n) &&
-        separate(m->binding.clocks,sizeof(*m->binding.clocks),p,n) &&
-        separate(m->binding.gpu,sizeof(*m->binding.gpu),p,n);
+    return m && a733_ranges_disjoint(m,sizeof(*m),p,n) &&
+        a733_ranges_disjoint(m->binding.clocks,sizeof(*m->binding.clocks),p,n) &&
+        a733_ranges_disjoint(m->binding.gpu,sizeof(*m->binding.gpu),p,n);
 }
 static int binding_equal(const struct a733_rail_binding *a,const struct a733_rail_binding *b)
 {return a->clocks==b->clocks && a->gpu==b->gpu && a->bridge_owner==b->bridge_owner &&
@@ -42,8 +38,7 @@ static enum a733_rail_result fault(struct a733_rail_leases *m,struct a733_rail_s
 static enum a733_rail_result time_check(struct a733_rail_leases *m,uint64_t deadline)
 {
     uint64_t now;
-    if(m->binding.now(m->binding.context,&now)!=1 || now<m->last_now)return fault(m,NULL);
-    m->last_now=now;
+    if(m->binding.now(m->binding.context,&now)!=1 || !a733_monotonic_advance(now,&m->last_now))return fault(m,NULL);
     return now<deadline ? A733_RAIL_READY : A733_RAIL_EXPIRED;
 }
 static a733_rail_mask_t expand(a733_rail_mask_t mask)
@@ -79,14 +74,14 @@ static enum a733_rail_result health(struct a733_rail_leases *m,struct a733_rail_
 }
 int a733_rail_leases_init(struct a733_rail_leases *m,const struct a733_rail_binding *binding)
 {
-    if(!m || m->self || !separate(m,sizeof(*m),binding,sizeof(*binding)))return 0;
+    if(!m || m->self || !a733_ranges_disjoint(m,sizeof(*m),binding,sizeof(*binding)))return 0;
     const struct a733_rail_binding b=*binding;
     if(!b.clocks || !b.gpu || !b.bridge_owner || !b.now || !b.clocks->initialized ||
         !b.gpu->initialized || b.clocks->failed || b.gpu->failed ||
         b.now!=b.clocks->now || b.context!=b.clocks->context ||
-        !separate(m,sizeof(*m),b.clocks,sizeof(*b.clocks)) ||
-        !separate(m,sizeof(*m),b.gpu,sizeof(*b.gpu)) ||
-        !separate(b.clocks,sizeof(*b.clocks),b.gpu,sizeof(*b.gpu)))return 0;
+        !a733_ranges_disjoint(m,sizeof(*m),b.clocks,sizeof(*b.clocks)) ||
+        !a733_ranges_disjoint(m,sizeof(*m),b.gpu,sizeof(*b.gpu)) ||
+        !a733_ranges_disjoint(b.clocks,sizeof(*b.clocks),b.gpu,sizeof(*b.gpu)))return 0;
     *m=(struct a733_rail_leases){.self=m,.binding=b,.sealed_binding=b,.next_id=1,.next_borrow=1};
     atomic_init(&m->busy,0);return 1;
 }
@@ -151,7 +146,7 @@ enum a733_rail_result a733_rail_borrow(struct a733_rail_leases *m,const struct a
     a733_rail_mask_t rails,struct a733_rail_borrow *out)
 {
     if(!rails || (rails&~A733_RAIL_ALL) || !external(m,t,sizeof(*t)) ||
-        !external(m,out,sizeof(*out)) || !separate(t,sizeof(*t),out,sizeof(*out)))return A733_RAIL_INVALID;
+        !external(m,out,sizeof(*out)) || !a733_ranges_disjoint(t,sizeof(*t),out,sizeof(*out)))return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
     struct a733_rail_slot *s=find(m,t);if(!s || (rails&~(t->shared|t->exclusive)))return leave(m,A733_RAIL_INVALID);
     r=health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
@@ -159,7 +154,7 @@ enum a733_rail_result a733_rail_borrow(struct a733_rail_leases *m,const struct a
     for(unsigned i=0;i<A733_RAIL_BORROWS;++i) {
         struct a733_rail_borrow_slot *b=&m->borrows[i];
         if(!b->ticket.id) {if(!free)free=b;}
-        else if(!separate(out,sizeof(*out),b->address,sizeof(*out)))return leave(m,A733_RAIL_INVALID);
+        else if(!a733_ranges_disjoint(out,sizeof(*out),b->address,sizeof(*out)))return leave(m,A733_RAIL_INVALID);
     }
     if(!free)return leave(m,A733_RAIL_BUSY);
     if(!m->next_borrow)return leave(m,A733_RAIL_EXHAUSTED);

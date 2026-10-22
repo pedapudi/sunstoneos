@@ -35,11 +35,6 @@ static const uint32_t fabric_masks[]={0x0300001f,0x8700001f,0x8700001f};
 static const unsigned parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0}, {24,0,800,600,480,0,0,0}, {24,600,0,480,400,0,0,0}
 };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clock_config *c,
     const struct a733_media_clock_ops *o,void *cookie,struct a733_clock_leases *registry,
     struct a733_gpu_resource_manager *manager,unsigned client,const struct a733_gpu_resource_lease *pck)
@@ -53,7 +48,7 @@ int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clo
     const void *objects[]={p,c,o,registry,manager,pck};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*manager),sizeof(*pck)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
-        if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        if (!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC|A733_POWER_DCDC2,exclusive=0;
     unsigned selected[3];
     for (unsigned i=0;i<3;++i) {

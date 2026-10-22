@@ -1,26 +1,16 @@
 #include "a733_pwm_native.h"
 #include "a733_platform_locks.h"
 #include "task.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error PWM native binding requires scheduler and mutex identity
 #endif
 static int current(void *v)
 {
- struct a733_pwm_native *n=v;uint64_t el,flags,nesting,critical;
- __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif":"=r"(el),"=r"(flags));
- if(!n||!n->initialized||el!=4||(flags&0x80))return 0;
- __asm__ volatile("msr daifset, #2":::"memory");
-#if configNUMBER_OF_CORES > 1
- extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
- uint64_t core;__asm__ volatile("mrs %0, tpidr_el1":"=r"(core));
- nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
- critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
- extern uint64_t ullPortInterruptNesting;extern volatile uint64_t ullCriticalNesting;
- nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
- __asm__ volatile("msr daif, %0"::"r"(flags):"memory");
- return !nesting&&!critical&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->task;
+ struct a733_pwm_native *n=v;
+ return n&&n->initialized&&a733_task_context_owner_el1((TaskHandle_t)n->task);
 }
 static int now(void *v,uint64_t *n)
 {struct a733_pwm_native *p=v;return p->locks->now(p->locks->context,n);}
@@ -51,13 +41,13 @@ static int readable(uintptr_t a)
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
  if(!out||!readable(a)||!held(v))return 0;
- __asm__ volatile("dsb sy":::"memory");*out=*(volatile const uint32_t *)a;__asm__ volatile("dsb sy":::"memory");return 1;
+ *out=a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
  struct a733_pwm_native *n=v;if(!held(n))return 0;
  switch(a){
- case 0x02002784:{uint32_t old=*(volatile const uint32_t *)a;if((old^value)&~UINT32_C(0x10001))return 0;break;}
+ case 0x02002784:{uint32_t old=a733_mmio_read32(a);if((old^value)&~UINT32_C(0x10001))return 0;break;}
  case 0x02527000:case 0x02527040:case 0x02527080:if(value&&value!=(1u<<5))return 0;break;
  case 0x02527004:if(value!=(1u<<5))return 0;break;
  case 0x02527240:if(value!=n->plan.pcr&&(!n->plan.duration_us||value!=(n->plan.pcr|(1u<<10))))return 0;break;
@@ -66,12 +56,11 @@ static int write32(void *v,uintptr_t a,uint32_t value)
  case 0x02527248:if(value)return 0;break;
  default:return 0;
  }
- __asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)a=value;__asm__ volatile("dsb sy":::"memory");return 1;
+ a733_mmio_write32_dsb_sy_both(a,value);return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int outside(void *v,const void *p,size_t bytes)
-{struct a733_pwm_native *n=v;return n&&separate(n,sizeof(*n),p,bytes)&&separate(n->locks,sizeof(*n->locks),p,bytes);}
+{struct a733_pwm_native *n=v;
+ return n&&a733_ranges_disjoint(n,sizeof(*n),p,bytes)&&a733_ranges_disjoint(n->locks,sizeof(*n->locks),p,bytes);}
 int a733_pwm_native_init(struct a733_pwm_native *n,struct a733_platform_locks *locks,void *task,
  const struct a733_pwm_config *c,int (*admission)(void *,const struct a733_pwm_config *,const struct a733_clock_token *),void *cookie)
 {

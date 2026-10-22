@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_cpu_clock.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CPUPLL UINT32_C(0x08870000)
@@ -162,11 +163,6 @@ int a733_cpu_clock_timing(const struct a733_cpu_cycle_sample *b,const struct a73
     *out=t;return 1;
 }
 
-static int separate(const void *a,size_t n,const void *b,size_t k)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && n<=UINTPTR_MAX-x && k<=UINTPTR_MAX-y && (x+n<=y || y+k<=x);
-}
 static const struct a733_cpu_opp *row(unsigned d,uint32_t mhz)
 {
     unsigned count;const struct a733_cpu_opp *t=a733_cpu_clock_opps(d,&count);
@@ -201,9 +197,10 @@ int a733_cpu_clock_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_con
        !clocks || !clocks->initialized || !rails || rails->self!=rails || rails->binding.clocks!=clocks ||
        !pmic || pmic->self!=pmic || pmic->rails!=rails || (config->grant.clusters&~UINT32_C(3)) ||
        !policy || !policy->initialized ||
-       !separate(c,sizeof(*c),config,sizeof(*config)) || !separate(c,sizeof(*c),ops,sizeof(*ops)) ||
-       !separate(c,sizeof(*c),clocks,sizeof(*clocks)) || !separate(c,sizeof(*c),rails,sizeof(*rails)) ||
-       !separate(c,sizeof(*c),pmic,sizeof(*pmic)) || !separate(c,sizeof(*c),policy,sizeof(*policy)))return 0;
+       !a733_ranges_disjoint(c,sizeof(*c),config,sizeof(*config)) || !a733_ranges_disjoint(c,sizeof(*c),ops,sizeof(*ops)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),clocks,sizeof(*clocks)) || !a733_ranges_disjoint(c,sizeof(*c),rails,sizeof(*rails)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),pmic,sizeof(*pmic)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),policy,sizeof(*policy)))return 0;
     *c=(struct a733_cpu_clock){.self=c,.config=*config,.ops=*ops,.cookie=cookie,.clocks=clocks,
         .rails=rails,.pmic=pmic,.policy=policy,.changes=config->grant.changes};
     return 1;
@@ -239,8 +236,7 @@ static uint32_t dsu_mv(uint64_t hz,unsigned bin)
 static int time_now(struct a733_cpu_clock *c)
 {
     uint64_t now;
-    if(c->ops.now(c->cookie,&now)!=1 || now<c->last_now)return 0;
-    c->last_now=now;return 1;
+    return c->ops.now(c->cookie,&now)==1 && a733_monotonic_advance(now,&c->last_now);
 }
 static enum a733_rail rail_of(unsigned cluster){return cluster==A733_CPU_LITTLE ? A733_RAIL_DCDC5 : A733_RAIL_DCDC3;}
 /* Uncertain state: keep both leases. Retention is metadata and is retried

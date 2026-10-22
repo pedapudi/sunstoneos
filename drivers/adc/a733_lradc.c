@@ -6,17 +6,13 @@
  * See apps/adc/lradc-sources.json for source pins and manual differences. */
 #include "a733_lradc.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define ADC UINT32_C(0x02524000)
 #define CCU UINT32_C(0x02002000)
 #define RTC UINT32_C(0x07090000)
 enum {ADMIT,START,ACTIVE,FAILED,STOPPED};
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_lradc_init(struct a733_lradc *p,const struct a733_adc_config *c,
  const struct a733_adc_ops *o,void *cookie,struct a733_clock_leases *registry,const struct a733_clock_token *token)
 {
@@ -24,7 +20,7 @@ int a733_lradc_init(struct a733_lradc *p,const struct a733_adc_config *c,
  c->configure_adc_clock||(c->apb1&~0x0300001fu)||!o->now_us||!o->current||!o->authorize||
  !o->enter||!o->leave||!o->retain||!o->read||!o->write||!token->id||token->owner!=c->owner)return 0;
  const void *objects[]={p,c,o,registry,token};size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*token)};
- for(unsigned i=0;i<5;++i)for(unsigned j=i+1;j<5;++j)if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+ for(unsigned i=0;i<5;++i)for(unsigned j=i+1;j<5;++j)if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
  unsigned parent=c->apb1>>24,div=(c->apb1&31)+1;uint32_t hz=parent==0?24000000u:parent==3?600000000u:0;
  a733_clock_mask_t stable=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_CLOCK_RTC32K|A733_CLOCK_RC16M;
  if(parent==3)stable|=A733_CLOCK_PERI0;
@@ -35,8 +31,7 @@ int a733_lradc_init(struct a733_lradc *p,const struct a733_adc_config *c,
 static int timely(struct a733_lradc *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->deadline) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->deadline);
 }
 static int rd(struct a733_lradc *p,uintptr_t a,uint32_t *v)
 {return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
@@ -167,8 +162,8 @@ enum a733_adc_result a733_lradc_poll(struct a733_lradc *p)
 }
 enum a733_adc_result a733_lradc_read(struct a733_lradc *p,uint64_t deadline,struct a733_adc_sample *out)
 {
- if(!p||!p->initialized||!out||!separate(out,sizeof(*out),p,sizeof(*p))||
- !separate(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
+ if(!p||!p->initialized||!out||!a733_ranges_disjoint(out,sizeof(*out),p,sizeof(*p))||
+ !a733_ranges_disjoint(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
  if(!claim(p))return A733_ADC_BUSY;if(p->stage==STOPPED)return finish(p,A733_ADC_STOPPED);
  if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
  if(p->stage!=ACTIVE||!deadline)return finish(p,A733_ADC_INVALID);
