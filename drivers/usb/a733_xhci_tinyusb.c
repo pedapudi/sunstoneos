@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_usb2_native.h"
+#include "a733_range.h"
 #include "tusb.h"
 #include "host/hcd.h"
 #include <string.h>
@@ -51,14 +52,13 @@ static int owner(void)
 {return host&&host->self==host&&host->core_started&&!host->failed&&host->core.ops.current(host->core.context)==1;}
 static int clock_now(uint64_t *v)
 {
-    if(!owner()||host->core.ops.now(host->core.context,v)!=1||*v<host->last_now||
-        *v>=host->platform.config.lifetime_deadline)return 0;
-    host->last_now=*v;return 1;
+    return owner()&&host->core.ops.now(host->core.context,v)==1&&
+        a733_deadline_admit(*v,&host->last_now,host->platform.config.lifetime_deadline);
 }
 static uint64_t deadline(void)
 {
-    uint64_t now;if(!clock_now(&now)||now>UINT64_MAX-1000000)return 0;
-    uint64_t d=host->hid.pending?host->hid.deadline:now+1000000;
+    uint64_t now,later;if(!clock_now(&now)||!a733_deadline_after(now,1000000,&later))return 0;
+    uint64_t d=host->hid.pending?host->hid.deadline:later;
     if(!host->mounted&&host->mount_deadline&&d>host->mount_deadline)d=host->mount_deadline;
     if(host->read_pending&&d>host->read_deadline)d=host->read_deadline;
     if(d>host->platform.config.lifetime_deadline)d=host->platform.config.lifetime_deadline;
@@ -365,7 +365,7 @@ static int control_response(const struct a733_xhci_notice *e)
                 hub->powered_mask|=1u<<port;
                 if(hub->powered_mask==((2u<<hub->ports)-2)){
                     uint64_t delay=(uint64_t)hub->power_good_2ms*2000;
-                    if(now>UINT64_MAX-delay)return 0;hub->power_good_deadline=now+delay;
+                    if(!a733_deadline_after(now,delay,&hub->power_good_deadline))return 0;
                 }
             }
         }

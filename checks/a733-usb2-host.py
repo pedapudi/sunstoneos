@@ -100,7 +100,7 @@ def main():
     run('ss-source',[interpreter,saved(root/'drivers/usb/host/cadence-source.py'),'--source',saved(cadence),'--output',out/'ss-cadence.inc'])
     run('ss-stack',[interpreter,saved(root/'drivers/usb/host/superspeed.py'),'--source',saved(tiny),'--output',out/'tinyusb-ss'])
     # Exact native mapping loop, compiled on host with a translation model.
-    mapping = '#include <assert.h>\n#include "aarch64_device_memory.h"\n'
+    mapping = '#include <assert.h>\n#include "a733_mapping_check.h"\n'
     mapping += '''static unsigned attributes=0x44,shareability=2,bad_last,shift;
 int aarch64_device_translate(uintptr_t a,int w,struct aarch64_translation *t) {
 assert(w);*t=(struct aarch64_translation){a+shift,attributes,shareability};
