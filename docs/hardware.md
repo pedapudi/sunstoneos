@@ -419,6 +419,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
+  [Idle cores waiting in WFI](cpu-power.md) are **implemented in the
+  instruction model only**; the image change awaits the scheduler owner. With
+  that change, idle secondaries of the cached diagnostic receive no SGI and
+  execute no instruction over 64 idle ticks, compared with 295 time-slice SGIs
+  over 66 ticks before, and every secondary task still wakes for a
+  notification and a delay. EL0 `WFI` and its wake-up on the board remain
+  unqualified. Core power-off, retention and cluster power-down are not
+  implemented.
 - DDR: **tested** independently on both attached boards for initialization and
   distinct transfers to two 4 KiB pages. Firmware reports 12 GiB LPDDR5 on each;
   full capacity and stability remain untested. The second board also passes its

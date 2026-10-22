@@ -1,7 +1,20 @@
 # Design: idle cores wait in WFI; core power-off waits for a consumer
 
-Status: **design only**. No code exists. Section numbers refer to
-`docs/performance-architecture.md`.
+Status: **WFI idle implemented in the instruction model**; the image change
+awaits the scheduler owner, and no board has executed it. The implementation,
+its measurements and its differences from this design are in
+[cpu-power.md](../cpu-power.md). Core power-off remains deferred. Section
+numbers refer to `docs/performance-architecture.md`.
+
+The implementation differs from the text below in three points. The idle
+function is `static inline` in `include/a733_cpu_power.h`, and the image
+configuration maps the passive idle hook to it, because the kernel calls that
+hook from both idle loops; enabling both hooks would execute two `WFI` per
+active idle iteration. `configIDLE_AFFINITY` is set, so the active idle task
+stays on core 0, which the tick wakes; a self-deleted task is reclaimed within
+one tick of core 0 becoming idle. The time-slice condition is a patch to the kernel's
+`tasks.c`, `patches/freertos-smp-tasks.patch`, because
+`patches/freertos-smp-c.patch` changes only the port.
 
 Today an idle core never sleeps. The cached eight-core image disables both
 FreeRTOS idle hooks, so idle tasks spin. Core 0 alone takes the 1 ms tick, and
@@ -40,11 +53,19 @@ and the image's EL3 vectors keep treating every SMC as a terminal report.
 
 ## Changes outside this package
 
-For the primary agent:
+For the primary agent, as implemented and measured:
 
-- `platform/a733-smp-cached/FreeRTOSConfig.h`: enable both idle hooks.
+- `platform/a733-smp-cached/FreeRTOSConfig.h`: enable the passive idle hook,
+  map it to `a733_cpu_idle` and set `configIDLE_AFFINITY`.
 - `platform/a733-smp-cached/continue.S`: set `SCTLR_EL1.nTWI`.
-- `patches/freertos-smp-c.patch`: the idle time-slice condition.
+- `patches/freertos-smp-tasks.patch` (new): the idle time-slice condition in
+  `tasks.c`.
+- `cmake/a733-smp-cached.cmake`, `cmake/a733-smp-observe.cmake` and
+  `cmake/a733-smp-supervised.cmake`: build the patched `tasks.c`.
+- `cmake/a733-smp-observe.cmake`, `cmake/a733-smp-supervised.cmake` and
+  `cmake/a733-storage-maintenance.cmake`: record the new `continue.S` digest
+  that each compares before applying its private `continue.patch`. All three
+  private patches still apply.
 
 ## Board evidence needed
 
