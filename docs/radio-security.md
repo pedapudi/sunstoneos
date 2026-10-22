@@ -84,8 +84,14 @@ and runs its unmodified `sae.c` and `dragonfly.c`:
 
 Acceptance stores the 32-byte PMK in the configuration and the PMKID beside
 it. `aic8800_supplicant_sae_clear` frees the exchange state and wipes the
-password. The exchange does not retransmit lost frames; the deadline bounds a
-lost exchange.
+password. A cleared supplicant cannot start again, because start refuses a
+configuration without a password. A retry therefore initializes a new
+supplicant with the password.
+
+The exchange does not retransmit lost frames. Receive checks the deadline only
+when a frame arrives, so a lost exchange holds its state and allocations until
+the caller acts. When the deadline passes without a frame, the caller must call
+`aic8800_supplicant_sae_clear`.
 
 ### Missing parts before association
 
@@ -159,6 +165,20 @@ library use before setup fails. Its string, conversion and sorting functions
 serve OpenSSL code that WPA2 and SAE do not call: encoders, PEM input and
 configuration loading.
 
+Two constraints apply to a board image that adds SAE:
+
+- **Floating-point and SIMD registers.** The recipe sets the library's
+  code-generation flags itself and does not take them from the image. The
+  network model allows floating-point and SIMD code, and the library as built
+  uses those registers. Board images compile C with `-mgeneral-regs-only`, so
+  the board composition must either allow OpenSSL to use these registers or
+  build the library with that flag.
+- **C library.** The C library file defines `malloc`, `free`, `abort`,
+  `__errno`, `_ctype_`, `strtoul`, `qsort` and other C library functions. In
+  an image that links newlib through `runtime/newlib.c`, these definitions
+  collide with newlib or silently replace it. The board composition must
+  resolve each overlap.
+
 ### Footprint
 
 In the AArch64 network model with the same compiler, linking OpenSSL instead
@@ -167,11 +187,12 @@ of the internal crypto files adds 991,775 bytes of code and read-only data,
 the OpenSSL default provider. The SAE exchange, together with the model's own
 test exchange, adds 37,553 bytes of code more.
 
-On the FreeRTOS heap, OpenSSL keeps 80,491 bytes after one hunting-and-pecking
-and one H2E exchange, and peaks at 130,422 bytes while setting up its random
-generator and first algorithms. The native model and the host check measure
-the same figures. The network configuration's heap holds 256 KB and is shared
-with FreeRTOS+TCP, so an image that adds SAE must account for this demand.
+In the AArch64 network model under QEMU, OpenSSL keeps 80,491 bytes on the
+FreeRTOS heap after one hunting-and-pecking and one H2E exchange. It peaks at
+130,422 bytes while setting up its random generator and first algorithms. The
+host check runs other sequences of exchanges, so its heap figures differ. The
+network configuration's heap holds 256 KB and is shared with FreeRTOS+TCP, so
+an image that adds SAE must account for this demand.
 
 ## Firmware actions complete in order
 
@@ -344,6 +365,8 @@ each change. `checks/aic8800-security.py --native` compiles and links the actual
 AArch64 dependency closure without libc. Its link-only entry is not a board
 executable or proof of radio operation. With `--openssl`, the host recipe runs
 the same WPA2 cases with `crypto_openssl.c` and the minimal OpenSSL library.
+Before each case it also checks that claim refuses an SAE configuration with
+the owner, time and beacon evidence that admit the PSK supplicant.
 
 `checks/sae-openssl.py` builds the minimal OpenSSL library for the host from the
 recipe's options and runs the station exchange under the same sanitizers
@@ -360,6 +383,8 @@ hostapd uses. Passing cases cover:
 - refusal of an altered confirm, a wrong password, a confirm before a commit,
   a rejection status, a zero status on an H2E commit and a late frame;
 - discard of a reflected commit;
+- refusal of a second start after `aic8800_supplicant_sae_clear` ends an
+  unfinished exchange;
 - refusal of an SAE start for a PSK configuration and of a supplied PMK;
 - an entropy refusal before the generator is seeded, followed by a successful
   exchange with a new supplicant.
@@ -377,7 +402,9 @@ of these checks is a synthetic model input.
 Physical work still requires qualified board recovery, clock/pin/power ownership,
 a real entropy provider, and admitted radio transmission. SAE additionally needs
 the external-authentication frame path, PMF and an SAE association before a WPA3
-access point can test it. Confirm firmware key
+access point can test it. A board image that adds SAE must also decide how
+OpenSSL is compiled with respect to floating-point and SIMD registers and must
+resolve the C library overlap with newlib. Confirm firmware key
 replacement/deletion, controlled-port behavior, EAPOL status and CCMP integrity
 before qualifying secure data. IP networking, credential lifecycle, the excluded
 security modes, broader receive profiles and Bluetooth remain separate required
