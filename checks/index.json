@@ -440,7 +440,8 @@
  "a733-gpu-resources-emulate.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-resources.md"
+   "docs/gpu-resources.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -734,9 +735,7 @@
  },
  "a733-radio-session.py": {
   "cache_areas": [],
-  "docs": [
-   "docs/handoff.md"
-  ],
+  "docs": [],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -955,6 +954,7 @@
    "sources"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/storage-update.md"
   ],
   "library": false,
@@ -1087,7 +1087,9 @@
  },
  "a733-usb-platform.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1321,9 +1323,7 @@
  },
  "aic8800-dispatch.py": {
   "cache_areas": [],
-  "docs": [
-   "docs/handoff.md"
-  ],
+  "docs": [],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1658,7 +1658,8 @@
    "host"
   ],
   "docs": [
-   "docs/bluetooth-native.md"
+   "docs/bluetooth-native.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1692,7 +1693,8 @@
    "sources"
   ],
   "docs": [
-   "docs/bluetooth-native.md"
+   "docs/bluetooth-native.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1880,7 +1882,8 @@
  "board-park.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-application.md"
+   "docs/board-application.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2380,7 +2383,8 @@
    "sources"
   ],
   "docs": [
-   "docs/clock-leases.md"
+   "docs/clock-leases.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2621,6 +2625,41 @@
   "summary": "Check copied DI output, durable ACK ordering and exact FS/HS USB framing.",
   "usb": false
  },
+ "deinterlace-jobs-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md",
+   "docs/deinterlace-preparation.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--template",
+   "--output"
+  ],
+  "summary": "Execute repeated DI301 jobs in the linked native task with a synthetic device.",
+  "usb": false
+ },
+ "deinterlace-jobs.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md",
+   "docs/deinterlace-preparation.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--generated",
+   "--image",
+   "--previous-image",
+   "--bundle",
+   "--base",
+   "--output"
+  ],
+  "summary": "Check repeated DI301 jobs from plan generation to host predicates and the SRAM launcher.",
+  "usb": false
+ },
  "deinterlace-launcher.py": {
   "cache_areas": [],
   "docs": [],
@@ -2757,7 +2796,9 @@
  },
  "deinterlace-usb.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/deinterlace-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3008,7 +3049,8 @@
  "dma-interrupt.py": {
   "cache_areas": [],
   "docs": [
-   "docs/dma-service.md"
+   "docs/dma-service.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3036,7 +3078,8 @@
  "dma-pool-session.py": {
   "cache_areas": [],
   "docs": [
-   "docs/dma-pool-session.md"
+   "docs/dma-pool-session.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3878,7 +3921,9 @@
  },
  "gpu-draw.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4204,7 +4249,8 @@
  "h264-encode-native.py": {
   "cache_areas": [],
   "docs": [
-   "docs/h264-encode-native.md"
+   "docs/h264-encode-native.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4234,7 +4280,8 @@
  "h264-encode-registers.py": {
   "cache_areas": [],
   "docs": [
-   "docs/h264-encode-native.md"
+   "docs/h264-encode-native.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4956,7 +5003,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5002,6 +5051,7 @@
  "i2s-interrupt.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/i2s-stream.md"
   ],
   "library": false,
@@ -6273,6 +6323,7 @@
  "npu-reserved.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/npu-reserved.md"
   ],
   "library": false,
@@ -6321,6 +6372,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/npu-service.md",
    "docs/npu-session.md"
   ],
@@ -6615,6 +6667,7 @@
  "pcie-nvme-fixture.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/pcie-nvme.md"
   ],
   "library": false,
@@ -6631,6 +6684,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/pcie-nvme.md"
   ],
   "library": false,
@@ -6647,6 +6701,7 @@
  "pcie-nvme-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/pcie-nvme.md"
   ],
   "library": false,
@@ -6829,6 +6884,7 @@
  "provider-clock-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/provider-clock-reference.md"
   ],
   "library": false,
@@ -7501,7 +7557,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
