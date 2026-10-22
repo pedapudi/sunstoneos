@@ -1,44 +1,42 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_rail_leases.h"
 #include "a733_range.h"
 #include <stddef.h>
 
+_Static_assert(sizeof(struct a733_rail_slot)==32,"one holder slot is half a line");
+_Static_assert(sizeof(struct a733_rail_borrow_slot)==32,"one borrow slot is half a line");
+_Static_assert(offsetof(struct a733_rail_leases,self)==64 && offsetof(struct a733_rail_leases,busy)<128,
+    "status reads the state word line and one header line");
+_Static_assert(offsetof(struct a733_rail_leases,slots)%64==0,"holder slots do not straddle lines");
+_Static_assert(sizeof(struct a733_rail_leases)<=1632,"ledger storage budget");
+_Static_assert(A733_RAIL_CLIENTS==(1u<<A733_RAIL_SLOT_BITS) && A733_RAIL_CLIENTS<=32,"slot index bits");
+_Static_assert(A733_RAIL_BORROWS<=(1u<<A733_RAIL_BORROW_BITS),"borrow index bits");
+#define GENERATIONS (UINT64_MAX>>A733_RAIL_SLOT_BITS)
+#define BORROW_GENERATIONS (UINT64_MAX>>A733_RAIL_BORROW_BITS)
+
 static int external(const struct a733_rail_leases *m,const void *p,size_t n)
 {
-    return m && a733_ranges_disjoint(m,sizeof(*m),p,n) &&
+    return a733_ranges_disjoint(m,sizeof(*m),p,n) &&
         a733_ranges_disjoint(m->binding.clocks,sizeof(*m->binding.clocks),p,n) &&
         a733_ranges_disjoint(m->binding.gpu,sizeof(*m->binding.gpu),p,n);
 }
-static int binding_equal(const struct a733_rail_binding *a,const struct a733_rail_binding *b)
-{return a->clocks==b->clocks && a->gpu==b->gpu && a->bridge_owner==b->bridge_owner &&
-    a->now==b->now && a->context==b->context;}
 static enum a733_rail_result enter(struct a733_rail_leases *m)
 {
-    if(!m || m->self!=m)return A733_RAIL_INVALID;
     unsigned expected=0;
-    if(!atomic_compare_exchange_strong_explicit(&m->busy,&expected,1,
-        memory_order_acquire,memory_order_relaxed))return A733_RAIL_BUSY;
-    if(!binding_equal(&m->binding,&m->sealed_binding)) {
-        m->failed=1;atomic_store_explicit(&m->busy,0,memory_order_release);return A733_RAIL_RETAINED;
-    }
-    return A733_RAIL_READY;
+    return atomic_compare_exchange_strong_explicit(&m->busy,&expected,1,
+        memory_order_acquire,memory_order_relaxed) ? A733_RAIL_READY : A733_RAIL_BUSY;
 }
 static enum a733_rail_result leave(struct a733_rail_leases *m,enum a733_rail_result r)
 {atomic_store_explicit(&m->busy,0,memory_order_release);return r;}
-static int equal(const struct a733_rail_token *a,const struct a733_rail_token *b)
-{return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}
-static struct a733_rail_slot *find(struct a733_rail_leases *m,const struct a733_rail_token *t)
-{
-    if(!t->id || !t->owner)return NULL;
-    for(unsigned i=0;i<A733_RAIL_CLIENTS;++i)
-        if(m->slots[i].state!=A733_RAIL_FREE && equal(&m->slots[i].token,t))return &m->slots[i];
-    return NULL;
-}
-static enum a733_rail_result fault(struct a733_rail_leases *m,struct a733_rail_slot *s)
-{m->failed=1;if(s)s->state=A733_RAIL_FAULTED;return A733_RAIL_RETAINED;}
+static enum a733_rail_result fault(struct a733_rail_leases *m)
+{a733_power_authority_set(&m->authority,A733_POWER_LEDGER_FAULT);return A733_RAIL_RETAINED;}
+static int faulted(const struct a733_rail_leases *m)
+{return !a733_power_authority_admits(&m->authority,A733_POWER_LEDGER_FAULT);}
 static enum a733_rail_result time_check(struct a733_rail_leases *m,uint64_t deadline)
 {
     uint64_t now;
-    if(m->binding.now(m->binding.context,&now)!=1 || !a733_monotonic_advance(now,&m->last_now))return fault(m,NULL);
+    if(m->binding.now!=m->sealed_now || m->binding.context!=m->sealed_context ||
+       m->binding.now(m->binding.context,&now)!=1 || !a733_monotonic_advance(now,&m->last_now))return fault(m);
     return now<deadline ? A733_RAIL_READY : A733_RAIL_EXPIRED;
 }
 static a733_rail_mask_t expand(a733_rail_mask_t mask)
@@ -47,176 +45,143 @@ static a733_rail_mask_t expand(a733_rail_mask_t mask)
         A733_RAIL_BIT(A733_RAIL_DC1SW1)|A733_RAIL_BIT(A733_RAIL_DC1SW2);
     return mask&aliases ? mask|aliases : mask;
 }
-static enum a733_rail_result bridge_health(struct a733_rail_leases *m,struct a733_rail_slot *s)
+/* The exact holder slot of t, or NULL. One slot is compared: the identifier
+ * names its slot and is never reused. */
+static struct a733_rail_slot *find(struct a733_rail_leases *m,const struct a733_rail_token *t)
 {
-    if(m->failed || s->state==A733_RAIL_FAULTED)return A733_RAIL_RETAINED;
-    const a733_rail_mask_t mask=s->token.shared|s->token.exclusive;
-    if(s->state==A733_RAIL_ACTIVE &&
-        (((mask&A733_RAIL_BIT(A733_RAIL_DCDC2)) && !s->dcdc2.id) ||
-         ((mask&A733_RAIL_BIT(A733_RAIL_DCDC4)) && !s->dcdc4.lease.token)))return fault(m,s);
-    if(s->dcdc2.id) {
-        enum a733_clock_result r=a733_clock_token_status(m->binding.clocks,&s->dcdc2);
-        if(r==A733_CLOCK_BUSY)return A733_RAIL_BUSY;
-        if(r!=A733_CLOCK_OK)return fault(m,s);
-    }
-    if(s->dcdc4.lease.token) {
-        enum a733_gpu_resource_result r=a733_gpu_rail_guard_status(m->binding.gpu,&s->dcdc4);
-        if(r==A733_GPU_RESOURCE_BUSY)return A733_RAIL_BUSY;
-        if(r!=A733_GPU_RESOURCE_OK)return fault(m,s);
-    }
-    return A733_RAIL_READY;
+    struct a733_rail_slot *s=&m->slots[t->id&(A733_RAIL_CLIENTS-1)];
+    return t->id && s->id==t->id && s->owner==t->owner && s->shared==t->shared &&
+        s->exclusive==t->exclusive ? s : NULL;
 }
-static enum a733_rail_result health(struct a733_rail_leases *m,struct a733_rail_slot *s)
-{
-    enum a733_rail_result r=bridge_health(m,s);
-    if(r!=A733_RAIL_READY)return r;
-    return s->state==A733_RAIL_ACTIVE ? A733_RAIL_READY : A733_RAIL_PENDING;
-}
+static unsigned slot_index(const struct a733_rail_leases *m,const struct a733_rail_slot *s)
+{return (unsigned)(s-m->slots);}
 int a733_rail_leases_init(struct a733_rail_leases *m,const struct a733_rail_binding *binding)
 {
     if(!m || m->self || !a733_ranges_disjoint(m,sizeof(*m),binding,sizeof(*binding)))return 0;
     const struct a733_rail_binding b=*binding;
     if(!b.clocks || !b.gpu || !b.bridge_owner || !b.now || !b.clocks->initialized ||
-        !b.gpu->initialized || b.clocks->failed || b.gpu->failed ||
+        !b.gpu->initialized || atomic_load(&b.clocks->failed) || b.gpu->failed || b.clocks->authority ||
         b.now!=b.clocks->now || b.context!=b.clocks->context ||
         !a733_ranges_disjoint(m,sizeof(*m),b.clocks,sizeof(*b.clocks)) ||
         !a733_ranges_disjoint(m,sizeof(*m),b.gpu,sizeof(*b.gpu)) ||
         !a733_ranges_disjoint(b.clocks,sizeof(*b.clocks),b.gpu,sizeof(*b.gpu)))return 0;
-    *m=(struct a733_rail_leases){.self=m,.binding=b,.sealed_binding=b,.next_id=1,.next_borrow=1};
-    atomic_init(&m->busy,0);return 1;
+    *m=(struct a733_rail_leases){.self=m,.free_slots=UINT32_MAX>>(32-A733_RAIL_CLIENTS),
+        .next_generation=1,.next_borrow=1,.binding=b,.sealed_now=b.now,.sealed_context=b.context};
+    atomic_init(&m->authority.word,0);atomic_init(&m->busy,0);
+    b.clocks->authority=&m->authority;
+    return 1;
 }
 enum a733_rail_result a733_rail_acquire(struct a733_rail_leases *m,uint64_t owner,
     a733_rail_mask_t shared,a733_rail_mask_t exclusive,uint64_t deadline,struct a733_rail_token *out)
 {
-    if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_RAIL_ALL) ||
+    if(!m || m->self!=m || !owner || !(shared|exclusive) || ((shared|exclusive)&~A733_RAIL_ACCEPTED) ||
         (shared&exclusive) || !external(m,out,sizeof(*out)))return A733_RAIL_INVALID;
     shared=expand(shared);exclusive=expand(exclusive);shared&=~exclusive;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    if(m->failed)return leave(m,A733_RAIL_RETAINED);
-    struct a733_rail_slot *free=NULL;
-    for(unsigned i=0;i<A733_RAIL_CLIENTS;++i) {
-        struct a733_rail_slot *s=&m->slots[i];
-        if(s->state==A733_RAIL_FREE) {if(!free)free=s;continue;}
-        if((exclusive&(s->token.shared|s->token.exclusive)) || (shared&s->token.exclusive))
-            return leave(m,A733_RAIL_BUSY);
-    }
-    if(!free)return leave(m,A733_RAIL_BUSY);
-    if(!m->next_id)return leave(m,A733_RAIL_EXHAUSTED);
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    if((exclusive&(m->shared_held|m->exclusive_held)) || (shared&m->exclusive_held) || !m->free_slots)
+        return leave(m,A733_RAIL_BUSY);
+    if(m->next_generation>GENERATIONS)return leave(m,A733_RAIL_EXHAUSTED);
     r=time_check(m,deadline);if(r!=A733_RAIL_READY)return leave(m,r);
-    struct a733_rail_token t={m->next_id++,owner,shared,exclusive};
-    *free=(struct a733_rail_slot){.token=t,.deadline=deadline,.state=A733_RAIL_OPENING};
+    const unsigned i=(unsigned)__builtin_ctz(m->free_slots);
+    const struct a733_rail_token t={m->next_generation++<<A733_RAIL_SLOT_BITS|i,owner,shared,exclusive};
+    m->slots[i]=(struct a733_rail_slot){t.id,owner,shared,exclusive};
+    m->free_slots&=~(UINT32_C(1)<<i);
+    m->exclusive_held|=exclusive;m->shared_held|=shared;
+    for(a733_rail_mask_t bits=shared;bits;bits&=bits-1)++m->sharers[__builtin_ctzll(bits)];
     *out=t;return leave(m,A733_RAIL_PENDING);
 }
+/* Admission is complete at acquire, so the first poll reports READY. */
 enum a733_rail_result a733_rail_poll(struct a733_rail_leases *m,const struct a733_rail_token *t)
-{
-    if(!external(m,t,sizeof(*t)))return A733_RAIL_INVALID;
-    enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    struct a733_rail_slot *s=find(m,t);if(!s)return leave(m,A733_RAIL_INVALID);
-    r=bridge_health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
-    if(s->state!=A733_RAIL_OPENING)return leave(m,s->state==A733_RAIL_ACTIVE ? A733_RAIL_READY : A733_RAIL_PENDING);
-    if(time_check(m,s->deadline)!=A733_RAIL_READY)return leave(m,fault(m,s));
-    const a733_rail_mask_t mask=s->token.shared|s->token.exclusive;
-    if((mask&A733_RAIL_BIT(A733_RAIL_DCDC2)) && !s->dcdc2.id) {
-        int change=(s->token.exclusive&A733_RAIL_BIT(A733_RAIL_DCDC2))!=0;
-        enum a733_clock_result c=a733_clock_acquire(m->binding.clocks,m->binding.bridge_owner,
-            change ? 0 : A733_POWER_DCDC2,change ? A733_POWER_DCDC2 : 0,s->deadline,&s->dcdc2);
-        if(c==A733_CLOCK_BUSY)return leave(m,A733_RAIL_PENDING);
-        if(c!=A733_CLOCK_OK)return leave(m,fault(m,s));
-    }
-    if((mask&A733_RAIL_BIT(A733_RAIL_DCDC4)) && !s->dcdc4.lease.token) {
-        enum a733_gpu_resource_result g=a733_gpu_rail_guard_acquire(m->binding.gpu,
-            (s->token.exclusive&A733_RAIL_BIT(A733_RAIL_DCDC4))!=0,&s->dcdc4);
-        if(g==A733_GPU_RESOURCE_BUSY)return leave(m,A733_RAIL_PENDING);
-        if(g!=A733_GPU_RESOURCE_OK)return leave(m,fault(m,s));
-    }
-    if(((mask&A733_RAIL_BIT(A733_RAIL_DCDC2)) && !s->dcdc2.id) ||
-        ((mask&A733_RAIL_BIT(A733_RAIL_DCDC4)) && !s->dcdc4.lease.token))return leave(m,fault(m,s));
-    r=bridge_health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
-    if(time_check(m,s->deadline)!=A733_RAIL_READY)return leave(m,fault(m,s));
-    s->state=A733_RAIL_ACTIVE;return leave(m,A733_RAIL_READY);
-}
+{return a733_rail_status(m,t);}
 enum a733_rail_result a733_rail_status(struct a733_rail_leases *m,const struct a733_rail_token *t)
 {
-    if(!external(m,t,sizeof(*t)))return A733_RAIL_INVALID;
+    if(!m || m->self!=m || !t)return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    struct a733_rail_slot *s=find(m,t);
-    return leave(m,s ? health(m,s) : A733_RAIL_INVALID);
+    if(!find(m,t))return leave(m,A733_RAIL_INVALID);
+    return leave(m,faulted(m) ? A733_RAIL_RETAINED : A733_RAIL_READY);
+}
+static enum a733_rail_result pin(struct a733_rail_leases *m,struct a733_rail_slot *s)
+{
+    uint8_t *p=&m->pins[slot_index(m,s)];
+    if(*p==UINT8_MAX)return A733_RAIL_BUSY;
+    ++*p;return A733_RAIL_READY;
 }
 enum a733_rail_result a733_rail_borrow(struct a733_rail_leases *m,const struct a733_rail_token *t,
     a733_rail_mask_t rails,struct a733_rail_borrow *out)
 {
-    if(!rails || (rails&~A733_RAIL_ALL) || !external(m,t,sizeof(*t)) ||
-        !external(m,out,sizeof(*out)) || !a733_ranges_disjoint(t,sizeof(*t),out,sizeof(*out)))return A733_RAIL_INVALID;
+    if(!m || m->self!=m || !rails || (rails&~A733_RAIL_ALL) || !t || !external(m,out,sizeof(*out)) ||
+        !a733_ranges_disjoint(t,sizeof(*t),out,sizeof(*out)))return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    struct a733_rail_slot *s=find(m,t);if(!s || (rails&~(t->shared|t->exclusive)))return leave(m,A733_RAIL_INVALID);
-    r=health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
-    struct a733_rail_borrow_slot *free=NULL;
+    struct a733_rail_slot *s=find(m,t);
+    if(!s || (rails&~(s->shared|s->exclusive)))return leave(m,A733_RAIL_INVALID);
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    unsigned free=A733_RAIL_BORROWS;
     for(unsigned i=0;i<A733_RAIL_BORROWS;++i) {
         struct a733_rail_borrow_slot *b=&m->borrows[i];
-        if(!b->ticket.id) {if(!free)free=b;}
+        if(!b->id) {if(free==A733_RAIL_BORROWS)free=i;}
         else if(!a733_ranges_disjoint(out,sizeof(*out),b->address,sizeof(*out)))return leave(m,A733_RAIL_INVALID);
     }
-    if(!free)return leave(m,A733_RAIL_BUSY);
-    if(!m->next_borrow)return leave(m,A733_RAIL_EXHAUSTED);
-    struct a733_rail_borrow b={m->next_borrow++,*t,rails};
-    *free=(struct a733_rail_borrow_slot){b,out};++s->borrows;*out=b;
-    return leave(m,A733_RAIL_READY);
-}
-static struct a733_rail_borrow_slot *find_borrow(struct a733_rail_leases *m,const struct a733_rail_borrow *b)
-{
-    for(unsigned i=0;i<A733_RAIL_BORROWS;++i) {
-        struct a733_rail_borrow_slot *s=&m->borrows[i];
-        if(s->address==b && b->id && s->ticket.id==b->id && s->ticket.rails==b->rails &&
-            equal(&s->ticket.parent,&b->parent))return s;
-    }
-    return NULL;
+    if(free==A733_RAIL_BORROWS)return leave(m,A733_RAIL_BUSY);
+    if(m->next_borrow>BORROW_GENERATIONS)return leave(m,A733_RAIL_EXHAUSTED);
+    r=pin(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
+    const struct a733_rail_borrow b={m->next_borrow++<<A733_RAIL_BORROW_BITS|free,*t,rails};
+    m->borrows[free]=(struct a733_rail_borrow_slot){b.id,t->id,out,rails};
+    *out=b;return leave(m,A733_RAIL_READY);
 }
 static enum a733_rail_result borrowed(struct a733_rail_leases *m,const struct a733_rail_borrow *b,int end)
 {
-    if(!external(m,b,sizeof(*b)))return A733_RAIL_INVALID;
+    if(!m || m->self!=m || !b)return A733_RAIL_INVALID;
+    const unsigned index=(unsigned)(b->id&((1u<<A733_RAIL_BORROW_BITS)-1));
+    if(!b->id || index>=A733_RAIL_BORROWS)return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    struct a733_rail_borrow_slot *bs=find_borrow(m,b);
-    if(!bs)return leave(m,A733_RAIL_INVALID);
-    struct a733_rail_slot *s=find(m,&bs->ticket.parent);
-    if(!s || !s->borrows)return leave(m,fault(m,s));
-    r=health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
-    if(end) {--s->borrows;*bs=(struct a733_rail_borrow_slot){0};}
+    struct a733_rail_borrow_slot *bs=&m->borrows[index];
+    if(bs->id!=b->id || bs->address!=b || bs->rails!=b->rails || bs->parent!=b->parent.id)
+        return leave(m,A733_RAIL_INVALID);
+    /* A pinned parent cannot be released, so a mismatch is corruption. */
+    struct a733_rail_slot *s=find(m,&b->parent);
+    if(!s || !m->pins[slot_index(m,s)])return leave(m,fault(m));
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    if(end){--m->pins[slot_index(m,s)];*bs=(struct a733_rail_borrow_slot){0};}
     return leave(m,A733_RAIL_READY);
 }
 enum a733_rail_result a733_rail_borrow_status(struct a733_rail_leases *m,const struct a733_rail_borrow *b)
 {return borrowed(m,b,0);}
 enum a733_rail_result a733_rail_end_borrow(struct a733_rail_leases *m,const struct a733_rail_borrow *b)
 {return borrowed(m,b,1);}
+enum a733_rail_result a733_rail_floor(struct a733_rail_leases *m,const struct a733_rail_token *t,
+    enum a733_rail rail,uint32_t observed_uv,uint32_t *floor_uv)
+{
+    if(!m || m->self!=m || !t || !floor_uv || !observed_uv ||
+       (rail!=A733_RAIL_DCDC3 && rail!=A733_RAIL_DCDC5))return A733_RAIL_INVALID;
+    enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
+    struct a733_rail_slot *s=find(m,t);
+    if(!s || !(s->exclusive&A733_RAIL_BIT(rail)))return leave(m,A733_RAIL_INVALID);
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    uint32_t *f=&m->floor_uv[rail==A733_RAIL_DCDC5];
+    if(!*f)*f=observed_uv;
+    *floor_uv=*f;return leave(m,A733_RAIL_READY);
+}
 enum a733_rail_result a733_rail_release(struct a733_rail_leases *m,const struct a733_rail_token *t,uint64_t deadline)
 {
-    if(!external(m,t,sizeof(*t)))return A733_RAIL_INVALID;
+    if(!m || m->self!=m || !t)return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
     struct a733_rail_slot *s=find(m,t);if(!s)return leave(m,A733_RAIL_INVALID);
-    r=bridge_health(m,s);if(r!=A733_RAIL_READY)return leave(m,r);
-    if(s->borrows)return leave(m,A733_RAIL_BUSY);
-    r=time_check(m,deadline);
-    if(r!=A733_RAIL_READY)return leave(m,s->state==A733_RAIL_CLOSING ? fault(m,s) : r);
-    s->state=A733_RAIL_CLOSING;
-    if(s->dcdc2.id) {
-        enum a733_clock_result c=a733_clock_release(m->binding.clocks,&s->dcdc2,deadline);
-        if(c==A733_CLOCK_BUSY)return leave(m,A733_RAIL_PENDING);
-        if(c!=A733_CLOCK_OK)return leave(m,fault(m,s));
-        s->dcdc2=(struct a733_clock_token){0};
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    const unsigned i=slot_index(m,s);
+    if(m->pins[i])return leave(m,A733_RAIL_BUSY);
+    r=time_check(m,deadline);if(r!=A733_RAIL_READY)return leave(m,r);
+    m->exclusive_held&=~s->exclusive;
+    for(a733_rail_mask_t bits=s->shared;bits;bits&=bits-1) {
+        const unsigned rail=(unsigned)__builtin_ctzll(bits);
+        if(!--m->sharers[rail])m->shared_held&=~(UINT64_C(1)<<rail);
     }
-    if(s->dcdc4.lease.token) {
-        if(time_check(m,deadline)!=A733_RAIL_READY)return leave(m,fault(m,s));
-        enum a733_gpu_resource_result g=a733_gpu_rail_guard_end(m->binding.gpu,&s->dcdc4);
-        if(g==A733_GPU_RESOURCE_BUSY)return leave(m,A733_RAIL_PENDING);
-        if(g!=A733_GPU_RESOURCE_OK)return leave(m,fault(m,s));
-        s->dcdc4=(struct a733_gpu_rail_guard){0};
-    }
-    /* All fallible operations precede the final slot clear. */
-    *s=(struct a733_rail_slot){0};return leave(m,A733_RAIL_READY);
+    *s=(struct a733_rail_slot){0};m->free_slots|=UINT32_C(1)<<i;
+    return leave(m,A733_RAIL_READY);
 }
 enum a733_rail_result a733_rail_retain(struct a733_rail_leases *m,const struct a733_rail_token *t)
 {
-    if(!external(m,t,sizeof(*t)))return A733_RAIL_INVALID;
+    if(!m || m->self!=m || !t)return A733_RAIL_INVALID;
     enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
-    struct a733_rail_slot *s=find(m,t);
-    return leave(m,s ? fault(m,s) : A733_RAIL_INVALID);
+    return leave(m,find(m,t) ? fault(m) : A733_RAIL_INVALID);
 }

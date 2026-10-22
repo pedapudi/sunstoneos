@@ -887,6 +887,7 @@
   "docs": [
    "docs/a733-smp-supervised.md",
    "docs/board-test-queue.md",
+   "docs/designs/board-bundles.md",
    "docs/handoff.md"
   ],
   "library": false,
@@ -1884,6 +1885,22 @@
   "summary": "Build the native board composition and exercise only its new contracts.",
   "usb": false
  },
+ "board-bundles.py": {
+  "cache_areas": [
+   "build"
+  ],
+  "docs": [
+   "docs/designs/board-bundles-measurements.md",
+   "docs/designs/board-bundles.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Host check of tools/prepare-board-bundles.py on fixture rows in a fixture repository.",
+  "usb": true
+ },
  "board-park.py": {
   "cache_areas": [],
   "docs": [
@@ -2018,6 +2035,7 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
+   "docs/designs/board-bundles.md",
    "docs/handoff.md"
   ],
   "library": false,
@@ -2436,7 +2454,8 @@
    "sources"
   ],
   "docs": [
-   "docs/cpu-clock.md"
+   "docs/cpu-clock.md",
+   "docs/designs/power-authority-measurements.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6392,7 +6411,9 @@
   "cache_areas": [
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/power-authority.md"
+  ],
   "library": false,
   "pure_host": true,
   "required_arguments": [
@@ -6916,6 +6937,19 @@
    "--evidence"
   ],
   "summary": "Run the focused bank expansion checks and preserve exact evidence inputs.",
+  "usb": false
+ },
+ "pmic-tree.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/power-authority.md",
+   "docs/pmic-runtime.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the source-tree facts that keep PMIC outputs under the provider's control.",
   "usb": false
  },
  "primary-cache-host.py": {
@@ -7736,11 +7770,28 @@
   "summary": "Build and run the runtime receive check for one aggregate over 4,096 bytes.",
   "usb": false
  },
+ "rail-leases-cost.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/clock-leases.md",
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/power-authority.md",
+   "docs/rail-leases.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Count AArch64 instructions and cache lines for rail ledger and clock registry operations.",
+  "usb": false
+ },
  "rail-leases.py": {
   "cache_areas": [
    "sources"
   ],
   "docs": [
+   "docs/designs/power-authority.md",
    "docs/rail-leases.md"
   ],
   "library": false,

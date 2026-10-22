@@ -99,8 +99,10 @@ The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller
 validation and integration remain separate.
-The [rail ledger](rail-leases.md) separately coordinates 39 PMIC outputs through
-actual DCDC2 and GPU DCDC4 guards; clock ownership does not grant rail authority.
+The [rail ledger](rail-leases.md) is the only rail authority; clock ownership,
+including the legacy `A733_POWER_DCDC2` scope, grants none. The ledger binds
+the registry to its power-authority state word at initialization, and a
+registry fault then also sets `A733_POWER_CLOCK_FAULT` there.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
 the reference clock and oscillator. Peripheral PLL0 and PLL_NPU also depend on the
@@ -123,7 +125,11 @@ checks its native task binding and register-mutex holder. Both drivers retain
 their clock authority and stop healthy register access after either fault.
 
 The registry has 128 fixed slots and a nonblocking atomic lock. A busy
-call returns immediately. The owner must poll against its own deadline; a
+call returns immediately. A token identifier is never reused and names its
+slot, (id − 1) mod 128: acquisition takes the smallest unused identifier whose
+slot is free, so status, release and retain compare one slot. Acquisition still
+scans all slots for conflicts. Token status is 45 AArch64 instructions with
+any number of holders (`checks/rail-leases-cost.py`). The owner must poll against its own deadline; a
 conflicting acquisition does not call the clock callback. Successful metadata
 changes require a monotonic microsecond observation before their deadline.
 Callbacks must be bounded and non-reentrant.
@@ -249,10 +255,9 @@ The [NPU platform controller](npu-platform.md) acquires stable PLL_NPU,
 reference, oscillator and fabric scopes together with exclusive NPU ownership.
 The NPU scope includes its local clock, resets and power domain. Separate
 PCK-clock and DCDC2 rail leases are acquired by the [startup adapter](npu-startup.md).
-DCDC2 has a separate stable-supply scope in the common registry. Every PMIC
-writer must acquire exclusive rail authority; the PMIC mutex alone only
-serializes register transactions. DCDC2 ownership has no clock ancestors and
-does not alter audio-profile publication. Physical supply and clock qualification
+The registry's DCDC2 scope is a legacy scope that grants no rail authority; the
+[rail ledger](rail-leases.md) owns DCDC2, and nothing writes it. DCDC2 has no
+clock ancestors and does not alter audio-profile publication. Physical supply and clock qualification
 remain prerequisites for production startup.
 
 PLL_NPU can also supply memory, fabric and video clocks. Retuning it requires
