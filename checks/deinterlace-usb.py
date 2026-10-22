@@ -144,8 +144,10 @@ def main():
  for name in ['response','response_bytes','sent','delivered','acked','acking','terminal_zlp']:
   if name not in uv:uv[name]=e.address(name)
  def private(name,n=8):return m.word(uv[name],n)
- assert field('result')==1 and field('copied',8)==field('bytes',8)==460800
- payload_at=field('payload',8);payload=bytes(m.cpu.mem_read(payload_at,field('bytes',8)))
+ # A sequence session sends every job's output; repeats follows the strength.
+ jobs=1+m.word(g+gt['session']+886,2)
+ assert field('result')==1 and field('copied',8)==field('bytes',8)==460800 and jobs<=4
+ payload_at=field('payload',8);payload=bytes(m.cpu.mem_read(payload_at,jobs*field('bytes',8)))
  assert hashlib.sha256(payload).digest()==bytes(m.cpu.mem_read(g+gt['digest'],32))
  setup=a.output/'configured.pkl.gz'
  regs=[*[UC_ARM64_REG_X0+i for i in range(29)],UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_FPCR,UC_ARM64_REG_FPSR,*[UC_ARM64_REG_Q0+i for i in range(32)]]
@@ -171,7 +173,7 @@ def main():
  assert header[96:128]==hashlib.sha256(payload).digest()
  assert private('delivered',1)==private('acked',1)==0
  expected=header+payload;early_ack=False;pending_final=None;first=len(m.transfers);samples=[]
- for iteration in range(10000):
+ for iteration in range(10000*jobs):
   if 0x81 not in m.pending:m.tick();continue
   pending=m.pending[0x81];done=sum(len(x) for x in m.transfers[first:]);remaining=len(expected)-done
   assert pending['count']<=remaining or pending['count']==0
