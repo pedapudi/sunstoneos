@@ -373,6 +373,7 @@
  "a733-gpu-backend-emulate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-runtime.md",
    "docs/gpu-backend.md"
   ],
   "library": false,
@@ -2820,6 +2821,7 @@
  "device-memory-capacity.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture-measurements.md",
    "docs/device-memory-capacity.md",
    "docs/memory-protection.md"
   ],
@@ -3709,6 +3711,21 @@
   "summary": "Check native fixed-compute memory preparation without GPU commands.",
   "usb": false
  },
+ "gpu-conformance.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-conformance-measurements.md",
+   "docs/designs/gpu-conformance.md",
+   "docs/gpu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the GPU conformance plan, the pinned-Mesa reference and the comparator before board time.",
+  "usb": false
+ },
  "gpu-display-boot-usb.py": {
   "cache_areas": [],
   "docs": [],
@@ -3922,7 +3939,9 @@
  },
  "gpu-draw-runtime.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-conformance.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4162,6 +4181,7 @@
  "gpu-texture-runtime.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-conformance.md",
    "docs/gpu-render.md"
   ],
   "library": false,
@@ -5689,6 +5709,7 @@
  "memory-architecture-smp.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture-measurements.md",
    "docs/device-memory-capacity.md"
   ],
   "library": false,
@@ -5708,6 +5729,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/memory-architecture-measurements.md",
    "docs/memory-reservations.md"
   ],
   "library": false,
@@ -6552,6 +6574,23 @@
   "summary": "Run the integrated OS image's capture client against a modeled DMA service.",
   "usb": false
  },
+ "os-image-dispatch.py": {
+  "cache_areas": [
+   "inputs"
+  ],
+  "docs": [
+   "docs/designs/recognition-dispatch-measurements.md",
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the OS image's placement of mimus linear layers on the CPU or GPU against its design budgets.",
+  "usb": false
+ },
  "os-image-headset.py": {
   "cache_areas": [
    "host"
@@ -6609,8 +6648,10 @@
  "os-image-link.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/recognition-dispatch.md",
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7110,6 +7151,7 @@
  "pvr-compute-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-compute-mode.md",
    "docs/gpu-compute-service.md"
   ],
@@ -7275,6 +7317,7 @@
  "pvr-gpu-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-memory.md",
    "docs/gpu-service.md"
   ],
