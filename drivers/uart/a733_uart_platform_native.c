@@ -1,6 +1,8 @@
 #include "a733_uart_platform_native.h"
 #include "a733_platform_locks.h"
 #include "task.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "UART native binding requires scheduler-state, task and mutex-owner APIs"
@@ -8,26 +10,8 @@
 static int current(void *cookie)
 {
     struct a733_uart_platform_native *n=cookie;
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if (!n || !n->initialized || el!=4 || (flags&0x80)) return 0;
-    /* Read the port's task/interrupt state with the same short IRQ exclusion
-     * used by the shared lock implementation. Never admit ISR or critical code. */
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;
-    __asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting; critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->owner_task;
+    /* Never admit ISR or critical code, nor any task other than the owner. */
+    return n && n->initialized && a733_task_context_owner_el1((TaskHandle_t)n->owner_task);
 }
 static int now(void *cookie,uint64_t *v)
 {
@@ -68,9 +52,7 @@ static int read32(void *cookie,uintptr_t a,uint32_t *v)
 {
     struct a733_uart_platform_native *n=cookie;
     if (!v || !access_allowed(n,a,0)) return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory"); return 1;
+    *v=a733_mmio_read32_dsb_sy_both(a); return 1;
 }
 static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
@@ -100,13 +82,11 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     } else {
         uint32_t gate=n->port<7 ? 1u : UINT32_C(1)<<(n->port-7);
         uint32_t mask=gate|(gate<<16);
-        __asm__ volatile("dsb sy" ::: "memory");
-        uint32_t old=*(volatile const uint32_t *)a;
+        a733_mmio_dsb_sy();
+        uint32_t old=a733_mmio_read32(a);
         if ((old^v)&~mask) return 0;
     }
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory"); return 1;
+    a733_mmio_write32_dsb_sy_both(a,v); return 1;
 }
 int a733_uart_platform_native_init(struct a733_uart_platform_native *n,
     struct a733_platform_locks *locks,void *owner_task,unsigned port,

@@ -1,4 +1,5 @@
 #include "a733_spi.h"
+#include "a733_range.h"
 
 #define GCR 0x04u
 #define TCR 0x08u
@@ -55,8 +56,8 @@ static int fault(struct a733_spi *s) { s->state=A733_SPI_FAULT;return 0; }
 static int timely(struct a733_spi *s)
 {
     uint64_t t;
-    if (s->ops.now_us(s->context,&t)!=1 || t<s->last_now || t>=s->deadline) return fault(s);
-    s->last_now=t;return 1;
+    if (s->ops.now_us(s->context,&t)!=1 || !a733_deadline_admit(t,&s->last_now,s->deadline)) return fault(s);
+    return 1;
 }
 static int rd(struct a733_spi *s,unsigned o,uint32_t *v)
 {
@@ -106,15 +107,8 @@ int a733_spi_begin(struct a733_spi *s,const struct a733_spi_ops *ops,void *ctx,
     wr(s,GCR,GCR_SRST);
     return s->state;
 }
-static int span(const void *p,uint32_t n)
-{
-    return n ? p && (uintptr_t)p<=UINTPTR_MAX-(n-1u) : p==0;
-}
 static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{
-    if (!an||!bn) return 0;
-    return (uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn;
-}
+{ return a733_extents_intersect((uintptr_t)a,an,(uintptr_t)b,bn); }
 static int requests_off(struct a733_spi *s)
 {
     uint32_t v;
@@ -128,7 +122,7 @@ int a733_spi_submit(struct a733_spi *s,const struct a733_spi_transfer *t,uint64_
     if (!s||!t||s->state!=A733_SPI_READY||!deadline) return -1;
     /* DMA names bus memory only; CPU transfers borrow disjoint buffers. */
     if (t->dma ? t->dma!=1||!s->format.dma||t->tx||t->rx :
-        !span(t->tx,t->tx_bytes)||!span(t->rx,t->rx_bytes) ||
+        !a733_span_incl_or_null_empty(t->tx,t->tx_bytes)||!a733_span_incl_or_null_empty(t->rx,t->rx_bytes) ||
         overlap(t->tx,t->tx_bytes,t->rx,t->rx_bytes)||
         overlap(s,sizeof(*s),t->tx,t->tx_bytes)||overlap(s,sizeof(*s),t->rx,t->rx_bytes)) return -1;
     unsigned lanes=t->lanes?t->lanes:1;
