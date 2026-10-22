@@ -30,7 +30,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','inputs','output'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--resume',type=Path)
-    parser.add_argument('--variants',nargs='+',choices=('fullhd-qualification','hd-qualification','four-qualification','fullhd3-qualification','fullhd-normal'))
+    # Fixtures named after checks/h264-high-modes.py cases run the nominal path only.
+    parser.add_argument('--variants',nargs='+',choices=('fullhd-qualification','hd-qualification','four-qualification','fullhd3-qualification','fullhd-normal',
+        'long-term-qualification','mmco5-wrap-qualification','poc-wrap-b-qualification','baseline-profile-qualification','main-profile-b-qualification'))
     args=parser.parse_args();args.output.mkdir(exist_ok=False)
     cases=module('native_cases',ROOT/'checks/h264-application-cases.py')
     syms,segments,types,_,_=cases.setup(args.image,args.output,session_optional=True,fixture_optional=True,high=True)
@@ -53,7 +55,7 @@ def main():
     reports=[] if resumed is None else resumed['reports']
     for variant in variants:
         if resumed and variant!=resumed['variant']:continue
-        geometry,mode=variant.split('-');directory=args.inputs/geometry
+        geometry,mode=variant.rsplit('-',1);directory=args.inputs/geometry
         manifest=(directory/mode/'manifest.bin').read_bytes();limits=observe.profile(manifest);descs=observe.descriptors(manifest);reference=(directory/'reference.yuv').read_bytes();frame_bytes=limits['frame_bytes'];w=limits['coded_width'];h=limits['coded_height'];vw=limits['width'];vh=limits['height'];crop=limits['crop']
         assert len(reference)==len(descs)*frame_bytes
         coded=[]

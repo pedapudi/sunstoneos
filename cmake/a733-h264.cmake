@@ -1,4 +1,4 @@
-option(SUNSTONE_H264_HIGH "Runtime bounded High/CABAC short-term I/P/B profile" OFF)
+option(SUNSTONE_H264_HIGH "Runtime bounded Baseline/Main/High I/P/B profile with long-term P references" OFF)
 set(SUNSTONE_H264_GSTREAMER_SOURCE "" CACHE PATH "Pinned GStreamer H264 standalone source cache")
 if(SUNSTONE_H264_HIGH)
  set(SUNSTONE_H264_FULLHD ON CACHE BOOL "High uses existing extended memory" FORCE)

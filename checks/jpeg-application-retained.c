@@ -39,9 +39,25 @@ int main(int argc,char **argv)
         assert(r==(reject?-1:1)&&m.drain==0&&copies==(reject?1u:2u));
         assert(run.state==(reject?A733_VIDEO_JPEG_FAULT:A733_VIDEO_JPEG_COPIED));
         unsigned before=copies;assert(a733_video_jpeg_poll(&run)==r&&copies==before);
+        struct a733_video_jpeg_job moved=job;moved.luma_iova+=4096;
+        struct a733_video_jpeg_job longer=job;longer.file_bytes=(uint32_t)job.input_bytes+1;
+        if(reject)assert(!a733_video_jpeg_next(&run,&job)&&run.state==A733_VIDEO_JPEG_FAULT);
+        else {
+            /* A changed span, an oversized file or a missing job is refused
+             * without leaving COPIED. */
+            assert(!a733_video_jpeg_next(&run,&moved)&&!a733_video_jpeg_next(&run,&longer)&&
+                !a733_video_jpeg_next(&run,NULL)&&run.state==A733_VIDEO_JPEG_COPIED);
+            /* The next job reprograms the same registers as the end of the
+             * first one, without admission, mapping or preparation again. */
+            static struct event first[800];unsigned writes=m.writes;memcpy(first,m.events,sizeof(first));m.writes=0;
+            assert(a733_video_jpeg_next(&run,&job)&&run.state==A733_VIDEO_JPEG_PARSE&&!a733_video_jpeg_next(&run,&job));
+            r=0;for(unsigned i=0;!r&&i<2000;++i)r=a733_video_jpeg_poll(&run);
+            assert(r==1&&run.state==A733_VIDEO_JPEG_COPIED&&copies==3&&m.admissions==1&&m.memory==1&&m.drain==0);
+            assert(m.writes>659&&m.writes<writes&&!memcmp(m.events,first+writes-m.writes,m.writes*sizeof(*first)));
+        }
         assert(a733_clock_token_status(&clocks,&c.clock)==A733_CLOCK_OK);
         assert(a733_gpu_resources_status(&power,2,&c.pck)==A733_GPU_RESOURCE_OK);
     }
-    puts("JPEG retained copy: pending verification, distinct COPIED, rejection and permanent tokens passed");
+    puts("JPEG retained copy: pending verification, distinct COPIED, next-job reprogramming and refusal, rejection and permanent tokens passed");
     return 0;
 }

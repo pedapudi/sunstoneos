@@ -75,7 +75,8 @@ struct a733_video_jpeg_run {
     enum a733_video_jpeg_state state;
 };
 /* Fresh zeroed storage, one privileged serialized caller, no callback reentry.
- * One job per object. Restricts execution to <=1920x1080 and <=16MiB input,
+ * One job per begin; a retained readout may continue with
+ * a733_video_jpeg_next. Restricts execution to <=1920x1080 and <=16MiB input,
  * 32-bit IOVAs, planar YU12, no scaling/rotation/VCU. Copies job/ops.
  * Does not authorize physical execution without the documented providers.
  */
@@ -87,6 +88,15 @@ int a733_video_jpeg_begin(struct a733_video_jpeg_run *,
 int a733_video_jpeg_begin_retained(struct a733_video_jpeg_run *,
     const struct a733_video_jpeg_ops *,void *,const struct a733_video_jpeg_job *,uint64_t,
     int (*copy_verified)(void *,uint64_t,uint64_t));
+/* Start the next job of a retained readout that reached COPIED. The job must
+ * keep the CPU input alias and every IOVA span and capacity; only file_bytes
+ * may change. Before calling, the caller rewrites the input and reinitializes
+ * the output planes under the retained mappings, as H.264 refills its input
+ * after a healthy completion. Ownership, admitted identity and preparation
+ * carry over; the job is parsed, checked for stale status and programmed
+ * again. Returns 1 started, 0 refused with the state unchanged. This is not
+ * a drain or a release: every lease and mapping stays retained. */
+int a733_video_jpeg_next(struct a733_video_jpeg_run *,const struct a733_video_jpeg_job *);
 /* At most one external operation except pre/post monotonic time checks per poll.
  * Returns 0 pending, 1 DONE, -1 retained FAULT. Timeout/backward time/IO failure
  * never releases memory or resets hardware. Initialized state must not be edited.
