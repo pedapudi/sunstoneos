@@ -101,7 +101,11 @@ a733_cached_enter_el1:
     mov x2, #0x80000000
     msr hcr_el2, x2
     msr hstr_el2, xzr
-    msr mdcr_el2, xzr
+    // MDCR_EL2.HPMN = PMCR_EL0.N gives EL1 every event counter; TPM, TPMCR
+    // and HPME stay zero.
+    mrs x2, pmcr_el0
+    ubfx x2, x2, #11, #5
+    msr mdcr_el2, x2
     msr vttbr_el2, xzr
     mov x2, #0x33ff
     msr cptr_el2, x2
@@ -113,9 +117,11 @@ a733_cached_enter_el1:
     msr sctlr_el2, x2
     mov x2, #0x0800
     movk x2, #0x30d0, lsl #16
-    // FreeRTOS recursive locks execute WFE at EL0 under contention.
-    // SCTLR_EL1.nTWE permits that wait without an EL1 trap (EC=0x01).
+    // FreeRTOS recursive locks execute WFE at EL0 under contention, and
+    // idle tasks execute WFI at EL0. SCTLR_EL1.nTWE and nTWI permit those
+    // waits without an EL1 trap (EC=0x01).
     orr x25, x2, #(1 << 18)
+    orr x25, x25, #(1 << 16)
     msr tpidr_el1, x20
     adrp x2, a733_cpu_el1_stacks
     add x2, x2, :lo12:a733_cpu_el1_stacks

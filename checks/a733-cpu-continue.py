@@ -43,7 +43,8 @@ def emulate(path, system_only=False, vectors_only=False, power_only=False):
         phase = ['prepare']
         clock = [24]
         epoch = 0x123456789abcdef
-        model = {'currentel': 12, 'sctlr_el3': 0, 'mpidr_el1': 0x81000000,
+        # PMCR_EL0.N = 6 on both the A55 and the A76.
+        model = {'currentel': 12, 'sctlr_el3': 0, 'mpidr_el1': 0x81000000, 'pmcr_el0': 0x41003000,
                  'cntfrq_el0': 24000000, 'sctlr_el1': 0, 'mair_el1': 0, 'tcr_el1': 0, 'ttbr0_el1': 0,
                  'esr_el3': 0x96000010, 'far_el3': 0xdead0000, 'elr_el3': 0,
                  'esr_el1': 0x96000011, 'far_el1': 0xdead1000, 'elr_el1': 0x41000004}
@@ -194,7 +195,7 @@ def emulate(path, system_only=False, vectors_only=False, power_only=False):
             assert model['sctlr_el1'] & 0x1005 == 1 and model['tpidr_el1'] == core
             assert model['sctlr_el3'] == 0 and model['sp_el1'] == el1_stack + 32768
             expected = {'scr_el3': 0x535, 'mdcr_el3': 0x10000000, 'cptr_el3': 0,
-                        'hcr_el2': 0x80000000, 'hstr_el2': 0, 'mdcr_el2': 0, 'vttbr_el2': 0,
+                        'hcr_el2': 0x80000000, 'hstr_el2': 0, 'mdcr_el2': 6, 'vttbr_el2': 0,
                         'cptr_el2': 0x33ff, 'cnthctl_el2': 3, 'cntvoff_el2': 0,
                         'sctlr_el2': 0x30c50830, 'sctlr_el1': 0x30d00801,
                         'cpacr_el1': 0x300000, 'cntkctl_el1': 3}

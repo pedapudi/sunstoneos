@@ -295,7 +295,7 @@ static uint64_t golden_l2(unsigned i)
 }
 static void golden_tables(void)
 {
-    CHECK(a733_cached_el1_l1[0]==(BIT(54)|BIT(53)|BIT(10)|1));
+    CHECK(a733_cached_el1_l1[0]==(BIT(54)|BIT(53)|BIT(10)|(2u<<8)|1));
     CHECK(a733_cached_el1_l1[1]==((uintptr_t)a733_cached_el1_l2|3));
     for(unsigned i=2;i<512;++i)CHECK(!a733_cached_el1_l1[i]);
     uint64_t mapped=0;
@@ -333,7 +333,7 @@ void fixture_el3_prepare(unsigned core)
     }
     CHECK(!a733_cached_el3_l2[456]);
     golden_tables();
-    if(fixture_mode==1)a733_cached_el1_l2[100]=0; /* Interior fault, before immutable publication. */
+    if(fixture_mode==1){a733_cached_el1_table_sum[0]-=a733_cached_el1_l2[100];a733_cached_el1_l2[100]=0;}
     CHECK(a733_cpu_coherence_publish(0x41000000,0x200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish((uintptr_t)__tables_start,(size_t)(__tables_end-__tables_start),UINT32_MAX)==1);

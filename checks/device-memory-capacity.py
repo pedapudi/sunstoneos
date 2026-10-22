@@ -207,7 +207,7 @@ def main():
                         '__uncached_pool_end': 0x79000000}
             assert all(symbols[k] == v for k, v in expected.items())
             assert symbols['__bss_end'] < 0x42000000 and symbols['__tables_end'] <= 0x42200000
-            assert symbols['__tables_end'] - symbols['__tables_start'] == 5 * 4096
+            assert symbols['__tables_end'] - symbols['__tables_start'] == 5 * 4096 + 64
             assert elf.get_section_by_name('.device_pool')['sh_type'] == 'SHT_NOBITS'
             assert elf.get_section_by_name('.uncached_pool')['sh_type'] == 'SHT_NOBITS'
             segments = []

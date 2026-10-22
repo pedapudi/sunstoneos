@@ -202,7 +202,8 @@
    "sources"
   ],
   "docs": [
-   "docs/cpu-coherence.md"
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -217,7 +218,10 @@
    "host"
   ],
   "docs": [
-   "docs/cpu-continue.md"
+   "docs/cpu-continue.md",
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -771,7 +775,12 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/cpu-power.md",
+   "docs/designs/cpu-power-states-measurements.md",
+   "docs/designs/cpu-power-states.md",
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1489,7 +1498,9 @@
  },
  "all-core-pre-scheduler-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2287,7 +2298,8 @@
  "cached-device-reservations.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cached-device-reservations.md"
+   "docs/cached-device-reservations.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2457,6 +2469,8 @@
   ],
   "docs": [
    "docs/cpu-clock.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md",
    "docs/designs/power-authority-measurements.md"
   ],
   "library": false,
@@ -2465,6 +2479,72 @@
    "output"
   ],
   "summary": "Check CPU clock tables against pinned sources and run the transition model.",
+  "usb": false
+ },
+ "cpu-pmu-smp.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count instructions with the CPU PMU module on two QEMU cores in the FreeRTOS SMP port.",
+  "usb": false
+ },
+ "cpu-pmu.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "output"
+  ],
+  "summary": "Check the CPU PMU module under instruction emulation with modeled system registers.",
+  "usb": false
+ },
+ "cpu-power-states.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-power.md",
+   "docs/designs/cpu-power-states-measurements.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence",
+   "--freertos"
+  ],
+  "summary": "Measure idle-core wake-ups and idle instructions in the cached eight-core image.",
+  "usb": false
+ },
+ "cpu-table-walks.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--image"
+  ],
+  "summary": "Check the EL1 table walk profile on linked images: TCR sources, table flush and checksum order.",
   "usb": false
  },
  "crypto-application-host.py": {
@@ -2842,6 +2922,9 @@
  "device-memory-capacity.py": {
   "cache_areas": [],
   "docs": [
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md",
    "docs/designs/memory-architecture-measurements.md",
    "docs/device-memory-capacity.md",
    "docs/memory-protection.md"
@@ -5794,6 +5877,7 @@
  "memory-architecture-smp.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-pmu.md",
    "docs/designs/memory-architecture-measurements.md",
    "docs/device-memory-capacity.md"
   ],
@@ -6047,7 +6131,8 @@
   "docs": [
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7104,6 +7189,7 @@
  "pmic-tree.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-power-states.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
    "docs/pmic-runtime.md"
@@ -7135,7 +7221,8 @@
  "primary-cache-probe.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8230,7 +8317,9 @@
  },
  "secondary-cache-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -8740,7 +8829,10 @@
  },
  "storage-read-single-core.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

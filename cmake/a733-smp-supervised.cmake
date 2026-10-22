@@ -14,6 +14,8 @@ apply_build_patch("${a733_build}/portASM.S" "${a733_port}/portASM.S"
   "${a733_root}/patches/freertos-smp-asm.patch")
 apply_build_patch("${a733_build}/portmacro.h" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-macro.patch")
+apply_build_patch("${a733_build}/tasks.c" "${FREERTOS_DIR}/tasks.c"
+  "${a733_root}/patches/freertos-smp-tasks.patch")
 set(a733_sources
   platform/a733-smp-cached/start.S platform/a733-smp-supervised/admission.c
   platform/a733-smp-supervised/publication.S
@@ -33,7 +35,7 @@ list(APPEND a733_sources "${a733_build}/continue-core.c")
 file(SHA256 "${a733_root}/platform/a733-smp-cached/boot.c" observe_boot_hash)
 file(SHA256 "${a733_root}/platform/a733-smp-cached/continue.S" observe_vector_hash)
 if(NOT observe_boot_hash STREQUAL "2e7401667a2d320a268734f489722aedbb620bf8b2d96a8c791d2635136dcbe0" OR
-   NOT observe_vector_hash STREQUAL "4a079fa75a44b37ffdea90ecd06752634707a513ec9a14e8220319b6de5c3b1a")
+   NOT observe_vector_hash STREQUAL "7a6ce1ee97891bf7f6f87f63efa31979e63a7999c5e164a84689ced9523a0e25")
   message(FATAL_ERROR "Observer hooks require review against changed cached boot/vector inputs")
 endif()
 foreach(pair "boot.c|boot.patch" "continue.S|continue.patch")
@@ -66,11 +68,11 @@ set(a733_identity_inputs ${a733_sources}
   "${a733_root}/platform/a733-smp-supervised/CMakeLists.txt"
   "${a733_root}/include/a733_cpu_start.h" "${a733_root}/include/a733_cpu_entry.h"
   "${a733_root}/include/a733_cpu_continue.h" "${a733_root}/include/a733_cpu_coherence.h"
-  "${a733_root}/include/a733_cached_memory.h"
+  "${a733_root}/include/a733_cached_memory.h" "${a733_root}/include/a733_cpu_power.h"
   "${a733_root}/platform/a733-smp-cached/cached.h" "${a733_root}/include/FreeRTOSConfig.h"
   "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/platform/a733-smp-cached/boot.h"
   "${a733_root}/platform/a733-smp-cached/link.ld" "${a733_root}/cmake/a733-smp-supervised.cmake"
-  "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+  "${a733_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${a733_build}/port.c" "${a733_build}/portASM.S" "${a733_build}/portmacro.h")
 file(GLOB a733_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND a733_identity_inputs ${a733_kernel_headers}
@@ -97,9 +99,10 @@ file(WRITE "${a733_build}/build-id.txt" "${a733_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${a733_identity_inputs}
   "${a733_port}/port.c" "${a733_port}/portASM.S" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-c.patch" "${a733_root}/patches/freertos-smp-asm.patch"
-  "${a733_root}/patches/freertos-smp-macro.patch" "${a733_root}/patches/freertos-a733-smp.patch")
+  "${a733_root}/patches/freertos-smp-macro.patch" "${a733_root}/patches/freertos-a733-smp.patch"
+  "${FREERTOS_DIR}/tasks.c" "${a733_root}/patches/freertos-smp-tasks.patch")
 add_executable(a733-smp-supervised EXCLUDE_FROM_ALL ${a733_sources}
-  "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+  "${a733_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${a733_build}/port.c" "${a733_build}/portASM.S" "${a733_build}/build-id.c")
 target_include_directories(a733-smp-supervised PRIVATE "${a733_root}/platform/a733-smp-supervised" "${a733_root}/platform/a733-smp-observe"
   "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src" "${a733_root}/platform/a733-smp-cached"

@@ -51,6 +51,9 @@ function(sunstone_single_core_application name)
 
   get_target_property(sources ${base} SOURCES)
   list(FILTER sources EXCLUDE REGEX "(/${name}-application/(boot|boot-supervised|platform|build-id)\\.c$|/storage-maintenance/(platform|port|continue)\\.(c|S)$|/platform/a733-smp-cached/|/platform/a733/cpu_|/freertos-a733-smp-cached/|/a733-smp-observe/(usb\\.c|service\\.S))")
+  # The SMP base links its patched tasks.c from the port directory, which the
+  # filter removes; a boot-CPU-only image links the kernel's own tasks.c.
+  list(APPEND sources "${FREERTOS_DIR}/tasks.c")
   list(APPEND sources "${root}/platform/a733/cpu_coherence.c"
     "${root}/platform/a733/cpu_coherence.S" "${root}/platform/a733/cpu_start.c"
     "${root}/platform/a733-smp-cached/memory.c")

@@ -129,7 +129,7 @@ class Machine:
             u.reg_write(UC_ARM64_REG_CPACR_EL1,3<<20)
             m={'currentel':12,'spsel':1,'daif':0x3c0,'sctlr_el3':0x30c50830,'sctlr_el1':0x30d00800,
                 'tcr_el1':0,'scr_el3':0x200,'midr_el1':0x412fd050 if c<6 else 0x413fd0b0,
-                'mpidr_el1':0x81000000|(c<<8),'clidr_el1':0x124,'id_aa64mmfr0_el1':2,
+                'mpidr_el1':0x81000000|(c<<8),'clidr_el1':0x124,'pmcr_el0':0x41003000,'id_aa64mmfr0_el1':2,
                 's3_0_c15_c3_1':0x30,'s3_0_c15_c3_0':0,'cntfrq_el0':24000000,'ctr_el0':4<<16,
                 'sp_el0':0,'sp_el1':0,'sp_el3':0,'icc_pmr_el1':0,'icc_igrpen1_el1':0,
                 'cntp_ctl_el0':0,'cntp_cval_el0':MASK,'vbar_el3':0,'vbar_el1':0,
@@ -196,7 +196,12 @@ class Machine:
             return
         assert 0x41000000<=a and a+size<=0x42200000
         if 0x421f0000<=a<0x42200000:
-            assert not self.el3_enabled,('CPU table access after first walk',c,hex(a),write)
+            # EL1 table check: Device reads of the EL1 pages and checksum line, MMU off.
+            el1_check=(not write and m['currentel']==4 and not m['sctlr_el1']&1 and
+                any(s<=a<s+4096 for s in (self.symbols['a733_cached_el1_l1'],self.symbols['a733_cached_el1_l2'])) or
+                (not write and m['currentel']==4 and not m['sctlr_el1']&1 and
+                 self.symbols['a733_cached_el1_table_sum']<=a<self.symbols['a733_cached_el1_table_sum']+64))
+            assert not self.el3_enabled or el1_check,('CPU table access after first walk',c,hex(a),write)
         if 0x42000000<=a<0x421f0000:
             assert m['currentel']==12,('EL1 touched secure monitor',c,hex(a))
             assert a%size==0,('unaligned Device access',c,hex(a),size)

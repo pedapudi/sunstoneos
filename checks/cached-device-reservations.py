@@ -133,7 +133,7 @@ endforeach()
         assert layout['__device_pool_end'] - layout['__device_pool_start'] == 2097152
         assert layout['__bss_end'] <= layout['__device_pool_start'] < layout['__device_pool_end'] <= 0x41c00000
         assert layout['__uncached_pool_start'] == 0x41c00000 and layout['__uncached_pool_end'] == 0x41e00000
-        assert layout['__tables_end'] - layout['__tables_start'] == 5 * 4096
+        assert layout['__tables_end'] - layout['__tables_start'] == 5 * 4096 + 64
         (out / 'layout.json').write_text(json.dumps(layout, indent=2) + '\n')
         dependencies = set()
         for path in build.rglob('*.obj.d'):

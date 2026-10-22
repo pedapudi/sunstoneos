@@ -1,0 +1,17 @@
+--- tasks.c
++++ tasks.c
+@@ -4983,7 +4983,13 @@
+ 
+                 for( xCoreID = 0; xCoreID < ( ( BaseType_t ) configNUMBER_OF_CORES ); xCoreID++ )
+                 {
+-                    if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ) ) > 1U )
++                    UBaseType_t uxPriority = pxCurrentTCBs[ xCoreID ]->uxPriority;
++
++                    /* The idle-priority list always holds one idle task per
++                     * core. A core shares its time slice only when another task
++                     * of its priority is ready, the test prvIdleTask applies. */
++                    if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ uxPriority ] ) ) >
++                        ( ( uxPriority == tskIDLE_PRIORITY ) ? ( UBaseType_t ) configNUMBER_OF_CORES : 1U ) )
+                     {
+                         xYieldPendings[ xCoreID ] = pdTRUE;
+                     }
