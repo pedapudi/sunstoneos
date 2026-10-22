@@ -3,7 +3,7 @@
 #include "a733_pmic.h"
 
 enum a733_pcie_result { A733_PCIE_PENDING, A733_PCIE_READY, A733_PCIE_BUSY,
-    A733_PCIE_INVALID, A733_PCIE_RETAINED };
+    A733_PCIE_INVALID, A733_PCIE_RETAINED, A733_PCIE_STOPPED };
 /* This profile requires an authenticated V1.2 board/endpoint handoff: external
  * endpoint power is already stable, PD22 is its active-low PERST and starts
  * asserted, PD23 is not driven, and no endpoint has inherited DMA ownership.
@@ -54,6 +54,7 @@ struct a733_pcie_window { uint32_t type, cpu, pci, bytes; };
  * the same outbound window and cannot write endpoint command/BAR registers.
  */
 struct a733_pcie_epf_test;
+struct a733_pcie_function;
 struct a733_pcie {
     struct a733_pcie *self;
     struct a733_pcie_config config;
@@ -79,11 +80,13 @@ struct a733_pcie {
     uint64_t perst_since; /* Start of the current PERST timing interval: hold start, PHY completion, then release. */
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
     unsigned speed_change; /* Directed speed change requested above Gen1. */
+    unsigned client_stopped; /* The claimed function client finished its orderly stop. */
     uint8_t root_cap;
-    /* Region 0: core CFG0 window. Region 1: the claimed test client's MEM window. */
+    /* Region 0: core CFG0 window. Region 1: the claimed client's MEM window. */
     struct a733_pcie_window windows[2];
     uint32_t last_value;
     struct a733_pcie_epf_test *test; /* One-way concrete test ownership. */
+    struct a733_pcie_function *function; /* One-way general function ownership. */
 };
 /* Pure initialization. One registry/rail ledger/PCK manager/pin manager must
  * cover every overlapping local and remote writer. Selected parents are held
@@ -100,8 +103,9 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *);
  * every later identity check requires that same negotiated link status.
  * Cold endpoint compliance is trusted; disabled inbound iATU is NOT isolation.
  * No DMA, MSI activation, hotplug, bridge enumeration or memory reclamation is
- * authorized by this initial profile. Failures keep every lease and any held
- * register mutex. There is no automatic rollback/reset or close API.
+ * authorized by this initial profile; a claimed client adds only its own
+ * operations. Failures keep every lease and any held register mutex. There is
+ * no automatic rollback or reset; a733_pcie_stop is the only orderly close.
  */
 enum a733_pcie_result a733_pcie_identity(struct a733_pcie *,struct a733_pcie_endpoint *);
 /* Read one aligned dword in the direct endpoint's 4KiB config space. Function0
@@ -114,19 +118,32 @@ enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *,unsigned function
     unsigned offset,uint64_t deadline,uint32_t *);
 
 int a733_pcie_output_outside(const struct a733_pcie *,const void *,size_t);
-/* Internal concrete test-client boundary. Claim reestablishes function zero
- * and cold endpoint state under the existing mutex. No default getter/poll can
- * advance a claimed port. Lock success keeps busy+register ownership through
- * test_end; fault retains resources and any held register mutex. */
+/* Internal client boundary. One client claims the port for its lifetime: the
+ * concrete pci-epf-test client or one general function client. Claim
+ * reestablishes function zero and cold endpoint state under the existing
+ * mutex. No default getter/poll can advance a claimed port. Lock success keeps
+ * busy+register ownership through client_end; fault retains resources and any
+ * held register mutex. A function client sets client_stopped while it holds
+ * that lock, only after its own orderly stop. */
 enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *,struct a733_pcie_epf_test *);
 enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *,struct a733_pcie_epf_test *,uint64_t);
-enum a733_pcie_result a733_pcie_test_end(struct a733_pcie *,int);
+enum a733_pcie_result a733_pcie_function_claim(struct a733_pcie *,struct a733_pcie_function *);
+enum a733_pcie_result a733_pcie_function_lock(struct a733_pcie *,struct a733_pcie_function *,uint64_t);
+enum a733_pcie_result a733_pcie_client_end(struct a733_pcie *,int);
+/* Orderly port stop, advanced by repeated calls until STOPPED or RETAINED.
+ * Allowed from READY with no client, or after the function client's stop.
+ * The pci-epf-test client has no quiescence proof and cannot stop the port.
+ * The port disables outbound region 0, clears LTSSM enable, observes link
+ * down and then drives PD22 low to hold the endpoint in PERST. Every lease
+ * stays held: no reviewed reverse sequence exists for PHY, clock, PCK or rail
+ * state, so a stopped port cannot restart within this boot. */
+enum a733_pcie_result a733_pcie_stop(struct a733_pcie *,uint64_t deadline);
 /* Internal driver interface: callers already own the common register mutex. */
 int a733_pcie_read(struct a733_pcie *,uintptr_t,unsigned,uint32_t *);
 int a733_pcie_write(struct a733_pcie *,uintptr_t,unsigned,uint32_t);
 /* Disable, observe clear, program and enable one outbound region. Region 0
  * admits only the CFG0 window for bus 1 device 0; region 1 admits one identity
- * MEM window inside the aperture after a test claim. The caller observes the
+ * MEM window inside the aperture after a client claim. The caller observes the
  * enable bit. The recorded window is the region's native write permission. */
 int a733_pcie_atu_program(struct a733_pcie *,unsigned region,uint32_t type,
     uint32_t cpu,uint32_t pci,uint32_t bytes);

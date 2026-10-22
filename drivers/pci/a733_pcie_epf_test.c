@@ -195,7 +195,7 @@ enum a733_pcie_result a733_pcie_epf_poll(struct a733_pcie_epf_test *t)
         break;
     default:ok=0;break;
     }
-    r=a733_pcie_test_end(p,ok);
+    r=a733_pcie_client_end(p,ok);
     if(r!=A733_PCIE_READY&&r!=A733_PCIE_BUSY){a733_pcie_epf_stop(t);return A733_PCIE_RETAINED;}
     return r==A733_PCIE_READY&&t->stage==DONE?A733_PCIE_READY:A733_PCIE_PENDING;
 }

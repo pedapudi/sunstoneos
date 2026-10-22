@@ -8,7 +8,7 @@
 #define BIT(n) (UINT32_C(1)<<(n))
 #define IRQ_MASK UINT32_C(0x0300ff00)
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,PCK,SUPPLY,PINS,BASELINE,ENABLE,PHY,RC,
-    RESET_WAIT,RESET_RELEASE,TRAIN,LINK,IDENTIFY,READY };
+    RESET_WAIT,RESET_RELEASE,TRAIN,LINK,IDENTIFY,READY,STOP_RESET,STOP_DOWN,STOPPED };
 static const enum a733_rail supplies[]={A733_RAIL_DCDC2,A733_RAIL_BLDO1};
 static const uint32_t uv[]={800000,1800000};
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
@@ -211,7 +211,7 @@ static int window_valid(const struct a733_pcie *p,unsigned region,uint32_t type,
     uint32_t cpu,uint32_t pci,uint32_t bytes)
 {
     if(!region)return type==4&&cpu==CFG&&bytes==4096&&(pci&~UINT32_C(0x70000))==0x01000000u;
-    return region==1&&p->test&&!type&&cpu==pci&&!(cpu&4095)&&bytes&&!(bytes&4095)&&
+    return region==1&&(p->test||p->function)&&!type&&cpu==pci&&!(cpu&4095)&&bytes&&!(bytes&4095)&&
         cpu>=A733_PCIE_MEM&&bytes<=A733_PCIE_MEM_BYTES&&cpu-A733_PCIE_MEM<=A733_PCIE_MEM_BYTES-bytes;
 }
 int a733_pcie_atu_program(struct a733_pcie *p,unsigned region,uint32_t type,
@@ -304,7 +304,7 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
 {
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,fault(p));
-    if(p->test)return finish(p,A733_PCIE_INVALID);
+    if(p->test||p->function||p->phase>READY)return finish(p,p->phase==STOPPED?A733_PCIE_STOPPED:A733_PCIE_INVALID);
     p->deadline=p->phase==READY?p->config.lifetime_deadline:p->config.deadline;
     if(!timely(p))return finish(p,fault(p));
     int h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_PENDING);
@@ -427,7 +427,7 @@ enum a733_pcie_result a733_pcie_identity(struct a733_pcie *p,struct a733_pcie_en
     if(!p||p->self!=p||!a733_pcie_output_outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
-    if(p->test)return finish(p,A733_PCIE_INVALID);
+    if(p->test||p->function||p->phase>READY)return finish(p,p->phase==STOPPED?A733_PCIE_STOPPED:A733_PCIE_INVALID);
     if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
     p->deadline=p->config.lifetime_deadline;
     if(!timely(p))return finish(p,fault(p));
@@ -441,7 +441,7 @@ enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *p,unsigned functio
         !a733_pcie_output_outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
-    if(p->test)return finish(p,A733_PCIE_INVALID);
+    if(p->test||p->function||p->phase>READY)return finish(p,p->phase==STOPPED?A733_PCIE_STOPPED:A733_PCIE_INVALID);
     if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
     if(function&&!(p->endpoint.header_type&0x80))return finish(p,A733_PCIE_INVALID);
     p->deadline=deadline;
@@ -459,11 +459,12 @@ enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *p,unsigned functio
     *out=v;return finish(p,A733_PCIE_READY);
 }
 
-enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *p,struct a733_pcie_epf_test *test)
+static enum a733_pcie_result claim(struct a733_pcie *p,struct a733_pcie_epf_test *test,
+    struct a733_pcie_function *function)
 {
-    if(!test||!enter(p))return A733_PCIE_BUSY;
+    if((!test&&!function)||!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
-    if(p->test)return finish(p,A733_PCIE_INVALID);
+    if(p->test||p->function||p->phase>READY)return finish(p,A733_PCIE_INVALID);
     if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
     p->deadline=p->config.lifetime_deadline;
     if(!timely(p))return finish(p,fault(p));
@@ -472,11 +473,14 @@ enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *p,struct a733_pcie_
     if(!parent_profile(p)||!masked(p)||!link(p)||!atu_start(p,0)||
        !check(p,ATU+4,BIT(31),BIT(31))||!endpoint(p)||!check(p,CFG+4,4,0))
         return finish(p,fault(p));
-    p->test=test;return finish(p,A733_PCIE_READY);
+    p->test=test;p->function=function;return finish(p,A733_PCIE_READY);
 }
-enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *p,struct a733_pcie_epf_test *test,uint64_t deadline)
+enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *p,struct a733_pcie_epf_test *test)
+{return claim(p,test,NULL);}
+enum a733_pcie_result a733_pcie_function_claim(struct a733_pcie *p,struct a733_pcie_function *function)
+{return claim(p,NULL,function);}
+static enum a733_pcie_result client_lock(struct a733_pcie *p,uint64_t deadline)
 {
-    if(!p||p->self!=p||!test||p->test!=test||!deadline||deadline>p->config.lifetime_deadline)return A733_PCIE_INVALID;
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
     p->deadline=deadline;
@@ -486,11 +490,60 @@ enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *p,struct a733_pcie_e
     if(!parent_profile(p)||!link(p))return finish(p,fault(p));
     return A733_PCIE_READY;
 }
-enum a733_pcie_result a733_pcie_test_end(struct a733_pcie *p,int ok)
+enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *p,struct a733_pcie_epf_test *test,uint64_t deadline)
+{
+    if(!p||p->self!=p||!test||p->test!=test||!deadline||deadline>p->config.lifetime_deadline)return A733_PCIE_INVALID;
+    return client_lock(p,deadline);
+}
+enum a733_pcie_result a733_pcie_function_lock(struct a733_pcie *p,struct a733_pcie_function *function,uint64_t deadline)
+{
+    if(!p||p->self!=p||!function||p->function!=function||p->client_stopped||
+       !deadline||deadline>p->config.lifetime_deadline)return A733_PCIE_INVALID;
+    return client_lock(p,deadline);
+}
+enum a733_pcie_result a733_pcie_client_end(struct a733_pcie *p,int ok)
 {
     if(!p||p->self!=p||!atomic_load_explicit(&p->busy,memory_order_acquire)||!p->held)return A733_PCIE_INVALID;
     if(!ok||!timely(p)||!link(p))return finish(p,fault(p));
     p->ops.leave(p->cookie);p->held=0;
     int h=health(p);if(h<0)return finish(p,fault(p));
     return finish(p,h?A733_PCIE_READY:A733_PCIE_BUSY);
+}
+/* The board kernel's suspend clears LTSSM enable before PHY and power
+ * teardown. This stop keeps that first step, then holds the endpoint in PERST
+ * and requires the link to fall. Function zero and region one must already be
+ * cold; the endpoint test client never establishes that. */
+enum a733_pcie_result a733_pcie_stop(struct a733_pcie *p,uint64_t deadline)
+{
+    if(!p||p->self!=p||!deadline||deadline>p->config.lifetime_deadline)return A733_PCIE_INVALID;
+    if(!enter(p))return A733_PCIE_BUSY;
+    if(p->failed)return finish(p,A733_PCIE_RETAINED);
+    if(p->phase==STOPPED)return finish(p,A733_PCIE_STOPPED);
+    if(p->phase<READY)return finish(p,A733_PCIE_PENDING);
+    if(p->test||(p->function&&!p->client_stopped))return finish(p,A733_PCIE_INVALID);
+    p->deadline=deadline;
+    if(!timely(p))return finish(p,fault(p));
+    int h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_BUSY);
+    if(p->phase==STOP_RESET) {
+        enum a733_pins_result r=a733_pins_write_outputs(p->pins,&p->pin,A733_PIN_D,BIT(22),0,p->deadline);
+        if(r==A733_PINS_BUSY)return finish(p,A733_PCIE_PENDING);
+        if(r!=A733_PINS_OK||!timely(p))return finish(p,fault(p));
+        p->perst_since=p->last_now;p->phase=STOP_DOWN;return finish(p,A733_PCIE_PENDING);
+    }
+    int l=lock(p);if(l<0)return finish(p,fault(p));if(!l)return finish(p,A733_PCIE_PENDING);
+    int ok;
+    if(p->phase==READY) {
+        ok=link(p)&&atu_start(p,0)&&check(p,ATU+4,BIT(31),BIT(31))&&check(p,CFG+4,7,0)&&
+            (!p->windows[1].bytes||check(p,A733_PCIE_ATU_OUTBOUND(1)+4,BIT(31),0))&&
+            wr(p,ATU+4,0)&&check(p,ATU+4,BIT(31),0)&&update(p,APP+0xc00,1,0);
+        if(ok)p->phase=STOP_RESET;
+    } else {
+        ok=p->phase==STOP_DOWN&&rd(p,APP+0xe0c,&p->last_value);
+        if(ok&&!(p->last_value&3))p->phase=STOPPED;
+    }
+    if(!ok)return finish(p,fault(p));
+    p->ops.leave(p->cookie);p->held=0;
+    if(!timely(p))return finish(p,fault(p));
+    h=health(p);if(h<0)return finish(p,fault(p));
+    return finish(p,p->phase==STOPPED&&h?A733_PCIE_STOPPED:A733_PCIE_PENDING);
 }
