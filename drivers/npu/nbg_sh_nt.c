@@ -2,6 +2,7 @@
 #include "nbg_checksum.h"
 #include "nbg_relocation.h"
 #include "nbg_command.h"
+#include "a733_range.h"
 #include <string.h>
 
 static const uint32_t nt_state[]={0x08010e4c,0x0493e040,0x08010e5a,0x00451440,
@@ -11,7 +12,8 @@ static int overlap(uint64_t a,uint64_t an,uint64_t b,uint64_t bn)
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {return !overlap((uintptr_t)a,an,(uintptr_t)b,bn);}
 static int result_space(const struct nbg_model *m,struct nbg_assembly_plan *p)
-{return range(m,sizeof(*m)) && range(p,sizeof(*p)) && range(m->data,m->bytes) &&
+{return a733_span_excl_nonempty(m,sizeof(*m)) && a733_span_excl_nonempty(p,sizeof(*p)) &&
+ a733_span_excl_nonempty(m->data,m->bytes) &&
  separate(p,sizeof(*p),m,sizeof(*m)) && separate(p,sizeof(*p),m->data,m->bytes);}
 static int same(const unsigned char *p,const uint32_t *v,unsigned n)
 {for(unsigned i=0;i<n;++i)if(word(p+4*i)!=v[i])return 0;return 1;}
@@ -111,10 +113,11 @@ int nbg_sh_nt_assemble(const struct nbg_model *m,const struct nbg_assembly_buffe
  struct nbg_assembly_plan *out)
 {
  struct nbg_assembly_plan p;
- if(!result_space(m,out)||!range(b,6*sizeof(*b))||!separate(out,sizeof(*out),b,6*sizeof(*b))||
+ if(!result_space(m,out)||!a733_span_excl_nonempty(b,6*sizeof(*b))||
+     !separate(out,sizeof(*out),b,6*sizeof(*b))||
   !inspect(m,NULL,&p))return 0;
  for(unsigned i=0;i<6;++i){
-  if(!range(b[i].cpu,b[i].bytes)||b[i].bytes!=p.buffers[i].allocation_bytes||
+  if(!a733_span_excl_nonempty(b[i].cpu,b[i].bytes)||b[i].bytes!=p.buffers[i].allocation_bytes||
    ((uintptr_t)b[i].cpu&4095)||!b[i].device||(b[i].device&4095)||
    b[i].bytes>UINT64_C(0x100000000)-b[i].device||
    overlap(b[i].device,b[i].bytes,0x400000,0x80000)||

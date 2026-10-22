@@ -1,16 +1,11 @@
 #include "a733_npu_reserved.h"
+#include "a733_range.h"
 
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 _Static_assert(NPU_CONVOLUTION_BUFFERS == 8, "large graph layout");
 #else
 _Static_assert(NPU_CONVOLUTION_BUFFERS == 6, "reserved convolution layout");
 #endif
-
-static int disjoint(uintptr_t a, size_t an, uintptr_t b, size_t bn)
-{
-    return a && b && an && bn && a <= UINTPTR_MAX - an && b <= UINTPTR_MAX - bn &&
-        !(a < b + bn && b < a + an);
-}
 
 struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
     uint64_t owner, const void *model, size_t model_bytes, uintptr_t registers,
@@ -20,16 +15,19 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
         !owner || !model || (!model_bytes || model_bytes > NPU_CONVOLUTION_MODEL_CAPACITY) || !fatal ||
         !registers || (registers & 4095) || registers > UINTPTR_MAX - 4096 ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        !disjoint((uintptr_t)s, sizeof(*s), (uintptr_t)model, model_bytes) ||
-        !disjoint((uintptr_t)s, sizeof(*s), registers, 4096) ||
-        !disjoint((uintptr_t)model, model_bytes, registers, 4096)) return NULL;
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s), model, model_bytes) ||
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s), (const void *)registers, 4096) ||
+        !a733_ranges_disjoint_nonempty(model, model_bytes, (const void *)registers, 4096)) return NULL;
     struct device_memory_pool *pool = a733_memory_reservations_init();
     if (!pool ||
-        !disjoint((uintptr_t)s, sizeof(*s), pool->backing.cpu, pool->backing.bytes) ||
-        !disjoint((uintptr_t)model, model_bytes, pool->backing.cpu, pool->backing.bytes) ||
-        !disjoint((uintptr_t)s, sizeof(*s), (uintptr_t)pool, sizeof(*pool)) ||
-        !disjoint((uintptr_t)model, model_bytes, (uintptr_t)pool, sizeof(*pool)) ||
-        !disjoint(registers, 4096, pool->backing.cpu, pool->backing.bytes)) return NULL;
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s),
+            (const void *)pool->backing.cpu, pool->backing.bytes) ||
+        !a733_ranges_disjoint_nonempty(model, model_bytes,
+            (const void *)pool->backing.cpu, pool->backing.bytes) ||
+        !a733_ranges_disjoint_nonempty(s, sizeof(*s), pool, sizeof(*pool)) ||
+        !a733_ranges_disjoint_nonempty(model, model_bytes, pool, sizeof(*pool)) ||
+        !a733_ranges_disjoint_nonempty((const void *)registers, 4096,
+            (const void *)pool->backing.cpu, pool->backing.bytes)) return NULL;
     struct device_memory_lease lease;
     struct device_memory_extent extent;
     if (!device_memory_acquire(pool, owner, A733_NPU_RESERVED_BYTES, &lease, &extent)) return NULL;

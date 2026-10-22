@@ -1,5 +1,7 @@
 #include "npu_convolution_layout.h"
 #include "aarch64_device_memory.h"
+#include "a733_range.h"
+#include "a733_mapping_check.h"
 #include <string.h>
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 #include "nbg_sh_nt.h"
@@ -84,10 +86,6 @@ static unsigned immutable_slot(const struct npu_convolution *c,unsigned j)
 #endif
     return immutable[j];
 }
-static int span(uintptr_t base,size_t size)
-{return base && size && size-1<=UINTPTR_MAX-base;}
-static int overlap(uintptr_t a,size_t n,uintptr_t b,size_t m)
-{return n && m && (a<=b ? b-a<n : a-b<m);}
 static int fault(struct npu_convolution *c)
 {atomic_store_explicit(&c->failed,1,memory_order_release);return 0;}
 static int good(const struct npu_convolution *c)
@@ -98,12 +96,12 @@ static int good(const struct npu_convolution *c)
     !atomic_load_explicit(&c->failed,memory_order_acquire);}
 static int private_overlap(const struct npu_convolution *c,uintptr_t p,size_t n)
 {
-    if(!span(p,n) || overlap(p,n,(uintptr_t)c,sizeof(*c)) ||
-       overlap(p,n,c->native.memory.arena,c->native.memory.capacity) ||
-       overlap(p,n,c->native.registers,4096))return 1;
-    if(c->startup && overlap(p,n,(uintptr_t)c->startup,sizeof(*c->startup)))return 1;
+    if(!a733_span_incl_nonempty((const void *)p,n) || a733_extents_intersect(p,n,(uintptr_t)c,sizeof(*c)) ||
+       a733_extents_intersect(p,n,c->native.memory.arena,c->native.memory.capacity) ||
+       a733_extents_intersect(p,n,c->native.registers,4096))return 1;
+    if(c->startup && a733_extents_intersect(p,n,(uintptr_t)c->startup,sizeof(*c->startup)))return 1;
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i)
-        if(overlap(p,n,c->buffers[i].cpu,c->buffers[i].bytes))return 1;
+        if(a733_extents_intersect(p,n,c->buffers[i].cpu,c->buffers[i].bytes))return 1;
     return 0;
 }
 /* Command streams are a short payload followed by END pairs to the end of
@@ -224,12 +222,14 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     if(!c || !config || c->prepared || atomic_load(&c->failed) ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     struct npu_convolution_config v=*config;
-    if(v.register_physical!=0x03600000 || (!v.model_bytes || v.model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) || !span((uintptr_t)v.model,v.model_bytes) ||
-       !span((uintptr_t)c,sizeof(*c)) || !span((uintptr_t)v.arena,v.arena_bytes) ||
-       overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.model,v.model_bytes) ||
-       overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.arena,v.arena_bytes) ||
-       overlap((uintptr_t)v.arena,v.arena_bytes,(uintptr_t)v.model,v.model_bytes) ||
-       overlap((uintptr_t)config,sizeof(*config),(uintptr_t)v.arena,v.arena_bytes))return 0;
+    if(v.register_physical!=0x03600000 ||
+       (!v.model_bytes || v.model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) ||
+       !a733_span_incl_nonempty(v.model,v.model_bytes) ||
+       !a733_span_incl_nonempty(c,sizeof(*c)) || !a733_span_incl_nonempty(v.arena,v.arena_bytes) ||
+       a733_extents_intersect((uintptr_t)c,sizeof(*c),(uintptr_t)v.model,v.model_bytes) ||
+       a733_extents_intersect((uintptr_t)c,sizeof(*c),(uintptr_t)v.arena,v.arena_bytes) ||
+       a733_extents_intersect((uintptr_t)v.arena,v.arena_bytes,(uintptr_t)v.model,v.model_bytes) ||
+       a733_extents_intersect((uintptr_t)config,sizeof(*config),(uintptr_t)v.arena,v.arena_bytes))return 0;
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct a733_npu_buffer *b=&v.buffers[i];
         const struct npu_convolution_slot *l=&npu_convolution_layout[i];
@@ -237,10 +237,11 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
             if(b->cpu||b->physical||b->bytes||b->device||b->role!=A733_NPU_BUFFER_READ)return 0;
             continue;
         }
-        if(b->bytes!=l->bytes || b->role!=l->role || !span(b->cpu,b->bytes) ||
-           overlap(b->cpu,b->bytes,(uintptr_t)c,sizeof(*c)) ||
-           overlap(b->cpu,b->bytes,(uintptr_t)config,sizeof(*config)) ||
-           overlap(b->cpu,b->bytes,(uintptr_t)v.model,v.model_bytes))return 0;
+        if(b->bytes!=l->bytes || b->role!=l->role ||
+           !a733_span_incl_nonempty((const void *)b->cpu,b->bytes) ||
+           a733_extents_intersect(b->cpu,b->bytes,(uintptr_t)c,sizeof(*c)) ||
+           a733_extents_intersect(b->cpu,b->bytes,(uintptr_t)config,sizeof(*config)) ||
+           a733_extents_intersect(b->cpu,b->bytes,(uintptr_t)v.model,v.model_bytes))return 0;
     }
     atomic_init(&c->failed,0);
     memset(c->model,0,sizeof(c->model));
@@ -271,13 +272,13 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
 #endif
     if(!a733_npu_native_init(&c->native,v.register_cpu,v.register_physical,v.arena,v.arena_bytes,
         v.arena_physical,native_buffers,native_count,v.fatal,v.fatal_cookie))return fault(c);
+    static const struct a733_mapping_rule private_buffer={A733_MAPPING_WRITE,1,
+        {{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct a733_npu_buffer *b=&c->buffers[i];
-        for(size_t offset=0;offset<b->bytes;offset+=4096) {
-            struct aarch64_translation t;
-            if(!aarch64_device_translate(b->cpu+offset,1,&t) || t.physical!=b->physical+offset ||
-               t.attributes!=0xff || t.shareability!=3)return fault(c);
-        }
+        for(size_t offset=0;offset<b->bytes;offset+=4096)
+            if(!a733_mapping_check(aarch64_device_translate,b->cpu+offset,b->physical+offset,&private_buffer))
+                return fault(c);
     }
     struct nbg_assembly_buffer buffers[NBG_ALLOCATION_COUNT]={0};
     for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i) {
