@@ -57,15 +57,13 @@ output unchanged.
 pair keeps the existing poll call sites working. Changing acquire to return
 `READY` and removing the poll calls belongs to the consumers' packages.
 
-## Borrows and domain rows pin a token
+## A borrow pins its parent token
 
 A borrow pins its parent token for one PMIC request. The ticket stays at its
 original address until `a733_rail_end_borrow`, and a copy cannot authenticate or
-end it. The [power-domain owner](power.md) pins a token the same way while a
-domain row is counted (`a733_rail_pin` and `a733_rail_unpin`). Release returns
-`BUSY` while any pin remains, so a rail cannot be released under a pending
-request or a powered domain. Borrow, status and pin operations make no timer or
-hardware callback.
+end it. Release returns `BUSY` while any borrow of the token remains, so a rail
+cannot be released under a pending request. Borrow and status operations make
+no timer or hardware callback.
 
 ## Faults latch in the power-authority state word
 
@@ -121,7 +119,7 @@ of `docs/designs/power-authority.md`.
   UndefinedBehaviorSanitizer, covers acquire, poll and release in production
   order for all fifteen outputs with no registry or GPU lease and no bus
   access; refusal of every other output; exclusion; aliases; a full table;
-  never-reused identifiers; borrow capacity; pins; and fault retention,
+  never-reused identifiers; borrow capacity; and fault retention,
   including a registry fault reported in the state word.
 - `checks/rail-leases.py` runs that model and compiles every affected native
   unit with its recorded flags, archiving inputs and the executable.

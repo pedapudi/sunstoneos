@@ -158,19 +158,6 @@ static void aliases_and_capacity(void)
     for(unsigned i=0;i<A733_RAIL_CLIENTS;++i)assert(a733_rail_release(&m.rails,&tokens[i],100)==A733_RAIL_READY);
     assert(m.rails.free_slots==UINT32_MAX && !m.rails.shared_held && !m.rails.sharers[A733_RAIL_BLDO5]);
 }
-/* A counted domain row pins its token like a borrow. */
-static void pins(void)
-{
-    struct model m;init(&m);struct a733_rail_token t;
-    assert(a733_rail_acquire(&m.rails,1,D2|A733_RAIL_BIT(A733_RAIL_CLDO2),0,100,&t)==A733_RAIL_PENDING);
-    assert(a733_rail_pin(&m.rails,&t,D4)==A733_RAIL_INVALID);
-    assert(a733_rail_pin(&m.rails,&t,D2)==A733_RAIL_READY);
-    assert(a733_rail_pin(&m.rails,&t,D2|A733_RAIL_BIT(A733_RAIL_CLDO2))==A733_RAIL_READY);
-    assert(a733_rail_release(&m.rails,&t,100)==A733_RAIL_BUSY);
-    assert(a733_rail_unpin(&m.rails,&t)==A733_RAIL_READY && a733_rail_unpin(&m.rails,&t)==A733_RAIL_READY);
-    assert(a733_rail_unpin(&m.rails,&t)==A733_RAIL_INVALID);
-    assert(a733_rail_release(&m.rails,&t,100)==A733_RAIL_READY);
-}
 static void terminal_faults(void)
 {
     struct model m;init(&m);struct a733_rail_token t,u;
@@ -218,7 +205,7 @@ static void terminal_faults(void)
 }
 int main(void)
 {
-    scopes();fifteen_rails();exclusion();aliases_and_capacity();pins();terminal_faults();
+    scopes();fifteen_rails();exclusion();aliases_and_capacity();terminal_faults();
     puts("PASS: fifteen rails READY on the first poll without bus access, exclusion, aliases, "
-        "capacity, never-reused identifiers, pins and fault retention");
+        "capacity, never-reused identifiers and fault retention");
 }

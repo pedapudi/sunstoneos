@@ -5,10 +5,8 @@
 #define A733_DE_SYS_PCK_BASE A733_PCK_DOMAIN_BASE(1)
 /* Fixed, one-attempt ON operation for one display PCK domain: DE_SYS (1) or
  * VO1 (10). The pinned sun60iw2 pck600 table gives these domains the same
- * register offsets and delay row. This per-consumer form remains for the
- * framebuffer and G2D until they request rows from the domain owner in
- * a733_power_authority_domains.h, which owns domains 1, 4, 5 and 10. The consumer retains all authority,
- * backing and tokens until whole-board power removal, including after READY.
+ * register offsets and delay row. The consumer retains all authority, backing
+ * and tokens until whole-board power removal, including after READY.
  * authorize runs outside the register mutex: 1=authenticated, 0=metadata BUSY,
  * -1=refused. It must authenticate the designated task, whole-domain exclusion,
  * drained inherited traffic, clock/PCK leases and readonly supply observation

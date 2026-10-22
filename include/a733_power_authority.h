@@ -5,31 +5,20 @@
 #include <stdint.h>
 
 /* The power-authority state word: one 64-byte line that carries readiness and
- * revocation for the PMIC provider, the clock registry, the rail ledger and the
- * power domains that docs/power.md lists. Every bit is set once per boot with
- * an atomic OR and never cleared, so a READY bit cannot overwrite a fault set
- * on another core. A reader makes one acquire load and tests a mask; any set
- * fault bit in the mask refuses the caller. The rail ledger embeds the word, so
- * every object bound to one ledger shares it. */
+ * revocation for the PMIC provider, the clock registry and the rail ledger.
+ * Every bit is set once per boot with an atomic OR and never cleared, so a
+ * READY bit cannot overwrite a fault set on another core. A reader makes one
+ * acquire load and tests a mask; any set fault bit in the mask refuses the
+ * caller. The rail ledger embeds the word, so every object bound to one ledger
+ * shares it. */
 #define A733_POWER_AUTHORITY_LINE 64u
 #define A733_POWER_PROVIDER_READY  (1u << 0)  /* PMIC provider admitted the bus. */
-#define A733_POWER_SUPPLY_DONE     (1u << 1)  /* Supply verification finished. */
-#define A733_POWER_DCDC2_VERIFIED  (1u << 2)  /* Enabled at 800 mV. */
-#define A733_POWER_DCDC4_VERIFIED  (1u << 3)  /* Enabled at 800 mV. */
-#define A733_POWER_CLDO2_VERIFIED  (1u << 4)  /* Enabled at 1,800 mV. */
-#define A733_POWER_CLDO5_VERIFIED  (1u << 5)  /* Enabled at 1,800 mV. */
 #define A733_POWER_PROVIDER_FAULT  (1u << 8)
 #define A733_POWER_CLOCK_FAULT     (1u << 9)
 #define A733_POWER_LEDGER_FAULT    (1u << 10)
-#define A733_POWER_DOMAIN1_FAULT   (1u << 11) /* DE_SYS */
-#define A733_POWER_DOMAIN4_FAULT   (1u << 12) /* NPU */
-#define A733_POWER_DOMAIN5_FAULT   (1u << 13) /* GPU_TOP */
-#define A733_POWER_DOMAIN10_FAULT  (1u << 14) /* VO1: HDMI and DisplayPort */
-/* Revocation masks. A PMIC transaction depends on the provider, its S_TWI0
- * clock lease and its rail borrow; an HDMI or DisplayPort access also depends
- * on domain 10. */
+/* A PMIC transaction depends on the provider, its S_TWI0 clock lease and its
+ * rail borrow. */
 #define A733_POWER_PMIC_TRANSFER (A733_POWER_PROVIDER_FAULT | A733_POWER_CLOCK_FAULT | A733_POWER_LEDGER_FAULT)
-#define A733_POWER_HDMI (A733_POWER_PMIC_TRANSFER | A733_POWER_DOMAIN10_FAULT)
 
 struct a733_power_authority {
     _Alignas(64) atomic_uint word;

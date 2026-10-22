@@ -1,8 +1,8 @@
 # Design: one owner for supply rails and one for power domains
 
-Status: **implemented in part and host-modeled**; the section "Implemented
-state and measurements" at the end lists what exists, what differs from this
-design and what remains. Physical behavior stays unqualified until the board
+Status: **implemented in part and host-modeled**; the power-domain owner is
+**planned**. The section "Implemented state and measurements" at the end lists
+what exists, what differs from this design and what remains. Physical behavior stays unqualified until the board
 evidence exists. Section numbers refer to `docs/performance-architecture.md`.
 
 Today the clock registry holds AXP8191 output DCDC2, the GPU resource manager
@@ -56,6 +56,23 @@ has no production caller; a core placement mask for its settle spin and a
 ledger-held floor record are preconditions for its first production caller.
 
 ## The DE_SYS provider becomes the domain owner
+
+Status: **planned**. The owner lands in the same change as its first consumer,
+which replaces and deletes its own PCK600 sequence; until then it would add a
+fifth copy of that sequence without removing one. The first consumer is the
+framebuffer and G2D path through `a733_de_sys_power.c` (domains 1 and 10) or
+the GPU's domain-5 steps, coordinated with those packages. The owner then also
+needs these properties, which a host model must cover:
+
+- A release that meets the ledger try-lock held on another core returns BUSY
+  and keeps the row counted; only a corrupt pin count or a ledger fault
+  returns RETAINED, and it sets the domain's fault bit, so RETAINED always
+  means a set fault bit.
+- Supply verification compares its own deadline at every stage, including
+  while the ledger stays BUSY. Any terminal failure (an expired deadline, a
+  refused token or submission, a time source that runs backwards) sets the
+  done bit with the verified bits clear, so row requests become REFUSED
+  within a bounded time instead of PENDING forever.
 
 `drivers/power/a733_de_sys_power.c`, renamed `a733_power_domains.c`, owns
 domains 1, 4, 5 and 10. Its per-consumer ops, `authorize` callback and
@@ -182,14 +199,13 @@ interrupt, GIC-600 INTID 235 (`twi@7083000`, SPI 203 in
 - **One bus rate.** Verify admits divisor `0x28` only with a 24 MHz parent:
   400 kHz and 22.5 µs per byte. The tick-per-phase path is removed.
 - **Time source.** `a733_counter_clock_now` takes the global ticket lock
-  with interrupts masked (section 1.7), so no spin calls it. The provider
-  calls it once at activation and once at publication, converts the
-  deadline and each phase's expected completion to `CNTPCT_EL0` targets,
-  and spins on `ISB; MRS CNTPCT_EL0` through a raw-tick op in
-  `a733_pmic_native.c` that the checks model. Each caller keeps its own
-  `a733_monotonic_advance` check, and an iteration cap faults if the counter
-  stops. The PCK600 and CPU settle spins use the same op, with one
-  counter-clock call at their start.
+  with interrupts masked (section 1.7), so the provider never calls it. The
+  native adapter's time read returns `ISB; MRS CNTPCT_EL0` divided by the
+  ticks per microsecond, the same microseconds as the counter clock, and
+  refuses after a fault latched in the counter clock. The provider keeps its
+  `a733_monotonic_advance` check, and each future spin adds an iteration cap
+  that faults if the counter stops. The PCK600 and CPU settle spins use the
+  same read.
 - **Phases.** The task spins to the expected completion (9 bit times per
   byte), rereads control once per byte time for up to 90 µs, then once per
   tick until the deadline. A `DSB SY` follows each write that starts a
@@ -308,14 +324,16 @@ configurations; busy time is the sum of modelled spin intervals.
 
 Implemented:
 
-- the state word in the rail ledger;
-- the fifteen-output ledger with direct-slot tokens, pins and no bridges;
+- the state word in the rail ledger, with the provider READY bit and the
+  provider, registry and ledger fault bits;
+- the fifteen-output ledger with direct-slot tokens, borrow pins and no
+  bridges;
 - clock token status that compares one slot;
-- the provider's state-word check between bus phases, and one `DSB SY` per
-  control write in its native adapter;
-- the domain owner with supply verification, rows, adoption, bounded
-  acknowledgement, retention and domain-5 power-off;
-- the NPU supply selection and the CPU-rail floor;
+- the provider's state-word check between bus phases;
+- PMIC time reads from the raw counter in the native adapter, with no
+  counter-clock lock, and one kernel mutex-holder query per I2C bus
+  acquisition;
+- the CPU-rail floor, recorded before the snapshot request is reaped;
 - `checks/pmic-tree.py`, `checks/rail-leases-cost.py` and
   `checks/a733-pmic-cost.c`.
 
@@ -324,8 +342,12 @@ built from `git archive` output. Instruction and line counts come from
 `checks/rail-leases-cost.py`, which compiles with the production flags
 (`-march=armv8-a -mstrict-align -O2`, tuned for the Cortex-A55; the design's
 `-mcpu=cortex-a55` would emit LSE atomics the images do not use) and excludes
-the measuring wrappers. Bus counts come from `checks/a733-pmic-cost.c` with the
-model timing of `checks/a733-pmic-polls.c`.
+the measuring wrappers. PMIC counts come from `checks/a733-pmic-cost.c` with the
+model timing of `checks/a733-pmic-polls.c`; the merge-base PMIC counts come
+from a harness that wraps the same provider operations. A register access in
+the merge-base adapter queried the kernel's mutex holder, which enters a kernel
+critical section in this FreeRTOS SMP kernel, so the merge-base query count
+equals its register accesses.
 
 | Operation | Merge base | Now | Target |
 | --- | --- | --- | --- |
@@ -333,20 +355,19 @@ model timing of `checks/a733-pmic-polls.c`.
 | Clock token status, 42 / 126 leases | 235 / 592 instructions | 45 / 45 | ≤ 50, no scan |
 | Acquire, poll and release | 1,643 / 3,565 instructions | 335 / 335, no bus access | ≤ 450 |
 | Authority check per PMIC transaction | 498 / 1,507 instructions | 6, one acquire load | ≤ 6 |
+| Time reads per snapshot; per selector write | 590; 732 | 469; 599 | — |
+| Counter-clock lock acquisitions per snapshot; per selector write | 590; 732, one per time read | 0; 0, raw counter reads | ≤ 2; ≤ 2 |
+| Kernel mutex-holder queries per snapshot; per selector write | 250; 309 | 1; 1, at bus entry | 1 per request |
+| Register accesses per snapshot; per selector write | 250; 309 | 211; 270 | — |
 | Setup reads per snapshot | 64 | 25 | 3, plus 3 after each STOP (21) |
-| `DSB SY` per six-transaction snapshot | 500, two per register access | 42, one per control write | 7 per read transaction, 5 per write |
-| Longest poll; BUSY per snapshot (model) | 58 µs; 591 µs | 17 µs; 513 µs | — |
+| `DSB SY` per snapshot | 500, two per register access | 422, two per register access | 7 per read transaction, 5 per write, after board qualification |
+| Longest poll; BUSY per snapshot (model) | 58 µs; 591 µs | 17 µs; 470 µs | — |
 | Polls per snapshot (model) | 44 | 44 | 0 ticks with the service task |
-| Supply verification | Six drivers, each on use | 24 transactions once per boot | 16 transactions |
-| Row request | GPU: 27 polls and one supply read | 0 PMIC requests, 1 acquire load | Same |
-| Barriers per row request; per transition | About 10; 2 per status poll | 0; 1 | 0; 1 |
 | Ledger storage | 20,096 B | 1,600 B | ≤ 1,632 B |
 | Image `.bss`, board / HDMI / storage maintenance | 5,502,352 / 465,376 / 541,776 B | 5,481,872 / 446,944 / 523,344 B | — |
 
 Differences from the design, each with its reason:
 
-- Supply verification uses four ordinary snapshots, 24 transactions, so the
-  chip identity is read with each; a four-transaction read kind would reach 16.
 - `a733_pmic_live` keeps the provider object's try-lock and drops only the
   registry query. The USB2, storage and Type-C checks, which this package does
   not own, inject a busy provider object and expect BUSY.
@@ -357,21 +378,41 @@ Differences from the design, each with its reason:
   DCDC8 request. DC1SW1 is accepted as a DCDC1 alias with DC1SW2.
 - The CPU floor lives in the ledger (`a733_rail_floor`), because
   `include/a733_cpu_clock.h` is outside this package.
-- The owner's API is in `include/a733_power_authority_domains.h` until
-  `include/a733_power_domains.h` is approved. `a733_de_sys_power.c` is not
-  renamed: the framebuffer and G2D still call it; its domain-9 path is removed.
-- An open GPU gate makes domain-5 release return REFUSED and keep the row.
+- The native adapter's time read returns the raw counter in microseconds
+  (`ISB; MRS CNTPCT_EL0` divided by the ticks per microsecond) instead of
+  calling the counter clock once per poll and comparing raw ticks in between.
+  It gives the same microseconds as the counter clock with no lock, so the
+  provider and `struct a733_pmic_ops` stay unchanged: checks outside this
+  package build that structure with positional initializers, which a new
+  field would break under `-Wmissing-field-initializers`. The provider's own
+  monotonic check faults on a counter that runs backwards, the time read
+  refuses after a fault latched in the shared counter clock, and the provider
+  has no spin for an iteration cap to bound. `checks/pmic-tree.py` fails if the
+  time read calls the counter clock.
+- The native adapter checks mutex ownership once per bus entry instead of once
+  per poll. A FreeRTOS mutex changes holder only when its holder gives it, and
+  only the adapter's leave gives it on the provider task, so a flag set at
+  entry is exact until leave.
+- The native adapter keeps `DSB SY` before and after each register access.
+  One barrier per control write is unqualified until a board run completes
+  snapshots and selector writes with identical results under both placements;
+  `docs/shared-helpers.md` requires that qualification for a weaker barrier.
+- `a733_de_sys_power.c` accepts domains 1 and 10 only; the unused domain-9 path
+  is removed.
 
 Not implemented, with the dependency that blocks each:
 
-- The PMIC service task, its notifications, the raw-counter spins inside the
-  provider and the `vTaskDelete` and core-mask checks: they need
+- The power-domain owner, supply verification, `a733_rail_pin` and
+  `a733_rail_unpin`, and the NPU supply selection: they land with the first
+  consumer that replaces its own PCK600 sequence (GPU, NPU or display
+  package), as the section on the domain owner states.
+- The PMIC service task and its notifications, which remove the per-tick
+  polls: they need
   `configTASK_NOTIFICATION_ARRAY_ENTRIES` of 2 and a scheduled-core constant
   from the primary agent, and the image PMIC loops belong to the image
-  packages. Until then a snapshot still takes 44 ticks in the model.
+  packages. Until then a snapshot takes 44 polls in the model.
 - Consumer migration to rows and verified bits (GPU, NPU, display, HDMI,
   DisplayPort) and removal of the NPU startup's direct S_TWI0 path, which the
   NPU startup and clock-handoff models outside this package still use.
 - The settle spin and core placement for the CPU clock driver, which has no
   production caller.
-

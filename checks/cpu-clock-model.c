@@ -138,6 +138,18 @@ static enum a733_cpu_clock_status run(unsigned limit)
     }
     return A733_CPU_CLOCK_PENDING;
 }
+/* The build wraps a733_rail_floor: with floor_busy set, the next call returns
+ * BUSY as if another core held the ledger, and leaves the request it follows
+ * outstanding. */
+static unsigned floor_busy;
+enum a733_rail_result __real_a733_rail_floor(struct a733_rail_leases *,const struct a733_rail_token *,
+    enum a733_rail,uint32_t,uint32_t *);
+enum a733_rail_result __wrap_a733_rail_floor(struct a733_rail_leases *m,const struct a733_rail_token *t,
+    enum a733_rail rail,uint32_t observed_uv,uint32_t *floor_uv)
+{
+    if(floor_busy){floor_busy=0;assert(cpu.request.id);return A733_RAIL_BUSY;}
+    return __real_a733_rail_floor(m,t,rail,observed_uv,floor_uv);
+}
 static int ledger_failed(void)
 {return (atomic_load(&pm.rails.authority.word)&A733_POWER_LEDGER_FAULT)!=0;}
 static int released(void)
@@ -244,6 +256,14 @@ int main(void)
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==45 && first(1)==cm.count && released());
     assert(pm.rails.floor_uv[1]==950000 && !pm.rails.floor_uv[0]);
+    /* Another core holding the ledger during the floor call leaves the read
+     * outstanding; the next poll repeats both steps and the transition
+     * completes with no fault. */
+    setup(0x00000100,1,45,30,38,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
+    floor_busy=1;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1014,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && !floor_busy && !cpu.failed && !ledger_failed());
+    assert(pm.rails.floor_uv[1]==950000 && released());
     /* Code 0 uses the envelope: 1196 MHz needs 850 mV even if the chip is vf0000. */
     setup(0,A733_CPU_VF_ENVELOPE,30,30,30,&both);assert(heat(50000)==A733_THERMAL_NORMAL);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_PENDING);

@@ -378,10 +378,8 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
         if(p->stage==S_READY)a733_power_authority_set(&p->rails->authority,A733_POWER_PROVIDER_READY);
         return leave(p,p->stage==S_READY ? A733_PMIC_READY : A733_PMIC_PENDING);
     }
-    if(p->active<A733_PMIC_REQUESTS) {
-        if(!timely(p))return leave(p,fault(p));
-        return leave(p,transfer(p));
-    }
+    /* The deadline of an active transfer was checked above. */
+    if(p->active<A733_PMIC_REQUESTS)return leave(p,transfer(p));
     unsigned selected=A733_PMIC_REQUESTS;
     for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)if(p->slots[i].state==QUEUED &&
        (selected==A733_PMIC_REQUESTS || p->slots[i].request.id<p->slots[selected].request.id))selected=i;

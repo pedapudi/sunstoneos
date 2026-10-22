@@ -110,23 +110,45 @@ A poll holds the provider object, so a concurrent `a733_pmic_live()` caller
 observes BUSY while the poll runs. The HDMI and Type-C users treat that BUSY as
 a fault, so a poll must stay short. In the model, the longest poll lasts 17
 modeled microseconds with 7 register accesses, and the polls of one snapshot
-last about 513 modeled microseconds in total. The check counts each complete
+last about 470 modeled microseconds in total. The check counts each complete
 poll as BUSY time, so these figures are upper bounds. A caller deadline bounds
 the complete snapshot, including mutex acquisition and result publication.
 `a733_pmic_live()` itself takes the provider object's try-lock and makes one
 load of the state word; it no longer queries the clock registry.
 
-[The cost check](../checks/a733-pmic-cost.c) counts the register accesses of one
-snapshot through the same model: 126 transaction reads, 60 writes and 25 other
-reads, which are the admission route and bus-idle reads and the bus-idle reads
-after each of the six STOPs. `docs/designs/power-authority.md` records these
-counts against the previous provider.
+The provider checks its deadline before and after each register access. The
+native adapter answers those time reads from the architectural counter
+(`ISB; MRS CNTPCT_EL0`) divided by the ticks per microsecond, which gives the
+same microseconds as `a733_counter_clock_now` without its global ticket lock
+and masked interrupts. The provider faults on a time that runs backwards, and a
+fault latched in the shared counter clock refuses the read.
 
-The native adapter issues no barrier for a read or for the data-byte write:
-Device-nGnRnE accesses to one peripheral reach it in program order. Each
-control-register write starts a timed bus phase and is followed by one
-`DSB SY`. A read transaction therefore issues seven barriers and a selector
-write five.
+The native adapter queries the kernel's I2C mutex holder once, when it enters
+the bus. A FreeRTOS mutex changes holder only when its holder gives it, and
+only the adapter's leave gives it on the provider task, so a flag set at entry
+and cleared at leave stays exact. Each access then checks that flag, the
+provider task and the lock's retained bit with one acquire load, and enters no
+kernel critical section. `checks/pmic-tree.py` fails if the adapter's time read
+calls the counter clock or an accessor queries the mutex holder.
+
+[The cost check](../checks/a733-pmic-cost.c) counts the work of one DCDC2
+snapshot and one DCDC3 selector write through the same model. The snapshot
+makes 126 transaction reads, 60 writes and 25 other reads (the admission route
+and bus-idle reads and the bus-idle reads after each of the six STOPs), 469
+time reads and one bus acquisition. With `--limits` the check asserts those
+budgets. `docs/designs/power-authority.md` records the counts against the
+previous provider.
+
+The native adapter issues `DSB SY` before and after every register access.
+[shared-helpers.md](shared-helpers.md) requires board qualification for any
+weaker barrier placement.
+One `DSB SY` after each control-register write would suffice in principle,
+because Device-nGnRnE accesses to one peripheral reach it in program order and
+only a control write starts a timed bus phase. That placement is
+**unqualified**: the reads also reach the R_CCU, CCU, GIC and R_PIO blocks, and
+no board run has compared it with the current placement. A board run that
+completes snapshots and selector writes with identical results and bus-idle
+reads under both placements would qualify it.
 
 Request admission waits for two locks: the private pin-lease check waits for
 REGISTER_LOCK, and the bus access waits for the I2C mutex. The poll releases

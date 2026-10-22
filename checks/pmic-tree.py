@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Check the source-tree facts that the once-per-boot supply verification relies on.
+"""Check the source-tree facts that keep PMIC outputs under the provider's control.
 
-The domain owner reads DCDC2, DCDC4, CLDO2 and CLDO5 once per boot and then
-trusts the state word, so no agent the OS controls may change those outputs
-afterwards. This check fails when:
+The planned power-domain owner in docs/designs/power-authority.md reads DCDC2,
+DCDC4, CLDO2 and CLDO5 once per boot, so no agent the OS controls may change
+those outputs afterwards. This check fails when:
 
 - a PSCI CPU_OFF, CPU_SUSPEND or SYSTEM_SUSPEND function identifier appears in
   OS sources, because firmware may change PMIC outputs on those calls;
@@ -11,7 +11,11 @@ afterwards. This check fails when:
   DCDC5, or its native adapter can write any register other than the S_TWI0
   data and control registers;
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
-  235), which only the provider may use.
+  235), which only the provider may use;
+- the native adapter's time read, which the provider makes before and after
+  every register access, calls the counter clock (a global ticket lock with
+  interrupts masked), or its register accessors query the kernel's mutex
+  holder (a kernel critical section).
 
 It reads source text only and runs no build.
 """
@@ -66,11 +70,23 @@ def main():
     allow = re.search(r'if\(writing\)return (.*?);', native)
     if not allow or set(re.findall(r'0x[0-9a-fA-F]+', allow[1])) != {'0x07083008', '0x0708300c'}:
         problems.append('include/a733_pmic_native.h: the native adapter may write more than S_TWI0 data and control')
+    adapter = (root / 'drivers/power/a733_pmic_native.c').read_text()
+
+    def body(name):
+        found = re.search(r'static int ' + name + r'\([^)]*\)\s*\{(.*?)\n\}', adapter, re.S)
+        assert found, f'{name}() not found in the native adapter'
+        return found[1]
+    if re.search(r'counter_clock_now|locks->now', body('now')):
+        problems.append('drivers/power/a733_pmic_native.c: now() takes the counter clock lock')
+    for name in ['owned', 'read32', 'write32']:
+        if 'xSemaphoreGetMutexHolder' in body(name):
+            problems.append(f'drivers/power/a733_pmic_native.c: {name}() queries the mutex holder per access')
     for p in problems:
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
-          'only to DCDC3 and DCDC5, INTID 235 only in the provider')
+          'only to DCDC3 and DCDC5, INTID 235 only in the provider, no lock in the native adapter\'s '
+          'per-access time read or ownership check')
 
 
 if __name__ == '__main__':

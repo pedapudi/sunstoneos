@@ -82,7 +82,7 @@ struct a733_rail_leases {
     struct a733_rail_binding binding;
     int (*sealed_now)(void *, uint64_t *);
     void *sealed_context;
-    uint8_t pins[A733_RAIL_CLIENTS];   /* Borrows and counted domain rows. */
+    uint8_t pins[A733_RAIL_CLIENTS];   /* Outstanding borrows of each holder. */
     uint8_t sharers[A733_RAIL_COUNT];  /* Shared holders of each output. */
     uint32_t floor_uv[2];              /* DCDC3 and DCDC5 boot baselines; 0 unrecorded. */
     _Alignas(64) struct a733_rail_slot slots[A733_RAIL_CLIENTS];
@@ -128,12 +128,6 @@ enum a733_rail_result a733_rail_borrow(struct a733_rail_leases *, const struct a
     a733_rail_mask_t rails, struct a733_rail_borrow *);
 enum a733_rail_result a733_rail_borrow_status(struct a733_rail_leases *, const struct a733_rail_borrow *);
 enum a733_rail_result a733_rail_end_borrow(struct a733_rail_leases *, const struct a733_rail_borrow *);
-/* A counted power-domain row pins its rail token the way a borrow does. pin
- * requires a live token that holds every output of rails; unpin drops one pin.
- * Both are nonblocking metadata operations. */
-enum a733_rail_result a733_rail_pin(struct a733_rail_leases *, const struct a733_rail_token *,
-    a733_rail_mask_t rails);
-enum a733_rail_result a733_rail_unpin(struct a733_rail_leases *, const struct a733_rail_token *);
 /* Voltage floor of a CPU rail, DCDC3 or DCDC5, under an exclusive token of
  * it. The first call records observed_uv, the selector voltage the holder read
  * before any write, as the rail's boot baseline; every call returns that
@@ -141,8 +135,7 @@ enum a733_rail_result a733_rail_unpin(struct a733_rail_leases *, const struct a7
 enum a733_rail_result a733_rail_floor(struct a733_rail_leases *, const struct a733_rail_token *,
     enum a733_rail, uint32_t observed_uv, uint32_t *floor_uv);
 /* Call only after independent consumer quiescence/restoration or cancellation
- * before device access. A pinned token (outstanding borrow or counted domain
- * row) returns BUSY. READY means the slot is free and the token is stale.
+ * before device access. A token with an outstanding borrow returns BUSY. READY means the slot is free and the token is stale.
  */
 enum a733_rail_result a733_rail_release(struct a733_rail_leases *, const struct a733_rail_token *, uint64_t deadline);
 /* Latch a terminal ledger fault in the state word while preserving live

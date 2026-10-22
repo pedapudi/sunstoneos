@@ -179,7 +179,9 @@ step and never waits in a loop:
    snapshot of each rail records its voltage as a floor in the
    [rail ledger](rail-leases.md) (`a733_rail_floor`), which keeps it after the
    driver releases the rail. A rail inherited at 950 mV therefore stays at
-   950 mV when a lower point needs only 900 mV.
+   950 mV when a lower point needs only 900 mV. The driver records the floor
+   before it reaps the snapshot request, so a ledger held on another core
+   only delays both steps to the next poll.
 6. When raising the rate, write a higher voltage first, then wait for the
    ramp of `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay. No write
    is made when the present voltage is already enough.
@@ -288,7 +290,9 @@ PLL write while that cluster's mux selects the PLL. Its cases cover:
 - raises with and without a voltage write, lowering with the voltage written
   last, and CPU-B on DCDC3;
 - a boot baseline of 950 mV on DCDC5 that a lowering to a 900 mV point keeps,
-  with the floor still recorded in the ledger afterwards;
+  with the floor still recorded in the ledger afterwards, and a busy ledger
+  during the floor call, after which the transition completes without a
+  fault;
 - the envelope for code 0;
 - THROTTLE refusal and automatic lowering; the raise back at NORMAL, which
   consumes a change and writes no voltage; a lowering after a stale channel
