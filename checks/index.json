@@ -5887,6 +5887,7 @@
  "nbg-checksum-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-exact-sum.md",
    "docs/nbg-checksum.md"
   ],
   "library": false,
