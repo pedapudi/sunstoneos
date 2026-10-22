@@ -49,7 +49,9 @@ set_source_files_properties("{build}/pool-port.c" PROPERTIES
 apply_build_patch("{build}/start.S" "{ROOT}/platform/qemu-smp/start.S"
   "{ROOT}/checks/npu-service-start.patch")
 get_target_property(sources dma-startup-model SOURCES)
-list(FILTER sources EXCLUDE REGEX "checks/|platform/qemu-smp/start.S|dma-startup-port.c$")
+# Anchor the repository-relative entries; generated sources such as portASM.S
+# carry absolute build paths that may themselves contain "checks/".
+list(FILTER sources EXCLUDE REGEX "^checks/|^platform/qemu-smp/start.S$|/dma-startup-port.c$")
 list(APPEND sources arch/aarch64/device_memory.c runtime/device_memory_pool.c
   platform/a733/memory_reservations.c platform/a733/dma_native.c drivers/dma/dma_memory.c
   drivers/audio/a733_i2s_stream.c drivers/dma/dma_service_i2s_stream.c
