@@ -15,7 +15,11 @@ def main():
  p.add_argument('--resume',type=Path)
  p.add_argument('--next-frame',type=Path)
  p.add_argument('--next-pixels',type=Path)
- p.add_argument('--frames',type=int,choices=[0,1,2],default=0)
+ p.add_argument('--frames',type=int,choices=range(65),default=0)
+ # --release takes and frees each output as an acknowledging caller would;
+ # --entropy sets the modeled per-picture payload, to observe ring placement.
+ p.add_argument('--release',action='store_true')
+ p.add_argument('--entropy',type=int,default=512)
  p.add_argument('--case',choices=['finish','no-finish','stall','mb-timeout','hw-timeout','wait-error'],default='finish')
  a=p.parse_args();a.output.mkdir(exist_ok=False);model_identity=hashlib.sha256(Path(__file__).read_bytes()).hexdigest();external_identity={str(p.resolve()):hashlib.sha256(p.read_bytes()).hexdigest() for p in [a.next_frame,a.next_pixels] if p};resume_identity=None if a.resume is None else dict(path=str(a.resume.resolve()),sha256=hashlib.sha256(a.resume.read_bytes()).hexdigest());input_identity={str(path.resolve()):hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(a.fixtures.iterdir()) if path.is_file()};u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
  for start,n in [(0,0x100000),(0x1000000,0x100000),(0x2000000,0x100000),(RAM,0x3000000),(0x13000000,0x100000),(MMIO,0x1000)]:u.mem_map(start,n)
@@ -70,9 +74,9 @@ def main():
   elif name=='MODEL_WAIT':
    waits[0]+=1;assert trigger[0]
    if a.case=='wait-error':ret(-1);return
-   start=get(MMIO+0xb88,'I');end=start+512*8;assert end<=get(MMIO+0xb8c,'I');out=(get(MMIO+0xb80,'I')<<8)+start//8
-   assert any(x['address']<=out and out+512<=x['address']+x['bytes'] for x in allocations if x['kind']=='__EncAdapterMemPalloc')
-   m.mem_write(out,bytes([0x55])*512);put(MMIO+0xb1c,0x200|{'finish':1,'no-finish':0,'stall':2,'mb-timeout':4,'hw-timeout':8}[a.case],'I');put(MMIO+0xb90,end,'I');ret(0)
+   start=get(MMIO+0xb88,'I');end=start+a.entropy*8;assert end<=get(MMIO+0xb8c,'I'),('limit',hex(start),hex(end));out=(get(MMIO+0xb80,'I')<<8)+start//8
+   assert any(x['address']<=out and out+a.entropy<=x['address']+x['bytes'] for x in allocations if x['kind']=='__EncAdapterMemPalloc'),('ring end',hex(out))
+   m.mem_write(out,bytes([0x55])*a.entropy);put(MMIO+0xb1c,0x200|{'finish':1,'no-finish':0,'stall':2,'mb-timeout':4,'hw-timeout':8}[a.case],'I');put(MMIO+0xb90,end,'I');ret(0)
   elif name in ['MODEL_RESET','MODEL_ENABLE','MODEL_DISABLE','MODEL_SET_VE_MODE','MODEL_LOCK','MODEL_UNLOCK']:ret(0)
   else:raise RuntimeError(('unmodeled external boundary',name,hex(pc),v[:4]))
  def write(m,access,address,size,value,unused):
@@ -105,28 +109,36 @@ def main():
   saved=pickle.loads(gzip.decompress(a.resume.read_bytes()));assert saved['inputs']==input_identity and saved['libraries']==PINS
   for at,data in saved['memory']:u.mem_write(at,data)
   resume_identity['stage']=saved['stage'];assert 'stub_map' not in saved or all(stubnames.get(k)==v for k,v in saved['stub_map'].items())
-  stage=saved['stage'];ctx[0]=saved['context'];heap[0]=saved['heap'];allocations[:]=saved['allocations'];events[:]=saved['events'];trace[:]=saved['mmio'];assert stage in ['opened','configured','initialized','frame1','frame2']
+  stage=saved['stage'];ctx[0]=saved['context'];heap[0]=saved['heap'];allocations[:]=saved['allocations'];events[:]=saved['events'];trace[:]=saved['mmio'];assert stage in ['opened','configured','initialized'] or stage.startswith('frame')
  # Explicit owned lock callbacks from VeOpsS; no codec context fields patched.
  put(OPS+0x10,stubs['MODEL_LOCK']);put(OPS+0x18,stubs['MODEL_UNLOCK'])
  try:
   if not stage:ctx[0]=call('H264EncOpenVer2',CONFIG,0x21320);assert ctx[0];save('opened')
-  if stage not in ['configured','initialized','frame1','frame2']:
+  if stage not in ['configured','initialized'] and not stage.startswith('frame'):
    layout=json.loads((a.fixtures/'layout.json').read_text())
    for index,name in [(layout['param_index'],'parameters.bin'),(layout['fixqp_index'],'fixqp.bin'),(layout['vbv_index'],'vbv.bin')]:
     u.mem_write(VALUE,(a.fixtures/name).read_bytes());assert call('H264SetParameterVer2',ctx[0],index,VALUE)==0
    save('configured')
-  if stage not in ['initialized','frame1','frame2']:assert call('H264InitVer2',ctx[0],CONFIG)==0;save('initialized')
+  if stage!='initialized' and not stage.startswith('frame'):assert call('H264InitVer2',ctx[0],CONFIG)==0;save('initialized')
   routes=[get(ctx[0]+off) for off in [0x270,0x278,0x280,0x288]]
   assert routes==[MMIO+0x800,MMIO+0xa00,MMIO+0xb00,MMIO+0xc00]
-  first=1 if stage=='frame1' else 2 if stage=='frame2' else 0
+  first=int(stage[5:]) if stage.startswith('frame') else 0
   for i in range(first,a.frames):
    trigger[0]=False
    if i:
     assert a.next_frame and a.next_pixels
-    u.mem_write(FRAME,a.next_frame.read_bytes());pixels=a.next_pixels.read_bytes();assert len(pixels)==460800;u.mem_write(0x12100000,pixels)
+    # Picture i repeats supplied picture i&1: ID 17+i, PTS i*33333 and the
+    # matching input; picture 1 keeps the --next-frame descriptor bytes.
+    d=bytearray(a.next_frame.read_bytes());y=0x12100000 if i&1 else 0x12000000
+    struct.pack_into('<IIQ',d,0,17+i,0,i*33333);struct.pack_into('<4Q',d,0x18,y,y+0x4b000,y,y+0x4b000);u.mem_write(FRAME,bytes(d))
+    if i==1:pixels=a.next_pixels.read_bytes();assert len(pixels)==460800;u.mem_write(0x12100000,pixels)
    else:put(FRAME,i+17);put(FRAME+8,i*33333)
-   result=call('H264EncEncodeVer2',ctx[0],FRAME);assert result==0,(result,i);save('frame'+str(i+1))
-  summary=dict(passed=True,stage=('frame'+str(a.frames)) if a.frames else 'initialized',resume=resume_identity,model_sha256=model_identity,stub_map=stubnames,routes=routes,libraries=PINS,external_inputs=external_identity,inputs=input_identity,context=ctx[0],allocations=allocations,events=events,mmio=trace,physical_access=False,scope='Isolated pinned H264 Open/SetParameter/Init only. Memory/libc callbacks modeled; frame completion/512 placeholder entropy bytes are modeled; no numeric encoding, reference contents, drain or physical effects.')
+   result=call('H264EncEncodeVer2',ctx[0],FRAME);assert result==0,(result,i)
+   if a.release:
+    out=RAM+0x8000;u.mem_write(out,bytes(4096));assert call('H264GetOneBitstreamVer2',ctx[0],out)==0
+    events.append(dict(name='OUTPUT',args=[get(out+20,'I'),get(out+24,'I'),get(out+32),get(out+40)],phase='frame'+str(i+1)));assert call('H264FreeOneBitstreamVer2',ctx[0],out)==0
+   save('frame'+str(i+1))
+  summary=dict(passed=True,stage=('frame'+str(a.frames)) if a.frames else 'initialized',resume=resume_identity,model_sha256=model_identity,stub_map=stubnames,routes=routes,libraries=PINS,external_inputs=external_identity,inputs=input_identity,context=ctx[0],allocations=allocations,events=events,mmio=trace,physical_access=False,scope='Isolated pinned H264 Open/SetParameter/Init only. Memory/libc callbacks modeled; frame completion/placeholder entropy bytes are modeled; no numeric encoding, reference contents, drain or physical effects.')
  except Exception as ex:
   summary=dict(passed=False,resume=resume_identity,model_sha256=model_identity,stub_map=stubnames,libraries=PINS,external_inputs=external_identity,inputs=input_identity,error=repr(ex),pc=hex(u.reg_read(UC_ARM64_REG_PC)),context=ctx[0],allocations=allocations,events=events,mmio=trace,physical_access=False)
  (a.output/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
