@@ -51,6 +51,8 @@ static int rd(void *p,uintptr_t a,uint32_t *v)
     if(a==0x07090160)f->osc_reads++;
     if(a==f->platform.spi.plan.base+4&&(*cell(f,a)&0x80000000)) *cell(f,a)=0x80;
     if(a==f->platform.spi.plan.base+0x18)*cell(f,a)&=~0x80008000u;
+    /* An active RX DMA channel empties the FIFO before software observes it. */
+    if(a==f->platform.spi.plan.base+0x1c&&(*cell(f,f->platform.spi.plan.base+0x18)&0x100))f->rn=0;
     if(a==f->platform.spi.plan.base+0x1c)*v=f->rn;else *v=*cell(f,a);
     return 1;
 }
@@ -91,7 +93,7 @@ static int read8(void *p,uintptr_t a,uint8_t *v)
     *v=(uint8_t)++f->received;f->rn--;return 1;
 }
 static int write8(void *p,uintptr_t a,uint8_t v){(void)p;(void)a;(void)v;assert(0);return 0;}
-static void init(struct fixture *f,enum a733_spi_route route)
+static int configure(struct fixture *f,enum a733_spi_route route,unsigned lanes,unsigned dma)
 {
     memset(f,0,sizeof(*f));f->authorized=1;
     struct a733_spi_route_plan r;assert(a733_spi_route_plan(route,0,&r));
@@ -100,10 +102,10 @@ static void init(struct fixture *f,enum a733_spi_route route)
     assert(a733_pins_init_banks(&f->pins,&pins,f,&h));
     assert(a733_clock_leases_init(&f->clocks,now,f));
     struct a733_spi_platform_config c={.owner=8,.handoff=71,.deadline=100000,.route=route,
-        .format={r.port,0,0,0,route&1,500000,2,2}};
+        .format={r.port,0,0,0,route&1,500000,2,2,lanes,dma}};
     for(unsigned i=0;i<4;i++){c.expected[i]=(struct a733_pin_config){15,0,0};c.desired[i]=(struct a733_pin_config){r.function,0,0};}
     struct a733_spi_platform_ops ops={now,current,authorize,enter,leave,retain,rd,wr,read8,write8};
-    assert(a733_spi_platform_init(&f->platform,&c,&ops,f,&f->clocks,&f->pins));
+    if(!a733_spi_platform_init(&f->platform,&c,&ops,f,&f->clocks,&f->pins))return 0;
     for(unsigned i=0;i<4;i++) {
         struct a733_pin_fields fields;assert(a733_pin_fields_banked(r.bank,f->platform.requests[i].pin,&fields));
         *cell(f,fields.mux_address)|=15u<<fields.mux_shift;
@@ -111,7 +113,11 @@ static void init(struct fixture *f,enum a733_spi_route route)
     *cell(f,0x07090160)=0x10000002;*cell(f,0x02002000)=0xf8636300;
     *cell(f,f->platform.spi.plan.clock)=0x07000302;
     *cell(f,f->platform.spi.plan.reset)=0x20000000;
+    *cell(f,f->platform.spi.plan.base+0x88)=0xe5;
+    return 1;
 }
+static void init(struct fixture *f,enum a733_spi_route route)
+{ assert(configure(f,route,0,0)); }
 static enum a733_spi_platform_result advance(struct fixture *f,enum a733_spi_platform_result goal)
 {
     enum a733_spi_platform_result r=A733_SPI_PLATFORM_PENDING;
@@ -126,7 +132,7 @@ static void working(void)
         assert(f.platform.pin_lease.id&&f.platform.clock.id&&f.initial_pin_writes&&!f.transactions);
         assert(f.platform.clock.exclusive>>32); /* Real high-bit controller scope. */
         if(route==A733_SPI3_PE) {
-            uint8_t rx[4]={0};struct a733_spi_transfer t={A733_SPI_READ,0,rx,0,4};
+            uint8_t rx[4]={0};struct a733_spi_transfer t={A733_SPI_READ,0,rx,0,4,0,0,0};
             assert(a733_spi_platform_submit(&f.platform,&t,100000)==A733_SPI_PLATFORM_PENDING);
             /* Each transfer poll revalidates the parent once, inside admission. */
             enum a733_spi_platform_result r=A733_SPI_PLATFORM_PENDING;
@@ -206,4 +212,43 @@ static void uncertain(void)
     assert(!a733_spi_route_plan((enum a733_spi_route)6,0,&route));
     assert(!a733_spi_route_plan(A733_SPI3_PE,2,&route));
 }
-int main(void){working();ownership();pin_conflict();bad_cs_readback();uncertain();puts("SPI real clock/pin/core composition, retained faults and restoration passed");return 0;}
+/* Multi-lane and DMA admission: the routes lease no IO2/IO3 pins, so quad is
+ * refused; a DMA transfer completes through the platform without CPU buffers. */
+static void modes(void)
+{
+    struct fixture f;
+    assert(!configure(&f,A733_SPI3_PE,4,0)&&!configure(&f,A733_SPI3_PE,3,0)&&!configure(&f,A733_SPI3_PE,0,2));
+    assert(configure(&f,A733_S_SPI_PM,2,1));
+    assert(configure(&f,A733_SPI3_PE,2,1)&&advance(&f,A733_SPI_PLATFORM_READY)==A733_SPI_PLATFORM_READY);
+    uintptr_t fcr=f.platform.spi.plan.base+0x18;
+    struct a733_spi_transfer t={A733_SPI_READ,0,0,0,64,2,0,1};
+    assert(a733_spi_platform_submit(&f.platform,&t,100000)==A733_SPI_PLATFORM_PENDING);
+    assert(*cell(&f,fcr)==0x00200101u);
+    assert(advance(&f,A733_SPI_PLATFORM_COMPLETE)==A733_SPI_PLATFORM_COMPLETE);
+    assert(f.transactions==1&&*cell(&f,fcr)==0x00200001u&&!f.platform.spi.dma_requests);
+    assert(*cell(&f,f.platform.spi.plan.base+0x38)==0x10000000u);
+    assert(a733_spi_platform_reap(&f.platform,100000)==A733_SPI_PLATFORM_READY);
+    /* A DMA transfer cannot use the FIFO-sized interrupt completion path. */
+    f.rn=0;assert(a733_spi_platform_submit(&f.platform,&t,100000)==A733_SPI_PLATFORM_PENDING);
+    while(f.platform.spi.state==A733_SPI_SETUP)a733_spi_platform_poll(&f.platform,8);
+    assert(a733_spi_platform_interrupt_start(&f.platform)==A733_SPI_PLATFORM_INVALID);
+    assert(advance(&f,A733_SPI_PLATFORM_COMPLETE)==A733_SPI_PLATFORM_COMPLETE);
+    assert(a733_spi_platform_dma_stop(&f.platform,100000)==A733_SPI_PLATFORM_INVALID);
+    assert(a733_spi_platform_reap(&f.platform,100000)==A733_SPI_PLATFORM_READY);
+    assert(a733_spi_platform_close(&f.platform,100000)==A733_SPI_PLATFORM_PENDING);
+    assert(advance(&f,A733_SPI_PLATFORM_CLOSED)==A733_SPI_PLATFORM_CLOSED&&!f.poisoned);
+    /* Abandonment gates the requests and retains every lease. */
+    assert(configure(&f,A733_SPI3_PE,0,1)&&advance(&f,A733_SPI_PLATFORM_READY)==A733_SPI_PLATFORM_READY);
+    struct a733_spi_transfer w={A733_SPI_WRITE,0,0,16,0,0,0,1};
+    assert(a733_spi_platform_submit(&f.platform,&w,100000)==A733_SPI_PLATFORM_PENDING);
+    assert(*cell(&f,f.platform.spi.plan.base+0x18)==0x01200001u);
+    uint64_t pin_id=f.platform.pin_lease.id,clock_id=f.platform.clock.id;
+    assert(a733_spi_platform_dma_stop(&f.platform,200000)==A733_SPI_PLATFORM_RETAINED);
+    assert(*cell(&f,f.platform.spi.plan.base+0x18)==0x00200001u&&!f.platform.spi.dma_requests);
+    assert(f.platform.spi.state==A733_SPI_FAULT&&f.platform.fault&&f.poisoned);
+    assert(f.platform.pin_lease.id==pin_id&&f.platform.clock.id==clock_id);
+    /* A session without DMA admission refuses DMA transfers. */
+    init(&f,A733_SPI3_PE);assert(advance(&f,A733_SPI_PLATFORM_READY)==A733_SPI_PLATFORM_READY);
+    assert(a733_spi_platform_submit(&f.platform,&w,100000)==A733_SPI_PLATFORM_INVALID&&!f.platform.fault);
+}
+int main(void){working();ownership();pin_conflict();bad_cs_readback();uncertain();modes();puts("SPI real clock/pin/core composition, lane/DMA admission, retained faults and restoration passed");return 0;}

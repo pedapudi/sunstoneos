@@ -61,14 +61,14 @@ int spi_construct(void)
  if(start>UINT64_MAX-spi.session.operation_timeout_us||start+spi.session.operation_timeout_us>=board.session.deadline_us-10000)return 0;
  atomic_init(&spi.failed,0);atomic_init(&spi.result,0);spi.deadline=start+spi.session.operation_timeout_us;
  spi.config=(struct a733_spi_platform_config){.owner=spi.session.owner,.handoff=spi.session.authority,
- .deadline=spi.deadline,.route=A733_SPI3_PE,.format={3,0,0,0,0,500000,2,2}};
+ .deadline=spi.deadline,.route=A733_SPI3_PE,.format={3,0,0,0,0,500000,2,2,0,0}};
  for(unsigned i=0;i<4;++i){
   spi.config.expected[i]=(struct a733_pin_config){spi.session.expected[i][0],spi.session.expected[i][1],spi.session.expected[i][2]};
   spi.config.desired[i]=(struct a733_pin_config){spi.session.desired[i][0],spi.session.desired[i][1],spi.session.desired[i][2]};}
  if(!a733_spi_platform_native_init(&spi.native,&providers.shared.locks,spi.handle,3,admitted,&spi))return 0;
  spi.operations=(struct a733_spi_platform_ops){now,current,authorize,enter,leave,retain,read_register,write_register,read_byte,write_byte};
  memcpy(spi.tx,spi.session.tx,sizeof(spi.tx));
- spi.transfer=(struct a733_spi_transfer){A733_SPI_WRITE_READ,spi.tx,spi.rx,spi.session.tx_bytes,spi.session.rx_bytes};
+ spi.transfer=(struct a733_spi_transfer){A733_SPI_WRITE_READ,spi.tx,spi.rx,spi.session.tx_bytes,spi.session.rx_bytes,0,0,0};
  storage_digest_bytes(&spi.session,sizeof(spi.session),spi.session_digest);
  return a733_spi_platform_init(&spi.platform,&spi.config,&spi.operations,&spi,&providers.shared.clocks,&providers.shared.pins);
 }

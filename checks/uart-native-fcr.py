@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the linked native UART write policy for FCR values on ports 0-2.
+"""Execute the linked native UART write policy for FCR, MCR, THR and RS-485 control.
 
 Reuses the UART DMA image harness from uart-dma-native.py: RTOS state and MMIO
 are modeled; the native binding's current-task check and allowlist execute
@@ -11,11 +11,24 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('uart_dma_native',ROOT/'checks/uart-dma-native.py')
 base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 UNIT='/drivers/uart/a733_uart_platform_native.c'
-# Each port accepts exactly its planned trigger with and without the FIFO reset
-# bits; UART2 also accepts the DMA mode value.
-CASES={0:{1:1,7:1,0x81:0,0x87:0,9:0,0x41:0},
-       1:{0x81:1,0x87:1,1:0,7:0,9:0,0x41:0,0x47:0,0xc1:0},
-       2:{0x81:1,0x87:1,9:1,1:0,7:0,0x41:0,0x89:0}}
+# FCR (offset 8) accepts exactly the planned trigger with and without the FIFO
+# reset bits, plus the DMA mode value on every port. MCR (0x10) accepts the
+# planned flow control alone or with loopback, IrDA SIR and RS-485 9-bit.
+# RS-485 control (0xc0) exists on UART1..6. Offset 0 accepts a ninth bit only
+# as THR in RS-485 mode; SEQUENCE checks that through the cached MCR and LCR.
+CASES={(0,8):{1:1,7:1,9:1,0x81:0,0x87:0,0x41:0},
+       (1,8):{0x81:1,0x87:1,9:1,1:0,7:0,0x41:0,0x47:0,0xc1:0},
+       (2,8):{0x81:1,0x87:1,9:1,1:0,7:0,0x41:0,0x89:0},
+       (1,0x10):{0:1,0x22:1,0x10:1,0x32:1,0x40:1,0xa2:1,0x80:0,0x50:0,0xb2:0,0x02:0,0x62:0},
+       (1,0):{0x5a:1,0x200:0},
+       (1,0xc0):{0x18:1,0:1,0x10:0,0x19:0,0x118:0},(0,0xa4):{0xc2:1,7:1,0x42:0},
+       (0,0x88):{0xe5:1,0xa5:0},(1,0x8c):{0:1,3:1,7:0}}
+# (port, offset, value, accepted) in order: the ninth bit follows the last
+# accepted MCR (RS-485 0xa2) and LCR (DLAB clear) writes.
+SEQUENCE=[(1,0x10,0x22,1),(1,0,0x15a,0),(1,0,0x5a,1),(1,0x10,0x32,1),(1,0,0x15a,0),
+          (1,0x10,0xa2,1),(1,0,0x15a,1),(1,0,0x25a,0),(1,0xc,0x9b,1),(1,0,0x15a,0),
+          (1,0,0x5a,1),(1,0xc,0x1b,1),(1,0,0x15a,1),(1,0x10,0xb2,0),(1,0,0x15a,1),
+          (1,0x10,0x22,1),(1,0,0x15a,0)]
 
 def main():
  p=argparse.ArgumentParser(description=__doc__)
@@ -23,18 +36,24 @@ def main():
  p.add_argument('--output',type=Path,required=True);a=p.parse_args()
  image=base.Image(a.image);m=base.Machine(image,a.session.read_bytes(),'success');m.setup()
  native=m.app+image.layouts['uart_application']['native'];results=[]
- for port,values in CASES.items():
+ for (port,offset),values in CASES.items():
   m.field(native,'a733_uart_platform_native','port',port)
-  fcr=0x02500000+port*0x1000+8
+  address=0x02500000+port*0x1000+offset
   for value,allowed in values.items():
-   before=len(m.writes);m.val(fcr,4,0xee)
-   got=m.call('write32',native,fcr,value,unit=UNIT)
-   wrote=m.get(fcr,4)==value
-   assert got==allowed and wrote==bool(allowed),(port,hex(value),got,wrote)
-   if port==2:assert len(m.writes)==before+allowed
-   results.append(dict(port=port,value=value,accepted=bool(got)))
+   before=len(m.writes);m.val(address,4,0xee)
+   got=m.call('write32',native,address,value,unit=UNIT)
+   wrote=m.get(address,4)==value
+   assert got==allowed and wrote==bool(allowed),(port,hex(offset),hex(value),got,wrote)
+   if port==2:assert len(m.writes)==before+allowed # The harness records UART2 MMIO only.
+   results.append(dict(port=port,offset=offset,value=value,accepted=bool(got)))
+ for port,offset,value,allowed in SEQUENCE:
+  m.field(native,'a733_uart_platform_native','port',port)
+  address=0x02500000+port*0x1000+offset;m.val(address,4,0xee)
+  got=m.call('write32',native,address,value,unit=UNIT)
+  assert got==allowed and (m.get(address,4)==value)==bool(allowed),(port,hex(offset),hex(value),got)
+  results.append(dict(port=port,offset=offset,value=value,accepted=bool(got),sequence=True))
  a.output.mkdir(parents=True,exist_ok=False)
  (a.output/'result.json').write_text(json.dumps(dict(result='pass',physical_access=False,
   image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),cases=results),indent=2)+'\n')
- print('PASS native UART FCR allowlist accepts exactly the planned trigger values')
+ print('PASS native UART write allowlist accepts exactly the planned FIFO, mode, ninth-bit and RS-485 values')
 if __name__=='__main__':main()

@@ -9,6 +9,7 @@ struct a733_uart_platform_native {
     int (*admit)(void *,const struct a733_uart_platform_config *,
         const struct a733_clock_token *,enum a733_uart_admission);
     unsigned port,initialized;
+    uint32_t mcr,lcr; /* Last accepted MCR and LCR writes, for the THR policy. */
 };
 /* Pure address admission for the selected controller, its clock/reset bits,
  * source observations and GIC mask/pending words. Parent writes are excluded. */
@@ -16,11 +17,11 @@ static inline int a733_uart_platform_native_address(unsigned port,uintptr_t a,un
 {
     if (port>8 || (a&3)) return 0;
     uintptr_t uart=port<7 ? UINT32_C(0x02500000)+port*0x1000u : UINT32_C(0x07080000)+(port-7)*0x1000u;
-    if (a>=uart && a<=uart+0xa4) {
+    if (a>=uart && a<=uart+0xc0) {
         switch (a-uart) {
-        case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:return 1;
+        case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:case 0x88:case 0x8c:return 1;
         case 0x14:case 0x18:case 0x7c:return !writing;
-        case 0x88:case 0x8c:return port==2;
+        case 0xc0:return port && port<7; /* RS485 control: RTS-capable ports. */
         default:return 0;
         }
     }

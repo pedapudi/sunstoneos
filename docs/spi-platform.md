@@ -48,8 +48,9 @@ input for its fixed divider plan. These selectors follow manual sections
 4.1.6.168 and 4.2.5.12 and the pinned main/R CCU parent tables.
 
 A privileged boot handoff separately establishes recovery, mappings, stable
-24 MHz input, electrical safety, remote-firmware exclusion and absence of DMA
-or old handlers. The native adapter verifies the actual FreeRTOS owner task and
+24 MHz input, electrical safety, remote-firmware exclusion and absence of old
+handlers. It excludes every DMA user, except that a format with `dma` set
+admits the controller's own request channels. The native adapter verifies the actual FreeRTOS owner task and
 common register-mutex ownership. The boot authority provider remains a platform
 prerequisite; numeric handoff identifiers do not establish physical authority.
 
@@ -89,6 +90,25 @@ metadata; it does not repeat hardware writes. A successful pin release remains
 final even if a later step fails. Copied token records do not recreate ownership
 already released by their manager.
 
+## Multi-lane and DMA admission
+
+Initialization accepts `lanes` 0, 1 or 2 and refuses 4, because each route
+leases only clock, MOSI, MISO and one chip select. A format with `dma` set
+requires a controller with a DMA request line, which excludes SPI4. The core
+admission callback compares both fields with the configured format. Submission
+skips the CPU-buffer checks for a DMA transfer; the core refuses any buffer
+pointer in one. The FIFO-sized interrupt completion refuses DMA transfers, so
+they complete by polling. The native adapter permits reading the DMA handshake
+register at offset `0x88`.
+
+`a733_spi_platform_dma_stop` abandons an active DMA transfer under the register
+mutex with a fresh deadline. It returns RETAINED in every accepted case: the
+controller, pins, clock and register mutex stay retained. `spi.dma_requests`
+reports whether both FIFO requests were confirmed off. After a poll fault,
+including a detected controller error, the binding has already retained these
+resources; the stop then returns RETAINED without register access and the
+requests stay enabled.
+
 ## Evidence and remaining work
 
 The focused evidence is
@@ -111,7 +131,10 @@ component evidence and central source lock.
 
 Physical acceptance requires independent watchdog recovery, authenticated boot
 and electrical admission, connected peers, pad exclusion and actual pin/clock
-restoration. Remaining work includes SPI4 package routing, additional alternate
-routes, wider SPI modes, DMA, interrupts, calibrated high rates and power
+restoration. The composition also covers lane refusals, a dual DMA read
+through submission, polling, reaping and close, the interrupt-path refusal, DMA
+abandonment and a session without DMA admission. Remaining work includes SPI4
+package routing, additional alternate routes, IO2/IO3 routes for quad
+transfers, interrupt completion for DMA, calibrated high rates and power
 transitions. The separate SPIF controller remains required. No board access or
 benchmark ran for this implementation.

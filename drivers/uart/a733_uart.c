@@ -23,6 +23,14 @@
 #define DMA_REQ_EN 0x8cu /* bit0 RX, bit1 TX DMA request enable. */
 #define HALT 0xa4u
 #define HALT_DMA 0xc2u   /* HALT DMA_PTE_RX(7), PTE(6), CHCFG_AT_BUSY(1). */
+#define RS485_CTL 0xc0u  /* UART_485_CTL */
+/* sunxi-uart-ng hardware 9-bit configuration: half duplex (DUPLEX, bit 4)
+ * and RXBFA (bit 3, reserved in the manual); RCM 0 selects 9-bit receive. */
+#define RS485_HALF_9BIT 0x18u
+/* Readback compares the defined control bits and leaves out bits 6 and 5
+ * (write-one-to-clear address-detect status) and bit 3, whose reserved
+ * definition in the manual may read back zero. */
+#define RS485_CHECKED 0x97u
 #define ERRORS 0x9eu
 
 static int span(const void *p, size_t n)
@@ -104,6 +112,7 @@ int a733_uart_begin(struct a733_uart *u, const struct a733_uart_ops *ops, void *
         a733_uart_plan(format, &plan) != 1) return -1;
     u->plan = plan; u->ops = *ops; u->context = context;
     u->deadline = deadline; u->last_now = 0; u->ier = 0; u->errors = 0;
+    u->mode = A733_UART_MODE_UART;
     u->state = A733_UART_CONFIGURING;
     /* A fresh reset is mandatory. Refuse unexpected DLAB or active hardware. */
     if (!read_reg(u, LCR, &v)) return u->state;
@@ -190,7 +199,10 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
             r->errors |= v & ERRORS; u->errors |= v & ERRORS;
             if (!(v & 1u)) break;
             if (!fifo_read(u, RBR, &data)) return u->state;
-            rx[r->received++] = (struct a733_uart_byte){(uint8_t)data, (uint8_t)(v & ERRORS)};
+            /* RS485 9-bit receive returns the address bit in RBR bit 8. */
+            uint8_t status = (uint8_t)(v & ERRORS);
+            if (u->mode == A733_UART_MODE_RS485) status |= (uint8_t)((data >> 8) & A733_UART_NINTH_BIT);
+            rx[r->received++] = (struct a733_uart_byte){(uint8_t)data, status};
         }
         if (!clock_ok(u)) return u->state;
         timed = 1;
@@ -201,7 +213,10 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
             for (unsigned n = 0; n < budget && r->transmitted < tn; ++n) {
                 if (!fifo_read(u, USR, &v)) return u->state;
                 if (!(v & 2u)) break;
-                if (!fifo_write(u, THR, tx[r->transmitted])) return u->state;
+                /* As in sunxi-uart-ng, the 9-bit transmitter takes the
+                 * ninth bit in THR bit 8 from the even-parity select. */
+                uint32_t ninth = u->mode == A733_UART_MODE_RS485 && (u->plan.lcr & 0x10u) ? 0x100u : 0;
+                if (!fifo_write(u, THR, tx[r->transmitted] | ninth)) return u->state;
                 ++r->transmitted;
             }
             if (!clock_ok(u)) return u->state;
@@ -242,14 +257,50 @@ int a733_uart_drain(struct a733_uart *u, uint64_t deadline)
     u->ier = 0;
     return u->state;
 }
+int a733_uart_mode(struct a733_uart *u, enum a733_uart_mode mode, uint64_t deadline)
+{
+    uint32_t lsr, usr, v, mcr, ctl;
+    if (!u || !deadline || (unsigned)mode > A733_UART_MODE_LOOPBACK) return -1;
+    if (u->state == A733_UART_FAULT) return u->state;
+    if (u->state != A733_UART_READY || u->dma_owned || u->dma_released || (u->ier & 2u)) return -1;
+    switch (mode) {
+    case A733_UART_MODE_UART: mcr = u->plan.mcr; break;
+    case A733_UART_MODE_LOOPBACK: mcr = u->plan.mcr | 0x10u; break;
+    case A733_UART_MODE_IRDA:
+        /* IrDA 1.0 SIR tops out at 115200 baud, within its 0.87% rate
+         * tolerance (115384 baud from 24 MHz), and has no RTS/CTS. */
+        if (u->plan.mcr || u->plan.actual_baud > 116202) return -1;
+        mcr = 0x40u; break;
+    default:
+        /* Automatic RTS drives the transceiver enable, so the plan must route
+         * RTS/CTS (UART1..6). 9-bit mode needs eight data bits and parity. */
+        if (u->plan.mcr != 0x22u || (u->plan.lcr & 0x0bu) != 0x0bu) return -1;
+        mcr = 0x80u | u->plan.mcr; break;
+    }
+    u->deadline = deadline;
+    if (!read_reg(u, LSR, &lsr)) return u->state;
+    u->errors |= lsr & ERRORS;
+    if (!read_reg(u, USR, &usr)) return u->state;
+    if ((lsr & 0x41u) != 0x40u || (usr & 9u) || !(usr & 4u)) return u->state;
+    ctl = mode == A733_UART_MODE_RS485 ? RS485_HALF_9BIT : 0;
+    /* Leave RS-485 before changing MCR; enter it after MCR selects it. */
+    if (u->mode == A733_UART_MODE_RS485 && !ctl &&
+        (!write_reg(u, RS485_CTL, 0) || !read_reg(u, RS485_CTL, &v))) return u->state;
+    if (u->mode == A733_UART_MODE_RS485 && !ctl && (v & RS485_CHECKED)) { fault(u); return u->state; }
+    if (!write_reg(u, MCR, mcr) || !read_reg(u, MCR, &v)) return u->state;
+    if ((v & 255u) != mcr) { fault(u); return u->state; }
+    if (ctl && (!write_reg(u, RS485_CTL, ctl) || !read_reg(u, RS485_CTL, &v))) return u->state;
+    if (ctl && (v & RS485_CHECKED) != (ctl & RS485_CHECKED)) { fault(u); return u->state; }
+    u->mode = mode;
+    return u->state;
+}
 
 /* A733 manual 18.10.7: mode1, byte-wide handshake, both DMA requests gated.
  * FCR is write-only (the same read address is IIR), so do not read it back. */
 int a733_uart_dma_prepare(struct a733_uart *u,uint64_t deadline)
 {
     uint32_t v;
-    if(!u || !deadline || u->plan.base!=0x02502000 ||
-       u->state!=A733_UART_READY || u->dma_owned || u->dma_released)return -1;
+    if(!u || !deadline || u->state!=A733_UART_READY || u->dma_owned || u->dma_released)return -1;
     u->deadline=deadline;u->dma_owned=1;
     if(!write_reg(u,DMA_REQ_EN,0) || !read_reg(u,DMA_REQ_EN,&v))return u->state;
     if(v){fault(u);return u->state;}

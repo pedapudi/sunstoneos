@@ -65,7 +65,7 @@ int a733_spi_platform_native_address(unsigned port,uintptr_t a,unsigned writing,
         switch(a-base) {
         case 4:case 8:case 0x10:case 0x14:case 0x18:case 0x20:
         case 0x30:case 0x34:case 0x38:case 0x40:return 1;
-        case 0x1c:case 0x400:return !writing;
+        case 0x1c:case 0x88:case 0x400:return !writing;
         default:return 0;
         }
     }
