@@ -168,6 +168,9 @@ class Machine:
             if name == 'daif':
                 pstate = uc.reg_read(UC_ARM64_REG_PSTATE)
                 uc.reg_write(UC_ARM64_REG_PSTATE, (pstate & ~0x3c0) | (value & 0x3c0))
+            elif name == 'icc_pmr_el1':
+                # The CPU interface implements priority bits 7:4 only.
+                self.sys[name] = value & 0xf0
             elif not (isinstance(name, str) and name.startswith(('dc', 'at'))):
                 self.sys[name] = value
             result = None
@@ -197,16 +200,26 @@ class Machine:
         return self.uc.reg_read(UC_ARM64_REG_PC)
 
     # Monitor model -----------------------------------------------------------
-    def platform_tables(self, golden):
-        """Run platform_init; with golden set, add the memtest platform's
-        tested-map entries (level-2 entries 64-511, level-1 entries 2-12)."""
+    def platform_tables(self, tested_map=True):
+        """Run platform_init in the state the monitor's EL1 entry leaves:
+        DAIF masked and SCTLR_EL1 M, C and I clear. The memtest platform
+        writes the tested-map entries (level-2 entries 64-511, level-1
+        entries 2-12) itself. With tested_map False they are cleared
+        afterwards, which models a platform that maps only 128 MiB. The
+        counter advances one tick per read here, whatever step a case sets
+        for the run, so the table flushes meet their 10 ms deadlines."""
+        self.sys['sctlr_el1'] = 0x30d00800
+        self.uc.reg_write(UC_ARM64_REG_PSTATE, self.uc.reg_read(UC_ARM64_REG_PSTATE) | 0x3c0)
+        step, self.step = self.step, 1
         self.call('platform_init')
+        self.step = step
+        assert self.exit_status is None and self.pc() == SENTINEL, f'platform_init stopped at {self.pc():#x}'
         level1, level2 = self.address('level1'), self.address('level2')
-        if golden:
+        if not tested_map:
             for i in range(64, 512):
-                self.write(level2 + 8 * i, (0x40000000 + i * 0x200000) | GOLDEN_ATTRIBUTES)
+                self.write(level2 + 8 * i, 0)
             for i in range(2, 13):
-                self.write(level1 + 8 * i, (i << 30) | GOLDEN_ATTRIBUTES)
+                self.write(level1 + 8 * i, 0)
         return level1, level2
 
     def table_summary(self):

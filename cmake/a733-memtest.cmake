@@ -5,17 +5,20 @@
 # PORT and the patched freertos-port.c from there.
 find_program(SUNSTONE_OBJCOPY NAMES llvm-objcopy-21 llvm-objcopy
   HINTS /usr/lib/llvm-21/bin REQUIRED)
-add_executable(a733-memtest
-  platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+# Built only by name: the image is a manual qualification tool, and leaving it
+# out of the default build keeps the default target set unchanged.
+add_executable(a733-memtest EXCLUDE_FROM_ALL
+  platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
   arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S arch/aarch64/device_memory.c
-  runtime/memory.c drivers/clock/a733_cpu_clock.c
+  runtime/memory.c drivers/clock/a733_cpu_clock.c platform/a733/remote_writers.c
   apps/memtest/main.c apps/memtest/plan.c apps/memtest/kernels.S
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
 target_include_directories(a733-memtest PRIVATE
   include runtime/include platform/a733 apps/memtest "${FREERTOS_DIR}/include" "${PORT}")
-# SUNSTONE_USB_RUNTIME builds the monitor's 0x734 renewal SMC; SUNSTONE_MEMTEST
-# selects the memtest platform definitions once platform/a733 provides them.
+# SUNSTONE_USB_RUNTIME builds the monitor's 0x734 renewal SMC. SUNSTONE_MEMTEST
+# selects the platform's tested-map entries and log limit and the monitor's
+# remote-writer sample.
 target_compile_definitions(a733-memtest PRIVATE
   GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_MEMTEST=1)
 target_compile_options(a733-memtest PRIVATE
@@ -27,6 +30,8 @@ target_compile_options(a733-memtest PRIVATE
 target_link_options(a733-memtest PRIVATE -nostdlib -static -Wl,--gc-sections -Wl,--emit-relocs
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/apps/memtest/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-memtest.map")
+# The remote-writer sample runs at EL3 inside monitor_init.
+set_property(SOURCE platform/a733/remote_writers.c APPEND PROPERTY COMPILE_OPTIONS -mgeneral-regs-only)
 set_target_properties(a733-memtest PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/apps/memtest/link.ld")
 # The DWARF readers of the host checks cannot apply the debug relocations

@@ -13,8 +13,9 @@ and returns a bitmask of the masters whose exclusion it cannot prove. Zero means
 every listed master is excluded. The function never writes a register. The
 interface is in [`a733_remote_writers.h`](../include/a733_remote_writers.h).
 
-Status: implemented and checked against modeled register states. No boot image
-calls it yet, and no board has reported the register values it reads. With the
+Status: implemented and checked against modeled register states. The
+[memory qualification image](memory-qualification.md) is the only image that
+calls it, and no board has reported the register values it reads. With the
 current sources it cannot return zero on a board: the OR100 processor and the
 crypto engine (CE) remain unproven, as explained below.
 
@@ -149,6 +150,26 @@ static int mmio_read(void *context, uint64_t address, uint32_t *value)
 const struct a733_remote_writers_ops ops = {mmio_read, 0};
 uint32_t unproven = a733_remote_writers_excluded(&ops);
 ```
+
+## The memory qualification image accepts OR100, CE and USB0
+
+The memory qualification image departs from the caller rule above. Its
+monitor samples the mask once at EL3, at the end of `monitor_init()` and
+before EL1 entry, stores it in the image's result record and refuses EL1
+entry on any bit other than OR100, CE and USB0. The other images keep their
+current admission and do not call the function.
+
+- **OR100 and CE** stay unproven on every boot, for the reasons given under
+  [OR100 and CE need further evidence](#or100-and-ce-need-further-evidence).
+- **USB0** is out of reset because the ROM's FEL stack uploaded the image.
+  That stack uses programmed I/O, as the physical ROM capture shows
+  ([hardware.md](hardware.md), USB row), and does not run while the image
+  does.
+
+Each exclusion that the sample shows holds only at the sampling instant. A write by OR100, CE or
+USB0 during a run would look like a DRAM fault to the image. The host
+prepares no run contract until its run log holds the user's acceptance of
+this residual ([memory-qualification.md](memory-qualification.md#host-side)).
 
 ## Checks
 

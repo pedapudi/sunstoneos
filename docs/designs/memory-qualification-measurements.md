@@ -14,9 +14,10 @@ was used; every figure comes from a host model, and figures marked
   `~/.cache/sunstoneos/build/memory-qualification-measure/`: the tree before
   the change in `base/`, the new tree in `head/`. Each build links
   `a733-power-probe`, the central build of the returning platform that every
-  returning image links. The new tree also links `a733-memtest`, added to the
-  configuration through the deferred include that
-  [memory-qualification.md](../memory-qualification.md) gives.
+  returning image links. The new tree also links `a733-memtest`. Its
+  `CMakeLists.txt` did not yet include `cmake/a733-memtest.cmake`, so the
+  configuration added it through a `CMAKE_PROJECT_INCLUDE` file holding
+  `cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${CMAKE_SOURCE_DIR}/cmake/a733-memtest.cmake")`.
 - **Translation tables.** `checks/memtest-image.py` runs the linked
   `platform_init` in Unicorn 2.1.4 and reads every table word it writes.
 - **Counts.** `checks/memtest-emulate.py` runs the linked kernels and the
@@ -35,7 +36,7 @@ was used; every figure comes from a host model, and figures marked
 | Metric | Budget | Before | After | Within budget |
 | --- | --- | --- | --- | --- |
 | DRAM tested per board | 12,224 MiB less excluded ranges | 8 KiB (board record) | Scan and signature 12,224 MiB; march plan 12,224 MiB in 48 members and 23 groups; every fixed extent inside the tested map | Yes |
-| DRAM mapped at EL1; table memory | 12,288 MiB; 8 KiB | 128 MiB (126 MiB write-back, 2 MiB non-cacheable); 8 KiB | 128 MiB; 8 KiB. 12,288 MiB once the platform writes the tested-map entries | No; the entries belong to `platform.c`, the reason the design's budget row states |
+| DRAM mapped at EL1; table memory | 12,288 MiB; 8 KiB | 128 MiB (126 MiB write-back, 2 MiB non-cacheable); 8 KiB | 12,288 MiB (12,286 MiB write-back, 2 MiB non-cacheable); 8 KiB, after the platform wiring below | Yes |
 | Translations | 3 at admission; none afterwards | None | 3 in a complete run | Yes |
 | March cycles per line | Write ≤ 12, read-verify ≤ 21, read-verify-write ≤ 33.5 | None | 12.19, 21.19, 33.19 | Read-and-write yes; write and read no, by 0.19 cycles of loop decrement and branch, the reason the design's budget row states (see below) |
 | March work per block outside the loop | 1 `ISB` and counter read, 1 `UMAXV`, 1 progress store, ≤ 1 `SMC` per 200 ms; no call, maintenance, `DSB` or `DMB` | None | As budgeted, in every kernel and direction | Yes |
@@ -72,22 +73,49 @@ The write pass issues one `DSB SY` after each of the 6,112 blocks of the
 tested map. The barrier after the last block is also the barrier at the end
 of the pass, so the design's separate end barrier is not issued.
 
-### Translation entries
+### Platform wiring
 
-The image uses the platform's tables. Until `platform/a733/platform.c` writes
-the tested-map entries under the memtest build, the image's mapping check
-refuses each run, which `checks/memtest-emulate.py` confirms. With the entries
-written as the design specifies, the tables map 12,286 MiB write-back and
-2 MiB non-cacheable in the same 8 KiB.
+A later change wires the image into the build and the shared returning
+platform: `CMakeLists.txt` includes `cmake/a733-memtest.cmake`,
+`platform/a733/platform.c` writes the tested-map entries under
+`SUNSTONE_MEMTEST`, and the monitor stores the remote-writer sample. The same
+change makes every returning image clean and invalidate both table pages
+before the first table write and after the last
+([cpu-table-walks.md](cpu-table-walks.md)). Both trees, the commit before the
+change and the change itself, were built under
+`~/.cache/sunstoneos/build/memtest-wiring/` (`base/` and `central/`), the
+first with the deferred include described under the conditions.
+
+- **Translation entries.** `checks/memtest-image.py` reads the tables that
+  the image's own `platform_init` writes: 12,286 MiB write-back and 2 MiB
+  non-cacheable in the same 8 KiB, every tested-map entry equal to the golden
+  word. The image before the change maps 126 MiB write-back and 2 MiB
+  non-cacheable. `checks/memtest-emulate.py` runs with these tables, and the
+  image's mapping check accepts them; with the tested-map entries cleared,
+  admission refuses the run.
+- **Table maintenance.** `platform_init` issues 128 `DC CIVAC` before the
+  first table write and 128 after the last, with one `DSB SY` and three
+  counter reads in each of the four flush calls. Before the change it issued
+  none.
+- **Remote-writer sample.** The deepest EL3 call path, from
+  `monitor_entry` through `monitor_init` and the sampling function, uses
+  144 bytes of the 1,984-byte monitor stack.
 
 ## Image size and shared code
 
-`a733-memtest.elf` holds 37,184 bytes of text, 8,416 of data and 79,840 of
-BSS; the uploaded binary is 53,440 bytes. The text includes the entry page and
+With the platform wiring, `a733-memtest.elf` holds 41,256 bytes of text,
+8,416 of data and 79,840 of BSS, and the uploaded binary is 57,512 bytes.
+Before the wiring it held 38,472 bytes of text and the binary was 54,728
+bytes. When first measured, before the remote-writer sample, the image held
+37,184 bytes of text and the binary was 53,440 bytes. The text includes the entry page and
 the four recovery pages, which the linker pads to whole pages. The image is a
 new target; before the change no image tested memory.
 
-The change adds files only inside its own directories and edits no shared
-source. `a733-power-probe` links byte-identical ELF files before and after the
-change (20,320 bytes of text, 168 of data, 62,352 of BSS), so no existing image
-gains instructions, data, barriers or copies.
+The change that added the image edited no shared source:
+`a733-power-probe` linked byte-identical ELF files before and after it
+(20,320 bytes of text, 168 of data, 62,352 of BSS). The platform wiring does
+edit shared sources. `a733-power-probe` text grows from 21,352 to 22,888
+bytes: `platform_init` grows by 228 bytes, and the flush primitive adds 208.
+The rest of the growth is four unused primitives that share the flush's
+input section in `platform/a733/cpu_coherence.S`, so `--gc-sections` keeps
+them. Data and BSS are unchanged.

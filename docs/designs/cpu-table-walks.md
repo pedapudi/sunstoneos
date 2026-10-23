@@ -192,8 +192,10 @@ in the same merge:
   pinned `continue.S` hash with the new one.
 - `platform/a733/platform.c`: run the flush primitive over `level1` and
   `level2` before the first write and again after the last write, before
-  `msr ttbr0_el1`. These tables are written with the MMU off and already
-  walked cacheably without maintenance.
+  `msr ttbr0_el1`. These tables are written with the MMU off and walked
+  cacheably. This change is in place: `platform_init()` flushes both pages
+  with a 10 ms deadline each time, with DAIF masked and `SCTLR_EL1` M, C and
+  I clear, and every image that compiles the file links `cpu_coherence.S`.
 - `platform/a733-smp-cached/continue.c`: drop the `DC CVAC` publication of
   `__tables_start`–`__tables_end`, which finds no line after step 1.
   `platform/a733-smp-supervised/publication.S`: drop the Non-secure `DC IVAC`

@@ -52,6 +52,12 @@ safety. An initialization failure before ARE enable leaves the bits clear.
 EL1 identity-maps peripheral addresses and the first 128 MiB of DRAM. The result block
 at `0x42000000` uses normal non-cacheable memory, so the cache-disabled monitor
 and ROM can read the log. Other mapped RAM uses normal cacheable attributes.
+The table walker reads the two table pages through the data cache, but
+`platform_init()` writes them with the cache off. `platform_init()` therefore
+cleans and invalidates both pages with `a733_cpu_coherence_flush()` before the
+first table write and again after the last, before it sets `TTBR0_EL1`. The
+[memory qualification image](memory-qualification.md) also maps the rest of
+DRAM, as non-executable write-back blocks.
 The monitor cleans and invalidates data caches before reset. The current mapping
 still permits writes and execution in the same RAM regions; task isolation and
 separate code/data permissions remain unfinished.

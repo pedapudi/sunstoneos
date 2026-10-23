@@ -107,7 +107,7 @@ foreach(target IN LISTS kernel_targets)
     set(check_source checks/ufs-probe.c drivers/i2c/a733_i2c.c)
   endif()
   add_executable(${target}
-    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
     arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
     runtime/memory.c "${check_source}" checks/fp-context.S
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
@@ -141,7 +141,7 @@ foreach(pair "dcd_sunxi_musb.c|tinyusb-a733-dcd.patch" "musb_def.h|tinyusb-a733-
     "${TINYUSB_DIR}/src/portable/sunxi/${source}" "patches/${patch_file}")
 endforeach()
 add_executable(a733-usb-runtime
-  platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+  platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
   arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S runtime/memory.c
   drivers/usb/a733_usb.c drivers/usb/diagnostic.c
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
@@ -163,6 +163,7 @@ target_link_options(a733-usb-runtime PRIVATE -nostdlib -static -Wl,--gc-sections
 set_target_properties(a733-usb-runtime PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
 
+include(cmake/a733-memtest.cmake)
 include(cmake/cxx-runtime.cmake)
 include(cmake/mimus.cmake)
 include(cmake/smp.cmake)
