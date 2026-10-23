@@ -1,6 +1,16 @@
 --- tasks.c
 +++ tasks.c
-@@ -4983,7 +4983,13 @@
+@@ -1085,6 +1085,9 @@
+                             #endif
+                             pxTCB->xTaskRunState = xCoreID;
+                             pxCurrentTCBs[ xCoreID ] = pxTCB;
++                            /* xCoreID is the calling core, which keeps the
++                             * current-task register equal to this entry. */
++                            portSET_CURRENT_TASK( xCoreID, pxTCB );
+                             xTaskScheduled = pdTRUE;
+                         }
+                     }
+@@ -4983,7 +4986,13 @@
  
                  for( xCoreID = 0; xCoreID < ( ( BaseType_t ) configNUMBER_OF_CORES ); xCoreID++ )
                  {
@@ -15,3 +25,26 @@
                      {
                          xYieldPendings[ xCoreID ] = pdTRUE;
                      }
+@@ -6665,11 +6674,19 @@
+ 
+             traceENTER_xTaskGetCurrentTaskHandle();
+ 
+-            uxSavedInterruptStatus = portSET_INTERRUPT_MASK();
++            /* A task's own handle does not change when it migrates, so the
++             * register that the core keeps for its task needs no mask. It
++             * reads zero until the core first resumes a task. */
++            xReturn = ( TaskHandle_t ) ( uintptr_t ) ( ullPortGetTaskRegister() & portTASK_REGISTER_TCB_MASK );
++
++            if( xReturn == NULL )
+             {
+-                xReturn = pxCurrentTCBs[ portGET_CORE_ID() ];
++                uxSavedInterruptStatus = portSET_INTERRUPT_MASK();
++                {
++                    xReturn = pxCurrentTCBs[ portGET_CORE_ID() ];
++                }
++                portCLEAR_INTERRUPT_MASK( uxSavedInterruptStatus );
+             }
+-            portCLEAR_INTERRUPT_MASK( uxSavedInterruptStatus );
+ 
+             traceRETURN_xTaskGetCurrentTaskHandle( xReturn );
+ 

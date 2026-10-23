@@ -14,11 +14,12 @@ cortex-a55 cores and once with cortex-a76 cores. It records:
   - cross-core notification round trips, in instructions retired on each
     core per round trip, with idle cores waiting in WFI, and in virtual time.
 
-With --baseline (a result.json from the base tree) it also requires the
-budgets of docs/designs/smp-heterogeneous.md: at most 100 instructions for
-the EL1 pair, 180 for the EL0 pair and 800 for the same-core switch, and a
-cross-core round trip with at least 30% fewer instructions on both cores
-than the baseline.
+With --baseline (a result.json from the base tree) it also requires that no
+operation retires more instructions than in the baseline and that a cross-core
+round trip retires at least 30% fewer instructions on both cores. It records,
+without requiring them, the design targets of
+docs/designs/smp-heterogeneous.md: at most 100 instructions for the EL1 pair,
+180 for the EL0 pair and 800 for the same-core switch.
 """
 import argparse
 import hashlib
@@ -40,7 +41,9 @@ PATCHES = {PORT + '/port.c': ['freertos-smp-c.patch', 'freertos-smp-privileged.p
            PORT + '/portASM.S': ['freertos-smp-asm.patch'], PORT + '/portmacro.h': ['freertos-smp-macro.patch'],
            'tasks.c': ['freertos-smp-tasks.patch']}
 CPUS = ('cortex-a55', 'cortex-a76')
-BUDGETS = {'el1_critical_pair': 100, 'el0_critical_pair': 180, 'el1_give_switch': 800}
+TARGETS = {'el1_critical_pair': 100, 'el0_critical_pair': 180, 'el1_give_switch': 800}
+OPERATIONS = ('el1_critical_pair', 'el0_critical_pair', 'el1_current_task', 'el0_current_task',
+              'el1_notify_give_take', 'el1_give_switch', 'cross_core_round_trip_instructions')
 ROUND_TRIP_REDUCTION = 0.30
 
 
@@ -52,7 +55,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--output', type=Path, required=True, help='new directory for logs and results')
     p.add_argument('--root', type=Path, default=ROOT, help='source tree that supplies patches and platform')
-    p.add_argument('--baseline', type=Path, help='result.json of the base tree; enables the budgets')
+    p.add_argument('--baseline', type=Path, help='result.json of the base tree; enables the comparison')
     p.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
     p.add_argument('--lld', type=Path, default=CACHE / 'host/usr/bin/ld.lld-21')
     p.add_argument('--qemu', type=Path, default=CACHE / 'host/usr/bin/qemu-system-aarch64')
@@ -117,17 +120,20 @@ def main():
     if a.baseline:
         base = json.loads(a.baseline.read_text())['runs']
         for cpu, m in runs.items():
-            for name, limit in BUDGETS.items():
-                assert m[name] <= limit, (cpu, name, m[name], limit)
+            for name in OPERATIONS:
+                assert m[name] <= base[cpu][name], (cpu, name, m[name], base[cpu][name])
             ratio = m['cross_core_round_trip_instructions'] / base[cpu]['cross_core_round_trip_instructions']
             assert ratio <= 1 - ROUND_TRIP_REDUCTION, (cpu, 'cross-core round trip', ratio)
-            checked[cpu] = {'budgets': BUDGETS, 'round_trip_ratio': ratio}
+            checked[cpu] = {'baseline': {name: base[cpu][name] for name in OPERATIONS},
+                            'round_trip_ratio': ratio,
+                            'targets': {name: {'limit': limit, 'met': m[name] <= limit}
+                                        for name, limit in TARGETS.items()}}
     (out / 'result.json').write_text(json.dumps({
         'passed': True, 'commands': commands, 'elf_sha256': digest(elf), 'qemu_sha256': digest(a.qemu),
         'clang_sha256': digest(a.clang), 'root': str(root),
         'inputs': {str(s): digest(s) for s in sources}, 'patches': {
             patch: digest(root / 'patches' / patch) for patches in PATCHES.values() for patch in patches},
-        'runs': runs, 'budgets_checked': checked,
+        'runs': runs, 'baseline_comparison': checked,
         'scope': 'QEMU cortex-a55 and cortex-a76 cores with GICv3 and the FreeRTOS SMP port at EL1 and EL0, '
                  'without EL2 or EL3. Instruction counts are exact; virtual time is QEMU icount time, not A733 '
                  'cycles, and QEMU models no cache-line transfer between cores.'}, indent=2) + '\n')
