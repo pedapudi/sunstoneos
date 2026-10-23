@@ -1,8 +1,9 @@
 # Design: camera and NVMe rules for memory above 4 GiB
 
-Status: **design**; no code is written. The per-master rules are recorded in
-[docs/dma-address-width.md](../dma-address-width.md), whose section "Changes
-that other drivers must make" lists the work this design completes. Section
+Status: **implemented**, with host checks; the
+[measurement record](dma-high-memory-measurements.md) compares the change with
+its parent against the budgets below. The per-master rules are recorded in
+[docs/dma-address-width.md](../dma-address-width.md). Section
 numbers refer to [docs/performance-architecture.md](../performance-architecture.md).
 No board was used, and no step below is qualified on hardware.
 
@@ -33,7 +34,7 @@ admits its memory:
   IOMMU window and below `A733_IOMMU_IOVA_LIMIT`.
 - **NVMe** ([a733_pcie_nvme.c](../../drivers/pci/a733_pcie_nvme.c)).
   `a733_pcie_nvme_init` adds
-  `a733_extent_within(0, DMA_ADDRESS_32BIT_LIMIT, physical, bytes)` to the
+  `a733_extent_within(0, DMA_ADDRESS_32BIT_LIMIT, physical, A733_PCIE_NVME_POOL_BYTES)` to the
   existing identity test that follows `device_memory_acquire`. On refusal it
   releases the lease, as it already does when the identity test fails. A new
   `A733_PCIE_NVME_POOL_BYTES` (six 4 KiB pages) in

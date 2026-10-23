@@ -11,6 +11,10 @@
 #define A733_CAMERA_NATIVE_PLANE_BYTES 307200u
 #define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
 #define A733_CAMERA_NATIVE_BYTES 663552u /* Tables 8 + parameters 2 + two 76-page planes. */
+/* Fixed device address of the parameters. The planes follow at +8192 and
+ * +319488, all three inside one 4 MiB IOMMU window below 4 GiB. The IOMMU
+ * translates them to the allocation, which may lie anywhere below 2^34. */
+#define A733_CAMERA_NATIVE_IOVA UINT64_C(0x10000000)
 #define A733_CAMERA_NATIVE_FILL 0xa5u /* Plane payload/guard fill before each device write. */
 #define A733_CAMERA_NATIVE_DISCARD_LIMIT 15u
 /* Protected image/launch record, authenticated by the actual boot coordinator.
@@ -79,8 +83,9 @@ struct a733_camera_native {
 /* Actual singleton allocation during serialized primary preparation, before
  * any concurrent allocator user. One retained parent contains tables, immutable
  * parameters, both planes and guards. No new pool, alternate alias or fallback
- * range. Tables align 16 KiB; all spans are identity IOVA/PA below 4 GiB and
- * cover at most two 4 MiB windows. Both planes and their guards are filled with
+ * range. Tables align 16 KiB. The spans use A733_CAMERA_NATIVE_IOVA and its
+ * fixed offsets. The allocation's physical range must end at or below 2^34;
+ * its physical address need not equal its CPU address. Both planes and their guards are filled with
  * A733_CAMERA_NATIVE_FILL while CPU-owned, so bytes the DMA never writes cannot
  * hold an earlier image. Failed construction retains acquired backing.
  * This does not qualify the 4 KiB guard policy; the boot evidence must do so.

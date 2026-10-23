@@ -30,6 +30,9 @@ NVME_MODES = ["poll", "msix", "intx", "gen2", "forged", "inherited", "fatal", "i
               "timeout", "extra-vector", "extra-intx", "shutdown-stuck", "suspend", "suspend-keep",
               "multifunction", "bridge", "warm-sibling", "large-bar", "assigned-bar", "table-outside",
               "class", "stop-config", "stop-test", "stop-link-stuck"]
+# These place the NVMe pool at 4 GiB, inside AddressSanitizer's shadow gap on
+# x86-64, so they run in a build with only the undefined-behavior sanitizer.
+NVME_BOUNDARY_MODES = ["pool-at-4g", "pool-across-4g"]
 
 
 def block(text, pattern):
@@ -62,7 +65,7 @@ def run(command):
     return result.stdout
 
 
-def build(root, check, name, units=UNITS):
+def build(root, check, name, units=UNITS, sanitize="address,undefined"):
     """Compile one host model with the native address filter of the same root."""
     native = (root / "drivers/pci/a733_pcie_native.c").read_text()
     generated = out / (name + "-generated")
@@ -76,7 +79,7 @@ def build(root, check, name, units=UNITS):
         epf.replace("int main(int argc,char **argv)", "int epf_main(int argc,char **argv)"))
     target = out / name
     run([compiler, "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-         "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer", "-I" + str(root / "include"),
+         "-fsanitize=" + sanitize, "-fno-sanitize-recover=all", "-fno-omit-frame-pointer", "-I" + str(root / "include"),
          "-I" + str(generated), "-I" + str(root / "checks"),
          root / check, *[root / u for u in units], address, "-o", target])
     return target
@@ -91,6 +94,9 @@ for mode in EPF_MODES:
 nvme = build(ROOT, "checks/a733-pcie-nvme.c", "nvme", NVME_UNITS)
 for mode in NVME_MODES:
     run([nvme, mode]); results["nvme-" + mode] = "PASS"
+boundary = build(ROOT, "checks/a733-pcie-nvme.c", "nvme-boundary", NVME_UNITS, "undefined")
+for mode in NVME_BOUNDARY_MODES:
+    run([boundary, mode]); results["nvme-" + mode] = "PASS"
 trace = build(ROOT, "checks/a733-pcie-trace.c", "trace")
 current = {mode: run([trace, mode]) for mode in TRACE_MODES}
 for mode, text in current.items():
