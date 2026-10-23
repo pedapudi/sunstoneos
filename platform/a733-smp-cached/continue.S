@@ -160,7 +160,11 @@ a733_cached_enter_el1:
     mov x1, x22
     bl a733_cpu_coherence_enable_el1
     cmp w0, #1
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    b.ne a733_cached_el1_fault
+#else
     b.ne a733_cached_cold_fault
+#endif
     adrp x2, a733_cached_el1_vectors
     add x2, x2, :lo12:a733_cached_el1_vectors
     msr vbar_el1, x2
@@ -230,8 +234,13 @@ a733_cached_block_walks:
 .global a733_cached_smc
 a733_cached_smc:
     msr daifset, #15
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    // A deliberate exit: no marker, whatever the status in x0.
+    mov x2, #0
+#endif
     smc #0
     b .Lpark
+// In fault-page builds every EL1 vector entry sets x2 = 0x100 | slot first.
 .global a733_cached_cold_fault
 a733_cached_cold_fault:
     clear_bhb
@@ -243,20 +252,41 @@ a733_cached_cold_fault:
     b .Lpark
 .global a733_cached_el1_fault
 a733_cached_el1_fault:
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    // Not a vector entry: recorded as an exit with status 4.
+    mov x2, #0
+#endif
     b a733_cached_cold_fault
 .global a733_cached_el3_fault
 a733_cached_el3_fault:
     msr daifset, #15
     mov x20, x0
     mov x21, x1
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    mov x22, x2
+#endif
     clear_bhb
     block_walks
     mrs x0, mpidr_el1
     mov x1, #0xc1000000
     orr x1, x1, #0x700
     bic x1, x0, x1
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    // Stop watchdog renewal before any check: every entry of every core
+    // marks its byte (byte 0 for an MPIDR that names no core).
+    ubfx x19, x0, #8, #3
+    cmp x1, #0
+    csel x2, x19, xzr, eq
+    adrp x3, a733_fault_pending
+    add x3, x3, :lo12:a733_fault_pending
+    mov w0, #1
+    strb w0, [x3, x2]
+    dsb sy
+    cbnz x1, .Lpark
+#else
     cbnz x1, .Lpark
     ubfx x19, x0, #8, #3
+#endif
     adrp x1, a733_cached_records
     add x1, x1, :lo12:a733_cached_records
     add x1, x1, x19, lsl #7
@@ -275,7 +305,21 @@ a733_cached_el3_fault:
     cmp x18, #8
     b.ne .Lexception_report
     cmp x3, #0x17
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    b.ne .Lexception_report
+    // An SMC from EL1: fill this core's retained slot.
+    ldr x4, [x1]
+    mov x23, x1
+    mov x0, x19
+    mov x1, x20
+    mov x2, x21
+    mov x3, x22
+    bl a733_fault_capture
+    mov x1, x23
+    b .Lsmc_report
+#else
     b.eq .Lsmc_report
+#endif
 .Lexception_report:
     mov x20, #4
     mov x21, x2
@@ -314,14 +358,32 @@ a733_cached_el3_vectors:
 .balign 2048
 .global a733_cached_cold_vectors
 a733_cached_cold_vectors:
+.set slot, 0
 .rept 16
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    mov x2, #(0x100 + slot)
+    b a733_cached_cold_fault
+    .space 120
+#else
     b a733_cached_cold_fault
     .space 124
+#endif
+.set slot, slot+1
 .endr
 .balign 2048
 .global a733_cached_el1_vectors
 a733_cached_el1_vectors:
+.set vector_slot, 0
 .macro vector handler
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    .set vector_slot, vector_slot+1
+    .ifc \handler, a733_cached_cold_fault
+    mov x2, #(0x100 + vector_slot - 1)
+    b \handler
+    .space 120
+    .exitm
+    .endif
+#endif
     b \handler
     .space 124
 .endm
@@ -363,5 +425,17 @@ a733_cached_el1_vectors:
     b a733_smp_exit_privileged
 .Lsync_fault:
     ldp x0, x1, [sp], #16
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    // The vector slot from SPSR_EL1.M: 8 from EL0t, 0 from EL1t (images
+    // whose private tasks run on SP_EL0), 4 from EL1h.
+    mrs x16, spsr_el1
+    and x16, x16, #0xf
+    mov x2, #0x108
+    cbz x16, 1f
+    mov x2, #0x100
+    tbz x16, #0, 1f
+    mov x2, #0x104
+1:
+#endif
     b a733_cached_cold_fault
 .section .note.GNU-stack,"",%progbits

@@ -77,9 +77,11 @@ else()
   set(os_result_magic 0x415337334f535231ULL)
 endif()
 apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boot.patch")
+# Retained per-core fault records and their previous-boot report
+# (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
-  drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c)
+  drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/application.patch")
 set(os_generated "${os_build}/boot.c" "${os_build}/application.c")
 if(SUNSTONE_A733_OS_RADIO)
@@ -234,7 +236,7 @@ endforeach()
 get_target_property(os_definitions sunstone-a733-os COMPILE_DEFINITIONS)
 list(FILTER os_definitions EXCLUDE REGEX "^A733_SMP_(CONTRACT|RESULT)_MAGIC=")
 set_property(TARGET sunstone-a733-os PROPERTY COMPILE_DEFINITIONS "${os_definitions}")
-target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1
+target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
@@ -262,7 +264,7 @@ set_property(TARGET sunstone-a733-os PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os PRIVATE "-Wl,-Map,${os_build}/image.map")
 file(GLOB os_headers "${os_root}/apps/os/*.h")
 set(os_inputs ${mb_inputs} ${os_added} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
-  "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_thermal.h"
+  "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h" "${os_root}/include/a733_thermal.h"
   "${os_root}/include/a733_thermal_native.h" "${os_root}/include/gicv3_spi.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES os_inputs)
 if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")

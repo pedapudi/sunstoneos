@@ -122,9 +122,12 @@ and the loader's first expiry, four seconds after arming, bounds startup. The
 first renewal follows the first complete set of reports. If a service is
 still silent at that expiry and the watchdog has not reset the board, the
 task closes as below. When a reported service's window expires, a renewal
-is refused, or the board stops being live, the task closes admission
-(`board_fail`), revokes the Type-C attachment and parks. The watchdog then
-resets the board within four seconds of the last renewal.
+is refused, a core has entered the EL3 fault handler, or the board stops being
+live, the task closes admission (`board_fail`), revokes the Type-C attachment
+and exits with status 5 through `a733_smp_exit_privileged`. The watchdog then
+resets the board within four seconds of the last renewal. The exit records
+the reason in the supervising core's retained fault slot
+([fault capture](fault-capture.md), [reset](reset.md)).
 
 The renewal (`apps/os/watchdog.c`) takes the register mutex, checks that WDT0
 is in the four-second mode with reset output, and that the ROM redirect words

@@ -779,7 +779,10 @@
    "docs/cpu-power.md",
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
-   "docs/designs/cpu-table-walks.md"
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/smp-heterogeneous-measurements.md",
+   "docs/designs/smp-heterogeneous.md",
+   "docs/smp.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1658,7 +1661,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2489,7 +2494,8 @@
   "docs": [
    "docs/cpu-pmu.md",
    "docs/designs/cpu-pmu-measurements.md",
-   "docs/designs/cpu-pmu.md"
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/smp-heterogeneous.md"
   ],
   "library": false,
   "pure_host": true,
@@ -3008,7 +3014,9 @@
  },
  "displayport-composed.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5878,7 +5886,8 @@
    "host"
   ],
   "docs": [
-   "docs/designs/npu-platform.md"
+   "docs/designs/npu-platform.md",
+   "docs/designs/smp-heterogeneous.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6062,7 +6071,9 @@
  },
  "mimus-supervised-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6844,6 +6855,7 @@
    "apps/npu-runtime/README.md",
    "docs/designs/npu-platform-measurements.md",
    "docs/designs/npu-platform.md",
+   "docs/designs/smp-heterogeneous.md",
    "docs/npu-application.md"
   ],
   "library": false,
@@ -7251,7 +7263,8 @@
   "cache_areas": [],
   "docs": [
    "docs/a733-smp-supervised.md",
-   "docs/designs/cpu-table-walks.md"
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/smp-heterogeneous.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8545,6 +8558,24 @@
   "summary": "Compare a boot-CPU-only image built from two source trees.",
   "usb": false
  },
+ "smp-port-cost.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/smp-heterogeneous-measurements.md",
+   "docs/designs/smp-heterogeneous.md",
+   "docs/smp.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count FreeRTOS SMP port instructions per operation on two QEMU cores.",
+  "usb": false
+ },
  "spi-application-fixture.py": {
   "cache_areas": [
    "evidence"
@@ -9137,7 +9168,9 @@
  },
  "usb-host-irq-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

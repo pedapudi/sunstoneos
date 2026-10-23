@@ -168,7 +168,9 @@ static void supervise(void *unused)
            board.session.session_start_ticks+4*A733_SMP_COUNTER_HZ)!=1){
             board_fail(NULL);
             if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
-            park();
+            /* Status 5: renewal stopped. The reason reaches this core's
+             * retained slot, and on core 0 the resident result. */
+            a733_smp_exit_privileged(5,board_resident_stop_detail());
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
