@@ -14,44 +14,56 @@ Six drivers write the same domain sequence: the GPU power controller
 (domain 5), the DE_SYS provider of the framebuffer and G2D (domain 1), the NPU
 platform (domain 4), the video platform (domains 2 and 3), HDMI and DisplayPort
 (domain 10). The accelerator image links the GPU and NPU copies; the GPU
-display image links the GPU, framebuffer and HDMI copies. Each copy reads its
-own supply through the image's per-tick PMIC loop.
+display image links the GPU, framebuffer and HDMI copies.
 
 - **Domain owner.** `drivers/power/a733_power_domains.c` replaces
   `a733_de_sys_power.c` and becomes the only writer of domains 1 and 5;
   domain 4 joins in the NPU stage. A tree check fails if another file writes a
   block the owner holds.
 - **Rows.** A consumer registers one static row before the scheduler starts:
-  domain, rail token and wake semaphore. This package's rows are the
-  framebuffer and G2D (domain 1) and the GPU (domain 5). A domain is ON while
-  an admitted row requests it. Only domain 5, whose one bus master is the GPU,
-  is ever powered off.
+  domain and rail token. This package's rows are the framebuffer and G2D
+  (domain 1) and the GPU (domain 5). A domain is ON while an admitted row
+  requests it. Only domain 5, whose one bus master is the GPU, is ever powered
+  off.
+- **Row request.** The consumer runs its existing authorization, then stores
+  ON in its row with release order and notifies the service. The service
+  admits the row, reads the domain-level registers, writes the delay row and
+  the ON command if the domain is OFF, and polls status. It publishes the row
+  state with release order. The consumer reads that state with one acquire
+  load from its existing per-tick state machine: the GPU through
+  `a733_gpu_power_poll`, the framebuffer and G2D through
+  `a733_power_domain_state`. A blocking `a733_power_domain_wait` and its row
+  semaphore are added together with their first blocking caller, the NPU
+  startup.
 - **Service task.** One task per image runs every PMIC transaction and every
-  domain transition. Each image keeps its PMIC task with its liveness and
-  progress hooks. The loop body becomes `a733_power_service_step()`, which
-  advances all queued work and returns the ticks to block in
-  `ulTaskNotifyTake(pdTRUE, ticks)`.
-- **Row request.** The consumer stores ON in its row with release order and
-  notifies the service. The service reads the domain-level registers, writes
-  the delay row and the ON command if the domain is OFF, and spins on status.
-  It then publishes the row state with release order and gives the row's
-  semaphore. The consumer blocks on that semaphore until its deadline.
+  domain transition. The image's PMIC loop body becomes
+  `a733_power_service_step()`, which advances all queued work and returns the
+  ticks to block in `ulTaskNotifyTake(pdTRUE, ticks)`. It returns one tick
+  while a slot is QUEUED or ACTIVE, the I2C mutex is held, a poll returned
+  BUSY, or a domain transition is pending. Otherwise it returns the ticks to
+  the session deadline, so a liveness check that expires with time still runs.
+  Every park, stop or liveness-revocation path notifies the service.
 - **PMIC request.** `a733_pmic_submit` keeps its interface and calls a kick
-  hook that notifies the service. The hook is set through its own setter,
-  because checks outside this package build `struct a733_pmic_ops` with
-  positional initializers. When a slot leaves ACTIVE, the service gives that
-  slot's semaphore; `a733_power_wait()` takes it, bounded by the request
-  deadline, and then calls `a733_pmic_result`.
+  hook that notifies the service, which removes the per-tick service poll.
+  The hook has its own setter, because checks outside this package build
+  `struct a733_pmic_ops` with positional initializers. Submitters keep polling
+  `a733_pmic_result` once per tick: the USB2 supply snapshots in the GPU display
+  and HDMI audio images, the CPU clock selector writes, PWM, PCIe, the radio,
+  ISP0 and JPEG encode. No submitter blocks, so the design adds no slot
+  semaphore.
 - **Supply verification once per boot.** At provider start plus 5,160 µs (a
   1,000 µs enable delay and a 1,040 mV ramp at 250 µV/µs, board device tree
   lines 2123–2146), the service snapshots DCDC2 and DCDC4. A rail enabled at
   800 mV sets its verified bit in the state word; then the done bit is set.
-  A row is admitted only with its supply's verified bit: DCDC2 for domains 1
-  and 4 (`npu-supply`, line 2932) and DCDC4 for domain 5 (`gpu-supply`,
-  line 3421). The GPU's PMIC consumer then completes from that record with no
-  bus transaction. The ledger accepts selector writes to DCDC3 and DCDC5 only;
-  firmware writes to DCDC2 and DCDC4 after boot are excluded only by board
-  evidence.
+  Row admission makes one acquire load of the state word and requires the
+  supply's verified bit set and every `A733_POWER_PMIC_TRANSFER` bit (provider,
+  clock and ledger fault) clear. DCDC2 supplies domains 1 and 4 (`npu-supply`,
+  line 2932) and DCDC4 supplies domain 5 (`gpu-supply`, line 3421). A fault
+  latched after boot therefore refuses later GPU and DE_SYS starts, as the
+  per-start snapshots it replaces did. The GPU's PMIC consumer completes from
+  that record with no bus transaction. The ledger accepts selector writes to
+  DCDC3 and DCDC5 only; firmware writes to DCDC2 and DCDC4 after boot are
+  excluded only by board evidence.
 - **One PPU clock lease.** The owner holds one stable lease of the PPU clock
   (R_CCU `0x1ac` bit 0) through the GPU resource manager until power-off.
 
@@ -65,24 +77,25 @@ own supply through the image's per-tick PMIC loop.
   tick per retry until FAILED at 10 ms, the vendor bound
   (`pck600_domains.c` lines 112–121). Section 1.3 permits this tick wait for a
   device without qualified interrupt delivery.
-- **PMIC byte phases spin.** S_TWI0 runs at 400 kHz (board device tree lines
-  1946–1955), 22.5 µs per byte. Its interrupt, GIC SPI 203 (`sun60iw2p1.dtsi`
-  line 1962), is unqualified. The service calls `a733_pmic_poll` back to back
-  within a request and reads the raw counter between calls.
-- **Requesters never poll.** A semaphore per row and per slot carries
-  completion. Task notifications would need a second index, because interrupt
-  bindings use index 0 and `configTASK_NOTIFICATION_ARRAY_ENTRIES` is 1. A
-  stale give from a reaped request causes one extra wake; each wait rechecks
-  the published state.
+- **PMIC byte phases spin within a bounded step.** The provider does not set
+  the S_TWI0 rate. It adopts the bootloader's divisor and admits any rate from
+  10 to 400 kHz (`route()` in `drivers/power/a733_pmic.c`). At startup it
+  records the bit time from the admitted divisor and its parent clock as an
+  immutable field. A snapshot is about 240 bit times and a selector write
+  about 320: 0.6 ms and 0.8 ms at 400 kHz, 2.4 ms and 3.2 ms at 100 kHz. The
+  service waits for each byte phase (9 bit times) by reading the raw counter
+  without the provider lock, then calls `a733_pmic_poll` once. Spinning stops
+  after 1 ms in one step, and the step then returns one tick. The interrupt,
+  GIC SPI 203 (`sun60iw2p1.dtsi` line 1962), is unqualified.
 
 ## Memory placement and cache policy
 
 Owner and service state is static in kernel `.bss`, Normal write-back memory:
-the domain table, eight slot semaphores and the rows in consumer storage. The
-PCK600, CCU and R_CCU windows are Device-nGnRnE and are verified once at
-service start with `a733_mapping_check.h`. No buffer is shared with a device,
-so no cache maintenance occurs. Transitions occur a few times per boot, so no
-field gets its own cache line.
+the domain table and the rows in consumer storage. The PCK600, CCU and R_CCU
+windows are Device-nGnRnE and are verified once at service start with
+`a733_mapping_check.h`. No buffer is shared with a device, so no cache
+maintenance occurs. Transitions occur a few times per boot, so no field gets
+its own cache line.
 
 ## Synchronization across cores
 
@@ -92,11 +105,23 @@ field gets its own cache line.
 - Only the service task touches the PCK600 blocks it owns, so a transition
   takes no owner lock and no platform register lock. The CCU and R_CCU
   accesses are reads.
-- PMIC slots keep the provider's try-lock; a slot's semaphore is given only
-  after the provider leaves its object.
-- The service runs at priority 3, below USB0, audio and thermal, on the core
-  its image already uses for the PMIC task. A PMIC request spins at most
-  0.8 ms and a transition 50 µs; higher-priority tasks preempt both.
+- The provider's try-lock is held only inside one `a733_pmic_poll`, never
+  across a byte wait. `a733_pmic_live` takes no lock: it compares the
+  immutable lifetime and makes acquire loads of the stage, the failed flag and
+  the state word, so it never returns BUSY. A fault it sees is latched by the
+  service's next poll. `a733_pmic_result` and `a733_pmic_reap` keep the lock.
+- The service task runs below the image's USB0 and audio tasks, on A55 core 0,
+  created with `xTaskCreateStaticAffinitySet` (mask 1); single-core builds use
+  `xTaskCreateStatic` at the same priority. A higher-priority task preempts it
+  at any point.
+
+| Image (PMIC loop) | PMIC task today | USB0 and audio today | Service task |
+| --- | --- | --- | --- |
+| GPU (`apps/gpu-render/main.c`) | 2, core 0 | `gpu-usb` 2, core 0 | 1, core 0 |
+| Accelerator (`apps/npu-convolution/native.c`) | 4, core 0 | `accelerator-usb` 4, core 0 | 3, core 0 |
+| GPU display (`apps/gpu-display/main.c`) | 4, any core | USB 3 | 2, core 0 |
+| HDMI (`apps/hdmi/main.c`) | 4, any core | output and audio USB 4 | 3, core 0 |
+| DisplayPort and G2D (`apps/board/main.c`) | 4, any core | `board-usb0` 4 | 3, core 0 |
 
 ## Register sequences and sources
 
@@ -129,7 +154,9 @@ PPU.
    first NPU reset or clock write.
 3. Resets, module rate and clocks, then the NPU's existing `DSB SY`.
 4. `a733_power_domain_request(row)` and `a733_power_domain_wait(row, deadline)`,
-   followed by the NPU's existing 2,000 µs settle and readback.
+   followed by the NPU's existing 2,000 µs settle and readback. The wait takes
+   a row semaphore that the service gives after it publishes the row state;
+   both are added to the owner in the same change as this caller.
 
 The NPU package removes its delay-row and ON writes, the PCK write offsets in
 `a733_npu_platform_native.c`, its DCDC2 snapshot and the direct S_TWI0 path in
@@ -140,37 +167,54 @@ The NPU package removes its delay-row and ON writes, the PCK write offsets in
 - **Reused:** the PMIC provider and native adapter, rail tokens and borrow
   pins, the state word (gaining domain fault, verified and done bits),
   `a733_range.h` deadlines and the raw counter time read.
-- **Removed:** the PCK600 sequences in `a733_gpu_power.c` and
-  `a733_de_sys_power.c`, the unused domain-10 entry, the GPU's DCDC4 snapshot
-  per start and the per-tick PMIC loop bodies of images with a row consumer.
-  The display callers keep the `a733_de_sys_power_*` signatures for now; the
-  owner no longer calls their register callbacks, which the display packages
-  delete.
+- **Removed:** the PCK600 sequences in `a733_gpu_power.c`,
+  `include/a733_de_sys_power.h` with `a733_de_sys_power.c`, the unused
+  domain-10 entry, the GPU's DCDC4 snapshot per start and the per-tick PMIC
+  loop bodies of the images in the priority table.
+- **Moved:** G2D (`apps/g2d/native.c`) and the framebuffer
+  (`a733_display_framebuffer.c`) call `a733_power_domain_row_init`,
+  `a733_power_domain_request` and `a733_power_domain_state`. Each keeps its
+  `domain_authorize` function and runs it immediately before the row request.
+  That function checks the designated task, whole-domain exclusion through the
+  exclusive DE_SYS, IOMMU_SYS, VI, VE_DEC and VE_ENC clock tokens, the DCDC2
+  rail token, the PCK lease and, for the framebuffer, media ownership and
+  memory. Their read, write, enter and leave callbacks are deleted.
 
 ## Failure classes (section 1.8)
 
 | Failure | Class | Retained |
 | --- | --- | --- |
-| Verified bit clear, fault bit set, bad rail token, domain-level read wrong, GPU gate or reset open | 1, before any write | Nothing; row uncounted |
+| Designated task, clock tokens, PCK lease, media or memory wrong | 1, in the consumer's `domain_authorize` before the request | Nothing; no request stored |
+| Verified bit clear; provider, clock, ledger or domain fault bit set; bad rail token; domain-level read wrong; GPU gate or reset open | 1, at admission before any write | Nothing; row uncounted |
 | Command and status disagree at adoption | 1; domain FAILED without a write | Nothing; later rows refused |
 | Status not reached in 10 ms, or unexpected | 3 | Domain FAILED with fault bit, its rows and tokens, the PPU clock lease |
 | PMIC transaction fault or deadline | 3, existing rule | I2C mutex, request, borrow, leases |
-| Requester wait ends first | 1 | Nothing; slot kept until reap |
 | Supply mismatch or timeout | 1 | Done bit with verified bit clear; rows refused |
 
 ## Budgets and measurement
 
+The new `checks/power-domains-service.c` runs the service step against a
+FreeRTOS shim that counts ticks, wakes and notifications, with one modeled core
+and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
+
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Polls and tick waits per snapshot; per selector write | 44 and 56 polls; up to one tick each in images that sleep after every poll | 0 tick waits; spin ≤ 0.6 ms and ≤ 0.8 ms at 22.5 µs per byte | `checks/a733-pmic-cost.c`; new `checks/power-domains-service.c` with a FreeRTOS shim counting ticks, wakes and gives |
-| Requester wakes per PMIC or row request | One per tick of its own polling | 1 | `checks/power-domains-service.c` |
-| Service wakes per second with no work | 1,000 | 0, or the image's watchdog period | Same |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0, one step of ≤ 0.6 ms and ≤ 0.8 ms; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c` |
+| BUSY results seen by other cores during one snapshot | `a733_pmic_live`: BUSY whenever it meets a poll | `a733_pmic_live` 0; `a733_pmic_result` and `a733_pmic_reap` ≤ 1 per caller | `power-domains-service.c`, concurrent caller on the second core |
+| CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in every image in the table | 0 on one core and on two | `power-domains-service.c` |
+| Service wakes per second with no work | 1,000 | 0 until the session deadline; park, stop and revocation notify | `power-domains-service.c` |
+| Row-state read by GPU platform poll, framebuffer and G2D | DE_SYS: platform register lock and 2 reads per poll | ≤ 100 instructions, 1 acquire load, no lock | `checks/rail-leases-cost.py` (Unicorn) |
+| Ticks from row request to visible ON, acknowledgement within 50 µs | DE_SYS: at least 1; GPU: 0 | 1 for GPU, framebuffer and G2D (their next poll), once per start | `power-domains-service.c` |
+| PMIC result polls by the submitters named under PMIC request | One per tick | One per tick; unchanged | Not changed |
 | PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | `checks/power-domains-pck.c` |
-| Consumer cost of a row request | DE_SYS: platform register lock and 2 reads per poll | ≤ 100 instructions, 1 acquire load, no lock | `checks/rail-leases-cost.py` (Unicorn) |
-| Tick waits, row request to ON, acknowledgement within 50 µs | DE_SYS: at least 1; GPU: 0 | 0 on one core and on two | `checks/power-domains-service.c` |
 | Slow acknowledgement | One caller poll per tick | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick | `checks/power-domains-pck.c` |
 | Register accesses per domain-5 ON | 14 (counted from the GPU steps) | 14, once per transition | `checks/a733-gpu-power.c` trace |
 | Files that write the delay row | 6, plus 2 native allowlists | 5 after this package; 4 after the NPU stage | New `checks/power-domains-tree.py` |
+
+The service check also covers the park paths. A park request in the GPU
+display image completes only when the PMIC is idle and every domain is ON, OFF
+or FAILED with no row transition pending. The GPU finite-return stop and the
+GPU liveness park complete before their deadlines.
 
 ## Left out
 
@@ -179,12 +223,13 @@ The NPU package removes its delay-row and ON writes, the PCK write offsets in
   needs, are not verified.
 - Power-off of domains 1 and 4, which have several masters; no caller needs it.
 - The S_TWI0 packet engine and both interrupts: delivery is unqualified, and the
-  spin costs at most 0.8 ms per request at a few requests per second.
+  spin is capped at 1 ms per step at a few requests per second.
 - Lighter barriers, which need the board qualification in
   [docs/shared-helpers.md](../shared-helpers.md).
 
 ## Board evidence required
 
+- The inherited S_TWI0 divisor (`TWI+0x14`) and the bus rate it gives.
 - PCK600 time to ON for domains 1, 4 and 5 and to OFF for domain 5, which
   replaces the 50 µs spin bound with the longest time plus 50%.
 - GPU and framebuffer starts through the owner with the same register trace as
@@ -196,7 +241,15 @@ The NPU package removes its delay-row and ON writes, the PCK write offsets in
 
 ## Changes outside this package
 
-The PMIC task loops of the GPU, accelerator, GPU display, HDMI, DisplayPort and
-G2D images call the service step, and the GPU and NPU native adapters drop
-their PCK write offsets. These edits go to the primary agent as one patch. The
-FreeRTOS configuration does not change.
+One patch for the primary agent holds these edits; the FreeRTOS configuration
+does not change.
+
+- The PMIC loops in the priority table call the service step and create the
+  service task at the listed priority and core.
+- The GPU display park predicate (`apps/gpu-display/display.c`) also requires
+  every domain in ON, OFF or FAILED with no row transition pending. The park
+  request there, the GPU finite-return stop (`apps/gpu-finite/finite.c`) and
+  the GPU liveness park (`apps/gpu-render/main.c`) notify the service.
+- G2D and the framebuffer move to the row interface as listed under
+  **Moved**.
+- The GPU and NPU native adapters drop their PCK write offsets.
