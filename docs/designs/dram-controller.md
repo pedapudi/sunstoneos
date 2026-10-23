@@ -84,9 +84,13 @@ inside boot0. The section on left-out items lists what else waits for evidence.
   the stage's existing `goto fail` path, which retains the framebuffer.
 - **Images.** The call and the evidence member of the framebuffer structure
   compile only when `SUNSTONE_DRAM_PRIORITY` is defined. The gpu-display build
-  defines it as 2 (table) in its normal image and the table load image, and as
-  1 (reads only) in the no-table load image. The HDMI and DisplayPort builds
-  leave it undefined, so nothing new runs there.
+  defines it as 1 (reads only) in the no-table load image and as 2 (table) in
+  the table load image. Non-secure access to the NSI is unproven, so the first
+  NSI access on the board is in the no-table load image. The normal
+  gpu-display image leaves the macro undefined until that image shows
+  Non-secure reads and the table load image shows writes that read back; it
+  then defines it as 2. The HDMI and DisplayPort builds leave it undefined, so
+  nothing new runs there.
 - **Latency window.** Port 2 over a period P of 50 ms, in the load images
   only. Each phase runs under one `enter()` and `leave()` through a load-only
   accessor of the framebuffer, compiled under `SUNSTONE_GPU_DISPLAY_DRAM_LOAD`.
@@ -178,6 +182,10 @@ storing the end phase. The component adds no lock.
   before it returns.
 - Window refused or abandoned: class 1, counted; nothing is retained.
 - A failed access in the load accessor: the framebuffer's existing retain path.
+- A synchronous external abort or SError from an NSI or `+0x584` access, as a
+  Secure-only NSI may raise: the access never returns, the platform's
+  exception capture records ESR, ELR and FAR and ends the image, and nothing
+  retries the access.
 
 ## Reuse
 
@@ -247,7 +255,7 @@ no-table load images run in one board session.
   | 0 | `u16` ×8: windows started, accepted in phase A, accepted in phase B, refused late, refused idle, refused free-running, out of range, abandoned |
   | 16 | `u16`: result bits (hook built, table image, hook result, collect disables first, phases ended early); `u16`: stopping field of a failed hook (0, or 1 + 3 × port index + field index) |
   | 20 | `u16` ×6: inherited and final fields of ports 2, 14 and 15 (mode bits 1–0, priority bits 5–2, select bit 6) |
-  | 32 | `u16` ×4: configured CPU-L, CPU-B and DSU MHz (0 when undecoded), 0 |
+  | 32 | `u16` ×4: configured CPU-L, CPU-B and DSU MHz (0 when undecoded); at offset 38, `phase_ticks_max`, the longest start or collect in 24 MHz counter ticks, saturating at 65,535 |
   | 40 | `u32` ×2: CCU `+0x580`, `+0x584` |
   | 48 | `u32` ×2: `fabric_hz[2]`; phase B length in ms |
   | 56 | `u64` ×6: per phase, Σx, Σx², port 2 read data |
@@ -263,7 +271,7 @@ board.
 | --- | --- | --- | --- |
 | Hook | 2 CCU reads; per field 1 NSI access at target, else 3; at most 27 NSI accesses; 1 lock pair; once per framebuffer instance; 0 NSI accesses when the NSI is not running | Host model of the framebuffer prepare sequence | 0 OS accesses |
 | HDMI, DisplayPort and steady state | 0 added accesses, tasks, timers or interrupts | Linked-symbol check; host model | 0 |
-| Window | Init: 8 clock reads, once. Start: 6 NSI accesses, 1 lock pair, 2 ISB, no added DSB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 ISB, no added DSB. Abandon: 0 register accesses; 1 counter read in phase B. Pending: 1 ISB, 1 counter read. At most 10 µs per phase | Host model per phase; counter around each phase on the board | None |
+| Window | Init: 8 clock reads, once. Start: 6 NSI accesses, 1 lock pair, 2 ISB, no added DSB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 ISB, no added DSB. Abandon: 0 register accesses; 1 counter read in phase B. Pending: 1 ISB, 1 counter read. At most 20 µs per phase | Host model per phase; `phase_ticks_max` on the board | None |
 | Counter headroom | No 32-bit wrap in P | Arithmetic at 76.8 GB/s: port 2 ≤ 2.4 × 10⁸ units; period ≤ 3 × 10⁷ cycles at 600 MHz; latency sum below 2³² while DE averages under 143 reads outstanding | Not applicable |
 | Copy-load stop | No pass starts after the end phase or a state change is stored | Host model of the copy task loop | Not applicable |
 | Scan-out | HDMI stays `ACTIVE` without `A733_HDMI_UNDERFLOW`; m(no table) − m(table) in phase B > 2 √(SE₁² + SE₂²) | Both load images, under the conclusiveness rule | Not measured |
@@ -346,7 +354,9 @@ recorded as tested before they pass:
 
 ## Board evidence that would confirm the design
 
-- Inherited and final fields and the two CCU words from the gpu-display images.
+- Inherited fields and the two CCU words from the no-table load image, the
+  first image that accesses the NSI, then final fields from the table load
+  image. The normal gpu-display image gains the hook only after both.
 - The scan-out row from both load images, no-table image first, with the
   inherited fields, the CPU clocks, the copy passes per core, the third
   presentation time and the collect order bit, which shows whether the
