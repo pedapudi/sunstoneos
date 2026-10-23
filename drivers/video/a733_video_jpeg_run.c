@@ -1,14 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_jpeg_run.h"
+#include "a733_range.h"
 
 static int span(uint64_t a, uint64_t n, unsigned align)
 {
     return a >= 0x1000 && !(a & (align - 1u)) && n && n <= UINT64_C(0x100000000) - a &&
            a < UINT64_C(0x100000000);
-}
-static int overlap(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
-{
-    return a < b + m && b < a + n;
 }
 static int fault(struct a733_video_jpeg_run *r)
 {
@@ -34,9 +31,9 @@ int a733_video_jpeg_begin(struct a733_video_jpeg_run *r,
         !span(j->input_iova,j->input_bytes,16) ||
         !span(j->luma_iova,j->luma_bytes,32) ||
         !span(j->chroma_iova,j->chroma_bytes,32) ||
-        overlap(j->input_iova,j->input_bytes,j->luma_iova,j->luma_bytes) ||
-        overlap(j->input_iova,j->input_bytes,j->chroma_iova,j->chroma_bytes) ||
-        overlap(j->luma_iova,j->luma_bytes,j->chroma_iova,j->chroma_bytes)) return 0;
+        a733_extents_overlap_prechecked(j->input_iova,j->input_bytes,j->luma_iova,j->luma_bytes) ||
+        a733_extents_overlap_prechecked(j->input_iova,j->input_bytes,j->chroma_iova,j->chroma_bytes) ||
+        a733_extents_overlap_prechecked(j->luma_iova,j->luma_bytes,j->chroma_iova,j->chroma_bytes)) return 0;
     r->ops = *ops; r->job = *j; r->context = ctx; r->deadline = deadline;
     r->state = A733_VIDEO_JPEG_ACQUIRE;
     return 1;
@@ -51,6 +48,18 @@ int a733_video_jpeg_begin_retained(struct a733_video_jpeg_run *r,
     int result=a733_video_jpeg_begin(r,ops,ctx,job,deadline);
     if(result==1){r->retained_readout=1;r->retained_copy=copy_verified;}
     return result;
+}
+
+int a733_video_jpeg_next(struct a733_video_jpeg_run *r,const struct a733_video_jpeg_job *j)
+{
+    if(!r||!j||r->state!=A733_VIDEO_JPEG_COPIED||!r->retained_readout||
+       j->input!=r->job.input||!j->file_bytes||j->file_bytes>j->input_bytes||
+       j->input_iova!=r->job.input_iova||j->input_bytes!=r->job.input_bytes||
+       j->luma_iova!=r->job.luma_iova||j->luma_bytes!=r->job.luma_bytes||
+       j->chroma_iova!=r->job.chroma_iova||j->chroma_bytes!=r->job.chroma_bytes)return 0;
+    r->job.file_bytes=j->file_bytes;r->index=0;r->status=0;
+    r->state=A733_VIDEO_JPEG_PARSE;
+    return 1;
 }
 
 /* These compound IDs take the legacy MJPEG decoder and split-register map in

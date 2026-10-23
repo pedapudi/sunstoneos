@@ -1,18 +1,19 @@
 #include "pwm.h"
 #include "boot.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct pwm_application pwm;
 __attribute__((used,retain)) const uint64_t pwm_geometry[5]={A733_PWM_SESSION_MAGIC,872,512,25000,0};
 static int live(void)
 {return board_live(NULL)&&pwm.deadline&&a733_smp_counter()/24<pwm.deadline;}
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mappings(void)
 {
  static const uintptr_t a[]={0x02527000,0x02527240,0x02002784,0x02002510,0x07090160,
  0x0701000c,0x02000040,0x02000048,0x02000090,0x03400000,0x03400108,0x03400188,0x03406218};
- for(unsigned i=0;i<sizeof(a)/sizeof(a[0]);++i){struct aarch64_translation t;
-  if(!aarch64_device_translate(a[i],1,&t)||t.physical!=a[i]||t.attributes||t.shareability!=2)return 0;}
+ for(unsigned i=0;i<sizeof(a)/sizeof(a[0]);++i)
+  if(!a733_mapping_check(aarch64_device_translate,a[i],a[i],&device_rule))return 0;
  return 1;
 }
 static int authorize(void *v,const struct a733_pwm_config *c,const struct a733_clock_token *t)
@@ -69,7 +70,7 @@ int pwm_submit(const uint8_t raw[80])
   q.generation!=pwm.session.board.generation||!q.sequence||q.reserved||
   memcmp(q.session_digest,pwm.session_digest,32)||q.kind<1||q.kind>4||
   q.budget_us<20000||q.budget_us>100000||
-  ((q.kind<=2)?(!q.argument||q.argument>=600):q.kind==3?q.argument!=0:q.argument>1))reason=2;
+  ((q.kind<=2)?(!q.argument||q.argument>600):q.kind==3?q.argument!=0:q.argument>1))reason=2;
  else if(q.sequence==pwm.accepted.sequence){
   if(memcmp(&q,&pwm.accepted,sizeof(q)))reason=3;
  }else if(!pwm.ready||pwm.command_pending)reason=4;

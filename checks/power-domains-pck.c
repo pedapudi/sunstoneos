@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Display PCK domain provider over modeled registers. For DE_SYS (1), VO0 (9)
- * and VO1 (10) an OFF domain receives the pinned sun60iw2 delay row and one ON8
+/* Display PCK domain provider over modeled registers. For DE_SYS (1) and VO1
+ * (10) an OFF domain receives the pinned sun60iw2 delay row and one ON8
  * request at its own block, preserving other command bits; an ON domain is
- * adopted without writes. Other domains, incoherent initial state and a status
- * that stays OFF past the 10 ms bound are refused. */
+ * adopted without writes. Other domains, incoherent initial state and a
+ * status that stays OFF past the 10 ms bound are refused. */
 #include "a733_de_sys_power.h"
 #include <assert.h>
 #include <stdio.h>
@@ -18,7 +18,7 @@ static int authorize(void *v){(void)v;if(authorize_busy){--authorize_busy;return
 static int now(void *v,uint64_t *out){(void)v;now_us+=step_us;*out=now_us;return 1;}
 static int enter(void *v,uint64_t d){(void)v;assert(d>now_us);return 1;}
 static void leave(void *v){(void)v;}
-static uint32_t *word(uintptr_t a)
+static uint32_t *legacy_word(uintptr_t a)
 {
     static const unsigned offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
     assert(a>=base && a<base+0x1000);
@@ -27,18 +27,18 @@ static uint32_t *word(uintptr_t a)
     for(unsigned i=0;i<5;++i)if(a==base+offsets[i])return &delays[i];
     assert(0);return NULL;
 }
-static int read(void *v,uintptr_t a,uint32_t *out)
+static int legacy_read(void *v,uintptr_t a,uint32_t *out)
 {
     (void)v;
     if(a==base+8 && (command&15)==8 && (status&15)==0 && !status_delay--)status=(status&~15u)|8;
-    *out=*word(a);return 1;
+    *out=*legacy_word(a);return 1;
 }
-static int write(void *v,uintptr_t a,uint32_t value)
+static int legacy_write(void *v,uintptr_t a,uint32_t value)
 {
     (void)v;assert(a!=base+8 && trace_count<16);
-    trace[trace_count].address=a;trace[trace_count++].value=value;*word(a)=value;return 1;
+    trace[trace_count].address=a;trace[trace_count++].value=value;*legacy_word(a)=value;return 1;
 }
-static const struct a733_de_sys_power_ops ops={authorize,now,enter,leave,read,write};
+static const struct a733_de_sys_power_ops ops={authorize,now,enter,leave,legacy_read,legacy_write};
 
 static void reset(unsigned domain,uint32_t initial_command,uint32_t initial_status)
 {
@@ -53,14 +53,12 @@ static int run(struct a733_de_sys_power *p)
     for(unsigned i=0;i<100000 && !r;++i)r=a733_de_sys_power_poll(p);
     return r;
 }
-
 int main(void)
 {
     _Static_assert(A733_DE_SYS_PCK_BASE==UINT32_C(0x07061000),"DE_SYS block");
-    _Static_assert(A733_PCK_DOMAIN_BASE(9)==UINT32_C(0x07069000),"VO0 block");
     _Static_assert(A733_PCK_DOMAIN_BASE(10)==UINT32_C(0x0706a000),"VO1 block");
-    static const unsigned domains[]={1,9,10};
-    for(unsigned i=0;i<3;++i){
+    static const unsigned domains[]={1,10};
+    for(unsigned i=0;i<2;++i){
         /* OFF: delay row, then ON8 with bit 8 of the command word preserved. */
         struct a733_de_sys_power p={0};
         reset(domains[i],0x100,0);status_delay=3;authorize_busy=2;
@@ -88,14 +86,13 @@ int main(void)
         assert(run(&s)==-1 && trace_count==6 && now_us<20000);
         assert(a733_de_sys_power_poll(&s)==-1 && trace_count==6);
     }
-    /* Only the display domains are accepted; the old initializer is DE_SYS. */
-    for(unsigned d=0;d<16;++d)if(d!=1 && d!=9 && d!=10){
+    /* Only domains 1 and 10 are accepted; the old initializer is DE_SYS. */
+    for(unsigned d=0;d<16;++d)if(d!=1 && d!=10){
         struct a733_de_sys_power p={0};
         assert(!a733_de_sys_power_init_domain(&p,&ops,NULL,1000000,d) && !p.self);
     }
     struct a733_de_sys_power p={0};
     assert(a733_de_sys_power_init(&p,&ops,NULL,1000000) && p.base==A733_DE_SYS_PCK_BASE);
-    puts("PASS display PCK domains 1/9/10: OFF delay row and ON8 at each block, ON adoption, "
-        "incoherence and 10 ms refusals, other domains refused");
+    puts("PASS display PCK domains 1 and 10: ON sequence, adoption and refusals");
     return 0;
 }

@@ -1,9 +1,5 @@
 #include "nbg_relocation.h"
-
-static int cpu_range(const void *p, size_t n)
-{
-    return p != NULL && n != 0 && n <= UINTPTR_MAX - (uintptr_t)p;
-}
+#include "a733_range.h"
 
 static uint32_t read_word(const unsigned char *p)
 {
@@ -22,8 +18,8 @@ int nbg_relocate(void *buffer, size_t bytes,
 {
     const uint64_t address_space = UINT64_C(1) << 32;
     if (!count || count > NBG_RELOCATION_MAX_PATCHES ||
-        !cpu_range(buffer, bytes) ||
-        !cpu_range(patches, count * sizeof(*patches)))
+        !a733_span_excl_nonempty(buffer, bytes) ||
+        !a733_span_excl_nonempty(patches, count * sizeof(*patches)))
         return 0;
     uintptr_t begin = (uintptr_t)buffer, meta = (uintptr_t)patches;
     if (begin < meta + count * sizeof(*patches) && meta < begin + bytes)

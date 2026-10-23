@@ -15,6 +15,16 @@ struct nbg_assembly_plan {
     struct nbg_allocation_requirement buffers[NBG_ALLOCATION_COUNT];
     uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
 };
+/* General plan: NN, COEFF, POOL and COMMAND as above, then one allocation per
+ * input tensor in model order, then one per output tensor. With one input
+ * and one output this is the six-slot plan order. */
+#define NBG_ASSEMBLY_MAX_TENSORS 8u
+#define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS)
+struct nbg_assembly_layout {
+    struct nbg_allocation_requirement buffers[NBG_LAYOUT_MAX_BUFFERS];
+    uint32_t inputs, outputs;
+    uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
+};
 struct nbg_assembly_buffer {
     void *cpu;
     size_t bytes;
@@ -62,4 +72,43 @@ int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan
 int nbg_assemble(const struct nbg_model *,
                  const struct nbg_assembly_buffer[NBG_ALLOCATION_COUNT],
                  struct nbg_assembly_plan *);
+
+/* General form of the two functions above for graphs with 1..8 inputs and
+ * 1..8 outputs of affine UINT8, INT8 or INT16 tensors. In the directory
+ * format it also accepts neural-transpose operations (kind 8), which the
+ * compiler emits around fully connected layers, and the 32-byte operation
+ * state for every operation; nn_operations then counts both kinds. The
+ * relocation, ring and checksum policy is otherwise identical, and patch
+ * sources 1 and 2 select the input or output allocation by tensor index. Supply
+ * NBG_ALLOC_INPUT + inputs + outputs buffer slots in plan order with the same
+ * placement rules. The same refusal guarantees and the same lack of
+ * submission authorization apply. The six-slot functions remain limited to
+ * one UINT8 input and one UINT8 output. */
+int nbg_assembly_layout(const struct nbg_model *, struct nbg_assembly_layout *);
+int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
+                        struct nbg_assembly_layout *);
+
+/* Stepwise form of nbg_assemble_layout for a loader that writes into
+ * memory no device or other task uses while it runs, in steps of bounded
+ * length. The file must be the authenticated copy of one that
+ * nbg_assembly_layout accepted at admission: begin repeats the profile and
+ * placement checks but not the checksum pass, which the authentication
+ * supersedes. begin writes nothing; it returns the plan, without the patch
+ * counts, and a cursor at the first operation.
+ *
+ * Each next call validates and writes up to `operations` operations: the
+ * command prefix before the first one, each NN descriptor in place and each
+ * command state after the previous one. After the last operation it checks
+ * that every patch was consumed, writes the footer, fills in the patch counts
+ * and returns 1; it returns 0 while operations remain and -1 on refusal.
+ * cursor.offset is then the number of command bytes written from the start
+ * of the command allocation. Unlike nbg_assemble_layout it writes nothing
+ * else: coefficients, END pairs after the stream, padding and the tensor and
+ * pool allocations are the caller's, and a refusal can leave earlier
+ * operations written, so the caller discards the whole assembly. */
+struct nbg_assembly_cursor { uint32_t operation, patch, offset; };
+int nbg_assembly_begin(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
+                       struct nbg_assembly_layout *, struct nbg_assembly_cursor *);
+int nbg_assembly_next(const struct nbg_model *, const struct nbg_assembly_buffer *,
+                      struct nbg_assembly_layout *, struct nbg_assembly_cursor *, unsigned operations);
 #endif

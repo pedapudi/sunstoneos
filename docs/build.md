@@ -58,18 +58,14 @@ reviewed against. Configuration stops with the patch report when a hunk does
 not match. A hunk whose exact context sits a few lines away from its recorded
 line is still accepted. No reject file is written.
 
-Four patches in the boot-CPU PWM and crypto applications were written against
-an earlier `apps/board/main.c` and `apps/storage-read-single-core/runtime.c`
-and still need fuzz. `cmake/patch.cmake` lists each with the SHA-256 of the
-output that was checked to place every hunk at its intended location. Such a
-patch is applied with fuzz only while its output keeps that digest. Any further
-change to its base or to the patch stops configuration; regenerate the patch
-against its current base and remove its entry.
-
 The central `CMakeLists.txt` uses this function for every profile it includes.
-The standalone projects under `apps/` and `platform/` still define their own
-copy, which accepts fuzz. A host check exercises exact, offset and fuzzy
-application, the pinned outputs and the board-mode rule described below:
+The standalone boot-CPU projects `apps/crypto-single-core`,
+`apps/pwm-single-core`, `apps/thermal-single-core` and
+`apps/storage-read-single-core` include the same file. The other standalone
+projects under `apps/` and `platform/` define their own copy, which accepts
+fuzz. A host check exercises exact, offset and fuzzy application, applies the
+boot-CPU PWM `main.patch` to `apps/board/main.c` and to a changed copy of it,
+and checks the board-mode rule described below:
 
 ```sh
 PATH="$HOME/.cache/sunstoneos/host/usr/lib/llvm-21/bin:$PATH" \

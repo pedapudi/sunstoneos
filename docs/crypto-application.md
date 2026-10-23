@@ -74,7 +74,7 @@ admitted package with `apps/crypto/prepare.py`; the coordinator uses
 `tools/check-a733-crypto-supervised.py` only after queue review. A package built
 from modeled authority facts is a software fixture and must never be deployed.
 The existing CE controller, SHA/AES client and shared supervisor evidence is
-reused. New checks target application admission, sequential orchestration,
+reused. The application checks cover admission, sequential orchestration,
 publication revocation, copied framing and host acceptance. Native linkage and
 modeled instruction execution do not qualify physical CE behavior.
 
@@ -98,8 +98,8 @@ hardware operation or cold-start qualification was performed.
 
 ## Retained admission and terminal USB failure
 
-A crypto-local boot patch now seals the entire 824-byte session during primary
-EL3 admission. It rehashes the copied bytes against the private admitted
+The crypto boot patch, [apps/crypto/boot.patch](../apps/crypto/boot.patch),
+seals the entire 824-byte session during primary EL3 admission. It rehashes the copied bytes against the private admitted
 contract, validates the complete session and publishes the retained copy before
 provider construction. A failed attempt cannot be retried, and failed coherence
 publication leaves the snapshot unavailable. The fixed USB0-only image replaces
@@ -112,13 +112,13 @@ A disagreement refuses provider or CE construction, and later mutations at the
 live session address cannot replace admitted CE owner, authority or evidence.
 The fixed SHA/AES inputs, reference bytes and arithmetic paths are unchanged.
 
-Every crypto USB terminal stop now calls `board_fail` before parking. Shared
+Every crypto USB terminal stop calls `board_fail` before parking. Shared
 liveness and the existing read-only crypto output gate therefore close before
 any further queued transmission. The owner task observes failure and follows
-its existing retained-session path; no healthy CE operation or resource release
-is introduced. This correction does not establish physical CE admission.
+its retained-session path; it starts no CE operation and releases no
+resource. This does not establish physical CE admission.
 
-The focused correction passed its sanitizer seal fixture and six linked
+The focused sealing check passed its sanitizer seal fixture and six linked
 consumer/revocation cases. The instruction checks model cache publication,
 CE construction, USB provider observations and scheduler boundaries. They execute
 the actual sealed-session checks, board failure/liveness and output gate, without
@@ -126,13 +126,9 @@ running SHA/AES operations. The target links only its crypto boot object, whose
 seal hook runs before cached setup. Evidence is preserved at
 `~/.cache/sunstoneos/evidence/crypto-sealing-20261018/`.
 
-The first external batch script stopped before configuration because it retained
-a JPEG-only fixture variable. That script and diagnosis are preserved. Its
-successful compile/import and sanitizer results were reused; only configuration,
-the affected native link and remaining instruction cases resumed. The fixed
-vectors, CE clients and prior arithmetic/reference evidence were unchanged and
-were not replayed. The corrected image supersedes the earlier mutable-session
-handoff; physical admission remains separately blocked.
+The sealing check reuses the SHA/AES arithmetic and reference results of the
+focused software batch above instead of running the fixed vectors again. Physical admission remains
+separately blocked.
 
 ## Independent boot-CPU image
 
@@ -142,13 +138,18 @@ application on the boot CPU. Configure the standalone
 TinyUSB and board-provider dependencies, or select the crypto application from
 the repository root. The all-core crypto target remains available.
 
-Crypto-local patches reuse the accepted retained single-core monitor, runtime
-and board-provider startup. They seal both the board prefix and the complete
-824-byte crypto session at EL3. Retained EL1 copies survive BSS clearing while
-the actual EL1 translation tables deny access to the monitor contract, saved
-state and tables. Startup checks every secondary power/control/mode word before
-provider initialization. The SRE kernel runs the existing trusted tasks on the
-boot CPU and restores the preparation exception mask after static task creation.
+The image links the shared boot-CPU entry, monitor and runtime of
+`apps/storage-read-single-core`, built with `SUNSTONE_CRYPTO_SINGLE_CORE`.
+The monitor checks every secondary power, control and mode word, then seals
+both the board prefix and the complete 824-byte crypto session at EL3. Two
+crypto-local patches change the board sources for this image:
+[session.patch](../apps/crypto-single-core/session.patch) keeps the sealed
+board session in `.crypto_runtime_retained`, and
+[main.patch](../apps/crypto-single-core/main.patch) masks all exceptions after
+static task creation and again before the scheduler starts. The retained EL1
+copies survive BSS clearing, while the EL1 translation tables deny access to
+the monitor contract, saved state and tables. The SRE kernel runs the trusted
+tasks on the boot CPU.
 
 CE registers retain outer-shareable Device mappings. The retained cacheable CE
 page belongs to the compact 2 MiB write-back pool; the board USB provider retains
@@ -268,8 +269,7 @@ publication revocation, CPU key cleanup and optional oracle comparison. Native
 USB frames feed the host-copy tests. Diagnostic orchestration and host capture
 remain compatible. The package check uses actual linked-image identities,
 producer-derived request records and accepted provider fixture values; its
-physical authority remains explicitly modeled. Focused Astra review has no
-unresolved findings.
+physical authority remains explicitly modeled.
 
 Exact inputs, linked objects, images, frames and results are preserved at
 `~/.cache/sunstoneos/evidence/crypto-runtime-input-20261018/`. The standalone

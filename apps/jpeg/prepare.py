@@ -24,7 +24,9 @@ REQUEST_MAGIC=0x415337334a504c32
 def session_check(raw):
     require(len(raw)==856,'JPEG session must be856bytes.')
     require(board.session_check(raw[:592])==2,'JPEG requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x415337334a504132,2,856),'Invalid JPEG session extension.')
+    version=struct.unpack_from('<3Q',raw,592)
+    require(version in ((0x415337334a504132,2,856),(0x415337334a504132,3,856)),'Invalid JPEG session extension.')
+    require(version[1]==2 or not any(raw[800:832]),'A JPEG sequence session carries oracles per image.')
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid JPEG owner.')
     require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)),'Missing JPEG physical or fixture evidence.')
@@ -52,6 +54,7 @@ def embedded_reference(image,session):
 
 def upload_bytes(jpeg,reference,session):
     session_check(session)
+    require(struct.unpack_from('<Q',session,600)[0]==2,'Single JPEG upload requires a version 2 session.')
     reference=reference or b''
     require(0<len(jpeg)<=INPUT_CAPACITY and len(reference)<=OUTPUT_CAPACITY,'JPEG upload exceeds admitted capacities.')
     require(hashlib.sha256(jpeg).digest()==session[768:800],'JPEG input digest differs.')
@@ -60,6 +63,42 @@ def upload_bytes(jpeg,reference,session):
     epoch,generation=struct.unpack_from('<2Q',session,24)
     require(epoch and generation,'JPEG upload requires a live session identity.')
     return struct.pack('<4I2Q',0x5547504a,1,len(jpeg),len(reference),epoch,generation)+jpeg+reference
+
+def jpeg_size(data):
+    """Width and height from the baseline SOF0 segment."""
+    pos=2
+    while pos+4<=len(data) and data[pos]==0xff:
+        marker=data[pos+1];length=int.from_bytes(data[pos+2:pos+4],'big')
+        if marker==0xc0:height,width=struct.unpack_from('>HH',data,pos+5);return width,height
+        pos+=2+length
+    raise ValueError('JPEG has no baseline frame header.')
+
+def sequence_manifest(images,references):
+    """Manifest of a version 3 session: per image its lengths, size and digests."""
+    require(0<len(images)<=8 and len(references)==len(images),'A JPEG sequence holds one to eight images.')
+    out=struct.pack('<4I',0x5347504a,1,len(images),0)
+    for jpeg,reference in zip(images,references):
+        reference=reference or b'';width,height=jpeg_size(jpeg)
+        count=observe.geometry(width,height,(width+31)&~31,(height+31)&~31)
+        require(0<len(jpeg)<=INPUT_CAPACITY and len(reference) in (0,count),'JPEG sequence entry exceeds admitted capacities.')
+        out+=struct.pack('<4I',len(jpeg),len(reference),width,height)+hashlib.sha256(jpeg).digest()+(hashlib.sha256(reference).digest() if reference else bytes(32))
+    return out
+
+def sequence_upload(session,manifest):
+    session_check(session)
+    require(struct.unpack_from('<Q',session,600)[0]==3 and hashlib.sha256(manifest).digest()==session[768:800],'JPEG sequence manifest/session differs.')
+    epoch,generation=struct.unpack_from('<2Q',session,24)
+    return struct.pack('<4I2Q',0x5547504a,2,len(manifest),0,epoch,generation)+manifest
+
+def image_upload(session,manifest,index,jpeg,reference=None):
+    """Frame for image index; send it only after the previous result arrived."""
+    reference=reference or b'';count=struct.unpack_from('<I',manifest,8)[0]
+    require(0<=index<count,'JPEG sequence index exceeds manifest.')
+    entry=manifest[16+80*index:96+80*index]
+    require(struct.unpack_from('<2I',entry)==(len(jpeg),len(reference)) and entry[16:48]==hashlib.sha256(jpeg).digest() and
+        entry[48:80]==(hashlib.sha256(reference).digest() if reference else bytes(32)),'JPEG image differs from its manifest entry.')
+    epoch,generation=struct.unpack_from('<2Q',session,24)
+    return struct.pack('<4I2Q',0x4947504a,index,len(jpeg),len(reference),epoch,generation)+jpeg+reference
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
@@ -100,7 +139,9 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','decoder_off_reset_held','skipped_masters_physically_quiescent','remote_secure_writers_excluded','irq81_owned_masked','iommu_irqs_owned_masked'],
             'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','immutable_rom_mapping'],
             'electrical':['dcdc2_shared_800mv','ve_operating_point_qualified','stable_ve_pll'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse','one_attempt']}[key]
+            # A sequence refills its retained buffers after each healthy image.
+            'supervision':['whole_board_power_removal','permanent_dma_retention',
+                'no_reuse_after_fault' if struct.unpack_from('<Q',raw,600)[0]==3 else 'no_reuse','one_attempt']}[key]
         require(all(fact.get(k) is True for k in required),'Required JPEG physical fact absent.')
     return cache
 

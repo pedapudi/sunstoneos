@@ -17,6 +17,16 @@ static int active(enum a733_npu_state state)
            state == A733_NPU_CANCEL_ASSERTED || state == A733_NPU_CANCEL_WAIT;
 }
 enum { IRQ_EVENT=1u, IRQ_FAILED=2u, SERVICE_DEFERRED=5, SERVICE_HELD=6 };
+/* last is NPU_SERVICE_WAIT outside runtime mode, which folds away the LOAD
+ * comparison there. */
+static inline int valid_request(const struct npu_service_request *r, enum npu_service_operation last)
+{
+    return (unsigned)r->operation <= (unsigned)last &&
+        (r->operation == NPU_SERVICE_SUBMIT || r->operation == NPU_SERVICE_LOAD || !r->command) &&
+        ((r->operation == NPU_SERVICE_OPEN || r->operation == NPU_SERVICE_SUBMIT ||
+          r->operation == NPU_SERVICE_CANCEL) ? duration(r->timeout_us) : r->timeout_us == 0) &&
+        (r->operation != NPU_SERVICE_CANCEL || r->timeout_us > 100);
+}
 static void irq_fault(struct npu_service *s)
 {
     s->controller.state=A733_NPU_FAULT;s->controller.fault=A733_NPU_IRQ;
@@ -31,7 +41,12 @@ static int irq_mask(struct npu_service *s)
     else if(r<0){s->irq_retained=1;irq_fault(s);}
     return r;
 }
-static int irq_progress(struct npu_service *s)
+/* The worker and the runtime loop each call irq_progress and execute_shared
+ * once. Forced inlining keeps them inline in the worker, as when the worker
+ * was their only caller; the runtime loop, linked only into images that call
+ * npu_service_runtime, carries its own copies. */
+#define SERVICE_INLINE static inline __attribute__((always_inline))
+SERVICE_INLINE int irq_progress(struct npu_service *s)
 {
     a733_npu_check_timeout(&s->controller);
     unsigned pending=atomic_load_explicit(&s->irq_pending,memory_order_acquire);
@@ -74,11 +89,7 @@ static enum npu_service_result execute(struct npu_service *s,
 {
     const struct npu_service_request *r = &m->request;
     struct a733_npu_controller *c = &s->controller;
-    if ((unsigned)r->operation > NPU_SERVICE_WAIT ||
-        (r->operation != NPU_SERVICE_SUBMIT && r->command) ||
-        ((r->operation == NPU_SERVICE_OPEN || r->operation == NPU_SERVICE_SUBMIT ||
-          r->operation == NPU_SERVICE_CANCEL) ? !duration(r->timeout_us) : r->timeout_us != 0) ||
-        (r->operation == NPU_SERVICE_CANCEL && r->timeout_us <= 100)) return NPU_SERVICE_INVALID;
+    if (!valid_request(r, NPU_SERVICE_WAIT)) return NPU_SERVICE_INVALID;
     if (r->operation == NPU_SERVICE_STATUS)
         return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK;
     if (r->operation == NPU_SERVICE_OPEN) {
@@ -161,6 +172,290 @@ static void release_held(struct npu_service *s)
     s->has_held = 0;
     respond(s, &s->held, s->controller.state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK, 0);
 }
+/* Shared mode: member records, round-robin dispatch and per-member WAITs. */
+enum { MEMBER_NONE, MEMBER_IDLE, MEMBER_QUEUED, MEMBER_RUNNING, MEMBER_DONE, MEMBER_CANCELED };
+static enum a733_npu_state view(const struct npu_service *s, unsigned client)
+{
+    const struct npu_service_member *m = &s->member[client];
+    if (s->controller.state == A733_NPU_FAULT) return A733_NPU_FAULT;
+    switch (m->state) {
+    case MEMBER_IDLE:
+        return s->controller.state == A733_NPU_BOOTING ? A733_NPU_BOOTING : A733_NPU_READY;
+    case MEMBER_QUEUED: case MEMBER_RUNNING: return A733_NPU_RUNNING;
+    case MEMBER_DONE: return A733_NPU_DONE;
+    case MEMBER_CANCELED: return A733_NPU_CANCELED;
+    default: return s->controller.state;
+    }
+}
+static int queued(const struct npu_service *s)
+{
+    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+        if (s->member[i].state == MEMBER_QUEUED) return 1;
+    return 0;
+}
+SERVICE_INLINE enum npu_service_result execute_shared(struct npu_service *s,
+    const struct npu_service_message *m, unsigned *canceled, unsigned *closed)
+{
+    const struct npu_service_request *r = &m->request;
+    struct a733_npu_controller *c = &s->controller;
+    struct npu_service_member *member = &s->member[m->client];
+    if (r->operation == NPU_SERVICE_STATUS)
+        return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK;
+    if (r->operation == NPU_SERVICE_OPEN) {
+        if (member->state != MEMBER_NONE) return NPU_SERVICE_BUSY;
+        if (c->state == A733_NPU_FAULT || (s->irq_bound && c->state == A733_NPU_CLOSED))
+            return NPU_SERVICE_FAULT;
+        if (c->state == A733_NPU_COLD || c->state == A733_NPU_CLOSED) {
+            if (s->irq_bound && irq_mask(s) != 1)
+                return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
+            /* The opener owns the bootstrap, including a retained failure. */
+            member->state = MEMBER_IDLE; ++s->members;
+            if (!a733_npu_open(c, &s->ops, s->cookie, &s->image, &s->commands[0], r->timeout_us)) {
+                if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
+                member->state = MEMBER_NONE; --s->members;
+                return NPU_SERVICE_INVALID;
+            }
+            return NPU_SERVICE_OK;
+        }
+        member->state = MEMBER_IDLE; ++s->members;
+        return NPU_SERVICE_OK;
+    }
+    if (member->state == MEMBER_NONE) return NPU_SERVICE_DENIED;
+    if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
+    switch (r->operation) {
+    case NPU_SERVICE_WAIT:
+        if (member->refused) { member->refused = 0; return NPU_SERVICE_INVALID; }
+        return view(s, m->client) == A733_NPU_BOOTING || view(s, m->client) == A733_NPU_RUNNING ?
+            SERVICE_HELD : NPU_SERVICE_OK;
+    case NPU_SERVICE_SUBMIT:
+        if (!r->command || r->command >= s->command_count) return NPU_SERVICE_INVALID;
+        if (!(s->clients[m->client].commands & (UINT32_C(1) << r->command))) return NPU_SERVICE_DENIED;
+        if (member->state != MEMBER_IDLE || c->state == A733_NPU_BOOTING) return NPU_SERVICE_BUSY;
+        member->state = MEMBER_QUEUED; member->command = r->command;
+        member->timeout_us = r->timeout_us; member->job_ticket = m->ticket; member->refused = 0;
+        return NPU_SERVICE_OK;
+    case NPU_SERVICE_CANCEL:
+        /* A started job shares the controller with other members; only its
+         * deadline ends it. A queued job never reached the device. */
+        if (member->state != MEMBER_QUEUED) return NPU_SERVICE_BUSY;
+        member->state = MEMBER_CANCELED;
+        return NPU_SERVICE_OK;
+    case NPU_SERVICE_REAP:
+        if (member->state != MEMBER_DONE && member->state != MEMBER_CANCELED) return NPU_SERVICE_BUSY;
+        *canceled = member->state == MEMBER_CANCELED;
+        member->state = MEMBER_IDLE;
+        return NPU_SERVICE_OK;
+    case NPU_SERVICE_CLOSE:
+        if (member->state != MEMBER_IDLE) return NPU_SERVICE_BUSY;
+        if (s->members > 1) {
+            member->state = MEMBER_NONE; --s->members; *closed = 1;
+            return NPU_SERVICE_OK;
+        }
+        if (c->state != A733_NPU_READY && !(s->irq_bound && c->state == A733_NPU_CLOSED))
+            return NPU_SERVICE_BUSY;
+        if (s->irq_bound && irq_mask(s) != 1)
+            return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
+        if (c->state == A733_NPU_CLOSED || a733_npu_close(c)) {
+            if (s->irq_bound) {
+                int stopped = s->irq_ops.stop(s->irq_cookie);
+                if (stopped < 0) { s->irq_retained = 1; irq_fault(s); return NPU_SERVICE_FAULT; }
+                if (!stopped) return SERVICE_DEFERRED;
+                atomic_store_explicit(&s->irq_stopped, 1, memory_order_release);
+            }
+            member->state = MEMBER_NONE; --s->members; *closed = 1;
+            return NPU_SERVICE_OK;
+        }
+        break;
+    default: return NPU_SERVICE_INVALID;
+    }
+    return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_INVALID;
+}
+static void respond_shared(struct npu_service *s, const struct npu_service_message *m,
+                           enum npu_service_result result, unsigned canceled, unsigned closed)
+{
+    struct npu_service_member *member = &s->member[m->client];
+    struct npu_service_reply reply = {.ticket = m->ticket, .result = result, .canceled = canceled};
+    reply.state = closed ? A733_NPU_CLOSED : view(s, m->client);
+    reply.fault = s->controller.fault;
+    reply.owns_session = member->state != MEMBER_NONE;
+    reply.job_ticket = member->job_ticket;
+    if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
+        member->job_ticket = 0;
+    configASSERT(xQueueSend(s->clients[m->client].replies, &reply, 0) == pdTRUE);
+}
+/* Complete the finished job, then start the next queued member after the one
+ * served last. Completion already ran the finish callback for that job. */
+static void dispatch(struct npu_service *s)
+{
+    struct a733_npu_controller *c = &s->controller;
+    if (c->state == A733_NPU_DONE && s->running < NPU_SERVICE_CLIENTS) {
+        void *token; int stopped;
+        if (a733_npu_reap(c, &token, &stopped)) {
+            s->member[s->running].state = stopped ? MEMBER_CANCELED : MEMBER_DONE;
+            s->running = NPU_SERVICE_CLIENTS;
+        }
+    }
+    if (c->state != A733_NPU_READY || s->running != NPU_SERVICE_CLIENTS) return;
+    for (unsigned k = 0; k < NPU_SERVICE_CLIENTS; ++k) {
+        unsigned i = (s->next + k) % NPU_SERVICE_CLIENTS;
+        struct npu_service_member *member = &s->member[i];
+        if (member->state != MEMBER_QUEUED) continue;
+        if (s->irq_bound && irq_mask(s) != 1) return; /* Retried on the next pass. */
+        s->next = (i + 1) % NPU_SERVICE_CLIENTS;
+        if (a733_npu_submit(c, &s->commands[member->command], member->timeout_us) ||
+            c->state == A733_NPU_FAULT) {
+            /* A faulted start stays attributed to its member and is retained. */
+            member->state = MEMBER_RUNNING; s->running = i;
+            return;
+        }
+        /* Refused before any device access: report it on the member's WAIT. */
+        member->state = MEMBER_IDLE; member->job_ticket = 0; member->refused = 1;
+    }
+}
+static void release_waits(struct npu_service *s)
+{
+    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i) {
+        struct npu_service_member *member = &s->member[i];
+        enum a733_npu_state state = view(s, i);
+        if (!member->has_wait || state == A733_NPU_BOOTING || state == A733_NPU_RUNNING) continue;
+        member->has_wait = 0;
+        enum npu_service_result result = state == A733_NPU_FAULT ? NPU_SERVICE_FAULT :
+            member->refused ? NPU_SERVICE_INVALID : NPU_SERVICE_OK;
+        member->refused = 0;
+        respond_shared(s, &member->wait, result, 0, 0);
+    }
+}
+/* Runtime mode: members, held LOAD and SUBMIT replies and runtime steps. */
+static void runtime_reply(struct npu_service *s, unsigned client, enum npu_service_result result,
+                          enum a733_npu_state state)
+{
+    struct npu_service_member *member = &s->member[client];
+    struct npu_service_reply reply = {.ticket = member->wait.ticket, .result = result,
+        .state = state, .fault = s->controller.fault, .owns_session = 1,
+        .job_ticket = member->wait.request.operation == NPU_SERVICE_SUBMIT ? member->wait.ticket : 0};
+    member->has_wait = 0; member->state = MEMBER_IDLE; member->job_ticket = 0;
+    configASSERT(xQueueSend(s->clients[client].replies, &reply, 0) == pdTRUE);
+}
+static enum npu_service_result execute_runtime(struct npu_service *s,
+    const struct npu_service_message *m, unsigned *closed)
+{
+    const struct npu_service_request *r = &m->request;
+    struct npu_service_member *member = &s->member[m->client];
+    struct npu_service_runtime_state *rt = s->runtime;
+    switch (r->operation) {
+    case NPU_SERVICE_STATUS: case NPU_SERVICE_OPEN: case NPU_SERVICE_CLOSE: {
+        unsigned canceled = 0;
+        enum npu_service_result result = execute_shared(s, m, &canceled, closed);
+        if (r->operation == NPU_SERVICE_CLOSE && result == NPU_SERVICE_OK)
+            rt->hooks.closed(rt->context, m->client);
+        return result;
+    }
+    case NPU_SERVICE_LOAD: case NPU_SERVICE_SUBMIT: break;
+    default: return NPU_SERVICE_INVALID;
+    }
+    if (member->state == MEMBER_NONE) return NPU_SERVICE_DENIED;
+    if (s->controller.state == A733_NPU_FAULT || rt->failed) return NPU_SERVICE_FAULT;
+    if (member->state != MEMBER_IDLE) return NPU_SERVICE_BUSY;
+    if (r->operation == NPU_SERVICE_SUBMIT &&
+        (!r->command || r->command >= s->command_count ||
+         !(s->clients[m->client].commands & (UINT32_C(1) << r->command)))) return NPU_SERVICE_DENIED;
+    enum npu_service_result result = NPU_SERVICE_INVALID;
+    if (!rt->hooks.request(rt->context, m->client, r, &result)) return result;
+    member->state = MEMBER_QUEUED; member->wait = *m; member->has_wait = 1;
+    member->job_ticket = r->operation == NPU_SERVICE_SUBMIT ? m->ticket : 0;
+    return SERVICE_HELD;
+}
+/* Hand a completed job back to the runtime; on a controller fault release
+ * every held reply. */
+static void runtime_settle(struct npu_service *s)
+{
+    struct a733_npu_controller *c = &s->controller;
+    struct npu_service_runtime_state *rt = s->runtime;
+    if (c->state == A733_NPU_DONE && s->running < NPU_SERVICE_CLIENTS) {
+        void *token; int stopped;
+        unsigned client = s->running;
+        if (a733_npu_reap(c, &token, &stopped) && !stopped) {
+            s->running = NPU_SERVICE_CLIENTS; s->member[client].state = MEMBER_QUEUED;
+            rt->hooks.finished(rt->context, client, 0);
+        }
+    }
+    if (c->state != A733_NPU_FAULT || rt->failed) return;
+    rt->failed = 1;
+    rt->hooks.finished(rt->context, s->running, 1);
+    for (unsigned i = 0; i < NPU_SERVICE_CLIENTS; ++i)
+        if (s->member[i].has_wait) runtime_reply(s, i, NPU_SERVICE_FAULT, A733_NPU_FAULT);
+}
+static int controller_active(const struct npu_service *s)
+{ return s->controller.state == A733_NPU_BOOTING || s->controller.state == A733_NPU_RUNNING; }
+/* Read the idle register, which acknowledges nothing. Full idle is only a
+ * hint: it queues the masked progress sequence that a notification runs. */
+static int idle_hint(struct npu_service *s)
+{
+    uint32_t idle;
+    if (!s->runtime->hooks.idle_hint || !controller_active(s) ||
+        atomic_load_explicit(&s->irq_pending, memory_order_acquire)) return 0;
+    if (!s->ops.read(s->cookie, 4, &idle)) {
+        s->controller.state = A733_NPU_FAULT; s->controller.fault = A733_NPU_IO;
+        return 1;
+    }
+    if (idle != UINT32_C(0x7fffffff)) return 0;
+    ++s->runtime->idle_hints;
+    atomic_fetch_or_explicit(&s->irq_pending, IRQ_EVENT, memory_order_release);
+    return 1;
+}
+/* Interrupt progress reads the configuration registers while a job runs, so
+ * a pass runs it only when it can change something: a notification or hint
+ * is pending, the source is masked or rearming (after a start), the wait
+ * timed out, the deadline expired or no job runs. Other passes read only
+ * the timer. */
+static int runtime_progress(struct npu_service *s, int timed_out)
+{
+    if (!timed_out && controller_active(s) && !s->irq_masked && !s->irq_rearming &&
+        !atomic_load_explicit(&s->irq_pending, memory_order_acquire) &&
+        a733_npu_check_timeout(&s->controller) != A733_NPU_FAULT) return 1;
+    return irq_progress(s);
+}
+static void runtime_worker(struct npu_service *s)
+{
+    for (int timed_out = 0;;) {
+        if (atomic_load_explicit(&s->activation_state, memory_order_acquire) != SERVICE_ACTIVE) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+        if (!controller_active(s) && s->controller.state != A733_NPU_FAULT)
+            (void)s->ops.microseconds(s->cookie);
+        int progressed = runtime_progress(s, timed_out);
+        runtime_settle(s);
+        if (timed_out && idle_hint(s)) { timed_out = 0; continue; }
+        timed_out = 0;
+        struct npu_service_message message;
+        int handled = s->has_deferred;
+        if (handled) message = s->deferred;
+        else handled = xQueueReceive(s->requests, &message, 0) == pdTRUE;
+        if (handled) {
+            configASSERT(message.client < NPU_SERVICE_CLIENTS && message.ticket);
+            unsigned closed = 0;
+            enum npu_service_result result = valid_request(&message.request, NPU_SERVICE_LOAD) ?
+                execute_runtime(s, &message, &closed) : NPU_SERVICE_INVALID;
+            s->has_deferred = (unsigned)result == SERVICE_DEFERRED;
+            if (s->has_deferred) s->deferred = message;
+            else if ((unsigned)result != SERVICE_HELD) respond_shared(s, &message, result, 0, closed);
+            runtime_settle(s);
+        }
+        int stepped = s->controller.state != A733_NPU_FAULT && !s->runtime->failed &&
+            s->runtime->hooks.step(s->runtime->context);
+        runtime_settle(s);
+        if (stepped) { (void)idle_hint(s); continue; }
+        if (handled && !s->has_deferred) continue;
+        TickType_t wait = controller_active(s) || s->has_deferred || !progressed ? 1 :
+            s->controller.state == A733_NPU_FAULT ? portMAX_DELAY : pdMS_TO_TICKS(1000);
+        if (!s->irq_masked && !s->irq_retained &&
+            (s->controller.state == A733_NPU_FAULT || atomic_load_explicit(&s->irq_pending, memory_order_acquire)))
+            wait = 1;
+        timed_out = !ulTaskNotifyTake(pdTRUE, wait);
+    }
+}
+
 static void worker(void *argument)
 {
     struct npu_service *s = argument;
@@ -172,6 +467,7 @@ static void worker(void *argument)
 #else
     (void)stack;
 #endif
+    if (s->runtime) s->runtime->loop(s);
     for (;;) {
         if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
@@ -186,10 +482,12 @@ static void worker(void *argument)
         int progressed=1;
         if(s->irq_bound)progressed=irq_progress(s);
         else a733_npu_poll(&s->controller);
-        release_held(s);
+        if (s->shared) { dispatch(s); release_waits(s); }
+        else release_held(s);
         struct npu_service_message message;
         TickType_t wait = active(s->controller.state) ? 1 :
             (s->controller.state == A733_NPU_FAULT ? portMAX_DELAY : pdMS_TO_TICKS(1000));
+        if (s->shared && s->controller.state == A733_NPU_READY && queued(s)) wait = 1;
         if(s->irq_bound) {
             if(!s->irq_masked && !s->irq_retained &&
                (s->controller.state==A733_NPU_FAULT || atomic_load_explicit(&s->irq_pending,memory_order_acquire)))wait=1;
@@ -200,17 +498,30 @@ static void worker(void *argument)
             }
         }else if (xQueueReceive(s->requests, &message, wait) != pdTRUE) continue;
         configASSERT(message.client < NPU_SERVICE_CLIENTS && message.ticket);
-        unsigned canceled = 0;
-        enum npu_service_result result = execute(s, &message, &canceled);
+        unsigned canceled = 0, closed = 0;
+        enum npu_service_result result = !s->shared ? execute(s, &message, &canceled) :
+            valid_request(&message.request, NPU_SERVICE_WAIT) ? execute_shared(s, &message, &canceled, &closed) :
+            NPU_SERVICE_INVALID;
         if((unsigned)result==SERVICE_DEFERRED) {
             s->deferred=message;s->has_deferred=1;
             (void)ulTaskNotifyTake(pdTRUE,1);continue;
         }
         s->has_deferred=0;
         if((unsigned)result==SERVICE_HELD) {
-            /* One pending request per client: the owner has no other request. */
+            /* One pending request per client: the waiter has no other request. */
+            if (s->shared) {
+                struct npu_service_member *member = &s->member[message.client];
+                configASSERT(!member->has_wait);
+                member->wait = message; member->has_wait = 1;
+                continue;
+            }
             configASSERT(!s->has_held);
             s->held=message;s->has_held=1;continue;
+        }
+        if (s->shared) {
+            respond_shared(s, &message, result, canceled, closed);
+            dispatch(s); release_waits(s);
+            continue;
         }
         respond(s, &message, result, canceled);
         release_held(s);
@@ -300,6 +611,57 @@ enum npu_service_result npu_service_activate(struct npu_service *s)
     atomic_store_explicit(&s->activation_state,state,memory_order_release);
     if(state==SERVICE_ACTIVE){xTaskNotifyGive(s->worker);return NPU_SERVICE_OK;}
     return state==SERVICE_WAITING ? NPU_SERVICE_BUSY : NPU_SERVICE_FAULT;
+}
+int npu_service_share(struct npu_service *s)
+{
+    if (!s || s != instance || !s->initialized || s->shared ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    /* The controller refuses a command touching internal SRAM before any
+     * device access; rejecting it here keeps dispatch refusals impossible. */
+    for (unsigned i = 0; i < s->command_count; ++i)
+        if ((uint64_t)s->commands[i].device + s->commands[i].readable_bytes > 0x400000 &&
+            s->commands[i].device < 0x480000) return 0;
+    s->running = NPU_SERVICE_CLIENTS; s->shared = 1;
+    return 1;
+}
+int npu_service_runtime(struct npu_service *s, const struct npu_service_runtime *r, void *context)
+{
+    static struct npu_service_runtime_state state;
+    if (!s || s != instance || !s->initialized || !s->shared || s->runtime || !r ||
+        !r->request || !r->step || !r->finished || !r->closed || r->idle_hint > 1 ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    state.hooks = *r; state.context = context; state.loop = runtime_worker;
+    s->runtime = &state;
+    return 1;
+}
+int npu_service_start(struct npu_service *s, unsigned client, unsigned command, uint64_t timeout)
+{
+    struct a733_npu_controller *c = &s->controller;
+    if (!s->runtime || client >= NPU_SERVICE_CLIENTS || !s->irq_bound ||
+        s->member[client].state != MEMBER_QUEUED || !s->member[client].has_wait ||
+        s->member[client].wait.request.operation != NPU_SERVICE_SUBMIT ||
+        c->state != A733_NPU_READY || s->running != NPU_SERVICE_CLIENTS ||
+        !command || command >= s->command_count ||
+        !(s->clients[client].commands & (UINT32_C(1) << command))) return -1;
+    int masked = irq_mask(s);
+    if (masked != 1) return masked < 0 || c->state == A733_NPU_FAULT ? -1 : 0;
+    if (!a733_npu_submit(c, &s->commands[command], timeout) && c->state != A733_NPU_FAULT) return -1;
+    /* A faulted start stays attributed to its member and is retained. */
+    s->member[client].state = MEMBER_RUNNING; s->running = client;
+    return c->state == A733_NPU_FAULT ? -1 : 1;
+}
+void npu_service_release(struct npu_service *s, unsigned client, enum npu_service_result result,
+                         enum a733_npu_state state)
+{
+    configASSERT(s->runtime && client < NPU_SERVICE_CLIENTS && s->member[client].has_wait &&
+                 s->member[client].state == MEMBER_QUEUED);
+    runtime_reply(s, client, result, state);
+}
+void npu_service_retain(struct npu_service *s)
+{
+    configASSERT(s->runtime);
+    if (s->controller.state == A733_NPU_FAULT) return;
+    s->controller.state = A733_NPU_FAULT; s->controller.fault = A733_NPU_MEMORY;
 }
 int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
 {

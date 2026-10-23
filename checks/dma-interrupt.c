@@ -89,7 +89,7 @@ static void finish_pair(unsigned failed_mask)
     configASSERT(!bindings[0].pin_lease.id);
 }
 #define irq_case (*(volatile unsigned *)UINT64_C(0x47fff004))
-enum { INJECT=1, DELIVER=2, MASK_FAILED=4 };
+enum { INJECT=1, DELIVER=2, MASK_FAILED=4, INJECT_RX=8 };
 static uint32_t spi_enabled,rearms,deliveries,level_deliveries,line_at_rearm,command;
 static unsigned creating_device;
 static StaticTask_t device_task;
@@ -127,7 +127,7 @@ static void device_model(void *unused)
         unsigned c=get(&command);
         if(!c){vTaskDelay(1);continue;}
         UBaseType_t saved=taskENTER_CRITICAL_FROM_ISR();
-        if(c&INJECT){__atomic_fetch_add(&us,64000,__ATOMIC_SEQ_CST);cycle(0,1);cycle(1,1);}
+        if(c&(INJECT|INJECT_RX)){__atomic_fetch_add(&us,64000,__ATOMIC_SEQ_CST);cycle(0,1);if(c&INJECT)cycle(1,1);}
         if((c&DELIVER) && (get(&spi_enabled) || (c&MASK_FAILED)))deliver(!(c&MASK_FAILED));
         taskEXIT_CRITICAL_FROM_ISR(saved);
         set(&command,0);taskYIELD();
@@ -150,7 +150,8 @@ static void quiet(unsigned ticks)
     unsigned reads=get(&dma_reads);vTaskDelay(ticks);
     configASSERT(get(&dma_reads)==reads && get(&spi_enabled));
 }
-/* The worker publishes the RX copy without any client request. */
+/* The worker publishes the RX copy without any client request. Period n
+ * is copied only once period n+1 has also completed. */
 static TickType_t copied_by(uint64_t raw)
 {
     TickType_t start=xTaskGetTickCount();
@@ -182,11 +183,15 @@ static void interrupt_client(void *unused)
         /* Each package end wakes the worker well before the 200-tick fallback,
          * and the rearm follows acknowledgement of every enabled event. */
         wait_armed();quiet(30);configASSERT(get(&rearms)==1);
+        /* A completed period that cannot be copied yet also waits for the
+         * next interrupt. */
+        hardware(INJECT_RX|DELIVER);wait_armed();quiet(10);
+        configASSERT(!service.streams[0].raw_next && get(&rearms)==2);
         for(unsigned n=0;n<4;++n){
             hardware(INJECT|DELIVER);configASSERT(copied_by(n+1)<20);
             wait_armed();quiet(10);consume(n);
         }
-        configASSERT(get(&deliveries)==4 && get(&rearms)==5 && !get(&line_at_rearm));
+        configASSERT(get(&deliveries)==5 && get(&rearms)==6 && !get(&line_at_rearm));
         finish_pair(0);
     }else if(irq_case==1){
         /* An interrupt without an acknowledged event returns to tick polling
@@ -194,16 +199,17 @@ static void interrupt_client(void *unused)
         wait_armed();hardware(DELIVER);
         unsigned reads=get(&dma_reads);vTaskDelay(10);
         configASSERT(service.irq_spurious && get(&rearms)==1 && get(&dma_reads)>reads+5);
-        hardware(INJECT);(void)copied_by(1);wait_armed();quiet(10);
+        hardware(INJECT_RX);wait_armed();quiet(10);
         /* A rearm that raced the polled event delivers it at once. */
         unsigned level=get(&level_deliveries);
         configASSERT(get(&rearms)==2+level && get(&deliveries)==1+level && !service.irq_spurious);
-        consume(0);finish_pair(0);
+        configASSERT(!service.streams[0].raw_next);
+        hardware(INJECT|DELIVER);(void)copied_by(1);consume(0);finish_pair(0);
     }else if(irq_case==2){
         /* A failed ISR mask permanently returns the service to tick polling;
          * periods still complete and the SPI is never enabled again. */
-        wait_armed();hardware(INJECT|DELIVER|MASK_FAILED);(void)copied_by(1);consume(0);
-        for(unsigned n=1;n<3;++n){hardware(INJECT);(void)copied_by(n+1);consume(n);}
+        wait_armed();hardware(INJECT_RX|DELIVER|MASK_FAILED);
+        for(unsigned n=0;n<3;++n){hardware(INJECT);(void)copied_by(n+1);consume(n);}
         unsigned reads=get(&dma_reads);vTaskDelay(10);
         configASSERT(service.irq_retained && get(&rearms)==1 && get(&dma_reads)>reads+5);
         finish_pair(0);

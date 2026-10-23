@@ -137,7 +137,11 @@ def run(image,session,out):
   m=Machine(e,raw,variant);ready(m)
   if variant=='reusable':
    m.task_identity=2;n=len(m.trace);assert m.call('a733_pwm_control',m.driver,300,1,m.time+50000)==6 and len(m.trace)==n;m.task_identity=1
-   commands=[(1,300),(2,599),(4,1),(4,0),(3,0),(1,1),(3,0)]
+   # 600 active ticks hold the fan output active for the whole period. The host
+   # builder refuses 601, so patch its argument to reach the image's own check.
+   packet=bytearray(decoder.command(raw,1,1,600));struct.pack_into('<I',packet,1+36,601);m.cpu.mem_write(0x50020000,bytes(packet[1:]))
+   assert m.call('pwm_submit',0x50020000)==2 and m.field('rejection')==2
+   commands=[(1,300),(2,599),(2,600),(4,1),(4,0),(3,0),(1,1),(3,0)]
    for seq,(kind,arg) in enumerate(commands,1):
     assert submit(m,seq,kind,arg)==1;deadline=m.read(m.base+m.l['command_deadline'],8);n=len(m.trace)
     assert submit(m,seq,kind,arg)==1 and m.read(m.base+m.l['command_deadline'],8)==deadline and len(m.trace)==n
@@ -146,13 +150,13 @@ def run(image,session,out):
      assert submit(m,seq+1,3)==2 and m.field('rejection')==4
      assert submit(m,seq,kind,arg)==1
     decoded=finish(m);assert decoded['command']['sequence']==seq
-   assert m.pin_resume==3 and m.pinlow==6 and m.led==0
+   assert m.pin_resume==4 and m.pinlow==7 and m.led==0
    assert submit(m,1,1,300)==2 and m.field('rejection')==5
    frame=m.frame();(out/'native-frame.bin').write_bytes(frame)
    # Real USB fragmented81B command delivery plus copied512B staging/cancel.
-   m.request=decoder.command(raw,8,1,300)
+   m.request=decoder.command(raw,9,1,300)
    for i in range(4):m.call('board_usb0_task',0)
-   assert m.field('command_pending')==1 and m.read(m.base+m.l['accepted']+24,8)==8
+   assert m.field('command_pending')==1 and m.read(m.base+m.l['accepted']+24,8)==9
    finish(m)
    m.max_tx=64;m.request=b'\0';m.call('board_usb0_task',0);assert len(m.tx)==1 and len(m.tx[0])==64
    m.request=b'\1';m.call('board_usb0_task',0);assert len(m.tx)==1

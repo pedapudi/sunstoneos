@@ -5,6 +5,10 @@
 #define A733_ADC_INTID 70u /* A733 DTS SPI38, not the generic manual IRQ93. */
 enum a733_adc_result {A733_ADC_PENDING,A733_ADC_BUSY,A733_ADC_READY,A733_ADC_AGAIN,A733_ADC_SAMPLE,A733_ADC_RETAINED,A733_ADC_INVALID,A733_ADC_STOPPED};
 struct a733_adc_config {uint64_t owner,handoff,startup_deadline_us;uint32_t apb1,apb1_hz;unsigned configure_adc_clock;};
+/* mask selects channels0..3 for compare windows (manual18.12.8.14): low
+ * pending reports a code under low[i], high pending a code over high[i].
+ * Each selected window needs low<high<=4095; unselected channels keep zero. */
+struct a733_adc_thresholds {unsigned mask;uint16_t low[A733_ADC_CHANNELS],high[A733_ADC_CHANNELS];};
 struct a733_adc_sample {uint64_t observed_us[A733_ADC_CHANNELS];uint32_t sequence,valid;uint16_t code[A733_ADC_CHANNELS];};
 struct a733_adc_ops {
  int (*now_us)(void *,uint64_t *);
@@ -23,14 +27,18 @@ struct a733_adc_ops {
 };
 struct a733_adc {
  struct a733_adc_config config;struct a733_adc_ops ops;struct a733_clock_token token;
- struct a733_clock_leases *registry;void *cookie;atomic_uint busy;
- uint64_t deadline,last_now;uint32_t sequence;unsigned initialized,stage,fault,held;
+ struct a733_clock_leases *registry;void *cookie;atomic_uint busy;struct a733_adc_thresholds thresholds;
+ uint64_t deadline,last_now;uint32_t sequence,low_seen,high_seen;unsigned initialized,stage,fault,held;
 };
 /* Private zero-once objects and token are disjoint and permanent. GPADC is
  * exclusive; REF/OSC/FABRIC and GPADC24M stable, PERI0 stable for APB1 parent3.
  * configure_adc_clock additionally requires exclusive GPADC24M. Callbacks are
  * bounded/nonreentrant. No reset assertion, release or restart is provided. */
 int a733_adc_init(struct a733_adc *,const struct a733_adc_config *,const struct a733_adc_ops *,void *,struct a733_clock_leases *,const struct a733_clock_token *);
+/* Owner task, after init and before the first poll; no MMIO. Selects compare
+ * windows that startup programs before enabling the converter. Without this
+ * call the passive profile requires every compare enable and status clear. */
+int a733_adc_configure_thresholds(struct a733_adc *,const struct a733_adc_thresholds *);
 enum a733_adc_result a733_adc_poll(struct a733_adc *);
 /* Task-only deferred service. Copy each observed selected channel before W1C
  * only its observed flag. Values are latest observations, not synchronized or
@@ -40,6 +48,12 @@ enum a733_adc_result a733_adc_poll(struct a733_adc *);
  * expired deadline or non-owner caller still faults and retains.
  * Terminal fault retries retention metadata only, never healthy I/O. */
 enum a733_adc_result a733_adc_read(struct a733_adc *,uint64_t,struct a733_adc_sample *);
+/* Owner-task-only, no MMIO. read() also copies and W1C-clears only observed
+ * selected low/high compare statuses; they may reassert while the input stays
+ * outside its window. This returns and clears the channel bits latched since
+ * the previous call: SAMPLE when any is set, AGAIN when none. Without
+ * configured windows it returns INVALID. A non-owner caller faults and retains. */
+enum a733_adc_result a733_adc_thresholds(struct a733_adc *,uint32_t *low,uint32_t *high);
 /* Owner-task-only configured disable after READY. Caller masks its GIC IRQ
  * before entry and supplies a fresh absolute deadline. STOPPED means converter
  * and local interrupt enables were read back disabled; it does not prove an

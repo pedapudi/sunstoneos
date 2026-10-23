@@ -6,7 +6,11 @@
 #define configRUN_MULTIPLE_PRIORITIES 1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 #define configENABLE_MPU 0
-#define configUSE_PASSIVE_IDLE_HOOK 0
+/* Idle tasks wait in WFI (docs/cpu-power.md). Both idle loops call the
+ * passive hook. Idle task n stays on core n, so the task that reclaims
+ * deleted tasks runs on core 0, which the tick wakes every millisecond. */
+#define configUSE_PASSIVE_IDLE_HOOK 1
+#define configIDLE_AFFINITY 1
 #define INCLUDE_vTaskDelete 1
 /* The patched port obtains the primary redistributor from discovery. */
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0
@@ -19,6 +23,8 @@
 #define INCLUDE_xSemaphoreGetMutexHolder 1
 #endif
 #ifndef __ASSEMBLER__
+#include "../../include/a733_cpu_power.h"
+#define vApplicationPassiveIdleHook a733_cpu_idle
 #include <stdint.h>
 void a733_smp_startup_check(void);
 uintptr_t a733_smp_priority_address(void);

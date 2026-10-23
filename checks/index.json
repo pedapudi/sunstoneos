@@ -91,6 +91,19 @@
   "summary": "Compare camera route, VIPP parameters and SCAP with pinned source functions.",
   "usb": false
  },
+ "a733-camera-stream.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/camera-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Run the continuous camera capture composition model and compile its units.",
+  "usb": false
+ },
  "a733-ce-cipher.py": {
   "cache_areas": [],
   "docs": [],
@@ -137,6 +150,24 @@
   "summary": "Authenticate streaming SHA references and compare modeled hardware with hashlib.",
   "usb": false
  },
+ "a733-ce-modes.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/crypto-cipher.md",
+   "docs/crypto-hash.md",
+   "docs/handoff.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--sources",
+   "--manual",
+   "--model",
+   "--out"
+  ],
+  "summary": "Check CE hash methods, HMAC and AES modes against pinned sources and independent answers.",
+  "usb": false
+ },
  "a733-ce.py": {
   "cache_areas": [],
   "docs": [
@@ -171,7 +202,8 @@
    "sources"
   ],
   "docs": [
-   "docs/cpu-coherence.md"
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -186,7 +218,10 @@
    "host"
   ],
   "docs": [
-   "docs/cpu-continue.md"
+   "docs/cpu-continue.md",
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -342,6 +377,7 @@
  "a733-gpu-backend-emulate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-runtime.md",
    "docs/gpu-backend.md"
   ],
   "library": false,
@@ -409,7 +445,8 @@
  "a733-gpu-resources-emulate.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-resources.md"
+   "docs/gpu-resources.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -591,6 +628,7 @@
  "a733-pcie-trace.py": {
   "cache_areas": [],
   "docs": [
+   "docs/pcie-nvme.md",
    "docs/pcie.md"
   ],
   "library": false,
@@ -737,7 +775,15 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/cpu-power.md",
+   "docs/designs/cpu-power-states-measurements.md",
+   "docs/designs/cpu-power-states.md",
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/smp-heterogeneous-measurements.md",
+   "docs/designs/smp-heterogeneous.md",
+   "docs/smp.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -852,7 +898,9 @@
   ],
   "docs": [
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/designs/board-bundles.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -920,6 +968,7 @@
    "sources"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/storage-update.md"
   ],
   "library": false,
@@ -1052,7 +1101,9 @@
  },
  "a733-usb-platform.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1185,7 +1236,9 @@
  },
  "accelerator-providers.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1242,7 +1295,9 @@
  },
  "adc-application-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/adc-application.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1385,6 +1440,20 @@
   "summary": "Build a pinned BSD RSN composition with independent synthetic AP messages.",
   "usb": false
  },
+ "aic8800-wifi-power.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-wifi.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--reference-dir",
+   "--evidence"
+  ],
+  "summary": "Compare configured station power save with the pinned full-MAC ME_CONFIG ABI.",
+  "usb": false
+ },
  "aic8800-wifi.py": {
   "cache_areas": [],
   "docs": [
@@ -1432,7 +1501,9 @@
  },
  "all-core-pre-scheduler-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1513,6 +1584,17 @@
   "summary": "Check that build patches apply exactly and supervised profiles require an explicit board mode.",
   "usb": false
  },
+ "audit-consolidate-apps-a-h-equivalence.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Application mapping, deadline and range helpers match the inline code they replaced.",
+  "usb": false
+ },
  "audit-device-minors-usb-control.py": {
   "cache_areas": [
    "host"
@@ -1579,7 +1661,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1593,7 +1677,10 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md",
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1625,7 +1712,12 @@
    "evidence",
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md",
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
+   "docs/designs/bluetooth-voice-recognition.md",
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1748,7 +1840,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1809,9 +1903,42 @@
   "summary": "Build the native board composition and exercise only its new contracts.",
   "usb": false
  },
+ "board-bundles.py": {
+  "cache_areas": [
+   "build"
+  ],
+  "docs": [
+   "docs/designs/board-bundles-measurements.md",
+   "docs/designs/board-bundles.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Host check of tools/prepare-board-bundles.py on fixture rows in a fixture repository.",
+  "usb": true
+ },
+ "board-park.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-application.md",
+   "docs/handoff.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Linked board PMIC task: a parked service suspends once instead of waking every tick.",
+  "usb": false
+ },
  "board-radio.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-radio.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1926,6 +2053,7 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
+   "docs/designs/board-bundles.md",
    "docs/handoff.md"
   ],
   "library": false,
@@ -1977,6 +2105,23 @@
   "summary": "Build a focused ACL/link/UART model using wire structures from pinned Linux source.",
   "usb": false
  },
+ "bt-avdtp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/bluetooth-a2dp.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--source",
+   "--l2cap-source",
+   "--sdp-source",
+   "--sbc-source",
+   "--output"
+  ],
+  "summary": "Check the AVDTP SBC sink over the actual lower stack, SDP sink record and pinned libsbc.",
+  "usb": false
+ },
  "bt-config.py": {
   "cache_areas": [],
   "docs": [
@@ -2009,7 +2154,8 @@
  "bt-hfp-ag.py": {
   "cache_areas": [],
   "docs": [
-   "docs/bluetooth-hfp.md"
+   "docs/bluetooth-hfp.md",
+   "docs/designs/bluetooth-voice-recognition.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2060,7 +2206,7 @@
   "required_arguments": [
    "--output"
   ],
-  "summary": "Build and run the shared Bluetooth range-helper unit check under ASan/UBSan.",
+  "summary": "Build and run the shared Bluetooth range and deadline helper unit check under ASan/UBSan.",
   "usb": false
  },
  "bt-rfcomm-server.py": {
@@ -2157,7 +2303,8 @@
  "cached-device-reservations.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cached-device-reservations.md"
+   "docs/cached-device-reservations.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2279,7 +2426,8 @@
    "sources"
   ],
   "docs": [
-   "docs/clock-leases.md"
+   "docs/clock-leases.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2325,7 +2473,10 @@
    "sources"
   ],
   "docs": [
-   "docs/cpu-clock.md"
+   "docs/cpu-clock.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/power-authority-measurements.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2333,6 +2484,73 @@
    "output"
   ],
   "summary": "Check CPU clock tables against pinned sources and run the transition model.",
+  "usb": false
+ },
+ "cpu-pmu-smp.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/smp-heterogeneous.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count instructions with the CPU PMU module on two QEMU cores in the FreeRTOS SMP port.",
+  "usb": false
+ },
+ "cpu-pmu.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/cpu-pmu.md",
+   "docs/designs/cpu-pmu-measurements.md",
+   "docs/designs/cpu-pmu.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "output"
+  ],
+  "summary": "Check the CPU PMU module under instruction emulation with modeled system registers.",
+  "usb": false
+ },
+ "cpu-power-states.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-power.md",
+   "docs/designs/cpu-power-states-measurements.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence",
+   "--freertos"
+  ],
+  "summary": "Measure idle-core wake-ups and idle instructions in the cached eight-core image.",
+  "usb": false
+ },
+ "cpu-table-walks.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--image"
+  ],
+  "summary": "Check the EL1 table walk profile on linked images: TCR sources, table flush and checksum order.",
   "usb": false
  },
  "crypto-application-host.py": {
@@ -2378,6 +2596,19 @@
   "summary": "Offline ELF/launcher/package binding; physical authority is explicitly modeled.",
   "usb": true
  },
+ "crypto-health-cutoffs.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/entropy.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Derive CE TRNG health-test register words from an assessed entropy per raw sample.",
+  "usb": false
+ },
  "crypto-runtime-host.py": {
   "cache_areas": [
    "evidence"
@@ -2394,7 +2625,9 @@
  },
  "crypto-runtime-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2505,6 +2738,41 @@
   "summary": "Check copied DI output, durable ACK ordering and exact FS/HS USB framing.",
   "usb": false
  },
+ "deinterlace-jobs-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md",
+   "docs/deinterlace-preparation.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--template",
+   "--output"
+  ],
+  "summary": "Execute repeated DI301 jobs in the linked native task with a synthetic device.",
+  "usb": false
+ },
+ "deinterlace-jobs.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md",
+   "docs/deinterlace-preparation.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--generated",
+   "--image",
+   "--previous-image",
+   "--bundle",
+   "--base",
+   "--output"
+  ],
+  "summary": "Check repeated DI301 jobs from plan generation to host predicates and the SRAM launcher.",
+  "usb": false
+ },
  "deinterlace-launcher.py": {
   "cache_areas": [],
   "docs": [],
@@ -2564,7 +2832,9 @@
  },
  "deinterlace-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/memory-architecture.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2574,6 +2844,24 @@
    "--output"
   ],
   "summary": "Execute linked DI301 allocation/task code; model hardware and external services explicitly.",
+  "usb": false
+ },
+ "deinterlace-strength.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/deinterlace-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--generated",
+   "--image",
+   "--previous-image",
+   "--bundle",
+   "--launcher",
+   "--output"
+  ],
+  "summary": "Check selectable DI301 TNR strength from plan generation to host capture labels.",
   "usb": false
  },
  "deinterlace-tnr-host.py": {
@@ -2623,7 +2911,9 @@
  },
  "deinterlace-usb.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/deinterlace-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2637,7 +2927,14 @@
  },
  "device-memory-capacity.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/cpu-coherence.md",
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/memory-architecture-measurements.md",
+   "docs/device-memory-capacity.md",
+   "docs/memory-protection.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2647,7 +2944,7 @@
    "--qemu",
    "--freertos"
   ],
-  "summary": "Check large-pool placement, actual native mappings and bounded pool publication.",
+  "summary": "Check pool placement and class alignment, the EL1 map, and one-call pool preparation.",
   "usb": false
  },
  "display-clock-handoff.py": {
@@ -2717,7 +3014,9 @@
  },
  "displayport-composed.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2874,7 +3173,8 @@
  "dma-interrupt.py": {
   "cache_areas": [],
   "docs": [
-   "docs/dma-service.md"
+   "docs/dma-service.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2902,7 +3202,8 @@
  "dma-pool-session.py": {
   "cache_areas": [],
   "docs": [
-   "docs/dma-pool-session.md"
+   "docs/dma-pool-session.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3044,6 +3345,50 @@
   "summary": "Reject final ELFs whose string routines or EL3 boot code can fault on Device memory.",
   "usb": false
  },
+ "fatfs-port.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/filesystem.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Read-only FatFs port: pinned sources, FAT16/FAT32/exFAT card images and AArch64 compile; no hardware.",
+  "usb": false
+ },
+ "fault-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Execute the integrated OS image's fault capture and slot rotation.",
+  "usb": false
+ },
+ "fault-decode.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "path"
+  ],
+  "summary": "Decode retained fault records (docs/fault-capture.md).",
+  "usb": false
+ },
  "fel-input.py": {
   "cache_areas": [],
   "docs": [
@@ -3078,6 +3423,7 @@
    "docs/board-wiring.md",
    "docs/build.md",
    "docs/gpu.md",
+   "docs/radio-security.md",
    "docs/runtime.md",
    "docs/smp-runtime.md",
    "docs/sources.md",
@@ -3202,6 +3548,67 @@
    "--output"
   ],
   "summary": "Check the prepared G2D SRAM launcher without rebuilding or accessing hardware.",
+  "usb": false
+ },
+ "g2d-modes-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d-preparation.md",
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--session",
+   "--output"
+  ],
+  "summary": "Check host sealing, references and ACK policy for general scaling, image blending and conversion.",
+  "usb": false
+ },
+ "g2d-modes-launcher.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--launcher",
+   "--output"
+  ],
+  "summary": "Run a rebuilt G2D SRAM launcher on new operation sessions inside an earlier prepared bundle.",
+  "usb": false
+ },
+ "g2d-modes-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--reference",
+   "--output"
+  ],
+  "summary": "Execute the linked AArch64 G2D session validator and RCQ builder on every exported geometry case.",
+  "usb": false
+ },
+ "g2d-modes-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/g2d.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--reference",
+   "--output",
+   "--previous"
+  ],
+  "summary": "Compare general-scaling, image-over-image and format-conversion RCQ blocks with pinned setters.",
   "usb": false
  },
  "g2d-power-admission.py": {
@@ -3372,6 +3779,24 @@
   "summary": "Run native orderly stop and retained-failure composition.",
   "usb": false
  },
+ "gpu-batch.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tinyusb",
+   "--firmware",
+   "--qemu",
+   "--lld"
+  ],
+  "summary": "Check native profile-4 state batches, packed depth/stencil and presented output ownership.",
+  "usb": false
+ },
  "gpu-close-ordering.py": {
   "cache_areas": [],
   "docs": [],
@@ -3425,6 +3850,21 @@
    "--lld"
   ],
   "summary": "Check native fixed-compute memory preparation without GPU commands.",
+  "usb": false
+ },
+ "gpu-conformance.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-conformance-measurements.md",
+   "docs/designs/gpu-conformance.md",
+   "docs/gpu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the GPU conformance plan, the pinned-Mesa reference and the comparator before board time.",
   "usb": false
  },
  "gpu-display-boot-usb.py": {
@@ -3499,7 +3939,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3542,7 +3984,8 @@
  "gpu-display-preparation.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-display-preparation.md"
+   "docs/gpu-display-preparation.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3565,7 +4008,9 @@
  },
  "gpu-display-replay.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-graphics.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3635,7 +4080,9 @@
  },
  "gpu-draw-runtime.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-conformance.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3647,7 +4094,9 @@
  },
  "gpu-draw.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3705,6 +4154,68 @@
   "summary": "Actual retained depth lifecycle client/USB producer; GPU/service effects modeled.",
   "usb": false
  },
+ "gpu-mimus-layers.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mimus",
+   "--output"
+  ],
+  "summary": "Build and run the host model of exact mimus linear layers on the GPU.",
+  "usb": false
+ },
+ "gpu-mimus-program.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-compiled-programs.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-build",
+   "--ninja",
+   "--output"
+  ],
+  "summary": "Check the linked mimus linear-layer program against the pinned compiler.",
+  "usb": false
+ },
+ "gpu-mimus-readout.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Run the compiled mimus read-out entry under Unicorn.",
+  "usb": false
+ },
+ "gpu-mimus-time-model.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/designs/gpu-mimus-compute.md",
+   "docs/gpu-mimus.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Per-core time model of mimus linear layers with exact sums on the GPU.",
+  "usb": false
+ },
  "gpu-render-cleanup.py": {
   "cache_areas": [],
   "docs": [],
@@ -3760,7 +4271,9 @@
  },
  "gpu-resource-disposal.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3850,9 +4363,30 @@
   "summary": "Only supervised GPU admission, immutable input packaging and launcher cases.",
   "usb": false
  },
+ "gpu-texture-frame.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/gpu-graphics-measurements.md",
+   "docs/designs/gpu-graphics.md",
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count the render worker's per-frame CPU work on the texture path.",
+  "usb": false
+ },
  "gpu-texture-runtime.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-conformance.md",
+   "docs/gpu-render.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3876,7 +4410,7 @@
    "--qemu",
    "--lld"
   ],
-  "summary": "Check native display-sized indexed texture staging, mapping and copied output ownership.",
+  "summary": "Check native display-sized indexed texture upload, mapping and in-place output ownership.",
   "usb": false
  },
  "gpu-transport-only.py": {
@@ -3968,7 +4502,11 @@
  },
  "h264-encode-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/memory-architecture.md",
+   "docs/h264-encode-native.md",
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -3996,7 +4534,10 @@
  },
  "h264-encode-registers.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-encode-native.md",
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4008,7 +4549,9 @@
  },
  "h264-encode-usb.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/h264-encode-native.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4054,7 +4597,9 @@
  },
  "h264-fullhd-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/memory-architecture.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4106,6 +4651,7 @@
  "h264-high-allocation.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture.md",
    "docs/h264-native.md"
   ],
   "library": false,
@@ -4168,6 +4714,21 @@
   "summary": "Exercise High host bundles and capture with native copied outputs and modeled USB.",
   "usb": false
  },
+ "h264-high-modes.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/h264-native.md",
+   "docs/handoff.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--producer",
+   "--output"
+  ],
+  "summary": "High-build long-term references, MMCO5, POC/frame_num wrap and profiles.",
+  "usb": false
+ },
  "h264-high-native-access.py": {
   "cache_areas": [],
   "docs": [],
@@ -4183,6 +4744,7 @@
  "h264-high-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/memory-architecture.md",
    "docs/h264-native.md"
   ],
   "library": false,
@@ -4353,7 +4915,8 @@
   "docs": [
    ".agents/skills/sunstone-a733-device/SKILL.md",
    "docs/g2d-preparation.md",
-   "docs/h264-native.md"
+   "docs/h264-native.md",
+   "docs/pcie-nvme.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4617,6 +5180,23 @@
   "summary": "Only hdmi admission-to-consumption binding; providers and publication are modeled.",
   "usb": false
  },
+ "hevc-decode-model.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/handoff.md",
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check native HEVC slice parsing and register programming on the host.",
+  "usb": false
+ },
  "hevc-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -4635,6 +5215,39 @@
   "summary": "Check HEVC preparation and durable capture using a frozen actual native image.",
   "usb": false
  },
+ "hevc-image.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--manifest",
+   "--output"
+  ],
+  "summary": "Check a built native HEVC image against host preparation's ELF rules.",
+  "usb": false
+ },
+ "hevc-native-access.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/handoff.md",
+   "docs/hevc-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--trace",
+   "--output"
+  ],
+  "summary": "Run every HEVC VE access through the real lower native access policy.",
+  "usb": false
+ },
  "i2s-application-observer.py": {
   "cache_areas": [],
   "docs": [],
@@ -4649,7 +5262,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4666,7 +5281,10 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/i2s-stream.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -4692,6 +5310,7 @@
  "i2s-interrupt.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/i2s-stream.md"
   ],
   "library": false,
@@ -5137,7 +5756,9 @@
  },
  "jpeg-sealing-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5148,9 +5769,28 @@
   "summary": "Execute changed JPEG session-consumption and USB revocation paths only.",
   "usb": false
  },
+ "jpeg-sequence.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [
+   "docs/jpeg-application.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output",
+   "--executable"
+  ],
+  "summary": "Repeated JPEG decoding in one sequence session.",
+  "usb": false
+ },
  "jpeg-supervised-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5245,7 +5885,10 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md",
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5269,11 +5912,31 @@
   "summary": "Compose maintenance supervision with actual storage; no hardware access.",
   "usb": false
  },
+ "memory-architecture-smp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-pmu.md",
+   "docs/designs/memory-architecture-measurements.md",
+   "docs/device-memory-capacity.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--clang",
+   "--lld",
+   "--qemu",
+   "--freertos"
+  ],
+  "summary": "Measure and check the device-memory ledger on two QEMU cores with the FreeRTOS SMP port.",
+  "usb": false
+ },
  "memory-reservations.py": {
   "cache_areas": [
    "host"
   ],
   "docs": [
+   "docs/designs/memory-architecture-measurements.md",
    "docs/memory-reservations.md"
   ],
   "library": false,
@@ -5281,7 +5944,65 @@
   "required_arguments": [
    "--output"
   ],
-  "summary": "Check reserved allocation ownership and opt-in native image layout.",
+  "summary": "Check reserved allocation ownership, local pool preparation and opt-in native image layout.",
+  "usb": false
+ },
+ "memtest-emulate.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/designs/memory-qualification.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--elf",
+   "--binary",
+   "--out"
+  ],
+  "summary": "Unicorn checks of the linked memory qualification image.",
+  "usb": false
+ },
+ "memtest-image.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--elf",
+   "--out"
+  ],
+  "summary": "Layout checks of the linked memory qualification image.",
+  "usb": false
+ },
+ "memtest-machine.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Unicorn model of the returning platform for the memory qualification checks.",
+  "usb": false
+ },
+ "memtest-plan.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/memory-qualification-measurements.md",
+   "docs/designs/memory-qualification.md",
+   "docs/memory-qualification.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "Planner model of the memory qualification image (docs/memory-qualification.md).",
   "usb": false
  },
  "microsd-boot-package.py": {
@@ -5350,7 +6071,9 @@
  },
  "mimus-supervised-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5429,7 +6152,9 @@
  },
  "monitor-application-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5446,7 +6171,8 @@
   "docs": [
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
   "pure_host": false,
@@ -5478,6 +6204,7 @@
  "nbg-checksum-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-exact-sum.md",
    "docs/nbg-checksum.md"
   ],
   "library": false,
@@ -5563,6 +6290,23 @@
    "reference"
   ],
   "summary": "Compare a pinned compiled network with recorded SDK metadata and corruptions.",
+  "usb": false
+ },
+ "nbg-layout-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-conformance.md",
+   "docs/nbg-assembly.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sdk",
+   "model",
+   "native",
+   "output"
+  ],
+  "summary": "Compare general-layout native assembly with the pinned SDK loader.",
   "usb": false
  },
  "nbg-loader-reference.py": {
@@ -5671,7 +6415,9 @@
  },
  "npu-application-clock-reference.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5685,6 +6431,7 @@
  "npu-application.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-platform.md",
    "docs/npu-application.md"
   ],
   "library": false,
@@ -5700,10 +6447,25 @@
   "summary": "One native NPU application link and focused constructor/client/frame/host composition.",
   "usb": false
  },
+ "npu-conformance.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-conformance-measurements.md",
+   "docs/designs/npu-conformance.md",
+   "docs/npu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the NPU conformance harness's vectors, comparisons and identity pins; host only.",
+  "usb": false
+ },
  "npu-conv-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu-compiler.md"
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
   ],
   "library": false,
   "pure_host": false,
@@ -5731,9 +6493,27 @@
   "summary": "Prepare authenticated external inputs for the fixed convolution composition.",
   "usb": false
  },
+ "npu-dual-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-conformance.md",
+   "docs/npu-compiler.md",
+   "docs/npu-conformance.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "fixture",
+   "report"
+  ],
+  "summary": "Compare saved compiler/simulator outputs of the two-input, two-output fixture.",
+  "usb": false
+ },
  "npu-finite-client.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5771,7 +6551,9 @@
  },
  "npu-interrupt-client.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5812,7 +6594,9 @@
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5885,7 +6669,9 @@
   "cache_areas": [
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/power-authority.md"
+  ],
   "library": false,
   "pure_host": true,
   "required_arguments": [
@@ -5910,6 +6696,7 @@
  "npu-reserved.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/npu-reserved.md"
   ],
   "library": false,
@@ -5924,12 +6711,28 @@
   "summary": "Run the native reserved-convolution preparation modes, without NPU commands.",
   "usb": false
  },
+ "npu-runtime-bounds.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-breadth-measurements.md",
+   "docs/designs/npu-breadth.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Compute the NPU runtime's start, reply and load bounds per image and refuse a short collect timeout.",
+  "usb": false
+ },
  "npu-runtime-host.py": {
   "cache_areas": [
    "evidence",
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5953,9 +6756,34 @@
   "summary": "Actual linked runtime USB/mailbox/client; service and hardware replies modeled.",
   "usb": false
  },
+ "npu-session.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/designs/npu-breadth-measurements.md",
+   "docs/designs/npu-breadth.md",
+   "docs/designs/npu-conformance.md",
+   "docs/handoff.md",
+   "docs/npu-conformance.md",
+   "docs/npu-service.md",
+   "docs/npu-session.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "output",
+   "--mode"
+  ],
+  "summary": "Build and run the shared-service and model-session FreeRTOS checks in QEMU.",
+  "usb": false
+ },
  "npu-single-core-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5973,7 +6801,10 @@
  },
  "npu-single-core.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5986,7 +6817,9 @@
  },
  "npu-stop-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5999,7 +6832,9 @@
  },
  "npu-supervised-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-platform.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6018,6 +6853,9 @@
   "cache_areas": [],
   "docs": [
    "apps/npu-runtime/README.md",
+   "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-platform.md",
+   "docs/designs/smp-heterogeneous.md",
    "docs/npu-application.md"
   ],
   "library": false,
@@ -6033,6 +6871,7 @@
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6044,11 +6883,63 @@
   "summary": "Run the integrated OS image's capture client against a modeled DMA service.",
   "usb": false
  },
+ "os-image-dispatch.py": {
+  "cache_areas": [
+   "inputs"
+  ],
+  "docs": [
+   "docs/designs/recognition-dispatch-measurements.md",
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the OS image's placement of mimus linear layers on the CPU or GPU against its design budgets.",
+  "usb": false
+ },
+ "os-image-headset.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/designs/bluetooth-voice-recognition-measurements.md",
+   "docs/designs/bluetooth-voice-recognition.md",
+   "docs/handoff.md",
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Run the integrated OS image's headset capture client against a modeled headset.",
+  "usb": false
+ },
+ "os-image-identity.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check the linked integrated OS image's EL3 publication hook for its workloads.",
+  "usb": false
+ },
  "os-image-launch.py": {
   "cache_areas": [
    "host"
   ],
   "docs": [
+   "docs/handoff.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -6066,8 +6957,10 @@
  "os-image-link.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/recognition-dispatch.md",
    "docs/handoff.md",
-   "docs/os-image.md"
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6080,6 +6973,23 @@
    "--output"
   ],
   "summary": "Check the linked integrated OS image's fixed interrupt table, start list and layout.",
+  "usb": false
+ },
+ "os-image-radio.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/handoff.md",
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Run the integrated OS image's radio entry against a modeled session and profile.",
   "usb": false
  },
  "os-image-stage2.py": {
@@ -6098,6 +7008,20 @@
    "--output"
   ],
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
+  "usb": false
+ },
+ "ov5640-modes-reference.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/camera.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--source",
+   "--evidence"
+  ],
+  "summary": "Compare every native OV5640 mode with unchanged Linux mode functions.",
   "usb": false
  },
  "ov5640-reference.py": {
@@ -6164,6 +7088,56 @@
    "--output"
   ],
   "summary": "Check the linked PCIe MSI route and dispatch; no physical interrupt evidence.",
+  "usb": false
+ },
+ "pcie-nvme-fixture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Produce software-only PCIe NVMe session and admission records for the linked image.",
+  "usb": false
+ },
+ "pcie-nvme-host.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/handoff.md",
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--fixture",
+   "--frame",
+   "--output"
+  ],
+  "summary": "Host admission, decoding and capture cases for the PCIe NVMe application.",
+  "usb": false
+ },
+ "pcie-nvme-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/pcie-nvme.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Execute the linked PCIe NVMe application, function client and NVMe driver.",
   "usb": false
  },
  "pcie-pd-rail-host.py": {
@@ -6253,6 +7227,20 @@
   "summary": "Run the focused bank expansion checks and preserve exact evidence inputs.",
   "usb": false
  },
+ "pmic-tree.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-power-states.md",
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/power-authority.md",
+   "docs/pmic-runtime.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the source-tree facts that keep PMIC outputs under the provider's control.",
+  "usb": false
+ },
  "primary-cache-host.py": {
   "cache_areas": [],
   "docs": [
@@ -6274,7 +7262,9 @@
  "primary-cache-probe.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/smp-heterogeneous.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6336,6 +7326,7 @@
  "provider-clock-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/provider-clock-reference.md"
   ],
   "library": false,
@@ -6344,6 +7335,40 @@
    "--output"
   ],
   "summary": "Exercise selected provider clock admissions on modeled register reads.",
+  "usb": false
+ },
+ "pvr-batch-producer.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-archive",
+   "--mesa-build",
+   "--evidence"
+  ],
+  "summary": "Compile the profile-4 batch programs with pinned Mesa sources.",
+  "usb": false
+ },
+ "pvr-batch.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/gpu-render.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--mesa-source",
+   "--mesa-archive",
+   "--mesa-build",
+   "--producer",
+   "--firmware-headers",
+   "--output"
+  ],
+  "summary": "Compare native profile-4 batch encoders with pinned Mesa and firmware sources.",
   "usb": false
  },
  "pvr-ccb-reference.py": {
@@ -6391,6 +7416,7 @@
  "pvr-compute-job.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
    "docs/gpu-compute-job.md"
   ],
   "library": false,
@@ -6422,7 +7448,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6451,6 +7479,8 @@
  "pvr-compute-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-compute-mode.md",
    "docs/gpu-compute-service.md"
   ],
@@ -6616,6 +7646,7 @@
  "pvr-gpu-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-memory.md",
    "docs/gpu-service.md"
   ],
@@ -6827,7 +7858,9 @@
  },
  "pwm-service-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/pwm.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6884,7 +7917,8 @@
  "radio-bootstrap-budget.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-radio.md"
+   "docs/board-radio.md",
+   "docs/os-image.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6927,13 +7961,14 @@
    "--qemu",
    "--evidence"
   ],
-  "summary": "Build one AArch64 DHCP/DNS composition and execute only its new cases.",
+  "summary": "Build one AArch64 DHCP/DNS/SNTP composition and execute only its new cases.",
   "usb": false
  },
  "radio-network.py": {
   "cache_areas": [],
   "docs": [
-   "docs/radio-network.md"
+   "docs/radio-network.md",
+   "docs/radio-security.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6971,7 +8006,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6999,6 +8036,22 @@
   "summary": "Build or execute only the affected retained-session reconnect composition,",
   "usb": false
  },
+ "radio-sntp.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-network.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tcp",
+   "--headers"
+  ],
+  "summary": "Check SNTP reply validation, RTC conversion and the client sequence on the host.",
+  "usb": false
+ },
  "radio-transport-aggregate.py": {
   "cache_areas": [],
   "docs": [
@@ -7012,11 +8065,28 @@
   "summary": "Build and run the runtime receive check for one aggregate over 4,096 bytes.",
   "usb": false
  },
+ "rail-leases-cost.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/clock-leases.md",
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/power-authority.md",
+   "docs/rail-leases.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Count AArch64 instructions and cache lines for rail ledger and clock registry operations.",
+  "usb": false
+ },
  "rail-leases.py": {
   "cache_areas": [
    "sources"
   ],
   "docs": [
+   "docs/designs/power-authority.md",
    "docs/rail-leases.md"
   ],
   "library": false,
@@ -7028,6 +8098,48 @@
    "--compile-commands"
   ],
   "summary": "Run the focused rail ownership batch and preserve all executed inputs.",
+  "usb": false
+ },
+ "remote-writers-model.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/remote-writers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Execute the AArch64 remote-writer exclusion check against modeled register states.",
+  "usb": false
+ },
+ "remote-writers-sources.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/remote-writers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Survey which remote bus masters the pinned boot0 and the captured board ROM can start.",
+  "usb": false
+ },
+ "reset-latency.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
+   "docs/fault-capture.md",
+   "docs/reset.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Build and run the host model of the resident reboot path.",
   "usb": false
  },
  "rtc-application-cases.py": {
@@ -7236,6 +8348,17 @@
   "summary": "Differential and access check of runtime memcpy, memmove and memset.",
   "usb": false
  },
+ "sae-openssl.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/radio-security.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Authenticate the pinned OpenSSL source; build its minimal host library and run the SAE cases.",
+  "usb": false
+ },
  "sdio-controller.py": {
   "cache_areas": [],
   "docs": [
@@ -7252,7 +8375,9 @@
  },
  "secondary-cache-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7398,6 +8523,57 @@
    "--output"
   ],
   "summary": "Run production per-core preparation and interrupt setup with modeled hardware.",
+  "usb": false
+ },
+ "shared-helpers.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/shared-helpers.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Shared range, deadline, MMIO, mapping-check and task-context helpers on host and AArch64/AArch32.",
+  "usb": false
+ },
+ "single-core-variants-equivalence.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/single-core-images.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--before",
+   "--before-source",
+   "--after",
+   "--after-source",
+   "--target",
+   "--output"
+  ],
+  "summary": "Compare a boot-CPU-only image built from two source trees.",
+  "usb": false
+ },
+ "smp-port-cost.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/smp-heterogeneous-measurements.md",
+   "docs/designs/smp-heterogeneous.md",
+   "docs/smp.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Count FreeRTOS SMP port instructions per operation on two QEMU cores.",
   "usb": false
  },
  "spi-application-fixture.py": {
@@ -7729,7 +8905,10 @@
  },
  "storage-read-single-core.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-table-walks-measurements.md",
+   "docs/designs/cpu-table-walks.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7878,7 +9057,9 @@
  },
  "uart-native-fcr.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/uart.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7886,7 +9067,7 @@
    "--session",
    "--output"
   ],
-  "summary": "Execute the linked native UART write policy for FCR values on ports 0-2.",
+  "summary": "Execute the linked native UART write policy for FCR, MCR, THR and RS-485 control.",
   "usb": false
  },
  "usb-board-lock.py": {
@@ -7922,6 +9103,22 @@
    "--evidence"
   ],
   "summary": "Focused native USB first-fault and no-access BUSY cases; no hardware access.",
+  "usb": false
+ },
+ "usb-host-classes.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/usb2-host.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--port"
+  ],
+  "summary": "USB2 hub tiers, hub power budgets and audio capture against a ring-level model; no board access.",
   "usb": false
  },
  "usb-host-dual-native.py": {
@@ -7971,7 +9168,9 @@
  },
  "usb-host-irq-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/smp-heterogeneous.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -8036,7 +9235,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/handoff.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -8083,6 +9284,9 @@
  "usb0-service-burst.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
+   "docs/performance-architecture.md",
    "docs/usb.md"
   ],
   "library": false,

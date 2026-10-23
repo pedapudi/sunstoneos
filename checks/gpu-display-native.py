@@ -53,7 +53,7 @@ class Machine:
         self.put(runtime+rl['epoch'],struct.unpack_from('<Q',contract,24)[0])
         self.put(runtime+rl['diagnostic_deadline'],struct.unpack_from('<Q',contract,image.layouts['a733_smp_contract']['diagnostic_deadline'])[0])
         self.tasks=[];self.stopped=False
-        names=['a733_smp_counter','a733_smp_device_preparation_admitted','a733_device_memory_commit_allowed','a733_device_memory_ready','a733_cpu_coherence_publish','a733_gpu_interrupt_binding_init','vTaskStartScheduler','aarch64_device_translate',
+        names=['a733_smp_counter','a733_smp_device_preparation_admitted','a733_device_memory_ready','a733_cpu_coherence_publish','a733_gpu_interrupt_binding_init','vTaskStartScheduler','aarch64_device_translate',
                'aarch64_device_cache_stride','aarch64_device_cache','a733_counter_clock_init','a733_counter_clock_now',
                'xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xTaskCreateStaticAffinitySet','xTaskCreateStatic','xQueueGenericCreateStatic',
                'xQueueCreateMutexStatic','vTaskEnterCritical','vTaskExitCritical','platform_panic']
@@ -83,7 +83,6 @@ class Machine:
         elif name=='aarch64_device_translate':
             attr=0x44 if 0x78000000<=a[0]<0x79000000 else 0xff if a[0]>=0x40000000 else 0
             self.u.mem_write(a[2],struct.pack('<QII',a[0],attr,3 if attr else 2));self.translations.append(a[:2]);self.ret(1)
-        elif name=='a733_device_memory_commit_allowed':self.ret((a[0],a[1],a[2]) in ((0,0x48000000,0x78000000),(1,0x78000000,0x79000000)))
         elif name=='a733_device_memory_ready':self.ret(1)
         elif name=='a733_cpu_coherence_publish':self.ret(1)
         elif name=='a733_gpu_interrupt_binding_init':self.ret(1)
@@ -147,8 +146,8 @@ def main():
         for row in state['memory']:m.u.mem_write(row['address'],(a.output/row['file']).read_bytes())
         m.tasks=state['tasks'];m.clocks=state['clocks']
     else:
-        assert m.call('a733_memory_reservations_commit_verified')==1
-        assert m.call('a733_memory_uncached_commit_verified')==1
+        assert m.call('a733_memory_reservations_prepare')==1
+        assert m.call('a733_memory_uncached_prepare')==1
         m.call('a733_smp_diagnostic_start')
         # PMIC, output, render and USB observation tasks plus the GPU service worker.
         assert m.stopped and len(m.tasks)==5,(m.tasks,m.trace[-30:])

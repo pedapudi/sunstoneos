@@ -2,73 +2,77 @@
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
 #include "task.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "PMIC provider requires scheduler, task and mutex-owner APIs"
 #endif
 static int current(void *v)
 {
-    struct a733_pmic_native *n=v;uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if(!n || !n->initialized || el!=4 || (flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->task;
+    struct a733_pmic_native *n=v;
+    return n && n->initialized && a733_task_context_owner_el1((TaskHandle_t)n->task);
 }
+/* The provider checks its deadline before and after every register access.
+ * a733_counter_clock_now takes a global ticket lock with interrupts masked,
+ * so this reads the architectural counter directly: the same microseconds as
+ * the counter clock (counter ticks over ticks per microsecond, no origin),
+ * with no lock. The provider faults on a value that runs backwards, and a
+ * fault latched in the shared counter clock refuses the read. */
 static int now(void *v,uint64_t *out)
-{struct a733_pmic_native *n=v;return n->locks->now(n->locks->context,out);}
+{
+    const struct a733_pmic_native *n=v;const struct a733_counter_clock *c=n->locks->context;
+    if(!c->initialized || atomic_load_explicit(&c->failed,memory_order_acquire) ||
+       !c->frequency || c->frequency%1000000u)return 0;
+    uint64_t t;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(t) :: "memory");
+    *out=t/(c->frequency/1000000u);return 1;
+}
+/* The kernel's mutex holder is queried once, when the bus is entered. A
+ * FreeRTOS mutex changes holder only when its holder gives it, and only
+ * leave() gives the I2C mutex on this task, so the holding flag stays exact
+ * until then. A retain anywhere sets the retained bit, which every access
+ * reads with one acquire load. */
 static int enter(void *v,uint64_t deadline)
-{struct a733_pmic_native *n=v;return current(n) && a733_platform_lock_enter(n->locks,A733_PLATFORM_I2C_LOCK,deadline);}
+{
+    struct a733_pmic_native *n=v;
+    if(!current(n) || n->holding || !a733_platform_lock_enter(n->locks,A733_PLATFORM_I2C_LOCK,deadline))return 0;
+    configASSERT(xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->task);
+    n->holding=1;return 1;
+}
 static void leave(void *v)
-{struct a733_pmic_native *n=v;a733_platform_lock_leave(n->locks,A733_PLATFORM_I2C_LOCK);}
+{struct a733_pmic_native *n=v;n->holding=0;a733_platform_lock_leave(n->locks,A733_PLATFORM_I2C_LOCK);}
 static void retain(void *v)
 {struct a733_pmic_native *n=v;configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_I2C_LOCK)==1);}
 static int owned(struct a733_pmic_native *n)
 {
-    return current(n) && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u) &&
-        xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->task;
+    return n->holding && current(n) && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u);
 }
+/* DSB SY before and after every access, as the shared MMIO rules require
+ * until a lighter placement is qualified on the board (docs/pmic-runtime.md). */
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     if(!out || !owned(v) || !a733_pmic_native_address(a,0))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");*out=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    *out=a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
     if(!owned(v) || !a733_pmic_native_address(a,1) || value>255 ||
        (a==0x0708300cu && value!=0x48 && value!=0x58 && value!=0x68))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=value;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
-}
-static int separate(const void *p,size_t size,const void *q,size_t count)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    return p && q && size<=UINTPTR_MAX-a && count<=UINTPTR_MAX-b && (a+size<=b || b+count<=a);
+    a733_mmio_write32_dsb_sy_both(a,value);return 1;
 }
 static int outside(void *v,const void *p,size_t size)
 {
     struct a733_pmic_native *n=v;
-    return separate(p,size,n,sizeof(*n)) && separate(p,size,n->locks,sizeof(*n->locks)) &&
-        separate(p,size,n->locks->context,sizeof(struct a733_counter_clock));
+    return a733_ranges_disjoint(p,size,n,sizeof(*n)) && a733_ranges_disjoint(p,size,n->locks,sizeof(*n->locks)) &&
+        a733_ranges_disjoint(p,size,n->locks->context,sizeof(struct a733_counter_clock));
 }
 int a733_pmic_native_init(struct a733_pmic_native *n,struct a733_platform_locks *locks,void *task)
 {
     if(!n || n->initialized || !locks || !locks->initialized || !task ||
        locks->now!=a733_counter_clock_now || !locks->context ||
-       !separate(n,sizeof(*n),locks,sizeof(*locks)) ||
-       !separate(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
-    n->locks=locks;n->task=task;
+       !a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
+    n->locks=locks;n->task=task;n->holding=0;
     n->operations=(struct a733_pmic_ops){now,current,enter,leave,retain,read32,write32,outside};
     n->initialized=1;return 1;
 }

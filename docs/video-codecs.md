@@ -5,13 +5,14 @@ register executor for the A733 video decoder. The executor compiles for native
 AArch64 and matches instruction traces from an A733/T736 runtime package.
 The [native JPEG application](jpeg-application.md) integrates the executor with
 clock/reset providers, decoder IOMMU mappings, guarded buffers and copied USB
-output. Its central image links and focused software checks pass. Physical
+output, and decodes sequences of up to eight images in one session. Its central
+image links and focused software checks pass. Physical
 decoding, memory confinement, completion and numerical conformance remain
 unqualified. The [native JPEG encoder](jpeg-encode-native.md) now implements a
 one-job VGA NV12/quality75 path with authenticated upload and retained copied
 JPEG output. The [native H.264 encoder](h264-encode-native.md) implements a retained
-two-picture VGA NV12 Baseline IDR/P job with caller upload and indexed copied
-AnnexB output. Focused models pass; physical encoding remains unqualified.
+VGA NV12 Baseline sequence of one IDR and up to 29 P pictures at fixed QP 26,
+with caller upload and indexed copied AnnexB output. Focused models pass; physical encoding remains unqualified.
 
 This document is for engineers implementing FreeRTOS device drivers. A video
 engine (VE) contains several codec register groups. An IOMMU master identifies a
@@ -233,13 +234,13 @@ are capability claims, not SunstoneOS qualification results.
 | Direction and family | Advertised profile or limit | Runtime reference and native status |
 | --- | --- | --- |
 | JPEG encode | Baseline, 64-megapixel snapshots, 4K at 15 fps; 4:2:0/4:2:2/4:4:4, grayscale | Native one-job VGA NV12/quality75; modeled path tested, physical unqualified |
-| H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Bounded native VGA Baseline IDR/P path modeled; broader profiles/rates/resolutions remain required; manual's level/resolution combination needs clarification |
+| H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Bounded native VGA Baseline sequence of up to 30 IDR/P pictures at fixed QP modeled; rate control, broader profiles/rates/resolutions remain required; manual's level/resolution combination needs clarification |
 | H.265 encode | Main, level 5 Main Tier, 4K at 30 fps | Encoder libraries present; native unsupported |
-| MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | First narrow JPEG profile implemented; physical execution unqualified |
-| H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | `libawh265.so`; no native decode. [A partial native proposal](hevc-native.md) is not integrated |
+| MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | Baseline YCbCr420 up to 640-by-480 planes, one image or a sequence of up to eight per session; modeled, physical execution unqualified |
+| H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | [Native 640-by-480 Main IDR and P build](hevc-native.md); modeled against the effective `libawh265.so` trace, preparation awaits physical allocation evidence, physical decoding unqualified; wider modes remain required |
 | VP9 decode | Profiles 0/2, level 6.1, 8192 by 8192 at 24 fps | `libawvp9HwAL.so`; native unsupported |
 | AVS2 decode | 8192 by 4608 at 24 fps | `libawavs2.so`; native unsupported |
-| H.264 decode | Baseline/Main/High, level 5.1, 4096 by 2304 at 30 fps | [Native Baseline 48-by-32, VGA and full-HD streaming builds and a High-profile CABAC I/P/B build with up to four references](h264-native.md); implemented and modeled, physical decoding unqualified; long-term references and wider modes remain required |
+| H.264 decode | Baseline/Main/High, level 5.1, 4096 by 2304 at 30 fps | [Native Baseline 48-by-32, VGA and full-HD streaming builds and a runtime build for Baseline, Main and High I/P/B streams with up to four short- or long-term references](h264-native.md); implemented and modeled, physical decoding unqualified; long-term references in B pictures, fields, levels above 4.0 and wider formats remain required |
 | H.263, MPEG-4 SP/ASP level 5, XVID, Sorenson decode | 1080p at 60 fps | MPEG-4 family libraries present; per-format paths need derivation |
 | MPEG-1/2 decode | 1080p at 60 fps | `libawmpeg2.so`; native unsupported |
 | VP8 decode | 1080p at 60 fps | `libawvp8.so`; native unsupported |

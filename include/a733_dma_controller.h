@@ -2,6 +2,8 @@
 #define SUNSTONE_A733_DMA_CONTROLLER_H
 
 #include "a733_dma.h"
+#include "a733_range.h"
+#include "dma_address_width.h"
 
 #define A733_DMA_CHANNELS 16u
 #define A733_DMA_MAX_MAPPINGS (2u * A733_DMA_MAX_SEGMENTS)
@@ -32,28 +34,19 @@ struct a733_dma_mapping {
 };
 
 /* Shape every DMA0 mapping needs: nonempty 64-byte-aligned CPU and bus ranges,
- * no CPU address wrap, and a bus range below 2^35. */
+ * no CPU address wrap, and a bus range below A733_DMA0_DATA_LIMIT (2^35). */
 static inline int a733_dma_mapping_shape(const struct a733_dma_mapping *m)
 {
     return m->cpu && m->bytes && !((uintptr_t)m->cpu & 63) && !(m->bus & 63) &&
         !(m->bytes & 63) && (uintptr_t)m->cpu <= UINTPTR_MAX - m->bytes &&
-        m->bus < (UINT64_C(1) << 35) && m->bytes <= (UINT64_C(1) << 35) - m->bus;
+        m->bus < A733_DMA0_DATA_LIMIT && m->bytes <= A733_DMA0_DATA_LIMIT - m->bus;
 }
-/* Callers must already have excluded wrap in both ranges. */
-static inline int a733_dma_overlap(uint64_t a, uint64_t a_bytes, uint64_t b, uint64_t b_bytes)
-{ return a < b + b_bytes && b < a + a_bytes; }
 /* Either the CPU or the bus ranges intersect; both mappings have valid shape. */
 static inline int a733_dma_mappings_overlap(const struct a733_dma_mapping *a,
                                             const struct a733_dma_mapping *b)
 {
-    return a733_dma_overlap((uintptr_t)a->cpu, a->bytes, (uintptr_t)b->cpu, b->bytes) ||
-           a733_dma_overlap(a->bus, a->bytes, b->bus, b->bytes);
-}
-/* Two objects are disjoint. Refuses NULL, empty and wrapping ranges. */
-static inline int a733_dma_separate(uintptr_t a, size_t a_bytes, uintptr_t b, size_t b_bytes)
-{
-    return a && b && a_bytes && b_bytes && a_bytes <= UINTPTR_MAX - a &&
-           b_bytes <= UINTPTR_MAX - b && (a + a_bytes <= b || b + b_bytes <= a);
+    return a733_extents_overlap_prechecked((uintptr_t)a->cpu, a->bytes, (uintptr_t)b->cpu, b->bytes) ||
+           a733_extents_overlap_prechecked(a->bus, a->bytes, b->bus, b->bytes);
 }
 
 struct a733_dma_transfer {
@@ -139,8 +132,10 @@ enum a733_dma_control_status a733_dma_submit_cyclic_rx(struct a733_dma_controlle
     unsigned,const struct a733_dma_transfer *,uint64_t);
 int a733_dma_cyclic_progress(const struct a733_dma_controller *,unsigned,uint64_t *);
 /* Copy only one completed, not-yet-reused RX range into private staging. No
- * raw lease escapes. Return1 verified copy,0 not yet stable/ready,-1 overrun or
- * ambiguous history. A failed copy remains unpublished. Serialized worker only. */
+ * raw lease escapes. Period k is copied only while period+2 <= packages <=
+ * period+count-2, so a ring needs at least four periods. Return1 verified
+ * copy,0 not yet stable/ready,-1 overrun or ambiguous history. A failed copy
+ * remains unpublished. Serialized worker only. */
 int a733_dma_cyclic_rx_copy(struct a733_dma_controller *,unsigned,uint64_t,
     void *,size_t);
 /* Observe the channel's finite transfer t without acknowledging PENDING, so a

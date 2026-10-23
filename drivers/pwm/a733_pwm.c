@@ -13,6 +13,7 @@
  */
 #include "a733_pwm.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define PWM A733_PWM_BASE
@@ -37,18 +38,22 @@ int a733_pwm_plan(const struct a733_pwm_config *c,struct a733_pwm_plan *p,a733_c
     (c->led_expected.function!=0&&c->led_expected.function!=1&&c->led_expected.function!=15)||
     (c->apbs0&~UINT32_C(0x0700001f))||((c->apbs0>>24)!=0&&(c->apbs0>>24)!=4)||
     24000000%((c->apbs0&31)+1)||c->apbs0_hz!=24000000/((c->apbs0&31)+1)))return 0;
- uint64_t ticks=(uint64_t)c->period_ns*24,active=(uint64_t)c->duty_ns*24;
- if(ticks%1000||active%1000||!(ticks/=1000)||ticks>65536||(active/=1000)>65535)return 0;
+ /* SYS_CLK24M with PCCR45 /1; PCR prescale K+1 (manual18.7.8.25) selects the
+  * finest exact period. Duty must be exact at that rate; no rounding. */
+ uint64_t ticks=(uint64_t)c->period_ns*24,active=(uint64_t)c->duty_ns*24;unsigned k=1;
+ while(k<=256&&(ticks%(1000u*k)||ticks/(1000u*k)>65536))++k;
+ if(k>256||active%(1000u*k)||!(ticks/=1000u*k)||(active/=1000u*k)>65535)return 0;
+ /* Continuous commands complete within100ms, including period readiness and
+  * the first period interrupt, so cycle periods are bounded to10ms. */
+ if(!c->pulses&&c->period_ns>10000000)return 0;
  unsigned source=c->apb0>>24,div=(c->apb0&31)+1,hz=source==0?24000000:source==3?600000000:0;
  if(!hz||hz%div||c->apb0_hz!=hz/div)return 0;
  uint64_t duration=((uint64_t)c->period_ns*c->pulses+999)/1000;
  if(duration>1000000)return 0; /* This finite owner never requests over1 second. */
- *p=(struct a733_pwm_plan){(c->pulses?((c->pulses-1)<<16)|BIT(9):0)|(c->active_high?BIT(8):0),
+ *p=(struct a733_pwm_plan){(c->pulses?((c->pulses-1)<<16)|BIT(9):0)|(c->active_high?BIT(8):0)|(k-1),
  ((uint32_t)(ticks-1)<<16)|(uint32_t)active,(uint32_t)ticks,(uint32_t)active,duration};
  *shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|(source==3?A733_CLOCK_PERI0:0)|(c->led_enabled?A733_CLOCK_APBS0:0);return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static enum a733_pwm_result fail(struct a733_pwm *p,unsigned error)
 {
  p->fault=1;if(!p->report.error)p->report.error=error;
@@ -58,7 +63,8 @@ static enum a733_pwm_result fail(struct a733_pwm *p,unsigned error)
  return A733_PWM_RETAINED;
 }
 static int timely(struct a733_pwm *p)
-{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->config.deadline_us&&(!p->service_step||n<p->service_deadline);}
+{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||!a733_monotonic_advance(n,&p->last_now))return 0;
+ return n<p->config.deadline_us&&(!p->service_step||n<p->service_deadline);}
 static enum a733_pwm_result finish(struct a733_pwm *p,enum a733_pwm_result r)
 {if(p->held){p->ops.leave(p->cookie);p->held=0;}atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
 static int api(struct a733_pwm *p)
@@ -110,9 +116,10 @@ int a733_pwm_init(struct a733_pwm *p,const struct a733_pwm_config *c,const struc
  !o->leave||!o->retain||!o->read||!o->write||!o->outside||!clocks||!clocks->initialized||!pins||!pins->initialized||
  !rails||rails->self!=rails||rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||pmic->pins!=pins||
  pmic->rails!=rails||!pmic->ops.outside||pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||o->outside(cookie,p,sizeof(*p))!=1||
- !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||!separate(p,sizeof(*p),clocks,sizeof(*clocks))||
- !separate(p,sizeof(*p),pins,sizeof(*pins))||!separate(p,sizeof(*p),rails,sizeof(*rails))||!separate(p,sizeof(*p),pmic,sizeof(*pmic))||
- !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
+ !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
+ !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
+ !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
+ !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)))return 0;
  *p=(struct a733_pwm){.config=*c,.plan=plan,.ops=*o,.cookie=cookie,.clocks=clocks,.pins=pins,.rails=rails,.pmic=pmic,.shared=shared};
  atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
@@ -233,13 +240,13 @@ static enum a733_pwm_result cycle(struct a733_pwm *p,unsigned notice)
  if(p->service_step==3){
   if(!zero(p,PER)||!exact(p,PCGR,BIT(5))||!rd(p,PCR,&v))return fail(p,18);
   if(v&BIT(11))return A733_PWM_PENDING;
-  uint32_t ppr=UINT32_C(599)<<16|p->service_ticks;
-  if(!exact(p,PCR,BIT(8))||!exact(p,PPR,ppr)||!exact(p,PWM+0x248,0))return fail(p,18);
-  p->plan.ppr=ppr;p->plan.active=p->service_ticks;p->report.ppr=ppr;p->report.pcr=BIT(8);
+  uint32_t ppr=(p->plan.ticks-1)<<16|p->service_ticks;
+  if(!exact(p,PCR,p->plan.pcr)||!exact(p,PPR,ppr)||!exact(p,PWM+0x248,0))return fail(p,18);
+  p->plan.ppr=ppr;p->plan.active=p->service_ticks;p->report.ppr=ppr;p->report.pcr=p->plan.pcr;
   p->service_step=4;return A733_PWM_PENDING;
  }
  if(p->service_step==5){
-  if(!zero(p,PER)||!zero(p,PIER)||!zero(p,PISR)||!rd(p,PCR,&v)||v!=BIT(8)||
+  if(!zero(p,PER)||!zero(p,PIER)||!zero(p,PISR)||!rd(p,PCR,&v)||v!=p->plan.pcr||
      !rd(p,PPR,&v)||v!=p->plan.ppr||!rd(p,PCGR,&v)||v!=BIT(5)||
      !rd(p,GIC,&v)||(v&BIT(31))||!rd(p,GIC+0x308,&v)||(v&BIT(3))||
      !wr(p,GIC+0x288,BIT(3))||!rd(p,GIC+0x208,&v)||(v&BIT(3))||
@@ -269,9 +276,10 @@ enum a733_pwm_result a733_pwm_led(struct a733_pwm *p,unsigned on,uint64_t deadli
 }
 enum a733_pwm_result a733_pwm_control(struct a733_pwm *p,unsigned ticks,unsigned run,uint64_t deadline)
 {
- if(!p||!p->initialized||run>1||!ticks||ticks>=600)return A733_PWM_INVALID;
+ if(!p||!p->initialized||run>1)return A733_PWM_INVALID;
  if(!api(p))return A733_PWM_BUSY;
- if(p->ops.current(p->cookie)!=1||p->config.pulses||p->config.period_ns!=25000||!p->config.active_high||
+ /* Zero and full-period ticks hold the inactive and active levels. */
+ if(p->ops.current(p->cookie)!=1||p->config.pulses||ticks>p->plan.ticks||ticks>65535||
     p->report.phase<ARMED||p->service_step)return finish(p,A733_PWM_INVALID);
  if(p->fault||!timely(p))return finish(p,fail(p,1));
  if(deadline<=p->last_now||deadline>p->config.deadline_us||deadline-p->last_now>100000)return finish(p,A733_PWM_INVALID);

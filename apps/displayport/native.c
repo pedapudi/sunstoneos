@@ -5,6 +5,9 @@
 #include "application.h"
 #include "aarch64_device_memory.h"
 #include "a733_clock_reference.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 #include <string.h>
 #define app dp_app
 #define n (dp_app.native)
@@ -19,7 +22,7 @@ static int intact(void)
 int dp_current(void)
 {return xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&xTaskGetCurrentTaskHandle()==app.handles[0];}
 int dp_now(void *v,uint64_t *out)
-{(void)v;uint64_t t;if(!intact()||!dp_current()||!board_live(NULL)||!out||a733_counter_clock_now(&providers.shared.counter,&t)!=1||t<n.last_now||t>=app.deadline)return 0;n.last_now=t;*out=t;return 1;}
+{(void)v;uint64_t t;if(!intact()||!dp_current()||!board_live(NULL)||!out||a733_counter_clock_now(&providers.shared.counter,&t)!=1||!a733_deadline_admit(t,&n.last_now,app.deadline))return 0;*out=t;return 1;}
 static int timely(void){uint64_t t;return dp_now(NULL,&t)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire);}
 /* Retry only read-only authority observations. No device operation or partial
  * controller sequence is repeated, and the original deadline remains binding. */
@@ -58,7 +61,11 @@ static int address(uintptr_t a,unsigned width)
  a==0x07090160||a==0x0709016c||a==0x070101ac;
 }
 static int mapped(uintptr_t a)
-{struct aarch64_translation r,w;return aarch64_device_translate(a,0,&r)&&aarch64_device_translate(a,1,&w)&&r.physical==a&&w.physical==a&&r.attributes==0&&w.attributes==0;}
+{
+ /* Device identity mapping for reads and writes, any shareability. */
+ static const struct a733_mapping_rule rule={A733_MAPPING_READ_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+ return a733_mapping_check(aarch64_device_translate,a,a,&rule);
+}
 static int enter(void)
 {
  if(!tokens()||!timely()||n.held)return 0;
@@ -71,14 +78,12 @@ static int leave(void)
 static int raw_read(uintptr_t a,unsigned width,uint32_t *out)
 {
  if(!out||!n.held||!address(a,width)||!mapped(a)||!timely())return 0;
- __asm__ volatile("dsb sy":::"memory");*out=width==2?*(volatile const uint16_t *)a:*(volatile const uint32_t *)a;
- __asm__ volatile("dsb sy":::"memory");return timely();
+ *out=width==2?a733_mmio_read16_dsb_sy_both(a):a733_mmio_read32_dsb_sy_both(a);return timely();
 }
 static int raw_write(uintptr_t a,unsigned width,uint32_t v)
 {
  if(!n.held||!address(a,width)||!mapped(a)||!timely())return 0;
- __asm__ volatile("dsb sy":::"memory");if(width==2)*(volatile uint16_t *)a=(uint16_t)v;else *(volatile uint32_t *)a=v;
- __asm__ volatile("dsb sy":::"memory");return timely();
+ if(width==2)a733_mmio_write16_dsb_sy_both(a,(uint16_t)v);else a733_mmio_write32_dsb_sy_both(a,v);return timely();
 }
 static int read_io(void *v,uintptr_t a,unsigned w,uint32_t *out)
 {(void)v;if(enter()!=1)return 0;if(!raw_read(a,w,out)){bad();return 0;}return leave();}

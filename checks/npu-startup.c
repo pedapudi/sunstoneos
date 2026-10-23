@@ -27,6 +27,8 @@ void __wrap_a733_platform_lock_leave(struct a733_platform_locks *p,enum a733_pla
     }
 }
 static uint64_t first_snapshot_time,second_snapshot_time;
+static unsigned cost_polls;static TickType_t cost_first;
+static enum a733_npu_platform_result counted(void){++cost_polls;return a733_npu_startup_poll(&startup);}
 static uint64_t deadline(void)
 {uint64_t now;configASSERT(a733_counter_clock_now(&clock_source,&now));return now+1000000;}
 static uint32_t *reg(uintptr_t address)
@@ -40,7 +42,7 @@ int __wrap_a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t
     configASSERT(xTaskGetCurrentTaskHandle()==bootstrap_task);
     configASSERT(xSemaphoreGetMutexHolder(locks.mutex[0])==bootstrap_task);
     atomic_fetch_add(&platform_reads,1);
-    if(address==0x07090160)*out=0;
+    if(address==0x07090160)*out=0x10000002;
     else if(address==0x070101ac)*out=1;
     else if(address==PCK+8 && (pck[0]&15)==8)*out=8;
     else *out=*reg(address);
@@ -64,7 +66,7 @@ static int inherited_read(void *cookie,uintptr_t address,uint32_t *out)
     if(address==0x0708300c || address==0x07083010 || address==0x07083020) {
         configASSERT(xSemaphoreGetMutexHolder(locks.mutex[1])==bootstrap_task);
         *out=address==0x0708300c ? 0x40 : address==0x07083010 ? 0xf8 : 0x30;
-    } else if(address==0x07090160)*out=0;
+    } else if(address==0x07090160)*out=0x10000002;
     else if(address==0x070101ac)*out=1;
     else *out=*reg(address);
     return 1;
@@ -200,8 +202,16 @@ static void bootstrap(void *unused)
         &startup.handoff.image,&changed,1)==-1 && bad_auth.failed);
     configASSERT(!bad_auth.clock_token.id && !atomic_load(&platform_reads));
     configASSERT(npu_service_activate(&service)==NPU_SERVICE_BUSY && prepared_calls==1);
-    for(unsigned i=0;i<3;++i)configASSERT(a733_npu_startup_poll(&startup)==A733_NPU_PLATFORM_PENDING);
-    configASSERT(startup.clock_token.id && startup.rail_token.id && startup.pck_token.token && !rail_reads);
+    /* The PMIC owner holds the I2C lock first. One startup call acquires the
+     * clock, rail and PCK leases, then waits on that lock for the first DCDC2
+     * snapshot and arms the settle time. */
+    xTaskNotifyGive(holder_task);configASSERT(ulTaskNotifyTake(pdTRUE,1000)==1);
+    cost_first=xTaskGetTickCount();
+    enum a733_npu_platform_result result=counted();
+    configASSERT(startup.clock_token.id && startup.rail_token.id && startup.pck_token.token);
+    configASSERT(atomic_load(&holder_done) && rail_reads==(failure_mode ? 5u : 6u));
+    configASSERT(failure_mode ? result==A733_NPU_PLATFORM_RETAINED :
+        result==A733_NPU_PLATFORM_PENDING && startup.settle_until && !atomic_load(&platform_reads));
     struct a733_clock_token other={0};uint64_t d=deadline();
     configASSERT(a733_clock_acquire(&registry,99,0,A733_POWER_DCDC2,d,&other)==A733_CLOCK_BUSY);
     uint64_t token=0;
@@ -212,10 +222,8 @@ static void bootstrap(void *unused)
     struct a733_gpu_resource_lease altered=startup.pck_token;altered.mask|=A733_GPU_RESOURCE_RAIL;
     configASSERT(a733_gpu_resources_status(&resources.manager,0,&altered)==A733_GPU_RESOURCE_INVALID);
     configASSERT(resources.manager.last_now==prior);
-    xTaskNotifyGive(holder_task);configASSERT(ulTaskNotifyTake(pdTRUE,1000)==1);
-    enum a733_npu_platform_result result=a733_npu_startup_poll(&startup);
     for(unsigned i=0;i<60 && result!=A733_NPU_PLATFORM_READY && result!=A733_NPU_PLATFORM_RETAINED;++i) {
-        vTaskDelay(1);result=a733_npu_startup_poll(&startup);
+        vTaskDelay(1);result=counted();
     }
     configASSERT(!atomic_load(&backend_calls));
     if(failure_mode) {
@@ -231,6 +239,9 @@ static void bootstrap(void *unused)
         configASSERT(a733_gpu_resources_status(&resources.manager,0,&startup.pck_token)==A733_GPU_RESOURCE_OK);
     } else {
         configASSERT(result==A733_NPU_PLATFORM_READY && rail_reads==12 && closes==2);
+        /* One startup call per tick from acquisition to READY. */
+        platform_puts("COST polls=");platform_hex(cost_polls);
+        platform_puts(" ticks=");platform_hex(xTaskGetTickCount()-cost_first);platform_puts("\n");
         configASSERT(second_snapshot_time-first_snapshot_time>=A733_NPU_RAIL_SETTLE_US);
         configASSERT(atomic_load(&platform_reads) && atomic_load(&platform_writes));
         atomic_store(&resources.manager.busy,1);

@@ -37,7 +37,7 @@ struct model {
 };
 static struct model model;
 
-static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_translation *out)
+static int translate(void *cookie, uintptr_t cpu, int write, struct aarch64_translation *out)
 {
     struct model *d = cookie;
     ++d->translations;
@@ -52,7 +52,7 @@ static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_tra
             writable = maps[i].role == A733_NPU_BUFFER_WRITE; found = 1;
         }
     if (!found || (write && !writable)) return 0;
-    *out = (struct a733_npu_translation){pa, 0xff, 3};
+    *out = (struct aarch64_translation){pa, 0xff, 3};
     if (cpu == d->bad_cpu) {
         if (d->bad_kind == 1 || (d->bad_kind == 2 && write)) return 0;
         if (d->bad_kind == 3) out->physical += 4096;
@@ -61,23 +61,23 @@ static int translate(void *cookie, uintptr_t cpu, int write, struct a733_npu_tra
     }
     return 1;
 }
-static int cache(void *cookie, enum a733_npu_cache_op op, uintptr_t cpu, size_t bytes)
+static int cache(void *cookie, enum aarch64_cache_op op, uintptr_t cpu, size_t bytes)
 {
     struct model *d = cookie;
     assert(!(cpu & 63) && !(bytes & 63) && bytes);
     if (++d->cache_calls == d->cache_failure) return 0;
     d->ordered = 0;
     if (cpu == (uintptr_t)arena) {
-        assert(op == A733_NPU_CACHE_CLEAN && bytes <= sizeof(device_arena));
+        assert(op == AARCH64_CACHE_CLEAN && bytes <= sizeof(device_arena));
         d->cleaned |= 16; memcpy(device_arena, arena, bytes); return 1;
     }
     for (unsigned i = 0; i < 4; ++i) {
         if (cpu != maps[i].cpu) continue;
         assert(bytes == maps[i].bytes); d->cleaned |= 1u << i;
         if (maps[i].role == A733_NPU_BUFFER_WRITE)
-            assert(op == A733_NPU_CACHE_CLEAN_INVALIDATE || op == A733_NPU_CACHE_INVALIDATE);
-        else assert(op == A733_NPU_CACHE_CLEAN);
-        if (op == A733_NPU_CACHE_INVALIDATE) memcpy((void *)cpu, device_copies[i], bytes);
+            assert(op == AARCH64_CACHE_CLEAN_INVALIDATE || op == AARCH64_CACHE_INVALIDATE);
+        else assert(op == AARCH64_CACHE_CLEAN);
+        if (op == AARCH64_CACHE_INVALIDATE) memcpy((void *)cpu, device_copies[i], bytes);
         else memcpy(device_copies[i], (void *)cpu, bytes);
         return 1;
     }
@@ -272,6 +272,35 @@ int main(void)
         assert(input_device[0] == (constant ? 0x12 : 0x3c));
         assert(a733_npu_memory_finish(&memory, &job));
     }
+    /* Session groups limit job maintenance to the command's own group plus
+     * shared group 0. Bootstrap publication and finish still cover every
+     * buffer. Another session's WRITE buffer keeps its CPU contents. */
+    for (unsigned shared = 0; shared < 2; ++shared) {
+        fresh();
+        assert(a733_npu_memory_group(&memory, JOB_VA, 1) && a733_npu_memory_group(&memory, INPUT_VA, 1));
+        assert(a733_npu_memory_group(&memory, OUTPUT_VA, shared ? 1 : 2));
+        assert(a733_npu_memory_publish(&memory, &memory.image, &boot, 1));
+        assert(model.cleaned == 31 && model.cache_calls == 5);
+        model.cache_calls = 0;
+        assert(a733_npu_memory_finish(&memory, &boot) && model.cache_calls == 1);
+        assert(!a733_npu_memory_group(&memory, OUTPUT_VA, 1)); /* Fixed once published. */
+        memset(OUTPUT_CPU, 0x44, DATA_BYTES); memset(input_cpu, 0x3c, DATA_BYTES);
+        model.cleaned = 0; model.cache_calls = 0;
+        assert(a733_npu_memory_publish(&memory, &memory.image, &job, 0));
+        assert(model.cleaned == (shared ? 5u : 4u) && model.cache_calls == (shared ? 2u : 1u));
+        assert(input_device[0] == 0x3c && output_device[0] == (shared ? 0x44 : 0xa5));
+        memset(output_device, 0x21, DATA_BYTES); model.cache_calls = 0;
+        assert(a733_npu_memory_finish(&memory, &job) && model.cache_calls == shared);
+        assert(OUTPUT_CPU[0] == (shared ? 0x21 : 0x44));
+        guards();
+    }
+    fresh();
+    assert(!a733_npu_memory_group(&memory, JOB_VA, 0) && !a733_npu_memory_group(&memory, JOB_VA, 256));
+    assert(!a733_npu_memory_group(&memory, BOOT_VA, 1) && !a733_npu_memory_group(&memory, INPUT_VA + 4096, 1));
+    assert(!a733_npu_memory_group(NULL, JOB_VA, 1));
+    for (unsigned i = 0; i < 4; ++i) assert(!memory.groups[i]);
+    memory.state = A733_NPU_MEMORY_FAULT; assert(!a733_npu_memory_group(&memory, JOB_VA, 1));
+
     /* A job publication before any bootstrap publication is refused. */
     fresh(); assert(!a733_npu_memory_publish(&memory, &memory.image, &job, 0));
     assert(!model.cache_calls); retained();
@@ -361,6 +390,6 @@ int main(void)
     assert(walk(UINT32_MAX, 1) == output_device + DATA_BYTES - 1);
     assert(!walk(0xffffdfff, 0));
     assert(a733_npu_memory_finish(&memory, &boot)); guards();
-    puts("PASS NPU private mappings, canonical tables, noncoherent publication, per-job cache scope, controller ownership, and fault retention");
+    puts("PASS NPU private mappings, canonical tables, noncoherent publication, per-job and per-session cache scope, controller ownership, and fault retention");
     return 0;
 }

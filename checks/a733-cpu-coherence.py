@@ -2,6 +2,7 @@
 """Check cold CPU controls and cache entry; no SMP-image or physical execution."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -19,6 +20,13 @@ REF = Path.home() / '.cache/sunstoneos/sources/cpu-coherence'
 REV = '0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e'
 GPR = [UC_ARM64_REG_X0+i for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_LR]
 MASK = (1 << 64) - 1
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+TCR = load('a733_tcr', ROOT / 'tools/a733_tcr.py').EIGHT_CORE
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -79,6 +87,12 @@ def emulate(path, selected):
     def context(core=0, rev=0x20, el=12, failure=''):
         uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM); uc.mem_map(0x41000000, 0x1200000)
         for addr, data in segments: uc.mem_write(addr, data)
+        if el == 4:  # EL1 root at 0x42000000 naming a level-2 page, and its recorded sum.
+            entry1 = {'root-outside': 0x48000003, 'root-self': 0x42000003, 'root-attributes': 0x42001403}
+            tables = {0x42000008: entry1.get(failure, 0x42001003), 0x42001000: 0x40000705}
+            for addr, value in tables.items(): uc.mem_write(addr, value.to_bytes(8, 'little'))
+            total = sum(tables.values()) + (1 if failure == 'checksum' else 0)
+            uc.mem_write(symbols['a733_cached_el1_table_sum'], total.to_bytes(8, 'little'))
         model = {'currentel': el, 'daif': 0x3c0, 'sctlr_el3': 0x30c50830, 'sctlr_el1': 0x30d00800,
             'midr_el1': (0x410fd050 if core < 6 else 0x410fd0b0)|((rev>>4)<<20)|(rev&15),
             'mpidr_el1': 0x81000000|(core<<8), 'clidr_el1': 0x124, 'id_aa64mmfr0_el1': 2,
@@ -132,23 +146,49 @@ def emulate(path, selected):
             assert patches==rpatches,(cpu,rev,patches,rpatches)
             results.append({'kind':'reset-reference','cpu':cpu,'revision':rev,'writes':trace,'patches':str(patches)})
     for el in (1,3):
-        for failure in ('','active','expired','readback','late_enable'):
-            if el==3 and failure=='readback':continue
+        for failure in ('','active','expired','readback','late_enable','checksum','root-outside','root-self','root-attributes'):
+            if el==3 and failure in ('readback','checksum') or el==3 and failure.startswith('root'):continue
             model,trace,patches,call=context(el=el*4,failure=failure)
             if failure=='active':model[f'sctlr_el{el}']|=1
             result=call(f'a733_cpu_coherence_enable_el{el}',0x42000000,1 if failure=='expired' else 240000)
             assert result==(1 if not failure else 0xffffffff),(el,failure,result)
             tlbi=[x for x in trace if x[0]=='tlbi'];enables=[x for x in trace if x[:2]==('msr',f'sctlr_el{el}')]
-            if failure in ('active','expired'):assert not tlbi and not enables
+            if failure in ('active','expired','checksum') or failure.startswith('root'):
+                assert not tlbi and not enables
+                if el==1:assert not [x for x in trace if x[0]=='msr'],(failure,'translation register written')
             else:
                 assert len(tlbi)==2 and len(enables)==1
                 assert model[f'mair_el{el}']==0x44ff00
-                assert model[f'tcr_el{el}']==(0x200803019 if el==1 else 0x80823019)
+                assert model[f'tcr_el{el}']==(TCR if el==1 else 0x80823019)
                 assert model[f'ttbr0_el{el}']==0x42000000
                 assert model[f'sctlr_el{el}']&0x1005==0x1005
                 first=trace.index(tlbi[0]);second=trace.index(tlbi[1],first+1)
                 assert ('dsb','sy',0) in trace[first+1:second]
+            if el==1 and failure in ('','checksum'):
+                lines=[x[2] for x in trace if x[:2]==('dc','civac')]
+                assert lines==list(range(0x42000000,0x42002000,64)),lines
+                first=next(i for i,x in enumerate(trace) if x[0]=='msr') if enables else len(trace)
+                assert max(i for i,x in enumerate(trace) if x[0]=='dc')<first
             results.append({'kind':'cache-enable','el':el,'failure':failure,'trace':trace})
+    for failure in ('','checksum','root-self'):
+        model,trace,patches,call=context(el=4,failure=failure)
+        result=call('a733_cpu_coherence_check_el1',0x42000000,240000)
+        assert result==(1 if not failure else 0xffffffff),(failure,result)
+        assert not [x for x in trace if x[0]=='msr'],('check_el1 changes no register',failure)
+        if failure!='root-self':assert [x[2] for x in trace if x[:2]==('dc','civac')]==list(range(0x42000000,0x42002000,64))
+        results.append({'kind':'table-check','failure':failure,'trace':trace})
+    for el, base, size, expect, change in [(12,0x42000010,100,[0x42000000,0x42000040],''),(4,0x42000000,64,[0x42000000],''),
+                                           (12,0x3fffffc0,128,[],'below-dram'),(12,0x47ffffc0,128,[],'beyond-dram'),
+                                           (12,0x42000000,0,[],'empty'),(8,0x42000000,64,[],'el2'),
+                                           (12,0x42000000,64,[],'daif'),(12,0x42000000,64,[],'sctlr_el3'),
+                                           (4,0x42000000,64,[],'sctlr_el1'),(12,0x42000000,64,[],'expired')]:
+        model,trace,patches,call=context(el=el)
+        if change=='daif':model['daif']=0
+        if change.startswith('sctlr'):model[change]|=4
+        result=call('a733_cpu_coherence_flush',base,size,1 if change=='expired' else 240000)
+        assert result==(1 if expect else 0xffffffff) and [x[2] for x in trace if x[0]=='dc']==expect,(el,base,change)
+        if expect:assert ('dsb','sy',0) in trace[trace.index(('dc','civac',expect[-1])):]
+        results.append({'kind':'flush','el':el,'base':base,'refusal':change,'trace':trace})
     for failure in ('','late_publish','range','expired'):
         model,trace,patches,call=context(failure=failure)
         result=call('a733_cpu_coherence_publish',0x42000003 if failure!='range' else 0x3fffffff,130,1 if failure=='expired' else 240000)
@@ -175,6 +215,7 @@ def main():
 void *memcpy(void*d,const void*s,size_t n){unsigned char*a=d;const unsigned char*b=s;while(n--)*a++=*b++;return d;}
 void *memset(void*d,int v,size_t n){unsigned char*a=d;while(n--)*a++=(unsigned char)v;return d;}
 struct a733_cpu_coherence state;
+uint64_t a733_cached_el1_table_sum[8] __attribute__((aligned(64)));
 int check_native(unsigned core){if(a733_cpu_coherence_init(&state,&a733_cpu_coherence_native_ops,0,core,1,10000)!=1)return -1;for(unsigned i=0;i<200;++i){int r=a733_cpu_coherence_poll(&state);if(r)return r;}return -1;}
 ''')
     flags=['clang-21','--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only','-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-Wall','-Wextra','-Werror','-fstack-usage','-I',str(ROOT/'include'),'-I',str(out)]

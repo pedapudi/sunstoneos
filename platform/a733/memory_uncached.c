@@ -1,42 +1,66 @@
 #include "a733_memory_uncached.h"
 #include "aarch64_device_memory.h"
-#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#include "a733_mapping_check.h"
+#include "a733_memory_critical.h"
 #include "a733_device_memory_layout.h"
-#endif
 
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
 extern unsigned char __device_pool_end[];
 static struct device_memory_pool uncached_pool;
 
-struct device_memory_pool *a733_memory_uncached_init(void)
-{
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-    return a733_device_memory_ready() && uncached_pool.initialized ? &uncached_pool : NULL;
-#else
-    if (uncached_pool.initialized) return &uncached_pool;
-    uintptr_t start = (uintptr_t)__uncached_pool_start;
-    uintptr_t end = (uintptr_t)__uncached_pool_end;
-    if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
-        (uintptr_t)__device_pool_end > start) return NULL;
-    for (uintptr_t cpu = start; cpu < end; cpu += DEVICE_MEMORY_PAGE) {
-        struct aarch64_translation r, w;
-        if (!aarch64_device_translate(cpu, 0, &r) ||
-            !aarch64_device_translate(cpu, 1, &w) ||
-            r.physical != cpu || w.physical != cpu ||
-            r.attributes != 0x44 || w.attributes != 0x44 ||
-            r.shareability != w.shareability ||
-            (r.shareability != 2 && r.shareability != 3)) return NULL;
-    }
-    if (!device_memory_pool_init(&uncached_pool, start, start, end - start)) return NULL;
-    return &uncached_pool;
-#endif
-}
-
-#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-int a733_memory_uncached_commit_verified(void)
+int a733_memory_uncached_prepare(void)
 {
     uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
-    return !uncached_pool.initialized && a733_device_memory_commit_allowed(1, start, end) &&
-        device_memory_pool_init(&uncached_pool, start, start, end - start);
+    /* Normal-NC identity blocks, outer or inner shareable; one write
+     * translation per 2 MiB block descriptor, as for the write-back pool. */
+    static const struct a733_mapping_rule nc = {A733_MAPPING_WRITE, 1,
+        {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 0, 1};
+    return start == A733_DEVICE_NC_START && end == A733_DEVICE_NC_END &&
+        a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
+                                  A733_DEVICE_MEMORY_BLOCK, &nc) &&
+        device_memory_pool_init_typed(&uncached_pool, start, start, end - start, DEVICE_MEMORY_CLASS_NONE,
+                                      DEVICE_MEMORY_NON_CACHEABLE);
+}
+
+struct device_memory_pool *a733_memory_uncached_init(void)
+{
+    return a733_device_memory_ready() ? &uncached_pool : NULL;
+}
+#else
+static int local_result; /* See a733_memory_prepare_once(). */
+
+static int check_local(void)
+{
+    uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
+    if (start == end) return 1; /* The image links no uncached pool. */
+    if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
+        (uintptr_t)__device_pool_end > start) return 0;
+    /* Normal-NC identity pages, outer or inner shareable; one write
+     * translation per page, which also proves the read translation of the
+     * same descriptor at EL1. */
+    static const struct a733_mapping_rule nc = {A733_MAPPING_WRITE, 1,
+        {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 0, 1};
+    return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
+                                     DEVICE_MEMORY_PAGE, &nc);
+}
+
+static int init_local(void)
+{
+    uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
+    return start == end ||
+        device_memory_pool_init_typed(&uncached_pool, start, start, end - start, DEVICE_MEMORY_CLASS_NONE,
+                                      DEVICE_MEMORY_NON_CACHEABLE);
+}
+
+int a733_memory_uncached_prepare(void)
+{
+    return a733_memory_prepare_once(&local_result, check_local, init_local);
+}
+
+struct device_memory_pool *a733_memory_uncached_init(void)
+{
+    /* Transitional, as for the write-back pool. */
+    return a733_memory_uncached_prepare() && uncached_pool.initialized ? &uncached_pool : NULL;
 }
 #endif

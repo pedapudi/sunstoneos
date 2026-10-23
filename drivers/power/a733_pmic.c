@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define TWI UINT32_C(0x07083000)
 #define BIT(n) (UINT32_C(1)<<(n))
 #define POLL_PHASES 8u /* Bus phases one poll may advance. */
@@ -46,16 +47,11 @@ int a733_pmic_decode(enum a733_rail rail,uint8_t enable,uint8_t selector,struct 
     *out=(struct a733_pmic_snapshot){.rail=rail,.enable=enable,.selector=selector,
         .enabled=!!(enable&BIT(p.bit)),.decoded=!!mv,.programmed_uv=mv*1000};return 1;
 }
-static int separate(const void *p,size_t n,const void *q,size_t k)
-{
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)q;
-    return p && q && n<=UINTPTR_MAX-a && k<=UINTPTR_MAX-b && (a+n<=b || b+k<=a);
-}
 static int outside(struct a733_pmic *p,const void *v,size_t n)
 {
-    return separate(v,n,p,sizeof(*p)) && separate(v,n,p->clocks,sizeof(*p->clocks)) &&
-        separate(v,n,p->rails,sizeof(*p->rails)) && separate(v,n,p->pins,sizeof(*p->pins)) &&
-        separate(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->ops.outside(p->cookie,v,n)==1;
+    return a733_ranges_disjoint(v,n,p,sizeof(*p)) && a733_ranges_disjoint(v,n,p->clocks,sizeof(*p->clocks)) &&
+        a733_ranges_disjoint(v,n,p->rails,sizeof(*p->rails)) && a733_ranges_disjoint(v,n,p->pins,sizeof(*p->pins)) &&
+        a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->ops.outside(p->cookie,v,n)==1;
 }
 static int enter(struct a733_pmic *p)
 {
@@ -70,13 +66,21 @@ static enum a733_pmic_status fault(struct a733_pmic *p)
     if(p->held && !p->retained && p->ops.current(p->cookie)==1) {
         p->ops.retain(p->cookie);p->retained=1;
     }
-    p->failed=1;return A733_PMIC_RETAINED;
+    p->failed=1;a733_power_authority_set(&p->rails->authority,A733_POWER_PROVIDER_FAULT);
+    return A733_PMIC_RETAINED;
 }
+/* Revocation check before each bus transaction and at publication: one
+ * acquire load of the state word, which carries provider, clock registry and
+ * rail ledger faults, plus the provider's own latch that a client can set.
+ * The provider holds its S_TWI0 lease and the request's borrow until reap, so
+ * only a fault can invalidate them. */
+static int authorized(const struct a733_pmic *p)
+{return !p->failed && a733_power_authority_admits(&p->rails->authority,A733_POWER_PMIC_TRANSFER);}
 static int time_now(struct a733_pmic *p)
 {
     uint64_t now;
-    if(p->ops.now(p->cookie,&now)!=1 || now<p->last_now){fault(p);return 0;}
-    p->last_now=now;return 1;
+    if(p->ops.now(p->cookie,&now)!=1 || !a733_monotonic_advance(now,&p->last_now)){fault(p);return 0;}
+    return 1;
 }
 static int timely(struct a733_pmic *p)
 {return time_now(p) && p->last_now<p->deadline;}
@@ -103,7 +107,10 @@ static int bus_idle(struct a733_pmic *p)
     return match(p,TWI+0xc,0xff,0x40) && match(p,TWI+0x10,0xff,0xf8) &&
         match(p,TWI+0x20,0x35,0x30);
 }
-static int baseline(struct a733_pmic *p)
+/* The S_TWI0 clock route and divisor: DCXO detection, APBS0/APBS1 sources,
+ * PLL_REF when selected, and a 10–400 kHz bus rate. Startup records them; each
+ * request admission requires them unchanged. */
+static int route(struct a733_pmic *p)
 {
     uint32_t osc,apbs,apbs0,ref,divider;
     if(!rd(p,0x07090160,&osc) || (osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
@@ -121,16 +128,7 @@ static int baseline(struct a733_pmic *p)
     if(apbs || source==4) {
         if(!rd(p,0x02002000,&ref) || !a733_clock_ref24_valid(osc,ref))return 0;
     }
-    if(!match(p,0x0701019c,0x10001,0x10001) ||
-       !match(p,0x07025000,0xff,0x22) || !match(p,0x03400000,BIT(31),0) ||
-       !match(p,0x0340011c,BIT(11),0) || !match(p,0x0340021c,BIT(11),0) ||
-       !match(p,0x0340031c,BIT(11),0) || !bus_idle(p) ||
-       !match(p,TWI+0x18,1,0) || !match(p,TWI+0x1c,UINT32_MAX,0) ||
-       !match(p,TWI+0x200,0x8f000003,0) || !match(p,TWI+0x210,0xc3,0xc0) ||
-       !match(p,TWI+0x214,0x000f0003,0) || !match(p,TWI+0x218,0x01000100,0) ||
-       !match(p,TWI+0x21c,0x007f007f,0) || !match(p,TWI+0x314,0xffff,0) ||
-       !match(p,TWI+0x318,0xffffff,0) || !match(p,TWI+0x31c,0xffffff,0) ||
-       !rd(p,TWI+0x14,&divider) || (divider&~0x1ffu))return 0;
+    if(!rd(p,TWI+0x14,&divider) || (divider&~0x1ffu))return 0;
     unsigned m=(divider>>3)&15,n=divider&7;
     unsigned denominator=(1u<<n)*(m+1)*((m==0 && (divider&0x180)==0x80) ? 11u : 10u);
     /* 10–400kHz supported read profile; no inherited divisor mutation. */
@@ -141,6 +139,23 @@ static int baseline(struct a733_pmic *p)
     else if(divider!=p->divider)return 0;
     return 1;
 }
+/* Startup only: the route, the S_TWI0 gate and reset, idle bus, and every
+ * autonomous engine, DMA request and interrupt source disabled. Only the
+ * provider can change these while it holds S_TWI0, and the native adapter
+ * writes no register among them. */
+static int baseline(struct a733_pmic *p)
+{
+    return route(p) &&
+       match(p,0x0701019c,0x10001,0x10001) &&
+       match(p,0x07025000,0xff,0x22) && match(p,0x03400000,BIT(31),0) &&
+       match(p,0x0340011c,BIT(11),0) && match(p,0x0340021c,BIT(11),0) &&
+       match(p,0x0340031c,BIT(11),0) && bus_idle(p) &&
+       match(p,TWI+0x18,1,0) && match(p,TWI+0x1c,UINT32_MAX,0) &&
+       match(p,TWI+0x200,0x8f000003,0) && match(p,TWI+0x210,0xc3,0xc0) &&
+       match(p,TWI+0x214,0x000f0003,0) && match(p,TWI+0x218,0x01000100,0) &&
+       match(p,TWI+0x21c,0x007f007f,0) && match(p,TWI+0x314,0xffff,0) &&
+       match(p,TWI+0x318,0xffffff,0) && match(p,TWI+0x31c,0xffffff,0);
+}
 int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
     const struct a733_pmic_ops *o,void *cookie,struct a733_clock_leases *clocks,
     struct a733_rail_leases *rails,struct a733_pins *pins)
@@ -149,10 +164,10 @@ int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
        rails->self!=rails || rails->binding.clocks!=clocks || !rails->binding.gpu || !pins->initialized ||
        !c->owner || !c->identity || !c->startup_deadline || !o->now || !o->current || !o->enter ||
        !o->leave || !o->retain || !o->read || !o->write || !o->outside ||
-       !separate(p,sizeof(*p),c,sizeof(*c)) || !separate(p,sizeof(*p),o,sizeof(*o)) ||
-       !separate(p,sizeof(*p),clocks,sizeof(*clocks)) || !separate(p,sizeof(*p),rails,sizeof(*rails)) ||
-       !separate(p,sizeof(*p),pins,sizeof(*pins)) ||
-       !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c)) || !a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks)) || !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins)) ||
+       !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu)) ||
        o->outside(cookie,p,sizeof(*p))!=1)return 0;
     for(unsigned i=0;i<2;++i)if(c->pins[i].function!=2 ||
         !a733_pin_config_valid_banked(A733_PIN_L,i,c->pins[i]))return 0;
@@ -173,8 +188,7 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *p,const struct a733_pmic_
     if(!same(p,v))return leave(p,A733_PMIC_INVALID);
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
     if(p->stage!=S_READY)return leave(p,A733_PMIC_PENDING);
-    int live=clock_live(p);
-    return leave(p,live==1 ? A733_PMIC_READY : live==0 ? A733_PMIC_BUSY : fault(p));
+    return leave(p,authorized(p) ? A733_PMIC_READY : fault(p));
 }
 /* Only the CPU rails accept writes, and only within the pinned CPU operating
  * points' 800-1050 mV, so a wrong caller value cannot leave that range. */
@@ -195,7 +209,7 @@ static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,
     if(!owner || parent.owner!=owner || !profile(which,&f) ||
        !((write ? parent.exclusive : parent.shared|parent.exclusive)&A733_RAIL_BIT(which)) ||
        (write && (!writable(which,target) || expected>f.mask)) || !outside(p,rail,sizeof(*rail)) ||
-       !outside(p,out,sizeof(*out)) || !separate(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
+       !outside(p,out,sizeof(*out)) || !a733_ranges_disjoint(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
     if(p->stage!=S_READY)return leave(p,A733_PMIC_PENDING);
@@ -232,12 +246,11 @@ enum a733_pmic_status a733_pmic_result(struct a733_pmic *p,const struct a733_pmi
     struct a733_pmic_snapshot *out)
 {
     if(!p || p->self!=p || !outside(p,r,sizeof(*r)) || !outside(p,out,sizeof(*out)) ||
-       !separate(r,sizeof(*r),out,sizeof(*out)))return A733_PMIC_INVALID;
+       !a733_ranges_disjoint(r,sizeof(*r),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     struct a733_pmic_slot *s=request(p,r);if(!s)return leave(p,A733_PMIC_INVALID);
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
-    enum a733_rail_result status=a733_rail_borrow_status(p->rails,&s->borrow);
-    if(status!=A733_RAIL_READY)return leave(p,status==A733_RAIL_BUSY ? A733_PMIC_BUSY : fault(p));
+    if(!authorized(p))return leave(p,fault(p));
     if(s->state==DONE){*out=s->snapshot;return leave(p,A733_PMIC_COMPLETE);}
     return leave(p,s->state==EXPIRED ? A733_PMIC_EXPIRED : A733_PMIC_PENDING);
 }
@@ -296,9 +309,8 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
         if(p->byte_index==WRITE_INDEX+1 && p->values[WRITE_INDEX+1]!=p->values[WRITE_INDEX])return fault(p);
         if(++p->byte_index<(s->write ? 8u : 6u)){p->phase=P_START;return A733_PMIC_PENDING;}break;
     case P_PUBLISH: {
-        enum a733_rail_result r=a733_rail_borrow_status(p->rails,&s->borrow);
-        if(r==A733_RAIL_BUSY)return A733_PMIC_BUSY;
-        if(r!=A733_RAIL_READY || !baseline(p) || !timely(p))return fault(p);
+        /* The bus was idle after the last STOP; startup verified the rest. */
+        if(!authorized(p) || !timely(p))return fault(p);
         struct a733_pmic_snapshot snapshot;
         a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[s->write ? 7 : 4],&snapshot);
         snapshot.page_before=p->values[0];snapshot.chip=p->values[1];snapshot.revision=p->values[2];snapshot.page_after=p->values[5];
@@ -321,19 +333,14 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
  * first wait phase whose flag is still clear, and after POLL_PHASES phases.
  * This keeps the provider object busy for only a few register accesses;
  * a733_pmic_live() callers on other cores observe a busy object as BUSY.
- * Authority is checked again before each further phase; BUSY there ends the
- * poll before any access. */
+ * The state word is checked again before each further phase. */
 static enum a733_pmic_status transfer(struct a733_pmic *p)
 {
     for(unsigned n=1;;++n) {
         unsigned before=p->phase,index=p->byte_index;
         enum a733_pmic_status r=phase(p);
         if(r!=A733_PMIC_PENDING || n==POLL_PHASES || (p->phase==before && p->byte_index==index))return r;
-        int live=clock_live(p);
-        if(live!=1)return live==0 ? A733_PMIC_PENDING : fault(p);
-        enum a733_rail_result rail=a733_rail_borrow_status(p->rails,&p->slots[p->active].borrow);
-        if(rail==A733_RAIL_BUSY)return A733_PMIC_PENDING;
-        if(rail!=A733_RAIL_READY)return fault(p);
+        if(!authorized(p))return fault(p);
     }
 }
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
@@ -350,7 +357,9 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
         if(r==A733_CLOCK_BUSY)return leave(p,A733_PMIC_BUSY);
         if(r!=A733_CLOCK_OK)return leave(p,fault(p));p->stage=S_BASELINE;return leave(p,A733_PMIC_PENDING);
     }
-    int live=clock_live(p);
+    /* The registry is queried during startup; afterwards each request is
+     * admitted against it once, and the state word reports revocation. */
+    int live=p->stage==S_READY && p->active<A733_PMIC_REQUESTS ? (authorized(p) ? 1 : -1) : clock_live(p);
     if(live!=1)return leave(p,live==0 ? A733_PMIC_BUSY : fault(p));
     if(p->stage==S_PINS) {
         struct a733_pin_request_banked requests[2]={0};
@@ -366,15 +375,11 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
         p->ops.leave(p->cookie);p->held=0;
         if(!timely(p))return leave(p,fault(p));
         p->stage=p->stage==S_BASELINE ? S_PINS : S_READY;
+        if(p->stage==S_READY)a733_power_authority_set(&p->rails->authority,A733_POWER_PROVIDER_READY);
         return leave(p,p->stage==S_READY ? A733_PMIC_READY : A733_PMIC_PENDING);
     }
-    if(p->active<A733_PMIC_REQUESTS) {
-        if(!timely(p))return leave(p,fault(p));
-        enum a733_rail_result r=a733_rail_borrow_status(p->rails,&p->slots[p->active].borrow);
-        if(r==A733_RAIL_BUSY)return leave(p,A733_PMIC_BUSY);
-        if(r!=A733_RAIL_READY)return leave(p,fault(p));
-        return leave(p,transfer(p));
-    }
+    /* The deadline of an active transfer was checked above. */
+    if(p->active<A733_PMIC_REQUESTS)return leave(p,transfer(p));
     unsigned selected=A733_PMIC_REQUESTS;
     for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)if(p->slots[i].state==QUEUED &&
        (selected==A733_PMIC_REQUESTS || p->slots[i].request.id<p->slots[selected].request.id))selected=i;
@@ -394,13 +399,17 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
     int held=0;enum a733_pins_result pins=a733_pins_held_banked(p->pins,&p->pin,&held,deadline);
     int bus=pins==A733_PINS_OK && held && p->ops.enter(p->cookie,deadline)==1;
     if(!enter(p)){if(bus)p->ops.leave(p->cookie);return A733_PMIC_BUSY;}
-    if(bus && p->failed){p->ops.leave(p->cookie);bus=0;}
-    if(p->failed)return leave(p,fault(p));
+    if(bus && !authorized(p)){p->ops.leave(p->cookie);bus=0;}
+    if(!authorized(p))return leave(p,fault(p));
     if(pins==A733_PINS_BUSY)return leave(p,A733_PMIC_BUSY);
     if(pins!=A733_PINS_OK || !held)return leave(p,fault(p));
     if(!bus)return leave(p,A733_PMIC_BUSY);
     p->held=1;
-    if(!baseline(p))return leave(p,fault(p));
+    /* Startup verified the gate, reset and engines, which only the provider
+     * could change while it holds S_TWI0. Admission rereads the clock route
+     * and divisor, which set the bus timing, and requires an idle bus; the
+     * bus-idle registers are read again after every STOP. */
+    if(!route(p) || !bus_idle(p))return leave(p,fault(p));
     p->active=selected;s->state=ACTIVE;p->byte_index=0;p->phase=P_START;
     return leave(p,A733_PMIC_PENDING);
 }

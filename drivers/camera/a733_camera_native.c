@@ -5,6 +5,11 @@
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
 #include "task.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
+#ifndef SUNSTONE_CAMERA_MODEL
+#include "a733_task_context.h"
+#endif
 #include <string.h>
 #define TABLE_BYTES 32768u
 #define PARAMETER_BYTES 8192u
@@ -21,8 +26,7 @@ static uint32_t load(uintptr_t a)
 #ifdef SUNSTONE_CAMERA_MODEL
     return a733_camera_model_load(a);
 #else
-    __asm__ volatile("dsb sy" ::: "memory");uint32_t v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return v;
+    return a733_mmio_read32_dsb_sy_both(a);
 #endif
 }
 static void store(uintptr_t a,uint32_t v)
@@ -30,14 +34,8 @@ static void store(uintptr_t a,uint32_t v)
 #ifdef SUNSTONE_CAMERA_MODEL
     a733_camera_model_store(a,v);
 #else
-    __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(a,v);
 #endif
-}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
 }
 static int time_read(void *v,uint64_t *out)
 {
@@ -49,30 +47,13 @@ static int current(struct a733_camera_native *n)
 #ifdef SUNSTONE_CAMERA_MODEL
     return a733_camera_model_current(n->config.task);
 #else
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if(el!=4 || (flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->config.task;
+    return a733_task_context_owner_el1((TaskHandle_t)n->config.task);
 #endif
 }
 static int timely(struct a733_camera_native *n,uint64_t d)
 {
     uint64_t t;
-    if(d!=n->boot.deadline_us || time_read(n,&t)!=1 || t<n->last_now || t>=d)return 0;
-    n->last_now=t;return 1;
+    return d==n->boot.deadline_us && time_read(n,&t)==1 && a733_deadline_admit(t,&n->last_now,d);
 }
 static int memory_owned(struct a733_camera_native *n)
 {
@@ -392,24 +373,24 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        c->media->config.camera_mclk_mask!=2 || c->media->config.deadline_us!=c->boot->deadline_us ||
        c->pmic->clocks!=c->clocks || c->pmic->rails!=c->rails || c->pmic->pins!=c->pins ||
        c->rail_parent->owner!=c->boot->owner ||
-       !boot_valid(c->boot,supervised) || !separate(n,sizeof(*n),c,sizeof(*c)) ||
-       !separate(n,sizeof(*n),c->boot,sizeof(*c->boot)) ||
-       !separate(n,sizeof(*n),c->media,sizeof(*c->media)) ||
-       !separate(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
-       !separate(n,sizeof(*n),c->pins,sizeof(*c->pins)) ||
-       !separate(n,sizeof(*n),c->rails,sizeof(*c->rails)) ||
-       !separate(n,sizeof(*n),c->rail_parent,sizeof(*c->rail_parent)) ||
-       !separate(n,sizeof(*n),c->pmic,sizeof(*c->pmic)) ||
-       !separate(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
-       !separate(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)) ||
+       !boot_valid(c->boot,supervised) || !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->boot,sizeof(*c->boot)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->media,sizeof(*c->media)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->pins,sizeof(*c->pins)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->rails,sizeof(*c->rails)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->rail_parent,sizeof(*c->rail_parent)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->pmic,sizeof(*c->pmic)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
+       !a733_ranges_disjoint(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)) ||
        !a733_smp_device_preparation_admitted() ||
        c->pmic->ops.outside(c->pmic->cookie,n,sizeof(*n))!=1 ||
        c->pmic->ops.outside(c->pmic->cookie,c,sizeof(*c))!=1 ||
        c->pmic->ops.outside(c->pmic->cookie,c->boot,sizeof(*c->boot))!=1)return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if(!pool || !separate(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
-       !separate(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
-       !separate(c->boot,sizeof(*c->boot),(void *)pool->backing.cpu,pool->backing.bytes))return 0;
+    if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
+       !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
+       !a733_ranges_disjoint(c->boot,sizeof(*c->boot),(void *)pool->backing.cpu,pool->backing.bytes))return 0;
     *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK};
     instance=n;
     if(!device_memory_acquire_aligned(n->pool,n->boot.owner,A733_CAMERA_NATIVE_BYTES,16384,&n->memory,&n->extent))return fail(n);
@@ -432,13 +413,14 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES),p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,
             p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
         .table_words=(void *)p,.table_physical=p,.frame_id=n->boot.lease,
-        .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.color_bars=n->boot.test_pattern,
+        .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
+        .color_bars=n->boot.test_pattern,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
-        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain}};
+        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,NULL}};
     if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1 ||
        (n->boot.pwdn_only && ov5640_pwdn_only(&n->capture.sensor)!=1))return fail(n);
     return 1;

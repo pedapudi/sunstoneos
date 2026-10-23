@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture one retained deinterlace operation with durable copied pixels before acknowledgment."""
+"""Capture one retained deinterlace session with durable copied pixels before acknowledgment."""
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -13,7 +13,28 @@ preparation=module('deinterlace_host_preparation',ROOT/'apps/deinterlace/prepare
 supervisor=module('deinterlace_host_supervisor',ROOT/'tools/check-a733-smp-supervised.py')
 require=supervisor.require
 HEADER=192
-MAXIMUM=460800
+FRAME=460800
+# Pinned di_alg_fixed_para gain bounds for the LOW, MIDDLE and HIGH levels.
+INITIAL=(0x3a,38,48,62)
+BOUNDS=(None,(16,38),(28,48),(52,62))
+
+
+def sequence_check(raw,session,status):
+    """Check a sequence's finished-job count and per-job TNR strengths."""
+    mode=struct.unpack_from('<I',session,876)[0];strength,repeats=struct.unpack_from('<2H',session,884)
+    finished=struct.unpack_from('<I',raw,176)[0];strengths=list(raw[180:184])
+    if not repeats or status==0:
+        require(not any(raw[176:192]),'Deinterlace reserved result bytes differ.');return {}
+    require(not any(raw[184:192]) and finished<=1+repeats and (status==2 or finished==1+repeats),
+        'Deinterlace finished-job count differs.')
+    if mode!=3:require(not any(strengths),'Deinterlace strength bytes outside TNR.')
+    else:
+        started=[value for value in strengths if value]
+        require(not any(strengths[len(started):]) and finished<=len(started)<=1+repeats and
+            (not started or started[0]==INITIAL[strength]) and all(value==INITIAL[0] if not strength else
+                BOUNDS[strength][0]<=value<=BOUNDS[strength][1] for value in started[1:]),
+            'Deinterlace per-job TNR strengths differ.')
+    return dict(finished_jobs=finished,tnr_strengths=strengths[:1+repeats] if mode==3 else None)
 
 
 def decode(raw,session):
@@ -29,13 +50,17 @@ def decode(raw,session):
     require(geometry==struct.unpack_from('<8I',session,856),
         'Deinterlace geometry differs.')
     finish,hardware_status,scanned,guards=struct.unpack_from('<4I',raw,160)
-    require(not any(raw[176:192]),'Deinterlace reserved result bytes differ.')
-    require(count==(MAXIMUM if status==1 else 0) and len(raw)==HEADER+count,
+    jobs=preparation.jobs(session);strength=geometry[7]&0xffff
+    sequence=sequence_check(raw,session,status)
+    require(count==(FRAME*jobs if status==1 else 0) and len(raw)==HEADER+count,
         'Deinterlace copied extent differs.')
-    result=dict(status=status,bytes=count,width=640,height=480,y_stride=640,uv_stride=320 if geometry[5]==3 else 640,
-        format='YUV420' if geometry[5]==3 else 'NV12',mode={1:'WEAVE',2:'MOTION-OUT_1FRAME',3:'TNR-FIXED'}[geometry[5]],top_field_first=True,matched_finish=finish,
+    # A sequence feeds the adaptive gain back; a single job uses its initial value.
+    tnr=('TNR-FIXED',)+tuple(('TNR-ADAPTIVE-' if jobs>1 else 'TNR-INITIAL-')+level for level in ('LOW','MIDDLE','HIGH'))
+    result=dict(status=status,bytes=count,jobs=jobs,frame_bytes=FRAME,width=640,height=480,y_stride=640,uv_stride=320 if geometry[5]==3 else 640,
+        format='YUV420' if geometry[5]==3 else 'NV12',top_field_first=True,matched_finish=finish,
+        mode={1:'WEAVE',2:'MOTION-OUT_1FRAME',3:tnr[strength]}[geometry[5]],
         hardware_status=hardware_status,scanned_masters=scanned,guards=guards,
-        physical_qualified=False)
+        physical_qualified=False,**sequence)
     if geometry[5]==3:
         result.update(input_format='NV12',input_y_stride=640,input_uv_stride=640,
             u_stride=320,v_stride=320,layout='planar-Y-U-V',
@@ -53,7 +78,10 @@ def decode(raw,session):
 
 
 def expected_output(source,session):
-    """Return the WEAVE identity oracle; motion/TNR have no numerical pixel oracle."""
+    """Return the WEAVE identity oracle; motion/TNR have no numerical pixel oracle.
+
+    Each WEAVE job reproduces its own frame, so a sequence's output equals
+    its upload."""
     preparation.session_check(session)
     require(len(source)==preparation.geometry_check(struct.unpack_from('<8I',session,856)) and
         hashlib.sha256(source).digest()==session[768:800],
@@ -100,11 +128,12 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             if result['status']==2:
                 record['deinterlace_result']='observed-failure';record['durable_result']=entry.copy();save();return result
             require(result['status']==1,'Unexpected already-acknowledged deinterlace output.')
-            output=evidence/('output.yuv420' if result['mode']=='TNR-FIXED' else 'output.nv12');supervisor.durable_frame(output,frame[HEADER:])
+            output=evidence/('output.yuv420' if result['format']=='YUV420' else 'output.nv12');supervisor.durable_frame(output,frame[HEADER:])
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
+                **(dict(jobs=result['jobs'],frame_bytes=FRAME) if result['jobs']>1 else {}),
                 matches_cpu_reference=frame[HEADER:]==expected if expected is not None else None,
                 pixel_reference_checked=expected is not None,wire_header_hex=frame[:HEADER].hex())
-            if result['mode']=='TNR-FIXED':
+            if result['format']=='YUV420':
                 copied.update(format='YUV420',layout=result['layout'],y_stride=640,u_stride=320,v_stride=320,
                     plane_offsets=result['plane_offsets'])
             record['deinterlace_output']=copied;save()
@@ -200,7 +229,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
             if expected is None and len(frame)>=HEADER:
                 magic,version,status,count=struct.unpack_from('<4I',frame)
                 require((magic,version)==(0x52494453,1) and status in (0,1,2,3) and
-                    (0<count<=MAXIMUM if status==1 else count==0),'Invalid deinterlace response extent.')
+                    (0<count<=FRAME*preparation.jobs(session) if status==1 else count==0),'Invalid deinterlace response extent.')
                 expected=HEADER+count
             require(expected is None or len(frame)<=expected,'deinterlace stream exceeds declared extent.')
             terminated=len(fragment)<maximum

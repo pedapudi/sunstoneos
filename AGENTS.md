@@ -65,8 +65,16 @@ do not copy each run's status into it.
 - Keep evidence and status updates proportional to the change. Reuse the existing
   snapshot tools and canonical records; do not add parallel reporting systems.
 - Implement useful operational modes incrementally while retaining all required
-  modes in the hardware inventory. Defer optional frameworks, native replacements
-  for adequate development tools, and performance tuning until their stated need.
+  modes in the hardware inventory. Defer optional frameworks and native replacements
+  for adequate development tools until their stated need.
+- Design for the hardware's performance as part of implementation. Follow
+  [docs/performance-architecture.md](docs/performance-architecture.md): write a
+  short design with measurable budgets, have it reviewed for over-engineering,
+  hardware use and correctness before coding, and measure before and after.
+  An unexplained regression blocks the merge. Prefer interrupts to tick polling,
+  single-copy data paths, the weakest correct barrier and verification once at
+  admission. Do not add protocol features that no board use needs merely for
+  specification completeness; mark any that exist as optional.
 
 ## Validation
 
@@ -173,8 +181,8 @@ second build while preserving checks for the actual requested application.
 
 - The user confirms that neither current A733 board has populated eMMC or UFS.
   Do not probe or schedule media qualification for these absent devices. Preserve
-  both microSD cards. Existing optional-storage drivers and historical evidence
-  remain available for a future populated board.
+  the existing contents of both microSD cards. Existing optional-storage drivers
+  and historical evidence remain available for a future populated board.
 - Parallel workers develop in isolated worktrees and use separate build/evidence
   directories. Assign file ownership before overlapping work begins.
 - One coordinator owns physical board testing. Workers use host checks/emulation
@@ -190,8 +198,14 @@ second build while preserving checks for the actual requested application.
 - A733 tools use `tools/usb-access.py:board_lock`, keyed by stable USB port as
   `/tmp/sunstoneos-a733-<USB-port>.lock`. Do not acquire a project-wide mimus
   lock for this board. Unrelated boards have independent ownership.
-- Start with identity queries and RAM-only execution. Preserve storage contents
-  and establish recovery before persistent writes.
+- Start with identity queries and RAM-only execution. Write paths may be
+  implemented and host-checked at any time; images refuse writes unless their
+  session grants them. Physical writes depend on the target:
+  - boot area (boot0, TOC1 and the stage-2 slots): only through the backup-first
+    update path with slot fallback, after a host backup of the card;
+  - a microSD data partition: once a host backup of that card exists and the
+    image confines its writes to that partition;
+  - an NVMe device: only on a device the user designates as scratch storage.
 - Stop device communication at the first transport failure or disappearance.
   Do not loop resets, downloads, or reconnections around an unresolved failure.
 - Before intentional USB re-enumeration, require a reconnect access rule for the

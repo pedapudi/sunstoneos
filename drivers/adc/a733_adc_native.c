@@ -1,32 +1,16 @@
 #include "a733_adc_native.h"
 #include "a733_platform_locks.h"
 #include "task.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "ADC native binding requires scheduler/task/mutex-owner APIs"
 #endif
 static int current(void *cookie)
 {
     struct a733_adc_native *n=cookie;
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if (!n || !n->initialized || el!=4 || (flags&0x80)) return 0;
-    /* Read the port's task/interrupt state with the same short IRQ exclusion
-     * used by the shared lock implementation. Never admit ISR or critical code. */
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;
-    __asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical=core<configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting; critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->owner_task;
+    /* Never admit ISR or critical code, or any task but the owner. */
+    return n && n->initialized && a733_task_context_owner_el1((TaskHandle_t)n->owner_task);
 }
 static int now(void *cookie,uint64_t *v)
 {
@@ -79,7 +63,7 @@ static int allowed(struct a733_adc_native *n)
 static int read_register(void *cookie,uintptr_t a,uint32_t *out)
 {
  struct a733_adc_native *n=cookie;if(!out||!readable(n,a)||!allowed(n))return 0;
- __asm__ volatile("dsb sy" ::: "memory");*out=*(volatile const uint32_t *)a;__asm__ volatile("dsb sy" ::: "memory");return 1;
+ *out=a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 static int write_register(void *cookie,uintptr_t a,uint32_t value)
 {
@@ -91,13 +75,13 @@ static int write_register(void *cookie,uintptr_t a,uint32_t value)
   case 0x02524004:mask=0x1f1f;if(value&mask&~1u)return 0;break;
   case 0x02524008:
    if(value!=1)return 0;
-   __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+   a733_mmio_write32_dsb_sy_both(a,value);return 1;
   default:return 0;
   }
-  __asm__ volatile("dsb sy" ::: "memory");uint32_t old=*(volatile const uint32_t *)a;
+  a733_mmio_dsb_sy();uint32_t old=a733_mmio_read32(a);
   if((old^value)&~mask)return 0;
   if(a==0x02003024&&(old&~value&mask))return 0;
-  *(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+  a733_mmio_write32(a,value);a733_mmio_dsb_sy();return 1;
  }
 
  switch(a){
@@ -110,14 +94,14 @@ static int write_register(void *cookie,uintptr_t a,uint32_t value)
  case 0x025210d0:mask=1;if(!(value&1))return 0;break;
  case 0x02521038:
   if(!value||(value&~15u))return 0;
-  __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+  a733_mmio_write32_dsb_sy_both(a,value);return 1;
  default:return 0;
  }
- __asm__ volatile("dsb sy" ::: "memory");uint32_t old=*(volatile const uint32_t *)a;
+ a733_mmio_dsb_sy();uint32_t old=a733_mmio_read32(a);
  if((old^value)&~mask)return 0;
  if(a==0x02002fc0&&(old&0x80000000u)&&((old^value)&mask))return 0;
  if(a==0x02002fc4&&(old&~value&mask))return 0;
- *(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+ a733_mmio_write32(a,value);a733_mmio_dsb_sy();return 1;
 }
 int a733_adc_native_init(struct a733_adc_native *n,struct a733_platform_locks *locks,void *task,
  int (*admit)(void *,const struct a733_adc_config *,const struct a733_clock_token *),void *cookie)

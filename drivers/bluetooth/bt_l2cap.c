@@ -3,6 +3,7 @@
  * Published kernel wire structures are retained in external reference fixtures. */
 #include "bt_l2cap.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 static uint16_t get16(const uint8_t *p) {return (uint16_t)p[0]|((uint16_t)p[1]<<8);}
 static void put16(uint8_t *p,unsigned n) {p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static void copy(uint8_t *d,const uint8_t *s,size_t n) {for(size_t i=0;i<n;++i)d[i]=s[i];}
@@ -11,7 +12,7 @@ static int equal(const uint8_t *a,const uint8_t *b,size_t n)
 static int outside(const struct bt_l2cap *q,const void *p,size_t n)
 {
     if(!n)return 1;
-    if(!p || (uintptr_t)p>UINTPTR_MAX-(n-1) || !bt_range_disjoint_empty(q,sizeof(*q),p,n) ||
+    if(!a733_span_incl_nonempty(p,n) || !bt_range_disjoint_empty(q,sizeof(*q),p,n) ||
        !bt_range_disjoint_empty(q->acl,sizeof(*q->acl),p,n) || !bt_range_disjoint_empty(q->acl->hci,sizeof(*q->acl->hci),p,n) ||
        !bt_range_disjoint_empty(q->acl->hci->transport.binding.uart,sizeof(struct a733_uart),p,n))return 0;
     for(unsigned i=0;i<q->acl->hci->transport.count;++i)
@@ -59,14 +60,14 @@ static struct bt_l2cap_pdu *free_pdu(struct bt_l2cap_pdu *pool)
 static int deadline(struct bt_l2cap *q,uint64_t *d)
 {
     uint64_t now=q->acl->hci->transport.now;
-    if(now>UINT64_MAX-q->timeout_us)return fault(q,BT_L2CAP_TIMEOUT);
-    *d=now+q->timeout_us;return 1;
+    if(!a733_deadline_after(now,q->timeout_us,d))return fault(q,BT_L2CAP_TIMEOUT);
+    return 1;
 }
 static int transport_deadline(struct bt_l2cap *q,uint64_t *d)
 {
     uint64_t now=q->acl->hci->transport.now;
-    if(now>UINT64_MAX-q->ertx_us)return fault(q,BT_L2CAP_TIMEOUT);
-    *d=now+q->ertx_us;return 1;
+    if(!a733_deadline_after(now,q->ertx_us,d))return fault(q,BT_L2CAP_TIMEOUT);
+    return 1;
 }
 static int emit(struct bt_l2cap *q,uint64_t link,unsigned cid,const uint8_t *bytes,size_t n,
                 uint64_t bound,unsigned application,uint64_t *serial)
@@ -242,8 +243,8 @@ static void ready(struct bt_l2cap_channel *c)
 static int start_timer(struct bt_l2cap *q,struct bt_l2cap_channel *c,enum bt_l2cap_timer timer)
 {
     uint64_t now=q->acl->hci->transport.now,interval=timer==BT_L2CAP_RTX ? q->timeout_us : q->ertx_us;
-    if(now>UINT64_MAX-interval)return fault(q,BT_L2CAP_TIMEOUT);
-    c->timer=timer;c->timer_deadline=now+interval;return 1;
+    if(!a733_deadline_after(now,interval,&c->timer_deadline))return fault(q,BT_L2CAP_TIMEOUT);
+    c->timer=timer;return 1;
 }
 static int pending_response(struct bt_l2cap *q,struct bt_l2cap_channel *c)
 {

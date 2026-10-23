@@ -89,7 +89,11 @@ a733_cpu_continue_enter_el1:
     mov x2, #0x80000000
     msr hcr_el2, x2
     msr hstr_el2, xzr
-    msr mdcr_el2, xzr
+    // MDCR_EL2.HPMN = PMCR_EL0.N gives EL1 every event counter; TPM, TPMCR
+    // and HPME stay zero.
+    mrs x2, pmcr_el0
+    ubfx x2, x2, #11, #5
+    msr mdcr_el2, x2
     msr vttbr_el2, xzr
     mov x2, #0x33ff
     msr cptr_el2, x2

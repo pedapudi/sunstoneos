@@ -15,7 +15,7 @@ a=p.parse_args()
 a.output=a.output.resolve();a.source=a.source.resolve();a.spec=a.spec.resolve()
 root=pathlib.Path(__file__).resolve().parents[1]
 a.output.mkdir(parents=True,exist_ok=False)
-files=['checks/bt-hfp-ag.c','checks/bt-hfp-ag.py','checks/bt-config-fixture.h','include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h','include/bt_memory.h',
+files=['checks/bt-hfp-ag.c','checks/bt-hfp-ag.py','checks/bt-config-fixture.h','include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h','include/bt_memory.h','include/a733_range.h',
        'drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','checks/bt-acl-incoming.c','checks/bt-acl-incoming.py','checks/bt-config.c','checks/bt-config.py','include/bt_acl.h','drivers/bluetooth/bt_acl.c']
 files += ['include/'+name+'.h' for name in ['bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server','bt_hfp_ag']]
 files += ['drivers/bluetooth/'+name+'.c' for name in ['bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server','bt_hfp_ag']]

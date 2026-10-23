@@ -98,10 +98,14 @@ both the previous and returned bundles for recovery diagnostics and stops.
 No automatic release, rollback, reset, or retry follows a fault.
 
 Register operations use one common bounded mutex. Resource callbacks run outside
-that mutex. Each read, write, lock completion, and final unlock receives a
-deadline check. The clock provider must enforce one monotonic microsecond bound
-across admission and platform calls. A late final read or unlock cannot publish
-READY. These units are separate from a controller's request timeout interface.
+that mutex. Register work happens in locked passes, each a bounded run of
+register accesses. Every poll checks the deadline on entry. Each locked pass
+checks it again after taking the mutex, before its first write and before
+releasing the mutex, and the poll checks it once more after the release.
+Individual reads and writes take no clock sample. The clock provider must
+enforce one monotonic microsecond bound across admission and platform calls.
+A late final read or unlock cannot publish READY. These units are separate
+from a controller's request timeout interface.
 
 Cold startup requires the module and bus gated, with core, AXI, and AHB resets
 asserted and SRAM reset deasserted. Both domain command and status must be OFF.
@@ -111,6 +115,26 @@ sets the module rate, enables the bus and module clocks, and requests domain ON.
 This preserves the pinned driver's clock-before-runtime-power sequence.
 The controller waits for domain status 8, then at least two milliseconds,
 and checks the final local state before returning READY.
+
+Startup takes three polls when the domain reports ON promptly:
+
+1. The poll that completes acquisition continues into one locked pass. That
+   pass checks every entry condition, applies the twelve-step open table with
+   a readback after each write, and reads domain status. Status 8 starts the
+   two-millisecond settle from a clock sample taken after that read.
+2. A poll before the settle ends returns PENDING without taking the mutex.
+3. A second locked pass checks the final local state.
+
+A domain that still reports OFF adds one locked status read per poll.
+
+Local stop, after a successful controller CLOSE, runs in one call and one
+locked pass. It first requires the state that startup left: PLL_NPU enabled,
+locked and with its output open, domain command and status ON, SRAM reset
+released, and the module and bus words exactly as startup set them. It then
+gates the module, gates the bus and asserts the AHB, AXI and core resets, in
+the order of `npu_clk_uninit` in the pinned Allwinner VIPLite platform. Each
+write is read back. Stop does not reread the parent clocks: gating a local
+clock does not depend on them, and startup still holds their leases.
 
 The manual maps shared SRAM at CPU addresses `0x00074000`–`0x000f3fff` and
 requires the NPU power domain to remain on while that SRAM is used.
@@ -147,6 +171,14 @@ publication, and numerical acceptance remain separate requirements. READY does
 not prove device execution, correct inference, bus drain, or safe shutdown.
 
 ## Focused evidence and source identities
+
+The [platform budget harness](../checks/npu-platform-budget.c) counts work in
+the register model, with one poll standing for one bootstrap tick. Startup
+takes 3 polls, 51 register reads, 12 writes, 12 clock samples and 2 mutex
+acquisitions. Local stop takes 1 poll, 10 reads, 5 writes, 4 clock samples and
+1 acquisition. With the argument `budget` the harness also enforces these
+limits. The [measurements](designs/npu-platform-measurements.md) compare them
+with the previous controller.
 
 One host session with address and undefined-behavior sanitizers checks source
 startup order, the admitted inherited profiles, preserved register fields,

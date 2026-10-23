@@ -5,7 +5,8 @@
  *
  *   clang -std=c11 -fsanitize=address,undefined -fno-sanitize-recover=all \
  *     -Iinclude -Iplatform/a733-smp-cached -Iapps/os -DSUNSTONE_BOARD_SUPERVISED=1 \
- *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1 | -DSUNSTONE_A733_OS_AUDIO=1] \
+ *     -DSUNSTONE_BOARD_USB2_DUAL=1 [-DSUNSTONE_BOARD_RESIDENT=1] [-DSUNSTONE_A733_OS_AUDIO=1] \
+ *     [-DSUNSTONE_A733_OS_RADIO=1] [-DSUNSTONE_A733_OS_HEADSET=1] \
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
@@ -98,6 +99,20 @@ static void irq_cases(void)
         ROUTES==2?"thermal INTID 71 and DMA0 INTID 143":"thermal INTID 71",988u-ROUTES);
 }
 
+/* Report periods: the board owners, the capture client, the radio owner and
+ * network client, and the Bluetooth owner and headset client every tick, the
+ * recognizer every 5 ms and the thermal reader every 25 ms. */
+static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25,
+#ifdef SUNSTONE_A733_OS_AUDIO
+    1,
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    1,1,
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    1,1,
+#endif
+};
 /* One supervision run in 1 ms steps. The supervisor runs every 20 ms from
  * time 0, as at scheduler start. Every service first reports at 0.3 s, except
  * service `late`, which first reports at late_at, and then at its own period
@@ -106,7 +121,6 @@ static void irq_cases(void)
 struct run { uint64_t expired,refused,reloads,max_gap,first_reload; };
 static struct run supervise(int stalled,uint64_t stall_at,uint64_t end,int never,int late,uint64_t late_at)
 {
-    static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
     struct run r={0,0,0,0,0};
     uint64_t start=HZ*3/10,previous=0;int parked=0;
     ticks=0;expires=4*HZ;reloads=0;last_reload=0;
@@ -157,7 +171,6 @@ static void supervision_cases(void)
         if(!child){
             uint64_t at=70*HZ;
             struct run r=supervise(s,at,90*HZ,0,-1,0);
-            static const unsigned period_ms[OS_SERVICES]={1,1,1,1,1,5,25};
             uint64_t window=(uint64_t)os_services[s].window_us*24,period=period_ms[s]*(HZ/1000);
             /* The last report came at most one period before the stall. */
             assert(r.refused>at-period+window&&r.refused<=at+window+HZ/50);
@@ -195,8 +208,9 @@ static void supervision_cases(void)
     /* Resident board_live: deadline_us = UINT64_MAX/24 exceeds every counter/24. */
     const uint64_t deadline_us=UINT64_MAX/24;
     assert(61*HZ/24<deadline_us&&(UINT64_MAX-1)/24<deadline_us+1&&deadline_us-10000<deadline_us);
-    puts("PASS resident supervision: 120 s renewed; late first report renews; each of 7 stalled services ends renewal; "
-        "each missing service expires at 4 s without an early close; stall before full startup closes; refused reload expires");
+    printf("PASS resident supervision: 120 s renewed; late first report renews; each of %u stalled services ends renewal; "
+        "each missing service expires at 4 s without an early close; stall before full startup closes; refused reload expires\n",
+        (unsigned)OS_SERVICES);
 }
 
 #define SESSION ((struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS)
@@ -214,6 +228,16 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     b->usb_supply_uv[0]=b->usb_supply_uv[1]=3300000;b->usb0_cold_reference=1;b->usb2_revision=1;
     b->source_min_mv=4750;b->source_max_mv=5250;b->source_ma=500;b->zero_threshold_max_mv=600;
     b->fusb_device_id=0x81;
+#if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
+    /* The SID authority and, for the headset, the Bluetooth profile digest. */
+    b->sid_authority=21;memset(b->sid_evidence,0x54,32);
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* Workload 1: the board's radio station with storage. */
+    b->workload=1;b->radio_profile_address=0x43000000;b->radio_profile_bytes=1872;
+    memset(b->radio_profile_digest,0x55,32);
+    b->latch_m_identity=22;b->latch_m_owner=23;b->latch_m_known_mask=0x3f;
+#endif
     s->magic=A733_OS_SESSION_MAGIC;s->version=OS_SESSION_VERSION;s->bytes=sizeof(*s);
     s->thermal_owner=15;s->thermal_authority=16;
     memset(s->thermal_initial,1,32);memset(s->thermal_electrical,2,32);
@@ -225,7 +249,7 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     a->magic=OS_AUDIO_SESSION_MAGIC;a->version=OS_AUDIO_SESSION_VERSION;a->bytes=sizeof(*a);
     memset(a->evidence,5,32);a->dma.owner=17;a->dma.handoff=a->dma_evidence=b->lease;
     memcpy(a->dma.fabric,b->fabric,sizeof(b->fabric));memcpy(a->dma.rate_hz,b->fabric_hz,sizeof(b->fabric_hz));
-    a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_SUPERVISED;
+    a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_ESTABLISHED;
     a->dma_owned_channels=0xffff;a->dma_service_channels=1;a->capture_samples=48000;
 #endif
 }
@@ -246,6 +270,12 @@ static struct a733_smp_contract nominal_contract(const struct os_session *s,uint
     c.reserved[0]=A733_BOARD_SESSION_ADDRESS;c.reserved[1]=sizeof(*s);
     storage_digest_bytes(s,sizeof(*s),(uint8_t *)&c.reserved[2]);
     return c;
+}
+/* A board session without the radio fields, as workloads 0 and 4 require. */
+static void without_radio(struct a733_board_session *b,unsigned workload)
+{
+    b->workload=workload;b->radio_profile_address=b->radio_profile_bytes=0;memset(b->radio_profile_digest,0,32);
+    b->latch_m_identity=b->latch_m_owner=0;b->latch_m_known_mask=b->latch_m_value=0;
 }
 static void admission_cases(void)
 {
@@ -288,6 +318,25 @@ static void admission_cases(void)
     SESSION_REFUSED(SESSION->apb1=0x03000003;SESSION->apb1_hz=0);
     SESSION_REFUSED(SESSION->reserved[5]=1);
     SESSION_REFUSED(SESSION->board.deadline_us=1);
+#ifdef SUNSTONE_A733_OS_RADIO
+    /* The radio build admits workload 1 only, and the board's radio rules apply. */
+    SESSION_REFUSED(without_radio(&SESSION->board,0));
+    SESSION_REFUSED(without_radio(&SESSION->board,4));
+    SESSION_REFUSED(SESSION->board.radio_profile_address=0x43001000);
+    SESSION_REFUSED(SESSION->board.latch_m_known_mask=0x1f);
+#else
+    /* Without the radio build, a board session with the radio is refused. */
+    SESSION_REFUSED(SESSION->board.workload=1;SESSION->board.sid_authority=21;memset(SESSION->board.sid_evidence,0x54,32);
+        SESSION->board.radio_profile_address=0x43000000;SESSION->board.radio_profile_bytes=1872;
+        memset(SESSION->board.radio_profile_digest,0x55,32);SESSION->board.latch_m_identity=22;
+        SESSION->board.latch_m_owner=23;SESSION->board.latch_m_known_mask=0x3f);
+    (void)without_radio;
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    /* The headset build requires the SID authority and the profile digest. */
+    SESSION_REFUSED(SESSION->board.sid_authority=0);
+    SESSION_REFUSED(memset(SESSION->board.sid_evidence,0,32));
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     struct os_audio_session *a=&SESSION->audio;
     SESSION_REFUSED(a->magic^=1);
@@ -301,6 +350,8 @@ static void admission_cases(void)
     SESSION_REFUSED(a->dma_evidence^=1);
     SESSION_REFUSED(a->dma.deadline_us=1);
     SESSION_REFUSED(a->dma_established=0x5e);
+    /* The other lifetime's handoff: supervised 0x5f against resident 0x3f. */
+    SESSION_REFUSED(a->dma_established=OS_AUDIO_DMA_ESTABLISHED^0x60);
     SESSION_REFUSED(a->dma_owned_channels=0xfffe);
     SESSION_REFUSED(a->dma_service_channels=3);
     SESSION_REFUSED(a->dma_controller=0x04602000);
@@ -315,13 +366,26 @@ static void admission_cases(void)
     /* A start after the startup deadline is refused. */
     nominal_session(SESSION,9);c=nominal_contract(SESSION,armed);
     assert(!a733_smp_contract_valid(&c,armed+HZ));++refused;
-    printf("PASS %s OS admission: nominal contract and session accepted, %u refusals\n",
+    printf("PASS %s%s%s%s OS admission: nominal contract and session accepted, %u refusals\n",
 #ifdef SUNSTONE_BOARD_RESIDENT
         "resident",
-#elif defined(SUNSTONE_A733_OS_AUDIO)
-        "supervised audio",
 #else
         "supervised",
+#endif
+#ifdef SUNSTONE_A733_OS_AUDIO
+        " audio",
+#else
+        "",
+#endif
+#ifdef SUNSTONE_A733_OS_RADIO
+        " radio",
+#else
+        "",
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+        " headset",
+#else
+        "",
 #endif
         refused);
 }

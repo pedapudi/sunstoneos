@@ -4,23 +4,18 @@
  * Copyright (C) 2016 Allwinner.
  */
 #include "a733_tcon_lcd.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
 #define LCD A733_TCON_LCD1_BASE
 #define TOP A733_TCON_TOP_BASE
-
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y || (x < y + bn && y < x + an);
-}
 static void word(struct a733_tcon_lcd_plan *p, uintptr_t address, uint32_t mask, uint32_t value)
 {
     p->words[p->count++] = (struct a733_tcon_lcd_word){address, mask, value};
 }
 int a733_tcon_lcd_plan(const struct a733_tcon_lcd_timing *t, struct a733_tcon_lcd_plan *out)
 {
-    if (!t || !out || overlap(t, sizeof(*t), out, sizeof(*out)) ||
+    if (!t || !out || a733_ranges_overlap_or_wrap(t, sizeof(*t), out, sizeof(*out)) ||
         t->actual_dclk_hz != t->dsi.ls_hz || t->dsi.height > 1080 ||
         t->dsi.vback < 4 || t->dsi.vfront < 2) return 0;
     struct a733_dsi_video_plan dsi;
@@ -52,7 +47,7 @@ int a733_tcon_lcd_plan(const struct a733_tcon_lcd_timing *t, struct a733_tcon_lc
 }
 int a733_tcon_lcd_init(struct a733_tcon_lcd *d, const struct a733_tcon_lcd_config *c, uint64_t deadline)
 {
-    if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
+    if (!d || !c || a733_ranges_overlap_or_wrap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
         !c->lease || !c->ops.admit || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier || !c->ops.now_us) return 0;
     struct a733_tcon_lcd_plan p;
     if (!a733_tcon_lcd_plan(&c->timing, &p)) return 0;
@@ -76,10 +71,9 @@ static void fail(struct a733_tcon_lcd *d, enum a733_tcon_lcd_error e)
 static int time_ok(struct a733_tcon_lcd *d)
 {
     uint64_t n = 0;
-    if (d->config.ops.now_us(d->config.context, &n) != 1 || n < d->last_now || n >= d->deadline) {
+    if (d->config.ops.now_us(d->config.context, &n) != 1 || !a733_deadline_admit(n, &d->last_now, d->deadline)) {
         fail(d, A733_TCON_TIME); return 0;
     }
-    d->last_now = n;
     return d->state == A733_TCON_PENDING;
 }
 static const struct a733_tcon_lcd_word cold[] = {

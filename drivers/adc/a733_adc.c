@@ -3,17 +3,13 @@
 /* Copyright (C) 2019 frank@allwinnertech.com */
 #include "a733_adc.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define ADC UINT32_C(0x02521000)
 #define CCU UINT32_C(0x02002000)
 #define MASK UINT32_C(15)
 enum {ADMIT,START,ACTIVE,FAILED,STOPPED};
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_adc_init(struct a733_adc *p,const struct a733_adc_config *c,
  const struct a733_adc_ops *o,void *cookie,struct a733_clock_leases *registry,const struct a733_clock_token *token)
 {
@@ -21,7 +17,7 @@ int a733_adc_init(struct a733_adc *p,const struct a733_adc_config *c,
  c->configure_adc_clock>1||(c->apb1&~0x0300001fu)||!o->now_us||!o->current||!o->authorize||
  !o->enter||!o->leave||!o->retain||!o->read||!o->write||!token->id||token->owner!=c->owner)return 0;
  const void *objects[]={p,c,o,registry,token};size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*token)};
- for(unsigned i=0;i<5;++i)for(unsigned j=i+1;j<5;++j)if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+ for(unsigned i=0;i<5;++i)for(unsigned j=i+1;j<5;++j)if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
  unsigned parent=c->apb1>>24,div=(c->apb1&31)+1;uint32_t hz=parent==0?24000000u:parent==3?600000000u:0;
  a733_clock_mask_t stable=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_CLOCK_GPADC24M;
  if(parent==3)stable|=A733_CLOCK_PERI0;
@@ -32,8 +28,7 @@ int a733_adc_init(struct a733_adc *p,const struct a733_adc_config *c,
 static int timely(struct a733_adc *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->deadline) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->deadline);
 }
 static int rd(struct a733_adc *p,uintptr_t a,uint32_t *v)
 {return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
@@ -66,6 +61,16 @@ static int clocks(struct a733_adc *p,int enabled,uint32_t *cold_source)
     return (v==UINT32_C(0x80000000) || (direct24&&v==UINT32_C(0x81000000))) &&
         (!enabled || bits(p,CCU+0xfc4,0x10001,0x10001));
 }
+static uint32_t window(const struct a733_adc *p,unsigned i)
+{return (uint32_t)p->thresholds.high[i]<<16|p->thresholds.low[i];}
+/* Selected compare windows, compare enables and low/high interrupt enables. */
+static int thresholds(struct a733_adc *p,int program)
+{
+ uint32_t m=p->thresholds.mask;
+ for(unsigned i=0;i<A733_ADC_CHANNELS;++i)
+  if((m&BIT(i))&&!(program?update(p,ADC+0x40+4*i,0x0fff0fff,window(p,i)):bits(p,ADC+0x40+4*i,0x0fff0fff,window(p,i))))return 0;
+ return program?update(p,ADC+0x20,127,m)&&update(p,ADC+0x24,127,m):bits(p,ADC+0x20,127,m)&&bits(p,ADC+0x24,127,m);
+}
 static int masked(struct a733_adc *p)
 {
  return bits(p,0x03400000,BIT(31),0)&&bits(p,0x03400108,BIT(6),0)&&
@@ -88,9 +93,11 @@ static int startup(struct a733_adc *p)
  !bits(p,ADC+0xdc,1,0)||!bits(p,ADC+0xfc,1,1))return 0;
  if(!rd(p,ADC+0x38,&status)||(status&~MASK)||!clear_observed(p,ADC+0x38,status))return 0;
  /* Manual TACQ>10RC with C6.4pF:100us exceeds64us at admitted1Mohm.
-  * Pinned U-Boot uses the same1kHz FS divider; no busy-wait is retained. */
+  * Pinned U-Boot uses the same1kHz FS divider; no busy-wait is retained.
+  * Manual18.12.6.1 orders compare data and interrupt enables before ADC_EN. */
+ uint32_t m=p->thresholds.mask;
  if(!update(p,ADC,UINT32_MAX,0x5dbf095f)||!update(p,ADC+0xd0,1,1)||
- !update(p,ADC+4,0x000f0000,0x00080000)||!update(p,ADC+8,0x007f007f,MASK)||
+ !update(p,ADC+4,0x000f0000,0x00080000)||(m&&!thresholds(p,1))||!update(p,ADC+8,0x007f007f,MASK|m<<16)||
  !update(p,ADC+0x28,127,MASK)||!update(p,ADC+4,BIT(16),BIT(16)))return 0;
  return clocks(p,1,NULL);
 }
@@ -134,6 +141,15 @@ static int unlock(struct a733_adc *p)
     p->ops.leave(p->cookie);p->held=0;
     return timely(p);
 }
+int a733_adc_configure_thresholds(struct a733_adc *p,const struct a733_adc_thresholds *t)
+{
+ if(!p||!p->initialized||!t||!t->mask||(t->mask&~MASK)||!a733_ranges_disjoint(t,sizeof(*t),p,sizeof(*p))||!claim(p))return 0;
+ int ok=p->stage==ADMIT&&!p->fault&&!p->last_now&&!p->thresholds.mask&&p->ops.current(p->cookie)==1;
+ for(unsigned i=0;ok&&i<A733_ADC_CHANNELS;++i)
+  ok=(t->mask&BIT(i))?t->low[i]<t->high[i]&&t->high[i]<=4095:!t->low[i]&&!t->high[i];
+ if(ok)p->thresholds=*t;
+ finish(p,A733_ADC_READY);return ok;
+}
 enum a733_adc_result a733_adc_poll(struct a733_adc *p)
 {
  if(!p||!p->initialized)return A733_ADC_INVALID;if(!claim(p))return A733_ADC_BUSY;
@@ -152,22 +168,25 @@ enum a733_adc_result a733_adc_poll(struct a733_adc *p)
 }
 enum a733_adc_result a733_adc_read(struct a733_adc *p,uint64_t deadline,struct a733_adc_sample *out)
 {
- if(!p||!p->initialized||!out||!separate(out,sizeof(*out),p,sizeof(*p))||
- !separate(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
+ if(!p||!p->initialized||!out||!a733_ranges_disjoint(out,sizeof(*out),p,sizeof(*p))||
+ !a733_ranges_disjoint(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
  if(!claim(p))return A733_ADC_BUSY;if(p->stage==STOPPED) return finish(p,A733_ADC_STOPPED);
  if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
  if(p->stage!=ACTIVE||!deadline)return finish(p,A733_ADC_INVALID);
  if(p->ops.current(p->cookie)!=1)return fault(p);p->deadline=deadline;
  enum a733_adc_result r=lock(p);if(r!=A733_ADC_READY)return r;
- uint32_t status;
- if(!clocks(p,1,NULL)||!bits(p,ADC,UINT32_MAX,0x5dbf095f)||!bits(p,ADC+0xd0,1,1)||!bits(p,ADC+4,0x008f0000,0x00890000)||!bits(p,ADC+8,0x007f007f,MASK)||
+ uint32_t status,low,high,m=p->thresholds.mask;
+ if(!clocks(p,1,NULL)||!bits(p,ADC,UINT32_MAX,0x5dbf095f)||!bits(p,ADC+0xd0,1,1)||!bits(p,ADC+4,0x008f0000,0x00890000)||!bits(p,ADC+8,0x007f007f,MASK|m<<16)||
  !bits(p,ADC+0x28,127,MASK)||!bits(p,ADC+0x0c,0x00070010,0)||!bits(p,ADC+0x10,0x00037f00,0)||
- !bits(p,ADC+0x20,127,0)||!bits(p,ADC+0x24,127,0)||!bits(p,ADC+0x30,127,0)||!bits(p,ADC+0x34,127,0)||!bits(p,ADC+0xdc,1,0)||!bits(p,ADC+0xfc,1,1)||
+ !thresholds(p,0)||!rd(p,ADC+0x30,&low)||(low&127&~m)||!rd(p,ADC+0x34,&high)||(high&127&~m)||!bits(p,ADC+0xdc,1,0)||!bits(p,ADC+0xfc,1,1)||
  !rd(p,ADC+0x38,&status)||(status&~MASK))return fault(p);
+ low&=m;high&=m;
  struct a733_adc_sample sample={.sequence=p->sequence+1,.valid=status};
  if(!sample.sequence)return fault(p);
  for(unsigned i=0;i<4;++i)if(status&BIT(i)){uint32_t code;if(!rd(p,ADC+0x80+4*i,&code)||code>4095)return fault(p);sample.code[i]=(uint16_t)code;sample.observed_us[i]=p->last_now;}
- if(!clear_observed(p,ADC+0x38,status)||!unlock(p))return fault(p);
+ if(!clear_observed(p,ADC+0x38,status)||!clear_observed(p,ADC+0x30,low)||
+ !clear_observed(p,ADC+0x34,high)||!unlock(p))return fault(p);
+ p->low_seen|=low;p->high_seen|=high;
  if(!status)return finish(p,A733_ADC_AGAIN);p->sequence=sample.sequence;*out=sample;return finish(p,A733_ADC_SAMPLE);
 }
 
@@ -185,9 +204,22 @@ enum a733_adc_result a733_adc_stop(struct a733_adc *p,uint64_t deadline)
  if (r!=A733_ADC_READY) return r;
  if (!clocks(p,1,NULL) || !bits(p,ADC+0x0c,0x00070010,0) ||
      !bits(p,ADC+0x10,0x00037f00,0) ||
-     !update(p,ADC+0x28,127,0) || !update(p,ADC+4,BIT(16),0) ||
+     !update(p,ADC+0x28,127,0) || !update(p,ADC+0x20,127,0) ||
+     !update(p,ADC+0x24,127,0) || !update(p,ADC+4,BIT(16),0) ||
      !update(p,ADC+8,0x007f007f,0) ||
-     !bits(p,ADC+0x28,127,0) || !bits(p,ADC+4,BIT(16),0) ||
+     !bits(p,ADC+0x28,127,0) || !bits(p,ADC+0x20,127,0) ||
+     !bits(p,ADC+0x24,127,0) || !bits(p,ADC+4,BIT(16),0) ||
      !bits(p,ADC+8,0x007f007f,0) || !unlock(p)) return fault(p);
  p->stage=STOPPED;return finish(p,A733_ADC_STOPPED);
+}
+
+enum a733_adc_result a733_adc_thresholds(struct a733_adc *p,uint32_t *low,uint32_t *high)
+{
+ if (!p || !p->initialized || !low || !high || !p->thresholds.mask) return A733_ADC_INVALID;
+ if (!claim(p)) return A733_ADC_BUSY;
+ if (p->stage==FAILED) return finish(p,A733_ADC_RETAINED);
+ if (p->fault) return fault(p);
+ if (p->ops.current(p->cookie)!=1) return fault(p);
+ *low=p->low_seen;*high=p->high_seen;p->low_seen=p->high_seen=0;
+ return finish(p,(*low|*high)?A733_ADC_SAMPLE:A733_ADC_AGAIN);
 }

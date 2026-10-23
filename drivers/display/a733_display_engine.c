@@ -4,6 +4,7 @@
  * Copyright (C) 2017 Allwinner.
  */
 #include "a733_display_engine.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
 #define DE A733_DE_BASE
@@ -11,15 +12,11 @@
 #define BLD UINT32_C(0x2a1000)
 #define COUNT(a) (sizeof(a) / sizeof(*(a)))
 struct word { uint32_t offset, mask, value; };
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y || (x < y + bn && y < x + an);
-}
 static int plan(unsigned width,unsigned height,unsigned pixel_bytes,unsigned format,
                 const struct a733_de_surface *s,struct a733_de_plan *out)
 {
-    if(!s||!out||overlap(s,sizeof(*s),out,sizeof(*out))||!s->owner||!s->device_address||
+    if(!s||!out||a733_ranges_overlap_or_wrap(s,sizeof(*s),out,sizeof(*out))||
+       !s->owner||!s->device_address||
        (s->device_address&3)||(s->pitch&3)||s->pitch<pixel_bytes*width)return 0;
     uint64_t bytes=(uint64_t)s->pitch*height,limit=UINT64_C(1)<<40;
     if(!bytes||s->device_address>=limit||bytes>limit-s->device_address||
@@ -37,20 +34,25 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surfa
                  struct a733_de_plan *out)
 {
     struct a733_tcon_lcd_plan lcd;
-    if(!t||!out||overlap(t,sizeof(*t),out,sizeof(*out))||!a733_tcon_lcd_plan(t,&lcd))return 0;
+    if(!t||!out||a733_ranges_overlap_or_wrap(t,sizeof(*t),out,sizeof(*out))||
+       !a733_tcon_lcd_plan(t,&lcd))return 0;
     return plan(t->dsi.width,t->dsi.height,4,4,s,out);
 }
 int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
 {return plan(1280,720,2,0x0a,s,out);}
+static unsigned ring_slots(const struct a733_de_config *,const struct a733_de_plan *,uint64_t *);
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {
-    if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
+    if (!d || !c || a733_ranges_overlap_or_wrap(d, sizeof(*d), c, sizeof(*c)) ||
+        d->initialized || !deadline ||
         !c->lease || !c->ops.admit || !c->ops.read32 || !c->ops.write32 ||
         !c->ops.barrier || !c->ops.now_us) return 0;
     struct a733_de_plan p;
     if(c->output==A733_DE_LCD1_XRGB8888){if(!a733_de_plan(&c->timing,&c->surface,&p))return 0;}
     else if(c->output==A733_DE_TV0_RGB565||c->output==A733_DE_TV1_RGB565){if(!a733_de_plan_tv0(&c->surface,&p))return 0;}
     else return 0;
+    uint64_t ring = 0;
+    if (c->ring_frame_bytes && (!c->ops.rcq_submit || !ring_slots(c, &p, &ring))) return 0;
     memset(d, 0, sizeof(*d));
     d->config = *c; d->plan = p; d->deadline = deadline; d->initialized = 1;
     return 1;
@@ -71,10 +73,9 @@ static void fail(struct a733_de *d, enum a733_de_error error)
 static int time_ok(struct a733_de *d)
 {
     uint64_t n = 0;
-    if (d->config.ops.now_us(d->config.context, &n) != 1 || n < d->last_now || n >= d->deadline) {
+    if (d->config.ops.now_us(d->config.context, &n) != 1 || !a733_deadline_admit(n, &d->last_now, d->deadline)) {
         fail(d, A733_DE_TIME); return 0;
     }
-    d->last_now = n;
     return d->state == A733_DE_PENDING;
 }
 /* Checks supplement authenticated cold/quiescent provenance. They do not
@@ -132,42 +133,63 @@ static struct word write_word(const struct a733_de *d, unsigned i)
 }
 /* DE352 RCQ: pinned de_base.h header encoding and sunxi_de.c aligned
  * header pairs; de_top.c output1 stride0x40, stale W1C and busy submission.
- * No CPU writes to either command page occur after bank publication. */
-static int replay_shape(uint64_t base,uint64_t f)
-{return base&&!(base&4095)&&f&&!(f&4095)&&base<=UINT64_C(0x100000000)-8192&&
- f<=(UINT64_C(0x100000000)-base-8192)/2;}
-static void replay_words(uint32_t w[16],uint64_t base,uint64_t f,unsigned slot)
+ * No CPU writes to any command page occur after bank publication. A ring has
+ * n frames followed by n command pages; n==2 is the original replay bank. */
+static int replay_shape(uint64_t base,uint64_t f,unsigned n)
+{return n>=2&&n<=A733_DE_RING_SLOTS&&base&&!(base&4095)&&f&&!(f&4095)&&
+ base<=UINT64_C(0x100000000)-4096u*n&&f<=(UINT64_C(0x100000000)-base-4096u*n)/n;}
+/* Ring geometry fixed by the configuration, never by a request: a declared
+ * frame size fills the mapping with n slots, and zero reads the mapping as
+ * the two-slot bank. Returns n and the frame size, or zero. */
+static unsigned ring_slots(const struct a733_de_config *c,const struct a733_de_plan *p,uint64_t *frame)
 {
- memset(w,0,64);w[0]=(uint32_t)(base+2*f+slot*4096+32);
+ const struct a733_de_surface *s=&c->surface;uint64_t f=c->ring_frame_bytes,n=2;
+ if(!f){if(s->mapped_bytes<8192||(s->mapped_bytes&1))return 0;f=(s->mapped_bytes-8192)/2;}
+ else if(f>UINT64_MAX-4096||s->mapped_bytes%(f+4096))return 0;
+ else n=s->mapped_bytes/(f+4096);
+ if(n>A733_DE_RING_SLOTS||f<p->padded_bytes||!replay_shape(s->device_address,f,(unsigned)n))return 0;
+ *frame=f;return (unsigned)n;
+}
+static void replay_words(uint32_t w[16],uint64_t base,uint64_t f,unsigned slot,unsigned n)
+{
+ memset(w,0,64);w[0]=(uint32_t)(base+n*f+slot*4096+32);
  w[1]=4;w[2]=1;w[3]=OVL+0x10;w[8]=(uint32_t)(base+slot*f);
 }
-int a733_de_replay_build(void *pages,uint64_t base,uint64_t f)
+int a733_de_ring_build(void *pages,uint64_t base,uint64_t f,unsigned n)
 {
- if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f))return 0;
- memset(pages,0,8192);for(unsigned slot=0;slot<2;++slot){uint32_t words[16];
- replay_words(words,base,f,slot);memcpy((uint8_t *)pages+slot*4096,words,64);}return 1;
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n))return 0;
+ memset(pages,0,4096u*n);for(unsigned slot=0;slot<n;++slot){uint32_t words[16];
+ replay_words(words,base,f,slot,n);memcpy((uint8_t *)pages+slot*4096,words,64);}return 1;
 }
-int a733_de_replay_valid(const void *pages,uint64_t base,uint64_t f)
+int a733_de_ring_valid(const void *pages,uint64_t base,uint64_t f,unsigned n)
 {
- if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f))return 0;
- for(unsigned slot=0;slot<2;++slot){uint32_t words[16];replay_words(words,base,f,slot);
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f,n))return 0;
+ for(unsigned slot=0;slot<n;++slot){uint32_t words[16];replay_words(words,base,f,slot,n);
  const uint8_t *p=(const uint8_t *)pages+slot*4096;if(memcmp(p,words,64))return 0;
  for(unsigned i=64;i<4096;++i)if(p[i])return 0;}return 1;
 }
+int a733_de_replay_build(void *pages,uint64_t base,uint64_t f){return a733_de_ring_build(pages,base,f,2);}
+int a733_de_replay_valid(const void *pages,uint64_t base,uint64_t f){return a733_de_ring_valid(pages,base,f,2);}
 int a733_de_replay_request(struct a733_de *d,unsigned slot,uint64_t f,uint64_t deadline)
 {
- if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||slot>1||
+ if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||
  (d->config.output!=A733_DE_LCD1_XRGB8888&&d->config.output!=A733_DE_TV0_RGB565&&d->config.output!=A733_DE_TV1_RGB565)||
- !d->config.ops.rcq_submit||deadline<=d->last_now||
- !replay_shape(d->config.surface.device_address,f)||f<d->plan.padded_bytes||
- d->config.surface.mapped_bytes!=2*f+8192)return 0;
- d->replay_slot=slot;d->replay_frame_bytes=f;d->replay_rcq_done=d->replay_frame_end=0;
+ !d->config.ops.rcq_submit||deadline<=d->last_now)return 0;
+ uint64_t ring=0;unsigned n=ring_slots(&d->config,&d->plan,&ring);
+ if(!n||f!=ring||slot>=n)return 0;
+ d->replay_slot=slot;d->replay_slots=n;d->replay_frame_bytes=f;d->replay_rcq_done=d->replay_frame_end=0;
  d->deadline=deadline;d->state=A733_DE_PENDING;d->action=A733_DE_REPLAY;d->step=0;return 1;
+}
+int a733_de_replay_writable(const struct a733_de *d,unsigned slot,uint64_t f)
+{
+ if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||!d->config.ops.rcq_submit)return 0;
+ uint64_t ring=0;unsigned n=ring_slots(&d->config,&d->plan,&ring);
+ return n&&f==ring&&slot<n&&slot!=d->scanout_slot;
 }
 static int replay_poll(struct a733_de *d)
 {
  uint32_t v=0;int ok=0;void *c=d->config.context;unsigned step=d->step;
- uint64_t header=d->config.surface.device_address+2*d->replay_frame_bytes+4096*d->replay_slot;
+ uint64_t header=d->config.surface.device_address+d->replay_slots*d->replay_frame_bytes+4096*d->replay_slot;
  if(!step)ok=d->config.ops.admit(c,&d->config,A733_DE_REPLAY);
  else if(step==1)ok=d->config.ops.read32(c,DE+0x8140,&v);
  else if(step==2||step==4||step==13||step==15||step==17||step==18)ok=d->config.ops.read32(c,DE+0x8144,&v);
@@ -191,7 +213,11 @@ static int replay_poll(struct a733_de *d)
  if(step==13){if(!(v&4))return 1;d->replay_rcq_done=d->last_now;}
  if(step==14&&v!=(uint32_t)(d->config.surface.device_address+d->replay_slot*d->replay_frame_bytes)){fail(d,A733_DE_VERIFY);return 0;}
  if(step==17&&(v&1)){d->step=16;return 1;}
- if(step==18){if(!(v&1))return 1;d->raw_status=v;d->replay_frame_end=d->last_now;d->state=A733_DE_ARMED;}
+ /* Every frame after a frame-end latched after the post-RCQ clear fetches
+  * from the new address, whether the address applied at once or at the
+  * boundary that frame-end marks, so the previous slot leaves scanout. */
+ if(step==18){if(!(v&1))return 1;d->raw_status=v;d->replay_frame_end=d->last_now;
+  d->scanout_slot=d->replay_slot;++d->presented;d->state=A733_DE_ARMED;}
  ++d->step;return 1;
 }
 enum a733_de_state a733_de_poll(struct a733_de *d)

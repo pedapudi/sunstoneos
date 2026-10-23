@@ -1,6 +1,68 @@
 --- portmacro.h
 +++ portmacro.h
-@@ -293,7 +293,7 @@
+@@ -142,10 +142,38 @@
+     extern void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID );
+ #endif /* if !defined(__ASSEMBLER__) */
+ 
++#if ( configNUMBER_OF_CORES == 1 )
+ /* Use SVC so this is safe from EL0. EL1 sites in the port use direct MSR. */
+-#define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
++    #define portDISABLE_INTERRUPTS() __asm volatile ( "SVC %0" : : "i" ( portSVC_DISABLE_INTERRUPTS ) : "memory" )
+ 
+-#define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
++    #define portENABLE_INTERRUPTS()  __asm volatile ( "SVC %0" : : "i" ( portSVC_ENABLE_INTERRUPTS ) : "memory" )
++#else
++
++/* TPIDRRO_EL0 describes the task that a core runs: bits [47:0] hold its TCB,
++ * bits [55:48] the core index and bit 56 is set when the task runs at EL1.
++ * Only EL1 writes it; EL0 can read it. A zero TCB field means that the core
++ * has not yet resumed a task, and readers then take the supervisor-call path.
++ * An EL1 task masks with ICC_PMR_EL1 in line; an EL0 task uses the SVC. */
++    #define portTASK_REGISTER_TCB_MASK     ( 0xFFFFFFFFFFFFULL )
++    #define portTASK_REGISTER_CORE_SHIFT   ( 48 )
++    #define portTASK_REGISTER_EL1_BIT      ( 56 )
++    #define portSET_PRIORITY_MASK( ulSvc, ulMask )                                         \
++    do {                                                                                   \
++        uint64_t ullTaskRegister;                                                          \
++        __asm volatile ( "MRS %0, TPIDRRO_EL0       \n"                                    \
++                         "TBZ %0, #56, 1f            \n"                                    \
++                         "MOV %0, %1                 \n"                                    \
++                         "MSR ICC_PMR_EL1, %0        \n"                                    \
++                         "DSB SY                     \n"                                    \
++                         "ISB SY                     \n"                                    \
++                         "B 2f                       \n"                                    \
++                         "1: SVC %2                  \n"                                    \
++                         "2:                         \n"                                    \
++                         : "=&r" ( ullTaskRegister ) : "i" ( ulMask ), "i" ( ulSvc ) : "memory" ); \
++    } while( 0 )
++    #define portDISABLE_INTERRUPTS()    portSET_PRIORITY_MASK( portSVC_DISABLE_INTERRUPTS, portMAX_API_PRIORITY_MASK )
++    #define portENABLE_INTERRUPTS()     portSET_PRIORITY_MASK( portSVC_ENABLE_INTERRUPTS, portUNMASK_VALUE )
++#endif /* if ( configNUMBER_OF_CORES == 1 ) */
+ 
+ /* In all GICs 255 can be written to the priority mask register to unmask all
+  * (but the lowest) interrupt priority. */
+@@ -269,6 +297,20 @@
+                                         BaseType_t uxAcquire );
+         extern uint8_t ucPortGetCoreID( void );
+         extern uint8_t ucPortGetCoreIDFromIsr( void );
++
++        static inline uint64_t ullPortGetTaskRegister( void )
++        {
++            uint64_t ullValue;
++
++            __asm volatile ( "MRS %0, TPIDRRO_EL0" : "=r" ( ullValue ) );
++            return ullValue;
++        }
++
++        /* Records the task selected for this core; called at EL1 only. */
++        #define portSET_CURRENT_TASK( xCoreID, pxTCB )                                             \
++    __asm volatile ( "MSR TPIDRRO_EL0, %0" ::"r" ( ( uint64_t ) ( uintptr_t ) ( pxTCB ) |          \
++                                                  ( ( uint64_t ) ( xCoreID ) << portTASK_REGISTER_CORE_SHIFT ) | \
++                                                  ( 1ULL << portTASK_REGISTER_EL1_BIT ) ) : "memory" )
+     #endif /* if !defined(__ASSEMBLER__) */
+ 
+     #define portSET_INTERRUPT_MASK()         uxPortSetInterruptMask()
+@@ -293,7 +335,7 @@
  
  #endif /* configNUMBER_OF_CORES > 1 */
  

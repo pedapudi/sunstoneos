@@ -3,14 +3,16 @@
  * hashes the newest valid slot in place and publishes a report. It never
  * writes storage or enables caches. Entering the loaded image needs the
  * entry prerequisites in admission.c, which refuse until remote-writer
- * exclusion exists; with them, the loader arms the watchdog, builds the
- * integrated OS image's resident contract and branches to the image entry.
+ * exclusion, watchdog recovery and the entry state are established; with
+ * them, the loader arms the watchdog, builds the integrated OS image's
+ * resident contract and branches to the image entry.
  * Every other reported outcome requests the ROM forced-FEL return of the RAM
  * monitor. */
 #include "sunxi_mmc.h"
 #include "a733_storage_digest.h"
 #include "a733_board_application.h"
 #include "../../../platform/a733-smp-cached/boot.h"
+#include "../../../apps/os/os.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -82,12 +84,16 @@ static uint64_t counter(void)
     return n;
 }
 
-/* Separate unit: admission and presence evidence for a cold SD controller
- * (admission.c). */
+/* Separate unit: admission of boot0's SD controller state and card presence
+ * from the PF6 card-detect pin (admission.c). */
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
-/* Separate unit: prerequisites for entering a verified image (admission.c). */
-int a733_stage2_entry_admission(void);
+/* Separate unit: each prerequisite for entering a verified image
+ * (admission.c). Calls across units keep every one a separate decision that
+ * the instruction model can grant or refuse. */
+int a733_stage2_remote_writers_excluded(void);
+int a733_stage2_watchdog_recovery(void);
+int a733_stage2_entry_state(void);
 
 static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t module_hz)
 {
@@ -347,8 +353,10 @@ static const struct slot_extent *session_extent(const struct slot_header *h)
 }
 /* Resident contract for the integrated OS image (docs/os-image.md). The slot
  * supplies the session page as an asset; the slot header's extent digest
- * already authenticated it. The loader stamps a fresh epoch into the session,
- * binds its new digest and the image build ID that the session names, and
+ * already authenticated it. The session is the 808-byte OS session or the
+ * microphone build's 992-byte one, and its own size field must equal the
+ * extent. The loader stamps a fresh epoch into the session, binds its new
+ * digest, its size and the image build ID that the session names, and
  * publishes the contract magic last. Deadlines count from arming. */
 static _Noreturn void enter(const struct slot_header *h)
 {
@@ -357,9 +365,12 @@ static _Noreturn void enter(const struct slot_header *h)
     volatile struct a733_smp_contract *c =
         (volatile struct a733_smp_contract *)(uintptr_t)A733_SMP_CONTRACT_ADDRESS;
     volatile uint64_t *result = (volatile uint64_t *)(uintptr_t)A733_SMP_RESULT_ADDRESS;
-    if (!e || e->bytes != A733_OS_SESSION_BYTES) finish(ENTRY_REFUSED, 1);
+    const struct os_session *os = (const struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS;
+    if (!e || (e->bytes != A733_OS_SESSION_BYTES &&
+               e->bytes != A733_OS_SESSION_BYTES + OS_AUDIO_SESSION_BYTES)) finish(ENTRY_REFUSED, 1);
     if (s->magic != A733_BOARD_SUPERVISED_SESSION_MAGIC || s->version != 2 ||
-        s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease)
+        s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease ||
+        os->magic != A733_OS_SESSION_MAGIC || os->version != OS_SESSION_VERSION || os->bytes != e->bytes)
         finish(ENTRY_REFUSED, 2);
     /* The image refuses a contract whose generation a retained result already
      * holds. Each boot of a slot repeats its generation, so a result left by
@@ -441,9 +452,10 @@ _Noreturn void a733_stage2_main(void)
         if (r == LOAD_DONE) {
             a733_stage2_report.selected = s;
             a733_stage2_report.generation = headers[s].generation;
-            /* Boundary: entry needs remote-writer exclusion, which does not
-             * exist yet, so the verified image is normally not entered. */
-            if (a733_stage2_entry_admission() != 1) finish(LOADED, headers[s].entry);
+            /* Boundary: no entry prerequisite is established yet, so the
+             * verified image is normally not entered. */
+            if (a733_stage2_remote_writers_excluded() != 1 || a733_stage2_watchdog_recovery() != 1 ||
+                a733_stage2_entry_state() != 1) finish(LOADED, headers[s].entry);
             enter(&headers[s]);
         }
     }

@@ -3,13 +3,11 @@
 #include "aic8800_supplicant_port.h"
 #include "aic8800_supplicant.h"
 #include "aic8800_sdio_transport.h"
+#include "a733_range.h"
 #include "utils/common.h"
 #include "rsn_supp/wpa.h"
 #include "common/wpa_common.h"
 #include "common/ieee802_11_defs.h"
-static int span(const void *p,size_t n){return p&&n<=UINTPTR_MAX-(uintptr_t)p;}
-static int overlap(const void *a,size_t an,const void *b,size_t bn)
-{return (uintptr_t)a<(uintptr_t)b+bn&&(uintptr_t)b<(uintptr_t)a+an;}
 static const uint8_t own_rsn[]={48,20,1,0,0,15,172,4,1,0,0,15,172,4,1,0,0,15,172,2,0,0};
 void aic8800_supplicant_stop(struct aic8800_supplicant *s)
 {
@@ -74,24 +72,37 @@ static u8 *alloc_eapol(void *ctx,u8 type,const void *payload,u16 bytes,size_t *l
 }
 int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *cfg)
 {
-    if(!span(cfg,sizeof(*cfg))||!cfg->entropy||!cfg->entropy_record||!cfg->beacon_record||
+    if(!a733_span_excl(cfg,sizeof(*cfg))||!cfg->entropy||!cfg->entropy_record||!cfg->beacon_record||
        !cfg->ticks_per_second||cfg->ticks_per_second>UINT64_MAX/1000000||
        !cfg->command_timeout||cfg->command_timeout>UINT64_MAX/8||
        cfg->ap_rsn_bytes<2||cfg->ap_rsn_bytes>sizeof(cfg->ap_rsn))return 0;
     struct wpa_ie_data ie;
-    return !wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)&&ie.group_cipher==WPA_CIPHER_CCMP&&
-        (ie.pairwise_cipher&WPA_CIPHER_CCMP)&&(ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!(ie.capabilities&WPA_CAPABILITY_MFPR);
+    if(wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)||ie.group_cipher!=WPA_CIPHER_CCMP||
+        !(ie.pairwise_cipher&WPA_CIPHER_CCMP)||(ie.capabilities&WPA_CAPABILITY_MFPR))return 0;
+    if(cfg->key_mgmt==AIC8800_SUPPLICANT_PSK)
+        return (ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!cfg->sae_password_bytes;
+#ifdef SUNSTONE_AIC8800_SAE
+    /* SAE derives the PMK; a supplied one would be ignored, so refuse it. */
+    uint8_t pmk=0;for(unsigned i=0;i<sizeof(cfg->pmk);++i)pmk|=cfg->pmk[i];
+    return cfg->key_mgmt==AIC8800_SUPPLICANT_SAE&&(ie.key_mgmt&WPA_KEY_MGMT_SAE)&&!pmk&&
+        cfg->sae_password_bytes&&cfg->sae_password_bytes<=sizeof(cfg->sae_password);
+#else
+    return 0;
+#endif
 }
 int aic8800_supplicant_init(struct aic8800_supplicant *s,const struct aic8800_supplicant_config *cfg)
 {
-    if(!span(s,sizeof(*s))||!aic8800_supplicant_config_valid(cfg)||
-       overlap(s,sizeof(*s),cfg,sizeof(*cfg))||s->initialized)return 0;
+    if(!a733_span_excl(s,sizeof(*s))||!aic8800_supplicant_config_valid(cfg)||
+       a733_extents_overlap_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)cfg,sizeof(*cfg))||s->initialized)return 0;
     aic8800_security_zero(s,sizeof(*s));s->config=*cfg;s->initialized=1;return 1;
 }
 int aic8800_supplicant_claim(struct aic8800_supplicant *s,struct aic8800_sdio_transport *owner,
     struct aic8800_security *security,uint64_t now,uint64_t deadline)
 {
+    /* The association request and key installation lack the SAE AKM and
+     * protected management frames, so only PSK reaches the handshake. */
     if(!s||!s->initialized||s->owner||!owner||!owner->wifi||!owner->data||!security||
+        s->config.key_mgmt!=AIC8800_SUPPLICANT_PSK||
         s->state!=AIC8800_SUPPLICANT_NEW||deadline<=now||deadline>owner->deadline||
         s->config.beacon_record!=owner->wifi->target.beacon_evidence)return 0;
     if(!aic8800_security_claim(security,owner,owner->wifi,s,now))return 0;
@@ -132,8 +143,8 @@ void aic8800_supplicant_observe(struct aic8800_supplicant *s,uint64_t now)
 }
 static uint64_t command_deadline(struct aic8800_supplicant *s,uint64_t now)
 {
-    if(s->config.command_timeout>UINT64_MAX-now)return 0;
-    uint64_t deadline=now+s->config.command_timeout;
+    uint64_t deadline;
+    if(!a733_deadline_after(now,s->config.command_timeout,&deadline))return 0;
     if(deadline>s->deadline)deadline=s->deadline;
     if(deadline>s->owner->deadline)deadline=s->owner->deadline;
     return deadline;
@@ -214,8 +225,8 @@ int aic8800_supplicant_receive(struct aic8800_supplicant *s,const struct aic8800
         s->deferred_encrypted=frame->encrypted;return 1;
     }
     if(s->state==AIC8800_SUPPLICANT_AUTHORIZED){
-        uint64_t ticks=8*s->config.command_timeout;if(ticks>UINT64_MAX-now){aic8800_supplicant_stop(s);return 0;}
-        s->deadline=now+ticks;if(s->deadline>s->owner->deadline)s->deadline=s->owner->deadline;
+        uint64_t ticks=8*s->config.command_timeout;if(!a733_deadline_after(now,ticks,&s->deadline)){aic8800_supplicant_stop(s);return 0;}
+        if(s->deadline>s->owner->deadline)s->deadline=s->owner->deadline;
     }
     if(!aic8800_supplicant_os_enter(s)){aic8800_supplicant_stop(s);return 0;}
     (void)wpa_sm_rx_eapol(s->rsn,frame->ethernet+6,frame->ethernet+14,frame->bytes-14,
@@ -245,7 +256,8 @@ int aic8800_supplicant_rearm(struct aic8800_supplicant *s,struct aic8800_securit
 {
     if(!s||!sec||!t||!s->initialized||!sec->initialized||!t->wifi||!t->card||!t->card->host||
        !aic8800_transport_attachment_ready(t)||!aic8800_supplicant_config_valid(cfg)||
-       overlap(s,sizeof(*s),cfg,sizeof(*cfg))||overlap(sec,sizeof(*sec),cfg,sizeof(*cfg))||
+       a733_extents_overlap_prechecked((uintptr_t)s,sizeof(*s),(uintptr_t)cfg,sizeof(*cfg))||
+       a733_extents_overlap_prechecked((uintptr_t)sec,sizeof(*sec),(uintptr_t)cfg,sizeof(*cfg))||
        s->owner!=t||s->security!=sec||sec->owner!=t||sec->supplicant!=s||
        s->data!=t->data||s->wifi!=t->wifi||sec->wifi!=t->wifi||
        s->generation!=sec->generation||s->generation==UINT64_MAX||t->wifi->association_generation<=s->generation||

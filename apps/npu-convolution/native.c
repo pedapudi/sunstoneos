@@ -6,7 +6,8 @@
 #include "../npu-interrupt/irq.h"
 #endif
 #include <string.h>
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #ifdef SUNSTONE_NPU_SINGLE_CORE
 #include "a733_usb_platform.h"
 #include "a733_usb_platform_native.h"
@@ -110,13 +111,10 @@ static int image(const void *p,size_t bytes,int write)
 {
     extern unsigned char __device_pool_start[];
     uintptr_t a=(uintptr_t)p,limit=(uintptr_t)__device_pool_start;
+    static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
+        writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     if(!p || !bytes || a<0x41000000 || a>=limit || bytes>limit-a)return 0;
-    for(uintptr_t page=a&~(uintptr_t)4095;page<a+bytes;page+=4096) {
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(page,write,&t) || t.physical!=page ||
-           t.attributes!=0xff || t.shareability!=3)return 0;
-    }
-    return 1;
+    return a733_mapping_check_pages(aarch64_device_translate,a,a,bytes,write?&writable:&readable);
 }
 static int parent(void)
 {
@@ -314,13 +312,10 @@ static int finite_irq_quiet(void)
      * masked interrupt; never acknowledge or change inherited GIC state. */
     const uintptr_t addresses[]={0x03400000,0x0340010c,0x0340020c,0x0340030c};
     uint32_t value[4];
+    static const struct a733_mapping_rule device={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
     for(unsigned i=0;i<4;++i) {
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(addresses[i],0,&t) ||
-           t.physical!=addresses[i] || t.attributes!=0)return -1;
-        __asm__ volatile("dsb sy":::"memory");
-        value[i]=*(volatile uint32_t *)addresses[i];
-        __asm__ volatile("dsb sy":::"memory");
+        if(!a733_mapping_check(aarch64_device_translate,addresses[i],addresses[i],&device))return -1;
+        value[i]=a733_mmio_read32_dsb_sy_both(addresses[i]);
     }
     return !(value[0]&UINT32_C(0x80000000)) && !((value[1]|value[2]|value[3])&2);
 }
@@ -487,8 +482,9 @@ static int usb_authorize(void *cookie,const struct a733_usb_platform_config *c,c
        memcmp(c->rate_hz,b->npu.rate_hz,sizeof(c->rate_hz))||
        a733_clock_token_status(&app.registry,t)!=A733_CLOCK_OK)return 0;
     const uintptr_t mmio[]={0x02002000,0x04100000,0x07090160};
-    for(unsigned i=0;i<3;++i){struct aarch64_translation t;
-        if(!aarch64_device_translate(mmio[i],1,&t)||t.physical!=mmio[i]||t.attributes||t.shareability!=2)return 0;}
+    static const struct a733_mapping_rule device={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
+    for(unsigned i=0;i<3;++i)
+        if(!a733_mapping_check(aarch64_device_translate,mmio[i],mmio[i],&device))return 0;
     /* Authenticated external admission owns persistent USB rails, IRQ exclusion,
      * the ROM PIO predecessor and absence of outstanding external DMA. */
     return 1;

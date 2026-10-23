@@ -88,7 +88,10 @@ with zero offset. Keyboard workload four also accepts operation three to copy
 128 trigger-evidence bytes, and operation four to acknowledge the result with
 zero count and offset. Nonzero keyboard operations require the exact current
 recognition generation. Workload zero retains zero in the final request word
-and its original operations zero through two.
+and its original operations zero through two. The integrated OS image also
+accepts operation five, with zero count, offset and generation, in either
+workload. Its response is the 1,160-byte previous-boot fault report alone,
+without the 64-byte header ([fault capture](../../docs/fault-capture.md)).
 
 Responses have a 64-byte header followed by the requested copy. The first eight
 32-bit words contain magic `0x424d494d`, version, state (pending zero, success

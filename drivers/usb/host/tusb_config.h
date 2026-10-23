@@ -10,13 +10,23 @@
 #define CFG_TUH_ENABLED 1
 #define CFG_TUD_ENABLED 0
 #define CFG_TUH_DEVICE_MAX 2
-#define CFG_TUH_HUB 1
+/* Two hub tiers: the root-port hub and one USB2 hub below it. */
+#define CFG_TUH_HUB 2
 #define CFG_TUH_MSC 1
 #define CFG_TUH_HID 1
 #define CFG_TUH_HID_EPIN_BUFSIZE 64
 #define CFG_TUH_HID_EPOUT_BUFSIZE 64
 #define CFG_TUH_HID_SET_PROTOCOL_ON_ENUM 1
 #define CFG_TUH_MSC_MAXLUN 1
+/* The USB Audio Class host is linked only into images that also build the
+ * pinned class/audio/audio_host.c and define SUNSTONE_USB_HOST_AUDIO=1. */
+#ifndef SUNSTONE_USB_HOST_AUDIO
+#define SUNSTONE_USB_HOST_AUDIO 0
+#endif
+#define CFG_TUH_AUDIO SUNSTONE_USB_HOST_AUDIO
+#define CFG_TUH_AUDIO_PROTOCOLS TUH_AUDIO_PROTOCOL_UAC1
+#define CFG_TUH_AUDIO_EPIN_BUFSIZE 512
+#define CFG_TUH_AUDIO_STREAM_BUFSIZE 4096
 #define CFG_TUH_ENUMERATION_BUFSIZE 256
 #define CFG_TUH_TASK_QUEUE_SZ 8
 #define CFG_TUH_TASK_EVENTS_PER_RUN 2

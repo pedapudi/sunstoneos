@@ -1,6 +1,45 @@
 --- port.c
 +++ port.c
-@@ -1228,8 +1228,8 @@
+@@ -260,9 +260,17 @@
+     /* Flag to signal that the primary core has done all the shared initialisations. */
+     PRIVILEGED_DATA volatile uint8_t ucPrimaryCoreInitDoneFlag = 0;
+ 
+-    /* Saved as part of the task context. If ullPortTaskHasFPUContext is non-zero
+-     * then floating point context must be saved and restored for the task. */
+-    PRIVILEGED_DATA uint64_t ullPortTaskHasFPUContext[ configNUMBER_OF_CORES ] = { pdFALSE };
++    /* State that only its own core writes, one 64-byte line per core.
++     * ullTaskHasFPUContext is saved as part of the task context: when it is
++     * non-zero the floating point context is saved and restored for the task.
++     * portASM.S indexes the array with the core index shifted left by 6.
++     * ullOwnedLocks has bit eLockNum set while the core holds that lock. */
++    typedef struct PortCoreState
++    {
++        uint64_t ullTaskHasFPUContext;
++        volatile uint64_t ullOwnedLocks;
++    } __attribute__( ( aligned( 64 ) ) ) PortCoreState_t;
++    PRIVILEGED_DATA PortCoreState_t xPortCoreStates[ configNUMBER_OF_CORES ];
+ 
+     /* Set to 1 to pend a context switch from an ISR. */
+     PRIVILEGED_DATA uint64_t ullPortYieldRequired[ configNUMBER_OF_CORES ] = { pdFALSE };
+@@ -304,7 +312,7 @@
+             #if ( configNUMBER_OF_CORES == 1 )
+                 ullPortTaskHasFPUContext = pdTRUE;
+             #else
+-                ullPortTaskHasFPUContext[ portGET_CORE_ID() ] = pdTRUE;
++                xPortCoreStates[ portGET_CORE_ID() ].ullTaskHasFPUContext = pdTRUE;
+             #endif
+         #else
+             #error "Invalid configUSE_TASK_FPU_SUPPORT setting - must be 1 or 2."
+@@ -505,7 +513,7 @@
+             #if ( configNUMBER_OF_CORES == 1 )
+             ullPortTaskHasFPUContext = pdTRUE;
+             #else
+-            ullPortTaskHasFPUContext[ portGET_CORE_ID() ] = pdTRUE;
++            xPortCoreStates[ portGET_CORE_ID() ].ullTaskHasFPUContext = pdTRUE;
+             #endif
+         }
+         #else /* if ( configUSE_TASK_FPU_SUPPORT == portTASK_NO_FPU_CONTEXT_BY_DEFAULT ) */
+@@ -1228,8 +1236,8 @@
          /* Start the timer that generates the tick ISR. */
          configSETUP_TICK_INTERRUPT();
          ucPrimaryCoreInitDoneFlag = 1;
@@ -11,7 +50,72 @@
                           "ISB SY                    \n"
                           ::: "memory" );
          /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
-@@ -1413,9 +1413,10 @@
+@@ -1356,11 +1364,13 @@
+      * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
+      * updated.
+      */
+-    UBaseType_t uxInterruptStatus = portSET_INTERRUPT_MASK_FROM_ISR();
+-
+-    #if ( configNUMBER_OF_CORES > 1 )
++    #if ( configNUMBER_OF_CORES == 1 )
++        UBaseType_t uxInterruptStatus = portSET_INTERRUPT_MASK_FROM_ISR();
++    #else
++        /* The scheduler runs before the tick starts, so the ISR critical
++         * section sets the mask itself. */
+         UBaseType_t x = portENTER_CRITICAL_FROM_ISR();
+-    #endif /* if ( configNUMBER_OF_CORES > 1 ) */
++    #endif /* if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     /* Increment the RTOS tick. */
+     if( xTaskIncrementTick() != pdFALSE )
+@@ -1371,12 +1381,12 @@
+             ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
+         #endif
+     }
+-    #if ( configNUMBER_OF_CORES > 1 )
+-        portEXIT_CRITICAL_FROM_ISR(x);
+-    #endif /* if ( configNUMBER_OF_CORES > 1 ) */
+-
+-    /* Ensure all interrupt priorities are active again. */
+-    portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
++    #if ( configNUMBER_OF_CORES == 1 )
++        /* Ensure all interrupt priorities are active again. */
++        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
++    #else
++        portEXIT_CRITICAL_FROM_ISR( x );
++    #endif /* if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     /* Ok to enable interrupts after the interrupt source has been cleared. */
+     configCLEAR_TICK_INTERRUPT();
+@@ -1393,7 +1403,7 @@
+         #if  ( configNUMBER_OF_CORES == 1 )
+             ullPortTaskHasFPUContext = pdTRUE;
+         #else
+-            ullPortTaskHasFPUContext[ portGET_CORE_ID() ] = pdTRUE;
++            xPortCoreStates[ portGET_CORE_ID() ].ullTaskHasFPUContext = pdTRUE;
+         #endif
+ 
+         /* Consider initialising the FPSR here - but probably not necessary in
+@@ -1406,6 +1416,18 @@
+ 
+ void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
+ {
++    #if ( configNUMBER_OF_CORES > 1 )
++        /* An EL1 task writes the mask in line; DAIF keeps the caller's value,
++         * as the supervisor call returns the caller's SPSR. */
++        if( ( ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT ) & 1U )
++        {
++            __asm volatile ( "MSR ICC_PMR_EL1, %0  \n"
++                             "DSB SY               \n"
++                             "ISB SY               \n"
++                             ::"r" ( ( uint64_t ) uxNewMaskValue ) : "memory" );
++        }
++        else
++    #endif
+     if( uxNewMaskValue == portUNMASK_VALUE )
+     {
+         /* Unmask all interrupt priorities. */
+@@ -1413,9 +1435,10 @@
      }
      else
      {
@@ -24,7 +128,34 @@
              : "i" ( portSVC_UNMASK_INTERRUPTS )
              : "memory"
          );
-@@ -1474,7 +1475,7 @@
+@@ -1444,6 +1467,26 @@
+ {
+     UBaseType_t ullPMRValue;
+ 
++    #if ( configNUMBER_OF_CORES > 1 )
++        if( ( ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT ) & 1U )
++        {
++            /* An EL1 task masks in line, without changing DAIF. A switch away
++             * from this task between the read and the write restores the same
++             * mask, because the task is outside a critical section. */
++            __asm volatile ( "MRS %0, ICC_PMR_EL1" : "=r" ( ullPMRValue ) );
++
++            if( ullPMRValue != portMAX_API_PRIORITY_MASK )
++            {
++                __asm volatile ( "MSR ICC_PMR_EL1, %0  \n"
++                                 "DSB SY               \n"
++                                 "ISB SY               \n"
++                                 ::"r" ( ( uint64_t ) portMAX_API_PRIORITY_MASK ) : "memory" );
++            }
++
++            return ullPMRValue;
++        }
++    #endif
++
+     /* Use SVC so this can be called safely from EL0 tasks. */
+     __asm volatile (
+         "svc %1        \n"
+@@ -1474,7 +1517,7 @@
                           "MSR DAIFCLR, #2        \n"
                           "DSB SY                 \n"
                           "ISB SY                 \n"
@@ -33,17 +164,53 @@
      }
  
      return ullPMRValue;
-@@ -1570,8 +1571,8 @@
+@@ -1538,12 +1581,15 @@
+ 
+ #if ( configNUMBER_OF_CORES > 1 )
+ 
+-    /* Which core owns the lock? Keep in privileged, shareable RAM. */
+-    PRIVILEGED_DATA volatile uint64_t ullOwnedByCore[ portMAX_CORE_COUNT ];
+-    /* Lock count a core owns. */
+-    PRIVILEGED_DATA volatile uint64_t ullRecursionCountByLock[ eLockCount ];
+-    /* Index 0 is used for ISR lock and Index 1 is used for task lock. */
+-    PRIVILEGED_DATA uint32_t ulGateWord[ eLockCount ];
++    /* Each lock word and its recursion count share one 64-byte line, which
++     * no other port data uses. Index 0 is the ISR lock and index 1 the task
++     * lock; xPortCoreStates records which core owns each. */
++    typedef struct PortLock
++    {
++        uint32_t ulGateWord;
++        volatile uint64_t ullRecursionCount;
++    } __attribute__( ( aligned( 64 ) ) ) PortLock_t;
++    PRIVILEGED_DATA PortLock_t xPortLocks[ eLockCount ];
+ 
+     void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID )
+     {
+@@ -1570,8 +1616,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
-+            "dsb sy         \n"
-             "sev            \n"
--            "dsb sy         \n"
+-            "sev            \n"
+             "dsb sy         \n"
++            "sev            \n"
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1661,10 +1662,6 @@
+@@ -1651,21 +1697,17 @@
+              * If the core owns the lock wait increment the lock count by the core.
+              * If core does not own the lock wait for the spinlock.
+              */
+-            if( prvSpinTrylock( &ulGateWord[ eLockNum ] ) != 0 )
++            if( prvSpinTrylock( &( xPortLocks[ eLockNum ].ulGateWord ) ) != 0 )
+             {
+                 /* Check if the core owns the spinlock. */
+-                if( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ulLockBit )
++                if( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit )
+                 {
+-                    configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) != 255u );
+-                    prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) + 1 ) );
++                    configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
++                    prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
                      return;
                  }
  
@@ -51,10 +218,76 @@
 -                uint32_t dummy = ulGateWord[ eLockNum ];
 -                dummy++;
 -
-                 while( prvSpinTrylock( &ulGateWord[ eLockNum ] ) != 0 )
+-                while( prvSpinTrylock( &ulGateWord[ eLockNum ] ) != 0 )
++                while( prvSpinTrylock( &( xPortLocks[ eLockNum ].ulGateWord ) ) != 0 )
                  {
                     /* Follow Arm's recommended way of sleeping
-@@ -1740,7 +1737,7 @@
+                     * sevl is used to prime the wait loop.
+@@ -1679,7 +1721,7 @@
+                         "ldr w2, [%x0]   \n"
+                         "cbnz w2, 1b     \n"
+                         :
+-                        : "r" ( &ulGateWord[ eLockNum ] )
++                        : "r" ( &( xPortLocks[ eLockNum ].ulGateWord ) )
+                         : "memory", "w2"
+                     );
+                 }
+@@ -1689,27 +1731,27 @@
+             __asm__ __volatile__ ( "dmb sy" ::: "memory" );
+ 
+             /* Assert the lock count is 0 when the spinlock is free and is acquired. */
+-            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) == 0 );
++            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) == 0 );
+ 
+             /* Set lock count as 1. */
+-            prvSet64( &ullRecursionCountByLock[ eLockNum ], 1 );
+-            /* Set ullOwnedByCore. */
+-            prvSet64( &ullOwnedByCore[ ucCoreID ], ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) | ulLockBit ) );
++            prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), 1 );
++            /* Record that this core owns the lock. */
++            prvSet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ), ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) | ulLockBit ) );
+         }
+         /* Lock release. */
+         else
+         {
+             /* Assert the lock is not free already. */
+-            configASSERT( ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ulLockBit ) != 0 );
+-            configASSERT( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) != 0 );
++            configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
++            configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
+ 
+-            /* Reduce ullRecursionCountByLock by 1. */
+-            prvSet64( &ullRecursionCountByLock[ eLockNum ], ( prvGet64( &ullRecursionCountByLock[ eLockNum ] ) - 1 ) );
++            /* Reduce the recursion count by 1. */
++            prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
+ 
+-            if( !prvGet64( &ullRecursionCountByLock[ eLockNum ] ) )
++            if( !prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) )
+             {
+-                prvSet64( &ullOwnedByCore[ ucCoreID ], ( prvGet64( &ullOwnedByCore[ ucCoreID ] ) & ~ulLockBit ) );
+-                prvSpinUnlock( &ulGateWord[ eLockNum ] );
++                prvSet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ), ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ~ulLockBit ) );
++                prvSpinUnlock( &( xPortLocks[ eLockNum ].ulGateWord ) );
+                 /* Add barrier to ensure lock status is reflected before we proceed. */
+                 __asm__ __volatile__ ( "dmb sy" ::: "memory" );
+             }
+@@ -1720,6 +1762,15 @@
+ 
+     uint8_t ucPortGetCoreID( void )
+     {
++        /* Once the core has resumed a task, TPIDRRO_EL0 holds its index at
++         * both privilege levels. */
++        const uint64_t ullTaskRegister = ullPortGetTaskRegister();
++
++        if( ( ullTaskRegister & portTASK_REGISTER_TCB_MASK ) != 0U )
++        {
++            return ( uint8_t ) ( ullTaskRegister >> portTASK_REGISTER_CORE_SHIFT );
++        }
++
+         /* Use SVC to obtain the core ID in a way that is safe when called
+          * from EL0 tasks. ISRs and EL1 code should use
+          * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
+@@ -1740,7 +1791,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -63,3 +296,30 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
+@@ -1763,22 +1814,10 @@
+         }
+         #endif /* configASSERT_DEFINED */
+ 
+-        /* Set interrupt mask before altering scheduler structures. The SGI
+-         * interrupt runs at the lowest priority, so interrupts cannot already be masked,
+-         * so there is no need to save and restore the current mask value.  It is
+-         * necessary to turn off interrupts in the CPU itself while the ICCPMR is being
+-         * updated.
+-         */
+-        UBaseType_t uxInterruptStatus = portSET_INTERRUPT_MASK_FROM_ISR();
+-
+-        UBaseType_t uxSavedInterruptStatus = portENTER_CRITICAL_FROM_ISR();
+-        #if ( configNUMBER_OF_CORES == 1 )
+-            ullPortYieldRequired = pdTRUE;
+-        #else
+-            ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
+-        #endif
+-        portEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
+-        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxInterruptStatus );
++        /* Only this core writes its yield flag, and DAIF.I stays set from
++         * exception entry, so no mask or lock is needed. The IRQ exit path
++         * takes both kernel locks when it switches context. */
++        ullPortYieldRequired[ portGET_CORE_ID_FROM_ISR() ] = pdTRUE;
+     }
+ 
+ /*-----------------------------------------------------------*/

@@ -120,11 +120,17 @@ not qualify WPA2, TCP sequence unpredictability or a secure physical network.
 
 ## Explicit healthy reconnect preserves the existing service
 
-`a733_radio_session_reconnect` requests one bounded reconnect to the same access
-point with fixed IPv4 settings or DHCP. The recorded owner task supplies the target,
-fresh security configuration or explicit OPEN authority, disconnect reason and
-absolute deadline inside the current runtime lease. The session must still be
-healthy and associated. Clients must first complete every socket CLOSE and
+`a733_radio_session_reconnect` requests one bounded reconnect with fixed IPv4
+settings or DHCP. The target is an access point of the current network, also
+called the extended service set (ESS): it has the same SSID and security as the
+current association, while its BSSID and admitted channel may differ. A target
+on another BSSID moves the station to another access point of that network,
+which is host-driven roaming. The recorded owner task supplies the target with
+that access point's own beacon evidence and connection authority. It also
+supplies fresh security configuration or explicit OPEN authority, a disconnect
+reason and an absolute deadline inside the current runtime lease. For WPA2 the
+security configuration carries the RSN element observed in that access point's
+beacon. The session must still be healthy and associated. Clients must first complete every socket CLOSE and
 consume every reply; listener, accept and DNS handoffs must also be finished.
 Admission refuses unresolved transitions, expired deadlines and live client work. It never clears a terminal failure or reloads firmware.
 
@@ -178,9 +184,10 @@ Physical reconnect, RF behavior and entropy quality remain unqualified.
 When the network adapter reports a clean loss (see the
 [network adapter](radio-network.md#security-authority-belongs-to-one-association)),
 the session stays in its network stage and `a733_radio_session_poll` returns
-`A733_SESSION_LOST`. The owner then calls `a733_radio_session_recover` with the
-same target and credentials that reconnect admits, or OPEN authority, and an
-absolute deadline inside the runtime lease. Admission requires the link to be
+`A733_SESSION_LOST`. The owner then calls `a733_radio_session_recover` with a
+target and credentials that reconnect would admit, or OPEN authority, and an
+absolute deadline inside the runtime lease. The target may therefore be the lost
+access point or another access point of the same network. Admission requires the link to be
 down rather than unresolved, an idle Wi-Fi worker and data worker, and a
 supplicant that is authorized or in a group-key handshake.
 
@@ -218,9 +225,13 @@ network adapter, socket service and IP task on the modeled MMIO of the reconnect
 composition. An idle fixed-address OPEN association with one open UDP socket
 receives a source-layout disconnection indication. The session reports LOST
 without fault, the network is offline, and submissions are refused while the
-socket survives. Recovery refuses a foreign BSSID and missing OPEN authority. Its
-first reassociation fails in the indication; the retry succeeds at association
-generation three, and the address and a new TCP exchange follow. A separate
+socket survives. Recovery refuses another SSID, another security mode, a
+channel outside the admitted list, missing beacon evidence and missing OPEN
+authority. It admits a second access point of the same network with its own
+BSSID and beacon evidence. Its first reassociation fails in the indication; the
+retry associates with that access point at association generation three.
+Received frames then carry the new BSSID, and the address and a new TCP exchange
+follow. A separate
 part of the same image retires a WPA2 security pair after loss: no port command,
 the pairwise key wiped locally, one group-key KEY_DEL with its hardware index,
 and rearm accepted for a later generation. Key state there is a modeled input,
@@ -264,6 +275,30 @@ reconnection. A separate native `sunstone-a733-board` build covers the actual
 board caller, session and changed network structure layout. That image was not
 executed. These results and exact compiled closures are retained under
 `~/.cache/sunstoneos/evidence/radio-dhcp-reconnect-20261020/`.
+
+## A Bluetooth client shares the firmware generation
+
+The firmware upload applies the Bluetooth patch before it loads the Wi-Fi
+image, so a full session also brings up the module's Bluetooth controller.
+`a733_radio_session_bootstrap` reports the completed firmware generation of a
+full session as it does for a bootstrap-only one: in the management and
+online stages and while a reconnect or a loss recovery reassociates. Those
+Wi-Fi stages leave the firmware, runtime and dispatcher unchanged, so a
+Bluetooth client keeps its H4 binding while Wi-Fi recovers. The call
+requires the session's owner task, so the client runs on that task after the
+session poll ([native Bluetooth](bluetooth-native.md#attachment-to-a-wi-fi-module-owner)).
+The client never polls or retains the session; a session fault ends the
+client.
+
+The radio platform's native adapter accepts one added admission before the
+scheduler starts (`a733_radio_platform_native_extend`). It runs only after
+the owner's own admission accepts, and both must accept. A Bluetooth client
+that adds the wake pins to a platform another owner built authenticates them
+there.
+
+The reconnect model (`checks/radio-reconnect.py`) requests the firmware
+generation right after a healthy reconnect is admitted and requires the
+current borrow generation.
 
 ## Faults close admission and preserve outstanding work
 

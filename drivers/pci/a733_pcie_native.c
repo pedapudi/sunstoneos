@@ -2,7 +2,13 @@
 #ifdef SUNSTONE_PCIE_EPF_TEST
 #include "a733_pcie_epf_test.h"
 #endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+#include "a733_pcie_function.h"
+#endif
 #include "a733_platform_locks.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
+#include "a733_task_context.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "PCIe native binding requires scheduler-state, task and mutex-owner APIs"
@@ -10,23 +16,7 @@
 static int current(void *cookie)
 {
     struct a733_pcie_native *n=cookie;
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif" : "=r"(el),"=r"(flags));
-    if(!n||!n->initialized||el!=4||(flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2" ::: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
-    critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !nesting&&!critical&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->owner_task;
+    return n&&n->initialized&&a733_task_context_owner_el1((TaskHandle_t)n->owner_task);
 }
 static int now(void *cookie,uint64_t *v)
 {struct a733_pcie_native *n=cookie;return n->locks->now(n->locks->context,v);}
@@ -95,6 +85,9 @@ static int allowed(struct a733_pcie_native *n,uintptr_t a,unsigned width,unsigne
 #ifdef SUNSTONE_PCIE_EPF_TEST
     address=address||a733_pcie_epf_native_address(n->port,a,width,writing);
 #endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+    address=address||a733_pcie_function_native_address(n->port,a,width,writing);
+#endif
     return current(n)&&address&&
         !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
@@ -102,9 +95,9 @@ static int allowed(struct a733_pcie_native *n,uintptr_t a,unsigned width,unsigne
 static int read(void *cookie,uintptr_t a,unsigned width,uint32_t *v)
 {
     struct a733_pcie_native *n=cookie;if(!v||!allowed(n,a,width,0))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *v=width==1?*(volatile const uint8_t *)a:width==2?*(volatile const uint16_t *)a:*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    a733_mmio_dsb_sy();
+    *v=width==1?a733_mmio_read8(a):width==2?a733_mmio_read16(a):a733_mmio_read32(a);
+    a733_mmio_dsb_sy();return 1;
 }
 static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
 {
@@ -112,15 +105,27 @@ static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
     if((width==1&&v>255)||(width==2&&v>65535))return 0;
     if(a==0x03400194&&v!=0x0300ff00)return 0;
     if(a==0x06000004&&v!=0x102){
+#if defined(SUNSTONE_PCIE_EPF_TEST) || defined(SUNSTONE_PCIE_FUNCTION)
+        int client=0;
 #ifdef SUNSTONE_PCIE_EPF_TEST
-        if(!a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+        client=client||a733_pcie_epf_native_write(n->port,a,width,v);
+#endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+        client=client||a733_pcie_function_native_write(n->port,a,width,v);
+#endif
+        if(!client)return 0;
 #else
         return 0;
 #endif
     }
 #ifdef SUNSTONE_PCIE_EPF_TEST
-    if((n->port->test||!a733_pcie_native_address(a,width,1))&&
+    if((n->port->test||(!n->port->function&&!a733_pcie_native_address(a,width,1)))&&
        !a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+#endif
+#ifdef SUNSTONE_PCIE_FUNCTION
+    /* A claimed function client's exact policy covers every later write. */
+    if((n->port->function||(!n->port->test&&!a733_pcie_native_address(a,width,1)))&&
+       !a733_pcie_function_native_write(n->port,a,width,v))return 0;
 #endif
     /* Outbound iATU writes must match the owned region's recorded window. */
     if(a>=0x06300000&&a<0x06302000&&!a733_pcie_atu_write_allowed(n->port,a,v))return 0;
@@ -140,33 +145,28 @@ static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
     default:break;
     }
     if(mask) {
-        __asm__ volatile("dsb sy" ::: "memory");
-        uint32_t old=*(volatile const uint32_t *)a;
+        a733_mmio_dsb_sy();
+        uint32_t old=a733_mmio_read32(a);
         if((old^v)&~mask)return 0;
     }
-    __asm__ volatile("dsb sy" ::: "memory");
-    if(width==1)*(volatile uint8_t *)a=(uint8_t)v;
-    else if(width==2)*(volatile uint16_t *)a=(uint16_t)v;
-    else *(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
-}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
+    a733_mmio_dsb_sy();
+    if(width==1)a733_mmio_write8(a,(uint8_t)v);
+    else if(width==2)a733_mmio_write16(a,(uint16_t)v);
+    else a733_mmio_write32(a,v);
+    a733_mmio_dsb_sy();return 1;
 }
 static int outside(void *cookie,const void *v,size_t bytes)
 {
     struct a733_pcie_native *n=cookie;
-    return n&&separate(n,sizeof(*n),v,bytes)&&separate(n->locks,sizeof(*n->locks),v,bytes);
+    return n&&a733_ranges_disjoint(n,sizeof(*n),v,bytes)&&a733_ranges_disjoint(n->locks,sizeof(*n->locks),v,bytes);
 }
 int a733_pcie_native_init(struct a733_pcie_native *n,struct a733_pcie *port,
     struct a733_platform_locks *locks,void *task,
     int (*admission)(void *,const struct a733_pcie_config *),void *cookie)
 {
     if(!n||n->initialized||!port||port->self||!locks||!locks->initialized||!task||!admission||
-        !separate(n,sizeof(*n),port,sizeof(*port))||!separate(n,sizeof(*n),locks,sizeof(*locks))||
-        !separate(port,sizeof(*port),locks,sizeof(*locks)))return 0;
+        !a733_ranges_disjoint(n,sizeof(*n),port,sizeof(*port))||!a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks))||
+        !a733_ranges_disjoint(port,sizeof(*port),locks,sizeof(*locks)))return 0;
     n->port=port;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
     n->operations=(struct a733_pcie_ops){now,current,admit,enter,leave,retain,read,write,outside};
     n->initialized=1;return 1;

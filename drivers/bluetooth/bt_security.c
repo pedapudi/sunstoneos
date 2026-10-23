@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "bt_security.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 static struct bt_security *active;
 const bt_addr_t bt_security_any_address={{0}};
 static int fault(struct bt_security *s)
@@ -14,8 +15,8 @@ static int live(struct bt_security *s)
     struct bt_h4 *h=&s->acl->hci->transport;
     if(h->binding.firmware_generation!=s->firmware_generation||h->binding.uart_generation!=s->uart_generation||
         h->binding.current(h->binding.context,s->firmware_generation,s->uart_generation)!=1||
-        h->now<s->now||h->now>=s->deadline)return 0;
-    s->now=h->now;return 1;
+        !a733_deadline_admit(h->now,&s->now,s->deadline))return 0;
+    return 1;
 }
 static struct bt_acl_link *actual(struct bt_security *s,const struct bt_conn *c)
 {
@@ -247,7 +248,7 @@ int bt_security_service(struct bt_security *s,uint64_t deadline)
     struct bt_hci *h=s->acl->hci;
     if(h->command!=BT_HCI_IDLE||s->acl->command_link<BT_ACL_LINKS||
         (s->acl->synchronous&&s->acl->synchronous->acknowledgement_pending(s->acl->synchronous_context)))return 1;
-    uint64_t bound=s->now>UINT64_MAX-s->timeout_us?UINT64_MAX:s->now+s->timeout_us;if(bound>deadline)bound=deadline;
+    uint64_t bound=a733_deadline_after_saturating(s->now,s->timeout_us);if(bound>deadline)bound=deadline;
     struct bt_security_command *q=&s->commands[s->first];
     int result=bt_hci_security_request(h,s,q->opcode,q->bytes,q->length,bound);
     if(result<0)return fault(s);

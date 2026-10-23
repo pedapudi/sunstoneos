@@ -5,6 +5,7 @@
  * Copyright (C) 2023 Allwinner.
  */
 #include "a733_dsi_phy.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -31,16 +32,10 @@ int a733_dsi_pll_plan(uint32_t hs, uint32_t ls, struct a733_dsi_pll_plan *out)
     return 1;
 }
 
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y || (x < y + bn && y < x + an);
-}
-
 int a733_dsi_phy_init(struct a733_dsi_phy *p, const struct a733_dsi_phy_config *c)
 {
     struct a733_dsi_pll_plan plan;
-    if (!p || !c || overlap(p, sizeof(*p), c, sizeof(*c)) || p->initialized ||
+    if (!p || !c || a733_ranges_overlap_or_wrap(p, sizeof(*p), c, sizeof(*c)) || p->initialized ||
         !c->lease || !c->deadline || c->controller > 1 || !c->lanes || c->lanes > 4 ||
         !c->ops.admit || !c->ops.read32 || !c->ops.write32 ||
         !c->ops.barrier || !c->ops.now_us || !a733_dsi_pll_plan(c->hs_hz, c->ls_hz, &plan)) return 0;
@@ -138,17 +133,15 @@ static int clock_ok(struct a733_dsi_phy *p)
 {
     uint64_t n = 0;
     if (p->config.ops.now_us(p->config.context, &n) != 1 ||
-        n < p->last_now || n >= p->config.deadline) {
+        !a733_deadline_admit(n, &p->last_now, p->config.deadline)) {
         fail(p, A733_DSI_PHY_TIME);
         return 0;
     }
-    p->last_now = n;
     return p->state == A733_DSI_PHY_PENDING;
 }
 static void wait_for(struct a733_dsi_phy *p, unsigned us)
 {
-    if (p->last_now > UINT64_MAX - us) fail(p, A733_DSI_PHY_TIME);
-    else p->wait_until = p->last_now + us;
+    if (!a733_deadline_after(p->last_now, us, &p->wait_until)) fail(p, A733_DSI_PHY_TIME);
 }
 static uint32_t field_value(const struct a733_dsi_phy *p, const struct field *f)
 {

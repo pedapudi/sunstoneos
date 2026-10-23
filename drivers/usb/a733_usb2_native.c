@@ -2,33 +2,16 @@
 #include "a733_usb2_native.h"
 #include "a733_usb3_phy.h"
 #include "a733_platform_locks.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
+#include "a733_task_context.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "USB2 requires scheduler, current-task and mutex-owner APIs"
 #endif
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int current(void *cookie)
-{
-    struct a733_usb2_native *n=cookie;uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif":"=r"(el),"=r"(flags));
-    if(!n||n->self!=n||!n->initialized||el!=4||(flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2":::"memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1":"=r"(core));
-    nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
-    critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0"::"r"(flags):"memory");
-    return !nesting&&!critical&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->owner_task;
-}
+{struct a733_usb2_native *n=cookie;return n&&n->self==n&&n->initialized&&a733_task_context_owner_el1((TaskHandle_t)n->owner_task);}
 static int now(void *cookie,uint64_t *value)
 {struct a733_usb2_native *n=cookie;return n->locks->now(n->locks->context,value);}
 static int admit(void *cookie,const struct a733_usb2_platform_config *c)
@@ -45,42 +28,40 @@ static int held(struct a733_usb2_native *n)
 static int read(void *cookie,uintptr_t a,uint32_t *v)
 {
     struct a733_usb2_native *n=cookie;if(!v||!held(n)||!(a733_usb2_platform_address(a,0)||(n->platform.config.superspeed&&(a733_usb3_mask32(a)||a==0x06c01900))))return 0;
-    __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_dsb_sy();*v=a733_mmio_read32(a);
+    a733_mmio_dsb_sy();return 1;
 }
 static int write(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_usb2_native *n=cookie;uint32_t mask=a733_usb2_platform_mask(a);
     if(n->platform.config.superspeed&&a733_usb3_mask32(a))mask=a733_usb3_mask32(a);
     if(!mask||!held(n)||!(a733_usb2_platform_address(a,1)||(n->platform.config.superspeed&&a733_usb3_mask32(a))))return 0;
-    __asm__ volatile("dsb sy":::"memory");uint32_t old=*(volatile const uint32_t *)a;
-    if((v^old)&~mask)return 0;*(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_dsb_sy();uint32_t old=a733_mmio_read32(a);
+    if((v^old)&~mask)return 0;a733_mmio_write32_dsb_sy_after(a,v);return 1;
 }
 static int read16(void *cookie,uintptr_t a,uint16_t *v)
 {
     struct a733_usb2_native *n=cookie;
     if(!v||!held(n)||!n->platform.config.superspeed||!a733_usb3_address16(a))return 0;
-    __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint16_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_dsb_sy();*v=a733_mmio_read16(a);
+    a733_mmio_dsb_sy();return 1;
 }
 static int write16(void *cookie,uintptr_t a,uint16_t v)
 {
     struct a733_usb2_native *n=cookie;
     if(!held(n)||!n->platform.config.superspeed||!a733_usb3_address16(a))return 0;
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint16_t *)a=v;
-    __asm__ volatile("dsb sy":::"memory");return *(volatile const uint16_t *)a==v;
+    a733_mmio_write16_dsb_sy_both(a,v);return a733_mmio_read16(a)==v;
 }
 /* The embedded platform itself is an intentional constructor input. Other
  * caller buffers must exclude every other native field and the DMA parent. */
 static int platform_outside(void *cookie,const void *p,size_t z)
 {
     struct a733_usb2_native *n=cookie;
-    return separate(n,offsetof(struct a733_usb2_native,platform),p,z)&&
-        separate((uint8_t *)n+offsetof(struct a733_usb2_native,platform_ops),
+    return a733_ranges_disjoint(n,offsetof(struct a733_usb2_native,platform),p,z)&&
+        a733_ranges_disjoint((uint8_t *)n+offsetof(struct a733_usb2_native,platform_ops),
             sizeof(*n)-offsetof(struct a733_usb2_native,platform_ops),p,z)&&
-        separate(n->locks,sizeof(*n->locks),p,z)&&separate(n->parent_pool,sizeof(*n->parent_pool),p,z)&&
-        (!n->backing.bytes||separate((void *)n->backing.cpu,n->backing.bytes,p,z));
+        a733_ranges_disjoint(n->locks,sizeof(*n->locks),p,z)&&a733_ranges_disjoint(n->parent_pool,sizeof(*n->parent_pool),p,z)&&
+        (!n->backing.bytes||a733_ranges_disjoint((void *)n->backing.cpu,n->backing.bytes,p,z));
 }
 static int core_outside(void *cookie,const void *p,size_t z)
 {
@@ -89,14 +70,14 @@ static int core_outside(void *cookie,const void *p,size_t z)
     int own_sector=p==n->sector&&z<=sizeof(n->sector);
     int own_core=p==&n->core&&z==sizeof(n->core);
     int own_dma=p==(void *)n->backing.cpu&&z==n->backing.bytes;
-    return (own_sector||own_core||own_dma||separate(n,sizeof(*n),p,z))&&
-        separate(n->locks,sizeof(*n->locks),p,z)&&separate(n->parent_pool,sizeof(*n->parent_pool),p,z)&&
-        (own_dma||separate((void *)n->backing.cpu,n->backing.bytes,p,z))&&
-        separate(n->platform.clocks,sizeof(*n->platform.clocks),p,z)&&
-        separate(n->platform.rails,sizeof(*n->platform.rails),p,z)&&
-        separate(n->platform.pmic,sizeof(*n->platform.pmic),p,z)&&
-        separate(n->platform.pck,sizeof(*n->platform.pck),p,z)&&
-        separate(n->platform.typec,sizeof(*n->platform.typec),p,z)&&
+    return (own_sector||own_core||own_dma||a733_ranges_disjoint(n,sizeof(*n),p,z))&&
+        a733_ranges_disjoint(n->locks,sizeof(*n->locks),p,z)&&a733_ranges_disjoint(n->parent_pool,sizeof(*n->parent_pool),p,z)&&
+        (own_dma||a733_ranges_disjoint((void *)n->backing.cpu,n->backing.bytes,p,z))&&
+        a733_ranges_disjoint(n->platform.clocks,sizeof(*n->platform.clocks),p,z)&&
+        a733_ranges_disjoint(n->platform.rails,sizeof(*n->platform.rails),p,z)&&
+        a733_ranges_disjoint(n->platform.pmic,sizeof(*n->platform.pmic),p,z)&&
+        a733_ranges_disjoint(n->platform.pck,sizeof(*n->platform.pck),p,z)&&
+        a733_ranges_disjoint(n->platform.typec,sizeof(*n->platform.typec),p,z)&&
         n->platform.pmic->ops.outside(n->platform.pmic->cookie,p,z)==1&&
         n->platform.typec->config.ops.outside(n->platform.typec->config.context,p,z)==1;
 }
@@ -107,8 +88,8 @@ static int core_allowed(struct a733_usb2_native *n,uint32_t off,unsigned w)
 static int read32(void *cookie,uint32_t off,uint32_t *v)
 {
     struct a733_usb2_native *n=cookie;if(!v||!core_allowed(n,off,4))return 0;
-    __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint32_t *)(uintptr_t)(0x06a00000u+off);
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_dsb_sy();*v=a733_mmio_read32(0x06a00000u+off);
+    a733_mmio_dsb_sy();return 1;
 }
 static int write32(void *cookie,uint32_t off,uint32_t v)
 {
@@ -122,8 +103,7 @@ static int write32(void *cookie,uint32_t off,uint32_t v)
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
         allowed|=db&&h->devices[i].slot&&off==db+4*h->devices[i].slot;
     if(!allowed)return 0;
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)(uintptr_t)(0x06a00000u+off)=v;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_write32_dsb_sy_both(0x06a00000u+off,v);return 1;
 }
 static int write64(void *cookie,uint32_t off,uint64_t v)
 {
@@ -131,18 +111,16 @@ static int write64(void *cookie,uint32_t off,uint64_t v)
     struct a733_xhci *h=&n->core;
     if(!((h->operational&&(off==h->operational+0x18||off==h->operational+0x30))||
         (h->runtime&&(off==h->runtime+0x30||off==h->runtime+0x38))))return 0;
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint64_t *)(uintptr_t)(0x06a00000u+off)=v;
-    __asm__ volatile("dsb sy":::"memory");return 1;
+    a733_mmio_write64_dsb_sy_both(0x06a00000u+off,v);return 1;
 }
 static int barrier(void *cookie)
-{if(!current(cookie))return 0;__asm__ volatile("dsb sy":::"memory");return 1;}
+{if(!current(cookie))return 0;a733_mmio_dsb_sy();return 1;}
 static int mappings(uintptr_t a,size_t bytes,unsigned attr)
 {
-    if(!bytes||bytes>UINTPTR_MAX-a)return 0;
-    for(size_t i=0;i<bytes;i+=4096){struct aarch64_translation t;
-        if(!aarch64_device_translate(a+i,1,&t)||t.physical!=a+i||t.attributes!=attr||
-            (attr==0x44&&t.shareability!=2&&t.shareability!=3))return 0;}
-    return 1;
+    /* Identity write translations every 4 KiB; Normal-NC must be outer or inner shareable. */
+    const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,
+        {{(uint8_t)attr,attr==A733_MAIR_NORMAL_NC?A733_SH_OUTER|A733_SH_INNER:A733_SH_ANY}},0,1};
+    return a733_mapping_check_stride(aarch64_device_translate,a,a,bytes,4096,&rule);
 }
 int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_platform_config *c,
     struct a733_platform_locks *locks,void *task,struct device_memory_pool *pool,
@@ -154,12 +132,12 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
     __asm__ volatile("mrs %0, sctlr_el1":"=r"(ctl)); /* EL2/stage2 exclusion is immutable boot authority. */
     if(!n||n->self||!c||!locks||!locks->initialized||!task||!pool||!pool->initialized||!admission||
         (ctl&5)!=5||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
-        !separate(n,sizeof(*n),c,sizeof(*c))||!separate(n,sizeof(*n),locks,sizeof(*locks))||
-        !separate(n,sizeof(*n),pool,sizeof(*pool))||!clocks||!rails||!pmic||!pck||!typec||
+        !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c))||!a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks))||
+        !a733_ranges_disjoint(n,sizeof(*n),pool,sizeof(*pool))||!clocks||!rails||!pmic||!pck||!typec||
         !clocks->initialized||rails->self!=rails||pmic->self!=pmic||!pck->initialized||typec->self!=typec||
-        !separate(n,sizeof(*n),clocks,sizeof(*clocks))||!separate(n,sizeof(*n),rails,sizeof(*rails))||
-        !separate(n,sizeof(*n),pmic,sizeof(*pmic))||!separate(n,sizeof(*n),pck,sizeof(*pck))||
-        !separate(n,sizeof(*n),typec,sizeof(*typec))||
+        !a733_ranges_disjoint(n,sizeof(*n),clocks,sizeof(*clocks))||!a733_ranges_disjoint(n,sizeof(*n),rails,sizeof(*rails))||
+        !a733_ranges_disjoint(n,sizeof(*n),pmic,sizeof(*pmic))||!a733_ranges_disjoint(n,sizeof(*n),pck,sizeof(*pck))||
+        !a733_ranges_disjoint(n,sizeof(*n),typec,sizeof(*typec))||
         pmic->ops.outside(pmic->cookie,n,sizeof(*n))!=1||
         typec->config.ops.outside(typec->config.context,n,sizeof(*n))!=1)return 0;
     static const uintptr_t pages[]={0x02002000,0x02003000,0x03400000,0x06b00000,0x06c00000,
@@ -172,8 +150,9 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
         .admit=admission,.admission_context=context};
     if(!device_memory_acquire(pool,c->owner,A733_XHCI_MEMORY_BYTES,&n->parent,&n->backing))return 0;
     if(!mappings(n->backing.cpu,n->backing.bytes,0x44)||n->backing.cpu!=n->backing.physical||
-        !separate(n,sizeof(*n),(void *)n->backing.cpu,n->backing.bytes)||
-        !device_memory_pool_init(&n->private_pool,n->backing.cpu,n->backing.physical,n->backing.bytes)||
+        !a733_ranges_disjoint(n,sizeof(*n),(void *)n->backing.cpu,n->backing.bytes)||
+        !device_memory_pool_init_typed(&n->private_pool,n->backing.cpu,n->backing.physical,n->backing.bytes,
+            DEVICE_MEMORY_CLASS_NONE,DEVICE_MEMORY_NON_CACHEABLE)||
         !device_memory_acquire(&n->private_pool,c->owner,n->backing.bytes,&n->memory,&n->backing)){
         device_memory_retain(pool,n->parent);return 0;}
     struct device_memory_allocation *a=device_memory_lookup(pool,n->parent);

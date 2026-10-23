@@ -1,16 +1,12 @@
 #include "a733_npu_startup.h"
 #include "a733_npu_platform_native.h"
+#include "a733_range.h"
 
 #define READY A733_NPU_PLATFORM_READY
 #define BUSY A733_NPU_PLATFORM_BUSY
 #define PENDING A733_NPU_PLATFORM_PENDING
 #define RETAINED A733_NPU_PLATFORM_RETAINED
 enum { CLOCK, RAIL, PCK, FIRST_SNAPSHOT, SETTLE, SECOND_SNAPSHOT, RESOURCES_READY };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static int privileged(void)
 {uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));return level==4;}
 static int resource_now(void *v,uint64_t *out)
@@ -49,8 +45,9 @@ int a733_npu_startup_resources_init(struct a733_npu_startup_resources *s,
 {
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
         !s || s->initialized || !clock || !clock->initialized || !locks || !locks->initialized ||
-        !separate(s,sizeof(*s),clock,sizeof(*clock)) || !separate(s,sizeof(*s),locks,sizeof(*locks)) ||
-        !separate(clock,sizeof(*clock),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),clock,sizeof(*clock)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),locks,sizeof(*locks)) ||
+        !a733_ranges_disjoint(clock,sizeof(*clock),locks,sizeof(*locks)) ||
         locks->now!=a733_counter_clock_now || locks->context!=clock)return 0;
     s->clock=clock;s->locks=locks;
     if(!a733_gpu_resources_native_init(&s->native,&locks->callbacks))return 0;
@@ -206,8 +203,10 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
             if(!r)return PENDING;
         } else if(!rail_snapshot(b))return fault(b);
         if(b->stage==FIRST_SNAPSHOT) {
-            uint64_t now;if(!timely(b,&now) || now>UINT64_MAX-A733_NPU_RAIL_SETTLE_US)return fault(b);
-            b->settle_until=now+A733_NPU_RAIL_SETTLE_US;++b->stage;
+            uint64_t now;
+            if(!timely(b,&now) ||
+                !a733_deadline_after(now,A733_NPU_RAIL_SETTLE_US,&b->settle_until))return fault(b);
+            ++b->stage;
         } else b->stage=RESOURCES_READY;
     } else if(b->stage==SETTLE) {
         uint64_t now;if(!timely(b,&now))return fault(b);
@@ -241,18 +240,20 @@ static int leave(void *v)
     }
     a733_platform_lock_leave(b->shared->locks,A733_PLATFORM_REGISTER_LOCK);b->register_held=0;return 1;
 }
+/* Called only from a startup or stop step, which checks the owner task first;
+ * register access also needs the lock that enter() took after its owner check. */
 static int now(void *v,uint64_t *out)
-{struct a733_npu_startup *b=v;return task_owner(b) && resource_now(b->shared,out);}
+{struct a733_npu_startup *b=v;return resource_now(b->shared,out);}
 static int read_reg(void *v,uintptr_t address,uint32_t *out)
 {
     struct a733_npu_startup *b=v;
-    if(!task_owner(b) || !b->register_held)return 0;
+    if(!b->register_held)return 0;
     int ok=a733_npu_platform_native_read(0,address,out);if(!ok)(void)fault(b);return ok;
 }
 static int write_reg(void *v,uintptr_t address,uint32_t value)
 {
     struct a733_npu_startup *b=v;
-    if(!task_owner(b) || !b->register_held)return 0;
+    if(!b->register_held)return 0;
     int ok=a733_npu_platform_native_write(0,address,value);if(!ok)(void)fault(b);return ok;
 }
 static int valid_backend(const struct a733_npu_handoff *h)
@@ -273,13 +274,18 @@ int a733_npu_startup_init(struct a733_npu_startup *b,const struct a733_npu_hando
     a733_clock_mask_t shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !b || b->initialized ||
         !h || !s || !s->initialized || !registry || !registry->initialized ||
-        !separate(b,sizeof(*b),h,sizeof(*h)) || !separate(b,sizeof(*b),s,sizeof(*s)) ||
-        !separate(b,sizeof(*b),registry,sizeof(*registry)) || !separate(s,sizeof(*s),registry,sizeof(*registry)) ||
-        !separate(h,sizeof(*h),s,sizeof(*s)) || !separate(h,sizeof(*h),registry,sizeof(*registry)) ||
-        !separate(b,sizeof(*b),s->clock,sizeof(*s->clock)) || !separate(b,sizeof(*b),s->locks,sizeof(*s->locks)) ||
-        !separate(h,sizeof(*h),s->clock,sizeof(*s->clock)) || !separate(h,sizeof(*h),s->locks,sizeof(*s->locks)) ||
-        !separate(registry,sizeof(*registry),s->clock,sizeof(*s->clock)) ||
-        !separate(registry,sizeof(*registry),s->locks,sizeof(*s->locks)) ||
+        !a733_ranges_disjoint(b,sizeof(*b),h,sizeof(*h)) ||
+        !a733_ranges_disjoint(b,sizeof(*b),s,sizeof(*s)) ||
+        !a733_ranges_disjoint(b,sizeof(*b),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint(h,sizeof(*h),s,sizeof(*s)) ||
+        !a733_ranges_disjoint(h,sizeof(*h),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint(b,sizeof(*b),s->clock,sizeof(*s->clock)) ||
+        !a733_ranges_disjoint(b,sizeof(*b),s->locks,sizeof(*s->locks)) ||
+        !a733_ranges_disjoint(h,sizeof(*h),s->clock,sizeof(*s->clock)) ||
+        !a733_ranges_disjoint(h,sizeof(*h),s->locks,sizeof(*s->locks)) ||
+        !a733_ranges_disjoint(registry,sizeof(*registry),s->clock,sizeof(*s->clock)) ||
+        !a733_ranges_disjoint(registry,sizeof(*registry),s->locks,sizeof(*s->locks)) ||
         registry->now!=a733_counter_clock_now || registry->context!=s->clock ||
         s->manager.ops.now!=resource_now || s->manager.context!=s ||
         h->controller!=0x03600000 || h->evidence!=h->allowed.handoff ||
@@ -297,11 +303,11 @@ int a733_npu_startup_bind_pll(struct a733_npu_startup *b,struct a733_npu_pll *p)
         !b || !b->initialized || b->failed || b->pll_source || b->stage!=CLOCK || b->platform.stage ||
         b->clock_token.id || b->rail_token.id || b->pck_token.token || b->platform.resources.clock.id ||
         !p || p->self!=p || !p->initialized || p->failed || p->successor || p->transferred ||
-        p->registry!=b->registry || !separate(b,sizeof(*b),p,sizeof(*p)) ||
-        !separate(p,sizeof(*p),b->shared,sizeof(*b->shared)) ||
-        !separate(p,sizeof(*p),b->registry,sizeof(*b->registry)) ||
-        !separate(p,sizeof(*p),b->shared->clock,sizeof(*b->shared->clock)) ||
-        !separate(p,sizeof(*p),b->shared->locks,sizeof(*b->shared->locks)) ||
+        p->registry!=b->registry || !a733_ranges_disjoint(b,sizeof(*b),p,sizeof(*p)) ||
+        !a733_ranges_disjoint(p,sizeof(*p),b->shared,sizeof(*b->shared)) ||
+        !a733_ranges_disjoint(p,sizeof(*p),b->registry,sizeof(*b->registry)) ||
+        !a733_ranges_disjoint(p,sizeof(*p),b->shared->clock,sizeof(*b->shared->clock)) ||
+        !a733_ranges_disjoint(p,sizeof(*p),b->shared->locks,sizeof(*b->shared->locks)) ||
         !a733_npu_pll_scopes(&p->config,&shared,&exclusive) ||
         !a733_npu_platform_scopes(&b->handoff.allowed,&platform_shared) ||
         (shared|A733_CLOCK_PLL_NPU)!=platform_shared ||
@@ -349,7 +355,7 @@ int a733_npu_startup_supply_sample(struct a733_npu_startup *b)
     if(r<0 || !timely(b,0)){fault(b);return -1;}
     return r;
 }
-static enum a733_npu_platform_result platform_poll(struct a733_npu_startup *b,int stop)
+static enum a733_npu_platform_result platform_step(struct a733_npu_startup *b,int stop)
 {
     if(!task_owner(b))return RETAINED;
     if((stop || !a733_npu_platform_ready(&b->platform)) && !timely(b,0))return fault(b);
@@ -378,10 +384,17 @@ static enum a733_npu_platform_result platform_poll(struct a733_npu_startup *b,in
     }
     return r;
 }
+/* Run acquisition steps, each with every entry check, until one waits; the platform's
+ * register pass then follows. Stage only advances, so at most six steps repeat. */
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
-{return platform_poll(b,0);}
+{
+    enum a733_npu_platform_result r;unsigned stage;
+    do {stage=b ? b->stage : 0;r=platform_step(b,0);}
+    while(r==PENDING && !b->platform.stage && b->stage>stage);
+    return r;
+}
 enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *b)
-{return platform_poll(b,1);}
+{return platform_step(b,1);}
 int a733_npu_startup_ready(const struct a733_npu_startup *b)
 {return b && b->initialized && !b->failed && pll_integrity(b) && a733_npu_platform_ready(&b->platform);}
 static int backend_equal(const struct a733_npu_ops *a,const struct a733_npu_ops *b)

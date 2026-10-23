@@ -24,11 +24,23 @@ Acquisition returns uninitialized bytes; the CPU owner must initialize every
 byte a device may read before submitting work. Drivers maintain caches over the
 complete rounded allocation, including unused padding.
 
-The [native initializer](../platform/a733/memory_reservations.c) derives CPU and
-physical addresses from the linker symbols. It requires identity translation,
-Normal write-back memory, inner shareability and write permission on every page.
-It uses the existing AArch64 translation and cache-geometry implementation.
-Initialization performs no writes to pool backing and no peripheral MMIO.
+The [native preparation](../platform/a733/memory_reservations.c),
+`a733_memory_reservations_prepare()`, derives CPU and physical addresses from
+the linker symbols. It makes one write address translation per pool page and
+requires identity translation, Normal write-back memory and inner
+shareability. No golden comparison covers this layout's tables, so every page
+is checked: 512 translations for a 2 MiB pool. The optional uncached pool has
+its own preparation, `a733_memory_uncached_prepare()`, with a read and a write
+translation per page. Preparation performs no writes to pool backing and no
+peripheral MMIO. It returns 1 when the pool is ready or the image links none,
+and 0 after a refusal, which it keeps. The getter returns NULL until
+preparation has succeeded.
+
+`platform_init()` is to call both preparations on core 0 before the scheduler
+starts. Until it does, each getter calls its preparation. The first call
+checks the translations outside any lock and initializes the pool inside the
+kernel critical section; a later call returns the kept result after one
+load-acquire and takes no lock.
 
 The pool excludes image code, driver state, translation tables, monitor state,
 exception stacks and heap allocations by construction. It also remains below
@@ -73,18 +85,38 @@ It rounds requested sizes up to whole pages and returns CPU address, physical
 address and complete byte extent. It searches reusable free extents without
 moving existing allocations.
 
-Every operation uses the caller's common service lock. The caller initializes
-the pool once and never resets its state to reclaim memory. A lease from
+Acquire, release and retain each run inside the kernel critical section,
+which serializes every core, and none may be called from an interrupt handler.
+Describe takes no lock: acquire publishes a slot's generation after its other
+fields, release clears the generation first, and describe accepts a copy only
+when the generation equals the lease's before and after it. The owner
+initializes the pool once, before any other task can reach it, and never
+resets its state to reclaim memory. One task at a time holds a lease, changes
+its state and maintains its cache lines; handing a lease to another task needs
+an ordering event such as task creation or a queue message. A lease from
 another pool, owner or generation is refused. Exhausting the 64-bit generation
 counter prevents further allocation; generations never wrap into reuse.
 Output metadata cannot overlap the pool or allocator state.
 
-A CPU-owned allocation may be released. A device-owned or retained allocation
-cannot be released through the allocator API. Retention is permanent for this
-pool lifetime. Timeout, a changed controller pointer or a device failure does
-not authorize reuse.
+The holder still changes its allocation between CPU-owned and device-owned,
+or to retained, by writing the `state` field that `device_memory_lookup()`
+returns. That write takes no ledger lock: the holder serializes it under its
+own service lock, and no transition rule checks it. A holder never writes the
+free state or any other field. A locked state change with a transition table
+replaces these writes in a later merge, when the holders move onto it.
 
-The native pool uses write-back mappings. The [GPU firmware constructor](gpu-reserved.md)
+A CPU-owned allocation may be released. A device-owned or retained allocation
+cannot be released through the allocator API, and retain succeeds from every
+held state. Retention is permanent for this pool lifetime: nothing in the
+ledger frees a retained allocation, and holders must not write another state
+over it. Timeout, a changed controller pointer or a device failure does not
+authorize reuse.
+
+The native pool uses write-back mappings. Acquire cleans the part of an extent
+that an earlier holder can have left dirty, the pages below the pool's
+watermark of the highest page ever handed out, before returning it. That
+clean uses EL1-only instructions, so acquire on a write-back pool must run at
+EL1. A pool initialized as Non-cacheable runs no clean. The [GPU firmware constructor](gpu-reserved.md)
 adds a separate optional uncached linker block with attributes established before
 MMU/cache enable. Both pools remain disjoint inside the existing image reservation.
 [NPU convolution](npu-reserved.md) binds one complete session to the write-back pool.
@@ -105,21 +137,29 @@ contract, which software checks do not qualify.
 
 ## Focused validation
 
-The host check runs the allocator against modeled backing storage. It checks
-complete page extents, stale and cross-pool leases, retained allocations, and
-allocation and generation exhaustion under AddressSanitizer and
-UndefinedBehaviorSanitizer. Native AArch64 compilation covers the allocator,
-the reservation initializer and the translation helper. The companion runner
-compares allocated sections, bytes, existing symbol addresses and load-segment
-extents with the previous linker script when no pool is requested. It also
-checks the explicit pool's placement and linker refusal cases. The real mimus
-image also preserves every allocated section byte, existing symbol and
-load-segment extent after relinking with the default pool size.
+The host check runs the allocator against modeled backing storage under
+AddressSanitizer and UndefinedBehaviorSanitizer. It checks complete page
+extents, stale and cross-pool leases, retained allocations, allocation and
+generation exhaustion, retain and release from every held state, describe
+without a lock, and the clean watermark on write-back and Non-cacheable pools.
+A traced build of the pool confirms that every critical-section entry has its
+exit. A second host build links both local preparations with modeled
+translations at fixed linker addresses. With an unaligned 2 MiB write-back
+pool and the uncached pool, preparation makes 1,024 translations; with the
+large NPU graph pool it makes 1,536. A faulting block refuses its pool, and
+later getter calls make no further translation. Native AArch64 compilation
+covers the allocator, both preparations and the translation helper as a
+one-thread fixture, and confirms that the allocator does not compile for
+AArch64 without the kernel headers unless a fixture asks for that. The link mode
+compares allocated sections, bytes, existing symbol addresses and
+load-segment extents with the previous linker script when no pool is
+requested, and checks the explicit pool's placement and linker refusal cases.
 
-Evidence is under `~/.cache/sunstoneos/evidence/memory-reservations-20261016/`.
-`batch1/results.json` records the focused ownership, native-object and linker
-checks of an earlier revision that also exercised a per-allocation DMA service,
-since removed. `native-links/result.json` records the actual mimus comparison.
+Evidence is under `~/.cache/sunstoneos/evidence/memory-architecture-20261022/`.
+An earlier relink of the real mimus image with the default pool size kept every
+allocated section byte, existing symbol and load-segment extent; that
+comparison is in
+`~/.cache/sunstoneos/evidence/memory-reservations-20261016/native-links/result.json`.
 No physical memory or device access ran in these checks.
 
 Run only the mode affected by a later change:

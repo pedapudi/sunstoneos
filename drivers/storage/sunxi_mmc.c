@@ -1,6 +1,7 @@
 /* Native storage controller. Source anchors: docs/mmc.md and docs/mmc-write.md. */
 #include "sunxi_mmc.h"
 #include "sunxi_smhc.h"
+#include "a733_range.h"
 
 #define START SUNXI_SMHC_CMD_START
 #define UPDATE SUNXI_SMHC_UPDATE
@@ -30,10 +31,6 @@ enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_SD_SCR_APP, P_SD_SCR, P_SD_WIDTH_APP, P_SD_WIDTH,
        P_SD_SWITCH_CHECK, P_SD_SWITCH_SET, P_SD_CLOCK, P_SD_MODE_STATUS };
 
-static int span(const void *p, size_t n)
-{ return p && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{ return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an; }
 static void fault(struct sunxi_mmc *h, enum sunxi_mmc_error e)
 { if (h->state != SUNXI_MMC_FAULT) { h->result.error = e; h->state = SUNXI_MMC_FAULT; } }
 static int rd(struct sunxi_mmc *h, uint32_t o, uint32_t *v)
@@ -55,8 +52,7 @@ static int time_ok(struct sunxi_mmc *h)
 {
     uint64_t n;
     if (h->config.ops.now_us(h->config.context, &n) != 1) { fault(h, SUNXI_MMC_IO); return 0; }
-    if (n < h->last_us) { fault(h, SUNXI_MMC_TIME); return 0; }
-    h->last_us = n;
+    if (!a733_monotonic_advance(n, &h->last_us)) { fault(h, SUNXI_MMC_TIME); return 0; }
     if (n >= h->deadline_us) { fault(h, SUNXI_MMC_TIMEOUT); return 0; }
     return 1;
 }
@@ -64,8 +60,7 @@ static void defer_command(struct sunxi_mmc *h, uint64_t delay_us)
 {
     /* Sample after the observed clock/command completion, not before MMIO. */
     if (!time_ok(h)) return;
-    if (h->last_us > UINT64_MAX - delay_us) { fault(h, SUNXI_MMC_TIME); return; }
-    h->retry_us = h->last_us + delay_us;
+    if (!a733_deadline_after(h->last_us, delay_us, &h->retry_us)) fault(h, SUNXI_MMC_TIME);
 }
 static uint32_t bits(const uint32_t *r, unsigned start, unsigned count)
 {
@@ -77,7 +72,8 @@ static uint32_t bits(const uint32_t *r, unsigned start, unsigned count)
 int sunxi_mmc_capacity(enum sunxi_mmc_kind kind, const uint32_t c[4], uint32_t ocr,
                        const uint8_t ext[512], uint64_t *out)
 {
-    if (!span(c, 16) || !span(out, sizeof(*out)) || overlap(c, 16, out, sizeof(*out)) ||
+    if (!a733_span_excl(c, 16) || !a733_span_excl(out, sizeof(*out)) ||
+        a733_extents_overlap_prechecked((uintptr_t)c, 16, (uintptr_t)out, sizeof(*out)) ||
         (kind != SUNXI_MMC_SD && kind != SUNXI_MMC_EMMC) || !(ocr & START)) return 0;
     unsigned structure = bits(c, 126, 2), blockbits = bits(c, 80, 4);
     if ((bits(c, 84, 12) & 5u) != 5u || blockbits < 9 || blockbits > 11) return 0;
@@ -92,8 +88,9 @@ int sunxi_mmc_capacity(enum sunxi_mmc_kind kind, const uint32_t c[4], uint32_t o
             if (n > (1u << 22)) return 0; /* SDSC maximum 2 GiB. */
         }
     } else {
-        if (!span(ext, 512) || overlap(ext, 512, out, sizeof(*out)) || !structure ||
-            bits(c, 122, 4) != 4 || ext[194] > 2 || ext[192] > 8 ||
+        if (!a733_span_excl(ext, 512) ||
+            a733_extents_overlap_prechecked((uintptr_t)ext, 512, (uintptr_t)out, sizeof(*out)) ||
+            !structure || bits(c, 122, 4) != 4 || ext[194] > 2 || ext[192] > 8 ||
             (ext[179] & 7u) || ext[183] || ext[185] || ext[61] || ext[15]) return 0;
         unsigned mode = (ocr >> 29) & 3u;
         if (mode != 0 && mode != 2) return 0;
@@ -114,7 +111,8 @@ int sunxi_mmc_capacity(enum sunxi_mmc_kind kind, const uint32_t c[4], uint32_t o
 }
 int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
 {
-    if (!span(h, sizeof(*h)) || !span(c, sizeof(*c)) || overlap(h, sizeof(*h), c, sizeof(*c)) ||
+    if (!a733_span_excl(h, sizeof(*h)) || !a733_span_excl(c, sizeof(*c)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)c, sizeof(*c)) ||
         h->initialized || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
         !c->ops.now_us || !c->ops.admit || !c->ops.retained || !c->token ||
         !c->ops.read_fifo || !c->ops.write_fifo ||
@@ -145,7 +143,8 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
 {
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY ||
         deadline <= h->last_us || !blocks || blocks > SUNXI_MMC_MAX_BLOCKS ||
-        bytes != blocks * 512u || !span(buffer, bytes) || overlap(h, sizeof(*h), buffer, bytes) ||
+        bytes != blocks * 512u || !a733_span_excl(buffer, bytes) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)buffer, bytes) ||
         first >= h->card.sectors || blocks > h->card.sectors - first) return 0;
     uint64_t last = first + blocks - 1;
     if ((h->card.sector_addressed && last > UINT32_MAX) ||
@@ -205,11 +204,14 @@ int sunxi_mmc_write(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
                     const struct sunxi_mmc_write_authority *a)
 {
     if(!h||!h->initialized||h->entered||h->state!=SUNXI_MMC_READY||
-       !span(r,sizeof(*r))||!span(a,sizeof(*a))||!a->admit||!r->policy_token||
-       overlap(h,sizeof(*h),r,sizeof(*r))||overlap(h,sizeof(*h),a,sizeof(*a))||
+       !a733_span_excl(r,sizeof(*r))||!a733_span_excl(a,sizeof(*a))||!a->admit||!r->policy_token||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r,sizeof(*r))||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)a,sizeof(*a))||
        !r->blocks||r->blocks>SUNXI_MMC_MAX_BLOCKS||r->bytes!=r->blocks*512u||
-       !span(r->source,r->bytes)||overlap(h,sizeof(*h),r->source,r->bytes)||
-       overlap(r,sizeof(*r),r->source,r->bytes)||overlap(a,sizeof(*a),r->source,r->bytes)||
+       !a733_span_excl(r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)h,sizeof(*h),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)r,sizeof(*r),(uintptr_t)r->source,r->bytes)||
+       a733_extents_overlap_prechecked((uintptr_t)a,sizeof(*a),(uintptr_t)r->source,r->bytes)||
        r->deadline_us<=h->last_us||r->first_sector>=h->card.sectors||
        r->blocks>h->card.sectors-r->first_sector||!writable(h))return 0;
     uint64_t last=r->first_sector+r->blocks-1;
@@ -493,8 +495,7 @@ static void protocol(struct sunxi_mmc *h)
             fault(h, SUNXI_MMC_UNSUPPORTED); return;
         }
         if (!(r & START)) {
-            if (h->last_us > UINT64_MAX - 1000) { fault(h, SUNXI_MMC_TIME); return; }
-            h->retry_us = h->last_us + 1000;
+            if (!a733_deadline_after(h->last_us, 1000, &h->retry_us)) { fault(h, SUNXI_MMC_TIME); return; }
             queue(h, mmc ? P_MMC_OCR : P_SD_APP, mmc ? (1u | RESP) : (55u | RESP | CRC),
                   mmc ? ((r & voltage) | (1u << 30)) : 0, 0, 0); return;
         }
@@ -597,8 +598,8 @@ static void protocol(struct sunxi_mmc *h)
             if(h->result.confirmed_blocks==h->write_request.blocks)h->state=SUNXI_MMC_DONE;
             else next_write(h);
         } else if(((r>>9)&15u)==7u||((r&0x1f00u)==0x800u)) {
-            if(h->last_us>UINT64_MAX-1000){fault(h,SUNXI_MMC_TIME);return;}
-            h->retry_us=h->last_us+1000;ready_status(h,P_WRITE_STATUS);
+            if(!a733_deadline_after(h->last_us,1000,&h->retry_us)){fault(h,SUNXI_MMC_TIME);return;}
+            ready_status(h,P_WRITE_STATUS);
         } else fault(h,SUNXI_MMC_CARD);
         return;
     default: fault(h, SUNXI_MMC_CARD); return;
@@ -623,9 +624,10 @@ out:
 }
 int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
 {
-    if (!h || !h->initialized || h->entered || !span(out, sizeof(*out)) ||
-        overlap(h, sizeof(*h), out, sizeof(*out)) ||
-        (h->borrowed && overlap(h->borrowed, h->borrowed_bytes, out, sizeof(*out))) ||
+    if (!h || !h->initialized || h->entered || !a733_span_excl(out, sizeof(*out)) ||
+        a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)out, sizeof(*out)) ||
+        (h->borrowed &&
+            a733_extents_overlap_prechecked((uintptr_t)h->borrowed, h->borrowed_bytes, (uintptr_t)out, sizeof(*out))) ||
         (h->state != SUNXI_MMC_DONE && h->state != SUNXI_MMC_FAULT)) return 0;
     *out = h->result;
     if (h->state == SUNXI_MMC_DONE) {

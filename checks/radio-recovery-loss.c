@@ -1,14 +1,17 @@
 /* Clean unsolicited link loss and recovery in the actual retained session:
  * an idle fixed-address OPEN association receives a disconnection indication,
  * goes offline without fault, keeps its socket, retries a failed
- * reassociation, and restores the same IP interface. Lower firmware, initial
- * association and RF remain modeled, as in the reconnect composition. */
+ * reassociation with another access point of the same network, and restores
+ * the same IP interface. Lower firmware, initial association and RF remain
+ * modeled, as in the reconnect composition. */
 #define kernel_main prior_session_kernel_main
 #include "a733-radio-session.c"
 #undef kernel_main
 static atomic_uint loss_test;
 static unsigned connect_commands,lost_polls,drained_events;
 static uint64_t kept_handle;
+/* Another access point of the network that was lost. */
+static const uint8_t roam_bssid[6]={2,17,34,51,68,86};
 static unsigned loss_wire(uint8_t *p,uint16_t id,const uint8_t *payload,unsigned n)
 {
     unsigned size=12+n;p[0]=(uint8_t)size;p[1]=(uint8_t)(size>>8);p[2]=0x11;
@@ -31,8 +34,10 @@ static int loss_mmio_write(void *ctx,uintptr_t address,uint32_t value)
     assert(id==0x1800&&atomic_load(&loss_test)==5);
     assert(atomic_load(&session.sockets.network.offline_ack)==atomic_load(&session.sockets.network.offline_request));
     memset(receive,0,sizeof(receive));
-    /* The first attempt fails in the indication; the retry associates. */
-    uint8_t accepted=0,ind[852]={0};memcpy(ind+2,peer_mac,6);ind[9]=1;ind[10]=3;ind[824]=0x6c;ind[825]=9;
+    /* The first attempt fails in the indication; the retry associates with
+     * the requested access point, whose BSSID then addresses received frames. */
+    uint8_t accepted=0,ind[852]={0};memcpy(ind+2,m.transmitted+16+34,6);ind[9]=1;ind[10]=3;ind[824]=0x6c;ind[825]=9;
+    assert(!memcmp(ind+2,roam_bssid,6));
     if(++connect_commands==1)ind[0]=1;
     unsigned at=loss_wire(receive,0x1801,&accepted,1);at+=loss_wire(receive+at,0x1802,ind,sizeof(ind));
     m.card[1][4]=(uint8_t)((at+511)/512);return ok;
@@ -143,7 +148,14 @@ static void loss_owner(void *unused)
             assert(!session.data.open_authority&&!connect_commands);
             if(++lost_polls==3)atomic_store(&loss_test,4);
         }else if(phase==4){
-            struct aic8800_wifi_target target=session.wifi.target,foreign=target;foreign.bssid[5]^=1;
+            struct aic8800_wifi_target target=session.wifi.target,foreign=target;
+            memcpy(target.bssid,roam_bssid,6);target.beacon_evidence=12;foreign.ssid[0]^=1;
+            assert(!a733_radio_session_recover(&session,&foreign,NULL,92,session.deadline));
+            foreign=target;foreign.security=AIC8800_WIFI_WPA2_PSK_CCMP;
+            assert(!a733_radio_session_recover(&session,&foreign,NULL,92,session.deadline));
+            foreign=target;foreign.channel_index=1;
+            assert(!a733_radio_session_recover(&session,&foreign,NULL,92,session.deadline));
+            foreign=target;foreign.beacon_evidence=0;
             assert(!a733_radio_session_recover(&session,&foreign,NULL,92,session.deadline));
             assert(!a733_radio_session_recover(&session,&target,NULL,0,session.deadline));
             assert(!a733_radio_session_reconnect(&session,&target,NULL,92,3,session.deadline));
@@ -152,13 +164,14 @@ static void loss_owner(void *unused)
             atomic_store(&loss_test,5);
         }else if(phase==5&&status==A733_SESSION_NETWORK&&!atomic_load(&session.sockets.offline)){
             assert(connect_commands==2&&session.wifi.association_generation==3&&session.sockets.network.generation==3);
+            assert(!memcmp(session.wifi.target.bssid,roam_bssid,6)&&session.wifi.target.beacon_evidence==12);
             assert(!aic8800_network_lost(&session.sockets.network)&&!atomic_load(&session.sockets.network.failed));
             assert(drained_events>=3&&!session.fault&&session.data.open_authority==92);
             atomic_store(&loss_test,6);
         }
         if(atomic_load(&loss_test)==7){
             assert(tcp_packets==1&&session.borrow.generation==r.radio.clock.id);
-            platform_puts("PASS clean link loss: offline without fault, socket kept, retried reassociation, restored interface and new TCP exchange; lower firmware/initial association and RF remain modeled\n");
+            platform_puts("PASS clean link loss: offline without fault, socket kept, retried reassociation with another access point of the network, restored interface and new TCP exchange; lower firmware/initial association and RF remain modeled\n");
             platform_exit(0);
         }
         vTaskDelay(1);

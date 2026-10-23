@@ -77,6 +77,117 @@ Reap and close cannot clear the fault. Task abandonment also retains resources.
 External recovery must prove device quiescence before releasing faulted memory;
 automatic fault reset and task-deletion cleanup remain unimplemented.
 
+## Shared mode gives each client its own session
+
+`npu_service_share`, called after initialization and before scheduling, lets
+several clients use the controller at once. The [session runtime](npu-session.md)
+uses it to run several models. Each bound client opens its own session: the
+first OPEN boots the controller and later OPENs join it, even while the
+bootstrap is still running. Sharing refuses a command table in which any
+command overlaps the internal-SRAM window, because the controller would refuse
+such a command only when the worker later started it.
+
+Each member has at most one job. SUBMIT queues the job and replies at once.
+After each poll or interrupt pass and after each request, the worker reaps a
+finished job, records the result for its member and starts the next queued
+job. It searches the client slots in round-robin order, starting after the
+client it served last. While every member keeps a job queued, each member
+therefore runs once before any member runs twice. A completed result stays
+with its member until that member's REAP, so a member that has not yet reaped
+never delays the others. The completion's cache maintenance has already run
+for that job's [session group](npu-memory.md).
+
+Replies report the member's own view of the controller:
+
+| Member state | Reply state |
+| --- | --- |
+| No job; bootstrap running | BOOTING |
+| No job; controller ready or running another member's job | READY |
+| Job queued or running | RUNNING |
+| Job finished, not yet reaped | DONE |
+| Queued job canceled, not yet reaped | CANCELED |
+| Session left by this CLOSE | CLOSED |
+| Any member's controller fault | FAULT |
+
+WAIT is held separately for each member, until that member's own view leaves
+BOOTING or RUNNING. CANCEL removes only a job that has not started; REAP then
+reports it as canceled. Canceling a started job would drain the controller for
+every member, so the request is refused and the job's deadline bounds it.
+CLOSE requires a member without a job and leaves the session. The last
+member's CLOSE closes the controller exactly as in exclusive mode, including
+the interrupt stop. A controller fault, such as an expired deadline, retains
+the controller and every member's buffers; every member then receives FAULT.
+Exclusive mode, the default, is unchanged.
+
+The [shared-mode check](../checks/npu-service-shared.c) runs three EL0 member
+tasks on two QEMU cores against the actual controller, memory policy and
+native cache operations, with a register model that completes one job per
+credit granted by the check. It covers:
+
+- Refusals for non-members, joining during the bootstrap and immediate replies
+  to queued SUBMITs.
+- The start order A, B, C, A when A resubmits while C is still queued.
+- A completed result that stays unreaped while other members' jobs run.
+- Refusal of CANCEL for a started job, and cancellation of a queued job that
+  never reaches the device.
+- Held WAITs of all three members at once.
+- A member leaving and rejoining, the last member's CLOSE and a second
+  bootstrap after it.
+- A deadline fault reported to every member with no further register access.
+
+Before scheduling, sharing refuses a command overlapping internal SRAM and a
+second `npu_service_share` call.
+[npu-session.py](../checks/npu-session.py) builds the check with the
+npu-service-model flags and link line and runs it:
+
+```sh
+checks/npu-session.py BUILD_DIRECTORY NEW_OUTPUT_DIRECTORY --mode service-shared
+```
+
+It passed seven consecutive QEMU runs; results are under
+`~/.cache/sunstoneos/build/audit-npu-runtime/evidence/service-shared/`. The
+exclusive-mode and interrupt checks below still pass with the changed source.
+
+## Runtime mode holds LOAD and SUBMIT replies
+
+`npu_service_runtime`, called after `npu_service_share` and before scheduling,
+hands job scheduling to a runtime that owns per-client slots, as in the
+[NPU runtime](designs/npu-breadth.md). Members still OPEN and CLOSE as in
+shared mode. LOAD (carrying a catalogue index) and SUBMIT go to the runtime's
+`request` callback, which normally holds the reply; WAIT, CANCEL and REAP are
+refused. The worker starts no job by itself. The runtime starts one with
+`npu_service_start` once its preparation is done, which masks INTID 97 and
+submits while the controller is ready; a deferred mask returns 0 and the start
+is retried. `npu_service_release` sends a held reply.
+`npu_service_retain` faults the controller after a runtime integrity failure.
+A controller fault releases every held reply with FAULT and refuses later
+requests.
+
+Each worker pass makes interrupt progress, hands a completed job to the
+runtime's `finished` callback, handles at most one request with a zero wait
+and runs one runtime step through the `step` callback. While a job runs,
+interrupt progress reads three configuration registers, so a pass runs it
+only after a notification or idle hint, while the source is masked or its
+rearm is deferred, after a tick timeout or once the job deadline has expired.
+Other passes read only the timer to check the deadline. While steps remain the
+worker does not block. With none left it blocks on its notification, for at
+most one tick while the controller is active. Runtime mode requires the
+interrupt binding: the runtime refuses activation without it. Until board
+evidence qualifies INTID 97 delivery, the worker also reads the idle register
+at offset `0x4`, which acknowledges nothing, after each step and after each
+tick timeout while the controller is active. Full idle queues the masked
+progress sequence that a notification runs, so the event register is never
+read while the source is unmasked. Exclusive and shared modes are unchanged.
+The runtime-mode state is a static object that `npu_service_runtime`
+installs, together with the pointer through which the worker enters the
+runtime loop. An image that never calls `npu_service_runtime` therefore links
+neither the loop nor its state.
+
+[npu-session-runtime.c](../checks/npu-session-runtime.c) checks the mode with
+the runtime; [npu-session.py](../checks/npu-session.py) runs it with
+`--mode runtime`. The shared-mode, session, reserved, exclusive and interrupt
+checks pass with the changed source.
+
 ## A preemptible EL1 task performs device operations
 
 The [SMP port extension](../patches/freertos-smp-privileged.patch) changes the
@@ -159,8 +270,9 @@ Local results, the failed fixture, final artifacts, and input identities are und
 The final ELF has SHA-256
 `55323616f8c91cb26b77b8b105df3a37de9ce5a01774f35f2eaf1b22a2bc8575`.
 It contains 52,488 bytes of code/constants and 1,834,032 bytes of BSS and reserved
-stacks, with no initialized data. The service object occupies 36,208 bytes,
-including its 32 KiB task stack. The native adapter and fixture command/table
+stacks, with no initialized data. That ELF predates shared mode. The service
+object now occupies 36,920 bytes, including its 32 KiB task stack, eight
+64-byte shared-mode member records and the runtime-mode pointer. The native adapter and fixture command/table
 buffers are separate. Physical stack usage and latency remain unmeasured.
 
 Reproduce after relevant inputs change, using the [configured toolchain](build.md):

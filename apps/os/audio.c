@@ -7,17 +7,23 @@
  * the buffer at EL0. Before the next capture the client returns the final
  * period, reaps and closes the stream, then opens it again. Any refusal ends
  * the session through board_fail and keeps every reservation, lease and the
- * stream held; the supervised session's manual power removal recovers them. */
+ * stream held. Manual power removal recovers them in the supervised lifetime;
+ * in the resident lifetime the client stops reporting progress and the
+ * watchdog resets the board. */
 #include "os.h"
 #include "../board/application.h"
 #include "a733_audio_leases.h"
 #include "a733_i2s_platform_native.h"
 #include "a733_dma_pool_session.h"
 #include "dma_service_i2s_irq.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "boot.h"
 #include <string.h>
-_Static_assert(OS_AUDIO_DMA_SUPERVISED==A733_DMA_HANDOFF_SUPERVISED,"supervised DMA handoff");
+#ifdef SUNSTONE_BOARD_RESIDENT
+_Static_assert(OS_AUDIO_DMA_ESTABLISHED==A733_DMA_HANDOFF_REQUIRED,"resident DMA handoff");
+#else
+_Static_assert(OS_AUDIO_DMA_ESTABLISHED==A733_DMA_HANDOFF_SUPERVISED,"supervised DMA handoff");
+#endif
 _Static_assert(A733_DMA0_INTID==143,"OS interrupt table DMA0 entry");
 enum { PERIODS=4, PERIOD_BYTES=4096, PERIOD_FRAMES=PERIOD_BYTES/2 };
 enum { PREPARE, POOL, IDLE, OPEN, OPENING, SUBMIT, GET, CHECK, PUT, CANCEL, DRAIN, CAPTURED,
@@ -53,7 +59,11 @@ static int enter(void *v,uint64_t d)
 static void leave(void *v)
 {configASSERT(v==&audio);a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
 static int mapped(uintptr_t a,int write)
-{struct aarch64_translation t;return aarch64_device_translate(a,write,&t)&&t.physical==a&&t.attributes==0;}
+{
+    static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1},
+        writable={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,write?&writable:&readable);
+}
 static int read_reg(void *v,uintptr_t a,uint32_t *out)
 {return v==&audio&&worker()&&mapped(a,0)&&a733_audio_native_read(NULL,a,out)==1;}
 static int write_reg(void *v,uintptr_t a,uint32_t value)
@@ -156,14 +166,20 @@ static int step(void)
     default:return -1;
     }
 }
+/* One bounded pass of the client task. The DMA worker answers each request
+ * within its next iteration, so a pass that ends with no unanswered request
+ * reports resident progress; a stalled worker or a failed capture does not. */
+static void pass(void)
+{
+    /* A failed capture parks with its request, leases and periods held. */
+    if(atomic_load_explicit(&audio.failed,memory_order_acquire))return;
+    if(!live()||step()<0){fail();return;}
+    if(!audio.pending)BOARD_PROGRESS(OS_SERVICE_AUDIO);
+}
 void os_audio_task(void *unused)
 {
     (void)unused;
-    for(;;){
-        /* A failed capture parks with its request, leases and periods held. */
-        if(!atomic_load_explicit(&audio.failed,memory_order_acquire)&&(!live()||step()<0))fail();
-        vTaskDelay(1);
-    }
+    for(;;){pass();vTaskDelay(1);}
 }
 int os_audio_capture(unsigned g,const uint8_t **wav,size_t *bytes)
 {
@@ -208,7 +224,12 @@ int os_audio_start(void)
         a733_i2s_platform_stream_operations(),&audio.binding,A733_I2S_RECEIVE,10000,0};
     audio.config=(struct a733_dma_pool_config){&audio.dma,&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,240000,4096,5,1,dma_fatal,&audio};
-    return a733_dma_pool_session_stream_supervised_init(&audio.pool,&audio.config,&audio.stream,PERIODS,PERIOD_BYTES)&&
-        dma_service_bind(&audio.pool.service,0,audio.handle,1)&&
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(!a733_dma_pool_session_stream_init(&audio.pool,&audio.config,&audio.stream,PERIODS,PERIOD_BYTES))return 0;
+#else
+    if(!a733_dma_pool_session_stream_supervised_init(&audio.pool,&audio.config,&audio.stream,PERIODS,PERIOD_BYTES))
+        return 0;
+#endif
+    return dma_service_bind(&audio.pool.service,0,audio.handle,1)&&
         dma_service_i2s_irq_bind(&audio.irq,&audio.pool.service,A733_SMP_COUNTER_HZ);
 }

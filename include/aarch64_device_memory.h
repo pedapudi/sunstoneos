@@ -7,6 +7,9 @@ struct aarch64_translation {
     uint64_t physical;
     unsigned attributes, shareability;
 };
+/* The project's one cache-maintenance operation enum. enum a733_dma_cache names
+ * the same operations for the DMA callback table and is mapped onto this enum
+ * by name; new code uses this enum. */
 enum aarch64_cache_op {
     AARCH64_CACHE_CLEAN, AARCH64_CACHE_CLEAN_INVALIDATE, AARCH64_CACHE_INVALIDATE
 };

@@ -2,6 +2,7 @@
 #include "a733_rtc_boot.h"
 #include "a733_cpu_coherence.h"
 #include "a733_storage_digest.h"
+#include "a733_mmio.h"
 #include "boot.h"
 #include <string.h>
 static struct {
@@ -21,18 +22,17 @@ static int access_ok(void)
 static int read32(void *c,uintptr_t p,uint32_t *v)
 {
  if(c!=&admitted||!v||!access_ok())return 0;
- __asm__ volatile("dsb sy":::"memory");*v=*(volatile uint32_t *)p;
- __asm__ volatile("dsb sy":::"memory");return access_ok();
+ *v=a733_mmio_read32_dsb_sy_both(p);return access_ok();
 }
 static int write32(void *c,uintptr_t p,uint32_t v)
 {
  if(c!=&admitted||!access_ok())return 0;
- *(volatile uint32_t *)p=v;__asm__ volatile("dsb sy":::"memory");return access_ok();
+ a733_mmio_write32_dsb_sy_after(p,v);return access_ok();
 }
 static int route64(void *c,uintptr_t p,uint64_t v)
 {
  if(c!=&admitted||!access_ok())return 0;
- *(volatile uint64_t *)p=v;__asm__ volatile("dsb sy":::"memory");return access_ok();
+ a733_mmio_write64_dsb_sy_after(p,v);return access_ok();
 }
 int rtc_session_prepare(const struct a733_smp_contract *contract)
 {

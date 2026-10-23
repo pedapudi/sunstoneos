@@ -12,7 +12,9 @@ it with CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs each mode under unicorn:
 - 1: a discontinuous period refuses the capture with the stream held;
 - 2: a stream that stops by itself refuses the capture with the stream held;
 - 3: the recognizer's request rules (no generation 0, no earlier generation,
-  nothing once the board has failed).
+  nothing once the board has failed);
+- 4: each task pass reports resident progress unless a DMA request is still
+  unanswered or the capture has failed; a supervised build reports nothing.
 
 No device, DMA or audio hardware is modeled beyond the service replies.
 """
@@ -28,7 +30,7 @@ from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ['two-generations-wav-and-stream-reuse', 'discontinuous-period-refused',
-         'self-stopped-stream-refused', 'request-rules']
+         'self-stopped-stream-refused', 'request-rules', 'progress-reports']
 
 
 def main():
@@ -74,6 +76,7 @@ def main():
         assert result == 1, (case, result)
     (out / 'result.json').write_text(json.dumps({
         'passed': True, 'physical_access': False, 'cases': results, 'command': command,
+        'lifetime': 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised',
         'audio_c_sha256': hashlib.sha256((ROOT / 'apps/os/audio.c').read_bytes()).hexdigest(),
         'fixture_sha256': hashlib.sha256((ROOT / 'checks/os-image-audio.c').read_bytes()).hexdigest()}, indent=2) + '\n')
     print('PASS OS audio client: ' + ', '.join(CASES))

@@ -1,4 +1,5 @@
 #include "a733_clock_leases.h"
+#include "a733_range.h"
 #include <stddef.h>
 
 /* Masks and tokens are private metadata under the existing 32-bit lock.
@@ -16,13 +17,10 @@ OFFSET(a733_clock_leases,busy,0); OFFSET(a733_clock_leases,next_id,8);
 OFFSET(a733_clock_leases,last_now,16); OFFSET(a733_clock_leases,slots,32);
 OFFSET(a733_clock_leases,now,6176); OFFSET(a733_clock_leases,context,6184);
 OFFSET(a733_clock_leases,initialized,6192); OFFSET(a733_clock_leases,failed,6196);
+OFFSET(a733_clock_leases,authority,6200);
 #undef OFFSET
+_Static_assert((A733_CLOCK_CLIENTS&(A733_CLOCK_CLIENTS-1))==0,"slot index is a mask of the identifier");
 
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static a733_clock_mask_t parents(a733_clock_mask_t mask)
 {
     a733_clock_mask_t p=0;
@@ -54,20 +52,40 @@ static enum a733_clock_result enter(struct a733_clock_leases *m)
 }
 static enum a733_clock_result leave(struct a733_clock_leases *m,enum a733_clock_result r)
 {atomic_store_explicit(&m->busy,0,memory_order_release);return r;}
+/* Latch the registry fault, and report it in the bound power-authority word. */
+static enum a733_clock_result fail(struct a733_clock_leases *m)
+{
+    atomic_store_explicit(&m->failed,1,memory_order_release);
+    if(m->authority)a733_power_authority_set(m->authority,A733_POWER_CLOCK_FAULT);
+    return A733_CLOCK_FAULT;
+}
 static enum a733_clock_result clock_check(struct a733_clock_leases *m,uint64_t deadline)
 {
     uint64_t now;
-    if(m->now(m->context,&now)!=1 || now<m->last_now) {atomic_store_explicit(&m->failed,1,memory_order_release);return A733_CLOCK_FAULT;}
-    m->last_now=now;
+    if(m->now(m->context,&now)!=1 || !a733_monotonic_advance(now,&m->last_now))return fail(m);
     return now<deadline ? A733_CLOCK_OK : A733_CLOCK_EXPIRED;
 }
 static int equal(const struct a733_clock_token *a,const struct a733_clock_token *b)
 {return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}
+/* An identifier names its slot, (id - 1) mod 128, so lookup compares one slot. */
+static unsigned home(uint64_t id){return (unsigned)((id-1)&(A733_CLOCK_CLIENTS-1));}
 static unsigned find(struct a733_clock_leases *m,const struct a733_clock_token *t)
 {
     if(!t->id || !t->owner)return A733_CLOCK_CLIENTS;
-    for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i)if(equal(&m->slots[i],t))return i;
-    return A733_CLOCK_CLIENTS;
+    const unsigned i=home(t->id);
+    return equal(&m->slots[i],t) ? i : A733_CLOCK_CLIENTS;
+}
+/* The smallest unused identifier whose slot is free, or whose slot is the one
+ * being replaced. Identifiers stay increasing and are never reused. Returns 0
+ * when they are exhausted. */
+static uint64_t next_identifier(struct a733_clock_leases *m,unsigned replaced)
+{
+    for(uint64_t id=m->next_id;id;++id) {
+        const unsigned i=home(id);
+        if(!m->slots[i].id || i==replaced)return id;
+        if(id-m->next_id>=A733_CLOCK_CLIENTS)return 0;
+    }
+    return 0;
 }
 int a733_clock_leases_init(struct a733_clock_leases *m,int (*now)(void *,uint64_t *),void *ctx)
 {
@@ -86,25 +104,27 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
         A733_CLOCK_TWI11|A733_CLOCK_TWI9|A733_CLOCK_S_TWI1|A733_CLOCK_USB2|A733_CLOCK_PWM0|A733_CLOCK_GPADC|A733_CLOCK_LRADC;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
-        !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
+        !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
     shared|=parents(shared|exclusive);shared&=~exclusive;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
-    unsigned free=A733_CLOCK_CLIENTS;
+    unsigned held=0;
     for(unsigned i=0;i<A733_CLOCK_CLIENTS;++i) {
         const struct a733_clock_token *t=&m->slots[i];
-        if(!t->id) {if(free==A733_CLOCK_CLIENTS)free=i;continue;}
+        if(!t->id)continue;
+        ++held;
         if((exclusive&(t->shared|t->exclusive)) || (shared&t->exclusive))return leave(m,A733_CLOCK_BUSY);
     }
-    if(free==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_BUSY);
-    if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
+    if(held==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_BUSY);
+    const uint64_t id=next_identifier(m,A733_CLOCK_CLIENTS);
+    if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
-    struct a733_clock_token t={m->next_id++,owner,shared,exclusive};
-    m->slots[free]=t;*out=t;return leave(m,A733_CLOCK_OK);
+    struct a733_clock_token t={id,owner,shared,exclusive};
+    m->next_id=id+1;m->slots[home(id)]=t;*out=t;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_release(struct a733_clock_leases *m,
     const struct a733_clock_token *token,uint64_t deadline)
 {
-    if(!separate(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
+    if(!a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     unsigned slot=find(m,token);
     if(slot==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
@@ -114,48 +134,54 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *m,
 enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
     const struct a733_clock_token *token,uint64_t deadline,struct a733_clock_token *out)
 {
-    if(!separate(m,sizeof(*m),token,sizeof(*token)) ||
-        !separate(m,sizeof(*m),out,sizeof(*out)) || !separate(token,sizeof(*token),out,sizeof(*out)))
+    if(!a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)) ||
+        !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)) || !a733_ranges_disjoint(token,sizeof(*token),out,sizeof(*out)))
         return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     unsigned slot=find(m,token);
     if(slot==A733_CLOCK_CLIENTS || token->exclusive!=A733_CLOCK_AUDIO_CHANGE ||
         token->shared!=(A733_CLOCK_REF|A733_CLOCK_OSC))return leave(m,A733_CLOCK_INVALID);
-    if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
+    const uint64_t id=next_identifier(m,slot);
+    if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
-    struct a733_clock_token t={m->next_id++,token->owner,parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5,0};
-    m->slots[slot]=t;*out=t;return leave(m,A733_CLOCK_OK);
+    struct a733_clock_token t={id,token->owner,parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5,0};
+    m->next_id=id+1;m->slots[slot]=(struct a733_clock_token){0};m->slots[home(id)]=t;
+    *out=t;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     const struct a733_clock_token *token,a733_clock_mask_t stable,uint64_t deadline,struct a733_clock_token *out)
 {
     const a733_clock_mask_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1|A733_CLOCK_USB01_REF|A733_CLOCK_GPADC24M;
-    if(!stable || (stable&~supported) || !separate(m,sizeof(*m),token,sizeof(*token)) ||
-        !separate(m,sizeof(*m),out,sizeof(*out)) || !separate(token,sizeof(*token),out,sizeof(*out)))
+    if(!stable || (stable&~supported) || !a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)) ||
+        !a733_ranges_disjoint(m,sizeof(*m),out,sizeof(*out)) || !a733_ranges_disjoint(token,sizeof(*token),out,sizeof(*out)))
         return A733_CLOCK_INVALID;
     /* Snapshot before any callback; no caller bytes are consulted at commit. */
     const struct a733_clock_token old=*token;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     unsigned slot=find(m,&old);
     if(slot==A733_CLOCK_CLIENTS || (old.exclusive&stable)!=stable)return leave(m,A733_CLOCK_INVALID);
-    if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
+    const uint64_t id=next_identifier(m,slot);
+    if(!id)return leave(m,A733_CLOCK_EXHAUSTED);
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
     struct a733_clock_token next=old;
-    next.id=m->next_id++;next.shared|=stable;next.exclusive&=~stable;
+    next.id=id;next.shared|=stable;next.exclusive&=~stable;
     /* No fallible callback or additional refusal after the atomic commit. */
-    m->slots[slot]=next;*out=next;return leave(m,A733_CLOCK_OK);
+    m->next_id=id+1;m->slots[slot]=(struct a733_clock_token){0};m->slots[home(id)]=next;
+    *out=next;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_retain(struct a733_clock_leases *m,const struct a733_clock_token *token)
 {
-    if(!separate(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
+    if(!a733_ranges_disjoint(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     if(find(m,token)==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
-    atomic_store_explicit(&m->failed,1,memory_order_release);return leave(m,A733_CLOCK_FAULT);
+    return leave(m,fail(m));
 }
 
+/* Status writes nothing, so a token stored inside the registry cannot change
+ * its result; only a NULL token is refused. */
 enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *m,const struct a733_clock_token *token)
 {
-    if(!separate(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
+    if(!token)return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     return leave(m,find(m,token)==A733_CLOCK_CLIENTS ? A733_CLOCK_INVALID : A733_CLOCK_OK);
 }

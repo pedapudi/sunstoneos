@@ -3,6 +3,7 @@
 /* Copyright (C) 2019 frank@allwinnertech.com */
 #include "a733_thermal.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define THS UINT32_C(0x02522000)
@@ -10,11 +11,6 @@
 #define SID UINT32_C(0x03006244)
 #define MASK UINT32_C(31)
 enum { ADMIT, START, ACTIVE, FAILED, STOPPED };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 int a733_thermal_temperature(uint16_t code,int32_t *out)
 {
     if (!out || !code || code>4095) return 0;
@@ -23,7 +19,7 @@ int a733_thermal_temperature(uint16_t code,int32_t *out)
 }
 int a733_thermal_calibrate(const uint32_t words[3],struct a733_thermal_calibration *out)
 {
-    if (!separate(words,3*sizeof(*words),out,sizeof(*out))) return 0;
+    if (!a733_ranges_disjoint(words,3*sizeof(*words),out,sizeof(*out))) return 0;
     struct a733_thermal_calibration c={0};
     c.factory_tenth_c=words[0]&4095;
     if (!c.factory_tenth_c || c.factory_tenth_c==4095) return 0;
@@ -54,7 +50,7 @@ int a733_thermal_init(struct a733_thermal *p,const struct a733_thermal_config *c
     const void *objects[]={p,c,o,registry,token};
     size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*token)};
     for (unsigned i=0;i<5;++i) for (unsigned j=i+1;j<5;++j)
-        if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        if (!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     unsigned parent=c->apb1>>24,div=(c->apb1&31)+1;
     uint32_t hz=parent==0 ? 24000000u : parent==3 ? 600000000u : 0;
     a733_clock_mask_t stable=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_CLOCK_GPADC24M;
@@ -75,8 +71,7 @@ int a733_thermal_init(struct a733_thermal *p,const struct a733_thermal_config *c
 static int timely(struct a733_thermal *p)
 {
     uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->deadline) return 0;
-    p->last_now=now;return 1;
+    return p->ops.now_us(p->cookie,&now)==1 && a733_deadline_admit(now,&p->last_now,p->deadline);
 }
 static int rd(struct a733_thermal *p,uintptr_t a,uint32_t *v)
 {return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
@@ -216,8 +211,8 @@ enum a733_thermal_result a733_thermal_poll(struct a733_thermal *p)
 enum a733_thermal_result a733_thermal_read(struct a733_thermal *p,uint64_t deadline,
     struct a733_thermal_sample *out)
 {
-    if (!p || !p->initialized || !separate(p,sizeof(*p),out,sizeof(*out)) ||
-        !separate(p->registry,sizeof(*p->registry),out,sizeof(*out))) return A733_THERMAL_INVALID;
+    if (!p || !p->initialized || !a733_ranges_disjoint(p,sizeof(*p),out,sizeof(*out)) ||
+        !a733_ranges_disjoint(p->registry,sizeof(*p->registry),out,sizeof(*out))) return A733_THERMAL_INVALID;
     if (!claim(p)) return A733_THERMAL_BUSY;
     if (p->stage==STOPPED) return finish(p,A733_THERMAL_STOPPED);
  if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
@@ -267,9 +262,13 @@ enum a733_thermal_result a733_thermal_stop(struct a733_thermal *p,uint64_t deadl
 
 /* sun60iw2p1.dtsi thermal-zones: the second passive trip of each CPU/GPU zone
  * is the one bound to a CPU or GPU cooling device; the first only starts fans
- * and power accounting. NPU and DDR zones have critical trips only. */
+ * and power accounting. The NPU zone has a critical trip only. The DDR zone
+ * has only the 110 C critical trip there; the passive trip at 85 C is this
+ * board's, because JEDEC LPDDR5 standard refresh covers die temperatures up
+ * to 85 C and no decoded boot0 field shows derated refresh
+ * (docs/designs/dram-controller.md). */
 static const struct { int32_t passive,hysteresis,critical; } trips[A733_THERMAL_SENSORS]={
-    {90000,2000,110000},{0,0,110000},{0,0,110000},{90000,2000,110000},{90000,0,110000}};
+    {90000,2000,110000},{85000,2000,110000},{0,0,110000},{90000,2000,110000},{90000,0,110000}};
 #define STALE_US UINT64_C(1000000) /* The zones' 1000 ms polling delay. */
 #define LOST_US UINT64_C(5000000)
 int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,
@@ -277,7 +276,12 @@ int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,
 {
     if (!p || p->initialized || !notify) return 0;
     *p=(struct a733_thermal_policy){.notify=notify,.cookie=cookie,.start_us=now,.last_us=now,.initialized=1};
-    atomic_init(&p->level,A733_THERMAL_NORMAL);return 1;
+    atomic_init(&p->level,A733_THERMAL_NORMAL);atomic_init(&p->published_seen,0);return 1;
+}
+unsigned a733_thermal_policy_seen(const struct a733_thermal_policy *p)
+{
+    if (!p || !p->initialized) return 0;
+    return atomic_load_explicit(&p->published_seen,memory_order_acquire);
 }
 enum a733_thermal_level a733_thermal_policy_level(const struct a733_thermal_policy *p)
 {
@@ -314,8 +318,11 @@ enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *p
         }
         unsigned level=p->sensor || p->critical ? A733_THERMAL_CRITICAL :
             p->passive || p->stale ? A733_THERMAL_THROTTLE : A733_THERMAL_NORMAL;
+        /* Channels publish after the level, so a reader that sees a channel
+         * also sees the level that its reading produced. */
+        if (level!=old) atomic_store_explicit(&p->level,level,memory_order_release);
+        atomic_store_explicit(&p->published_seen,p->seen,memory_order_release);
         if (level==old) return (enum a733_thermal_level)level;
-        atomic_store_explicit(&p->level,level,memory_order_release);
         if (level!=A733_THERMAL_CRITICAL) {
             (void)p->notify(p->cookie,(enum a733_thermal_level)level);return (enum a733_thermal_level)level;
         }

@@ -4,15 +4,14 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_stop.h"
+#include "a733_range.h"
 #include <string.h>
 
 enum { POLL, WRITE, FENCE };
-static int range(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int outside(const struct pvr_gpu_stop *s, const void *p, size_t n)
 {
-    return range(p, n) && ((uintptr_t)s + sizeof(*s) <= (uintptr_t)p ||
-                          (uintptr_t)p + n <= (uintptr_t)s);
+    return a733_span_excl_nonempty(p, n) &&
+        a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)p, n);
 }
 static void add(struct pvr_gpu_stop *s, unsigned kind, unsigned off, unsigned width,
                 uint64_t mask, uint64_t value)
@@ -22,7 +21,7 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
                       void *ctx, uint64_t deadline)
 {
     struct pvr_fw_plan p;
-    if (!range(s,sizeof(*s)) || s->phase != PVR_GPU_STOP_NEW ||
+    if (!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase != PVR_GPU_STOP_NEW ||
         !outside(s,c,sizeof(*c)) || !outside(s,ops,sizeof(*ops)) ||
         c->phase != PVR_GPU_CONTROL_READY || !outside(s,c->queue,sizeof(*c->queue)) ||
         c->queue->phase != PVR_CCB_ACTIVE || !deadline ||
@@ -100,9 +99,15 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         enum pvr_gpu_control_result r=pvr_gpu_control_poll(s->control,4);
         if (r==PVR_GPU_CONTROL_AGAIN) return PVR_GPU_STOP_AGAIN;
         if (r!=PVR_GPU_CONTROL_OK) return fail(s,PVR_GPU_STOP_CONTROL);
-        uint32_t ack=0;
-        if (!s->ops.sync_read(s->context,&ack)) return fail(s,PVR_GPU_STOP_IO);
-        if (!ack) return PVR_GPU_STOP_AGAIN;
+        /* Re-read the acknowledgement for at most A733_GPU_SPIN_US, counted
+         * from the first read so event servicing does not consume it. */
+        uint32_t ack=0; struct a733_gpu_spin wait={0};
+        for (;;) {
+            if (!s->ops.sync_read(s->context,&ack)) return fail(s,PVR_GPU_STOP_IO);
+            if (ack) break;
+            if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
+            if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
+        }
         s->acknowledgement[which]=ack;
         if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
         enum pvr_ccb_result cr=pvr_ccb_collect(s->control->queue,s->tokens[which],&s->command_status[which]);
@@ -118,8 +123,14 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         if (op->kind==WRITE) {
             if (!s->ops.write(s->context,op->offset,op->width,op->value)) return fail(s,PVR_GPU_STOP_IO);
         } else {
-            if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
-            if (op->kind==POLL && (value&op->mask)!=op->value) return PVR_GPU_STOP_AGAIN;
+            /* A register poll re-reads for at most A733_GPU_SPIN_US. */
+            struct a733_gpu_spin wait={0};
+            for (;;) {
+                if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
+                if (op->kind!=POLL || (value&op->mask)==op->value) break;
+                if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
+                if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
+            }
         }
         if (++s->index==s->count) ++s->phase;
         break;

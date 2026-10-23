@@ -2,7 +2,6 @@
 #include "bt_hfp_ag.h"
 #include "bt_memory.h"
 static uint64_t stamp(const struct bt_hfp_ag *q){return q->rfcomm->l2cap->acl->hci->transport.now;}
-static uint64_t after(uint64_t now,uint64_t n){return n>UINT64_MAX-now ? UINT64_MAX : now+n;}
 static int fail(struct bt_hfp_ag *q,enum bt_hfp_ag_error e)
 {q->error=e;q->phase=BT_HFP_AG_FAULT;return -1;}
 static int values(const uint8_t *p)
@@ -21,23 +20,32 @@ static int external(const struct bt_hfp_ag *q,const void *p,size_t n)
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->registry->session[i] && !bt_range_disjoint(q->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
     return 1;
 }
-int bt_hfp_ag_init_codecs(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t deadline,uint64_t timeout,unsigned codecs)
+/* Without call control ring is always zero and this stays internal. */
+#ifndef SUNSTONE_BT_HFP_CALL_CONTROL
+static
+#endif
+int bt_hfp_ag_init_calls(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t deadline,uint64_t timeout,
+    unsigned codecs,unsigned voice,uint64_t ring)
 {
-    if((codecs&&codecs!=6) || !q || !r || !p || !bt_range_disjoint(q,sizeof(*q),r,sizeof(*r)) || !bt_range_disjoint(q,sizeof(*q),p,7) ||
+    if((codecs&&codecs!=6) || voice>1 || ring>60000000 || (ring && p && (p[1]||p[2]||p[3])) || !q || !r || !p || !bt_range_disjoint(q,sizeof(*q),r,sizeof(*r)) || !bt_range_disjoint(q,sizeof(*q),p,7) ||
        q->rfcomm || q->phase!=BT_HFP_AG_OFF || r->phase!=BT_RFCOMM_OPEN || !r->registry || !r->l2cap ||
        (r->incoming ? r->service_uuid!=0x111f : r->service_uuid!=0x111e) || !timeout || timeout>60000000 ||
        !values(p) || deadline<=r->l2cap->acl->hci->transport.now)return -1;
     struct bt_hfp_ag temp={.rfcomm=r,.registry=r->registry,.link=r->link,.channel=r->channel,
         .setup_deadline=deadline,.timeout_us=timeout,.now=r->l2cap->acl->hci->transport.now,
-        .active=127,.pending_active=127,.local_codecs=codecs,.phase=BT_HFP_AG_INITIALIZING};
+        .active=127,.pending_active=127,.local_codecs=codecs,.voice=voice,
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+        .calls=!!ring,.ring_us=ring,
+#endif
+        .phase=BT_HFP_AG_INITIALIZING};
     if(!external(&temp,p,7) || !external(&temp,q,sizeof(*q)))return -1;
     for(unsigned i=0;i<BT_RFCOMM_DATA;++i)if(r->tx[i].state!=BT_RFCOMM_FREE)return -1;
     if(r->registry->authorize_service(r->registry->context,r->link,r->service_uuid,r->server)!=1)return -1;
     for(unsigned i=0;i<7;++i)temp.indicators[i]=temp.notified[i]=p[i];
     *q=temp;return 1;
 }
-int bt_hfp_ag_init(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t d,uint64_t t)
-{return bt_hfp_ag_init_codecs(q,r,p,d,t,0);}
+int bt_hfp_ag_init(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t d,uint64_t t,unsigned codecs,unsigned voice)
+{return bt_hfp_ag_init_calls(q,r,p,d,t,codecs,voice,0);}
 static void text(struct bt_hfp_ag *q,const char *s)
 {while(*s && q->response_length<BT_HFP_AG_RESPONSE)q->response[q->response_length++]=(uint8_t)*s++;}
 static void number(struct bt_hfp_ag *q,uint32_t x)
@@ -81,14 +89,97 @@ static int cmer(const uint8_t *p,size_t n,size_t at,unsigned *mode,unsigned *ind
     }
     return *mode==3;
 }
-static void response(struct bt_hfp_ag *q)
+/* Every response starts from committed state; acceptance commits pending state. */
+static void hold(struct bt_hfp_ag *q)
 {
-    const uint8_t *p=q->line;size_t n=q->line_length,at=0;uint32_t value=0;unsigned ok=0;
     q->pending_stage=q->stage;q->pending_features=q->hf_features;
     q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
-    q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;q->notify_index=0;
+    q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;
+    q->pending_control=q->control;q->pending_recognition=q->recognition;
+}
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+/* 27.007 dial digits; HFP numbers are quoted, so no quote can be admitted. */
+static int dial(const uint8_t *p,size_t n)
+{
+    if(!n || n>BT_HFP_AG_NUMBER)return 0;
+    for(size_t i=0;i<n;++i)if(!((p[i]>='0'&&p[i]<='9')||p[i]=='*'||p[i]=='#'||p[i]=='+'||(p[i]>='A'&&p[i]<='D')))return 0;
+    return 1;
+}
+static void quoted(struct bt_hfp_ag *q,const struct bt_hfp_ag_call *c)
+{text(q,"\"");for(unsigned i=0;i<c->length;++i)q->response[q->response_length++]=c->number[i];text(q,"\",");number(q,c->type);}
+/* The call indicators follow the single call; callheld stays zero. */
+static void call_indicators(struct bt_hfp_ag *q)
+{
+    const uint8_t value[3]={(uint8_t)q->control.call.call,(uint8_t)q->control.call.setup,0};
+    for(unsigned i=1;i<4;++i){q->indicators[i]=value[i-1];
+        if(q->indicators[i]!=q->notified[i])q->changed|=1u<<i;else q->changed&=~(1u<<i);}
+}
+#endif
+/* Queries headsets send after service-level setup, answered with or without
+ * call control, and call-control commands. Returns1 OK, otherwise ERROR;
+ * *cme selects a +CME code once the HF has enabled extended errors. */
+static int queries(struct bt_hfp_ag *q,const uint8_t *p,size_t n,unsigned *cme)
+{
+    struct bt_hfp_ag_control *c=&q->pending_control;
+    size_t at=0;uint32_t value=0;
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    struct bt_hfp_ag_call *call=&c->call;unsigned busy=call->call||call->setup;
+#endif
+    if(prefix(p,n,"AT+CMEE=",&at) && decimal(p,n,&at,&value) && at==n && value<=1){c->cmee=value;return 1;}
+    if(prefix(p,n,"AT+CLIP=",&at) && decimal(p,n,&at,&value) && at==n && value<=1){c->clip=value;return 1;}
+    if(prefix(p,n,"AT+CCWA=",&at) && decimal(p,n,&at,&value) && at==n && value<=1){c->ccwa=value;return 1;}
+    if(equal(p,n,"AT+COPS=3,0")){c->format=1;return 1;}
+    /* No network operator exists, so mode0 is reported without a name. */
+    if(equal(p,n,"AT+COPS?")){text(q,"\r\n+COPS: 0\r\n");return 1;}
+    if(equal(p,n,"AT+CNUM"))return 1;
+    if(equal(p,n,"AT+CLCC")){
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+        if(busy){text(q,"\r\n+CLCC: 1,");number(q,call->direction);text(q,",");
+            number(q,call->call?0:call->setup==1?4:call->setup);text(q,",0,0");
+            if(call->length){text(q,",");quoted(q,call);}text(q,"\r\n");}
+#endif
+        return 1;
+    }
+    if(equal(p,n,"AT+BCC")){
+        if(!q->local_codecs || !(q->hf_features&128) || !q->peer_codecs || q->offered_codec){*cme=3;return 0;}
+        ++c->audio_requests;return 1;
+    }
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    if(!q->calls)return 0;
+    if(equal(p,n,"ATA")){if(call->setup!=1 || call->call){*cme=3;return 0;}call->call=1;call->setup=0;return 1;}
+    if(equal(p,n,"AT+CHUP")){if(!busy){*cme=3;return 0;}*call=(struct bt_hfp_ag_call){0};return 1;}
+    if(prefix(p,n,"AT+VTS=",&at)){
+        if(n-at!=1 || !dial(p+at,1) || p[at]=='+')return 0;
+        if(!call->call){*cme=3;return 0;}
+        c->dtmf=p[at];++c->dtmf_count;return 1;
+    }
+    const struct bt_hfp_ag_call *source=0;struct bt_hfp_ag_call dialed={0};
+    /* No phone book exists, so every memory location is empty. */
+    if(prefix(p,n,"ATD>",&at))return 0;
+    if(equal(p,n,"AT+BLDN")){if(!c->last.length)return 0;source=&c->last;}
+    else if(prefix(p,n,"ATD",&at)){
+        if(n<5 || p[n-1]!=';' || !dial(p+at,n-at-1))return 0;
+        dialed.length=(unsigned)(n-at-1);dialed.type=p[at]=='+'?145:129;
+        for(unsigned i=0;i<dialed.length;++i)dialed.number[i]=p[at+i];source=&dialed;
+    } else return 0;
+    if(busy){*cme=3;return 0;}
+    if(!q->indicators[0]){*cme=30;return 0;}
+    *call=*source;call->direction=0;call->call=0;call->setup=2;c->last=*call;return 1;
+#else
+    return 0;
+#endif
+}
+static void response(struct bt_hfp_ag *q)
+{
+    const uint8_t *p=q->line;size_t n=q->line_length,at=0;uint32_t value=0;unsigned ok=0,cme=0;
+    hold(q);q->notify_index=0;
     if(!q->discard && prefix(p,n,"AT+BRSF=",&at) && decimal(p,n,&at,&value) && at==n && !q->stage){
-        q->pending_features=value;q->pending_stage=1;text(q,q->local_codecs?"\r\n+BRSF: 512\r\n":"\r\n+BRSF: 0\r\n");ok=1;
+        q->pending_features=value;q->pending_stage=1;text(q,"\r\n+BRSF: ");
+        uint32_t features=(q->local_codecs?512u:0u)|(q->voice?BT_HFP_AG_VOICE:0u);
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+        if(q->calls)features|=BT_HFP_AG_CALL_FEATURES;
+#endif
+        number(q,features);text(q,"\r\n");ok=1;
     }else if(!q->discard && q->stage && q->local_codecs && (q->hf_features&128) && prefix(p,n,"AT+BAC=",&at)){
         unsigned mask=0;ok=1;
         do {if(!decimal(p,n,&at,&value)||!value||value>255){ok=0;break;}
@@ -116,12 +207,15 @@ static void response(struct bt_hfp_ag *q)
         q->microphone_gain=value;q->gain_valid|=1;ok=1;
     }else if(!q->discard && q->stage>=4 && prefix(p,n,"AT+VGS=",&at) && decimal(p,n,&at,&value) && at==n && value<=15){
         q->speaker_gain=value;q->gain_valid|=2;ok=1;
-    }
-    if(!ok){q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;q->pending_stage=q->stage;q->pending_features=q->hf_features;
-        q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
-        q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;}
-    text(q,ok ? "\r\nOK\r\n" : "\r\nERROR\r\n");
-    q->response_deadline=after(q->now,q->timeout_us);q->line_length=0;q->discard=0;q->line_deadline=0;
+    }else if(!q->discard && q->stage>=4 && q->voice && prefix(p,n,"AT+BVRA=",&at) && at+1==n && p[at]=='0'+!q->recognition &&
+             (q->recognition || (q->voice_admit && (q->hf_features&BT_HFP_AG_HF_VOICE)))){
+        /* Each accepted request changes the state: =1 while off, =0 while on. */
+        q->pending_recognition=!q->recognition;ok=1;
+    }else if(!q->discard && q->stage>=4)ok=(unsigned)queries(q,p,n,&cme);
+    if(!ok){hold(q);q->response_length=0;}
+    if(!ok && cme && q->control.cmee){text(q,"\r\n+CME ERROR: ");number(q,cme);text(q,"\r\n");}
+    else text(q,ok ? "\r\nOK\r\n" : "\r\nERROR\r\n");
+    q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);q->line_length=0;q->discard=0;q->line_deadline=0;
 }
 static void accepted(struct bt_hfp_ag *q)
 {
@@ -129,6 +223,10 @@ static void accepted(struct bt_hfp_ag *q)
     q->peer_codecs=q->pending_codecs;q->selected_codec=q->pending_codec;
     if(q->selected_codec){q->codec_deadline=0;q->offered_codec=0;}
     q->reporting=q->pending_reporting;q->active=q->pending_active;q->cmer_mode=q->pending_mode;
+    q->control=q->pending_control;q->recognition=q->pending_recognition;
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    if(q->calls)call_indicators(q);
+#endif
     if(q->notify_index){unsigned i=q->notify_index-1;q->notified[i]=(uint8_t)q->notify_value;
         if(q->notified[i]==q->indicators[i])q->changed&=~(1u<<i);}
     if(q->stage==4 && q->phase==BT_HFP_AG_INITIALIZING)q->phase=BT_HFP_AG_READY;
@@ -161,7 +259,7 @@ static int input(struct bt_hfp_ag *q,unsigned budget)
         uint8_t c=b->bytes[q->receive_cursor++];
         if(c=='\r'){response(q);break;}
         if(c=='\n' && !q->line_length && !q->discard)continue;
-        if(!q->line_deadline)q->line_deadline=after(q->now,q->timeout_us);
+        if(!q->line_deadline)q->line_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
         if(c<' ' || c>126){q->discard=1;continue;}
         if(q->discard || c==' ')continue;
         if(q->line_length==BT_HFP_AG_LINE){q->discard=1;continue;}
@@ -185,22 +283,27 @@ int bt_hfp_ag_select_codec(struct bt_hfp_ag *q,unsigned codec)
     if(!q||!identity(q)||q->phase!=BT_HFP_AG_READY||!q->local_codecs||!(q->hf_features&128)||
        codec<1||codec>2||!(q->peer_codecs&q->local_codecs&(1u<<codec)))return -1;
     if(q->response_length||q->line_deadline||q->offered_codec)return 0;
-    q->selected_codec=q->pending_codec=0;q->offered_codec=codec;
-    q->codec_deadline=after(q->now,q->timeout_us);
-    q->pending_stage=q->stage;q->pending_features=q->hf_features;q->pending_codecs=q->peer_codecs;
-    q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;
+    hold(q);q->selected_codec=q->pending_codec=0;q->offered_codec=codec;
+    q->codec_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
     text(q,"\r\n+BCS: ");number(q,codec);text(q,"\r\n");q->response_deadline=q->codec_deadline;return 1;
 }
 static void notify(struct bt_hfp_ag *q)
 {
-    if(q->phase!=BT_HFP_AG_READY || !q->reporting)return;
-    for(unsigned i=0;i<7;++i)if((q->changed&q->active)&(1u<<i)){
-        text(q,"\r\n+CIEV: ");number(q,i+1);text(q,",");number(q,q->indicators[i]);text(q,"\r\n");
+    if(q->phase!=BT_HFP_AG_READY)return;
+    if(q->reporting)for(unsigned i=0;i<7;++i)if((q->changed&q->active)&(1u<<i)){
+        hold(q);text(q,"\r\n+CIEV: ");number(q,i+1);text(q,",");number(q,q->indicators[i]);text(q,"\r\n");
         q->notify_value=q->indicators[i];q->notify_index=i+1;
-        q->pending_stage=q->stage;q->pending_features=q->hf_features;
-        q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
-        q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;
-        q->response_deadline=after(q->now,q->timeout_us);break;}
+        q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);return;}
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    /* Any unreported callsetup change returned above, so RING follows the
+     * reported callsetup1, or starts at once without reports. */
+    const struct bt_hfp_ag_call *c=&q->control.call;
+    if(q->calls && c->setup==1 && q->now>=q->next_ring){
+        hold(q);q->notify_index=0;text(q,"\r\nRING\r\n");
+        if(q->control.clip && c->length){text(q,"\r\n+CLIP: ");quoted(q,c);text(q,"\r\n");}
+        q->next_ring=a733_deadline_after_saturating(q->now,q->ring_us);q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);
+    }
+#endif
 }
 int bt_hfp_ag_step(struct bt_hfp_ag *q,unsigned budget,unsigned bytes,uint64_t deadline)
 {
@@ -228,10 +331,45 @@ int bt_hfp_ag_step(struct bt_hfp_ag *q,unsigned budget,unsigned bytes,uint64_t d
     if(!q->response_length && !q->line_deadline)notify(q);
     return publish(q);
 }
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+int bt_hfp_ag_call(struct bt_hfp_ag *q,unsigned event,const char *text_number,unsigned type)
+{
+    if(!q || !q->rfcomm || !q->calls || q->phase!=BT_HFP_AG_READY || !identity(q) ||
+       (event!=BT_HFP_AG_CALL_INCOMING && (text_number || type)))return -1;
+    struct bt_hfp_ag_call next=q->control.call;
+    if(event==BT_HFP_AG_CALL_INCOMING){
+        size_t n=0;if(text_number){if(!external(q,text_number,1))return -1;
+            while(n<=BT_HFP_AG_NUMBER && text_number[n])++n;
+            if(!external(q,text_number,n+1))return -1;}
+        if(next.call || next.setup || (text_number && (!dial((const uint8_t *)text_number,n) || type<128 || type>175)) ||
+           (!text_number && type))return -1;
+        next=(struct bt_hfp_ag_call){.length=(unsigned)n,.type=type,.direction=1,.setup=1};
+        for(size_t i=0;i<n;++i)next.number[i]=(uint8_t)text_number[i];
+    } else if(event==BT_HFP_AG_CALL_ALERTING){if(next.setup!=2)return -1;next.setup=3;}
+    else if(event==BT_HFP_AG_CALL_ACTIVE){if(!next.setup || next.call)return -1;next.setup=0;next.call=1;}
+    else if(event==BT_HFP_AG_CALL_END){if(!next.call && !next.setup)return -1;next=(struct bt_hfp_ag_call){0};}
+    else return -1;
+    if(q->response_length)return 0;
+    q->control.call=next;q->pending_control=q->control;call_indicators(q);
+    if(event==BT_HFP_AG_CALL_INCOMING)q->next_ring=q->now;return 1;
+}
+#endif
+int bt_hfp_ag_voice(struct bt_hfp_ag *q,unsigned on)
+{
+    if(!q || !q->rfcomm || !identity(q) || q->phase!=BT_HFP_AG_READY || !q->voice ||
+       !(q->hf_features&BT_HFP_AG_HF_VOICE) || on>1 || on==q->recognition)return -1;
+    if(q->response_length || q->line_deadline)return 0;
+    hold(q);q->notify_index=0;q->pending_recognition=on;
+    text(q,on?"\r\n+BVRA: 1\r\n":"\r\n+BVRA: 0\r\n");
+    q->response_deadline=a733_deadline_after_saturating(q->now,q->timeout_us);return 1;
+}
 int bt_hfp_ag_indicators(struct bt_hfp_ag *q,const uint8_t *p)
 {
     if(!q || !q->rfcomm || (q->phase!=BT_HFP_AG_INITIALIZING && q->phase!=BT_HFP_AG_READY) ||
        !external(q,p,7) || !values(p) || !identity(q))return -1;
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+    if(q->calls && (p[1]!=q->control.call.call || p[2]!=q->control.call.setup || p[3]))return -1;
+#endif
     for(unsigned i=0;i<7;++i){q->indicators[i]=p[i];if(p[i]!=q->notified[i])q->changed|=1u<<i;else q->changed&=~(1u<<i);}return 1;
 }
 int bt_hfp_ag_close(struct bt_hfp_ag *q,uint64_t deadline)

@@ -1,6 +1,7 @@
 /* Native artifact-bound radio firmware engine. Protocol/artifact identities and
  * SHA-256 specification references are documented in docs/radio-firmware.md. */
 #include "aic8800_firmware.h"
+#include "a733_range.h"
 
 enum { LOAD_ADID, LOAD_BT_PATCH, APPLY_BT_TABLE, LOAD_WIFI, READ_POINTERS,
     APPLY_WIFI_PATCH, START_WIFI };
@@ -12,9 +13,6 @@ static const char *const hashes[] = {
     "55b5a20865aca7cd2edaae1733a36da45d2b0b29060bc243d8e9ec212e139f6c",
     "ae8d548df96c132c445f888b91eab5ef03c19991b8bdef4fc12ebfcbf9f953e7"
 };
-static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{ return (uintptr_t)a < (uintptr_t)b + bn && (uintptr_t)b < (uintptr_t)a + an; }
 static uint32_t le32(const uint8_t *p)
 { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static void put32(uint8_t *p, uint32_t v)
@@ -29,14 +27,14 @@ void aic8800_firmware_stop(struct aic8800_firmware *f, const void *owner, enum a
 }
 static int observe(struct aic8800_firmware *f, uint64_t now)
 {
-    if (now < f->last_now || now >= f->deadline) {
+    if (!a733_deadline_admit(now,&f->last_now,f->deadline)) {
         aic8800_firmware_stop(f,f->owner,AIC8800_FW_TIME_ERROR); return 0;
     }
-    f->last_now=now;return 1;
+    return 1;
 }
 int aic8800_firmware_init(struct aic8800_firmware *f, const struct aic8800_firmware_config *c)
 {
-    if (!span(f,sizeof(*f)) || !span(c,sizeof(*c)) || overlap(f,sizeof(*f),c,sizeof(*c)) ||
+    if (!a733_span_excl(f,sizeof(*f)) || !a733_span_excl(c,sizeof(*c)) || a733_extents_overlap_prechecked((uintptr_t)f,sizeof(*f),(uintptr_t)c,sizeof(*c)) ||
         f->initialized || c->profile != 1 || c->table_bursts > 1) return 0;
     struct aic8800_sdio_response chip={.is_memory_read=1,.address=AIC8800_SDIO_CHIP_ADDRESS,.value=c->identity.chip_word};
     struct aic8800_sdio_response sub={.is_memory_read=1,.address=AIC8800_SDIO_SUBREV_ADDRESS,.value=c->identity.subrevision_word};
@@ -45,9 +43,11 @@ int aic8800_firmware_init(struct aic8800_firmware *f, const struct aic8800_firmw
         (!id.is_h && id.revision != 3 && id.revision != 7)) return 0;
     for (unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i) {
         const struct aic8800_firmware_blob *b=&c->blobs[i];
-        if (b->bytes != sizes[i == AIC8800_WIFI_IMAGE && id.is_h ? 4 : i] || !span(b->data,b->bytes) ||
-            overlap(f,sizeof(*f),b->data,b->bytes) || overlap(c,sizeof(*c),b->data,b->bytes)) return 0;
-        for (unsigned j=0;j<i;++j) if (overlap(b->data,b->bytes,c->blobs[j].data,c->blobs[j].bytes)) return 0;
+        if (b->bytes != sizes[i == AIC8800_WIFI_IMAGE && id.is_h ? 4 : i] || !a733_span_excl(b->data,b->bytes) ||
+            a733_extents_overlap_prechecked((uintptr_t)f,sizeof(*f),(uintptr_t)b->data,b->bytes) ||
+            a733_extents_overlap_prechecked((uintptr_t)c,sizeof(*c),(uintptr_t)b->data,b->bytes)) return 0;
+        for (unsigned j=0;j<i;++j)
+            if (a733_extents_overlap_prechecked((uintptr_t)b->data,b->bytes,(uintptr_t)c->blobs[j].data,c->blobs[j].bytes)) return 0;
     }
     struct aic8800_firmware initial={0}; initial.config=*c;initial.config.identity=id;
     initial.initialized=1;initial.h_variant=id.is_h;*f=initial;return 1;
@@ -197,8 +197,8 @@ static void advance(struct aic8800_firmware *f,uint64_t now,const struct aic8800
         if(f->pair_index==f->table_pairs){
             f->pair_index=0;f->table_offset+=24+(size_t)f->table_pairs*8;
             if(f->table_type==4){
-                if(f->power_delay_ticks>UINT64_MAX-now){aic8800_firmware_stop(f,f->owner,AIC8800_FW_TIME_ERROR);return;}
-                f->delay_until=now+f->power_delay_ticks;f->state=AIC8800_FW_DELAY;
+                if(!a733_deadline_after(now,f->power_delay_ticks,&f->delay_until)){aic8800_firmware_stop(f,f->owner,AIC8800_FW_TIME_ERROR);return;}
+                f->state=AIC8800_FW_DELAY;
             }
         }
     }else if(f->phase==READ_POINTERS){
@@ -215,9 +215,13 @@ enum aic8800_codec_result aic8800_firmware_response(struct aic8800_firmware *f,c
     const void *input,size_t available,uint64_t now,struct aic8800_sdio_response *output)
 {
     if(!f||!f->initialized||!owner||f->owner!=owner||f->state==AIC8800_FW_FAULT||
-        !span(input,available)||!span(output,sizeof(*output))||overlap(f,sizeof(*f),input,available)||
-        overlap(f,sizeof(*f),output,sizeof(*output))||overlap(input,available,output,sizeof(*output)))return AIC8800_CODEC_INVALID;
-    for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)if(overlap(output,sizeof(*output),f->config.blobs[i].data,f->config.blobs[i].bytes))return AIC8800_CODEC_INVALID;
+        !a733_span_excl(input,available)||!a733_span_excl(output,sizeof(*output))||
+        a733_extents_overlap_prechecked((uintptr_t)f,sizeof(*f),(uintptr_t)input,available)||
+        a733_extents_overlap_prechecked((uintptr_t)f,sizeof(*f),(uintptr_t)output,sizeof(*output))||
+        a733_extents_overlap_prechecked((uintptr_t)input,available,(uintptr_t)output,sizeof(*output)))return AIC8800_CODEC_INVALID;
+    for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
+        if(a733_extents_overlap_prechecked((uintptr_t)output,sizeof(*output),(uintptr_t)f->config.blobs[i].data,
+            f->config.blobs[i].bytes))return AIC8800_CODEC_INVALID;
     if(!observe(f,now))return AIC8800_CODEC_INVALID;
     struct aic8800_sdio_response r;
     enum aic8800_codec_result result=aic8800_sdio_decode_identity_response(input,available,AIC8800_IDENTITY_CHIP,&r);

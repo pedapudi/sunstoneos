@@ -1,6 +1,6 @@
 --- apps/board/admission.c
 +++ board-admission.c
-@@ -38,7 +38,7 @@
+@@ -43,7 +43,7 @@
         s->rtc_control||s->rtc_divider||s->rtc_source||s->deadline_us||s->session_start_ticks||s->reload_after_ticks||
  #endif
  #if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_SD_SINGLE_CORE)

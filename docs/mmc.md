@@ -276,6 +276,43 @@ scoped to those unchanged paths. The [bounded-write validation](mmc-write.md)
 covers the affected shared command path and current native object compilation.
 Neither compilation nor a model establishes physical storage operation.
 
+## Files are read through a FAT or exFAT volume
+
+The [read-only filesystem port](filesystem.md) mounts a FAT or exFAT volume on
+the card and loads whole files through this core. It passes a private 4 KiB
+buffer to `sunxi_mmc_read`, polls until DONE or FAULT and copies data out only
+after success. A fault keeps that buffer borrowed and stops the port. The core
+itself is unchanged and has no filesystem knowledge.
+
+## UHS-I modes need a signaling-voltage writer and board qualification
+
+The board's device tree (`sun60i-a733-orangepi-zero3w.dts` at the reference
+kernel revision listed under sources and evidence) enables SDR50, DDR50 and
+SDR104 on SDC0, with a 150 MHz limit. It names DC1SW2 as the card supply and the
+3.3 V signaling supply, and CLDO5 as the 1.8 V signaling supply. The SoC tree
+gives SDC0 a `mmc_1v8` pin state that sets PF0–PF5 to 1.8 V. The pinned Linux
+`sunxi-mmc.c` switches signaling by selecting that pin state in
+`sunxi_mmc_signal_voltage_switch`, and `sunxi_mmc_execute_tuning` sweeps sample
+delays with CMD19.
+
+These modes are not implemented. The following conditions block them:
+
+- Switching to 1.8 V writes the PF bank voltage setting. The same bank carries
+  the PF6 card-detect input and the UART0 and JTAG functions on PF0–PF5, and the
+  [platform binding](mmc-platform.md) excludes every bank-voltage writer.
+- After CMD11 the card keeps 1.8 V signaling until its supply is removed.
+  DC1SW2 also feeds the board's shared 3.3 V distribution, so a failed switch
+  can be recovered only by removing board power.
+- Tuning chooses a sample delay from CMD19 results on the physical bus. A host
+  model cannot establish a valid delay window.
+- No SD command has yet run on either board, so the existing default-speed and
+  high-speed profiles are themselves unqualified.
+
+Adding SDR50 or SDR104 requires physical qualification of the existing
+profiles, a reviewed bank-voltage writer that excludes the debug functions, a
+recovery procedure for a card left at 1.8 V and a tuning procedure validated on
+the board.
+
 ## Remaining storage coverage
 
 The native platform binding implements clock, rail, pin, reset and presence
@@ -285,8 +322,8 @@ identification/read attempt. Only the read-only SD service permits its explicit
 first CMD0 policy in place of cold card history. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
 CMD1 timeout require new evidence before another physical attempt.
 
-SD v1 identification, SDUC, eight-bit buses, UHS rates, voltage switching,
-tuning, DMA, interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
+SD v1 identification, SDUC, eight-bit buses, UHS rates and their voltage
+switching and tuning, DMA, interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
 4 KiB sectors, command queuing, hotplug/recovery and power management remain
 outside the implemented profile. Four-bit default-speed and high-speed SD reads
 are implemented but physically unqualified, as is the update-bound writer at

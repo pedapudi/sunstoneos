@@ -1,5 +1,5 @@
 #include "boot.h"
-#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE) || defined(SUNSTONE_THERMAL_SINGLE_CORE)
+#ifdef SUNSTONE_CACHED_SINGLE_CORE
 #include "session.h"
 #include "a733_device_memory_layout.h"
 #include "a733_cached_memory.h"
@@ -41,6 +41,14 @@ static unsigned rtc_runtime_secondary_off __attribute__((section(".rtc_runtime_r
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
 static struct a733_smp_contract npu_runtime_contract __attribute__((section(".npu_runtime_retained")));
 static unsigned npu_runtime_secondary_off __attribute__((section(".npu_runtime_retained")));
+#elif defined(SUNSTONE_PWM_SINGLE_CORE)
+static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+static struct a733_smp_contract pwm_runtime_contract __attribute__((section(".pwm_runtime_retained")));
+static unsigned pwm_runtime_secondary_off __attribute__((section(".pwm_runtime_retained")));
+#elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
+static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+static struct a733_smp_contract crypto_runtime_contract __attribute__((section(".crypto_runtime_retained")));
+static unsigned crypto_runtime_secondary_off __attribute__((section(".crypto_runtime_retained")));
 #else
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
 #endif
@@ -97,6 +105,14 @@ void sd_single_core_monitor_init(void)
     extern uint64_t __thermal_retained_start[],__thermal_retained_end[];
     for(uint64_t *p=__thermal_retained_start;p<__thermal_retained_end;++p)*p=0;
 #endif
+#ifdef SUNSTONE_PWM_SINGLE_CORE
+    extern uint64_t __pwm_retained_start[],__pwm_retained_end[];
+    for(uint64_t *p=__pwm_retained_start;p<__pwm_retained_end;++p)*p=0;
+#endif
+#ifdef SUNSTONE_CRYPTO_SINGLE_CORE
+    extern uint64_t __crypto_retained_start[],__crypto_retained_end[];
+    for(uint64_t *p=__crypto_retained_start;p<__crypto_retained_end;++p)*p=0;
+#endif
 #ifdef SUNSTONE_BOARD_SINGLE_CORE
     extern uint64_t __board_retained_start[],__board_retained_end[];
     for(uint64_t *p=__board_retained_start;p<__board_retained_end;++p)*p=0;
@@ -125,32 +141,28 @@ void sd_single_core_monitor_init(void)
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     if(!gpu_application_seal_session(&admission)||!secondaries_off()||
        !a733_device_memory_boot_admit(&admission)||!a733_cached_memory_prepare())finish(1);
-    /* The shared single-core providers require outer-shareable Device MMIO.
-     * Both regimes are still cache-disabled; no table has been adopted. */
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
     extern int thermal_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !thermal_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     extern int board_identity_prepare(uint64_t);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !board_identity_prepare(admission.startup_deadline)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)
     extern int rtc_session_prepare(const struct a733_smp_contract *);
     if(!secondaries_off()||!board_session_prepare(&admission)||
        !rtc_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+#elif defined(SUNSTONE_PWM_SINGLE_CORE)
+    extern int pwm_session_prepare(const struct a733_smp_contract *);
+    if(!secondaries_off()||!board_session_prepare(&admission)||
+       !pwm_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
+#elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
+    extern int crypto_session_prepare(const struct a733_smp_contract *);
+    if(!secondaries_off()||!board_session_prepare(&admission)||
+       !crypto_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     if(!npu_single_core_seal(&admission)||!secondaries_off()||!a733_cached_memory_prepare())finish(1);
-    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
-    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #else
     if(!board_session_prepare(&admission)||!storage_read_session_prepare(&admission)||
        !secondaries_off())finish(1);
@@ -166,6 +178,10 @@ void sd_single_core_monitor_init(void)
     rtc_runtime_contract=admission;rtc_runtime_secondary_off=1;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     npu_runtime_contract=admission;npu_runtime_secondary_off=1;
+#elif defined(SUNSTONE_PWM_SINGLE_CORE)
+    pwm_runtime_contract=admission;pwm_runtime_secondary_off=1;
+#elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
+    crypto_runtime_contract=admission;crypto_runtime_secondary_off=1;
 #endif
     __asm__ volatile("dsb sy":::"memory");
     /* Snapshot helpers hash and publish before any providers. EL3 remains
@@ -203,6 +219,11 @@ void sd_single_core_monitor_init(void)
      * interrupt. Disabling delivery alone cannot retire a pending/active owner. */
     if((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|
         mmio_read(GICD_BASE+0x308))&(1U<<31))finish(4);
+#endif
+#ifdef SUNSTONE_PWM_SINGLE_CORE
+    /* Reject inherited PWM IRQ state before distributor cleanup hides it. */
+    if((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|
+        mmio_read(GICD_BASE+0x308))&(1u<<3))finish(1);
 #endif
     saved.ready = 1;
     // Disable groups before changing routing or per-interrupt configuration.
@@ -284,6 +305,15 @@ void sd_single_core_monitor_init(void)
     *(volatile uint64_t *)(GICD_BASE+0x6238)=0;
     __asm__ volatile("dsb sy":::"memory");
 #endif
+#ifdef SUNSTONE_PWM_SINGLE_CORE
+    /* Same Group1NS/level/priority/boot-CPU route as pwm's accepted boot. */
+    mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1u<<3));
+    mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1u<<3));
+    mmio_write(GICD_BASE+0xc10,mmio_read(GICD_BASE+0xc10)&~(3u<<6));
+    mmio_write(GICD_BASE+0x440,(mmio_read(GICD_BASE+0x440)&0x00ffffff)|0xd8000000);
+    *(volatile uint64_t *)(GICD_BASE+0x6218)=0;
+    __asm__ volatile("dsb sy":::"memory");
+#endif
     value = admission.diagnostic_deadline;
     __asm__ volatile("msr cntps_cval_el1, %0" :: "r"(value));
     value = 1;
@@ -316,6 +346,10 @@ const struct a733_smp_contract *sd_single_core_contract(void)
     return &rtc_runtime_contract;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     return &npu_runtime_contract;
+#elif defined(SUNSTONE_PWM_SINGLE_CORE)
+    return &pwm_runtime_contract;
+#elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
+    return &crypto_runtime_contract;
 #else
     return &admission;
 #endif
@@ -333,6 +367,10 @@ int sd_single_core_secondaries_admitted(void)
     return rtc_runtime_secondary_off==1;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     return npu_runtime_secondary_off==1;
+#elif defined(SUNSTONE_PWM_SINGLE_CORE)
+    return pwm_runtime_secondary_off==1;
+#elif defined(SUNSTONE_CRYPTO_SINGLE_CORE)
+    return crypto_runtime_secondary_off==1;
 #else
     return secondary_off_admitted==1;
 #endif

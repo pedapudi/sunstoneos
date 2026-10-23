@@ -11,6 +11,9 @@ option(SUNSTONE_GPU_TRANSPORT_ONLY "Observe the native shared USB transport with
 file(MAKE_DIRECTORY "${gpsc_build}")
 get_target_property(gpsc_sources sunstone-a733-gpu-render SOURCES)
 list(FILTER gpsc_sources EXCLUDE REGEX "(/platform/a733-smp-|/platform/a733/cpu_|/freertos-a733-smp-cached/|/storage-maintenance/(boot|platform|continue|port|build-id)\\.|/gpu-application/(boot[^/]*|platform|build-id)\\.)")
+# The SMP base links its patched tasks.c from the port directory, which the
+# filter removes; a boot-CPU-only image links the kernel's own tasks.c.
+list(APPEND gpsc_sources "${FREERTOS_DIR}/tasks.c")
 list(APPEND gpsc_sources "${gpsc_root}/platform/a733/cpu_coherence.c"
  "${gpsc_root}/platform/a733/cpu_coherence.S" "${gpsc_root}/platform/a733/cpu_start.c"
  "${gpsc_root}/platform/a733-smp-cached/memory.c")
@@ -80,7 +83,7 @@ list(FILTER gpsc_includes EXCLUDE REGEX "(a733-smp-cached|freertos-a733-smp-cach
 set_property(TARGET ${gpsc_target} PROPERTY COMPILE_OPTIONS "${gpsc_options}")
 target_include_directories(${gpsc_target} BEFORE PRIVATE "${gpsc_app}" "${gpsc_port}")
 target_include_directories(${gpsc_target} PRIVATE ${gpsc_includes})
-target_compile_definitions(${gpsc_target} PRIVATE ${gpsc_definitions} GUEST=1 SUNSTONE_GPU_SINGLE_CORE=1)
+target_compile_definitions(${gpsc_target} PRIVATE ${gpsc_definitions} GUEST=1 SUNSTONE_CACHED_SINGLE_CORE=1 SUNSTONE_GPU_SINGLE_CORE=1)
 # The shared adapter's local boot.h stays unchanged; include the GPU log placement first.
 set_property(SOURCE "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c" "${gpsc_build}/platform.c" APPEND PROPERTY COMPILE_OPTIONS
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,${gpsc_target}>:-include>"

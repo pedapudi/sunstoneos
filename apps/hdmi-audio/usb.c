@@ -5,6 +5,7 @@
 struct hdmi_audio_usb usb;
 #include "a733_usb_platform_native.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "boot.h"
 #include "tusb.h"
 #include "device/dcd.h"
@@ -58,9 +59,11 @@ static int authorize(void *v,const struct a733_usb_platform_config *c,const stru
        memcmp(c->fabric,app.session.usb.fabric,sizeof(c->fabric))||
        memcmp(c->rate_hz,app.session.usb.fabric_hz,sizeof(c->rate_hz)))return -1;
     int r=providers();if(r!=1)return r;
+    /* Device identity pages; the write translation must be outer shareable. */
+    static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
     const uintptr_t pages[]={0x02002000,0x04100000,0x07090160};
-    for(unsigned i=0;i<3;++i){struct aarch64_translation tr;
-        if(!aarch64_device_translate(pages[i],1,&tr)||tr.physical!=pages[i]||tr.attributes||tr.shareability!=2)return -1;}
+    for(unsigned i=0;i<3;++i)
+        if(!a733_mapping_check(aarch64_device_translate,pages[i],pages[i],&rule))return -1;
     return 1;
 }
 static int enter(void *v,uint64_t deadline)

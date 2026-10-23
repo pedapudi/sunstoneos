@@ -1,29 +1,11 @@
 #include "a733_platform_locks.h"
+#include "a733_task_context.h"
 #include "task.h"
 
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "Platform locks require scheduler-state, current-task and mutex-holder APIs"
 #endif
 
-static int task_context(void)
-{
-    uint64_t flags, nesting, critical;
-    __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(flags) :: "memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[], ullCriticalNestings[];
-    uint64_t core;
-    __asm__ volatile("mrs %0, tpidr_el1" : "=r"(core));
-    nesting = core < configNUMBER_OF_CORES ? ullPortInterruptNestings[core] : 1;
-    critical = core < configNUMBER_OF_CORES ? ullCriticalNestings[core] : 1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting = ullPortInterruptNesting; critical = ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0" :: "r"(flags) : "memory");
-    return !(flags & 0x80) && !nesting && !critical &&
-        xTaskGetSchedulerState() == taskSCHEDULER_RUNNING && xTaskGetCurrentTaskHandle();
-}
 static int reg_enter(void *p, uint64_t deadline)
 { return a733_platform_lock_enter(p, A733_PLATFORM_REGISTER_LOCK, deadline); }
 static int i2c_enter(void *p, uint64_t deadline)
@@ -45,7 +27,7 @@ int a733_platform_locks_init(struct a733_platform_locks *p, int (*now)(void *, u
 }
 int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline)
 {
-    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !task_context() ||
+    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !a733_task_context_any_no_el_check() ||
         (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return 0;
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
     for (unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
@@ -72,14 +54,14 @@ int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_l
 }
 void a733_platform_lock_leave(struct a733_platform_locks *p, enum a733_platform_lock lock)
 {
-    configASSERT(p && p->initialized && (unsigned)lock < A733_PLATFORM_LOCK_COUNT && task_context());
+    configASSERT(p && p->initialized && (unsigned)lock < A733_PLATFORM_LOCK_COUNT && a733_task_context_any_no_el_check());
     configASSERT(xSemaphoreGetMutexHolder(p->mutex[lock]) == xTaskGetCurrentTaskHandle());
     configASSERT(!(atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock)));
     configASSERT(xSemaphoreGive(p->mutex[lock]) == pdTRUE);
 }
 int a733_platform_lock_retain(struct a733_platform_locks *p, enum a733_platform_lock lock)
 {
-    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !task_context() ||
+    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !a733_task_context_any_no_el_check() ||
         xSemaphoreGetMutexHolder(p->mutex[lock]) != xTaskGetCurrentTaskHandle()) return 0;
     atomic_fetch_or_explicit(&p->retained, 1u << lock, memory_order_release);
     return 1;

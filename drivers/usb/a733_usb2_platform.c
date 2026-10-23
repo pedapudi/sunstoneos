@@ -5,6 +5,7 @@
  *          Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  */
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include "a733_usb2_platform.h"
 #include "a733_usb3_phy.h"
 #define B(n) (UINT32_C(1)<<(n))
@@ -18,14 +19,12 @@ static const enum a733_rail supplies[A733_USB2_SUPPLIES+1]={A733_RAIL_DCDC1,A733
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const unsigned parent_mhz[3][8]={{24,0,0,600},{24,0,800,600,480},{24,600,0,480,400}};
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 int a733_usb2_platform_outside(struct a733_usb2_platform *p,const void *v,size_t n)
 {
-    return p&&p->self==p&&separate(p,sizeof(*p),v,n)&&
-        separate(p->clocks,sizeof(*p->clocks),v,n)&&separate(p->rails,sizeof(*p->rails),v,n)&&
-        separate(p->pmic,sizeof(*p->pmic),v,n)&&separate(p->pck,sizeof(*p->pck),v,n)&&
-        separate(p->typec,sizeof(*p->typec),v,n)&&p->ops.outside(p->cookie,v,n)==1&&
+    return p&&p->self==p&&a733_ranges_disjoint(p,sizeof(*p),v,n)&&
+        a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
+        a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&a733_ranges_disjoint(p->pck,sizeof(*p->pck),v,n)&&
+        a733_ranges_disjoint(p->typec,sizeof(*p->typec),v,n)&&p->ops.outside(p->cookie,v,n)==1&&
         p->pmic->ops.outside(p->pmic->cookie,v,n)==1&&
         p->typec->config.ops.outside(p->typec->config.context,v,n)==1;
 }
@@ -52,10 +51,10 @@ int a733_usb2_platform_init(struct a733_usb2_platform *p,const struct a733_usb2_
         pmic->clocks!=clocks||pmic->rails!=rails||!valid(c)||!o->now||!o->current||
         (c->superspeed&&(!o->read16||!o->write16||typec->config.source_ma<900))||
         !o->admit||!o->enter||!o->leave||!o->retain||!o->read||!o->write||!o->outside||
-        !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||
-        !separate(p,sizeof(*p),clocks,sizeof(*clocks))||!separate(p,sizeof(*p),rails,sizeof(*rails))||
-        !separate(p,sizeof(*p),pmic,sizeof(*pmic))||!separate(p,sizeof(*p),pck,sizeof(*pck))||
-        !separate(p,sizeof(*p),typec,sizeof(*typec))||o->outside(cookie,p,sizeof(*p))!=1||
+        !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
+        !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
+        !a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||!a733_ranges_disjoint(p,sizeof(*p),pck,sizeof(*pck))||
+        !a733_ranges_disjoint(p,sizeof(*p),typec,sizeof(*typec))||o->outside(cookie,p,sizeof(*p))!=1||
         pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||
         typec->config.ops.outside(typec->config.context,p,sizeof(*p))!=1)return 0;
     *p=(struct a733_usb2_platform){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,
@@ -63,7 +62,7 @@ int a733_usb2_platform_init(struct a733_usb2_platform *p,const struct a733_usb2_
     atomic_init(&p->busy,0);return 1;
 }
 static int timely(struct a733_usb2_platform *p)
-{uint64_t n;if(p->ops.now(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->deadline&&n<p->config.lifetime_deadline;}
+{uint64_t n;if(p->ops.now(p->cookie,&n)!=1||!a733_monotonic_advance(n,&p->last_now))return 0;return n<p->deadline&&n<p->config.lifetime_deadline;}
 static int health(struct a733_usb2_platform *);
 static int attachment(struct a733_usb2_platform *);
 /* Each access needs a fresh observation. Provider or publication BUSY is

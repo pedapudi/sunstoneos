@@ -6,13 +6,14 @@
  * Source, hash and adaptation scope: apps/g2d/sources.json.
  */
 #include "a733_de_sys_power.h"
+#include "a733_range.h"
 enum { INITIAL,WAIT,READY,FAILED };
 static int fail(struct a733_de_sys_power *p){p->state=FAILED;return -1;}
 static int timely(struct a733_de_sys_power *p)
 {
     uint64_t t;
-    if(p->ops.now(p->context,&t)!=1||t<p->last_now||t>=p->deadline)return 0;
-    p->last_now=t;return p->state!=WAIT||t<p->wait_deadline;
+    if(p->ops.now(p->context,&t)!=1||!a733_deadline_admit(t,&p->last_now,p->deadline))return 0;
+    return p->state!=WAIT||t<p->wait_deadline;
 }
 static int read32(struct a733_de_sys_power *p,unsigned off,uint32_t *v)
 {return timely(p)&&p->ops.read(p->context,p->base+off,v)==1&&timely(p);}
@@ -28,7 +29,7 @@ int a733_de_sys_power_init_domain(struct a733_de_sys_power *p,
     const struct a733_de_sys_power_ops *o,void *v,uint64_t d,unsigned domain)
 {
     if(!p||p->self||!o||!o->authorize||!o->now||!o->enter||!o->leave||
-       !o->read||!o->write||!d||(domain!=1&&domain!=9&&domain!=10))return 0;
+       !o->read||!o->write||!d||(domain!=1&&domain!=10))return 0;
     p->self=p;p->ops=*o;p->context=v;p->deadline=d;
     p->base=A733_PCK_DOMAIN_BASE(domain);return 1;
 }
@@ -64,8 +65,7 @@ int a733_de_sys_power_poll(struct a733_de_sys_power *p)
         }
         /* Set the bound before the write can take effect. WAIT permits our
          * command8/status0 transition; initial incoherence was refused above. */
-        if(!timely(p)||p->last_now>UINT64_MAX-10000)return fail(p);
-        p->wait_deadline=p->last_now+10000;
+        if(!timely(p)||!a733_deadline_after(p->last_now,10000,&p->wait_deadline))return fail(p);
         if(p->wait_deadline>p->deadline)p->wait_deadline=p->deadline;
         p->state=WAIT;
         if(!write32(p,0,(command&~UINT32_C(15))|8)||

@@ -13,9 +13,10 @@ static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskDelay(1);}
 #include "../board/usb0_service.h"
 
 /* Header-only queries until committed upload completes. Output bytes are sent
- * directly from the private immutable copy, with bounded TinyUSB FIFO writes.
- * ACK is accepted only after actual transfer completion and binds generation
- * plus copied digest. It never releases device or CPU buffers. */
+ * directly from the private immutable copy, with bounded TinyUSB FIFO writes;
+ * a sequence sends every job's output in job order. ACK is accepted only after
+ * actual transfer completion and binds generation plus copied digest. It never
+ * releases device or CPU buffers. */
 static uint8_t response[DEINTERLACE_RESULT_HEADER],ack[40];
 static size_t response_bytes,sent,transferred,ack_used;
 static unsigned delivered,acked,acking,terminal_zlp;
@@ -88,7 +89,8 @@ static void exchange(void)
     unsigned result=atomic_load_explicit(&deinterlace.result,memory_order_acquire);
     if(incoming[0]==1){if(result!=1||!delivered||acked)stop();acking=1;return;}
     memset(response,0,sizeof(response));put32(response,0x52494453);put32(response+4,1);
-    put32(response+8,acked?3:result);put32(response+12,result==1&&!acked?(uint32_t)deinterlace.bytes:0);
+    size_t outputs=a733_deinterlace_jobs(&deinterlace.session)*deinterlace.bytes;
+    put32(response+8,acked?3:result);put32(response+12,result==1&&!acked?(uint32_t)outputs:0);
     put32(response+16,(uint32_t)board.session.epoch);put32(response+20,(uint32_t)(board.session.epoch>>32));
     put32(response+24,(uint32_t)board.session.generation);put32(response+28,(uint32_t)(board.session.generation>>32));
     memcpy(response+32,deinterlace.session.fixture,32);
@@ -96,11 +98,15 @@ static void exchange(void)
     if(result==1)memcpy(response+96,deinterlace.digest,32);
     const uint32_t geometry[]={deinterlace.session.width,deinterlace.session.height,
       deinterlace.session.y_stride,deinterlace.session.uv_stride,deinterlace.session.format,
-      deinterlace.session.mode,deinterlace.session.top_field_first,deinterlace.session.reserved};
+      deinterlace.session.mode,deinterlace.session.top_field_first,
+      deinterlace.session.strength|(uint32_t)deinterlace.session.repeats<<16};
     for(unsigned i=0;i<8;++i)put32(response+128+4*i,geometry[i]);
     if(result){put32(response+160,deinterlace.complete);put32(response+164,deinterlace.status);
-      put32(response+168,deinterlace.iommu.fault.scanned_masters);put32(response+172,deinterlace.guards_ok);}
-    sent=transferred=0;terminal_zlp=0;response_bytes=DEINTERLACE_RESULT_HEADER+(result==1&&!acked?deinterlace.bytes:0);
+      put32(response+168,deinterlace.iommu.fault.scanned_masters);put32(response+172,deinterlace.guards_ok);
+      /* A sequence reports its finished jobs and each job's TNR strength. */
+      if(deinterlace.session.repeats){put32(response+176,deinterlace.job+deinterlace.complete);
+        if(deinterlace.session.mode==A733_DEINTERLACE_TNR)memcpy(response+180,deinterlace.strengths,sizeof(deinterlace.strengths));}}
+    sent=transferred=0;terminal_zlp=0;response_bytes=DEINTERLACE_RESULT_HEADER+(result==1&&!acked?outputs:0);
 }
 void board_usb0_task(void *unused)
 {

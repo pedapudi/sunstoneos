@@ -181,7 +181,8 @@ inherited PLL state still requires cold provisioning. A general descriptor
 verifier is unnecessary for this immutable privileged entry once all access
 routes are constrained; the trusted catalogue does not admit arbitrary models.
 Runtime executable-model upload, hot switching, concurrent models and generalized
-graph admission remain unsupported. The small profile retains a 512-byte tensor
+graph admission remain unsupported in this registration; concurrent catalogue
+models use the separate [session runtime](npu-session.md). The small profile retains a 512-byte tensor
 API. Separate retained profiles support the authenticated SH/NT graph and the
 [complete published weight-bearing NN graph](npu-complete-nn.md), including
 external working memory and chunked caller data. These implemented profiles do

@@ -1,10 +1,12 @@
-# Native SHA-256 streams share one crypto-engine owner
+# Native SHA streams share one crypto-engine owner
 
-The A733 SHA-256 driver accepts a stream of bytes and returns one 32-byte digest.
-It submits real hardware descriptors through the existing CE command controller.
-Software adds SHA-256 padding; the engine performs the compression operations.
-Empty messages, exact block multiples and messages spanning multiple DMA tasks
-are implemented. Physical hashing remains unqualified.
+The A733 hash driver accepts a stream of bytes and returns one SHA-1, SHA-224,
+SHA-256, SHA-384 or SHA-512 digest, or the HMAC of the stream under any of
+those hashes. It submits real hardware descriptors through the existing CE
+command controller. Software adds SHA padding and forms the HMAC key blocks;
+the engine performs every compression operation. Empty messages, exact block
+multiples and messages spanning multiple DMA tasks are implemented. Physical
+hashing remains unqualified.
 
 The stream interface is `include/a733_ce_hash.h`, implemented in
 `drivers/crypto/a733_ce_hash.c`. The common owner is
@@ -14,7 +16,10 @@ token, its controller and one page from the existing linker memory pool.
 
 ## A session admits capabilities and owns the engine permanently
 
-A session admits TRNG, SHA-256 or both when constructed. Its immutable capability
+A session admits TRNG, hashing or both when constructed. The hash capability
+bit, named `A733_CE_CAP_SHA256` and aliased `A733_CE_CAP_HASH`, admits every
+SHA method because each method uses the same execution unit, memory and
+security authority. Its immutable capability
 profile participates in the existing platform authorization and binding checks.
 SHA-only admission requires clock, memory, security, IRQ, remote-exclusion,
 prior-drain and recovery authority. It requires neither a TRNG health profile
@@ -48,11 +53,29 @@ remain reserved.
 
 ## Descriptors process padded blocks and preserve intermediate state
 
-The first task uses the standard SHA-256 initial state. Later tasks use the prior
-32-byte intermediate result as an opaque initialization vector. The driver
-copies those bytes without interpreting or swapping them. Every task leaves the
-last-package flag clear, so software supplies all padding and the engine processes
-complete 64-byte blocks.
+The first task uses the engine's standard initial state for the selected
+method. Later tasks use the prior intermediate result as an opaque
+initialization vector. The driver copies those bytes without interpreting or
+swapping them; manual section 19.1.4.13 states that a digest output can be
+configured directly as the next IV. Every task leaves the last-package flag
+clear, so software supplies all padding and the engine processes complete
+blocks.
+
+| Method | Selector | Block | State written per task | Digest |
+| --- | --- | --- | --- | --- |
+| SHA-1 | 1 | 64 bytes | 20 bytes | 20 bytes |
+| SHA-224 | 2 | 64 bytes | 32 bytes | first 28 bytes |
+| SHA-256 | 3 | 64 bytes | 32 bytes | 32 bytes |
+| SHA-384 | 4 | 128 bytes | 64 bytes | first 48 bytes |
+| SHA-512 | 5 | 128 bytes | 64 bytes | 64 bytes |
+
+SHA-224 and SHA-384 tasks request the full 32- or 64-byte state, because a
+continuation needs the complete state. The pinned CE v5 driver does the same:
+it initializes SHA-224 and SHA-384 contexts with the SHA-256 and SHA-512 state
+sizes and requests that size for every package that is not the last. Because
+software padding keeps every task a non-last package, the driver truncates the
+final state to the digest length in software. SHA-384 and SHA-512 padding uses a
+128-bit length field whose upper 64 bits are zero.
 
 A 208-byte descriptor occupies 256 private bytes at the page start. Separate
 cache lines hold the output at offset 256, the intermediate state at offset 320
@@ -72,13 +95,13 @@ its reachability or security permissions.
 | Descriptor field | Implemented value |
 | --- | --- |
 | Channel | 2, under complete engine exclusion |
-| Command | SHA-256 selector 3, without RNG or HMAC |
+| Command | Method selector from the table above, without RNG or hardware HMAC |
 | IV enable | Clear for the first task; set for continuation |
 | Last package | Clear for every software-padded task |
 | Current length | This task's input length in bits, bytes 8–12 |
 | IV address | Page base plus 320 when continuing |
 | First source | Page base plus 384; byte count at offset 36 |
-| First destination | Page base plus 256; 32 output bytes |
+| First destination | Page base plus 256; state bytes from the table above |
 | Total length | Cumulative submitted bits in words 50 and 51 |
 | Unused entries and chains | Zero |
 
@@ -91,7 +114,9 @@ without depending on the manual's inconsistent description of hardware padding.
 
 ## Updates copy input and finalization publishes one digest
 
-`a733_ce_hash_begin` reserves the client slot and issues a generation number.
+`a733_ce_hash_start` selects the method and optional HMAC key, reserves the
+client slot and issues a generation number. `a733_ce_hash_begin` is the same
+call for plain SHA-256.
 One absolute deadline covers the complete stream, including time between
 updates. `a733_ce_hash_update` copies an accepted prefix of a chunk of at most
 2048 bytes into private staging. The caller can change its input immediately
@@ -99,21 +124,41 @@ after the call. When staging fills, polling submits and completes a task before
 accepting more input.
 
 Finalization appends the marker byte, zero fill and original message bit length.
-At the largest partial-buffer boundary, padding occupies 2112 bytes; the driver
-submits a 2048-byte task followed by a 64-byte task. The maximum admitted message
+At the largest partial-buffer boundary, padding occupies at most 2176 bytes; the
+driver submits a 2048-byte task followed by a task of one or two blocks. The maximum admitted message
 length leaves enough space for padding within the 64-bit cumulative bit counter.
 
 Polling returns the digest once, after all tasks complete and the final deadline
-check passes. A later poll of that generation reports consumption without
+check passes. `a733_ce_hash_poll_digest` takes the method's digest length;
+`a733_ce_hash_poll` accepts only 32-byte digests. A later poll of that generation reports consumption without
 copying again. New streams receive fresh generations. Invalid lengths, aliases,
 stale handles and exhausted generations are refused before consuming input.
+
+## HMAC runs as consecutive engine hashes within one stream
+
+HMAC follows RFC 2104. With a key of at most one block, the driver zero-pads the
+key to the block length, privately stores it and queues the key combined with
+the inner pad byte `0x36` ahead of the message. After the inner digest, the
+stream restarts from the default initial state, queues the key combined with
+the outer pad byte `0x5c` followed by the inner digest, and hashes that. Only
+the outer digest is published. A key longer than one block, up to 1024 bytes,
+is first hashed by the same stream: `a733_ce_hash_start` then returns PENDING,
+and polling completes that hash and returns READY before any message input is
+accepted. An empty key is valid.
+
+The engine's own HMAC mode is not used. Its key handling is not described in
+enough detail to verify without hardware, and software key blocks let one
+engine path serve all five methods. The key and the inner digest occupy only
+private service staging and the input line of the task that hashes them. Every
+successful task zeros and cleans that input line, and the private key copy is
+zeroed when the digest is published or the stream fails.
 
 ## Failures retain both the engine and the page
 
 Completion checks the shared controller's actual task status and both security
 banks' error words. Timeout, uncertain launch, changed binding or failed cache
-operations prevent digest publication. Private CPU input and intermediate-state
-staging are erased. Potentially active DMA memory remains quarantined.
+operations prevent digest publication. Private CPU input, intermediate-state
+and HMAC key staging are erased. Potentially active DMA memory remains quarantined.
 
 A fault affects the shared session, so another client cannot resume the engine.
 Registry contention during retention retries metadata only. No failure path
@@ -138,13 +183,27 @@ relocatable native link resolves the actual session, pool, registry and translat
 implementations. Final linker symbols, runtime `memset` and the pool module's
 separate DMA constructor remain external image inputs. This is not a boot check.
 
-The five CE objects contain 28,736 bytes of code and eight bytes of BSS for the
-native owner pointer. The largest direct compiler-reported stack frame is
-352 bytes; no whole-call-chain bound is claimed. Exact executed inputs and
+`checks/a733-ce-modes.c`, driven by `checks/a733-ce-modes.py`, runs the same
+real code against a descriptor-driven model engine for all five methods. The
+model's SHA round constants and initial values come from the script, which
+derives them from prime square and cube roots with exact integer arithmetic.
+The script compares 155 streams with Python `hashlib` and `hmac`: 13 message
+lengths from 0 to 5003 bytes for each method, and HMAC keys of 0, 20, 64, 100,
+131 and 1024 bytes with three message lengths for each method. The model also
+checks each descriptor's selector, state length and continuation state. It
+covers refusal of unknown methods, wrong block multiples, over-long keys,
+aliased keys and wrong digest lengths, and retention after a failed HMAC task.
+These checks, run on 2026-10-21 under ASan and UBSan, pass. They do not qualify
+physical hash output. In the board image build with these methods, the six CE
+objects contain 37,680 bytes of code and eight bytes of BSS.
+
+For the initial SHA-256 stream, the five CE objects contained 28,736 bytes of
+code and eight bytes of BSS for the native owner pointer. The largest direct
+compiler-reported stack frame was 352 bytes; no whole-call-chain bound is claimed. Exact executed inputs and
 artifacts are preserved in
 `~/.cache/sunstoneos/evidence/ce-hash-20261016/batch1/`.
 
-Cipher modes, other hashes, HMAC, asymmetric operations, key ladders and secure
-key handling remain required engine coverage. Hashing does not resolve the
+MD5, SM3, the engine's hardware padding and HMAC modes, asymmetric operations,
+key ladders and secure key handling remain required engine coverage. Hashing does not resolve the
 raw-source characterization and startup qualification required for production
 security use of entropy output.

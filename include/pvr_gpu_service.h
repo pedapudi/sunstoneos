@@ -13,13 +13,25 @@ struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_disposal;
 struct pvr_render_texture_request;
+struct pvr_render_texture_frame;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
-/* Consecutive worker steps taken without waiting while each one makes progress
- * and no request or interrupt wake is queued. */
-#define PVR_GPU_SERVICE_BURST_STEPS 16u
+/* Worker pacing, in microseconds. Steps that progress continue without waiting
+ * for at most BURST_US while nothing is queued. A ready session with a job in
+ * flight waits at most JOB_POLL_US, or until the job deadline if that is
+ * earlier, so a job completes after a lost interrupt or in an image without
+ * interrupt delivery. A ready idle session without interrupt delivery waits at
+ * most IDLE_POLL_US, so firmware events that arrive with no job are drained. */
+#define PVR_GPU_SERVICE_BURST_US 200u
+#define PVR_GPU_SERVICE_JOB_POLL_US 4000u
+#define PVR_GPU_SERVICE_IDLE_POLL_US 50000u
+/* Longest run of CPU-only bursts outside a job or render before the worker
+ * blocks for one tick, so tasks below its priority on its core still run
+ * during long preparation or disposal. Submitting and completing a job or
+ * render is exempt: no tick wait lies between a request and its kick. */
+#define PVR_GPU_SERVICE_CPU_RUN_US 1000u
 /* Firmware UPDATE_STATS counters: partial renders, out-of-memory events and
  * TA, 3D, CDM and TDM context stores, in firmware statistic order 1..6. */
 #define PVR_GPU_SERVICE_STATISTICS 6u
@@ -167,6 +179,10 @@ int pvr_gpu_service_texture(struct pvr_gpu_service *,uint64_t epoch,
     TickType_t wait,uint64_t *ticket);
 int pvr_gpu_service_texture_output(struct pvr_gpu_service *,uint64_t ticket,
     const void **data,uint32_t *bytes);
+/* After a collected PRESENT, describe the lent snapshot to its client. The
+ * consumer stops reading it before sending RELEASE with that ticket. */
+int pvr_gpu_service_texture_present(struct pvr_gpu_service *,uint64_t ticket,
+    struct pvr_render_texture_frame *);
 /* Accept another frame only after acquired previous completion and copied output.
  * Acceptance acknowledges replacement of previous_frame; refusal preserves it. */
 int pvr_gpu_service_draw_next(struct pvr_gpu_service *,uint64_t epoch,uint32_t previous_frame,
@@ -206,6 +222,15 @@ struct pvr_gpu_service {
     struct pvr_ccb_token graphics_cleanup_tokens[6];
     uint32_t graphics_cleanup_address[6], graphics_cleanup_type[6], graphics_cleanup_status[6];
     unsigned graphics_cleanup_count, graphics_cleanup_index, graphics_events_retired;
+    /* Worker pacing counters. Timed waits the worker began and those that
+     * expired without a request or interrupt wake, in READY and in every other
+     * phase. The longest run of bursts outside a job or render that ended with
+     * CPU work left, in clock microseconds, and the number of such runs that
+     * reached CPU_RUN_US and blocked for a tick. */
+    uint32_t ready_timed_waits, lifecycle_timed_waits;
+    uint32_t ready_wait_expiries, lifecycle_wait_expiries;
+    uint32_t yield_running, yield_blocks;
+    uint64_t yield_start, longest_yield_us;
     QueueHandle_t requests;
     StaticQueue_t request_state;
     uint8_t request_storage[PVR_GPU_SERVICE_CLIENTS * sizeof(struct pvr_gpu_service_message)];

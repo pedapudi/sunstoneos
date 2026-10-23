@@ -3,19 +3,17 @@
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_gpu_events.h"
+#include "a733_range.h"
 #include <string.h>
 
-static int span(const void *p, size_t n)
-{ return p && n && n <= UINTPTR_MAX - (uintptr_t)p; }
-static int separate(const void *a, size_t n, const void *b, size_t m)
-{ return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static uint64_t le(const unsigned char *p, unsigned n)
 { uint64_t v = 0; for (unsigned i = 0; i < n; ++i) v |= (uint64_t)p[i] << (i * 8); return v; }
 enum pvr_gpu_event_decode_result pvr_gpu_event_decode(const void *command, size_t bytes,
                                                       struct pvr_gpu_event *out)
 {
-    if (bytes != PVR_CCB_COMMAND_BYTES || !span(command, bytes) || !span(out, sizeof(*out)) ||
-        !separate(command, bytes, out, sizeof(*out))) return PVR_GPU_EVENT_DECODE_INVALID;
+    if (bytes != PVR_CCB_COMMAND_BYTES || !a733_span_excl_nonempty(command, bytes) ||
+        !a733_span_excl_nonempty(out, sizeof(*out)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)command, bytes, (uintptr_t)out, sizeof(*out))) return PVR_GPU_EVENT_DECODE_INVALID;
     const unsigned char *b = command;
     uint32_t type = (uint32_t)le(b, 4);
     if (type < (PVR_CCB_MAGIC | 101u) || type > (PVR_CCB_MAGIC | 108u))
@@ -62,11 +60,11 @@ int pvr_gpu_events_init(struct pvr_gpu_events *s, uint64_t epoch,
     const struct pvr_gpu_event_resource *resources, unsigned count,
     const struct pvr_gpu_event_handlers *handlers, void *context)
 {
-    if (!span(s, sizeof(*s)) || s->phase != PVR_GPU_EVENTS_NEW || !epoch ||
-        count > PVR_GPU_EVENTS_RESOURCES || !span(handlers, sizeof(*handlers)) ||
-        !separate(s, sizeof(*s), handlers, sizeof(*handlers)) ||
-        (count && (!span(resources, count * sizeof(*resources)) ||
-                   !separate(s, sizeof(*s), resources, count * sizeof(*resources))))) return 0;
+    if (!a733_span_excl_nonempty(s, sizeof(*s)) || s->phase != PVR_GPU_EVENTS_NEW || !epoch ||
+        count > PVR_GPU_EVENTS_RESOURCES || !a733_span_excl_nonempty(handlers, sizeof(*handlers)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)handlers, sizeof(*handlers)) ||
+        (count && (!a733_span_excl_nonempty(resources, count * sizeof(*resources)) ||
+                   !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)resources, count * sizeof(*resources))))) return 0;
     for (unsigned i = 0; i < count; ++i) {
         if (resources[i].kind < PVR_GPU_RESOURCE_ZS || resources[i].kind > PVR_GPU_RESOURCE_PROCESS ||
             !resources[i].owner || !resources[i].token) return 0;
@@ -93,7 +91,8 @@ int pvr_gpu_events_dispatch(struct pvr_gpu_events *s, uint64_t epoch, const void
     if (s->phase == PVR_GPU_EVENTS_DISPATCHING) return fail(s, PVR_GPU_EVENTS_REENTRY);
     if (s->phase != PVR_GPU_EVENTS_READY) return 0;
     s->last_bytes = bytes;
-    if (!span(command, bytes) || !separate(s, sizeof(*s), command, bytes))
+    if (!a733_span_excl_nonempty(command, bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)command, bytes))
         return fail(s, PVR_GPU_EVENTS_INVALID);
     memset(s->last_raw, 0, sizeof(s->last_raw));
     memcpy(s->last_raw, command, bytes < sizeof(s->last_raw) ? bytes : sizeof(s->last_raw));

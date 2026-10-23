@@ -59,7 +59,9 @@ int a733_radio_session_init(struct a733_radio_session *,struct a733_radio_platfo
 int a733_radio_session_init_bootstrap(struct a733_radio_session *,struct a733_radio_platform *,
     const struct a733_radio_session_config *);
 /* Owner-only authenticated completed firmware generation; 1 ready,0 pending/
- * contention,-1 invalid/fault. Readiness establishes bootstrap, not HCI. */
+ * contention,-1 invalid/fault. Readiness establishes bootstrap, not HCI. A
+ * full session reports it too, also while Wi-Fi reconnects or recovers, so a
+ * Bluetooth client on the same owner task shares the one firmware load. */
 int a733_radio_session_bootstrap(struct a733_radio_session *,uint64_t *generation);
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *);
 /* Owner-only external prerequisite failure. Closes network admission before
@@ -68,7 +70,10 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
 /* Serialized owner task only. Each admission directly authenticates the real
  * platform borrow. Deadlines must fit the current runtime lease. RF, association
  * and open-port authority remain explicit lower-layer inputs. */
-/* Healthy, same-AP reconnect with fixed IPv4 or DHCP. All sockets must have completed
+/* Healthy reconnect with fixed IPv4 or DHCP to an admitted access point of the
+ * same network: same SSID and security, any BSSID and admitted channel, with
+ * that access point's beacon evidence and, for WPA2, its RSN configuration.
+ * The same access point remains admitted. All sockets must have completed
  * CLOSE and every copied reply must be consumed. New submissions stay closed
  * until the same IP interface publishes a fresh address. Fault/unsolicited loss
  * is refused. DHCP restarts in the IP task; security config is required for WPA2.
@@ -76,11 +81,12 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
 int a733_radio_session_reconnect(struct a733_radio_session *,const struct aic8800_wifi_target *,
     const struct aic8800_supplicant_config *,uint64_t open_authority,uint16_t reason,uint64_t deadline);
 /* Poll returns LOST while the network is offline after a clean unsolicited
- * disconnection (see aic8800_network_lost). Recovery admits the same target and
- * credentials as reconnect. It skips port closure, the pairwise delete and the
- * disconnect command, deletes group keys, then reassociates, retrying refused or
- * failed associations until the deadline, and restores the address as reconnect
- * does. Sockets survive; their requests wait or time out meanwhile. */
+ * disconnection (see aic8800_network_lost). Recovery admits the same targets
+ * and credentials as reconnect, so it may roam to another access point. It
+ * skips port closure, the pairwise delete and the disconnect command, deletes
+ * group keys, then reassociates, retrying refused or failed associations until
+ * the deadline, and restores the address as reconnect does. Sockets survive;
+ * their requests wait or time out meanwhile. */
 int a733_radio_session_recover(struct a733_radio_session *,const struct aic8800_wifi_target *,
     const struct aic8800_supplicant_config *,uint64_t open_authority,uint64_t deadline);
 int a733_radio_session_scan(struct a733_radio_session *,uint64_t deadline);

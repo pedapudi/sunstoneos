@@ -59,6 +59,8 @@ AUDIO_CONDITIONS = {
 def image_manifest_check(manifest, raw):
     """The OS link check of these exact bytes; returns whether audio is built in."""
     audio = manifest.get('audio')
+    require(not manifest.get('radio') and not manifest.get('headset'),
+            'Preparation does not yet stage the radio or Bluetooth profile and firmware.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
             manifest.get('lifetime') == 'supervised' and type(audio) is bool and
             manifest.get('image_sha256') == hashlib.sha256(raw).hexdigest(),

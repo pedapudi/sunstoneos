@@ -144,6 +144,85 @@ are copied and hashed before compilation and execution; raw results reside in
 `bluetooth-native-20261017/host-capture` under the evidence cache.
 
 
+## Attachment to a Wi-Fi module owner
+
+`bluetooth_application_init` builds the module itself: a radio platform with
+the wake pins and a bootstrap-only radio session. `bluetooth_application_attach`
+instead serves Bluetooth on a module that a full Wi-Fi radio session owns, so
+the module is powered and its firmware loaded once for both. The integrated
+OS image uses it when it has both the radio and the headset
+([OS image](os-image.md#one-owner-serves-the-aic8800-module)).
+
+The attachment runs before the scheduler and before any task has polled the
+session. It requires:
+
+- a full session that has not faulted, whose owner task is the Bluetooth
+  owner and whose radio platform uses the given native adapter with the same
+  owner task;
+- a profile that names that module: the platform and session owners, the
+  topology, the radio identity and the four firmware spans equal the
+  session's;
+- the same profile and lifetime rules as `bluetooth_application_init`.
+
+It adds the profile's wake pins to the module platform and registers an
+added admission with the native adapter
+(`a733_radio_platform_native_extend`). After the module's own admission
+accepts the platform configuration, the added admission accepts only the
+profile's exact wake pins with the platform owner's clock token. Once
+attached, the wake pins belong to the module platform, so the added admission
+does not read the client's recovery latch. A client failure before the
+module's admission therefore leaves that admission and Wi-Fi unaffected.
+
+The Bluetooth client owns UART1, the H4/HCI binding and its own recovery
+latch. The module's owner task polls the session first and the client after
+it; the client never polls, drains or retains the session. It takes the
+firmware generation from `a733_radio_session_bootstrap`, which a full session
+reports while Wi-Fi is in management, online, reconnecting or recovering. A
+client failure retains UART1, H4 and the upper layers and sets only the
+client latch. A session or platform fault ends the client at its next poll.
+Before the firmware first becomes ready, the client gives up at its own
+bootstrap bound.
+
+## Supervised and resident lifetimes
+
+The application admits two lifetimes. A supervised session ends exactly 60 s
+after its start, and the schedule below runs from the start. A resident
+session ends at `UINT64_MAX / 24` microseconds, the board's resident deadline,
+which no counter value reaches.
+
+| Bound | Supervised | Resident |
+| --- | --- | --- |
+| Firmware ready | 30 s for version 3 and wideband playback profiles, 40 s otherwise | 120 s after the session start |
+| Schedule origin | Session start | Firmware readiness minus the supervised firmware bound |
+| HCI identification, headset setup | Fixed offsets from the origin | The same offsets from the moved origin |
+| Repeated capture window | 38 s after the origin | None |
+| First audio link open in a voice-recognition activation | Two line timeouts plus two response timeouts, at most 40 s after the origin | Two line timeouts plus two response timeouts |
+| Closing after capture stops | 40 s after the origin | 2 s after the stop |
+
+The resident origin keeps each stage's supervised time budget after the
+firmware becomes ready. Firmware loading needs about 47 s of SDIO bus time at
+the admitted one-bit 400 kHz clock, which the supervised bounds do not allow;
+the resident 120 s bound matches the integrated OS radio. The resident bounds
+are configuration, not a board measurement. The Bluetooth image itself
+remains supervised.
+
+[bluetooth-application.py](../checks/bluetooth-application.py) runs
+[bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real
+UART, H4 and HCI over the HCI wire model. It refuses a bootstrap-only or
+faulted session, another owner task or adapter, other session or platform
+owners, another topology, radio identity or firmware span and another
+lifetime. It checks the added admission, the client's own bootstrap bound
+without touching the module or the board latch, the added admission after
+that client failure, identification on the
+module's generation in the resident lifetime with the moved origin, and a
+module fault that ends the client. The repeated headset model
+(`checks/bluetooth-headset.py --repeated --case resident`) runs resident
+recognition activations past the supervised window and checks the 2 s close
+bound. Its `stop-in-poll` case requests cancellation from inside an owner
+poll, after that poll's first stop check, as the owner publishes a segment
+with the audio transmit path idle. The owner must set the close bound before it asks
+the controller to close, so the close succeeds in that same poll.
+
 ## Bounded native headset capture
 
 Building with `SUNSTONE_BT_SECURITY_DIR` enables the 752-byte headset profile.
@@ -188,9 +267,15 @@ initializer claims L2CAP once without discarding partial H4 framing or staged
 bytes. Its ordinary strict initializer retains its existing empty-input rule.
 Every service admission checks actual security again.
 
-The gateway advertises no telephony service or active call. After hands-free
-setup, it opens CVSD synchronous audio and collects signed 16-bit little-endian
-PCM at 8 kHz. Packet boundaries may split a sample. The application copies bytes
+The gateway answers the headset's call-status, operator, subscriber and
+error-reporting queries without call control, and its SDP record sets Network
+to 0. The service and call indicators stay zero because no telephony exists.
+[Call control](bluetooth-hfp.md#the-call-control-build-option-adds-the-mandatory-call-procedures)
+exists only for HFP conformance: `SUNSTONE_BT_HFP_CALL_CONTROL=ON` builds it
+into this image, with Network 1, and still reports no call and refuses
+dialing. In the finite capture modes the application opens CVSD synchronous
+audio after hands-free setup and collects signed 16-bit little-endian PCM at
+8 kHz. Packet boundaries may split a sample. The application copies bytes
 across boundaries and preserves each packet's acquisition serial, source length,
 copied length, offset and loss status. It sends explicit zero-valued playback
 samples to service the synchronous link. Capture is bounded by the immutable
@@ -271,8 +356,9 @@ The Bluetooth task retains priority 4. A priority-3 recognition task waits for
 the completed copied capture. It rejects failure, packet loss, changing capture
 identity and a mismatching complete PCM digest. Only a complete capture whose
 synchronous link has actually disconnected can enter conversion. The task owns
-static 48,000-byte PCM, 96,044-byte WAV, 97,280-byte internal scratch and
-65,536-byte text buffers through the entire attempt.
+static 96,044-byte WAV, 97,280-byte internal scratch and 65,536-byte text
+buffers through the entire attempt. The copied capture is staged in the
+internal scratch, which recognition does not use until conversion is done.
 
 Conversion produces 16 kHz mono signed 16-bit little-endian WAV data. Each
 8 kHz sample emits itself and the average of itself and the next sample. The
@@ -394,38 +480,119 @@ headset mode at byte 624 of the existing 832-byte profile to 2. Mode 1 retains
 its finite capture protocol. The controller performs CVSD coding; this profile
 adds no host codec and does not negotiate wideband mSBC.
 
-The Bluetooth task owns transport service and two copied PCM slots. Each slot
-holds at most 24,000 samples and 1,024 packet records. A packet that crosses a
-segment boundary retains its acquired-record identity and byte offset until its
-remaining bytes enter the next slot. The task releases the HCI record only after
-its final byte is copied, or explicitly abandons the remainder while closing.
-Complete, loss-free segments carry an increasing ticket, absolute sample offset,
-transport identities and SHA256 digest. Release/acquire publication prevents a
-consumer from reading a mutable slot.
+### One voice-recognition activation records one segment
 
-The recognizer copies one complete segment into its private PCM buffer, checks
-its identity and digest, then acknowledges that exact input ticket. Only that
-acknowledgment permits the Bluetooth task to reuse the slot. The existing
-8-to-16 kHz converter and recorded recognition engine process the private copy.
-One transcript log remains immutable until its entire byte range completes USB
-transfer and the host acknowledges the current ticket. Queueing USB bytes or
-reading a partial log provides no acknowledgment credit. Recognition waits for
-that acknowledgment before processing the next segment.
+Modes 2 and 3 record a segment only on request. The AG advertises
+[voice recognition](bluetooth-hfp.md#the-headset-button-starts-voice-recognition),
+and the headset's voice button sends `AT+BVRA=1`. After hands-free setup and
+codec selection the Bluetooth task waits idle, with no audio link. One request
+word, shared with the bound consumer task, holds one of four values:
+
+- 0: no request; the AG refuses the button.
+- ACCEPT: the AG admits the next `AT+BVRA=1`.
+- START: the task starts an activation at once. It sends `+BVRA: 1` when the
+  headset advertised voice recognition, and otherwise opens audio without it.
+- ACTIVE: an activation runs.
+
+The consumer may change 0 to ACCEPT or START, and ACCEPT to START, with an
+atomic compare-and-exchange. It passes the published-segment count it last
+observed, and the change is refused when a segment was published since: the
+word is read before that count, so a 0 stored at the end of an activation is
+always seen together with that activation's segment. The task changes ACCEPT or START to ACTIVE when
+recognition commits, after the UART accepts the `OK` or `+BVRA: 1`. The first
+activation opens the audio link, which then stays open; the mode-3 CVSD retry
+also happens within it. An activation is admitted only while the commit can
+complete before the supervised capture window ends. The first link open is
+bounded by two line timeouts (one AG response and one codec reselection) plus
+two response timeouts (the link open and its CVSD retry), capped in the
+supervised lifetime by the close bound. A stop at any stage from idle through
+capture, including a headset cancel while the first link opens, ends without
+retaining the transports.
+
+An activation ends when its segment holds the profile's sample count, at most
+24,000 samples, or when the headset sends `AT+BVRA=0`. The task then publishes
+the largest even byte count, if any, stores 0 in the word with release and
+notifies the consumer's task. After a full segment it sends `+BVRA: 0` at the
+first poll with the serial stream free; a new activation waits for that
+response to commit. A headset cancel therefore never restarts capture; the
+consumer chooses the next request. The recognizer in this image requests
+START once, so an unattended supervised session records one segment and
+exercises both `+BVRA` responses, then requests ACCEPT whenever the word is 0.
+The host tool therefore defaults to one transcript for modes 2 and 3.
+
+Between activations the task releases each received packet without copying,
+decoding or hashing it. Silence transmission continues, each packet bounded by
+the profile's response timeout and the capture window. CVSD packets may have
+odd lengths, so a packet can split a sample. The task counts the bytes
+released since the link opened, and an activation that starts after an odd
+count skips one byte. An mSBC activation skips to the next frame boundary;
+see the wideband section below.
+
+### Two slots, borrowed in place
+
+The Bluetooth task owns two PCM slots of at most 24,000 samples and 1,024
+packet records each. It writes slot *head* mod 2 only while *head − tail* is
+less than 2. As each write completes a 64-byte SHA-256 block, the task
+hashes that block in place in the slot; at publication it hashes the rest of
+the even-length prefix. A published segment carries an increasing ticket, the number
+of samples in earlier segments, transport identities, the codec and its
+SHA-256 digest. The task stores *head* with release after the slot and its
+snapshot.
+
+The recognizer borrows the oldest segment with
+`bluetooth_headset_segment_take`, which checks the calling task, the argument
+ranges and that head, tail and ticket agree. It returns a read-only pointer to
+the slot, valid until `bluetooth_headset_segment_ack` for that ticket advances
+*tail*. The recognizer converts the slot into its WAV buffer with the existing
+8-to-16 kHz converter, acknowledges it and then transcribes, so the next
+segment can record during transcription. The reported PCM digest is the
+Bluetooth task's. One transcript log remains immutable until its entire byte
+range completes USB transfer and the host acknowledges the current ticket.
+Queueing USB bytes or reading a partial log provides no acknowledgment credit.
+Recognition waits for that acknowledgment before processing the next segment.
+
+The recognizer waits in `ulTaskNotifyTake` for at most 100 ms and re-reads the
+counters and the request word after every wake-up, so a lost or spurious
+notification changes only latency. The Bluetooth task notifies it when an
+activation ends and after a stop or disconnection; a transcript
+acknowledgment and a recognition failure also wake it.
+
+### Stops and bounds
 
 The profile retains the session's overall deadline. New capture admission ends
-38 seconds after application start, and the matching synchronous disconnect must
-arrive by 40 seconds. These are application budgets within the existing roughly
-60-second session; they are not evidence of a transport drain. Recognition and
-copied output may continue after capture stops, subject to the session deadline.
+38 seconds after the schedule origin, and the matching synchronous disconnect
+must arrive by 40 seconds. These are application budgets within the existing
+roughly 60-second session; they are not evidence of a transport drain.
+Recognition and copied output may continue after capture stops, subject to the
+session deadline.
 
-A full copied-input queue, packet loss or a capture deadline stops admission and
-starts the existing bounded close sequence. Accepted complete segments and their
-transcripts remain available after an orderly close. The application waits for
-accepted H4 output to complete locally before requesting synchronous disconnect,
-then requires its matching disconnect event. An unknown or late result retains
-failure. Security revocation denies further input and transcript publication.
-The Bluetooth task continues security/control service after audio disconnect.
-No condition silently overwrites accepted input or reports a guessed disconnect.
+- Before the AG is ready and the codec selected, a stop retains the transports
+  as before, because connection, authentication, SDP, RFCOMM or codec
+  commands may be in flight.
+- While idle, a stop or the capture window ends the session at the first poll
+  with no AG response or codec offer in flight, within the close bound, and
+  reports a confirmed disconnect without retention.
+- No stop leaves the headset recognizing: when recognition is committed on,
+  the task sends `+BVRA: 0` before it reports the end.
+- From idle through capture, a headset that closes the service-level
+  connection fails the session in both lifetimes, unless a stop or the
+  capture window is already ending it.
+- A stop while the link opens waits for the result: an open link closes
+  through the normal sequence, a confirmed setup failure ends cleanly, and a
+  retained setup fails as before.
+- With the link open, a stop, the window, a full slot pair, packet loss or a
+  capture deadline starts the bounded close sequence and discards a partial
+  segment. Accepted segments and their transcripts remain available after an
+  orderly close.
+- A release of the audio link that the task did not request fails the session
+  in both lifetimes, including a headset that releases it after `+BVRA: 0`.
+
+The application waits for accepted H4 output to complete locally before
+requesting synchronous disconnect, then requires its matching disconnect
+event. An unknown or late result retains failure. Security revocation denies
+further input and transcript publication. The Bluetooth task continues
+security and control service after audio disconnect. No condition silently
+overwrites accepted input or reports a guessed disconnect.
 
 ### Repeated USB requests and results
 
@@ -446,7 +613,7 @@ are little-endian. Reserved and unpublished metadata bytes are zero.
 | 8, 12 | 32-bit state (pending 0, result 1, finished 2, failure 3), payload bytes |
 | 16, 24, 32 | 64-bit session epoch and generation, 32-byte profile SHA256 |
 | 64–95 | Four 64-bit firmware, UART, ACL and audio identities |
-| 96, 104 | 64-bit transcript ticket and first input sample |
+| 96, 104 | 64-bit transcript ticket and the number of samples in earlier segments |
 | 112, 116, 120, 124 | 32-bit text bytes, input samples, output samples, reserved zero |
 | 128, 160, 192 | 32-byte PCM, converted WAV and transcript SHA256 digests |
 | 224, 232 | 64-bit published and consumed input counts |
@@ -460,27 +627,61 @@ when a capture stop flag is set. Authorization failure suppresses its metadata
 and body. Finished means that disconnect is confirmed and all accepted inputs
 have passed through recognition and their transcript acknowledgments.
 The host stores each complete transcript and its digest before acknowledging it.
-It requires matching session/profile identities, consecutive tickets and sample
-offsets, confirmed disconnect, and equal accepted/consumed/acknowledged counts.
+It requires matching session/profile identities, consecutive tickets, a first
+sample equal to the input samples of all earlier transcripts, an input sample
+count of at most the profile's, confirmed disconnect, and equal accepted/consumed/acknowledged
+counts.
 
 ### Software evidence and remaining qualification
 
-Evidence is preserved under
-`~/.cache/sunstoneos/evidence/bluetooth-repeated-recognition-20261019/`.
-Six actual-stack ownership/error cases pass. A separate stack composition copies
-two distinct speech segments across HCI record boundaries. The unchanged
-recognizer processes those copied segments, and both results match the portable
-host reference for features, log probabilities, frames and formatted text.
+[bluetooth-headset.py](../checks/bluetooth-headset.py) with `--repeated` runs
+the production UART, H4, HCI, security, AG and synchronous-audio code against
+a modeled headset and controller. Its cases cover:
+
+- the headset button and its refusals, owner-started activations with both
+  `+BVRA` responses, and a headset without voice recognition;
+- early ends that publish the even prefix or nothing, odd packets released
+  between activations, and a request made before `+BVRA: 0` commits;
+- stops before the AG is ready, while idle with a response in flight, during
+  the link open and during capture, and the capture window while idle;
+- backlog, loss, revocation, late disconnect, resident activations and an
+  unrequested link release after `+BVRA: 0`;
+- a headset that closes the service-level connection while the task is idle,
+  in both lifetimes, and `+BVRA: 0` sent before the end after a stop during
+  the link open or a loss during capture;
+- a request refused because a segment was published after the consumer's
+  last observation, and `AT+BVRA=1` refused after a stop;
+- with `--msbc`, the button on an mSBC link, and a stop after a headset
+  cancel while the first activation reselects the codec, which ends without
+  retention.
+
+The button, START and early-end cases print the owner polls from the
+`AT+BVRA` line or START to the commit, from the commit to the
+synchronous-connection setup accepted by the UART, from a packet's arrival to
+its first byte in a slot and from publication to `+BVRA: 0` queued, and fail
+when a count exceeds its recorded value.
+
+With `--call-control` the same
+cases build with the call-control option. A speech case records two
+48,000-byte segments, one per activation, and reproduces the input bytes.
+`checks/bluetooth-recognition-repeated.cc` passes those segments through the
+unchanged recognizer with the borrowed slot.
 
 The actual native USB task, serializer, result APIs and TinyUSB pass delivery,
-early/stale acknowledgment, revocation and publication-order checks. The host
-uses their produced frames to check two-result collection, backlog, durable-store
-failure, wrong identity, sample gaps, missing disconnect and a 512-byte first
-USB packet. Scheduler progress, device registers, radio/controller events and
-USB device effects are modeled. No hardware transaction or performance
-measurement was performed. Physical headset operation, receive-service bounds,
-recognition within the session deadline and wideband mSBC remain unqualified.
+early/stale acknowledgment, revocation and publication-order checks in
+[bluetooth-repeated-usb.py](../checks/bluetooth-repeated-usb.py). The host
+uses their produced frames to check two-result collection, backlog,
+durable-store failure, wrong identity, sample gaps, missing disconnect and a
+512-byte first USB packet. Scheduler progress, device registers,
+radio/controller events and USB device effects are modeled. No hardware
+transaction was performed. Physical headset operation, the headset's button
+behavior, receive-service bounds, recognition within the session deadline and
+wideband mSBC remain unqualified.
 
+The audio link stays open from the first activation because the
+synchronous-audio provider cannot yet reopen a link to the same peer. For
+CVSD that costs about 34,100 UART bytes per second in each direction and the
+radio's eSCO slots while no activation runs.
 
 ## Wideband capture through the existing recognizer
 
@@ -489,7 +690,7 @@ same repeated recognition path. Enable `SUNSTONE_BLUETOOTH_MSBC=ON` and set
 `SUNSTONE_BT_SBC_DIR` to the pinned BlueZ SBC source directory. The default
 CVSD build omits this dependency. Set headset mode 3 in the existing 832-byte
 profile; its segment length must be a multiple of 120 and at most 24,000 samples.
-The existing two 48,000-byte copied slots therefore hold at most 1.5 seconds of
+The existing two 48,000-byte slots therefore hold at most 1.5 seconds of
 wideband PCM each. The session and transcript acknowledgment budgets remain the
 same as those for repeated CVSD capture.
 
@@ -556,13 +757,24 @@ CRC error, unexpected sequence, reported HCI loss or later framing error stops
 capture without publishing its partial PCM segment. The implementation does not
 reuse decoder state after a failed candidate or conceal missing samples.
 
+Between activations no packet reaches the decoder. Each activation starts with
+`bluetooth_msbc_resync`, which clears the partial frame, the sequence lock and
+the discard count. Each decoded frame records where the next frame starts, so
+after the first decoded frame on a link an activation skips at most 59 bytes
+to the next frame boundary and decodes from there. The first activation on a
+link uses the header search, which discards at most 59 bytes on an intact
+stream. The libsbc synthesis history is kept, so only the first decoded frame
+of a segment can carry audio from before the gap. Mode 5, with caller playback, records continuously and does
+not advertise voice recognition, because its playback pacing and cancellation
+depend on an open capture.
+
 H2's two-bit sequence alone cannot rule out every multiple-of-four frame loss.
 Controller packet-status reporting and the admitted receive-service bounds
 remain part of physical qualification. Acquired record serials identify host
 transport records; they are not radio timestamps.
 
-A complete decoded segment carries the negotiated codec in its copied capture
-identity. The recognizer verifies that identity on every chunk before input ACK.
+A complete decoded segment carries the negotiated codec in its capture
+identity. The recognizer verifies that identity when it borrows the segment.
 For mSBC, the WAV wrapper copies the 16 kHz samples directly; for explicit CVSD
 fallback, the existing 8-to-16 kHz converter applies. The model and recorded
 recognition engine remain unchanged. Full-ring backpressure stops before a raw
@@ -597,10 +809,13 @@ existing wire formats.
 
 Evidence resides under
 `~/.cache/sunstoneos/evidence/bluetooth-msbc-20261019/`. Actual-stack checks cover
-fragmented frames, CRC/sequence/HCI loss, full copied-ring backpressure,
+fragmented frames, CRC/sequence/HCI loss, full-ring backpressure,
 mismatched BCS, missing capability, confirmed CVSD fallback and command refusal.
-A separate composition copies two distinct decoded speech segments through the
-same stack. Both pass through the unchanged recognizer and match its portable
+An `activations` case separates two activations on one open link by three
+released frames, with 7-byte packets that split frames, and checks that the
+second segment decodes the first whole frame after the gap. A separate
+composition records two distinct decoded speech segments through the same
+stack, one per activation; its PCM equals that of continuous capture. Both pass through the unchanged recognizer and match its portable
 reference for features, log probabilities, frames and formatted text.
 
 The linked AArch64 codec reproduces all 96,000 copied PCM bytes from 400
@@ -657,7 +872,7 @@ dispositions have separate counters and never count as caller samples.
 
 Playback-only continues servicing and releasing incoming synchronous packets,
 counting discarded packets, bytes and status loss. Duplex uses the existing two
-copied capture slots and delivery-owned transcript log. Capture backlog or loss
+capture slots and delivery-owned transcript log. Capture backlog or loss
 seals playback admission and stops both directions; accepted playback results
 and authenticated copied transcripts remain available after orderly closure.
 Security revocation denies their publication and retains the session. The host

@@ -4,12 +4,34 @@
 #include "bluetooth-application.c"
 #undef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
 #include "../apps/bluetooth/headset.c"
+/* A repeated case may store a capture stop inside one owner poll, after the
+ * poll's first stop check, as another task can: at the notification that
+ * follows publication of segment stop_at_publication. */
+static uint64_t stop_at_publication;
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
 void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine completion. */
 #endif
+/* The owner notifies only the bound segment consumer, on index 0. */
+static unsigned notifications;
+BaseType_t xTaskGenericNotify(TaskHandle_t task,UBaseType_t index,uint32_t value,eNotifyAction action,uint32_t *previous)
+{
+    (void)value;assert(task&&task==voice.segment_consumer&&!index&&action==eIncrement&&!previous);++notifications;
+    if(stop_at_publication&&atomic_load(&voice.segment_head)==stop_at_publication){
+        stop_at_publication=0;assert(bluetooth_headset_segment_stop(&app)==1);}
+    return pdPASS;
+}
+/* AG responses the modeled headset received. */
+static unsigned bvra_on,bvra_off,at_ok,at_error,sco_setups;
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss,retry,retry_limit,retried;
-static uint16_t local_cid;static unsigned handoff,speech,informational;static uint64_t sco_bytes;
+static uint16_t local_cid;static unsigned handoff,speech,informational,brsf;static uint64_t sco_bytes;
+static unsigned resident_lifetime; /* The application starts with the resident lifetime. */
+/* The AG's call features exist only with the call-control build option. */
+#ifdef SUNSTONE_BT_HFP_CALL_CONTROL
+static const unsigned call_features=BT_HFP_AG_CALL_FEATURES;
+#else
+static const unsigned call_features=0;
+#endif
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -74,7 +96,7 @@ r[7]=0x80;r[9]=0x20;r[10]=8;}
         if(!msbc_no_cap)features[5]|=8;
 #endif
         event(&wire,0x0b,features,sizeof(features));return;}
-    else if(op==0x043d){assert(n==59);
+    else if(op==0x043d){assert(n==59);++sco_setups;
 #ifdef BLUETOOTH_CHECK_MSBC
         ++msbc_setups;assert(voice.ag.selected_codec==msbc_selected||msbc_no_cap);
         if(p[10]==3){assert(get16(p+54)==13||get16(p+54)==8);assert(get16(p+56)==0x380||get16(p+56)==0x3c8);
@@ -110,11 +132,15 @@ static void peer_acl(const uint8_t *p,unsigned n)
                 if(type==0x20){assert(!cr);rf_in(14,0x3f,NULL,0,-1);}
                 else if(type==0x38){const uint8_t msc[]={59,0x8d};if(cr){mcc_in(0x38,0,msc,2);mcc_in(0x38,1,msc,2);}else rf_in(14,0xff,NULL,0,100);}
                 else assert(0);
-            }else {assert(dlci==14);(void)count;
+            }else {assert(dlci==14);
+                for(unsigned i=0;i+9<count;++i)if(!memcmp(data+i,"+BRSF: ",7))for(unsigned j=i+7;data[j]>='0'&&data[j]<='9';++j)brsf=brsf*10+data[j]-'0';
+                for(unsigned i=0;i+9<=count;++i)if(!memcmp(data+i,"+BVRA: ",7)){assert(data[i+7]=='0'||data[i+7]=='1');++*(data[i+7]=='1'?&bvra_on:&bvra_off);}
+                for(unsigned i=0;i+6<=count;++i)if(!memcmp(data+i,"\r\nOK\r\n",6))++at_ok;
+                for(unsigned i=0;i+9<=count;++i)if(!memcmp(data+i,"\r\nERROR\r\n",9))++at_error;
 #ifdef BLUETOOTH_CHECK_MSBC
                 for(unsigned i=0;i+7<count;++i)if(!memcmp(data+i,"+BCS: ",6)){
                     msbc_selected=data[i+6]-'0';char response[20];snprintf(response,sizeof(response),"AT+BCS=%u\r",msbc_bad_bcs?3:msbc_selected);
-                    rf_in(14,0xef,(const uint8_t *)response,(unsigned)strlen(response),-1);
+                    if(!msbc_hold_bcs)rf_in(14,0xef,(const uint8_t *)response,(unsigned)strlen(response),-1);
                 }
 #endif
             }}
@@ -146,6 +172,13 @@ static void wire_outputs(void)
 }
 static int pump(void)
 {wire.room=1024;++wire.now;int r=bluetooth_application_poll(&app);wire_outputs();return r;}
+#ifdef BLUETOOTH_CHECK_REPEATED
+/* Owner polls until the condition holds, counting the poll that makes it
+ * true: 1 means the next poll. Latency cases report these counts. */
+#define POLLS(condition) __extension__({unsigned n_=0;while(!(condition)){assert(n_<400&&pump()>=0);++n_;}n_;})
+/* Reports a latency in owner polls and holds it to its recorded bound. */
+#define LATENCY(name,value,bound) do{unsigned v_=(value);fprintf(stderr,"LATENCY %s %s %u polls\n",latency_codec,name,v_);assert(v_<=(bound));}while(0)
+#endif
 static void until(unsigned phase)
 {for(unsigned i=0;i<2000&&voice.stage!=phase;++i){int r=pump();if(r<0)fprintf(stderr,"failure phase=%u HCI=%u acl=%u sec=%u config=%u now=%llu\n",voice.stage,app.hci.state,voice.acl.state,voice.security.fatal,voice.security.configuration_stage,(unsigned long long)wire.now);assert(r>=0);}assert(voice.stage==phase);}
 /* Owner polls on a jittered 1 ms tick: each gap is 700..1000 us, never past
@@ -153,7 +186,10 @@ static void until(unsigned phase)
 static void jittered(uint64_t duration)
 {
     uint64_t end=wire.now+duration;unsigned seed=12345;
-    while(wire.now<end){seed=seed*1103515245u+12345u;wire.now+=999-(seed>>16)%300;assert(pump()>=0);
+    while(wire.now<end){seed=seed*1103515245u+12345u;wire.now+=999-(seed>>16)%300;int r=pump();
+        if(r<0)fprintf(stderr,"failure stage=%u flags=%u sco=%u ag=%u/%u now=%llu\n",voice.stage,atomic_load(&voice.segment_flags),
+            voice.audio.links[0].phase,voice.ag.phase,voice.ag.error,(unsigned long long)wire.now);
+        assert(r>=0);
         if(output_cursor==wire.tn)output_cursor=wire.tn=0;} /* Bound the modeled TX log. */
 }
 static unsigned owned_records(void)
@@ -180,19 +216,29 @@ static void setup(void)
     memcpy(profile.recognition.sha256,bluetooth_model_sha256,sizeof(bluetooth_model_sha256));
 #endif
 #ifdef BLUETOOTH_CHECK_MSBC
-    profile.headset.mode=3;profile.headset.samples=speech?24000:120;
+    profile.headset.mode=3;profile.headset.samples=speech?24000:msbc_two_frames?240:120;
 #elif defined(BLUETOOTH_CHECK_REPEATED)
     profile.headset.mode=2;
+#endif
+#ifdef BLUETOOTH_CHECK_REPEATED
+    /* Silence between activations lives for one response timeout, which must
+     * exceed the controller's retirement of a sent packet. */
+    profile.headset.response_timeout_us=20000;
 #endif
 #ifdef BLUETOOTH_CHECK_PLAYBACK
     profile.headset.mode=playback_fixture_mode;profile.headset.samples=1200;
     if(playback_fixture_mode==4){profile.version=2;profile.bytes=752;}
 #endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
-    assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest));
+    assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,
+        resident_lifetime?BLUETOOTH_RESIDENT_END_US:60000000,digest));
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    if(resident_lifetime)assert(app.resident&&app.radio_config.deadline_us==BLUETOOTH_RESIDENT_BOOTSTRAP_US&&
+        app.session_config.bootstrap_deadline==BLUETOOTH_RESIDENT_BOOTSTRAP_US&&app.deadline==BLUETOOTH_RESIDENT_END_US-10000);
+    else {
     assert(app.radio_config.deadline_us==30000000&&app.session_config.bootstrap_deadline==30000000&&app.hci_deadline==35000000&&app.deadline==59990000);
     assert(stage_deadline(&app,48000000)==40000000&&stage_deadline(&app,59500000)==40000000);
+    }
     if(profile.version==3){profile.recognition.sha256[0][0]^=1;storage_digest_bytes(&profile,profile.bytes,digest);
     assert(!bluetooth_profile_valid(&profile,digest));profile.recognition.sha256[0][0]^=1;
     storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));}
@@ -251,7 +297,7 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     if(!strcmp(argv[1],"deadline")){wire.now=voice.operation_deadline;assert(pump()==-1);puts("PASS operation deadline retains entire native owner");return 0;}
     const uint8_t connect[]={3,0,0x61,0};sig_in(2,50,connect,4);until(AG);
     assert(rf_stage);const char *at="AT+BRSF=0\rAT+CIND=?\rAT+CIND?\rAT+CMER=3,,,1\r";rf_in(14,0xef,(const uint8_t *)at,(unsigned)strlen(at),-1);at_sent=1;
-    until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY);
+    until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY&&!voice.voice&&brsf==(voice.wideband?512u:0u)+call_features);
     if(!strcmp(argv[1],"cadence")){
         /* CVSD silence follows its 3750 us packet period, not the 4 ms poll
          * grid that rounding up from each serving poll would produce. */

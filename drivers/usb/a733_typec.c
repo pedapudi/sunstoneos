@@ -2,6 +2,7 @@
 /* FUSB302 register operations follow the published controller data sheet and
  * Linux driver. Copyright 2016-2017 Google, Inc. */
 #include "a733_typec.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define ADDRESS 0x22u
 #define COMP 0x20u
@@ -12,14 +13,10 @@
 #define FALL_US UINT64_C(650000)
 static int same(const void *a,const void *b,size_t bytes)
 {const unsigned char *x=a,*y=b;for(size_t i=0;i<bytes;i++)if(x[i]!=y[i])return 0;return 1;}
-static int disjoint(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int intact(struct a733_typec *s)
 {return s&&s->self==s&&same(&s->config,&s->sealed,sizeof(s->config));}
 void a733_typec_revoke(struct a733_typec *s)
 {if(s&&s->self==s)atomic_store_explicit(&s->revoked,1,memory_order_release);}
-static int add(uint64_t a,uint64_t b,uint64_t *out)
-{if(a>UINT64_MAX-b)return 0;*out=a+b;return 1;}
 static int clock_read(struct a733_typec *s)
 {uint64_t n;if(s->config.ops.now(s->config.context,&n)!=1||n<s->now)return 0;s->now=n;return 1;}
 static void fault(struct a733_typec *s)
@@ -27,7 +24,7 @@ static void fault(struct a733_typec *s)
     a733_typec_revoke(s);
     if(!s->shutdown_attempted){
         s->shutdown_attempted=1;s->state=A733_TYPEC_SHUTDOWN;s->transaction=0;s->step=0;
-        if(!add(s->now,FALL_US,&s->shutdown_deadline))s->shutdown_deadline=UINT64_MAX;
+        if(!a733_deadline_after(s->now,FALL_US,&s->shutdown_deadline))s->shutdown_deadline=UINT64_MAX;
         if(s->config.bus->held||(s->config.bus->state>A733_TWI_READY&&s->config.bus->state<A733_TWI_COMPLETE)){
             (void)a733_twi_retain(s->config.bus);s->bus_failed=1;
         }
@@ -42,8 +39,8 @@ int a733_typec_init(struct a733_typec *s,const struct a733_typec_config *c)
        (c->displayport&&c->source_max_mv>5250)||c->source_ma<500||!c->zero_threshold_max_mv||
        c->zero_threshold_max_mv>800||c->device_id<0x80||c->device_id>0x82||
        !c->ops.outside||!c->ops.now||!c->ops.servicing||!c->ops.prepare||!c->ops.live||
-       !c->ops.vbus||!c->ops.irq||!disjoint(s,sizeof(*s),c,sizeof(*c))||
-       !disjoint(s,sizeof(*s),c->bus,sizeof(*c->bus)))return 0;
+       !c->ops.vbus||!c->ops.irq||!a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c))||
+       !a733_ranges_disjoint(s,sizeof(*s),c->bus,sizeof(*c->bus)))return 0;
     s->self=s;s->config=*c;s->sealed=*c;
     atomic_init(&s->entered,0);atomic_init(&s->publishing,0);atomic_init(&s->revoked,0);
     atomic_init(&s->progress_until,0);atomic_init(&s->power_until,0);return 1;
@@ -60,7 +57,7 @@ static int io(struct a733_typec *s,unsigned reg,unsigned reading,unsigned value)
     struct a733_twi *b=s->config.bus;int r;
     if(s->bus_failed)return -1;
     if(!s->transaction){
-        uint64_t d;if(!add(s->now,TRANSACTION_US,&d))return -1;
+        uint64_t d;if(!a733_deadline_after(s->now,TRANSACTION_US,&d))return -1;
         if(!s->shutdown_attempted&&s->state<A733_TYPEC_MONITOR&&d>s->startup_deadline)d=s->startup_deadline;
         if(s->shutdown_attempted&&d>s->shutdown_deadline)d=s->shutdown_deadline;
         if(a733_twi_request(b,ADDRESS,(uint16_t)reg,reading,(uint8_t)value,d)!=0)return -1;
@@ -88,7 +85,7 @@ static int measured(struct a733_typec *s)
     int r;
     switch(s->measuring){
     case 0:r=setting(s,2,s->measure_switch,255);if(r==1)++s->measuring;return r<0?-1:0;
-    case 1:r=setting(s,4,s->measure_word,127);if(r==1){if(!add(s->now,100,&s->until))return -1;++s->measuring;}return r<0?-1:0;
+    case 1:r=setting(s,4,s->measure_word,127);if(r==1){if(!a733_deadline_after(s->now,100,&s->until))return -1;++s->measuring;}return r<0?-1:0;
     case 2:if(s->now>=s->until)++s->measuring;return 0;
     case 3:r=io(s,0x40,1,0);if(r==1){s->status=s->value;s->measure_result=!!(s->value&COMP);s->state=s->after_measure;}return r<0?-1:0;
     default:return -1;
@@ -96,7 +93,7 @@ static int measured(struct a733_typec *s)
 }
 static int publish(struct a733_typec *s)
 {
-    uint64_t d;if(!add(s->cycle_start,A733_TYPEC_FRESH_US,&d)||s->now>=d)return -1;
+    uint64_t d;if(!a733_deadline_after(s->cycle_start,A733_TYPEC_FRESH_US,&d)||s->now>=d)return -1;
     unsigned zero=0;if(!atomic_compare_exchange_strong_explicit(&s->publishing,&zero,1,memory_order_acquire,memory_order_relaxed))return 0;
     int ok=!atomic_load_explicit(&s->revoked,memory_order_acquire);
     if(ok){
@@ -111,7 +108,7 @@ static int publish(struct a733_typec *s)
 }
 static int output(struct a733_typec *s,unsigned on)
 {
-    uint64_t d;if(!add(s->now,TRANSACTION_US,&d))return -1;
+    uint64_t d;if(!a733_deadline_after(s->now,TRANSACTION_US,&d))return -1;
     int r=s->config.ops.vbus(s->config.context,on,d);
     if(r==1)s->enabled=on;
     return r;
@@ -121,7 +118,7 @@ static int active(struct a733_typec *s)
     int r;
     switch(s->step){
     case 0:{
-        uint64_t d;if(!add(s->now,1000,&d))return -1;
+        uint64_t d;if(!a733_deadline_after(s->now,1000,&d))return -1;
         r=s->config.ops.irq(s->config.context,&s->irq_level,d);
         if(r!=1)return r<0?-1:0;
         if(!s->irq_level)return -1;
@@ -237,7 +234,7 @@ static int step(struct a733_typec *s)
         /* Publish the watchdog limit before the separate task can raise PL8. */
         if(!s->step){
             uint64_t progress;
-            if(!add(s->now,RISE_US,&s->until)||!add(s->now,A733_TYPEC_FRESH_US,&progress))return -1;
+            if(!a733_deadline_after(s->now,RISE_US,&s->until)||!a733_deadline_after(s->now,A733_TYPEC_FRESH_US,&progress))return -1;
             atomic_store_explicit(&s->power_until,s->until,memory_order_release);
             atomic_store_explicit(&s->progress_until,progress,memory_order_release);s->step=1;
         }
@@ -294,7 +291,7 @@ int a733_typec_poll(struct a733_typec *s)
     r=step(s);
     if(!clock_read(s)||r<0){if(!s->shutdown_attempted)fault(s);else if(s->state!=A733_TYPEC_UNCERTAIN)s->state=A733_TYPEC_UNCERTAIN;}
     if(oldstep!=s->step||oldstage!=(unsigned)s->state||oldbus!=s->config.bus->state){
-        uint64_t d;if(add(s->now,A733_TYPEC_FRESH_US,&d))atomic_store_explicit(&s->progress_until,d,memory_order_release);else fault(s);
+        uint64_t d;if(a733_deadline_after(s->now,A733_TYPEC_FRESH_US,&d))atomic_store_explicit(&s->progress_until,d,memory_order_release);else fault(s);
     }
     if(r==2&&!s->shutdown_attempted){
         int health=s->config.ops.live(s->config.context);
@@ -321,13 +318,13 @@ static int observation(struct a733_typec *s,struct a733_typec_token *out,uint64_
 }
 int a733_typec_snapshot(struct a733_typec *s,struct a733_typec_token *out,uint64_t deadline)
 {
-    if(!intact(s)||!out||!disjoint(s,sizeof(*s),out,sizeof(*out))||
+    if(!intact(s)||!out||!a733_ranges_disjoint(s,sizeof(*s),out,sizeof(*out))||
        !s->config.ops.outside(s->config.context,out,sizeof(*out)))return -1;
     struct a733_typec_token t;int r=observation(s,&t,deadline);if(r==1)*out=t;return r;
 }
 int a733_typec_validate(struct a733_typec *s,const struct a733_typec_token *token,uint64_t deadline)
 {
-    if(!intact(s)||!token||!disjoint(s,sizeof(*s),token,sizeof(*token))||
+    if(!intact(s)||!token||!a733_ranges_disjoint(s,sizeof(*s),token,sizeof(*token))||
        !s->config.ops.outside(s->config.context,token,sizeof(*token)))return -1;
     struct a733_typec_token t;int r=observation(s,&t,deadline);if(r!=1)return r;
     uint64_t now;if(s->config.ops.now(s->config.context,&now)!=1||now>=deadline||
@@ -339,7 +336,7 @@ int a733_typec_validate(struct a733_typec *s,const struct a733_typec_token *toke
 
 int a733_typec_dp_snapshot(struct a733_typec *s,struct a733_typec_dp_token *out,uint64_t deadline)
 {
-    if(!intact(s)||!out||!disjoint(s,sizeof(*s),out,sizeof(*out))||
+    if(!intact(s)||!out||!a733_ranges_disjoint(s,sizeof(*s),out,sizeof(*out))||
        !s->config.ops.outside(s->config.context,out,sizeof(*out)))return -1;
     struct a733_typec_token cc;int r=observation(s,&cc,deadline);if(r!=1)return r;
     unsigned zero=0;if(!atomic_compare_exchange_strong_explicit(&s->publishing,&zero,1,memory_order_acquire,memory_order_relaxed))return 0;
@@ -355,7 +352,7 @@ int a733_typec_dp_snapshot(struct a733_typec *s,struct a733_typec_dp_token *out,
 }
 int a733_typec_dp_validate(struct a733_typec *s,const struct a733_typec_dp_token *t,uint64_t deadline)
 {
-    if(!intact(s)||!t||!disjoint(s,sizeof(*s),t,sizeof(*t))||
+    if(!intact(s)||!t||!a733_ranges_disjoint(s,sizeof(*s),t,sizeof(*t))||
        !s->config.ops.outside(s->config.context,t,sizeof(*t)))return -1;
     struct a733_typec_dp_token current;int r=a733_typec_dp_snapshot(s,&current,deadline);if(r!=1)return r;
     uint64_t now;

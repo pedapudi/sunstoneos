@@ -15,7 +15,10 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('gpu_disposal_image',ROOT/'checks/npu-large-native.py')
 base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 
+# Graphics profile 3 (depth/blend) or 4 (batches) selects the owner constructor.
+PREPARE={3:'a733_gpu_graphics_memory_prepare_depth_blend',4:'a733_gpu_graphics_memory_prepare_batches'}
 class Machine:
+    profile=3
     def __init__(self,path):
         self.path=Path(path);self.image=base.Image(path);self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         self.u.mem_map(0x40000000,0x04000000);self.u.mem_map(0x48000000,0x31000000)
@@ -35,7 +38,7 @@ class Machine:
         self.app=self.image.address('app');self.tick=24000000;self.scheduler=1;self.task=0
         self.cache=[];self.fail_cache=None;self.traces=[];self.publishing=False;self.incoming=None;self.worker_stop=None;self.reply=None
         names=['a733_smp_counter','aarch64_device_translate','aarch64_device_cache_stride','aarch64_device_cache',
-            'a733_device_memory_ready','a733_device_memory_commit_allowed','a733_cpu_coherence_publish',
+            'a733_device_memory_ready','a733_cpu_coherence_publish',
             'xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xTaskCreateStatic','xQueueGenericCreateStatic',
             'vPortEnterCritical','vPortExitCritical','platform_panic','xQueueReceive','xQueueGenericSend',
             'uxQueueMessagesWaiting']
@@ -75,7 +78,6 @@ class Machine:
         elif name=='aarch64_device_cache':
             self.cache.append(tuple(a[:3]));self.ret(0 if self.fail_cache and self.fail_cache(a) else 1)
         elif name in ('a733_device_memory_ready','a733_cpu_coherence_publish'):self.ret(1)
-        elif name=='a733_device_memory_commit_allowed':self.ret((a[0],a[1],a[2]) in ((0,0x48000000,0x78000000),(1,0x78000000,0x79000000)))
         elif name=='xTaskGetSchedulerState':self.ret(self.scheduler)
         elif name=='xTaskGetCurrentTaskHandle':self.ret(self.task)
         elif name=='xTaskCreateStatic':self.ret(a[6])
@@ -118,13 +120,13 @@ class Machine:
         self.f,self.c,self.g,self.s,self.b,self.p,self.d=f,c,g,s,b,p,d
         self.set(self.at('session'),'a733_board_session','deadline_us',61000000,8)
         fw=self.image.address('gpu_firmware');end=self.image.address('gpu_firmware_end')
-        assert self.call('a733_memory_reservations_commit_verified')==1
-        assert self.call('a733_memory_uncached_commit_verified')==1
+        assert self.call('a733_memory_reservations_prepare')==1
+        assert self.call('a733_memory_uncached_prepare')==1
         assert self.call('a733_gpu_reserved_prepare',f,9,fw,end-fw,400000000)
         assert self.call('a733_gpu_compute_reserved_prepare',c,f,s,10)
         profile=d+self.image.layouts['a733_gpu_disposal']['profile']
         self.u.mem_write(profile,struct.pack('<6I Q',64,64,16384,1024,1024,25,5000000))
-        assert self.call('a733_gpu_graphics_memory_prepare_depth_blend',g,f,c,s,11,profile)==1
+        assert self.call(PREPARE[self.profile],g,f,c,s,11,profile)==1
         # Provider construction/OFF is inherited accepted evidence, not replayed.
         self.set(p,'a733_gpu_platform','initialized',1)
         self.set(p,'a733_gpu_platform','manager',self.at('shared')+self.image.layouts['a733_native_usb']['gpu'],8)
@@ -205,13 +207,14 @@ class Machine:
         raise AssertionError('disposal poll budget')
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',type=Path);a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',type=Path)
+    p.add_argument('--profile',type=int,choices=(3,4),default=3);a=p.parse_args()
     a.output.mkdir(parents=True,exist_ok=False)
-    m=Machine(a.image);m.out=a.output
+    m=Machine(a.image);m.out=a.output;m.profile=a.profile
     # Resolve every called function, consumed type/field and modeled boundary
     # before constructors or worker code execute; inlined advance is not called.
-    calls=['a733_memory_reservations_commit_verified','a733_memory_uncached_commit_verified',
-        'a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare','a733_gpu_graphics_memory_prepare_depth_blend',
+    calls=['a733_memory_reservations_prepare','a733_memory_uncached_prepare',
+        'a733_gpu_reserved_prepare','a733_gpu_compute_reserved_prepare',PREPARE[a.profile],
         'a733_gpu_backend_bind','pvr_gpu_service_init','pvr_gpu_service_bind','a733_gpu_graphics_memory_cleanup_records',
         'a733_gpu_backend_stopped','a733_gpu_disposal_begin','a733_gpu_disposal_poll','a733_gpu_disposal_rebuild','device_memory_lookup']
     resolved={name:m.image.address(name) for name in calls}
@@ -222,7 +225,7 @@ def main():
     assert all(n in m.image.layouts and n in m.sizes for n in required)
     (a.output/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
         functions=resolved,hooks=m.hooks,types=required,stack='actual service.worker_stack; scratch outside complete pools',
-        initialization='actual extended pool commit_verified under modeled admission; native child constructors, backend binding, static service/client construction; actual worker publication up to modeled power admission; existing complete healthy stop and receipts modeled'),indent=2)+'\n')
+        initialization='actual extended pool preparation under modeled READY; native child constructors, backend binding, static service/client construction; actual worker publication up to modeled power admission; existing complete healthy stop and receipts modeled'),indent=2)+'\n')
     if a.resume:m.restore(a.resume)
     else:m.make()
     # Save all exact parent leases; old generations must remain invalid forever.
@@ -246,7 +249,7 @@ def main():
     m.checkpoint('reconstructed')
     m.worker_stop=None;m.publishing=True;m.call('worker',m.s,unit='/drivers/gpu/pvr_gpu_service.c')
     m.checkpoint('reopened-publication')
-    record={'passed':True,'old_epoch_open_refusal':refused,'new_open':opened,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'steps':steps,'scope':__doc__}
+    record={'passed':True,'profile':a.profile,'old_epoch_open_refusal':refused,'new_open':opened,'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'steps':steps,'scope':__doc__}
     (a.output/'result.json').write_text(json.dumps(record,indent=2)+'\n')
     print(json.dumps(record))
 if __name__=='__main__':main()

@@ -1,13 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_display_handoff.h"
+#include "a733_range.h"
 #include <stddef.h>
 #include <string.h>
-
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static int same_token(const struct a733_clock_token *a,const struct a733_clock_token *b)
 {return a->id==b->id && a->owner==b->owner && a->shared==b->shared && a->exclusive==b->exclusive;}
 static int fault(struct a733_display_handoff *b) {b->failed=1;return -1;}
@@ -45,8 +40,8 @@ static int timestamp(void *v,uint64_t *out)
     if (!integrity(b)) return -1;
     uint64_t n=0;
     int r=b->config.platform.now_us(b->config.context,&n);
-    if (!integrity(b) || r!=1 || n<b->last_now) return fault(b);
-    b->last_now=n;*out=n;return 1;
+    if (!integrity(b) || r!=1 || !a733_monotonic_advance(n,&b->last_now)) return fault(b);
+    *out=n;return 1;
 }
 static int matching(struct a733_display_handoff *b,const struct display_request *r,
                     const struct display_resource_token *t)
@@ -154,7 +149,7 @@ int a733_display_handoff_init(struct a733_display_handoff *b,const struct a733_d
     const void *objects[]={b,c,m,p,m->registry,m->pck_manager};
     const size_t sizes[]={sizeof(*b),sizeof(*c),sizeof(*m),sizeof(*p),sizeof(*m->registry),sizeof(*m->pck_manager)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
-        if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
+        if (!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     const struct display_provider *v=&c->platform;
     if (!v->now_us || !v->acquire_frame || !v->authenticate || !v->read32 || !v->write32 ||
         !v->barrier || !v->prepare_panel || !v->drain_de || !v->quiet_output ||

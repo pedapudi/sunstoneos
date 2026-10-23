@@ -1,15 +1,8 @@
 #include "a733_dma.h"
-
-#define DATA_LIMIT (UINT64_C(1) << 35)
-#define DESCRIPTOR_LIMIT UINT64_C(0xfffff800)
+#include "a733_range.h"
+#include "dma_address_width.h"
 
 _Static_assert(sizeof(struct a733_dma_descriptor) == 64, "descriptor stride");
-
-/* Call only with nonempty, validated ranges that cannot wrap. */
-static int overlap(uint64_t a, uint64_t a_bytes, uint64_t b, uint64_t b_bytes)
-{
-    return a < b + b_bytes && b < a + a_bytes;
-}
 
 static uint64_t endpoint_bytes(const struct a733_dma_endpoint *endpoint,
                                uint32_t bytes)
@@ -27,8 +20,8 @@ static enum a733_dma_result validate_endpoint(
         return A733_DMA_FORMAT;
     if (endpoint->address % endpoint->width || bytes % endpoint->width)
         return A733_DMA_ALIGNMENT;
-    if (endpoint->address >= DATA_LIMIT ||
-        endpoint_bytes(endpoint, bytes) > DATA_LIMIT - endpoint->address)
+    if (endpoint->address >= A733_DMA0_DATA_LIMIT ||
+        endpoint_bytes(endpoint, bytes) > A733_DMA0_DATA_LIMIT - endpoint->address)
         return A733_DMA_ADDRESS;
     return A733_DMA_OK;
 }
@@ -64,10 +57,11 @@ enum a733_dma_result a733_dma_build(
         return A733_DMA_ALIGNMENT;
     if (output_address > UINTPTR_MAX - output_bytes ||
         input_address > UINTPTR_MAX - input_bytes ||
-        descriptor_bus >= DESCRIPTOR_LIMIT ||
-        output_bytes > DESCRIPTOR_LIMIT - descriptor_bus)
+        descriptor_bus >= A733_DMA0_DESCRIPTOR_LIMIT ||
+        output_bytes > A733_DMA0_DESCRIPTOR_LIMIT - descriptor_bus)
         return A733_DMA_ADDRESS;
-    if (overlap(output_address, output_bytes, input_address, input_bytes))
+    if (a733_extents_overlap_prechecked(output_address, output_bytes,
+                                        input_address, input_bytes))
         return A733_DMA_ALIAS;
 
     /* Validate every segment before any descriptor mutation. */
@@ -82,8 +76,9 @@ enum a733_dma_result a733_dma_build(
         for (unsigned e = 0; e < 2; ++e) {
             enum a733_dma_result status = validate_endpoint(ends[e], segment->bytes);
             if (status != A733_DMA_OK) return status;
-            if (overlap(ends[e]->address, endpoint_bytes(ends[e], segment->bytes),
-                        descriptor_bus, output_bytes))
+            if (a733_extents_overlap_prechecked(ends[e]->address,
+                                                endpoint_bytes(ends[e], segment->bytes),
+                                                descriptor_bus, output_bytes))
                 return A733_DMA_ALIAS;
         }
     }
@@ -102,9 +97,9 @@ enum a733_dma_result a733_dma_build(
                 for (unsigned o = 0; o < 2; ++o) {
                     if (i == j && e == o) continue;
                     if (!e && !o && !others[o]->request) continue;
-                    if (overlap(ends[e]->address, segments[i].bytes,
-                                others[o]->address,
-                                endpoint_bytes(others[o], segments[j].bytes)))
+                    if (a733_extents_overlap_prechecked(
+                            ends[e]->address, segments[i].bytes, others[o]->address,
+                            endpoint_bytes(others[o], segments[j].bytes)))
                         return A733_DMA_ALIAS;
                 }
             }
@@ -123,7 +118,7 @@ enum a733_dma_result a733_dma_build(
         put32(descriptor + 16, 8u |
               (uint32_t)((segment->source.address >> 32) << 11) |
               (uint32_t)((segment->destination.address >> 32) << 15));
-        put32(descriptor + 20, i + 1 == count ? (uint32_t)DESCRIPTOR_LIMIT :
+        put32(descriptor + 20, i + 1 == count ? (uint32_t)A733_DMA0_DESCRIPTOR_LIMIT :
               (uint32_t)(descriptor_bus + (i + 1) * sizeof(*output)));
     }
     return A733_DMA_OK;

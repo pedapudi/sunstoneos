@@ -1,4 +1,6 @@
 #include "pvr_compute_service.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
 #include "pvr_compute_context.h"
 #include "pvr_gpu_service.h"
 #include "a733_gpu_mapping.h"
@@ -6,10 +8,6 @@
 
 #define PAGE 4096u
 #define OWNED (PVR_COMPUTE_SERVICE_OBJECTS + PVR_PROGRAM_REGIONS + PVR_JOB_REGIONS - 1u)
-static int span(const void *p,size_t n)
-{ return p && n && n<=UINTPTR_MAX-(uintptr_t)p; }
-static int apart(const void *a,size_t n,const void *b,size_t m)
-{ return span(a,n)&&span(b,m)&&((uintptr_t)a+n<=(uintptr_t)b||(uintptr_t)b+m<=(uintptr_t)a); }
 static const struct pvr_mips_buffer *owned(const struct pvr_compute_service_config *c,unsigned i)
 {
     if(i<PVR_COMPUTE_SERVICE_OBJECTS)return &c->firmware[i];
@@ -37,20 +35,23 @@ static int mapped(const struct pvr_mips_buffer *b,unsigned page,unsigned attr)
 { return mapped_access(b,page,attr,1); }
 static int descriptor(const struct pvr_mips_buffer *b)
 {
-    return span(b->storage.cpu,b->storage.bytes)&&!((uintptr_t)b->storage.cpu&4095)&&
+    return a733_span_excl_nonempty(b->storage.cpu,b->storage.bytes)&&!((uintptr_t)b->storage.cpu&4095)&&
         b->page_count&&b->page_count<=64&&b->storage.bytes==(size_t)b->page_count*PAGE&&
-        span(b->pages,(size_t)b->page_count*8)&&!((uintptr_t)b->pages&7);
+        a733_span_excl_nonempty(b->pages,(size_t)b->page_count*8)&&!((uintptr_t)b->pages&7);
 }
 static int private_range(const struct pvr_compute_service *s,const struct pvr_gpu_service *g,
     const struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c,const void *p,size_t n)
 {
-    return apart(p,n,s,sizeof(*s))&&apart(p,n,g,sizeof(*g))&&apart(p,n,gc,sizeof(*gc))&&
-        apart(p,n,c,sizeof(*c))&&apart(p,n,c->job,sizeof(*c->job))&&apart(p,n,c->image,sizeof(*c->image))&&
-        apart(p,n,c->job->programs,sizeof(*c->job->programs))&&
-        apart(p,n,c->job->program_result,sizeof(*c->job->program_result))&&
-        apart(p,n,c->vm,sizeof(*c->vm))&&apart(p,n,c->maps,c->map_count*sizeof(*c->maps))&&
-        apart(p,n,gc->firmware,gc->firmware_bytes)&&
-        apart(p,n,c->vm->tables.physical_pages,(size_t)c->vm->tables.page_count*8);
+    return a733_ranges_disjoint_nonempty(p,n,s,sizeof(*s))&&a733_ranges_disjoint_nonempty(p,n,g,sizeof(*g))&&
+        a733_ranges_disjoint_nonempty(p,n,gc,sizeof(*gc))&&
+        a733_ranges_disjoint_nonempty(p,n,c,sizeof(*c))&&
+        a733_ranges_disjoint_nonempty(p,n,c->job,sizeof(*c->job))&&
+        a733_ranges_disjoint_nonempty(p,n,c->image,sizeof(*c->image))&&
+        a733_ranges_disjoint_nonempty(p,n,c->job->programs,sizeof(*c->job->programs))&&
+        a733_ranges_disjoint_nonempty(p,n,c->job->program_result,sizeof(*c->job->program_result))&&
+        a733_ranges_disjoint_nonempty(p,n,c->vm,sizeof(*c->vm))&&a733_ranges_disjoint_nonempty(p,n,c->maps,c->map_count*sizeof(*c->maps))&&
+        a733_ranges_disjoint_nonempty(p,n,gc->firmware,gc->firmware_bytes)&&
+        a733_ranges_disjoint_nonempty(p,n,c->vm->tables.physical_pages,(size_t)c->vm->tables.page_count*8);
 }
 static int readonly(unsigned i)
 {
@@ -87,7 +88,8 @@ static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
     for(unsigned i=0;i<OWNED;++i){const struct pvr_mips_buffer *b=owned(c,i);ADD(b->pages,b->page_count*8);}
     for(unsigned i=0;i<3+PVR_FW_RESOURCE_COUNT;++i){const struct pvr_mips_buffer *b=system_buffer(gc,i);ADD(b->pages,b->page_count*8);}
     if(gc->free_lists.count) {
-        if(gc->free_lists.count>PVR_FREE_LISTS||!span(gc->free_lists.lists,gc->free_lists.count*sizeof(*gc->free_lists.lists)))return 0;
+        if(gc->free_lists.count>PVR_FREE_LISTS||
+            !a733_span_excl_nonempty(gc->free_lists.lists,gc->free_lists.count*sizeof(*gc->free_lists.lists)))return 0;
         ADD(gc->free_lists.lists,gc->free_lists.count*sizeof(*gc->free_lists.lists));
         for(unsigned i=0;i<gc->free_lists.count;++i) {
             const struct pvr_free_list_config *f=&gc->free_lists.lists[i];
@@ -98,25 +100,25 @@ static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
 #undef ADD
     for(unsigned i=0;i<count;++i) {
         const struct view *v=&views[i];
-        if(!apart(v->p,v->n,s,sizeof(*s))||!apart(v->p,v->n,g,sizeof(*g))||
-           !apart(v->p,v->n,c->vm,sizeof(*c->vm))||
-           !apart(v->p,v->n,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
+        if(!a733_ranges_disjoint_nonempty(v->p,v->n,s,sizeof(*s))||!a733_ranges_disjoint_nonempty(v->p,v->n,g,sizeof(*g))||
+           !a733_ranges_disjoint_nonempty(v->p,v->n,c->vm,sizeof(*c->vm))||
+           !a733_ranges_disjoint_nonempty(v->p,v->n,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
         for(unsigned j=0;j<OWNED;++j) {
             const struct pvr_mips_buffer *b=owned(c,j);
-            if(!apart(v->p,v->n,b->storage.cpu,b->storage.bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(v->p,v->n,b->storage.cpu,b->storage.bytes))return 0;
         }
         for(unsigned j=0;j<3+PVR_FW_RESOURCE_COUNT;++j) {
             const struct pvr_mips_buffer *b=system_buffer(gc,j);
-            if(!apart(v->p,v->n,b->storage.cpu,b->storage.bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(v->p,v->n,b->storage.cpu,b->storage.bytes))return 0;
         }
     }
-    if(!apart(c->vm,sizeof(*c->vm),s,sizeof(*s))||!apart(c->vm,sizeof(*c->vm),g,sizeof(*g))||
+    if(!a733_ranges_disjoint_nonempty(c->vm,sizeof(*c->vm),s,sizeof(*s))||!a733_ranges_disjoint_nonempty(c->vm,sizeof(*c->vm),g,sizeof(*g))||
        !private_range(s,g,gc,c,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
     for(unsigned j=0;j<3+PVR_FW_RESOURCE_COUNT;++j) {
         const struct pvr_mips_buffer *b=system_buffer(gc,j);
-        if(!apart(b->storage.cpu,b->storage.bytes,s,sizeof(*s))||
-           !apart(b->storage.cpu,b->storage.bytes,c->vm,sizeof(*c->vm))||
-           !apart(b->storage.cpu,b->storage.bytes,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
+        if(!a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,s,sizeof(*s))||
+           !a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,c->vm,sizeof(*c->vm))||
+           !a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
         for(unsigned k=0;k<b->page_count;++k)
             for(unsigned i=0;i<c->vm->tables.page_count;++i)if(b->pages[k]==c->vm->tables.physical_pages[i])return 0;
     }
@@ -125,27 +127,30 @@ static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
 static int validate(struct pvr_compute_service *s,struct pvr_gpu_service *g,
     struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c,int rebuilding)
 {
-    if(!span(s,sizeof(*s))||!span(g,sizeof(*g))||!span(gc,sizeof(*gc))||!span(c,sizeof(*c))||
+    if(!a733_span_excl_nonempty(s,sizeof(*s))||!a733_span_excl_nonempty(g,sizeof(*g))||
+       !a733_span_excl_nonempty(gc,sizeof(*gc))||!a733_span_excl_nonempty(c,sizeof(*c))||
        (uintptr_t)s%_Alignof(struct pvr_compute_service)||(uintptr_t)c%_Alignof(struct pvr_compute_service_config)||
        (uintptr_t)g%_Alignof(struct pvr_gpu_service)||(uintptr_t)gc%_Alignof(struct pvr_gpu_service_config)||
-       s->phase||(g->initialized && (!rebuilding || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING))||gc->compute||!apart(s,sizeof(*s),g,sizeof(*g))||
-       !apart(s,sizeof(*s),gc,sizeof(*gc))||!apart(s,sizeof(*s),c,sizeof(*c))||
-       !span(c->job,sizeof(*c->job))||!span(c->image,sizeof(*c->image))||
+       s->phase||(g->initialized && (!rebuilding || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING))||gc->compute||
+       !a733_ranges_disjoint_nonempty(s,sizeof(*s),g,sizeof(*g))||
+       !a733_ranges_disjoint_nonempty(s,sizeof(*s),gc,sizeof(*gc))||!a733_ranges_disjoint_nonempty(s,sizeof(*s),c,sizeof(*c))||
+       !a733_span_excl_nonempty(c->job,sizeof(*c->job))||!a733_span_excl_nonempty(c->image,sizeof(*c->image))||
        (uintptr_t)c->job%_Alignof(struct pvr_compute_job_config)||
        (uintptr_t)c->image%_Alignof(struct pvr_compute_job_image)||
-       !span(c->vm,sizeof(*c->vm))||(uintptr_t)c->vm%_Alignof(struct a733_gpu_vm_memory)||!c->map_count||c->map_count>PVR_COMPUTE_SERVICE_MAPS||
-       !span(c->maps,c->map_count*sizeof(*c->maps))||
+       !a733_span_excl_nonempty(c->vm,sizeof(*c->vm))||(uintptr_t)c->vm%_Alignof(struct a733_gpu_vm_memory)||
+       !c->map_count||c->map_count>PVR_COMPUTE_SERVICE_MAPS||
+       !a733_span_excl_nonempty(c->maps,c->map_count*sizeof(*c->maps))||
        (uintptr_t)c->maps%_Alignof(struct pvr_gpu_mapping)||
-       !span(c->job->programs,sizeof(*c->job->programs))||
+       !a733_span_excl_nonempty(c->job->programs,sizeof(*c->job->programs))||
        (uintptr_t)c->job->programs%_Alignof(struct pvr_compute_program_config)||
-       !span(c->job->program_result,sizeof(*c->job->program_result))||
+       !a733_span_excl_nonempty(c->job->program_result,sizeof(*c->job->program_result))||
        (uintptr_t)c->job->program_result%_Alignof(struct pvr_compute_program_result)||!c->job->admit||
        c->vm->phase!=A733_GPU_VM_MEMORY_PREPARED||!c->vm->tables.page_count||
        c->vm->tables.page_count>PVR_COMPUTE_SERVICE_TABLE_PAGES||
-       !span(c->vm->tables.cpu,c->vm->tables.bytes)||
+       !a733_span_excl_nonempty(c->vm->tables.cpu,c->vm->tables.bytes)||
        c->vm->tables.bytes!=(size_t)c->vm->tables.page_count*PAGE||
-       !span(c->vm->tables.physical_pages,c->vm->tables.page_count*8)||
-       !span(gc->firmware,gc->firmware_bytes)||!aarch64_device_cache_stride())return 0;
+       !a733_span_excl_nonempty(c->vm->tables.physical_pages,c->vm->tables.page_count*8)||
+       !a733_span_excl_nonempty(gc->firmware,gc->firmware_bytes)||!aarch64_device_cache_stride())return 0;
     const struct pvr_compute_program_config *p=c->job->programs;
     if(p->excluded_count<5||p->excluded_count>PVR_COMPUTE_PROGRAM_EXCLUSIONS||
        c->vm->context_cpu!=c->firmware[4].storage.cpu||
@@ -166,7 +171,7 @@ static int validate(struct pvr_compute_service *s,struct pvr_gpu_service *g,
         if(!descriptor(b)||l->cpu!=b->storage.cpu||!l->bytes||l->bytes>b->storage.bytes||
            b->storage.bytes!=((l->bytes+4095)&~(size_t)4095)||
            !private_range(s,g,gc,c,b->storage.cpu,b->storage.bytes)||
-           !apart(b->storage.cpu,b->storage.bytes,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
+           !a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,c->vm->tables.cpu,c->vm->tables.bytes))return 0;
         if(i<6) {
             uint32_t address=c->firmware_address[i];
             if((address&4095)||address<0xc0000000u||address>=0xc1000000u||
@@ -177,13 +182,13 @@ static int validate(struct pvr_compute_service *s,struct pvr_gpu_service *g,
         } else if(l->gpu&4095)return 0;
         for(unsigned j=0;j<OWNED;++j) {
             const struct pvr_mips_buffer *a=owned(c,j);
-            if(!descriptor(a)||!apart(b->storage.cpu,b->storage.bytes,a->pages,a->page_count*8)||
-               (j<i&&!apart(b->storage.cpu,b->storage.bytes,a->storage.cpu,a->storage.bytes)))return 0;
+            if(!descriptor(a)||!a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,a->pages,a->page_count*8)||
+               (j<i&&!a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,a->storage.cpu,a->storage.bytes)))return 0;
         }
         for(unsigned j=0;j<3+PVR_FW_RESOURCE_COUNT;++j) {
             const struct pvr_mips_buffer *a=system_buffer(gc,j);
-            if(!apart(b->storage.cpu,b->storage.bytes,a->storage.cpu,a->storage.bytes)||
-               !apart(b->storage.cpu,b->storage.bytes,a->pages,a->page_count*8))return 0;
+            if(!a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,a->storage.cpu,a->storage.bytes)||
+               !a733_ranges_disjoint_nonempty(b->storage.cpu,b->storage.bytes,a->pages,a->page_count*8))return 0;
         }
         for(unsigned page=0;page<b->page_count;++page) {
             uint64_t physical=b->pages[page];if(!pa(physical)||!mapped(b,page,i<6?0x44:0xff))return 0;
@@ -261,8 +266,8 @@ static int read_client(void *ctx,enum pvr_cccb_region r,uint32_t off,void *out,s
 {
     struct pvr_compute_service *s=ctx;
     if(r!=PVR_CCCB_CONTROL||n!=4||(off&3)||!io_span(s,2,off,n,0))return 0;
-    uint32_t value=*(volatile uint32_t *)((uintptr_t)s->config->firmware[2].storage.cpu+off);
-    __asm__ volatile("dsb sy":::"memory");memcpy(out,&value,4);return 1;
+    uint32_t value=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config->firmware[2].storage.cpu+off);
+    memcpy(out,&value,4);return 1;
 }
 static int write_client(void *ctx,enum pvr_cccb_region r,uint32_t off,const void *in,size_t n)
 {
@@ -301,8 +306,8 @@ static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t
 static int read_fence(void *ctx,uint32_t *out)
 {
     struct pvr_compute_service *s=ctx;if(!io_span(s,5,0,4,0))return 0;
-    uint32_t value=*(volatile uint32_t *)s->config->firmware[5].storage.cpu;
-    __asm__ volatile("dsb sy":::"memory");*out=value;return 1;
+    uint32_t value=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config->firmware[5].storage.cpu);
+    *out=value;return 1;
 }
 static int read_output(void *ctx,void *out,size_t bytes)
 {

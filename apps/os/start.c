@@ -24,6 +24,15 @@ __attribute__((used,retain)) const struct os_application os_applications[]={
 #ifdef SUNSTONE_A733_OS_AUDIO
     {"audio",os_audio_task_privileged,os_audio_pins,os_audio_start},
 #endif
+#ifdef SUNSTONE_A733_OS_RADIO
+    {"radio",os_radio_task_privileged,os_radio_pins,os_radio_start},
+#endif
+#ifdef SUNSTONE_A733_OS_HEADSET
+    {"headset",os_headset_task_privileged,os_headset_pins,os_headset_start},
+#endif
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    {"gpu-linear",os_gpu_linear_task_privileged,os_gpu_linear_pins,os_gpu_linear_start},
+#endif
 };
 #define OS_APPLICATIONS (sizeof(os_applications)/sizeof(os_applications[0]))
 int board_application_task_privileged(void (*entry)(void *),void *context)
@@ -51,3 +60,8 @@ const struct os_session *os_session_admitted(void)
     return s&&!memcmp(&s->board,&board.admitted_session,sizeof(s->board))&&os_session_valid(s)&&
         !memcmp(s->board.image,a733_smp_build_id,32)?s:NULL;
 }
+#ifdef SUNSTONE_A733_OS_AUDIO
+int os_capture(unsigned g,const uint8_t **wav,size_t *bytes){return os_audio_capture(g,wav,bytes);}
+#elif defined(SUNSTONE_A733_OS_HEADSET)
+int os_capture(unsigned g,const uint8_t **wav,size_t *bytes){return os_headset_capture(g,wav,bytes);}
+#endif

@@ -1,5 +1,6 @@
 #include "a733_dma_pool_session.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
 #include "a733_i2s_platform.h"
 
 _Static_assert(A733_DMA_CHANNELS<=DMA_SERVICE_JOBS,"one job per selected channel");
@@ -16,16 +17,14 @@ static int privileged(void)
 { uint64_t v; __asm__ volatile("mrs %0,CurrentEL":"=r"(v)); return v==4; }
 static int image(const void *p,size_t bytes,int write)
 {
+    /* Identity-mapped write-back memory, inner shareable, on every page. */
+    static const struct a733_mapping_rule rules[2]={
+        {A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
+        {A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1}};
     uintptr_t start=(uintptr_t)p;
     if(start<0x41000000 || start>=0x42000000 || !bytes || bytes>0x42000000-start ||
-       !a733_dma_separate(start,bytes,pool_extent.cpu,pool_extent.bytes)) return 0;
-    uintptr_t end=start+bytes;
-    for(uintptr_t a=start&~(uintptr_t)4095;a<end;a+=4096) {
-        struct aarch64_translation t;
-        if(!aarch64_device_translate(a,write,&t) || t.physical!=a ||
-           t.attributes!=0xff || t.shareability!=3) return 0;
-    }
-    return 1;
+       !a733_ranges_disjoint_nonempty(p,bytes,(const void *)pool_extent.cpu,pool_extent.bytes)) return 0;
+    return a733_mapping_check_pages(aarch64_device_translate,start,start,bytes,&rules[write!=0]);
 }
 static int same_extent(struct device_memory_extent a,struct device_memory_extent b)
 { return a.cpu==b.cpu && a.physical==b.physical && a.bytes==b.bytes; }
@@ -163,7 +162,7 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !s || !c ||
        instance || (uintptr_t)s%_Alignof(struct a733_dma_pool_session) ||
        (uintptr_t)c%_Alignof(struct a733_dma_pool_config) ||
-       !a733_dma_separate((uintptr_t)s,sizeof(*s),(uintptr_t)c,sizeof(*c))) return 0;
+       !a733_ranges_disjoint_nonempty(s,sizeof(*s),c,sizeof(*c))) return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     /* This constructor uses the initial in-image pool profile. A later external
      * carveout requires explicit image-exclusion integration, not subtraction
@@ -187,7 +186,7 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
     for(unsigned i=0;i<sizeof(objects)/sizeof(objects[0]);++i) {
         if((uintptr_t)objects[i]%alignments[i] || !image(objects[i],sizes[i],i!=1 && i!=2)) return 0;
         for(unsigned j=0;j<i;++j)
-            if(!a733_dma_separate((uintptr_t)objects[i],sizes[i],(uintptr_t)objects[j],sizes[j])) return 0;
+            if(!a733_ranges_disjoint_nonempty(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     }
     if(!image((const void *)(uintptr_t)c->fatal,4,0) ||
        (c->fatal_cookie && !image(c->fatal_cookie,1,1)) ||

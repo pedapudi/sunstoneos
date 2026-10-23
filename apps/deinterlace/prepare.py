@@ -33,16 +33,33 @@ def session_check(raw):
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited deinterlace clock/rail state.')
     geometry_check(struct.unpack_from('<8I',raw,856))
 
+FRAME=460800
+MAX_REPEATS=3
+
+
+def selection(geometry):
+    """Split the last geometry word into TNR strength and repeated jobs."""
+    return geometry[7]&0xffff,geometry[7]>>16
+
+
 def geometry_check(geometry):
     require(len(geometry)==8 and tuple(geometry[:5])==(640,480,640,640,0x3231564e) and
-        geometry[5] in (1,2,3) and tuple(geometry[6:])==(1,0),
-        'Deinterlace requires fixed top-first NV12 WEAVE, first-operation motion or fixed-strength TNR.')
-    return 460800 if geometry[5]==1 else 921600
+        geometry[5] in (1,2,3) and geometry[6]==1,
+        'Deinterlace requires fixed top-first NV12 WEAVE, motion or TNR.')
+    strength,repeats=selection(geometry)
+    require((strength==0 or (geometry[5]==3 and strength<=3)) and repeats<=MAX_REPEATS,
+        'Deinterlace requires TNR strength0-3 and at most three repeated jobs.')
+    return FRAME*(repeats+(1 if geometry[5]==1 else 2))
+
+
+def jobs(session):
+    return 1+selection(struct.unpack_from('<8I',session,856))[1]
 
 def embedded_reference(image,session):
     """Bind immutable native geometry before preparation or runtime upload."""
     session_check(session)
-    _image_parts(image,mode=struct.unpack_from('<I',session,876)[0])
+    strength,repeats=struct.unpack_from('<2H',session,884)
+    _image_parts(image,mode=struct.unpack_from('<I',session,876)[0],strength=strength,repeats=repeats)
     return None
 
 def upload_bytes(pixels,session):
@@ -101,6 +118,7 @@ def allocation_check(proof,raw,table):
     """Check actual provider rows and every IOMMU descriptor, including holes."""
     input_bytes=geometry_check(struct.unpack_from('<8I',raw,856))
     mode=struct.unpack_from('<I',raw,876)[0];history=mode!=1;rounded=462848
+    repeats=selection(struct.unpack_from('<8I',raw,856))[1];outputs=(FRAME*(1+repeats)+4095)&~4095
     md_bytes=307200 if mode==3 else 76800;md_rounded=(md_bytes+4095)&~4095
     input_rounded=(input_bytes+4095)&~4095
     if history:require(all(proof.get(key)==value for key,value in
@@ -112,7 +130,7 @@ def allocation_check(proof,raw,table):
     require(set(groups)=={'boot_pool','uncached_pool'} and
         len(groups['boot_pool'])==2 and len(groups['uncached_pool'])==(6 if history else 3),'Incomplete deinterlace allocations.')
     extents=[]
-    for pool,low,high,sizes,state in [('boot_pool',0x48000000,0x78000000,[input_rounded,rounded],1),
+    for pool,low,high,sizes,state in [('boot_pool',0x48000000,0x78000000,[input_rounded,outputs],1),
             ('uncached_pool',0x78000000,0x79000000,[32768,rounded+8192,rounded+8192]+([rounded+8192,md_rounded+8192,md_rounded+8192] if history else []),2)]:
         for slot,(row,size) in enumerate(zip(groups[pool],sizes)):
             address=row.get('physical');alignment=16384 if pool=='uncached_pool' and slot==0 else 4096
@@ -123,7 +141,8 @@ def allocation_check(proof,raw,table):
             extents.append((address,size))
     nc=groups['uncached_pool'];pa=nc[0]['physical']
     mapping=[(0x10000000,rounded,1),(0x10400000,rounded,3)]
-    if history:mapping += [(0x10800000,rounded,1),(0x10c00000,md_rounded,1),
+    # Repeated jobs alternate which flag buffer DI writes.
+    if history:mapping += [(0x10800000,rounded,1),(0x10c00000,md_rounded,3 if repeats else 1),
         (0x10c50000 if mode==3 else 0x10c20000,md_rounded,3)]
     spans=[dict(iova=iova,physical=nc[i+1]['physical']+4096,bytes=size,access=access)
         for i,(iova,size,access) in enumerate(mapping)]
@@ -167,7 +186,9 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         require(fact.get('schema')=='a733-deinterlace-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'deinterlace authority is not bound to this image/target.')
         required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained',('di_inherited_powered_reset_deasserted' if struct.unpack_from('<I',raw,876)[0]==1 else
                 'di_dedicated_reset_held_bus_and_module_gated'),'skipped_masters_physically_quiescent','remote_secure_writers_excluded','di_irq_owned_masked','iommu_irqs_owned_masked'],
-            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','di_device_mapping','dma_visibility_established'],
+            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','di_device_mapping','dma_visibility_established']+
+                # Refilling a retired input or output relies on finish ending DI access to it.
+                (['di_finish_ends_job_buffer_access'] if jobs(raw)>1 else []),
             'electrical':['dcdc2_shared_800mv','di_operating_point_source_reviewed','stable_di_parent'],
             'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}[key]
         require(all(fact.get(k) is True for k in required),'Required deinterlace physical fact absent.')
@@ -267,7 +288,7 @@ def validate_bundle(bundle):
 def image_parts(path):
     return _image_parts(Path(path).read_bytes())
 
-def _image_parts(data,mode=None):
+def _image_parts(data,mode=None,strength=0,repeats=0):
     import io
     elf=ELFFile(io.BytesIO(data));require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Native extended-memory deinterlace ELF required.')
     table=elf.get_section_by_name('.symtab');require(table is not None,'Native deinterlace symbol table required.')
@@ -295,9 +316,10 @@ def _image_parts(data,mode=None):
         p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
     _,geometry=immutable('deinterlace_geometry',88)
     compiled=struct.unpack('<11Q',geometry)
-    require(compiled in [(0x4153373344494131,revision,888,288,0x41f00000,20,capacity,460800,192,640,480)
-        for revision,capacity in ((1,460800),(2,921600),(3,921600))] and
-        (mode not in (2,3) or compiled[1]>=mode),
+    require(compiled in [(0x4153373344494131,revision,888,288,0x41f00000,20,capacity,output,192,640,480)
+        for revision,capacity,output in ((1,460800,FRAME),(2,921600,FRAME),(3,921600,FRAME),(4,921600,FRAME),
+            (5,FRAME*(2+MAX_REPEATS),FRAME*(1+MAX_REPEATS)))] and
+        (mode not in (2,3) or compiled[1]>=mode) and (not strength or compiled[1]>=4) and (not repeats or compiled[1]>=5),
         'Deinterlace compiled input capacity or geometry differs.')
     address,identity=immutable('a733_smp_build_id',32)
     for p in parts:p.pop('flags')

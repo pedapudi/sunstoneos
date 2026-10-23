@@ -226,6 +226,23 @@ digest. Native sealing copies and authenticates the envelope before OPEN. Privat
 GPU linker assertions preserve the complete copy across BSS clearing and reserve
 12 KiB for upload. CPU startup and return implementation remain unchanged.
 
+### Programs linked into the image
+
+`compile.py compile --profile 3 --session` compiles a program that has no
+package: its code is linked into the image and copied into two 4 KiB program
+pages at session open, so the code limit is 8,128 bytes. Such a program may
+leave the workgroup counts unread; the compiler then reports three
+coefficients and the system-value ranges `[4, 1, 0, 3, 0, 0]`. The PDS still
+writes all seven coefficients. The manifest records `session: true`, and
+`compile.py package` refuses it. The one such program is the
+[mimus matrix-product kernel](gpu-mimus.md), whose constant
+`checks/gpu-mimus-program.py` generates and checks.
+
+The profile-three PDS data and program, the fence program, the CDM grid
+stream and the 96-byte firmware command are encoded by functions in
+`drivers/gpu/pvr_compute_job.c` that both the package path and the mimus
+session call; the package bytes are unchanged and still equal Mesa's.
+
 The [observer](../apps/gpu-program/observe.py) reads an already-running selected
 USB instance and epoch. It returns copied output to a new file. It never launches
 or resets a board. Physical launch requires the existing independent GPU memory,

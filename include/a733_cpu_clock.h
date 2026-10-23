@@ -56,6 +56,31 @@ struct a733_cpu_clock_grant {
     uint32_t changes;            /* Requested transitions admitted. */
 };
 struct a733_cpu_clock_config { uint64_t owner; struct a733_cpu_clock_grant grant; };
+
+/* Little-endian grant record that a sealed OS session carries. A record that
+ * grants nothing has zero epoch, generation, clusters, maxima, changes and
+ * approval. A grant names the carrying board session's epoch and generation,
+ * admitted clusters, a table point as each admitted cluster's maximum (zero
+ * for the others), 1 to 64 changes and the SHA-256 of the reviewed record of
+ * the user's approval for those changes. The hash identifies that record; it
+ * does not establish the approval. */
+#define A733_CPU_CLOCK_GRANT_MAGIC UINT64_C(0x4153373343505531)
+#define A733_CPU_CLOCK_GRANT_VERSION 1u
+#define A733_CPU_CLOCK_GRANT_CHANGES 64u
+struct a733_cpu_clock_grant_record {
+    uint64_t magic,version,bytes;      /* Magic, version 1, 96. */
+    uint64_t owner;                    /* Clock and rail lease owner; nonzero. */
+    uint64_t epoch,generation;         /* The carrying board session. */
+    uint32_t clusters,max_mhz[2],changes;
+    uint8_t approval[32];
+};
+_Static_assert(sizeof(struct a733_cpu_clock_grant_record)==96,"CPU clock grant record geometry");
+/* Pure check of a record against the carrying session's nonzero epoch and
+ * generation. Returns 1 and fills the configuration, with the epoch as the
+ * grant session, or 0 without changing it. */
+int a733_cpu_clock_grant_load(const struct a733_cpu_clock_grant_record *,uint64_t epoch,
+    uint64_t generation,struct a733_cpu_clock_config *);
+
 struct a733_cpu_clock_ops {
     int (*now)(void *,uint64_t *); /* Monotonic microseconds shared with the leases. */
     int (*read)(void *,uintptr_t,uint32_t *);
@@ -74,25 +99,31 @@ struct a733_cpu_clock {
     struct a733_clock_leases *clocks;
     struct a733_rail_leases *rails;
     struct a733_pmic *pmic;
-    atomic_uint level; /* Latest enum a733_thermal_level; 3 until first reported. */
+    const struct a733_thermal_policy *policy;
     struct a733_clock_token clock;
     struct a733_rail_token rail;
     struct a733_pmic_request request;
     struct a733_pmic_snapshot snapshot;
     struct a733_cpu_clock_report report;
     uint64_t last_now, deadline, timer;
-    uint32_t changes, applied_mhz[2], target_mhz, from_uv, to_uv, select;
-    unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained;
+    uint32_t changes, applied_mhz[2], restore_mhz[2], target_mhz, from_uv, to_uv, select;
+    unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained, critical;
+    unsigned throttled;       /* Cluster bits lowered by THROTTLE, to restore at NORMAL. */
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
 };
-/* Zeroed private storage once. Managers and the PMIC provider have platform
- * lifetime. The grant is copied. No hardware access. */
+/* Zeroed private storage once. Managers, the PMIC provider and the thermal
+ * policy have platform lifetime; the policy must already be initialized. The
+ * grant is copied. No hardware access. */
 int a733_cpu_clock_init(struct a733_cpu_clock *,const struct a733_cpu_clock_config *,
     const struct a733_cpu_clock_ops *,void *,struct a733_clock_leases *,
-    struct a733_rail_leases *,struct a733_pmic *);
+    struct a733_rail_leases *,struct a733_pmic *,const struct a733_thermal_policy *);
 /* Owner task. Admits one transition of LITTLE or BIG to an exact operating
- * point when the grant covers it, the latest thermal level permits it and no
- * transition is active. PENDING starts it; poll completes it. No access. */
+ * point when the grant covers it, the thermal policy permits it and no
+ * transition is active. The policy permits a point once the cluster's sensor
+ * (CPUL for LITTLE, CPUB for BIG) has had a valid reading: any granted point
+ * at NORMAL, none above the ceiling at THROTTLE and none at CRITICAL, which
+ * this driver keeps once seen. PENDING starts it; poll completes it. No
+ * access. */
 enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
     enum a733_cpu_domain,uint32_t mhz,uint64_t deadline);
 /* Owner task, one bounded step per call, no busy waits. Exclusive cluster
@@ -109,16 +140,37 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
  * most a confirmed voltage that covers the present rate. A fault, including
  * a failed register read or PMIC provider fault before any write, or expiry
  * once the PLL is touched, returns RETAINED: the leases, the PMIC request and
- * the hardware state are kept and every later call returns RETAINED. While
- * idle under THROTTLE, a cluster this driver raised above the throttle
- * ceiling is lowered to it without consuming a change and without lowering
- * its voltage. If that lowering is refused or expires, it is not retried
- * until the owner requests that cluster again. Idle with nothing to do:
- * READY. */
+ * the hardware state are kept and every later call returns RETAINED.
+ * While idle the thermal level selects operating points. Under THROTTLE, a
+ * cluster this driver raised above the ceiling is lowered to it without
+ * consuming a change and without lowering its voltage; a lowering that is
+ * refused or expires is not retried in the same THROTTLE episode. At NORMAL,
+ * a cluster that THROTTLE lowered returns to its earlier point once, which
+ * consumes a change; without a change it stays at the ceiling. Idle with
+ * nothing to do: READY. */
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
-/* Any task: the thermal policy's level. Before the first call every request
- * is refused. NORMAL admits granted points, THROTTLE admits none above the
- * ceiling, CRITICAL refuses all transitions and is terminal. Returns 1 when
- * recorded. No access and no waiting. */
-int a733_cpu_clock_thermal(struct a733_cpu_clock *,enum a733_thermal_level);
+
+/* Cycle timing on one core. A sample holds MIDR_EL1, MPIDR_EL1, PMCCNTR_EL0
+ * and CNTPCT_EL0 read together. Both samples must name the same A733 core:
+ * MPIDR Aff1 is the core, cores 0-5 are Cortex-A55 (LITTLE) and 6-7 are
+ * Cortex-A76 (BIG). The cycle counter stops while the core waits for an
+ * interrupt, so the measured rate is a lower bound that equals the clock only
+ * while the core stayed busy. The configured rate is the report's decoded
+ * rate for that cluster, zero without a report or decode. */
+struct a733_cpu_cycle_sample { uint64_t midr, mpidr, cycles, ticks; };
+struct a733_cpu_timing {
+    unsigned core, cluster;
+    uint64_t cycles, ticks, measured_hz, configured_hz;
+};
+/* Pure. Needs counter ticks that advance, at most UINT64_MAX/counter_hz of
+ * them, and cycles that do not go back. Returns 1 when filled. */
+int a733_cpu_clock_timing(const struct a733_cpu_cycle_sample *begin,const struct a733_cpu_cycle_sample *end,
+    uint32_t counter_hz,const struct a733_cpu_clock_report *,struct a733_cpu_timing *);
+/* Native, EL1 on the core to be timed (a733_cpu_cycles_native.c). Enable sets
+ * PMCR_EL0.E and LC, clears D, writes PMCCFILTR_EL0 zero (count at EL0, EL1
+ * and EL3, not EL2) and enables the cycle counter; it never resets a
+ * counter. Sample masks IRQs for its reads and refuses a cycle counter that
+ * is not configured that way. Both return 1 on success. */
+int a733_cpu_cycles_enable(void);
+int a733_cpu_cycles_sample(struct a733_cpu_cycle_sample *);
 #endif

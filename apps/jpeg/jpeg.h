@@ -27,7 +27,7 @@ struct jpeg_application {
     TaskHandle_t handle;
     uint8_t *input,*luma,*chroma;
     uint32_t *table;
-    unsigned stage,copy_step;
+    unsigned stage,copy_step,decoded; /* decoded: jobs started. */
     uint32_t copy_row; /* Next output row: luma, then Cb, then Cr. */
     atomic_uint result;
     uint8_t payload[JPEG_OUTPUT_CAPACITY],digest[32];

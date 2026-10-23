@@ -1,5 +1,8 @@
 #include "a733_dma_native.h"
 #include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
 
 int a733_dma_native_translate(void *unused, uintptr_t address, int write,
                               struct dma_translation *result)
@@ -30,15 +33,16 @@ int a733_dma_native_init(struct a733_dma_native *n, uintptr_t register_cpu,
         const struct dma_memory_window *w = &windows[i];
         if (!w->bytes || w->cpu > UINTPTR_MAX - w->bytes ||
             w->physical > UINT64_MAX - w->bytes) return 0;
-        if (w->cpu < (uintptr_t)n + sizeof(*n) && (uintptr_t)n < w->cpu + w->bytes) return 0;
-        if (w->cpu < register_cpu + 0x2000 && register_cpu < w->cpu + w->bytes) return 0;
-        if (w->physical < register_physical + 0x2000 && register_physical < w->physical + w->bytes) return 0;
+        if (a733_extents_overlap_prechecked(w->cpu, w->bytes, (uintptr_t)n, sizeof(*n)) ||
+            a733_extents_overlap_prechecked(w->cpu, w->bytes, register_cpu, 0x2000) ||
+            a733_extents_overlap_prechecked(w->physical, w->bytes, register_physical, 0x2000)) return 0;
     }
-    for (unsigned offset = 0; offset < 0x2000; offset += 4096) {
-        struct dma_translation t;
-        if (!a733_dma_native_translate(NULL, register_cpu + offset, 1, &t) ||
-            t.physical != register_physical + offset || (t.attributes != 0 && t.attributes != 4)) return 0;
-    }
+    /* Both register pages are Device memory at the expected physical address. */
+    static const struct a733_mapping_rule registers = {
+        A733_MAPPING_WRITE, 2, {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}, {A733_MAIR_DEVICE_NGNRE, A733_SH_ANY}}, 0, 1
+    };
+    if (!a733_mapping_check_stride(aarch64_device_translate, register_cpu, register_physical,
+                                   0x2000, 4096, &registers)) return 0;
     if (!dma_memory_init(&n->memory, windows, count, ports, port_count,
                          a733_dma_native_translate, NULL)) return 0;
     n->registers = register_cpu;
@@ -57,20 +61,16 @@ static uint32_t native_read(void *cookie, uintptr_t address)
 {
     struct a733_dma_native *n = cookie;
     check_register(n, address);
-    uint32_t result = *(volatile uint32_t *)address;
-    __asm__ volatile("dsb sy" ::: "memory");
-    return result;
+    return a733_mmio_read32_dsb_sy_after(address);
 }
 static void native_write(void *cookie, uintptr_t address, uint32_t value)
 {
     struct a733_dma_native *n = cookie;
     check_register(n, address);
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)address = value;
-    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_both(address, value);
 }
 static void native_barrier(void *cookie)
-{ (void)cookie; __asm__ volatile("dsb sy" ::: "memory"); }
+{ (void)cookie; a733_mmio_dsb_sy(); }
 static uint64_t native_ticks(void *cookie)
 {
     (void)cookie;

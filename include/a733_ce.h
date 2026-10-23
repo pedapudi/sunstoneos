@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "a733_clock_leases.h"
+#include "a733_range.h"
 #define A733_CE_RANDOM_BYTES 32u
 #define A733_CE_DESCRIPTOR_BYTES 208u
 #define A733_CE_HASH_INPUT_BYTES 2048u
@@ -12,6 +13,42 @@ enum a733_ce_profile { A733_CE_TRNG_ONLY, A733_CE_SHA256_ONLY, A733_CE_TRNG_SHA2
 #define A733_CE_CAP_TRNG 1u
 #define A733_CE_CAP_SHA256 2u
 #define A733_CE_CAP_AES128 4u
+/* The SHA256 and AES128 capability bits admit the whole hash and symmetric
+ * execution units: every SHA method below, and AES-128/192/256 ECB, CBC and
+ * CTR. Memory, clock and security authority is the same for each method. */
+#define A733_CE_CAP_HASH A733_CE_CAP_SHA256
+#define A733_CE_CAP_AES A733_CE_CAP_AES128
+/* Values are the descriptor HASH SEL field. */
+enum a733_ce_hash_method { A733_CE_SHA1=1,A733_CE_SHA224=2,A733_CE_SHA256=3,A733_CE_SHA384=4,A733_CE_SHA512=5 };
+/* Compression block, chained state and final digest bytes; zero if invalid.
+ * The engine writes the full state of SHA-224 and SHA-384 for intermediate
+ * packages, which software truncates to the digest after the last task. */
+static inline unsigned a733_ce_hash_block(unsigned method)
+{return method>=A733_CE_SHA1 && method<=A733_CE_SHA256 ? 64:(method==A733_CE_SHA384 || method==A733_CE_SHA512 ? 128:0);}
+static inline unsigned a733_ce_hash_state(unsigned method)
+{
+    switch (method) {
+    case A733_CE_SHA1:return 20;case A733_CE_SHA224:case A733_CE_SHA256:return 32;
+    case A733_CE_SHA384:case A733_CE_SHA512:return 64;default:return 0;
+    }
+}
+static inline unsigned a733_ce_hash_digest(unsigned method)
+{
+    switch (method) {
+    case A733_CE_SHA1:return 20;case A733_CE_SHA224:return 28;case A733_CE_SHA256:return 32;
+    case A733_CE_SHA384:return 48;case A733_CE_SHA512:return 64;default:return 0;
+    }
+}
+/* Values are the symmetric control word's operation-mode field. */
+enum a733_ce_aes_mode { A733_CE_AES_ECB=0,A733_CE_AES_CBC=1,A733_CE_AES_CTR=2 };
+/* One symmetric task. key_bytes is 16, 24 or 32. CBC and CTR take a 16-byte
+ * IV or initial counter block; ECB takes none. CTR always runs the forward
+ * cipher, so decrypt must be 0; counter_bits is 32 or 128 for CTR, else 0. */
+struct a733_ce_symmetric {
+    const uint8_t *key,*iv;
+    size_t key_bytes;
+    unsigned mode,decrypt,counter_bits;
+};
 static inline unsigned a733_ce_capabilities(enum a733_ce_profile profile)
 {
     switch (profile) {
@@ -20,16 +57,11 @@ static inline unsigned a733_ce_capabilities(enum a733_ce_profile profile)
     case A733_CE_TRNG_AES128:return 5;case A733_CE_TRNG_SHA256_AES128:return 7;default:return 0;
     }
 }
-/* Both ranges are nonnull, do not wrap the address space and do not overlap. */
-static inline int a733_ce_separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 #define A733_CE_NS_INTID 200u
 #define A733_CE_S_INTID 201u
 /* Separate complete cache lines: hash/TRNG descriptors occupy 208 bytes;
- * symmetric descriptors occupy 220 bytes.
+ * symmetric descriptors occupy 220 bytes. CBC and CTR read their IV from the
+ * iv line and the engine writes its next counter block to the output line.
  * Storage, aliases and physical extents remain exclusively reserved forever
  * after init; task completion permits reuse under the same reservation,
  * but no global drain or release operation is provided. */
@@ -87,11 +119,11 @@ struct a733_ce_ops {
     int (*write)(void *,uintptr_t,uint32_t);
     /* Publish cleans descriptor, IV and input and cleans/invalidates output
      * before DMA. CIPHER_PUBLISH instead cleans the key and cleans/invalidates
-     * the complete cipher output. CIPHER_ACQUIRE invalidates the complete
-     * cipher output. Acquire invalidates output after successful completion.
+     * the complete cipher output and output lines. CIPHER_ACQUIRE invalidates
+     * the complete cipher output and output lines. Acquire invalidates output after successful completion.
      * Scrubs follow a completed task whose result was copied, after software
-     * zeroed the lines: KEY_CLEAN cleans input, cipher output and key after a
-     * consumed AES task; SCRUB cleans output, IV and input after a SHA task;
+     * zeroed the lines: KEY_CLEAN cleans output, IV, input, cipher output and
+     * key after a consumed AES task; SCRUB cleans output, IV and input after a SHA task;
      * RANDOM_SCRUB cleans only output after a TRNG task. Exact 1 means completed cache maintenance and barriers, never
      * memory drain or release. */
     int (*sync)(void *,struct a733_ce_memory *,enum a733_ce_sync);
@@ -113,6 +145,7 @@ struct a733_ce {
     unsigned initialized,stage,fault,held,health_programmed;
     unsigned operation,task_configured,hash_bytes,hash_continue;
     unsigned cipher_bytes,cipher_decrypt,key_dirty,key_clean_complete;
+    unsigned hash_method,result_bytes,cipher_control;
 };
 /* Zero controller storage once. All inputs, registry and DMA memory are pairwise
  * disjoint and live throughout retained lifetime. Borrow an immutable actual
@@ -147,6 +180,12 @@ enum a733_ce_result a733_ce_request(struct a733_ce *,uint64_t deadline_us);
  * shared session is the sole caller; do not interleave direct controller use. */
 enum a733_ce_result a733_ce_hash_request(struct a733_ce *,const uint8_t *,size_t,
     const uint8_t iv[32],unsigned continuation,uint64_t total_bits,uint64_t deadline_us);
+/* The same compression task for any hash method: input is a whole number of
+ * the method's blocks, at most 2048 bytes, and continuation state has
+ * a733_ce_hash_state bytes. a733_ce_digest_poll returns that complete state. */
+enum a733_ce_result a733_ce_digest_request(struct a733_ce *,enum a733_ce_hash_method,const uint8_t *,
+    size_t,const uint8_t *state,unsigned continuation,uint64_t total_bits,uint64_t deadline_us);
+enum a733_ce_result a733_ce_digest_poll(struct a733_ce *,uint8_t *state,size_t bytes);
 /* Typed AES-128 ECB task, 16..1024 bytes in complete blocks, decrypt 0/1.
  * Input/key are copied into private memory; normal input-key selection only.
  * No IV, counter, padding, authentication or key-ladder operation. The actual
@@ -154,9 +193,14 @@ enum a733_ce_result a733_ce_hash_request(struct a733_ce *,const uint8_t *,size_t
  * and client release remain blocked until key cleanup succeeds. */
 enum a733_ce_result a733_ce_cipher_request(struct a733_ce *,const uint8_t key[16],
     const uint8_t *,size_t,unsigned decrypt,uint64_t deadline_us);
+/* The same task for any AES key size and for CBC or CTR. Software chains IVs
+ * between tasks; the engine's next-counter write is never read back. The
+ * IV, counter, key, input and output lines are all cleared by key cleanup. */
+enum a733_ce_result a733_ce_symmetric_request(struct a733_ce *,const struct a733_ce_symmetric *,
+    const uint8_t *,size_t,uint64_t deadline_us);
 enum a733_ce_result a733_ce_cipher_task_poll(struct a733_ce *,uint8_t *,size_t);
-/* Only a consumed successful AES task permits zeroing its key, input and cipher
- * output lines and completing cache clean/barriers. Earlier faults retain
+/* Only a consumed successful AES task permits zeroing its key, IV, counter,
+ * input and cipher output lines and completing cache clean/barriers. Earlier faults retain
  * secret DMA backing. A successful SHA completion zeros output, IV and input
  * the same way before returning its result; a TRNG completion zeros output. Neither proves internal CE
  * key-register erasure or global engine drain. */

@@ -13,7 +13,13 @@ struct aic8800_wifi_config {
     uint64_t rf_profile_record, channel_policy_record, command_timeout;
     unsigned profile, channel_count;
     struct aic8800_wifi_channel channels[AIC8800_WIFI_CHANNELS];
+    /* Station power save requested from management configuration, one of
+     * enum aic8800_wifi_power. It applies only when the firmware reports the
+     * power-save feature; reserved bytes must be zero. */
+    uint8_t power_save, reserved[3];
 };
+/* Source ME_CONFIG power-save settings: ON sets ps_on, DYNAMIC also sets dpsm. */
+enum aic8800_wifi_power { AIC8800_WIFI_POWER_OFF, AIC8800_WIFI_POWER_ON, AIC8800_WIFI_POWER_DYNAMIC };
 enum aic8800_wifi_state { AIC8800_WIFI_NEW, AIC8800_WIFI_PREPARING,
     AIC8800_WIFI_REQUEST, AIC8800_WIFI_WAITING, AIC8800_WIFI_READY,
     AIC8800_WIFI_SCAN_DONE, AIC8800_WIFI_FAULT };
@@ -73,6 +79,8 @@ struct aic8800_wifi {
     const uint8_t *held_record;
     uint16_t last_cfm_id, last_cfm_bytes, expected_cfm;
     uint16_t max_stations;
+    /* Configured power save once the version reports the feature, else OFF. */
+    uint8_t power_mode;
     uint8_t initialized, phase, mac[6], max_vifs, vif, scan_done, held;
     uint8_t request[512], last_cfm[1024], frame[AIC8800_WIFI_FRAME_BYTES];
 };

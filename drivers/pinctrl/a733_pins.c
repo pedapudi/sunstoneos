@@ -1,4 +1,5 @@
 #include "a733_pins.h"
+#include "a733_range.h"
 
 static int in_time(struct a733_pins *m, uint64_t deadline)
 {
@@ -23,12 +24,6 @@ static enum a733_pins_result leave(struct a733_pins *m, enum a733_pins_result re
 { m->operations.leave(m->cookie); return result; }
 static enum a733_pins_result fault(struct a733_pins *m)
 { m->failed = 1; return A733_PINS_RECOVERY; }
-/* Output aliases could overwrite manager ownership or the operation's input. */
-static int overlap(const void *a, size_t n, const void *b, size_t k)
-{
-    uintptr_t x=(uintptr_t)a, y=(uintptr_t)b;
-    return n>UINTPTR_MAX-x || k>UINTPTR_MAX-y || (x<y+k && y<x+n);
-}
 #define DEBOUNCE_MASK UINT32_C(0x71)
 static uintptr_t bank_base(unsigned b)
 { return b<A733_PIN_L ? A733_PINS_BASE+0x80+b*0x80 : A733_PINS_R_BASE+(b-A733_PIN_L)*0x30; }
@@ -47,7 +42,7 @@ int a733_pins_init_banks(struct a733_pins *m,const struct a733_pins_operations *
 {
     if (!m || m->initialized || !ops || !ops->enter || !ops->leave || !ops->now ||
         !ops->read || !ops->write || !h || (h->irq_banks & ~UINT32_C(0x1ffe)) ||
-        overlap(m,sizeof(*m),h,sizeof(*h))) return 0;
+        a733_ranges_overlap_or_wrap(m,sizeof(*m),h,sizeof(*h))) return 0;
     uint32_t any=0;
     for (unsigned b=0;b<A733_PIN_BANKS;++b) {
         if (h->authorized[b] & ~a733_pin_bank_mask(b)) return 0;
@@ -260,13 +255,13 @@ static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
     struct a733_pin_lease_banked *out,uint64_t deadline,unsigned banked)
 {
     if (!m || !r || !out || !owner || !count || count>A733_PIN_MAX_REQUESTS || !empty_banked(out) ||
-        overlap(m,sizeof(*m),r,count*sizeof(*r)) || overlap(m,sizeof(*m),out,sizeof(*out)) ||
-        overlap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
+        a733_ranges_overlap_or_wrap(m,sizeof(*m),r,count*sizeof(*r)) || a733_ranges_overlap_or_wrap(m,sizeof(*m),out,sizeof(*out)) ||
+        a733_ranges_overlap_or_wrap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
     struct a733_pin_output_condition expected={0};
     if (condition) {
-        if (overlap(condition,sizeof(*condition),m,sizeof(*m)) ||
-            overlap(condition,sizeof(*condition),r,count*sizeof(*r)) ||
-            overlap(condition,sizeof(*condition),out,sizeof(*out))) return A733_PINS_INVALID;
+        if (a733_ranges_overlap_or_wrap(condition,sizeof(*condition),m,sizeof(*m)) ||
+            a733_ranges_overlap_or_wrap(condition,sizeof(*condition),r,count*sizeof(*r)) ||
+            a733_ranges_overlap_or_wrap(condition,sizeof(*condition),out,sizeof(*out))) return A733_PINS_INVALID;
         expected=*condition;
         uint32_t any=0;
         for (unsigned b=0;b<A733_PIN_BANKS;++b) {
@@ -449,12 +444,12 @@ static enum a733_pins_result release(struct a733_pins *m,
 enum a733_pins_result a733_pins_release_banked(struct a733_pins *m,
     struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
 {
-    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
+    if (!m || !h || quiescent!=1 || a733_ranges_overlap_or_wrap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
     return release(m,h,deadline,1);
 }
 static int observation_arguments(struct a733_pins *m,const struct a733_pin_lease_banked *h,uint32_t *out)
 {
-    return m && h && out && !overlap(m,sizeof(*m),out,sizeof(*out)) && !overlap(h,sizeof(*h),out,sizeof(*out));
+    return m && h && out && !a733_ranges_overlap_or_wrap(m,sizeof(*m),out,sizeof(*out)) && !a733_ranges_overlap_or_wrap(h,sizeof(*h),out,sizeof(*out));
 }
 static enum a733_pins_result read_inputs(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,unsigned b,uint32_t mask,uint32_t *levels,
@@ -548,15 +543,15 @@ static enum a733_pins_result held_by(struct a733_pins *m,
 enum a733_pins_result a733_pins_held_banked(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,int *held,uint64_t deadline)
 {
-    if (!m || !h || !held || overlap(m,sizeof(*m),held,sizeof(*held)) ||
-        overlap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
+    if (!m || !h || !held || a733_ranges_overlap_or_wrap(m,sizeof(*m),held,sizeof(*held)) ||
+        a733_ranges_overlap_or_wrap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
     return held_by(m,h,held,deadline,1);
 }
 
 enum a733_pins_result a733_pins_pwm0_fan_low(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
 {
-    if(!m||!h||quiescent!=1||overlap(m,sizeof(*m),h,sizeof(*h)))return A733_PINS_INVALID;
+    if(!m||!h||quiescent!=1||a733_ranges_overlap_or_wrap(m,sizeof(*m),h,sizeof(*h)))return A733_PINS_INVALID;
     enum a733_pins_result r=enter(m,deadline);
     if(r!=A733_PINS_OK)return r;
     if(!match_banked(m,h))return leave(m,A733_PINS_CONFLICT);
@@ -578,7 +573,7 @@ enum a733_pins_result a733_pins_pwm0_fan_low(struct a733_pins *m,
 enum a733_pins_result a733_pins_pwm0_fan_resume(struct a733_pins *m,
     const struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
 {
-    if(!m||!h||quiescent!=1||overlap(m,sizeof(*m),h,sizeof(*h)))return A733_PINS_INVALID;
+    if(!m||!h||quiescent!=1||a733_ranges_overlap_or_wrap(m,sizeof(*m),h,sizeof(*h)))return A733_PINS_INVALID;
     enum a733_pins_result r=enter(m,deadline);
     if(r!=A733_PINS_OK)return r;
     if(!match_banked(m,h))return leave(m,A733_PINS_CONFLICT);
@@ -627,8 +622,8 @@ enum a733_pins_result a733_pins_acquire(struct a733_pins *m, uint64_t owner,
 {
     if (!m || !r || !out || !owner || !count || count>A733_PINS_COUNT ||
         out->id || out->owner || out->pb_mask ||
-        overlap(m,sizeof(*m),out,sizeof(*out)) || overlap(m,sizeof(*m),r,count*sizeof(*r)) ||
-        overlap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
+        a733_ranges_overlap_or_wrap(m,sizeof(*m),out,sizeof(*out)) || a733_ranges_overlap_or_wrap(m,sizeof(*m),r,count*sizeof(*r)) ||
+        a733_ranges_overlap_or_wrap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
     struct a733_pin_request_banked requests[A733_PINS_COUNT];
     for (size_t i=0; i<count; ++i) {
         if (!a733_pin_config_valid(r[i].pb_pin,r[i].expected) ||
@@ -645,7 +640,7 @@ enum a733_pins_result a733_pins_acquire(struct a733_pins *m, uint64_t owner,
 enum a733_pins_result a733_pins_release(struct a733_pins *m, struct a733_pin_lease *h,
                                         unsigned quiescent, uint64_t deadline)
 {
-    if (!m || !h || quiescent!=1 || overlap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
+    if (!m || !h || quiescent!=1 || a733_ranges_overlap_or_wrap(m,sizeof(*m),h,sizeof(*h))) return A733_PINS_INVALID;
     struct a733_pin_lease_banked lease=bank_b(h);
     enum a733_pins_result result=release(m,&lease,deadline,0);
     if (result==A733_PINS_OK) *h=(struct a733_pin_lease){0};
@@ -655,7 +650,7 @@ enum a733_pins_result a733_pins_read_inputs(struct a733_pins *m, const struct a7
     uint32_t mask, uint32_t *levels, uint64_t deadline)
 {
     if (!m || !h || !levels || !mask || (mask & ~h->pb_mask) ||
-        overlap(m,sizeof(*m),levels,sizeof(*levels)) || overlap(h,sizeof(*h),levels,sizeof(*levels)))
+        a733_ranges_overlap_or_wrap(m,sizeof(*m),levels,sizeof(*levels)) || a733_ranges_overlap_or_wrap(h,sizeof(*h),levels,sizeof(*levels)))
         return A733_PINS_INVALID;
     struct a733_pin_lease_banked lease=bank_b(h);
     return read_inputs(m,&lease,A733_PIN_B,mask,levels,deadline,0);
@@ -663,8 +658,8 @@ enum a733_pins_result a733_pins_read_inputs(struct a733_pins *m, const struct a7
 enum a733_pins_result a733_pins_held(struct a733_pins *m, const struct a733_pin_lease *h,
                                    int *held, uint64_t deadline)
 {
-    if (!m || !h || !held || overlap(m,sizeof(*m),held,sizeof(*held)) ||
-        overlap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
+    if (!m || !h || !held || a733_ranges_overlap_or_wrap(m,sizeof(*m),held,sizeof(*held)) ||
+        a733_ranges_overlap_or_wrap(h,sizeof(*h),held,sizeof(*held))) return A733_PINS_INVALID;
     struct a733_pin_lease_banked lease=bank_b(h);
     return held_by(m,&lease,held,deadline,0);
 }

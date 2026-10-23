@@ -7,6 +7,10 @@ struct bt_sdp_ag_profile {
     uint32_t handle, brsf_features;
     uint16_t version, supported_features;
     uint8_t rfcomm_channel, network;
+    /* Optional A2DP1.3 sink record over AVDTP1.3 on PSM0x19; handle0 omits
+     * it. Features: headphone1, speaker2, recorder4, amplifier8. */
+    uint32_t sink_handle;
+    uint16_t sink_features;
 };
 enum bt_sdp_server_error { BT_SDP_SERVER_OK, BT_SDP_SERVER_LOWER,
     BT_SDP_SERVER_EXPIRED, BT_SDP_SERVER_IDENTITY, BT_SDP_SERVER_SHORT };
@@ -32,7 +36,9 @@ struct bt_sdp_server {
  * compliance, pairing, key or audio authority is inferred. Current profile
  * excludes wide/super-wide speech and enhanced voice recognition until their
  * native owners supply supported bindings. Network and bits0..4 agree with
- * BRSF; all other SDP feature bits are refused. Handle must be >=0x10000.
+ * BRSF; all other SDP feature bits are refused. Handles must be >=0x10000.
+ * A sink record needs a distinct handle, nonzero features and an actual
+ * AVDTP sink that owns PSM0x19 on every admitted link.
  * One serialized task owns all workers. Server, profile, policy context,
  * registry and lower objects/backing must be disjoint and stay alive on fault.
  * Callback is bounded/non-reentrant; exact1 authorizes,0 unsupported,<0 denied.

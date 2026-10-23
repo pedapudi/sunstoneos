@@ -1,13 +1,19 @@
-# Native G2D fill, copy, blending and twofold enlargement
+# Native G2D fill, copy, blending, scaling and RGB order conversion
 
-The native FreeRTOS application implements one retained ARGB8888 fill,
-source-copy, source-over-solid or twofold enlargement operation per boot. This document assumes familiarity with DMA,
+The native FreeRTOS application implements one retained fill, source-copy,
+source-over-solid, twofold enlargement, general scaling or image-over-image
+operation per boot. Copy and general scaling may also convert between 32-bit
+RGB channel orders. This document assumes familiarity with DMA,
 IOMMU translation and the supervised A733 launch contract. Software
 implementation does not establish physical pixel correctness or safe resource
 reclamation. Board testing is blocked while physical recovery is unavailable.
 
 The caller supplies width, height, byte stride, operation, destination rectangle,
-source origin and fill color in the sealed 904-byte session. Width is at most
+source origin and fill color in the sealed 904-byte session. Eight further
+words carry the general-scaling source size (`sw`, `sh`), the image-over-image
+background origin and plane alpha (`bx`, `by`, `alpha`), the output format and
+two reserved words. Each word an operation does not use must be zero, so every
+earlier session keeps its meaning. Width is at most
 1280, height at most 720 and stride at most 5120 bytes. The stride must cover
 all pixels and be divisible by four. ARGB8888 bytes are B, G, R, A in memory.
 Fill requires a zero source origin; copy requires a zero fill color. Source-over-solid
@@ -16,9 +22,27 @@ alpha byte must be 255. It uses the same bounded source origin and rectangle as
 copy. Twofold enlargement (`scale2x`, operation4) requires positive even
 width and height for the destination rectangle and a zero color. Its source
 crop has half the destination width and height at the supplied source origin.
-Bounds checks use subtraction before computing offsets. Other scaling ratios,
-image-over-image blending, translucent backgrounds, rotation, color conversion
-and additional formats remain required hardware modes outside these operations.
+General scaling (`scale`, operation 5) reads an `sw` by `sh` source crop at the
+source origin and writes any other destination size, enlarging or reducing.
+An identical size is refused, because the copy operation already covers it.
+Image-over-image blending (`source-over-image`, operation 6) places a foreground
+rectangle at the source origin over a background rectangle of the same size at
+(`bx`, `by`) in the same upload. Foreground opacity is its per-pixel alpha times
+plane alpha 1 to 255; the background keeps its own per-pixel alpha, so either
+image may be translucent. Its color must be zero.
+
+`format` describes the source and `output_format` the destination, using the
+pinned `sunxi-g2d.h` codes 0 to 7: ARGB8888, ABGR8888, RGBA8888, BGRA8888,
+XRGB8888, XBGR8888, RGBX8888 and BGRX8888. Each name lists channels from the
+most significant byte of a little-endian 32-bit word. Only copy and general
+scaling accept codes other than ARGB8888. Every order keeps four bytes per
+pixel, so buffer sizes and mappings do not change.
+
+Bounds checks use subtraction before computing offsets. Rotation and mirroring,
+YUV color-space conversion, formats with other pixel sizes and a translucent
+solid background remain required. The pinned source set does not include the
+G2D rotation unit's driver, `g2d_rotate.c`, so rotation needs that source pinned
+before an adaptation.
 
 The caller uploads stride times height bytes, including row padding. A SHA256
 digest authenticates the complete source even for fill. The destination starts
@@ -86,16 +110,26 @@ cover at most three distinct 4 MiB windows and never map the guards.
 
 The register-command queue (RCQ) contains eight headers. It configures video
 layer0, disables unused UI layers and writes the bounded destination rectangle.
-Fill, copy and twofold enlargement select blender COPY. Enlargement enables the
+Fill, copy, twofold enlargement and general scaling select blender COPY. Enlargement enables the
 video scaler with the full 1152-byte register block inside the existing RCQ
 page. It follows the pinned RGB path: half-step coordinates, zero phases, the
 upscaling horizontal coefficient bank and linear vertical coefficients. The
 source crop remains at most 640 by 360 pixels, so coarse downsampling is disabled.
+General scaling uses the same RGB scaler path at the ratio of source to
+destination size. The pinned Lanczos bank for that ratio filters horizontally
+and the linear bank vertically. A source at least eight times wider or four
+times taller than the destination is first decimated by the video layer, as
+the pinned `g2d_ovl_v_calc_coarse` does, to eight times the destination width
+or four times its height. Twofold enlargement is general scaling at exactly
+half the destination size and emits identical commands.
 Other operations disable the scaler. Source-over-solid enables UI2 in
 constant-color mode as pipe1, with uploaded V0 foreground in pipe0, and selects
 Porter-Duff SRCOVER. UI2 adds no buffer reads or IOMMU mapping. Both inputs and
 the output use the effective upstream straight-alpha settings; the uploaded
-source retains its per-pixel alpha rather than a substituted global alpha. A zero-dirty final header preserves the
+source retains its per-pixel alpha rather than a substituted global alpha.
+Image-over-image uses the same SRCOVER blend with UI2 reading the background
+rectangle through the existing read-only source mapping. Video layer0 uses the
+pinned mixer alpha mode, which multiplies per-pixel and plane alpha. A zero-dirty final header preserves the
 hardware's even-header requirement. GPL source provenance and preserved
 notices are recorded in [the source manifest](../apps/g2d/sources.json).
 
@@ -144,6 +178,16 @@ routing and controls, but do not establish device quantization. For blending, ag
 diagnostic and does not gate ACK. Authentication, completion and durable output
 checks remain strict. Modeled output cannot qualify physical arithmetic. The UAPI SRCOVER/DSTOVER formula comments conflict with the
 executed source and are not used as an oracle.
+
+For image-over-image, the host computes ideal straight-alpha source-over with
+foreground alpha `Af = As * plane / 255²` and background alpha `Ab = Ab8 / 255`,
+where `As` and `Ab8` are the 8-bit pixel alphas. Output alpha is
+`Ao = Af + Ab * (1 - Af)`, and each color channel is
+`(Cs * Af + Cb * Ab * (1 - Af)) / Ao`, rounded to nearest; a zero `Ao` gives a
+zero pixel. A converting copy reorders channels and treats an X channel as 255
+on input and output. Both references are unqualified diagnostics, like
+source-over-solid, and do not gate ACK. General scaling has no numerical oracle;
+the host requires only zero bytes outside the destination rectangle.
 
 Physical qualification must compare fill, copy and source-over output, including arbitrary
 source alpha, nonzero origins and untouched padding, with the CPU reference.
@@ -265,3 +309,42 @@ the linked C serializer and TinyUSB vendor, FIFO and endpoint code. It emits the
 16576-byte authenticated response and final receipt while gating ACK processing
 on completed transfers. DCD effects, provider readiness and scheduling are
 modeled; no G2D job, full-speed matrix or earlier completion cases replay.
+
+
+## General scaling, image-over-image and RGB order conversion checks
+
+These operations write the RCQ fields named by the pinned setters. Video
+layer0 carries the source format in `lay_fbfmt`, writeback carries the output
+format in `fmt`, and the blender alpha mode stays 0, as the pinned
+`bld_cs_set` selects for every RGB format. No buffer, mapping, clock, power or
+completion step changes. Rebuilt image SHA-256
+`08e56fc59dca1f9f148dc217649e78453944c9a7a81a143cd5b31a47ff30351b` passes four
+focused checks. None executes a G2D job or establishes physical pixels.
+
+- `checks/g2d-modes-reference.py` runs unchanged pinned scaler, overlay,
+  blender and writeback setters under ASan/UBSan beside the native builder. It
+  matches 1369 scaling cases, including enlargement, reduction, mixed axes
+  and both decimation paths, all 64 format pairs for copy and scaling, and four
+  image-over-image geometries. Given `--previous f99e356`, it compiles the
+  builder from that revision and confirms identical commands for earlier fill,
+  copy, source-over-solid and twofold enlargement sessions. Twenty-nine refusal
+  cases and ten admitted cases also run through host preparation, which agrees
+  on every verdict.
+- `checks/g2d-modes-native.py` executes the linked AArch64 session validator
+  and RCQ builder on those 39 cases. Every verdict matches, and the ten admitted
+  command pages equal the host builder's bytes.
+- `checks/g2d-modes-launcher.py` runs the rebuilt 3008-byte SRAM launcher in
+  the shared AArch32 model inside an earlier prepared bundle. It admits four new
+  operation sessions and refuses eight invalid ones. The launcher's geometry
+  predicate reads each session word once and checks each axis with one compare,
+  which keeps it within the 3072-byte SRAM region. The earlier launcher cases
+  pass with the rebuilt binary.
+- `checks/g2d-modes-host.py` seals new sessions with the actual producer from an
+  accepted earlier session's board prefix. It checks seven refusals, the ideal
+  references and capture policy: blending and conversion differences still
+  receive ACK, while a differing plain copy and a scaled write outside the
+  destination rectangle are refused before ACK. Response frames are synthetic.
+
+The earlier scaling and blending register checks and host capture checks pass
+with the changed code. Physical pixels, interpolation, X-channel handling,
+alpha rounding, DMA visibility and performance remain unqualified.

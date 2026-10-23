@@ -1,6 +1,7 @@
 /* pci-epf-test wire layout and COPY semantics follow the pinned GPL-2.0 Linux
  * endpoint function and host test driver in sources.lock.json. */
 #include "a733_pcie_epf_test.h"
+#include "a733_range.h"
 #include <string.h>
 #define CFG UINT32_C(0x20000000)
 #define DBI UINT32_C(0x06000000)
@@ -8,8 +9,6 @@
 #define MEM A733_PCIE_TEST_WINDOW
 #define B(n) (UINT32_C(1)<<(n))
 enum { CLAIM,BAR,WINDOW,MSI,PREPARE,ARM,SUBMIT,WAIT,DONE };
-static int separate(const void *a,size_t n,const void *b,size_t m)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
 static int rd(struct a733_pcie_epf_test *t,uintptr_t a,unsigned w,uint32_t *v)
 {return a733_pcie_read(t->port,a,w,v);}
 static int wr(struct a733_pcie_epf_test *t,uintptr_t a,unsigned w,uint32_t v)
@@ -36,9 +35,9 @@ int a733_pcie_epf_init(struct a733_pcie_epf_test *t,struct a733_pcie *p,
 {
     if(!t||t->self||!p||p->self!=p||p->test||!c||!c->identity||!c->timeout_us||c->timeout_us>5000000||
         !c->vendor||c->vendor==65535||!c->device||c->device==65535||c->bar>5||!pool||!pool->initialized||
-        !irq||!irq->arm||!irq->event||!irq->stop||!separate(t,sizeof(*t),p,sizeof(*p))||
-        !separate(t,sizeof(*t),pool,sizeof(*pool))||!separate(t,sizeof(*t),c,sizeof(*c))||
-        !separate(t,sizeof(*t),irq,sizeof(*irq))||a733_pcie_output_outside(p,t,sizeof(*t))!=1)return 0;
+        !irq||!irq->arm||!irq->event||!irq->stop||!a733_ranges_disjoint(t,sizeof(*t),p,sizeof(*p))||
+        !a733_ranges_disjoint(t,sizeof(*t),pool,sizeof(*pool))||!a733_ranges_disjoint(t,sizeof(*t),c,sizeof(*c))||
+        !a733_ranges_disjoint(t,sizeof(*t),irq,sizeof(*irq))||a733_pcie_output_outside(p,t,sizeof(*t))!=1)return 0;
     *t=(struct a733_pcie_epf_test){.self=t,.port=p,.pool=pool,.config=*c,.irq=*irq};
     for(unsigned i=0;i<3;++i){
         size_t bytes=i==2?4096:A733_PCIE_TEST_ALLOCATION;
@@ -195,15 +194,15 @@ enum a733_pcie_result a733_pcie_epf_poll(struct a733_pcie_epf_test *t)
         break;
     default:ok=0;break;
     }
-    r=a733_pcie_test_end(p,ok);
+    r=a733_pcie_client_end(p,ok);
     if(r!=A733_PCIE_READY&&r!=A733_PCIE_BUSY){a733_pcie_epf_stop(t);return A733_PCIE_RETAINED;}
     return r==A733_PCIE_READY&&t->stage==DONE?A733_PCIE_READY:A733_PCIE_PENDING;
 }
 enum a733_pcie_result a733_pcie_epf_copy(struct a733_pcie_epf_test *t,uint8_t out[4096])
 {
     if(!t||t->self!=t||!out||t->published||t->stage!=DONE||t->failed||
-       !separate(out,4096,t,sizeof(*t))||!separate(out,4096,t->pool,sizeof(*t->pool))||
-       !separate(out,4096,(void *)t->pool->backing.cpu,t->pool->backing.bytes)||
+       !a733_ranges_disjoint(out,4096,t,sizeof(*t))||!a733_ranges_disjoint(out,4096,t->pool,sizeof(*t->pool))||
+       !a733_ranges_disjoint(out,4096,(void *)t->pool->backing.cpu,t->pool->backing.bytes)||
        a733_pcie_output_outside(t->port,out,4096)!=1)return A733_PCIE_INVALID;
     enum a733_pcie_result r=a733_pcie_epf_poll(t);if(r!=A733_PCIE_READY)return r;
     if(!contents(t)){a733_pcie_epf_stop(t);return A733_PCIE_RETAINED;}

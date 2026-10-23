@@ -6,7 +6,10 @@
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
 #include "a733_clock_reference.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
+#include "a733_range.h"
+#include "a733_task_context.h"
 #include "task.h"
 #include <stdatomic.h>
 #define CCU UINT32_C(0x02002000)
@@ -20,35 +23,16 @@ enum { CLOCK,RAIL,RAIL_WAIT,PMIC_ID,SUPPLY0,SUPPLY1,MAPPINGS,PCK_ACQUIRE,BASELIN
 static struct a733_hdmi_native *boot_owner;
 static int equal(const void *a,const void *b,size_t n)
 {const unsigned char *x=a,*y=b;for(size_t i=0;i<n;++i)if(x[i]!=y[i])return 0;return 1;}
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
 static int intact(struct a733_hdmi_native *n)
 {return n&&n->self==n&&boot_owner==n&&equal(&n->config,&n->sealed,sizeof(n->config));}
 static int current(struct a733_hdmi_native *n)
-{
-    uint64_t el,flags,nesting,critical;
-    __asm__ volatile("mrs %0, CurrentEL\n mrs %1, daif":"=r"(el),"=r"(flags));
-    if(!intact(n)||n->failed||el!=4||(flags&0x80))return 0;
-    __asm__ volatile("msr daifset, #2":::"memory");
-#if configNUMBER_OF_CORES > 1
-    extern volatile uint64_t ullPortInterruptNestings[],ullCriticalNestings[];
-    uint64_t core;__asm__ volatile("mrs %0, tpidr_el1":"=r"(core));
-    nesting=core<configNUMBER_OF_CORES?ullPortInterruptNestings[core]:1;
-    critical=core<configNUMBER_OF_CORES?ullCriticalNestings[core]:1;
-#else
-    extern uint64_t ullPortInterruptNesting;
-    extern volatile uint64_t ullCriticalNesting;
-    nesting=ullPortInterruptNesting;critical=ullCriticalNesting;
-#endif
-    __asm__ volatile("msr daif, %0"::"r"(flags):"memory");
-    return !nesting&&!critical&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&
-        xTaskGetCurrentTaskHandle()==(TaskHandle_t)n->config.task;
-}
+{return intact(n)&&!n->failed&&a733_task_context_owner_el1((TaskHandle_t)n->config.task);}
 static int now(void *v,uint64_t *out)
 {
     struct a733_hdmi_native *n=v;uint64_t t;
-    if(!current(n)||!out||n->config.locks->now(n->config.locks->context,&t)!=1||t<n->last_now)return 0;
-    n->last_now=t;*out=t;return 1;
+    if(!current(n)||!out||n->config.locks->now(n->config.locks->context,&t)!=1||
+       !a733_monotonic_advance(t,&n->last_now))return 0;
+    *out=t;return 1;
 }
 static int timely(struct a733_hdmi_native *n)
 {uint64_t t;return now(n,&t)&&t<n->deadline&&
@@ -104,17 +88,13 @@ static int unlock(struct a733_hdmi_native *n)
     a733_platform_lock_leave(n->config.locks,A733_PLATFORM_REGISTER_LOCK);n->held=0;
     return timely(n)?1:fail(n);
 }
-static uint32_t load32(uintptr_t a)
-{uint32_t x;__asm__ volatile("dsb sy":::"memory");x=*(volatile const uint32_t *)a;__asm__ volatile("dsb sy":::"memory");return x;}
-static void store32(uintptr_t a,uint32_t x)
-{__asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)a=x;__asm__ volatile("dsb sy":::"memory");}
 static int update(struct a733_hdmi_native *n,uintptr_t a,uint32_t mask,uint32_t value)
 {
     int r=lock(n);if(r!=1)return r;
-    uint32_t old=load32(a),next=(old&~mask)|value;
+    uint32_t old=a733_mmio_read32_dsb_sy_both(a),next=(old&~mask)|value;
     if(!timely(n))return fail(n);
-    store32(a,next);
-    if(!timely(n)||load32(a)!=next||!timely(n))return fail(n);
+    a733_mmio_write32_dsb_sy_both(a,next);
+    if(!timely(n)||a733_mmio_read32_dsb_sy_both(a)!=next||!timely(n))return fail(n);
     return unlock(n);
 }
 static int snapshot(struct a733_hdmi_native *n,unsigned i)
@@ -137,30 +117,31 @@ static int snapshot(struct a733_hdmi_native *n,unsigned i)
 }
 static int mapped(uintptr_t a)
 {
-    struct aarch64_translation r,w;
-    return aarch64_device_translate(a,0,&r)&&aarch64_device_translate(a,1,&w)&&
-        r.physical==a&&w.physical==a&&r.attributes==0&&w.attributes==0;
+    static const struct a733_mapping_rule rule={A733_MAPPING_READ_WRITE,1,
+        {{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
+    return a733_mapping_check(aarch64_device_translate,a,a,&rule);
 }
 static int baseline(struct a733_hdmi_native *n)
 {
     int r=lock(n);if(r!=1)return r;
-    uint32_t osc=load32(0x07090160),reference=load32(CCU),pck=load32(0x070101ac);
+    uint32_t osc=a733_mmio_read32_dsb_sy_both(0x07090160),reference=a733_mmio_read32_dsb_sy_both(CCU),
+        pck=a733_mmio_read32_dsb_sy_both(0x070101ac);
     uint32_t raw=a733_clock_dcxo_hz(osc);
     if(raw!=n->config.request.phy_reference_hz||
        (raw!=24000000&&raw!=26000000)||!a733_clock_ref24_valid(osc,reference)||!(pck&1))return fail(n);
     /* PCK token protects its source; these words verify the selected native
      * gates before accessing domain10. No unrelated domain is modified. */
-    uint32_t control=load32(PCK),status=load32(PCK+8);
+    uint32_t control=a733_mmio_read32_dsb_sy_both(PCK),status=a733_mmio_read32_dsb_sy_both(PCK+8);
     if((control&15)!=(status&15)||((status&15)!=0&&(status&15)!=8))return fail(n);
     /* Alternative TV/eDP/HDCP/CEC producer clocks must be inactive. Cold
      * platform provenance additionally excludes already-running local output. */
     const uint16_t inactive[]={0x1640,0x1680,0x1684,0x1694};
     for(unsigned i=0;i<sizeof(inactive)/sizeof(*inactive);++i)
-        if(load32(CCU+inactive[i])&BIT(31))return fail(n);
+        if(a733_mmio_read32_dsb_sy_both(CCU+inactive[i])&BIT(31))return fail(n);
     const uint16_t buses[]={0x16cc,0x1604,0x160c,0x164c,0x168c};
     for(unsigned i=0;i<sizeof(buses)/sizeof(*buses);++i)
-        if(load32(CCU+buses[i])&1)return fail(n);
-    if(load32(CCU+0x1690)&BIT(31))return fail(n);
+        if(a733_mmio_read32_dsb_sy_both(CCU+buses[i])&1)return fail(n);
+    if(a733_mmio_read32_dsb_sy_both(CCU+0x1690)&BIT(31))return fail(n);
     n->grant.phy_reference_hz=raw;n->grant.sfr_hz=24000000;
     n->domain_on=(status&15)==8;n->step=0;
     return unlock(n);
@@ -223,8 +204,8 @@ static int acquire(void *v,const struct a733_hdmi_request *request,uint64_t dead
         r=update(n,CCU+offsets[n->step],mask,0);
         if(r<0)return fail(n);
         if(r&&++n->step==4){
-            if(n->last_now>UINT64_MAX-10)return fail(n);
-            n->reset_until=n->last_now+10;++n->stage;
+            if(!a733_deadline_after(n->last_now,10,&n->reset_until))return fail(n);
+            ++n->stage;
         }break;}
     case RESET_HOLD:
         if(n->last_now>=n->reset_until){n->step=n->domain_on?5u:0u;++n->stage;}break;
@@ -235,13 +216,12 @@ static int acquire(void *v,const struct a733_hdmi_request *request,uint64_t dead
         r=update(n,PCK+offsets[n->step],UINT32_MAX,values[n->step]);
         if(r<0)return fail(n);if(r)++n->step;break;}
     case POWER_ON:
-        if(n->last_now>UINT64_MAX-10000)return fail(n);
-        n->power_deadline=n->last_now+10000;
+        if(!a733_deadline_after(n->last_now,10000,&n->power_deadline))return fail(n);
         r=update(n,PCK,15,8);if(r<0)return fail(n);if(r)++n->stage;break;
     case POWER_WAIT:{
         if(n->last_now>=n->power_deadline)return fail(n);
         r=lock(n);if(r<0)return fail(n);if(!r)break;
-        uint32_t x=load32(PCK+8);
+        uint32_t x=a733_mmio_read32_dsb_sy_both(PCK+8);
         if(!timely(n)||n->last_now>=n->power_deadline)return fail(n);
         r=unlock(n);if(r<0)return fail(n);
         if((x&15)==8){n->step=0;++n->stage;}break;}
@@ -287,7 +267,7 @@ static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     struct a733_hdmi_native *n=v;
     if(!out||!allowed(a,4,0)||!live(n)||lock(n)!=1)return fail(n);
-    *out=load32(a);return unlock(n);
+    *out=a733_mmio_read32_dsb_sy_both(a);return unlock(n);
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
@@ -296,21 +276,19 @@ static int write32(void *v,uintptr_t a,uint32_t value)
     if(n->config.pixel_source&&a==A733_HDMI_TV_BASE+0x90&&(value&BIT(31))&&
        n->config.pixel_source(n->config.pixel_context,1)!=1)return fail(n);
     if(!allowed(a,4,1)||!live(n)||lock(n)!=1)return fail(n);
-    store32(a,value);return unlock(n);
+    a733_mmio_write32_dsb_sy_both(a,value);return unlock(n);
 }
 static int read8(void *v,uintptr_t a,uint8_t *out)
 {
     struct a733_hdmi_native *n=v;
     if(!out||!allowed(a,1,0)||!live(n)||lock(n)!=1)return fail(n);
-    __asm__ volatile("dsb sy":::"memory");*out=*(volatile const uint8_t *)a;
-    __asm__ volatile("dsb sy":::"memory");return unlock(n);
+    *out=a733_mmio_read8_dsb_sy_both(a);return unlock(n);
 }
 static int write8(void *v,uintptr_t a,uint8_t value)
 {
     struct a733_hdmi_native *n=v;
     if(!allowed(a,1,1)||!live(n)||lock(n)!=1)return fail(n);
-    __asm__ volatile("dsb sy":::"memory");*(volatile uint8_t *)a=value;
-    __asm__ volatile("dsb sy":::"memory");return unlock(n);
+    a733_mmio_write8_dsb_sy_both(a,value);return unlock(n);
 }
 static int barrier(void *v)
 {struct a733_hdmi_native *n=v;if(!current(n)||!timely(n))return fail(n);__asm__ volatile("dsb sy":::"memory");return 1;}
@@ -330,8 +308,8 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
         !c->request.initial.id||!c->request.initial.generation||
         c->pck_client>=A733_GPU_RESOURCE_CLIENTS||
         !c->locks->initialized||c->locks->now!=a733_counter_clock_now||
-        !separate(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock))||
-        !separate(c,sizeof(*c),c->locks->context,sizeof(struct a733_counter_clock))||
+        !a733_ranges_disjoint(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock))||
+        !a733_ranges_disjoint(c,sizeof(*c),c->locks->context,sizeof(struct a733_counter_clock))||
         c->clocks->now!=c->locks->now||c->clocks->context!=c->locks->context||
         c->rails->binding.clocks!=c->clocks||c->rails->binding.gpu!=c->pck||
         c->pmic->self!=c->pmic||c->pmic->clocks!=c->clocks||c->pmic->rails!=c->rails||
@@ -341,7 +319,7 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->clocks),sizeof(*c->rails),
         sizeof(*c->pmic),sizeof(*c->locks),sizeof(*c->pck)};
     for(unsigned i=0;i<7;++i)for(unsigned j=i+1;j<7;++j)
-        if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
+        if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;
     n->self=n;n->config=*c;n->sealed=*c;
     n->grant=(struct a733_hdmi_reservation){.generation=c->epoch,.system_owner=c->owner,
         .system_generation=c->epoch,.inactive_epoch=c->epoch,.recovery_epoch=c->recovery,

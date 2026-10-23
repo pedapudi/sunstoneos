@@ -1,27 +1,23 @@
 #include "a733_radio_session.h"
+#include "a733_range.h"
 #include <string.h>
 #ifndef SUNSTONE_AIC8800_RSN
 #error "Native radio session requires the actual RSN integration"
 #endif
 enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP,RECONNECT };
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
-}
 static int platform_outside(struct a733_radio_platform *b,const void *p,size_t n)
 {
-    return separate(b,sizeof(*b),p,n)&&separate(b->clocks,sizeof(*b->clocks),p,n)&&
-        separate(b->pins,sizeof(*b->pins),p,n)&&separate(b->rails,sizeof(*b->rails),p,n)&&
-        separate(b->pmic,sizeof(*b->pmic),p,n)&&
-        separate(b->rails->binding.gpu,sizeof(*b->rails->binding.gpu),p,n)&&
+    return a733_ranges_disjoint(b,sizeof(*b),p,n)&&a733_ranges_disjoint(b->clocks,sizeof(*b->clocks),p,n)&&
+        a733_ranges_disjoint(b->pins,sizeof(*b->pins),p,n)&&a733_ranges_disjoint(b->rails,sizeof(*b->rails),p,n)&&
+        a733_ranges_disjoint(b->pmic,sizeof(*b->pmic),p,n)&&
+        a733_ranges_disjoint(b->rails->binding.gpu,sizeof(*b->rails->binding.gpu),p,n)&&
         b->pmic->ops.outside(b->pmic->cookie,p,n)==1;
 }
 static int outside(struct a733_radio_session *s,const void *p,size_t n)
 {
-    if(!separate(s,sizeof(*s),p,n)||!platform_outside(s->platform,p,n))return 0;
+    if(!a733_ranges_disjoint(s,sizeof(*s),p,n)||!platform_outside(s->platform,p,n))return 0;
     for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
-        if(!separate(s->config.firmware.blobs[i].data,s->config.firmware.blobs[i].bytes,p,n))return 0;
+        if(!a733_ranges_disjoint(s->config.firmware.blobs[i].data,s->config.firmware.blobs[i].bytes,p,n))return 0;
     return 1;
 }
 static int owner(struct a733_radio_session *s)
@@ -50,9 +46,8 @@ static enum a733_radio_session_result fail(struct a733_radio_session *s)
 }
 static int now(struct a733_radio_session *s,uint64_t *out)
 {
-    if(s->platform->ops.now_us(s->platform->cookie,out)!=1||*out<s->last_now||
-        *out>=s->platform->config.lifetime_deadline_us)return 0;
-    s->last_now=*out;return 1;
+    return s->platform->ops.now_us(s->platform->cookie,out)==1&&
+        a733_deadline_admit(*out,&s->last_now,s->platform->config.lifetime_deadline_us);
 }
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
 {
@@ -100,10 +95,10 @@ static int initialize(struct a733_radio_session *s,struct a733_radio_platform *p
         c->bootstrap_deadline>p->config.lifetime_deadline_us||!c->runtime_lease_us||
         !c->renew_margin_us||c->renew_margin_us>=c->runtime_lease_us||c->transport.ticks_per_ms!=1000||
         !platform_outside(p,s,sizeof(*s))||!platform_outside(p,c,sizeof(*c))||
-        !separate(s,sizeof(*s),c,sizeof(*c)))return 0;
+        !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)))return 0;
     for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i){
         const struct aic8800_firmware_blob *b=&c->firmware.blobs[i];
-        if(!separate(s,sizeof(*s),b->data,b->bytes)||!separate(c,sizeof(*c),b->data,b->bytes)||
+        if(!a733_ranges_disjoint(s,sizeof(*s),b->data,b->bytes)||!a733_ranges_disjoint(c,sizeof(*c),b->data,b->bytes)||
             !platform_outside(p,b->data,b->bytes))return 0;
     }
     /* Constructors consume this private lifetime even if a later profile fails.
@@ -282,7 +277,9 @@ int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generati
         (void)leave(s,fail(s));return -1;
     }
     int result=0;
-    if(s->stage==BOOTSTRAP||s->stage==MANAGEMENT||s->stage==NETWORK){
+    /* Wi-Fi association, loss and recovery leave the firmware and runtime
+     * that a Bluetooth client of the same module uses unchanged. */
+    if(s->stage==BOOTSTRAP||s->stage==MANAGEMENT||s->stage==NETWORK||s->stage==RECONNECT){
         enum a733_radio_session_result health=live(s);
         if(health==A733_SESSION_RETAINED)result=-1;
         else if(health!=A733_SESSION_BUSY&&!s->renew_pending&&s->firmware.state==AIC8800_FW_START_CONFIRMED&&
@@ -340,15 +337,19 @@ int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_d
 int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
 {if(!enter(s))return 0;return done(s,outside(s,out,sizeof(*out))&&admission(s,s->deadline)&&aic8800_transport_take_scan(&s->transport,out));}
 
-/* The same admitted target as the lost association, with its credentials. */
-static int same_target(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
+/* An admitted access point of the current network (ESS): the same SSID and
+ * security as the current association, any BSSID and admitted channel, with
+ * its own beacon evidence and credentials. Each access point's RSN element
+ * comes from its beacon, so WPA2 supplies a configuration for that access
+ * point. The worker checks the BSSID and channel again in the association. */
+static int same_ess(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
     const struct aic8800_supplicant_config *security,uint64_t open)
 {
     const struct aic8800_wifi *w=&s->wifi;
     return outside(s,target,sizeof(*target))&&w->association_generation!=UINT64_MAX&&
-        target->security==w->target.security&&target->channel_index==w->target.channel_index&&
+        target->security==w->target.security&&target->channel_index<w->config.channel_count&&
         target->ssid_bytes==w->target.ssid_bytes&&target->connection_authority&&target->beacon_evidence&&
-        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        !memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
         ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
          (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
           security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)));
@@ -361,7 +362,7 @@ int a733_radio_session_recover(struct a733_radio_session *s,const struct aic8800
     if(!now(s,&current)||deadline<=current)return done(s,0);
     int ok=s->stage==NETWORK&&aic8800_network_lost(&s->sockets.network)&&admission(s,deadline)&&
         s->wifi.state==AIC8800_WIFI_READY&&s->wifi.link==AIC8800_WIFI_LINK_DOWN&&
-        s->data.state==AIC8800_DATA_IDLE&&same_target(s,target,security,open)&&
+        s->data.state==AIC8800_DATA_IDLE&&same_ess(s,target,security,open)&&
         (!security||s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED||s->supplicant.state==AIC8800_SUPPLICANT_HANDSHAKE);
     if(ok){
         s->reconnect_target=*target;if(security)s->reconnect_security=*security;
@@ -376,19 +377,12 @@ int a733_radio_session_reconnect(struct a733_radio_session *s,const struct aic88
     if(!enter(s))return 0;
     struct aic8800_wifi *w=&s->wifi;uint64_t current;
     if(!now(s,&current)||deadline<=current)return done(s,0);
-    int ok=outside(s,target,sizeof(*target))&&s->stage==NETWORK&&admission(s,deadline)&&reason&&
+    int ok=s->stage==NETWORK&&admission(s,deadline)&&reason&&
         w->state==AIC8800_WIFI_READY&&w->link==
             (w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED)&&
-        aic8800_network_address(&s->sockets.network,NULL)&&
-        w->association_generation!=UINT64_MAX&&target->security==w->target.security&&
-        target->channel_index==w->target.channel_index&&target->ssid_bytes==w->target.ssid_bytes&&
-        target->connection_authority&&target->beacon_evidence&&
-        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        aic8800_network_address(&s->sockets.network,NULL)&&same_ess(s,target,security,open)&&
         aic8800_transport_attachment_ready(&s->transport)&&s->data.state==AIC8800_DATA_IDLE&&
-        ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
-         (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
-          security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)&&
-          s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(&s->security)));
+        (!security||(s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(&s->security)));
     if(ok&&sunstone_net_offline(&s->sockets)){
         s->reconnect_target=*target;if(security)s->reconnect_security=*security;
         s->reconnect_deadline=deadline;s->reconnect_reason=reason;s->reconnect_open=open;

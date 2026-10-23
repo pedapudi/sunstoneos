@@ -21,6 +21,7 @@
  * SOFTWARE.
  */
 #include "pvr_compute_job.h"
+#include "a733_range.h"
 #include <string.h>
 #include "pvr_compute_probe.inc"
 _Static_assert(PVR_COMPUTE_DISPATCH_MAX*128u+64u<=4096u-64u,"PDS data, code and trailing fetch space");
@@ -36,14 +37,8 @@ size_t pvr_compute_job_region_bytes(const struct pvr_compute_job_config *c,unsig
 }
 unsigned pvr_compute_job_result_words(const struct pvr_compute_job_config *c)
 {return c->package?c->package->output_bytes/4:PVR_COMPUTE_JOB_WORDS;}
-static int range(const void *p,size_t n)
-{ return p && n && n<=UINTPTR_MAX-(uintptr_t)p; }
 static int gpu(uint64_t a,size_t n)
 { return a && n && a<(UINT64_C(1)<<40) && n<=(UINT64_C(1)<<40)-a; }
-static int overlap(uint64_t a,uint64_t n,uint64_t b,uint64_t m)
-{ return a<b+m && b<a+n; }
-static int apart(const void *a,size_t n,const void *b,size_t m)
-{ return range(a,n)&&range(b,m)&&!overlap((uintptr_t)a,n,(uintptr_t)b,m); }
 static uint32_t get32(const void *p,size_t off)
 { const unsigned char *b=p;return (uint32_t)b[off]|(uint32_t)b[off+1]<<8|(uint32_t)b[off+2]<<16|(uint32_t)b[off+3]<<24; }
 static uint64_t get64(const void *p,size_t off)
@@ -55,48 +50,52 @@ static void put64(void *p,size_t off,uint64_t v)
 static void clear(void *p,size_t n)
 { unsigned char *b=p;for(size_t i=0;i<n;++i)b[i]=0; }
 static void words(void *p,size_t off,const uint32_t *w,size_t count)
-{ for(size_t i=0;i<count;++i)put32(p,off+4*i,w[i]); }
+{
+    /* A loop keeps constant tables in .rodata; unrolled stores take more .text. */
+#pragma clang loop unroll(disable)
+    for(size_t i=0;i<count;++i)put32(p,off+4*i,w[i]);
+}
 static int span(const struct pvr_compute_program_span *s)
-{ return range(s->cpu,s->bytes)&&gpu(s->gpu,s->bytes); }
+{ return a733_span_excl_nonempty(s->cpu,s->bytes)&&gpu(s->gpu,s->bytes); }
 static int heap(const struct pvr_compute_program_heap *h,int relative)
 { return gpu(h->base,h->bytes)&&!(h->base&4095)&&!(h->bytes&4095)&&(!relative||h->bytes<=(UINT64_C(1)<<32)); }
 static int inside(const struct pvr_compute_program_heap *h,const struct pvr_compute_program_span *s)
-{ return s->gpu>=h->base&&s->gpu-h->base<=h->bytes&&s->bytes<=h->bytes-(s->gpu-h->base); }
+{ return a733_extent_within(h->base,h->bytes,s->gpu,s->bytes); }
 static int fw(uint32_t a,size_t n,unsigned alignment)
 { return a>=0xc0000000u&&a<0xc1000000u&&n<=0xc1000000u-a&&!(a&(alignment-1)); }
 static int valid(const struct pvr_compute_job_config *c,const void *out,size_t out_size)
 {
-    if(!range(c,sizeof(*c))||(uintptr_t)c%_Alignof(struct pvr_compute_job_config)||
-       !apart(c,sizeof(*c),out,out_size)||!c->admit||
-       !range(c->programs,sizeof(*c->programs))||
+    if(!a733_span_excl_nonempty(c,sizeof(*c))||(uintptr_t)c%_Alignof(struct pvr_compute_job_config)||
+       !a733_ranges_disjoint_nonempty(c,sizeof(*c),out,out_size)||!c->admit||
+       !a733_span_excl_nonempty(c->programs,sizeof(*c->programs))||
        (uintptr_t)c->programs%_Alignof(struct pvr_compute_program_config)||
-       !range(c->program_result,sizeof(*c->program_result))||
+       !a733_span_excl_nonempty(c->program_result,sizeof(*c->program_result))||
        (uintptr_t)c->program_result%_Alignof(struct pvr_compute_program_result)||
-       !apart(c->programs,sizeof(*c->programs),out,out_size)||
-       !apart(c->program_result,sizeof(*c->program_result),out,out_size)||
+       !a733_ranges_disjoint_nonempty(c->programs,sizeof(*c->programs),out,out_size)||
+       !a733_ranges_disjoint_nonempty(c->program_result,sizeof(*c->program_result),out,out_size)||
        !fw(c->firmware_context,232,8)||!fw(c->firmware_ufo,64,4))return 0;
-    if(c->package&&(!range(c->package,sizeof(*c->package))||!pvr_compute_package_valid(c->package)||
-       !apart(c->package,sizeof(*c->package),out,out_size)))return 0;
+    if(c->package&&(!a733_span_excl_nonempty(c->package,sizeof(*c->package))||!pvr_compute_package_valid(c->package)||
+       !a733_ranges_disjoint_nonempty(c->package,sizeof(*c->package),out,out_size)))return 0;
     const struct pvr_compute_program_config *p=c->programs;
     if(p->bvnc!=PVR_FW_A733_BVNC||p->execution_cores!=1||!p->admission_token||
        p->excluded_count<5||p->excluded_count>PVR_COMPUTE_PROGRAM_EXCLUSIONS||
        !heap(&p->pds,1)||!heap(&p->usc,1)||!heap(&p->general,0)||
-       overlap(p->pds.base,p->pds.bytes,p->usc.base,p->usc.bytes)||
-       overlap(p->pds.base,p->pds.bytes,p->general.base,p->general.bytes)||
-       overlap(p->usc.base,p->usc.bytes,p->general.base,p->general.bytes))return 0;
+       a733_extents_overlap_prechecked(p->pds.base,p->pds.bytes,p->usc.base,p->usc.bytes)||
+       a733_extents_overlap_prechecked(p->pds.base,p->pds.bytes,p->general.base,p->general.bytes)||
+       a733_extents_overlap_prechecked(p->usc.base,p->usc.bytes,p->general.base,p->general.bytes))return 0;
     static const uint32_t min_size[5]={232,4,32,256,32};
     for(unsigned i=0;i<p->excluded_count;++i)
         if(!span(&p->excluded[i])||(i<5&&p->excluded[i].bytes<min_size[i])||
-           !apart(p->excluded[i].cpu,p->excluded[i].bytes,out,out_size))return 0;
+           !a733_ranges_disjoint_nonempty(p->excluded[i].cpu,p->excluded[i].bytes,out,out_size))return 0;
     for(unsigned i=0;i<PVR_PROGRAM_REGIONS;++i)
         if(!span(&p->buffers[i])||(p->buffers[i].gpu&63)||p->buffers[i].bytes!=pvr_compute_program_bytes[i]||
-           !apart(p->buffers[i].cpu,p->buffers[i].bytes,out,out_size))return 0;
+           !a733_ranges_disjoint_nonempty(p->buffers[i].cpu,p->buffers[i].bytes,out,out_size))return 0;
     const void *context=p->excluded[0].cpu;
     uint32_t addresses[5]={c->firmware_context,get32(context,24),get32(context,0),
                            get32(context,4),get32(context,136)};
     for(unsigned i=0;i<5;++i)
         if(!fw(addresses[i],p->excluded[i].bytes,i==1?4:8)||
-           overlap(c->firmware_ufo,64,addresses[i],p->excluded[i].bytes))return 0;
+           a733_extents_overlap_prechecked(c->firmware_ufo,64,addresses[i],p->excluded[i].bytes))return 0;
     for(unsigned i=0;i<7;++i)
         if(get64(context,152+8*i)!=c->program_result->switch_registers[i])return 0;
     if(c->program_result->cdm_resume_address!=p->buffers[PVR_PROGRAM_CDM_RESUME].gpu)return 0;
@@ -106,32 +105,75 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
             i==PVR_JOB_PDS||i==PVR_JOB_FENCE_PDS?&p->pds:&p->general;
         if(!span(s)||s->bytes!=pvr_compute_job_region_bytes(c,i)||(s->gpu&63)||
            (i==PVR_JOB_CDM&&(s->gpu&4095))||(i!=PVR_JOB_UFO&&!inside(h,s))||
-           !apart(s->cpu,s->bytes,c,sizeof(*c))||!apart(s->cpu,s->bytes,p,sizeof(*p))||
-           !apart(s->cpu,s->bytes,c->program_result,sizeof(*c->program_result))||
-           !apart(s->cpu,s->bytes,out,out_size))return 0;
-        if(c->package&&!apart(s->cpu,s->bytes,c->package,sizeof(*c->package)))return 0;
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c,sizeof(*c))||!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p,sizeof(*p))||
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->program_result,sizeof(*c->program_result))||
+           !a733_ranges_disjoint_nonempty(s->cpu,s->bytes,out,out_size))return 0;
+        if(c->package&&!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->package,sizeof(*c->package)))return 0;
         for(unsigned j=0;j<i;++j)
-            if(!apart(s->cpu,s->bytes,c->buffers[j].cpu,c->buffers[j].bytes)||
-               overlap(s->gpu,s->bytes,c->buffers[j].gpu,c->buffers[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,c->buffers[j].cpu,c->buffers[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,c->buffers[j].gpu,c->buffers[j].bytes))return 0;
         for(unsigned j=0;j<PVR_PROGRAM_REGIONS;++j)
-            if(!apart(s->cpu,s->bytes,p->buffers[j].cpu,p->buffers[j].bytes)||
-               overlap(s->gpu,s->bytes,p->buffers[j].gpu,p->buffers[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p->buffers[j].cpu,p->buffers[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,p->buffers[j].gpu,p->buffers[j].bytes))return 0;
         for(unsigned j=0;j<p->excluded_count;++j)
-            if(!apart(s->cpu,s->bytes,p->excluded[j].cpu,p->excluded[j].bytes)||
-               overlap(s->gpu,s->bytes,p->excluded[j].gpu,p->excluded[j].bytes))return 0;
+            if(!a733_ranges_disjoint_nonempty(s->cpu,s->bytes,p->excluded[j].cpu,p->excluded[j].bytes)||
+               a733_extents_overlap_prechecked(s->gpu,s->bytes,p->excluded[j].gpu,p->excluded[j].bytes))return 0;
     }
     return 1;
 }
-static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
+/* Shared encoders: the job builder inlines each one, and images without the
+ * mimus session drop the external copies. */
+/* Writes only the fields it names; the caller zeroes the command first. */
+void pvr_compute_job_command(unsigned char compute[96],uint64_t border,uint64_t cdm,uint64_t resume)
+{
+    put64(compute,8,border>>2);
+    put64(compute,40,cdm);
+    put64(compute,48,resume);
+    /* Resume unified four, shared allocation, four 16-byte PDS data units. */
+    put32(compute,60,(4u<<21)|(1u<<20)|(4u<<1));
+    /* Source flags: prevent all overlap and execute on one GPU core. */
+    put32(compute,80,(1u<<2)|(1u<<5));
+}
+void pvr_compute_job_fence_pds(void *fence)
+{
+    static const uint32_t code[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
+    words(fence,16,code,5);
+}
+__attribute__((always_inline)) void pvr_compute_job_grid_pds(void *pds,uint64_t task,const uint32_t groups[3],uint64_t input,uint64_t output)
+{
+    /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
+     * Insert pointer writes at the ordinary entry. The relative branch10
+     * still enters that prefix; coefficient tasks halt before it. */
+    static const uint32_t data[]={0,0,0x10000002u,0x10004001u,0x10008002u,0x1000c000u,
+        0x90008000u,0x80008000u,0,0,0,0,0,0,0,0,0,0};
+    static const uint32_t code[]={0xc2c0000au,0x90022000u,0x90026041u,0x9002a0c3u,
+        0xf0024001u,0xf0034101u,0xf0040601u,0xf0050701u,0xf0060800u,0xd3000000u,
+        0xf0160a01u,0xf01a0c01u,0xf0074001u,0xfc000002u,0xd3000000u};
+    words(pds,0,data,18);words(pds,128,code,15);
+    put64(pds,0,task);
+    for(unsigned i=0;i<3;++i)put32(pds,48+4*i,groups[i]);
+    /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
+     * Their control words omit LAST; the ordinary local-index write ends it. */
+    put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
+    put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
+}
+__attribute__((always_inline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
+{
+    /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
+     * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
+    put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
+    put32(cdm,4,pds);put32(cdm,8,pds+128);
+    for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,groups[i]-1);
+    put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
+    put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,fence|(1u<<2)|(1u<<1));
+    put32(cdm,36,fence+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+}
+/* Two callers; inlining it into pvr_compute_job_build adds 2,644 bytes. */
+__attribute__((noinline)) static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
 {
     clear(out,sizeof(*out));
-    put64(out->compute,8,c->buffers[PVR_JOB_BORDER].gpu>>2);
-    put64(out->compute,40,c->buffers[PVR_JOB_CDM].gpu);
-    put64(out->compute,48,c->program_result->cdm_resume_address);
-    /* Resume unified four, shared allocation, four 16-byte PDS data units. */
-    put32(out->compute,60,(4u<<21)|(1u<<20)|(4u<<1));
-    /* Source flags: prevent all overlap and execute on one GPU core. */
-    put32(out->compute,80,(1u<<2)|(1u<<5));
+    pvr_compute_job_command(out->compute,c->buffers[PVR_JOB_BORDER].gpu,c->buffers[PVR_JOB_CDM].gpu,
+        c->program_result->cdm_resume_address);
     put32(out->update,0,c->firmware_ufo);put32(out->update,4,1);
     for(unsigned i=0;!c->package&&i<PVR_COMPUTE_JOB_WORDS;++i)
         out->expected[i]=(c->seed+(i+1u)*c->factor)^(0x9e3779b9u+(i<<16));
@@ -151,8 +193,7 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     put64(pds,32,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|((uint64_t)(c->package?(pvr_compute_package_temps(c->package)+3)/4:2)<<35));
     static const uint32_t dispatch[]={0xc1100001u,0xdb000000u,0xc1080001u,0xf0020001u,0xf0060201u,0xfc000402u};
     words(pds,64,dispatch,6);
-    static const uint32_t fence[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
-    words(c->buffers[PVR_JOB_FENCE_PDS].cpu,16,fence,5);
+    pvr_compute_job_fence_pds(c->buffers[PVR_JOB_FENCE_PDS].cpu);
     void *cdm=c->buffers[PVR_JOB_CDM].cpu;
     uint32_t a=(uint32_t)(c->buffers[PVR_JOB_PDS].gpu-c->programs->pds.base);
     uint32_t b=(uint32_t)(c->buffers[PVR_JOB_FENCE_PDS].gpu-c->programs->pds.base);
@@ -194,30 +235,9 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     if(c->package&&c->package->profile==3) {
         const struct pvr_compute_package *p=c->package;
         clear(pds,c->buffers[PVR_JOB_PDS].bytes);clear(cdm,c->buffers[PVR_JOB_CDM].bytes);
-        /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
-         * Insert pointer writes at the ordinary entry. The relative branch10
-         * still enters that prefix; coefficient tasks halt before it. */
-        static const uint32_t data[]={0,0,0x10000002u,0x10004001u,0x10008002u,0x1000c000u,
-            0x90008000u,0x80008000u,0,0,0,0,0,0,0,0,0,0};
-        static const uint32_t code[]={0xc2c0000au,0x90022000u,0x90026041u,0x9002a0c3u,
-            0xf0024001u,0xf0034101u,0xf0040601u,0xf0050701u,0xf0060800u,0xd3000000u,
-            0xf0160a01u,0xf01a0c01u,0xf0074001u,0xfc000002u,0xd3000000u};
-        words(pds,0,data,18);words(pds,128,code,15);
-        put64(pds,0,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
-            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35));
-        for(unsigned i=0;i<3;++i)put32(pds,48+4*i,p->grid.groups[i]);
-        /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
-         * Their control words omit LAST; the ordinary local-index write ends it. */
-        put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
-        put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
-        /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
-         * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
-        put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
-        put32(cdm,4,a);put32(cdm,8,a+128);
-        for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,p->grid.groups[i]-1);
-        put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
-        put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,b|(1u<<2)|(1u<<1));
-        put32(cdm,36,b+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+        pvr_compute_job_grid_pds(pds,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
+            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35),p->grid.groups,input,output);
+        pvr_compute_job_grid_cdm(cdm,a,b,p->grid.groups);
     }
     if(c->package) {
         memcpy(c->buffers[PVR_JOB_INPUT].cpu,c->package->input,c->package->input_bytes);
@@ -245,17 +265,17 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
                          const struct pvr_compute_job_image *i,const struct pvr_compute_job_ops *ops,
                          void *ctx,struct pvr_cccb *t,uint64_t deadline)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase!=PVR_JOB_NEW||
-       !range(i,sizeof(*i))||(uintptr_t)i%_Alignof(struct pvr_compute_job_image)||
-       !range(ops,sizeof(*ops))||(uintptr_t)ops%_Alignof(struct pvr_compute_job_ops)||
-       !range(t,sizeof(*t))||(uintptr_t)t%_Alignof(struct pvr_cccb)||
-       !range(t->queue,sizeof(*t->queue))||(uintptr_t)t->queue%_Alignof(struct pvr_ccb)||
-       !apart(j,sizeof(*j),i,sizeof(*i))||!apart(j,sizeof(*j),ops,sizeof(*ops))||
-       !apart(j,sizeof(*j),t,sizeof(*t))||!apart(j,sizeof(*j),t->queue,sizeof(*t->queue))||
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase!=PVR_JOB_NEW||
+       !a733_span_excl_nonempty(i,sizeof(*i))||(uintptr_t)i%_Alignof(struct pvr_compute_job_image)||
+       !a733_span_excl_nonempty(ops,sizeof(*ops))||(uintptr_t)ops%_Alignof(struct pvr_compute_job_ops)||
+       !a733_span_excl_nonempty(t,sizeof(*t))||(uintptr_t)t%_Alignof(struct pvr_cccb)||
+       !a733_span_excl_nonempty(t->queue,sizeof(*t->queue))||(uintptr_t)t->queue%_Alignof(struct pvr_ccb)||
+       !a733_ranges_disjoint_nonempty(j,sizeof(*j),i,sizeof(*i))||!a733_ranges_disjoint_nonempty(j,sizeof(*j),ops,sizeof(*ops))||
+       !a733_ranges_disjoint_nonempty(j,sizeof(*j),t,sizeof(*t))||!a733_ranges_disjoint_nonempty(j,sizeof(*j),t->queue,sizeof(*t->queue))||
        !valid(c,j,sizeof(*j))||!valid(c,i,sizeof(*i))||
        !valid(c,t,sizeof(*t))||!valid(c,t->queue,sizeof(*t->queue))||
-       !apart(t,sizeof(*t),t->queue,sizeof(*t->queue))||
-       !apart(t,sizeof(*t),i,sizeof(*i))||!apart(t->queue,sizeof(*t->queue),i,sizeof(*i))||
+       !a733_ranges_disjoint_nonempty(t,sizeof(*t),t->queue,sizeof(*t->queue))||
+       !a733_ranges_disjoint_nonempty(t,sizeof(*t),i,sizeof(*i))||!a733_ranges_disjoint_nonempty(t->queue,sizeof(*t->queue),i,sizeof(*i))||
        !ops->now||!ops->publish||!ops->read_fence||!ops->read_output||
        t->phase!=PVR_CCCB_IDLE||t->queue->phase!=PVR_CCB_ACTIVE||!t->epoch||
        t->epoch!=t->queue->epoch||t->serial||t->size<512||
@@ -272,7 +292,7 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
 }
 int pvr_compute_job_can_repeat(const struct pvr_compute_job *j,uint64_t deadline)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
        j->phase!=PVR_JOB_COMPLETE||j->sequence==UINT32_MAX||j->serial==UINT64_MAX||
        j->transport->phase!=PVR_CCCB_IDLE||j->transport->queue->phase!=PVR_CCB_ACTIVE||
        j->transport->serial!=j->serial||j->transport->epoch!=j->epoch||
@@ -288,7 +308,7 @@ int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
 }
 int pvr_compute_job_poll(struct pvr_compute_job *j)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
     if(j->phase==PVR_JOB_COMPLETE)return 1;
     if(j->phase==PVR_JOB_FAILED)return -1;
     if(j->epoch!=j->transport->epoch||j->epoch!=j->transport->queue->epoch||
@@ -347,7 +367,7 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
 }
 int pvr_compute_job_abort(struct pvr_compute_job *j)
 {
-    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
+    if(!a733_span_excl_nonempty(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||j->phase==PVR_JOB_NEW)return -1;
     if(j->phase==PVR_JOB_COMPLETE)return 1;
     if(j->phase==PVR_JOB_FAILED)return -1;
     return fail(j,PVR_JOB_TRANSPORT);

@@ -77,6 +77,10 @@ enum { BOARD_SERVICE_PMIC, BOARD_SERVICE_USB0, BOARD_SERVICE_TYPEC, BOARD_SERVIC
 #ifdef SUNSTONE_BOARD_RESIDENT
 void board_service_progress(unsigned);
 int board_resident_renew(void *supervisor,uint64_t first_expiry);
+/* After a refusal: one plus the index of the first service that was stale,
+ * or still silent at the first expiry; 0 for a pending fault or a failed
+ * renewal. */
+uint64_t board_resident_stop_detail(void);
 #define BOARD_PROGRESS(service) board_service_progress(service)
 #else
 #define BOARD_PROGRESS(service) ((void)0)

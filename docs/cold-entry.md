@@ -150,3 +150,51 @@ The monitor hash and execution location are documented in
 The local `remote-source-assessment.json` and `monitor-e902-start.txt` preserve
 the compared file hashes, exact instructions and unresolved requirement.
 This assessment adds no MMIO operation to the cold-entry recorder.
+
+[Remote-writer exclusion](remote-writers.md) records which bus masters the
+board ROM and boot0 start and provides a read-only check for the stage-2
+loader. boot0 copies an `scp` item to DRAM without starting the E902, and
+neither boot0 nor the board ROM contains a literal address of the E902 start
+registers. The check accepts the E902 only when its start bits all read clear:
+the RISC-V bus gates and configuration reset (bits 0, 1 and 16 of
+`0x0701021c`), the clock enable (bit 31 of `0x07010210`) and bit 0 of the
+CPUIDLE word at `0x07050008`. Other bits of these registers are not checked,
+and the check never reads the gated block at `0x07032000`. Two masters remain
+unproven: the OR100 processor, for which neither pinned document gives a
+reset or clock control, and the crypto engine, which the board ROM takes out
+of reset. The check therefore refuses on every board until further evidence
+exists. The loader does not call it yet.
+
+## The EL1 tables need a Nonsecure dirty-line experiment
+
+**Status: specified; not run.** The cached images walk the EL1 translation
+tables through the data caches ([CPU coherence](cpu-coherence.md#el1-table-walks-read-descriptors-through-the-data-caches)).
+Core 0 writes the tables at EL3 with the MMU off, which addresses the Secure
+physical space, after removing Secure lines over them. Each core then flushes
+the two EL1 pages with `DC CIVAC` in the Nonsecure space before its first walk.
+On the Cortex-A55, `DC IVAC` cleans a dirty line before invalidating it
+(Technical Reference Manual 100442_0200_00, section A6.2.4), and `DC CIVAC`
+always does. A Nonsecure dirty line left over a table page by the boot loader
+or an earlier image would therefore be written back over the new descriptors.
+The per-core table checksum then stops that core before translation, which is
+a bounded failure on every boot, so the experiment must show that no such line
+exists at entry.
+
+The experiment runs on each launch path that starts a cached image. Today
+that is the supervised USB launch; the microSD stage-2 monitor joins it when
+its loader enters a slot. On core 0 at EL3 with the MMU off, the experiment:
+
+1. fills the five table pages at `0x421f0000`–`0x421f5000` with a known
+   pattern through the Secure alias;
+2. cleans the same pages with `DC CVAC` through the Nonsecure alias, using the
+   temporary EL3 mapping of `platform/a733-smp-supervised/publication.S`;
+3. reads the pages back through the Secure alias and records every word that
+   differs from the pattern, with its address.
+
+The experiment passes when no word changes in three cold boots per path. A
+changed word means that the Nonsecure flush must move before the first
+descriptor write, which needs an EL3 mapping of the Nonsecure alias while the
+tables are built. Images with the table check may run on the board before the
+experiment, because such a line stops the entering core at the check, before
+any translation register is written. The experiment is the first run of the
+first board session that uses them.

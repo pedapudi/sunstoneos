@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check reserved allocation ownership and opt-in native image layout."""
+"""Check reserved allocation ownership, local pool preparation and opt-in native image layout."""
 import argparse
 import hashlib
 import json
@@ -14,9 +14,19 @@ SOURCES = [
     'include/a733_memory_reservations.h', 'platform/a733/memory_reservations.c',
     'platform/a733/link.ld', 'checks/memory-reservations.c', 'checks/memory-reservations.py',
     'include/a733_dma.h', 'include/a733_dma_controller.h', 'include/a733_dma_native.h',
-    'include/dma_memory.h', 'include/aarch64_device_memory.h',
-    'arch/aarch64/device_memory.c',
+    'include/dma_memory.h', 'include/aarch64_device_memory.h', 'include/a733_mapping_check.h',
+    'arch/aarch64/device_memory.c', 'include/a733_memory_critical.h',
+    'include/a733_memory_uncached.h', 'platform/a733/memory_uncached.c',
+    'include/a733_device_memory_layout.h', 'checks/memory-reservations-local.c',
 ]
+# Local-layout preparation cases: pool range, extra definitions, and the
+# translations expected: one write translation per page of either pool.
+LOCAL_CASES = {
+    'unaligned-2mib': (0x41500000, 0x41700000, [], 512 + 512),
+    'large-graph': (0x41600000, 0x41a00000, ['-DSUNSTONE_NPU_LARGE_GRAPH', '-DSUNSTONE_NPU_SINGLE_CORE',
+                    '-DSUNSTONE_NPU_RUNTIME_INPUT', '-DSUNSTONE_NPU_INTERRUPT', '-DSUNSTONE_NPU_SUPERVISED'],
+                    1024 + 512),
+}
 
 
 def digest(path):
@@ -70,17 +80,40 @@ def main():
         if args.mode in ('all', 'host'):
             binary = out / 'ownership'
             run('host-build', common + ['-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-                'checks/memory-reservations.c'] + runtime + ['-o', str(binary)])
+                '-DDEVICE_MEMORY_POOL_TRACE', 'checks/memory-reservations.c'] + runtime + ['-o', str(binary)])
             # Record executable identity before executing the candidate.
             (out / 'executed.json').write_text(json.dumps({'path': str(binary), 'sha256': digest(binary)}, indent=2) + '\n')
             results['host'] = run('ownership', [str(binary)]).strip()
+            results['local'] = {}
+            for name, (start, end, extra, expected) in LOCAL_CASES.items():
+                local = out / ('local-' + name)
+                symbols = {'__device_pool_start': start, '__device_pool_end': end, '__heap_end': 0x41400000,
+                           '__uncached_pool_start': 0x41c00000, '__uncached_pool_end': 0x41e00000}
+                run('local-build-' + name, common + ['-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                    '-no-pie', '-DPREPARED_POOLS', f'-DPOOL_START={start:#x}', f'-DPOOL_END={end:#x}', *extra,
+                    'checks/memory-reservations-local.c', 'platform/a733/memory_reservations.c',
+                    'platform/a733/memory_uncached.c'] + runtime + ['-o', str(local)] +
+                    [f'-Wl,--defsym={k}={v:#x}' for k, v in symbols.items()])
+                text = run('local-' + name, [str(local)])
+                counts = dict(item.split('=') for item in text.split('\n')[0].split()[1:])
+                assert int(counts['total']) == expected, counts
+                fault = run('local-fault-' + name, [str(local), hex(end - 1 >> 21)])
+                assert 'refuses its pool' in fault, fault
+                results['local'][name] = {'translations': {k: int(v) for k, v in counts.items()},
+                                          'expected': expected}
         if args.mode in ('all', 'native'):
-            native = runtime + ['platform/a733/memory_reservations.c', 'arch/aarch64/device_memory.c']
+            native = runtime + ['platform/a733/memory_reservations.c', 'platform/a733/memory_uncached.c',
+                                'arch/aarch64/device_memory.c']
             objects = []
+            freestanding = common + ['--target=aarch64-none-elf', '-ffreestanding',
+                                     '-fno-builtin', '-mstrict-align', '-mgeneral-regs-only']
+            # Without the kernel headers a native ledger compiles only as an
+            # explicit one-thread fixture.
+            unlocked = run('native-without-kernel', freestanding + ['-fsyntax-only', runtime[0]], success=False)
+            assert 'DEVICE_MEMORY_POOL_SINGLE_THREAD' in unlocked, unlocked
             for source in native:
                 obj = out / (Path(source).stem + '.o')
-                run(obj.stem, common + ['--target=aarch64-none-elf', '-ffreestanding',
-                    '-fno-builtin', '-mstrict-align', '-mgeneral-regs-only', '-fstack-usage',
+                run(obj.stem, freestanding + ['-DDEVICE_MEMORY_POOL_SINGLE_THREAD', '-fstack-usage',
                     '-c', source, '-o', str(obj)])
                 objects.append({'source': source, 'object': str(obj), 'sha256': digest(obj)})
             results['native_objects'] = objects

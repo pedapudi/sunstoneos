@@ -55,7 +55,8 @@ int a733_cpu_coherence_tables(uint64_t *l1,uint64_t *l2,uint64_t pa,unsigned el)
        overlap(l1,4096,l2,4096) || (pa&4095) ||
        pa<A733_CPU_COHERENCE_MONITOR || pa>=A733_CPU_COHERENCE_MONITOR_END)return -1;
     for(unsigned i=0;i<512;++i)l1[i]=l2[i]=0;
-    l1[0]=BIT(54)|(el==1?BIT(53):BIT(6))|BIT(10)|1; /* Device, EL1 RW, XN. */
+    /* Device, Outer Shareable field, EL1 RW, XN. */
+    l1[0]=BIT(54)|(el==1?BIT(53):BIT(6))|BIT(10)|(UINT64_C(2)<<8)|1;
     l1[1]=pa|3;
     for(unsigned i=0;i<64;++i) {
         uint64_t a=UINT64_C(0x40000000)+((uint64_t)i<<21);

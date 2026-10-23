@@ -25,7 +25,7 @@ if(TINYUSB_DIR)
 endif()
 foreach(target ${mimus_targets})
   add_executable(${target}
-    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
     arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
     runtime/newlib.c runtime/new_delete.cc apps/mimus/platform.cc apps/mimus/main.cc apps/mimus/recorded.cc
     "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc"

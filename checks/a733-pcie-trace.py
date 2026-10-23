@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run the PCIe host models and compare write traces with an earlier revision."""
+"""Run the PCIe host models and compare write traces with an earlier revision.
+
+The core, endpoint-test, general function and NVMe models run against the
+current tree. Only the Gen1 trace driver also builds against --baseline-rev.
+"""
 import argparse
 import hashlib
 import json
@@ -20,6 +24,12 @@ EPF_MODES = ["nominal", "wide", "other-bar", "high-half", "oversize", "deadline"
              "status-error", "extra-msi", "data-error", "guard-error", "source-error", "link-loss",
              "gen2", "gen2-retrain"]
 TRACE_MODES = ["core", "nominal", "wide"]
+# The function layer and NVMe driver postdate the trace baseline.
+NVME_UNITS = UNITS + ["drivers/pci/a733_pcie_function.c", "drivers/pci/a733_pcie_nvme.c"]
+NVME_MODES = ["poll", "msix", "intx", "gen2", "forged", "inherited", "fatal", "identify-error",
+              "timeout", "extra-vector", "extra-intx", "shutdown-stuck", "suspend", "suspend-keep",
+              "multifunction", "bridge", "warm-sibling", "large-bar", "assigned-bar", "table-outside",
+              "class", "stop-config", "stop-test", "stop-link-stuck"]
 
 
 def block(text, pattern):
@@ -52,7 +62,7 @@ def run(command):
     return result.stdout
 
 
-def build(root, check, name):
+def build(root, check, name, units=UNITS):
     """Compile one host model with the native address filter of the same root."""
     native = (root / "drivers/pci/a733_pcie_native.c").read_text()
     generated = out / (name + "-generated")
@@ -66,9 +76,9 @@ def build(root, check, name):
         epf.replace("int main(int argc,char **argv)", "int epf_main(int argc,char **argv)"))
     target = out / name
     run([compiler, "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I" + str(root / "include"),
+         "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer", "-I" + str(root / "include"),
          "-I" + str(generated), "-I" + str(root / "checks"),
-         root / check, *[root / u for u in UNITS], address, "-o", target])
+         root / check, *[root / u for u in units], address, "-o", target])
     return target
 
 
@@ -78,6 +88,9 @@ run([core]); results["core"] = "PASS"
 epf = build(ROOT, "checks/a733-pcie-epf.c", "epf")
 for mode in EPF_MODES:
     run([epf, mode]); results["epf-" + mode] = "PASS"
+nvme = build(ROOT, "checks/a733-pcie-nvme.c", "nvme", NVME_UNITS)
+for mode in NVME_MODES:
+    run([nvme, mode]); results["nvme-" + mode] = "PASS"
 trace = build(ROOT, "checks/a733-pcie-trace.c", "trace")
 current = {mode: run([trace, mode]) for mode in TRACE_MODES}
 for mode, text in current.items():
@@ -100,5 +113,6 @@ if args.baseline_rev:
                                     "identical_to": args.baseline_rev}
 (out / "results.json").write_text(json.dumps({"status": "PASS", "results": results,
     "limitations": ["controller, endpoint, DMA, MSI and scheduler responses are modeled",
+                    "the NVMe controller, PCI PM, INTx/MSI-X delivery and link loss are modeled",
                     "no physical link, speed change or electrical qualification"]}, indent=2) + "\n")
 print(json.dumps(results))

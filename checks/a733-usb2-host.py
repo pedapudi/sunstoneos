@@ -100,7 +100,7 @@ def main():
     run('ss-source',[interpreter,saved(root/'drivers/usb/host/cadence-source.py'),'--source',saved(cadence),'--output',out/'ss-cadence.inc'])
     run('ss-stack',[interpreter,saved(root/'drivers/usb/host/superspeed.py'),'--source',saved(tiny),'--output',out/'tinyusb-ss'])
     # Exact native mapping loop, compiled on host with a translation model.
-    mapping = '#include <assert.h>\n#include "aarch64_device_memory.h"\n'
+    mapping = '#include <assert.h>\n#include "a733_mapping_check.h"\n'
     mapping += '''static unsigned attributes=0x44,shareability=2,bad_last,shift;
 int aarch64_device_translate(uintptr_t a,int w,struct aarch64_translation *t) {
 assert(w);*t=(struct aarch64_translation){a+shift,attributes,shareability};
@@ -153,7 +153,7 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
             if word.startswith('/') and Path(word).is_file():
                 libraries[word] = hashlib.sha256(Path(word).read_bytes()).hexdigest()
     (out/'loaded-libraries.json').write_text(json.dumps({'ldd': loaded, 'sha256': libraries}, indent=2)+'\n')
-    cases=['admission','read','busy-read','busy-stuck','busy-stuck-platform','busy-stuck-lock','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach','unplug','hid-hs-unplug','hub-unplug']
+    cases=['admission','read','busy-read','busy-stuck','busy-stuck-platform','busy-stuck-lock','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach','unplug','hid-hs-unplug','hub-unplug','unplug-stuck','hub-detach','hub-detach-enabled','ss-hub-detach']
     cases=[] if a.compile_only else a.cases or cases
     for case in cases:
         run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('companion-') or case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('msc-stall') or case.startswith('irq-msc-stall') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])

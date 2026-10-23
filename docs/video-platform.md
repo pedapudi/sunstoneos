@@ -47,15 +47,17 @@ A constant descriptor holds the facts that differ between the two units:
 The codec bindings keep their own job types, register allowlists and
 sequencing. A codec-neutral decoder layer, `struct a733_video_decoder`, holds
 the decoder's admission, cold or inherited start, identity, memory and reset
-steps. The JPEG and H.264 bindings pass their own typed jobs through its
-`admit` and `memory` hooks, so neither binding presents its job as another
-codec's structure. The encoder layer, `struct a733_video_encoder`, does the same
-for the JPEG and H.264 encoder bindings. The cold NS-ROM start, the JPEG drain
-and the retained-copy gate remain decoder-specific.
+steps. The JPEG, H.264 and HEVC bindings pass their own typed jobs through its
+`admit` and `memory` hooks, so no binding presents its job as another codec's
+structure. The HEVC binding selects decoder mode 4 and admits the H.265 engine
+registers described in [the HEVC document](hevc-native.md). The encoder layer,
+`struct a733_video_encoder`, passes typed jobs in the same way for the JPEG and
+H.264 encoder bindings. The cold NS-ROM start, the JPEG drain and the
+retained-copy gate remain decoder-specific.
 
-`checks/a733-video-unit.c` drives both decoder bindings and both encoder
-bindings through nominal, cold-start, identity, contention, uncertain-write,
-refused-mutex, parent-selection and job-mismatch cases. It records every
+`checks/a733-video-unit.c` drives the JPEG and H.264 decoder bindings and both
+encoder bindings through nominal, cold-start, identity, contention,
+uncertain-write, refused-mutex, parent-selection and job-mismatch cases. It records every
 callback, register access and clock observation. The recorded digests match
 those of the separate decoder and encoder implementations that preceded the
 shared core. The encoder native checks also produce identical programmed

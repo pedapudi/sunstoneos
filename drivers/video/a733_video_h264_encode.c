@@ -1,19 +1,33 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "a733_video_h264_encode.h"
+#include "a733_range.h"
 /* Format data and fixed controls verified against pinned A733
  * H264InitSPS/PPS/EncSliceHeader and h264EncFrame. See sources.json.
  * No opaque library is linked; hardware alone generates entropy/reconstruction. */
 const uint8_t a733_h264_encode_sps_pps[22]={
  0,0,0,1,0x67,0x42,0,0x1f,0x89,0x89,0x40,0x50,0x1e,0x88,0,0,0,1,0x68,0xce,0x3c,0x80};
-const uint8_t *a733_h264_encode_prefix(unsigned ordinal,size_t *bytes)
+size_t a733_h264_encode_prefix(unsigned ordinal,uint8_t prefix[10])
 {
  static const uint8_t idr[]={0,0,0,1,0x65,0x88,0x80,4,0,0xf};
- static const uint8_t p[]={0,0,0,1,0x41,0x9a,0,0x20,4};
- if(!bytes||ordinal>1)return NULL;*bytes=ordinal?sizeof(p):sizeof(idr);return ordinal?p:idr;
+ if(!prefix||ordinal>=A733_H264_ENCODE_GOP_FRAMES)return 0;
+ if(!ordinal){for(unsigned i=0;i<sizeof(idr);++i)prefix[i]=idr[i];return sizeof(idr);}
+ /* P slice: first_mb 0, slice_type 5, PPS 0, 12-bit frame_num k, 12-bit POC
+  * lsb 2k and no override, as the pinned library writes for picture k. */
+ uint32_t bits=0x9a000000u|(uint32_t)ordinal<<13|(uint32_t)ordinal<<2;
+ prefix[0]=prefix[1]=prefix[2]=0;prefix[3]=1;prefix[4]=0x41;
+ for(unsigned i=0;i<4;++i)prefix[5+i]=(uint8_t)(bits>>(24-8*i));
+ return 9;
+}
+size_t a733_h264_encode_cursor(size_t end)
+{
+ /* Keep the source 2MiB minimum-free guard as contiguous space before the
+  * ring end, so a bounded 1MiB output never reaches the device wrap. */
+ size_t cursor=(end+63u)&~(size_t)63u;
+ return cursor>A733_H264_ENCODE_RING_BYTES-2097152u?0:cursor;
 }
 static int fail(struct a733_h264_encode_run *s){s->state=A733_H264_ENCODE_FAULT;return -1;}
 static int tick(struct a733_h264_encode_run *s)
-{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||n<s->last_now||n>=s->deadline)return fail(s);s->last_now=n;return 1;}
+{uint64_t n;if(s->ops.now_us(s->context,&n)!=1||!a733_deadline_admit(n,&s->last_now,s->deadline))return fail(s);return 1;}
 static int rd(struct a733_h264_encode_run *s,uint32_t o,uint32_t *v)
 {return s->ops.read(s->context,s->token,o,v,s->deadline)==1&&tick(s)==1?1:fail(s);}
 static int wr(struct a733_h264_encode_run *s,uint32_t o,uint32_t v)
@@ -21,7 +35,8 @@ static int wr(struct a733_h264_encode_run *s,uint32_t o,uint32_t v)
 static int valid(const struct a733_h264_encode_job *j)
 {
  static const size_t sizes[]={462848,462848,4194304,491520,491520,12288,12288,8192,8192,4096};
- if(!j||!j->input[0]||!j->input[1]||j->input[0]==j->input[1])return 0;
+ if(!j||!j->input[0]||!j->input[1]||j->input[0]==j->input[1]||!j->frames||
+    j->frames>A733_H264_ENCODE_GOP_FRAMES)return 0;
  for(unsigned i=0;i<A733_H264_ENCODE_BUFFERS;++i){
   uint64_t a=j->buffers[i].iova,n=j->buffers[i].bytes;
   if(!a||(a&4095)||n!=sizes[i]||a>UINT32_MAX-n)return 0;
@@ -109,19 +124,21 @@ static void program(const struct a733_h264_encode_run *s,unsigned index,uint32_t
   {0xb8c,0x2000000},
  };
  *off=pairs[index][0];*value=pairs[index][1];
- uint32_t input=(uint32_t)s->job.buffers[s->ordinal].iova;
- uint32_t recon=(uint32_t)s->job.buffers[A733_H264_ENCODE_RECON0+s->ordinal].iova;
+ /* Pairs alternate by picture parity; the IDR also names pair 0 as reference. */
+ unsigned slot=s->ordinal&1,prior=s->ordinal?slot^1:0;
+ uint32_t input=(uint32_t)s->job.buffers[A733_H264_ENCODE_INPUT0+slot].iova;
+ uint32_t recon=(uint32_t)s->job.buffers[A733_H264_ENCODE_RECON0+slot].iova;
+ uint32_t ref=(uint32_t)s->job.buffers[A733_H264_ENCODE_RECON0+prior].iova;
  switch(*off){
  case 0xa08:*value=s->ordinal?1:0x20001;break;
  case 0xa78:*value=input;break;case 0xa7c:*value=input+307200;break;case 0xa80:*value=input+384000;break;
  case 0xb04:*value=s->ordinal?0x410:0;break;case 0xb08:*value=s->ordinal?0x51a:0x41a;break;
  case 0xb48:*value=s->ordinal?0x180004:0;break;case 0xb4c:*value=s->ordinal?0x800068:0;break;
  case 0xb9c:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_MISC].iova>>8);break;
- case 0xba0:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_RECON0].iova>>8);break;
- case 0xba4:*value=(uint32_t)((s->job.buffers[A733_H264_ENCODE_RECON0].iova+327680)>>8);break;
+ case 0xba0:*value=ref>>8;break;case 0xba4:*value=(ref+327680)>>8;break;
  case 0xbb0:*value=recon>>8;break;case 0xbb4:*value=(recon+327680)>>8;break;
- case 0xbb8:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_AUX0].iova>>8);break;
- case 0xbbc:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_AUX0+s->ordinal].iova>>8);break;
+ case 0xbb8:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_AUX0+prior].iova>>8);break;
+ case 0xbbc:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_AUX0+slot].iova>>8);break;
  case 0xbc0:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_LINE0].iova>>8);break;
  case 0xbc4:*value=(uint32_t)(s->job.buffers[A733_H264_ENCODE_LINE1].iova>>8);break;
  case 0xb88:*value=(uint32_t)((s->cursor+(s->ordinal?9:10))*8);break;
@@ -133,12 +150,10 @@ static void program(const struct a733_h264_encode_run *s,unsigned index,uint32_t
 }
 int a733_h264_encode_next(struct a733_h264_encode_run *s)
 {
- if(!s||s->state!=A733_H264_ENCODE_COPIED||s->ordinal)return 0;
+ if(!s||s->state!=A733_H264_ENCODE_COPIED||s->ordinal+1>=s->job.frames)return 0;
  if(tick(s)!=1)return 0;
- size_t cursor=(s->end[0]+63u)&~(size_t)63u;
- /* Preserve source2MiB minimum-free guard, no ring wrap or rewind. */
- if(cursor>4194304-2097152)return fail(s);
- s->cursor=cursor;s->ordinal=1;s->index=0;s->state=A733_H264_ENCODE_PRIME;return 1;
+ /* The finished picture's range is already copied; its ring bytes may be reused. */
+ s->cursor=a733_h264_encode_cursor(s->end);++s->ordinal;s->index=0;s->state=A733_H264_ENCODE_PRIME;return 1;
 }
 int a733_h264_encode_poll(struct a733_h264_encode_run *s)
 {
@@ -201,9 +216,9 @@ int a733_h264_encode_poll(struct a733_h264_encode_run *s)
   if(rd(s,0xb90,&v)!=1)return -1;
   if(v<=(s->cursor+(s->ordinal?9:10))*8+(s->ordinal?6:0)||v%8||v/8>4194304||
      v/8-s->cursor>1048576-(s->ordinal?0:22))return fail(s);
-  s->end[s->ordinal]=v/8;s->state=A733_H264_ENCODE_COPY;break;
+  s->end=v/8;s->state=A733_H264_ENCODE_COPY;break;
  case A733_H264_ENCODE_COPY:
-  r=s->ops.copied(s->context,s->token,s->ordinal,s->cursor,s->end[s->ordinal],s->deadline);
+  r=s->ops.copied(s->context,s->token,s->ordinal,s->cursor,s->end,s->deadline);
   if(tick(s)!=1||r<0||r>1)return fail(s);if(r==1){s->state=A733_H264_ENCODE_COPIED;return 1;}break;
  default:return fail(s);
  }

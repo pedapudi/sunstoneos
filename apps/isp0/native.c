@@ -1,6 +1,7 @@
 #include "isp0.h"
 #include "a733_storage_digest.h"
-#include "aarch64_device_memory.h"
+#include "a733_mapping_check.h"
+#include "a733_mmio.h"
 #include "boot.h"
 #include <string.h>
 struct isp0_application isp0;
@@ -14,18 +15,18 @@ static int owner(void)
  uint64_t el;__asm__ volatile("mrs %0, CurrentEL":"=r"(el));
  return el==4&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&xTaskGetCurrentTaskHandle()==isp0.handle&&live();
 }
+static const struct a733_mapping_rule device_rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_OUTER}},0,1};
 static int mapped(uintptr_t a)
-{struct aarch64_translation t;return aarch64_device_translate(a,1,&t)&&t.physical==a&&!t.attributes&&t.shareability==2;}
+{return a733_mapping_check(aarch64_device_translate,a,a,&device_rule);}
 static int load(uintptr_t a,uint32_t *v)
 {
  if(!v||!owner()||!mapped(a)||(a&3))return 0;
- __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint32_t *)a;
- __asm__ volatile("dsb sy":::"memory");return live();
+ *v=a733_mmio_read32_dsb_sy_both(a);return live();
 }
 static int store(uintptr_t a,uint32_t v)
 {
  if(!owner()||!mapped(a)||(a&3))return 0;
- *(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");return live();
+ a733_mmio_write32_dsb_sy_after(a,v);return live();
 }
 static int enter(void *v,uint64_t d)
 {return v==&isp0&&d==deadline()&&owner()?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}
@@ -165,7 +166,7 @@ static int step(void)
   struct a733_isp0_ops ops={now,engine_read,engine_write};
   if(!a733_isp0_init(&isp0.engine,&ops,&isp0,deadline()))return -1;isp0.stage=2;return 0;}
  if(isp0.stage==2){r=a733_isp0_poll(&isp0.engine);if(r!=1)return r;
-  struct a733_camera_dma_ops ops={now,dma_admit,dma_read,dma_write,start,fence,never_release,sync_cpu,never_release};
+  struct a733_camera_dma_ops ops={now,dma_admit,dma_read,dma_write,start,fence,never_release,sync_cpu,never_release,NULL,NULL};
   struct a733_camera_dma_config c={.y={A733_ISP0_Y_IOVA,A733_ISP0_PLANE_BYTES},
     .uv={A733_ISP0_UV_IOVA,A733_ISP0_PLANE_BYTES},.frame_id=isp0.session.authority,.block=0};
   if(a733_camera_dma_init(&isp0.dma,&ops,&isp0,&c)!=1||a733_camera_dma_open(&isp0.dma,deadline())!=1)return -1;

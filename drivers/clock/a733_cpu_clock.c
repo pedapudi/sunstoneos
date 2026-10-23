@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_cpu_clock.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CPUPLL UINT32_C(0x08870000)
@@ -25,7 +26,7 @@
 #define RAMP_UV_US 250u   /* Board DTS regulator-ramp-delay of DCDC3/DCDC5. */
 #define RELEASE_US 100000u
 #define THERMAL_US 500000u
-#define LEVEL_UNKNOWN 3u
+enum { USER, LOWER, RESTORE }; /* Who started the transition. */
 enum { S_IDLE,S_CLOCK,S_RAIL,S_INSPECT,S_READ,S_VOLTAGE,S_WRITTEN,S_SETTLE,S_PARK,S_UPDATE,
     S_LOCK,S_UNPARK,S_RELEASE };
 
@@ -139,45 +140,89 @@ int a733_cpu_clock_address(uintptr_t a,int write)
     }
     return !write && (a==OSC || a==SID_DVFS);
 }
+/* Core identity as the secondary-core coherence check requires it: MPIDR
+ * with only RES1, U, MT and Aff1 set, and the core type that Aff1 implies. */
+static int core_of(const struct a733_cpu_cycle_sample *s,unsigned *core)
+{
+    *core=(unsigned)(s->mpidr>>8)&7u;
+    return !(s->mpidr&~UINT64_C(0xc1000700)) &&
+        (s->midr&UINT64_C(0xffffffffff0ffff0))==(*core<6 ? UINT64_C(0x410fd050) : UINT64_C(0x410fd0b0));
+}
+int a733_cpu_clock_timing(const struct a733_cpu_cycle_sample *b,const struct a733_cpu_cycle_sample *e,
+    uint32_t hz,const struct a733_cpu_clock_report *report,struct a733_cpu_timing *out)
+{
+    unsigned core;
+    if(!b || !e || !out || !hz || !core_of(b,&core) || b->mpidr!=e->mpidr || b->midr!=e->midr ||
+       e->ticks<=b->ticks || e->cycles<b->cycles || e->ticks-b->ticks>UINT64_MAX/hz)return 0;
+    uint64_t ticks=e->ticks-b->ticks,cycles=e->cycles-b->cycles,whole=cycles/ticks;
+    if(whole>UINT64_MAX/hz)return 0;
+    /* cycles x hz / ticks without a 128-bit division. */
+    struct a733_cpu_timing t={.core=core,.cluster=core<6 ? A733_CPU_LITTLE : A733_CPU_BIG,.cycles=cycles,
+        .ticks=ticks,.measured_hz=whole*hz+cycles%ticks*hz/ticks};
+    if(report && report->domain[t.cluster].decoded)t.configured_hz=report->domain[t.cluster].hz;
+    *out=t;return 1;
+}
 
-static int separate(const void *a,size_t n,const void *b,size_t k)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && n<=UINTPTR_MAX-x && k<=UINTPTR_MAX-y && (x+n<=y || y+k<=x);
-}
-int a733_cpu_clock_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,
-    const struct a733_cpu_clock_ops *ops,void *cookie,struct a733_clock_leases *clocks,
-    struct a733_rail_leases *rails,struct a733_pmic *pmic)
-{
-    if(!c || c->self || !config || !ops || !ops->now || !ops->read || !ops->write || !config->owner ||
-       !clocks || !clocks->initialized || !rails || rails->self!=rails || rails->binding.clocks!=clocks ||
-       !pmic || pmic->self!=pmic || pmic->rails!=rails || (config->grant.clusters&~UINT32_C(3)) ||
-       !separate(c,sizeof(*c),config,sizeof(*config)) || !separate(c,sizeof(*c),ops,sizeof(*ops)) ||
-       !separate(c,sizeof(*c),clocks,sizeof(*clocks)) || !separate(c,sizeof(*c),rails,sizeof(*rails)) ||
-       !separate(c,sizeof(*c),pmic,sizeof(*pmic)))return 0;
-    *c=(struct a733_cpu_clock){.self=c,.config=*config,.ops=*ops,.cookie=cookie,.clocks=clocks,
-        .rails=rails,.pmic=pmic,.changes=config->grant.changes};
-    atomic_init(&c->level,LEVEL_UNKNOWN);return 1;
-}
-int a733_cpu_clock_thermal(struct a733_cpu_clock *c,enum a733_thermal_level level)
-{
-    if(!c || c->self!=c || (unsigned)level>A733_THERMAL_CRITICAL)return 0;
-    unsigned old=atomic_load_explicit(&c->level,memory_order_acquire);
-    do if(old==A733_THERMAL_CRITICAL)return level==A733_THERMAL_CRITICAL;
-    while(!atomic_compare_exchange_weak_explicit(&c->level,&old,(unsigned)level,
-        memory_order_acq_rel,memory_order_acquire));
-    return 1;
-}
-static int permitted(struct a733_cpu_clock *c,uint32_t mhz)
-{
-    unsigned level=atomic_load_explicit(&c->level,memory_order_acquire);
-    return level==A733_THERMAL_NORMAL || (level==A733_THERMAL_THROTTLE && mhz<=A733_CPU_CLOCK_THROTTLE_MHZ);
-}
 static const struct a733_cpu_opp *row(unsigned d,uint32_t mhz)
 {
     unsigned count;const struct a733_cpu_opp *t=a733_cpu_clock_opps(d,&count);
     for(unsigned i=0;t && i<count;++i)if(t[i].mhz==mhz)return &t[i];
     return 0;
+}
+int a733_cpu_clock_grant_load(const struct a733_cpu_clock_grant_record *r,uint64_t epoch,
+    uint64_t generation,struct a733_cpu_clock_config *out)
+{
+    unsigned approved=0;
+    if(!r || !out || !epoch || !generation || r->magic!=A733_CPU_CLOCK_GRANT_MAGIC ||
+       r->version!=A733_CPU_CLOCK_GRANT_VERSION || r->bytes!=sizeof(*r) || !r->owner ||
+       (r->clusters&~UINT32_C(3)))return 0;
+    for(unsigned i=0;i<sizeof(r->approval);++i)approved|=r->approval[i];
+    if(!r->clusters) {
+        if(r->epoch || r->generation || r->max_mhz[0] || r->max_mhz[1] || r->changes || approved)return 0;
+        *out=(struct a733_cpu_clock_config){.owner=r->owner};return 1;
+    }
+    if(r->epoch!=epoch || r->generation!=generation || !r->changes ||
+       r->changes>A733_CPU_CLOCK_GRANT_CHANGES || !approved)return 0;
+    for(unsigned d=0;d<2;++d)
+        if((r->clusters&BIT(d)) ? !row(d,r->max_mhz[d]) : r->max_mhz[d]!=0)return 0;
+    *out=(struct a733_cpu_clock_config){.owner=r->owner,.grant={.session=epoch,.clusters=r->clusters,
+        .max_mhz={r->max_mhz[0],r->max_mhz[1]},.changes=r->changes}};
+    return 1;
+}
+int a733_cpu_clock_init(struct a733_cpu_clock *c,const struct a733_cpu_clock_config *config,
+    const struct a733_cpu_clock_ops *ops,void *cookie,struct a733_clock_leases *clocks,
+    struct a733_rail_leases *rails,struct a733_pmic *pmic,const struct a733_thermal_policy *policy)
+{
+    if(!c || c->self || !config || !ops || !ops->now || !ops->read || !ops->write || !config->owner ||
+       !clocks || !clocks->initialized || !rails || rails->self!=rails || rails->binding.clocks!=clocks ||
+       !pmic || pmic->self!=pmic || pmic->rails!=rails || (config->grant.clusters&~UINT32_C(3)) ||
+       !policy || !policy->initialized ||
+       !a733_ranges_disjoint(c,sizeof(*c),config,sizeof(*config)) || !a733_ranges_disjoint(c,sizeof(*c),ops,sizeof(*ops)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),clocks,sizeof(*clocks)) || !a733_ranges_disjoint(c,sizeof(*c),rails,sizeof(*rails)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),pmic,sizeof(*pmic)) ||
+       !a733_ranges_disjoint(c,sizeof(*c),policy,sizeof(*policy)))return 0;
+    *c=(struct a733_cpu_clock){.self=c,.config=*config,.ops=*ops,.cookie=cookie,.clocks=clocks,
+        .rails=rails,.pmic=pmic,.policy=policy,.changes=config->grant.changes};
+    return 1;
+}
+/* The policy's level, with CRITICAL kept once seen. */
+static unsigned level(struct a733_cpu_clock *c)
+{
+    unsigned now=a733_thermal_policy_level(c->policy);
+    if(now==A733_THERMAL_CRITICAL)c->critical=1;
+    return c->critical ? A733_THERMAL_CRITICAL : now;
+}
+/* A throttle lowering needs only a level below CRITICAL. Any other
+ * transition needs a valid reading from the cluster's sensor, read before the
+ * level, and a level that admits the point. */
+static int permitted(struct a733_cpu_clock *c,unsigned cluster,uint32_t mhz,unsigned thermal)
+{
+    static const unsigned sensor[2]={3,0}; /* Physical channels CPUL and CPUB. */
+    unsigned seen=a733_thermal_policy_seen(c->policy),now=level(c);
+    if(now==A733_THERMAL_CRITICAL)return 0;
+    if(thermal==LOWER)return 1;
+    return (seen&BIT(sensor[cluster])) &&
+        (now==A733_THERMAL_NORMAL || (thermal==USER && mhz<=A733_CPU_CLOCK_THROTTLE_MHZ));
 }
 /* Lowest DSU point at or above the inherited DSU rate that the bin supports. */
 static uint32_t dsu_mv(uint64_t hz,unsigned bin)
@@ -191,8 +236,7 @@ static uint32_t dsu_mv(uint64_t hz,unsigned bin)
 static int time_now(struct a733_cpu_clock *c)
 {
     uint64_t now;
-    if(c->ops.now(c->cookie,&now)!=1 || now<c->last_now)return 0;
-    c->last_now=now;return 1;
+    return c->ops.now(c->cookie,&now)==1 && a733_monotonic_advance(now,&c->last_now);
 }
 static enum a733_rail rail_of(unsigned cluster){return cluster==A733_CPU_LITTLE ? A733_RAIL_DCDC5 : A733_RAIL_DCDC3;}
 /* Uncertain state: keep both leases. Retention is metadata and is retried
@@ -230,10 +274,12 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
     if(c->state!=S_IDLE)return A733_CPU_CLOCK_BUSY;
     const struct a733_cpu_clock_grant *g=&c->config.grant;
     if(!g->session || !(g->clusters&BIT(cluster)) || !c->changes || mhz>g->max_mhz[cluster] ||
-       !row(cluster,mhz) || !permitted(c,mhz))return A733_CPU_CLOCK_REFUSED;
+       !row(cluster,mhz) || !permitted(c,cluster,mhz,USER))return A733_CPU_CLOCK_REFUSED;
     if(!time_now(c))return fault(c);
     if(c->last_now>=deadline)return A733_CPU_CLOCK_EXPIRED;
-    --c->changes;c->throttle_failed&=~BIT(cluster);return start(c,cluster,mhz,deadline,0);
+    /* The owner's choice replaces any pending restore of this cluster. */
+    --c->changes;c->throttled&=~BIT(cluster);c->throttle_failed&=~BIT(cluster);
+    return start(c,cluster,mhz,deadline,USER);
 }
 /* Inherited state and the target point, checked before any write. */
 static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
@@ -258,7 +304,7 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
      * the rate and lock may not mean the final rate. */
     if((pat0&PAT0_TYPE) || (pat1&PAT1_LFM) || (lfm&LFM_ON) ||
        (r->oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002) || r->dcxo_hz!=26000000u ||
-       !r->binned || !o || !a733_cpu_clock_opp_mv(o,r->bin) || !permitted(c,c->target_mhz) ||
+       !r->binned || !o || !a733_cpu_clock_opp_mv(o,r->bin) || !permitted(c,c->cluster,c->target_mhz,c->thermal) ||
        (d->pll&(PLL_ON|UPDATE))!=PLL_ON || d->source!=MUX_PLL || d->n<26u || d->n>nmax ||
        c->n*26u!=c->target_mhz<<c->p || c->n<26u || c->n>nmax)return finish(c,A733_CPU_CLOCK_REFUSED);
     c->to_uv=mv*1000u;c->raise=d->hz<(uint64_t)c->target_mhz*1000000u;c->select=d->select;
@@ -270,19 +316,28 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
     c->state=S_READ;return A733_CPU_CLOCK_PENDING;
 }
 /* Wait for the current PMIC request. 1: result copied and reaped. 2: the
- * request expired before bus admission, so it had no bus effects; reaped. */
-static int collect(struct a733_cpu_clock *c,enum a733_cpu_clock_status *out)
+ * request expired before bus admission, so it had no bus effects; reaped.
+ * With floor, a completed read of an enabled, decoded selector first records
+ * the rail's boot baseline in the ledger and returns it in *floor, before the
+ * request is reaped: a busy ledger leaves the request outstanding, so the
+ * next poll repeats both steps. */
+static int collect(struct a733_cpu_clock *c,uint32_t *floor,enum a733_cpu_clock_status *out)
 {
     enum a733_pmic_status s=a733_pmic_result(c->pmic,&c->request,&c->snapshot);
     if(s==A733_PMIC_PENDING || s==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
     if(s!=A733_PMIC_COMPLETE && s!=A733_PMIC_EXPIRED){*out=fault(c);return 0;}
+    if(s==A733_PMIC_COMPLETE && c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
+    if(floor && s==A733_PMIC_COMPLETE && c->snapshot.enabled && c->snapshot.decoded) {
+        enum a733_rail_result f=a733_rail_floor(c->rails,&c->rail,rail_of(c->cluster),
+            c->snapshot.programmed_uv,floor);
+        if(f==A733_RAIL_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
+        if(f!=A733_RAIL_READY){*out=fault(c);return 0;}
+    }
     enum a733_pmic_status reaped=a733_pmic_reap(c->pmic,&c->request);
     if(reaped==A733_PMIC_BUSY){*out=A733_CPU_CLOCK_PENDING;return 0;}
     if(reaped!=A733_PMIC_COMPLETE){*out=fault(c);return 0;}
     c->request=(struct a733_pmic_request){0};
-    if(s==A733_PMIC_EXPIRED)return 2;
-    if(c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
-    return 1;
+    return s==A733_PMIC_EXPIRED ? 2 : 1;
 }
 static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
 {
@@ -298,7 +353,7 @@ static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
 static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
 {
     enum a733_cpu_clock_status out;
-    int k=collect(c,&out);
+    int k=collect(c,0,&out);
     if(!k)return out;
     /* Expired before the bus: the voltage is unchanged. A raise has not yet
      * touched the PLL; a lowering keeps its lower rate at the higher voltage. */
@@ -326,8 +381,10 @@ static enum a733_cpu_clock_status release(struct a733_cpu_clock *c)
         if(r!=A733_CLOCK_OK)return fault(c);
         c->clock=(struct a733_clock_token){0};
     }
-    /* A throttle lowering that did not complete is not retried while idle. */
-    if(c->thermal && c->result!=A733_CPU_CLOCK_COMPLETE)c->throttle_failed|=BIT(c->cluster);
+    /* A completed throttle lowering is restored at NORMAL; one that did not
+     * complete is not retried in this THROTTLE episode. */
+    if(c->thermal==LOWER && c->result==A733_CPU_CLOCK_COMPLETE)c->throttled|=BIT(c->cluster);
+    else if(c->thermal==LOWER)c->throttle_failed|=BIT(c->cluster);
     c->state=S_IDLE;return c->result;
 }
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
@@ -336,10 +393,23 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     if(c->failed)return fault(c);
     if(!time_now(c))return fault(c);
     if(c->state==S_IDLE) {
-        unsigned level=atomic_load_explicit(&c->level,memory_order_acquire);
-        for(unsigned i=0;i<2;++i)if(level==A733_THERMAL_THROTTLE &&
-            c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ && !(c->throttle_failed&BIT(i)))
-            return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,1);
+        unsigned now=level(c);
+        for(unsigned i=0;i<2;++i) {
+            if(now==A733_THERMAL_THROTTLE && c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ &&
+               !(c->throttle_failed&BIT(i))) {
+                c->restore_mhz[i]=c->applied_mhz[i];
+                return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,LOWER);
+            }
+            if(now!=A733_THERMAL_NORMAL)continue;
+            /* A new THROTTLE episode may try a failed lowering again. A restore
+             * is attempted once and consumes a change, as a request does. */
+            c->throttle_failed&=~BIT(i);
+            if(!(c->throttled&BIT(i)))continue;
+            c->throttled&=~BIT(i);
+            if(c->changes && c->restore_mhz[i]>c->applied_mhz[i]) {
+                --c->changes;return start(c,i,c->restore_mhz[i],c->last_now+THERMAL_US,RESTORE);
+            }
+        }
         return A733_CPU_CLOCK_READY;
     }
     if(c->state==S_RELEASE)return release(c);
@@ -378,17 +448,21 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     }
     case S_INSPECT:return inspect(c);
     case S_READ: {
+        /* The rail's first reading is its boot baseline, kept by the ledger:
+         * the target never falls below it, whatever the operating point. */
         enum a733_cpu_clock_status out;
-        int k=collect(c,&out);
+        uint32_t floor=0;
+        int k=collect(c,&floor,&out);
         if(!k)return out;
         if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
         if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
+        if(c->to_uv<floor)c->to_uv=floor;
         /* Raise: voltage first. Lower: frequency first, then voltage unless
          * the thermal path keeps it. Enough voltage needs no write. */
         if(c->raise && c->to_uv>c->from_uv){c->state=S_VOLTAGE;c->after=S_PARK;}
-        else {c->state=S_PARK;c->after=!c->raise && !c->thermal && c->to_uv<c->from_uv ? S_VOLTAGE : S_RELEASE;}
+        else {c->state=S_PARK;c->after=!c->raise && c->thermal!=LOWER && c->to_uv<c->from_uv ? S_VOLTAGE : S_RELEASE;}
         return A733_CPU_CLOCK_PENDING;
     }
     case S_VOLTAGE:return voltage(c);

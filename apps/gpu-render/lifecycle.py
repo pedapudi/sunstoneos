@@ -39,10 +39,10 @@ class Triangle(common.Compute):
 class Texture(common.Session):
     close_op=5;dispose_op=6;open_op=7;initial_sequence=0
     def __init__(self,write,read,epoch,width,height,*,deadline,retain,profile=2):
-        if not callable(write) or not callable(read) or profile not in (2,3) or not 0<width<=1920 or not 0<height<=1080:
+        if not callable(write) or not callable(read) or profile not in (2,3,4) or not 0<width<=1920 or not 0<height<=1080:
             raise ValueError('GPU lifecycle texture transport or geometry')
-        super().__init__(epoch,deadline,retain,'depth' if profile==3 else 'texture')
-        self.write=write;self.receive=read;self.graphics_profile=profile;self.version=9 if profile==3 else 8
+        super().__init__(epoch,deadline,retain,{2:'texture',3:'depth',4:'batch'}[profile])
+        self.write=write;self.receive=read;self.graphics_profile=profile;self.version=texture.VERSIONS[profile]+4
         self.width=width;self.height=height;self.stride=(width+1)&~1;self.total=self.stride*height*4
         self.generation=0
 
@@ -95,7 +95,8 @@ class Texture(common.Session):
         width,height,stride,vertices,indices=shape
         if not (0<width<=1920 and 0<height<=1080 and stride==(width+1)&~1 and 1<=vertices<=65536 and 3<=indices<=65535 and indices%3==0):
             raise ValueError('GPU texture lifecycle input geometry')
-        if len(data)!=vertices*24+indices*2+stride*height*4:raise ValueError('GPU texture lifecycle input extent')
+        batches=(state&31)*16 if self.graphics_profile==4 else 0
+        if len(data)!=vertices*24+indices*2+batches+stride*height*4:raise ValueError('GPU texture lifecycle input extent')
         self._ready()
         if self.state!=1 or self.sequence>=draw.MAX_FRAMES:raise ValueError('GPU texture submission state')
         self._protect_output();previous=self.sequence;old_generation=self.generation

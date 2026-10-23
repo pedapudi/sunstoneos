@@ -28,6 +28,9 @@ static int probe_take(uint64_t deadline)
 }
 int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
 {
+    /* TPIDRRO_EL0 is UNKNOWN at reset. A zero task field makes the FreeRTOS
+     * port read the core index through SVC until it first resumes a task. */
+    __asm__ volatile("msr tpidrro_el0, xzr":::"memory");
     if(c>=8 || !epoch)return 0;
     __atomic_store_n(&probe_arrived[c],1,__ATOMIC_RELEASE);
     for(unsigned i=0;i<8;++i)while(!__atomic_load_n(&probe_arrived[i],__ATOMIC_ACQUIRE))

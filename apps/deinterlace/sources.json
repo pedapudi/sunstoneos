@@ -1,6 +1,6 @@
 {
   "schema": "a733-deinterlace-references-v1",
-  "runtime": "Pinned GPL DI301 configuration and algorithm defaults execute on the FreeRTOS CPU against a private register image. Native callbacks publish mode-specific active WEAVE, initial MOTION or fixed-strength TNR register whitelists. No Linux kernel, queue or hardware status shadow executes.",
+  "runtime": "Pinned GPL DI301 configuration, finish-time statistics collection and algorithm code execute on the FreeRTOS CPU against a private register image. Native callbacks publish mode-specific active WEAVE, MOTION or selected-strength TNR register whitelists and read the source's statistics registers between the jobs of a sequence. No Linux kernel, queue or hardware status shadow executes.",
   "license": "GPL-2.0-or-later for DI code; preserve all original notices. drm_fourcc.h retains its own permissive notice.",
   "reference_pins": {
     "bsp/drivers/di/Kconfig": {
@@ -95,5 +95,7 @@
     "sha256": "ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc"
   },
   "manual": "A733 manual14.4 and4.1 DI CCU controls; existing manual pin remains in sources.lock.json.",
-  "scope": "One offline combined-field NV12 WEAVE, initial MOTION or fixed-strength TNR operation. TNR consumes two frames and produces planar YUV420. Matched processing finish and nonbusy authorize immutable copied output only; resources remain retained and physical DMA completion/visibility remains unqualified."
+  "scope": "One to four offline combined-field NV12 WEAVE, MOTION or TNR jobs per session. The first MOTION or TNR job consumes two frames and each later job one more; TNR produces planar YUV420. Matched processing finish and nonbusy authorize immutable copied output and, within a sequence, refilling that job's oldest input and output for the next job; resources remain retained and physical DMA completion/visibility remains unqualified.",
+  "sequence": "The upper half of the strength word selects zero to three repeated jobs. MOTION and TNR sequences keep alg_en=1; WEAVE sequences keep alg_en=0. The adapter refuses field-order counts above INT32_MAX/11, whose s32 products the source lets overflow, and TNR statistics whose do_div divisor is zero.",
+  "tnr_strength": "Strength 0 keeps the source fixed TNR strength 0x3a. Strengths 1 to 3 set the source's adaptive TNR mode with the LOW, MIDDLE or HIGH level and keep alg_en=1, so di_alg_fixed_para selects the initial gain 38, 48 or 62 and di_dev_set_tnr_para writes it to the strength register. Sequence zero runs no algorithm; each later job of a sequence runs di_alg, whose di_alg_tnr_strengths_adjustment feeds the gain back within the level's bounds. The only other plan differences are DIT words that the TNR register list never submits."
 }

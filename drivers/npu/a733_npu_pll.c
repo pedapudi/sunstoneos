@@ -1,4 +1,5 @@
 #include "a733_npu_pll.h"
+#include "a733_range.h"
 #include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -10,7 +11,8 @@
 #define BUSY A733_NPU_PLL_BUSY
 #define PENDING A733_NPU_PLL_PENDING
 #define RETAINED A733_NPU_PLL_RETAINED
-enum { ACQUIRE, BASELINE, PROGRAM, LOCK_WAIT, SETTLE, OUTPUT, COMPLETE };
+/* Numbering is shared with the host fixtures: LOCK_WAIT is 3 and COMPLETE 6. */
+enum { ACQUIRE, BASELINE, LOCK_WAIT=3, SETTLE, COMPLETE=6 };
 static const uint32_t offsets[A733_NPU_PLL_SNAPSHOTS]={
     0x500,0x580,0x588,0xa80,0xa88,0xa8c,0xb00,0xb04,0xc00,0xc0c,0x1b10,0x1b14,0x1b1c
 };
@@ -64,9 +66,7 @@ int a733_npu_pll_bind_registry(struct a733_npu_pll *p,struct a733_clock_leases *
     if (!p || p->self!=p || !p->initialized || p->failed || p->registry || p->successor ||
         p->stage!=ACQUIRE || p->resources.clock.id || p->observed.clock.id ||
         !registry || !registry->initialized) return 0;
-    uintptr_t a=(uintptr_t)p,b=(uintptr_t)registry;
-    if (sizeof(*p)>UINTPTR_MAX-a || sizeof(*registry)>UINTPTR_MAX-b ||
-        !(a+sizeof(*p)<=b || b+sizeof(*registry)<=a)) return 0;
+    if (!a733_ranges_disjoint(p,sizeof(*p),registry,sizeof(*registry))) return 0;
     p->registry=registry;return 1;
 }
 int a733_npu_pll_ready(const struct a733_npu_pll *p)
@@ -74,8 +74,7 @@ int a733_npu_pll_ready(const struct a733_npu_pll *p)
 static int timely(struct a733_npu_pll *p)
 {
     uint64_t t;
-    if (p->ops.now_us(p->cookie,&t)!=1 || t<p->last_now || t>=p->config.deadline_us) return 0;
-    p->last_now=t;return 1;
+    return p->ops.now_us(p->cookie,&t)==1 && a733_deadline_admit(t,&p->last_now,p->config.deadline_us);
 }
 static enum a733_npu_pll_result fault(struct a733_npu_pll *p)
 {
@@ -83,8 +82,10 @@ static enum a733_npu_pll_result fault(struct a733_npu_pll *p)
     p->ops.retain(p->cookie,&p->resources,&p->observed,p->lock_state);
     return RETAINED;
 }
+/* Register accesses take no clock sample of their own. Each locked pass checks the
+ * deadline before its first write, after each LOCK observation and before release. */
 static int rd(struct a733_npu_pll *p,uintptr_t a,uint32_t *v)
-{return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
+{return p->ops.read(p->cookie,a,v)==1;}
 static int check(struct a733_npu_pll *p,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(p,a,&v) && (v&mask)==expected;}
 static int update(struct a733_npu_pll *p,uintptr_t a,uint32_t mask,uint32_t value)
@@ -96,9 +97,8 @@ static int update(struct a733_npu_pll *p,uintptr_t a,uint32_t mask,uint32_t valu
     if (a==CTRL) next&=~LOCK; /* Read-only status is not a write target. */
     uint32_t compare=a==CTRL ? ~LOCK : UINT32_MAX;
     if ((old&compare)==(next&compare)) return 1;
-    if (!timely(p)) return 0;
     p->wrote=1;
-    if (p->ops.write(p->cookie,a,next)!=1 || !timely(p) || !rd(p,a,&actual) ||
+    if (p->ops.write(p->cookie,a,next)!=1 || !rd(p,a,&actual) ||
         (actual&compare)!=(next&compare)) return 0;
     if (a==CTRL) p->expected_control=next;
     return 1;
@@ -155,6 +155,7 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
         if (!p->resources.clock.id || p->resources.clock.owner!=p->config.owner ||
             p->resources.clock.shared!=p->shared || p->resources.clock.exclusive!=(A733_CLOCK_PLL_NPU|A733_CLOCK_NPU) ||
             !p->resources.whole_platform) return fault(p);
+        /* The provider's admission is observable before any PLL access. */
         p->stage=BASELINE;return PENDING;
     }
     if ((p->stage==LOCK_WAIT && p->last_now<p->next_sample) ||
@@ -162,43 +163,39 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
     int held=p->ops.enter(p->cookie,p->config.deadline_us);
     if (!held) return timely(p) ? BUSY : fault(p);
     p->lock_state=held==1 ? 1 : 2;
-    if (held!=1 || !timely(p)) return fault(p);
-    int ok=1,complete=0;
-    if (p->stage==BASELINE) {ok=baseline(p);if(ok)p->stage=PROGRAM;}
-    else if (p->stage==PROGRAM) {
-        const struct step *s=p->config.mode==A733_NPU_PLL_ENABLED_RETUNE ? &retune[p->step] : &cold[p->step];
-        ok=update(p,s->address,s->mask,s->value);
-        if (ok && ++p->step==6) {
-            ok=p->last_now<=UINT64_MAX-3;
-            if(ok) {p->next_sample=p->last_now+3;p->stage=LOCK_WAIT;}
-        }
+    if (held!=1) return fault(p);
+    int ok=1,complete=0,sampled=p->stage!=SETTLE; /* Pass ends with a clock sample. */
+    if (p->stage==BASELINE) {
+        /* Entry checks, the step table, then a sample after the last write arms LOCK polling. */
+        const struct step *table=p->config.mode==A733_NPU_PLL_ENABLED_RETUNE ? retune : cold;
+        ok=baseline(p) && timely(p);
+        for (; ok && p->step<6; ++p->step) ok=update(p,table[p->step].address,table[p->step].mask,table[p->step].value);
+        ok=ok && timely(p) && a733_deadline_after(p->last_now,3,&p->next_sample);
+        if (ok) p->stage=LOCK_WAIT;
     } else if (p->stage==LOCK_WAIT) {
         uint32_t v;
-        ok=rd(p,CTRL,&v) && (v&~LOCK)==p->expected_control;
+        ok=rd(p,CTRL,&v) && timely(p) && (v&~LOCK)==p->expected_control;
         if(ok) {
             p->consecutive=(v&LOCK) ? p->consecutive+1 : 0;
             ++p->samples;
             if (p->consecutive==3) {
-                ok=p->last_now<=UINT64_MAX-20;
-                if(ok) {p->settle_until=p->last_now+20;p->stage=SETTLE;}
+                ok=a733_deadline_after(p->last_now,20,&p->settle_until);
+                if(ok)p->stage=SETTLE;
             } else {
-                ok=p->samples<100 && p->last_now<=UINT64_MAX-3;
-                if(ok)p->next_sample=p->last_now+3;
+                ok=p->samples<100 && a733_deadline_after(p->last_now,3,&p->next_sample);
             }
         }
     } else if (p->stage==SETTLE) {
-        ok=check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) &&
-            check(p,CCU+0x1920,0x10001,0x10001) && check(p,CCU+0x19a0,BIT(16),BIT(16));
-        if(ok)p->stage=OUTPUT;
-    } else if (p->stage==OUTPUT) {
-        ok=check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) && update(p,CTRL,BIT(27),BIT(27)) &&
-            check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) &&
+        /* After the 20 us settle: lock and gate status, then the output gate. */
+        ok=timely(p) && check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) &&
+            check(p,CCU+0x1920,0x10001,0x10001) && check(p,CCU+0x19a0,BIT(16),BIT(16)) &&
+            update(p,CTRL,BIT(27),BIT(27)) && check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) &&
             check(p,CCU+0x19a0,BIT(16),BIT(16));
         if(ok)complete=1;
     } else ok=0;
     /* No unlock after a failed readback/deadline. A failure first observed
      * after confirmed release retains authority but cannot retain that mutex. */
-    if (!ok || !timely(p)) return fault(p);
+    if (!ok || (!sampled && !timely(p))) return fault(p);
     int released=p->ops.leave(p->cookie);
     p->lock_state=released==1 ? 0 : 2;
     if (released!=1 || !timely(p)) return fault(p);

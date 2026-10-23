@@ -8,7 +8,16 @@
 #undef exchange
 #undef tud_vendor_tx_cb
 #include "application.h"
+#ifdef SUNSTONE_A733_FAULT_PAGE
+#include "a733_fault.h"
+/* Operation 5 returns the previous boot's 1,160-byte fault report alone,
+ * without the 64-byte frame header (docs/fault-capture.md). */
+#define FAULT_OP 5u
+static uint8_t frame[sizeof(struct a733_fault_report)],request[16];
+_Static_assert(sizeof(struct a733_fault_report)>=1088,"frame holds every response");
+#else
 static uint8_t frame[1088],request[16];
+#endif
 static unsigned frame_bytes,sent,transferred,request_used,frame_success;
 /* USB0 owner only. Receipt publication follows the final TX completion. */
 static unsigned delivery_generation,delivered_text,delivered_sector,delivered_trigger;
@@ -47,13 +56,20 @@ static void exchange(void)
     size_t bytes=request[2]|(unsigned)request[3]<<8;
     int keyboard=mimus_board_keyboard();unsigned current=mimus_board_generation();
     uint64_t expected=0;for(unsigned i=0;i<8;++i)expected|=(uint64_t)request[8+i]<<(8*i);
+#ifdef SUNSTONE_A733_FAULT_PAGE
+    if(op==FAULT_OP){
+        if(request[1]||offset||bytes||expected)stop();
+        memcpy(frame,&a733_fault_previous,sizeof(a733_fault_previous));
+        frame_success=0;sent=transferred=0;frame_bytes=sizeof(a733_fault_previous);return;
+    }
+#endif
     if(op>(keyboard?4u:2u)||request[1]||bytes>1024)stop();
     if((!keyboard||op==0)&&expected)stop();
     if(keyboard&&delivery_generation!=current){
         delivery_generation=current;delivered_text=delivered_sector=delivered_trigger=0;
     }
     if((op==0&&(offset||bytes))||(op==1&&!bytes)||(op==2&&(offset||bytes!=512))||(op==3&&(offset||bytes!=128))||(op==4&&(offset||bytes)))stop();
-    memset(frame,0,sizeof(frame));size_t copied=0;uint32_t total=0;
+    memset(frame,0,1088);size_t copied=0;uint32_t total=0;
     int r=mimus_board_copy(op==1?offset:0,op==1?bytes:0,frame+64,&copied,&total);
     unsigned storage=atomic_load_explicit(&board.result,memory_order_acquire);
     if(!board_live(NULL)||storage==2||(keyboard&&op&&expected!=current))r=-1;

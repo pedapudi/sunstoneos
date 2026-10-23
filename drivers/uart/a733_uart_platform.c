@@ -1,5 +1,6 @@
 #include "a733_uart_platform.h"
 #include "a733_clock_reference.h"
+#include "a733_range.h"
 #define CCU UINT32_C(0x02002000)
 #define RCCU UINT32_C(0x07010000)
 #define GICD UINT32_C(0x03400000)
@@ -30,11 +31,6 @@ int a733_uart_route_plan(enum a733_uart_route id,struct a733_uart_route_plan *ou
     if (!out || (unsigned)id>=sizeof(routes)/sizeof(routes[0])) return 0;
     *out=routes[id]; return 1;
 }
-static int separate(const void *a,size_t an,const void *b,size_t bn)
-{
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
-}
 static uintptr_t bus(const struct a733_uart_platform *s)
 { return s->route.port<7 ? CCU+0xe00+s->route.port*4 : RCCU+0x18c; }
 static uint32_t gate(const struct a733_uart_platform *s)
@@ -55,8 +51,7 @@ static a733_clock_mask_t local_scope(unsigned port)
 static int time_ok(struct a733_uart_platform *s)
 {
     uint64_t now;
-    if (s->ops.now_us(s->cookie,&now)!=1 || now<s->last_now || now>=s->deadline) return 0;
-    s->last_now=now; return 1;
+    return s->ops.now_us(s->cookie,&now)==1 && a733_deadline_admit(now,&s->last_now,s->deadline);
 }
 static enum a733_uart_platform_result fault(struct a733_uart_platform *s)
 {
@@ -131,11 +126,11 @@ enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platfo
 }
 static int uart_address(struct a733_uart_platform *s,uintptr_t a,unsigned writing)
 {
-    if (a<s->uart.plan.base || a>s->uart.plan.base+0xa4 || (a&3)) return 0;
+    if (a<s->uart.plan.base || a>s->uart.plan.base+0xc0 || (a&3)) return 0;
     switch (a-s->uart.plan.base) {
-    case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:return 1;
+    case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:case 0x88:case 0x8c:return 1;
     case 0x14:case 0x18:case 0x7c:return !writing;
-    case 0x88:case 0x8c:return s->route.port==2;
+    case 0xc0:return s->route.port && s->route.port<7; /* RS-485 control. */
     default:return 0;
     }
 }
@@ -181,9 +176,9 @@ int a733_uart_platform_init(struct a733_uart_platform *s,
         !pins || !pins->initialized || !c->owner || !c->handoff || !c->startup_deadline_us ||
         !a733_uart_route_plan(c->route,&route) || c->format.port!=route.port ||
         c->deferred_irq>1 || c->format.clock_hz!=24000000 || (c->format.auto_flow && !route.flow) ||
-        a733_uart_plan(&c->format,&plan)!=1 || !separate(s,sizeof(*s),c,sizeof(*c)) ||
-        !separate(s,sizeof(*s),o,sizeof(*o)) || !separate(s,sizeof(*s),registry,sizeof(*registry)) ||
-        !separate(s,sizeof(*s),pins,sizeof(*pins))) return 0;
+        a733_uart_plan(&c->format,&plan)!=1 || !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),o,sizeof(*o)) || !a733_ranges_disjoint(s,sizeof(*s),registry,sizeof(*registry)) ||
+        !a733_ranges_disjoint(s,sizeof(*s),pins,sizeof(*pins))) return 0;
     unsigned count=c->format.auto_flow ? 4 : 2;
     unsigned numbers[]={route.tx,route.rx,route.rts,route.cts};
     for (unsigned i=0;i<count;++i) {

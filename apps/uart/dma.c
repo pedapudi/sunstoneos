@@ -1,5 +1,6 @@
 #include "uart.h"
 #include "boot.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include <string.h>
 struct uart_dma_application uart_dma;
@@ -58,10 +59,10 @@ int uart_dma_construct(void)
 {
  struct uart_dma_application *d=&uart_dma;
  const struct uart_dma_authority *w=&uart.session.dma;
- uint64_t start=board.session.session_start_ticks/24;
- if(d->pool || start>UINT64_MAX-w->startup_timeout_us)return 0;
+ uint64_t start=board.session.session_start_ticks/24,end;
+ if(d->pool || !a733_deadline_after(start,w->startup_timeout_us,&end))return 0;
  struct a733_dma_handoff h={.allowed={.owner=w->owner,.handoff=w->handoff,
- .deadline_us=start+w->startup_timeout_us,.cold=w->cold,
+ .deadline_us=end,.cold=w->cold,
  .expected_cpu=w->expected_cpu,.expected_mcu=w->expected_mcu,
  .desired_cpu=w->desired_cpu,.desired_mcu=w->desired_mcu,.route_change_mask=w->route_change_mask},
  .controller=w->controller,.evidence=w->evidence,.established=w->established,

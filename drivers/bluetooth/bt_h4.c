@@ -4,12 +4,11 @@
  * Linux reference structures; no Linux implementation code is included. */
 #include "bt_h4.h"
 #include "bt_memory.h"
+#include "a733_range.h"
 #define H4_ACL 2u
 #define H4_SCO 3u
 #define H4_EVENT 4u
 #define H4_ISO 5u
-static int valid_span(const void *p, size_t n)
-{ return !n || (p && (uintptr_t)p <= UINTPTR_MAX-(n-1)); }
 void bt_h4_fail(struct bt_h4 *q) { if (q) q->state=BT_H4_FAULT; }
 static int valid(struct bt_h4 *q, uint64_t deadline)
 {
@@ -42,7 +41,7 @@ int bt_h4_init(struct bt_h4 *q, const struct bt_h4_binding *b,
         b->uart->plan.mcr!=0x22 || b->uart->plan.actual_baud!=b->baud) return -1;
     for(unsigned i=0;i<count;++i) {
         if(s[i].capacity<257 || s[i].capacity>BT_H4_MAX_PACKET ||
-           !valid_span(s[i].bytes,s[i].capacity) ||
+           !a733_span_incl_or_empty(s[i].bytes,s[i].capacity) ||
            !bt_range_disjoint_empty(s[i].bytes,s[i].capacity,q,sizeof(*q)) ||
            !bt_range_disjoint_empty(s[i].bytes,s[i].capacity,b->uart,sizeof(*b->uart)) ||
            !bt_range_disjoint_empty(s[i].bytes,s[i].capacity,b,sizeof(*b)) ||
@@ -58,7 +57,7 @@ int bt_h4_init(struct bt_h4 *q, const struct bt_h4_binding *b,
 int bt_h4_command(struct bt_h4 *q, uint16_t opcode, const uint8_t *p, size_t n,
                   uint64_t deadline)
 {
-    if(!q || !opcode || n>255 || !valid_span(p,n) || !deadline ||
+    if(!q || !opcode || n>255 || !a733_span_incl_or_empty(p,n) || !deadline ||
        !bt_range_disjoint_empty(p,n,q,sizeof(*q))) return -1;
     if(q->state!=BT_H4_ACTIVE) return -1;
     if(q->tx_offset<q->tx_length) return 0;
@@ -72,7 +71,7 @@ int bt_h4_acl(struct bt_h4 *q, uint16_t handle_flags, const uint8_t *p, size_t n
               uint64_t deadline)
 {
     unsigned pb=(handle_flags>>12)&3u;
-    if(!q || !n || n>65535 || !valid_span(p,n) || !deadline ||
+    if(!q || !n || n>65535 || !a733_span_incl_or_empty(p,n) || !deadline ||
        (handle_flags&0xc000u) || (handle_flags&0xfffu)>0xeffu || (pb!=1 && pb!=2) ||
        !bt_range_disjoint_empty(p,n,q,sizeof(*q))) return -1;
     if(q->state!=BT_H4_ACTIVE) return -1;
@@ -88,7 +87,7 @@ int bt_h4_acl(struct bt_h4 *q, uint16_t handle_flags, const uint8_t *p, size_t n
 }
 int bt_h4_sco(struct bt_h4 *q,uint16_t handle,const uint8_t *p,size_t n,uint64_t deadline)
 {
-    if(!q || !n || n>255 || handle>0xeff || !valid_span(p,n) || !deadline ||
+    if(!q || !n || n>255 || handle>0xeff || !a733_span_incl_or_empty(p,n) || !deadline ||
        !bt_range_disjoint_empty(p,n,q,sizeof(*q)))return -1;
     if(q->state!=BT_H4_ACTIVE)return -1;
     if(!bt_range_disjoint_empty(p,n,q->binding.uart,sizeof(*q->binding.uart)))return -1;

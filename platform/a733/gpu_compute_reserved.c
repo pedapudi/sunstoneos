@@ -1,4 +1,6 @@
 #include "a733_gpu_compute_reserved.h"
+#include "a733_range.h"
+#include "a733_mmio.h"
 #include "a733_gpu_mapping.h"
 #include "a733_gpu_disposal.h"
 #include <string.h>
@@ -11,8 +13,6 @@ static const uint32_t context_bytes[6] = {232, 4, 32, 1024, 32, 64};
  * heap profile. PDS/USC offsets are relative to globally programmed bases. */
 static const uint64_t heap_base[3] = {UINT64_C(0xda00000000), UINT64_C(0xe000000000), UINT64_C(0x8000000000)};
 
-static int apart(uintptr_t a, size_t an, uintptr_t b, size_t bn)
-{ return a + an <= b || b + bn <= a; }
 static size_t rounded(size_t n) { return (n + 4095) & ~(size_t)4095; }
 static int mapped(uintptr_t cpu, size_t bytes, unsigned attr, int write)
 { return a733_gpu_identity_mapped(cpu, bytes, attr, write); }
@@ -179,8 +179,7 @@ static int submission_owned(const struct a733_gpu_compute_reserved *s)
        c->epoch!=s->binding.service->epoch||j->epoch!=c->epoch||c->client.epoch!=c->epoch||
        s->binding.service->queue.epoch!=c->epoch||c->client.serial!=j->serial||
        j->transport!=&c->client||c->client.queue!=&s->binding.service->queue||j->config!=&s->job)return 0;
-    uint32_t timeline=*(volatile uint32_t *)s->config.firmware[5].storage.cpu;
-    __asm__ volatile("dsb sy":::"memory");
+    uint32_t timeline=a733_mmio_read32_dsb_sy_after((uintptr_t)s->config.firmware[5].storage.cpu);
     return timeline==j->sequence;
 }
 static int admit_job(void *ctx, const struct pvr_compute_job_config *j)
@@ -224,27 +223,27 @@ static struct pvr_compute_service *prepare(
     struct pvr_gpu_service *service, uint32_t owner, const struct pvr_compute_package *package,int rebuilding)
 {
     if(package&&(!private_image((uintptr_t)package,sizeof(*package),0)||!pvr_compute_package_valid(package)||
-        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)s,sizeof(*s))||
-        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)g,sizeof(*g))||
-        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)service,sizeof(*service))))return NULL;
+        !a733_extents_disjoint_prechecked((uintptr_t)package,sizeof(*package),(uintptr_t)s,sizeof(*s))||
+        !a733_extents_disjoint_prechecked((uintptr_t)package,sizeof(*package),(uintptr_t)g,sizeof(*g))||
+        !a733_extents_disjoint_prechecked((uintptr_t)package,sizeof(*package),(uintptr_t)service,sizeof(*service))))return NULL;
     if (compute_owner || !s || !g || !service || !owner || (uintptr_t)s % _Alignof(struct a733_gpu_compute_reserved) ||
         (uintptr_t)g % _Alignof(struct a733_gpu_reserved) || (uintptr_t)service % _Alignof(struct pvr_gpu_service) ||
         (!rebuilding && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) ||
         !private_image((uintptr_t)s, sizeof(*s), 1) || !private_image((uintptr_t)g, sizeof(*g), 1) ||
         !private_image((uintptr_t)service, sizeof(*service), 1) ||
-        !apart((uintptr_t)s, sizeof(*s), (uintptr_t)g, sizeof(*g)) ||
-        !apart((uintptr_t)s, sizeof(*s), (uintptr_t)service, sizeof(*service)) ||
-        !apart((uintptr_t)g, sizeof(*g), (uintptr_t)service, sizeof(*service)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)g, sizeof(*g)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)service, sizeof(*service)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)g, sizeof(*g), (uintptr_t)service, sizeof(*service)) ||
         s->stage || s->binding.self || (!rebuilding && service->initialized) || g->config.compute ||
         g->config.free_lists.count || g->memory.phase != A733_GPU_MEMORY_OFFLINE ||
         !private_image((uintptr_t)g->config.firmware, g->config.firmware_bytes, 0) ||
-        !apart((uintptr_t)s, sizeof(*s), (uintptr_t)g->config.firmware, g->config.firmware_bytes) ||
-        !apart((uintptr_t)service, sizeof(*service), (uintptr_t)g->config.firmware, g->config.firmware_bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)g->config.firmware, g->config.firmware_bytes) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)service, sizeof(*service), (uintptr_t)g->config.firmware, g->config.firmware_bytes) ||
         !firmware_owned(g)) return NULL;
-    if (!apart((uintptr_t)s, sizeof(*s), (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
-        !apart((uintptr_t)s, sizeof(*s), (uintptr_t)g->nc_pool, sizeof(*g->nc_pool)) ||
-        !apart((uintptr_t)service, sizeof(*service), (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
-        !apart((uintptr_t)service, sizeof(*service), (uintptr_t)g->nc_pool, sizeof(*g->nc_pool))) return NULL;
+    if (!a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)s, sizeof(*s), (uintptr_t)g->nc_pool, sizeof(*g->nc_pool)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)service, sizeof(*service), (uintptr_t)g->wb_pool, sizeof(*g->wb_pool)) ||
+        !a733_extents_disjoint_prechecked((uintptr_t)service, sizeof(*service), (uintptr_t)g->nc_pool, sizeof(*g->nc_pool))) return NULL;
     struct device_memory_lease first; struct device_memory_extent extent;
     if (!device_memory_acquire(g->wb_pool, owner, A733_GPU_COMPUTE_PAYLOAD_PAGES * 4096u, &first, &extent)) return NULL;
     compute_owner = s;

@@ -3,6 +3,9 @@
 #endif
 #include "cached.h"
 #include "a733_cached_memory.h"
+#if defined(SUNSTONE_A733_FAULT_PAGE)
+#include "a733_fault.h"
+#endif
 #include <stddef.h>
 #define MONITOR __attribute__((section(".bss.a733_smp_monitor"),aligned(128)))
 #define BIT(n) (UINT64_C(1)<<(n))
@@ -72,6 +75,10 @@ void a733_cached_prepare(uint64_t epoch,uint64_t startup,uint64_t diagnostic,uin
 {
     if(native_core()!=0 || !epoch || !token || a733_smp_counter()>=startup || startup>=diagnostic)
         a733_smp_stop(2,0x100);
+#if defined(SUNSTONE_A733_FAULT_PAGE)
+    /* Previous-boot records move to EL1 .bss before image RAM is published. */
+    a733_fault_boot();
+#endif
     boot_values[0]=epoch;boot_values[1]=startup;boot_values[2]=diagnostic;boot_values[3]=token;
     if(!a733_cached_memory_prepare())a733_smp_stop(2,0x101);
     /* The source image and initial RAM are immutable/idle under external cold-boot
@@ -138,9 +145,7 @@ _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64
     if(a733_smp_pre_scheduler(c,epoch,startup/24)!=1)a733_cached_smc(3,0x201);
     if(!c) {
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-        int prepared;
-        do { prepared = a733_device_memory_prepare(); } while (prepared == 0);
-        if (prepared != 1) a733_cached_smc(3, 0x203);
+        if (a733_device_memory_prepare() != 1) a733_cached_smc(3, 0x203);
 #endif
         a733_smp_primary_el1();a733_cached_smc(4,0x202);
     }

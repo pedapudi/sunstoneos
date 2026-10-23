@@ -1,7 +1,13 @@
 #include "pwm_session.h"
 #include "a733_pwm.h"
 #define a733_smp_contract_valid board_contract_unused
+#ifdef SUNSTONE_PWM_SINGLE_CORE
+/* The boot-CPU image admits only USB0 takeover mode 2 (the ROM USB handoff);
+ * its build generates this board validator from board-admission.patch. */
+#include "board-admission.c"
+#else
 #include "../board/admission.c"
+#endif
 #undef a733_smp_contract_valid
 int pwm_session_valid(const struct pwm_session *s)
 {

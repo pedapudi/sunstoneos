@@ -11,7 +11,7 @@ static int duration(uint64_t value) { return value && value <= INT64_MAX; }
 static int mapping_valid(const struct a733_dma_mapping *m, const struct dma_service *s)
 {
     return a733_dma_mapping_shape(m) && (unsigned)m->access <= A733_DMA_DESCRIPTORS &&
-        !a733_dma_overlap((uintptr_t)m->cpu,m->bytes,(uintptr_t)s,sizeof(*s));
+        !a733_extents_overlap_prechecked((uintptr_t)m->cpu,m->bytes,(uintptr_t)s,sizeof(*s));
 }
 static int conflict(const struct a733_dma_transfer *a,const struct a733_dma_transfer *b,int exclusive)
 {
@@ -41,7 +41,7 @@ static int job_valid(const struct dma_service_job *j,const struct dma_service *s
         t->descriptors.bytes/64 < t->count) return 0;
     if (j->kind == DMA_SERVICE_I2S_STREAM ?
         (!j->stream || sizeof(*j->stream)>UINTPTR_MAX-(uintptr_t)j->stream ||
-         a733_dma_overlap((uintptr_t)j->stream,sizeof(*j->stream),(uintptr_t)s,sizeof(*s)) ||
+         a733_extents_overlap_prechecked((uintptr_t)j->stream,sizeof(*j->stream),(uintptr_t)s,sizeof(*s)) ||
          !a733_i2s_stream_valid(&j->stream->stream,t)) : j->stream != NULL) return 0;
     for (size_t i=0;i<t->mapping_count;++i)
         if (!mapping_valid(&t->mappings[i],s) || t->mappings[i].access == A733_DMA_DESCRIPTORS) return 0;
@@ -116,7 +116,7 @@ static unsigned poll_channel(struct dma_service *s,unsigned i)
 }
 enum { IRQ_EVENT=1u, IRQ_FAILED=2u };
 /* Whether channel i can wait for its next DMA interrupt. Stop drain, I2S
- * register and health operations, TX priming and an uncopied RX period all
+ * register and health operations, TX priming and a copyable RX period all
  * progress without one, so they keep tick polling. */
 static int event_driven(struct dma_service *s,unsigned i)
 {
@@ -128,7 +128,8 @@ static int event_driven(struct dma_service *s,unsigned i)
     uint64_t packages;
     if (st->status != A733_I2S_ACTIVE || st->deadline || st->priming) return 0;
     if (!st->profile.cyclic || st->profile.direction == A733_I2S_TRANSMIT) return 1;
-    return a733_dma_cyclic_progress(&s->controller,i,&packages) && packages <= st->raw_next;
+    /* Receive period raw_next becomes copyable once raw_next+1 completes. */
+    return a733_dma_cyclic_progress(&s->controller,i,&packages) && packages < st->raw_next+2;
 }
 /* Account for ISR notifications, after this pass has acknowledged events. */
 static void irq_observe(struct dma_service *s,unsigned pending)
@@ -392,8 +393,8 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
             const struct dma_service_protected *g=&protected[n];
             for (size_t k=0;k<=t->mapping_count;++k) {
                 const struct a733_dma_mapping *m=k == t->mapping_count ? &t->descriptors : &t->mappings[k];
-                if (a733_dma_overlap((uintptr_t)m->cpu,m->bytes,g->cpu,g->bytes) ||
-                    a733_dma_overlap(m->bus,m->bytes,g->physical,g->bytes)) return 0;
+                if (a733_extents_overlap_prechecked((uintptr_t)m->cpu,m->bytes,g->cpu,g->bytes) ||
+                    a733_extents_overlap_prechecked(m->bus,m->bytes,g->physical,g->bytes)) return 0;
             }
         }
         if (jobs[i].kind == DMA_SERVICE_I2S_STREAM) {
@@ -512,15 +513,15 @@ int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,v
     unsigned slot;struct dma_service_client *client=caller(s,&slot);
     if(!client || client->pending || job>=s->job_count || !out || bytes!=4096 ||
        !(client->jobs&(UINT32_C(1)<<job)) || (uintptr_t)out>UINTPTR_MAX-bytes ||
-       a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
+       a733_extents_overlap_prechecked((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
     struct dma_service_private_job *j=&s->jobs[job];
     struct dma_service_channel *ch=&s->channels[j->channel];
     if(j->kind!=DMA_SERVICE_I2S_STREAM || ch->owner!=slot || ch->profile!=job)return 0;
     for(unsigned n=0;n<s->job_count;++n) {
         const struct a733_dma_transfer *t=&s->jobs[n].transfer;
-        if(a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)t->descriptors.cpu,t->descriptors.bytes))return 0;
+        if(a733_extents_overlap_prechecked((uintptr_t)out,bytes,(uintptr_t)t->descriptors.cpu,t->descriptors.bytes))return 0;
         for(size_t i=0;i<t->mapping_count;++i)
-            if(a733_dma_overlap((uintptr_t)out,bytes,(uintptr_t)t->mappings[i].cpu,t->mappings[i].bytes))return 0;
+            if(a733_extents_overlap_prechecked((uintptr_t)out,bytes,(uintptr_t)t->mappings[i].cpu,t->mappings[i].bytes))return 0;
     }
     return a733_i2s_stream_copy(dma_service_i2s_stream(s,j->channel),ticket,out,bytes);
 }

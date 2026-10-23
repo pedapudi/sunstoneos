@@ -10,13 +10,14 @@ def module(n,p):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','session','checkpoint','output'):p.add_argument('--'+n,type=Path,required=True)
- p.add_argument('--case',action='append',choices=['nominal','wrong-generation','wrong-digest','early-ack','duplicate-ack','wrong-ordinal'])
+ p.add_argument('--case',action='append',choices=['nominal','wrong-generation','wrong-digest','early-ack','duplicate-ack','wrong-ordinal','requery'])
  a=p.parse_args();a.output.mkdir(exist_ok=False);native=module('encoder_native',ROOT/'checks/h264-encode-native.py');im=native.Image(a.image);state=pickle.loads(gzip.decompress(a.checkpoint.read_bytes()));session=a.session.read_bytes()
  assert state['image']==hashlib.sha256(a.image.read_bytes()).hexdigest() and state['session']==hashlib.sha256(session).hexdigest()
  observe=module('encoder_observe',ROOT/'apps/h264-encode/observe.py');reports=[]
- for case in (a.case or ['nominal','wrong-generation','wrong-digest','early-ack','duplicate-ack','wrong-ordinal']):
+ for case in (a.case or ['nominal','wrong-generation','wrong-digest','early-ack','duplicate-ack','wrong-ordinal','requery']):
   m=native.Machine(im,session)
   for at,data in state['memory']:m.u.mem_write(at,data)
+  frames=m.get(m.s+im.layouts['h264_encode_input']['frames'],4)
   m.now=state['now'];m.put(m.base+m.a['stage'],1)
   shared=im.address('providers')+im.layouts['board_provider']['shared'];m.put(shared+im.layouts['a733_native_usb']['pmic_ready'],1)
   assert m.call('h264_encode_task',0)==1 or m.get(m.base+m.a['result'],4)==1
@@ -32,8 +33,8 @@ def main():
     if case=='early-ack' and len(m.tx)==160+n:break
     m.call('tud_vendor_tx_cb',0,accepted)
    if len(m.tx)==160+n:break
-  assert len(m.tx)==160+n and observe.decode(bytes(m.tx),session,0)['status']==1
-  packet=bytearray(observe.ack(bytes(m.tx),session,0))
+  assert len(m.tx)==160+n and observe.decode(bytes(m.tx),session,0,frames)['status']==1
+  packet=bytearray(observe.ack(bytes(m.tx),session,0,frames))
   if case=='wrong-generation':packet[5]^=1
   if case=='wrong-digest':packet[-1]^=1
   if case=='wrong-ordinal':packet[1]=1
@@ -44,16 +45,17 @@ def main():
    assert bytes(m.u.mem_read(payload,n))==before
    reports.append(dict(case=case,bytes=len(m.tx),ack_held_by_transfer_backpressure=True,copied_output_preserved=True));continue
   while m.incoming and not failed:m.call('board_usb0_task',0)
-  if case=='duplicate-ack' and not failed:
-   m.incoming.extend(packet)
+  if case in ('duplicate-ack','requery') and not failed:
+   # Picture 2 reuses picture 0's copy, so a query after its ACK is refused.
+   m.incoming.extend(packet if case=='duplicate-ack' else b'\0\0')
    for _ in range(3):
     if m.incoming and not failed:m.call('board_usb0_task',0)
-  assert bool(failed)==(case!='nominal'),case
+  assert bool(failed)==(case!='nominal' and (case!='requery' or frames>2)),case
   assert bytes(m.u.mem_read(payload,n))==before
   if case=='nominal':
    assert m.get(m.base+m.a['acked'],4)==1 and m.get(m.base+m.a['acked']+4,4)==0
    (a.output/'frame.bin').write_bytes(bytes(m.tx));(a.output/'ack.bin').write_bytes(packet)
-  reports.append(dict(case=case,bytes=len(m.tx),failed=bool(failed),copied_output_preserved=True))
+  reports.append(dict(case=case,frames=frames,bytes=len(m.tx),failed=bool(failed),copied_output_preserved=True))
   (a.output/(case+'-result.json')).write_text(json.dumps(reports[-1],indent=2)+'\n')
  (a.output/'result.json').write_text(json.dumps(dict(passed=True,image_sha256=state['image'],checkpoint_sha256=hashlib.sha256(a.checkpoint.read_bytes()).hexdigest(),physical_access=False,cases=reports,scope='Actual compiled application COPIED publication, bounded31-byte USB FIFO acceptance, serialization, transferred-byte backpressure and ordinal/generation/digest ACK/refusal. Reuses completed encoding checkpoint. USB/controller transfer completion, readiness/lease/translation attributes modeled; no encode replay or physical USB.'),indent=2)+'\n');print('PASS actual copied-output publication/USB backpressure/ACK')
 if __name__=='__main__':main()

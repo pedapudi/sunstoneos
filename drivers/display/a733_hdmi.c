@@ -7,11 +7,7 @@
  * Copyright (C) 2010, Guennadi Liakhovetski <g.liakhovetski@gmx.de>
  * EDID field interpretation follows Linux drm_edid.c and drm_edid.h. */
 #include "a733_hdmi.h"
-
-static int overlap(const void *a,size_t an,const void *b,size_t bn){
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
-}
+#include "a733_range.h"
 int a733_hdmi_edid_accept(const uint8_t *e,size_t n,enum a733_hdmi_mode mode,
                          enum a733_hdmi_range range){
     static const uint8_t signature[]={0,255,255,255,255,255,255,0};
@@ -54,8 +50,8 @@ static int fail(struct a733_hdmi *s,enum a733_hdmi_error e){
 }
 int a733_hdmi_init(struct a733_hdmi *s,const struct a733_hdmi_config *c){
     struct a733_hdmi_timing t;
-    if(!s || !c || s->self || overlap(s,sizeof(*s),c,sizeof(*c)) ||
-       (c->context && overlap(s,sizeof(*s),c->context,1)) ||
+    if(!s || !c || s->self || a733_ranges_overlap_or_wrap(s,sizeof(*s),c,sizeof(*c)) ||
+       (c->context && a733_ranges_overlap_or_wrap(s,sizeof(*s),c->context,1)) ||
        !c->ops.now_us || !c->ops.acquire || !c->ops.validate || !c->ops.read8 ||
        !c->ops.write8 || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
        !c->ops.retain || !c->request.initial.id || !c->request.initial.generation ||
@@ -101,8 +97,8 @@ static int hpd(struct a733_hdmi *s){
     return (x&2)?1:0;
 }
 static int delay_set(struct a733_hdmi *s,uint64_t us){
-    if(s->io.now>UINT64_MAX-us)return fail(s,A733_HDMI_IO);
-    s->until=s->io.now+us;return 1;
+    if(!a733_deadline_after(s->io.now,us,&s->until))return fail(s,A733_HDMI_IO);
+    return 1;
 }
 #define B(o,m,v) {A733_HDMI_BASE+(o),(m),(v),1}
 static const struct a733_hdmi_step ddc_setup[]={
@@ -120,8 +116,7 @@ static int edid_read(struct a733_hdmi *s){
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x105,1,3)!=1 ||
            a733_hdmi_write(b,A733_HDMI_BASE+0x7e0a,1,s->position/256)!=1 ||
            a733_hdmi_write(b,A733_HDMI_BASE+0x7e01,1,s->position&255)!=1)return -1;
-        if(b->now>UINT64_MAX-10000)return fail(s,A733_HDMI_IO);
-        s->transaction_deadline=b->now+10000;
+        if(!a733_deadline_after(b->now,10000,&s->transaction_deadline))return fail(s,A733_HDMI_IO);
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x7e04,1,s->position>=256?2:1)!=1)return -1;
     }else if(s->phase==1){
         if(b->now>=s->transaction_deadline)return fail(s,A733_HDMI_DDC_ERROR);

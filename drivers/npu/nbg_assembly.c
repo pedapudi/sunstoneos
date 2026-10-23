@@ -3,6 +3,7 @@
 #include "nbg_checksum.h"
 #include "a733_npu_controller.h"
 #include "nbg_command.h"
+#include "a733_range.h"
 #include <string.h>
 
 static const uint32_t state[] = {
@@ -10,19 +11,19 @@ static const uint32_t state[] = {
     0x08010428, 1, 0x08010429, 0
 };
 
-static int overlaps(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
-{
-    return a < b + bn && b < a + an;
-}
 static int separate(const void *a, size_t an, const void *b, size_t bn)
 {
-    return !overlaps((uintptr_t)a, an, (uintptr_t)b, bn);
+    return a733_extents_disjoint_prechecked((uintptr_t)a, an, (uintptr_t)b, bn);
 }
-static int result_space(const struct nbg_model *m, struct nbg_assembly_plan *out)
+static int result_space(const struct nbg_model *m, const void *out, size_t bytes)
 {
-    return range(m, sizeof(*m)) && range(out, sizeof(*out)) &&
-           separate(out, sizeof(*out), m, sizeof(*m)) &&
-           separate(out, sizeof(*out), m->data, m->bytes);
+    return a733_span_excl_nonempty(m, sizeof(*m)) && a733_span_excl_nonempty(out, bytes) &&
+           separate(out, bytes, m, sizeof(*m)) &&
+           separate(out, bytes, m->data, m->bytes);
+}
+static uint32_t buffer_count(const struct nbg_assembly_layout *p)
+{
+    return NBG_ALLOC_INPUT + p->inputs + p->outputs;
 }
 static int requirement(struct nbg_allocation_requirement *r, uint32_t payload,
                         uint64_t minimum)
@@ -42,15 +43,16 @@ static int patch_fields(const struct nbg_patch *p)
 /* Profile checks are intentionally narrower than structural container decoding.
  * The INIT bytes are recognized before being omitted, as in the SDK capture.
  * Their equivalence to a cold native bootstrap is still unqualified. */
-static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
+static int profile(const struct nbg_model *m, struct nbg_assembly_layout *p, int checked)
 {
     const struct nbg_model_header *h = &m->header;
     int directory = h->version == NBG_MODEL_DIRECTORY_VERSION;
     struct nbg_checksum checksum;
-    if (nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
+    if (checked && nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
     if ((!directory && h->version != NBG_MODEL_VERSION) || h->target != 0x1000003b ||
         h->flags != (directory ? 0x0aU : 0x02d00027U) || h->core_count != 1 || h->nn_bytes != 192 ||
-        h->input_count != 1 || h->output_count != 1 ||
+        !h->input_count || h->input_count > NBG_ASSEMBLY_MAX_TENSORS ||
+        !h->output_count || h->output_count > NBG_ASSEMBLY_MAX_TENSORS ||
         h->operation_count < 2 || h->operation_count > NBG_ASSEMBLY_MAX_NN + 1 ||
         h->pool_alignment != 64 || h->pool_base || h->axi_sram_base ||
         h->axi_sram_bytes || h->vip_sram_base || !h->vip_sram_bytes ||
@@ -68,10 +70,20 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
         }
     }
     memset(p, 0, sizeof(*p));
+    p->inputs = h->input_count; p->outputs = h->output_count;
     p->nn_operations = h->operation_count - 1;
     if (m->sections[NBG_NN].bytes != p->nn_operations * 192 ||
         m->sections[NBG_LOAD_STATES_TABLE].bytes != h->operation_count * 8) return 0;
-    p->command_body_bytes = (uint32_t)sizeof(prefix) + p->nn_operations * 24 + 8;
+    /* The body is the prefix plus every operation's state; operation()
+     * later admits only the 24- and 32-byte state forms. */
+    uint64_t body = sizeof(prefix);
+    for (uint32_t i = 1; i <= p->nn_operations; ++i) {
+        struct nbg_span state_span;
+        if (!nbg_model_table(m, NBG_LOAD_STATES_TABLE, i, &state_span) || state_span.bytes > 32)
+            return 0;
+        body += state_span.bytes;
+    }
+    p->command_body_bytes = (uint32_t)body;
     uint32_t command_bytes = p->command_body_bytes + (uint32_t)sizeof(footer);
     uint64_t fetch = A733_NPU_FETCH_BYTES;
     if (fetch < command_bytes) fetch = command_bytes;
@@ -81,15 +93,18 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
                      (uint64_t)m->sections[NBG_COEFF].bytes + 128) ||
         (h->pool_bytes && !requirement(&p->buffers[NBG_ALLOC_POOL], h->pool_bytes, h->pool_bytes)) ||
         !requirement(&p->buffers[NBG_ALLOC_COMMAND], command_bytes, fetch)) return 0;
-    for (unsigned i = 0; i < 2; ++i) {
+    /* Affine UINT8, INT8 and INT16 tensors, in model order: inputs, then outputs. */
+    for (uint32_t i = 0; i < p->inputs + p->outputs; ++i) {
         struct nbg_tensor t;
-        if (!nbg_model_tensor(m, i ? NBG_OUTPUT : NBG_INPUT, 0, &t) ||
-            t.format != 2 || t.buffer_type != 0 || t.quantization != 2 ||
+        int output = i >= p->inputs;
+        if (!nbg_model_tensor(m, output ? NBG_OUTPUT : NBG_INPUT, output ? i - p->inputs : i, &t) ||
+            (t.format != 2 && t.format != 3 && t.format != 5) || t.buffer_type != 0 ||
+            t.quantization != 2 ||
             !requirement(&p->buffers[NBG_ALLOC_INPUT + i], t.logical_bytes,
                          (((uint64_t)t.logical_bytes + 63) & ~UINT64_C(63)) + 64)) return 0;
     }
     uint64_t total = 0;
-    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i) total += p->buffers[i].allocation_bytes;
+    for (unsigned i = 0; i < buffer_count(p); ++i) total += p->buffers[i].allocation_bytes;
     if (total > NBG_MODEL_MAX_BYTES) return 0;
 
     struct nbg_operation op;
@@ -141,20 +156,30 @@ static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
 
 static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                      const struct nbg_assembly_buffer *buffers,
-                     const struct nbg_assembly_plan *plan, struct operation_image *image,
+                     const struct nbg_assembly_layout *plan, struct operation_image *image,
                      uint32_t *count)
 {
     struct nbg_operation op;
     struct nbg_span span;
-    if (!nbg_model_operation(m, number, &op) || op.kind != 2 || op.index != number - 1 ||
+    int directory = m->header.version == NBG_MODEL_DIRECTORY_VERSION;
+    /* Kind 2 is a neural-network operation; kind 8, a neural-transpose step
+     * (observed only in the directory format), uses the same 192-byte
+     * descriptor and pointer fields without coefficients. */
+    if (!nbg_model_operation(m, number, &op) || (op.kind != 2 && !(op.kind == 8 && directory)) ||
+        op.index != number - 1 ||
         op.state != number || op.first_patch != first || !op.patch_count ||
         op.patch_count > POINTER_COUNT + 1 || op.auxiliary[0] ||
         !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op.state, &span)) return 0;
     int last = number == plan->nn_operations;
-    image->command_bytes = last ? 32 : 24;
-    if (span.bytes != image->command_bytes) return 0;
+    /* The 24-byte state sets word 5 and runs straight into the next
+     * operation. The 32-byte state clears it and appends a second pair; the
+     * compiler emits it for the last operation and, in the directory format,
+     * for every operation of graphs that contain transpose steps. */
+    if (span.bytes != 32 && (last || span.bytes != 24)) return 0;
+    if (span.bytes == 32 && !last && !directory) return 0;
+    image->command_bytes = (uint32_t)span.bytes;
     for (unsigned i = 0; i < span.bytes / 4; ++i) {
-        uint32_t expected = i == 5 && last ? 0 : state[i];
+        uint32_t expected = i == 5 && span.bytes == 32 ? 0 : state[i];
         // The observed directory profile changes bit 17 of this state value.
         // Its hardware meaning remains unresolved; require the captured bytes.
         if (i == 1 && m->header.version == NBG_MODEL_DIRECTORY_VERSION) expected = 0x0493e040;
@@ -182,7 +207,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             unsigned field;
             switch (p.destination) {
             case 20:
-                if (p.source != 5 || p.transformed != 1) return 0;
+                if (op.kind != 2 || p.source != 5 || p.transformed != 1) return 0;
                 field = WEIGHTS; break;
             case 24:
                 if ((p.source != 1 && p.source != 3 && p.source != 8) || p.transformed) return 0;
@@ -202,8 +227,9 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             unsigned id;
             switch (p.source) {
             case 1: case 2:
-                if (p.index) return 0;
-                id = p.source == 1 ? NBG_ALLOC_INPUT : NBG_ALLOC_OUTPUT;
+                if (p.index < 0 || (uint32_t)p.index >= (p.source == 1 ? plan->inputs : plan->outputs))
+                    return 0;
+                id = NBG_ALLOC_INPUT + (uint32_t)p.index + (p.source == 1 ? 0 : plan->inputs);
                 r.source_device = buffers ? buffers[id].device : 0x1000;
                 r.source_bytes = plan->buffers[id].minimum_bytes;
                 break;
@@ -245,7 +271,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
 }
 
 static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
-                   struct nbg_assembly_plan *p)
+                   struct nbg_assembly_layout *p)
 {
     uint32_t first = 1;
     for (uint32_t i = 1; i <= p->nn_operations; ++i) {
@@ -261,43 +287,54 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
     return 1;
 }
 
-int nbg_assembly_requirements(const struct nbg_model *m, struct nbg_assembly_plan *out)
+int nbg_assembly_layout(const struct nbg_model *m, struct nbg_assembly_layout *out)
 {
-    struct nbg_assembly_plan p;
-    if (!result_space(m, out) || !profile(m, &p) || !inspect(m, NULL, &p)) return 0;
+    struct nbg_assembly_layout p;
+    if (!result_space(m, out, sizeof(*out)) || !profile(m, &p, 1) || !inspect(m, NULL, &p)) return 0;
     *out = p;
     return 1;
 }
 
-int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
-                 struct nbg_assembly_plan *out)
+/* Placement rules shared by the one-call and stepwise assemblers. Forced
+ * inlining keeps the one-call assembler as compact as before the stepwise
+ * form existed; only images that link the stepwise form carry the copies. */
+static inline __attribute__((always_inline)) int placed(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
+                  const struct nbg_assembly_layout *p, const void *out, size_t out_bytes)
 {
-    struct nbg_assembly_plan p;
-    const size_t metadata_bytes = NBG_ALLOCATION_COUNT * sizeof(*b);
-    if (!result_space(m, out) || !range(b, metadata_bytes) ||
-        !separate(out, sizeof(*out), b, metadata_bytes) || !profile(m, &p)) return 0;
-    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i) {
-        if (!p.buffers[i].allocation_bytes) {
+    const size_t metadata_bytes = count * sizeof(*b);
+    for (unsigned i = 0; i < count; ++i) {
+        if (!p->buffers[i].allocation_bytes) {
             if (b[i].cpu || b[i].bytes || b[i].device) return 0;
             continue;
         }
-        if (b[i].bytes != p.buffers[i].allocation_bytes || !range(b[i].cpu, b[i].bytes) ||
+        if (b[i].bytes != p->buffers[i].allocation_bytes || !a733_span_excl_nonempty(b[i].cpu, b[i].bytes) ||
             ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
-            overlaps(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
-            !separate(b[i].cpu, b[i].bytes, out, sizeof(*out)) ||
+            a733_extents_overlap_prechecked(b[i].device, b[i].bytes, 0x400000, 0x80000) ||
+            !separate(b[i].cpu, b[i].bytes, out, out_bytes) ||
             !separate(b[i].cpu, b[i].bytes, b, metadata_bytes) ||
             !separate(b[i].cpu, b[i].bytes, m, sizeof(*m)) ||
             !separate(b[i].cpu, b[i].bytes, m->data, m->bytes)) return 0;
         for (unsigned j = 0; j < i; ++j)
             if (b[j].bytes && (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
-                overlaps(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
+                a733_extents_overlap_prechecked(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
     }
-    if (!inspect(m, b, &p)) return 0;
+    return 1;
+}
+
+int nbg_assemble_layout(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
+                        size_t count, struct nbg_assembly_layout *out)
+{
+    struct nbg_assembly_layout p;
+    const size_t metadata_bytes = count * sizeof(*b);
+    if (!result_space(m, out, sizeof(*out)) || count > NBG_LAYOUT_MAX_BUFFERS ||
+        !a733_span_excl_nonempty(b, metadata_bytes) || !separate(out, sizeof(*out), b, metadata_bytes) ||
+        !profile(m, &p, 1) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
+        !inspect(m, b, &p)) return 0;
 
     /* All caller-visible failure paths precede mutation. Immutable input and
      * metadata make the repeated operation construction infallible here. */
-    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i)
+    for (unsigned i = 0; i < count; ++i)
         if (b[i].bytes) memset(b[i].cpu, 0, b[i].bytes);
     memcpy(b[NBG_ALLOC_COEFF].cpu, m->data + m->sections[NBG_COEFF].offset,
            p.buffers[NBG_ALLOC_COEFF].payload_bytes);
@@ -307,14 +344,98 @@ int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
     uint32_t first = 1, offset = (uint32_t)sizeof(prefix);
     for (uint32_t i = 1; i <= p.nn_operations; ++i) {
         struct operation_image scratch;
-        uint32_t count = 0;
-        (void)operation(m, i, first, b, &p, &scratch, &count);
+        uint32_t used = 0;
+        (void)operation(m, i, first, b, &p, &scratch, &used);
         memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + (i - 1) * 192, scratch.nn, 192);
         memcpy(commands + offset, scratch.command, scratch.command_bytes);
-        first += count;
+        first += used;
         offset += scratch.command_bytes;
     }
     words(commands + offset, footer, sizeof(footer) / 4);
     *out = p;
+    return 1;
+}
+
+int nbg_assembly_begin(const struct nbg_model *m, const struct nbg_assembly_buffer *b, size_t count,
+                       struct nbg_assembly_layout *out, struct nbg_assembly_cursor *cursor)
+{
+    struct nbg_assembly_layout p;
+    const size_t metadata_bytes = count * sizeof(*b);
+    if (!result_space(m, out, sizeof(*out)) || !result_space(m, cursor, sizeof(*cursor)) ||
+        count > NBG_LAYOUT_MAX_BUFFERS || !a733_span_excl_nonempty(b, metadata_bytes) ||
+        !separate(out, sizeof(*out), b, metadata_bytes) || !separate(cursor, sizeof(*cursor), b, metadata_bytes) ||
+        !separate(out, sizeof(*out), cursor, sizeof(*cursor)) ||
+        !profile(m, &p, 0) || count != buffer_count(&p) || !placed(m, b, count, &p, out, sizeof(*out)) ||
+        !placed(m, b, count, &p, cursor, sizeof(*cursor))) return 0;
+    *out = p;
+    *cursor = (struct nbg_assembly_cursor){1, 1, (uint32_t)sizeof(prefix)};
+    return 1;
+}
+
+int nbg_assembly_next(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
+                      struct nbg_assembly_layout *p, struct nbg_assembly_cursor *cursor,
+                      unsigned operations)
+{
+    if (!cursor->operation || cursor->operation > p->nn_operations + 1 || !operations) return -1;
+    unsigned char *commands = b[NBG_ALLOC_COMMAND].cpu;
+    if (cursor->operation == 1 && cursor->offset == sizeof(prefix))
+        words(commands, prefix, sizeof(prefix) / 4);
+    for (; operations && cursor->operation <= p->nn_operations; --operations) {
+        struct operation_image scratch;
+        uint32_t used = 0;
+        if (!operation(m, cursor->operation, cursor->patch, b, p, &scratch, &used) ||
+            cursor->offset + scratch.command_bytes > p->command_body_bytes) return -1;
+        memcpy((unsigned char *)b[NBG_ALLOC_NN].cpu + (cursor->operation - 1) * 192, scratch.nn, 192);
+        memcpy(commands + cursor->offset, scratch.command, scratch.command_bytes);
+        cursor->patch += used; cursor->offset += scratch.command_bytes; ++cursor->operation;
+    }
+    if (cursor->operation <= p->nn_operations) return 0;
+    if (cursor->offset == p->command_body_bytes + sizeof(footer)) return 1;
+    unsigned patch_bytes = m->header.version == NBG_MODEL_DIRECTORY_VERSION ? 28 : 40;
+    if (cursor->offset != p->command_body_bytes ||
+        cursor->patch != m->sections[NBG_PATCH].bytes / patch_bytes) return -1;
+    words(commands + cursor->offset, footer, sizeof(footer) / 4);
+    cursor->offset += (uint32_t)sizeof(footer);
+    p->state_patches = p->nn_operations;
+    p->descriptor_patches = cursor->patch - 1 - p->state_patches;
+    return 1;
+}
+
+/* The six-slot interface keeps its single UINT8 input/output contract. */
+static int single(const struct nbg_model *m, const struct nbg_assembly_layout *p)
+{
+    struct nbg_tensor input, output;
+    return p->inputs == 1 && p->outputs == 1 &&
+        nbg_model_tensor(m, NBG_INPUT, 0, &input) && input.format == 2 &&
+        nbg_model_tensor(m, NBG_OUTPUT, 0, &output) && output.format == 2;
+}
+static void narrow(const struct nbg_assembly_layout *l, struct nbg_assembly_plan *p)
+{
+    memcpy(p->buffers, l->buffers, sizeof(p->buffers));
+    p->nn_operations = l->nn_operations; p->descriptor_patches = l->descriptor_patches;
+    p->state_patches = l->state_patches; p->command_body_bytes = l->command_body_bytes;
+}
+
+int nbg_assembly_requirements(const struct nbg_model *m, struct nbg_assembly_plan *out)
+{
+    struct nbg_assembly_layout l;
+    if (!result_space(m, out, sizeof(*out)) || !nbg_assembly_layout(m, &l) || !single(m, &l))
+        return 0;
+    narrow(&l, out);
+    return 1;
+}
+
+int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
+                 struct nbg_assembly_plan *out)
+{
+    struct nbg_assembly_layout l;
+    if (!result_space(m, out, sizeof(*out)) ||
+        !a733_span_excl_nonempty(b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
+        !separate(out, sizeof(*out), b, NBG_ALLOCATION_COUNT * sizeof(*b)) ||
+        !nbg_assembly_layout(m, &l) || !single(m, &l)) return 0;
+    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i)
+        if (b[i].bytes && !separate(b[i].cpu, b[i].bytes, out, sizeof(*out))) return 0;
+    if (!nbg_assemble_layout(m, b, NBG_ALLOCATION_COUNT, &l)) return 0;
+    narrow(&l, out);
     return 1;
 }

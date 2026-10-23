@@ -2,20 +2,27 @@
 
 The initial native profile implements the A733 COMB1 internal 100 MHz PHY
 sequence, PCIe root-complex preparation, an x1 link and read-only
-configuration access to one directly attached endpoint. Both applications
-select Gen1 (2.5 GT/s). FreeRTOS owns the
+configuration access to one directly attached endpoint. The configuration-read,
+endpoint-test and NVMe applications all select Gen1 (2.5 GT/s). FreeRTOS owns the
 controller. Linux and U-Boot supply register semantics and comparison helpers;
 neither is a runtime dependency. The [supervised native application](pcie-application.md)
 connects these providers to authenticated entry and copied USB results. Physical
 PCIe operation remains unqualified.
 
 The controller has sixteen inbound and sixteen outbound translation windows,
-four embedded DMA read channels and four write channels. Physical Gen2/Gen3
-operation, bridge enumeration, general BAR allocation, wider interrupt/DMA modes, endpoint
-drivers, power transitions and shutdown remain required follow-on work. The
-separate [endpoint test application](pcie-test-application.md) implements one
-selected BAR, one MSI and one endpoint-DMA COPY offline. Configuration-only
-READY does not authorize those operations.
+four embedded DMA read channels and four write channels. The separate
+[endpoint test application](pcie-test-application.md) implements one selected
+BAR, one MSI and one endpoint-DMA COPY offline. Configuration-only READY does
+not authorize those operations.
+
+A general function client configures any cold type-0 endpoint function: it
+assigns every memory BAR and delivers interrupts by polling, INTx or MSI-X. It
+also moves the function between D0 and D3hot and stops it in order. A
+read-only NVMe driver is its first consumer, and the port itself can stop by
+holding the endpoint in PERST. Host models cover these paths, and the
+supervised [NVMe block-read image](pcie-nvme.md), `sunstone-a733-pcie-nvme`,
+links both units. None of them has run on hardware. Bridges and switches, embedded root DMA, ASPM, physical
+Gen2/Gen3 links and physical power transitions remain required.
 
 ## The board handoff identifies the actual endpoint circuit
 
@@ -76,11 +83,13 @@ the inherited GPIO-output-low condition before mutation under the pin manager's
 shared lock. The port holds PERST low while it initializes COMB1, then waits at
 least 100 ms after successful PHY initialization before raising PERST. After
 raising PERST, it waits at least another 100 ms before the first configuration
-request. The pinned U-Boot `pcie_sunxi_rc.c` (SHA-256
-`15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
-lines 375–379) has the same two 100 ms delays, around the PERST release. No
-running inherited endpoint is converted into a cold endpoint by an unapproved
-reset.
+request. Link training runs during that second interval; only the first
+configuration request waits for it to end. The pinned U-Boot `pcie_sunxi_rc.c`
+(SHA-256 `15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
+lines 375–383) also waits 100 ms with PERST low and 100 ms after raising it,
+but it sets up the root complex and trains the link only after the second
+delay. No running inherited endpoint is converted into a cold endpoint by an
+unapproved reset.
 
 Every register operation uses the actual common FreeRTOS register mutex. Pin
 operations and resource health checks occur outside that mutex, avoiding nested
@@ -123,7 +132,7 @@ region, observes the enable bit clear, writes base, limit and target, and then
 enables the region. Region zero accepts only the CFG0 window for bus 1,
 device 0 and a function from 0 to 7. Region one accepts one identity-mapped
 memory window inside the DTS memory aperture, `0x22000000..0x27ffffff`, and
-only after the endpoint test client has claimed the port. The core records the
+only after a client has claimed the port. The core records the
 last programming of each region. The native write filter admits an outbound
 translation write only when its value repeats that record, so no other region
 and no other target can be written.
@@ -177,6 +186,131 @@ transaction. Qualified independent recovery is required before physical use.
 An uncertain access, late result, resource fault or failed invariant retains
 leases and any held register mutex. There is no automatic rollback, retry reset,
 resource release or memory reclamation.
+
+## One client claims the port for its lifetime
+
+After READY, only one client can claim the port: the endpoint test client or
+one general function client. The claim repeats the cold function-zero checks
+under the register mutex. From then on the default poll, identity and
+configuration-read calls refuse, and every register access belongs to the
+client's locked sessions. The native write filter applies the claimed
+client's exact value rules to every later write, including the core's own
+region-zero and stop writes.
+
+## The function client configures one cold endpoint function
+
+The general function client, `a733_pcie_function.c`, names one function of
+the direct endpoint by vendor, device and 24-bit class code. It is not a PCI
+bus framework: it serves one trusted function behind the x1 port.
+
+- **Scan.** Function 0 is read first; functions 1 to 7 are read only when
+  function 0 reports a multifunction header. Every present function must have
+  a type-0 header, memory, I/O and bus mastering clear, MSI and MSI-X disabled,
+  and power state D0 with PME disabled. A type-1 header refuses the scan,
+  because a bridge or switch needs CFG1 routing and bus-number assignment that
+  the port does not implement. Only the claimed function is configured.
+- **BARs.** Every BAR of the claimed function must start unassigned. Memory
+  BARs are sized by writing all ones with decode off, as the pinned U-Boot
+  `dm_pciauto_setup_device()` does. They are placed largest first at natural
+  alignment from 0x22000000. A 64-bit BAR receives an upper half of zero and
+  must be smaller than 4 GiB. A BAR larger than the 96 MiB aperture, or a
+  placement beyond it, refuses the function. I/O BARs are recorded and never
+  written, and I/O decode stays off.
+- **Window.** Region one covers the assigned BARs, rounded up to 1 MiB, which
+  is the granularity of the root port's memory base and limit register at
+  DBI+0x20. The client programs that register to the same range, sets root
+  memory decode and bus mastering (DBI+4 = 0x106), and then sets the
+  function's memory decode. Function bus mastering stays clear.
+- **Interrupts.** In polling mode the function's INTx disable bit stays set
+  and MSI-X stays disabled. In INTx mode the function's interrupt pin selects
+  one of the four SII assert bits at APP+0xe00 (mask) and APP+0xe08
+  (write-one-to-clear status), which the board kernel demultiplexes from
+  INTID 184. The client unmasks only that bit and refuses any other INTx
+  assert. In MSI-X mode the client reserves one pool page as the DesignWare
+  MSI target (DBI+0x820) and enables one to four vectors at DBI+0x828. It
+  enables MSI-X with the whole function masked, writes each table entry
+  masked, unmasks it, and finally unmasks the function. Every entry beyond
+  the configured vectors must remain masked. A vector bit outside the
+  configured set faults the port. An interrupt never establishes completion.
+- **Driver sessions.** A driver reads and writes 32-bit words inside an
+  assigned BAR only between `a733_pcie_function_begin()` and
+  `a733_pcie_function_end()`. The session start checks the command register
+  and clears the configured MSI-X or INTx status bits. Each BAR write must pass
+  the driver's exact write rule. MSI-X table and PBA writes come only from the
+  client. The driver enables bus mastering after it owns every DMA target and
+  clears it only after proving the endpoint quiescent.
+- **Power states.** With bus mastering clear, a suspend request writes D3hot
+  to the PCI power-management control register. The client then waits 10 ms
+  before the next access, as the PCI power-management specification requires.
+  The link may then enter L1. Resume writes D0 and waits another 10 ms. When
+  the function does not report No_Soft_Reset, it has lost its configuration,
+  so the client rewrites the BARs, the window, decode and the MSI-X entries.
+  BAR access is refused while the function is in D3hot. ASPM stays disabled,
+  because CLKREQ handling on PD20 and L1 substates are not implemented.
+- **Stop.** With bus mastering clear, the client disables MSI-X or masks its
+  INTx bit, clears memory decode, closes the root memory window, disables
+  region one and clears root bus mastering. It then marks the port's client
+  as stopped.
+
+The native write filter enforces the same rules. Configuration writes reach
+only the function that region zero currently targets, and only with the
+recorded command, BAR, MSI-X control and power-state values. BAR sizing
+writes are accepted only during the BAR stage. Any refusal or failed
+readback retains the port, the MSI target page and every resource, with no
+rollback. A late fault therefore leaves memory decode set as it was.
+
+## The NVMe driver reads one namespace without write commands
+
+`a733_pcie_nvme.c` is a polled driver for one NVMe controller (class
+0x010802), adapted from the pinned U-Boot `drivers/nvme/nvme.c`. It owns six
+4 KiB pages from the device memory pool: the admin submission and completion
+queues, the I/O submission and completion queues, an identify buffer and a
+data buffer. Both queue pairs are two entries deep, so at most one command is
+outstanding.
+
+The controller must start disabled: CC and CSTS must both read zero. CAP must
+report the NVM command set, a 4 KiB minimum page size, a nonzero ready
+timeout and doorbells inside BAR0. The driver then programs the admin queue
+registers and moves its memory to device ownership. Next it enables bus
+mastering and sets CC.EN, and waits for CSTS.RDY within CAP.TO. A controller
+fatal status at any point retains the port. The driver identifies the
+controller and the configured namespace. The namespace format must use
+512 to 4096-byte blocks without metadata. The driver then requests one I/O
+queue pair and creates the I/O completion and submission queues.
+
+A read request names one starting block. The request covers 4096 bytes, must
+lie inside the namespace and is copied out only after completion. Completion is
+the phase-tagged completion entry with the expected command identifier,
+queue, submission head and zero status. Between the phase observation and the
+entry and data reads, the driver reads CSTS through the native path. The
+barriers around that read order the later memory reads, and the read also
+detects a controller fatal status. Each command has a deadline; a missing
+completion retains the queues, the data memory and bus mastering.
+
+The driver builds the single command that its current stage permits. The
+BAR0 write rule admits a submission doorbell only when the queued entry equals
+that command word for word. No write, format, firmware or vendor command can
+therefore be submitted, even by a corrupted entry. Controller configuration
+writes are limited to the admin queue addresses and two CC values.
+
+Shutdown deletes the I/O submission and completion queues and requests a
+normal controller shutdown. When CSTS reports shutdown complete, the driver
+clears bus mastering, stops the function and stops the port. The queue and
+data memory stays retained for the rest of the boot.
+
+## An orderly stop holds the endpoint in PERST
+
+`a733_pcie_stop()` closes the port from READY when no client has claimed it,
+or after the function client's stop. The endpoint test client has no
+quiescence proof, so its claimed port cannot stop. The stop first disables
+outbound region zero, requires region one disabled and function zero's
+decode and bus mastering clear, and clears LTSSM enable. The board kernel's
+suspend path also clears LTSSM enable before PHY and power teardown. The stop
+then drives PD22 low to hold the endpoint in PERST and requires both link-up
+bits to fall within the caller's deadline. A link that stays up retains the
+port. Every lease stays held after the stop, because no reviewed reverse
+sequence exists for the PHY, clock, PCK or rail state. A stopped port cannot
+restart within the same boot.
 
 ## Translation does not establish hostile-device isolation
 
@@ -235,3 +369,30 @@ register write of the nominal Gen1 core and endpoint-test flows. Given an
 earlier revision with `--baseline-rev`, it builds the same trace driver against
 that revision and requires identical write sequences. Controller and endpoint
 responses, including the speed change, are modeled.
+
+The same script builds `checks/a733-pcie-nvme.c` with the function client and
+NVMe driver and runs its 24 cases. The model supplies an NVMe controller with
+a 16 KiB 64-bit BAR0, a 4 KiB BAR2, an I/O BAR and an eight-entry MSI-X table.
+It also models the DesignWare MSI and SII latches, PCI power-management resets
+and link loss after PERST.
+
+- **Nominal.** Polling, INTx, MSI-X, and MSI-X at 5 GT/s each identify the
+  controller and read three 4096-byte ranges against a fixed pattern. Each then shuts
+  down to PERST, with memory, decode, windows and the MSI target checked
+  afterwards.
+- **NVMe refusals.** An enabled inherited controller, a fatal status during
+  enable, an identify error and a missing completion each retain the port. So
+  do an unconfigured MSI-X vector, an INTB assert and a shutdown that never
+  completes. A forged write command and an out-of-range read are refused
+  before submission.
+- **Function cases.** D3hot and resume run both with and without an internal
+  reset. A multifunction scan is checked, as are refusals for a bridge, a
+  sibling with decode set, a 128 MiB BAR, a preassigned BAR, an MSI-X table
+  outside its BAR and a class mismatch.
+- **Port stop.** A configuration-only stop succeeds, the endpoint test client
+  cannot stop the port, and a link that stays up retains it.
+
+Every modeled DMA requires function bus mastering and device-owned memory,
+and every write passes the native filter's decisions. The endpoint, its
+controller and interrupt delivery are software models; no NVMe device or
+function power transition has run on hardware.

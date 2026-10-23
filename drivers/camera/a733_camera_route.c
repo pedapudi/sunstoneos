@@ -31,16 +31,22 @@ static int tick(struct a733_camera_route *s){
 }
 int a733_camera_route_init(struct a733_camera_route *s,const struct a733_route_ops *o,
                           void *ctx,const struct a733_route_config *c){
+    struct a733_camera_format f=A733_CAMERA_VGA;
+    return a733_camera_route_init_format(s,o,ctx,c,&f);
+}
+int a733_camera_route_init_format(struct a733_camera_route *s,const struct a733_route_ops *o,
+    void *ctx,const struct a733_route_config *c,const struct a733_camera_format *f){
     if(!s || !o || !c || s->initialized || s->state!=A733_ROUTE_NEW || c->parser>1 ||
+       !a733_camera_format_valid(f) || a733_ranges_overlap_or_wrap(s,sizeof(*s),f,sizeof(*f)) ||
        !c->parameter_address || (c->parameter_address&63) || c->mapped_bytes<1024 ||
        c->parameter_address>UINT32_MAX || c->mapped_bytes>(UINT64_C(1)<<32)-c->parameter_address ||
-       a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
-       a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
-       (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),o,sizeof(*o)) ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),c,sizeof(*c)) ||
+       (ctx && a733_ranges_overlap_or_wrap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
        !o->publish || !o->read || !o->write || !o->producer_stop || !o->drain ||
        !o->release)return -1;
     s->ops=*o;s->config=*c;s->context=ctx;s->initialized=1;
-    a733_vipp_unity_parameters(s->parameters);
+    a733_vipp_unity_parameters(s->parameters,f->width,f->height);
     return 1;
 }
 static int begin(struct a733_camera_route *s,enum a733_route_state state,uint64_t d){

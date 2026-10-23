@@ -1,0 +1,39 @@
+{
+  "sources": [
+    {
+      "name": "Cortex-A55 TRM 100442_0200_00 (r2p0)",
+      "url": "https://documentation-service.arm.com/static/5e7e09f6a3736a0d2e862d2f",
+      "archive": "cpu-continue/cortex-a55-trm.pdf",
+      "sha256": "1f71b74d5cf1cbf3c86dab85d1407c45355ab5015d12d68afc0dc64107f7dd97",
+      "used_for": "PMCR_EL0 (D5.4), PMCEID0/1_EL0 (D5.2, D5.3), event numbers (C2.4), nPMUIRQ (C2.5), PMUSERENR_EL0 reset (table D5-1)"
+    },
+    {
+      "name": "TF-A 0892ad4d include/arch/aarch64/arch.h",
+      "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/arch/aarch64/arch.h",
+      "archive": "cpu-entry/include/arch/aarch64/arch.h",
+      "sha256": "a80ac103594aea664565d3d705c700d27d86d49a1561c37fd8d370aeabb256a5",
+      "used_for": "MDCR_EL3_RESET_VAL (line 796) and MDCR_EL2_HPMN_MASK (line 816)"
+    },
+    {
+      "name": "Vendor EL3 monitor disassembly, orangepi-build a95129bf monitor.fex",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+      "archive": "cpu-startup/monitor.disasm",
+      "sha256": "99659f283fe7991bc2ecb6c19c43dc3a1a626f2fca96be5da0e15012d2c41cce",
+      "used_for": "MDCR_EL2 = PMCR_EL0.N | HPMD | HLP at 0x48004880-0x48004890"
+    },
+    {
+      "name": "Arm Architecture Reference Manual DDI 0487",
+      "url": "https://developer.arm.com/documentation/ddi0487/latest",
+      "archive": null,
+      "sha256": null,
+      "used_for": "ISB placement around counter reads, direct PMEVCNTR<n>_EL0 access, MDCR_EL2.HPMN = 0 on Armv8.2 cores"
+    },
+    {
+      "name": "Cortex-A76 TRM 100798 (r4p1)",
+      "url": "https://developer.arm.com/documentation/100798/0401",
+      "archive": null,
+      "sha256": null,
+      "used_for": "A76 event numbers and event counter count"
+    }
+  ]
+}

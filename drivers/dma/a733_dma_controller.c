@@ -27,7 +27,7 @@ static int valid_channel(const struct a733_dma_controller *c, unsigned channel)
 
 /* Every range passed here was checked for overflow. */
 static int cpu_overlap(const struct a733_dma_mapping *a, const void *b, size_t n)
-{ return a733_dma_overlap((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
+{ return a733_extents_overlap_prechecked((uintptr_t)a->cpu, a->bytes, (uintptr_t)b, n); }
 static int metadata_overlap(const struct a733_dma_mapping *m, const struct a733_dma_transfer *t)
 {
     return cpu_overlap(m, t, sizeof(*t)) ||
@@ -62,8 +62,8 @@ static int fifo_memory_conflict(const struct a733_dma_endpoint *e,
                                 const struct a733_dma_transfer *t)
 {
     for (size_t j = 0; j < t->mapping_count; ++j)
-        if (a733_dma_overlap(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
-    return a733_dma_overlap(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
+        if (a733_extents_overlap_prechecked(e->address, e->width, t->mappings[j].bus, t->mappings[j].bytes)) return 1;
+    return a733_extents_overlap_prechecked(e->address, e->width, t->descriptors.bus, t->descriptors.bytes);
 }
 
 static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dma_transfer *b)
@@ -78,8 +78,9 @@ static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dm
                     /* Read and write FIFOs may share one MMIO address (UART RBR/
                      * THR). Each direction still needs independent native port
                      * admission; two readers or two writers remain exclusive. */
-                    if (e == o && other[o]->request && a733_dma_overlap(ends[e]->address, ends[e]->width,
-                                                     other[o]->address, other[o]->width)) return 1;
+                    if (e == o && other[o]->request &&
+                        a733_extents_overlap_prechecked(ends[e]->address, ends[e]->width,
+                                                        other[o]->address, other[o]->width)) return 1;
             }
             if (fifo_memory_conflict(ends[e], b)) return 1;
         }
@@ -99,9 +100,9 @@ static enum a733_dma_control_status validate_transfer(
         (uintptr_t)t->segments > UINTPTR_MAX - t->count * sizeof(*t->segments) ||
         (uintptr_t)t->mappings > UINTPTR_MAX - t->mapping_count * sizeof(*t->mappings))
         return A733_DMA_INVALID;
+    /* a733_dma_build refuses linked descriptors at or above
+     * A733_DMA0_DESCRIPTOR_LIMIT before it writes a descriptor or register. */
     if (!valid_mapping(c, &t->descriptors) || t->descriptors.access != A733_DMA_DESCRIPTORS ||
-        t->descriptors.bus >= UINT64_C(0xfffff800) ||
-        t->descriptors.bytes > UINT64_C(0xfffff800) - t->descriptors.bus ||
         t->descriptors.bytes / 64 < t->count || metadata_overlap(&t->descriptors, t))
         return A733_DMA_INVALID;
     for (size_t i = 0; i < t->mapping_count; ++i) {
@@ -118,8 +119,8 @@ static enum a733_dma_control_status validate_transfer(
             if (!ends[e]->request) continue;
             if (ends[e]->request > 63 ||
                 (ends[e]->width != 1 && ends[e]->width != 2 && ends[e]->width != 4) ||
-                ends[e]->address >= (UINT64_C(1) << 35) ||
-                ends[e]->width > (UINT64_C(1) << 35) - ends[e]->address ||
+                ends[e]->address >= A733_DMA0_DATA_LIMIT ||
+                ends[e]->width > A733_DMA0_DATA_LIMIT - ends[e]->address ||
                 !c->operations.validate_fifo(c->cookie, ends[e], e ? A733_DMA_WRITE : A733_DMA_READ))
                 return A733_DMA_INVALID;
             if (fifo_memory_conflict(ends[e], t)) return A733_DMA_CONFLICT;
@@ -127,8 +128,9 @@ static enum a733_dma_control_status validate_transfer(
         if (!endpoint_mapped(t, &s->source, s->bytes, A733_DMA_READ) ||
             !endpoint_mapped(t, &s->destination, s->bytes, A733_DMA_WRITE)) return A733_DMA_INVALID;
     }
-    for (unsigned channel = 0; channel < A733_DMA_CHANNELS; ++channel) {
-        const struct a733_dma_transfer *other = c->channels[channel].transfer;
+    const struct a733_dma_channel *channels = c->channels;
+    for (const struct a733_dma_channel *ch = channels; ch != channels + A733_DMA_CHANNELS; ++ch) {
+        const struct a733_dma_transfer *other = ch->transfer;
         if (!other) continue;
         if (t == other || metadata_overlap(&t->descriptors, other) ||
             metadata_overlap(&other->descriptors, t) ||
@@ -336,14 +338,19 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
 {
     if(!out || !bytes || !valid_channel(c,channel))return -1;
     struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
-    if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t ||
+    if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t || t->count<4 ||
        period>UINT64_MAX-t->count || bytes!=t->segments[0].bytes ||
        (uintptr_t)out>UINTPTR_MAX-bytes || cpu_overlap(&t->descriptors,out,bytes))return -1;
     for(size_t i=0;i<t->mapping_count;++i)if(cpu_overlap(&t->mappings[i],out,bytes))return -1;
     if(cpu_overlap(&(struct a733_dma_mapping){c,0,sizeof(*c),A733_DMA_READ},out,bytes))return -1;
     if(!cyclic_progress(c,channel))return -1;
-    if(s->packages<=period)return 0;
-    if(s->packages>=period+t->count)return -1;
+    /* One whole period of guard on each side: period+1 must also have
+     * completed, and at most period+count-2 may have completed, so a writer
+     * up to one period ahead of the counter is still outside this slot. A
+     * copy then depends only on write completion and counter/cursor lag
+     * staying below one period, not on their exact device ordering. */
+    if(s->packages<period+2)return 0;
+    if(s->packages>period+t->count-2)return -1;
     if(!rx_position(c,channel))return 0;
     const struct a733_dma_mapping *m=&t->mappings[period%t->count];
     /* The first barrier orders the copy after invalidation. The second
@@ -354,7 +361,7 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
      * so no maintenance follows the copy. */
     c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
     memcpy(out,m->cpu,bytes);barrier(c);
-    if(!cyclic_progress(c,channel) || s->packages>=period+t->count ||
+    if(!cyclic_progress(c,channel) || s->packages>period+t->count-2 ||
        !rx_position(c,channel) || (read_channel(c,channel,PENDING)&~3u))return -1;
     return 1;
 }
