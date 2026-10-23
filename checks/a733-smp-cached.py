@@ -3,6 +3,12 @@
 
 The model has no A733 interconnect/cache implementation and proves no physical
 coherence, interrupt delivery timing, watchdog recovery or board admission.
+
+With --count, the scheduler run also counts, for each call of the kernel and
+port functions in COUNTED, the instructions, SVC, DSB, DMB and ISB that the
+calling core executes until the call returns, and the lock calls it makes.
+Instructions of other tasks and of interrupts taken during the call are not
+counted. The result gives the median of each count over all calls.
 """
 import argparse
 import ctypes
@@ -11,6 +17,7 @@ import json
 import pickle
 from pathlib import Path
 import shutil
+import statistics
 import struct
 import subprocess
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -20,6 +27,12 @@ from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 GPR=[UC_ARM64_REG_X0+i for i in range(29)]+[UC_ARM64_REG_X29,UC_ARM64_REG_LR]
 MASK=(1<<64)-1
+COUNTED=('vTaskEnterCritical','vTaskExitCritical','xTaskGetCurrentTaskHandle','ucPortGetCoreID',
+    'FreeRTOS_SGI_Handler','FreeRTOS_Tick_Handler','vTaskSwitchContext','vTaskEnterCriticalFromISR',
+    'vTaskExitCriticalFromISR','vTaskDelay','xTaskGenericNotify','ulTaskGenericNotifyTake')
+# TPIDRRO_EL0 is UNKNOWN at reset. The scheduler run seeds a value whose task
+# field is nonzero and whose core field is 0xff; the entry code must clear it.
+TPIDRRO_RESET=(0xff<<48)|0x41ff0000
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -69,6 +82,7 @@ def main():
     p.add_argument('--transition-only',action='store_true')
     p.add_argument('--cold-vectors-only',action='store_true')
     p.add_argument('--image',type=Path,help='Reuse preserved ELF without rebuilding')
+    p.add_argument('--count',action='store_true',help='Count instructions per kernel and port call')
     a=p.parse_args();e=a.evidence.resolve()
     if a.image:
         e.mkdir(parents=True,exist_ok=False);image=a.image.resolve()
@@ -76,7 +90,7 @@ def main():
     else:
         assert a.freertos;image=build(e,a.freertos)
     if a.build_only:print(f'BUILT {image}');return
-    try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume)
+    try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume,a.count)
     except Exception as error:
         (e/'failure.txt').write_text(repr(error)+'\n');raise
     (e/'result.json').write_text(json.dumps(result,indent=2)+'\n')
@@ -92,7 +106,7 @@ def main():
 
 
 class Machine:
-    def __init__(self,image,missing=None):
+    def __init__(self,image,missing=None,count=False):
         with image.open('rb') as f:
             elf=ELFFile(f)
             self.symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
@@ -108,6 +122,9 @@ class Machine:
         self.pending=[set() for _ in range(8)];self.irq_active=[None]*8
         self.versions={};self.exclusive=[None]*8
         self.decoded={};self.decoder=Cs(CS_ARCH_ARM64,CS_MODE_ARM)
+        self.counting=count;self.calls=[[] for _ in range(8)];self.exceptions=[[] for _ in range(8)]
+        self.samples={name:[] for name in COUNTED}
+        self.entries={self.symbols[n]:n for n in COUNTED if n in self.symbols}
         self.trace=[];self.sticky_sif=None;self.sif_cleared=set();self.el3_enabled=set();self.el1_enabled=set();self.first_task=set()
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
@@ -131,7 +148,7 @@ class Machine:
                 'tcr_el1':0,'scr_el3':0x200,'midr_el1':0x412fd050 if c<6 else 0x413fd0b0,
                 'mpidr_el1':0x81000000|(c<<8),'clidr_el1':0x124,'pmcr_el0':0x41003000,'id_aa64mmfr0_el1':2,
                 's3_0_c15_c3_1':0x30,'s3_0_c15_c3_0':0,'cntfrq_el0':24000000,'ctr_el0':4<<16,
-                'sp_el0':0,'sp_el1':0,'sp_el3':0,'icc_pmr_el1':0,'icc_igrpen1_el1':0,
+                'sp_el0':0,'sp_el1':0,'sp_el3':0,'icc_pmr_el1':0,'icc_igrpen1_el1':0,'tpidrro_el0':0,
                 'cntp_ctl_el0':0,'cntp_cval_el0':MASK,'vbar_el3':0,'vbar_el1':0,
                 's3_0_c15_c1_0':0,'s3_0_c15_c1_1':0,'s3_0_c15_c1_2':0,'s3_0_c15_c1_4':0,
                 'esr_el1':0,'far_el1':0,'esr_el3':0,'far_el3':0,'elr_el3':0}
@@ -166,6 +183,7 @@ class Machine:
         m[f'elr_el{level}']=pc
         m[f'spsr_el{level}']=u.reg_read(UC_ARM64_REG_NZCV)|m['daif']|(old*4+(m['spsel'] if old else 0))
         m[f'esr_el{level}']=esr
+        self.exceptions[c].append(irq)
         offset=(0x200 if m['spsel'] else 0) if old==level else 0x400
         if irq:offset+=0x80
         m['currentel']=level*4;m['spsel']=1;m['daif']=0x3c0
@@ -221,6 +239,7 @@ class Machine:
             self.exception(c,1,a,irq=True);return
         if a not in self.decoded:self.decoded[a]=next(self.decoder.disasm(bytes(u.mem_read(a,4)),a))
         ins=self.decoded[a];op=ins.mnemonic;args=ins.op_str.split(', ')
+        if self.counting:self.count(u,a,c,op)
         skip=False
         if op=='mrs':
             dest,name=args
@@ -285,12 +304,30 @@ class Machine:
             self.exception(c,3,a+4,0x17<<26);return
         elif op=='eret':
             level=m['currentel']//4;target=m[f'elr_el{level}'];spsr=m[f'spsr_el{level}']
+            if self.exceptions[c]:self.exceptions[c].pop()
             self.save_sp(c);mode=spsr&15;m['currentel']=(mode>>2)*4;m['spsel']=mode&1
             m['daif']=spsr&0x3c0;u.reg_write(UC_ARM64_REG_NZCV,spsr&0xf0000000)
             u.reg_write(UC_ARM64_REG_SP,m[self.spname(c)]);u.reg_write(UC_ARM64_REG_PC,target)
             if not m['currentel']:self.first_task.add(c)
             return
         if skip:u.reg_write(UC_ARM64_REG_PC,a+4)
+    def count(self,u,a,c,op):
+        sp=u.reg_read(UC_ARM64_REG_SP);irqs=sum(self.exceptions[c])
+        task=self.q(self.symbols['pxCurrentTCBs']+8*c)
+        calls=self.calls[c]
+        while calls and a==calls[-1]['return'] and sp==calls[-1]['sp'] and irqs==calls[-1]['irqs']:
+            done=calls.pop();self.samples[done['name']].append(done['counts'])
+        if a in self.entries:
+            calls.append({'name':self.entries[a],'return':u.reg_read(UC_ARM64_REG_LR),'sp':sp,'irqs':irqs,
+                'task':task,'counts':dict.fromkeys(('instructions','svc','dsb','dmb','isb','lock_calls'),0)})
+        for call in calls:
+            if call['irqs']!=irqs or call['task']!=task:continue
+            counts=call['counts'];counts['instructions']+=1
+            if op in counts:counts[op]+=1
+            if a==self.symbols['vPortRecursiveLock']:counts['lock_calls']+=1
+    def counts(self):
+        return {name:{'calls':len(samples),**{key:statistics.median_low(s[key] for s in samples)
+            for key in samples[0]}} for name,samples in self.samples.items() if samples}
     def mappings(self):
         names=['a733_cached_el3_l1','a733_cached_el3_l2','a733_cached_el3_l3',
                'a733_cached_el1_l1','a733_cached_el1_l2']
@@ -366,8 +403,9 @@ class Machine:
         raise AssertionError(('instruction budget',self.steps,[hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus]))
 
 
-def execute(image,e,stop_clock=None,resume=None):
-    machine=Machine(image)
+def execute(image,e,stop_clock=None,resume=None,count=False):
+    machine=Machine(image,count=count)
+    for r in machine.regs:r['tpidrro_el0']=TPIDRRO_RESET
     if resume:machine.restore(resume)
     success=machine.run(stop_clock);machine.save(e/'machine.pkl')
     (e/'state.json').write_text(json.dumps(success,indent=2)+'\n')
@@ -380,6 +418,7 @@ def execute(image,e,stop_clock=None,resume=None):
     failed=Machine(image,missing=7).run()
     assert failed['report'][4]!=0 and failed['EL3']==failed['EL1']==[] and not failed['task_cores'],failed
     return {'passed':True,'success':success,'missing_secondary':failed,
+        **({'counts':machine.counts()} if count else {}),
         'limits':'Actual image instructions and FreeRTOS tasks; modeled registers, GIC, timer, exclusive monitors and shared RAM. No A733 cache/interconnect/physical timing model or board execution.'}
 
 

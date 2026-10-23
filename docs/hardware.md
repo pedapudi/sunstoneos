@@ -249,8 +249,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   An [eight-core emulator soak](smp.md#eight-emulated-cores-pass-a-scheduling-soak)
   passes ten trials of cross-core queue traffic, shared-mutex exclusion,
   migration through all cores and preemption of non-yielding tasks on every
-  core. QEMU models identical Cortex-A55 cores with sequentially consistent
-  memory, so the soak establishes no A733 timing, A55/A76 or coherence result.
+  core, on Cortex-A55 and on Cortex-A76 models. QEMU models identical cores
+  with sequentially consistent memory, so the soak establishes no A733 timing,
+  A55/A76 or coherence result. The SMP port reads the core index and current
+  task from `TPIDRRO_EL0` and lets EL1 tasks mask interrupts without a
+  supervisor call; in QEMU a cross-core notification round trip retires 58%
+  fewer instructions ([port costs](smp.md#measured-cost)). The observe and
+  supervised images build from the cached image's sources and patched kernel.
   [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons
   in the two-core target, with the engine's asynchronous jobs running on the
   second core.

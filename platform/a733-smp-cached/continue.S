@@ -123,6 +123,9 @@ a733_cached_enter_el1:
     orr x25, x2, #(1 << 18)
     orr x25, x25, #(1 << 16)
     msr tpidr_el1, x20
+    // TPIDRRO_EL0 is UNKNOWN at reset. A zero task field makes the FreeRTOS
+    // port read the core index through SVC until it first resumes a task.
+    msr tpidrro_el0, xzr
     adrp x2, a733_cpu_el1_stacks
     add x2, x2, :lo12:a733_cpu_el1_stacks
     add x3, x20, #1
