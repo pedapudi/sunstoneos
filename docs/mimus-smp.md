@@ -143,8 +143,10 @@ Capture completed without queue overflow. The inference arena peak was
 
 The initial runtime integration passed these cases with sequential inference
 and then with a worker. The matrix-row extension passed each case once on its
-final candidate. Emulator timings are retained in the raw output and do not
-establish board throughput or latency.
+final candidate. On 2026-10-22, the whole-recording case and the matrix check
+passed again with the port that reads the core index and current task from
+`TPIDRRO_EL0` ([port costs](smp.md#measured-cost)). Emulator timings are
+retained in the raw output and do not establish board throughput or latency.
 
 | Image | Code/read-only bytes | Initialized data bytes | Reserved RAM bytes | ELF SHA-256 |
 | --- | ---: | ---: | ---: | --- |

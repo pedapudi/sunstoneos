@@ -1,9 +1,28 @@
 # Design: one cached SMP base, lighter scheduler locks and A55/A76 task placement
 
-Status: **design, no code**. Section numbers refer to
-[performance-architecture.md](../performance-architecture.md). Figures marked
-*counted* come from reading the pinned FreeRTOS port with the project patches:
-uncontended, `configASSERT` enabled, critical nesting from 0 to 1 and back.
+Status: the consolidation and the first port change are **implemented and
+measured in emulation**; [docs/smp.md](../smp.md#port-operations-avoid-supervisor-calls-and-shared-lines)
+records the results. The second port change waits for the board session listed
+below, and the placement header waits for its `apps/os` consumer. Section
+numbers refer to [performance-architecture.md](../performance-architecture.md).
+Figures marked *counted* come from reading the pinned FreeRTOS port with the
+project patches: uncontended, `configASSERT` enabled, critical nesting from 0
+to 1 and back.
+
+The implementation differs from this design in three places:
+
+- The entry code clears `TPIDRRO_EL0` instead of writing the core index and
+  bit 56. While the TCB field is zero, `ucPortGetCoreID` also takes the
+  supervisor call, so QEMU, the instruction models and every check that
+  starts an image part-way keep working without an entry write.
+- The eight-core diagnostic clears the register in `a733_smp_pre_scheduler`,
+  which this package owns, instead of in `platform/a733/cpu_continue.S`.
+  `platform/qemu-smp/start.S` and `checks/cached-device-reservations.S` need
+  no change. The only edit outside the package is the storage-maintenance pin
+  of the cached `continue.S` hash.
+- Measured in QEMU, the EL1 critical-section pair retires 296 instructions and
+  the same-core switch 1,320, above the 100 and 800 targets below; the four
+  lock calls account for most of the pair.
 
 The observe and supervised images build from the cached diagnostic's source
 list. The SMP port drops supervisor calls, locks and barriers that protect no

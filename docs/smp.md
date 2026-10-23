@@ -23,8 +23,10 @@ enables its interrupt interface, and records a logical index in `TPIDR_EL1`.
 Both cores complete a startup handshake before running tasks.
 
 Tasks execute at EL0, the unprivileged processor level. Supervisor calls enter
-EL1 for interrupt masks, core identification, and context switches. The kernel
-has a 1 kHz tick on core zero. Software-generated interrupt zero requests a
+EL1 for interrupt masks and context switches. The core index and the current
+task come from `TPIDRRO_EL0`, which EL0 can read and only EL1 writes, as
+described under [port costs](#port-operations-avoid-supervisor-calls-and-shared-lines).
+The kernel has a 1 kHz tick on core zero. Software-generated interrupt zero requests a
 context switch on the other core. The current target assumes affinity indices
 zero and one in one group.
 
@@ -49,6 +51,123 @@ completed supervisor call as task context.
 The patches also preserve the yield-flag address while checking critical-section
 nesting, complete shared writes before wake events, and supply a hardware memory
 barrier for scheduler operations. Core indexing uses the platform's logical index.
+
+## Port operations avoid supervisor calls and shared lines
+
+The port patches make four changes that remove work which protects no
+shared data:
+
+- **Current task in `TPIDRRO_EL0`.** The context-restore path writes the
+  resumed task's TCB address to bits [47:0], the core index to bits [55:48]
+  and, in bit 56, whether the task runs at EL1. Task selection writes the
+  register when it changes the core's current task, so the register always
+  matches `pxCurrentTCBs` for that core. `ucPortGetCoreID` and
+  `xTaskGetCurrentTaskHandle` read it with one `MRS`. A task's own handle does
+  not change when it migrates, so the read needs no interrupt mask.
+- **Zero means not yet resumed.** The register is UNKNOWN at reset. The entry
+  code of the cached images (`platform/a733-smp-cached/continue.S`) and the
+  eight-core diagnostic (`a733_smp_pre_scheduler`) clears it before any kernel
+  call; QEMU and the instruction models reset it to zero. While the TCB field
+  is zero, both functions use the supervisor-call path, so code that runs
+  before the first task, and emulators that start an image part-way, behave as
+  before.
+- **EL1 tasks mask in line.** `portDISABLE_INTERRUPTS`, `portENABLE_INTERRUPTS`,
+  `uxPortSetInterruptMask` and `vPortClearInterruptMask` test bit 56. For an
+  EL1 task they write `ICC_PMR_EL1` followed by `DSB SY` and `ISB`, the same
+  sequence as the supervisor calls, and leave `DAIF` unchanged. EL0 tasks keep
+  the supervisor calls; an EL0 task cannot reach the inline write because the
+  restore path clears bit 56 for it.
+- **Fewer masks and locks in interrupts, and one line per core.** The SGI
+  handler only sets its own core's yield flag with `DAIF.I` still set from
+  exception entry; the IRQ exit path takes both kernel locks when it switches
+  context. The tick handler masks once, through its ISR critical section.
+  Each core's FPU-context flag and lock-ownership bits share one 64-byte line
+  (`xPortCoreStates`), and each lock word shares a line only with its own
+  recursion count (`xPortLocks`). `ullCriticalNestings`,
+  `ullPortInterruptNestings` and `ullPortYieldRequired` keep their names and
+  8-byte stride because drivers and checks outside the port read them.
+
+Lock acquisition and release keep their `DMB SY`, `DSB SY`, `SEV` and `ISB`.
+Weaker acquire and release ordering, and `PMR` writes without `DSB`, wait for a
+supervised eight-core board session, as
+[the design](designs/smp-heterogeneous.md) requires.
+
+### Measured cost
+
+[checks/smp-port-cost.py](../checks/smp-port-cost.py) builds a two-core QEMU
+image with the port, task and privileged-task patches and counts
+`INST_RETIRED` under `-icount shift=0`, where the count is exact. Idle tasks
+wait in `WFI`, so an idle core retires almost no instructions. Each figure is
+the least of 16 samples, minus an empty region; the round trip is the mean of
+256. Cortex-A55 and Cortex-A76 models give identical counts. The base tree is
+the integration branch before these changes.
+
+| Operation | Base | Changed |
+| --- | --- | --- |
+| Critical-section pair, EL1 task | 487 | 296 |
+| Critical-section pair, EL0 task | 487 | 368 |
+| Current-task read, EL1 or EL0 task | 170 | 11 |
+| Notification given to the caller and taken | 1,644 | 656 |
+| Notification that wakes a higher-priority task on the same core, to its first instruction | 2,779 | 1,320 |
+| Cross-core notification round trip, instructions on both cores | 29,236 | 12,191 |
+
+The check fails if any operation retires more instructions than in the base
+result, or if the round trip falls by less than 30%; it fell by 58%. The
+design's targets of 100 instructions for the EL1 pair, 180 for the EL0 pair and
+800 for the switch are not met. About 170 of the 296 instructions of the EL1
+pair are the four calls to `vPortRecursiveLock`, which keep their `configASSERT`
+checks and barriers.
+
+The cached eight-core instruction model, run with `--count`, gives the median
+per call over its scheduler run:
+
+| Function | Base: instructions, SVC, DSB, ISB | Changed |
+| --- | --- | --- |
+| `ucPortGetCoreID` | 121, 1, 1, 1 | 5, 0, 0, 0 |
+| `FreeRTOS_SGI_Handler` | 479, 2, 24, 12 | 15, 0, 0, 0 |
+| `FreeRTOS_Tick_Handler` | 2,071, 12, 36, 23 | 1,667, 7, 32, 15 |
+| `vTaskSwitchContext` | 1,747, 10, 47, 24 | 305, 0, 9, 0 |
+| `vTaskExitCritical`, EL0 task | 373, 2, 19, 5 | 255, 1, 18, 4 |
+
+The seven supervisor calls left in the tick are `SVC 117`, which sends the
+yield SGI to other cores. The tick interrupts EL0 tasks, whose bit 56 is clear,
+so `vInterruptCore` takes the supervisor call although the handler runs at EL1.
+In this image every task runs at EL0, so the remaining critical-section calls
+also use the supervisor path for the mask.
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+python3 checks/smp-port-cost.py --output "$cache/evidence/smp-port-cost-base" \
+  --root <base source tree>
+python3 checks/smp-port-cost.py --output "$cache/evidence/smp-port-cost" \
+  --baseline "$cache/evidence/smp-port-cost-base/result.json"
+python3 checks/a733-smp-cached.py --evidence "$cache/evidence/smp-cached-count" \
+  --image <a733-smp-cached-diagnostic.elf> --count
+```
+
+The counts are emulator evidence. QEMU models no cache-line transfer between
+cores, so it shows neither the cost of a nesting word written by another core
+nor the benefit of the per-core lines; only a board session can measure those.
+
+### One cached base builds every cached eight-core image
+
+The observe and supervised images take the cached diagnostic's source list and
+its patched kernel, and replace only the boot, vector, diagnostic and
+admission files (`a733_smp_observer` in
+[cmake/a733-smp-observe.cmake](../cmake/a733-smp-observe.cmake)). The build
+patches one kernel instead of three, and the three CMake files have 200 lines
+instead of 325. Built from the same sources before the port changes, each
+image's stripped ELF matched the previous build except for the 32 bytes of
+`a733_smp_build_id`.
+
+The port changes alter every cached-family build identity, so board evidence
+stays bound to the identity it ran:
+
+| Image | Identity before these changes | Identity with them |
+| --- | --- | --- |
+| Cached diagnostic | `e377251e3653dc4d48a9066d26ae552aa2c3e6abbc7e9ed3d57793a3630acf1d` | `a84a36befd4d61e29e911b683faeb1e7f322048e120f23ad392fe10282237027` |
+| USB observer | `144491f5679836f651aabe0a84e91cee41e9057418266dfc89a96aa3dcd6b4f0` | `2c7773bfd399465a3def5f795bd45944f069913a4d7a9ab3f13e877cd4625458` |
+| Supervised observer | `83ea52a2b4a287cf53fd9a6e1fea572fba6236ee999ebb2360dbbd42a8b63206` | `fe89501ef8801cbd9d69aab3b1c6902e3d4ab9f2db64cd0b5b38c6b2d050f2aa` |
 
 ## Concurrency evidence
 
@@ -154,10 +273,13 @@ python3 tools/check-smp.py "$cache/build/qemu-virt/smp8-soak-model.elf" \
   --evidence "$cache/evidence/smp8-soak.json"
 ```
 
-Ten consecutive trials passed on 2026-10-20. QEMU runs identical Cortex-A55
-models with sequentially consistent memory, so the soak establishes kernel and
-port behavior with eight participants, not A733 timing, A55/A76 differences or
-physical coherence. It uses the QEMU platform, not the A733 cached platform.
+Ten consecutive trials passed on 2026-10-20. With the port changes above, ten
+trials of this soak and of the queue and migration checks passed on 2026-10-22
+with `--cpu cortex-a55` and with `--cpu cortex-a76`. QEMU runs identical cores
+of the selected model with sequentially consistent memory, so the soak
+establishes kernel and port behavior with eight participants, not A733 timing,
+differences between A55 and A76 cores, or physical coherence. It uses the QEMU
+platform, not the A733 cached platform.
 
 ## Requirements before application and physical integration
 
