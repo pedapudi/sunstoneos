@@ -138,6 +138,10 @@ a733_cpu_coherence_publish:
     ret
 .size a733_cpu_coherence_publish,.-a733_cpu_coherence_publish
 
+/* The flush has a section of its own, so an image that calls only the flush
+ * does not keep the publication and EL3 primitives under --gc-sections. */
+.section .text.a733_cpu_coherence_flush,"ax"
+.balign 4
 /* EL3 or EL1 with translation and caches off; DAIF masked; owned DRAM range.
  * Clean and invalidate never discards data, so the loop needs no per-line
  * deadline check to keep a refusal harmless. */
@@ -151,32 +155,32 @@ a733_cpu_coherence_flush:
     b 2f
 1:
     cmp x3, #4
-    b.ne .Lrefuse
+    b.ne .Lrefuse_flush
     mrs x4, sctlr_el1
 2:
     mov x3, #0x1005
     movk x3, #0x200, lsl #16
     tst x4, x3
-    b.ne .Lrefuse
+    b.ne .Lrefuse_flush
     mrs x3, daif
     and x3, x3, #0x3c0
     cmp x3, #0x3c0
-    b.ne .Lrefuse
+    b.ne .Lrefuse_flush
     mov x3, #0x40000000
     cmp x0, x3
-    b.lo .Lrefuse
-    cbz x1, .Lrefuse
+    b.lo .Lrefuse_flush
+    cbz x1, .Lrefuse_flush
     adds x1, x0, x1
-    b.cs .Lrefuse
+    b.cs .Lrefuse_flush
     mov x3, #0x48000000
     cmp x1, x3
-    b.hi .Lrefuse
+    b.hi .Lrefuse_flush
     mrs x3, ctr_el0
     ubfx x3, x3, #16, #4
     cmp x3, #4 /* Both admitted CPU families use 64-byte data lines. */
-    b.ne .Lrefuse
+    b.ne .Lrefuse_flush
     mov x14, xzr
-    deadline_check
+    deadline_check .Lrefuse_flush
     and x0, x0, #-64
 1:
     dc civac, x0
@@ -184,10 +188,14 @@ a733_cpu_coherence_flush:
     cmp x0, x1
     b.lo 1b
     dsb sy
-    deadline_check
+    deadline_check .Lrefuse_flush
     mov w0, #1
     ret
+.Lrefuse_flush:
+    mov w0, #-1
+    ret
 .size a733_cpu_coherence_flush,.-a733_cpu_coherence_flush
+.section .text.a733_cpu_coherence,"ax"
 
 /* EL1 entry admission shared by the table check and the cache enable.
  * In: x0 TTBR, x1 deadline. Out: x2 deadline, x4 SCTLR_EL1, x14 counter. */

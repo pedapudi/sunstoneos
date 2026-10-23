@@ -114,8 +114,7 @@ new target; before the change no image tested memory.
 The change that added the image edited no shared source:
 `a733-power-probe` linked byte-identical ELF files before and after it
 (20,320 bytes of text, 168 of data, 62,352 of BSS). The platform wiring does
-edit shared sources. `a733-power-probe` text grows from 21,352 to 22,888
-bytes: `platform_init` grows by 228 bytes, and the flush primitive adds 208.
-The rest of the growth is four unused primitives that share the flush's
-input section in `platform/a733/cpu_coherence.S`, so `--gc-sections` keeps
-them. Data and BSS are unchanged.
+edit shared sources. `a733-power-probe` text grows from 21,352 to 21,864
+bytes: `platform_init` grows by 228 bytes, and the flush primitive adds 216
+in an input section of its own, so `--gc-sections` drops the other
+primitives of `platform/a733/cpu_coherence.S`. Data and BSS are unchanged.
