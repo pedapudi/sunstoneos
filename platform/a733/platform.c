@@ -51,16 +51,41 @@ _Noreturn void platform_panic(const char *file, unsigned line)
     platform_exit(1);
 }
 
+/* Included here rather than at the top so that the platform.patch files of
+ * other images keep their context. */
+#include "task.h"
+#include "a733_fault.h"
+#include "a733_range.h"
 _Noreturn void platform_exception(void)
 {
-    uint64_t esr, elr, far;
-    __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
-    __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
-    __asm__ volatile("mrs %0, far_el1" : "=r"(far));
-    platform_puts("FAIL exception ESR="); platform_hex(esr);
-    platform_puts(" ELR="); platform_hex(elr);
-    platform_puts(" FAR="); platform_hex(far);
-    platform_puts("\n");
+    /* The shared fault record (docs/fault-capture.md), written as one line.
+     * These images keep their FEL transport and do not use the slots. */
+    struct a733_fault_record r;
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0, esr_el1" : "=r"(r.esr));
+    __asm__ volatile("mrs %0, elr_el1" : "=r"(r.elr));
+    __asm__ volatile("mrs %0, far_el1" : "=r"(r.far));
+    __asm__ volatile("mrs %0, spsr_el1" : "=r"(r.spsr));
+    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+    r.magic = r.crc = r.epoch = r.detail = r.reserved[0] = r.reserved[1] = 0;
+    r.info = A733_FAULT_INFO(A733_FAULT_KIND_VECTOR, A733_FAULT_SLOT_UNKNOWN, (mpidr >> 8) & 7);
+    r.status = 1;
+    r.counter = counter();
+    r.task[0] = r.task[1] = 0;
+    /* The name is read only inside image RAM, so a corrupt TCB pointer
+     * cannot fault again here. */
+    extern void *volatile pxCurrentTCB;
+    void *tcb = pxCurrentTCB;
+    r.tcb = (uintptr_t)tcb;
+    if (tcb) {
+        const char *name = pcTaskGetName((TaskHandle_t)tcb);
+        if (a733_extent_within(0x41000000UL, RESULT_BASE - 0x41000000UL, (uintptr_t)name, 16))
+            for (unsigned i = 0; i < 16; ++i)
+                r.task[i / 8] |= (uint64_t)(uint8_t)name[i] << (8 * (i % 8));
+    }
+    char line[A733_FAULT_LINE_BYTES];
+    a733_fault_line(&r, line);
+    platform_puts(line);
     platform_exit(1);
 }
 

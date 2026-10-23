@@ -1,6 +1,10 @@
 # Design: retained per-core fault records and one watchdog reboot path
 
-Status: **design**; no code exists yet. Section numbers refer to
+Status: **implemented**; host and instruction checks pass, board evidence is
+outstanding. The component documents are [fault-capture.md](../fault-capture.md)
+and [reset.md](../reset.md); the implementation departs from this design where
+[Implementation and measurements](#implementation-and-measurements) says so.
+Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 
 In the resident lifetime of the integrated OS image
@@ -257,3 +261,61 @@ Each step needs a scheduled board session under
    and once on an A76, produces the expected `ESR_EL1`, `ELR_EL1` and
    `FAR_EL1`.
 4. The previous-boot report arrives over USB0 after the reboot.
+
+## Implementation and measurements
+
+The implementation departs from the design in five places:
+
+- **USB0 request.** The OS image's USB0 exchange is the mimus board's
+  16-byte request (`apps/mimus-board/usb0.c`), whose operation 1 already
+  copies transcript text. The report is therefore operation 5, with zero
+  count, offset and generation. Its response is the 1,160-byte report without
+  the 64-byte frame header, and the frame buffer grows from 1,088 to 1,160
+  bytes. `apps/board/usb0.c` is unchanged.
+- **Rotation call.** `a733_cached_prepare` (`continue.c`) calls
+  `a733_fault_boot` first. A call in `boot.c` would change the context lines
+  of `apps/board/boot.patch`. The order is the same: after the resident
+  result's stage-1 write, before publication and every secondary release.
+- **EL1t slot.** In the OS image the storage patch routes EL1t synchronous
+  exceptions to the runtime handler, so `.Lsync_fault` also records slot 0
+  for `SPSR_EL1.M` = EL1t.
+- **Open marker.** The capture writes `A733FLT0` to word 0 before the fields.
+  A capture interrupted by a second fault is then reported as incomplete, and
+  random DRAM after power-on is not.
+- **Stop detail.** A service still silent at the first expiry also gives one
+  plus its index. The watchdog expires before that pass in the model, so the
+  value is reachable only if the reset fails.
+
+`continue.S` keeps every line that `platform/a733-storage-maintenance/continue.patch`
+and `platform/a733-smp-observe/continue.patch` use as context: the vector
+macro records the slot with an assembler counter. Both patches apply without
+fuzz, and the three review hashes of `continue.S` in `cmake/` name the new
+file. Images without `SUNSTONE_A733_FAULT_PAGE` assemble byte-identical
+`continue.S`, `continue.c` and `tasks.c` objects.
+
+Measurements compare the resident OS image (`-DSUNSTONE_A733_OS=ON
+-DSUNSTONE_A733_OS_RESIDENT=ON`) built from the branch's merge base with the
+changed image.
+
+| Metric | Merge base | Changed | Budget | Source |
+| --- | --- | --- | --- | --- |
+| Modeled parks that end in a reboot | 1,000 of 8,000 (core 0) | 8,000 of 8,000 | All | `checks/reset-latency.py` |
+| Park to watchdog expiry | Unbounded on cores 1..7 | At most 3.999 s | 4.02 s | Same |
+| Executed park entries that store the pending byte | 0 | 72 of 72 (9 kinds, 8 cores) | All | `checks/fault-capture.py` |
+| Fields per record | `ESR_EL1` (as detail) | 11 nonzero for a vector fault | As designed | Same |
+| Decode to pending store | None | 6 instructions | 6 | Same |
+| Capture leaf | None | 85 instructions | 250 | Same |
+| EL3 entry to record publication, deliberate exit | 122 instructions | 203 instructions | No budget | Same |
+| Supervisor pass | 40 instructions, no pending load | 52 instructions; one plain `ldr`, no barrier or atomic | One load | Disassembly in the same check |
+| Rotation | None | 1,875 instructions; reads 968 bytes with no valid slot, 1,384 in the check's mix; writes 1,160 bytes and clears 1,024 | 1,152 read, 1,160 written | Same |
+| USB0 report | None | 1,160 bytes in 1 tick | 1 tick | `checks/usb0-service-burst.py` |
+| Single-core line | 84 bytes, 3 registers | At most 137 bytes, 4 registers, core and task | 160 | `checks/fault-capture.py` |
+| `.text` / `.bss` | | +1,024 / +1,280 bytes | 1 KiB / 1,168 | `size -A` |
+
+The rotation reads two report header words and, for each valid slot, the
+slot a second time while copying it; with valid slots it exceeds the
+1,152-byte read budget by those words. The `.bss` growth exceeds its budget by
+the 72-byte larger USB0 frame, the stop detail word and alignment. The EL3
+path to publication grows by the capture and the pending store. None of
+these runs outside a fault, a boot or a report request.
+
