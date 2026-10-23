@@ -523,6 +523,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A [physical SRAM trial](watchdog.md) also passes ROM-redirect and watchdog
   reset-policy programming/restoration with the timer disabled. Timer enabling,
   expiry, and reset retention remain unqualified.
+  **Implemented** in the resident OS image: any core's entry into the EL3
+  fault handler stops watchdog renewal, so WDT0 expiry is the
+  [single reboot path](reset.md), and EL1 faults and deliberate exits leave
+  [retained per-core records](fault-capture.md) that the next boot reports
+  over USB0. Instruction checks on every core and a renewal model pass; WDT0
+  expiry, record retention across the reset and the USB0 report remain
+  untested on the board.
 - RTC and watchdog: **tested** coherent RTC reads in inherited normal RC mode,
   with source control `0x401c`, status zero and prescaler `0x0f`. Two reads about
   1.1 seconds apart show one second of calendar progression. No RTC register
