@@ -1,11 +1,10 @@
 # Memory qualification image
 
 Status: **implemented** and host-modeled; no run has taken place on a board.
-On the current returning platform the image refuses every run at admission,
-because the platform maps only the first 128 MiB of DRAM and the monitor does
-not yet sample the remote writers. The platform changes listed at the end
-remove both refusals. The DMA0 cache-maintenance and reachability cases are
-not built, and admission refuses their contract bits.
+In Unicorn emulation the image's admission accepts the 12,288 MiB map that
+its own `platform_init()` writes and the remote-writer sample that its
+monitor stores. The DMA0 cache-maintenance and reachability cases are not
+built, and admission refuses their contract bits.
 
 The [design](designs/memory-qualification.md) gives the reasoning and the
 budgets; [the measurements](designs/memory-qualification-measurements.md)
@@ -45,7 +44,9 @@ The secure timer and the exit SMC run the monitor at EL3 with its MMU off,
 so recovery needs only the four recovery pages. The recovery code is what the
 timer, exceptions, renewal and exit run: `monitor_sync`, `monitor_reset`,
 `monitor_exception`, `finish` and the set/way cache routines, with their
-literal pools. `apps/memtest/link.ld` places this code, the monitor state and
+literal pools. `platform/a733/monitor.S` puts `monitor_sync` and
+`monitor_reset` in the section `.text.monitor_recovery`.
+`apps/memtest/link.ld` places this code, the monitor state and
 a `0x7c0`-byte monitor stack in bytes `0x000`–`0x7bf` of their pages, and the
 vector table in `0x000`–`0x7ff`. Linker assertions bound each part. Every
 64-bit word from offset `0x7c0` to `0xfff` of the four pages is a *beacon*:
@@ -269,14 +270,16 @@ the same admission function the image runs.
 
 ## Build and checks
 
-`cmake/a733-memtest.cmake` defines the `a733-memtest` target: the returning
-platform sources, `apps/memtest` and the FreeRTOS kernel, linked with
-`apps/memtest/link.ld` and `--emit-relocs`. `SUNSTONE_USB_RUNTIME` builds the
-monitor's renewal handler. After the link the build removes the debug
-relocations, writes the beacons and produces `a733-memtest.bin`. Until
-`CMakeLists.txt` includes the file, a build directory can add it with
-`-DCMAKE_PROJECT_INCLUDE=` pointing at a file that holds
-`cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${CMAKE_SOURCE_DIR}/cmake/a733-memtest.cmake")`.
+`cmake/a733-memtest.cmake`, which `CMakeLists.txt` includes after the
+FreeRTOS port setup, defines the `a733-memtest` target: the returning
+platform sources, `platform/a733/remote_writers.c`, `apps/memtest` and the
+FreeRTOS kernel, linked with `apps/memtest/link.ld` and `--emit-relocs`. The
+target is excluded from the default build, so
+`cmake --build BUILD --target a733-memtest` builds it.
+`SUNSTONE_USB_RUNTIME` builds the monitor's renewal handler, and
+`SUNSTONE_MEMTEST` selects the platform and monitor definitions described in
+the next section. After the link the build removes the debug relocations,
+writes the beacons and produces `a733-memtest.bin`.
 
 The host checks run without a board:
 
@@ -297,32 +300,45 @@ $PY checks/memtest-emulate.py --elf BUILD/a733-memtest.elf --binary BUILD/a733-m
 - `memtest-image.py` checks the recovery placement, the beacons in the ELF
   and the binary, the targets of every relocation into the recovery pages, the
   EL3 stack depth, the zero contract and the record layout. It also emulates
-  `platform_init` and classifies every translation-table word; `--baseline`
-  reports the same figures for another image.
+  `platform_init` and classifies every translation-table word: the
+  tested-map entries must equal the descriptor word given in the next
+  section, and every table write must come after a clean and invalidate of
+  both table pages and before a second one. `--baseline` reports the same
+  figures for another image and also accepts a 128 MiB map there.
 - `memtest-emulate.py` runs the linked kernels and the image's task in
-  Unicorn over a reduced 64 MiB tested map with a modeled counter, monitor
-  sample and memtest translation entries. It counts instructions, barriers,
+  Unicorn over a reduced 64 MiB tested map with a modeled counter and monitor
+  sample, after the image's own `platform_init` has written its tables. One
+  case clears the tested-map entries and confirms the mapping refusal, and
+  another runs `monitor_init` against modeled reset registers and checks the
+  stored sample and the refusal of EL1 entry. It counts instructions, barriers,
   maintenance and accesses against the budgets and injects the faults that
   the design lists, apart from the DMA0 cases. One case puts a fault in every
   march block with a counter that moves 0.1 s per read and confirms that the
   run ends no later than a clean run. `checks/memtest-machine.py`
   holds the shared emulation model.
 
-## Changes needed outside this package
+## Platform map, log limit and remote-writer sample
 
-- `CMakeLists.txt`: `include(cmake/a733-memtest.cmake)` after the FreeRTOS
-  port setup.
-- `platform/a733/platform.c`, under `SUNSTONE_MEMTEST`: level-2 entries 64–511
-  and level-1 entries 2–12 become
-  `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP = 0b00, from one
-  macro shared with the other memory-map builder; `platform_puts` stops the log
-  at offset `0x3000` so that it cannot reach the record.
-- The monitor, under `SUNSTONE_MEMTEST`: call `a733_remote_writers_excluded()`
-  at EL3 before EL1 entry and store `(0x57525452 << 32) | mask` in the word at
-  `0x4200_3010`, refusing EL1 entry on any bit other than OR100 (1), CE (4) and
-  USB0 (12). `monitor_init` and the sampling stay outside the recovery pages.
-- `docs/remote-writers.md`: name this image's acceptance of OR100, CE and USB0
-  as remote writers during a run.
+`SUNSTONE_MEMTEST` changes three things in the shared returning platform:
+
+- **Map.** `platform_init()` in `platform/a733/platform.c` writes level-2
+  entries 64–511 and level-1 entries 2–12 with `A733_EL1_DRAM_BLOCK(pa)` from
+  `include/a733_device_memory_layout.h`:
+  `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP = 0b00. Index 1 of
+  the platform's `MAIR_EL1` value `0x44ff00` is `0xff`, Normal write-back.
+  The cached memory builder uses the same macro for its stage-2 entries.
+  Entries 0–63 and the 8 KiB of tables are unchanged. The tables map
+  12,286 MiB write-back and the 2 MiB result block non-cacheable.
+- **Log limit.** `platform_puts()` stops the log at offset `0x3000`, so it
+  cannot reach the record page.
+- **Remote-writer sample.** At the end of `monitor_init()`, at EL3 before
+  EL1 entry, the monitor calls `a733_remote_writers_excluded()` with one
+  aligned 32-bit load per register and stores `(0x57525452 << 32) | mask` in
+  the record word at `0x4200_3010`. It refuses EL1 entry through
+  `finish(4)` on any bit other than OR100 (1), CE (4) and USB0 (12).
+  `monitor_init()` and the sampling code stay outside the recovery pages.
+  [remote-writers.md](remote-writers.md) records the acceptance of these
+  three writers.
 
 ## Board evidence that would confirm the image
 

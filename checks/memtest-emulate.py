@@ -3,15 +3,15 @@
 
 The linked kernels and the image's own task function run in
 checks/memtest-machine.py over a reduced tested map (blocks 32-63, 64 MiB)
-with a modeled counter, a modeled monitor remote-writer sample and, unless a
-case says otherwise, the memtest platform's tested-map translation entries
-written into the platform's tables. Cases:
+with a modeled counter, a modeled monitor remote-writer sample and the
+tested-map translation entries that the image's own platform_init writes.
+Cases:
 
 - kernel instruction counts per page or line, the A55 cost model, the work
   per 2 MiB block outside the inner loop, PRFM lookahead and load-to-use
   distances, against the budgets of docs/memory-qualification.md;
-- complete runs: pass, the current platform's mapping and an absent writer
-  sample refused, a non-empty excluded-range list, the time budget with
+- complete runs: pass on the image's own map; a 128 MiB map and an absent
+  writer sample refused; a non-empty excluded-range list, the time budget with
   renewal gaps, the time budget with a fault in every march block, and a
   damaged recovery page;
 - injected faults: address bits 6-25 stuck and open; a single-bit wrap at each
@@ -20,6 +20,9 @@ written into the platform's tables. Cases:
   two-bit alias, a page alias at a distance that is not a multiple of 64
   pages; a dropped write, a coupled word, a transient read error and an
   address decode fault in the march;
+- the monitor's remote-writer sample at the end of monitor_init: the record
+  word it stores and the refusal of EL1 entry for a writer other than OR100,
+  CE and USB0;
 - the monitor's renewal SMC handler.
 """
 import argparse
@@ -70,13 +73,13 @@ def record_word(m, name):
 class Run:
     """One complete run of the image's task over the reduced map."""
 
-    def __init__(self, elf, mask=0x1f, slice_blocks=(32, 40), excluded=(), golden=True, writers=True,
+    def __init__(self, elf, mask=0x1f, slice_blocks=(32, 40), excluded=(), tested_map=True, writers=True,
                  step=2000, budget=20 * TICK, seed=SEED, extra_map=()):
         self.m = m = machine.Machine(elf, step=step)
         m.map(MAP_START, MAP_END - MAP_START)
         for address, size, alias in extra_map:
             m.map(address, size, alias)
-        m.platform_tables(golden)
+        m.platform_tables(tested_map)
         m.counts.clear()
         m.uc.mem_write(m.address('memtest_geometry'), bytes(geometry()))
         self.contract = host.make_contract(7, mask, seed, budget, slice_blocks, excluded)
@@ -287,11 +290,12 @@ def full_runs(elf):
     assert len(rec['chase']) == 4 and all(s['ticks'][2] for s in rec['samples'])
     out['pass'] = {'translations': r.m.counts.get('at s1e1w', 0), 'renewals': len(renewals),
                    'march_words': rec['tests']['march']['words'], 'signature_pages': rec['tests']['signature']['words']}
-    # The current platform maps 128 MiB, so admission refuses the run.
-    r = Run(elf, golden=False)
+    # With the tested-map entries cleared the tables map 128 MiB, and
+    # admission refuses the run.
+    r = Run(elf, tested_map=False)
     rec = r.go()
     assert rec['status'] == 'refused' and rec['refusal'] == 'mapping' and r.m.exit_status == 1
-    out['current_platform'] = rec['refusal']
+    out['map_128_mib'] = rec['refusal']
     rec = Run(elf, writers=False).go()
     assert rec['refusal'] == 'writers-unsampled'
     rec = Run(elf, mask=0x1f | host.MASK['dma-reach']).go()
@@ -586,9 +590,10 @@ def fixed_tests(elf):
 
 def host_round_trip(elf, binary, out):
     """apps/memtest/check.py prepares a bundle from a run log; its execute()
-    uploads it through a modeled FEL transaction to the emulated image on the
-    current platform, which refuses at the mapping check, and decodes the
-    returned record against the uploaded contract."""
+    uploads it through a modeled FEL transaction to the emulated image with
+    its tested-map entries cleared, so that the run ends at the mapping check
+    instead of marching the full board map, and decodes the returned record
+    against the uploaded contract."""
     import argparse as ap
     import contextlib
     import io
@@ -604,7 +609,7 @@ def host_round_trip(elf, binary, out):
     assert p['entry'] == 0x41000000 and p['contract_address'] == 0x41005000 and p['budget_ticks'] == 20 * TICK
     assert p['mask'] == 0x1f and p['slice'] == [32, 6144] and p['groups'] == 23 and p['acceptance'] == accepted
     m = machine.Machine(elf)
-    m.platform_tables(golden=False)
+    m.platform_tables(tested_map=False)
     requests = []
 
     def transaction(*arguments, pass_fds=()):
@@ -628,6 +633,36 @@ def host_round_trip(elf, binary, out):
     assert decoded['refusal'] == 'mapping' and decoded['sequence'] == 1 and record['complete']
     assert record['launch_attempted'] and requests == ['write', 'reset64', 'read']
     return {'refusal': decoded['refusal'], 'requests': requests}
+
+
+def writer_sample(elf):
+    """monitor_init stores (magic << 32) | mask in the record's sample word.
+    With every modeled CCU reset asserted only OR100 is unproven; CE and USB0
+    out of reset are accepted; NAND0 out of reset stops at finish(4) before
+    EL1 entry."""
+    ccu = 0x02002000
+    cases = {'reset-defaults': ({}, 1 << 1, True),
+             'ce-and-usb0-out-of-reset': ({0xac4: 1 << 16, 0x1304: 1 << 16}, (1 << 1) | (1 << 4) | (1 << 12), True),
+             'nand0-out-of-reset': ({0xc8c: 1 << 16}, (1 << 1) | (1 << 9), False)}
+    out = {}
+    for name, (registers, mask, admitted) in cases.items():
+        m = machine.Machine(elf)
+        m.map(0x02000000, 0x4000)
+        m.write(0x03400000, 0x30, 4)  # GICD_CTLR with affinity routing in both security states
+        for offset, value in registers.items():
+            m.write(ccu + offset, value, 4)
+        finish = m.e.address('finish', 'platform/a733/monitor.c')
+        harness.hook_addresses(m.uc, [finish], lambda uc, a, s, d: uc.emu_stop())
+        m.call('monitor_init')
+        word = m.read(RECORD + 16)
+        assert word == (host.WRITERS_MAGIC << 32) | mask, (name, hex(word))
+        stage = m.read(0x42000000 + 8)
+        if admitted:
+            assert m.pc() == machine.SENTINEL and stage == 2, (name, hex(m.pc()), stage)
+        else:
+            assert m.pc() == finish and m.uc.reg_read(UC_ARM64_REG_X0) == 4 and stage == 1, (name, hex(m.pc()))
+        out[name] = {'sample': hex(word), 'el1_entry': admitted}
+    return out
 
 
 def renewal(elf):
@@ -657,13 +692,14 @@ def main():
     parser.add_argument('--elf', type=Path, required=True)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--only', choices=('kernels', 'fixed', 'runs', 'scan', 'lines', 'march', 'host', 'renewal'),
+    parser.add_argument('--only', choices=('kernels', 'fixed', 'runs', 'scan', 'lines', 'march', 'host', 'writers',
+                                             'renewal'),
                         action='append')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     cases = {'kernels': kernel_profile, 'fixed': fixed_tests, 'runs': full_runs, 'scan': scan_faults, 'lines': line_faults,
              'march': march_faults, 'host': lambda elf: host_round_trip(elf, args.binary, args.out),
-             'renewal': renewal}
+             'writers': writer_sample, 'renewal': renewal}
     result = {}
     for name, case in cases.items():
         if not args.only or name in args.only:

@@ -51,7 +51,10 @@ monitor_vectors:
     slot 3
 .endr
 
-.section .text, "ax"
+// Renewal and reset code, which the renewal SMC and the timer, exception and
+// exit paths run with the monitor's MMU off. apps/memtest/link.ld places this
+// section in the memory qualification image's recovery pages.
+.section .text.monitor_recovery, "ax"
 #ifdef SUNSTONE_USB_RUNTIME
 // A narrow SMC renews the recovery deadline while the USB task makes progress.
 monitor_sync:

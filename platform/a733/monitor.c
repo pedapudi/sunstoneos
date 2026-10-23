@@ -9,6 +9,17 @@ static struct {
 extern _Noreturn void monitor_reset(void);
 static _Noreturn void finish(unsigned status);
 
+#ifdef SUNSTONE_MEMTEST
+#include "a733_remote_writers.h"
+#include "memtest.h"
+static int writer_read(void *context, uint64_t address, uint32_t *value)
+{
+    (void)context;
+    *value = mmio_read(address);
+    return 1;
+}
+#endif
+
 static void wait_clear(uintptr_t address, uint32_t bits)
 {
     uint64_t deadline = counter() + COUNTER_HZ / 10;
@@ -100,6 +111,17 @@ void monitor_init(void)
     __asm__ volatile("msr cntps_cval_el1, %0" :: "r"(value));
     value = 1;
     __asm__ volatile("msr cntps_ctl_el1, %0\n isb" :: "r"(value) : "memory");
+#ifdef SUNSTONE_MEMTEST
+    // One remote-writer sample before EL1 entry (docs/remote-writers.md). The
+    // memory qualification image records it and refuses EL1 entry for any
+    // writer other than OR100, CE and USB0, which the user accepts as a residual.
+    static const struct a733_remote_writers_ops writers = {writer_read, 0};
+    uint32_t unproven = a733_remote_writers_excluded(&writers);
+    ((volatile struct memtest_record *)MEMTEST_RECORD_ADDRESS)->writers_sample =
+        (MEMTEST_WRITERS_MAGIC << 32) | unproven;
+    if (unproven & ~MEMTEST_WRITERS_ACCEPTED)
+        finish(4);
+#endif
     RESULT->stage = 2;
 }
 

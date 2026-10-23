@@ -23,7 +23,7 @@ function(sunstone_cxx_compile target)
 endfunction()
 foreach(target a733-cxx-check a733-cxx-model)
   add_executable(${target}
-    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c platform/a733/cpu_coherence.S
     arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
     runtime/newlib.c runtime/new_delete.cc checks/cxx-runtime.cc
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"

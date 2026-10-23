@@ -27,7 +27,7 @@ SECTIONS {
         . = 0x41002000;
     } > RAM
     .recovery_code 0x41002000 : {
-        KEEP(*/platform/a733/monitor.S.obj(.text))
+        KEEP(*(.text.monitor_recovery))
         */platform/a733/monitor.c.obj(.text.monitor_exception .text.finish)
         */arch/aarch64/cache.S.obj(.text)
         __memtest_recovery_code_end = .;

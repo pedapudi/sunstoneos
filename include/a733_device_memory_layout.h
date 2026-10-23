@@ -29,6 +29,14 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
 #define A733_DEVICE_NC_END UINT64_C(0x79000000)
 /* The EL1 tables map both extended pools with 2 MiB level-2 blocks. */
 #define A733_DEVICE_MEMORY_BLOCK ((size_t)2 << 20)
+/* EL1 stage-1 block descriptor for DRAM beyond the boot image: physical
+ * address pa, UXN and PXN, access flag, inner shareable (SH = 0b11), MAIR
+ * index 1 (Normal write-back) and AP = 0b00 (EL1 read/write, no EL0 access).
+ * Level-1 (1 GiB) and level-2 (2 MiB) blocks share the format. The cached
+ * builder's stage-2 entries and the memory qualification image's tested map
+ * both use it. */
+#define A733_EL1_DRAM_BLOCK(pa) ((uint64_t)(pa) | (UINT64_C(1) << 54) | (UINT64_C(1) << 53) | \
+    (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | (UINT64_C(1) << 2) | 1)
 struct a733_device_memory_layout {
     uint64_t profile, wb_start, wb_end, nc_start, nc_end;
 };

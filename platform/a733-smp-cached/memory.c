@@ -85,8 +85,7 @@ int a733_cached_memory_prepare(void)
     extern int a733_dram_decode_check(void);
     if (a733_dram_decode_check() != 1) return 0;
     for (unsigned i = 2; i < 4; ++i)
-        a733_cached_el1_l1[i] = ((uint64_t)i << 30) | BIT(54) | BIT(53) | BIT(10) |
-            (UINT64_C(3) << 8) | 4 | 1;
+        a733_cached_el1_l1[i] = A733_EL1_DRAM_BLOCK((uint64_t)i << 30);
 #endif
     /* Last table step: each core compares this with its own readback. */
     uint64_t sum = 0;

@@ -12,8 +12,10 @@
 - Translation tables: platform_init runs in Unicorn and the check reports the
   DRAM mapped Normal write-back and non-cacheable and the table memory, for
   the image and, with --baseline, for an image of the tree before this work.
-  Every table word equals either the current platform's (128 MiB) or the
-  memtest platform's golden word for the 12,288 MiB map.
+  The image's tested-map entries must equal the golden word for the
+  12,288 MiB map; a baseline image may instead leave them invalid (128 MiB).
+  Every table write must come after a DC CIVAC of both table pages and
+  before a second one, because the walker reads the tables through the cache.
 """
 import argparse
 import importlib.util
@@ -29,6 +31,7 @@ sys.path.insert(0, str(ROOT / 'checks'))
 import harness  # noqa: E402
 from elftools.elf.elffile import ELFFile  # noqa: E402
 from elftools.elf.relocation import RelocationSection  # noqa: E402
+from unicorn import UC_HOOK_MEM_WRITE  # noqa: E402
 
 
 def module(name, path):
@@ -175,26 +178,31 @@ def contract_zero(parts, table):
     assert all(word_at(parts, address + 8 * i) == 0 for i in range(16))
 
 
-def tables(path, model=True):
+def tables(path, baseline=False):
     """Run platform_init in Unicorn and classify every table word."""
     m = machine.Machine(path)
-    level1, level2 = m.platform_tables(golden=False)
+    # DC CIVAC count at each table write: the flush lines before it.
+    flushed = []
+    for table in (m.address('level1'), m.address('level2')):
+        m.uc.hook_add(UC_HOOK_MEM_WRITE, lambda uc, access, address, size, value, data:
+                      flushed.append(m.counts.get('dc civac', 0)), begin=table, end=table + 4095)
+    level1, level2 = m.platform_tables()
+    lines = m.counts.get('dc civac', 0)
     words1 = [m.read(level1 + 8 * i) for i in range(512)]
     words2 = [m.read(level2 + 8 * i) for i in range(512)]
     golden1 = {i: (i << 30) | machine.GOLDEN_ATTRIBUTES for i in range(2, 13)}
     golden2 = {i: (0x40000000 + i * 0x200000) | machine.GOLDEN_ATTRIBUTES for i in range(64, 512)}
     golden = all(words1[i] == v for i, v in golden1.items()) and all(words2[i] == v for i, v in golden2.items())
     current = all(words1[i] == 0 for i in golden1) and all(words2[i] == 0 for i in golden2)
-    assert golden or current, 'tested-map entries are neither absent nor the golden word'
+    assert golden or (baseline and current), 'tested-map entries are not the golden word'
     assert all(words1[i] == 0 for i in range(13, 512))
     summary = m.table_summary()
     summary['table_bytes'] = 2 * 4096
     summary['tested_map_entries'] = 'golden' if golden else 'absent'
-    if model and not golden:
-        # The memtest platform's entries, as the emulation checks model them.
-        modeled = machine.Machine(path)
-        modeled.platform_tables(golden=True)
-        summary['with_memtest_platform_entries'] = modeled.table_summary()
+    if not baseline:
+        # 64 lines per page: both pages before the first write, both after the last.
+        assert flushed and set(flushed) == {128} and lines == 256, (sorted(set(flushed)), lines)
+    summary['table_lines_flushed'] = {'before_first_write': min(flushed), 'after_last_write': lines - max(flushed)}
     return summary
 
 
@@ -222,7 +230,7 @@ def main():
     result['record_fields'] = dwarf_layouts(args.elf)
     result['tables'] = tables(args.elf)
     if args.baseline:
-        result['baseline_tables'] = tables(args.baseline, model=False)
+        result['baseline_tables'] = tables(args.baseline, baseline=True)
     harness.save(args.out / 'memtest-image.json', result)
     print(json.dumps(result, indent=2))
 

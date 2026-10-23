@@ -289,30 +289,34 @@ descriptor kind (`0x4400_0000`, `0x8000_0000`, `0x3_3FFF_F000`), which sees
 live state the host cannot: `TTBR0_EL1`, the MAIR index and the `TCR_EL1`
 sizes.
 
-Changes needed from the primary agent, all under the memtest build definition:
+Changes outside the package, all selected by the memtest build definition
+`SUNSTONE_MEMTEST`:
 
-- `platform/a733/platform.c`: level-2 entries 64–511 and level-1 entries
-  2–12 become `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP =
-  0b00, the word from `docs/designs/memory-architecture.md`, taken by both
-  builders from one shared macro. Entries 0–63 and the 8 KiB of tables stay.
-  `platform_puts` stops the log at `0x3000`.
+- `platform/a733/platform.c` writes level-2 entries 64–511 and level-1
+  entries 2–12 as `PA | UXN | PXN | AF | SH=0b11 | AttrIndx=1 | 1` with AP =
+  0b00, the word from `docs/designs/memory-architecture.md`. Both builders
+  take it from `A733_EL1_DRAM_BLOCK` in
+  `include/a733_device_memory_layout.h`. Entries 0–63 and the 8 KiB of tables
+  stay. `platform_puts` stops the log at `0x3000`.
 - The monitor samples the remote-writer mask as described above; other images
   keep their current admission until their own designs adopt the check.
-- The monitor's linker placement follows the recovery region layout, with
-  `monitor_sync` moved from `.text` into a recovery section.
-  `cmake/a733-memtest.cmake` defines `SUNSTONE_USB_RUNTIME` for `monitor.S`,
-  which compiles the 0x734 renewal; a Unicorn case checks that a renewal
-  returns and moves `CNTPS_CVAL_EL1` forward.
-- `CMakeLists.txt` gains `include(cmake/a733-memtest.cmake)`, and
-  `docs/remote-writers.md` names this image's acceptance of OR100, CE and
-  USB0.
+- The monitor's linker placement follows the recovery region layout:
+  `monitor_sync` and `monitor_reset` sit in the section
+  `.text.monitor_recovery`, which `apps/memtest/link.ld` places in the
+  recovery code page. `cmake/a733-memtest.cmake` defines
+  `SUNSTONE_USB_RUNTIME`, which compiles the 0x734 renewal in `monitor.S`; a
+  Unicorn case checks that a renewal returns and moves `CNTPS_CVAL_EL1`
+  forward.
+- `CMakeLists.txt` includes `cmake/a733-memtest.cmake`, whose target is
+  excluded from the default build, and `docs/remote-writers.md` names this
+  image's acceptance of OR100, CE and USB0.
 
 ## Budgets and measurement
 
 | Metric | Baseline | Budget | Measured by |
 | --- | --- | --- | --- |
 | DRAM tested per board | 8 KiB | 12,224 MiB less the contract's excluded ranges | Planner model `checks/memtest-plan.py`: slices and every fixed write extent, harness and chase included, inside the tested map and outside excluded ranges |
-| DRAM mapped at EL1 | 128 MiB; 8 KiB of tables | 12,288 MiB; 8 KiB of tables. Measured 128 MiB in 8 KiB: the entries above 128 MiB belong to `platform/a733/platform.c`, which this package does not edit (see the changes outside the package). Until they are written, the image's mapping check refuses every run, and `checks/memtest-emulate.py` confirms the refusal; with the entries as specified, the same 8 KiB map 12,286 MiB write-back and 2 MiB non-cacheable | Host comparison with the golden word, once per build |
+| DRAM mapped at EL1 | 128 MiB; 8 KiB of tables | 12,288 MiB; 8 KiB of tables. Measured 12,286 MiB write-back and 2 MiB non-cacheable in 8 KiB, every tested-map entry equal to the golden word, from the tables the image's own `platform_init` writes. The image's mapping check accepts this map in `checks/memtest-emulate.py` and refuses it with the tested-map entries cleared | Host comparison with the golden word, once per build |
 | Translations | none | 3 at admission; none afterwards | `AT` count in Unicorn |
 | March cycles per line, A55 model | none | write ≤ 12; read-verify ≤ 21; read-verify-write ≤ 33.5; each `LD1` at least one line before its use; one `PRFM` per loaded line, 16 lines ahead in the travel direction. Measured 12.19, 21.19 and 33.19. The per-line work is 12, 21 and 33 cycles; each kernel's loop adds one `SUBS` and one `B.NE`, 1.5 cycles per eight lines, or 0.19 cycles per line. The write and read bounds omit that loop cost, which the read-and-write bound includes as half a cycle. A 2 MiB block holds 32,768 lines, so the kernels need a loop; a 16-line unroll would leave 12.09 and 21.09 cycles and a 32-line unroll 12.05 and 21.05, still above the bounds, for 1.2 KiB and 3.6 KiB more text across the three kernels | Unicorn trace and load-to-use trace over 1 MiB in each direction, priced by the cost model |
 | March work per 2 MiB block outside the loop | none | one `ISB` and counter read, one `UMAXV` test, one progress store, ≤ one `SMC` per 200 ms; no call, cache maintenance, `DSB` or `DMB` | Unicorn counters |
