@@ -385,9 +385,11 @@ design. Each package's design and measurement table are in
 | Per-core CPU cycle and event counting at EL1; startup now copies `PMCR_EL0.N` into `MDCR_EL2.HPMN`, so EL1 sees all six event counters | `cpu-pmu` | Done. Which events the A55 implements, and empty-region costs on both core types, need a board run. |
 | Idle cores wait in WFI at EL0: the kernel no longer time-slices a core whose only ready idle-priority task is its own idle task, so idle secondaries receive no SGI and execute nothing for 64 emulated ticks | `cpu-power-states` | Partial. Turning cores off and on through EL3 and powering down a cluster are deferred; the design states the conditions for adding them. |
 | Cacheable EL1 table walks for the boot-CPU-only images, one builder for every EL1 table, and a per-core table checksum that refuses before any translation register is written | `cpu-table-walks` | Partial. The eight-core images keep non-cacheable walks until a board A/B run on core 6. The cache flush around the tables that `platform.c` writes, two redundant maintenance passes and the DRAM decode check remain. |
+| One cached SMP base for the cached, observe and supervised images, built from one patched kernel; the port keeps the current task and core in `TPIDRRO_EL0`, so a cross-core round trip retires 58% fewer instructions, the SGI handler 15 instead of 479 and a context switch 305 instead of 1,747 | `smp-heterogeneous` | Partial. The critical-section pair (296 instructions at EL1, 368 at EL0) and the same-core switch (1,320) miss their targets because the kernel's four lock calls keep their barriers until a supervised eight-core board session admits the lighter locks. The A55 and A76 placement constants land with their first consumer in the OS image, and A76 admission stays off. |
+| Fault capture on every core into a reserved page that survives a WDT0 reset, a cold reboot of the resident image through WDT0, and USB0 operation 5, which returns the saved report after the next boot | `cpu-fault-reset` | Done. No host tool sends operation 5 yet; `checks/fault-decode.py` decodes a saved report. Survival of the page across a watchdog reset and boot0, and the recorded registers of a deliberate fault on an A55 and an A76, need board runs. |
 
 The CPU startup, scheduler and EL3 monitor files are reserved for the
-integrator, so the last three packages delivered their edits to those files
+integrator, so the multicore packages delivered their edits to those files
 as patches, and the integrator applied them with the merge.
 
 ## Deferred findings
