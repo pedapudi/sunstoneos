@@ -157,8 +157,11 @@ admission files (`a733_smp_observer` in
 [cmake/a733-smp-observe.cmake](../cmake/a733-smp-observe.cmake)). The build
 patches one kernel instead of three, and the three CMake files have 200 lines
 instead of 325. Built from the same sources before the port changes, each
-image's stripped ELF matched the previous build except for the 32 bytes of
-`a733_smp_build_id`.
+image's instructions matched the previous build. Outside the 32 bytes of
+`a733_smp_build_id`, the cached image is byte-identical; the observe and
+supervised images differ in 433 and 1,018 bytes, all in `configASSERT`
+file-name strings, whose kernel copy path now names the cached build, and in
+the addresses that point at them.
 
 The port changes alter every cached-family build identity, so board evidence
 stays bound to the identity it ran:

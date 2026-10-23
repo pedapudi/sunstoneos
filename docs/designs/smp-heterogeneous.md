@@ -9,7 +9,7 @@ Figures marked *counted* come from reading the pinned FreeRTOS port with the
 project patches: uncontended, `configASSERT` enabled, critical nesting from 0
 to 1 and back.
 
-The implementation differs from this design in three places:
+The implementation differs from this design in five places:
 
 - The entry code clears `TPIDRRO_EL0` instead of writing the core index and
   bit 56. While the TCB field is zero, `ucPortGetCoreID` also takes the
@@ -23,6 +23,18 @@ The implementation differs from this design in three places:
 - Measured in QEMU, the EL1 critical-section pair retires 296 instructions and
   the same-core switch 1,320, above the 100 and 800 targets below; the four
   lock calls account for most of the pair.
+- The EL0 critical-section pair retires 368 instructions, above the 180
+  target: it keeps its two supervisor calls and the same four lock calls.
+- The tick on core 0 still makes 7 `SVC` and 32 `DSB SY`, against targets of
+  0 and 18 (base 12 and 36). The calls are `SVC 117` in `vInterruptCore`: the
+  tick interrupts EL0 tasks, so the in-line path for EL1 tasks does not
+  apply. An in-line SGI send from interrupt context would remove them and
+  needs its own design.
+- The consolidation changes 433 bytes of the observe image and 1,018 of the
+  supervised image outside `a733_smp_build_id`. Every changed byte is in a
+  `configASSERT` file-name string, whose kernel copy path now names the
+  cached build, or in an address that points at one; the instruction streams
+  match once those addresses are masked.
 
 The observe and supervised images build from the cached diagnostic's source
 list. The SMP port drops supervisor calls, locks and barriers that protect no
