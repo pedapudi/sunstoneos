@@ -3352,6 +3352,35 @@
   "summary": "Read-only FatFs port: pinned sources, FAT16/FAT32/exFAT card images and AArch64 compile; no hardware.",
   "usb": false
  },
+ "fault-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Execute the integrated OS image's fault capture and slot rotation.",
+  "usb": false
+ },
+ "fault-decode.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "path"
+  ],
+  "summary": "Decode retained fault records (docs/fault-capture.md).",
+  "usb": false
+ },
  "fel-input.py": {
   "cache_areas": [],
   "docs": [
@@ -8084,6 +8113,22 @@
   "summary": "Survey which remote bus masters the pinned boot0 and the captured board ROM can start.",
   "usb": false
  },
+ "reset-latency.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
+   "docs/fault-capture.md",
+   "docs/reset.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Build and run the host model of the resident reboot path.",
+  "usb": false
+ },
  "rtc-application-cases.py": {
   "cache_areas": [],
   "docs": [],
@@ -9206,6 +9251,8 @@
  "usb0-service-burst.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-fault-reset-measurements.md",
+   "docs/designs/cpu-fault-reset.md",
    "docs/performance-architecture.md",
    "docs/usb.md"
   ],
