@@ -20,7 +20,7 @@ reaches the GPU until the mimus engine has its exact-sum hook (the design's
 | Part | Source | Role |
 | --- | --- | --- |
 | Session component | [pvr_mimus_service.c](../drivers/gpu/pvr_mimus_service.c), [pvr_mimus_service.h](../include/pvr_mimus_service.h) | Slot, client ring, timeline, completion queue, failure |
-| Service points | [pvr_gpu_service.c](../drivers/gpu/pvr_gpu_service.c) | `config.mimus`: objects, publication, mode admission, READY poll, events, wait bound, submit window, progress, failure, job wake |
+| Service points | [pvr_gpu_service.c](../drivers/gpu/pvr_gpu_service.c) | `config.mimus`: configuration checks at init, objects, publication, mode admission, READY poll, events, wait bound, submit window, progress, end of a burst once the session has nothing to submit, failure, job wake |
 | Native construction | [gpu_mimus.c](../platform/a733/gpu_mimus.c), [a733_gpu_mimus.h](../include/a733_gpu_mimus.h) | Pool pages, GPU address space, context-switch programs, compute context |
 | Runtime | [gpu.c](../apps/os/gpu.c) | Start, OPEN, per-job begin and finish, INTID 95, tensor admission |
 | Engine hook | [gpu_hook.cc](../apps/os/gpu_hook.cc) | Splits a call into jobs, checks tags, hands sums to the engine |

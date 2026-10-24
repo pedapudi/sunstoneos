@@ -106,7 +106,7 @@ its ordering, and is the one description of it.
   `pvr_compute_context.c` and the context-switch programs with
   `pvr_compute_programs.c`, as `gpu_compute_reserved.c` does for packages.
 - `apps/os/placement.py` adds, per GPU row, the model region, weight offset,
-  weight stride and K (179 rows for the bench models). Its rate seeds become
+  weight stride, K and N (179 rows for the bench models). Its rate seeds become
   the measured ones ("Budgets").
 - `apps/os/identity.c`, under the option, zeroes the 64 KiB tag area and
   publishes it with `a733_cpu_coherence_publish`, as it publishes the models.
