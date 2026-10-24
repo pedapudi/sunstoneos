@@ -36,6 +36,14 @@ that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
      twice); the DCDC3 write splits at 386 ns per poll, not 390; the model
      step is 757 µs at 250 ns; note that an interrupt landed in 24 of 33
      steps.
+   - From the correctness review, which agrees on both points: state the
+     bound in permille of the run's own wire time (799 µs holds only at the
+     nominal 22.5 µs byte); the model's 110% floor is 694–712 µs depending
+     on byte rounding, so the "22 or 23 µs gives the same step" sentence is
+     false; the 380 ns host assertion sits at exact equality (779 + 20 =
+     799), and the DCDC3 write is judged against at most two steps with one
+     tick wait, not one step; the base provider's model also overshoots its
+     own run with the remainder method (941 against 917 µs).
 
    Merge it into `audit/cpu-wave` with its patch and run
    `~/.cache/sunstoneos/bin/integration-gate.sh`, which now also runs
