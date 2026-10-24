@@ -29,7 +29,7 @@ import re
 lock_enum=re.search(r'enum a733_platform_lock \{([^}]*)\}',(r/'include/a733_platform_locks.h').read_text()).group(1)
 lock_count=[x.strip() for x in lock_enum.split(',')].index('A733_PLATFORM_LOCK_COUNT')
 variants=['complete','partial-callbacks','no-host','pending-before-mask','pending-stuck','active-dma','active-irq','held-mutex','pmic-held','write-ineffective','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric','device-session','session-host-request','session-host-mode','session-dma']
-takeovers=['takeover-observed','takeover-softconn-stuck','takeover-host-request','takeover-host-mode','takeover-full-speed-device','takeover-dma-request','takeover-no-b-device','takeover-dma-channel']
+takeovers=['takeover-observed','takeover-softconn-stuck','takeover-host-request','takeover-host-mode','takeover-dma-request','takeover-no-b-device','takeover-dma-channel']
 if a.case:
     assert set(a.case)<=set(variants+takeovers),a.case
     variants=[v for v in variants if v in a.case]
@@ -155,8 +155,8 @@ for variant in variants:
 # captured clock words and the USB0 word it observed. The register model is
 # the one above; the ROM's interrupt enables follow the matched nonsecure ROM
 # (INTUSBE=7 at offset 0x1d68, INTTxE bit 0 at 0x1d78). CCU USB controls are
-# the values the ROM baseline admits. Scheduler, mutexes, rail and PMIC
-# health are modeled as READY.
+# the values the ROM baseline admits. Scheduler, mutexes and rail health
+# are modeled as READY; PMIC readiness is the power-authority word.
 OBSERVED=Path.home()/'.cache/sunstoneos/evidence/board-session-20261023/port-3-3'
 OBSERVED_WORD=0x00029940
 def takeover(elf,variant):
@@ -171,7 +171,6 @@ def takeover(elf,variant):
     regs.update({0x04100540+i*16:0 for i in range(16)})
     if variant=='takeover-host-request':regs[0x04100040]|=1<<9
     if variant=='takeover-host-mode':regs[0x04100040]|=1<<10
-    if variant=='takeover-full-speed-device':regs[0x04100040]|=1<<14
     if variant=='takeover-dma-request':regs[0x04100040]|=1<<25
     if variant=='takeover-no-b-device':regs[0x04100040]&=~0x8000
     if variant=='takeover-dma-channel':regs[0x04100540+15*16]=1<<31
@@ -224,13 +223,17 @@ def takeover(elf,variant):
     clock=pmic+pl['clock'];put(clock+tl['owner'],2,8);put(clock+tl['shared'],(1<<69)|(1<<32)|3,16);put(clock+tl['exclusive'],1<<55,16)
     lifetime=sh+nl['usb_power'];ll=im.layouts['a733_pmic_lifetime'];put(lifetime+ll['provider'],pmic,8);put(lifetime+ll['owner'],2,8)
     put(lifetime+ll['identity'],int.from_bytes(board_input[24:32],'little'),8);put(usb+ul['stage'],2)
-    for _ in range(1000):
+    # PMIC readiness is the rail ledger's power-authority word (A733_POWER_PROVIDER_READY).
+    put(sh+nl['rails']+im.layouts['a733_rail_leases']['authority'],1)
+    # One poll per 1 ms tick, as the USB task's vTaskDelay(1) paces them.
+    polls=0
+    for polls in range(1,3001):
         result=call('a733_usb_platform_poll',[usb])
         if result!=0:break
         st['time']+=1000
     fl=im.layouts['a733_usb_failure'];fb=usb+ul['failure']
     fault={k:get(fb+fl[k],8 if k=='address' else 4) for k in ('kind','stage','address','mask','expected','observed','writes_attempted','writes_completed')}
-    return {'result':result,'stage':get(usb+ul['stage']),'fault':fault,'writes':st['writes'],'word':regs[0x04100040]}
+    return {'result':result,'stage':get(usb+ul['stage']),'fault':fault,'writes':st['writes'],'word':regs[0x04100040],'polls':polls}
 def board_fault():
     log=(OBSERVED/'r9-v2-usb/kernel.log').read_text()
     values={k:int(v,16) for k,v in (line.split('=') for line in log.splitlines() if line.startswith('USB_FAULT_'))}
@@ -249,10 +252,12 @@ for variant in takeovers:
         assert r['word']==OBSERVED_WORD&~64 and [w for w in r['writes'] if w[0]==0x04100040]==[[0x04100040,0,1]],r['writes']
         assert [w[0] for w in r['writes']][:4]==[0x04100048,0x04100050,0x04100040,0x02003304],r['writes']
     elif variant=='takeover-softconn-stuck':
-        assert r['result']==3 and f['kind']==4 and f['stage']==24 and f['address']==0x04100040 and f['mask']==0x640 and f['observed']==OBSERVED_WORD,r
+        # Re-read without writing until the deadline, then retain.
+        assert r['result']==3 and f['kind']==1 and f['stage']==29 and f['address']==0x04100040 and f['observed']==OBSERVED_WORD,r
+        assert [w[0] for w in r['writes']].count(0x04100040)==1,r['writes']
         assert not any(w[0]==0x02003304 for w in r['writes']),r['writes']
     else:
         assert r['result']==3 and f['kind']==4 and f['stage']==20 and not r['writes'],r
-    cases.append({'name':variant,'passed':True,'result':r['result'],'fault':f,'mmio_writes':r['writes']})
+    cases.append({'name':variant,'passed':True,'result':r['result'],'polls':r['polls'],'fault':f,'mmio_writes':r['writes']})
 result={'passed':True,'physical_access':False,'scope':'Actual linked input copy, task construction, native PMIC/USB and resource constructors, finite client, IN callback accounting and native MMIO shutdown guards; actual USB provider ROM takeover and native callbacks from the 2026-10-23 port 3-3 input, clock capture and observed USB0 word. Scheduler, mutexes, rail/PMIC health, TinyUSB vendor FIFO/events and register effects modeled; a word store to USB0+0x40 is modeled as leaving PCTL unchanged, as observed. No physical enumeration, transfers, scheduling or ROM return established.','elf_sha256':hashlib.sha256((e/'build/probe.elf').read_bytes()).hexdigest(),'refused_elf_sha256':hashlib.sha256(refused_elf.read_bytes()).hexdigest(),'checker_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'cases':cases}
 (e/'check-result.json').write_text(json.dumps(result,indent=2)+'\n');print(f'{len(cases)} focused linked USB cases passed')

@@ -100,8 +100,12 @@ over USB0 from the ROM, enumerated, received the 4-byte OUT request and sent
 the 40-byte IN response (`native_usb.functional_success` true), quiesced and
 returned to a responsive ROM (`board-session-20261023/port-3-3/r9-v3-usb/`).
 This is the first board run of the native USB device channel. The image
-used the platform revision of the passing kernel check, without the 12 GiB
-EL1 map. Both ports were power-cycled afterwards and
+used the platform revision of the passing kernel check. In the same
+lifetime, `rank-9-usb-v4/`, rebuilt on the current platform with the PCTL
+byte store only in the shared native USB adapter, passed the same exchange
+and returned (`r9-v4-usb/`). The current platform's 12 GiB EL1 map code was
+present but installs no high map, because the DRAM decode check still
+returns 0. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);

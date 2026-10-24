@@ -111,7 +111,7 @@ static void init(struct fixture *f,unsigned cold)
 }
 static enum a733_usb_platform_result run(struct fixture *f)
 {
-    for(unsigned i=0;i<3000;++i){
+    for(unsigned i=0;i<20000;++i){
         enum a733_usb_platform_result r=a733_usb_platform_poll(&f->p);
         if(r!=A733_USB_PLATFORM_PENDING)return r;
         f->now+=100;

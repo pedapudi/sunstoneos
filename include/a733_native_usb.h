@@ -59,9 +59,4 @@ int a733_native_usb_init(struct a733_native_usb *,const struct a733_native_usb_c
 int a733_native_usb_bind(struct a733_native_usb *,TaskHandle_t,TaskHandle_t);
 int a733_native_usb_step(struct a733_native_usb *);
 int a733_native_usb_health(struct a733_native_usb *);
-#define A733_NATIVE_USB_PCTL UINT32_C(0x04100040)
-/* Store the PCTL byte of the packed word at USB0+0x40. Accepts only a word
- * equal to the current word with SoftConn (bit 6) clear; returns 1 after one
- * byte store, 0 without a store otherwise. The caller verifies the bit later. */
-int a733_native_usb_pctl_write(uint32_t word);
 #endif
