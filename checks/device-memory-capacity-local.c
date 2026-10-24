@@ -121,7 +121,6 @@ void fixture_el3_prepare(unsigned core)
     golden_tables();
     CHECK(a733_cpu_coherence_publish(0x41000000,0x200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,UINT32_MAX)==1);
-    CHECK(a733_cpu_coherence_publish((uintptr_t)__tables_start,(size_t)(__tables_end-__tables_start),UINT32_MAX)==1);
 }
 void fixture_el3_mapped(unsigned core)
 {

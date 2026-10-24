@@ -207,6 +207,8 @@
   ],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -784,6 +786,7 @@
   ],
   "docs": [
    "docs/cpu-power.md",
+   "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
@@ -1005,7 +1008,10 @@
  },
  "a733-supervised-publication.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2316,6 +2322,7 @@
   "cache_areas": [],
   "docs": [
    "docs/cached-device-reservations.md",
+   "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -2554,6 +2561,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md"
   ],
@@ -2942,6 +2951,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md",
    "docs/designs/memory-architecture-measurements.md",
@@ -3413,6 +3424,7 @@
  "fault-decode.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-leftovers.md",
    "docs/fault-capture.md"
   ],
   "library": false,
@@ -3421,6 +3433,21 @@
    "path"
   ],
   "summary": "Decode retained fault records (docs/fault-capture.md).",
+  "usb": false
+ },
+ "fault-report.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the host fault-report reader of tools/fault-report.py against a modeled device.",
   "usb": false
  },
  "fel-input.py": {
@@ -6977,6 +7004,8 @@
    "host"
   ],
   "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -9341,6 +9370,8 @@
   "docs": [
    "docs/designs/cpu-fault-reset-measurements.md",
    "docs/designs/cpu-fault-reset.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/performance-architecture.md",
    "docs/usb.md"
   ],
