@@ -34,19 +34,24 @@ One manager owns the following resource inventory:
 | Power-controller clock | The shared PCK controller remains clocked |
 | GPU AHB gate | The enabled GPU control-bus gate remains fixed |
 | GPU memory-bus gate | The enabled GPU memory-bus gate remains fixed |
-| GPU local resources | One owner controls GPU clock, reset, and top-level power policy |
+| GPU local resources | One owner controls GPU clock/reset and CORE6 policy/PWCR; TOP5 uses the shared owner’s row |
 
 Trusted privileged clients use fixed registration slots and monotonically
 increasing lease tokens. Stable leases share matching resources. Parent-clock
 and bus-clock requests also reserve the oscillator. GPU-local ownership requires
-all resources and excludes a second GPU owner.
+all resources and excludes a second GPU owner. LOCAL explicitly includes CORE6
+at `0x07066000`; an older admission granting only TOP5 is insufficient. The
+coordinator must extend the existing GPU-local ownership grant before a corrected
+image can execute. No new grant schema is required.
 
 A change guard excludes stable leases for the resources it covers. It reserves
 permission to perform a separately implemented transition; it does not program
 hardware. Callers must include every resource their transition changes. An
 uncertain external transition must end its guard as failed, retaining ownership.
 GPU-local writes are permitted to the exclusive GPU owner while its stable
-lease remains held.
+lease remains held. Release requires closed local clocks/reset and TOP OFF,
+plus exact CORE policy/status zero. The shared PCK clock remains held through
+those final CORE reads. Failure retains the whole GPU lease.
 
 An atomic admission lock serializes registry changes and resource callbacks.
 A competing call receives `BUSY` without I/O or output changes. Callers can

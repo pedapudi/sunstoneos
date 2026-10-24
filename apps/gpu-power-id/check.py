@@ -74,7 +74,13 @@ def run(image, case):
                 state['time'] = 99
             ret(state['time'])
         elif name == 'a733_gpu_platform_poll':
-            if case == 'on-fault':
+            if case in ['on-fault', 'core-refused', 'core-partial']:
+                if case != 'on-fault':
+                    field(power, 'a733_gpu_power', 'core_seen', 7 if case == 'core-refused' else 1)
+                    field(power, 'a733_gpu_power', 'core_policy', 8)
+                    field(power, 'a733_gpu_power', 'core_config', 0x010101ff if case == 'core-refused' else 0)
+                    field(power, 'a733_gpu_power', 'error', 5 if case == 'core-refused' else 1)
+                    field(power, 'a733_gpu_power', 'index', 8 if case == 'core-refused' else 7)
                 ret((1 << 64) - 1)
                 return
             field(gpu, 'a733_gpu_platform', 'phase', 3)
@@ -117,7 +123,7 @@ def run(image, case):
         else:
             ret()
 
-    modeled = ['bb_power_wait_ready', 'bb_power_now', 'bb_power_pause',
+    modeled = ['bb_power_wait_ready', 'bb_power_now', 'vTaskDelay',
                'a733_gpu_platform_begin', 'a733_gpu_platform_poll', 'aarch64_device_translate',
                'a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'bb_power_park',
                'a733_power_service_idle', 'bb_power_fail', 'platform_puts', 'platform_exit']
@@ -143,16 +149,20 @@ def run(image, case):
         assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < state['calls'].index('platform_puts')
         assert state['gpu_reads'] == ([['0x1800020', 8], ['0x1800020', 4], ['0x1800018', 4]] if case == 'legacy-id' else [['0x1800020', 8]])
     else:
-        reasons = {'on-fault': 'GPU ON poll', 'bad-mapping': 'GPU identity mapping',
+        reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll', 'bad-mapping': 'GPU identity mapping',
                    'read-crosses-deadline': 'GPU identity deadline/clock', 'clock-regresses': 'GPU identity deadline/clock',
                    'off-fault': 'GPU OFF poll', 'retained-token': 'GPU OFF ownership proof',
                    'counted-row': 'GPU OFF ownership proof', 'unparked': 'GPU provider park proof'}
         assert state['failure'] == reasons[case], state
         assert state['exit_status'] is None and 'COMPLETE' not in output
-        if case in ['on-fault', 'bad-mapping']:
+        if case in ['on-fault', 'core-refused', 'core-partial', 'bad-mapping']:
             assert not state['gpu_reads']
-        if case in ['on-fault', 'bad-mapping', 'read-crosses-deadline', 'clock-regresses']:
+        if case in ['on-fault', 'core-refused', 'core-partial', 'bad-mapping', 'read-crosses-deadline', 'clock-regresses']:
             assert 'a733_gpu_platform_off_begin' not in state['calls']
+    if case in ['core-refused', 'core-partial']:
+        assert 'GPU CORE entry' in output and f'seen={7 if case == "core-refused" else 1}' in output
+        assert 'policy=0x8 status=0x0' in output, output
+        assert 'GPU power' in output and 'a733_gpu_platform_off_begin' not in state['calls']
     assert not state['gpu_writes']
     return state
 
@@ -161,14 +171,46 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--cases', nargs='+', help='Resume selected cases after a fixture-only failure')
     a = p.parse_args()
-    image = harness.Image(a.image, layout_names=NAMES)
+    # The shared owner added delays_ready in existing padding. Reused objects
+    # retain the old DWARF member list; consume the actual replacement owner's
+    # layout, and verify every old member and the total size still agree.
+    image = harness.Image(a.image, layout_names=[n for n in NAMES if n != 'a733_power_domain'])
+    from elftools.elf.elffile import ELFFile
+    layouts = []
+    with a.image.open('rb') as stream:
+        for cu in ELFFile(stream).get_dwarf_info().iter_CUs():
+            for die in cu.iter_DIEs():
+                attr = die.attributes
+                if die.tag != 'DW_TAG_structure_type' or attr.get('DW_AT_name') is None or attr['DW_AT_name'].value != b'a733_power_domain':
+                    continue
+                if 'DW_AT_byte_size' not in attr: continue
+                assert attr['DW_AT_byte_size'].value == 32
+                layouts.append({c.attributes['DW_AT_name'].value.decode(): c.attributes['DW_AT_data_member_location'].value
+                                for c in die.iter_children() if c.tag == 'DW_TAG_member'})
+    current = next(x for x in layouts if 'delays_ready' in x)
+    assert current['delays_ready'] == 12
+    old_fields = {k: v for k, v in current.items() if k != 'delays_ready'}
+    assert all({k: v for k, v in x.items() if k != 'delays_ready'} == old_fields for x in layouts)
+    image.layouts['a733_power_domain'] = current
     cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
-             'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked']
+             'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
+    if a.cases:
+        assert set(a.cases) <= set(cases)
+        cases = a.cases
     result = {'physical_access': False, 'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
-              'cases': [run(image, case) for case in cases]}
-    a.output.write_text(json.dumps(result, indent=2) + '\n')
+              'cases': []}
+    for case in cases:
+        try:
+            result['cases'].append(run(image, case))
+        except Exception as error:
+            result['failed_case'] = case
+            result['fixture_error'] = repr(error)
+            a.output.write_text(json.dumps(result, indent=2) + '\n')
+            raise
+        a.output.write_text(json.dumps(result, indent=2) + '\n')
     print(f'{len(cases)} focused client cases passed; no physical access')
 
 

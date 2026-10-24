@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare native GPU power writes with pinned PCK functions and CCU definitions."""
+"""Compare native TOP/CCU writes with pinned functions; CORE has a separate BXM audit."""
 import argparse
 import hashlib
 import json
@@ -94,6 +94,11 @@ int main(void) {
     expected = [tuple(int(v, 16 if i >= 2 else 10) for i, v in enumerate(line.split()))
                 for line in output.splitlines()]
     assert [x for x in native if x[1] == 2] == expected
+    # CORE is not initialized by the generic domain driver. Its three writes
+    # follow the selected BXM helpers documented in docs/gpu-power.md.
+    assert [x for x in native if x[1] == 3] == [
+        (1, 3, 0x20, 0xffffffff, 0), (1, 3, 0, 0xffffffff, 8),
+        (1, 3, 0, 0xffffffff, 0)]
     core = block(ccu, r'static struct ccu_div gpu0_clk\s*=')
     assert '_SUNXI_CCU_DIV_TABLE(0, 4, gpu_div_table)' in core
     assert '_SUNXI_CCU_MUX(24, 3)' in core and '.enable         = BIT(31)' in core

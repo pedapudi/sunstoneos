@@ -224,7 +224,9 @@ enum a733_gpu_resource_result a733_gpu_resources_release(
     if (ok && (l->mask & A733_GPU_RESOURCE_LOCAL))
         ok = check(m, CCU + 0xb20, 0x80000000, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, CCU + 0xb24, 0x10001, 0, A733_GPU_RESOURCE_LIVE) &&
-             check(m, PCK + 0x5008, 15, 0, A733_GPU_RESOURCE_LIVE);
+             check(m, PCK + 0x5008, 15, 0, A733_GPU_RESOURCE_LIVE) &&
+             check(m, PCK + 0x6000, UINT32_MAX, 0, A733_GPU_RESOURCE_LIVE) &&
+             check(m, PCK + 0x6008, UINT32_MAX, 0, A733_GPU_RESOURCE_LIVE);
     if (!ok) { l->mode = A733_GPU_RESOURCE_RETAINED; return leave(m, A733_GPU_RESOURCE_FAULT); }
     *l = (struct a733_gpu_resource_lease){0};
     return leave(m, A733_GPU_RESOURCE_OK);

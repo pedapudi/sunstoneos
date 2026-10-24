@@ -9,6 +9,7 @@ static uintptr_t address(enum a733_gpu_power_bank bank, uint32_t off)
     if (bank == A733_GPU_CCU && (off == 0x5c0 || off == 0x5e0 || off == 0xb20 || off == 0xb24))
         return 0x02002000u + off;
     if (bank == A733_GPU_R_CCU && off == 0x1ac) return 0x07010000u + off;
+    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x20)) return 0x07066000u + off;
     /* GPU_TOP (PCK domain 5) belongs to the power-domain owner. */
     return 0;
 }
@@ -38,10 +39,12 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
          ((clear == 0x8700000f && set == 0x0b000000) || (clear == 0 && set == 0x88000000) ||
           (clear == 0x80000000 && set == 0x08000000))) ||
         (bank == A733_GPU_CCU && off == 0xb24 &&
-         ((clear == 0 && (set == 1 || set == 0x10000)) || (set == 0 && (clear == 1 || clear == 0x10000))));
+         ((clear == 0 && (set == 1 || set == 0x10000)) || (set == 0 && (clear == 1 || clear == 0x10000)))) ||
+        (bank == A733_GPU_CORE && clear == UINT32_MAX &&
+         ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0)));
     if (!allowed || !enter(n, deadline)) return 0;
-    uint32_t old;
-    (void)read_reg(n, bank, off, &old);
+    uint32_t old = 0;
+    if (clear != UINT32_MAX) (void)read_reg(n, bank, off, &old);
     a733_mmio_write32_dsb_sy_after(address(bank, off), (old & ~clear) | set);
     n->locks.register_leave(n->locks.context);
     return 1;

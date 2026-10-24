@@ -34,7 +34,8 @@ struct a733_gpu_resource_rail { uint8_t page_before, chip, revision, enable, vol
  * rail reads AXP8191 address 0x36, registers ff/0e/0f/10/15/ff in that order,
  * holding the common PMIC/I2C lock for the entire snapshot. No PMIC data writes.
  * Changes to shared resources require a CHANGE lease. A stable LOCAL lease
- * grants its owner GPU-local clock/reset/domain control. All clock-register
+ * grants exclusive GPU-local clock/reset and CORE6 control, with TOP5 reached
+ * only through the shared power-domain owner's row. All clock-register
  * writers must use the same platform register lock, including unrelated fields.
  */
 struct a733_gpu_resource_ops {
@@ -95,7 +96,8 @@ enum a733_gpu_resource_result a733_gpu_resources_change(
 enum a733_gpu_resource_result a733_gpu_resources_change_end(
     struct a733_gpu_resource_manager *, unsigned client, uint64_t token, int success);
 /* Release a stable lease. LOCAL release verifies external reset asserted,
- * local clocks off and GPU_TOP status zero before dropping ownership.
+ * local clocks off, GPU_TOP status zero and exact static CORE6 policy/status
+ * zero before dropping ownership. The shared PCK clock stays held until then.
  * Shared gate enablement persists for the resource manager's OS lifetime,
  * preserving inherited gates, the critical AHB/MBUS gates, and the PCK provider.
  * No release disables a PLL/oscillator/rail, changes a PMIC register, or frees

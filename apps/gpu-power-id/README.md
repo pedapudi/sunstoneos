@@ -1,9 +1,10 @@
 # GPU power and identity diagnostic
 
-This returning single-core diagnostic powers GPU_TOP, reads the GPU hardware
-identity, powers GPU_TOP off, and parks the shared PMIC service. It is implemented
-and checked in a software model. Physical GPU power and identity operation remain
-unqualified until the coordinator admits and runs the frozen image.
+This returning single-core diagnostic powers GPU_TOP and GPU_CORE, reads the GPU
+hardware identity, powers CORE and TOP off, and parks the shared PMIC service. The earlier TOP-only image
+`fd3d5839` did not return on hardware, without an observed failure stage. This
+corrected candidate is checked in software only. GPU power and identity operation
+remain physically unqualified.
 
 The diagnostic creates no firmware, command buffers, GPU mappings or DMA
 backing. Its successful return establishes a narrower boundary than firmware
@@ -45,9 +46,12 @@ The service verifies supplies and the GPU resource manager checks the inherited
 The [resource manager](../../docs/gpu-resources.md) may enable the shared PPU,
 AHB and MBUS gates. The [power owner](../../docs/power-domains.md) adopts coherent
 GPU_TOP policy/status 0 or 8. When ON needs a transition, it programs the pinned
-PCK600 delay row and requests ON. The GPU controller then selects the existing
-400 MHz parent, opens the local clock/bus gates, waits for settling and releases
-external reset. No PLL retuning or voltage programming occurs.
+PCK600 delay row and requests ON. Under the exclusive LOCAL lease, the GPU controller then captures CORE6
+policy/status/PWCR. It requires whole policy/status words to match at 0 or 8,
+writes PWCR zero and policy 8 with readbacks, and progresses local clocks/reset.
+After that progress it checks CORE status 8 before identity access. It selects
+the existing 400 MHz parent, opens local clock/bus gates, waits for settling
+and releases external reset in the existing order. No PLL retuning or voltage programming occurs.
 
 Only these identity reads reach the GPU register window:
 
@@ -63,8 +67,10 @@ one GPU read; the legacy format costs three. There are no GPU register writes.
 The expected identity is `36.56.104.183`. A different identity is still a valid
 observation if OFF and provider park complete; it does not qualify that GPU.
 
-OFF asserts external reset, closes the local bus and clock gates, requests
-domain-5 OFF, and releases the platform's resource token. Completion requires
+OFF first writes CORE policy zero and checks status zero with TOP and local
+clocks still available. It then asserts external reset, closes local bus/clock
+gates, requests domain-5 OFF, and releases the platform’s resource token.
+Resource release independently checks CORE policy and status zero. Completion requires
 the actual OFF phases, no token or delegated lease, an answered OFF row with no
 count, a healthy OFF domain with no users, and no retained client resource slot.
 After service park, the client checks those conditions again and refuses any
@@ -74,8 +80,9 @@ the image lifetime ends. Shared gates remain enabled for their other users.
 The client uses the existing absolute 1.5-second service deadline from monitor
 entry. Each PCK transition also has the owner's 10-millisecond bound. Pending
 client polls wait one scheduler tick; elapsed bounds are observed on resumption.
-The returning CPU monitor retains its existing two-second deadline and return
-implementation. A failure can return a CPU error report while partial device
+The returning CPU monitor retains its two-second deadline and uses the accepted
+restoration-readback fix from the provider-readiness candidate. The failed
+`fd3d5839` image lacked that fix; this does not locate its failure. A failure can return a CPU error report while partial device
 ownership remains. Every failed or missing completion retains the claim and
 owned RAM for coordinator recovery; ROM visibility alone does not authorize reuse.
 
@@ -89,17 +96,23 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
 
-The build reuses 31 objects from the physically passing DCDC2 snapshot image.
-Six objects supply the new consumer, GPU platform, native adapter, GPU power
-controller, `memmove`, and the current shared power owner with its reviewed
-deadline fix. Eleven shared structure sizes and member offsets must match across
+The build reuses 30 objects from the frozen provider-readiness candidate,
+including its accepted CPU monitor. Seven replacements compile the consumer,
+GPU platform/native adapter, power controller, resource manager/native adapter,
+and current shared TOP owner. The input-object audit checks every power/platform
+layout user and its actual dependency file; all three layout users are rebuilt.
+The power structure grows by 16 bytes for cached diagnostics. Eleven shared structure sizes and member offsets must match across
 old and new objects. The recorded private PMIC callback-member rename does not
 change its offset or callback order.
 
-Eleven focused cases execute the linked client, mapping predicate and identity
+Thirteen focused cases execute the linked client, mapping predicate and identity
 loads. They cover both identity formats, unexpected identity, ON/OFF faults,
 wrong translation, a read crossing the deadline, backward time, retained token,
-counted row and missing provider park. Power transitions and provider progress
+counted row, missing provider park, and complete/partial cached CORE refusals.
+A seen bit records a completed read, including one whose following clock check
+fails; it does not make the observation admissible. Power failures print only
+cached CORE values, phase, step, error and last read, then take retained error
+return. No new hardware read is made for the report. Power transitions and provider progress
 are modeled; these cases do not requalify their physical behavior. Existing
 shared-owner deadline and resource evidence is preserved by reference rather
 than rerun. The normal client case makes six explicit clock samples; the
@@ -116,7 +129,10 @@ RAM disposition and retains the existing supervised failure policy.
 PMIC admission requires the inherited S_TWI0 gate/reset, APBS route, PL0/PL1
 configuration, settled supplies and excluded PMU writers. GPU admission adds
 stable oscillator/REF/PERI0 ownership, closed local GPU gates, asserted reset,
-inactive INT95 and exclusive GPU_TOP/CCU authority. No prior GPU boot or command
+inactive INT95 and exclusive GPU-local authority covering CCU and CORE6
+policy/PWCR at `0x07066000`. TOP5 remains controlled by the shared row. An older
+root record granting only TOP5 does not authorize these new CORE writes: the
+coordinator must extend the existing GPU-local grant explicitly. No prior GPU boot or command
 execution may have occurred in this powered lifetime. These conditions prevent
 the identity-only OFF path from retiring an inherited executing device.
 
@@ -142,3 +158,17 @@ Use the existing retaining queue wrapper and frozen returning-kernel runner
 with expected text `COMPLETE GPU power identity: OFF and provider parked`.
 Require status zero, normal CPU return and the complete identity lines before
 classifying BVNC. A draft proposal or a model pass grants no device access.
+
+
+The selected BXM source and the architectural PWCR restriction are documented in
+[gpu-power.md](../../docs/gpu-power.md). BXM writes CORE without polling it; this
+candidate's bounded exact status check is a conservative acceptance condition,
+not a promise that hardware will acknowledge. Inherited policy 8/status 0 is
+refused before PWCR or local clock writes. No CORE delay values are invented.
+The pinned SCP fragment is a host-inspected source clue, not a runtime dependency
+or evidence that its boot path executed on either board.
+
+The frozen provider-readiness image `3adfa4ad` remains the first proposed board
+test. This later candidate needs a fresh recovered board, current root admission
+and explicit CORE authority. It must not reuse operating records from the failed
+powered lifetime. Neither candidate has been launched by this offline work.

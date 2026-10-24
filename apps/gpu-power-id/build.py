@@ -53,36 +53,50 @@ def main():
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    baseline = harness.CACHE / 'evidence/npu-supply-snapshot-20261024'
+    baseline = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1'
     base = json.loads((baseline / 'build.json').read_text())
-    assert sha(baseline / 'image.elf') == base['image_sha256'] == 'a95eff6baca811b1b28826b0be066ff76c94d1923f17a4dc18450238128e2b02'
-    runpath = harness.CACHE / 'evidence/processor-completion-20261024/port-3-1/pmic-supply/session.json'
-    run = json.loads(runpath.read_text())
-    assert run['complete'] and run['result']['status'] == 0 and run['image_sha256'] == base['binary_sha256']
-    oldroot = '/home/sunil/git/sunstoneos-worktrees/npu-prereq-1024'
-    flags = base['compile'][-1][:base['compile'][-1].index('-MD')]
+    assert sha(baseline / 'image.elf') == base['image_sha256'] == '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
+    # Reuse the reviewed monitor restoration-readback fix from this checkpoint.
+    # The failed fd3d power/ID image did not contain that fix.
+    oldroot = '/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024'
+    flags = base['compile'][0][:base['compile'][0].index('-MD')]
     flags = [v.replace(oldroot, str(ROOT)) for v in flags]
-    sources = ['apps/gpu-power-id/main.c', 'drivers/gpu/a733_gpu_platform.c',
-               'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_power.c',
-               'runtime/memmove.c', 'drivers/power/a733_power_domains.c']
+    units = [
+        ('apps/gpu-power-id/main.c', 'kernel_main'),
+        ('drivers/gpu/a733_gpu_platform.c', 'a733_gpu_platform_init'),
+        ('drivers/gpu/a733_gpu_platform_native.c', 'a733_gpu_platform_native_init'),
+        ('drivers/gpu/a733_gpu_power.c', 'a733_gpu_power_init'),
+        ('drivers/gpu/a733_gpu_resources.c', 'a733_gpu_resources_init'),
+        ('drivers/gpu/a733_gpu_resources_native.c', 'a733_gpu_resources_native_init'),
+        ('drivers/power/a733_power_domains.c', 'a733_power_domains_init'),
+    ]
+    from elftools.elf.elffile import ELFFile
+    replacements = {}
     commands, new = [], []
-    for i, source in enumerate(sources):
+    old_objects = base['new_objects'] + base['reused_objects']
+    for i, (source, symbol) in enumerate(units):
+        matches = []
+        for item in old_objects:
+            assert sha(item['object']) == item['sha256']
+            with Path(item['object']).open('rb') as stream:
+                symbols = ELFFile(stream).get_section_by_name('.symtab').get_symbol_by_name(symbol) or []
+                if any(x['st_shndx'] != 'SHN_UNDEF' for x in symbols):
+                    matches.append(item)
+        assert len(matches) == 1, (source, symbol, matches)
         obj = out / f'new-{i}.obj'
         command = flags + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
-        new.append({'source': source, 'source_sha256': sha(ROOT / source), 'object': str(obj), 'sha256': sha(obj)})
-    # Retain the accepted initializer, CPU monitor and provider. Replace the old
-    # power owner with its reviewed deadline fix, because this probe issues PCK commands.
-    old_owner = next(x['object'] for x in base['reused_objects'] if x['original'].endswith('/pmic/new-2.obj'))
-    replace = {str(baseline / 'build/npu-supply.obj'): new[0]['object'], old_owner: new[-1]['object']}
-    expected = {x['sha256'] for x in base['reused_objects']} | {x['sha256'] for x in base['new_objects']}
+        replacements[matches[0]['object']] = str(obj)
+        new.append({'source': source, 'source_sha256': sha(ROOT / source), 'object': str(obj),
+                    'sha256': sha(obj), 'replaced_object': matches[0]})
+    expected = {x['object']: x['sha256'] for x in old_objects}
     link, reused = [], []
     for value in base['link']:
-        if value in replace:
-            value = replace[value]
+        if value in replacements:
+            value = replacements[value]
         elif value.endswith('.obj'):
-            assert sha(value) in expected, value
+            assert sha(value) == expected[value], value
             dest = out / ('reused-' + sha(value) + '.obj')
             shutil.copyfile(value, dest)
             reused.append({'original': value, 'object': str(dest), 'sha256': sha(dest)})
@@ -92,7 +106,30 @@ def main():
         elif value.startswith('-Wl,-Map,'):
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
-    link += [x['object'] for x in new[1:-1]]
+    assert len(reused) == 30 and len(new) == 7
+    # Audit every input object, not a guessed list of layout consumers. A
+    # complete power/platform DWARF declaration identifies the three objects
+    # using the enlarged structures; all must be replaced in this candidate.
+    layout_users = []
+    for item in old_objects:
+        with Path(item['object']).open('rb') as stream:
+            for cu in ELFFile(stream).get_dwarf_info().iter_CUs():
+                types = {}
+                for die in cu.iter_DIEs():
+                    attrs = die.attributes
+                    if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in attrs and 'DW_AT_byte_size' in attrs:
+                        name = attrs['DW_AT_name'].value.decode()
+                        if name in ('a733_gpu_power', 'a733_gpu_platform'):
+                            types[name] = attrs['DW_AT_byte_size'].value
+                if types:
+                    assert item['object'] in replacements, item
+                    original = item.get('original', item['object'])
+                    depfile = Path(original + '.d')
+                    assert depfile.is_file() and 'a733_gpu_power.h' in depfile.read_text(), depfile
+                    layout_users.append({'object': item['object'], 'unit': cu.get_top_DIE().attributes['DW_AT_name'].value.decode(),
+                        'old_layouts': types, 'replacement': replacements[item['object']],
+                        'depfile': str(depfile), 'depfile_sha256': sha(depfile)})
+    assert len(layout_users) == 3
     subprocess.run(link, check=True, cwd=ROOT)
     subprocess.run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', str(out / 'image.elf'), str(out / 'probe.bin')], check=True)
     # These shared layouts cross old/new object boundaries. The reused image
@@ -106,12 +143,14 @@ def main():
     assert old == current, 'Shared old/new object layouts differ'
     record = {'physical_access': False, 'execution_admitted': False,
               'base_build': {'path': str(baseline / 'build.json'), 'sha256': sha(baseline / 'build.json')},
-              'base_physical_pass': {'path': str(runpath), 'sha256': sha(runpath)},
+              'monitor_evidence': base['monitor_evidence'],
+              'monitor_evidence_sha256': base['monitor_evidence_sha256'],
               'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
+              'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'expect': 'COMPLETE GPU power identity: OFF and provider parked',
-              'host_tools': base['host_tools']}
+              'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))
 
