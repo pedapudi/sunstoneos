@@ -45,12 +45,15 @@ rows. It checks that:
 - a returning row that links objects of a base row of the same run is
   prepared when each such object equals the base bundle's object of the same
   unit, and refused when one differs or when the base row was not prepared
-  earlier in the run;
+  earlier in the run; a row whose `after` rows were refused is still
+  prepared, because `after` orders runbooks only;
 - with a lifetime, each row's runbook gives its record directories, the full
   --warm-return list (the lifetime's chain, then every earlier step) and the
   rows it runs after, and the run directory receives runbook.md with the
-  order; a lifetime that reuses a record stem or names a row without inputs
-  stops before any run directory exists;
+  order, each entry's gates and its stop outcomes; a lifetime that reuses a
+  record stem, names a row without inputs, gives a row entry its own gates,
+  or places a gate row after its dependent stops before any run directory
+  exists;
 - each prepared single-core row has a runbook naming every bundle file's
   SHA-256 and its run command;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
@@ -591,8 +594,9 @@ def main():
              returning_fixture('returning-on-base', 14, base='returning-base'),
              returning_fixture('returning-after', 15, base='returning-base', after=['returning-on-base']),
              returning_fixture('returning-base-differs', 16, base='returning-base'),
-             returning_fixture('returning-base-refused', 17, base='returning-sync')]
-    rows[-5]['overlay'] = ['checks/kernel.c.obj', 'platform/a733/platform.c.obj']
+             returning_fixture('returning-base-refused', 17, base='returning-sync'),
+             returning_fixture('returning-after-refused', 18, after=['returning-sync'])]
+    rows[-6]['overlay'] = ['checks/kernel.c.obj', 'platform/a733/platform.c.obj']
     inputs.update({name: {} for name in ('read-good', 'read-extra-key', 'read-later-condition', 'read-outside-block')})
     inputs.update({
         'returning-good': {'build': fixture_build(work, 'good', plain)},
@@ -609,14 +613,15 @@ def main():
         'returning-on-base': {'build': fixture_build(work, 'on-base', plain, objects=on_base('4' * 64))},
         'returning-after': {'build': fixture_build(work, 'after', plain, objects=on_base('4' * 64))},
         'returning-base-differs': {'build': fixture_build(work, 'base-differs', plain, objects=on_base('6' * 64))},
-        'returning-base-refused': {'build': fixture_build(work, 'base-refused', plain, objects=on_base('4' * 64))}})
+        'returning-base-refused': {'build': fixture_build(work, 'base-refused', plain, objects=on_base('4' * 64))},
+        'returning-after-refused': {'build': fixture_build(work, 'after-refused', plain)}})
     repo = fixture_repository(work)
     evidence = work / 'evidence'
     lifetime = {'port': '3-3', 'ddr': 'ddr-f', 'chain': ['link-1', 'link-2'],
                 'order': [{'row': 'returning-base', 'stem': 'f-base', 'run': 'f-base-run'},
                           {'row': 'returning-on-base', 'stem': 'f-on', 'run': 'f-on-run'},
                           {'external': 'fixture-usb', 'stem': 'f-usb', 'run': 'f-usb-run', 'runbook': 'usb.md',
-                           'after': ['returning-on-base']},
+                           'after': ['returning-on-base'], 'stop_if': {'returning-on-base': ['fixture-fault']}},
                           {'row': 'returning-after', 'stem': 'f-after', 'run': 'f-after-run'}],
                 'state': ['Fixture state.']}
 
@@ -627,6 +632,13 @@ def main():
     harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=reused), 'reuses a record stem')
     absent = dict(lifetime, order=[{'row': 'returning-good', 'stem': 'g', 'run': 'g-run'}])
     harness.refused(lambda: tool.run({}, rows, evidence, repo, lifetime=absent), 'names no returning row')
+    swapped = dict(lifetime, order=[lifetime['order'][1], lifetime['order'][0]] + lifetime['order'][2:])
+    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=swapped), 'not placed before it')
+    late_stop = dict(lifetime, order=[dict(lifetime['order'][0], stop_if={'returning-after': ['fixture-fault']})]
+                     + lifetime['order'][1:])
+    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=late_stop), 'not placed before it')
+    own_gate = dict(lifetime, order=[dict(lifetime['order'][0], after=['returning-good'])] + lifetime['order'][1:])
+    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=own_gate), 'keys outside')
     assert not evidence.exists(), 'refused inputs created no run directory'
 
     status, run_dir = tool.run(inputs, rows, evidence, repo, lifetime=lifetime)
@@ -637,7 +649,7 @@ def main():
                 'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared',
                 'returning-good': 'prepared', 'returning-plain': 'prepared', 'returning-progress': 'prepared',
                 'returning-extra-request': 'prepared', 'returning-base': 'prepared', 'returning-on-base': 'prepared',
-                'returning-after': 'prepared'}
+                'returning-after': 'prepared', 'returning-after-refused': 'prepared'}
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
@@ -652,7 +664,7 @@ def main():
                'returning-bad-bin': 'not the loadable segments', 'returning-bad-controlled': 'Fixture runner refuses',
                'returning-base-differs': "differ from the base bundle's object of the same unit: "
                                          'platform/a733/platform.c.obj',
-               'returning-base-refused': 'not prepared earlier in this run: returning-sync'}
+               'returning-base-refused': 'base row returning-sync is not prepared earlier in this run'}
     stages = {'memory-wrong-build': 'admission', 'service-wrong-build': 'admission', 'memory-unnamed': 'admission',
               'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout',
               'returning-base-refused': 'inputs'}
@@ -751,12 +763,15 @@ def main():
         found = [line.split('$S/')[1].split('/')[0] for line in text[name].splitlines() if '--warm-return $S/' in line]
         assert found == chain, (name, found)
         assert '--ddr-evidence $S/ddr-f/session.json' in text[name], name
-    assert '$S/f-on-run' in text['returning-on-base'] and '1 to objects of the base image' in text['returning-on-base']
+    assert '$S/f-on-run' in text['returning-on-base']
+    assert '1 equal objects of the image of `returning-base`' in text['returning-on-base']
     assert '## Run only after' not in text['returning-base']
     assert '- `returning-base` of this set passed' in text['returning-on-base']
     assert '- `returning-on-base` of this set passed' in text['returning-after']
     order = (run_dir / 'runbook.md').read_text()
-    assert '| 3 | `fixture-usb`, `usb.md` | `$S/f-usb-*`; link `f-usb-run` | `returning-on-base` passed |' in order, order
+    assert ('| 3 | `fixture-usb`, `usb.md` | `$S/f-usb-*`; link `f-usb-run` | `returning-on-base` passed; not if '
+            '`returning-on-base` ended in `fixture-fault` |') in order, order
+    assert 'runner does not check them' in order and 'is not a pass' in order
     assert '`link-1`, `link-2`' in order and 'Fixture state.' in order
     prepared['lifetime'] = {name: len(chain) for name, chain in links.items()}
     status, second = tool.run({}, rows, evidence, repo)

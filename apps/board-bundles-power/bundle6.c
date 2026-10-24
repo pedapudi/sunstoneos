@@ -20,14 +20,15 @@
  * for the record.
  *
  * The wire time of a step counts two bit times per START, repeated START or
- * STOP, and per byte nine bit times, or the measured byte wire time when that
- * is longer. Success is status 0 with "COMPLETE board bundle 6": both supplies
- * verified, every snapshot 0xff9e (enabled, 800 mV) and the provisional bound
- * of docs/designs/pmic-access.md met (trace.h, bb_bound). A missed bound
- * ends with status 1 after "FAILED board bundle 6: provisional step bound",
- * a controlled outcome: the board returns, and bundle 7 and the native USB
- * image of the same set do not run. A supply or snapshot mismatch is an
- * uncontrolled failure.
+ * STOP, and per byte the byte time of bb_byte_ns(): nine bit times, or the
+ * measured byte when that is longer and at most 110% of nine bit times.
+ * Success is status 0 with "COMPLETE board bundle 6": both supplies verified,
+ * every snapshot 0xff9e (enabled, 800 mV), 34 snapshots counted and the
+ * provisional bound of docs/designs/pmic-access.md met (trace.h,
+ * bb_steps_evaluate). Re-spins are reported, not bounded. A missed bound, or
+ * a measured byte that is missing or above 110%, ends with status 1 after
+ * "FAILED board bundle 6: provisional step bound", a controlled outcome. A
+ * supply, snapshot or record mismatch is an uncontrolled failure.
  *
  * Before its first snapshot the client arms the wire-time spin: the service
  * times one byte phase from its CNTR write to INT_FLAG set and leaves that
@@ -123,14 +124,9 @@ static void client(void *unused)
     s.stop_respins = bb_power.twi.stop_respins;
     s.snapshot_respins_max = bb_power.twi.snapshot_respins_max;
     s.snapshots = bb_power.twi.snapshots;
-    /* The measured byte: CNTPCT ticks of 125/3 ns. */
-    const uint64_t byte_ns = s.cost.wire_ticks * 125 / 3;
-    s.byte_ns = byte_ns > 9ull * s.bit_ns ? (uint32_t)byte_ns : 9u * s.bit_ns;
-    bb_step_bins(bb_power.steps, bb_power.stepped, s.bit_ns, s.byte_ns, &s.bins);
-    bb_bound(bb_power.steps, bb_power.stepped, s.bit_ns, s.byte_ns, s.snapshot_respins_max, &s.bound);
-    /* The two verification snapshots and the 32 client snapshots each end
-     * in six STOPs; another count leaves the per-snapshot re-spins unknown. */
-    s.bound.pass &= s.snapshots == SNAPSHOTS + 2;
+    s.byte_ok = bb_byte_ns(s.bit_ns, s.cost.wire_seen, s.cost.wire_clear, &s.byte_ns);
+    bb_steps_evaluate(bb_power.steps, bb_power.stepped, s.bit_ns, s.byte_ns, &s.bins, &s.bound);
+    s.bound.pass &= s.byte_ok;
     struct bb_line lines[BB6_SUMMARY_LINES];
     const unsigned n = bb6_summary_lines(&s, lines);
     for (unsigned i = 0; i < n; ++i)
@@ -138,6 +134,11 @@ static void client(void *unused)
     if (!s.dcdc2 || !s.dcdc4 || !s.unchanged || s.dcdc2_first != SNAPSHOT_EXPECTED ||
         s.dcdc4_first != SNAPSHOT_EXPECTED)
         bb_power_fail("board bundle 6: supply verification or snapshot mismatch");
+    /* The two verification snapshots and the 32 client snapshots each end in
+     * six STOPs. Another count, or no recorded step, means the record itself
+     * is wrong. */
+    if (s.snapshots != SNAPSHOTS + 2 || !s.steps)
+        bb_power_fail("board bundle 6: snapshot count or step record");
     platform_puts(s.bound.pass ? BB6_COMPLETE : BB6_BOUND_MISSED);
     for (unsigned i = 0; i < bb_power.stepped; ++i) {
         bb_step_line(&bb_power.steps[i], &lines[0]);

@@ -34,16 +34,20 @@ is 0 when no row was refused.
 A returning row may name a base row of the same table. Its image may then link
 objects of the base row's image (origin set-base) besides those of images that
 passed on the board; the tool prepares the row only when the base row was
-prepared in the same run, and requires each such object to equal the base
-bundle's object of the same unit. The base and every row named in a row's
-`after` list must pass on the board first, in the same lifetime.
+prepared earlier in the same run, and requires each such object to equal the
+base bundle's object of the same unit. A row's `after` list orders its
+runbook only: the base and every row in that list must pass on the board
+first, in the same lifetime. The operator applies these gates; the runner
+does not check them.
 
 With --lifetime, the runbooks name the board lifetime they run in: its DDR
 record, the warm-return chain of the runs since then, and the order of this
 run's rows and of external bundles (such as a native USB image) with the
-record directory of each. Each row's runbook then gives its full
---warm-return list, and the run directory receives runbook.md with the order,
-the gates and the chain.
+record directory of each. An external entry names the rows it runs after,
+and any entry may name controlled outcomes of earlier rows that stop it
+(`stop_if`). Every gate must name a row placed earlier in the order. Each
+row's runbook then gives its full --warm-return list, and the run directory
+receives runbook.md with the order, the gates and the chain.
 
   prepare-board-bundles.py --inputs inputs.json [--lifetime lifetime.json]
 """
@@ -103,9 +107,9 @@ HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
 PASSED_ORIGINS = {'rank-4-kernel-check', 'rank-9-usb-v4', 'kernel-check-counter-option'}
 PASSED_RECORDS = {'rank-4-kernel-check': 'the kernel check of ranks 4 and 5, `574245e2…`',
                   'rank-9-usb-v4': '`board-bundles-20261023/rank-9-usb-v4/`',
-                  'kernel-check-counter-option': 'bundle 2, `a8e6ecac…`, passed as `bb2-run` on port 3-3',
-                  'set-base': 'the base image of this set, which must pass first in the same lifetime'}
-# Objects of the base row prepared in the same run.
+                  'kernel-check-counter-option': 'bundle 2, `a8e6ecac…`, passed as `bb2-run` on port 3-3'}
+# Objects of the base row prepared in the same run, which has not run on a
+# board when the set is prepared.
 SET_BASE = 'set-base'
 
 TERMINAL_PROCEDURE = [
@@ -262,8 +266,9 @@ ROWS = [
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle6.c.obj'],
                   'COMPLETE board bundle 6: PMIC service and domain adoption reads', True,
                   'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
-                  'provisional bound and its verdict, the re-spins, the step distribution against 100%, 105%, '
-                  '110% and 155% of wire time, the access-cost windows, the domain-1 mapping and the adoption '
+                  'provisional bound and its verdict, the byte time and the wire-time spin, the re-spins, the step '
+                  'distribution against 100%, 105%, 110% and 155% of wire time, the access-cost windows with their '
+                  'fastest and slowest sub-windows, the domain-1 mapping and the adoption '
                   'reads of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the '
                   'STEP lines, the 32 snapshots and the owner accesses; or the controlled outcome '
                   'provisional-step-bound-missed: status 1 after the same summary with BOUND pass=0 and FAILED '
@@ -279,15 +284,19 @@ ROWS = [
                   'step records), and every S_TWI0 write is timed in place. Each STEP line gives the step\'s CNTPCT '
                   'span, the scheduler ticks inside it, the phases it completed, the TWI interrupt flag at the first '
                   'read of each byte phase, the most polls of one phase and its re-spins: CNTR polls beyond the '
-                  'second of a flag phase or a STOP wait. The wire time of a step counts two bit times per START, '
-                  'repeated START or STOP and, per byte, nine bit times or the measured byte time when that is '
-                  'longer. At the park, the service, which is the provider task, times 256 iterations each of '
-                  'CNTR reads with DSB SY on both sides, plain CNTR reads (issue throughput), dependent CNTR reads '
+                  'second of a flag phase or a STOP wait, which are reported and do not gate the run. The wire time '
+                  'of a step counts two bit times per START, repeated START or STOP and, per byte, nine bit times '
+                  'or the measured byte when that is longer and at most 110% of nine bit times; the measured byte '
+                  'is the lower bracket of the wire-time spin, which runs with IRQs masked. At the park, the '
+                  'service, which is the provider task, times 256 iterations in eight sub-windows each of CNTR '
+                  'reads with DSB SY on both sides, plain CNTR reads (issue throughput), dependent CNTR reads '
                   '(latency), the adapter\'s time and read operations, the task check with IRQs unmasked, and the '
-                  'TWI observer, and names its core. Pass: both supplies verified, every snapshot 0xff9e, the '
-                  'median step at most 155% of its wire time, the first step at most 155% plus 40 us, at most 12 '
-                  're-spins in any of the 34 snapshots. A missed bound is the controlled outcome; a supply or '
-                  'snapshot mismatch is not. The summary and outcome print before the detail lines, which stop '
+                  'TWI observer, and prints each total with its fastest and slowest sub-window; it names its '
+                  'core. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
+                  'provisional bound of docs/designs/pmic-access.md: the median step at most 155% of its wire time '
+                  'and the first step at most 155% plus 40 us. A missed bound, or a measured byte that is missing '
+                  'or above 110%, is the controlled outcome; a supply, snapshot or record mismatch is not. The '
+                  'summary and outcome print before the detail lines, which stop '
                   'while 256 log bytes remain. No GIC register is read for the record, and no PPU or PMIC register '
                   'is written.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c'], base=BASE_ROW),
@@ -656,15 +665,17 @@ def lifetime_runs(lifetime, name):
     return order[index], index + 1, links
 
 
-def gates(row, entry):
-    """The rows of this set that must pass before this row, with the reason."""
-    found = []
-    if row.get('base'):
-        found.append((row['base'], 'its image links objects of that image'))
-    for name in row.get('after', []) + (entry or {}).get('after', []):
-        if name not in [g for g, _ in found]:
-            found.append((name, 'it runs after that row in this set'))
-    return found
+def gates(row):
+    """The rows of this set that must pass before a row: its base, then its `after` rows."""
+    found = [(row['base'], 'its image links objects of that image')] if row.get('base') else []
+    return found + [(name, 'it runs after that row in this set') for name in row.get('after', [])
+                    if name != row.get('base')]
+
+
+def stops(entry):
+    """The controlled outcomes of earlier rows that stop an order entry, as text."""
+    return [f'`{name}` ended in `{outcome}`' for name, outcomes in (entry or {}).get('stop_if', {}).items()
+            for outcome in outcomes]
 
 
 def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None):
@@ -685,26 +696,27 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
                   'at 0x71000; the USB instance does not change.', '']
     else:
         lines += [row['intro'], '']
-    required = gates(row, entry)
-    if required:
+    required, stopped = gates(row), stops(entry)
+    if required or stopped:
         lines += ['## Run only after', '']
         lines += [f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
                   'controlled outcome of that row is not a pass.' for name, reason in required]
-        lines += ['']
+        lines += [f'- Do not run it when {text}.' for text in stopped]
+        lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
     lines += ['']
     if row['class'] == 'monitor':
         origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
                          - {'new'})
+        passed = sorted(set(origins) & set(PASSED_RECORDS))
         lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
-                  'that passed on the board' + (f' and {len(value.get("base_objects", []))} to objects of the base '
-                                                f'image `{row["base"]}` of this set'
-                                                if value.get('base_objects') else '') + ' ('
-                  + ', '.join(f'`{o}`' for o in origins) + '; '
-                  + ', '.join(f'{k}: {v}' for k, v in PASSED_RECORDS.items() if k in origins)
-                  + '), listed per object in `equivalence.json`. New: '
-                  + ', '.join(f'`{x}`' for x in value['new_objects']) + '.', '']
+                  'that passed on the board (' + ', '.join(f'`{k}`: {PASSED_RECORDS[k]}' for k in passed) + ').'
+                  + (f' {len(value["base_objects"])} equal objects of the image of `{row["base"]}`, the base of '
+                     'this set, which has not run when the set is prepared: '
+                     + ', '.join(f'`{x}`' for x in value['base_objects']) + '.' if value.get('base_objects') else '')
+                  + ' New: ' + ', '.join(f'`{x}`' for x in value['new_objects'])
+                  + '. `equivalence.json` lists every object with its origin.', '']
     lines += ['## Commands', '',
               'Set the variables of docs/board-runbooks/README.md ("Names used in every runbook"), with `S` '
               f'naming this lifetime\'s session directory, and `B={bundle}`.', '']
@@ -778,22 +790,23 @@ def set_runbook(run_dir, lifetime, rows, table):
     lines = ['# Prepared set ' + run_dir.name + f' on port {lifetime["port"]}', '',
              'Status: **prepared** by `tools/prepare-board-bundles.py`; nothing here has run. Run the steps below '
              f'in order on port {lifetime["port"]}, in the lifetime that `$S/{lifetime["ddr"]}/` started. Each '
-             'step runs once. A step that exits nonzero, or a gate that its step names and that did not pass, '
-             'stops the steps after it; later bundles are not run out of order.', '']
-    if lifetime.get('note'):
-        lines += [lifetime['note'], '']
+             'step runs once. A step that exits nonzero stops the steps after it. A step whose gate is not met is '
+             'not run: a gate row passed only with status 0 and its success text, and a controlled outcome '
+             '(which the runner reports as `CONTROLLED` and exits 0) is not a pass. The operator applies the '
+             'gates; the runner does not check them.', '']
     lines += ['## Order', '', '| Step | Bundle | Records | Run only after |', '| --- | --- | --- | --- |']
     for i, entry in enumerate(lifetime['order'], 1):
         if 'row' in entry:
             row = names[entry['row']]
             status = rows.get(entry['row'], {}).get('status', 'not prepared')
             what = f'Bundle {row["position"]}, `{entry["row"]}/runbook.md` ({status})'
-            after = [g for g, _ in gates(row, entry)]
+            after = [g for g, _ in gates(row)]
         else:
             what = f'`{entry["external"]}`, `{entry["runbook"]}`'
             after = entry.get('after', [])
+        gate = [f'`{a}` passed' for a in after] + [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
-                     + (', '.join(f'`{a}` passed' for a in after) or 'none') + ' |')
+                     + ('; '.join(gate) or 'none') + ' |')
     lines += ['', '## Warm-return chain', '',
               f'Before step 1 the lifetime holds `{lifetime["ddr"]}` and these returning runs, in order: '
               + ', '.join(f'`{x}`' for x in lifetime['chain']) + '. Each step\'s runbook gives its complete '
@@ -908,8 +921,8 @@ def prepare_row(row, arguments, row_dir, request, queue, prepared=()):
     try:
         require(isinstance(arguments, dict) and 'output' not in arguments,
                 'Row inputs must be an object of prepare() keyword arguments without output.')
-        missing = [name for name in [row.get('base')] + list(row.get('after', [])) if name and name not in prepared]
-        require(not missing, 'Rows that this row runs after are not prepared earlier in this run: ' + ', '.join(missing))
+        require(not row.get('base') or row['base'] in prepared,
+                f'The base row {row.get("base")} is not prepared earlier in this run.')
         root = Path(request['repository'])
         module_path = root / row['module']
         require(module_path.is_file(), f'Preparation module {row["module"]} does not exist.')
@@ -1000,25 +1013,39 @@ def step(run_dir):
 
 
 def check_lifetime(lifetime, names, inputs):
-    """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems."""
+    """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems in
+    which every gate names a row placed earlier."""
     require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
-            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'note', 'state'},
-            'The lifetime names port, ddr, chain and order, and optionally note and state.')
+            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state'},
+            'The lifetime names port, ddr, chain and order, and optionally state.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs = set(), set(lifetime['chain'])
+    stems, runs, placed = set(), set(lifetime['chain']), []
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')
+        keys = {'row', 'stem', 'run', 'stop_if'} if 'row' in entry else {'external', 'stem', 'run', 'runbook', 'after',
+                                                                         'stop_if'}
+        require(set(entry) <= keys, f'Order entry {entry} has keys outside {sorted(keys)}; a row\'s gates are its '
+                'base and after fields.')
         require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
                 f'Order entry {entry} names no returning row of these inputs.')
         require('external' not in entry or entry.get('runbook'), f'External entry {entry} names no runbook.')
         require(entry.get('stem') and entry['stem'] not in stems and entry.get('run') and entry['run'] not in runs,
                 f'Order entry {entry} reuses a record stem or run directory.')
-        stems.add(entry['stem'])
-        runs.add(entry['run'])
         require('row' not in entry or entry['run'] == entry['stem'] + '-run',
                 f'A row\'s run directory is its stem followed by -run: {entry}')
+        stop_if = entry.get('stop_if', {})
+        require(isinstance(stop_if, dict) and all(isinstance(v, list) and v and all(isinstance(x, str) for x in v)
+                                                  for v in stop_if.values()),
+                f'Order entry {entry}: stop_if maps a row to a list of its controlled outcome names.')
+        required = [g for g, _ in gates(names[entry['row']])] if 'row' in entry else list(entry.get('after', []))
+        late = [g for g in required + list(stop_if) if g not in placed]
+        require(not late, f'Order entry {entry} names gate rows that are not placed before it: ' + ', '.join(late))
+        stems.add(entry['stem'])
+        runs.add(entry['run'])
+        if 'row' in entry:
+            placed.append(entry['row'])
 
 
 def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None):

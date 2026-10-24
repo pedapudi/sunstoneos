@@ -18,8 +18,9 @@ image, which runs first, and its declared new units:
   the USB units, plus the bundle's main file, power.c, trace.c, the
   power-domain owner, its native adapter and device_memory.c. The PMIC
   provider, its native adapter and its consumer changed with the PMIC access
-  path (docs/designs/pmic-access.md); they and every other provider object
-  that recompiles differently are declared new units of both images;
+  path (docs/designs/pmic-access.md). They and the GPU resource adapter are
+  declared new units of both images; the adapter, declared new for its
+  debug information only, must keep rank-9-usb-v4's instructions;
 - bundle 8 (apps/board-bundles-dram/) on the same platform objects and the
   provider's tasks.c and queue.c, plus main.c, sequence.c,
   drivers/dram/a733_dram.c in table mode and device_memory.c.
@@ -106,6 +107,8 @@ BASE_OVERLAY = ['platform/a733/monitor.c.obj', 'platform/a733/platform.c.obj']
 # recompile byte-identical to rank-9-usb-v4's.
 PROVIDER_NEW = ('drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c', 'drivers/power/a733_pmic_consumer.c',
                 'drivers/gpu/a733_gpu_resources_native.c')
+# Declared new for their debug information only: their instructions must equal rank-9-usb-v4's.
+PROVIDER_SAME_INSTRUCTIONS = ('drivers/gpu/a733_gpu_resources_native.c',)
 EXPECT = {
     'base': KERNEL_PASS,
     'cpu': 'COMPLETE board bundle 4:',
@@ -342,9 +345,11 @@ def platform_and_provider(platform, provider, rp, central, base_objects, work):
         else:
             require(unit in PROVIDER_NEW, f'{unit} recompiled differs from rank-9-usb-v4\'s provider object and is not '
                                           'a declared new provider unit.')
+            same = instructions(obj) == instructions(provider[unit])
+            require(same or unit not in PROVIDER_SAME_INSTRUCTIONS,
+                    f'{unit} is declared new for its debug information only, but its instructions changed.')
             units[unit] = obj
-            result[unit] = 'new provider unit' + (', same instructions as rank-9-usb-v4'
-                                                  if instructions(obj) == instructions(provider[unit]) else '')
+            result[unit] = 'new provider unit' + (', same instructions as rank-9-usb-v4' if same else '')
     return chosen, units, result
 
 

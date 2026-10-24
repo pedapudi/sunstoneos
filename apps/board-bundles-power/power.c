@@ -37,21 +37,35 @@ static int pmic_read(void *c, uintptr_t a, uint32_t *v)
 static int pmic_write(void *c, uintptr_t a, uint32_t v)
 {
     struct bb_power *p = &bb_power;
+    /* The wire-time spin runs with IRQs masked from before the write, so no
+     * interrupt lands between the write and the reads that bracket INT_FLAG. */
+    const unsigned spin = a == BB_TWI_CNTR && v == 0x48 &&
+        atomic_exchange_explicit(&p->wire_armed, 0, memory_order_acquire);
+    uint64_t daif = 0;
+    if (spin)
+        __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(daif) :: "memory");
     const uint64_t before = counter();
     const int r = p->native_pmic_ops.write(c, a, v);
     const uint64_t after = counter();
-    if (r != 1)
-        return r;
-    ++p->cost.writes;
-    p->cost.write_ticks += after - before;
-    bb_twi_observe(&p->twi, 1, a, v);
-    if (a == BB_TWI_CNTR && v == 0x48 && atomic_exchange_explicit(&p->wire_armed, 0, memory_order_acquire)) {
+    if (r == 1 && spin) {
         struct bb_status_trace t;
-        bb_status_spin(p->native_pmic_ops.read, c, cntpct, BB_TWI_CNTR, after, BB_POWER_STATUS_BOUND, &t);
-        p->cost.wire_ticks = t.on ? t.on_at : 0;
+        bb_status_spin(p->native_pmic_ops.read, c, cntpct, BB_TWI_CNTR, 8, 8, after, BB_POWER_STATUS_BOUND, &t);
+        p->cost.wire_seen = t.on;
+        p->cost.wire_clear = t.on ? t.on_before : 0;
+        p->cost.wire_set = t.on ? t.on_at : 0;
         p->cost.wire_reads = t.reads;
         p->wire_in_step = 1;
     }
+    if (spin)
+        __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
+    if (r != 1)
+        return r;
+    const uint32_t ticks = (uint32_t)(after - before);
+    ++p->cost.writes;
+    p->cost.write_ticks += ticks;
+    if (ticks < p->cost.write_min) p->cost.write_min = ticks;
+    if (ticks > p->cost.write_max) p->cost.write_max = ticks;
+    bb_twi_observe(&p->twi, 1, a, v);
     return r;
 }
 /* Caller buffers must also stay clear of the records this layer writes. */
@@ -90,7 +104,7 @@ static int domain_write(void *c, uintptr_t a, uint32_t v)
     /* The write accessor ends with DSB SY, so the stamps count from the
      * command reaching the PPU. */
     if (bb_power.spin_after_on && a == A733_POWER_PCK_DOMAIN(1) && (v & 15) == 8)
-        bb_status_spin(DOMAIN_OPS.read, DOMAIN_NATIVE, cntpct, A733_POWER_PCK_DOMAIN(1) + 8, counter(),
+        bb_status_spin(DOMAIN_OPS.read, DOMAIN_NATIVE, cntpct, A733_POWER_PCK_DOMAIN(1) + 8, 15, 8, counter(),
                        BB_POWER_STATUS_BOUND, &bb_power.status);
     return r;
 }
@@ -100,65 +114,62 @@ static void domain_notify(void *c) { (void)c; DOMAIN_OPS.notify(DOMAIN_NATIVE); 
  * idle and the I2C mutex entered through the adapter, so that the adapter's
  * read operation runs as the provider runs it. CNTR reads have no side
  * effect. */
+/* One cost window: BB_POWER_COST_READS iterations of body in
+ * BB_COST_SUBWINDOWS equal sub-windows, each timed by CNTPCT after `end`
+ * (a DSB SY for the windows whose loads may still be outstanding). */
+#define WINDOW(w, body, end)                                                    \
+    do {                                                                        \
+        (w).sub_min = UINT32_MAX;                                               \
+        (w).sub_max = 0;                                                        \
+        (w).ticks = 0;                                                          \
+        for (unsigned s_ = 0; s_ < BB_COST_SUBWINDOWS; ++s_) {                  \
+            const uint64_t t0_ = counter();                                     \
+            for (unsigned i = 0; i < BB_POWER_COST_READS / BB_COST_SUBWINDOWS; ++i) \
+                body;                                                           \
+            end;                                                                \
+            const uint32_t d_ = (uint32_t)(counter() - t0_);                    \
+            (w).ticks += d_;                                                    \
+            if (d_ < (w).sub_min) (w).sub_min = d_;                             \
+            if (d_ > (w).sub_max) (w).sub_max = d_;                             \
+        }                                                                       \
+    } while (0)
+_Static_assert(BB_POWER_COST_READS % BB_COST_SUBWINDOWS == 0, "whole sub-windows");
+
 static void measure(struct bb_power *p)
 {
     struct bb_cost *c = &p->cost;
     void *n = &p->pmic_native;
     const uintptr_t cntr = BB_TWI_CNTR;
-    uint64_t daif, mpidr, now, t[9];
+    uint64_t daif, mpidr, now;
     uint32_t v = 0;
     unsigned failed = 0;
     if (p->native_pmic_ops.enter(n, p->deadline) != 1)
         bb_power_fail("board bundle 6: cost windows could not enter the I2C mutex");
     __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
     __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(daif) :: "memory");
-    t[0] = counter();
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        (void)a733_mmio_read32_dsb_sy_both(cntr);
-    t[1] = counter();
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        (void)a733_mmio_read32(cntr);
-    a733_mmio_dsb_sy();
-    t[2] = counter();
+    WINDOW(c->dsb, (void)a733_mmio_read32_dsb_sy_both(cntr), (void)0);
+    WINDOW(c->plain, (void)a733_mmio_read32(cntr), a733_mmio_dsb_sy());
     uintptr_t address = cntr;
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i) {
+    WINDOW(c->dependent, ({
         uint64_t zero;
         v = a733_mmio_read32(address);
         __asm__ volatile("eor %0, %1, %1" : "=r"(zero) : "r"((uint64_t)v));
         address = cntr + zero;
-    }
-    a733_mmio_dsb_sy();
-    t[3] = counter();
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        failed |= p->native_pmic_ops.now(n, &now) != 1;
-    t[4] = counter();
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        failed |= p->native_pmic_ops.read(n, cntr, &v) != 1;
-    t[5] = counter();
+    }), a733_mmio_dsb_sy());
+    WINDOW(c->time_read, failed |= p->native_pmic_ops.now(n, &now) != 1, (void)0);
+    WINDOW(c->adapter_read, failed |= p->native_pmic_ops.read(n, cntr, &v) != 1, (void)0);
     /* As a flag poll after a phase-start write that reads the flag clear. */
     struct bb_twi scratch = {.mode = 1};
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        bb_twi_observe(&scratch, 0, cntr, v & ~UINT32_C(8));
-    t[6] = counter();
+    WINDOW(c->observer, bb_twi_observe(&scratch, 0, cntr, v & ~UINT32_C(8)), (void)0);
     __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
     const TickType_t first = xTaskGetTickCount();
-    t[7] = counter();
-    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
-        failed |= a733_task_context_owner_el1(p->service) != 1;
-    t[8] = counter();
+    WINDOW(c->task_check, failed |= a733_task_context_owner_el1(p->service) != 1, (void)0);
     const TickType_t last = xTaskGetTickCount();
     p->native_pmic_ops.leave(n);
     if (failed)
         bb_power_fail("board bundle 6: cost window operation refused");
     c->reads = BB_POWER_COST_READS;
     c->core = (uint32_t)((mpidr >> 8) & 0xff);
-    c->dsb = (uint32_t)(t[1] - t[0]);
-    c->plain = (uint32_t)(t[2] - t[1]);
-    c->dependent = (uint32_t)(t[3] - t[2]);
-    c->time_read = (uint32_t)(t[4] - t[3]);
-    c->adapter_read = (uint32_t)(t[5] - t[4]);
-    c->observer = (uint32_t)(t[6] - t[5]);
-    c->task_check = (uint32_t)(t[8] - t[7]);
     c->task_ticks = (uint32_t)(last - first);
 }
 
@@ -209,6 +220,7 @@ int bb_power_init(TaskFunction_t client, const char *name)
     atomic_init(&p->stop, 0);
     atomic_init(&p->parked, 0);
     atomic_init(&p->wire_armed, 0);
+    p->cost.write_min = UINT32_MAX;
     if (!a733_counter_clock_init(&p->counter, 24000000) ||
         !a733_platform_locks_init(&p->locks, a733_counter_clock_now, &p->counter) ||
         !a733_clock_leases_init(&p->clocks, a733_counter_clock_now, &p->counter))

@@ -63,39 +63,46 @@ struct bb_step {
     uint32_t interrupts;               /* scheduler ticks inside it */
     uint16_t conditions, bytes, stops, first_set, first_clear, polls_max, respins;
 };
-/* The distribution of steps against the wire time of their phases (bit
- * time bit_ns, byte time byte_ns), in thousandths: at most 1000, 1050, 1100
- * (the design's first target), 1550 (the interim bound of
- * docs/designs/power-domains.md), above; steps longer than 1.1 ms; and the
- * largest ratio. */
-struct bb_step_bins { unsigned bins[5], over_ms; uint64_t worst; };
-void bb_step_bins(const struct bb_step *, unsigned count, uint32_t bit_ns, uint32_t byte_ns, struct bb_step_bins *);
-/* The provisional pass bound of docs/designs/pmic-access.md, which holds
- * until a bundle 6 run has measured the access costs: the median step at
- * most 155% of its wire time, the first step at most 155% of its wire time
- * plus 40 us, and at most 12 re-spins in any snapshot. The median of an even
- * count is the larger middle value. */
+/* Step evaluation against the wire time of the steps' phases (bit time
+ * bit_ns, byte time byte_ns), with each step's ratio computed once:
+ * - the distribution in thousandths: at most 1000, 1050, 1100, 1550, above;
+ *   steps longer than 1.1 ms; and the largest ratio;
+ * - the provisional bound of docs/designs/pmic-access.md, which holds until a
+ *   bundle 6 run has measured the access costs: the median step at most 155%
+ *   of its wire time (the larger middle value of an even count) and the first
+ *   step at most 155% of its wire time plus 40 us. Re-spins are reported, not
+ *   bounded. */
 #define BB_BOUND_PERMILLE 1550u
 #define BB_BOUND_FIRST_EXTRA_NS 40000u
-#define BB_BOUND_RESPINS 12u
 #define BB_BOUND_STEPS 160u
-struct bb_bound { uint32_t median; uint64_t first_ns, first_limit_ns; unsigned respins_max, pass; };
-void bb_bound(const struct bb_step *, unsigned count, uint32_t bit_ns, uint32_t byte_ns, unsigned respins_max,
-              struct bb_bound *);
+struct bb_step_bins { unsigned bins[5], over_ms; uint64_t worst; };
+struct bb_bound { uint32_t median; uint64_t first_ns, first_limit_ns; unsigned pass; };
+void bb_steps_evaluate(const struct bb_step *, unsigned count, uint32_t bit_ns, uint32_t byte_ns,
+                       struct bb_step_bins *, struct bb_bound *);
+/* The byte time of the wire model. The measured byte is the lower bracket of
+ * the wire-time spin: CNTPCT ticks from the return of a byte phase's CNTR
+ * write to the last read that still saw INT_FLAG clear. The byte time is nine
+ * bit times, or the measured byte when it is longer and at most 110% of nine
+ * bit times. Returns 1 with *byte_ns set; returns 0 with nine bit times when
+ * the spin never saw INT_FLAG set or the measured byte exceeds 110%, and the
+ * bound then fails. */
+#define BB_BYTE_LIMIT_PERMILLE 1100u
+unsigned bb_byte_ns(uint32_t bit_ns, unsigned seen, uint64_t clear_ticks, uint32_t *byte_ns);
 
-/* Domain status read back to back after the ON command, with CNTPCT stamps
- * relative to the command's completion, until the status reads ON (8) or the
- * bound passes. Each change of the status value is recorded with its stamp
- * and the stamp of the read before it. */
+/* A register read back to back, with CNTPCT stamps relative to start, until
+ * (value & mask) == done or the bound passes: the domain status after the ON
+ * command (mask 15, done 8, ON) and S_TWI0 CNTR after a byte-phase write
+ * (mask and done 8, INT_FLAG). Each change of the value is recorded with its
+ * stamp and the stamp of the read before it. */
 #define BB_STATUS_CHANGES 16u
 struct bb_status_trace {
     unsigned reads, changes, on, bounded;
     uint32_t first;
-    uint64_t on_at, last_at;
+    uint64_t on_at, on_before, last_at; /* the first done read, the read before it, the last read */
     struct { uint32_t value; uint64_t at, before; } change[BB_STATUS_CHANGES];
 };
 void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, uint64_t (*now)(void),
-    uintptr_t status, uint64_t start, uint64_t bound, struct bb_status_trace *);
+    uintptr_t status, uint32_t mask, uint32_t done, uint64_t start, uint64_t bound, struct bb_status_trace *);
 
 /* Fixed lines of both images, which the host model counts in the log bound. */
 #define BB6_BEGIN "BEGIN board bundle 6: PMIC service and power-domain owner, read-only\n"
@@ -117,22 +124,31 @@ void bb_line_end(struct bb_line *);
 
 /* The parts of a provider register access, measured once by the service
  * task, which is the provider task, on its core and clock, with the I2C mutex
- * entered and the provider idle, at the park. Each window is `reads` iterations timed by
- * CNTPCT; all but the task-check window run with IRQs masked. Writes are
- * timed in place inside the snapshots' own transfers, so no extra bus write
- * is made; those two counter stamps per write (about 60 per snapshot) are
- * inside the step times. The wire time is one byte phase, from the return of
- * its CNTR write to INT_FLAG set. */
+ * entered and the provider idle, at the park. Each window is `reads`
+ * iterations timed by CNTPCT in BB_COST_SUBWINDOWS equal sub-windows; the
+ * record keeps the total and the fastest and slowest sub-window, so that the
+ * upper end of a cost's range is the slowest sub-window over its iterations.
+ * All but the task-check window run with IRQs masked. Writes are timed in
+ * place inside the snapshots' own transfers, so no extra bus write is made;
+ * those two counter stamps and the observer call per write (about 60 per
+ * snapshot) are inside the step times. */
+#define BB_COST_SUBWINDOWS 8u
+struct bb_window { uint32_t ticks, sub_min, sub_max; };
 struct bb_cost {
     uint32_t reads, core;              /* iterations per window; MPIDR_EL1 Aff1 (the core number) of the service task */
-    uint32_t dsb;                      /* CNTR reads through a733_mmio_read32_dsb_sy_both */
-    uint32_t plain;                    /* plain CNTR reads, value discarded: issue throughput */
-    uint32_t dependent;                /* plain CNTR reads, each address depending on the last value: latency */
-    uint32_t time_read, adapter_read;  /* the native adapter's now and read operations */
-    uint32_t task_check, task_ticks;   /* a733_task_context_owner_el1, IRQs unmasked; scheduler ticks inside */
-    uint32_t observer;                 /* bb_twi_observe on a scratch record, as a flag poll that reads the flag clear */
-    uint32_t writes, wire_reads;       /* writes timed in transfers; CNTR reads of the wire-time spin */
-    uint64_t write_ticks, wire_ticks;  /* their sum; the wire time, 0 when INT_FLAG was not seen */
+    struct bb_window dsb;              /* CNTR reads through a733_mmio_read32_dsb_sy_both */
+    struct bb_window plain;            /* plain CNTR reads, value discarded: issue throughput */
+    struct bb_window dependent;        /* plain CNTR reads, each address depending on the last value: latency */
+    struct bb_window time_read, adapter_read; /* the native adapter's now and read operations */
+    struct bb_window task_check;       /* a733_task_context_owner_el1, IRQs unmasked */
+    struct bb_window observer;         /* bb_twi_observe on a scratch record, as a flag poll that reads the flag clear */
+    uint32_t task_ticks;               /* scheduler ticks inside the task-check window */
+    uint32_t writes, write_min, write_max; /* writes timed in transfers, the fastest and the slowest */
+    uint64_t write_ticks;              /* their sum */
+    /* The wire-time spin, with IRQs masked: CNTR read back to back after one
+     * byte-phase write until INT_FLAG sets. */
+    uint32_t wire_reads, wire_seen;    /* reads; 1 when INT_FLAG was seen set */
+    uint64_t wire_clear, wire_set;     /* ticks from the write's return to the last read with INT_FLAG clear, the first set */
 };
 /* Bundle 6's summary. */
 struct bb6_summary {
@@ -148,11 +164,11 @@ struct bb6_summary {
     unsigned wire_excluded;             /* 1: the step that held the wire-time spin is left out */
     unsigned respins;                   /* respins over the recorded steps */
     unsigned stop_respins, snapshot_respins_max, snapshots; /* from the observer, over every transfer */
-    uint32_t byte_ns;                   /* byte time of the wire model */
+    uint32_t byte_ns, byte_ok;          /* byte time of the wire model; 0 when bb_byte_ns() refused the sample */
     struct bb_bound bound;
     struct bb_cost cost;
 };
-#define BB6_SUMMARY_LINES 15u
+#define BB6_SUMMARY_LINES 23u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {

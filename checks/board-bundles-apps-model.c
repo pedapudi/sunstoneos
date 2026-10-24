@@ -12,9 +12,9 @@
  * Bundles 6 and 7: apps/board-bundles-power/trace.c. The TWI observer is fed
  * the S_TWI0 accesses of one modeled read transaction, of flag phases and
  * STOP waits polled after a spin that ended early, and of whole snapshots;
- * the status spin is fed a modeled status sequence; the step distribution
- * and the provisional bound are computed for modeled steps and for the board
- * steps of port 3-3. Every summary and detail line is formatted with each field at its
+ * the status spin is fed a modeled status sequence and a CNTR sequence; the
+ * step distribution, the provisional bound and the byte rule are computed
+ * for modeled steps and for the board steps of port 3-3. Every summary and detail line is formatted with each field at its
  * widest value: no line is cut, and the begin line, the summary, the outcome
  * line and the detail reserve of each image fit the 16,127 log bytes, so the
  * outcome line always reaches the log.
@@ -237,7 +237,7 @@ static uint64_t clock_now;
 static int status_read(void *c, uintptr_t a, uint32_t *v)
 {
     (void)c;
-    assert(a == 0x07061008);
+    assert(a == 0x07061008 || a == BB_TWI_CNTR);
     *v = statuses[status_index < status_count ? status_index : status_count - 1];
     ++status_index;
     return 1;
@@ -251,8 +251,8 @@ static void spin_case(void)
     status_count = 6;
     status_index = 0;
     clock_now = 1000;
-    bb_status_spin(status_read, NULL, step_now, 0x07061008, 1000, 240000, &t);
-    assert(t.on && !t.bounded && t.reads == 6 && t.changes == 3 && t.first == 0);
+    bb_status_spin(status_read, NULL, step_now, 0x07061008, 15, 8, 1000, 240000, &t);
+    assert(t.on && !t.bounded && t.reads == 6 && t.changes == 3 && t.first == 0 && t.on_before == 50);
     assert(t.change[0].value == 0 && t.change[1].value == 4 && t.change[2].value == 8 && t.on_at == 60);
     assert(t.change[1].at == 40 && t.change[1].before == 30 && t.change[2].before == 50);
     static const uint32_t stuck[] = {0};
@@ -260,9 +260,19 @@ static void spin_case(void)
     status_count = 1;
     status_index = 0;
     clock_now = 0;
-    bb_status_spin(status_read, NULL, step_now, 0x07061008, 0, 100, &t);
+    bb_status_spin(status_read, NULL, step_now, 0x07061008, 15, 8, 0, 100, &t);
     assert(!t.on && t.bounded && t.reads == 10 && t.changes == 1 && t.last_at == 100);
-    printf("\"status spin: ON after an intermediate value; bounded when it never changes\"");
+    /* CNTR after a byte-phase write with A_ACK (bit 2) set, then INT_FLAG
+     * (bit 3): the spin tests the flag bit alone, which (v & 15) == 8 would
+     * never match here. */
+    static const uint32_t cntr[] = {0x44, 0x44, 0x44, 0x4c};
+    statuses = cntr;
+    status_count = 4;
+    status_index = 0;
+    clock_now = 0;
+    bb_status_spin(status_read, NULL, step_now, BB_TWI_CNTR, 8, 8, 0, 240000, &t);
+    assert(t.on && t.reads == 4 && t.on_at == 40 && t.on_before == 30);
+    printf("\"status spin: ON after an intermediate value; bounded when it never changes; INT_FLAG with A_ACK set\"");
 }
 
 /* One STOP wait: the STOP write, CNTR polls (the last with the STOP bit
@@ -286,18 +296,28 @@ static void bins_case(void)
                                      {16632, 1, 12, 24, 6, 20, 16, 2, 0},  /* 693,000 ns: 110% */
                                      {30000, 1, 12, 24, 6, 20, 16, 2, 0}}; /* 1,250,000 ns */
     struct bb_step_bins b;
-    bb_step_bins(steps, 3, 2500, 22500, &b);
+    struct bb_bound bound;
+    bb_steps_evaluate(steps, 3, 2500, 22500, &b, &bound);
     assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
-           b.worst == 1984);
+           b.worst == 1984 && bound.median == 1100);
     /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
     const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2, 0};
-    bb_step_bins(&board, 1, 2500, 22500, &b);
+    bb_steps_evaluate(&board, 1, 2500, 22500, &b, &bound);
     assert(b.bins[3] == 1 && b.worst == 1456);
-    /* A measured byte of 25 us, longer than nine 2,500 ns bits: the snapshot
-     * wire is 36 x 2,500 + 24 x 25,000 = 690,000 ns, so the same step is
-     * 1,329 thousandths. */
-    bb_step_bins(&board, 1, 2500, 25000, &b);
-    assert(b.bins[3] == 1 && b.worst == 1329);
+    /* A byte of 24,750 ns, the largest that bb_byte_ns() admits: the snapshot
+     * wire is 36 x 2,500 + 24 x 24,750 = 684,000 ns, so the same step is
+     * 1,341 thousandths. */
+    bb_steps_evaluate(&board, 1, 2500, 24750, &b, &bound);
+    assert(b.bins[3] == 1 && b.worst == 1341);
+    /* The byte rule: nine bit times (22,500 ns) up to the measured lower
+     * bracket; at most 110% (24,750 ns, 594 ticks); refused when the flag was
+     * never seen. */
+    uint32_t byte;
+    assert(bb_byte_ns(2500, 1, 500, &byte) == 1 && byte == 22500);          /* 20,833 ns */
+    assert(bb_byte_ns(2500, 1, 570, &byte) == 1 && byte == 23750);          /* 23,750 ns */
+    assert(bb_byte_ns(2500, 1, 594, &byte) == 1 && byte == 24750);          /* 24,750 ns */
+    assert(bb_byte_ns(2500, 1, 595, &byte) == 0 && byte == 22500);          /* 24,791 ns */
+    assert(bb_byte_ns(2500, 0, 0, &byte) == 0 && byte == 22500);
     /* A byte phase polled four times: the read right after the write, the
      * read after the spin, and two re-spins. */
     struct bb_twi twi = {0};
@@ -329,39 +349,38 @@ static void bins_case(void)
 
 static void bound_case(void)
 {
+    struct bb_step_bins bins;
     struct bb_bound b;
     /* The board's 34 steps of 2026-10-24 (first 22,590 ticks, the others
-     * 22,011 to 22,166): median 1,456 and first 941,250 ns against
-     * 976,500 + 40,000 ns, so the run would pass the provisional bound. */
+     * 22,011 to 22,166): median about 1,456 and first 941,250 ns against
+     * 976,500 + 40,000 ns, so the run would pass the provisional bound.
+     * Re-spins do not enter it. */
     struct bb_step board[34];
     for (unsigned i = 0; i < 34; ++i)
-        board[i] = (struct bb_step){i ? 22011u + (i * 7) % 156 : 22590u, 1, 12, 24, 6, 0, 36, 2, 0};
-    bb_bound(board, 34, 2500, 22500, 0, &b);
+        board[i] = (struct bb_step){i ? 22011u + (i * 7) % 156 : 22590u, 1, 12, 24, 6, 0, 36, 2, 24};
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
     assert(b.pass && b.first_ns == 941250 && b.first_limit_ns == 1016500 && b.median >= 1456 && b.median <= 1470);
-    /* Re-spins above 12 in one snapshot fail it. */
-    bb_bound(board, 34, 2500, 22500, BB_BOUND_RESPINS + 1, &b);
-    assert(!b.pass);
     /* A first step above its own bound fails it: 1,016,500 ns is 24,396
      * ticks. */
     board[0].ticks = 24400;
-    bb_bound(board, 34, 2500, 22500, 0, &b);
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
     assert(!b.pass && b.first_ns == 1016666);
     board[0].ticks = 24395;
-    bb_bound(board, 34, 2500, 22500, 0, &b);
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
     assert(b.pass);
     /* The median is the larger middle value: 17 steps at 1,600 thousandths
      * of 34 fail it, 16 do not. */
     board[0].ticks = 22590;
     for (unsigned i = 1; i < 34; ++i)
         board[i].ticks = i <= 17 ? 24192 : 22019; /* 1,008,000 ns: 1,600 */
-    bb_bound(board, 34, 2500, 22500, 0, &b);
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
     assert(!b.pass && b.median == 1600);
     board[17].ticks = 22019;
-    bb_bound(board, 34, 2500, 22500, 0, &b);
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
     assert(b.pass && b.median == 1494); /* the first step, 941,250 ns */
-    bb_bound(board, 0, 2500, 22500, 0, &b);
+    bb_steps_evaluate(board, 0, 2500, 22500, &bins, &b);
     assert(!b.pass);
-    printf("\"provisional bound: median 155%%, first step 155%% plus 40 us, 12 re-spins per snapshot\",");
+    printf("\"provisional bound: median 155%%, first step 155%% plus 40 us; byte at most 110%% of nine bit times\",");
 }
 
 static size_t length(const struct bb_line *l)
@@ -372,7 +391,7 @@ static size_t length(const struct bb_line *l)
 static void log_bound_case(void)
 {
     const size_t room = 16384 - 256 - 1, reserve = 2 * BB_LINE_MAX;
-    struct bb_line lines[16];
+    struct bb_line lines[BB6_SUMMARY_LINES > BB7_SUMMARY_LINES ? BB6_SUMMARY_LINES : BB7_SUMMARY_LINES];
     struct bb6_summary s6;
     memset(&s6, 0xff, sizeof s6);
     for (unsigned i = 0; i < 3; ++i) s6.check[i] = 1;
