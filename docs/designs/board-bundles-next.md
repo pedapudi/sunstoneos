@@ -11,9 +11,16 @@ four bundles are prepared in
 The earlier preparation of the same rows in `board-bundles-20261024-2/` is
 superseded and must not run.
 All four ran on port 3-3 on 2026-10-24; the [handoff](../handoff.md) records
-their results. Bundle 4's prepared walk check was wrong, and the next bundle
-4 set must be prepared as section "Samples in bundle 4" states. Bundle 10 stays refused until its runner declares completion counts and
-its owner names admission values.
+their results. The fourth set,
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-4/`,
+is prepared from the source revision with the PMIC access path and is not
+run. It holds a new base image (bundle 2's kernel check rebuilt), bundle 4
+with the corrected walk check, bundle 6 with the access-cost windows and
+its pass bound, bundle 7, and the native USB image `rank-9-usb-v5/`, all
+except the base on the changed PMIC provider or the base's platform; its
+`runbook.md` gives the order on port 3-3 (section "The fourth set").
+Bundle 10 stays refused until its runner declares completion counts and its
+owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
 on 2026-10-24 ([handoff](../handoff.md)): ranks 1 to 6 of the
@@ -141,6 +148,11 @@ still quarantines.
   than the monitor's `end_counter`. This outcome means the core stopped waking from
   `WFI` on PPI 30. The runner reads the four words from the result page; an
   outcome may name such a record through its `progress` key.
+- **Bundle 6 (fourth set).** Status 1 after the full summary, with `BOUND
+  permille=1550` and `FAILED board bundle 6: provisional step bound`: the
+  steps missed the provisional bound (section "Records of bundles 6, 7 and
+  8"). The board returns, and the steps that need bundle 6 to pass do not
+  run. A supply or snapshot mismatch prints `FAIL` and is not controlled.
 - **Bundle 7.** Status 1 with the owner's FAILED record and its status trace,
   bracketed by `FAILED board bundle 7: domain 1` and `TRACE END board bundle
   7`. No later bundle writes the PPU in that lifetime. When the owner refuses
@@ -203,17 +215,11 @@ record.
   instruction walk is the walk that a block already counts once per
   iteration. The image prepared on 2026-10-24 instead required 1,024 plus
   the calibration's count, so on port 3-3 it refused all 13 blocks, whose
-  counts were 1,024 and 1,024 in every block. The next bundle 4 set must
-  carry the corrected check. `checks/board-bundles-apps.py` passes on the
-  bundles' source revision `74d6aeab` with the current bundle sources. The
-  bundle 4 image then differs from the prepared one only in `main.c`, and
-  the bundle 8 image is byte-identical. The bundle 6 and 7 images differ in
-  their main files, `power.c` and `trace.c`, which carry the next bundle 6's
-  additions (section "Records of bundles 6, 7 and 8"). On the `bringup` revision `f3cbec23` the check refuses before
-  any image is built, because `platform/a733/platform.c` changed after
-  bundle 2 was frozen and the central kernel-check object no longer equals
-  bundle 2's. The next set is therefore prepared from `74d6aeab` with the
-  correction, or on a new base image. The switch is:
+  counts were 1,024 and 1,024 in every block. The fourth set carries the
+  corrected check. Its bundle 4 links the objects of that set's base image
+  instead of bundle 2's: `platform/a733/platform.c` changed after bundle 2
+  ran, so the central kernel-check object no longer equals bundle 2's. The
+  switch is:
   write `TCR_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, `ISB`. No table write
   follows the final flush of both table pages in `platform_init()`
   (`platform/a733/platform.c` lines 138–139), so uncached walks read the
@@ -254,7 +260,7 @@ record.
   then its detail lines while 256 log bytes remain free, then a count of the
   omitted lines (and bundle 7 its closing line). The host model formats
   every line with each field at its widest value: bundle 6 needs at most
-  1,364 bytes before its details and bundle 7 at most 721, of 16,127.
+  1,855 bytes before its details and bundle 7 at most 721, of 16,127.
 - **Bundle 6** records the owner adapter's mapping result and the
   `PAR_EL1` translation of the domain-1 block. The adapter requires the
   block to translate as Device-nGnRnE and outer-shareable; the descriptor's
@@ -284,9 +290,28 @@ record.
   back until its flag sets, which gives one byte's wire time; that step is
   excluded from the step records and counted. A control-register read has
   no side effect. The `TWI_COST` lines print the windows; the
-  `STEPS` line also prints whether that step was excluded and the re-spins,
-  flag polls beyond the second of a phase, over the recorded steps, and each
-  step line its own re-spins.
+  `STEPS` line also prints whether that step was excluded and the re-spins
+  over the recorded steps, and each step line its own re-spins.
+- **Bundle 6 re-spins, wire time and pass bound.** A re-spin is a
+  control-register poll beyond the second of a phase: the first poll reads
+  right after the phase-start write and the second after the service's spin.
+  The observer counts them for flag phases and for STOP waits, which last
+  until `M_STP` reads clear and the status register reads `0xf8`. Six STOPs
+  end a snapshot, so the observer also keeps the most re-spins of one
+  snapshot. The wire time of a step is two bit times per START, repeated
+  START or STOP, and per byte nine bit times or the measured byte wire time
+  when that is longer. The `BOUND` line applies the provisional bound of
+  [pmic-access.md](pmic-access.md): the median step at most 155% of its
+  wire time (the larger middle value of an even count), the first step at
+  most 155% plus 40 µs, at most 12 re-spins in any snapshot, and 34
+  snapshots counted (the two supply verifications and the 32 client
+  snapshots). The `RESPINS` line prints the STOP waits' share, the most per
+  snapshot and the byte time used. Both supplies verified and every
+  snapshot `0xff9e` are required before the verdict; a mismatch is a
+  `FAIL`. A met bound ends with `COMPLETE board bundle 6` and status 0, a
+  missed one with the controlled outcome above. After the run, the
+  post-change bound of [pmic-access.md](pmic-access.md) is computed from
+  the `TWI_COST` windows and replaces 155% for later runs.
 - **Bundle 7** reads the domain-1 words before the request, then lets the
   owner run its sequence. After the owner's ON command reaches the PPU, the
   layer reads the status back to back until it reads ON or 10 ms pass, and
@@ -308,6 +333,31 @@ record.
   of the framebuffer's register path. An access that the register pair
   refuses, as when its trace is full, ends the run as a refused access,
   never as a readback mismatch.
+
+## The fourth set
+
+`board-bundles-20261024-4/` was prepared on 2026-10-24 for port 3-3's
+lifetime that the cold DDR start `ddr-2` began. Its `runbook.md` gives the
+order, and each row's `runbook.md` its full `--warm-return` list: the
+lifetime's chain `r9-v3-usb`, `r9-v4-usb`, `bb1-run`, `bb2-run`, `bb4-run`,
+`bb6-run`, `bb7-run`, `bb8-run`, then every earlier step of the set.
+
+| Step | Bundle | Records | Run only after |
+| --- | --- | --- | --- |
+| 1 | Base: the kernel check with the counter option, as bundle 2 | `set4-bb2-*` | None |
+| 2 | Bundle 4 with the corrected walk check | `set4-bb4-*` | Step 1 passed |
+| 3 | Bundle 6 on the changed PMIC provider, with the access-cost windows and the provisional bound | `set4-bb6-*` | Step 1 passed |
+| 4 | Bundle 7 on the changed PMIC provider | `set4-bb7-*` | Steps 1 and 3 passed |
+| 5 | `rank-9-usb-v5/`, the native USB channel on the changed PMIC provider | `set4-r9-v5-*` | Steps 1 and 3 passed, and step 4 not `domain-1-failed` |
+
+Steps 2 to 5 link the base's `platform/a733/platform.c`, so the base runs
+first. Step 3 is the first board run of the changed provider and adapter,
+which steps 4 and 5 also run. Step 3 needs step 2's CPU-L rate from the
+same lifetime. The native USB step runs last because a failed handback
+leaves the board unreachable. Bundle 8 is not in the set: its NSI priority
+writes of `bb8-run` persist until power removal, so step 3 runs under
+those fields and its steps are compared with the service model at the
+measured costs.
 
 ## Bundles that wait
 
@@ -349,16 +399,33 @@ record.
 ## Data flow and ownership
 
 Owners build each image under `~/.cache/sunstoneos/build/<package>/`; the
-tool builds nothing. `checks/board-bundles-apps.py` builds the images of
-bundles 4, 6, 7 and 8 and writes the `build.json` that the tool reads. It
-links each image from the exact objects of an image that passed: bundle 2's
-for bundle 4, and `rank-9-usb-v4/`'s platform and provider objects for
-bundles 6 to 8. It runs from the source tree, outside
-`~/.cache/sunstoneos`, because the provider objects record the compile
-directory. It first reproduces those objects from this tree: every
-object byte-identical, except `monitor.c` in `rank-9-usb-v4/`, whose
-instructions are equal because only its line table moved with the counter
-option's lines. In `tools/prepare-board-bundles.py`:
+tool builds nothing. `checks/board-bundles-apps.py` builds the base image
+and the images of bundles 4, 6, 7 and 8 and writes the `build.json` that the
+tool reads. It runs from the source tree, outside `~/.cache/sunstoneos`,
+because the provider objects record the compile directory. Each object of
+an image is one of:
+
+- an object of an image that passed: the kernel check of ranks 4 and 5,
+  bundle 2 or `rank-9-usb-v4/`. A returning platform object of
+  `rank-9-usb-v4/` is used when this tree's object equals it; `monitor.c`
+  is used when its instructions are equal, because only its line table
+  moved with the counter option's lines. A provider object of
+  `rank-9-usb-v4/` is used when the unit recompiles byte-identical;
+- an object of the base image of the same set (origin `set-base`): the
+  central kernel check with `monitor.c` compiled with the counter option.
+  Its only object that no passed image holds is
+  `platform/a733/platform.c`. Bundle 4 links every base object except
+  `checks/kernel.c`, and bundles 6 to 8 link its `platform.c`. The base
+  runs first, and its pass makes those objects board-run;
+- a declared new unit: the bundle's own files and, in bundles 6 and 7, the
+  PMIC provider, its native adapter, its consumer and the GPU resource
+  adapter. The last recompiles with unchanged instructions; its debug
+  information records the changed layout of `struct a733_pmic`.
+
+With `--usb`, the check also records the origin of every object of the
+native USB image that `apps/usb-returning/build.py --platform-build` built
+from the same tree. It refuses a platform or provider object that belongs
+to no passed image, the base or bundle 6. In `tools/prepare-board-bundles.py`:
 
 - **Read rows** carry their words in the row table, and the tool writes them
   to `WORDS.json`: each entry is an address and either the ungated block that
@@ -374,13 +441,23 @@ option's lines. In `tools/prepare-board-bundles.py`:
   defines `monitor_sync`, the uncapped renewal. `validate_bundle()` returns a
   platform-equivalence record against the base, and the tool refuses any
   differing object outside the row's declared overlay. Passed objects come
-  from the kernel check of ranks 4 and 5, `rank-9-usb-v4/` and bundle 2. The
-  queue timeout is computed from the bundle's own copy of the runner.
+  from the kernel check of ranks 4 and 5, `rank-9-usb-v4/` and bundle 2. A
+  row may name a base row of the table; it is prepared only after that row
+  in the same run, and each `set-base` object must equal the base bundle's
+  object of the same unit. A row also names the rows that must pass before
+  it runs (bundle 7 after bundle 6). The queue timeout is computed from the
+  bundle's own copy of the runner.
 - **Runbooks.** For each prepared row, the tool writes `runbook.md` in the
   format of `docs/board-runbooks/`: status, bundle files with SHA-256, host
   checks, numbered commands with success text, timeouts and admission
   records, stop conditions, the controlled outcomes named in the bundle's
-  `controlled.json`, and the path without the runner patch.
+  `controlled.json`, and the rows that must pass first.
+- **Lifetime.** With `--lifetime`, a JSON file names the port, the DDR
+  record of the current lifetime, its warm-return chain and the order of
+  the run's rows and of external bundles, each with its record directory.
+  Every runbook then gives its record directories and its complete
+  `--warm-return` list, and the run directory receives `runbook.md` with
+  the order, the gates and the chain.
 - **Admission.** Rows 1 to 9 admit the value that their preparation step
   returns when it names the row's schema and the row; row 10 keeps
   `admission` at `None` until its owner names the admission values.
@@ -481,24 +558,15 @@ Offline results of the four new images (`checks/board-bundles-apps.py`):
 ## Edits outside the owned files
 
 The counter option in `platform/a733/monitor.c`, the single-core form of
-`a733_cpu_pmu_begin` and `end`, and the controlled outcomes with their
-warm-return admission are merged. `primary.patch` of the bundle apps holds:
+`a733_cpu_pmu_begin` and `end`, the controlled outcomes with their
+warm-return admission and progress record, and the reader's FEL command
+times are merged. `primary.patch` of the fourth set
+(`board-bundles-20261024/common-4/primary.patch`) holds:
 
-- `tools/check-a733-kernel.py`: the optional `progress` key of a controlled
-  outcome (offset, magic, stage, count bound, minimum age) and its match
-  against the four words at that offset of the result page and the
-  monitor's `end_counter`, also in a warm-return link;
-  `checks/kernel-platform-admission.py` gains the link, refusal and runner
-  cases.
-- `tools/board-bundles-next-read.py`: the start and end time of each FEL
-  command in the session record.
-- `checks/cpu-pmu.py`: a case for the single-core form, compiled with the
-  returning images' configuration.
-- `checks/index.json`: the entry of `checks/board-bundles-apps.py`, in
-  place of that of `checks/board-bundles-images.py`, the builder of bundles
-  1 and 2, which `checks/board-bundles-apps.py` supersedes.
-- `docs/board-runbooks/README.md` and `docs/audit/board-test-plan.md`: the
-  second prepared set and its runbooks.
+- `checks/index.json`: the summary line of `checks/board-bundles-apps.py`.
+- `docs/designs/pmic-access.md`: the bound procedure takes the measured
+  byte wire time when it exceeds nine bit times, and re-spins include STOP
+  waits.
 
 The table-walk owner's acceptance of one interleaved image in place of two
 images stays open.
