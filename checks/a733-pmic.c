@@ -21,8 +21,11 @@ struct pmic_model {
     uint64_t now_step,wire_us,flag_at;uint32_t flag_value;
     /* Optional finer timing: each time read costs now_ns and each register
      * access access_ns nanoseconds instead of now_step, and START, repeated
-     * START and STOP complete edge_us after their write instead of wire_us. */
-    uint64_t now_ns,access_ns,frac_ns,edge_us;
+     * START and STOP complete edge_us after their write instead of wire_us.
+     * With now_ns set, a flag sets at flag_ns: the write's completion time
+     * in nanoseconds plus its wire time, so its fraction of a microsecond
+     * counts. */
+    uint64_t now_ns,access_ns,frac_ns,edge_us,flag_ns;
     /* Optional concurrent consumer: each bus access also calls live(), and
      * concurrent(), when set, models a caller on another core; it also runs
      * at every time read, which includes the service task's spins. */
@@ -86,7 +89,7 @@ static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
 {
     struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m);
     assert(a733_pmic_native_address(address,0));++m->reads;
-    if(address==0x0708300c && m->flag_at && m->now>=m->flag_at){*pmic_model_word(m,address)=m->flag_value;m->flag_at=0;}
+    if(address==0x0708300c && m->flag_at && (m->now_ns ? m->now*1000+m->frac_ns>=m->flag_ns : m->now>=m->flag_at)){*pmic_model_word(m,address)=m->flag_value;m->flag_at=0;}
     *out=*pmic_model_word(m,address);return 1;
 }
 static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
@@ -115,13 +118,13 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
         assert(value==0x58 && m->wire==6);
         if(m->stop_stall){*pmic_model_word(m,address)=0x58;return 1;}
         m->wire=0;*pmic_model_word(m,0x07083010)=0xf8;
-        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+(m->edge_us ? m->edge_us : m->wire_us);m->flag_value=0x40;}
+        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+(m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->now*1000+m->frac_ns+(m->flag_at-m->now)*1000;m->flag_value=0x40;}
         else *pmic_model_word(m,address)=0x40;
         return 1;
     }
     uint32_t done=m->wire==m->stall_phase ? 0x40 : 0x48;
     if(m->wire_us){*pmic_model_word(m,address)=0x40;
-        m->flag_at=m->now+(value==0x68 && m->edge_us ? m->edge_us : m->wire_us);m->flag_value=done;}
+        m->flag_at=m->now+(value==0x68 && m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->now*1000+m->frac_ns+(m->flag_at-m->now)*1000;m->flag_value=done;}
     else *pmic_model_word(m,address)=done;
     *pmic_model_word(m,0x07083010)=m->wire==m->fail_phase ? m->fail_status : status;return 1;
 }

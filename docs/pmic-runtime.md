@@ -87,7 +87,15 @@ makes one acquire load of the power-authority state word described in
 [power.md](power.md), which carries provider, clock registry and rail ledger
 faults. A set fault bit retains the provider before any further access. The
 provider holds its S_TWI0 lease and the request's borrow until reap, so only a
-fault can invalidate them between phases.
+fault can invalidate them between phases. After each phase's register accesses
+the provider reads the time once and checks the request deadline; a register
+access makes no time read. A phase that starts before the deadline therefore
+completes its accesses, at most three, before the provider retains the request.
+Admission checks the deadline once after its eight reads at most, and startup
+once after its 24 reads at most. A `CNTR` write, including the one that sends
+the selector byte of a selector write, can start after the deadline has passed
+within its phase; the request is then retained, as after any fault that follows
+the data byte.
 
 Each request is admitted once. Admission queries the clock registry for the
 provider's S_TWI0 lease and the ledger for the request's borrow, rereads the
@@ -95,8 +103,19 @@ clock route and divisor (four or five reads), and requires an idle bus (three
 reads). Startup alone verifies the S_TWI0 gate and reset, the idle legacy and
 autonomous engines, DMA and interrupt state: only the provider could change
 them while it holds S_TWI0, and the native adapter cannot write any of them.
-The bus-idle registers are read again after every STOP, which detects another
-master's activity.
+After each STOP the provider waits, as the bootloader's `twi_stop()` does
+(`drivers/i2c/sunxi_i2c.c` lines 469–483), for the control register's `M_STP`
+bit to clear and then for the status register to read `0xf8`; each "not yet" is
+pending until the request deadline. Once `M_STP` clears, the control register
+must read `0x40`: the STOP write `0x58` cleared `INT_FLAG`, `M_STA` cleared
+after the START, and the idle state `0xF8` is the only state that does not set
+`INT_FLAG` (A733 User Manual V1.00, sections 18.11.10.4 and 18.11.10.5). Any
+other value is an error state and retains the request. The line-control check
+(`+0x20`) runs at admission and after a request's final STOP, where a mismatch
+retains the request. The bootloader reads line control only before a clock
+change and in its bus-recovery pulses. A line that another master holds after
+an intermediate STOP stops the next START, whose wait the request deadline
+bounds.
 
 The [poll-count and BUSY check](../checks/a733-pmic-polls.c) models bus timing
 in software. Its clock advances 1 microsecond for each time read, and each
@@ -107,14 +126,20 @@ modeled figures compare poll designs and have not been measured on hardware.
 
 In the GPU, accelerator, GPU display, HDMI and board images the provider task
 is the power service task ([docs/power-domains.md](power-domains.md)). It
-spins on the raw counter between polls for the expected duration of the bus
-phase, without the provider object, and blocks for one tick after at most 1 ms
-of spinning. `checks/power-domains-service.c` measures it. At 400 kHz with
-200 ns per register access, a snapshot and a selector write each complete in
-one step with no tick wait; at 100 kHz they take two and three tick waits.
-The board's snapshot steps take longer; section "Board result of the service
-steps" of [the power-domain design](designs/power-domains.md) records them. The other images keep their
-per-tick loops. `a733_pmic_work()` reads faults from the state word. When a
+spins on the raw counter between polls, without the provider object. Each
+spin lasts until the expected duration of the bus phase has passed since
+`phase_at`, the time the provider read after the write that started the
+phase, and at least a quarter bit time after a poll that found the phase
+unfinished. It blocks for
+one tick after at most 1 ms of spinning in a step.
+`checks/power-domains-service.c` measures it with each bus flag set at a
+sub-microsecond time. At 400 kHz with 200 ns per register access, a snapshot
+and a selector write each complete in one step with no tick wait; at 100 kHz
+they take two and three tick waits. The board's snapshot steps take longer;
+section "Board result of the service steps" of
+[the power-domain design](designs/power-domains.md) records them, and
+[the access design](designs/pmic-access.md) gives the per-phase timing and its
+modeled step times. The other images keep their per-tick loops. `a733_pmic_work()` reads faults from the state word. When a
 client latches a fault while the provider task holds the I2C mutex for a
 transfer, it reports `A733_PMIC_WORK_FAILED` with `A733_PMIC_WORK_RETAIN`,
 and the service polls once more; that poll marks the mutex retained.
@@ -130,28 +155,32 @@ immutable provider lifetime and makes one acquire load of the state word, so
 it never returns BUSY. A fault it sees is latched by the provider task's next
 poll.
 
-The provider checks its deadline before and after each register access. The
-native adapter answers those time reads from the architectural counter
+The provider checks its deadline once per bus phase. The native adapter
+answers those time reads from the architectural counter
 (`ISB; MRS CNTPCT_EL0`) divided by the ticks per microsecond, which gives the
 same microseconds as `a733_counter_clock_now` without its global ticket lock
 and masked interrupts. The provider faults on a time that runs backwards, and a
 fault latched in the shared counter clock refuses the read.
 
-The native adapter queries the kernel's I2C mutex holder once, when it enters
-the bus. A FreeRTOS mutex changes holder only when its holder gives it, and
-only the adapter's leave gives it on the provider task, so a flag set at entry
-and cleared at leave stays exact. Each access then checks that flag, the
-provider task and the lock's retained bit with one acquire load, and enters no
-kernel critical section. `checks/pmic-tree.py` fails if the adapter's time read
-calls the counter clock or an accessor queries the mutex holder.
+The native adapter checks the provider task and queries the kernel's I2C
+mutex holder once, when it enters the bus. A FreeRTOS mutex changes holder
+only when its holder gives it, and only the adapter's leave gives it on the
+provider task, so a flag set at entry and cleared at leave stays exact. Each
+access then checks that flag and the lock's retained bit with one acquire
+load, enters no kernel critical section and makes no task check: only
+`a733_pmic_poll()` reaches the accessors, and it checks the provider task at
+entry while it holds the provider object. `checks/pmic-tree.py` fails if the
+adapter's time read calls the counter clock, if an accessor queries the mutex
+holder or checks the task, or if a source other than the provider and the
+board-bundle forwarders calls the adapter's read or write operation.
 
 [The cost check](../checks/a733-pmic-cost.c) counts the work of one DCDC2
 snapshot and one DCDC3 selector write through the same model. The snapshot
-makes 126 transaction reads, 60 writes and 25 other reads (the admission route
-and bus-idle reads and the bus-idle reads after each of the six STOPs), 469
-time reads and one bus acquisition. With `--limits` the check asserts those
-budgets. `docs/designs/power-authority.md` records the counts against the
-previous provider.
+makes 200 register accesses, 180 time reads and one bus acquisition; the
+selector write 255 accesses and 229 time reads. With `--limits` the check
+asserts those budgets. `docs/designs/power-authority.md` and
+`docs/designs/pmic-access-measurements.md` record the counts against the
+earlier providers.
 
 The native adapter issues `DSB SY` before and after every register access.
 [shared-helpers.md](shared-helpers.md) requires board qualification for any

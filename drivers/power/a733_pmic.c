@@ -84,10 +84,12 @@ static int time_now(struct a733_pmic *p)
 }
 static int timely(struct a733_pmic *p)
 {return time_now(p) && p->last_now<p->deadline;}
+/* Register accesses make no time read: transfer() checks the deadline once
+ * per bus phase, and admission and startup once after their reads. */
 static int rd(struct a733_pmic *p,uintptr_t a,uint32_t *v)
-{return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
+{return p->ops.read(p->cookie,a,v)==1;}
 static int wr(struct a733_pmic *p,uintptr_t a,uint32_t v)
-{return timely(p) && p->ops.write(p->cookie,a,v)==1 && timely(p);}
+{return p->ops.write(p->cookie,a,v)==1;}
 static int match(struct a733_pmic *p,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(p,a,&v) && (v&mask)==expected;}
 static struct a733_pmic_lifetime identity(struct a733_pmic *p)
@@ -324,9 +326,17 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     case P_DATA:if(!rd(p,TWI+8,&value))return fault(p);p->values[p->byte_index]=(uint8_t)value;break;
     case P_STOP:ok=wr(p,TWI+0xc,0x58);break;
     case P_WAIT_STOP:
+        /* As the bootloader's twi_stop(): wait for M_STP to clear, then for
+         * the idle status 0xf8, each bounded by the request deadline. The
+         * STOP write cleared INT_FLAG and M_STA cleared after the START, so
+         * CNTR then holds BUS_EN alone (A733 manual 18.11.10.4); any other
+         * value is an error state. Line control is read after the final
+         * STOP; a line held after an earlier STOP stops the next START. */
         if(!rd(p,TWI+0xc,&value))return fault(p);
         if(value&0x10)return A733_PMIC_PENDING;
-        if(!bus_idle(p))return fault(p);
+        if((value&0xff)!=0x40 || !rd(p,TWI+0x10,&value))return fault(p);
+        if((value&0xff)!=0xf8)return A733_PMIC_PENDING;
+        if(p->byte_index+1==(s->write ? 8u : 6u) && !match(p,TWI+0x20,0x35,0x30))return fault(p);
         if((p->byte_index==0 && p->values[0]!=0) || (p->byte_index==1 && p->values[1]!=3) ||
            (p->byte_index==2 && p->values[2]!=0) || (p->byte_index==5 && p->values[5]!=0))return fault(p);
         /* A write needs the enabled output at the selector the client read.
@@ -362,13 +372,24 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
  * POLL_PHASES phases. The provider object is held only for those few register
  * accesses; result() and reap() callers on other cores see BUSY only then.
  * The state word is checked again before each further phase. */
+static int starts(unsigned phase)
+{
+    return phase==P_START || phase==P_RESTART || phase==P_ADDRESS || phase==P_READ_ADDRESS ||
+        phase==P_REGISTER || phase==P_RECEIVE || phase==P_WRITE || phase==P_STOP;
+}
 static enum a733_pmic_status transfer(struct a733_pmic *p)
 {
     for(unsigned n=1;;++n) {
-        unsigned before=p->phase,index=p->byte_index;
+        const unsigned before=p->phase,index=p->byte_index;
         enum a733_pmic_status r=phase(p);
-        if(r==A733_PMIC_PENDING && p->phase==before && p->byte_index==index){p->waiting=1;return r;}
-        if(r!=A733_PMIC_PENDING || n==POLL_PHASES)return r;
+        if(r!=A733_PMIC_PENDING)return r;
+        /* One time read per phase: the deadline and, after a phase-start
+         * write, the time the service spins from. */
+        if(!timely(p))return fault(p);
+        const int moved=p->phase!=before || p->byte_index!=index;
+        if(moved && starts(before))p->phase_at=p->last_now;
+        if(!moved){p->waiting=1;return r;}
+        if(n==POLL_PHASES)return r;
         if(!authorized(p))return fault(p);
     }
 }
@@ -440,9 +461,10 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
     p->held=1;
     /* Startup verified the gate, reset and engines, which only the provider
      * could change while it holds S_TWI0. Admission rereads the clock route
-     * and divisor, which set the bus timing, and requires an idle bus; the
-     * bus-idle registers are read again after every STOP. */
-    if(!route(p) || !bus_idle(p))return leave(p,fault(p));
+     * and divisor, which set the bus timing, and requires an idle bus. Each
+     * STOP is followed by the idle control and status values, and the final
+     * STOP of a request by the idle line state. */
+    if(!route(p) || !bus_idle(p) || !timely(p))return leave(p,fault(p));
     p->active=selected;s->state=ACTIVE;p->byte_index=0;p->phase=P_START;
     atomic_fetch_sub_explicit(&p->queued,1,memory_order_relaxed);
     return leave(p,A733_PMIC_PENDING);

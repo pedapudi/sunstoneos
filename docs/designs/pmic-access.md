@@ -1,12 +1,11 @@
 # PMIC register access and service spin timing
 
-Status: **design, not implemented**. Every step time below comes from the
-host model of the power service (`checks/power-domains-service.c`) run on an
-uncommitted copy with this design applied
-(`~/.cache/sunstoneos/build/pmic-access/v2/`). The model sets each bus flag
-at a sub-microsecond time, the write's completion time plus the phase's
-wire time. The figures are estimates until the check cases listed under
-"Measurement" are committed.
+Status: **implemented and host-modeled**; no board run has used it. Every
+step time below comes from the host model of the power service,
+`checks/power-domains-service.c`, which sets each bus flag at a
+sub-microsecond time, the write's completion time plus the phase's wire
+time. [pmic-access-measurements.md](pmic-access-measurements.md) records the
+measured rows against the base tree.
 
 The PMIC provider (`drivers/power/a733_pmic.c`) reads the AXP8191 over the
 always-on I2C controller S_TWI0. In five images its worker is the power
@@ -47,7 +46,11 @@ its two `DSB SY`. The run did not measure that split.
    `0xf8` is PENDING. Both waits are bounded by the request deadline.
 4. **Line-control read at the ends of a request.** The line-control idle
    check (`+0x20`) runs at admission and after the request's final STOP,
-   instead of after every STOP.
+   instead of after every STOP. A mismatch after the final STOP faults, as
+   every mismatch does today; every STOP of the board runs so far read idle
+   right after `0xf8`. A line that another master holds after an
+   intermediate STOP stops the next START, whose wait the request deadline
+   bounds.
 5. **Spin from the phase-start write.** The service spins until
    `max(phase_at + phase duration, now + bit time / 4)`, in whole
    microseconds, rounded up, where `now` is read after the poll returns. The
@@ -101,11 +104,16 @@ bound of one BUSY result per caller holds.
 
 ## Register sequences and sources
 
-No register write changes. The A733 User Manual V1.00, section 18.11.9.4,
-states that `M_STP` clears automatically and that the idle state `0xF8` is
-the only state that does not set `INT_FLAG`. With `A_ACK` and `INT_EN`
-never written, `CNTR` therefore reads `BUS_EN` alone, `0x40`, once `M_STP`
-clears. Section 18.11.9.5 lists `0xF8` as "no relevant status information,
+No register write changes. The A733 User Manual V1.00 describes S_TWI0's
+control register in section 18.11.10.4 and its status register in 18.11.10.5,
+with the same text as TWI0's (18.11.9). `M_STA` clears automatically after
+a START is sent, `M_STP` clears automatically after the STOP, `INT_FLAG` is
+write-one-to-clear, and the idle state `0xF8` is the only state that does
+not set `INT_FLAG`. `CNTR` reads `0x40`, `BUS_EN` alone, once `M_STP` clears,
+on two premises: the STOP write `0x58` cleared `INT_FLAG`, and `M_STA`
+cleared after the START. `A_ACK` and `INT_EN` are never written. Only an
+error state can set `INT_FLAG` after a STOP, so any other value faults.
+Section 18.11.10.5 lists `0xF8` as "no relevant status information,
 INT_FLAG=0". The pinned bootloader `b791be842935b27268ae3d00e943a9075495f30a`,
 `drivers/i2c/sunxi_i2c.c`, waits after STOP for status `0xf8` with a timeout
 (`twi_stop()`, lines 469–483). It reads line control only before a clock
@@ -121,7 +129,8 @@ so its own snapshot wire is 642 µs (102%). Rows at 200 ns per access keep the
 check's 40 ns per time read. The board-cost rows charge 100 ns per time read,
 an estimate for an `ISB`, a counter read and a division at 494 MHz, which
 the next bundle 6 measures. *X* is the cost of one provider register access
-after the change.
+after the change; the measurement section defines it from the board
+windows.
 
 | Metric | Baseline | Design | Measured by |
 | --- | --- | --- | --- |
@@ -130,7 +139,7 @@ after the change.
 | Task checks per register access | 1, plus 1 per poll | 0, plus 1 per poll | `checks/pmic-tree.py` |
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
-| Snapshot step, 400 kHz, 1,300 ns per access | 915 µs (145%) | 845 µs (134%) | Same, board-cost case |
+| Snapshot step, 400 kHz, 1,300 ns per access, 100 ns per time read | 947 µs (150%); 915 µs (145%) with the fit's 40 ns per time read | 845 µs (134%) | Same, board-cost case |
 | Snapshot step, 400 kHz, *X* = 850 ns; 900 ns | Not applicable; the current path fits 1,300 ns | 758 µs (120%); 782 µs (124%) | Same, board-cost cases |
 | Selector write, 400 kHz, *X* = 850 ns; 900 ns | Two steps, one tick wait | One step of 975 µs; two steps, one tick wait | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
@@ -161,20 +170,22 @@ Committed checks, added with the implementation:
 - `checks/power-domains-service.c`: a table of board-cost cases, 850 ns and
   900 ns (the selector-write bracket) and 1,300 ns, at 100 ns per time read;
   and the slow-bus case. Every service case runs with sub-microsecond flags.
-  These cases replace the review estimates of 856 µs at 1,300 ns and 776 µs
-  at 900 ns, which came from a model copy that timed the spin from the phase
-  start and changed nothing else.
+  The 400 kHz case at 200 ns per access keeps its 110% assertion against the
+  model's own wire time: the base provider fails it with sub-microsecond
+  flags (712 µs for 642 µs), and the changed provider passes (685 µs).
 - `checks/a733-pmic.c` model: flags set from the write's completion time in
   nanoseconds.
 - `checks/a733-pmic-cost.c --limits`: the counts in the table.
 
-Board measurement on the next bundle 6, which still runs the current
-provider:
+Board measurement on the next bundle 6. A bundle built from this tree runs
+the changed provider, so the windows give *X* directly, and one window times
+the task check that the earlier adapter made per access:
 
-1. **Run the cost windows in the service task**, on the provider's core at
-   its clock, with the I2C mutex held between transfers; record the core
-   number and CPU-L rate. If they stay in the client task, record both
-   tasks' cores and clocks.
+1. **Cost windows in the service task**, which is the provider task, after
+   the adapter's `enter()`, with the provider idle: on the provider's core at
+   its clock. The record names the core; the CPU-L rate comes from bundle 4 in
+   the same lifetime. The windows live in `apps/board-bundles-power/power.c`,
+   whose calls of the adapter's read operation the tree rule names.
 2. **Windows**, 256 iterations each:
    - `CNTR` reads with `a733_mmio_read32_dsb_sy_both`;
    - plain `CNTR` reads whose value is discarded, labelled as issue
@@ -182,31 +193,46 @@ provider:
    - plain `CNTR` reads where each value forms the next read's address (an
      address dependency), labelled as latency;
    - time reads through the adapter's `now`;
-   - the adapter's `read` operation, the current path;
+   - the adapter's `read` operation;
+   - `a733_task_context_owner_el1()`, with IRQs unmasked as the earlier
+     adapter called it, and the scheduler ticks inside that window;
    - `bb_twi_observe()` on a scratch record: the trace observer that
-     `apps/board-bundles-power/power.c` lines 25–37 runs on every access.
+     `apps/board-bundles-power/power.c` runs on every access.
 3. **Writes**, timed inside the snapshots' own transfers: the `pmic_write`
    wrapper stamps the counter around the adapter's `write` and sums the
-   ticks, with no extra bus write.
+   ticks, with no extra bus write. Those two stamps per write, about 60 per
+   snapshot, are inside the run's step times, so its steps are compared with
+   the model at the measured cost and never with the earlier 917 µs median.
 4. **Wire time**: once, after a byte-phase `CNTR` write, `bb_status_spin()`
    reads `CNTR` back to back until `INT_FLAG` sets. That step is excluded
-   from the step statistics.
-5. **Baseline check.** The adapter-read window plus two time reads plus the
-   observer must reproduce the 1,300 ns fit within 10%; the barrier window
-   then gives the bus part of *X*.
+   from the step statistics and counted as excluded.
+5. **Baseline check.** The adapter-read window plus the task-check window,
+   two time-read windows and the observer window reconstructs the earlier
+   per-access path. It must come within 10% of 1,380 ns: the 1,300 ns fit
+   plus the two 40 ns time reads that the model charged on top of it. The
+   fit also holds per-phase and per-poll software that no window measures, so
+   a reconstruction below that range means the windows miss part of the
+   cost, and *X* is then taken from the upper end of its range.
 
-After the change, bundle 6 is rebuilt and makes 32 snapshots of DCDC2 and
-DCDC4. Pass: the median and first steps within their bounds set as above;
-snapshot bytes unchanged (`0xff9e`); no fault; re-spins reported. A DCDC3
-selector write in one step needs a separate bundle with a PMIC write, which
-needs the user's approval.
+*X* is defined conservatively as the adapter-read window plus the observer
+window per access, which is what the bundle's steps pay; production images
+pay the adapter read alone.
+
+After the change, bundle 6 makes 32 snapshots of DCDC2 and DCDC4. Pass: the
+median and first steps within their bounds set as above; snapshot bytes
+unchanged (`0xff9e`); no fault; re-spins reported. A DCDC3 selector write in
+one step needs a separate bundle with a PMIC write, which needs the user's
+approval.
 
 **Requalification.** The provider and adapter change affects every image
-that links them. The board-qualified ones are the native USB channel image
-(`rank-9-usb-v4/`, rank 9 of the board-bundle table, four supply snapshots)
-and the returning thermal image (rank 6, a CLDO3 snapshot,
-`apps/thermal-returning/adc.c`). Both are rebuilt and rerun with their
-qualifying pass conditions, independent of the selector-write run. Bundle 7
+that links them. The board-qualified one is the native USB channel image
+(`rank-9-usb-v4/`, rank 9 of the board-bundle table, four supply snapshots).
+It is rebuilt and rerun with its qualifying pass conditions, independent of
+the selector-write run. The returning thermal image of rank 6 does not link
+the provider: its board-run ELF has no `a733_pmic_` symbol, and each of the
+seven units it compiles from the tree has the same instructions before and
+after this change. The returning ADC image (`apps/thermal-returning/adc.c`)
+links the provider and is not board-qualified. Bundle 7
 (`apps/board-bundles-power/bundle7.c`), which runs the service and the
 provider, either runs from its existing freeze on the current provider or is
 refrozen only after the rebuilt bundle 6 passes. The spin change otherwise
@@ -247,9 +273,15 @@ image built from it. None of them is board-qualified.
   `drivers/power/a733_pmic.c` and the forwarders in
   `apps/board-bundles-power/power.c` calls the adapter's `read` or `write`
   operation.
-- `apps/board-bundles-power/bundle6.c`, `power.c`, `trace.c` and `trace.h`,
-  for the next refreeze: the windows, write timing, wire-time spin and core
-  and clock record of the measurement plan, in place of the current
-  `access_cost()`, whose plain window discards each value.
+- `apps/board-bundles-power/bundle6.c`, `power.c`, `power.h`, `trace.c` and
+  `trace.h`, for the next refreeze: the windows, write timing, wire-time spin
+  and core record of the measurement plan, in place of the client's
+  `access_cost()`. The same edit passes the third argument of
+  `a733_power_domain_check()`, which `bundle6.c` omits on the current tree.
 - `docs/designs/board-bundles-next.md`: the bundle 6 row's measurements and
   bound procedure.
+- `checks/board-bundles-apps.py` and `tools/prepare-board-bundles.py`, not in
+  the patch: bundles 6 and 7 reuse rank-9-usb-v4's provider objects and
+  require each to recompile byte-identical from the tree. The changed
+  provider, adapter and consumer, and the layout of `struct a733_pmic`, make
+  those objects new units of the next bundle 6.

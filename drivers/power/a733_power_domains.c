@@ -16,7 +16,7 @@
 /* Bounds for spins whose clock might stop: each is far above the reads that
  * the longest spin makes on the board. */
 #define SPIN_READS (1u<<18)
-#define PMIC_POLLS_PER_STEP 64u
+#define PMIC_POLLS_PER_STEP 256u
 
 /* Per domain: MBUS gates (CCU 0x5c0 and 0x5e0 bits), supply and fault bits
  * (ccu-sun60iw2.c lines 587-601 and 653-677; board device tree npu-supply
@@ -278,9 +278,12 @@ static int verify(struct a733_power_domains *d,uint64_t now)
 }
 
 /* Every queued PMIC request and provider startup. A bus phase is waited for
- * by spinning on the raw counter without the provider object for the phase's
- * expected duration, then polling once, for at most A733_POWER_PMIC_SPIN_US in
- * one step. After a fault latched while this task holds the I2C mutex, one
+ * by spinning on the raw counter without the provider object until its
+ * expected duration has passed since the provider's time of the write that
+ * started it, and at least a quarter bit time after a poll that found it
+ * unfinished, then polling once, for at most A733_POWER_PMIC_SPIN_US in one
+ * step. A selector write with a slow bus needs about 56 polls plus
+ * re-spins, within PMIC_POLLS_PER_STEP. After a fault latched while this task holds the I2C mutex, one
  * poll marks the mutex retained. Returns 1 while the service must run again
  * within a tick. */
 static int pmic(struct a733_power_domains *d,uint64_t start)
@@ -296,7 +299,8 @@ static int pmic(struct a733_power_domains *d,uint64_t start)
         work=a733_pmic_work(p,&wait_ns);
         if(!(work&A733_PMIC_WORK_WAITING))continue;
         uint64_t now;if(!clock(d,&now))return 1;
-        const uint64_t until=now+(wait_ns+999u)/1000u;
+        const uint64_t anchored=p->phase_at+(wait_ns+999u)/1000u,respin=now+(p->bit_ns/4u+999u)/1000u;
+        const uint64_t until=anchored>respin ? anchored : respin;
         for(unsigned i=0;now<until;++i) {
             if(now-start>=A733_POWER_PMIC_SPIN_US || i>=SPIN_READS || !clock(d,&now))return 1;
         }

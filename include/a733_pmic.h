@@ -74,6 +74,10 @@ struct a733_pmic {
     void (*kick)(void *);
     void *kick_context;
     struct a733_power_domains *domains;
+    /* Provider task only: the time read after the write that started the
+     * bus phase now being waited for, in truncated microseconds. Last, so
+     * that the fields before it keep their offsets. */
+    uint64_t phase_at;
 };
 /* Zero private, disjoint storage once; all arguments/callback metadata and
  * shared managers have platform lifetime. No MMIO. All clocks use the same
@@ -119,8 +123,12 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_l
  * Startup verifies the S_TWI0 gate and reset and the idle engines once, and
  * sets A733_POWER_PROVIDER_READY. A request is admitted once against the
  * clock registry, its rail borrow, the unchanged clock route and divisor and
- * an idle bus; each later bus phase checks only the state word. The bus-idle
- * registers are read again after every STOP.
+ * an idle bus; each later bus phase checks only the state word, and the
+ * deadline once after its register accesses. After each STOP the control
+ * register must clear M_STP and read 0x40 and the status must read 0xf8; until
+ * then the phase is pending. The final STOP of a request also requires the
+ * idle line state. A register access makes no time read, so a phase that
+ * starts before the deadline completes its accesses, at most three.
  * Failure retains any still-owned mutex, request ticket and all leases. A
  * client-detected fault is latched immediately; the provider task must poll
  * once more to mark its own mutex retained. No client unlocks another task.
