@@ -7,7 +7,9 @@ and bundles 1 to 3 passed on port 3-3 on 2026-10-24. The returning apps of
 bundles 4, 6, 7 and 8 are **implemented**: bundle 4's image passes in the
 secure QEMU model, the sequences of bundles 6 to 8 pass a host model, and the
 four bundles are prepared in
-`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-2/`.
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-3/`.
+The earlier preparation of the same rows in `board-bundles-20261024-2/` is
+superseded and must not run.
 None of the four has run on a board. Bundle 10 stays refused until its runner
 declares completion counts and its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
