@@ -53,7 +53,11 @@ rows. It checks that:
   order, each entry's gates and its stop outcomes; a lifetime that reuses a
   record stem, names a row without inputs, gives a row entry its own gates,
   or places a gate row after its dependent stops before any run directory
-  exists;
+  exists; a stop outcome that the named row's bundle does not list as
+  controlled refuses the lifetime and writes no set runbook; an external
+  runbook is accepted only when its record directories lie under its
+  entry's stem, apart from the DDR record, the chain and earlier runs, and
+  it names its run directory;
 - each prepared single-core row has a runbook naming every bundle file's
   SHA-256 and its run command;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
@@ -774,8 +778,24 @@ def main():
     assert 'runner does not check them' in order and 'is not a pass' in order
     assert '`link-1`, `link-2`' in order and 'Fixture state.' in order
     prepared['lifetime'] = {name: len(chain) for name, chain in links.items()}
+    # External runbooks: record directories under the entry's stem only.
+    (run_dir / 'usb.md').write_text('$S/f-usb-capture $S/f-usb-run/session.json $S/link-1/session.json '
+                                    '$S/f-on-run/session.json\n')
+    assert tool.check_externals(run_dir) == {'fixture-usb': ['f-usb-capture', 'f-usb-run']}
+    (run_dir / 'usb.md').write_text('$S/f-usb-capture $S/f-usb-run/session.json $S/f-old-usb/session.json\n')
+    harness.refused(lambda: tool.check_externals(run_dir), 'outside the stem f-usb: f-old-usb')
+    (run_dir / 'usb.md').write_text('$S/f-usb-capture\n')
+    harness.refused(lambda: tool.check_externals(run_dir), 'never names its run directory f-usb-run')
+    # A stop outcome that the named row does not list refuses the lifetime.
+    unknown = dict(lifetime, order=lifetime['order'][:2] + [dict(lifetime['order'][2],
+                                                                stop_if={'returning-on-base': ['no-such-outcome']})]
+                   + lifetime['order'][3:])
+    status, third = tool.run({k: inputs[k] for k in ('returning-base', 'returning-on-base', 'returning-after')}, rows,
+                             evidence, repo, lifetime=unknown)
+    record = json.loads((third / 'run.json').read_text())
+    assert status == 1 and 'no-such-outcome' in record['lifetime_refused'] and not (third / 'runbook.md').exists()
     status, second = tool.run({}, rows, evidence, repo)
-    assert status == 0 and second.name.endswith('-2'), 'a second run gets its own directory'
+    assert status == 0 and second.name.endswith('-3'), 'a later run gets its own directory'
 
     result.update(rows=states, prepared=prepared, sandbox_start=sandbox_start(work))
     assert result['sandbox_start']['median_ms'] <= 100, result['sandbox_start']

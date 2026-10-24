@@ -45,7 +45,10 @@ record, the warm-return chain of the runs since then, and the order of this
 run's rows and of external bundles (such as a native USB image) with the
 record directory of each. An external entry names the rows it runs after,
 and any entry may name controlled outcomes of earlier rows that stop it
-(`stop_if`). Every gate must name a row placed earlier in the order. Each
+(`stop_if`); each must be a controlled outcome of that row's bundle. Every
+gate must name a row placed earlier in the order. --check-externals RUN_DIR
+checks that each external runbook writes only record directories under its
+entry's stem and names its run directory. Each
 row's runbook then gives its full --warm-return list, and the run directory
 receives runbook.md with the order, the gates and the chain.
 
@@ -1003,13 +1006,54 @@ def step(run_dir):
             prepared = {name for name, r in rows.items() if r['status'] == 'prepared'}
             rows[row['name']] = prepare_row(row, request['inputs'][row['name']], run_dir / row['name'], request,
                                             queue, prepared)
-    save(run_dir / 'run.json', {'schema': 'board-bundles-run-v1', 'physical_access': False, 'rows': rows})
-    if request.get('lifetime'):
-        with (run_dir / 'runbook.md').open('x') as stream:
-            stream.write(set_runbook(run_dir, request['lifetime'], rows, request['rows']) + '\n')
+    value = {'schema': 'board-bundles-run-v1', 'physical_access': False, 'rows': rows}
+    lifetime = request.get('lifetime')
+    if lifetime:
+        try:
+            stop_outcomes(lifetime, run_dir, rows)
+            with (run_dir / 'runbook.md').open('x') as stream:
+                stream.write(set_runbook(run_dir, lifetime, rows, request['rows']) + '\n')
+        except ValueError as error:
+            value['lifetime_refused'] = str(error)
+    save(run_dir / 'run.json', value)
     for name, record in rows.items():
         print(f'{name}: {record["status"]}' + (f' ({record["message"]})' if 'message' in record else ''))
-    return 1 if any(r['status'] == 'refused' for r in rows.values()) else 0
+    if 'lifetime_refused' in value:
+        print('lifetime: refused (' + value['lifetime_refused'] + ')')
+    return 1 if any(r['status'] == 'refused' for r in rows.values()) or 'lifetime_refused' in value else 0
+
+
+def stop_outcomes(lifetime, run_dir, rows):
+    """Every stop_if outcome is a controlled outcome of the named row's prepared bundle."""
+    for entry in lifetime['order']:
+        for name, outcomes in entry.get('stop_if', {}).items():
+            require(rows.get(name, {}).get('status') == 'prepared', f'stop_if names {name}, which is not prepared.')
+            path = run_dir / name / 'bundle/controlled.json'
+            named = {o['name'] for o in json.loads(path.read_text())['outcomes']} if path.is_file() else set()
+            unknown = sorted(set(outcomes) - named)
+            require(not unknown, f'stop_if names outcomes that {name} does not list as controlled: '
+                    + ', '.join(unknown))
+
+
+def check_externals(run_dir):
+    """Each external entry's runbook, read from the run directory, writes record directories under its own stem,
+    names its run directory, and refers to no other record of the session directory than the DDR record, the
+    chain and the runs of earlier entries."""
+    lifetime = json.loads((run_dir / 'request.json').read_text()).get('lifetime')
+    require(lifetime, f'{run_dir} was prepared without a lifetime.')
+    earlier, result = [lifetime['ddr'], *lifetime['chain']], {}
+    for entry in lifetime['order']:
+        if 'external' in entry:
+            text = (run_dir / entry['runbook']).read_text()
+            named = sorted(set(re.findall(r'\$S/([A-Za-z0-9._-]+)', text)))
+            own = [x for x in named if x not in earlier]
+            wrong = [x for x in own if not x.startswith(entry['stem'] + '-')]
+            require(not wrong, f'{entry["runbook"]} names record directories outside the stem {entry["stem"]}: '
+                    + ', '.join(wrong))
+            require(entry['run'] in own, f'{entry["runbook"]} never names its run directory {entry["run"]}.')
+            result[entry['external']] = own
+        earlier.append(entry['run'])
+    return result
 
 
 def check_lifetime(lifetime, names, inputs):
@@ -1083,10 +1127,15 @@ def main():
     parser.add_argument('--lifetime', type=Path, help='JSON object: the board lifetime and order the runbooks name')
     parser.add_argument('--evidence', type=Path, default=EVIDENCE, help='Directory that receives the run directory')
     parser.add_argument('--nm', default=NM)
+    parser.add_argument('--check-externals', type=Path, metavar='RUN_DIR',
+                        help='Check the external runbooks of a prepared run against its lifetime order')
     parser.add_argument('--step', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.step:
         return step(args.step)
+    if args.check_externals:
+        print(json.dumps(check_externals(args.check_externals), indent=1))
+        return 0
     if args.inputs is None:
         parser.error('--inputs is required')
     lifetime = json.loads(args.lifetime.read_text()) if args.lifetime else None

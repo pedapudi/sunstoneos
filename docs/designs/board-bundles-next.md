@@ -11,15 +11,17 @@ four bundles are prepared in
 The earlier preparation of the same rows in `board-bundles-20261024-2/` is
 superseded and must not run.
 All four ran on port 3-3 on 2026-10-24; the [handoff](../handoff.md) records
-their results. The fifth set,
-`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-5/`,
+their results. The sixth set,
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-6/`,
 is prepared from the source revision with the PMIC access path and is not
 run. It holds a new base image (bundle 2's kernel check rebuilt), bundle 4
 with the corrected walk check, bundle 6 with the access-cost windows and
 its pass bound, bundle 7, and the native USB image `rank-9-usb-v6/`, all
 except the base on the changed PMIC provider or the base's platform
-(section "The fifth set"). The fourth set, `board-bundles-20261024-4/`, is
-superseded and must not run.
+(section "The sixth set"). Its first four bundles are byte-identical to
+those of the fifth set, `board-bundles-20261024-5/`; that set's native USB
+runbook names wrong record directories and must not be used. The fourth
+set, `board-bundles-20261024-4/`, is superseded and must not run.
 Bundle 10 stays refused until its runner declares completion counts and its
 owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
@@ -149,7 +151,7 @@ still quarantines.
   than the monitor's `end_counter`. This outcome means the core stopped waking from
   `WFI` on PPI 30. The runner reads the four words from the result page; an
   outcome may name such a record through its `progress` key.
-- **Bundle 6 (fifth set).** Status 1 after the full summary, with `BOUND
+- **Bundle 6 (fifth and sixth sets).** Status 1 after the full summary, with `BOUND
   permille=1550` and `FAILED board bundle 6: provisional step bound`: the
   steps missed the provisional bound, or the measured byte was missing or
   above 110% of nine bit times (section "Records of bundles 6, 7 and 8").
@@ -218,8 +220,9 @@ record.
   instruction walk is the walk that a block already counts once per
   iteration. The image prepared on 2026-10-24 instead required 1,024 plus
   the calibration's count, so on port 3-3 it refused all 13 blocks, whose
-  counts were 1,024 and 1,024 in every block. The fifth set carries the
-  corrected check. Its bundle 4 links the objects of that set's base image
+  counts were 1,024 and 1,024 in every block. The fifth and sixth sets
+  carry the corrected check. Their bundle 4 links the objects of the set's
+  base image
   instead of bundle 2's: `platform/a733/platform.c` changed after bundle 2
   ran, so the central kernel-check object no longer equals bundle 2's. The
   switch is:
@@ -312,7 +315,9 @@ record.
   a missing or larger measured byte also fails it. Both supplies verified,
   every snapshot `0xff9e`, 34 snapshots counted (the two supply
   verifications and the 32 client snapshots) and at least one recorded step
-  are required before the verdict; a mismatch is a `FAIL`. Each cost window
+  are required before the verdict; a spin with a single read has no lower
+  bracket and takes nine bit times without failing the bound
+  ([pmic-access.md](pmic-access.md) gives why the larger byte fails); a mismatch is a `FAIL`. Each cost window
   prints its total over 256 iterations and its fastest and slowest of eight
   sub-windows, and the write record its fastest and slowest write. After
   the run, the post-change bound of [pmic-access.md](pmic-access.md) is
@@ -339,10 +344,15 @@ record.
   refuses, as when its trace is full, ends the run as a refused access,
   never as a readback mismatch.
 
-## The fifth set
+## The sixth set
 
-`board-bundles-20261024-5/` is prepared for port 3-3's lifetime that the
-cold DDR start `ddr-2` began, whose last returning run is `bb8-run`. Its
+`board-bundles-20261024-6/` is prepared for port 3-3's lifetime that the
+cold DDR start `ddr-2` began, whose last returning run is `bb8-run`. Steps 1
+to 4 (the base and bundles 4, 6 and 7) are byte-identical to those of
+`board-bundles-20261024-5/` and may run from either set; both use the
+record prefix `set5-`. Step 5, the native USB image, runs only from the
+sixth set. `tools/prepare-board-bundles.py --check-externals` confirmed
+that its runbook writes only `set5-r9-v6-*` records. Its
 generated `runbook.md` holds the one order table: the steps, their record directories, the rows
 each step runs after and the controlled outcomes that stop it, and the
 lifetime's warm-return chain. Each row's `runbook.md` gives its full
@@ -557,12 +567,13 @@ Offline results of the four new images (`checks/board-bundles-apps.py`):
 The counter option in `platform/a733/monitor.c`, the single-core form of
 `a733_cpu_pmu_begin` and `end`, the controlled outcomes with their
 warm-return admission and progress record, and the reader's FEL command
-times are merged. `primary.patch` of the fifth set
-(`board-bundles-20261024/common-5/primary.patch`) holds:
+times are merged. `primary.patch` of the sixth set
+(`board-bundles-20261024/common-6/primary.patch`) holds:
 
 - `checks/index.json`: the summary line of `checks/board-bundles-apps.py`.
 - `docs/designs/pmic-access.md`: the byte rule (lower bracket, at most 110%
-  of nine bit times), the sub-window definition of a cost's upper end, the
+  of nine bit times, why a larger byte fails, a single-read spin), the
+  sub-window definition of a cost's upper end, the
   per-write observer and stamps in the post-change model, re-spins of STOP
   waits, and re-spins reported without gating the measurement run.
 
