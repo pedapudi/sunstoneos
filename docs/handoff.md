@@ -1,5 +1,10 @@
 # Current work
 
+**Engine revision:** `bringup` now builds against mimus `9c57286b7`, the
+exact-sum hook and the AArch64 epilogue default, on the local branch
+`port/sunstoneos` in `~/git/mimus-worktrees/sunstoneos`. That revision is
+not on the mimus remote yet; publishing it needs the user's approval.
+
 **Reconnect request, port `3-1`:** remove every power source from the board
 on host port `3-1` (the separate 5 V/3 A supply and the USB cable), wait a few
 seconds, and reconnect it in FEL mode. The corrected rank 7 diagnostic did not
