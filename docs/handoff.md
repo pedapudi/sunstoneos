@@ -91,9 +91,17 @@ not establish physical operation.
    The official Zero 3W current-kernel recipe selects BXM and disables
    open-PVR. The pinned build/configuration chain is now documented in
    [GPU power](gpu-power.md); a particular installed image remains unverified.
-   Its selected source also contains internal GPU core-domain control omitted
-   from the native path. The effective parent/core sequence is under review;
-   this finding alone does not identify the failed instruction or authorize writes.
+   The native path now implements the selected reference's internal GPU core
+   control under exclusive LOCAL ownership. Static admission precedes handshake
+   control changes; CORE ON is checked after clock/reset progress, and CORE OFF
+   before teardown. Uncertainty retains ownership. Focused controller, native
+   access and shared-owner checks pass, including thirteen linked-client cases.
+   The corrected power/identity image `20726f8b…` and draft proposal are under
+   `gpu-core-power-20261024/`. Its source and artifact review passed, but fresh
+   admission must explicitly cover CORE6; the earlier TOP5-only grant is insufficient.
+   The unchanged provider-readiness image remains the first physical test.
+   This source correction does not establish the previous failed instruction
+   or qualify physical core-domain acknowledgement.
    The integrated GPU caller now performs its existing bounded CLOSE before
    removing the recognition hook after an invalid completed result. Only a
    matching STOPPED result permits CPU fallback; uncertainty remains fatal and
@@ -126,6 +134,11 @@ not establish physical operation.
    from unqualified domain power-off. The scoped test already supplies shared-SRAM
    ownership; the remaining source gap concerns A733 low-power handshakes and
    ordering. Linux asynchronous runtime PM does not establish a synchronous order.
+   A bounded search of A733 suspend, management-firmware and remote-processor
+   sources found no additional OFF/drain contract. Its evidence is in
+   `npu-low-power-source-20261024/source-search.json`; this is not proof that
+   such a contract is unavailable elsewhere. The stopped-memory capture remains
+   the next useful numerical observation.
 4. Qualify power and thermal behavior after reliable numerical execution. The
    optional CPU-clock path now lowers and restores supported inherited rates
    under a bounded grant while preserving voltage. Missing authority prevents
