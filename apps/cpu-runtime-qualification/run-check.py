@@ -202,9 +202,10 @@ def main():
                     assert not state['restores']
             results.append({'case': variant, 'passed': True, 'retained': bool(state['held']), 'requests': len(state['commands'])})
             shutil.rmtree(evidence)
-    # Reuse parser/geometry evidence only when their source remains identical.
+    # Reuse unchanged geometry/producer evidence. host-check.py separately
+    # validates the v2 manifest and report parser, including timer counts.
     prior = subprocess.check_output(['git', 'show', 'f96b:apps/cpu-runtime-qualification/host.py'], cwd=host.ROOT, text=True)
-    selected = {'decode_report', 'geometry', 'manifest_check', 'prepare', 'validate_bundle'}
+    selected = {'geometry', 'prepare', 'validate_bundle'}
     def functions(text):
         return {node.name: ast.dump(node, include_attributes=False) for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name in selected}
     assert functions(prior) == functions((HERE / 'host.py').read_text())
@@ -220,11 +221,11 @@ def main():
                Path(host.base.__file__), Path(host.supervised.observer.__file__), Path(host.kernel.__file__),
                host.ROOT / 'tools/usb-access.py']
     host.save_json(args.output / 'result.json', {'passed': True, 'cases': results, 'caller_stack_cases': 6,
-        'parser_geometry_producer_reused_from': 'f96b', 'image_sha256': host.digest(args.image),
+        'geometry_producer_reused_from': 'f96b', 'image_sha256': host.digest(args.image),
         'native_report_sha256': host.digest(args.native_report), 'launcher_sha256': host.digest(args.launcher),
         'source_hashes': {str(p): host.digest(p) for p in sources}, 'physical_access': False,
         'scope': 'Actual callback, protected preload and shared transport; modeled admission/USB, real linked image, request producer, launcher and native-model report. No physical authority created.'})
-    print(f'PASS {len(results)} callback/transport cases and 6 caller-stack cases; parser evidence reused')
+    print(f'PASS {len(results)} callback/transport cases and 6 caller-stack cases; geometry/producer evidence reused')
 
 
 if __name__ == '__main__':

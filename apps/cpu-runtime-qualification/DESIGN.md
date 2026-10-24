@@ -1,14 +1,28 @@
 # Finite current-image CPU runtime qualification
 
-Status: the standalone target builds and its native success and refusal
-paths have offline checks. Physical qualification of this image remains
-outstanding; the model supplies completed workload records as inputs.
+Status: the secondary-timer revision has passed focused instruction and host
+checks. Physical qualification of this revision remains outstanding. Its
+report version is 2 and its execution profile is
+`current-finite-cpu-local-timer-v2`.
+
+The preceding version completed one bounded physical run on October 24, 2026.
+The preserved session is
+`processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`
+under the evidence cache. It binds image SHA-256
+`9d90b6f97b2f56a8ad4a20af0add4d31ec686c1a516918cb44c6fc52c845ef09`:
+all eight cores completed 32 rounds, CPU0 received 32 timer interrupts,
+secondaries received no timer interrupts, and every core received SGIs.
+The session returned to a distinct ROM instance and restored its DRAM.
+That prepared-lifetime pass does not qualify this revision or cold-start
+repeatability. Earlier successful CPU0 publication and all-core diagnostics
+had already run in that power lifetime.
 
 The harness runs the current cached A733 startup, FreeRTOS SMP port and finite
 CPU diagnostic, then returns to ROM after successful cleanup. It uses the
 existing 16 pinned tasks: one worker and one background task on each CPU.
 Each worker completes 32 floating-point context rounds. CPU0 supplies the
 production timer tick; every core receives the production SGI handler.
+Each secondary also receives exactly one private physical-timer interrupt.
 The existing pre-scheduler exclusive-access check requires 256 increments.
 This is finite integration evidence, not sustained-duration qualification.
 
@@ -18,6 +32,61 @@ Its worker completion patch, task frames and writable bounds are specific to
 that image. They cannot establish execution of the current stackless fault
 path. The current cached diagnostic instead retains all resources on exit.
 This standalone target supplies successful shutdown for that runtime.
+
+## Secondary timers prove local delivery without multiplying kernel time
+
+The private continuation hook runs after acquiring the primary initialization
+flag and before publishing secondary readiness and issuing SVC106. Interrupts
+remain masked. Each secondary verifies its timer is disabled and PPI30 is
+inactive, not pending, disabled and configured as a level interrupt. Startup
+already validated its redistributor, interrupt group and CPU interface. The
+hook uses the same Nonsecure priority as CPU0 (`0xe0`), preserves SGI0, and
+checks priority and enable readbacks within the original startup deadline.
+
+Each secondary publishes an armed state before setting a compare value one
+millisecond ahead and enabling its physical timer. A timer that expires before
+SVC106 remains pending until the scheduler restores an interruptible task.
+The private dispatch routes INTID30 on cores 1–7 to a one-shot callback.
+It reads `CNTP_CTL_EL0` before disabling the timer, requires enabled,
+unmasked and asserted status, and accepts exactly one armed-to-delivered
+transition with an initial count of zero. Disabling the timer and completing
+its barriers precede the real port's EOI. An unarmed, repeated or inconsistent
+interrupt enters retained failure.
+
+CPU0's setup, compare advancement and FreeRTOS tick call remain unchanged.
+Secondary callbacks never invoke `FreeRTOS_Tick_Handler` or change the shared
+`next_tick`. The kernel has one global tick count; calling its tick handler on
+every CPU would advance that count multiple times per interval. Worker
+completion and the final masked capture both require one secondary delivery.
+The final capture remains authoritative. Existing shutdown disables both
+local timer generators, drains SGI0/PPI30, restores the saved Secure timer
+priority word and timer controls, and independently observes secondary OFF.
+
+The added budget is seven IRQ entries, fourteen local GIC writes, fourteen
+timer arm writes and seven timer-disable writes. Each callback adds one
+status read. Per-core delivery state occupies 32 bytes in total; no recurring
+secondary tick, shared lock or new deadline is added. In the instruction model,
+one arm executes 89 instructions and one complete IRQ, including the vector
+and port frame, executes 263 instructions. These counts apply to the nominal
+readback path, with no RWP wait. The original one-second startup and 20-second
+session bounds remain. The linked text grows by 352 bytes relative to the
+preserved physical image; linker alignment changes account for the different
+overall BSS extent, while the new state itself is 32 bytes.
+
+Arm's [Generic Timer guide](https://documentation-service.arm.com/static/6294c39db334256d9ea8ae53),
+revision `102379_0100_02_en`, section 3, describes per-core physical timer
+interrupts, meaningful ISTATUS while enabled, and level deassertion by
+disabling the timer. Its PDF SHA-256 is
+`a067f58710ea3ce55532b6a23ce904f1b4e9a87f6478d7c5e489fbec1098ddd6`.
+[Arm IHI 0069G](https://documentation-service.arm.com/static/601412d54ccc190e5e681269)
+section 4.1 defines level-sensitive pending/active transitions
+and combined priority drop/deactivation when EOImode is zero. Sections 4.8.1
+and 4.8.4 define the Secure priority-mask restriction and Nonsecure priority
+view. The cached GIC manual has SHA-256
+`f5461ced0b908141c87f655e602ff6340a90f14028ea009239c388ed69b78ac6`.
+The actual FreeRTOS ARM_CR82 port is pinned at commit
+`97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2`; its patched IRQ assembly saves
+integer/FP state, calls the application handler and then writes EOI.
 
 ## Execution uses the current production objects
 
@@ -50,7 +119,7 @@ itself.
    SGI/PPI accesses. Snapshot both the SGI0 priority word and the Secure
    priority word containing PPI30.
 2. Each worker completes its existing rounds and verifies its own background
-   progress and SGI count. CPU0 additionally verifies the tick count. Workers
+   progress, SGI count and assigned timer count. Workers
    join at their pinned high priority, so lower-priority background and idle
    tasks cannot resume while the workers wait.
 3. A dedicated terminal SVC verifies the qualification epoch, core and caller
@@ -141,16 +210,36 @@ original scope. Do not rerun performance or broad stress suites.
 
 The native check is `checks/cpu-runtime-qualification.py`. It executes the
 linked success terminal, actual SVC/SMC vectors, fault recorder and shutdown
-on eight modeled cores. Eleven cases cover success, ordinary exit zero,
+on eight modeled cores. Thirteen cases cover success, ordinary exit zero,
 wrong core, absent peer, active or unrelated pending interrupts, wrong
 Nonsecure cache alias, expired deadline, restoration readback failure,
-acknowledgment without OFF, and a bad interrupted stack. The success case
+acknowledgment without OFF, missing or duplicate secondary timers, and a bad
+interrupted stack. The success case
 checks every writable cache line and rejects Normal-memory stores after
 cleaning begins. It does not emulate the preceding scheduler workload or
 establish physical interrupt delivery, cache coherence or power transitions.
 The assembly checks the original deadline on every cache line. The model
 advances its counter by fixed ticks on each counter read, so these checks
 verify deadline branches rather than the physical elapsed time of cleanup.
+
+`checks/cpu-local-timer.py` reuses the cached CPU instruction model for 22
+focused cases. Seven execute the linked arm hook, actual continuation SVC106,
+task restoration, vector and IRQ frame on each secondary. They check all
+integer and FP registers, SP, NZCV, FPCR and FPSR, exact timer counts, unchanged
+global tick state, and disable-before-EOI ordering. The remaining cases reject
+bad arm state, busy RWP at the deadline, lost enable/priority writes and bad
+IRQ state. A restrictive inherited Secure priority mask prevents modeled
+delivery, showing why startup's existing Secure initialization remains
+necessary. The model represents Nonsecure priority rounding to four bits.
+It supplies admitted local controller state and task frames; it does not
+rerun the complete scheduler or establish physical interrupt delivery.
+
+Offline results and frozen inputs are under
+`cpu-local-timer-20261024` in the evidence cache. The host checks reject the
+older report version, missing or duplicate secondary timer counts, and a
+mismatched execution profile. The two focused transport cases use the actual
+new native model report for successful restoration and rejected-report
+retention. Unchanged geometry and producer checks retain their earlier proof.
 
 `apps/cpu-runtime-qualification/host-check.py` checks the compiled C report
 layout, actual ELF allocations, missing-admission refusal and mutations of
@@ -216,3 +305,20 @@ for an already copied report. It validates report contents without claiming
 transport continuity or restoration. Freeze the ELF, build manifest, model
 results, host implementation, bundle and exact reservation before execution.
 Offline checks do not grant physical authority.
+
+## Remaining physical robustness gaps
+
+One prepared-lifetime run does not resolve the earlier unlocated cold-start
+failure or establish repeatable cold startup. The secondary one-shot timers
+still require physical delivery and returning-cleanup qualification on both
+A55 and A76 cores. Neither revision establishes sustained eight-core load,
+long-running coherence, nested interrupt stress, WFI idle/wake, runtime core
+hotplug, or coordinated fault recovery. Normal retirement executing the fault
+recorder does not qualify induced faults or their recovery.
+
+Secondary OFF at test completion is distinct from runtime hotplug and idle
+power management. This application neither changes CPU voltage/clock points
+nor qualifies thermal throttling. Supported operating points, their shared
+power-controller permission boundary and sustained thermal operation remain
+separate requirements. Existing fault retention preserves evidence; it does
+not supply a reset or recovery guarantee.

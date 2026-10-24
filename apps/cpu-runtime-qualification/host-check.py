@@ -62,12 +62,13 @@ int main(void) {
         host.decode_report(raw, args.epoch)
         passed.append('actual-native-model-report')
         refused('wrong-expected-epoch', lambda: host.decode_report(raw, args.epoch + 1))
-        mutations = [('header-magic', 0, 0), ('incomplete-state', 40, 3), ('global-error', 48, 1),
+        mutations = [('header-magic', 0, 0), ('old-report-version', 8, 1), ('incomplete-state', 40, 3), ('global-error', 48, 1),
                      ('cpu0-ticks', host.CPU_OFFSET + 96, 31)]
         for core in range(8):
             offset = host.CPU_OFFSET + core * host.CPU_BYTES
             if core:
-                mutations.append((f'cpu{core}-unexpected-ticks', offset + 96, 1))
+                mutations.extend([(f'cpu{core}-missing-timer', offset + 96, 0),
+                                  (f'cpu{core}-duplicate-timer', offset + 96, 2)])
             for name, field, value in [('epoch', 0, 0), ('captured', 8, 0), ('cleaned', 16, 0),
                                        ('restored', 24, 0), ('drained', 104, 0), ('error', 48, 1), ('rounds', 64, 31),
                                        ('background', 72, 0), ('sgis', 80, 0), ('failure', 88, 1)]:

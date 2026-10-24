@@ -30,6 +30,8 @@ struct qualification_report {
 _Static_assert(offsetof(struct qualification_report,cpu)==688 && sizeof(struct qualification_report)==8880,"report geometry");
 extern volatile struct qualification_report a733_qualification_report;
 extern unsigned char a733_qualification_stacks[QUAL_CORES][QUAL_STACK_BYTES];
+void a733_qualification_timer_arm(unsigned core);
+void a733_qualification_timer_irq(unsigned core);
 int a733_qualification_boot(uint64_t epoch,uint64_t deadline);
 int a733_qualification_local(unsigned core,uint64_t epoch);
 _Noreturn void a733_qualification_worker_done(unsigned core);

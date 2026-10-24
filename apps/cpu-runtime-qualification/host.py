@@ -21,7 +21,7 @@ _spec.loader.exec_module(supervised)
 require, digest, save_json = supervised.require, supervised.digest, supervised.save_json
 MAGIC = 0x3154525133333741
 REPORT_BYTES, CPU_OFFSET, CPU_BYTES = 8880, 688, 1024
-PROFILE = 'current-finite-cpu-return-v1'
+PROFILE = 'current-finite-cpu-local-timer-v2'
 
 
 def geometry(image):
@@ -78,7 +78,7 @@ def geometry(image):
 def manifest_check(image, manifest):
     g = geometry(image)
     require(manifest.get('target') == 'a733-cpu-runtime-qualification' and
-            manifest.get('execution_profile') == PROFILE and manifest.get('workload') == '32-rounds-per-core' and
+            manifest.get('execution_profile') == PROFILE and manifest.get('workload') == '32-rounds-per-core-plus-local-timers' and
             manifest.get('final_elf') == digest(image) and manifest.get('build_id') == g['build_id'],
             'Manifest does not bind the current qualification image.')
     return g
@@ -151,7 +151,7 @@ def validate_bundle(bundle):
 def decode_report(raw, epoch):
     require(type(epoch) is int and 0 < epoch < 2**64 and len(raw) == REPORT_BYTES, 'Report size or expected epoch differs.')
     magic, version, size, actual, deadline, state, error, core = struct.unpack_from('<8Q', raw)
-    require((magic, version, size, actual, state, error, core) == (MAGIC, 1, REPORT_BYTES, epoch, 4, 0, 0) and deadline,
+    require((magic, version, size, actual, state, error, core) == (MAGIC, 2, REPORT_BYTES, epoch, 4, 0, 0) and deadline,
             'No matching successful native report.')
     cpus = []
     for i in range(8):
@@ -163,7 +163,7 @@ def decode_report(raw, epoch):
         require((seen, captured, drained, cleaned, restored) == (epoch,) * 5 and error == failure == 0 and
                 rounds == 32 and background > 0 and sgis > 0, f'CPU {i} workload/publication incomplete.')
         require((request, acknowledged, off) == ((epoch,) * 3 if i else (0, 0, 0)), f'CPU {i} shutdown incomplete.')
-        require(ticks >= 32 if i == 0 else ticks == 0, f'CPU {i} timer count differs from its assigned role.')
+        require(ticks >= 32 if i == 0 else ticks == 1, f'CPU {i} timer count differs from its assigned role.')
         cpus.append({'core': i, 'rounds': rounds, 'background': background, 'sgis': sgis, 'ticks': ticks})
     return {'epoch': epoch, 'state': state, 'cpus': cpus, 'scope': 'copied report only; ROM return and restoration require separate evidence'}
 
