@@ -300,13 +300,14 @@ static void deadline_cases(void)
 }
 /* Revocation between phases: a clock fault that another core sets while the
  * provider reads the time after a phase stops the transfer before its next
- * access, read or write, for a fault after each write of a snapshot. The
+ * access, read or write, for a fault at each time read the provider makes
+ * while it holds the I2C mutex, so a fault between any two phases is covered. The
  * poll's entry check and result() would see the fault later, after further
  * bus phases. */
-static unsigned revoke_after,revoked,revoked_writes,revoked_reads;
+static unsigned revoke_after,revoked,revoked_writes,revoked_reads,held_reads;
 static void revoke(struct pmic_model *m)
 {
-    if(!m->in_time_read || revoked || m->writes<revoke_after)return;
+    if(!m->in_time_read || revoked || !m->provider.held || ++held_reads<revoke_after)return;
     a733_power_authority_set(&m->rails.authority,A733_POWER_CLOCK_FAULT);
     revoked=1;revoked_writes=m->writes;revoked_reads=m->reads;
 }
@@ -325,8 +326,9 @@ static void phase_cases(void)
     unsigned total=0,cases=0;
     pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
     assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
-    finish(&m,&q,&s);total=m.writes;assert(total>=6);
-    for(revoke_after=1;revoke_after<=total;++revoke_after,++cases) {
+    held_reads=0;revoked=0;revoke_after=~0u;m.concurrent=revoke;
+    finish(&m,&q,&s);total=held_reads;m.concurrent=0;assert(total>=6);
+    for(revoke_after=1;revoke_after<=total;++revoke_after,++cases) {held_reads=0;
         pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
         assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
         revoked=0;m.concurrent=revoke;
@@ -361,7 +363,7 @@ static void phase_cases(void)
     assert(stop_end>respin && until==stop_end);
     const uint64_t stop_spin_us=stop_end-m.stop_read;
     assert(run(&m,&q,20000)==A733_PMIC_COMPLETE && a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
-    printf("phases: revocation after each of %u writes stops the transfer before its next access; "
+    printf("phases: revocation at each of %u time reads under the I2C mutex stops the transfer before its next access; "
            "late publication retained; STOP spin ends %llu us after the STOP time read\n",
            cases,(unsigned long long)stop_spin_us);
 }
