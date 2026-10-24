@@ -16,7 +16,7 @@
  {
 +    /* The engine's second worker runs on the pair's other core. */
 +    mimus_parallel_bind();
-     /* Board owners must first establish live storage attachment. Hashing is
+     /* Board owners establish the selected USB readiness. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
 @@ -48,4 +56,16 @@
          started.store(current,std::memory_order_release);

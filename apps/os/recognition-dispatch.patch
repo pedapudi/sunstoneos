@@ -18,7 +18,7 @@
  {
 +    /* The engine's second worker runs on the pair's other core. */
 +    mimus_parallel_bind();
-     /* Board owners must first establish live storage attachment. Hashing is
+     /* Board owners establish the selected USB readiness. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
 @@ -36,4 +45,8 @@
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}

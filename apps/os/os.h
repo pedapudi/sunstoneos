@@ -14,15 +14,18 @@ int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
-/* Board workloads the image admits: the mimus board's 0 (storage) and 4
- * (keyboard and storage) or, in the radio build, only 1, in which the board
- * adds its radio station to storage. */
+/* Workloads 0/4 require storage; the radio build selects 1. Supervised
+ * recorded audio also admits explicit USB0-only workload 2. */
 static inline int os_workload_valid(unsigned workload)
 {
 #ifdef SUNSTONE_A733_OS_RADIO
     return workload==1;
 #else
-    return workload==0||workload==4;
+    return workload==0||workload==4
+#if defined(SUNSTONE_BOARD_SUPERVISED) && !defined(SUNSTONE_A733_OS_AUDIO) && !defined(SUNSTONE_A733_OS_HEADSET)
+        ||workload==2
+#endif
+        ;
 #endif
 }
 /* The microphone build appends 184 bytes of I2S receive facts to the
