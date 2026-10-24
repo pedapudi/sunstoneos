@@ -204,6 +204,14 @@ PROVIDER_UNITS = {
 # returning platform: the probe itself and the kernel objects the provider
 # configuration recompiles.
 PROBE_ONLY = ('/checks/power-probe.c.obj', '/tasks.c.obj', '/queue.c.obj')
+# Sources of the returning platform objects in the central a733-power-probe
+# target, in link order. The kernel-check image that runs on the board links
+# the same list, so a change to it must be reviewed here, not absorbed.
+CENTRAL_PLATFORM = ('platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
+                    'platform/a733/cpu_coherence.S', 'arch/aarch64/cache.S', 'arch/aarch64/start.S',
+                    'arch/aarch64/vectors.S', 'runtime/memory.c', 'drivers/i2c/a733_i2c.c',
+                    'checks/fp-context.S', 'FREERTOS/list.c', 'freertos-port.c',
+                    'FREERTOS/portable/GCC/ARM_AARCH64_SRE/portASM.S')
 
 
 class ReturningPlatform:
@@ -216,9 +224,10 @@ class ReturningPlatform:
     must match the current tree. New units compile with the baseline's
     recorded flags, mapped from the recording checkout to this repository.
 
-    With a central build directory, the same units come from the current tree
-    and no earlier evidence: the twelve platform objects are those of the
-    a733-power-probe target, and the provider units compile with that
+    With a central build directory, the units come from the current tree and
+    no earlier evidence: the platform objects are those of the
+    a733-power-probe target, which since the EL1 table flush also include
+    platform/a733/cpu_coherence.S (CENTRAL_PLATFORM), and the provider units compile with that
     target's flags, the provider probe's FreeRTOS configuration and -Werror,
     as the provider probe built them.
     """
@@ -284,8 +293,12 @@ class ReturningPlatform:
         self.linker = next(x for x in link if x.startswith('--ld-path='))
         self.objcopy = str(Path(self.compiler).resolve().parent / 'llvm-objcopy')
         self.platform_objects = [build / x for x in link if x.endswith('.obj') and not x.endswith(PROBE_ONLY)]
-        assert len(self.platform_objects) == 12, self.platform_objects
         self.freertos = next(Path(x['file']).parent for x in entries if x['file'].endswith('/tasks.c'))
+        kernel = str(self.freertos).lstrip('/')
+        names = [str(x.relative_to(build / 'CMakeFiles/a733-power-probe.dir'))[:-len('.obj')] for x in self.platform_objects]
+        names = tuple('FREERTOS' + x[len(kernel):] if x.startswith(kernel + '/') else x for x in names)
+        if names != CENTRAL_PLATFORM:
+            raise SystemExit(f'The a733-power-probe platform objects changed: {names}')
 
     def compile(self, sources, flags=(), linked=True, prefix='new'):
         """Compile new units with the platform flags; return their object paths."""
@@ -308,11 +321,12 @@ class ReturningPlatform:
         if self.build:
             for obj in self.platform_objects:
                 self._copy(obj, digest(obj))
-            if extra:
-                raise SystemExit('The central build provides no objects beyond the returning platform')
             units = [PROVIDER_UNITS[name] for name in names]
             self.provider_objects = self.compile([self.freertos / x[9:] if x.startswith('FREERTOS/') else ROOT / x
                                                   for x in units], prefix='provider')
+            # Further accepted objects, such as the TinyUSB objects that exist
+            # only in evidence, still need headers that match the current tree.
+            self._reuse_accepted(list(extra), closures)
             return
         base = self.baseline
         items = json.loads((base / 'reused-objects.json').read_text())
@@ -320,7 +334,9 @@ class ReturningPlatform:
             source = base / 'build/objects' / (name + '.obj')
             pin = next(x for x in self.accepted['new_objects'] if x['path'] == str(source))
             items.append({'path': str(source), 'sha256': pin['sha256'], 'original': str(source)})
-        items += list(extra)
+        self._reuse_accepted(items + list(extra), closures)
+
+    def _reuse_accepted(self, items, closures):
         # Accepted objects keep the layouts of the headers they were compiled with.
         self.headers = require_unchanged_headers(
             [(closures or {}).get(x['sha256']) or object_closure(x['path'], x.get('original')) for x in items],

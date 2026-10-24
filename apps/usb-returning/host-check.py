@@ -72,6 +72,17 @@ try:
         if field==token:log=log.replace(f'{key}=0x{(0 if token=="outcome" else 1 if token=="quiesced" else 40):016x}',f'{key}=0x{wrong:016x}')
     assert host.functional_result(record,log,1)==(field=='nominal')
     passed('consistency-'+field)
+ # The 2026-10-23 port 3-3 record: the provider refused USB takeover at the
+ # SoftConn check, the image returned to the ROM with status 1 and no native
+ # exchange began. Its log and record must never classify as functional
+ # success, also when the log fields alone would be nominal.
+ observed=Path.home()/'.cache/sunstoneos/evidence/board-session-20261023/port-3-3/r9-v2-usb'
+ record=json.loads((observed/'session.json').read_text());log=(observed/'kernel.log').read_text()
+ assert 'USB_FAULT_STAGE=0x0000000000000016' in log and 'USB_FAULT_OBSERVED=0x0000000000029940' in log
+ assert not record['complete'] and not record['native_usb']['attempted'] and record['result']['status']==1
+ assert host.functional_result(json.loads(json.dumps(record)),log,1) is False
+ assert host.functional_result(json.loads(json.dumps(record)),nominal,1) is False
+ passed('observed-takeover-refusal')
  # Execute the real existing kernel runner with modeled host/device services.
  # Its callback must run after launch, under the held lock and before any ROM
  # protocol request. The same total deadline must survive native enumeration.

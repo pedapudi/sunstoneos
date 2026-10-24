@@ -40,7 +40,41 @@ int main(void)
     actual(&f);
     while(!f.writes){assert(a733_usb_platform_poll(&f.p)==A733_USB_PLATFORM_PENDING);f.now+=100;}
     *reg(&f,U+0x540)=0x80000000;assert(run(&f)==A733_USB_PLATFORM_RETAINED);terminal(&f);
-    puts("PASS ROM device takeover: actual clocks, preserved shared reference, ordered detach/reset, DMA/host refusal and retained uncertainty");
+    /* Words observed on 2026-10-23 before the refused disconnect: packed
+     * PCTL/DEVCTL/EPIND/VEND0 0x00029940 (SoftConn; SESSION, VBUS valid and
+     * B-device; endpoint index 2) and the matched ROM's interrupt enables. */
+    const uint32_t observed=0x00029940;
+    actual(&f);*reg(&f,U+0x40)=observed;*reg(&f,U+0x48)=1;*reg(&f,U+0x50)=7;
+    *reg(&f,U+0x500)=0;*reg(&f,U+0x400)=0x8000c000;
+    assert(run(&f)==A733_USB_PLATFORM_PREPARED && f.reset_seen && *reg(&f,U+0x40)==0x00029900);
+    /* SoftConn that reads back clear only 100 ms after its write still passes. */
+    actual(&f);*reg(&f,U+0x40)=observed;f.pctl_delay=100000;
+    assert(run(&f)==A733_USB_PLATFORM_PREPARED && f.reset_seen && *reg(&f,U+0x40)==0x00029900);
+    /* SoftConn that never clears refuses before the reset write. */
+    actual(&f);*reg(&f,U+0x40)=observed;f.pctl_stuck=1;
+    assert(run(&f)==A733_USB_PLATFORM_RETAINED && !f.reset_seen);
+    assert(f.p.failure.kind==A733_USB_FAILURE_VALUE && f.p.failure.stage==24 &&
+        f.p.failure.address==U+0x40 && f.p.failure.mask==0x640 && f.p.failure.observed==observed);
+    assert(*reg(&f,C+0x1304)==0x01000100);terminal(&f);
+    /* Inherited bits: other PCTL bits, SESSION clear, VEND0 bus selection. */
+    const uint32_t inherited[]={observed|0xbf,observed&~0x100u,observed|0x01000000,observed&~0x00ff0000u};
+    for(unsigned i=0;i<4;++i){
+        actual(&f);*reg(&f,U+0x40)=inherited[i];
+        assert(run(&f)==A733_USB_PLATFORM_PREPARED && f.reset_seen);
+        assert(*reg(&f,U+0x40)==(inherited[i]&~64u));
+    }
+    /* Refused bits: HOSTREQ, HOSTMODE, LSDEV, FSDEV, VEND0 DMA request
+     * selection, and a missing B-device role; no write before refusal. */
+    const uint32_t refused[]={observed|1u<<9,observed|1u<<10,observed|1u<<13,observed|1u<<14,
+        observed&~0x8000u,observed|1u<<25,observed|1u<<26,observed|1u<<27,observed|1u<<28,
+        observed|1u<<29,observed|1u<<30,observed|1u<<31};
+    for(unsigned i=0;i<sizeof(refused)/sizeof(*refused);++i){
+        actual(&f);*reg(&f,U+0x40)=refused[i];
+        assert(run(&f)==A733_USB_PLATFORM_RETAINED && !f.writes);
+        assert(f.p.failure.stage==20 && f.p.failure.address==U+0x40 && f.p.failure.observed==refused[i]);
+        terminal(&f);
+    }
+    puts("PASS ROM device takeover: actual clocks, preserved shared reference, ordered detach/reset, DMA/host refusal, observed 2026-10-23 words, deferred SoftConn verification and retained uncertainty");
 }
 
 #endif

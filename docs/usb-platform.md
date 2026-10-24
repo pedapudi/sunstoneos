@@ -68,7 +68,9 @@ deadline bounds initialization; it does not release completed ownership.
 The native adapter permits only the addresses and fields used by this device
 profile. PMIC, watchdog, host, DMA start and upstream fabric writes are
 refused. The explicit ROM takeover mode also permits interrupt masking,
-soft-disconnect and assertion of the USB0 device reset. All accesses use Device mappings and full-system barriers.
+soft-disconnect and assertion of the USB0 device reset. The soft-disconnect
+is an 8-bit store of PCTL that `platform/a733/native_usb.c` issues; it
+accepts only a word that differs from the current word by SoftConn clear. All accesses use Device mappings and full-system barriers.
 
 | Register | Operation |
 | --- | --- |
@@ -125,24 +127,29 @@ and device bus/reset controls `0x01000100` under mask `0x01110111`. The USB0
 host gates and resets must be clear. It reserves the common reference as a
 shared consumer and preserves USB1 and the reference registers.
 
-Before mutation, the provider requires DEVCTL.BDEVICE set, HOSTREQ and HOSTMODE
-clear, and all sixteen internal DMA start bits clear. DEVCTL.SESSION may be set
-in device mode; it neither selects host mode nor enables DMA. The packed word
-at USB0+0x40 contains PCTL, DEVCTL, EPIND and VEND0 bytes. The observed
-`0x00029940` therefore carries SESSION, valid VBUS, B-device, soft-connect and
-endpoint index2; the endpoint index is not a transfer-active or DMA flag.
-The matched nonsecure ROM tests BDEVICE and VBUS at offsets0x23bc..0x23e8,
-and its FEL execute path waits for TXPKTRDY before calling the target without
-resetting USB0. The pinned Linux BSP header names the DEVCTL fields; the A733
-manual18.5 describes the controller capabilities but omits this register table.
-The detached-core and returning-client checks reject host request/mode while
-allowing SESSION. All DMA, interrupt, disconnect and retained-owner checks
-remain required. FIFO bus selection
-is allowed in either state: the pinned `USBC_SelectBus` sets it even for PIO
-on newer controllers. It masks endpoint, bus, DMA and interface interrupts,
-removes soft-connect, and allows the host 150 ms to observe disconnection.
-It then asserts only the device reset for 1 ms, keeping its bus gate enabled,
-deasserts reset, waits 40 microseconds and verifies the detached core before
+Before mutation, the provider applies the admission rule of
+[USB0 takeover from the boot ROM's device session](designs/usb-session-takeover.md)
+to the packed word at USB0+0x40, which holds the byte registers PCTL,
+DEVCTL, EPIND and VEND0. It requires DEVCTL.BDEVICE and refuses HOSTREQ,
+HOSTMODE, LSDEV, FSDEV and any VEND0 DMA request selection. It inherits
+SESSION, the VBUS level, the endpoint index, VEND0 bus selection and the
+PCTL bits; SoftConn is then removed. All sixteen internal DMA start bits
+must be clear. The ROM leaves `0x00029940`: soft-connect, SESSION, valid
+VBUS, B-device and endpoint index 2. The matched nonsecure ROM tests
+BDEVICE and VBUS at offsets 0x23bc..0x23e8, and its FEL execute path waits
+for TXPKTRDY before calling the target without resetting USB0. The pinned
+Linux BSP header and TinyUSB's `musb_def.h` name the fields; the A733
+manual 18.5 describes the controller capabilities but omits this register
+table. The detached-core and returning-client checks reject host
+request/mode while allowing SESSION.
+
+The provider masks endpoint, bus, DMA and interface interrupts. It removes
+soft-connect with one 8-bit store of PCTL, the access width that the
+pinned BSP, TinyUSB and the matched ROM use; a 32-bit store of the packed
+word left SoftConn set on the board on 2026-10-23. The provider verifies
+SoftConn clear after the 150 ms disconnect interval, before it asserts the
+device reset for 1 ms, keeping its bus gate enabled. It then deasserts
+reset, waits 40 microseconds and verifies the detached core before
 continuing through the existing PHY preparation and TinyUSB consumer.
 The 150 ms and 1 ms intervals reuse the physically exercised
 `drivers/usb/a733_usb.c` sequence; the 40 microsecond interval comes from the

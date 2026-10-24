@@ -6,7 +6,7 @@ The native observation ends 1.4 seconds after application setup begins. Provider
 
 The host sends the four bytes `USB?` to bulk OUT endpoint `0x02`. Bulk IN endpoint `0x81` returns five little-endian 64-bit words: magic `0x3154455253425355`, input generation, status 1, USB preparation step, and PMIC stage. Native success requires the IN completion callback to account for all 40 copied bytes. This response length avoids TinyUSB's trailing zero-length packet behavior at 64-byte and 512-byte packet boundaries. Host success also requires matching generation, native outcome 0, received count 1, sent count 40, transferred count 40, quiescence 1, and a responsive new ROM instance.
 
-After observation, the USB task requests PMIC parking and waits for its acknowledgment. It requires idle PMIC request slots, no rail borrows, no retained provider fault, and unheld register/I2C mutexes. It checks USB interrupts disabled and inactive, stops native USB polling, masks controller endpoint/bus/DMA/interface interrupt enables, removes soft-connect, and waits 150 ms. Final checks include pending interrupts clear and all sixteen internal DMA channel start bits clear. Controller W1C status bits are preserved. The USB task performs no further TinyUSB work after starting shutdown.
+After observation, the USB task requests PMIC parking and waits for its acknowledgment. It requires idle PMIC request slots, no rail borrows, no retained provider fault, and unheld register/I2C mutexes. It checks USB interrupts disabled and inactive, stops native USB polling, masks controller endpoint/bus/DMA/interface interrupt enables, removes soft-connect with one 8-bit store of PCTL, and waits 150 ms. Final checks include soft-connect clear, pending interrupts clear and all sixteen internal DMA channel start bits clear. Controller W1C status bits are preserved. The USB task performs no further TinyUSB work after starting shutdown.
 
 Outcome 0 means the native response completed. Outcome 1 means observation expired without completing that response. Both normal outcomes publish `COMPLETE native USB bounded observation` only after quiescence and exit with platform status 0. Provider, malformed-request, transfer-accounting and shutdown faults exit with status 1 and omit that marker. A monitor timeout or controlled negative does not establish successful USB operation. Clock, rail, pin, provider and buffer ownership stays retained through CPU reset; there is no resource-release or restoration API.
 
@@ -41,6 +41,20 @@ remain in force. The failed predicate preceded the DMA loop, so that attempt
 did not observe those sixteen channels or qualify later takeover/cleanup.
 PMIC and pin activity is separate from the zero USB platform write count.
 Evidence is `~/.cache/sunstoneos/evidence/usb-first-fault-20261018/physical-064/runtime/`.
+
+The rank 9 image of 2026-10-23, which contains that correction, returned to
+ROM on port 3-3 with status 1. It passed ROM_CHECK and the interrupt
+masking, and recorded a value mismatch in ROM_DISCONNECT (stage `0x16`) at
+`USB0+0x40`: mask `0x40`, expected 0, observed `0x00029940`, with three
+write attempts and completions. Its 32-bit store of `0x00029900` completed,
+and the readback still had SoftConn (PCTL bit 6) set. The pinned BSP,
+TinyUSB and the matched ROM write PCTL with 8-bit stores. The provider now
+removes SoftConn with one PCTL byte store and verifies it after the 150 ms
+disconnect interval, before the device reset. The admission rule now also
+refuses LSDEV, FSDEV and VEND0 DMA request selection.
+[USB0 takeover from the boot ROM's device session](../../docs/designs/usb-session-takeover.md)
+gives the decoding, the rule and its sources. Evidence is
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/r9-v2-usb/`.
 
 
 The current provider preserves the first failed condition before entering FAULTED. The error log copies its original stage, check kind, address, mask, expected value, observation-valid flag, existing observed value, callback result and write counters. It performs no diagnostic MMIO. `USB_FAULT_WROTE` is the legacy attempted-write flag. `USB_FAULT_WRITES_ATTEMPTED` counts write callbacks attempted; `USB_FAULT_WRITES_COMPLETED` counts successful callbacks. Neither proves engine completion or bus drain. A time failure reports the last good time, the existing callback's sample and the deadline; the sample is valid only when its callback result is 1.
@@ -82,7 +96,13 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/host-check.py --evidence ~/.cache/sunstoneos/evidence/usb-returning-20261018
 ```
 
-Fifteen linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Their configuration comes from an existing session producer's retained board fields. Scheduler behavior, hardware provider progression, TinyUSB FIFO events and register effects are modeled. Twenty-three host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
+Headers that changed after the accepted provider objects were compiled make the default build refuse. `--platform-build DIR` compiles the platform and providers from the current tree, as for the thermal client, and still reuses the five accepted TinyUSB objects after their header closures match the current tree:
+
+```sh
+python3 apps/usb-returning/build.py --platform-build /absolute/central-build --evidence /absolute/new/usb-evidence
+```
+
+Twenty-eight linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Nineteen take their configuration from an existing session producer's retained board fields. Nine run the actual provider ROM takeover and native callbacks from the 2026-10-23 port 3-3 input, clock capture and observed USB0 word. One of them runs the image refused that day and must reproduce its fault record; the others run the built image: takeover to PREPARED, refusal when SoftConn never clears, and six admission refusals. In the register model a 32-bit store to USB0+0x40 leaves PCTL unchanged and an 8-bit store replaces it. Scheduler behavior, TinyUSB FIFO events and register effects are modeled. Twenty-four host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency, the 2026-10-23 refusal record and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
 
 The diagnostic input producer reads existing board-configuration JSON fields `fabric`, `fabric_hz`, `usb_supply_uv` and `pmic_expected`. The first three contain 3, 3 and 4 unsigned words; the last contains two three-word pin configurations. It emits a 96-byte diagnostic input with an explicit generation. This input carries configuration, not physical authority. The checker-generated fixture is not a board admission record.
 

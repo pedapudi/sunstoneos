@@ -82,19 +82,33 @@ static int value_bits(struct a733_usb_platform *p,uintptr_t a,uint32_t v,uint32_
 }
 static int bits(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t value)
 {uint32_t v;return rd(p,a,&v)&&value_bits(p,a,v,mask,value);}
-static int update(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t value,uint32_t w1c)
+static int store(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t old,uint32_t next)
 {
-    uint32_t old;
-    if (!rd(p,a,&old)) return 0;
-    uint32_t next=((old&~mask)|value)&~w1c;
-    if (next==old) return 1;
     if(!timely(p))return 0;
     p->wrote=1;++p->writes_attempted;
     int result=p->ops.write(p->cookie,a,next);p->last_callback_result=result;
     if(result==A733_USB_PLATFORM_IO_BUSY){p->io_busy=1;return 0;}
     if(result!=1){record(p,A733_USB_FAILURE_WRITE,a,mask,next,old,1,result);return 0;}
     ++p->poll_writes;++p->writes_completed;
-    return timely(p)&&bits(p,a,mask,value);
+    return timely(p);
+}
+static int update(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t value,uint32_t w1c)
+{
+    uint32_t old;
+    if (!rd(p,a,&old)) return 0;
+    uint32_t next=((old&~mask)|value)&~w1c;
+    if (next==old) return 1;
+    return store(p,a,mask,old,next)&&bits(p,a,mask,value);
+}
+/* Remove SoftConn (PCTL bit 6) with one write. The native callback stores
+ * only the PCTL byte, as the pinned BSP, TinyUSB and the matched ROM do. No
+ * source states when the bit reads back clear, so it is verified after the
+ * 150 ms detach interval: ROM_RESET_ASSERT requires it clear before reset. */
+static int soft_disconnect(struct a733_usb_platform *p)
+{
+    uint32_t old;
+    if (!rd(p,USB+0x40,&old)) return 0;
+    return !(old&BIT(6)) || store(p,USB+0x40,BIT(6),old,old&~BIT(6));
 }
 static int wait_start(struct a733_usb_platform *p,uint64_t delay)
 {
@@ -182,11 +196,12 @@ static int rom_baseline(struct a733_usb_platform *p)
 }
 static int rom_pio(struct a733_usb_platform *p)
 {
-    /* Packed PCTL/DEVCTL: require B-device, no HOSTREQ/HOSTMODE.
-     * DEVCTL.SESSION is valid device-session state, not DMA activity. The
-     * matched ROM tests BDEVICE/VBUS without requiring SESSION clear.
-     * VEND0 bus selection is allowed for PIO (pinned USBC_SelectBus). */
-    if (!bits(p,USB+0x40,BIT(9)|BIT(10)|BIT(15),BIT(15))) return 0;
+    /* Packed PCTL/DEVCTL/EPIND/VEND0 word. Inherited: every PCTL bit
+     * (SoftConn is removed below), DEVCTL SESSION and VBUS, the endpoint
+     * index and VEND0 bus selection (pinned USBC_SelectBus sets it for PIO).
+     * Required: DEVCTL BDEVICE. Refused: HOSTREQ, HOSTMODE, the host-side
+     * LSDEV/FSDEV detection bits and any VEND0 DMA request selection. */
+    if (!bits(p,USB+0x40,BIT(9)|BIT(10)|BIT(13)|BIT(14)|BIT(15)|0xfe000000u,BIT(15))) return 0;
     for (unsigned i=0;i<16;++i) if (!bits(p,USB+0x540+i*16,BIT(31),0)) return 0;
     return 1;
 }
@@ -278,7 +293,7 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
         update(p,USB+0x400,15,0,W1C);break;
     /* Same disconnect/reset intervals as the physically exercised PIO path in
      * a733_usb_prepare(). The disconnect interval is not a bus-drain proof. */
-    case ROM_DISCONNECT:ok=rom_pio(p)&&update(p,USB+0x40,BIT(6),0,0)&&wait_start(p,150000);break;
+    case ROM_DISCONNECT:ok=rom_pio(p)&&soft_disconnect(p)&&wait_start(p,150000);break;
     case ROM_RESET_ASSERT:ok=rom_pio(p)&&core_detached(p)&&
         update(p,CCU+0x1304,BIT(24),0,0)&&wait_start(p,1000);break;
     case ROM_RESET_RELEASE:ok=bits(p,CCU+0x1304,0x01110111,0x100)&&

@@ -24,6 +24,7 @@ def main():
     a=p.parse_args();root=Path(__file__).resolve().parents[1]
     a.output.mkdir(parents=True,exist_ok=False);snapshot=a.output/'source';snapshot.mkdir()
     paths=['include/a733_usb_platform.h','include/a733_clock_reference.h','include/a733_usb_platform_native.h','include/a733_clock_leases.h',
+           'include/a733_power_authority.h','include/a733_range.h',
            'drivers/usb/a733_usb_platform.c','drivers/usb/a733_usb_platform_native.c',
            'drivers/clock/a733_clock_leases.c','checks/a733-usb-platform.c','checks/a733-usb-rom-handoff.c','checks/a733-usb-platform.py']
     hashes={}
@@ -109,7 +110,7 @@ __usbc_otg_t h={0};cell=old;USBC_Phyx_Write(&h,0x188);return cell;}
     def writecase(address,old,value,ok):
         u.mem_write(address,old.to_bytes(4,'little'))
         assert call('a733_usb_platform_native_write',address,value)==ok
-        assert writes==([(address,4,value)] if ok else [])
+        assert writes==([(address,1,value&255) if address==0x04100040 else (address,4,value)] if ok else [])
     writecase(0x02003340,0x20000005,0x21000005,1)
     writecase(0x02003340,0xa0000005,0xa1000005,0)
     writecase(0x02003304,0x20000000,0x21000100,1)
