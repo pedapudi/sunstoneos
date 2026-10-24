@@ -1,226 +1,111 @@
-# NPU PLL preparation
+# NPU PLL enable table
 
-The native PLL controller programs a fixed 492 MHz output from the 24 MHz
-reference. It implements the documented disabled-PLL enable sequence and a
-separate enabled-PLL retune sequence. An optional [atomic handoff](npu-clock-handoff.md)
-transfers its reservations to NPU startup. The supervised native application
-provides an explicit live-DRAM enable mode. Physical PLL qualification remains
-required for every mode.
+The [PLL module](../drivers/npu/a733_npu_pll.c) holds the PLL_NPU method-2
+enable table and two predicates over the control word. The
+[startup sequencer](npu-startup.md) runs the table under the register lock,
+samples LOCK, and opens the output gate in its local open table
+([npu-platform.md](npu-platform.md)). The module has no state machine and
+takes no lock. Physical PLL qualification is outstanding.
 
-The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to the
-NPU domain's DCDC2 supply. The PLL's internal LDO is a separate control. PLL
-preparation does not program DCDC2 or power the NPU domain. The existing
-[NPU startup binding](npu-startup.md) must still establish stable, read-back
-verified DCDC2 and PCK ownership before local clock/reset/domain startup.
+The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to
+the NPU domain's DCDC2 supply, which the [power-domain owner](power-domains.md)
+verifies. The PLL's internal LDO is a separate control.
 
 ## Source basis
 
-The pinned A733 User Manual V1.00 defines the following behavior. Its central
+The pinned A733 User Manual V1.00 defines the following behaviour. Its central
 source-lock identity is `a733-user-manual-1.00`.
 
-| Manual section | Implemented requirement |
+| Manual section | Requirement |
 | --- | --- |
-| 4.1.4.1, pages 25–27 | Disabled enable method 2; enabled retune; warning that enabling or disabling a PLL can disturb other PLLs |
+| 4.1.4.1, pages 25–27 | Disabled enable method 2; enabling or disabling a PLL can disturb other PLLs |
 | 4.1.4.2 | Three consecutive lock observations separated by at least 3 microseconds |
 | 4.1.4.6, 4.1.6.255 and 4.1.6.264 | Dedicated software gate enabled before selecting No-Auto; effective gate status checked |
 | 4.1.6.56–60 | PLL enable, internal LDO, lock control, output gate, factors, modulation and bias fields |
-| 4.1.6.76, 114–116 and 120–124 | MBUS, video encode/decode, NPU and DRAM0 consumer selectors and gates |
+| 4.1.6.76, 114–116 and 120–124 | MBUS, video encode and decode, NPU and DRAM0 consumer selectors and gates |
 
 The board clock source at revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` identifies the same PLL register,
-24 MHz reference parent and N/divider fields. Its common lock helper waits for
-three lock observations, spaces reads by 3 microseconds, limits observations to
-100 and waits another 20 microseconds. The host source check records exact input
-hashes. Existing platform evidence remains applicable to the separate rail,
-PCK, local reset and service components.
+24 MHz reference parent and N and divider fields. Its common lock helper waits
+for three lock observations, spaces reads by 3 microseconds, limits
+observations to 100 and waits another 20 microseconds.
+`checks/npu-pll.py` compares the profile and the sequence with these pinned
+sources and records their hashes.
 
-The profile uses N=82, M1=1 and P0=4: a 1,968 MHz oscillator divided to 492 MHz.
-The encoded factor fields are `0x00305100`. The multiplier is within the board
-source's supported 53–105 range and the documented oscillator range. This is an
-initial functional profile, not a performance target.
+The profile uses N=82, M1=1 and P0=4: a 1,968 MHz oscillator divided to
+492 MHz. The encoded factor fields are `0x00305100`. The multiplier lies in
+the board source's supported 53–105 range and the documented oscillator range.
 
-## Admission and lifetime ownership
+## Entry state, table and LOCK
 
-The caller supplies a private immutable configuration and bounded operations.
-Initialization copies both before changing controller storage. The acquisition
-callback must authenticate the entire configuration against independent startup
-authority. Its numeric handoff identity does not establish ownership by itself.
-All state, callbacks and reservations remain live for platform lifetime.
+`a733_npu_pll_disabled` admits the entry state: PLL enable, lock enable, LOCK
+and output gate clear, and every bit outside the documented fields clear. The
+LDO and factor fields may hold any value, because the table writes them. The
+register pass also requires the PLL_NPU pattern and bias words
+(`+0x2a4`–`+0x2b0`) at their reset values, and the video encode, video decode,
+NPU and DRAM0 consumers idle or on other sources ([npu-startup.md](npu-startup.md)).
 
-Admission reserves exclusive PLL_NPU and local NPU authority in the common clock
-registry. Stable reference, oscillator and fabric reservations remain held.
-A selected PERI0 fabric route adds stable PERI0 ownership. The provider must
-validate the actual selected parent rate, modulation and effective gates;
-reserving a scope alone does not verify hardware. AHB, NSI and MBUS selectors
-outside the supported SYS24/PERI0 routes are refused.
+The enable table (`a733_npu_pll_enable`) has six entries, each read back:
 
-A separate whole-platform reservation must exclude every remaining consumer and
-writer: video encode/decode, DRAM0 and its PHY, remote MCU, secure firmware and
-autonomous clock management. All register writers must honor the same register
-mutex and lifetime reservations. Software leases cannot establish that remote
-firmware is stopped. The cold boot provider must supply that evidence.
+1. software gate enable, CCU `+0x1920` bit 16;
+2. No-Auto, `+0x1920` bit 0;
+3. internal LDO, `+0x2a0` bit 30;
+4. factors `0x00305100` in the N, P0 and M1 fields;
+5. PLL enable, bit 31;
+6. lock enable, bit 29.
 
-The controller compares complete snapshots of AHB, NSI, MBUS, video module and
-bus clocks, NPU module and bus clocks, DRAM0 clock and bus controls, and video/NPU
-autonomous clock modes before its first write. Active video/NPU module gates,
-deasserted video/NPU core bus resets, pending fabric updates and autonomous
-video/NPU modes refuse admission. DRAM0 selectors are limited to DDR/PERI1
-sources. DE- or NPU-selected DRAM0 is refused even when its output gate is off.
-The controller never migrates consumers or writes their registers.
+The LOCK bit (28) is read-only status: the table writes it as zero and the
+readback ignores it. The output gate (bit 27) stays closed.
 
-The three entry modes have different additional requirements:
+After the register lock is released, the sequencer reads the control word at
+least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
+then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
+sampling needs no lock. `a733_npu_pll_locked` requires the control word
+`0xe0305100` with LOCK set. The local open table then opens the output gate,
+and the final readback requires `0xe8305100` with LOCK set. A LOCK that never
+appears leaves the PLL enabled with its output closed and retains every token.
 
-- **Disabled PLL enable:** execution, stack, data and every callback must reside
-  in owned non-NPU SRAM before DRAM initialization. This profile excludes the
-  shared NPU SRAM alias. DRAM0
-  must remain reset with its module clock off. Fabric must use SYS24. CPU clocks
-  and other active PLL users must be safe against the manual's PLL-enable
-  disturbance. A normal FreeRTOS task whose storage resides in DRAM cannot meet
-  these requirements. A separate early boot provider is required.
-- **Enabled PLL retune:** PLL, internal LDO and lock detection must already be
-  enabled and lock must be observed. Every PLL_NPU consumer and writer must be
-  excluded. Running RAM may remain active only with separately authenticated,
-  independent DRAM and PHY sources. The manual identifies a PHY clock path in
-  normal DRAM operation; the DRAM0 selector alone does not prove that path.
-  The controller leaves unrelated running RAM and its clocks untouched.
-- **Live-DRAM disabled PLL enable:** the PLL, output and lock detector must be
-  off, with LOCK clear. The full snapshot must show DRAM0 enabled, its reset
-  released, its controller sourced by DDRPLL and its external memory clock
-  selected from the separate PHY PLL. No update may be pending. Independent
-  PHY operation, stable fabric parents and exclusion of every PLL_NPU consumer
-  and writer remain authenticated prerequisites. This supervised mode retains
-  every reservation through success or failure and never disables or retries
-  the PLL. It uses the existing method-2 sequence and timeout handling.
+## Enabling the PLL while DRAM runs
 
-The live-DRAM mode follows a concrete Linux runtime precedent at the pinned
-revision above. `vip_drv_device_platform.c` calls `clk_set_rate(pclk)` and later
-`clk_prepare_enable(mclk)`; the device tree binds that parent to PLL_NPU.
-Its CCU descriptor uses `CLK_SET_RATE_UNGATE`. The pinned
+The sequencer enables PLL_NPU from a DRAM-resident FreeRTOS task. The board's
+Linux runtime does the same at the pinned revision:
+`vip_drv_device_platform.c` calls `clk_set_rate(pclk)` and later
+`clk_prepare_enable(mclk)`, and the device tree binds that parent to PLL_NPU.
+The CCU descriptor uses `CLK_SET_RATE_UNGATE`, and the pinned
 [clock core](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/clk/clk.c#L2278)
-temporarily enables such a clock before changing its rate. Enabling the module
-also recursively enables its parent. The CCU gate helper explicitly handles
-a disabled PLL: output off, LDO on, PLL on, lock detector on, wait for lock,
-then output on. These calls run in the normal DRAM-resident driver path.
+enables such a clock before changing its rate. The CCU gate helper handles a
+disabled PLL as output off, LDO on, PLL on, lock detector on, wait for lock,
+then output on.
 
-This source establishes a runtime implementation, not the board's current state
-or physical safety. The manual warns that enabling a PLL can disturb other PLLs;
-independent selectors do not remove that analogue risk. The live mode therefore
-requires a supervised single attempt and full power removal after the session.
-Software deadlines depend on a responsive CPU and interconnect. Unlike the
-Linux helper's warning-only lock failure, SunstoneOS retains failure without
-opening the output gate. Its pre-DRAM mode remains available under its original
-conservative contract; the manual does not mandate that restriction.
+That precedent does not establish the board's state or physical safety. The
+manual warns that enabling a PLL can disturb other PLLs, and independent
+selectors do not remove that analogue risk. The session record's clock
+evidence therefore binds these conditions: independent DRAM and PHY sources,
+exclusive PLL_NPU consumers and writers, no autonomous parent-selector
+writers, and supervised acceptance of the cross-PLL disturbance risk. Each
+session is a single supervised attempt that ends with whole-board power
+removal. Unlike the Linux helper, which only warns on a lock failure, the
+sequencer retains the failure without opening the output.
 
-Reference checks require enabled, stable DCXO and exact 24 MHz PLL_REF using
-the [shared decoder](clock-leases.md#detected-oscillator-and-normalized-reference).
-The detected input may be 19.2, 24 or 26 MHz. The fixed PLL_REF parent from the
-pinned kernel keeps the programmed NPU output unchanged. Baseline checks run
-under held REF/OSC ownership; final control, lock and output checks remain in
-force, without claiming continuous reference monitoring. PLL
-modulation, fractional interpolation, smooth updates and dithering must be
-disabled. The phase-interpolator bias and charge-pump bias must have their
-specified reset settings. Unlock interrupts must be disabled. Pending unlock
-status is preserved; no event is acknowledged.
+## Native write rules
 
-## Programming and failures
+The [native adapter](../drivers/npu/a733_npu_platform_native.c) admits writes
+to PLL_NPU control at `+0x2a0` and gate control at `+0x1920` only under these
+rules:
 
-The controller first sets the dedicated software gate bit, then disables
-automatic gating by setting No-Auto. Disabled enable follows method 2: enable the
-internal LDO, write factors, enable the PLL, then enable lock detection. Enabled
-retune closes the output gate, writes factors and toggles lock detection off
-then on. It never disables an enabled PLL or LDO.
+- LOCK is never written;
+- the PLL and its LDO are never disabled;
+- the factors change only to `0x00305100`, and only with the output closed;
+- the output opens only with the PLL, LDO, lock enable and LOCK set;
+- the two gate-control bits never clear.
 
-The first lock observation occurs at least 3 microseconds after lock detection
-is enabled. Three consecutive successful observations, each separated by at
-least 3 microseconds, precede a 20 microsecond settling interval. At most 100
-observations are allowed. The output gate opens only after settling and another
-lock/gate-status check. Final readback verifies the output and effective gate.
-Method 2 can produce an output-enable glitch according to the manual; excluded
-consumers must remain excluded through output enable and eventual publication.
+The rules guard against a wrong table entry;
+the clock token remains the authority.
 
-Only PLL control at CCU offset `0x2a0` and the dedicated gate at `0x1920` are
-written. Read-modify-write preserves unrelated fields. The read-only lock bit
-is excluded from writes. Native access rejects other write addresses, changes
-to unrelated fields, PLL/LDO disable and factor changes while output is open.
-This allowlist is an additional guard, not a replacement for startup authority.
+## Checks
 
-Preparation takes six polls when the PLL locks on its first three
-observations:
-
-1. Acquisition. No register is accessed in this poll.
-2. One locked enable pass: the entry checks, then all six programming steps,
-   each read back. A clock sample taken after the last write sets the time of
-   the first LOCK observation.
-3. Three locked passes, one LOCK observation each.
-4. After the 20 microsecond settle, one locked pass checks LOCK and the gate
-   status, opens the output gate and checks the final control word.
-
-Each poll does bounded work. Every poll checks the absolute deadline on entry
-and again after releasing the mutex. Inside a locked pass the controller
-checks it before its first write, after each LOCK observation and before
-releasing the mutex; individual reads and writes take no clock sample. BUSY
-before effects permits another poll. Pending acquisition retains all admitted
-tokens. Token replacement preserves both original and observed identities for
-fault handling.
-
-A failed read, write, readback, clock observation or deadline ends hardware
-access immediately. Before unlock, the controller publishes failure and calls
-the metadata-only retention callback while the mutex remains held. A failure
-first observed after successful unlock retains tokens and terminal state but
-cannot claim to retain the released mutex. An unsuccessful unlock leaves mutex
-ownership uncertain. No terminal failure permits another device callback,
-release, reset, rollback or retry.
-
-## Required integration
-
-Successful preparation retains exclusive PLL_NPU and NPU reservations. The
-optional startup binding atomically replaces exclusive PLL ownership with stable
-ownership and adopts the local NPU token. Parent, fabric and whole-platform
-reservations remain live throughout. The source controller stays reserved for
-the successor's lifetime. Releasing and reacquiring the PLL is not permitted.
-
-The concrete provider must authenticate cold boot/remote handoff, register
-security access, physical reference and parent state, independent recovery and
-memory residency. It must share a monotonic clock with registry and mutex
-operations. The existing scheduler-based register mutex cannot be assumed
-available before DRAM and scheduler initialization. Reviewed entry conditions
-and the selected recovery plan must precede a physical qualification attempt.
-
-## Focused validation
-
-The [PLL budget harness](../checks/npu-platform-pll-budget.c) counts work in
-the existing register model, with one poll standing for one bootstrap tick.
-Enabled retuning takes 6 polls, 43 register reads including 3 LOCK
-observations, 7 writes, 19 clock samples and 5 mutex acquisitions; live-DRAM
-enable takes 42 reads and 6 writes with the other counts equal. The
-[measurements](designs/npu-platform-measurements.md) compare them with the
-previous controller.
-
-The controller fixture uses the real common clock registry and modeled registers.
-It checks both sequences, timed lock admission, retained exclusive ownership,
-unchanged consumers, unsafe admission refusal, partial acquisition, token
-replacement, time regression, write/readback failures and deadline failures on
-both sides of unlock. It also checks bounded failure when the PLL never locks.
-The native files are compiled for AArch64. These checks establish controller
-behavior; they do not establish analog PLL stability, remote exclusion, safe
-RAM clocks or a production cold boot provider.
-
-The native live-DRAM composition is recorded under
-`~/.cache/sunstoneos/evidence/npu-live-20261017/batch1/`. One affected native link
-and the three changed cases passed on their first attempt. The successful case
-executes the real PMIC provider, PLL enable, clock transfer, ON-domain startup
-and service activation with modeled hardware responses. An OFF domain causes
-retained local-startup refusal after PLL preparation; lock timeout retains
-ownership without opening the output. No PCK or DRAM clock writes occur, and
-SRAM reset remains deasserted. Existing controller and numerical suites were
-not rerun. These results do not establish physical operation or inference.
-
-The focused detected-reference checks are preserved under
-`~/.cache/sunstoneos/evidence/accelerator-clock-reference-20261018/`.
-Actual provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
-profiles and retains wrong ratios, lost reference lock, and disabled or unstable
-DCXO before writes. GPU/NPU PERI0 cases preserve reserved bit24; the NPU PLL
-case also retains final control corruption without opening the output.
-These modeled-register checks do not establish physical operation. No native
-image was rebuilt; accelerator launch still requires a final image built from
-the accepted startup and providers, plus actual resource and recovery admission.
+`checks/npu-startup-host.c` runs the table through the sequencer, including a
+PLL that never locks. `checks/npu-stop-native.py` exercises the adapter's PLL
+rules in the linked images, and `checks/npu-application-clock-reference.py`
+shows that an admitted reference case writes the gate enable at
+`CCU+0x1920` first.

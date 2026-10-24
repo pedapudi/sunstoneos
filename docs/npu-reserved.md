@@ -64,16 +64,16 @@ No teardown or child-release operation is provided.
 
 Use the returned object throughout the existing runtime sequence:
 
-1. Call `npu_convolution_handoff()` with independently established platform
-   evidence. It binds the reserved backend, MMU image and command catalogue.
-2. Initialize the actual startup object with the shared resource manager and
-   clock registry. Bind its designated bootstrap task, and bind an NPU PLL source
-   when that startup path requires one.
-3. Call `npu_convolution_bind()` with that startup object and the designated
-   client task. This constructs the existing deferred FreeRTOS service.
-4. After scheduling starts, the bootstrap task calls
-   `npu_convolution_startup_poll()`. The client uses the existing send, collect,
-   output and reap functions. Every job uses the same permanently reserved backing.
+1. Initialize the [startup sequencer](npu-startup.md) with the image's shared
+   providers: counter, clock registry, register lock, GPU/PCK resource manager,
+   rail ledger and power-domain owner. Bind its designated bootstrap task.
+2. Call `npu_convolution_bind()` with that startup object and the designated
+   client task. This constructs the existing deferred FreeRTOS service with the
+   reserved backend, MMU image and command catalogue.
+3. After scheduling starts, the bootstrap task calls
+   `npu_convolution_startup_poll()` once per tick until READY, then activates
+   the service. The client uses the existing send, collect, output and reap
+   functions. Every job uses the same permanently reserved backing.
 
 These are the existing production APIs. The constructor does not replace their
 activation conditions. It cannot infer remote-processor exclusion, internal
@@ -91,8 +91,8 @@ physical address for admission. The fixture performs no NPU register access.
 
 The three declared modes passed in QEMU: authenticated preparation, model
 rejection and insufficient capacity. Successful preparation checks the complete child layout
-and command digests, disposes of caller model storage, constructs the real
-handoff and performs native cache publication. A real static FreeRTOS client
+and command digests, disposes of caller model storage and performs native
+cache publication. A real static FreeRTOS client
 cannot bind the service without initialized startup authority. The fixture
 supplies no startup readiness or drain-success flags.
 
