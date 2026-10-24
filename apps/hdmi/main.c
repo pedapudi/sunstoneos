@@ -30,20 +30,21 @@ static int enter(void *v,uint64_t deadline)
 {return v==&app&&hdmi_live(NULL)?a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline):-1;}
 static void leave(void *v)
 {configASSERT(v==&app);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
+/* The power service task: every PMIC transaction and the framebuffer's
+ * domain 1. It blocks until a submit or row request notifies it, or for the
+ * ticks the step returns. */
 static void pmic_task(void *unused)
 {
     (void)unused;
     for(;;){
+        uint32_t ticks=1;
         if(hdmi_live(NULL)){
-            enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
-            if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
-                atomic_store_explicit(&app.pmic_ready,1,memory_order_release);
-            else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY)hdmi_fail(NULL);
+            ticks=a733_power_service_step(&app.domains);
+            const int ready=a733_power_service_ready(&app.domains);
+            if(ready>0)atomic_store_explicit(&app.pmic_ready,1,memory_order_release);
+            else if(ready<0)hdmi_fail(NULL);
         }
-#if SUNSTONE_HDMI_AUDIO
-        if(app.pmic.held){taskYIELD();continue;}
-#endif
-        vTaskDelay(1);
+        (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
 }
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
@@ -94,8 +95,13 @@ void a733_smp_diagnostic_start(void)
 #endif
     };
     for(unsigned i=0;i<HDMI_TASK_COUNT;++i){
-        app.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,4,app.stacks[i],&app.tasks[i]);
+        /* The power service (task 0) runs below the output and audio tasks,
+         * on A55 core 0. */
+        app.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i?4:3,app.stacks[i],&app.tasks[i]);
         if(!app.handles[i])platform_panic("HDMI tasks",8);
+#if configNUMBER_OF_CORES > 1
+        if(!i)vTaskCoreAffinitySet(app.handles[i],1);
+#endif
     }
     struct a733_pmic_config pmic=app.session.pmic;pmic.startup_deadline=app.deadline;
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.handles[0])||
@@ -103,6 +109,10 @@ void a733_smp_diagnostic_start(void)
           &app.clocks,&app.rails,&app.pins)||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))
         platform_panic("HDMI PMIC",9);
+    const struct a733_power_service_config service={app.session.pmic.owner,app.deadline,1000000u/configTICK_RATE_HZ,0};
+    if(!a733_power_domains_native_init(&app.domains_native,app.handles[0])||
+       !a733_power_domains_init(&app.domains,&app.pmic,&app.domains_native.operations,&app.domains_native,&service))
+        platform_panic("HDMI power domains",9);
     struct a733_hdmi_native_config config={.clocks=&app.clocks,.rails=&app.rails,
         .pmic=&app.pmic,.locks=&app.locks,.pck=&app.pck,.pck_client=app.session.pck_client,
         .task=app.handles[1],.owner=app.session.owner,.epoch=app.session.epoch,

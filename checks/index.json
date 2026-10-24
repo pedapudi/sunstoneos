@@ -207,6 +207,8 @@
   ],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -435,7 +437,9 @@
  "a733-gpu-power-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-power.md"
+   "docs/designs/power-domains.md",
+   "docs/gpu-power.md",
+   "docs/power-domains.md"
   ],
   "library": false,
   "pure_host": false,
@@ -784,6 +788,7 @@
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/cpu-power.md",
+   "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
@@ -905,6 +910,7 @@
   ],
   "docs": [
    "docs/a733-smp-supervised.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
@@ -1006,7 +1012,10 @@
  },
  "a733-supervised-publication.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1483,6 +1492,8 @@
  "all-core-first-task-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/rank-7-corrected.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md"
   ],
@@ -2320,6 +2331,7 @@
   "cache_areas": [],
   "docs": [
    "docs/cached-device-reservations.md",
+   "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -2558,6 +2570,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md"
   ],
@@ -2946,6 +2960,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-coherence.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md",
    "docs/designs/memory-architecture-measurements.md",
@@ -3417,6 +3433,7 @@
  "fault-decode.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-leftovers.md",
    "docs/fault-capture.md"
   ],
   "library": false,
@@ -3425,6 +3442,21 @@
    "path"
   ],
   "summary": "Decode retained fault records (docs/fault-capture.md).",
+  "usb": false
+ },
+ "fault-report.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
+   "docs/fault-capture.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the host fault-report reader of tools/fault-report.py against a modeled device.",
   "usb": false
  },
  "fel-input.py": {
@@ -3666,7 +3698,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/power-domains.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6213,6 +6247,7 @@
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
    "docs/a733-smp-supervised.md",
    "docs/board-runbooks/README.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
@@ -6983,6 +7018,8 @@
    "host"
   ],
   "docs": [
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -7283,6 +7320,18 @@
   "pure_host": true,
   "required_arguments": [],
   "summary": "Check the source-tree facts that keep PMIC outputs under the provider's control.",
+  "usb": false
+ },
+ "power-domains-tree.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/power-domains.md",
+   "docs/power-domains.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the source-tree facts that give PCK600 domains 1 and 5 one owner.",
   "usb": false
  },
  "primary-cache-host.py": {
@@ -8117,6 +8166,8 @@
    "docs/clock-leases.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
+   "docs/designs/power-domains.md",
+   "docs/power-domains.md",
    "docs/rail-leases.md"
   ],
   "library": false,
@@ -8499,6 +8550,8 @@
  "secondary-identity-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/rank-7-corrected.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md"
   ],
@@ -9333,6 +9386,8 @@
   "docs": [
    "docs/designs/cpu-fault-reset-measurements.md",
    "docs/designs/cpu-fault-reset.md",
+   "docs/designs/cpu-leftovers-measurements.md",
+   "docs/designs/cpu-leftovers.md",
    "docs/performance-architecture.md",
    "docs/usb.md"
   ],

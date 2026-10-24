@@ -2,6 +2,7 @@
 #define SUNSTONE_BOARD_APPLICATION_PRIVATE_H
 #include "a733_board_application.h"
 #include "a733_native_usb.h"
+#include "a733_power_domains_native.h"
 #include "a733_typec_native.h"
 #include "a733_usb2_native.h"
 #include "a733_maintenance_watchdog_internal.h"
@@ -53,6 +54,9 @@ _Static_assert(64+512==576 && 576+512==sizeof(((struct board_application *)0)->d
 struct board_provider {
     struct a733_native_usb shared;
     struct board_radio_ce_provider ce;
+    /* The power-domain owner; its service task is the PMIC task. */
+    struct a733_power_domains domains;
+    struct a733_power_domains_native domains_native;
 };
 #ifdef SUNSTONE_BOARD_SUPERVISED
 /* Outputs are private, mutually disjoint and separate from immutable inputs. */

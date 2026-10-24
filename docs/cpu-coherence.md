@@ -212,10 +212,12 @@ noncacheable walks, where it removes stale lines that a later eviction could
 write over the tables:
 
 1. **Cold entry, core 0, EL3, MMU off.** `a733_cached_memory_prepare()` flushes
-   the whole table section (the five table pages and the checksum line) before
-   it writes the first descriptor. This removes any Secure dirty line that a
-   later eviction or the existing `DC CVAC` publication in
-   `platform/a733-smp-cached/continue.c` could write back over a descriptor.
+   the table section (the five table pages and the checksum line) with
+   `DC CIVAC` before it writes the first descriptor. This removes any Secure
+   dirty line that a later eviction could write back over a descriptor. The
+   descriptor writes that follow are Device stores, which allocate no line, so
+   `platform/a733-smp-cached/continue.c` publishes code and initial RAM but not
+   the table section.
 2. **Build.** The builder and `a733_cached_memory_prepare()` write every
    descriptor. No code writes a table after preparation returns. As its last
    step, core 0 stores the 64-bit additive sum of the 1,024 words of the EL1
@@ -245,22 +247,24 @@ The Arm Architecture Reference Manual states this for Device-type accesses, but
 no copy of that manual is pinned here.
 
 The counts below come from `checks/cpu-table-walks.py` on the cached
-eight-core diagnostic image, against the same image built from the previous
-integration commit:
+eight-core diagnostic image:
 
-| Per boot | Before | Now |
-| --- | --- | --- |
-| `a733_cpu_coherence_enable_el1()` instructions, success path | 75 | 2,233 |
-| EL3 `DC CIVAC` before the first descriptor write | 0 | 321 |
-| EL1 `DC CIVAC` per core | 0 | 128 |
-| EL1 `LDP` readback per core | 0 | 512 (1,024 words) |
-| `DC CVAC` publication of the table section in `continue.c` | 320 | 321 |
-| Table section bytes | 20,480 | 20,544 |
+| Per boot | Count |
+| --- | --- |
+| `a733_cpu_coherence_enable_el1()` instructions, success path | 2,233 |
+| EL3 `DC CIVAC` before the first descriptor write | 321 |
+| EL1 `DC CIVAC` per core | 128 |
+| EL1 `LDP` readback per core | 512 (1,024 words) |
+| `DC CVAC` publication of the table section in `continue.c` | 0 |
+| Table section bytes | 20,544 |
 
-For the eight-core image this is 1,666 table-line operations per boot, or
-1,345 after `continue.c` drops its table publication. A cached single-core
-image adds 449. At 494 MHz and at most 70 cycles per maintenance operation the
-estimate is about 0.25 ms, plus about 0.1 ms per core for the readback at
+For the eight-core diagnostic image this is 1,345 table-line operations per
+boot: 321 at EL3 and 128 on each of the eight cores. The supervised image's
+table section also holds two temporary EL3 pages, so its EL3 flush covers 449
+lines, and `a733_supervised_ns_publish()` maintains 128 more lines of those
+pages and 128 lines of the EL1 pages, 1,729 in total. A cached single-core
+image runs 449. At 494 MHz and at most 70 cycles per maintenance operation the
+estimate for the diagnostic image is about 0.19 ms, plus about 0.1 ms per core for the readback at
 200 ns per Device load. The work runs once per boot.
 
 When `A733_DEVICE_MEMORY_LAYOUT` reaches 2, `a733_cached_memory_prepare()`

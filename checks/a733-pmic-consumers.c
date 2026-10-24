@@ -61,10 +61,8 @@ static uintptr_t address(enum a733_gpu_power_bank b,uint32_t off)
 {return (b==A733_GPU_CCU ? 0x02002000u : b==A733_GPU_R_CCU ? 0x07010000u : 0x07060000u)+off;}
 static int gpu_read(void *v,enum a733_gpu_power_bank b,uint32_t off,uint32_t *out)
 {(void)v;uintptr_t a=address(b,off);*out=a==0x07065008 ? *word(0x07065000)&15 : *word(a);return 1;}
-static int gpu_write(void *v,enum a733_gpu_power_bank b,uint32_t off,uint32_t value,uint64_t d)
-{(void)v;assert(d>model.now);*word(address(b,off))=value;return 1;}
 static int gpu_update(void *v,enum a733_gpu_power_bank b,uint32_t off,uint32_t clear,uint32_t set,uint64_t d)
-{return gpu_write(v,b,off,(*word(address(b,off))&~clear)|set,d);}
+{(void)v;assert(d>model.now);*word(address(b,off))=(*word(address(b,off))&~clear)|set;return 1;}
 int a733_npu_platform_native_read(void *v,uintptr_t a,uint32_t *out)
 {(void)v;assert(held);*out=a==0x07064008 ? *word(0x07064000)&15 : *word(a);return 1;}
 int a733_npu_platform_native_write(void *v,uintptr_t a,uint32_t value)
@@ -120,7 +118,7 @@ static void setup(unsigned client)
     struct a733_gpu_resource_rail untouched={9,9,9,9,9,9};
     assert(!shared.native.operations.rail(&shared.native,&untouched,1000000));
     assert(untouched.chip==9 && !model.reads && !model.writes);
-    const struct a733_gpu_platform_ops gops={gpu_now,gpu_read,gpu_write,gpu_update};
+    const struct a733_gpu_platform_ops gops={gpu_now,gpu_read,gpu_update};
     assert(a733_gpu_platform_init(&gpu,&shared.manager,client,&gops,0));
     assert(a733_gpu_platform_bind_pmic(&gpu,&shared.native,&model.provider,&model.lifetime,8));
     assert(a733_npu_startup_bind_task(&npu,(TaskHandle_t)1));

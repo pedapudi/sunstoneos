@@ -140,7 +140,10 @@ def prepare(args):
     if task_workload:symbols += [f'--defsym=probe_worker_results={native["a733_smp_core_results"]:#x}']
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
-    commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
+    # The first-task survey runs its pre-release admission (all-core-first-task-probe.S)
+    # before identity_primary_run, so a refused state check returns instead of parking.
+    admit=['--wrap=identity_primary_run'] if first_task and not task_switch else []
+    commands.extend([[args.lld,'-T',link,'--gc-sections',*admit,*symbols,*[args.output/name for _,name in units],
                       '-o',args.output/'identity.elf'],
                      [args.objcopy,'-O','binary',args.output/'identity.elf',args.output/'identity.bin']])
     for command in commands:

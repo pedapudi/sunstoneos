@@ -41,18 +41,19 @@ void a733_storage_maintenance_stop(void)
 static _Noreturn void park(void){for(;;)vTaskSuspend(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
+/* The power service task: every PMIC transaction and domain transition. It
+ * blocks until a submit or row request notifies it, or for the ticks the step
+ * returns; faults park it with ownership held. */
 static void pmic(void *unused)
 {
     (void)unused;for(;;){
         if(!board_live(NULL))park();
-        enum a733_pmic_status r=a733_pmic_poll(&providers.shared.pmic);
-        if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
-            atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
-        else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY){board_fail(NULL);park();}
+        const uint32_t ticks=a733_power_service_step(&providers.domains);
+        const int ready=a733_power_service_ready(&providers.domains);
+        if(ready>0)atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
+        else if(ready<0){board_fail(NULL);park();}
         BOARD_PROGRESS(BOARD_SERVICE_PMIC);
-        /* Advance an owned transaction without sleeping after each I2C state.
-         * Other ready tasks still run; faults above park with ownership held. */
-        if(providers.shared.pmic.held)taskYIELD();else vTaskDelay(1);
+        (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
 }
 static void typec(void *unused)
@@ -302,8 +303,12 @@ void a733_smp_diagnostic_start(void)
            &&i!=7
 #endif
            )continue;
-        board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
+        /* The power service runs below USB0, on A55 core 0. */
+        board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
         if(!board.handles[i])platform_panic("board tasks",5);
+#if configNUMBER_OF_CORES > 1
+        if(!i)vTaskCoreAffinitySet(board.handles[i],1);
+#endif
 #ifdef SUNSTONE_BOARD_USB2_IRQ
         if(i==4)vTaskCoreAffinitySet(board.handles[i],1);
 #endif
@@ -346,6 +351,17 @@ void a733_smp_diagnostic_start(void)
            board_radio_chip_id(),board.handles[5],board.handles[6],&board.watchdog_state))
             platform_panic("board radio",9);
     }
+    /* The resident service reports progress to the watchdog (1 s window). */
+    const struct a733_power_service_config service={s->pmic_owner,s->deadline_us,1000000u/configTICK_RATE_HZ,
+#ifdef SUNSTONE_BOARD_RESIDENT
+        500000u
+#else
+        0
+#endif
+    };
+    if(!a733_power_domains_native_init(&providers.domains_native,board.handles[0])||
+       !a733_power_domains_init(&providers.domains,&providers.shared.pmic,&providers.domains_native.operations,
+           &providers.domains_native,&service))platform_panic("board power domains",12);
 #ifdef SUNSTONE_BOARD_APPLICATION
     if(board_application_start()!=1)platform_panic("board application startup",11);
 #endif

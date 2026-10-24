@@ -1,16 +1,20 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Count actual-provider polls per PMIC snapshot when each wire event takes
  * modeled bus time and the provider task sleeps one 1 ms tick between polls.
- * A concurrent a733_pmic_live() consumer runs at every bus access and between
- * polls; the check bounds how long each poll and each snapshot keep the
- * provider BUSY to it. Arguments: poll limit, longest-poll and total BUSY
- * limits in microseconds.
+ * A concurrent consumer runs at every bus access and between polls. Its
+ * a733_pmic_live() takes no lock and never sees BUSY; its a733_pmic_result()
+ * takes the provider object, and the check bounds how long each poll and each
+ * snapshot keep the object BUSY to it. Arguments: poll limit, longest-poll
+ * and total BUSY limits in microseconds.
  * Build with checks/a733-pmic.c's provider, rail, clock, GPU and pin units. */
 #define PMIC_MODEL_NO_MAIN
 #include "a733-pmic.c"
 #include <stdlib.h>
 static struct pmic_model m;
-struct busy { uint64_t held,longest;unsigned accesses,observed; };
+struct busy { uint64_t held,longest;unsigned accesses,observed,live; };
+static const struct a733_pmic_request *probe_request;static unsigned result_busy;
+static void probe_result(struct pmic_model *p)
+{struct a733_pmic_snapshot s;if(a733_pmic_result(&p->provider,probe_request,&s)==A733_PMIC_BUSY)++result_busy;}
 static unsigned snapshot_polls(enum a733_rail rail,unsigned owner,unsigned expected_uv,struct busy *b)
 {
     struct a733_rail_token t={0};
@@ -19,7 +23,7 @@ static unsigned snapshot_polls(enum a733_rail rail,unsigned owner,unsigned expec
     struct a733_pmic_request q;struct a733_pmic_snapshot s;
     assert(a733_pmic_submit(&m.provider,owner,&t,rail,m.now+1000000,&q)==A733_PMIC_PENDING);
     unsigned polls=0;
-    *b=(struct busy){0};m.probe_live=1;m.live_busy=0;
+    *b=(struct busy){0};m.probe_live=1;m.live_busy=0;probe_request=&q;result_busy=0;m.concurrent=probe_result;
     while(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_PENDING) {
         uint64_t start=m.now;unsigned accesses=m.reads+m.writes;
         assert(++polls<1000 && pmic_model_step(&m)!=A733_PMIC_RETAINED);
@@ -30,7 +34,7 @@ static unsigned snapshot_polls(enum a733_rail rail,unsigned owner,unsigned expec
         assert(a733_pmic_live(&m.provider,&m.lifetime)==A733_PMIC_READY);
         m.now+=1000;
     }
-    m.probe_live=0;b->observed=m.live_busy;
+    m.probe_live=0;m.concurrent=0;b->live=m.live_busy;b->observed=result_busy;
     assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_COMPLETE);
     assert(s.rail==rail && s.enabled && s.decoded && s.programmed_uv==expected_uv);
     assert(s.chip==3 && !s.page_before && !s.page_after && !s.revision && !m.i2c_held && !m.retained);
@@ -53,12 +57,12 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;++i) {
         struct busy b;unsigned polls=snapshot_polls(rails[i],10+i,uv[i],&b);
         printf("PMIC rail %u: %u polls (limit %u); BUSY %llu us in total (limit %llu), "
-            "%llu us and %u accesses in the longest poll (limit %llu us); %u BUSY live() observations\n",
+            "%llu us and %u accesses in the longest poll (limit %llu us); %u BUSY result() and %u BUSY live() observations\n",
             (unsigned)rails[i],polls,limit,(unsigned long long)b.held,(unsigned long long)total_limit,
-            (unsigned long long)b.longest,b.accesses,(unsigned long long)longest_limit,b.observed);
+            (unsigned long long)b.longest,b.accesses,(unsigned long long)longest_limit,b.observed,b.live);
         fflush(stdout);
-        /* The consumer did run while the provider was busy. */
-        assert(b.observed && polls<=limit && b.longest<=longest_limit && b.held<=total_limit);
+        /* The consumer did run while the provider was busy; live() never waits. */
+        assert(b.observed && !b.live && polls<=limit && b.longest<=longest_limit && b.held<=total_limit);
     }
     puts("PASS PMIC snapshot poll count and bounded BUSY with modeled bus time");
     return 0;

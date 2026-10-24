@@ -27,12 +27,18 @@ supplies only its session values and output callbacks: the designated task and
 unchanged session, the live output clock, rail, PMIC and PCK leases, and the
 output state that admits each DE action.
 
-Domain preparation first checks that the low four bits of the DE_SYS PCK command
-and status registers agree at OFF (0) or ON (8), then asserts the DE bus and module resets and waits 10 µs. The
-shared fixed domain-ON provider (`a733_de_sys_power`, also used by G2D) adopts
-an ON domain without writes. For an OFF domain it writes the pinned
+Domain preparation first calls `a733_power_domain_check(domains, 1)`, which
+reads the DE_SYS MBUS gates, the PPU clock and the PCK command and status
+registers, requires their low four bits to agree at OFF (0) or ON (8), and
+writes nothing. It then asserts the DE bus and module resets and waits 10 µs.
+The framebuffer does not write PCK domain 1. It registers a domain-1 row on
+the image's power-domain owner at boot and, after its own authorization,
+requests the row ON and reads the row state once per step
+([docs/power-domains.md](power-domains.md)). The owner adopts an ON domain
+without writes; for an OFF domain it writes the pinned
 `0x170/0x174/0xc00/0xc04/0xc10` delay row, requests ON and waits at most
-10 ms for the status. Any other state, or an expired wait, retains everything.
+10 ms for the status. A refused or failed row, or a row still pending at the
+session deadline, retains everything.
 It adopts a verified stable 600 MHz DE PLL and authenticated fabric settings.
 It does not invent a cold PLL image. Both IOMMU bus-clock groups and the global DE AHB/MBUS gates must already
 be enabled, consistent with the authenticated initial handoff.

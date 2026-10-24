@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic_consumer.h"
+#include "a733_power_domains.h"
 #include "a733_range.h"
 enum { NEW, RESERVED, STABLE, REQUESTED, SAMPLED };
 static int identity(const struct a733_pmic_consumer *c)
@@ -38,6 +39,18 @@ static int equal(const struct a733_pmic_snapshot *a,const struct a733_pmic_snaps
         a->revision==b->revision && a->enable==b->enable && a->selector==b->selector &&
         a->page_after==b->page_after && a->enabled==b->enabled && a->decoded==b->decoded &&
         a->programmed_uv==b->programmed_uv;
+}
+/* DCDC4 completes from the service's boot verification when the provider is
+ * bound to a power-domain owner: no bus transaction and no PMIC slot. */
+static int recorded(const struct a733_pmic_consumer *c)
+{return c->config.rail==A733_RAIL_DCDC4 && c->config.provider->domains;}
+/* 1 verified, 0 verification pending, -1 refused: one acquire load. */
+static int record(const struct a733_pmic_consumer *c)
+{
+    const unsigned w=a733_power_authority_load(&c->config.provider->rails->authority);
+    if(w&A733_POWER_PMIC_TRANSFER)return -1;
+    if(!(w&A733_POWER_SUPPLY_DONE))return 0;
+    return w&A733_POWER_DCDC4_VERIFIED ? 1 : -1;
 }
 int a733_pmic_consumer_storage(struct a733_pmic *p,const void *v,size_t n)
 {
@@ -83,6 +96,14 @@ int a733_pmic_consumer_sample(struct a733_pmic_consumer *c,uint64_t deadline)
 {
     int r=a733_pmic_consumer_reserve(c,deadline);if(r!=1)return r;
     struct a733_pmic *p=c->config.provider;
+    if(recorded(c)) {
+        if(c->stage==SAMPLED)return a733_pmic_consumer_health(c);
+        r=record(c);if(r<=0)return r<0 ? fault(c) : 0;
+        /* The verified bit, loaded with acquire order above, publishes the record. */
+        const struct a733_pmic_snapshot *s=&p->domains->dcdc4;
+        if(!correct(c,s) || timely(c,deadline)<0)return fault(c);
+        c->snapshot=*s;c->stage=SAMPLED;return 1;
+    }
     enum a733_pmic_status status=a733_pmic_live(p,&c->config.lifetime);
     if(status==A733_PMIC_BUSY || status==A733_PMIC_PENDING)return 0;
     if(status!=A733_PMIC_READY)return fault(c);
@@ -103,11 +124,12 @@ int a733_pmic_consumer_health(struct a733_pmic_consumer *c)
 {
     if(!identity(c))return -1;
     if(c->stage!=SAMPLED)return 0;
-    if(!request_identity(c) || c->rail.owner!=c->config.owner ||
+    if((!recorded(c) && !request_identity(c)) || c->rail.owner!=c->config.owner ||
         c->rail.shared!=A733_RAIL_BIT(c->config.rail) || c->rail.exclusive)return fault(c);
     enum a733_rail_result rail=a733_rail_status(c->config.provider->rails,&c->rail);
     if(rail==A733_RAIL_BUSY)return 0;
     if(rail!=A733_RAIL_READY)return fault(c);
+    if(recorded(c))return record(c)==1 ? 1 : fault(c);
     enum a733_pmic_status s=a733_pmic_live(c->config.provider,&c->config.lifetime);
     if(s==A733_PMIC_BUSY)return 0;
     if(s!=A733_PMIC_READY)return fault(c);
@@ -121,6 +143,7 @@ int a733_pmic_consumer_refresh(struct a733_pmic_consumer *c,uint64_t deadline)
 {
     int r=a733_pmic_consumer_health(c);if(r!=1)return r;
     if(c->armed || deadline!=c->deadline || timely(c,deadline)<0)return fault(c);
+    if(recorded(c))return 1; /* No request: the boot record stays valid. */
     enum a733_pmic_status s=a733_pmic_reap(c->config.provider,&c->request);
     if(s==A733_PMIC_BUSY)return 0;
     if(s!=A733_PMIC_COMPLETE)return fault(c);
@@ -139,7 +162,7 @@ int a733_pmic_consumer_take(struct a733_pmic_consumer *c,const void *recipient,u
 {
     if(!identity(c) || !out || out!=c->destination || !c->armed || c->recipient!=recipient ||
         c->armed_deadline!=deadline || c->config.rail!=A733_RAIL_DCDC4 ||
-        c->stage!=SAMPLED || !request_identity(c) || !correct(c,&c->snapshot))return 0;
+        c->stage!=SAMPLED || (!recorded(c) && !request_identity(c)) || !correct(c,&c->snapshot))return 0;
     c->armed=0;const struct a733_pmic_snapshot *s=&c->snapshot;
     *out=(struct a733_gpu_resource_rail){s->page_before,s->chip,s->revision,s->enable,s->selector,s->page_after};
     return 1;

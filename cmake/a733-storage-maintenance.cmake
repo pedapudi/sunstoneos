@@ -62,6 +62,7 @@ set(storage_extra
   drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c drivers/storage/sunxi_mmc.c
   drivers/clock/a733_clock_leases.c drivers/power/a733_rail_leases.c
   drivers/power/a733_pmic.c drivers/power/a733_pmic_native.c drivers/power/a733_pmic_consumer.c drivers/i2c/a733_i2c.c
+  drivers/power/a733_power_domains.c drivers/power/a733_power_domains_native.c
   drivers/pinctrl/a733_pins.c drivers/pinctrl/a733_pin_tables.c drivers/pinctrl/a733_pins_native.c
   drivers/gpu/a733_gpu_resources.c drivers/gpu/a733_gpu_resources_native.c
   drivers/usb/a733_usb_platform.c drivers/usb/a733_usb_platform_native.c

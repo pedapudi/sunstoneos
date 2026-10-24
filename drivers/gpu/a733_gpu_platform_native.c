@@ -9,8 +9,7 @@ static uintptr_t address(enum a733_gpu_power_bank bank, uint32_t off)
     if (bank == A733_GPU_CCU && (off == 0x5c0 || off == 0x5e0 || off == 0xb20 || off == 0xb24))
         return 0x02002000u + off;
     if (bank == A733_GPU_R_CCU && off == 0x1ac) return 0x07010000u + off;
-    if (bank == A733_GPU_PCK && (off == 0x5000 || off == 0x5008 || off == 0x5170 ||
-        off == 0x5174 || off == 0x5c00 || off == 0x5c04 || off == 0x5c10)) return 0x07060000u + off;
+    /* GPU_TOP (PCK domain 5) belongs to the power-domain owner. */
     return 0;
 }
 static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, uint32_t *out)
@@ -31,24 +30,11 @@ static int enter(struct a733_gpu_platform_native *n, uint64_t deadline)
     n->locks.register_leave(n->locks.context);
     return 0;
 }
-static int write_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off,
-                      uint32_t value, uint64_t deadline)
-{
-    struct a733_gpu_platform_native *n = context;
-    if (bank != A733_GPU_PCK || !((off == 0x5170 && value == 0x1f1f1f) ||
-        (off == 0x5174 && value == 0x1f1f) || (off == 0x5c00 && value == 0x08080808) ||
-        (off == 0x5c04 && value == 0x0808) || (off == 0x5c10 && value == 8))) return 0;
-    if (!enter(n, deadline)) return 0;
-    a733_mmio_write32_dsb_sy_both(address(bank, off), value);
-    n->locks.register_leave(n->locks.context);
-    return 1;
-}
 static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off,
                        uint32_t clear, uint32_t set, uint64_t deadline)
 {
     struct a733_gpu_platform_native *n = context;
-    int allowed = (bank == A733_GPU_PCK && off == 0x5000 && clear == 15 && (set == 0 || set == 8)) ||
-        (bank == A733_GPU_CCU && off == 0xb20 &&
+    int allowed = (bank == A733_GPU_CCU && off == 0xb20 &&
          ((clear == 0x8700000f && set == 0x0b000000) || (clear == 0 && set == 0x88000000) ||
           (clear == 0x80000000 && set == 0x08000000))) ||
         (bank == A733_GPU_CCU && off == 0xb24 &&
@@ -68,7 +54,7 @@ int a733_gpu_platform_native_init(struct a733_gpu_platform_native *n,
     uint64_t frequency;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     if (frequency != COUNTER_HZ) return 0;
-    *n = (struct a733_gpu_platform_native){.operations = {a733_gpu_platform_native_now, read_reg, write_reg, update_reg},
+    *n = (struct a733_gpu_platform_native){.operations = {a733_gpu_platform_native_now, read_reg, update_reg},
                                           .locks = *locks, .initialized = 1};
     return 1;
 }

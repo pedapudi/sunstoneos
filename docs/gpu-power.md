@@ -1,7 +1,8 @@
 # GPU power control has host evidence
 
 The A733 GPU power controller prepares the GPU at 400 MHz and requests power
-for its top-level domain. It supports bounded startup, shutdown, and reopening.
+for its top-level domain (PCK600 domain 5) through a row of the
+[power-domain owner](power-domains.md). It supports bounded startup, shutdown, and reopening.
 Host checks and an AArch64 compilation pass. Physical execution, regulator
 control, shared-clock management, and integration with the FreeRTOS GPU service
 remain outstanding.
@@ -12,15 +13,14 @@ A privileged owner polls the controller. One poll runs the resource and
 register steps back to back, with monotonic clock reads. It waits on the clock
 for the one-microsecond clock-settling delay. The board clock reports whole
 microseconds rounded down, so the delay ends only when the clock passes the
-sample taken after the clock-gate write by more than one microsecond. An
-unsatisfied power-domain acknowledgement is re-read for up to 50 µs
-(`A733_GPU_SPIN_US`, the bound shared with the startup and shutdown
-controllers) from its first read before the poll returns to the owner. The
-lease callback and earlier register steps in the same poll therefore do not
-consume that budget. A wait whose clock shows no advance for 1,024 consecutive
-samples (`A733_GPU_SPIN_STALLED_READS`) returns to the owner without advancing
-the step, and the next poll restarts the delay. Clock settling and domain
-acknowledgement share one absolute deadline. An expired deadline, clock
+sample taken after the clock-gate write by more than one microsecond. The
+domain step requests the row once and returns to the owner until the service
+task answers; each later poll reads the answer with one acquire load. A
+delay whose clock shows no advance for 1,024 consecutive samples
+(`A733_GPU_SPIN_STALLED_READS`) returns to the owner without advancing the
+step, and the next poll restarts the delay. Clock settling and the domain
+answer share one absolute deadline. A refused row fails with
+`A733_GPU_POWER_STATE`, a failed domain with `A733_GPU_POWER_DOMAIN`. An expired deadline, clock
 regression, callback failure, or unexpected register value stops further I/O.
 The controller performs no automatic rollback after a failure.
 
@@ -62,8 +62,10 @@ No parent PLL or PMIC register is written by the controller.
 
 ## Startup and shutdown preserve explicit limits
 
-Startup programs the source-defined power-controller delays, requests GPU domain
-state 8, and waits for that exact status. It selects the 400 MHz peripheral
+Startup checks the MBUS gates, the power-controller clock, a closed GPU clock
+gate and an asserted reset, then requests the domain-5 row ON. The owner
+programs the source-defined power-controller delays, requests domain state 8
+and waits for that exact status. After the row reads ON the controller selects the 400 MHz peripheral
 parent with divisor one, enables the core and bus clocks, waits at least one
 microsecond, and releases external reset. Relevant writes receive readback
 checks. The selected clock requires only 80 ns for 32 cycles, so the one
@@ -71,7 +73,8 @@ microsecond delay covers the reference driver's settling requirement.
 
 Shutdown requires stopped firmware, closed job admission, and masked GPU
 interrupts. It asserts external reset, disables the local bus and core clocks,
-requests domain state zero, and waits for that exact status. It then releases
+and requests the row OFF; the owner rereads the gate and reset closed, requests
+domain state zero and waits for that exact status. It then releases
 shared-resource leases through the resource manager. The controller allows no
 new operation after a failed transition.
 
@@ -100,18 +103,22 @@ unrelated fields and shared gates. Reset release follows the clock gate by at
 least the settling delay. A second clock model counts one 24 MHz tick per
 clock read and callback and reports whole microseconds rounded down; under it,
 reset release followed the clock gate by 44 counter ticks, at least the 24 that
-one microsecond requires. One poll completes startup when the domain
-acknowledges within 50 µs, including when the register writes before the
-acknowledgement take 60 µs; a stalled acknowledgement returns after at least
-50 µs of re-reads and completes on a later poll. With a stopped clock, the
-settling delay and the acknowledgement wait each return without advancing and
-complete once the clock runs. The check covers 102 retained faults, including every
-callback failure on a successful startup/shutdown path, stalled transitions,
-invalid prerequisites, a partially applied write, and a late resource release.
+one microsecond requires. A stand-in for the owner answers the row from the
+modeled power-controller words. The first poll checks the preconditions and
+requests the row without waiting; the poll after the answer runs every
+remaining step, including 10 µs register updates. An unanswered row keeps the
+controller at the domain step with no register write, and with a stopped
+clock the settling delay returns without advancing and completes once the
+clock runs. The check covers 69 retained faults, including every callback
+failure on a successful startup/shutdown path, stalled transitions, invalid
+prerequisites, a refused and a failed row, a partially applied write, and a
+late resource release. The owner itself is covered by
+`checks/power-domains-pck.c`.
 
 The [reference check](../checks/a733-gpu-power-reference.py) compiles the original
 power-domain initialization and transition functions with a register model. All
-emitted power-controller writes match the native trace. It derives GPU mux,
+emitted power-controller writes match the trace of one GPU power-on and
+power-off through the real owner, which `checks/power-domains-pck.c` writes. It derives GPU mux,
 divisor, update key, gate, and reset expectations from the clock definitions.
 It also verifies register bases, the selected operating point, the board's GPU
 supply assignment, and the always-on rail requirement.

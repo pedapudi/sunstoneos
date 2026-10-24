@@ -2,7 +2,9 @@
 """Execute actual first-task restoration and the returning diagnostic overlay.
 
 Register, MMIO and coherent-memory effects are modeled. No physical scheduling
-or cache visibility follows from these instruction checks.
+or cache visibility follows from these instruction checks. The refusal cases
+change one modeled GIC state before the pre-release admission and require a
+return to the ROM with the matching code, before any secondary is released.
 """
 from collections import deque
 import argparse
@@ -18,6 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('barrier', ROOT/'checks/all-core-pre-scheduler-probe.py')
 barrier = importlib.util.module_from_spec(spec); spec.loader.exec_module(barrier)
 digest = barrier.digest
+
+
+REPORT = 0x42018100
+# Refusal case: injected GIC words, then the expected code, address, value read and core.
+REFUSALS = {
+    'refuse-gic-unreadable': (None, (0x10, 0x03400004, 0, 0)),
+    'refuse-cpu0-pending': ({0x03470200: 1 << 29}, (0x34, 0x03470200, 1 << 29, 0)),
+}
+# Words the admission reads in other cores' redistributor frames before release.
+ADMISSION_OFFSETS = (0x0, 0x14, 0x24, 0x10100, 0x10200, 0x10300)
 
 
 class FirstTask(barrier.AllCore):
@@ -37,6 +49,14 @@ class FirstTask(barrier.AllCore):
         self.entries = {}
         self.idle_entries, self.idle_yields, self.selected = set(), set(), set()
         self.recent = [deque(maxlen=24) for _ in range(8)]
+        if fault in REFUSALS:
+            words, _ = REFUSALS[fault]
+            for address in [a for a in self.mmio if 0x03400000 <= a < 0x03600000]:
+                if words is None:
+                    self.mmio[address] = 0  # Every GIC word reads zero.
+                elif address in words:
+                    self.mmio[address] = words[address]
+                self.original_mmio[address] = self.mmio[address]
 
     def pages(self, core):
         return range(0x41200000, 0x41291000, 4096)
@@ -46,6 +66,10 @@ class FirstTask(barrier.AllCore):
         return r['currentel'] < 12 and bool(r['scr_el3'] & 1)
 
     def memory(self, u, access, address, size, value, core):
+        # Pre-release admission: CPU0 reads, never writes, other frames' words.
+        if (core == 0 and access != UC_MEM_WRITE and not self.started and size == 4 and
+                0x03480000 <= address < 0x03560000 and (address-0x03460000) % 0x20000 in ADMISSION_OFFSETS):
+            return barrier.model.Machine.memory(self, u, access, address, size, value, core)
         if access == UC_MEM_WRITE and 0x41200000 <= address < 0x41291000:
             assert not any(self.cleaned.values()), 'Any CPU/EL wrote owned RAM after cleanup began'
         # Same implemented-priority semantics as a733-supervised-scheduler.py.
@@ -85,6 +109,10 @@ class FirstTask(barrier.AllCore):
         ins = self.decoded[address]; op, args = ins.mnemonic, ins.op_str.split(', ')
         r = self.regs[core]
         self.recent[core].append(f'{address:#x} {op} {ins.op_str}')
+        if op == 'msr' and args[0] == 'rmr_el3' and self.q(REPORT+48) == 3:
+            # Admission refusal: return before any release, with no GIC write.
+            assert core == 0 and self.reg(core, args[1]) == 2 and not self.started and not any(self.active[1:])
+            self.returned = True; u.emu_stop(); return
         if self.task_switch and address == self.symbols['vTaskSwitchContext']:
             assert r['currentel'] == 4 and (self.task_workload or core in self.idle_yields)
             self.selected.add(core)
@@ -148,7 +176,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for n in ('image', 'bundle', 'prefix', 'output'):
         p.add_argument('--'+n, type=Path, required=True)
-    p.add_argument('--case', choices=('success','wrong-task-argument','restore-el3'), default='success')
+    p.add_argument('--case', choices=('success','wrong-task-argument','restore-el3', *REFUSALS), default='success')
     p.add_argument('--task-switch', action='store_true')
     a = p.parse_args()
     machine = FirstTask(a.image, a.bundle)
@@ -169,6 +197,24 @@ def main():
     snapshot = pickle.loads(a.prefix.read_bytes())  # Hash-checked trusted local snapshot.
     machine.restore(snapshot, None if a.case=='success' else a.case)
     machine.execute()
+    if a.case in REFUSALS:
+        assert machine.returned and not machine.retained and machine.started == machine.stopped == []
+        assert all(address in (0x08001004, 0x08001008) for address, _, _ in machine.mmio_writes), machine.mmio_writes
+        assert machine.mmio == machine.original_mmio | {0x08001004: 0x20, 0x08001008: 0}
+        raw = machine.read(0x42018000, 0x5200)
+        header = struct.unpack_from('<32Q', raw, 0x100)
+        code, address, observed, core = REFUSALS[a.case][1]
+        assert header[:8] == (0x4137335052455331, 1, 0x5100, machine.epoch, machine.deadline, 0, 3, core), header[:8]
+        assert header[12:15] == (code, address, observed) and not any(header[8:12]+header[15:])
+        assert not any(raw[0x200:])
+        report = a.output.with_suffix('.bin'); report.write_bytes(raw)
+        a.output.write_text(json.dumps({'physical_access':False,'pass':True,'case':a.case,
+            'manifest_sha256':digest(a.bundle/'manifest.json'),'native_sha256':digest(a.image),
+            'sources':{n:digest(ROOT/n) for n in (*barrier.SOURCES,'checks/all-core-first-task-probe.py')},
+            'returned':True,'started':[],'off':[],'clean_complete':[],'refusal':{'code':code,'address':address,
+            'value':observed,'core':core},'report_sha256':digest(report)},indent=2)+'\n')
+        print('PASS returned refusal',a.case,hex(code))
+        return
     if a.case != 'success':
         assert machine.retained and not machine.returned
         assert 6 in machine.target_parked and 6 not in machine.stopped

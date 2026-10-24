@@ -101,21 +101,23 @@ The power-authority state word is one 64-byte line embedded in the
 [rail ledger](rail-leases.md) and defined in
 [a733_power_authority.h](../include/a733_power_authority.h). Its bits are PMIC
 provider READY and fault bits for the provider, the clock registry and the rail
-ledger. Every bit is set once per boot with an atomic OR and never cleared, so
-READY cannot overwrite a fault that another core set during startup. A reader
-makes one acquire load and tests a mask. The PMIC provider checks it before
-every bus phase.
+ledger. The power-domain owner adds a supply-verification done bit, verified
+bits for DCDC2 and DCDC4, and fault bits for domains 1, 4 and 5
+([a733_power_domains.h](../include/a733_power_domains.h)). Every bit is set
+once per boot with an atomic OR and never cleared, so READY cannot overwrite a
+fault that another core set during startup. A reader makes one acquire load
+and tests a mask. The PMIC provider checks it before every bus phase, and
+`a733_pmic_live` reads only it.
 
-## PCK600 power domains keep their per-consumer sequences
+## One owner powers PCK600 domains 1 and 5
 
-The framebuffer and G2D power on domains 1 (DE_SYS) and 10 (VO1) through
-[a733_de_sys_power.c](../drivers/power/a733_de_sys_power.c). The GPU, the NPU
-and the other display blocks run their own PCK600 sequences. A single owner for
-domains 1, 4, 5 and 10, with supply verification once per boot, is designed in
-[the power-authority design](designs/power-authority.md) and is
-**planned**: it lands together with its first consumer, which replaces and
-deletes that consumer's own sequence. The NPU supply-voltage selection stays
-unsupported until then.
+[docs/power-domains.md](power-domains.md) describes the owner of PCK600
+domains 1 (DE_SYS) and 5 (GPU_TOP) and the service task that runs every PMIC
+transaction in the GPU, accelerator, GPU display, HDMI and board images. The
+framebuffer, G2D and the GPU hold rows; the owner verifies DCDC2 and DCDC4
+once per boot. The NPU, the video platform, HDMI and DisplayPort still write
+domains 4, 2, 3 and 10 themselves; domain 4 moves onto a row in the NPU
+startup's next stage.
 
 ## Board evidence that would confirm the power authority
 
@@ -124,5 +126,6 @@ unsupported until then.
   bus capture showing no other S_TWI0 master.
 - DCDC3 and DCDC5 readbacks after a raise and a lowering, with
   request-to-readback times.
-- PCK600 time to ON for domains 1, 4, 5 and 10 and to OFF for domain 5.
+- PCK600 time to ON for domains 1, 4, 5 and 10 and to OFF for domain 5
+  ([docs/power-domains.md](power-domains.md) lists the owner's evidence).
 - A schematic source for the DE_SYS, G2D and deinterlace supply.

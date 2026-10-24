@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,14 +60,15 @@ def main():
     assert host.digest(model_report) == instruction['report_sha256']
     raw = model_report.read_bytes()
     assert host.decode(raw, raw[32:48], manifest)['first_task_entry_completed']
-    instruction_cases = ('wrong-rounds',) if a.task_workload else ('wrong-task-argument',) if a.task_switch else ('wrong-task-argument','restore-el3')
+    instruction_cases = ('wrong-rounds',) if a.task_workload else ('wrong-task-argument',) if a.task_switch else host.INSTRUCTION_CASES[1:]
+    host_cases = host.CASES+getattr(host, 'REFUSAL_CASES', ())
     evidence = {'success': a.model, **{case: a.model.parent/(case+'.json') for case in instruction_cases}}
     proof = {'schema': host.SOFTWARE_SCHEMA if a.task_switch else 'a733-all-core-first-task-software-v1', 'physical_access': False,
         'manifest_sha256': host.digest(a.build/'manifest.json'),
         'host_sources': {n: host.digest(ROOT/n) for n in host.HOST_SOURCES},
         'instruction_evidence': {case: {'path': str(path.resolve()), 'sha256': host.digest(path)}
                                  for case, path in evidence.items()},
-        'host_cases': dict.fromkeys(host.CASES, True)}
+        'host_cases': dict.fromkeys(host_cases, True)}
     fixture = a.output/'MODEL-never-deploy.json'
     fixture.write_text(json.dumps(proof, indent=2)+'\n')
     host.validate_software(proof, proof['manifest_sha256'])
@@ -74,9 +76,25 @@ def main():
     accepted = json.loads(accepted_path.read_text()) if accepted_path.exists() else {
         'manifest_sha256': proof['manifest_sha256'], 'host_sources': proof['host_sources'], 'cases': {}}
     assert accepted['manifest_sha256'] == proof['manifest_sha256'] and accepted['host_sources'] == proof['host_sources']
-    for case in a.case or host.CASES:
-        assert case in host.CASES
-        if case in host.CASES[:3]:
+    for case in a.case or host_cases:
+        assert case in host_cases
+        if case == 'refusal-returned-restored':
+            # The actual runner receives the instruction model's refusal report:
+            # it restores DRAM, keeps the ROM usable, does not quarantine and
+            # records the code. Same simulated FEL as invalid-report-restored.
+            refused = a.model.parent/'refuse-cpu0-pending.bin'
+            def refusal_report(data, dram, unused):
+                raw = bytearray(refused.read_bytes())
+                raw[32:48] = data[32:48]
+                struct.pack_into('<Q', raw, 280, struct.unpack_from('<Q', dram, 0x1004000+24)[0])
+                return bytes(raw)
+            refusal_args = SimpleNamespace(**dict(vars(a), output=a.output/case))
+            refusal_args.output.mkdir()
+            assert shared.run_case(refusal_args, 'invalid-report-restored', fixture, refusal_report)
+            record = json.loads((refusal_args.output/'invalid-report-restored/runtime/session.json').read_text())
+            assert record['dram_restored'] and record['rom_usable'] and not record['complete']
+            assert record['failure'].startswith('Admission refused before any secondary was released: code 0x34'), record['failure']
+        elif case in host.CASES[:3]:
             assert shared.run_case(a, case, fixture, transform(raw, a.task_workload))
         elif case == 'changed-input-refused':
             for field in ('reservations', 'first_task')+(('task_switch',) if a.task_switch else ())+(('task_workload','patches') if a.task_workload else ()):
@@ -129,7 +147,7 @@ def main():
             'checks/all-core-first-task-host.py', 'checks/primary-publication-host.py')}}
         accepted_path.write_text(json.dumps(accepted, indent=2)+'\n')
         print('PASS', case, flush=True)
-    assert set(accepted['cases']) == set(host.CASES)
+    assert set(accepted['cases']) == set(host_cases)
     proof.update(case_evidence=accepted['cases'],
         limits='Actual host runner and decoder; modeled FEL, USB, queue and reports. No physical access.')
     (a.output/'software.json').write_text(json.dumps(proof, indent=2)+'\n')

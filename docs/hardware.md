@@ -758,9 +758,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   DCDC4 through the clock registry or GPU manager. Rail status costs 37 AArch64
   instructions on three cache lines at any holder count, and the ledger uses
   1,600 bytes. One [power-authority state word](power.md) carries provider,
-  registry and ledger readiness and faults. A single owner for PCK600 domains
-  1, 4, 5 and 10 is **planned** and lands with its first consumer. CPU rail
-  lowering stops at the boot baseline.
+  registry and ledger readiness and faults. One [power-domain owner](power-domains.md)
+  is the only writer of PCK600 domains 1 and 5 and verifies DCDC2 and DCDC4
+  once per boot; the framebuffer, G2D and the GPU hold rows, and one service
+  task per image runs every PMIC transaction and domain transition. It is
+  **host-modeled**; no board run has used it. Domain 4 moves onto a row in
+  the NPU startup's next stage. CPU rail lowering stops at the boot baseline.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
   and native compilation pass. A physical returning test now completes production
