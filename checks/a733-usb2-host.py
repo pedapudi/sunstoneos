@@ -163,7 +163,8 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
     native_flags += ['-I'+str(i) for i in includes+[saved(root/'runtime/include'),saved(root/'platform/a733'),saved(freertos),saved(a.port)]]
     for i, unit in enumerate(native):
         run('native-'+str(i),native_flags+['-c',saved(unit),'-o',out/('native-'+str(i)+'.o')])
-    result={'result':'PASS','cases':cases,'native_objects':len(native),'hardware_access':False,
+    run('native-msc',native_flags+['-c',out/'tinyusb-ss/class/msc/msc_host.c','-o',out/'native-msc.o'])
+    result={'result':'PASS','cases':cases,'native_objects':len(native)+1,'hardware_access':False,
         'typec_boundary':'Actual snapshot/revoke from a prepared observation checkpoint; reuse separate role-engine evidence.',
         'artifact_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [out/'composed',*out.glob('native-*.o')]}}
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')

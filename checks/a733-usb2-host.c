@@ -18,6 +18,8 @@ static _Alignas(4096) uint8_t dma[A733_XHCI_MEMORY_BYTES];
 static uint32_t registers[0x8000/4];
 static unsigned reg_fault,lose_on_lock,platform_writes,commands,transfers,events,event_cycle=1;
 static unsigned bad_status,hold_bulk,short_data,bad_config,short_descriptor;
+static unsigned bot_case,bot_fault,bot_stalls,bot_commands,bot_controls,bot_reads,bot_delays;
+static uint64_t bot_wait;
 static unsigned stall_case,stall_seen,recovery_commands,recovery_delay,stall_events;
 static uint64_t recovery_wait,reset_command_pointer,stalled_pointer;
 static uint8_t *stalled_caller;static uint8_t stalled_original;
@@ -272,6 +274,37 @@ static void wire(void)
             if(!teardown_stuck)teardown_command(j);
             return;
         }
+        if(bot_stalls&&d->recovering){
+            struct a733_xhci_endpoint *e=&d->endpoints[d->recovering-1];
+            const struct a733_xhci_trb *cmd=&x->commands[(x->command_pointer-x->command_pa)/16];
+            uint64_t param=(uint64_t)cmd->parameter_lo|((uint64_t)cmd->parameter_hi<<32);
+            uint8_t *context=d->device+e->number*x->context_bytes;
+            assert(!e->caller&&!n.read_complete&&n.read_pending);
+            if(bot_fault==7){a733_typec_revoke(&role);return;}
+            if(bot_fault==6)return;
+            if(bot_wait!=x->command_pointer){bot_wait=x->command_pointer;bot_delays=2;}
+            if(bot_delays){--bot_delays;return;}
+            ++bot_commands;++commands;last_command=x->command_pointer;
+            assert(bot_commands<=4);
+            if(x->command_kind==14){
+                assert(bot_commands==1&&!param&&(get32(context)&7)==2&&!bot_controls);
+                put32(context,(get32(context)&~7u)|3);
+            }else if(x->command_kind==16){
+                assert(bot_controls==(e->direction?2u:3u));
+                assert(param==((e->ring_pa+16*e->index)|e->cycle));
+                put32(context+8,(uint32_t)param^(bot_fault==4?16:0));put32(context+12,param>>32);
+            }else if(x->command_kind==15){
+                assert(!e->pending_trb&&(get32(context)&7)==1);
+                assert(bot_controls==(e->direction?2u:3u));
+                put32(context,(get32(context)&~7u)|3);
+                if(bot_fault==5)put32(context+8,get32(context+8)^16);
+            }else {
+                assert(x->command_kind==12&&(get32(context)&7)==3);
+                assert(get32(d->input)==(1u<<e->number)&&get32(d->input+4)==((1u<<e->number)|1));
+                memcpy(context,d->input+(e->number+1)*x->context_bytes,x->context_bytes);running(context);
+            }
+            event(33,x->command_pointer+(bot_fault==8?16:0),bot_fault==9?19:1,0,0,d->slot);return;
+        }
         if(stall_seen&&(x->command_kind==14||x->command_kind==16)){
             assert(!n.msc_mounted&&!n.bot_stage&&!n.bot_phase&&!d->endpoints[0].caller);
             if(stalled_caller)assert(*stalled_caller==stalled_original);
@@ -357,6 +390,15 @@ static void wire(void)
         if(!i){
             if(e->kind==2){
                 memcpy(request,d->setup,8);
+                if(bot_stalls&&(request[0]==0x21||request[0]==2)){
+                    assert(bot_controls<3&&!request[2]&&!request[3]&&!request[5]&&!request[6]&&!request[7]);
+                    if(!bot_controls)assert(request[0]==0x21&&request[1]==0xff&&!request[4]);
+                    else assert(request[0]==2&&request[1]==1&&request[4]==(bot_controls==1?n.msc_in:n.msc_out));
+                    ++bot_controls;
+                    if(bot_fault==10+bot_controls){
+                        put32(d->device+x->context_bytes,2);event(32,e->pending_trb,6,8,1,d->slot);return;
+                    }
+                }
                 if(ss_mode&&request[1]==49)assert(request[0]==0&&((unsigned)request[2]|(unsigned)request[3]<<8)==(ss_hub&&j?480u:40u)&&!request[4]&&!request[5]&&!request[6]&&!request[7]);
                 if(hub_mode&&!j&&request[0]==0x23){
                     unsigned value=request[2],port=request[4];
@@ -381,11 +423,27 @@ static void wire(void)
             for(unsigned k=0;k<report_bytes;++k)e->bounce[k]=(uint8_t)(hid_reports*17+k+1);
             residual=e->length-report_bytes;++hid_reports;
             event(32,e->pending_trb+(wrong_hid_pointer?16:0),failed_hid_event?6:residual?13:1,residual,e->number,wrong_leaf_slot?1:d->slot);return;
-        }else if(!e->direction){assert(e->length==31);memcpy(cbw,e->bounce,31);}
+        }else if(!e->direction){assert(e->length==31);memcpy(cbw,e->bounce,31);
+            if(bot_case&&cbw[15]==0x28){++bot_reads;if(bot_reads==2)assert(bot_commands==4&&bot_controls==3&&!n.bot_recovery);}
+        }
         else if(e->length==13){memset(e->bounce,0,13);put32(e->bounce,0x53425355);put32(e->bounce+4,get32(cbw+4)+(bad_status?1:0));}
         else if(cbw[15]==0x25){assert(e->length==8);const uint8_t capacity[]={0,0,0,127,0,0,2,0};memcpy(e->bounce,capacity,8);}
         else if(cbw[15]==0x28){assert(e->length==512);for(unsigned k=0;k<512;++k)e->bounce[k]=(uint8_t)(k*17+3);if(short_data)residual=1;}
         else{assert(cbw[15]==3||cbw[15]==0x12);memset(e->bounce,0,e->length);}
+        if(bot_case&&i&&n.read_pending&&cbw[15]==0x28&&
+           ((!bot_stalls&&((bot_case==1&&e->direction&&e->length==512)||(bot_case==2&&!e->direction)||(bot_case==3&&e->length==13)))||
+            (bot_fault==1&&bot_stalls==1&&bot_reads==2&&e->direction&&e->length==512))){
+            ++bot_stalls;put32(d->device+e->number*x->context_bytes,2);
+            if(e->direction)memset(e->bounce,0xa6,e->length);
+            event(32,e->pending_trb,6,e->length,e->number,d->slot);return;
+        }
+        if(bot_case&&i){
+            /* Completed TDs advance the controller dequeue. Stop must publish
+             * that position before the non-stalled endpoint is reconfigured. */
+            uint64_t next=(e->ring_pa+16*e->index)|e->cycle;
+            put32(d->device+e->number*x->context_bytes+8,next);
+            put32(d->device+e->number*x->context_bytes+12,next>>32);
+        }
         if(stall_case&&!stall_seen&&!i&&request[0]==0xa1&&request[1]==0xfe&&
            e->kind==(stall_case==9?2u:stall_case==10?4u:3u)){
             stall_seen=1;++stall_events;stalled_pointer=e->pending_trb;
@@ -565,6 +623,15 @@ int main(int argc,char **argv)
         if(strstr(mode,"detach"))hub_fault_case=1;
         if(strstr(mode,"second-leaf"))hub_fault_case=2;
         if(strstr(mode,"stale"))wrong_leaf_slot=1;
+    }
+    if(!strncmp(mode,"bot-",4)||!strncmp(mode,"ss-bot-",7)){
+        if(!strncmp(mode,"ss-",3)){ss_mode=1;device_speed=4;device_packet=512;}
+        bot_case=strstr(mode,"cbw")?2:strstr(mode,"csw")?3:1;
+        bot_fault=strstr(mode,"second")?1:strstr(mode,"bad-dequeue")?4:strstr(mode,"stop-dequeue")?5:
+            strstr(mode,"deadline")?6:strstr(mode,"generation")?7:strstr(mode,"stale")?8:
+            strstr(mode,"command-fail")?9:strstr(mode,"reset-fail")?11:
+            strstr(mode,"clear-in-fail")?12:strstr(mode,"clear-out-fail")?13:0;
+        mode="read";
     }
     if(!strncmp(mode,"msc-stall",9)){
         stall_case=strstr(mode,"reset-fail")?2:strstr(mode,"dequeue-fail")?3:
@@ -921,6 +988,19 @@ int main(int argc,char **argv)
         assert(m.now-stuck_at>=2000&&m.now-stuck_at<3000&&m.now<n.read_deadline);
     }
     else for(unsigned i=0;i<10000&&!n.read_complete&&!n.failed;++i)poll();
+    if(bot_case){
+        assert(bot_stalls==(bot_fault==1?2u:1u));
+        if(bot_fault){
+            assert(n.failed&&n.core.failed&&!n.read_complete&&a733_usb2_read_result(&n,result)<0);
+            for(unsigned j=0;j<512;++j)assert(result[j]==0x5a);
+            enum device_memory_state state;struct device_memory_extent extent;
+            assert(device_memory_describe(&n.private_pool,n.memory,&extent,&state)&&state==DEVICE_MEMORY_RETAINED);
+            assert(bot_reads<3&&bot_commands<=4);
+            printf("PASS BOT fault %u retains DMA/caller output after %u commands, %u control requests, %u READ10 attempts\n",bot_fault,bot_commands,bot_controls,bot_reads);return 0;
+        }
+        assert(bot_reads==2&&bot_commands==4&&bot_controls==3&&!n.bot_recovery);
+        printf("BOT recovery: 4 commands, 3 control requests, 1 retry; ");
+    }
     if(strcmp(mode,"read")){
         (void)a733_usb2_host_poll(&n);assert(n.failed&&n.core.failed);
         assert(a733_usb2_read_result(&n,result)<0);for(unsigned j=0;j<512;++j)assert(result[j]==0x5a);
@@ -929,7 +1009,7 @@ int main(int argc,char **argv)
     assert(n.read_complete&&!n.failed&&a733_usb2_read_result(&n,result)==1);
     for(unsigned j=0;j<512;++j)assert(result[j]==(uint8_t)(j*17+3));
     if(irq_model)assert(irq_begins&&irq_releases&&!(registers[0x1020/4]&1));
-    assert(n.core.devices[hub_mode?1:0].endpoints[0].cycle==0); /* Enumeration crosses the control Link TRB. */
+    if(!bot_case)assert(n.core.devices[hub_mode?1:0].endpoints[0].cycle==0); /* Enumeration crosses the control Link TRB. */
     if(busy_inject){
         assert(platform_busy>10&&live_busy>100);
         printf("PASS %u platform and %u xHCI BUSY observations mid-sequence; ",platform_busy,live_busy);

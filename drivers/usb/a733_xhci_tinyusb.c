@@ -6,6 +6,7 @@
 #include <string.h>
 static struct a733_usb2_native *host;
 static unsigned descriptor_index(unsigned address);
+static void bot_recovery_poll(void);
 static struct a733_usb2_ss *ss_state(unsigned address)
 {
     if(!host)return NULL;
@@ -119,6 +120,7 @@ static void forget(unsigned address)
     if(n->msc_seen&&address==n->address){
         withdraw_msc();n->msc_seen=n->msc_in=n->msc_out=n->blocks=n->block_bytes=0;
         n->bot_tag=n->bot_total=n->bot_received=0;n->bot_buffer=NULL;
+        n->bot_recovery=n->bot_retried=0;
         n->bot_phase=n->bot_opcode=n->bot_stage=n->bot_endpoint=n->bot_requested=n->bot_status=0;
     }
     if(n->hid_seen&&address==n->hid_address){
@@ -175,7 +177,7 @@ int a733_usb2_host_poll(struct a733_usb2_native *n)
             h->configure_pending=0;
         }
     }
-    if(!host->failed&&r!=A733_XHCI_BUSY)tuh_task_ext(0,false);
+    if(!host->failed&&r!=A733_XHCI_BUSY){tuh_task_ext(0,false);if(!host->failed)bot_recovery_poll();}
 #if CFG_TUH_AUDIO
     /* Hand completed isochronous packets to the pending class request. Each
      * completion lets the class queue its next request in the same poll. */
@@ -197,7 +199,7 @@ int a733_usb2_host_poll(struct a733_usb2_native *n)
  * Only read-only SCSI commands needed by enumeration and READ10 are admitted. */
 static int bot_submit(unsigned ep,uint8_t *buffer,unsigned bytes)
 {
-    struct a733_usb2_native *n=host;if(n->bot_stage)return 0;
+    struct a733_usb2_native *n=host;if(n->bot_stage||n->bot_recovery)return 0;
     if(!n->bot_phase){
         if((ep&128)||bytes!=31||!buffer||le32(buffer)!=UINT32_C(0x43425355)||buffer[13]||
             (buffer[12]&127)||buffer[14]>16||!buffer[14])return 0;
@@ -215,7 +217,12 @@ static int bot_submit(unsigned ep,uint8_t *buffer,unsigned bytes)
 static int bot_complete(const struct a733_xhci_notice *e)
 {
     struct a733_usb2_native *n=host;
-    if(!n->bot_stage||e->endpoint!=n->bot_endpoint||e->result||e->bytes>n->bot_requested)return 0;
+    if(!n->bot_stage||e->endpoint!=n->bot_endpoint||e->bytes>n->bot_requested)return 0;
+    if(e->result){
+        if(e->result!=1||e->bytes||n->bot_recovery||n->bot_retried||
+           !n->msc_mounted||!n->read_pending||n->read_complete||n->bot_opcode!=0x28||n->bot_total!=512)return 0;
+        n->bot_retried=1;n->bot_recovery=1;n->bot_buffer=NULL;return 1;
+    }
     if(n->bot_stage==1){if(e->bytes!=31)return 0;n->bot_phase=n->bot_total?1:2;}
     else if(n->bot_stage==2){n->bot_received=e->bytes;n->bot_phase=2;}
     else {
@@ -226,6 +233,49 @@ static int bot_complete(const struct a733_xhci_notice *e)
         n->bot_status=p[12];n->bot_phase=0;
     }
     n->bot_stage=0;n->bot_buffer=NULL;return 1;
+}
+/* The pinned MSC class preserves its CBW and callback while this adapter
+ * restores the transport. No transfer from the failed command reaches a client. */
+extern bool a733_tinyusb_msc_retry(uint8_t address);
+static void bot_control_done(tuh_xfer_t *xfer)
+{
+    /* Pinned TinyUSB falls through SETUP to DATA for wLength=0 and reports
+     * the eight SETUP bytes as actual_len. The core verified zero STATUS bytes. */
+    if(!owner()||xfer->daddr!=host->address||xfer->result!=XFER_RESULT_SUCCESS||
+       xfer->actual_len!=8||!host->read_pending){lost();return;}
+    unsigned phase=host->bot_recovery;
+    if(phase==2){host->bot_recovery=3;return;}
+    if(phase!=4&&phase!=6){lost();return;}
+    unsigned ep=phase==4?host->msc_in:host->msc_out;
+    if(!a733_xhci_clear_bulk(&host->core,host->address,ep,host->read_deadline)){lost();return;}
+    host->bot_recovery=phase+1;
+}
+static bool bot_control(unsigned phase)
+{
+    tusb_control_request_t request={.bmRequestType=phase==2?0x21:0x02,
+        .bRequest=phase==2?0xff:1,.wIndex=phase==2?0:phase==4?host->msc_in:host->msc_out};
+    tuh_xfer_t xfer={.daddr=host->address,.setup=&request,.complete_cb=bot_control_done};
+    host->bot_recovery=phase;
+    if(!tuh_control_xfer(&xfer)){lost();return false;}return true;
+}
+bool a733_tinyusb_bot_recover(uint8_t address)
+{
+    if(!owner()||address!=host->address||host->bot_recovery!=1||!host->read_pending){lost();return false;}
+    return bot_control(2);
+}
+static void bot_recovery_poll(void)
+{
+    unsigned phase=host->bot_recovery;if(phase!=3&&phase!=5&&phase!=7)return;
+    unsigned index=descriptor_index(host->address);
+    if(index>=A733_XHCI_DEVICES){lost();return;}
+    if(host->core.devices[index].recovering)return;
+    if(phase==3){(void)bot_control(4);return;}
+    if(phase==5){(void)bot_control(6);return;}
+    host->bot_recovery=host->bot_stage=host->bot_phase=host->bot_received=host->bot_status=0;
+    /* A failed CSW can follow a complete private data copy. Discard it before
+     * retry, and require another full validated READ10 before publication. */
+    memset(host->sector,0,sizeof(host->sector));
+    if(!a733_tinyusb_msc_retry((uint8_t)host->address))lost();
 }
 static unsigned le16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static uint32_t le24(const uint8_t *p){return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16;}
@@ -345,6 +395,7 @@ static int control_response(const struct a733_xhci_notice *e)
            device->endpoints[0].pending_trb||device->endpoints[0].caller)return 0;
         n->control_buffer=NULL;n->control_bytes=0;return 1;
     }
+    if(e->result)return 0;
     if(!p){
         if(device->speed==4&&device->control_stage==0&&e->bytes==0&&e->endpoint==128){
             if(s[1]==49){if(ssdata->ss_control!=2||ssdata->ss_request!=2)return 0;ssdata->ss_control=3;if(device->parent)ssdata->ss_ready=1;}
@@ -684,7 +735,14 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
             ((a->features[index>>13]>>((index>>8)&31))&1)&&
             ((value>>8)==1||(value>>8)==2)&&(len==1||len==2))||
           (setup[0]==0x22&&setup[1]==1&&value==0x0100&&index==a->endpoint&&len==3&&a->starting);
-    }else valid=desc->kind==A733_USB2_DEVICE_MSC&&setup[0]==0xa1&&setup[1]==0xfe&&!value&&!index&&len==1;
+    }else if(desc->kind==A733_USB2_DEVICE_MSC){
+        valid=setup[0]==0xa1&&setup[1]==0xfe&&!value&&!index&&len==1;
+        if(address==host->address&&host->read_pending&&!value&&!len){
+            valid|=host->bot_recovery==2&&setup[0]==0x21&&setup[1]==0xff&&!index;
+            valid|=setup[0]==2&&setup[1]==1&&
+                ((host->bot_recovery==4&&index==host->msc_in)||(host->bot_recovery==6&&index==host->msc_out));
+        }
+    }
     if(!valid){lost();return false;}
     if(!a733_xhci_setup(&host->core,address,setup,d))return false;
     host->control_address=address;host->control_device=di;memcpy(host->control_setup,setup,8);return true;
@@ -725,7 +783,8 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
 }
 bool hcd_edpt_abort_xfer(uint8_t port,uint8_t address,uint8_t ep)
 {return owner()&&!port&&a733_xhci_abort(&host->core,address,ep);}
-/* Bulk clear-halt/BOT reset recovery is outside the fixed GET_MAX_LUN path. */
+/* Generic class clear-halt has no asynchronous completion contract here. The
+ * bounded BOT owner calls the core only after each control request completes. */
 bool hcd_edpt_clear_stall(uint8_t port,uint8_t address,uint8_t ep)
 {(void)port;(void)address;(void)ep;lost();return false;}
 bool hcd_dcache_clean(const void *p,uint32_t z){(void)p;(void)z;return owner();}
@@ -757,7 +816,8 @@ int a733_usb2_read_sector(struct a733_usb2_native *n,uint32_t lba,uint64_t d)
     uint64_t now;if(n!=host||!clock_now(&now)||!n->msc_mounted||n->read_pending||n->read_complete||
         n->read_failed||lba>=n->blocks||d<=now||d>n->platform.config.lifetime_deadline)return 0;
     if(n->core.ops.live(n->core.context,n->core.generation,d)!=1)return 0;
-    n->read_deadline=d;n->read_pending=1;
+    if(!a733_xhci_read_recovery(&n->core,n->address))return 0;
+    n->read_deadline=d;n->read_pending=1;n->bot_retried=0;
     if(!tuh_msc_read10((uint8_t)n->address,0,n->sector,lba,1,read_complete,(uintptr_t)n)){lost();return 0;}
     return 1;
 }

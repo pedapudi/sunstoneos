@@ -102,6 +102,7 @@ struct a733_usb2_native {
         read_pending,read_complete,read_failed;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;
     unsigned bot_phase,bot_opcode,bot_stage,bot_endpoint,bot_requested,bot_status;
+    unsigned bot_recovery,bot_retried; /* One reset/retry per mounted READ10. */
     uint8_t *bot_buffer,*control_buffer;
     unsigned control_bytes,control_address,control_device;
     uint8_t control_setup[8];
