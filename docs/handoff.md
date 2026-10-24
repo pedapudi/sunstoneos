@@ -8,7 +8,8 @@ not on the mimus remote yet; publishing it needs the user's approval.
 **Port `3-3` needs power removal when available:** disconnect and reconnect
 its USB cable, which is its only power source. The corrected finite GPU image
 launched but did not return to ROM within 90 seconds. Do not probe or retry it.
-Runner PID `3892073`, wrapper PID `3892068` and tool session `20301` retain claim
+The earlier runner and wrapper PIDs `3892073` and `3892068` have ended.
+The queue still retains claim
 `f5e77284cf63a0b25af8681a8798031c6a976a84166256a8eaa31d162a7c771c`.
 Evidence is under `processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
 Source diagnosis continues without board access; the failed execution boundary
@@ -16,14 +17,17 @@ is unknown.
 
 **Port `3-1` also needs USB power removal:** the GPU power/identity probe
 launched from `/dev/bus/usb/003/047`, identity `[7, 1642, 1097006, 0, 0]`,
-but did not return within 30 seconds. Do not probe or retry it. Runner PID
-`3974830`, wrapper PID `3974825` and tool session `49981` retain claim
+but did not return within 30 seconds. Do not probe or retry it. The earlier
+runner and wrapper PIDs `3974830` and `3974825` have ended. The queue retains claim
 `a7c35b3b0e5c0bce0d06cfb9db6039b8830898ec4115509636115de998db0cc8`.
 Evidence: `processor-completion-20261024/port-3-1/gpu-power-id-corrected/`.
 All six FEL transactions succeeded, including launch; no native report locates
 the failure. A preceding command-path error stopped before board access and
 was closed as blocked; it did not require physical recovery. USB is the only
 power source. A reconnect request is pending while software work continues.
+Host metadata checked at 21:49 UTC still identifies both failed USB instances;
+process exit does not establish physical recovery. Neither claim was released.
+Evidence: `processor-completion-20261024/resume-host-state-214930.json`.
 
 **Physical progress before that failure:** the current CPU workload passed on
 all eight cores, followed by a separate revision that delivered one physical
@@ -84,8 +88,18 @@ not establish physical operation.
    Repeated-transition and eighteen injected-failure cases pass under
    `gpu-first-off-delays-20261024/`; this does not locate the failed launch.
    No additional clock-update wait is justified by the effective callbacks.
-   Open-PVR and BXM reset ordering differ, but the selected board build remains
-   unresolved. Preserve the current order pending that evidence.
+   The official Zero 3W current-kernel recipe selects BXM and disables
+   open-PVR. The pinned build/configuration chain is now documented in
+   [GPU power](gpu-power.md); a particular installed image remains unverified.
+   Its selected source also contains internal GPU core-domain control omitted
+   from the native path. The effective parent/core sequence is under review;
+   this finding alone does not identify the failed instruction or authorize writes.
+   The integrated GPU caller now performs its existing bounded CLOSE before
+   removing the recognition hook after an invalid completed result. Only a
+   matching STOPPED result permits CPU fallback; uncertainty remains fatal and
+   retains ownership. Seven native caller cases and focused hook checks pass
+   under `gpu-terminal-retire-20261024/`; normal jobs gain only a retired-state
+   guard. Physical shutdown remains unqualified.
 3. Diagnose the NPU numerical mismatch from exact runtime memory. Image
    `9e4adabf…` passed startup, two jobs, local retirement and ROM return, but
    all 400 output bytes differ from the reference. Frozen model, input and
@@ -108,6 +122,10 @@ not establish physical operation.
    cases pass; no physical capture exists yet. It reports incomplete evidence
    separately and does not infer engine behavior from matching RAM bytes.
    No repeat startup is valid with the retained PLL.
+   The [lifecycle audit](npu-startup.md) distinguishes observed local retirement
+   from unqualified domain power-off. The scoped test already supplies shared-SRAM
+   ownership; the remaining source gap concerns A733 low-power handshakes and
+   ordering. Linux asynchronous runtime PM does not establish a synchronous order.
 4. Qualify power and thermal behavior after reliable numerical execution. The
    optional CPU-clock path now lowers and restores supported inherited rates
    under a bounded grant while preserving voltage. Missing authority prevents
