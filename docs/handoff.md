@@ -124,7 +124,43 @@ single-core bundles of `docs/designs/board-bundles-next.md`
   scratch bytes restored (`bb3-read/`): CCU `+0x580` `0xc3000000`, `+0x588`
   `0x84000000` (MBUS at 400 MHz, `MBUS_DFS_EN` clear), R_CCU `0x20c`
   `0x00010001`, oscillator word `0x983fb0f7`, CPU-L PLL `0xf8802600` and
-  CPU-L mux `0x03010000`. Both ports were power-cycled afterwards and
+  CPU-L mux `0x03010000`.
+
+Later in the same lifetime, port `3-3` passed the second set of single-core
+bundles (`board-bundles-20261024-1/` and `-3/`):
+
+- **Event counters, walk A/B and WFI (bundle 4, `bb4-run/`):**
+  - **Counters:** an empty counter region retires exactly 20 instructions and
+    a fixed 2,000-instruction region exactly 2,000.
+  - **Walk A/B:** in the core-0 walk comparison, an iteration with uncached
+    table walks takes 693 cycles and one with cached walks 436 (median over
+    6 blocks each, spread below 0.2%); uncached walks make 7 bus accesses
+    per iteration against 4. Each block counted exactly 1,024 data and 1,024
+    instruction walks. The bundle's per-block check marked every block
+    refused because it expected the calibration region's one instruction
+    walk to recur per block; the raw counts are valid and the check needs
+    correcting before the next run.
+  - **WFI:** over 1,000 tick wakes in 1.0 s the cycle counter advanced
+    841,417 cycles, so the A55's cycle counter stops in WFI.
+  - **CPU-L clock:** the core ran at 494 MHz.
+- **Power-domain words (bundle 5, `bb5-read/`):** domains 1, 4 and 5 read
+  policy and status `0x8` (ON) after boot, before any SunstoneOS request.
+- **PMIC service and power-domain owner, read-only (bundle 6, `bb6-run/`):**
+  - **Supply:** S_TWI0 runs at 400 kHz, and supply verification found DCDC2
+    and DCDC4 at 800 mV, unchanged.
+  - **Mapping:** the domain 1 controller is mapped outer-shareable, as the
+    adapter requires.
+  - **Owner budget missed:** all 34 recorded service steps exceeded the
+    owner's bound of 110% of wire time, with a maximum of 149%. The owner's
+    budget needs a board-derived figure.
+- **Domain 1 ON (bundle 7, `bb7-run/`):** the owner found domain 1 already
+  ON and adopted it without a transition, so no switch-on time was measured
+  in this lifetime.
+- **DRAM bus priority (bundle 8, `bb8-run/`):** the NSI block answers
+  Non-secure EL1 reads. The table write on ports 2, 14 and 15 changed their
+  fields from `0x40` to `0x68`, `0x7c` and `0x7c` and read back correctly,
+  and the USB_PCIE port fields stayed unchanged. The written priorities
+  persist until port `3-3` loses power. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
