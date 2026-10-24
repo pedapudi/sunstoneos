@@ -791,6 +791,7 @@
   ],
   "docs": [
    "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-7-pre-scheduler.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/cpu-power.md",
    "docs/designs/cpu-a76-dvfs-measurements.md",
@@ -874,7 +875,8 @@
   "cache_areas": [],
   "docs": [
    "docs/a733-smp-observe-host.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/os-image.md"
   ],
   "library": false,
   "pure_host": false,
@@ -921,8 +923,7 @@
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md",
-   "docs/handoff.md"
+   "docs/designs/board-bundles.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1539,7 +1540,6 @@
  "all-core-pre-scheduler-host.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-runbooks/rank-7-pre-scheduler.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -1942,14 +1942,27 @@
   "summary": "Build the native board composition and exercise only its new contracts.",
   "usb": false
  },
+ "board-bundle-retention.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--wrapper",
+   "--output"
+  ],
+  "summary": "Check a frozen bundle wrapper's timeout without queue or device access.",
+  "usb": false
+ },
  "board-bundles-apps.py": {
   "cache_areas": [
    "host",
    "sources"
   ],
   "docs": [
-   "docs/designs/board-bundles-next.md",
-   "docs/designs/pmic-access.md"
+   "docs/designs/board-bundles-next.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1973,8 +1986,7 @@
    "docs/board-runbooks/README.md",
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
-   "docs/designs/board-bundles.md",
-   "docs/designs/pmic-access.md"
+   "docs/designs/board-bundles.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2119,8 +2131,7 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md",
-   "docs/handoff.md"
+   "docs/designs/board-bundles.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6184,6 +6195,21 @@
   "summary": "Check the linked Mimus workload gate without executing shared CPU startup.",
   "usb": false
  },
+ "mimus-paced-optional.py": {
+  "cache_areas": [
+   "inputs"
+  ],
+  "docs": [
+   "docs/mimus-replay.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check paced optional punctuation with real engine types and formatter, modeled recognition.",
+  "usb": false
+ },
  "mimus-parity.py": {
   "cache_areas": [],
   "docs": [
@@ -6617,6 +6643,21 @@
   "summary": "The board image's NPU construction: borrowed providers, the domain-4 row and the runtime's pool.",
   "usb": false
  },
+ "npu-board-usb-stack.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-board.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output",
+   "--speed"
+  ],
+  "summary": "Run the linked NPU USB task, TinyUSB and MUSB FIFO PIO over modeled registers.",
+  "usb": false
+ },
  "npu-conformance.py": {
   "cache_areas": [],
   "docs": [
@@ -6840,7 +6881,9 @@
  },
  "npu-nn-pool-native.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/npu-relative-shift.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7225,6 +7268,20 @@
    "--output"
   ],
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
+  "usb": false
+ },
+ "os-thermal-throttle.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Run actual AArch64 OS thermal publication, dispatch and recognition checkpoints.",
   "usb": false
  },
  "ov5640-modes-reference.py": {
@@ -8206,6 +8263,22 @@
   "summary": "One image and only the new IP-task DHCP reconnect boundary cases.",
   "usb": false
  },
+ "radio-native-clock.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/radio-sdio-qualification.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Exercise the real radio clock-write callback with modeled RTOS state and MMIO.",
+  "usb": false
+ },
  "radio-network-dhcp-dns.py": {
   "cache_areas": [],
   "docs": [
@@ -8724,7 +8797,6 @@
    "docs/board-runbooks/rank-7-corrected.md",
    "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
-   "docs/board-runbooks/rank-7-pre-scheduler.md",
    "docs/board-runbooks/rank-8-workload.md"
   ],
   "library": false,

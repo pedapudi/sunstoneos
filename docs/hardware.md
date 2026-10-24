@@ -1287,6 +1287,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   with unchanged return objects and structure layouts. Root source/binary review
   passes under `root-review.json`, verifying 88 objects, 218 frozen inputs and
   eight unchanged linked return functions. Physical admission remains false.
+  A subsequent configuration capture on port `3-3` passed on 2026-10-24.
+  Eleven accessible clock/reset words match the finite candidate's predicates;
+  21 power-status words confirm that the seven secondary CPUs are OFF.
+  The returning read helper restored all 128 scratch bytes exactly and the USB
+  instance stayed unchanged. Evidence: `gpu-entry-capture-20261024/physical-3-3/`
+  and `entry-settings.json`. GPU execution and memory ownership remain
+  unqualified. The GPU window was not accessed. Native launch still
+  requires the remaining entry authority, cache-off and fresh survey records.
   Evidence for the preceding finite/publication paths is
   preserved under `gpu-finite-adapter-20261018/layout-correction/` and
   `gpu-returning-application-20261019/ns-publication/`.
