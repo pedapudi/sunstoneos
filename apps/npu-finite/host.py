@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Prepare or capture the exact NPU returning profile; no admission defaults."""
-import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys,types
+import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
@@ -22,6 +22,12 @@ def image_profile(data,manifest):
  require(manifest.get('execution_profile') in PROFILES and manifest.get('final_elf')==sha(data),'Exact returning image manifest required.')
  parts,address,build,layout=original.image_data(data)
  elf=ELFFile(io.BytesIO(data));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
+ # Both finite profiles use ROM transport after return; neither starts a
+ # native USB provider. STT_FILE names remain after linker collection.
+ functions=[s.name for s in elf.get_section_by_name('.symtab').iter_symbols()
+  if s['st_info']['type']=='STT_FUNC' and s['st_shndx']!='SHN_UNDEF']
+ require(not any('usb' in n.lower() or n.startswith(('tud_','tuh_','dcd_','hcd_')) or
+  n=='a733_observe_service_start' for n in functions),'Finite image contains native USB functions.')
  checkpoint=manifest['execution_profile']==CHECKPOINT
  for name in ('npu_finite_receipt','npu_finite_smc','npu_finite_rom_return', 'npu_entry_checkpoint_ready' if checkpoint else 'a733_npu_application_quiescent'):
   require(name in symbols and symbols[name]['st_value'],'Missing returning producer: '+name)
@@ -69,23 +75,19 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,ex
  # A checkpoint carries the original typed session format, but never consumes
  # its provider grants. Its platform record retains CPU/DDR/ROM authority.
  platform=json.loads(evidence(record['platform']))
- if checkpoint:
-  conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
-   'remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity',
-   'primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded',
-   'providers-never-constructed','npu-clock-power-registers-not-accessed'}
-  require(platform.get('schema')=='a733-npu-checkpoint-platform-v1' and
-   platform.get('identity')==identity and platform.get('port')==port and
-   platform.get('image_sha256')==image_hash and set(platform.get('conditions',{}))==conditions and
-   platform.get('entry_conditions_established') is True and platform.get('physical_coherence_result')=='under-test',
-   'Checkpoint platform authority differs.')
-  for key in ('epoch','generation','lease','npu_evidence','command_admission','usb_evidence','pmic_evidence','pin_evidence'):
-   require(platform.get(key)==profile[key],'Checkpoint typed identity differs: '+key)
-  for ref in platform['conditions'].values():evidence(ref)
- else:
-  fn=original.protocol.validate_platform
-  validate=types.FunctionType(fn.__code__,{**fn.__globals__,'artifact':evidence})
-  validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':'npu-single-core-supervised-v1'},identity,port)
+ conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
+  'remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity',
+  'primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
+ conditions|=({'providers-never-constructed','npu-clock-power-registers-not-accessed'} if checkpoint else
+  {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'})
+ require(platform.get('schema')==('a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1') and
+  platform.get('identity')==identity and platform.get('port')==port and
+  platform.get('image_sha256')==image_hash and set(platform.get('conditions',{}))==conditions and
+  platform.get('entry_conditions_established') is True and platform.get('physical_coherence_result')=='under-test',
+  'Finite platform authority differs.')
+ for key in ('epoch','generation','lease','npu_evidence','command_admission','usb_evidence','pmic_evidence','pin_evidence'):
+  require(platform.get(key)==profile[key],'Finite typed identity differs: '+key)
+ for ref in platform['conditions'].values():evidence(ref)
  required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
  if checkpoint:
   required['clock']={'npu-clock-power-registers-not-accessed'}
