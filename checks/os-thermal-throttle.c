@@ -12,7 +12,7 @@
 struct board_application board;
 struct board_provider providers;
 volatile unsigned os_check_result;
-static unsigned mode,up=1,progress,sleeps,fails,mask_calls,fail_on_sleep;
+static unsigned mode,up=1,progress,sleeps,fails,mask_calls,fail_on_sleep,reads;
 static unsigned current=1;
 static uint64_t time_us=100;
 static struct a733_thermal_sample next_sample;
@@ -37,7 +37,7 @@ enum a733_thermal_result modeled_thermal_poll(struct a733_thermal *d)
 {(void)d;return A733_THERMAL_READY;}
 enum a733_thermal_result modeled_thermal_read(struct a733_thermal *d,uint64_t until,
                                              struct a733_thermal_sample *sample)
-{(void)d;check(until>time_us,3);*sample=next_sample;return next_result;}
+{(void)d;check(until>time_us,3);++reads;*sample=next_sample;return next_result;}
 void vTaskDelay(TickType_t ticks)
 {
     check(ticks==1,4);
@@ -60,12 +60,17 @@ void vTaskSuspend(TaskHandle_t task)
     else check(0,10);
     done();
 }
+static void sample(int32_t gpu,int32_t npu);
 static void start(void)
 {
     board.session.deadline_us=60000000;
     thermal.handle=(TaskHandle_t)(uintptr_t)1;
     check(os_thermal_throttled(),11);
-    check(step()==1&&!os_thermal_throttled()&&thermal.active,12);
+    check(step()==1&&os_thermal_throttled()&&thermal.active,12);
+    if(mode<8){
+        sample(50000,50000);check(step()==1&&!os_thermal_throttled(),36);
+        next_result=A733_THERMAL_AGAIN;
+    }
 }
 static void sample(int32_t gpu,int32_t npu)
 {
@@ -120,6 +125,45 @@ void os_throttle_check(unsigned selected)
     if(mode==7){
         time_us+=1000001;check(step()==1&&os_thermal_throttled(),33);
         time_us+=4000000;check(step()==-1&&!up&&os_thermal_throttled()&&fails,34);done();
+    }
+    if(mode==8){
+        /* Driver readiness and repeated no-data results do not admit load. */
+        next_result=A733_THERMAL_AGAIN;time_us+=25000;
+        check(step()==1&&os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==0,37);
+        next_result=A733_THERMAL_BUSY;time_us+=25000;
+        check(step()==1&&os_thermal_throttled(),38);
+        mimus_native_checkpoint();check(sleeps==1&&progress==1&&up,39);done();
+    }
+    if(mode==9){
+        sample(50000,50000);next_sample.valid=15;
+        check(step()==1&&os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==15,40);
+        mimus_native_checkpoint();check(sleeps==1&&progress==1,41);
+        sample(50000,50000);next_sample.valid=16;
+        check(step()==1&&!os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==31,42);
+        mimus_native_checkpoint();check(sleeps==1&&progress==2&&up,43);done();
+    }
+    if(mode==10){
+        sample(50000,50000);next_sample.valid=1;next_sample.millicelsius[0]=90000;
+        check(step()==1&&os_thermal_throttled(),44);
+        sample(50000,50000);next_sample.valid=30;
+        check(step()==1&&os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==31,45);
+        sample(50000,50000);next_sample.valid=1;next_sample.millicelsius[0]=87000;
+        check(step()==1&&!os_thermal_throttled(),46);done();
+    }
+    if(mode==11){
+        sample(50000,50000);next_sample.valid=1;next_sample.millicelsius[0]=110000;
+        check(step()==-1&&!up&&os_thermal_throttled()&&thermal.retaining&&thermal.masked,47);
+        uint64_t sequence=thermal.policy.sequence;unsigned before_reads=reads;
+        sample(50000,50000);
+        check(step()==-1&&!up&&os_thermal_throttled()&&thermal.policy.sequence==sequence&&reads==before_reads,48);
+        check(atomic_load_explicit(&load_level,memory_order_acquire)==A733_THERMAL_CRITICAL,49);done();
+    }
+    if(mode==12){
+        sample(50000,50000);next_sample.valid=1;
+        check(step()==1&&os_thermal_throttled(),50);
+        time_us+=1000001;sample(50000,50000);next_sample.valid=30;
+        check(step()==1&&os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==31,51);
+        check(a733_thermal_policy_level(&thermal.policy)==A733_THERMAL_THROTTLE,52);done();
     }
     check(0,35);
 }
