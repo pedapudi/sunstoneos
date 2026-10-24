@@ -63,10 +63,21 @@ MODES = {
                     port_define='npu_service_task_privileged=npu_session_task_privileged',
                     wraps=['a733_npu_native_operations', 'aarch64_device_translate', 'aarch64_device_cache',
                            'storage_digest_add', 'nbg_assembly_next', 'npu_service_release']),
+    # Case 5: the board image's client loop in slot 3 of the same runtime.
+    'board-client': dict(sources=['checks/npu-session-runtime.c', 'drivers/npu/a733_npu_runtime.c',
+                                  'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/nbg_model.c',
+                                  'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
+                                  'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
+                                  'apps/npu-board/client.c'],
+                         marker='PASS NPU runtime', cases=[5], defines=['NPU_BOARD_CLIENT_CHECK=1'],
+                         port_define='npu_service_task_privileged=npu_session_task_privileged',
+                         wraps=['a733_npu_native_operations', 'aarch64_device_translate', 'aarch64_device_cache',
+                                'storage_digest_add', 'nbg_assembly_next', 'npu_service_release', 'vTaskDelay'])
 }
 SESSION_NAMES = {'session': ('conv8', 'dual-u8', 'dual-i8'),
                  'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
-                 'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
+                 'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
+                 'board-client': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
 
 
 def flags(build):

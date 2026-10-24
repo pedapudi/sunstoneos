@@ -35,11 +35,21 @@
  *  3 a descriptor byte changes while the slot is idle: A refuses the trigger
  *    and every slot is retained.
  *  4 a coefficient byte changes while the job runs: H fails after the job and
- *    every slot is retained. */
+ *    every slot is retained.
+ *  5 (built with NPU_BOARD_CLIENT_CHECK) slot 3 runs the board image's client
+ *    loop (apps/npu-board/client.c) and the bootstrap task plays USB0: it
+ *    loads ShuffleNetV2, writes each input into the lent read window, hands
+ *    it back, submits, reads the output from the lent write window and hands
+ *    that back, three times, then closes. A SUBMIT posted while the read
+ *    window is lent is refused. The requests, replies and client tick waits
+ *    per inference and the bytes moved through the windows are printed. */
 #include "npu_runtime.h"
 #include "aarch64_device_memory.h"
 #include "platform.h"
 #include "npu_session_fixtures.h"
+#ifdef NPU_BOARD_CLIENT_CHECK
+#include "../apps/npu-board/client.h"
+#endif
 #include <string.h>
 
 #define npu_case (*(volatile unsigned *)UINT64_C(0x47fff000))
@@ -513,10 +523,23 @@ static void tail_is_end(unsigned slot)
         configASSERT(word(p + at) == 0x10000000u && !word(p + at + 4));
 }
 
+#ifdef NPU_BOARD_CLIENT_CHECK
+static struct npu_board_client board_client;
+static unsigned client_tick_waits;
+void __real_vTaskDelay(TickType_t);
+void __wrap_vTaskDelay(TickType_t ticks)
+{
+    if (xTaskGetCurrentTaskHandle() == clients[3]) ++client_tick_waits;
+    __real_vTaskDelay(ticks);
+}
+#endif
 static void client(void *argument)
 {
     unsigned slot = (unsigned)(uintptr_t)argument;
     configASSERT(task_level() == 0);
+#ifdef NPU_BOARD_CLIENT_CHECK
+    if (npu_case == 5 && slot == 3) { npu_board_client_run(&board_client); configASSERT(0); }
+#endif
     wait_flag(&started, 1);
     struct npu_service_reply r = call(slot, NPU_SERVICE_OPEN, 0, 1000000);
     configASSERT(r.result == NPU_SERVICE_OK && r.owns_session &&
@@ -635,6 +658,9 @@ static void client(void *argument)
         }
         close_slot(slot);
         break;
+    case 5:
+        close_slot(slot);
+        break;
     default:
         if (slot == 0) {
             load(slot, CONV8);
@@ -682,12 +708,80 @@ static void finish_case(const char *text)
     platform_puts(text);
     platform_exit(0);
 }
+#ifdef NPU_BOARD_CLIENT_CHECK
+/* The bootstrap task as USB0: one posted request at a time, answered through
+ * the client's acquire-loaded answer word. */
+static unsigned board_sequence;
+static unsigned board_request(enum npu_board_operation op, unsigned argument)
+{
+    configASSERT(npu_board_client_post(&board_client, ++board_sequence, op, argument));
+    unsigned result;
+    TickType_t start = xTaskGetTickCount();
+    while (!(result = npu_board_client_answer(&board_client, board_sequence))) {
+        configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1);
+    }
+    return result;
+}
+static void board_usb(void)
+{
+    struct npu_board_client *c = &board_client;
+    configASSERT(board_request(NPU_BOARD_OPEN, 0) == NPU_BOARD_RESULT_OK);
+    set(&opened[3], 1);
+    configASSERT(board_request(NPU_BOARD_LOAD, SHUFFLENET) == NPU_BOARD_RESULT_OK &&
+                 atomic_load(&c->window) == NPU_BOARD_READ_LENT && c->inputs == 1 && c->outputs == 1);
+    /* A SUBMIT while the read window is lent is refused before any request. */
+    unsigned requests = c->requests;
+    configASSERT(board_request(NPU_BOARD_SUBMIT, 0) == NPU_BOARD_RESULT_REFUSED &&
+                 c->refused == 1 && c->requests == requests);
+    const struct fixture *f = &fixtures[SHUFFLENET];
+    uint64_t upload = 0, output = 0;
+    unsigned replies = c->replies;
+    requests = c->requests;
+    for (unsigned n = 0; n < JOBS; ++n) {
+        configASSERT(atomic_load(&c->window) == NPU_BOARD_READ_LENT && c->input[0].bytes == f->tensor_bytes[0]);
+        /* tud_vendor_read writes the payload straight into the window. */
+        for (unsigned x = 0; x < c->input[0].bytes; ++x)
+            ((uint8_t *)c->input[0].cpu)[x] = (uint8_t)(f->tensor[0][x] ^ (n * 0x25));
+        upload += c->input[0].bytes;
+        npu_board_client_return(c);
+        configASSERT(board_request(NPU_BOARD_SUBMIT, 0) == NPU_BOARD_RESULT_OK &&
+                     atomic_load(&c->window) == NPU_BOARD_WRITE_LENT);
+        /* tud_vendor_write reads the output straight from the window. */
+        const struct npu_runtime_slot *s = &rt.slot[3];
+        unsigned i = source_of_output(s, 0);
+        for (unsigned x = 0; x < c->output[0].bytes; ++x)
+            configASSERT(((const uint8_t *)c->output[0].cpu)[x] ==
+                         expected(SHUFFLENET, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
+        output += c->output[0].bytes;
+        npu_board_client_return(c);
+        configASSERT(board_request(NPU_BOARD_RETURN, 0) == NPU_BOARD_RESULT_OK);
+    }
+    const unsigned job_requests = c->requests - requests, job_replies = c->replies - replies;
+    configASSERT(job_requests == JOBS && job_replies == JOBS && !client_tick_waits);
+    configASSERT(upload == JOBS * (uint64_t)f->tensor_bytes[0] && output == JOBS * (uint64_t)f->tensor_bytes[1]);
+    npu_board_client_return(c);
+    configASSERT(board_request(NPU_BOARD_CLOSE, 0) == NPU_BOARD_RESULT_OK && c->state == A733_NPU_CLOSED);
+    set(&closed[3], 1);
+    platform_puts("COUNT board_client jobs=3");
+    platform_puts(" requests="); decimal(job_requests); platform_puts(" replies="); decimal(job_replies);
+    platform_puts(" client_tick_waits="); decimal(client_tick_waits);
+    platform_puts(" refused_while_lent="); decimal(c->refused);
+    platform_puts(" upload_bytes="); decimal(upload); platform_puts(" output_bytes="); decimal(output);
+    platform_puts("\n");
+}
+#endif
 static void bootstrap_run(void *unused)
 {
     (void)unused;
     configASSERT(npu_runtime_stop_poll(&rt) == A733_NPU_PLATFORM_RETAINED && !atomic_load(&rt.failed));
     configASSERT(npu_runtime_startup_poll(&rt) == A733_NPU_PLATFORM_READY);
     set(&started, 1);
+#ifdef NPU_BOARD_CLIENT_CHECK
+    if (npu_case == 5) {
+        board_usb();
+        finish_case("PASS NPU runtime: the board client loop hands the windows over, one request and reply per inference, no tick wait\n");
+    }
+#endif
     for (unsigned s = 0; s < SLOTS; ++s) wait_flag(&opened[s], 1);
     if (npu_case == 0) {
         /* One credit at a time, each once every slot with work left has its
@@ -833,7 +927,7 @@ void kernel_main(void)
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4;
+    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5;
     model.late = npu_case == 2;
     model.defer_mask = npu_case == 2 ? 6 : 0;
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
@@ -854,5 +948,9 @@ void kernel_main(void)
     configASSERT(npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(rt.service.runtime && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
+#ifdef NPU_BOARD_CLIENT_CHECK
+    board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,
+        .wait = 20000, .task = clients[3]};
+#endif
     vTaskStartScheduler(); platform_panic("scheduler returned", 0);
 }

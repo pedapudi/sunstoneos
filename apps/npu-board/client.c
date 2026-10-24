@@ -41,7 +41,7 @@ void npu_board_client_run(struct npu_board_client *c)
         if(op==NPU_BOARD_RETURN) {
             /* The write window came back; lend the read window for the next
              * input. */
-            if(window!=NPU_BOARD_HELD || c->state!=A733_NPU_READY){++c->refused;answer(c,sequence,NPU_BOARD_RESULT_REFUSED);continue;}
+            if(window!=NPU_BOARD_HELD || (c->state!=A733_NPU_READY && c->state!=A733_NPU_DONE)){++c->refused;answer(c,sequence,NPU_BOARD_RESULT_REFUSED);continue;}
             atomic_store_explicit(&c->window,NPU_BOARD_READ_LENT,memory_order_release);
             answer(c,sequence,NPU_BOARD_RESULT_OK);continue;
         }
