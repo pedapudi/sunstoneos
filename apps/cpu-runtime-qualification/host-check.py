@@ -27,17 +27,18 @@ def main():
     source.write_text('''#include "runtime.h"
 #include <stdio.h>
 int main(void) {
- printf("%llu %zu %zu %zu %zu %zu\\n", (unsigned long long)QUAL_MAGIC,
+ printf("%llu %zu %zu %zu %zu %zu %zu %zu\\n", (unsigned long long)QUAL_MAGIC,
  sizeof(struct qualification_report), offsetof(struct qualification_report,cpu),
  sizeof(struct qualification_core), offsetof(struct qualification_core,off_observed),
- offsetof(struct qualification_core,drained_epoch));
+ offsetof(struct qualification_core,drained_epoch),
+ offsetof(struct qualification_core,idle_completed), offsetof(struct qualification_core,idle_wakes));
  return 0;
 }
 ''')
     executable = args.output / 'abi'
     subprocess.run([args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I' + str(HERE), str(source), '-o', str(executable)], check=True)
     actual = [int(x) for x in subprocess.check_output([str(executable)], text=True).split()]
-    host.require(actual == [host.MAGIC, host.REPORT_BYTES, host.CPU_OFFSET, host.CPU_BYTES, 768, 104], 'Host layout disagrees with actual runtime.h.')
+    host.require(actual == [host.MAGIC, host.REPORT_BYTES, host.CPU_OFFSET, host.CPU_BYTES, 768, 104, 112, 120], 'Host layout disagrees with actual runtime.h.')
     g = host.manifest_check(args.image, json.loads(args.manifest.read_text()))
     passed = ['native-header-layout', 'linked-report-stacks-and-fault-reservations']
 
@@ -62,7 +63,7 @@ int main(void) {
         host.decode_report(raw, args.epoch)
         passed.append('actual-native-model-report')
         refused('wrong-expected-epoch', lambda: host.decode_report(raw, args.epoch + 1))
-        mutations = [('header-magic', 0, 0), ('old-report-version', 8, 1), ('incomplete-state', 40, 3), ('global-error', 48, 1),
+        mutations = [('header-magic', 0, 0), ('old-report-version', 8, 2), ('incomplete-state', 40, 3), ('global-error', 48, 1),
                      ('cpu0-ticks', host.CPU_OFFSET + 96, 31)]
         for core in range(8):
             offset = host.CPU_OFFSET + core * host.CPU_BYTES
@@ -71,7 +72,7 @@ int main(void) {
                                   (f'cpu{core}-duplicate-timer', offset + 96, 2)])
             for name, field, value in [('epoch', 0, 0), ('captured', 8, 0), ('cleaned', 16, 0),
                                        ('restored', 24, 0), ('drained', 104, 0), ('error', 48, 1), ('rounds', 64, 31),
-                                       ('background', 72, 0), ('sgis', 80, 0), ('failure', 88, 1)]:
+                                       ('idle-completed', 112, 0), ('idle-wakes', 120, 0), ('background', 72, 0), ('sgis', 80, 0), ('failure', 88, 1)]:
                 mutations.append((f'cpu{core}-{name}', offset + field, value))
             for name, field in [('request', 32), ('acknowledged', 40), ('off-observed', 768)]:
                 mutations.append((f'cpu{core}-{name}', offset + field, 0 if core else args.epoch))

@@ -163,6 +163,8 @@ class Model:
             self.set('tpidr_el1',c);self.set('sctlr_el1',0x30d01805);self.set('tcr_el1',0x80803519)
             self.set('icc_sre_el1',1);self.set('icc_sre_el2',9)
             self.put64(arrived+c*8,EPOCH)
+            self.put64(self.s['a733_qualification_idle_completed']+c*8,1)
+            self.put64(self.s['a733_qualification_idle_wakes']+c*8,7 if c else 6)
             self.uc.mem_write(self.s['a733_cached_records']+c*128,struct.pack('<3Q',EPOCH,c,3))
             self.uc.mem_write(self.s['a733_smp_core_results']+c*128,struct.pack('<5Q',32,7,2,0,40 if c==0 else 1))
             r=0x03460000+c*0x20000
@@ -215,7 +217,7 @@ def main():
     rows=[dict(name='all-eight-success',instructions=model.count,cleaned_lines_per_core=len(expected),normal_writes_after_first_clean=0)]
     for name in ('ordinary-exit-zero','wrong-core','missing-peer','active-interrupt',
                  'unrelated-pending','wrong-ns-alias','expired-deadline',
-                 'restore-readback','ack-without-off','missing-timer','duplicate-timer'):
+                 'restore-readback','ack-without-off','missing-timer','duplicate-timer','missing-idle','missing-wake'):
         m=Model(image);ctx=m.initialize();missing=None
         m.put64(m.report+32,2500000 if name in ('restore-readback','ack-without-off') else 50000)
         if name=='ordinary-exit-zero':
@@ -227,6 +229,8 @@ def main():
         elif name=='missing-peer':missing=3
         elif name in ('missing-timer','duplicate-timer'):
             m.put64(image.symbols['a733_smp_core_results']+3*128+32,0 if name=='missing-timer' else 2)
+        elif name=='missing-idle':m.put64(image.symbols['a733_qualification_idle_completed']+3*8,0)
+        elif name=='missing-wake':m.put64(image.symbols['a733_qualification_idle_wakes']+3*8,3)
         elif name=='active-interrupt':m.put32(0x03460000+3*0x20000+0x10300,1)
         elif name=='unrelated-pending':m.put32(0x03460000+3*0x20000+0x10200,0x40000003)
         elif name=='wrong-ns-alias':
