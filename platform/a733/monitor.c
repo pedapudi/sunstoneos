@@ -100,6 +100,17 @@ void monitor_init(void)
                      :: "r"(value) : "memory");
     value = 1UL << 31;
     __asm__ volatile("msr hcr_el2, %0" :: "r"(value));
+#ifdef SUNSTONE_MONITOR_COUNTERS
+    // Event counters for EL1, as platform/a733/cpu_continue.S sets them:
+    // MDCR_EL3 at its TF-A reset value (MTPME, TPM clear), no EL2 trap of
+    // CP15 groups, and MDCR_EL2.HPMN = PMCR_EL0.N with TPM, TPMCR and HPME
+    // clear. After reset into EL3 the MDCR_EL2 trap bits are UNKNOWN.
+    value = 0x10000000;
+    __asm__ volatile("msr mdcr_el3, %0\n msr hstr_el2, xzr" :: "r"(value));
+    __asm__ volatile("mrs %0, pmcr_el0" : "=r"(value));
+    value = (value >> 11) & 0x1f;
+    __asm__ volatile("msr mdcr_el2, %0\n isb" :: "r"(value) : "memory");
+#endif
     value = 3;
     __asm__ volatile("msr cnthctl_el2, %0\n msr cntvoff_el2, xzr\n"
                      "msr cptr_el3, xzr" :: "r"(value));

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -20,13 +21,93 @@ def load_module(name, path):
     return module
 
 
+# One log line of platform_exception() (include/a733_fault.h, a733_fault_line).
+FAULT_LINE = re.compile(r"FAIL exception core=([0-7]) ESR=0x([0-9a-f]{16}) ELR=0x([0-9a-f]{16}) "
+                        r"FAR=0x([0-9a-f]{16}) SPSR=0x([0-9a-f]{16}) task=([ -~]{0,16})")
+OUTCOME_KEYS = {"name", "status", "interrupt", "fail_lines", "fault", "log_contains"}
+FAULT_KEYS = {"esr_mask", "esr_value", "far", "elr_low", "elr_high", "task"}
+
+
+def fault_lines(log):
+    """Every FAIL exception line of a log, parsed; None for a line that does not parse."""
+    found = []
+    for line in log.splitlines():
+        if line.startswith("FAIL exception"):
+            match = FAULT_LINE.fullmatch(line)
+            found.append(None if match is None else dict(
+                core=int(match[1]), esr=int(match[2], 16), elr=int(match[3], 16), far=int(match[4], 16),
+                spsr=int(match[5], 16), task=match[6]))
+    return found
+
+
+def controlled_outcomes(raw):
+    """The listed controlled outcomes of a bundle; each names a nonzero status and its full expected record."""
+    value = json.loads(raw)
+    outcomes = value.get("outcomes") if isinstance(value, dict) else None
+    if value.get("schema") != "kernel-controlled-outcomes-v1" or not isinstance(outcomes, list) or not outcomes:
+        raise ValueError("Controlled outcomes have no outcome list.")
+    for outcome in outcomes:
+        fault = outcome.get("fault") if isinstance(outcome, dict) else None
+        if not (isinstance(outcome, dict) and set(outcome) == OUTCOME_KEYS
+                and isinstance(outcome["name"], str) and outcome["name"]
+                and type(outcome["status"]) is int and outcome["status"] != 0
+                and (outcome["interrupt"] is None or type(outcome["interrupt"]) is int)
+                and type(outcome["fail_lines"]) is int and outcome["fail_lines"] >= 0
+                and isinstance(outcome["log_contains"], list) and outcome["log_contains"]
+                and all(isinstance(text, str) and text for text in outcome["log_contains"])
+                and (fault is None or (isinstance(fault, dict) and set(fault) == FAULT_KEYS
+                                       and outcome["fail_lines"] == 1
+                                       and all(type(fault[k]) is int for k in FAULT_KEYS - {"task"})
+                                       and fault["elr_low"] < fault["elr_high"]
+                                       and isinstance(fault["task"], str)))):
+            raise ValueError(f"Malformed controlled outcome: {outcome!r}")
+    if len({o["name"] for o in outcomes}) != len(outcomes):
+        raise ValueError("Controlled outcome names repeat.")
+    return outcomes
+
+
+def controlled_match(outcome, terminal, faults, found):
+    """True when the result record, the parsed FAIL lines and the log texts found equal one outcome."""
+    fault = outcome["fault"]
+    return (terminal.get("magic") == 0x534b4552 and terminal.get("stage") == 5
+            and terminal.get("status") == outcome["status"]
+            and (outcome["interrupt"] is None or terminal.get("interrupt") == outcome["interrupt"])
+            and isinstance(faults, list) and len(faults) == outcome["fail_lines"]
+            and all(isinstance(f, dict) for f in faults)
+            and sorted(found) == sorted(outcome["log_contains"])
+            and (fault is None or (faults[0]["esr"] & fault["esr_mask"] == fault["esr_value"]
+                                   and faults[0]["far"] == fault["far"]
+                                   and fault["elr_low"] <= faults[0]["elr"] < fault["elr_high"]
+                                   and faults[0]["task"] == fault["task"])))
+
+
+def controlled_return(returned):
+    """A kernel-mode session that ended in a listed controlled outcome, as recorded by this runner."""
+    controlled = returned.get("controlled")
+    if not isinstance(controlled, dict):
+        return False
+    try:
+        outcomes = controlled_outcomes(json.dumps(dict(schema="kernel-controlled-outcomes-v1",
+                                                       outcomes=[controlled.get("outcome")])))
+    except (ValueError, AttributeError):
+        return False
+    return (returned.get("mode") == "kernel"
+            and controlled_match(outcomes[0], returned.get("result", {}), controlled.get("faults"),
+                                 controlled.get("log_found", [])))
+
+
 def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_tool_hash, warm_raw=()):
     """Validate copied records against the selected live instance under its lock.
 
     The survey producer pins the FEL executable. Older survey records omit its
     hash, so DDR's recorded hash and the current tool must both match that pin.
-    Explicit successful kernel returns connect DDR to a later ROM instance.
-    This admits initialized RAM; it does not qualify peripheral ownership.
+    Explicit successful returns connect DDR to a later ROM instance: a
+    kernel-mode return, a forced-stall return through the monitor's secure
+    timer (status 2, interrupt 29), a kernel-mode return that ended in one of
+    its bundle's controlled outcomes, or a returning native CPU diagnostic that
+    restored its saved DRAM. Each leaves DRAM powered and trained; none is a
+    power cycle. This admits initialized RAM; it does not qualify peripheral
+    ownership.
     """
     ddr, survey = (json.loads(value) for value in raw)
     previous_node = ddr.get("device")
@@ -42,22 +123,29 @@ def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_too
         terminal = returned.get("result", {})
         next_node = returned.get("returned_node")
         next_identity = returned.get("returned_identity")
+        monitor_return = (returned.get("transport_failed") is False
+                and returned.get("automatic_access") is True
+                and returned.get("tool_sha256") == tool_hash == pinned_tool_hash
+                and terminal.get("magic") == 0x534b4552 and terminal.get("stage") == 5
+                and ((returned.get("mode") == "kernel" and terminal.get("status") == 0)
+                     or (returned.get("mode") == "timeout" and terminal.get("status") == 2
+                         and terminal.get("interrupt") == 29)
+                     or controlled_return(returned)))
+        # tools/run-native-startup-probe.py records: no mode, restored DRAM.
+        native_return = ("mode" not in returned and returned.get("physical_access") is True
+                and returned.get("rom_usable") is True and returned.get("dram_restored") is True
+                and isinstance(returned.get("execution_profile"), str))
         if not (returned.get("complete") is True
                 and returned.get("launch_attempted") is True
-                and returned.get("transport_failed") is False
-                and returned.get("automatic_access") is True
-                and returned.get("mode") == "kernel"
+                and (monitor_return or native_return)
                 and returned.get("port") == port
-                and returned.get("tool_sha256") == tool_hash == pinned_tool_hash
                 and returned.get("initial_node") == previous_node
                 and returned.get("initial_identity") == previous_identity
                 and isinstance(next_node, str) and next_node.startswith("/dev/bus/usb/")
                 and next_node != previous_node
                 and isinstance(next_identity, list) and len(next_identity) == 5
                 and all(type(part) is int for part in next_identity)
-                and next_identity != previous_identity
-                and terminal.get("magic") == 0x534b4552
-                and terminal.get("stage") == 5 and terminal.get("status") == 0):
+                and next_identity != previous_identity):
             raise RuntimeError("Warm-return evidence does not establish contiguous successful ROM return.")
         previous_node, previous_identity = next_node, next_identity
     result = ddr.get("result", {})
@@ -100,13 +188,15 @@ def main(argv=None, observe=None):
     parser.add_argument("--mode", choices=("kernel", "timeout"), default="kernel")
     parser.add_argument("--expect", default="PASS kernel:",
                         help="Required success text for a bounded runtime check")
+    parser.add_argument("--controlled", type=Path,
+                        help="Bundle's controlled outcomes: nonzero results that pass without quarantine")
     parser.add_argument("--ram-input", type=Path, help="Input bundle loaded at 0x43000000; at most 32 MiB")
     parser.add_argument("--ram-input-present", action="store_true", help="Verify existing RAM input instead of uploading it")
     parser.add_argument("--return-timeout", type=float, default=10)
     parser.add_argument("--ddr-evidence", type=Path, help="Successful DDR session for this board, before any supplied warm returns")
     parser.add_argument("--platform-survey", type=Path, help="Returning A32 survey for the current instance; paired with --ddr-evidence")
     parser.add_argument("--warm-return", type=Path, action="append", default=[],
-                        help="Successful kernel session connecting DDR to the current instance; repeat in execution order")
+                        help="Successful kernel, forced-stall or native returning session connecting DDR to the current instance; repeat in execution order")
     args = parser.parse_args(argv)
     if bool(args.ddr_evidence) != bool(args.platform_survey):
         parser.error("--ddr-evidence and --platform-survey must be supplied together.")
@@ -116,6 +206,15 @@ def main(argv=None, observe=None):
     admission = None
     if args.ddr_evidence:
         admission = (args.ddr_evidence.read_bytes(), args.platform_survey.read_bytes())
+    controlled = None
+    if args.controlled:
+        if args.mode != "kernel":
+            parser.error("--controlled applies to kernel mode only.")
+        controlled_raw = args.controlled.read_bytes()
+        try:
+            controlled = controlled_outcomes(controlled_raw)
+        except ValueError as error:
+            sys.exit(str(error))
     if not 5 <= args.return_timeout <= 600:
         sys.exit("Return timeout must be between 5 and 600 seconds.")
     if args.ram_input_present and not args.ram_input:
@@ -131,6 +230,8 @@ def main(argv=None, observe=None):
                   tool_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
                   mode=args.mode, expected_text=args.expect, transactions=[], complete=False,
                   launch_attempted=False, transport_failed=False)
+    if controlled is not None:
+        record["controlled_sha256"] = hashlib.sha256(controlled_raw).hexdigest()
     access = load_module("access", ROOT / "tools/usb-access.py")
     sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
     import usb_guard
@@ -282,15 +383,31 @@ def main(argv=None, observe=None):
                 print(log, end="")
                 save()
                 expected_status = 2 if args.mode == "timeout" else 0
-                if values[:3] != (0x534b4552, 5, expected_status):
+                outcome = None
+                if controlled is not None and values[2] != expected_status:
+                    # Matched on the full record; any other nonzero status
+                    # takes the retained-failure path below.
+                    faults = fault_lines(log)
+                    for item in controlled:
+                        found = [text for text in item["log_contains"] if text in log]
+                        if controlled_match(item, record["result"], faults, found):
+                            outcome = item
+                            record["controlled"] = dict(outcome=item, faults=faults, log_found=found)
+                            save()
+                            break
+                if outcome is None and values[:3] != (0x534b4552, 5, expected_status):
                     raise RuntimeError(f"Unexpected kernel result: {record['result']}")
-                if args.mode == "kernel" and args.expect not in log:
+                if outcome is None and args.mode == "kernel" and args.expect not in log:
                     raise RuntimeError("Kernel did not report successful completion.")
                 if args.mode == "timeout" and (values[7] != 29 or "CHECK recovery:" not in log):
                     raise RuntimeError("Recovery was not the expected secure timer interrupt.")
                 record["complete"] = True
                 save()
-                print(f"PASS: {args.mode} check, FEL recovery, automatic USB access.\n{args.evidence}")
+                if outcome is not None:
+                    print(f"CONTROLLED: {outcome['name']}, status {outcome['status']}, FEL recovery, "
+                          f"automatic USB access.\n{args.evidence}")
+                else:
+                    print(f"PASS: {args.mode} check, FEL recovery, automatic USB access.\n{args.evidence}")
             except BaseException as error:
                 retain_failure(record, save, lambda: access.quarantine_instance(
                     node, "Kernel runner stopped; coordinator recovery required.", node_identity),

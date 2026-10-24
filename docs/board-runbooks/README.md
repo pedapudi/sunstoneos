@@ -169,3 +169,29 @@ runs the thermal application only. The memory qualification rows, which
 require "rank 6 reporting the boot clock", stay blocked on that report.
 Either a reviewed read-only FEL capture of the eight words or a call from
 the thermal image would provide it; both need their own review.
+
+## Single-core bundles after rank 9
+
+[The single-core bundle design](../designs/board-bundles-next.md) orders ten
+bundles that one core can run on port 3-3 from the least recovery risk.
+`tools/prepare-board-bundles.py` writes a runbook beside each prepared
+bundle, in the format of the runbooks above. The prepared bundles are under
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-1/`,
+one directory per row with `bundle/`, `runbook.md`, `submission.json` and
+`snapshot/`; offline check results are in `offline-checks/` beside it. The
+commands use the variables above, including `$V/common/` for
+`bundle-run.py`, `cache-off.py` and `survey.py`.
+
+| Position | Row | Class | Runbook |
+| --- | --- | --- | --- |
+| 1 | Fault capture on core 0 | Returning, controlled outcome | `fault-capture/runbook.md` |
+| 2 | Kernel check with the counter option | Returning | `kernel-check-counter-option/runbook.md` |
+| 3 | Clock words: CPU-L, MBUS, NSI and the oscillator | Read | `clock-words/runbook.md` |
+| 4 | Counters, walk A/B and WFI | Returning | Not prepared: needs its owners' image |
+| 5 | Power-domain policy and status words | Read | `power-domain-words/runbook.md` |
+| 6 to 8 | PMIC service reads, domain 1 ON, DRAM bus priority | Returning | Not prepared: need their owners' images |
+| 9 | NPU speed-bin and clock words | Read | `npu-clock-words/runbook.md` |
+| 10 | NPU single-core image | Terminal | Not prepared: needs completion counts and admission values |
+
+Bundle 3 supplies the CPU-L part of the boot-clock report described below;
+the CPU-B and DSU words wait for the A76 work.

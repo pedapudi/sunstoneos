@@ -1931,12 +1931,31 @@
   "summary": "Build the native board composition and exercise only its new contracts.",
   "usb": false
  },
+ "board-bundles-images.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--central",
+   "--option-tree",
+   "--rank4",
+   "--v4",
+   "--output"
+  ],
+  "summary": "Build and check the two returning images of the single-core board bundles.",
+  "usb": true
+ },
  "board-bundles.py": {
   "cache_areas": [
    "build"
   ],
   "docs": [
+   "docs/board-runbooks/README.md",
    "docs/designs/board-bundles-measurements.md",
+   "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md"
   ],
   "library": false,
@@ -5895,7 +5914,8 @@
  "kernel-platform-admission.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-runbooks/README.md"
+   "docs/board-runbooks/README.md",
+   "docs/designs/board-bundles-next.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6952,6 +6972,7 @@
   "cache_areas": [],
   "docs": [
    "apps/npu-runtime/README.md",
+   "docs/designs/board-bundles-next.md",
    "docs/designs/npu-platform-measurements.md",
    "docs/designs/npu-platform.md",
    "docs/designs/smp-heterogeneous.md",

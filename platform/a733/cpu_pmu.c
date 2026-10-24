@@ -27,6 +27,16 @@
 
 _Static_assert(configNUMBER_OF_CORES <= A733_CPU_PMU_CORES, "one state line per core");
 
+#if configNUMBER_OF_CORES > 1
+#define CORE_IN_BEGIN "mrs %1, tpidr_el1\n"
+#define CORE_IN_END "mrs %4, tpidr_el1"
+#else
+/* One core: every task runs on core 0, no affinity mask exists to check, and
+ * TPIDR_EL1 holds no core index. */
+#define CORE_IN_BEGIN "mov %1, #0\n"
+#define CORE_IN_END "mov %4, #0"
+#endif
+
 /* Written only by its own core with IRQs masked. */
 struct core_state {
     uint32_t generation;
@@ -133,9 +143,13 @@ int a733_cpu_pmu_begin(struct a733_cpu_pmu_region *region)
     if (!region) return A733_CPU_PMU_BAD_ARGUMENT;
     region->core = A733_CPU_PMU_NO_CORE;
     /* The scheduler runs a task whose mask holds one core on that core only. */
+#if configNUMBER_OF_CORES > 1
     const UBaseType_t affinity = vTaskCoreAffinityGet(NULL);
+#else
+    const UBaseType_t affinity = 1;
+#endif
     uint64_t daif, core, pmcr;
-    __asm__ volatile("mrs %0, daif\n msr daifset, #2\n mrs %1, tpidr_el1\n mrs %2, pmcr_el0"
+    __asm__ volatile("mrs %0, daif\n msr daifset, #2\n " CORE_IN_BEGIN " mrs %2, pmcr_el0"
                      : "=&r"(daif), "=&r"(core), "=&r"(pmcr) :: "memory");
     if (core >= configNUMBER_OF_CORES || affinity != ((UBaseType_t)1 << core)) {
         irq_restore(daif);
@@ -196,7 +210,7 @@ int a733_cpu_pmu_end(const struct a733_cpu_pmu_region *region, struct a733_cpu_p
      * continuation programs every core alike, so it is read before the core
      * check. The other counters are read only on the beginning core. */
     __asm__ volatile("mrs %0, daif\n msr daifset, #2\n isb\n mrs %1, pmevcntr0_el0\n"
-                     "mrs %2, pmccntr_el0\n mrs %3, cntpct_el0\n mrs %4, tpidr_el1"
+                     "mrs %2, pmccntr_el0\n mrs %3, cntpct_el0\n " CORE_IN_END
                      : "=&r"(daif), "=&r"(v[0]), "=&r"(cycles), "=&r"(ticks), "=&r"(core) :: "memory");
     if (core != region->core) {
         irq_restore(daif);

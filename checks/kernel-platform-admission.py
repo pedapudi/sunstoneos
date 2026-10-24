@@ -24,6 +24,15 @@ def load(name, path):
 class Held(BaseException):
     pass
 
+# A level-1 translation fault on a load from 0x4_0000_0000 in a task named fault.
+CONTROLLED_FAULT = dict(name='level-1-translation-fault', status=1, interrupt=None, fail_lines=1,
+                        fault=dict(esr_mask=0xfe00007f, esr_value=0x96000005, far=0x400000000,
+                                   elr_low=0x41001000, elr_high=0x41001240, task='fault'),
+                        log_contains=['CHECK fault capture: load 0x400000000'])
+FAULT_LOG = (b'CHECK fault capture: load 0x400000000\n'
+             b'FAIL exception core=0 ESR=0x0000000096000005 ELR=0x0000000041001234 '
+             b'FAR=0x0000000400000000 SPSR=0x00000000000003c5 task=fault\n')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -31,6 +40,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--warm-return', type=Path, help='Saved successful kernel return for focused continuity checks')
     parser.add_argument('--warm-survey', type=Path, help='Saved survey after that return')
+    parser.add_argument('--timeout-return', type=Path, help='Saved forced-stall return that follows --warm-return')
+    parser.add_argument('--native-return', type=Path, help='Saved native returning CPU session, rebound after --timeout-return')
     parser.add_argument('--case', choices=('prelaunch-interruption',))
     args = parser.parse_args()
     if bool(args.warm_return) != bool(args.warm_survey):
@@ -40,6 +51,11 @@ def main():
              args.records/'ddr/session.json', args.records/'survey/session.json', Path(sys.executable)]
     if args.warm_return:
         paths += [args.warm_return, args.warm_survey]
+    if args.native_return and not args.timeout_return:
+        parser.error('--native-return requires --timeout-return')
+    if args.timeout_return and not args.warm_return:
+        parser.error('--timeout-return requires --warm-return')
+    paths += [x for x in (args.timeout_return, args.native_return) if x]
     snapshots = args.output/'inputs'; snapshots.mkdir()
     inputs = []
     for i, path in enumerate(paths):
@@ -138,10 +154,86 @@ def main():
         except RuntimeError: passed('warm-reordered-hops')
         else: raise AssertionError('warm-reordered-hops')
 
+    if args.timeout_return and not args.case:
+        # The saved forced-stall return began on the saved kernel return's
+        # instance. The survey on its returned instance is modeled from the
+        # saved warm survey, as for the second kernel return above.
+        timeout_raw = args.timeout_return.read_bytes(); timeout = json.loads(timeout_raw)
+        assert timeout['mode'] == 'timeout' and timeout['initial_node'] == warm['returned_node']
+        def after(record, survey_base):
+            return dict(survey_base, node=record['returned_node'], identity=record['returned_identity'])
+        def validate_chain(chain, last):
+            runner.validate_platform_admission((raw[0], json.dumps(after(last, json.loads(warm_survey_raw)))),
+                Path(last['returned_node']), last['returned_identity'], port,
+                ddr['tool_sha256'], helper.FEL_HASH, chain)
+        validate_chain((warm_raw, timeout_raw), timeout)
+        passed('actual-saved-forced-stall-continuity')
+        for name, key, value in [
+            ('timeout-kernel-status', 'result', dict(timeout['result'], status=0)),
+            ('timeout-wrong-interrupt', 'result', dict(timeout['result'], interrupt=30)),
+            ('timeout-transport-failure', 'transport_failed', True),
+            ('timeout-no-access', 'automatic_access', False),
+            ('timeout-wrong-tool', 'tool_sha256', '0'*64)]:
+            changed = dict(timeout); changed[key] = value
+            try: validate_chain((warm_raw, json.dumps(changed)), changed)
+            except RuntimeError: passed(name)
+            else: raise AssertionError(name)
+        # A kernel-mode return that ended in a listed controlled outcome: the
+        # saved kernel return rebound after the forced stall, with status 1
+        # and one parsed FAIL line. Offline fixture only.
+        outcome = dict(CONTROLLED_FAULT)
+        fault = dict(core=0, esr=0x96000005, elr=0x41001234, far=0x400000000, spsr=0x3c5, task='fault')
+        controlled = dict(warm, initial_node=timeout['returned_node'], initial_identity=timeout['returned_identity'],
+                          returned_node='/dev/bus/usb/003/121',
+                          returned_identity=timeout['returned_identity'][:1]+[timeout['returned_identity'][1]+9]
+                          +timeout['returned_identity'][2:],
+                          result=dict(warm['result'], status=1),
+                          controlled=dict(outcome=outcome, faults=[fault], log_found=list(outcome['log_contains'])))
+        validate_chain((warm_raw, timeout_raw, json.dumps(controlled)), controlled)
+        passed('modeled-controlled-outcome-continuity')
+        for name, change in [
+            ('controlled-other-status', lambda c: c.update(result=dict(c['result'], status=3))),
+            ('controlled-missing-record', lambda c: c.pop('controlled')),
+            ('controlled-two-fail-lines', lambda c: c.update(controlled=dict(c['controlled'], faults=[fault, fault]))),
+            ('controlled-other-far', lambda c: c.update(controlled=dict(c['controlled'], faults=[dict(fault, far=0)]))),
+            ('controlled-other-esr', lambda c: c.update(controlled=dict(c['controlled'],
+                                                                        faults=[dict(fault, esr=0x96000045)]))),
+            ('controlled-elr-outside', lambda c: c.update(controlled=dict(c['controlled'],
+                                                                          faults=[dict(fault, elr=0x41002000)]))),
+            ('controlled-missing-log-text', lambda c: c.update(controlled=dict(c['controlled'], log_found=[]))),
+            ('controlled-malformed-outcome', lambda c: c.update(controlled=dict(
+                c['controlled'], outcome=dict(outcome, status=0)))),
+            ('controlled-timeout-mode', lambda c: c.update(mode='timeout'))]:
+            changed = json.loads(json.dumps(controlled)); change(changed)
+            try: validate_chain((warm_raw, timeout_raw, json.dumps(changed)), changed)
+            except RuntimeError: passed(name)
+            else: raise AssertionError(name)
+        if args.native_return:
+            # A saved native returning CPU session from another lifetime,
+            # rebound to follow the forced-stall return. Offline fixture only.
+            native = dict(json.loads(args.native_return.read_text()), port=port,
+                          initial_node=timeout['returned_node'], initial_identity=timeout['returned_identity'],
+                          returned_node='/dev/bus/usb/003/120',
+                          returned_identity=timeout['returned_identity'][:1]+[timeout['returned_identity'][1]+7]+timeout['returned_identity'][2:])
+            validate_chain((warm_raw, timeout_raw, json.dumps(native)), native)
+            passed('modeled-native-return-continuity')
+            for name, key, value in [
+                ('native-dram-not-restored', 'dram_restored', False),
+                ('native-rom-unusable', 'rom_usable', None),
+                ('native-incomplete', 'complete', False),
+                ('native-not-physical', 'physical_access', False),
+                ('native-with-kernel-mode', 'mode', 'kernel'),
+                ('native-broken-origin', 'initial_node', warm['returned_node'])]:
+                changed = dict(native); changed[key] = value
+                try: validate_chain((warm_raw, timeout_raw, json.dumps(changed)), changed)
+                except RuntimeError: passed(name)
+                else: raise AssertionError(name)
+
     # Exercise actual main/transaction/exception ordering and shared retention
     # helper. Only the device transport and lock are modeled; no USB discovery.
     modes = ('success-new-admission', 'legacy-signature-refusal', 'prelaunch-transport-loss', 'launch-transport-loss', 'prelaunch-interruption')
     if args.warm_return: modes += ('success-warm-admission',)
+    modes += ('controlled-outcome-match', 'controlled-outcome-unlisted')
     for mode in modes:
         if args.case and mode != args.case:
             continue
@@ -175,8 +267,12 @@ def main():
                 elif parts[0] == 'readl': output = 'eb00008f e3a00911 e3a0193d e3a0605c ea00004d'
                 elif parts[0] == 'reset64':
                     active[0] = run_identity[:-1]+[1]
-                    data = bytearray(16384); log=b'PASS kernel: modeled completion\n'
-                    struct.pack_into('<16Q', data, 0, 0x534b4552,5,0,len(log), *([0]*12))
+                    data = bytearray(16384); log=b'PASS kernel: modeled completion\n'; status = 0
+                    if mode.startswith('controlled-'):
+                        log, status = FAULT_LOG, 1
+                        if mode == 'controlled-outcome-unlisted': log = log.replace(b'FAR=0x0000000400000000',
+                                                                                     b'FAR=0x0000000400000008')
+                    struct.pack_into('<16Q', data, 0, 0x534b4552,5,status,len(log), *([0]*12))
                     data[256:256+len(log)] = log; memory[0x42000000] = bytes(data)
                 else:
                     while parts:
@@ -194,6 +290,10 @@ def main():
             if mode == 'success-warm-admission':
                 argv[-1] = str(args.warm_survey)
                 argv += ['--warm-return', str(args.warm_return)]
+            if mode.startswith('controlled-'):
+                (tmp/'controlled.json').write_text(json.dumps(dict(schema='kernel-controlled-outcomes-v1',
+                                                                   outcomes=[CONTROLLED_FAULT])))
+                argv += ['--controlled', str(tmp/'controlled.json')]
             guard=SimpleNamespace(check_health=lambda:None, reenumeration=reenumeration)
             with patch.object(runner,'load_module',modules), patch.dict(sys.modules,usb_guard=guard), \
                  patch.object(runner.subprocess,'run',transact), patch.object(runner.os,'access',lambda *a:True), \
@@ -202,16 +302,25 @@ def main():
                 try:
                     runner.main(argv)
                 except Held:
-                    assert (mode.endswith('transport-loss') or mode == 'prelaunch-interruption') and len(quarantine)==1
-                    assert requests[-1][0] == ('reset64' if mode.startswith('launch-') else 'version')
+                    if mode == 'controlled-outcome-unlisted':
+                        # An unlisted nonzero status keeps ownership and quarantines.
+                        assert len(quarantine)==1 and requests[-1][0] == 'read'
+                    else:
+                        assert (mode.endswith('transport-loss') or mode == 'prelaunch-interruption') and len(quarantine)==1
+                        assert requests[-1][0] == ('reset64' if mode.startswith('launch-') else 'version')
                 except SystemExit:
                     assert mode == 'legacy-signature-refusal' and not quarantine
                     assert not any(r[0] in ('write','reset64') for r in requests)
                 else:
-                    assert mode in ('success-new-admission', 'success-warm-admission')
-                    assert sum(r[0]=='reset64' for r in requests)==1
+                    assert mode in ('success-new-admission', 'success-warm-admission', 'controlled-outcome-match')
+                    assert sum(r[0]=='reset64' for r in requests)==1 and not quarantine
                     saved = json.loads((tmp/'run/session.json').read_text())
                     assert saved['complete']
+                    if mode == 'controlled-outcome-match':
+                        assert saved['controlled']['outcome'] == CONTROLLED_FAULT
+                        assert saved['controlled']['faults'] == [dict(core=0, esr=0x96000005, elr=0x41001234,
+                                                                      far=0x400000000, spsr=0x3c5, task='fault')]
+                        assert runner.controlled_return(saved)
                     if mode == 'success-warm-admission':
                         assert (tmp/'run/warm-return-1.json').read_bytes() == warm_raw
                         assert saved['admission']['warm_returns'] == [
