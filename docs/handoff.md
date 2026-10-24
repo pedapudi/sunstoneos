@@ -1,5 +1,13 @@
 # Current work
 
+> **Reconnect requested, port `3-1` (original board), 2026-10-23.** Remove
+> its 5 V supply and its USB data cable, wait 5 seconds, then reconnect the
+> supply and the cable. The rank-7 all-core first-task diagnostic launched
+> and did not return to the boot ROM; the host still lists a stale FEL
+> descriptor on node `003/014`, which is quarantined, and the queue claim
+> `f87b2126…` is held. After the reconnect the board needs a cold DDR
+> start. Board `3-3` stays in use meanwhile.
+
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
