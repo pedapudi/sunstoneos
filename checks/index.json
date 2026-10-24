@@ -1962,7 +1962,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the returning images of bundles 4, 6, 7 and 8.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7 and 8.",
   "usb": true
  },
  "board-bundles.py": {
@@ -2582,7 +2582,6 @@
   ],
   "docs": [
    "docs/cpu-pmu.md",
-   "docs/designs/board-bundles-next.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md"
   ],
@@ -5940,8 +5939,7 @@
  "kernel-platform-admission.py": {
   "cache_areas": [],
   "docs": [
-   "docs/board-runbooks/README.md",
-   "docs/designs/board-bundles-next.md"
+   "docs/board-runbooks/README.md"
   ],
   "library": false,
   "pure_host": false,

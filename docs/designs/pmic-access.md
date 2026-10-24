@@ -180,13 +180,34 @@ therefore needs a lighter barrier placement, which this design leaves out.
 step stays until the next bundle 6 has measured the costs. The post-change
 bound is then the model's step with the measured read, write, poll and
 time-read costs, each taken at the upper end of its measured range, plus
-20 µs (3% of the 630 µs wire), applied to the median step. The first step has
-its own bound, 40 µs above the median bound: on the board it ran 24 µs above
-the median. Both hold at the stated core clock (494 MHz on CPU-L in the
-measured lifetime). Re-spins are a pass metric: at most 12 per snapshot, each
-costing a quarter bit time and one poll, about 1.5 µs, which the 20 µs margin
-covers. More re-spins than that size the counter-tick spin resolution left
-out below.
+20 µs (3% of the 630 µs wire), applied to the median step. The upper end of
+a window's range is its slowest of eight sub-windows of 32 iterations,
+divided by 32. The model also charges, per register write, the trace
+observer call and the two counter stamps that the bundle adds (about 60 per
+snapshot), since those lie inside the measured steps. The model's byte, and
+the bundle's own wire time per step, take the measured byte: the lower
+bracket of the wire-time spin when it exceeds nine bit times, at most 110%
+of nine bit times. A measured byte that is missing or above 110% fails the
+bound, and the raw stamps are printed. It fails rather than being capped at
+110%: the run measures the provider's cost per step against the wire time
+that the divisor sets, and a byte that much longer means the bus itself ran
+slower (clock stretching or a wrong divisor). A capped wire time would
+charge that bus time to the provider, so such a run needs a diagnosis of
+the bus before any bound is set from it. A spin with fewer than two reads
+has no read with the flag clear and therefore no lower bracket. Bundle 6
+then takes nine bit times, as for a missing sample, and its `WIRE` line
+shows `reads=1`; the post-change model treats that sample as missing. Unlike
+a missing sample it does not fail the bound in the fifth set's image, which
+stays byte-identical while it runs; with nine bit times the verdict can
+only be stricter. The first step has its own bound,
+40 µs above the median bound: on the board it ran 24 µs above the median.
+Both hold at the stated core clock (494 MHz on CPU-L in the measured
+lifetime). Re-spins are reported per step and in the summary and do not
+gate the measurement run: the service model gives no re-spin at a 23 µs
+byte and 18 to 24 per snapshot at 24 µs, with steps at 128% to 130% of wire
+time, inside 155%. Each re-spin costs a quarter bit time and one poll, about
+1.5 µs. Their measured count sizes the counter-tick spin resolution left out
+below.
 
 ## Measurement
 
@@ -226,7 +247,8 @@ the task check that the earlier adapter made per access:
    Aff1); the CPU-L rate comes from bundle 4 in the same lifetime. The
    windows live in `apps/board-bundles-power/power.c`, which the tree rule
    allows to use the adapter's operations.
-2. **Windows**, 256 iterations each:
+2. **Windows**, 256 iterations each in eight timed sub-windows of 32; each
+   prints its total and its fastest and slowest sub-window:
    - `CNTR` reads with `a733_mmio_read32_dsb_sy_both`;
    - plain `CNTR` reads whose value is discarded, labelled as issue
      throughput;
@@ -240,13 +262,17 @@ the task check that the earlier adapter made per access:
      flag clear: the trace observer that `apps/board-bundles-power/power.c`
      runs on every access.
 3. **Writes**, timed inside the snapshots' own transfers: the `pmic_write`
-   wrapper stamps the counter around the adapter's `write` and sums the
-   ticks, with no extra bus write. Those two stamps per write, about 60 per
+   wrapper stamps the counter around the adapter's `write`, sums the ticks
+   and keeps the fastest and slowest write, with no extra bus write. Those
+   two stamps and the observer call per write, about 60 per
    snapshot, are inside the run's step times, so its steps are compared with
    the model at the measured cost and never with the earlier 917 µs median.
-4. **Wire time**: once, after a byte-phase `CNTR` write, `bb_status_spin()`
-   reads `CNTR` back to back until `INT_FLAG` sets. That step is excluded
-   from the step statistics and counted as excluded.
+4. **Wire time**: once, with IRQs masked from before a byte-phase `CNTR`
+   write, `bb_status_spin()` reads `CNTR` back to back until `INT_FLAG`
+   (bit 3) reads set. The record keeps the stamp of the last read with the
+   flag clear and of the first with it set, both from the write's return;
+   the byte is the lower one. That step is excluded from the step
+   statistics and counted as excluded.
 5. **Baseline check.** The adapter-read window plus the task-check window,
    two time-read windows and the observer window reconstructs the earlier
    per-access path. It must come within 10% of 1,380 ns: the 1,300 ns fit
@@ -261,11 +287,14 @@ pay the adapter read alone. The write cost comes from the in-transfer write
 timing. The per-poll cost is the task-check window plus the remainder of the
 baseline check: 1,380 ns minus the reconstruction, spread over the 211
 accesses of a snapshot and charged per poll at the 44 polls of a snapshot.
-The step records count re-spins: flag polls beyond the second of a phase.
+The step records count re-spins: control-register polls beyond the second
+of a flag phase or of a STOP wait. A STOP wait lasts until `M_STP` reads
+clear and the status register reads `0xf8`.
 
 After the change, bundle 6 makes 32 snapshots of DCDC2 and DCDC4. Pass: the
-median and first steps within their bounds set as above; snapshot bytes
-unchanged (`0xff9e`); no fault; at most 12 re-spins per snapshot. A DCDC3 selector write in
+median and first steps within their bounds set as above; a measured byte
+within 110% of nine bit times; snapshot bytes unchanged (`0xff9e`); no
+fault. Re-spins are reported. A DCDC3 selector write in
 one step needs a separate bundle with a PMIC write, which needs the user's
 approval.
 
