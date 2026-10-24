@@ -721,6 +721,75 @@ bin tops at 1,508 MHz, a grant above the approval, the A1 step at 2,002 MHz,
 a missing approval, a second change, the other cluster and an approval
 without a grant. No device, queue database or FEL program is opened.
 
+### First bounded launch with recorded audio
+
+The smallest existing OS launch uses the supervised lifetime, recorded audio
+and workload 0. That workload starts one recognition after USB storage attaches
+and requires a sector-zero read to complete during recognition. It needs a
+USB storage device; workload 4 additionally needs the boot keyboard and its
+neutral-to-Enter trigger. The OS recognizer calls whole-recording recognition
+in both workloads. Paced replay is a separate mimus service operation.
+
+Select `SUNSTONE_A733_OS=ON`, with `SUNSTONE_A733_OS_RESIDENT`,
+`SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO`,
+`SUNSTONE_A733_OS_HEADSET`, `SUNSTONE_A733_OS_GPU_LINEAR`,
+`SUNSTONE_A733_OS_CPU_CLOCK` and `A733_A76_ADMITTED` all `OFF`.
+The resulting image uses the 808-byte session and requests no CPU operating-point
+change. Its recognition task and inference worker run on A55 cores 2 and 3.
+
+This configuration still starts all eight CPUs through
+[cached boot](../platform/a733-smp-cached/boot.c) before the shared scheduler
+runs. Disabling A76 recognition changes task placement; it does not remove
+secondary startup, coherence, interrupt delivery or scheduling from the image.
+The unresolved multicore launch described in the [handoff](handoff.md) therefore
+blocks this image too. Single-core USB and thermal results do not establish
+its multicore execution path.
+
+Offline preparation requires these inputs for the selected board and image:
+
+- A passed [OS link check](../checks/os-image-link.py) of the exact ELF and a
+  reviewed workload-0 session template. The template must use USB reference
+  mode 1 (cold initialization); the single-core ROM-takeover mode 2 is refused.
+- A reviewed `a733-os-supervised-entry-v1` record binding the image, template,
+  USB identity and port, session epoch, generation and lease. Its board DDR
+  reservation covers `0x41000000..0x42200000`.
+- Platform evidence for the CPU/DSU transition, cache and dirty-alias exclusion,
+  Secure and Nonsecure DRAM access, exclusive CPU/memory/DMA ownership,
+  exclusion of remote writers, USB clocks/power/reset ownership and device
+  mappings, and physical counter continuity. The inherited
+  [validator](../tools/check-a733-smp-observe.py) requires evidence for each
+  condition. A record labeled `physical_coherence_result=under-test` does
+  not qualify coherence or resolve a failed startup.
+- Thermal initial-state, electrical, clock and supervision records bound to
+  the image and board. These authorize the sensor and interrupt owner,
+  supplies, SID shadows, mappings, APB1/ADC clock profile and permanent
+  resource retention. The session carries each record's hash.
+- The exact base model, overlay and 16 kHz mono WAV declared by
+  [the model manifest](../apps/bluetooth/recognition-models.json) and
+  [the recorded-input manifest](../apps/mimus-board/inputs.json). Their separate
+  DDR reservation covers `0x44000000..0x45000000`, `0x45000000..0x45100000`
+  and the recognition arena at `0x46000000..0x47000000`.
+- A reviewed one-attempt recovery plan: demonstrated FEL access, explicit
+  reconnection before resumption, microSD preservation and whole-board power
+  removal before any retained resource is reused.
+
+The coordinator must then bind the frozen bundle to its existing claim and
+the two prerequisites `supervised-ram-recovery` and `os-supervised-software`.
+The software record must cover the exact image, SRAM launcher, host sources,
+admission cases, launcher cases, capture and lifecycle checks.
+[The launcher](../tools/check-a733-os-supervised.py) validates these bindings
+before device access. It captures one workload-0 result within 59 seconds;
+the native contract expires after 60 seconds. Success requires the copied
+transcript and sector, including the recognition/storage overlap evidence.
+The image ends at a terminal halt, so recovery requires whole-board power
+removal even after successful capture. Stop at the first transport failure.
+
+The physical entry record is still missing. Synthetic records used by host
+checks establish validation behavior and cannot authorize this launch.
+Resolving the multicore dependency and establishing the board-specific entry
+facts are separate requirements. This supervised configuration keeps WDT0
+disabled; resident watchdog-expiry qualification is not its prerequisite.
+
 ## Not yet integrated
 
 - **Continuous recognition.** Each generation captures one finite utterance.
