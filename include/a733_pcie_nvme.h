@@ -3,6 +3,10 @@
 #include "a733_pcie_function.h"
 #define A733_PCIE_NVME_BYTES 4096u
 #define A733_PCIE_NVME_DEPTH 2u /* One command outstanding per queue. */
+/* Queue and data pool: admin SQ and CQ, I/O SQ and CQ, identify and data
+ * pages. It must lie below 4 GiB, because the root port's inbound address
+ * width is unpublished. */
+#define A733_PCIE_NVME_POOL_BYTES (6u*4096u)
 #define A733_PCIE_NVME_CLASS UINT32_C(0x010802) /* Mass storage, NVM, NVMe I/O. */
 struct a733_pcie_nvme_config {
     uint64_t identity,timeout_us; /* timeout_us bounds each command and the shutdown. */
@@ -25,8 +29,9 @@ struct a733_pcie_nvme_identity {
  * admits a submission doorbell only when the queued entry equals that exact
  * command, so no write, format or vendor command can be submitted. Completion
  * is the phase-tagged queue entry, never an interrupt. The controller must
- * start disabled. After any fault, and after orderly stop, the queue and data
- * memory stays retained. */
+ * start disabled. Initialization refuses queue and data memory that ends above
+ * DMA_ADDRESS_32BIT_LIMIT, before any configuration or BAR access. After any
+ * fault, and after orderly stop, the queue and data memory stays retained. */
 struct a733_pcie_nvme {
     struct a733_pcie_nvme *self;
     struct a733_pcie_function function;

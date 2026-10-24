@@ -32,8 +32,34 @@ action, and continue with the other board or offline work meanwhile.
 Session access for both ports lasts until the next host reboot. After a reboot,
 the user runs `sudo python3 tools/usb-access.py enable-session --port <port>
 --user sunil` for each port; `python3 tools/usb-access.py check-session --port
-<port>` confirms access without communicating with the board. Nothing after the
-eight-core first-task result ran on a board. Earlier identities and admission
+<port>` confirms access without communicating with the board.
+
+On 2026-10-23 both boards passed the first five ranks of the board test plan,
+after the host reboot had reset both: the boot ROM answered as SoC `0x1903`,
+the returning SRAM survey restored SRAM byte for byte, boot0 trained 12,288 MiB
+of LPDDR5 at 2,040, 1,165, 816 and 408 MHz, the single-core FreeRTOS kernel
+check built from the current tree passed 100 rounds, and the forced-stall case
+returned to the ROM through the monitor's secure timer. That kernel run is the
+first board execution of the boot table flush in `platform/a733/platform.c`.
+After a warm ROM return the instruction cache is on, so every native launch is
+preceded by the returning cache-off helper and a fresh survey on the current
+USB instance. Evidence and the coordinator's queue scripts are in
+`~/.cache/sunstoneos/evidence/board-session-20261023/`.
+
+Rank 6, the returning thermal application, then passed on both boards: two
+complete sets from all five sensors read 40.7–42.2 °C on port `3-1` and
+42.5–44.0 °C on port `3-3`, below the 90 °C throttle trip. Rank 7, the
+accepted all-core first-task diagnostic, launched on port `3-1` and did not
+return to the ROM, although its overlay and payload are byte-identical to the
+build that passed on that board on 2026-10-18; the board needed a power
+removal, after which a cold DDR start passed again. The two lifetimes differ
+at least in the MBUS clock: a read-only capture today shows `+0x588` =
+`0x84000000`, decoded as 400 MHz, where the 2026-10-18 lifetime ran it at
+600 MHz. The same capture stopped rank 9 on port `3-3` before any launch,
+because its input requires 600 MHz. Rank 7 is not repeated on either board
+until an offline diagnosis names a concrete correction or a narrower
+diagnostic. The rank 6 to 9 bundles and runbooks are in
+`~/.cache/sunstoneos/evidence/board-bundles-20261023/`. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
@@ -48,8 +74,8 @@ target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
 | Board | Power and access facts | Continuation requirement |
 | --- | --- | --- |
-| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Bind its queue to the port, then refresh identity, recovery and admission in the order of the board test plan. Full workload execution is deferred until those ranks pass. |
-| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Bind its queue to the port, then run fresh cold DDR and platform admission before any other test. Its earlier recovery evidence, `usb-first-fault-20261018/root-physical-064/recovery-073.json`, predates the reconnection. |
+| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Queue bound to port `3-1`. Ranks 1 to 5 passed on 2026-10-23; ranks 6 to 9 wait for refrozen bundles, starting with the returning thermal image, whose build reuses objects compiled from sources that have since changed. |
+| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Queue bound to port `3-3`. Cold DDR and ranks 1 to 5 passed on 2026-10-23; it is ready for independent device work once the next bundles are frozen. |
 
 Per-port permissions, locks, queues and failure records remain independent.
 Neither queue has a running test; the original board's queue has four blocked

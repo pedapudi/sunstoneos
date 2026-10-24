@@ -7,6 +7,7 @@
 #include "task.h"
 #include "a733_mmio.h"
 #include "a733_range.h"
+#include "dma_address_width.h"
 #ifndef SUNSTONE_CAMERA_MODEL
 #include "a733_task_context.h"
 #endif
@@ -14,6 +15,13 @@
 #define TABLE_BYTES 32768u
 #define PARAMETER_BYTES 8192u
 #define PLANE_BYTES (A733_CAMERA_NATIVE_PLANE_BYTES+A733_CAMERA_NATIVE_GUARD_BYTES)
+/* Device addresses: parameters, then the Y and UV planes with their guards. */
+#define PARAMETER_IOVA A733_CAMERA_NATIVE_IOVA
+#define Y_IOVA (PARAMETER_IOVA+PARAMETER_BYTES)
+#define UV_IOVA (Y_IOVA+PLANE_BYTES)
+_Static_assert(TABLE_BYTES+PARAMETER_BYTES+2u*PLANE_BYTES==A733_CAMERA_NATIVE_BYTES,"camera allocation layout");
+_Static_assert(PARAMETER_IOVA>>22==(UV_IOVA+PLANE_BYTES-1)>>22 && UV_IOVA+PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,
+    "camera spans need one 4 MiB IOMMU window below the IOVA limit");
 #define MCLK1 UINT32_C(0x02003804)
 static struct a733_camera_native *instance;
 #ifdef SUNSTONE_CAMERA_MODEL
@@ -244,7 +252,7 @@ static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mo
 static int route_admit(void *v,const struct a733_route_config *c,uint64_t d,uint64_t *t)
 {
     struct a733_camera_native *n=v;
-    if(c->parser || c->parameter_address!=n->extent.physical+TABLE_BYTES ||
+    if(c->parser || c->parameter_address!=PARAMETER_IOVA ||
        c->mapped_bytes!=PARAMETER_BYTES || !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;return 1;
 }
@@ -301,8 +309,8 @@ static int csi_write(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32
 }
 static int dma_admit(void *v,const struct a733_camera_dma_config *c,uint64_t d,uint64_t *t)
 {
-    struct a733_camera_native *n=v;uint64_t y=n->extent.physical+TABLE_BYTES+PARAMETER_BYTES;
-    if(c->block || c->frame_id!=n->boot.lease || c->y.bus_address!=y || c->uv.bus_address!=y+PLANE_BYTES ||
+    struct a733_camera_native *n=v;
+    if(c->block || c->frame_id!=n->boot.lease || c->y.bus_address!=Y_IOVA || c->uv.bus_address!=UV_IOVA ||
        c->y.mapped_bytes!=PLANE_BYTES || c->uv.mapped_bytes!=PLANE_BYTES ||
        !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;
@@ -396,23 +404,24 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
     if(!device_memory_acquire_aligned(n->pool,n->boot.owner,A733_CAMERA_NATIVE_BYTES,16384,&n->memory,&n->extent))return fail(n);
     struct device_memory_allocation *a=device_memory_lookup(n->pool,n->memory);
     if(!a || a->state!=DEVICE_MEMORY_CPU)return fail(n);
-    /* Validate the geometry before any write. A refused extent stays device
-     * owned, as it did when this check followed the fill. */
-    if(n->extent.cpu!=n->extent.physical || n->extent.physical>=UINT64_C(0x100000000) ||
-       n->extent.bytes!=A733_CAMERA_NATIVE_BYTES || n->extent.bytes>UINT64_C(0x100000000)-n->extent.physical){
+    /* Validate the geometry before any write. IOMMU entries encode physical
+     * bits 33:32, so the device sees fixed IOVAs wherever the allocation lies.
+     * A refused extent stays device owned, as it did when this check followed
+     * the fill. */
+    if(n->extent.bytes!=A733_CAMERA_NATIVE_BYTES ||
+       !a733_extent_within(0,A733_IOMMU_PHYSICAL_LIMIT,n->extent.physical,n->extent.bytes)){
         a->state=DEVICE_MEMORY_DEVICE;return fail(n);}
     /* Unwritten payload or guard bytes then cannot repeat stale DRAM, such as
      * an earlier image. dma_admit's clean/invalidate publishes this fill. */
     memset((void *)(n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES),A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
     a->state=DEVICE_MEMORY_DEVICE;
-    uintptr_t p=n->extent.cpu;
+    uintptr_t p=n->extent.cpu;uint64_t pa=n->extent.physical;
     struct a733_camera_capture_config capture={
         .ops={time_read,native_acquire,native_handoff,no_drain},.context=n,
-        .memory={{(void *)(p+TABLE_BYTES),p+TABLE_BYTES,p+TABLE_BYTES,PARAMETER_BYTES},
-          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),p+TABLE_BYTES+PARAMETER_BYTES,p+TABLE_BYTES+PARAMETER_BYTES,PLANE_BYTES},
-          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES),p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,
-            p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
-        .table_words=(void *)p,.table_physical=p,.frame_id=n->boot.lease,
+        .memory={{(void *)(p+TABLE_BYTES),PARAMETER_IOVA,pa+TABLE_BYTES,PARAMETER_BYTES},
+          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),Y_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES,PLANE_BYTES},
+          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES),UV_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
+        .table_words=(void *)p,.table_physical=pa,.frame_id=n->boot.lease,
         .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
         .color_bars=n->boot.test_pattern,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},

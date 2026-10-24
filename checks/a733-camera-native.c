@@ -9,6 +9,7 @@
 #include "a733_counter_clock.h"
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
+#include "dma_address_width.h"
 #include "task.h"
 #include <sys/mman.h>
 #include <stdlib.h>
@@ -23,13 +24,18 @@ static struct a733_camera_boot_record boot;
 static struct device_memory_pool pool;
 static uint32_t common[0x2000/4],parser[0x1000/4],route[0x100/4],vipp[0x140/4],dma[0x1000/4],mmu[0x20000/4];
 static uint8_t sensor[65536],device_image[2*(307200+4096)];
-static unsigned wire,selected,frames,cache_syncs,io_count,stops,mode,fills,busy_seen;
+static unsigned wire,selected,frames,cache_syncs,io_count,writes,stops,mode,fills,busy_seen;
 static unsigned reading_bus,block_writes,longest_block,rearms,scap_writes,checked_frame;
 static uint64_t pwdn_released,identity_read,busy_until;
+static FILE *trace; /* Optional record of every modeled register write. */
 /* Modes 15-18 discard two images before the readable one. Mode 16 changes
  * DMA status, mode 17 reports a packet during the quiet interval and mode 18
  * drops the SCAP rewrite; each must fault during the first rearm. */
-#define DISCARDS (mode>=15?2u:0u)
+#define DISCARDS (mode>=15 && mode<=18?2u:0u)
+/* Physical base of the device pool, whose CPU alias stays at 0x48000000.
+ * Mode 19 places the camera allocation at 6 GiB; mode 20 makes it cross
+ * 2^34, which the IOMMU entries cannot encode. */
+#define POOL_PHYSICAL (mode==19?UINT64_C(0x180000000):mode==20?UINT64_C(0x3ffff0000):UINT64_C(0x48000000))
 static uint8_t payload(unsigned frame,unsigned plane,unsigned i){return (uint8_t)(i*17+plane*31+frame*101);}
 static void *const camera_task=(void *)0x1234;
 static unsigned preparation=1,reject_camera;
@@ -86,9 +92,15 @@ static void emit(void)
     assert((vipp[0]&3)==3 && (vipp[0x40/4]&1));
     assert((dma[0]&1) && (dma[0x200/4]&1));
     assert(mmu[0x14/4]==1 && mmu[0x10014/4]==1 && !mmu[0x604/4]);
-    uint64_t physical;
+    /* The route parameter and plane registers hold device addresses below
+     * 4 GiB; the IOMMU translates each to its span's physical address. */
+    uint64_t physical,parameters=(uint64_t)vipp[0x50/4]<<2;
+    assert(parameters==camera.capture.config.memory[0].iova && parameters+8192<=A733_IOMMU_IOVA_LIMIT);
+    assert(a733_iommu_translate(&camera.capture.tables,parameters,A733_IOMMU_READ,&physical)==1);
+    assert(physical==camera.capture.config.memory[0].physical);
     for(unsigned plane=0;plane<2;plane++){
         uint64_t address=(uint64_t)dma[(plane?0x228:0x220)/4]<<2;
+        assert(address==camera.capture.config.memory[plane+1].iova && address+307200+4096<=A733_IOMMU_IOVA_LIMIT);
         assert(a733_iommu_translate(&camera.capture.tables,address,A733_IOMMU_WRITE,&physical)==1);
         assert(physical==camera.capture.config.memory[plane+1].physical);
         assert(a733_iommu_translate(&camera.capture.tables,address+307199,A733_IOMMU_WRITE,&physical)==1);
@@ -136,6 +148,7 @@ uint32_t a733_camera_model_load(uintptr_t a)
 void a733_camera_model_store(uintptr_t a,uint32_t value)
 {
     assert(!(a&3));++io_count;
+    ++writes;if(trace)fprintf(trace,"%08lx %08x\n",(unsigned long)a,value);
     if(a>=0x05800000 && a<0x05840000)rearm_checks(a,camera_word(a),1,value);
     if(a==A733_TWI11_BASE+0xc && value!=0x40){
         assert(pm.i2c_held && !pm.register_held);
@@ -295,7 +308,7 @@ static void setup(void)
         media_retain,generic_read,generic_write};
     assert(a733_media_clock_init(&media,&mc,&mo,&pm,&pm.clocks,&pm.gpu,2,&lease));
     void *ram=mmap((void *)0x48000000,0x200000,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
-    assert(ram==(void *)0x48000000);assert(device_memory_pool_init(&pool,(uintptr_t)ram,(uintptr_t)ram,0x200000));
+    assert(ram==(void *)0x48000000);assert(device_memory_pool_init(&pool,(uintptr_t)ram,POOL_PHYSICAL,0x200000));
     struct a733_camera_native_config config={&boot,&media,&pm.clocks,&pm.pins,&pm.rails,&supply,&pm.provider,&locks,camera_task};
     struct device_memory_pool old_pool=pool;
     assert(a733_camera_native_init(ram,&config)==0 && !memcmp(&pool,&old_pool,sizeof(pool)));
@@ -314,7 +327,19 @@ static void setup(void)
     assert(!memcmp(&pool,&old_pool,sizeof(pool)) && !camera.self);
     for(unsigned i=0;i<sizeof(camera);i++)assert(!((uint8_t *)ram)[i]);
     reject_camera=1;assert(a733_camera_native_init(&camera,&config)==0 && !camera.self);
-    reject_camera=0;assert(a733_camera_native_init(&camera,&config)==1);preparation=0;
+    reject_camera=0;
+    if(mode==20){
+        /* Refused before the fill, any table byte or register access; the
+         * extent stays device owned and the constructor faults. */
+        struct device_memory_extent e;enum device_memory_state state;unsigned before=io_count;
+        assert(a733_camera_native_init(&camera,&config)==-1 && camera.state==A733_CAMERA_NATIVE_FAULT);
+        assert(device_memory_describe(&pool,camera.memory,&e,&state) && state==DEVICE_MEMORY_DEVICE);
+        assert(e.physical==POOL_PHYSICAL && e.physical+e.bytes>A733_IOMMU_PHYSICAL_LIMIT && io_count==before && !fills);
+        for(size_t i=0;i<A733_CAMERA_NATIVE_BYTES;i++)assert(!((uint8_t *)ram)[i]);
+        return;
+    }
+    assert(a733_camera_native_init(&camera,&config)==1);preparation=0;
+    assert(camera.extent.physical==POOL_PHYSICAL && camera.extent.cpu==(uintptr_t)ram);
     pm.worker=1;assert(a733_camera_native_poll(&camera)==-1 && camera.state==A733_CAMERA_NATIVE_CLOCK && !camera.entered);pm.worker=0;
 }
 /* The second concrete consumer uses S_TWI1 and an eight-bit register address.
@@ -364,7 +389,15 @@ static void short_case(void)
 }
 int main(int argc,char **argv)
 {
-    assert(argc==2);mode=(unsigned)strtoul(argv[1],NULL,10);assert(mode<=18);if(mode==7){short_case();return 0;}setup();
+    assert(argc==2 || argc==3);mode=(unsigned)strtoul(argv[1],NULL,10);assert(mode<=20);if(mode==7){short_case();return 0;}
+    if(argc==3)assert((trace=fopen(argv[2],"w")));
+    setup();
+    if(mode==20){puts("PASS native camera scenario20, allocation across 2^34 refused before the fill");return 0;}
+    /* One 4 MiB window and one leaf word per page: parameters 2, planes 2 x 76. */
+    unsigned windows=0,leaves=0;
+    for(unsigned i=0;i<A733_IOMMU_TABLE_BYTES/4;i++)
+        if(camera.capture.tables.words[i])++*(i<4096?&windows:&leaves);
+    assert(windows==1 && leaves==154);
     int r=0;
     for(unsigned polls=0;r==0 && polls<40000;polls++){
         assert(!pm.worker);
@@ -389,7 +422,7 @@ int main(int argc,char **argv)
         }
     }
     fprintf(stderr,"camera result%d state%u capture%u analog%u iommu%u sensor%u route%u receiver%u dma%u TWI%u/status%x time%llu frames%u\n",r,camera.state,camera.capture.state,camera.capture.analog.state,camera.capture.iommu.state,camera.capture.sensor.state,camera.capture.route.state,camera.capture.receiver.state,camera.capture.dma.state,camera.twi.state,camera.twi.last_status,(unsigned long long)pm.now,frames);
-    unsigned nominal=!mode || mode==10 || mode==11 || mode==12 || mode==14 || mode==15;
+    unsigned nominal=!mode || mode==10 || mode==11 || mode==12 || mode==14 || mode==15 || mode==19;
     assert(sensor[0x503d]==(mode==10?0x84:0) && busy_seen==(mode==12 || mode==13));
     if(nominal){
         /* PWDN release to identity keeps 1 ms + 20 ms with or without RESETB. */
@@ -439,6 +472,8 @@ int main(int argc,char **argv)
         assert(camera.capture.route.state==A733_ROUTE_ARMED && camera.capture.receiver.state==A733_CSI_ARMED);
         assert(camera.capture.iommu.state==A733_IOMMU_ACTIVE && camera.capture.sensor.state==OV5640_READY);
     }
-    printf("PASS native camera scenario%u, frames%u, cache acquisitions%u\n",mode,frames,cache_syncs);
+    if(trace)assert(!fclose(trace));
+    printf("PASS native camera scenario%u, frames%u, cache acquisitions%u, IOMMU windows%u, leaf words%u, register writes%u\n",
+        mode,frames,cache_syncs,windows,leaves,writes);
     return 0;
 }

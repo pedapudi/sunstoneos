@@ -51,8 +51,9 @@ Initialization constructs the real IOMMU tables in a caller-reserved 32 KiB
 arena aligned to 16 KiB. It performs no MMIO. The caller must already own the
 CPU aliases while this construction runs. Global acquisition subsequently
 authenticates their physical identity, DMA permissions and cache isolation.
-All I/O spans must end below 4 GiB, matching the current camera allocation
-policy. The native IOMMU controller then publishes and installs those tables.
+Every I/O span must end at or below `A733_IOMMU_IOVA_LIMIT` (4 GiB). Physical
+spans may lie anywhere in DRAM below 2^34, which the IOMMU entries encode. The
+native IOMMU controller then publishes and installs those tables.
 
 The global owner reserves both IOMMU banks and all ten masters, the common
 analog registers, local camera blocks, sensor resources and all memory spans.

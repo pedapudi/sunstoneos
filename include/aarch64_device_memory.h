@@ -29,5 +29,10 @@ static inline unsigned aarch64_cache_stride_from_ctr(uint64_t ctr)
  * recovery. None of these operations can recover a stalled interconnect. */
 unsigned aarch64_device_cache_stride(void);
 int aarch64_device_translate(uintptr_t, int write, struct aarch64_translation *);
+/* The same translation with the EL0 permission check (AT S1E0R, AT S1E0W),
+ * called at EL1 under the same conditions. It returns 0 when EL0 could not
+ * make the access, for example a write to a page that is read-only at EL0 or
+ * any access to a page closed to EL0. */
+int aarch64_device_translate_el0(uintptr_t, int write, struct aarch64_translation *);
 int aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
 #endif

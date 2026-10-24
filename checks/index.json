@@ -30,7 +30,9 @@
  },
  "a733-camera-capture.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/dma-high-memory-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -55,7 +57,9 @@
   "cache_areas": [
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/dma-high-memory-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -628,6 +632,7 @@
  "a733-pcie-trace.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/dma-high-memory-measurements.md",
    "docs/pcie-nvme.md",
    "docs/pcie.md"
   ],
@@ -1191,6 +1196,7 @@
  "a733-xhci-detach.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/dma-high-memory-measurements.md",
    "docs/usb2-host.md"
   ],
   "library": false,
@@ -2378,7 +2384,8 @@
  "camera-supervised.py": {
   "cache_areas": [],
   "docs": [
-   "docs/camera-application.md"
+   "docs/camera-application.md",
+   "docs/designs/dma-high-memory-measurements.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2932,6 +2939,7 @@
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md",
    "docs/designs/memory-architecture-measurements.md",
+   "docs/designs/memory-map-12g.md",
    "docs/device-memory-capacity.md",
    "docs/memory-protection.md"
   ],
@@ -2944,7 +2952,7 @@
    "--qemu",
    "--freertos"
   ],
-  "summary": "Check pool placement and class alignment, the EL1 map, and one-call pool preparation.",
+  "summary": "Check pool placement and class alignment, the EL1 map in both layouts, and pool preparation.",
   "usb": false
  },
  "display-clock-handoff.py": {
@@ -3215,6 +3223,26 @@
    "--lld"
   ],
   "summary": "Build one native DMA pool composition and compile the cached application entry.",
+  "usb": false
+ },
+ "dram-controller.py": {
+  "cache_areas": [
+   "host",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/dram-bus-priority.md",
+   "docs/designs/dram-controller-measurements.md",
+   "docs/designs/dram-controller.md",
+   "docs/designs/memory-map-12g.md",
+   "docs/dram.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "output"
+  ],
+  "summary": "Check memory-bus priority and the latency window against pinned sources.",
   "usb": false
  },
  "dsi-replay-launch.py": {
@@ -5917,6 +5945,7 @@
   "docs": [
    "docs/designs/cpu-pmu.md",
    "docs/designs/memory-architecture-measurements.md",
+   "docs/designs/memory-map-12g.md",
    "docs/device-memory-capacity.md"
   ],
   "library": false,

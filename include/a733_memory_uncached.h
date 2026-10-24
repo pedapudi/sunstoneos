@@ -7,10 +7,10 @@
  * extended layout reserves class `uncached`, 0x78000000..0x79000000.
  *
  * Preparation and the getter behave as for the write-back pool. In the
- * extended layout a733_device_memory_prepare() runs preparation once. In the
- * local layout the first getter call runs it, at EL1, until platform_init()
- * calls it. The extended check makes one write translation per 2 MiB block
- * and the local check one per page. Both accept identity, Normal
+ * extended layout a733_device_memory_prepare() runs preparation once, and in
+ * the local layout a733_memory_local_prepare() does. The extended check makes
+ * one write translation per 2 MiB block; the local check makes one per 2 MiB
+ * block or one per page, as for the write-back pool. Both accept identity, Normal
  * non-cacheable, outer or inner shareable, and initialize the pool as
  * non-cacheable, so acquire runs no clean. Preparation returns 1 when the
  * image links no local uncached pool.

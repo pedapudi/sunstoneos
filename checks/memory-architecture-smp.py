@@ -29,10 +29,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'checks'))
+import harness  # noqa: E402  Refuses to run with assertions disabled.
 FLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-ffreestanding', '-fno-builtin',
          '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
          '-ffunction-sections', '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-Werror']
@@ -97,9 +100,12 @@ def measurements(output):
     return found
 
 
-# Encodings with every operand bit masked: SVC #imm, and DSB, DMB, ISB with any option.
-BARRIERS = {'svc': (0xffe0001f, 0xd4000001), 'dsb': (0xfffff0ff, 0xd503309f),
-            'dmb': (0xfffff0ff, 0xd50330bf), 'isb': (0xfffff0ff, 0xd50330df)}
+COUNTED = ['svc', *harness.BARRIERS]
+
+
+def counted(word):
+    """SVC #imm (operand bits masked) and the barriers of harness.BARRIERS."""
+    return (['svc'] if word & 0xffe0001f == 0xd4000001 else []) + harness.barriers(word)
 
 
 def trace_filter(elf):
@@ -117,40 +123,6 @@ def trace_filter(elf):
             ranges.append(f'0x{at:x}+0x{start - at:x}')
         at = max(at, end or 0)
     return ','.join(ranges)
-
-
-def trace_counts(log):
-    """Instructions, SVC, DSB, ISB and DMB that CPU 0 executes between successive
-    semihosting markers, from the translated blocks (in_asm) and their executions."""
-    blocks, sections, counts, words, address = {}, [], None, None, None
-    exec_line = re.compile(r'^Trace 0: \S+ \[[0-9a-f]+/([0-9a-f]+)/')
-    with log.open(errors='replace') as stream:
-        for line in stream:
-            if line.startswith('IN:'):
-                words, address = [], None
-                continue
-            if words is not None:
-                if address is None and line.startswith('0x'):
-                    address = int(line.split(':')[0], 16)
-                    continue
-                if line.startswith('OBJD-T:'):
-                    data = bytes.fromhex(line.split(':', 1)[1].strip())
-                    words += [int.from_bytes(data[i:i + 4], 'little') for i in range(0, len(data), 4)]
-                    continue
-                blocks[address] = words
-                words = None
-            if 'Taking exception 16 [Semihosting call] on CPU 0' in line:
-                counts = {'instructions': 0, **{name: 0 for name in BARRIERS}}
-                sections.append(counts)
-                continue
-            match = exec_line.match(line)
-            if match and counts is not None:
-                for word in blocks[int(match[1], 16)]:
-                    counts['instructions'] += 1
-                    for name, (mask, value) in BARRIERS.items():
-                        if word & mask == value:
-                            counts[name] += 1
-    return sections
 
 
 def source_identity():
@@ -232,7 +204,7 @@ def main():
         r.run(label + '-trace', [a.qemu, *QEMU, '-icount', 'shift=0', '-d', 'int,exec,nochain,in_asm',
               '-dfilter', trace_filter(elf), '-D', trace_log,
               '-device', f'loader,file={mode_image(elf, 2, work / "trace.elf")},cpu-num=0'])
-        sections = trace_counts(trace_log)
+        sections = harness.trace_sections(trace_log, counted, COUNTED)
         # One section follows each marker; the one after the first end marker
         # holds the ledger set-up between the two groups.
         names = ['describe', 'xhci_rd', 'camera_memory'] + ([None, 'acquire', 'release', 'retain', 'getter']
