@@ -300,14 +300,15 @@ static void deadline_cases(void)
 }
 /* Revocation between phases: a clock fault that another core sets while the
  * provider reads the time after a phase stops the transfer before its next
- * access, for a fault after each write of a snapshot. The poll's entry check
- * and result() would see the fault later, after further bus phases. */
-static unsigned revoke_after,revoked,revoked_writes;
+ * access, read or write, for a fault after each write of a snapshot. The
+ * poll's entry check and result() would see the fault later, after further
+ * bus phases. */
+static unsigned revoke_after,revoked,revoked_writes,revoked_reads;
 static void revoke(struct pmic_model *m)
 {
     if(!m->in_time_read || revoked || m->writes<revoke_after)return;
     a733_power_authority_set(&m->rails.authority,A733_POWER_CLOCK_FAULT);
-    revoked=1;revoked_writes=m->writes;
+    revoked=1;revoked_writes=m->writes;revoked_reads=m->reads;
 }
 /* The deadline passes after the final STOP wait, at the time read of the
  * publish phase: the only time read with the request active and the I2C
@@ -330,7 +331,8 @@ static void phase_cases(void)
         assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
         revoked=0;m.concurrent=revoke;
         for(unsigned i=0;i<150 && !m.provider.failed;++i)pmic_model_step(&m);
-        assert(revoked && m.provider.failed && m.retained && m.i2c_held && m.writes==revoked_writes);
+        assert(revoked && m.provider.failed && m.retained && m.i2c_held);
+        assert(m.writes==revoked_writes && m.reads==revoked_reads);
         assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_RETAINED);
     }
     /* Publication after the deadline is a fault, and the request is not
@@ -357,11 +359,11 @@ static void phase_cases(void)
     uint64_t until=0;
     assert(a733_pmic_work(&m.provider,m.now,&until)&A733_PMIC_WORK_WAITING);
     assert(stop_end>respin && until==stop_end);
-    const uint64_t edge_us=stop_end-m.stop_read;
+    const uint64_t stop_spin_us=stop_end-m.stop_read;
     assert(run(&m,&q,20000)==A733_PMIC_COMPLETE && a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
     printf("phases: revocation after each of %u writes stops the transfer before its next access; "
            "late publication retained; STOP spin ends %llu us after the STOP time read\n",
-           cases,(unsigned long long)edge_us);
+           cases,(unsigned long long)stop_spin_us);
 }
 int main(int argc,char **argv)
 {

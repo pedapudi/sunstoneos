@@ -19,21 +19,19 @@ check fails when:
   must not call current() or an a733_task_context_ predicate, because
   a733_pmic_poll() checks the provider task at entry and the adapter's
   enter() when it takes the I2C mutex;
-- outside the adapter itself and the board-bundle forwarders and cost
-  windows (apps/board-bundles-power/power.c), a source uses the operations of
-  a struct a733_pmic_native other than as the &...operations third argument
-  of a733_pmic_init(), names struct a733_pmic_ops, or uses the ops of a
-  struct a733_pmic other than to read its now or outside query. Any such
-  use could reach the accessors without the poll's task check: a call, a
-  copy of the table, or a function pointer passed on. The rule is keyed on
-  the declared type: it collects the names that each translation unit, with
-  the project headers it includes, declares as struct a733_pmic_native or
-  struct a733_pmic, including functions that return one. A member access
-  counts as a use when the expression before it ends in such a name, or
-  ends in ')' or ']' and the brackets contain such a name or a cast to the
-  type, or follow such a name: (&native)->operations,
-  ((struct a733_pmic_native *)x)->operations, natives[0].operations and
-  get()->operations all count.
+- a source other than the provider, its native adapter and the board-bundle
+  forwarders and cost windows (apps/board-bundles-power/power.c and
+  power.h) names pmic_bus_ops, struct a733_pmic_ops or a733_pmic_init.
+  pmic_bus_ops is the member that holds the adapter operations in both
+  struct a733_pmic_native and struct a733_pmic, and no other code uses the
+  name. Any use of it could reach the register accessors without the poll's
+  task check: a call, a copy of the table, or a function pointer passed on.
+  Other sources reach the operations only through three helpers in the
+  headers: a733_pmic_native_bind() hands the native adapter to
+  a733_pmic_init(), and a733_pmic_now() and a733_pmic_outside() make the two
+  queries that consumers need. Text in comments is ignored. A name built
+  by token pasting, or an access through a pointer cast to the struct's
+  first member, is not caught.
 
 It reads source text only and runs no build.
 """
@@ -67,127 +65,20 @@ def strip_comments(text):
     return re.sub(r'//[^\n]*', '', text)
 
 
-def unit_text(root, path, seen):
-    """The comment-free text of a source and of the project headers it includes, recursively."""
-    if path in seen or not path.is_file():
-        return ''
-    seen.add(path)
-    text = strip_comments(path.read_text(errors='replace'))
-    parts = [text]
-    for name in re.findall(r'#\s*include\s+"([^"]+)"', text):
-        for base in (path.parent, root / 'include', root / 'platform/a733'):
-            if (base / name).is_file():
-                parts.append(unit_text(root, (base / name).resolve(), seen))
-                break
-    return '\n'.join(parts)
-
-
-def opening(text, close):
-    """The index of the bracket that text[close], a ')' or ']', closes; -1 if none."""
-    pair, depth = {')': '(', ']': '['}[text[close]], 0
-    for i in range(close, -1, -1):
-        depth += text[i] == text[close]
-        depth -= text[i] == pair
-        if not depth:
-            return i
-    return -1
-
-
-def operand(text, end):
-    """The start of the postfix expression that ends before text[end], and its object's possible names.
-
-    The names are the last name of the expression, such as a variable, a
-    member, an array or a called function, and every name inside the
-    brackets that follow it, so that (&x)->, ((T *)x)-> and x[0]. all yield x.
-    Names further out denote enclosing objects and are not returned; a cast
-    stays in the expression text."""
-    names, i, last = set(), end, True
-    while True:
-        while i and text[i - 1].isspace():
-            i -= 1
-        if i and text[i - 1] in ')]':
-            j = opening(text, i - 1)
-            if j < 0:
-                break
-            if last:
-                names |= set(re.findall(r'[A-Za-z_]\w*', text[j:i]))
-            i = j
-            continue
-        name = re.search(r'[A-Za-z_]\w*$', text[max(0, i - 256):i])
-        if not name:
-            break
-        if last:
-            names.add(name[0])
-        last = False
-        i -= len(name[0])
-        k = i
-        while k and text[k - 1].isspace():
-            k -= 1
-        if text[k - 1:k] == '.':
-            i = k - 1
-        elif text[k - 2:k] == '->':
-            i = k - 2
-        else:
-            break
-    return i, names
-
-
-def init_argument(text, start, end):
-    """Whether &text[start:end] is the whole third argument, the operations, of a733_pmic_init()."""
-    if not re.search(r'&\s*$', text[max(0, start - 64):start]) or not re.match(r'\s*,', text[end:]):
-        return False
-    depth, commas = 0, 0
-    for i in range(start - 1, -1, -1):
-        depth += {')': 1, ']': 1, '}': 1, '(': -1, '[': -1, '{': -1}.get(text[i], 0)
-        commas += not depth and text[i] == ','
-        if depth < 0:
-            return (text[i] == '(' and commas == 2 and
-                    re.search(r'\ba733_pmic_init\s*$', text[max(0, i - 64):i]) is not None)
-    return False
-
-
-ACCESS_NATIVE = re.compile(r'(?:\.|->)\s*operations\b')
-ACCESS_PROVIDER = re.compile(r'(?:\.|->)\s*ops\b')
-QUERY = re.compile(r'\s*\.\s*(?:now|outside)\b(?!\s*=[^=])')
+GUARDED = re.compile(r'\b(pmic_bus_ops|a733_pmic_ops|a733_pmic_init)\b')
 
 
 def adapter_uses(root):
-    """Uses of the native adapter's operations, keyed on the declared type."""
+    """Uses of the adapter operations' member, their type or the provider's init outside the adapter files."""
     problems = []
     for path in files(root):
         rel = path.relative_to(root)
         if rel in ADAPTER_FILES:
             continue
         own = strip_comments(path.read_text(errors='replace'))
-        if not re.search(r'\b(operations|ops|a733_pmic_ops)\b', own):
-            continue
-        unit = unit_text(root, path.resolve(), set())
-        natives = set(re.findall(r'struct\s+a733_pmic_native\b[\s*]*(?:const\b[\s*]*)?(\w+)', unit))
-        providers = set(re.findall(r'struct\s+a733_pmic\b[\s*]*(?:const\b[\s*]*)?(\w+)\s*[;,=)(\[]', unit))
-        for m in re.finditer(r'\bstruct\s+a733_pmic_ops\b', own):
+        for m in GUARDED.finditer(own):
             line = own.count('\n', 0, m.start()) + 1
-            problems.append(f'{rel}:{line}: names struct a733_pmic_ops outside the provider and its adapter')
-        for m in ACCESS_NATIVE.finditer(own):
-            begin, names = operand(own, m.start())
-            if not names & natives and not re.search(r'\bstruct\s+a733_pmic_native\b', own[begin:m.start()]):
-                continue
-            if not init_argument(own, begin, m.end()):
-                line = own.count('\n', 0, m.start()) + 1
-                problems.append(f'{rel}:{line}: uses the native PMIC adapter\'s operations other than as '
-                                'a733_pmic_init()\'s argument')
-        # Only the now and outside queries, which the power service and
-        # consumers make, may be read from a provider's copy of the adapter
-        # operations. A call of any other operation, a copy of the table or a
-        # pointer into it could reach the accessors without the poll's task check.
-        for m in ACCESS_PROVIDER.finditer(own):
-            begin, names = operand(own, m.start())
-            if not names & providers and not re.search(r'\bstruct\s+a733_pmic\b', own[begin:m.start()]):
-                continue
-            if QUERY.match(own, m.end()):
-                continue
-            line = own.count('\n', 0, m.start()) + 1
-            problems.append(f'{rel}:{line}: uses the PMIC provider\'s copy of the adapter operations other '
-                            'than the now and outside queries')
+            problems.append(f'{rel}:{line}: names {m[1]} outside the PMIC provider and its adapter')
     return problems
 
 
@@ -242,8 +133,7 @@ def main():
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
           'only to DCDC3 and DCDC5, INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, adapter '
-          'operations used only by the provider and the bundle forwarders, and only the now and outside '
-          'queries read from a provider\'s copy')
+          'operations named only by the provider, its adapter and the bundle forwarders')
 
 
 if __name__ == '__main__':
