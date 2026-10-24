@@ -140,11 +140,15 @@ blocks for one tick after at most 1 ms of spinning in a step.
 `checks/power-domains-service.c` measures it with each bus flag set at a
 sub-microsecond time. At 400 kHz with 200 ns per register access, a snapshot
 and a selector write each complete in one step with no tick wait; at 100 kHz
-they take two and three tick waits. The board's snapshot steps take longer;
-section "Board result of the service steps" of
-[the power-domain design](designs/power-domains.md) records them, and
-[the access design](designs/pmic-access.md) gives the per-phase timing and its
-modeled step times. The other images keep their per-tick loops.
+they take two and three tick waits. On the board (bundle 6, port 3-3,
+CPU-L at 494 MHz, with the bundle's trace observer), a 400 kHz snapshot step
+takes 779 µs at the median, 123.6% of its 630 µs wire time, and 809 µs in the
+first step. The bound for later runs of that bundle is 799 µs for the median
+step and 839 µs for the first. A step within 110% of wire time is out of
+reach on this bus: the bare S_TWI0 read alone takes about 378 ns, and 110%
+needs about 300 ns per register access. Section "Board result" of
+[the access design](designs/pmic-access.md) gives the measured costs, the
+bound and the per-phase timing. The other images keep their per-tick loops.
 `a733_pmic_work()` reads faults from the state word. When a
 client latches a fault while the provider task holds the I2C mutex for a
 transfer, it reports `A733_PMIC_WORK_FAILED` with `A733_PMIC_WORK_RETAIN`,
@@ -191,8 +195,10 @@ asserts those budgets. `docs/designs/power-authority.md` and
 earlier providers.
 
 The native adapter issues `DSB SY` before and after every register access.
-[shared-helpers.md](shared-helpers.md) requires board qualification for any
-weaker barrier placement.
+On the board the pair adds about 41 ns to a 378 ns S_TWI0 read, so a lighter
+placement saves at most about 41 ns per read and would not reach 110% of
+wire time. [shared-helpers.md](shared-helpers.md) requires board
+qualification for any weaker barrier placement.
 One `DSB SY` after each control-register write would suffice in principle,
 because Device-nGnRnE accesses to one peripheral reach it in program order and
 only a control write starts a timed bus phase. That placement is

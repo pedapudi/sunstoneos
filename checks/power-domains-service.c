@@ -26,19 +26,23 @@
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
  * Board cost, 400 kHz only, one table row per cost set: a register read, a
- * register write, a provider poll (its task check, the object try-lock and
- * per-phase software, which the per-access figures do not hold) and a time
- * read of 100 ns. 1,300 ns per access is the figure at which the model's
- * snapshot step matched the median step of port 3-3 before the provider spun
- * from the phase-start write (bundle 6, 2026-10-24: 917 us for 630 us of
- * wire time); 800 and 850 ns bracket the cost up to which a selector write
- * fits in one step. Writes cost as much as reads and a poll 200 ns until the
- * next bundle 6 measures them (docs/designs/pmic-access.md); the rows then
- * take the measured values. A snapshot takes one step within the interim
- * bound of 155% of its 630 us bit-time wire time
- * (docs/designs/power-domains.md); the selector write takes the steps the
- * row states, at most two with one tick wait, because the service spins at
- * most 1 ms per step.
+ * register write, a provider poll (its task check plus the object try-lock and
+ * per-phase software, which no access-cost window times) and a time read.
+ * The costs come from bundle 6 on port 3-3 on 2026-10-24 with the changed
+ * provider, each at the slowest of its eight timed sub-windows of 32
+ * iterations of the 24 MHz counter (docs/designs/pmic-access.md, "Bound"):
+ * a read 529 ns (the adapter's read 470 ns plus the bundle's trace observer
+ * 59 ns); a write 1,026 ns (the slowest timed write, 16 ticks or 667 ns, plus
+ * the observer and two counter stamps of 150 ns); a time read 150 ns; a poll
+ * 81 ns, the task check. At those costs the model's snapshot step is 756 us,
+ * 23 us below the board's median of 779 us. About 300 ns more per poll, the
+ * software between the timed operations, reproduces the median; the
+ * post-change bound is that step plus 20 us, 799 us (1,268 permille of the
+ * 630 us bit-time wire time). A third row charges the per-poll remainder of
+ * the base provider's 1,300 ns fit, 2,340 ns; its step overstates the board's
+ * by 71 us. Two rows with no software cost show the bus floor: at the bare
+ * S_TWI0 read of 379 ns per access a snapshot exceeds 110% of its bit-time
+ * wire time, and at 300 ns it stays within it.
  * Slow bus, 400 kHz: every flag sets 10% later than the divisor implies
  * (25 us bytes, 6 us conditions). A snapshot and a selector write each take
  * one step within 110% of that wire time.
@@ -302,24 +306,35 @@ int main(void)
     }
     {
         /* Board cost at 400 kHz. The wire time is the bit-time wire: 252 bit
-         * times of 2,500 ns for a snapshot, as on the board. */
-        static const struct { uint64_t read_ns,write_ns,poll_ns; unsigned write_steps; } rows[]={
-            {800,800,200,1},{850,850,200,2},{1300,1300,200,2}};
+         * times of 2,500 ns for a snapshot, as on the board. The model's byte
+         * stays 23 us, the service's spin target for a 22.5 us byte; bundle 6
+         * measured the byte at nine bit times. */
+        enum { FLOOR_ABOVE=1, FLOOR_WITHIN, BOUNDED };
+        static const struct { uint64_t read_ns,write_ns,poll_ns,now_ns; unsigned write_steps,kind; } rows[]={
+            {529,1026,81,150,1,BOUNDED},{529,1026,380,150,1,BOUNDED},{529,1026,2340,150,2,0},
+            {379,379,0,40,1,FLOOR_ABOVE},{300,300,0,40,1,FLOOR_WITHIN}};
+        /* The post-change bound of a median snapshot step and its margin. */
+        const uint64_t bound_us=799,margin_us=20;
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
+        assert(bound_us*1000*1000/wire_snapshot_ns==1268);
         for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);++i) {
             const struct rate *r=&rates[0];
-            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            setup(r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
             struct request_cost snapshot=request(0,1,0,0);
-            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            setup(r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
             struct request_cost write=request(1,1,0,0);
-            printf("{\"rate\":\"400kHz, %llu ns per register read, %llu per write, %llu per poll, 100 per time read\",",
-                (unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,(unsigned long long)rows[i].poll_ns);
+            printf("{\"rate\":\"400kHz, %llu ns per register read, %llu per write, %llu per poll, %llu per time read\",",
+                (unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,(unsigned long long)rows[i].poll_ns,
+                (unsigned long long)rows[i].now_ns);
             print_cost("snapshot",snapshot);print_cost("selector_write",write);
-            printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
-                (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
-            assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*1000000<=wire_snapshot_ns*1550);
+            const uint64_t permille=snapshot.longest_step_us*1000000/wire_snapshot_ns;
+            printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",(unsigned long long)permille);
+            assert(snapshot.steps==1 && !snapshot.tick_waits);
             assert(write.steps==rows[i].write_steps && write.tick_waits==rows[i].write_steps-1 &&
                 write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
+            if(rows[i].kind==BOUNDED)assert(snapshot.longest_step_us+margin_us<=bound_us);
+            if(rows[i].kind==FLOOR_ABOVE)assert(permille>1100);
+            if(rows[i].kind==FLOOR_WITHIN)assert(permille<=1100);
         }
     }
     {
