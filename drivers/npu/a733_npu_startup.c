@@ -25,15 +25,36 @@
 #define PLL_SAMPLE_US 3u
 #define PLL_SAMPLES 100u
 #define PLL_SETTLE_US 20u
+/* One register write of a table: the masked field takes value, every other
+ * bit keeps its read value. Bits in status are read-only status: they are
+ * written as zero and ignored by the readback, as PLL LOCK is. */
+struct step { uint32_t address, mask, value, status; };
 /* Method-2 enable of a disabled PLL (manual §4.1.4.1): software gate enable
  * before No-Auto in CCU+0x1920, then LDO, factors, PLL enable and lock
  * enable. The output gate stays closed until LOCK. */
-static const struct a733_npu_step pll_enable[]={
+static const struct step pll_enable[]={
     {CCU+0x1920,BIT(16),BIT(16),0}, {CCU+0x1920,1,1,0}, {PLL,BIT(30),BIT(30),PLL_LOCK},
     {PLL,UINT32_C(0x0070ff02),UINT32_C(0x00305100),PLL_LOCK}, {PLL,BIT(31),BIT(31),PLL_LOCK},
     {PLL,BIT(29),BIT(29),PLL_LOCK}
 };
-#define PLL_ENABLE_STEPS (sizeof(pll_enable)/sizeof(*pll_enable))
+/* The local tables follow the pinned board kernel's fields: CCU+0xb00 module
+ * divider bits 0-4, selector 24-26, gate 31; CCU+0xb04 bus gate 0, core
+ * reset 16, AXI 17, AHB 18, SRAM reset 19. Opened after PLL_NPU locks, in the
+ * clock-before-power order of the pinned VIPLite vip_drv_device_platform.c
+ * (lines 419-428): PLL output gate, AHB, AXI and core resets released, module
+ * selector PLL_NPU at divider 1, bus gate, module gate. */
+static const struct step local_open[]={
+    {PLL,BIT(27),BIT(27),PLL_LOCK},
+    {CCU+0xb04,BIT(18),BIT(18),0}, {CCU+0xb04,BIT(17),BIT(17),0}, {CCU+0xb04,BIT(16),BIT(16),0},
+    {CCU+0xb00,0x0700001f,0,0}, {CCU+0xb04,1,1,0}, {CCU+0xb00,BIT(31),BIT(31),0}
+};
+/* npu_clk_uninit in the pinned VIPLite platform: module gate, bus gate, then
+ * the AHB, AXI and core resets. PLL_NPU, the SRAM reset and domain 4 stay. */
+static const struct step local_stop[]={
+    {CCU+0xb00,BIT(31),0,0}, {CCU+0xb04,1,0,0},
+    {CCU+0xb04,BIT(18),0,0}, {CCU+0xb04,BIT(17),0,0}, {CCU+0xb04,BIT(16),0,0}
+};
+#define STEPS(t) (sizeof(t)/sizeof(*(t)))
 /* The supply wait ends when the owner sets its done bit. The owner bounds that
  * by its settle time after its first step, or by the PMIC provider's startup
  * deadline, plus its verification budget (docs/power-domains.md). */
@@ -82,8 +103,26 @@ static int now(struct a733_npu_startup *s,uint64_t *out)
     return 1;
 }
 static int rd(struct a733_npu_startup *s,uintptr_t a,uint32_t *v){return s->ops.registers.read(s->cookie,a,v)==1;}
-static unsigned apply(struct a733_npu_startup *s,const struct a733_npu_step *t,unsigned n)
-{return a733_npu_apply(&s->ops.registers,s->cookie,t,n);}
+/* Apply the steps in order with a readback of each write; a field that
+ * already holds its value is not written. Consecutive steps on one word use
+ * the value last read from it. Returns 1 when every step completed. */
+static int apply(struct a733_npu_startup *s,const struct step *t,unsigned count)
+{
+    uintptr_t at=0;uint32_t old=0;
+    for(unsigned i=0;i<count;++i) {
+        uint32_t actual,keep=~t[i].status;
+        if(t[i].address!=at) {
+            if(!rd(s,t[i].address,&old))return 0;
+            at=t[i].address;
+        }
+        uint32_t next=((old&~t[i].mask)|(t[i].value&t[i].mask))&keep;
+        if((old&keep)==next)continue;
+        if(s->ops.registers.write(s->cookie,t[i].address,next)!=1 || !rd(s,t[i].address,&actual) ||
+           (actual&keep)!=next)return 0;
+        old=actual;
+    }
+    return 1;
+}
 static int check(struct a733_npu_startup *s,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(s,a,&v) && (v&mask)==expected;}
 static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
@@ -267,9 +306,9 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held!=1)return fault(s);
         unsigned domain=8;
         if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain || !pass(s)) {
-            s->ops.leave(s->cookie);s->register_held=0;return refuse(s);
+            (void)leave(s);return refuse(s);
         }
-        if(!now(s,0) || apply(s,pll_enable,PLL_ENABLE_STEPS)!=PLL_ENABLE_STEPS)return fault(s);
+        if(!now(s,0) || !apply(s,pll_enable,STEPS(pll_enable)))return fault(s);
         if(!leave(s) || !lock_wait(s))return fault(s);
         s->stage=A733_NPU_STARTUP_OPEN;
         break;
@@ -280,7 +319,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         uint32_t v;
         if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_ENABLED|PLL_LOCK) ||
            !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
-           apply(s,a733_npu_local_open,A733_NPU_LOCAL_OPEN_STEPS)!=A733_NPU_LOCAL_OPEN_STEPS ||
+           !apply(s,local_open,STEPS(local_open)) ||
            !now(s,0))return fault(s);
         if(!leave(s))return fault(s);
         /* The row was admitted before the scheduler; a refusal of the request
@@ -325,7 +364,7 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
     int held=enter(s);
     if(held!=1)return held==0 && now(s,0) ? A733_NPU_PLATFORM_BUSY : fault(s);
     if(!now(s,0) || !opened(s) ||
-       apply(s,a733_npu_local_stop,A733_NPU_LOCAL_STOP_STEPS)!=A733_NPU_LOCAL_STOP_STEPS || !now(s,0))return fault(s);
+       !apply(s,local_stop,STEPS(local_stop)) || !now(s,0))return fault(s);
     if(!leave(s))return fault(s);
     s->stage=A733_NPU_STARTUP_STOPPED;
     return READY;
