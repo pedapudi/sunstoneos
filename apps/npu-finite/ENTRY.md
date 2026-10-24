@@ -215,3 +215,29 @@ It preserves `functional_success=false`, never edits the original session and
 refuses an existing output path. This establishes ROM continuity for later
 admission; it does not authorize an NPU restart, close a queue claim or grant
 peripheral ownership. PLL, domain and rail retention still apply.
+
+## Preserve stopped buffers before restoring a numerical failure
+
+The host captures returned RAM for a validated status-1 numerical failure from
+image `9e4adabf7c8fb19c2cfc2fb4260971cc32a3b6e5ee0fa09bcad0d4b4208c0e95`.
+Three fixed metadata reads total 440 bytes. They validate the six buffer slots,
+stream lengths, parent extent and translation-table allocation against the
+audited ELF layout. Only then does the host read the 1,085,440-byte parent
+reservation, including command padding and translation tables. All four addresses
+and lengths come from the image-bound plan; captured pointers never authorize
+reads. Every range lies within admitted DRAM and the native published interval.
+
+Each read is synchronized to disk and journaled with its address, length and
+hash before the next read. Metadata differences, short reads, transport failures
+or persistence failures retain the session without restoration. Payload and
+returned-output differences remain diagnostic evidence. The host restores DRAM
+and publishes the controlled outcome only after capture completes; the numerical
+result remains failed. Successful numerical runs, other images, checkpoints and
+thermal profiles perform no additional reads.
+
+This adds four ROM RAM reads totaling 1,085,880 bytes and no native instructions.
+The helper is part of the frozen host source closure. A future attempt requires
+a newly reviewed host bundle and operating admission in a permitted lifetime.
+The earlier physical capture has already been restored and is unchanged. The
+focused modeled evidence is in `npu-stopped-capture-20261024`; numerical
+correctness and physical buffer contents remain unresolved.
