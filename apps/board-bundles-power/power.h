@@ -84,6 +84,9 @@ extern struct bb_power bb_power;
  * function 2, pull 1 and drive 1 (the rank-9-usb-v4 input), the owner, and
  * the domain-1 row naming bb_power.token. Returns 1 on success. */
 int bb_power_init(TaskFunction_t client, const char *name);
+/* DCDC2 observation consumer: the same provider without a domain row, so the
+ * service performs no automatic supply verification or PPU access. */
+int bb_power_snapshot_init(TaskFunction_t client, const char *name);
 /* Client task helpers. */
 uint64_t bb_power_now(void);             /* PMIC clock microseconds */
 void bb_power_pause(const char *what);   /* one tick, or FAIL at the session deadline */
