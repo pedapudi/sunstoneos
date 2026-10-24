@@ -199,10 +199,18 @@ The code differs from the unmerged implementation in six ways:
 
 ## The decode check refuses until a register source exists
 
-`a733_dram_decode_check()` is the EL3 function that `memory.c` calls before
-it maps `0x8000_0000`–`0xFFFF_FFFF` as write-back. It must return 1 only when
-this boot's controller configuration shows a linear decode to `0x3_4000_0000`
-and no protected region inside that range. No pinned source documents the
+`a733_dram_decode_check()` is the EL3 function that the cached table builder
+in `memory.c` calls before it maps DRAM above the boot image as write-back at
+EL1. The builder passes the ranges it is about to map:
+`0x4800_0000`–`0x7900_0000` in the local layout and
+`0x8000_0000`–`0x3_4000_0000` in both layouts
+([12 GiB EL1 map](memory-map-12g.md)). The check must return 1 only when, for
+every byte of every listed range, this boot's controller configuration
+decodes the address linearly from `0x4000_0000` with no alias, the decoded
+size reaches `0x3_4000_0000`, and the firewall grants Non-secure read and
+write with no protected region overlapping. Its budget is controller and
+firewall register reads only, no DRAM access, at most 64 register reads and
+2,000 instructions. No pinned source documents the
 needed registers. Manual section 11.1 lists DRAMC features only, and its
 memory map names the SMC0 and SMC1 firewalls (`0x0A000000`, `0x0A010000`),
 DRAMC Common and the two controllers with no register descriptions. Appendix A
@@ -211,7 +219,8 @@ SMC configuration call in the pinned boot0. That finding conflicts with the
 "120 MiB secure region" that the table-walk design attributes to boot0, and
 no source in the repository supports that region.
 
-The function therefore makes no access and returns 0, so stage 2 stays refused.
+The function therefore makes no access and returns 0, so the builder maps
+nothing above the boot image.
 Its sequence is **unproven**. Converting it requires two steps:
 
 1. A host trace of the pinned boot0's DRAM initialization, from the DDR
@@ -221,8 +230,11 @@ Its sequence is **unproven**. Converting it requires two steps:
    the traced values, and the memory qualification's address-line result must
    confirm the decode that the values imply.
 
-The function's prototype is `int a733_dram_decode_check(void)`, the
-declaration that `memory.c` already uses.
+The function's prototype is `int a733_dram_decode_check(const struct
+a733_dram_range *ranges, unsigned count)`, declared once in
+`include/a733_dram.h`, which `include/a733_device_memory_layout.h` includes.
+No image links `drivers/dram/a733_dram_decode.c` yet, so `memory.c` keeps a
+weak definition with the same result, and each image links one definition.
 
 ## Performance budgets
 

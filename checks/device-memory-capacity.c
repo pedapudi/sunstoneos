@@ -283,6 +283,21 @@ static void pmu_start(void)
 }
 static uint64_t pmu_read(void){uint64_t v;__asm__ volatile("isb\n mrs %0,pmevcntr0_el0":"=r"(v)::"memory");return v;}
 #define BIT(n) (UINT64_C(1)<<(n))
+/* Modes 4 and 5 pass the DRAM decode check; mode 5 and 6 stop after the
+ * builder for an execution trace, with semihosting markers around the
+ * builder and around the check, so the trace counts exclude the check. */
+static int decode_passes(void){return fixture_mode==4 || fixture_mode==5;}
+static int tracing(void){return fixture_mode==5 || fixture_mode==6;}
+static struct a733_dram_range decode_seen[4];
+static unsigned decode_count,decode_calls;
+int a733_dram_decode_check(const struct a733_dram_range *r,unsigned n)
+{
+    if(tracing())say_hex("TRACE decode ",0);
+    ++decode_calls;decode_count=n;
+    for(unsigned i=0;i<n && i<4;++i)decode_seen[i]=r[i];
+    if(tracing())say_hex("TRACE decode end ",0);
+    return decode_passes();
+}
 /* The EL1 map of docs/memory-protection.md, entry by entry. Level-1 entry 0
  * keeps SH = 0 until the table builder sets the outer-shareable field. */
 static uint64_t golden_l2(unsigned i)
@@ -297,17 +312,31 @@ static void golden_tables(void)
 {
     CHECK(a733_cached_el1_l1[0]==(BIT(54)|BIT(53)|BIT(10)|(2u<<8)|1));
     CHECK(a733_cached_el1_l1[1]==((uintptr_t)a733_cached_el1_l2|3));
-    for(unsigned i=2;i<512;++i)CHECK(!a733_cached_el1_l1[i]);
-    uint64_t mapped=0;
+    /* The builder passed one range, 0x80000000-0x340000000, and wrote level-1
+     * entries 2-12 for it only when the check passed. */
+    CHECK(decode_calls==1 && decode_count==1 && decode_seen[0].base==UINT64_C(0x80000000) &&
+          decode_seen[0].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
+    uint64_t mapped=0,valid=0;
+    for(unsigned i=2;i<512;++i) {
+        uint64_t pa=(uint64_t)i<<30;
+        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_MAP_END?A733_EL1_DRAM_BLOCK(pa):0));
+        if(a733_cached_el1_l1[i]){mapped+=1024;++valid;}
+    }
+    /* EL3 maps nothing above 0x80000000. */
+    for(unsigned i=2;i<512;++i)CHECK(!a733_cached_el3_l1[i]);
     for(unsigned i=0;i<512;++i) {
         uint64_t v=a733_cached_el1_l2[i];
         CHECK(v==golden_l2(i));
         /* Every valid pool entry is a block descriptor, which lets one AT
          * stand for the whole block; no entry is writable and executable. */
-        if(v&1){CHECK((v&3)==1);mapped+=2;}
+        if(v&1){CHECK((v&3)==1);mapped+=2;++valid;}
         CHECK(!(v&1) || (v&BIT(7)) || ((v&BIT(53)) && (v&BIT(54))));
     }
-    CHECK(mapped==910); /* MiB of DRAM mapped at EL1 in stage 1. */
+    /* MiB of DRAM mapped at EL1: 910 below 0x80000000, plus 11 GiB above it
+     * when the decode check passes. */
+    CHECK(mapped==(decode_passes()?12174u:910u));
+    say_hex("MEASURE el1_mapped_mib=",mapped);
+    say_hex("MEASURE el1_valid_blocks=",valid);
 }
 uint64_t a733_smp_counter(void)
 {uint64_t v;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(v));return v;}
@@ -318,13 +347,16 @@ void fixture_el3_prepare(unsigned core)
 {
     if(core){wait(&tables_published);return;}
     memset(__bss_start,0,(size_t)(__bss_end-__bss_start));
-    CHECK(fixture_mode<=3);
+    CHECK(fixture_mode<=6);
     CHECK(!a733_cached_memory_prepare()); /* An available range is not boot admission. */
     struct a733_smp_contract c=contract(a733_smp_counter());startup=c.startup_deadline;
     memcpy((void *)A733_SMP_CONTRACT_ADDRESS,&c,sizeof(c));
     c.reserved[3]-=4096;CHECK(!a733_device_memory_boot_admit(&c));c.reserved[3]+=4096;
     CHECK(a733_device_memory_boot_admit(&c));CHECK(!a733_device_memory_boot_admit(&c));
-    CHECK(a733_cached_memory_prepare());
+    if(tracing())say_hex("TRACE prepare ",0);
+    int prepared=a733_cached_memory_prepare();
+    if(tracing()){say_hex("TRACE end ",0);CHECK(prepared);fixture_exit(0,0);}
+    CHECK(prepared);
     CHECK(!a733_device_memory_ready() && !a733_memory_reservations_init() && !a733_memory_uncached_init());
     for(unsigned i=64;i<456;++i) {
         uint64_t common=(UINT64_C(0x40000000)+(uint64_t)i*0x200000)|
@@ -361,6 +393,16 @@ void fixture_el1(unsigned core)
         CHECK(!aarch64_device_translate(0x42000000,0,&t) && !aarch64_device_translate(0x421f0000,0,&t));
         CHECK(!aarch64_device_translate(0x79000000,0,&t));
         for(uintptr_t a=0x48000000;a<0x79000000;a+=0x200000)CHECK(translate0(a)&1);
+        /* Above 0x80000000: EL1 read/write write-back inner shareable when the
+         * check passed, nothing otherwise; never EL0. */
+        for(uint64_t a=UINT64_C(0x80000000);a<A733_DRAM_MAP_END;a+=UINT64_C(0x3ffff000)) {
+            for(int w=0;w<2;++w) {
+                CHECK(aarch64_device_translate((uintptr_t)a,w,&t)==decode_passes());
+                CHECK(!decode_passes() || (t.physical==a && t.attributes==0xff && t.shareability==3));
+                CHECK(!aarch64_device_translate_el0((uintptr_t)a,w,&t));
+            }
+        }
+        CHECK(!aarch64_device_translate(A733_DRAM_MAP_END,0,&t));
     }
     CHECK(a733_smp_pre_scheduler(core,7,startup/24));
     if(core){for(;;)__asm__ volatile("wfe");}

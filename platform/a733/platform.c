@@ -4,6 +4,14 @@
 #include "a733_memory_boot.h"
 #include "a733_cpu_coherence.h"
 #include "a733_device_memory_layout.h"
+#include "a733_memory_local.h"
+#if !defined(SUNSTONE_CACHED_SINGLE_CORE)
+/* platform_init() maps image RAM, and so every local pool byte, with 2 MiB
+ * level-2 block descriptors, so the local pool check makes one translation
+ * per block. Cached single-core images take their tables, and this value,
+ * from platform/a733-smp-cached/memory.c. */
+const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
+#endif
 
 #ifdef SUNSTONE_MEMTEST
 // The memory qualification record occupies the result block's last page.
@@ -139,6 +147,12 @@ void platform_init(void)
     __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
     sctlr |= (1UL << 12) | (1UL << 2) | 1;
     __asm__ volatile("msr sctlr_el1, %0\n isb" :: "r"(sctlr) : "memory");
+#if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    // Both local pools are checked against the installed tables once, here,
+    // before the scheduler starts; their getters do not prepare. Extended
+    // images prepare their pools in a733_device_memory_prepare() instead.
+    configASSERT(a733_memory_local_prepare());
+#endif
     // EL3 owns distributor security and the recovery timer. EL1 owns only
     // the nonsecure physical timer and its Group 1 CPU interface.
     *(volatile uint8_t *)(GICR_SGI + 0x400 + TIMER_IRQ) =

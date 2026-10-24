@@ -61,9 +61,11 @@ static uint16_t packed(uint32_t mode,uint32_t priority,uint32_t select)
 int main(void)
 {
     struct model m;struct a733_dram_block e;
-    /* No register source for the decode exists, so the check refuses and
-     * stage 2 stays compiled out of every admitted layout. */
-    assert(a733_dram_decode_check()==0);
+    /* No register source for the decode exists, so the check refuses both
+     * ranges that the cached table builder passes, together and alone. */
+    static const struct a733_dram_range high[2]={{UINT64_C(0x48000000),UINT64_C(0x31000000)},
+        {UINT64_C(0x80000000),UINT64_C(0x2c0000000)}};
+    assert(!a733_dram_decode_check(high,2) && !a733_dram_decode_check(high+1,1));
     /* Address set: the two CCU words and nine port words, nothing adjacent. */
     unsigned admitted=0;
     for(uintptr_t a=0x02002000;a<0x02004000;a+=4)admitted+=(unsigned)a733_dram_address(a);

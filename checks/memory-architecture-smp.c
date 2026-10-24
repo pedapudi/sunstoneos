@@ -234,23 +234,30 @@ static int worst_release(void *unused) { (void)unused; return device_memory_rele
 static int retain_retained(void *lease) { return device_memory_retain(&pool, *(struct device_memory_lease *)lease); }
 static int empty_pair(void *unused) { (void)unused; taskENTER_CRITICAL(); taskEXIT_CRITICAL(); return 1; }
 
-/* A getter shaped like the local pool getters: a733_memory_prepare_once()
- * over a check that passes and a pool initialization. */
+/* A preparation and a getter shaped like the local pools': the boot runs
+ * a733_memory_prepare_once() over a check that passes and a pool
+ * initialization that publishes the pool pointer with a release store, and
+ * the getter makes one acquire load of that pointer. */
 static int getter_result;
-static struct device_memory_pool getter_pool;
+static struct device_memory_pool getter_pool, *getter_published;
 static unsigned char getter_backing[4 * DEVICE_MEMORY_PAGE] __attribute__((aligned(DEVICE_MEMORY_PAGE)));
 static int getter_check(void) { return 1; }
 static int getter_init(void)
 {
-    return device_memory_pool_init(&getter_pool, (uintptr_t)getter_backing, (uintptr_t)getter_backing,
-                                   sizeof(getter_backing));
+    if (!device_memory_pool_init(&getter_pool, (uintptr_t)getter_backing, (uintptr_t)getter_backing,
+                                 sizeof(getter_backing))) return 0;
+    __atomic_store_n(&getter_published, &getter_pool, __ATOMIC_RELEASE);
+    return 1;
 }
 __attribute__((noinline)) static struct device_memory_pool *getter(void)
 {
-    return a733_memory_prepare_once(&getter_result, getter_check, getter_init) && getter_pool.initialized ?
-        &getter_pool : NULL;
+    return __atomic_load_n(&getter_published, __ATOMIC_ACQUIRE);
 }
-static int getter_first(void *unused) { (void)unused; return getter() == &getter_pool; }
+static int getter_first(void *unused)
+{
+    (void)unused;
+    return a733_memory_prepare_once(&getter_result, getter_check, getter_init) && getter() == &getter_pool;
+}
 
 static void ledger_measurements(void)
 {
@@ -259,8 +266,8 @@ static void ledger_measurements(void)
     say("critical_pair_instructions", pair);
     empty = held_by(OP_OTHER, empty_pair, NULL);
     say("probe_overhead_instructions", empty);
-    /* The first getter call holds the critical section only to initialize
-     * the pool; later calls take no lock. */
+    /* The preparation holds the critical section only to initialize the
+     * pool; the getter takes no lock. */
     uint64_t getter_hold = held_by(OP_OTHER, getter_first, NULL), getter_call;
     MEASURE(getter_call, CHECK(getter() == &getter_pool));
     fill();
@@ -295,7 +302,7 @@ static void ledger_measurements(void)
     say("getter_first_hold_instructions", getter_hold - empty);
     say("getter_instructions", getter_call);
     CHECK(acquire - empty <= 15000 && release - empty <= 100 && retain - empty <= 100);
-    CHECK(getter_call <= 32 && getter_hold - empty <= 15000);
+    CHECK(getter_call <= 8 && getter_hold - empty <= 15000);
 }
 
 static uint64_t pmr(void)
