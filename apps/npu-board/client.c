@@ -30,14 +30,20 @@ static int tensors(struct npu_board_client *c)
 void npu_board_client_run(struct npu_board_client *c)
 {
     unsigned handled=0;
+    struct npu_service_reply r;
+    /* OPEN once the bootstrap has activated the service; USB0 answers every
+     * request not-ready until ready is published. */
+    while(!atomic_load_explicit(&c->start,memory_order_acquire))(void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+    if(!call(c,NPU_SERVICE_OPEN,0,c->job_timeout_us,&r) || r.result!=NPU_SERVICE_OK)return;
+    c->state=r.state;
+    atomic_store_explicit(&c->ready,1,memory_order_release);
     for(;;) {
-        (void)ulTaskNotifyTake(pdTRUE,c->wait);
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
         const unsigned q=atomic_load_explicit(&c->request,memory_order_acquire),sequence=q>>8;
         if(sequence==handled)continue;
         handled=sequence;
         const unsigned op=q&255;
         const unsigned window=atomic_load_explicit(&c->window,memory_order_acquire);
-        struct npu_service_reply r;
         if(op==NPU_BOARD_RETURN) {
             /* The write window came back; lend the read window for the next
              * input. */
@@ -47,10 +53,7 @@ void npu_board_client_run(struct npu_board_client *c)
         }
         /* SUBMIT, LOAD and CLOSE need both windows back with the client. */
         if(window!=NPU_BOARD_HELD){++c->refused;answer(c,sequence,NPU_BOARD_RESULT_REFUSED);continue;}
-        if(op==NPU_BOARD_OPEN) {
-            if(!call(c,NPU_SERVICE_OPEN,0,c->job_timeout_us,&r) || r.result!=NPU_SERVICE_OK)break;
-            c->state=r.state;answer(c,sequence,NPU_BOARD_RESULT_OK);
-        } else if(op==NPU_BOARD_LOAD) {
+        if(op==NPU_BOARD_LOAD) {
             if(!call(c,NPU_SERVICE_LOAD,c->argument,0,&r))break;
             if(r.result!=NPU_SERVICE_OK){answer(c,sequence,NPU_BOARD_RESULT_REFUSED);continue;}
             c->state=r.state;c->model=c->argument;
@@ -65,14 +68,22 @@ void npu_board_client_run(struct npu_board_client *c)
         } else if(op==NPU_BOARD_CLOSE) {
             if(!call(c,NPU_SERVICE_CLOSE,0,0,&r) || r.result!=NPU_SERVICE_OK)break;
             c->state=r.state;answer(c,sequence,NPU_BOARD_RESULT_OK);
+            /* The bootstrap runs the stop table once notified. */
+            atomic_store_explicit(&c->closed,1,memory_order_release);
+            if(c->bootstrap)xTaskNotifyGive(c->bootstrap);
         } else break;
     }
     answer(c,handled,NPU_BOARD_RESULT_FAULT);
 }
+void npu_board_client_start(struct npu_board_client *c)
+{atomic_store_explicit(&c->start,1,memory_order_release);xTaskNotifyGive(c->task);}
+int npu_board_client_ready(const struct npu_board_client *c)
+{return atomic_load_explicit(&c->ready,memory_order_acquire)!=0;}
 int npu_board_client_post(struct npu_board_client *c,unsigned sequence,enum npu_board_operation op,unsigned argument)
 {
+    /* USB0 is the only writer of request, so this check cannot race. */
     const unsigned q=atomic_load_explicit(&c->request,memory_order_relaxed);
-    if(npu_board_client_answer(c,q>>8)==0 && (q>>8))return 0;
+    if(!npu_board_client_ready(c) || (npu_board_client_answer(c,q>>8)==0 && (q>>8)))return 0;
     c->argument=argument;
     atomic_store_explicit(&c->request,(sequence<<8)|op,memory_order_release);
     xTaskNotifyGive(c->task);

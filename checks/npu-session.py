@@ -63,13 +63,16 @@ MODES = {
                     port_define='npu_service_task_privileged=npu_session_task_privileged',
                     wraps=['a733_npu_native_operations', 'aarch64_device_translate', 'aarch64_device_cache',
                            'storage_digest_add', 'nbg_assembly_next', 'npu_service_release']),
-    # Case 5: the board image's client loop in slot 3 of the same runtime.
+    # Case 5: the board image's client loop in slot 3 of the same runtime, and
+    # its USB0 protocol over a modeled TinyUSB vendor class.
     'board-client': dict(sources=['checks/npu-session-runtime.c', 'drivers/npu/a733_npu_runtime.c',
                                   'drivers/npu/a733_npu_runtime_interim.c', 'drivers/npu/nbg_model.c',
                                   'drivers/npu/nbg_assembly.c', 'drivers/npu/nbg_checksum.c',
                                   'drivers/npu/nbg_relocation.c', 'drivers/storage/storage_digest.c',
-                                  'apps/npu-board/client.c'],
-                         marker='PASS NPU runtime', cases=[5], defines=['NPU_BOARD_CLIENT_CHECK=1'],
+                                  'apps/npu-board/client.c', 'apps/npu-board/usb.c'],
+                         marker='PASS NPU runtime', cases=[5],
+                         defines=['NPU_BOARD_CLIENT_CHECK=1', 'NPU_BOARD_USB_MODEL=1'],
+                         includes=['checks/npu-board-usb'],
                          port_define='npu_service_task_privileged=npu_session_task_privileged',
                          wraps=['a733_npu_native_operations', 'aarch64_device_translate', 'aarch64_device_cache',
                                 'storage_digest_add', 'nbg_assembly_next', 'npu_service_release', 'vTaskDelay'])
@@ -154,7 +157,8 @@ def main():
     compiler = link[0]
     target = [v for v in link if v.startswith('--target=')]
     assert len(target) == 1, 'link line names no single target'
-    common = target + flags(build) + [f'-I{out}'] + ['-D' + d for d in mode.get('defines', [])]
+    common = (target + flags(build) + [f'-I{out}'] + [f'-I{ROOT / i}' for i in mode.get('includes', [])] +
+              ['-D' + d for d in mode.get('defines', [])])
     objects, commands = {check: [], port: [port]}, []
 
     def compile_one(source, extra=()):

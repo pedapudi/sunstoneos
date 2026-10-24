@@ -9,10 +9,10 @@
 struct npu_board_application npu_board;
 
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
-static void fatal(void *unused){(void)unused;atomic_store_explicit(&npu_board.failed,1,memory_order_release);board_fail(NULL);}
+static void fatal(void *unused){(void)unused;board_fail(NULL);}
 static void bootstrap(void *unused)
 {
-    (void)unused;struct npu_runtime *rt=&npu_board.runtime;
+    (void)unused;struct npu_runtime *rt=&npu_board.runtime;struct npu_board_client *c=&npu_board.client;
     for(;;) {
         if(!board_live(NULL) || a733_smp_counter()/24>=deadline())break;
         enum a733_npu_platform_result r=npu_runtime_startup_poll(rt);
@@ -21,18 +21,19 @@ static void bootstrap(void *unused)
             /* The worker on core 1 may run as soon as activation returns. */
             enum npu_service_result a=npu_service_activate(&rt->service);
             if(a==NPU_SERVICE_OK) {
-                atomic_store_explicit(&npu_board.ready,1,memory_order_release);
-                if(!npu_board_client_post(&npu_board.client,1,NPU_BOARD_OPEN,0))break;
+                npu_board_client_start(c);
                 /* The session ends with whole-board power removal; the stop
-                 * table runs only after every slot's CLOSE. */
+                 * table runs only after the client's CLOSE, which notifies
+                 * this task. A busy register lock is retried each tick. */
                 for(;;) {
-                    (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(100));
+                    if(!atomic_load_explicit(&c->closed,memory_order_acquire))
+                        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
                     if(!board_live(NULL))break;
-                    if(npu_board.client.state==A733_NPU_CLOSED) {
-                        enum a733_npu_platform_result s=npu_runtime_stop_poll(rt);
-                        if(s==A733_NPU_PLATFORM_READY){atomic_store_explicit(&npu_board.stopped,1,memory_order_release);vTaskSuspend(NULL);}
-                        if(s==A733_NPU_PLATFORM_RETAINED)break;
-                    }
+                    if(!atomic_load_explicit(&c->closed,memory_order_acquire))continue;
+                    enum a733_npu_platform_result s=npu_runtime_stop_poll(rt);
+                    if(s==A733_NPU_PLATFORM_READY)vTaskSuspend(NULL);
+                    if(s==A733_NPU_PLATFORM_RETAINED)break;
+                    vTaskDelay(1);
                 }
                 break;
             }
@@ -86,7 +87,7 @@ int board_application_start(void)
     const TaskHandle_t clients[NPU_BOARD_SLOTS]={a->client_task};
     if(!npu_runtime_bind(&a->runtime,&a->startup,clients,4,core)||!npu_board_irq_bind(&a->runtime))return 0;
     a->client=(struct npu_board_client){.rt=&a->runtime,.slot=0,.job_timeout_us=1000000,
-        .wait=pdMS_TO_TICKS(2000),.task=a->client_task};
+        .wait=pdMS_TO_TICKS(2000),.task=a->client_task,.bootstrap=a->bootstrap};
     /* USB0 stays on core 0 with the power service, apart from the NPU work. */
     if(!board.handles[1])return 0;
     vTaskCoreAffinitySet(board.handles[1],1);

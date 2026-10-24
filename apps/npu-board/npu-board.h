@@ -22,7 +22,6 @@ struct npu_board_application {
     StaticTask_t tasks[2];
     StackType_t stacks[2][NPU_BOARD_STACK] __attribute__((aligned(16)));
     TaskHandle_t bootstrap,client_task;
-    atomic_uint ready,stopped,failed;
 };
 extern struct npu_board_application npu_board;
 int npu_board_irq_bind(struct npu_runtime *);

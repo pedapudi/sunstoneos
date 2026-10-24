@@ -29,14 +29,14 @@ PRODUCT='sunstoneos native NPU'
 SERIAL='sunstoneos-a733-npu-board'
 REQUEST_MAGIC,RESPONSE_MAGIC=0x3151424e,0x3152424e
 STATUS,LOAD,UPLOAD,SUBMIT,READ,RETURN,CLOSE=range(1,8)
-OK=1
+OK,NOT_READY=1,4
 HEADER=64
 CHUNK=4096
 
 def request(operation,sequence,epoch,generation,argument=0,offset=0,payload=b''):
     return struct.pack('<4I2Q2I',REQUEST_MAGIC,operation,sequence,len(payload),epoch,generation,argument,offset)+bytes(24)+payload
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,now=time.monotonic):
+def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,now=time.monotonic,pause=time.sleep):
     same();require(now()<deadline,'NPU board descriptor deadline expired.')
     endpoints=[ep for ep in device.get_active_configuration()[(0,0)] if ep.bEndpointAddress==0x81]
     require(len(endpoints)==1 and endpoints[0].bmAttributes&3==2 and endpoints[0].wMaxPacketSize in (64,512),
@@ -50,7 +50,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,
         for first in range(0,len(data),512):
             packet=data[first:first+512];count=device.write(0x02,packet,timeout=min(500,remaining()))
             require(count==len(packet),'Incomplete NPU board write.')
-    def exchange(operation,argument=0,offset=0,payload=b''):
+    def exchange(operation,argument=0,offset=0,payload=b'',not_ready=False):
         nonlocal sequence
         sequence+=1;send(request(operation,sequence,epoch,generation,argument,offset,payload))
         frame=bytearray();expected=HEADER
@@ -65,12 +65,17 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,
                 magic,op,seq,result,state,window,model,count=struct.unpack_from('<8I',frame)
                 require((magic,op,seq)==(RESPONSE_MAGIC,operation,sequence) and struct.unpack_from('<2Q',frame,32)==(epoch,generation),
                     'NPU board response does not answer this request.')
-                require(result==OK,f'NPU board refused operation {operation}: result {result}.')
+                require(result==OK or (not_ready and result==NOT_READY),f'NPU board refused operation {operation}: result {result}.')
                 require((operation==READ and count>0) or (operation!=READ and count==0),'Invalid NPU board response extent.')
                 expected=HEADER+count
             require(len(frame)<=expected,'NPU board stream exceeds its declared extent.')
         return bytes(frame)
-    status=exchange(STATUS);record['npu_board_status_hex']=status[:HEADER].hex();save()
+    # The image answers not-ready until its client has opened the NPU.
+    while True:
+        status=exchange(STATUS,not_ready=True)
+        if struct.unpack_from('<I',status,12)[0]==OK:break
+        remaining();pause(0.01)
+    record['npu_board_status_hex']=status[:HEADER].hex();save()
     loaded=exchange(LOAD,prepared['model']);inputs,outputs=divmod(struct.unpack_from('<I',loaded,56)[0],1<<16)
     require(inputs==prepared['inputs'] and outputs==prepared['references'],'Loaded model tensors differ from the bundle.')
     for i in range(inputs):
