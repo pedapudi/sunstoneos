@@ -35,13 +35,17 @@ rows. It checks that:
   reader's 120 s timeout, and refused for a word list with a key outside the
   schema, a condition that is not an earlier word, and an ungated word outside
   its block;
-- a returning row is prepared with its controlled outcomes and the runner's
-  925 s worst case, and refused for an image that defines monitor_sync, a new
-  object outside its overlay, a binary that is not the ELF's loadable
-  segments, and controlled outcomes that the bundle's runner refuses;
+- a returning row is prepared with its controlled outcomes and the worst case
+  of the bundle's own copy of the runner, 925 s, or 955 s for a copy with one
+  more FEL request; its runbook names each outcome of controlled.json, with a
+  progress record where the outcome has one; the row is refused for an image
+  that defines monitor_sync, a new object outside its overlay, a binary that
+  is not the ELF's loadable segments, and controlled outcomes that the
+  bundle's runner refuses;
 - each prepared single-core row has a runbook naming every bundle file's
   SHA-256 and its run command;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
+  records the start and end time of each command,
   reads each condition word in its own command, skips the dependents of a
   condition that does not match, restores and rereads the scratch bytes,
   issues no FEL command other than read, readl and write, and quarantines
@@ -213,10 +217,17 @@ def controlled_outcomes(raw):
 OUTCOME = {'name': 'fixture-fault', 'status': 1, 'interrupt': None, 'fail_lines': 1,
            'fault': {'esr_mask': 0xfe00007f, 'esr_value': 0x96000005, 'far': 0x400000000, 'elr_low': 0x41001000,
                      'elr_high': 0x41001040, 'task': 'fault'}, 'log_contains': ['CHECK fixture']}
+PROGRESS_OUTCOME = {'name': 'fixture-stopped', 'status': 2, 'interrupt': 29, 'fail_lines': 0, 'fault': None,
+                    'log_contains': ['CHECK fixture'],
+                    'progress': {'offset': 128, 'magic': 0x1234, 'stage': 3, 'count_below': 1000, 'age_above': 24000}}
+# A request more than the repository runner makes: the bundle's own copy
+# bounds its timeout.
+EXTRA_REQUEST = '\n\ndef fixture_extra_request():\n    transaction("version")\n'
 
 
-def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False):
-    """A build.json as checks/board-bundles-images.py writes it, for one fixture image."""
+def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False, outcomes=(OUTCOME,), runner_extra=''):
+    """A build.json as checks/board-bundles-images.py writes it, for one fixture image. Its runner is the
+    repository's kernel runner with a fixture controlled_outcomes() and runner_extra appended."""
     directory = work / 'builds' / name
     directory.mkdir(parents=True)
     binary = directory / 'probe.bin'
@@ -224,7 +235,7 @@ def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False)
     if bad_bin:
         binary.write_bytes(binary.read_bytes() + b'x')
     runner = directory / 'runner.py'
-    runner.write_text(CONTROLLED_RUNNER)
+    runner.write_text((ROOT / 'tools/check-a733-kernel.py').read_text() + CONTROLLED_RUNNER + runner_extra)
     record = {'elf': str(elf), 'bin': str(binary), 'elf_sha256': hashlib.sha256(elf.read_bytes()).hexdigest(),
               'objects': objects or {'checks/kernel.c.obj': {'sha256': '1' * 64, 'origin': 'new'},
                                      'platform/a733/platform.c.obj': {'sha256': '2' * 64, 'origin': 'rank-9-usb-v4'},
@@ -232,7 +243,7 @@ def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False)
                                                                      'origin': 'rank-4-kernel-check'}},
               'overlay': ['checks/kernel.c.obj'],
               'controlled': {'schema': 'kernel-controlled-outcomes-v1' if controlled != 'bad' else 'other',
-                             'outcomes': [OUTCOME]} if controlled else None,
+                             'outcomes': list(outcomes)} if controlled else None,
               'expect': 'CHECK fixture',
               'host_tools': {'check-a733-kernel.py': str(runner), 'check-a733-smp.py': str(ROOT / tool.HOST_TOOLS[0]),
                              'usb-access.py': str(ROOT / tool.HOST_TOOLS[1])}}
@@ -337,6 +348,9 @@ def check_reader(work):
     session, commands, quarantined, error = run_reader(work, 'open', words, values)
     assert error is None and session['complete'] and session['scratch_restored'] and not quarantined, session
     assert session['words'] == {hex(a): v for a, v in values.items()} and session['skipped'] == []
+    # Each FEL command records its wall-clock start and end.
+    assert all(isinstance(t.get('start'), float) and t['start'] <= t.get('end', -1.0)
+               for t in session['transactions']), session['transactions']
     verbs = [c[0] for c in commands]
     assert verbs[0] == 'read' and commands[-1][0] == 'write' and commands[-1][3] == 'read', commands
     readls = [c for c in commands if c[0] == 'readl']
@@ -457,6 +471,8 @@ def check_table():
             assert r['admission'] is None or r['admission'] == {'schema': 'board-returning-bundle-v1',
                                                                 'row': r['name']}
             assert r['admission'] is not None or r['needs'], r['name']
+            missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
+            assert not missing, (r['name'], missing)
             entry.update(prerequisites=prerequisites, timeout_seconds=timeout)
         else:
             prerequisites, _, _ = tool.terms(r, ROOT)
@@ -550,7 +566,8 @@ def main():
              read_fixture('read-outside-block', [tool.word(0x07010000, 'ccu')], 4),
              returning_fixture('returning-good', 5), returning_fixture('returning-plain', 6, controlled=False),
              returning_fixture('returning-sync', 7), returning_fixture('returning-new-object', 8),
-             returning_fixture('returning-bad-bin', 9), returning_fixture('returning-bad-controlled', 10)]
+             returning_fixture('returning-bad-bin', 9), returning_fixture('returning-bad-controlled', 10),
+             returning_fixture('returning-progress', 11), returning_fixture('returning-extra-request', 12)]
     inputs.update({name: {} for name in ('read-good', 'read-extra-key', 'read-later-condition', 'read-outside-block')})
     inputs.update({
         'returning-good': {'build': fixture_build(work, 'good', plain)},
@@ -560,7 +577,9 @@ def main():
             'checks/kernel.c.obj': {'sha256': '1' * 64, 'origin': 'new'},
             'platform/a733/platform.c.obj': {'sha256': '2' * 64, 'origin': 'new'}})},
         'returning-bad-bin': {'build': fixture_build(work, 'bad-bin', plain, bad_bin=True)},
-        'returning-bad-controlled': {'build': fixture_build(work, 'bad-controlled', plain, controlled='bad')}})
+        'returning-bad-controlled': {'build': fixture_build(work, 'bad-controlled', plain, controlled='bad')},
+        'returning-progress': {'build': fixture_build(work, 'progress', plain, outcomes=(PROGRESS_OUTCOME,))},
+        'returning-extra-request': {'build': fixture_build(work, 'extra-request', plain, runner_extra=EXTRA_REQUEST)}})
     repo = fixture_repository(work)
     evidence = work / 'evidence'
 
@@ -574,7 +593,8 @@ def main():
     states = {name: r['status'] for name, r in record['rows'].items()}
     expected = {'memory-good': 'prepared', 'monitor-no-cap': 'prepared', 'nested': 'prepared',
                 'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared',
-                'returning-good': 'prepared', 'returning-plain': 'prepared'}
+                'returning-good': 'prepared', 'returning-plain': 'prepared', 'returning-progress': 'prepared',
+                'returning-extra-request': 'prepared'}
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
@@ -646,7 +666,13 @@ def main():
                                                           'check-a733-smp.py', 'usb-access.py'}),
                                  ('returning-plain', 925, {'image.elf', 'probe.bin', 'equivalence.json',
                                                            'check-a733-kernel.py', 'check-a733-smp.py',
-                                                           'usb-access.py'})):
+                                                           'usb-access.py'}),
+                                 ('returning-progress', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                                              'controlled.json', 'check-a733-kernel.py',
+                                                              'check-a733-smp.py', 'usb-access.py'}),
+                                 ('returning-extra-request', 955, {'image.elf', 'probe.bin', 'equivalence.json',
+                                                                   'controlled.json', 'check-a733-kernel.py',
+                                                                   'check-a733-smp.py', 'usb-access.py'})):
         submission = json.loads((run_dir / name / 'submission.json').read_text())
         queue.submission(submission)
         assert submission['prerequisites'] == [queue.SUPERVISED_RECOVERY] and submission['timeout_seconds'] == timeout
@@ -657,7 +683,14 @@ def main():
         artifacts = json.loads((run_dir / name / 'artifacts.json').read_text())
         assert all(a['sha256'] in text for a in artifacts) and '## Commands' in text and '## Stop conditions' in text
         assert ('board-read.py $B/WORDS.json' if name == 'read-good' else 'check-a733-kernel.py --fel') in text
-        assert ('--controlled $B/controlled.json' in text) == (name == 'returning-good'), name
+        controlled = name in ('returning-good', 'returning-progress', 'returning-extra-request')
+        assert ('--controlled $B/controlled.json' in text) == controlled, name
+        if controlled:
+            # Outcome names come from the bundle's controlled.json.
+            outcome = PROGRESS_OUTCOME if name == 'returning-progress' else OUTCOME
+            assert f'CONTROLLED: {outcome["name"]}, status {outcome["status"]}' in text, name
+            assert ('progress record at result offset 128' in text) == (name == 'returning-progress'), name
+        assert f'Queue timeout: {timeout} s' in text, name
         prepared[name] = {'files': len(files), 'timeout_seconds': timeout}
     assert (run_dir / 'read-good/bundle/board-read.py').read_bytes() == (ROOT / tool.READER).read_bytes()
     status, second = tool.run({}, rows, evidence, repo)
