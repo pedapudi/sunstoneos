@@ -118,10 +118,11 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
   if (next) completed = done.sequence;
   if (!next || !pvr_mimus_tags_complete(OS_DISPATCH_OUTPUT, static_cast<uint32_t>(rows), call.n_gpu, done.sequence) ||
       !SumsEqual(call.next, rows)) {
-    // Placement closes for the boot; the session stays open and idle.
-    // Removing the hook restores every CPU path of the engine for later
-    // calls, the streamed ring and internal-arena codes included.
+    // This job lends no output to the engine. Previous output was consumed
+    // before this Finish call. Retire through acknowledged shutdown before
+    // removing the hook that also owns thermal reconciliation.
     os_dispatch_incomplete();
+    if (!a733_gpu_mimus_retire()) os_dispatch_failed(OS_DISPATCH_LOST);
     mimus::asr::SetExactSumHook(nullptr);
     call.stopped = true;
     return false;

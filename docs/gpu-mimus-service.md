@@ -124,6 +124,26 @@ are refused. The slot remains CLOSED until the new OPEN result is published
 with the slot ready. Failed reconstruction, startup or result publication
 latches loss and retains backing.
 
+A completed job whose sequence, tags or numerical sums fail validation retires
+the session permanently. Previously this rejection removed the hook while the
+GPU stayed open; removing the hook also removed the only caller of thermal
+parking. The recognizer now clears dispatch admission and latches terminal
+retirement before requesting CLOSE. It consumes the rejected record first and
+hands none of that job's output to the engine. The engine has finished reading
+previous output before its next `Finish` call, so no accepted output borrow
+crosses this close.
+
+The caller waits through the existing CLOSE/STATUS protocol for same-epoch
+STOPPED, with live board authority, before removing the hook and continuing on
+the CPU. CLOSE acceptance alone is insufficient: STOPPED follows the firmware
+acknowledgements, hardware idle checks and platform power-off of the existing
+[healthy stop contract](gpu-stop.md). A stale record does not prove the worker
+is idle; a pending job or request can refuse CLOSE and must take the LOST path.
+Timeout, failed reply or revoked authority also ends the boot through LOST,
+with no silent CPU fallback. Successful retirement retains all allocations and
+permanently refuses OPEN and job submission, even after temperature returns to
+normal. It introduces no hard-fault reset or new drain claim.
+
 Reconstruction uses the existing [compute-context builder](gpu-compute-context.md)
 and [acknowledged stop sequence](gpu-stop.md). Their pinned board source is
 `linux-orangepi` revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`:
@@ -142,7 +162,8 @@ Classes follow section 1.8 of
 | Start refused: previous-boot GPU loss, owner or client collision, tensor admission, pools, firmware | 1 | OPEN refused; CPU for the boot | Acquired pool pages |
 | OPEN fails after power or firmware access | 3 | CPU for the boot | Everything the service holds; the GPU can write only the output region and firmware memory |
 | Job refused before the first client-ring write, including a failed wake send | 1 | REFUSED; slot IDLE; the engine computes the rows | Nothing |
-| Tag missing, or a sum that differs from the CPU's | 2 | `os_dispatch_incomplete` closes placement at once; the hook returns no rows for that job and the rest of the call, and the engine computes channels `[0, n_gpu)` of every row no job returned | The session and the output region for the boot; the GPU stays powered and idle |
+| Completed record has an unexpected sequence, missing tag or incorrect sum | 2 only after acknowledged shutdown | `os_dispatch_incomplete` closes placement; the recognizer retires the session before removing the hook and allowing CPU fallback | All backing remains allocated; no reopen for this boot |
+| Terminal retirement refuses CLOSE, misses its deadline, loses authority or lacks same-epoch STOPPED | 3 | LOST and the existing board-failure path before CPU fallback | Everything uncertain, including pending replies and backing |
 | After the client ring is published: deadline missed, context reset, timeline mismatch, failed maintenance, service failure | 3 | LOST; `os_dispatch_failed`, `board_fail`, watchdog reset; the supervisor records a GPU loss and the next boot keeps OPEN refused | Everything |
 | No record | Unknown | The recognizer's 3 s service window expires; watchdog reset; a GPU loss when it was waiting for OPEN or a job's record | Everything |
 
@@ -213,6 +234,26 @@ Reconstruction clears 35,136 bytes of context-switch storage before the
 existing program builder writes its instructions, and initializes 268 bytes
 of firmware context. It allocates no pages: 79 write-back and 51 uncached
 pages remain owned. These are software operation counts, not board timings.
+
+The terminal-retirement checks exercise the actual AArch64 caller with modeled
+service replies: successful STOPPED, BUSY, timeout, critical revocation, wrong
+client, an outstanding ticket and a stale STOPPED epoch. The engine-hook check
+rejects tags, sums and a stale sequence after consuming one prior output job;
+it permits CPU fallback only after retirement and takes LOST when retirement
+fails. The unchanged hook fails this new assertion. These focused checks passed
+on 2026-10-24; sources, objects, results and engine ownership references are in
+`~/.cache/sunstoneos/evidence/gpu-terminal-retire-20261024/snapshot/manifest.json`.
+They model shutdown replies and do not qualify physical power-off or drain.
+
+Retirement runs once on rejected output, using the existing one-second close
+target and bounded queue observation. Healthy jobs add one caller retirement
+flag check; the compiled AArch64 submission wrapper uses three instructions
+for its address, load and branch. OPEN and thermal reconciliation also check
+the flag. No normal-path queue transaction, cache operation or device access
+is added. The source of the engine borrow boundary is mimus `9c57286b7`,
+`kernels.cc:HookedSums` and `parallel.h:ForRowRanges`. The installed
+`apps/mimus/parallel_runtime.cc:dispatch` waits for the second worker's matching
+completion before returning. These sources are preserved with the evidence.
 
 ## Lifecycle and power limits
 

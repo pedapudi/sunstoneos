@@ -162,10 +162,14 @@ recognizer is its only writer.
 Before every model hash matches there is no OPEN and every row reads as
 CPU-only. A refused or failed OPEN keeps the CPU for the boot and is not
 retried. A refused job runs on the CPU and the session stays open. A missing
-tag or a sum that differs from the CPU's makes `os_dispatch_incomplete`
-clear the active count at once, and the hook removes itself from the engine
-(`SetExactSumHook(nullptr)`), so every later call runs on the engine's CPU
-paths as it does without a hook. A lost
+tag, unexpected sequence or sum that differs from the CPU's makes
+`os_dispatch_incomplete` clear the active count at once. Before removing itself
+from the engine, the hook requires acknowledged terminal shutdown through the
+existing CLOSE/STATUS protocol. The current job lends no output, and previous
+output has already been consumed. Only same-epoch STOPPED with live authority
+permits CPU fallback; a refused or uncertain close takes LOST. Successful
+retirement keeps all backing and permanently closes GPU admission, so later
+calls use the engine's CPU paths without a reopen. A lost
 job makes `os_dispatch_failed` record it, clear the active count and take the
 recognizer's failure path (`board_fail`, then suspension) before any CPU row
 of the failed job; the watchdog resets the board. A reply that never comes

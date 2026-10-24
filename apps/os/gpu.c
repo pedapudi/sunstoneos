@@ -57,7 +57,7 @@ static struct {
     /* Set once in start; read by the recognizer after the scheduler starts. */
     unsigned started;
     /* Recognizer-owned lifecycle, separate from permanent dispatch admission. */
-    unsigned opened, parked, failed;
+    unsigned opened, parked, failed, retired;
     uint64_t epoch;
 } gpu;
 
@@ -165,7 +165,7 @@ static int runtime_request(enum pvr_gpu_service_operation operation, uint64_t en
 int a733_gpu_mimus_open(void)
 {
     uint64_t end;
-    if (!gpu.started || gpu.failed || gpu.opened || !runtime_window(&end)) return 0;
+    if (!gpu.started || gpu.failed || gpu.retired || gpu.opened || !runtime_window(&end)) return 0;
     struct pvr_gpu_service_reply reply;
     if (!runtime_request(PVR_GPU_SERVICE_OPEN, end, &reply) || reply.epoch != gpu.epoch + 1) return 0;
     gpu.epoch = reply.epoch;
@@ -194,6 +194,7 @@ static int runtime_close(void)
 int a733_gpu_mimus_thermal(void)
 {
     if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return -1;
+    if (gpu.retired) return 0;
     if (!board_live(NULL)) { gpu.failed = 1; return -1; }
     int throttled = os_thermal_throttled();
     if ((!throttled && gpu.opened) || (throttled && gpu.parked)) return !throttled;
@@ -209,8 +210,21 @@ int a733_gpu_mimus_thermal(void)
     os_dispatch_waiting(0);
     return !throttled;
 }
+int a733_gpu_mimus_retire(void)
+{
+    if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return 0;
+    if (gpu.retired) return gpu.parked && !gpu.opened;
+    /* The recognizer has consumed the record but rejected the output. Close
+     * admission before shutdown; no result from this job was lent to the
+     * engine. Only acknowledged STOPPED permits continued CPU inference. */
+    gpu.retired = 1;
+    os_dispatch_waiting(1);
+    if (!runtime_close() || !board_live(NULL)) { gpu.failed = 1; return 0; }
+    os_dispatch_waiting(0);
+    return 1;
+}
 int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
-{ return gpu.failed ? -1 : pvr_mimus_service_submit(gpu.component, job); }
+{ return gpu.failed ? -1 : gpu.retired ? 0 : pvr_mimus_service_submit(gpu.component, job); }
 void a733_gpu_mimus_finish(struct pvr_mimus_record *record)
 { while (!pvr_mimus_service_receive(gpu.component, record, OS_GPU_WAIT_TICKS)) {} }
 int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *out)
