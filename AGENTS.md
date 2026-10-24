@@ -158,6 +158,10 @@ second build while preserving checks for the actual requested application.
 - The coordinator integrates completed paths and prepares the next eligible
   board test while workers continue implementation. Prioritize tests that unblock
   shared startup or several devices, then ready paths with available peripherals.
+- Only the coordinator pushes. It pushes `bringup` to `origin` after an
+  integration passes its builds and checks, and first scans the unpublished
+  changes for keys, tokens, credential files and session scratch paths.
+  Workers commit to their own branches and do not push.
 - Freeze each submitted image and its required inputs in the existing evidence
   directory. Workers may continue editing and building in separate directories
   while that image waits or runs. Physical results apply to the frozen inputs.
@@ -181,7 +185,8 @@ second build while preserving checks for the actual requested application.
 
 - The user confirms that neither current A733 board has populated eMMC or UFS.
   Do not probe or schedule media qualification for these absent devices. Preserve
-  the existing contents of both microSD cards. Existing optional-storage drivers
+  the existing contents of both microSD cards, apart from the writes that the
+  storage rule below permits. Existing optional-storage drivers
   and historical evidence remain available for a future populated board.
 - Parallel workers develop in isolated worktrees and use separate build/evidence
   directories. Assign file ownership before overlapping work begins.
@@ -208,6 +213,11 @@ second build while preserving checks for the actual requested application.
   - an NVMe device: only on a device the user designates as scratch storage.
 - Stop device communication at the first transport failure or disappearance.
   Do not loop resets, downloads, or reconnections around an unresolved failure.
+- Request a reconnect at the top of [docs/handoff.md](docs/handoff.md), naming
+  the port and the physical action, and continue with the other board or
+  offline work while it is pending. Order the tests of each connection window
+  from the lowest recovery risk, so the test most likely to lose the board runs
+  last.
 - Before intentional USB re-enumeration, require a reconnect access rule for the
   target port and user. Wait for udev permissions before the next protocol request.
   Do not reset again to work around missing host permissions.
