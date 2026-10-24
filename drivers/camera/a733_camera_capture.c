@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_camera_capture.h"
 #include "a733_camera_common.h"
+#include "dma_address_width.h"
 #include <stddef.h>
 
 static int fail(struct a733_camera_capture *s){s->state=A733_CAPTURE_FAULT;return -1;}
@@ -152,7 +153,7 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
     for(unsigned i=0;i<3;i++){
         const struct a733_capture_span *m=&c->memory[i];
         if(!m->cpu || ((uintptr_t)m->cpu&4095) || !m->iova ||
-           m->iova>=UINT64_C(0x100000000) || m->bytes>UINT64_C(0x100000000)-m->iova ||
+           m->iova>=A733_IOMMU_IOVA_LIMIT || m->bytes>A733_IOMMU_IOVA_LIMIT-m->iova ||
            m->bytes<(i?a733_camera_plane_bytes(&format):4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
            a733_ranges_overlap_or_wrap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
            a733_ranges_overlap_or_wrap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||

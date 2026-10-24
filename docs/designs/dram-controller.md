@@ -1,8 +1,9 @@
 # DRAM controller and memory-bus priority
 
 Status: the DDR trip is implemented and host-modeled in the thermal policy.
-The priority hook, the latency window and the copy load are implemented and
-host-modeled but not merged. Their code merges together with the framebuffer,
+The priority hook, the latency window and the copy load are implemented in
+`drivers/dram/` and host-modeled ([memory-bus priority](dram-bus-priority.md)),
+but no image links them. They enter an image together with the framebuffer,
 gpu-display and build edits that call them and with the integration host
 cases listed under the changes outside this component. Physical behavior
 stays unqualified until the board evidence in the last section exists.
@@ -23,9 +24,11 @@ inside boot0. The section on left-out items lists what else waits for evidence.
 - **Fabric clocks.** `NSI_CLK_REG` is CCU `+0x580` (gate bit 31, reset bit
   30), the NSI configuration word is `+0x584` (gate bit 0, reset bit 16) and
   `MBUS_CLK_REG` is `+0x588` (manual section 4.1.6). A set bit means the gate
-  is open or the reset is deasserted. `a733_media_clock` compares `+0x580` and
-  `+0x588` with the board record under mask `0x8700001f`, which requires gate
-  bit 31 and leaves out reset bit 30. The compare runs in `stable()` on every
+  is open or the reset is deasserted. Bit 28 of `+0x588`, `MBUS_DFS_EN`,
+  enables dynamic frequency scaling of the MBUS clock. `a733_media_clock`
+  compares `+0x580` and `+0x588` with the board record under mask
+  `0x8700001f`, which requires gate bit 31 and leaves out reset bit 30 and
+  `MBUS_DFS_EN`. The compare runs in `stable()` on every
   media-clock poll from the baseline step on. In the framebuffer that is
   prepare stage 4, after DE_SYS power-on in stage 3. No driver checks `+0x584`.
 - **NSI port fields.** The pinned `sunxi-nsi.c` and `sunxi-nsi.h` place NSI
@@ -40,8 +43,39 @@ inside boot0. The section on left-out items lists what else waits for evidence.
   when the request count is 0.
 - **Port owners.** The `nsi0` node of the pinned `sun60iw2p1.dtsi` assigns DE
   to port 2 and the IOMMU0 and IOMMU1 page-table walkers, which serve DE's
-  translated reads, to ports 14 and 15. The CPU clusters reach the DRAM
-  controller through direct channels that no NSI port counts.
+  translated reads, to ports 14 and 15; the next section derives these
+  numbers. The CPU clusters reach the DRAM controller through direct
+  channels that no NSI port counts.
+
+## DE uses NSI port 2 and its IOMMU walkers use ports 14 and 15
+
+The vendor driver reaches a port by two routes, one for the field writes and
+one for the counter reads. Both give the same numbers, and the U-Boot driver
+uses the same addresses. `checks/dram-controller.py` checks each fact below
+in the pinned sources.
+
+- **Port enum.** For `CONFIG_ARCH_SUN60IW2`, `enum nsi_pmu` in the pinned
+  `sunxi-nsi.h` gives DE port 2, IOMMU0 port 14 and IOMMU1 port 15. The
+  `nsi0` node gives its `de`, `iommu0` and `iommu1` children the same `id`
+  values.
+- **Field writes.** `sunxi_set_nsi_qos_params` in `sunxi-nsi.c` compares
+  each child's name with the sun60iw2 `pmu_name[]` table and passes the index
+  of the match to `nsi_port_setmode`, `nsi_port_setpri` and `nsi_port_setio`.
+  In that table `"de"` is entry 2, `"iommu0"` entry 14 and `"iommu1"` entry
+  15. The setters subtract one from the port only when `AW_NSI_CPU_CHANNEL`
+  and `NSI_HARDCODED_PORT_MAPPING` are both defined, and `sunxi-nsi.h`
+  defines `NSI_HARDCODED_PORT_MAPPING` only for sun55iw3.
+- **Counter reads.** `sunxi-nsi-bw.c` addresses each counter word with the
+  master's `ia_index`. The node sets `sub_node_id_mapping`, so `sunxi-nsi.c`
+  sets `ia_index` to the child's `id` (`ia_index = id`): again 2, 14 and 15.
+- **U-Boot.** The pinned U-Boot `drivers/nsi/sunxi_nsi.c` addresses
+  `SUNXI_NSI_BASE + 0x200 × id`, with `SUNXI_NSI_BASE` equal to `0x02020000`
+  in `plat-sun60iw2p1/cpu_autogen.h`. Ports 2, 14 and 15 are therefore at
+  `0x02020400`, `0x02021C00` and `0x02021E00`.
+- **Counter clock.** With `topology_type = <2>`, `__rate_for_master` takes
+  each port's clock from `master_clks`. Ports 2, 14 and 15 are absent from
+  that list and keep clock index 1, which the node names `bus` and points at
+  `CLK_MBUS`. The window period is therefore written in MBUS cycles.
 
 ## Data flow and ownership
 
@@ -58,13 +92,14 @@ inside boot0. The section on left-out items lists what else waits for evidence.
   words, makes zero NSI accesses and returns failure. For each field it then
   reads the word. Only a field that differs from the target is written, with
   the other bits kept, and read back under the field mask. The first mismatch
-  stops the hook with failure. The evidence holds the two CCU words, each
-  port's inherited and final fields and the stopping field (0, or 1 + 3 ×
-  port index + field index). Built with `SUNSTONE_DRAM_PRIORITY=1`, the hook
-  makes the same reads and writes nothing. The hook does not check its
-  arguments for NULL, because its one caller passes the framebuffer's own
-  pair and evidence member; the caller keeps the return value for the
-  evidence block.
+  stops the hook with failure. The hook zeroes the evidence block and fills
+  its hook part: the result bits, the two CCU words, each port's inherited
+  and final fields and the stopping field. The stopping field is 0, 1 + 3 ×
+  port index + field index for a port field, or 10 for a failed CCU read, so
+  a failed read differs from an NSI that is not running. Built with
+  `SUNSTONE_DRAM_PRIORITY=1`, the hook makes the same reads and writes
+  nothing. The hook does not check its arguments for NULL, because its one
+  caller passes the framebuffer's own pair and evidence block member.
 - **Register path.** The hook has no register path of its own. The
   framebuffer passes an `io` over its existing `raw_read` and `raw_write`,
   which check ownership, address, mapping (`a733_mapping_check`,
@@ -84,15 +119,19 @@ inside boot0. The section on left-out items lists what else waits for evidence.
   the stage's existing `goto fail` path, which retains the framebuffer.
 - **Images.** The call and the evidence member of the framebuffer structure
   compile only when `SUNSTONE_DRAM_PRIORITY` is defined. The gpu-display build
-  defines it as 2 (table) in its normal image and the table load image, and as
-  1 (reads only) in the no-table load image. The HDMI and DisplayPort builds
-  leave it undefined, so nothing new runs there.
+  defines it as 1 (reads only) in the no-table load image and as 2 (table) in
+  the table load image. Non-secure access to the NSI is unproven, so the first
+  NSI access on the board is in the no-table load image. The normal
+  gpu-display image leaves the macro undefined until that image shows
+  Non-secure reads and the table load image shows writes that read back; it
+  then defines it as 2. The HDMI and DisplayPort builds leave it undefined, so
+  nothing new runs there.
 - **Latency window.** Port 2 over a period P of 50 ms, in the load images
   only. Each phase runs under one `enter()` and `leave()` through a load-only
   accessor of the framebuffer, compiled under `SUNSTONE_GPU_DISPLAY_DRAM_LOAD`.
   The accessor reuses `raw_read` and `raw_write`, and in that build
-  `dram_address()` also admits port 2's words `+0xc0..+0xdc` and the reads that
-  `a733_cpu_clock_address` permits. Initialization records the CPU clocks once
+  `dram_address()` also admits port 2's words `+0xc0..+0xdc`, reads of CCU
+  `+0x588` and the reads that `a733_cpu_clock_address` permits. Initialization records the CPU clocks once
   through `a733_cpu_clock_report` and takes the MBUS rate from
   `fabric_hz[2]`, which the media clock verified. The framebuffer's
   `A733_CLOCK_FABRIC` exclusion holds that rate for the session. Times come
@@ -101,7 +140,12 @@ inside boot0. The section on left-out items lists what else waits for evidence.
     1, three presentations are done and the current phase has not ended. It
     reads the counter (t0) and makes 6 accesses in the vendor order: write the
     period P × `fabric_hz[2]`, clear enable bit 0, set clear bit 0 and write the
-    saved enable word with bit 0 set. Then a counter read gives t1.
+    saved enable word with bit 0 set. Then a counter read gives t1. The first
+    start of a session first reads `+0x588`. With `MBUS_DFS_EN` set, the
+    MBUS rate can change during a window, so P × `fabric_hz[2]` cycles would
+    not span 50 ms. That start then makes no port access, ends the phases
+    early and sets a result bit. The block has no free word for the `+0x588`
+    value, so the bit is the record.
   - *Collect* returns pending until the counter passes t1 + P. It then makes 6
     reads with the counters enabled, as the vendor driver does: the four
     counts, the latency sum and the read data count again. A counter read
@@ -178,6 +222,10 @@ storing the end phase. The component adds no lock.
   before it returns.
 - Window refused or abandoned: class 1, counted; nothing is retained.
 - A failed access in the load accessor: the framebuffer's existing retain path.
+- A synchronous external abort or SError from an NSI or `+0x584` access, as a
+  Secure-only NSI may raise: the access never returns, the platform's
+  exception capture records ESR, ELR and FAR and ends the image, and nothing
+  retries the access.
 
 ## Reuse
 
@@ -236,18 +284,18 @@ no-table load images run in one board session.
 - **Transport.** The gpu-display observation reply's `terminal.reserved[136]`,
   bytes 888..1023, becomes the evidence block and the reply version becomes 2.
   The 1,024-byte size and its static assert stay. `capture.py` accepts only
-  reply version 2 from gpu-display. `a733_dram_block()` in the hook object
-  fills the hook fields; the bits after the hook result come from the build
-  macro and the hook's return value. `a733_dram_window_block()` in the load
-  object adds the window and copy-slot fields, so images without the load
-  mode link no packing code for them.
+  reply version 2 from gpu-display. The hook writes the block directly: it
+  zeroes it and fills the hook fields, with result bits from the build macro
+  and its own result. `a733_dram_window_block()` in the load object adds the
+  window and copy-slot fields, so images without the load mode link no
+  packing code for them.
 
   | Offset | Fields |
   | --- | --- |
   | 0 | `u16` ×8: windows started, accepted in phase A, accepted in phase B, refused late, refused idle, refused free-running, out of range, abandoned |
-  | 16 | `u16`: result bits (hook built, table image, hook result, collect disables first, phases ended early); `u16`: stopping field of a failed hook (0, or 1 + 3 × port index + field index) |
+  | 16 | `u16`: result bits (hook built, table image, hook result, collect disables first, phases ended early, `MBUS_DFS_EN` found set); `u16`: stopping field of a failed hook (0, 1 + 3 × port index + field index, or 10 for a failed CCU read) |
   | 20 | `u16` ×6: inherited and final fields of ports 2, 14 and 15 (mode bits 1–0, priority bits 5–2, select bit 6) |
-  | 32 | `u16` ×4: configured CPU-L, CPU-B and DSU MHz (0 when undecoded), 0 |
+  | 32 | `u16` ×4: configured CPU-L, CPU-B and DSU MHz (0 when undecoded); at offset 38, `phase_ticks_max`, the longest start or collect in 24 MHz counter ticks, saturating at 65,535 |
   | 40 | `u32` ×2: CCU `+0x580`, `+0x584` |
   | 48 | `u32` ×2: `fabric_hz[2]`; phase B length in ms |
   | 56 | `u64` ×6: per phase, Σx, Σx², port 2 read data |
@@ -263,7 +311,7 @@ board.
 | --- | --- | --- | --- |
 | Hook | 2 CCU reads; per field 1 NSI access at target, else 3; at most 27 NSI accesses; 1 lock pair; once per framebuffer instance; 0 NSI accesses when the NSI is not running | Host model of the framebuffer prepare sequence | 0 OS accesses |
 | HDMI, DisplayPort and steady state | 0 added accesses, tasks, timers or interrupts | Linked-symbol check; host model | 0 |
-| Window | Init: 8 clock reads, once. Start: 6 NSI accesses, 1 lock pair, 2 ISB, no added DSB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 ISB, no added DSB. Abandon: 0 register accesses; 1 counter read in phase B. Pending: 1 ISB, 1 counter read. At most 10 µs per phase | Host model per phase; counter around each phase on the board | None |
+| Window | Init: 8 clock reads, once. Start: 6 NSI accesses (the first start of a session also reads `+0x588`), 1 lock pair, 2 ISB, no added DSB. Collect: 6 NSI reads (7 accesses after the fallback), 1 lock pair, 1 ISB, no added DSB. Abandon: 0 register accesses; 1 counter read in phase B. Pending: 1 ISB, 1 counter read. At most 20 µs per phase | Host model per phase; `phase_ticks_max` on the board | None |
 | Counter headroom | No 32-bit wrap in P | Arithmetic at 76.8 GB/s: port 2 ≤ 2.4 × 10⁸ units; period ≤ 3 × 10⁷ cycles at 600 MHz; latency sum below 2³² while DE averages under 143 reads outstanding | Not applicable |
 | Copy-load stop | No pass starts after the end phase or a state change is stored | Host model of the copy task loop | Not applicable |
 | Scan-out | HDMI stays `ACTIVE` without `A733_HDMI_UNDERFLOW`; m(no table) − m(table) in phase B > 2 √(SE₁² + SE₂²) | Both load images, under the conclusiveness rule | Not measured |
@@ -284,7 +332,7 @@ shown.
   read boot0's parameter copy at `0x47008000`.
 - DRAMC fields and temperature-based refresh state: the boot0 write-sequence
   trace.
-- DRAM firewall check: the boot0 trace naming the 120 MiB secure region.
+- DRAM firewall check: the boot0 trace of the DRAMC, SMC0 and SMC1 writes.
 - TA ports 32 and 33 and the CPU direct-channel counters: an image whose CPU
   traffic its own tasks cannot count.
 - Other masters (GPU 6, NPU 18, VE, ISP, CSI, DI, G2D, USB_PCIE): an image
@@ -340,13 +388,17 @@ recorded as tested before they pass:
 - each refusal rule, including zero read requests, refuses as specified;
   collect makes no write before the fallback and one after the first
   free-running refusal, including one refusal among held windows;
+- a first start with `+0x588` bit 28 set makes that one read and no port
+  access, and ends the phases early;
 - abandon at `stop_at` and at `output_fault` makes zero register accesses;
   an abandon in phase B records the phase B end and the early-end bit;
 - no copy pass starts after the end phase or state 3 is stored.
 
 ## Board evidence that would confirm the design
 
-- Inherited and final fields and the two CCU words from the gpu-display images.
+- Inherited fields and the two CCU words from the no-table load image, the
+  first image that accesses the NSI, then final fields from the table load
+  image. The normal gpu-display image gains the hook only after both.
 - The scan-out row from both load images, no-table image first, with the
   inherited fields, the CPU clocks, the copy passes per core, the third
   presentation time and the collect order bit, which shows whether the

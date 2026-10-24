@@ -4,6 +4,7 @@
 #include "a733_camera_native.h"
 #include "a733_iommu.h"
 #include "a733_pcie_epf_test.h"
+#include "a733_pcie_nvme.h"
 #include "a733_xhci.h"
 #include <assert.h>
 #include <stdio.h>
@@ -13,10 +14,6 @@ _Static_assert(A733_DMA0_DESCRIPTOR_LIMIT == UINT64_C(0xfffff800), "DMA0 end-of-
 _Static_assert(A733_IOMMU_PHYSICAL_LIMIT == UINT64_C(0x400000000), "IOMMU entry bits 9:8");
 _Static_assert(A733_IOMMU_IOVA_LIMIT == UINT64_C(0x100000000), "IOMMU master IOVA policy");
 _Static_assert(DMA_ADDRESS_32BIT_LIMIT == UINT64_C(0x100000000), "32-bit masters");
-
-/* Six 4 KiB pages: the ASQ..DATA enumeration in drivers/pci/a733_pcie_nvme.c.
- * The PCIe owner has not yet exported this size in a header. */
-#define NVME_POOL_BYTES (6u * 4096u)
 
 static _Alignas(16384) uint32_t arena[A733_IOMMU_TABLE_BYTES / 4];
 
@@ -66,14 +63,17 @@ int main(void)
     assert(low == 75 && high == 75);
     iova_policy();
 
+    /* The native camera gives the IOMMU fixed device addresses, so its
+     * allocation may lie anywhere below 2^34 and is not counted. */
     const unsigned long xhci = A733_XHCI_MEMORY_BYTES;
-    const unsigned long camera = A733_CAMERA_NATIVE_BYTES;
+    const unsigned long nvme = A733_PCIE_NVME_POOL_BYTES;
     const unsigned long endpoint = 2ul * A733_PCIE_TEST_ALLOCATION + A733_PCIE_TEST_BYTES;
-    const unsigned long total = xhci + NVME_POOL_BYTES + camera + endpoint;
-    assert(total == 847872ul && total - camera == 184320ul);
+    const unsigned long total = xhci + nvme + endpoint;
+    assert(nvme == 24576ul && total == 184320ul);
+    assert(A733_CAMERA_NATIVE_IOVA + A733_CAMERA_NATIVE_BYTES <= A733_IOMMU_IOVA_LIMIT);
     printf("PASS DMA address width: limits, %u leaf words per plane below and above 4 GiB, "
            "IOVA policy at 4 GiB, %lu bytes below 4 GiB required "
-           "(xHCI %lu, NVMe %u, camera %lu, endpoint test %lu; %lu without the camera) "
+           "(xHCI %lu, NVMe %lu, endpoint test %lu) "
            "plus one descriptor page per DMA0 job table. Hardware untested.\n",
-           low, total, xhci, NVME_POOL_BYTES, camera, endpoint, total - camera);
+           low, total, xhci, nvme, endpoint);
 }

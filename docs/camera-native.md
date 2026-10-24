@@ -110,9 +110,16 @@ a pin-manager fault prevents its result from becoming available.
 A 16 KiB-aligned parent reservation contains 32 KiB of IOMMU tables, 8 KiB of
 parameter memory and two 311,296-byte plane allocations. Each plane includes
 307,200 payload bytes and a 4 KiB guard. The 663,552-byte parent uses 162 pages
-and one allocator record. Every address is an identity CPU/physical/IOVA address
-below 4 GiB. These spans fit at most two of the IOMMU builder's four 4 MiB
-windows. The native constructor refuses insufficient capacity; it does not
+and one allocator record. The camera reaches the parent through the system
+IOMMU at fixed I/O virtual addresses (IOVAs): the parameters at `0x1000_0000`,
+the Y plane at `0x1000_2000` and the UV plane at `0x1004_E000`
+(`A733_CAMERA_NATIVE_IOVA` and fixed offsets). The IOMMU translates each IOVA to
+the parent's physical pages, which may lie anywhere below 2^34, the limit of
+the IOMMU entry encoding. The CPU address of the parent need not equal its
+physical address. The three spans use one of the IOMMU builder's four 4 MiB
+windows and 154 leaf words at any placement. The constructor checks the parent's
+size and physical range before it writes any byte. A refused parent stays
+DEVICE-owned and the constructor faults. The native constructor refuses insufficient capacity; it does not
 shrink the mode. Before the parent becomes DEVICE-owned, the constructor fills
 both planes and their guards with `0xa5`. DMA admission cleans and invalidates
 that range, so bytes the DMA never writes hold the fill instead of earlier DRAM
@@ -177,7 +184,14 @@ stays in the planes until the rearm refills them, that every image starts from
 the fill, and that SCAP is rewritten only after both quiet intervals. It then
 copies only the third image. Three rearm faults, from changed DMA status, a
 packet during the quiet interval and a lost SCAP write, each keep every lease
-and leave SCAP clear. A separate short case covers S_TWI1 register width and
+and leave SCAP clear. Every nominal case checks that the route parameter
+register and both plane address registers hold the fixed IOVAs, and that the
+IOMMU tables translate them to the parent's physical spans. One case places the
+parent at physical `0x1_8000_0000` with its CPU alias at `0x4800_0000` and
+captures and copies an image. Another places the parent across 2^34 and
+requires refusal before the fill, any register access or any table write. Given
+a file name as a second argument, the fixture writes every modeled register
+write to that file. A separate short case covers S_TWI1 register width and
 retained cancellation. Models do not qualify wiring, prefetch, timing,
 coherence, reset, camera output or physical recovery.
 

@@ -1,5 +1,13 @@
 # Current work
 
+> **Reconnect requested, port `3-1` (original board), 2026-10-23.** Remove
+> its 5 V supply and its USB data cable, wait 5 seconds, then reconnect the
+> supply and the cable. The rank-7 all-core first-task diagnostic launched
+> and did not return to the boot ROM; the host still lists a stale FEL
+> descriptor on node `003/014`, which is quarantined, and the queue claim
+> `f87b2126…` is held. After the reconnect the board needs a cold DDR
+> start. Board `3-3` stays in use meanwhile.
+
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
@@ -32,8 +40,19 @@ action, and continue with the other board or offline work meanwhile.
 Session access for both ports lasts until the next host reboot. After a reboot,
 the user runs `sudo python3 tools/usb-access.py enable-session --port <port>
 --user sunil` for each port; `python3 tools/usb-access.py check-session --port
-<port>` confirms access without communicating with the board. Nothing after the
-eight-core first-task result ran on a board. Earlier identities and admission
+<port>` confirms access without communicating with the board.
+
+On 2026-10-23 both boards passed the first five ranks of the board test plan,
+after the host reboot had reset both: the boot ROM answered as SoC `0x1903`,
+the returning SRAM survey restored SRAM byte for byte, boot0 trained 12,288 MiB
+of LPDDR5 at 2,040, 1,165, 816 and 408 MHz, the single-core FreeRTOS kernel
+check built from the current tree passed 100 rounds, and the forced-stall case
+returned to the ROM through the monitor's secure timer. That kernel run is the
+first board execution of the boot table flush in `platform/a733/platform.c`.
+After a warm ROM return the instruction cache is on, so every native launch is
+preceded by the returning cache-off helper and a fresh survey on the current
+USB instance. Evidence and the coordinator's queue scripts are in
+`~/.cache/sunstoneos/evidence/board-session-20261023/`. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
@@ -48,8 +67,8 @@ target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
 | Board | Power and access facts | Continuation requirement |
 | --- | --- | --- |
-| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Bind its queue to the port, then refresh identity, recovery and admission in the order of the board test plan. Full workload execution is deferred until those ranks pass. |
-| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Bind its queue to the port, then run fresh cold DDR and platform admission before any other test. Its earlier recovery evidence, `usb-first-fault-20261018/root-physical-064/recovery-073.json`, predates the reconnection. |
+| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Queue bound to port `3-1`. Ranks 1 to 5 passed on 2026-10-23; ranks 6 to 9 wait for refrozen bundles, starting with the returning thermal image, whose build reuses objects compiled from sources that have since changed. |
+| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Queue bound to port `3-3`. Cold DDR and ranks 1 to 5 passed on 2026-10-23; it is ready for independent device work once the next bundles are frozen. |
 
 Per-port permissions, locks, queues and failure records remain independent.
 Neither queue has a running test; the original board's queue has four blocked
