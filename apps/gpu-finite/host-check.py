@@ -31,7 +31,7 @@ class Store:
  def __str__(self):return self.name
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-application-20261019/ns-publication');args=parser.parse_args();args.evidence.mkdir(parents=True,exist_ok=True)
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019');args=parser.parse_args();args.evidence.mkdir(parents=True,exist_ok=True)
  image=args.image_evidence/'build/return.elf';manifest=json.loads((args.image_evidence/'manifest.json').read_bytes());parts,address,build,g=host.prepare.image_profile(image,manifest)
  p={'epoch':101,'generation':102,'lease':103,'geometry':g};raw=reports(p);assert report.validate_reports(*raw,p)['functional_success'];cases={'matched-arithmetic-two-results':True}
  for part,offset in [(0,x) for x in (0,8,16,24,32,40,56,64)]+[(1,x) for x in (0,8,16,24,32,71,72,256)]+[(2,x if x!=88 else 95) for x in range(0,104,8)]+[(3,x) for x in (0,8,12,16,24,32,36,40,44,48,300,311,312)]:

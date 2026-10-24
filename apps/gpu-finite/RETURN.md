@@ -12,7 +12,13 @@ EL3 requires the actual EL1t caller profile, disabled EL1 M/C/I and a valid publ
 
 EL3 performs no VA cache clean of Nonsecure data. With EL3 translation disabled, that operation would address Secure physical cache tags and could leave Nonsecure dirty lines unpublished. The final reset tail calls the existing set/way `clean_data_cache` helper to retire late EL1 stack stores in both security spaces, invalidates instructions and requests the existing RVBAR/RMR reset sequence. Monitor translation tables were constructed at cacheoff EL3; they are not claimed as dirty Nonsecure EL1 tables. Secondaries remain admitted OFF throughout. The coordinator must review this architectural sequence before execution.
 
-Build and check the new composition with a fresh evidence directory:
+The corrected two-job candidate and its frozen inputs are identified in
+[HOST.md](HOST.md#candidate-and-bounded-physical-procedure). Reuse that image
+for preparation. The development builder below starts from the earlier finite
+adapter; its retained objects do not include the later repeated-submission
+callback correction. Rebuilding it does not reproduce the corrected candidate.
+
+For development of the monitor composition, use a fresh evidence directory:
 
 ```sh
 python3 apps/gpu-finite/return-build.py --evidence EVIDENCE

@@ -31,6 +31,9 @@ def validate_admission(record,image_hash,template,build,cache=None,frozen=False)
   name=ref['path']
   if name not in cache:require(not frozen,'Missing frozen evidence.');cache[name]=Path(name).read_bytes()
   require(sha(cache[name])==ref['sha256'],'Changed returning evidence.');return cache[name]
+ # The fixed returning image retains only the base session, even when the
+ # shared renderer admits larger program or texture envelopes.
+ require(len(template)==592,'Returning GPU requires exactly 592 session bytes.')
  original.session_check(template)
  require(record.get('schema')=='a733-gpu-finite-entry-v1' and record.get('execution_profile')==PROFILE and record.get('image_sha256')==image_hash and record.get('session_template_sha256')==sha(template) and type(record.get('reservation')) is int and 0<record['reservation']<2**64,'Distinct returning admission required.')
  identity,port,supervisor=(record.get(k) for k in ('identity','port','supervisor'));require(identity and port and supervisor,'Target and supervisor required.')

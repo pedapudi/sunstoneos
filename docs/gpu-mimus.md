@@ -12,8 +12,10 @@ channels of each layer run here.
 
 Status: **implemented** and host-modeled. No GPU has executed the program. The
 OS image's GPU linear build links the session code through the GPU service's
-mimus component ([gpu-mimus-service.md](gpu-mimus-service.md)); no call
-reaches it until the mimus engine has its exact-sum hook. Two design
+mimus component ([gpu-mimus-service.md](gpu-mimus-service.md)). The local
+mimus engine at `9c57286b7` supplies `mimus/asr/exact_sum_hook.h` and the
+engine callbacks; `apps/os/gpu_hook.cc` installs the GPU implementation.
+Physical execution through that hook remains unqualified. Two design
 budgets are missed: the program has 3.39 GPU instructions per
 multiply-accumulate (MAC) against 1.75, and 7,624 code bytes against 4,000.
 

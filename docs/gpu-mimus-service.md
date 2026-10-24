@@ -11,9 +11,10 @@ The [design](designs/gpu-recognition.md) states the budgets and
 result with them.
 
 Status: **implemented** and host-modeled. The GPU option's image links and
-passes its link check and host checks. No board has run it, and no call
-reaches the GPU until the image build's pinned mimus engine has the
-exact-sum hook (the design's "Changes needed in the mimus engine").
+passes its link check and host checks. The local mimus engine at `9c57286b7`
+provides the exact-sum hook consumed by `apps/os/gpu_hook.cc`. No board has
+executed the GPU path; the engine hook's availability establishes source
+integration only.
 
 ## Parts
 
