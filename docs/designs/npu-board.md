@@ -421,7 +421,7 @@ and the pool comparison remove T, A, H and the pool clear.
 - `checks/power-domains-tree.py`: four delay-row writers, no native allowlist
   that admits the delay row, domain-4 rows accepted.
 - `cmake/npu-startup.cmake`, `cmake/npu-convolution.cmake`: fixture source
-  lists without the clock adapter, the PLL native file and the PMIC consumer,
+  lists without the clock adapter, the PLL files and the PMIC consumer,
   with the owner sources. `cmake/npu-clock-handoff.cmake`,
   `checks/a733-npu-pll-clock-reference.c` and
   `checks/a733-npu-platform-clock-reference.c` are deleted with the PLL
@@ -431,7 +431,14 @@ and the pool comparison remove T, A, H and the pool clear.
   `checks/a733-accelerator-clock-reference.py`: GPU cases only; the NPU
   reference cases run in `checks/npu-startup-host.c` and
   `npu-application-clock-reference.py`.
-- `docs/power-domains.md`: domain 4 in use by the NPU startup.
+- `drivers/power/a733_power_domains.c`, `include/a733_power_domains.h`:
+  `a733_power_domain_check` returns the domain state it read, so the startup
+  reads PCK600 once; `drivers/display/a733_display_framebuffer.c` and
+  `checks/power-domains-pck.c` pass NULL for it.
+- `checks/harness.py`: `Image.address` finds a static variable by compilation
+  unit, which `checks/npu-board-providers.py` uses.
+- `docs/power-domains.md`: domain 4 in use by the NPU startup, and the
+  check's state argument; `docs/hdmi-framebuffer.md`: the new call.
 - `checks/index.json`, which `checks/check-index.py` regenerates.
 
 `tools/check-a733-npu-supervised.py` needs no change: it validates through
