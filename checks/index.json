@@ -5558,6 +5558,17 @@
   "summary": "New I2S packaging/host cases only; all physical facts and USB are fixtures.",
   "usb": true
  },
+ "integration-gate.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/validation.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check integration selection, failure handling and evidence preservation with fake tools.",
+  "usb": false
+ },
  "isp0-boot.py": {
   "cache_areas": [],
   "docs": [],
@@ -7441,7 +7452,6 @@
    "docs/designs/pmic-access.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
-   "docs/handoff.md",
    "docs/pmic-runtime.md"
   ],
   "library": false,
@@ -7456,7 +7466,6 @@
    "docs/designs/npu-board.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-domains.md",
-   "docs/handoff.md",
    "docs/power-domains.md"
   ],
   "library": false,

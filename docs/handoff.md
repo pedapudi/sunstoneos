@@ -46,8 +46,11 @@ that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
      own run with the remainder method (941 against 917 µs).
 
    Merge it into `audit/cpu-wave` with its patch and run
-   `~/.cache/sunstoneos/bin/integration-gate.sh`, which now also runs
-   `checks/pmic-tree.py` and `checks/power-domains-tree.py`. The PMIC adapter
+   [the selective integration gate](validation.md#select-the-integration-gate-explicitly)
+   with the affected targets and variants, `--check pmic-tree` and
+   `--check power-domains-tree`, and a `--reason` describing the changed
+   behavior. Reuse valid checks from the preceding integration; do not run
+   the full suite merely because a merge occurred. The PMIC adapter
    rename (`pmic_bus_ops`, `a733_pmic_native_bind()`, `a733_pmic_now()`,
    `a733_pmic_outside()`) and the tightened tree checks merged at
    `588b1d2c`.
