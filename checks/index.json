@@ -785,6 +785,8 @@
    "host"
   ],
   "docs": [
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-8-workload.md",
    "docs/cpu-power.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-power-states-measurements.md",
@@ -909,6 +911,8 @@
   "docs": [
    "docs/a733-smp-supervised.md",
    "docs/board-runbooks/rank-7-diagnosis.md",
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
    "docs/designs/board-bundles.md",
    "docs/handoff.md"
@@ -1116,6 +1120,7 @@
  "a733-usb-platform.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/usb-session-takeover.md",
    "docs/handoff.md"
   ],
   "library": false,
@@ -1488,7 +1493,9 @@
   "cache_areas": [],
   "docs": [
    "docs/board-runbooks/rank-7-corrected.md",
-   "docs/board-runbooks/rank-7-diagnosis.md"
+   "docs/board-runbooks/rank-7-diagnosis.md",
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-8-workload.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1505,7 +1512,9 @@
  },
  "all-core-first-task-probe.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/rank-7-first-task.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -5865,7 +5874,9 @@
  },
  "kernel-platform-admission.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/README.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6235,7 +6246,10 @@
   "docs": [
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
    "docs/a733-smp-supervised.md",
+   "docs/board-runbooks/README.md",
    "docs/board-runbooks/rank-7-diagnosis.md",
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
    "docs/designs/cpu-table-walks.md"
   ],
@@ -8537,7 +8551,9 @@
   "cache_areas": [],
   "docs": [
    "docs/board-runbooks/rank-7-corrected.md",
-   "docs/board-runbooks/rank-7-diagnosis.md"
+   "docs/board-runbooks/rank-7-diagnosis.md",
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-8-workload.md"
   ],
   "library": false,
   "pure_host": false,

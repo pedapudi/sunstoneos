@@ -1,5 +1,6 @@
 #include "a733_native_usb.h"
 #include "a733_usb_platform_native.h"
+#include "a733_mmio.h"
 #include <stddef.h>
 #include <string.h>
 static int now(void *p,uint64_t *v)
@@ -81,12 +82,27 @@ static int usb_read(void *p,uintptr_t a,uint32_t *v)
     return a733_usb_platform_native_read(NULL,a,v)==1 ? 1 :
         usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
 }
+/* PCTL is a byte register. The pinned BSP (USBC_Dev_ConectSwitch), TinyUSB
+ * (dcd_disconnect) and the matched nonsecure ROM write SoftConn with a byte
+ * store. A word store that changed only SoftConn read back unchanged on the
+ * board. Reads of the packed word stay 32-bit, as the provider decodes it. */
+int a733_native_usb_pctl_write(uint32_t word)
+{
+    uint32_t old;
+    if(a733_usb_platform_native_read(NULL,A733_NATIVE_USB_PCTL,&old)!=1||word!=(old&~UINT32_C(0x40)))return 0;
+#if defined(__aarch64__)
+    a733_mmio_write8_dsb_sy_both(A733_NATIVE_USB_PCTL,(uint8_t)word);return 1;
+#else
+    return 0; /* Host builds of this unit have no USB0 mapping. */
+#endif
+}
 static int usb_write(void *p,uintptr_t a,uint32_t v)
 {
     struct a733_native_usb *n=p;int ready=usb_io_ready(n);
     if(ready!=1)return ready;
-    return a733_usb_platform_native_write(NULL,a,v)==1 ? 1 :
-        usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
+    int written=a==A733_NATIVE_USB_PCTL ? a733_native_usb_pctl_write(v) :
+        a733_usb_platform_native_write(NULL,a,v);
+    return written==1 ? 1 : usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
 }
 int a733_native_usb_step(struct a733_native_usb *n)
 {

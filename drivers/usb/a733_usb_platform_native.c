@@ -51,6 +51,10 @@ int a733_usb_platform_native_write(void *cookie,uintptr_t a,uint32_t v)
     if (a==USB+0x418 && (v&mask)!=0x806) return 0;
     if (a==USB+0x400 && ((v&15) ||
         ((v&0xf000)!=0xf000 && ((v^old)&0xf000)))) return 0;
-    *(volatile uint32_t *)a=v;
+    /* PCTL is the byte register at USB0+0x40, packed with DEVCTL, EPIND and
+     * VEND0. The pinned BSP, TinyUSB and the matched ROM write it with a byte
+     * store; a word store left SoftConn set on the board. */
+    if (a==USB+0x40) *(volatile uint8_t *)a=(uint8_t)v;
+    else *(volatile uint32_t *)a=v;
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
