@@ -192,12 +192,27 @@ The remaining sequence comparison is:
 
 The `img,gpu` compatible selects the manual callbacks *within* open PVR
 (`pvr_drv.c:1495–1510`); it does not prove which driver a Linux image loads.
-`bsp/drivers/gpu/Kconfig:35–51` and the imagination Makefile select open PVR with
-`CONFIG_AW_DRM_POWERVR`. The separate `bsp/modules/gpu/Makefile` selects BXM when
-`GPU_TYPE` or `CONFIG_AW_GPU_TYPE` is `bxm`. Neither cached sun60iw2 minimum config
-establishes that selection. No built board `.config` or loaded-module record is
-bound to this audit, so the effective board-driver choice remains unresolved.
-The differing reset orders are recorded rather than used to justify a change.
+The [pinned official build recipe](https://github.com/orangepi-xunlong/orangepi-build/tree/a95129bf30ea11886cc35f08ebb3e69695a26656)
+does establish its default current-kernel selection for Zero 3W. The board and
+family configs select `linux-sun60iw2-current-a733.config`, whose lines 450 and
+1124 disable `CONFIG_AW_DRM_POWERVR` and set `CONFIG_AW_GPU_TYPE="bxm"`.
+`scripts/compilation.sh:528–530` builds the external `bsp/modules/gpu` target
+against the kernel's actual `.config`. At the pinned kernel revision, that
+Makefile selects BXM's `sunxi_linux` build and `pvrsrvkm.ko`; its
+`PVR_SYSTEM=rgx_sunxi` selects the `sunxi_platform.o` adapter audited above.
+The family script explicitly installs the module and runs `depmod` for desktop
+Bullseye, Resolute and Trixie profiles (`sun60iw2.conf:137,162–166`). This
+installation path does not establish packaging for other profiles.
+
+BXM is therefore the default build reference, while the driver loaded by a
+particular released image remains unverified. The recipe permits saved or user
+configs and extension hooks, and the module Makefile gives explicit `GPU_TYPE`
+precedence. The build also names a moving kernel branch; no image-specific
+configuration, package manifest or loaded-module record binds a release to these
+two source revisions. Source URLs, hashes and line excerpts are preserved in
+`~/.cache/sunstoneos/evidence/gpu-power-id-diagnosis-20261024/reference-audit/driver-selection.json`.
+Changing native reset order still requires separate justification.
+
 The domain driver attaches clocks but does not set `GENPD_FLAG_PM_CLK`
 (`pck600_domains.c:186–213,282`); generic domain code installs automatic clock
 start/stop callbacks only with that flag (`drivers/base/power/domain.c:2084–2086`).
