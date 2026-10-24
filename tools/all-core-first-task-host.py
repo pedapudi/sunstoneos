@@ -16,9 +16,39 @@ MODEL_SOURCES = ('checks/all-core-first-task-probe.py',)+base.MODEL_SOURCES
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
          'changed-input-refused', 'incomplete-primary-refused', 'incomplete-participant-refused',
          'wrong-task-context-refused', 'wrong-saved-frame-refused', 'wrong-memory-result-refused')
-# Earlier negative cases remain valid: the sole later checker change rejects
-# writes by every CPU/EL after cleanup starts. Executable inputs are unchanged.
-PRIOR_CHECKER = '113e633601cb7fba102f308369e07f41d3e350bbb3d61d307f3b02de02194210'
+# The pre-release admission's refusal return; task-switch and workload
+# profiles keep CASES and do not include the admission.
+REFUSAL_CASES = ('refusal-returned-restored',)
+INSTRUCTION_CASES = ('success', 'wrong-task-argument', 'restore-el3',
+                     'refuse-gic-unreadable', 'refuse-cpu0-pending')
+IDENTITY_MAGIC = 0x4137335052455331
+# Codes written by identity_first_task_admit (boot/a733/all-core-first-task-probe.S).
+REFUSAL_CODES = {
+    0x01: 'startup contract epoch or lease is zero',
+    0x02: 'startup deadline has passed',
+    0x03: 'identity report is not zero',
+    0x04: 'CNTFRQ_EL0 is not 24 MHz',
+    0x10: 'GICD_TYPER reads zero',
+    0x11: 'GICD_CTLR has RWP set or ARE_S, ARE_NS and DS differ from 1, 1, 0',
+    0x12: 'GICR_TYPER affinity, VLPIS or last-frame bit differs',
+    0x20: 'power status is not OFF and idle',
+    0x21: 'power control bit 0 is set',
+    0x22: 'power mode bit 0 is set',
+    0x23: 'secondary GICR_PWRR is powered down or unstable',
+    0x24: 'secondary GICR_CTLR is not 0',
+    0x25: 'secondary GICR_WAKER is not 6',
+    0x26: 'secondary GICR_ISENABLER0 is not 0',
+    0x27: 'secondary GICR_ISPENDR0 is not 0',
+    0x28: 'secondary GICR_ISACTIVER0 is not 0',
+    0x30: 'CPU0 GICR_PWRR is powered down or unstable',
+    0x31: 'CPU0 GICR_CTLR is not 0',
+    0x32: 'CPU0 GICR_WAKER is not 0',
+    0x33: 'CPU0 GICR_ISENABLER0 is not 0',
+    0x34: 'CPU0 GICR_ISPENDR0 is not 0',
+    0x35: 'CPU0 GICR_ISACTIVER0 is not 0',
+}
+REFUSAL_EXPECTED = {'refuse-gic-unreadable': (0x10, 0x03400004, 0, 0),
+                    'refuse-cpu0-pending': (0x34, 0x03470200, 1 << 29, 0)}
 GEOMETRY = {
     'vApplicationGetIdleTaskMemory.xIdleTaskTCB': (0x41288618, 168),
     'vApplicationGetIdleTaskMemory.uxIdleTaskStack': (0x412886c0, 4096),
@@ -35,9 +65,29 @@ def task_context(core, task_switch=False):
     return tcb, (stack+4096-8) & ~15
 
 
+def refusal(raw, nonce):
+    """Return the admission refusal recorded in a returned report, or None."""
+    header = struct.unpack_from('<32Q', raw, 256)
+    if len(raw) != 0x5200 or header[0] != IDENTITY_MAGIC or header[6] != 3:
+        return None
+    base.cache.local.identity.primary.probe.decode(raw[:256], nonce)
+    require(header[1:3] == (1, 0x5100) and header[3] and header[4] and header[5] == 0 and
+            header[7] < 8 and header[12] in REFUSAL_CODES and
+            not any(header[8:12]+header[15:]) and not any(raw[0x200:]),
+            'Admission refusal report is inconsistent.')
+    return {'code': header[12], 'reason': REFUSAL_CODES[header[12]], 'core': header[7],
+            'address': header[13], 'value': header[14], 'epoch': header[3], 'deadline': header[4]}
+
+
 def decode(raw, nonce, manifest, task_switch=False, task_workload=False):
     task_switch = task_switch or task_workload
     hooks = manifest['hooks']
+    refused = None if task_switch else refusal(raw, nonce)
+    if refused:
+        # A returned refusal is a failed attempt: the runner restores DRAM and
+        # records this message; report.bin keeps the fields.
+        raise ValueError('Admission refused before any secondary was released: code {code:#x} ({reason}), '
+                         'core {core}, word {address:#010x} read {value:#x}.'.format(**refused))
     result = base.decode(raw, nonce, hooks['el1_smc_return'], first_task=True, task_workload=task_workload)
     epoch, deadline = result['epoch'], result['startup_deadline']
     entries = []
@@ -105,16 +155,14 @@ def validate_software(software, manifest_hash):
     require(software.get('schema') == 'a733-all-core-first-task-software-v1' and
             software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash and
             software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES} and
-            software.get('host_cases') == dict.fromkeys(CASES, True), 'First-task host evidence differs.')
+            software.get('host_cases') == dict.fromkeys(CASES+REFUSAL_CASES, True), 'First-task host evidence differs.')
     evidence = software['instruction_evidence']
-    require(set(evidence) == {'success', 'wrong-task-argument', 'restore-el3'}, 'Instruction cases incomplete.')
+    require(set(evidence) == set(INSTRUCTION_CASES), 'Instruction cases incomplete.')
     for case, item in evidence.items():
         path = Path(item['path'])
         require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
         result = json.loads(path.read_text())
         sources = {n: digest(ROOT/n) for n in MODEL_SOURCES}
-        if case != 'success':
-            sources['checks/all-core-first-task-probe.py'] = PRIOR_CHECKER
         require(result.get('physical_access') is False and result.get('pass') is True and
                 result.get('native_sha256') == probe.NATIVE and result.get('manifest_sha256') == manifest_hash and
                 result.get('sources') == sources, 'Instruction inputs or result differ.')
@@ -123,6 +171,16 @@ def validate_software(software, manifest_hash):
                     set(result.get('entries', {})) == set(map(str, range(8))), 'Instruction success is incomplete.')
             report = path.with_suffix('.bin')
             require(digest(report) == result['report_sha256'], 'Instruction report changed.')
+        elif case in REFUSAL_EXPECTED:
+            report = path.with_suffix('.bin')
+            code, address, value, core = REFUSAL_EXPECTED[case]
+            require(result.get('case') == case and result.get('returned') is True and
+                    result.get('started') == result.get('off') == result.get('clean_complete') == [] and
+                    result.get('refusal') == {'code': code, 'address': address, 'value': value, 'core': core} and
+                    digest(report) == result['report_sha256'], 'Admission refusal did not return before release.')
+            refused = refusal(report.read_bytes(), report.read_bytes()[32:48])
+            require(refused and (refused['code'], refused['address'], refused['value'], refused['core']) ==
+                    (code, address, value, core), 'Admission refusal report differs.')
         else:
             require(result.get('case') == case and result.get('off') == [] and
                     result.get('clean_complete') == ([] if case == 'wrong-task-argument' else list(range(8))),

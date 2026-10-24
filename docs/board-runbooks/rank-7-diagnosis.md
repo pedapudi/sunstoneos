@@ -1,9 +1,10 @@
 # Why the all-core first-task diagnostic did not return on 2026-10-23
 
-Status: offline diagnosis from saved evidence. No board or USB device was
-accessed. The cause is not established. This document ranks the candidate
-causes, gives the evidence for and against each, and names the read-only
-board observation and the diagnostic correction that separate them.
+Status: the cause is not established. The read-only captures on port 3-3 are
+complete. The corrected diagnostic is built and passes its offline checks
+(`board-bundles-20261023/rank-7-corrected/`; runbook
+[rank-7-corrected.md](rank-7-corrected.md)). No board was accessed to
+produce this document.
 
 ## Summary
 
@@ -24,24 +25,31 @@ observed on 2026-10-18.
 
 The powered lifetimes differ. On 2026-10-18 the board ran only CPU
 diagnostics, SRAM helpers and read-only observations between the cold DDR
-start and the diagnostic. These included an all-eight-core diagnostic that
-powered every secondary CPU up and down. On 2026-10-23 the board ran three
-FreeRTOS images under the kernel secure monitor before the diagnostic: the
-single-core kernel check, the forced-stall recovery case and the returning
-thermal application. No secondary CPU had been powered since the cold start,
-and the CPU power state was never observed in this lifetime.
+start and the diagnostic. On 2026-10-23 it ran three FreeRTOS images under
+the kernel secure monitor first: the single-core kernel check, the
+forced-stall recovery case and the returning thermal application.
 
 The diagnostic converts every failed check into an indefinite wait on CPU0. A
 refused state check, an expired deadline and a hardware hang therefore produce
-the same observation: no return. The most likely cause is a refused check on
-CPU state that differs between the two lifetimes. An intermittent failure of
-the diagnostic itself is second. The MBUS clock rate is not a cause: both
-lifetimes ran MBUS at the 400 MHz that the ROM programs on every entry, and
-the diagnostic does not read or depend on any bus clock.
+the same observation: no return. The two remaining explanations are a refused
+state check on state that the FreeRTOS images left, and an intermittent
+failure of the diagnostic itself.
 
-Running the unchanged diagnostic on port 3-3 is not justified. That board has
-the same lifetime history, so the attempt would repeat the suspected condition
-and could again end without any report.
+The GIC-600 interrupt controller is clocked and out of reset in every
+observed lifetime. Two read-only captures on port 3-3, one after the FreeRTOS
+images and one in a clean lifetime, read every GIC-600 word as 0. Both used
+`sunxi-fel read`, which has the ROM copy memory to the host. A third capture
+in the clean lifetime read `GICD_TYPER` both ways: `sunxi-fel read` gave 0,
+and `sunxi-fel readl`, which runs a 32-bit load on CPU0, gave `0x007b0408`.
+The zero words therefore come from the copy path. The GIC needs no clock or
+reset step before the diagnostic.
+
+The corrected diagnostic makes the state checks before it releases any
+secondary. If a check fails, CPU0 records a failure code, the word's address
+and the value read, and returns to the ROM, so the host gets a report instead
+of a hang. With the state left as it is, the diagnostic runs the same
+sequence as before; its instruction-model success report is byte-identical
+to the earlier one.
 
 ## The two attempts sent the same bytes through the same transactions
 
@@ -73,7 +81,7 @@ Both preparation scripts, `all-core-first-task-20261018/prepare-physical.py`
 and the bundle's `cpu-prepare.py`, copy the frozen prepared bundle and
 regenerate only these values. The native ELF SHA-256 is
 `762237cd…` on both days; the rebuilt overlay and segments are byte-identical
-(`overlay-comparison.json`).
+(`rank-7-first-task/overlay-comparison.json`).
 
 The return timing excludes the window as a cause. On 2026-10-18 the launcher
 upload completed at 21:56:29.4 and the runner read the returned report at
@@ -176,7 +184,10 @@ The checks that read state left by an earlier image, in execution order:
    zero. Any other value sets error `0x1001` or `0x1002` and returns 2, which
    `identity_primary_run` treats as failure.
 5. In `identity_pre_scheduler_el1` (`all-core-first-task-probe.S`), each core
-   at EL1 parks if `ICC_IGRPEN1_EL1` is nonzero.
+   at EL1 parks if `ICC_IGRPEN1_EL1` is nonzero. This check cannot refuse:
+   every core enters EL1 through `a733_cached_enter_el1`
+   (`platform/a733-smp-cached/continue.S`), which first writes 0 to
+   `ICC_IGRPEN1_EL3` and so clears both Group 1 enables.
 
 A refusal at check 4 or 5 happens after the secondaries are running. They then
 wait for CPU0's completion record until their own deadline and park at EL1.
@@ -193,6 +204,97 @@ and EL2/EL3 control registers are left to the RMR warm reset. The comment in
 `primary-local-cache-probe.c` relies on that reset; no board observation
 establishes the warm-reset value of `ICC_IGRPEN1_EL1`, `ICC_SRE_EL3`,
 `SCR_EL3` or the EL2 controls after a FreeRTOS image.
+
+## The GIC-600 is clocked and out of reset after every cold start
+
+The GIC-600 has one clock gate in the main clock controller (CCU, base
+`0x02002000`) and three outer resets in the CPU subsystem. The A733 User
+Manual V1.00 and the pinned Linux CCU driver (`ccu-sun60iw2.c`, SHA-256
+`1d32bb85…`) give these words:
+
+| Word | Address | Field | Reset value | Read on port 3-3, clean lifetime |
+| --- | --- | --- | --- | --- |
+| `GIC_CLK_REG` (manual 4.1.6.71) | `0x02002560` | Bit 31 gate, bits 26..24 source, bits 4..0 divider | `0x80000000`: gate on, 24 MHz | `0x84000003`: gate on, 400 MHz peripheral PLL divided by 4 |
+| `CPU_PERI_CLK_REG` (4.1.6.72) | `0x02002568` | Same layout | `0x80000000` | `0x84000003` |
+| `GENER_CTRL_REG0` (5.1.6.1) | `0x08000000` | Bit 1 `GICCDISABLE` | 0 | 0 |
+| `CPU_SYS_RST_CTRL` (5.1.6.2) | `0x0800000C` | Bits 6, 5, 4: GIC outer debug, outer and outer MBIST resets, 1 = de-asserted | `0x7F` | `0x7F` |
+| `CPU_DSU_PLL_CLK_REG` (5.1.10.37) | `0x0887301C` | CPU-side GIC clock = DSU clock / M1, bits 3..2 | `0x105` | `0x03000105` |
+
+The driver declares the GIC clock with `CLK_IGNORE_UNUSED` and has no GIC
+reset line. The device tree node `interrupt-controller@3400000` names no clock
+or reset.
+
+The boot ROM never closes the gate. On every entry the routine at ROM offset
+`0x23dc` clears only the source and divider fields of `0x02002560` and
+`0x02002568` (helper `0x1d04`), and the clock setup at `0x21cc` then selects
+source 4 with divider 4 (helper `0x1cbc`). Neither helper writes bit 31. The
+ROM contains no literal for the reset or cluster control words. The
+disassembly is `rom-copy-20261016-084055/physical-rom.dis`.
+
+Nothing in this repository writes these words. No source names
+`0x02002560`, `0x0800000C`, `0x08868000` (cluster `C0_RST_CTRL`, GIC inner
+reset bit 4) or `0x0886800C` (cluster clock-gating override). None of them
+appears as a literal in the loaded kernel-check image
+(`board-session-20261023/images/a733-kernel-check.bin`), the loaded thermal
+image (`board-bundles-20261023/rank-6-thermal/probe.bin`) or the frozen
+supervised ELF of the diagnostic. The kernel monitor (`platform/a733/monitor.c`, `monitor.S`) writes
+only GIC distributor and redistributor registers, the CPU0 reset vector
+`0x08001004` and `RMR_EL3`. The cache-off helper (`boot/a733/cache-off.S`)
+clears `SCTLR.I` only. The DDR wrapper runs the vendor boot0, which ran in
+every lifetime, including those in which the GIC read correctly.
+
+Every image read the GIC with 32-bit loads and got real values, in every
+lifetime:
+
+- On 2026-10-23, the kernel check was the first image after cold DDR on both
+  boards. Its monitor read `GICD_CTLR` `0x37` and `GICD_TYPER` `0x007b0408`
+  at entry, as did the forced-stall and thermal images that followed
+  (`port-3-1/kernel`, `timeout`, `r6-thermal` and the same on `port-3-3`).
+- On 2026-10-18, `sunxi-fel readl` read the same two values
+  (`primary-gic-state-121-20261018`, `gic600-registers-20261018-089`). Before
+  those reads the two lifetimes ran only cold DDR, surveys, a read-only CPU
+  power check and one native CPU diagnostic each. None of these steps writes
+  a GIC clock or reset.
+
+No step enabled the GIC on 2026-10-18; the gate is on from reset. The
+diagnostic's preparation needs no GIC clock or reset step, and none is added:
+no source shows a sequence that would be needed.
+
+## A ROM memory copy reads every GIC-600 register as 0
+
+`sunxi-fel read ADDRESS 4` sends the ROM's FEL read request, and the ROM
+copies the memory to the host. `sunxi-fel readl ADDRESS` instead uploads a
+12-word A32 stub to the FEL scratch area at `0x71000`, executes it, and reads
+back the value of one `LDR` (`fel_lib.c`, `aw_fel_readl_n`). The ROM's FEL
+copy code lies outside the 68 KiB captured ROM (the dispatcher jumps to
+`0x17000`), so its access width is not known. The GIC architecture supports
+only 32-bit and 64-bit accesses to these registers; any other access returns
+UNKNOWN data (IHI 0069G, section 12.1.3).
+
+Three port 3-3 captures compare the two methods:
+
+| Capture | Lifetime | Method | GIC words | Power and entry-configuration words |
+| --- | --- | --- | --- | --- |
+| `port-3-3/state-capture` | After the kernel, forced-stall and thermal images | `read`, 89 words | All 0 | Status `0x100`, control, mode and entry words 0 |
+| `port-3-3/state-capture-clean` | Power cycle, cold DDR, surveys | `read`, 89 words | All 0 | Same |
+| `port-3-3/gic-clock-capture` | Same clean lifetime | `read` and `readl` | `read`: `GICD_TYPER` 0 before and after. `readl`: the values below | Not read |
+
+The `readl` values in the clean lifetime match 2026-10-18 and satisfy every
+predicate of the diagnostic that they cover: `GICD_CTLR` `0x37`,
+`GICD_TYPER` `0x007b0408`; CPU0 redistributor `GICR_PWRR`, `GICR_CTLR`,
+`GICR_WAKER` and the enable, pending, active, group, modifier, configuration
+and priority words all 0; secondary frame n `GICR_TYPER` `(n << 40) | 0x21`
+(with `0x10` added on frame 7), `GICR_PWRR` `n << 8`, `GICR_CTLR` 0 and
+`GICR_WAKER` 6. The FEL scratch bytes were restored and compared.
+
+The CPU power, control and mode words read the same values with `read` as
+`readl` read on 2026-10-18, so the copy path returns correct values for those
+register blocks. For GIC-600 registers the method must be `readl`. The
+corrected capture script, `board-session-20261023/state-capture-readl.py`,
+reads the same 89 words and the two GIC gate and reset words with `readl`. It
+saves and restores the FEL scratch bytes, and it reads the GIC only when the
+gate is open and the resets are de-asserted. `state-capture.py` is unchanged
+because two queue proposals pin its SHA-256.
 
 ## MBUS ran at 400 MHz in both lifetimes
 
@@ -285,6 +387,9 @@ Against:
   the CPU power controller.
 - The distributor control word read by the monitor at each entry was `0x37`,
   the same value the 2026-10-18 baseline recorded.
+- No capture with 32-bit loads exists for the state after the FreeRTOS
+  images: the only capture of that state used the ROM copy, which reads the
+  GIC as 0.
 
 ### 2. The diagnostic fails intermittently
 
@@ -326,6 +431,9 @@ Against:
 - No image in the lifetime writes those registers.
 - Every observed cold start, on both boards, showed status `0x100` and zero
   control and mode words.
+- In a clean port 3-3 lifetime, the secondaries' power words and the
+  redistributor words read with 32-bit loads satisfy every predicate that
+  checks 2 and 3 apply to them.
 
 ### 4. A physical fault: supply, temperature or brownout
 
@@ -355,107 +463,112 @@ table area is rebuilt.
 
 Excluded, as shown above.
 
-## Next steps
+## The corrected diagnostic checks the inherited state before releasing any secondary
 
-The port 3-3 queue records a survey taken after the port 3-1 reconnect, so
-port 3-1's failed state is lost. The steps below separate hypotheses 1 to 3
-without another silent launch.
+The corrected first-task overlay adds one function,
+`identity_first_task_admit`, at the end of
+`boot/a733/all-core-first-task-probe.S`. The builder
+(`tools/prepare-secondary-identity-probe.py --first-task`) links the overlay
+with `--wrap=identity_primary_run`, so `identity_primary_gate` calls the new
+function before the sequential survey. The function uses no stack and writes
+no device register. It reads each word below with a 32-bit load (64-bit for
+`GICR_TYPER`) and applies the predicate of the later check that reads the
+same word. If every word passes, it branches to `identity_primary_run`, and
+the run continues as before with the report untouched.
 
-### Step 1: one read-only FEL capture on port 3-3
+On the first failing word it writes a refusal into the identity report header
+at `0x42018100` and returns to the ROM through the base overlay's existing
+RVBAR and `RMR_EL3` sequence. No secondary has been released at that point.
+In the saved `report.bin`, which starts at `0x42018000`, the refusal fields
+are:
 
-Port 3-3 ran the same sequence on 2026-10-23: cold DDR, kernel check, forced
-stall and thermal application. Since then it has run only the cache-off helper,
-surveys and a read-only CCU capture. Apart from board-to-board differences,
-its state should match what the diagnostic met on port 3-1. One `readl` batch
-of the following words tests checks 1, 2 and 4 and the redistributor part of
-check 3. FEL read the power words, the distributor words, the
-CPU0 words and the secondary `TYPER` and `PWRR` words on 2026-10-18. The
-secondary `CTLR` and `WAKER` words and the entry configuration words are new
-FEL reads. They sit in register blocks that FEL has already read, and CPU0
-reads the entry configuration words itself during the diagnostic.
+| Offset | Field |
+| --- | --- |
+| `0x130` | State 3 (refused before release); a completed run writes 2 |
+| `0x138` | Core whose word failed; 0 for CPU0 and the distributor |
+| `0x160` | Failure code |
+| `0x168` | Address of the failing word; 0 for a system register |
+| `0x170` | Value read |
 
-| Words | Addresses | 2026-10-18 value | Required by |
+The host profile (`tools/all-core-first-task-host.py`) decodes the refusal
+and raises `Admission refused before any secondary was released: code …
+(reason), core …, word … read …`. The runner then restores the saved DRAM,
+marks the ROM usable, records that message as the failure and does not
+quarantine the instance.
+
+| Code | Word | Required | Later check that applies it |
 | --- | --- | --- | --- |
-| Secondary power status, control, mode (cores 1 to 7) | `0x07052008 + n*0x1000`, `0x07050200 + 4n`, `0x07050220 + 4n` | `0x100`, 0, 0 (`reconnect-20261018-120/cpu-state`) | Low 4 status bits and bit 0 of control and mode clear |
-| Secondary entry configuration (cores 1 to 7) | `0x08001000 + n*0x1000`, `+4`, `+8` | 0, 0, 0 (first-task report) | Recorded and restored; no requirement |
-| Distributor control and type | `0x03400000`, `0x03400004` | `0x37`, `0x007b0408` (`primary-gic-state-121-20261018`) | `CTLR & 0x70 == 0x30`, RWP clear |
-| CPU0 redistributor | `0x03460024` first, then `0x03460000`, `0x03460014`, `0x03470100`, `0x03470200`, `0x03470300`, `0x03470080`, `0x03470d00`, `0x03470c04`, `0x03470400` | `PWRR` 0, all others 0 | `PWRR` powered; `CTLR`, `WAKER`, enable, pending and active zero |
-| Secondary redistributor frames (cores 1 to 7) | `0x03460000 + n*0x20000` at `+0x8`, `+0xc`, `+0x24`, `+0x0`, `+0x14` | `TYPER` affinity `n << 8`, last-frame bit on core 7 only; `PWRR` `n << 8`; `CTLR` 0; `WAKER` 6 (`gic600-registers-20261018-089`, first-task report) | Same values |
+| `0x01` | Startup contract epoch and lease (`0x42004018`, `0x42004070`) | Nonzero | `identity_primary_run` |
+| `0x02` | Startup deadline (`0x42004058`) | Counter below it | `identity_primary_run` |
+| `0x03` | Identity report `0x42018100`..`0x4201d200` | All zero | `identity_primary_run`, `secondary_distributor_begin`, `primary_local_cache_probe` |
+| `0x04` | `CNTFRQ_EL0` | 24,000,000 | `primary_local_cache_probe` |
+| `0x10` | `GICD_TYPER` `0x03400004` | Nonzero (distributor readable) | New |
+| `0x11` | `GICD_CTLR` `0x03400000` | RWP clear, bits 6..4 equal to `0b011` | `secondary_distributor_begin` |
+| `0x12` | `GICR_TYPER` of frames 0 to 7 (`0x03460008 + n*0x20000`) | Affinity n, VLPIS clear, last-frame bit on frame 7 only | `a733_cpu_continue` scan, `secondary_local_probe` |
+| `0x20` | Power status `0x07052008 + n*0x1000`, cores 1 to 7 | Low four bits 0 | `identity_primary_run` |
+| `0x21` | Power control `0x07050200 + 4n` | Bit 0 clear | `identity_primary_run`, `a733_cpu_continue` |
+| `0x22` | Power mode `0x07050220 + 4n` | Bit 0 clear | `identity_primary_run`, `a733_cpu_continue` |
+| `0x23` | Secondary `GICR_PWRR` (frame + `0x24`) | RDPD clear, bits 2 and 3 equal | `secondary_local_probe` |
+| `0x24` | Secondary `GICR_CTLR` (frame + 0) | 0 | `secondary_local_probe` |
+| `0x25` | Secondary `GICR_WAKER` (frame + `0x14`) | 6 | `secondary_local_probe` |
+| `0x26` to `0x28` | Secondary `GICR_ISENABLER0`, `ISPENDR0`, `ISACTIVER0` (frame + `0x10100`, `0x10200`, `0x10300`) | 0 | `secondary_local_probe` |
+| `0x30` | CPU0 `GICR_PWRR` `0x03460024` | RDPD clear, bits 2 and 3 equal | `primary_local_cache_probe` |
+| `0x31` to `0x35` | CPU0 `GICR_CTLR`, `GICR_WAKER`, `ISENABLER0`, `ISPENDR0`, `ISACTIVER0` | 0 | `primary_local_cache_probe` |
 
-The secondaries' SGI-bank words are also checked, but FEL has never read them
-from CPU0, so they stay out of this batch.
+The secondary words are checked core by core, `GICR_PWRR` before the other
+words of the same frame, and CPU0's frame last.
 
-The coordinator compares the result with the table and with the code's
-predicates:
+Some failures still park, because they happen after release, when running
+secondaries cannot be brought to an observed OFF. They are each secondary's
+checks of its own identity and control registers, the power-on, wake and
+configuration handshakes of `a733_cpu_continue`, the cached EL1 entry, every
+cleanup readback and every deadline that expires after release. The base overlay's
+entry checks (EL3, boot CPU, masked interrupts, CPU revision) run before the
+survey and also park; the primary report's state field records how far that
+overlay got.
 
-- **A word differs.** The differing word names the refusing check. The
-  correction is to make the earlier image restore it, or to make the
-  diagnostic's preparation establish it before any secondary is released.
-  Port 3-1 then gets one corrected attempt after a clean cold start.
-- **Every word matches.** Hypotheses 3 and the readable part of 1 are
-  excluded. What remains is CPU0 system-register state that FEL cannot read,
-  and intermittency. Continue with step 2.
+The executed bytes change only in the identity extension of the overlay. The
+extension grows from 11,096 to 11,736 bytes of its 12,288-byte reservation;
+the new function follows every existing hook, so no native patch target moves
+and the three native payload segments are byte-identical to the accepted
+build. The task-switch and workload profiles are built without the wrap and
+are byte-identical to their accepted builds. Their manifests pin the digests
+of the two changed sources, so the loaders refuse the frozen workload bundle
+(`rank-8-workload/`, "Identity source changed.") until its manifest and
+evidence are regenerated.
 
-### Step 2: make a refusal return a report
+## Next board steps
 
-Change the overlay so that every check that can fail runs before the first
-secondary is released. A failure at that point then returns through the
-existing monitor return with a nonzero status and a failure code. CPU0 can
-make all of these checks itself:
+Both boards are in clean lifetimes: power cycle, cold DDR and surveys, with
+no FreeRTOS image. [rank-7-corrected.md](rank-7-corrected.md) lists the
+commands. The order:
 
-- Read every secondary's power, control and mode words and redistributor
-  frame (checks 2 and 3) from EL3.
-- Read its own redistributor words (check 4).
-- Read `ICC_IGRPEN1_EL1` for the security state its EL1 will use (check 5).
-- Read `CNTFRQ_EL0`.
+1. **Port 3-1, read-only capture.** Run
+   `board-session-20261023/state-capture-readl.py`. Every word should match
+   the port 3-3 clean values above. A differing word names the inherited state
+   before any launch.
+2. **Port 3-1, corrected diagnostic.** Run the cache-off helper and a survey,
+   bind `rank-7-corrected` to the instance with its `cpu-prepare.py`, and run
+   it once. The outcomes separate the hypotheses:
+   - **It returns with success.** The diagnostic itself passes in a clean
+     lifetime on the board that failed, and lifetime history becomes the
+     leading explanation. Then, on the same board: the kernel check, the
+     forced-stall case and the thermal application, `state-capture-readl.py`,
+     the cache-off helper and a survey, and the corrected diagnostic once
+     more.
+   - **It returns with a refusal code.** The code, address and value name the
+     state; correct its owner before another attempt.
+   - **It does not return.** The failure is after release, so it is an
+     intermittent failure or a fault that does not depend on the inherited
+     state. Remove every power source from port 3-1. The next diagnostic is a
+     bounded repeat of the all-eight-core pre-scheduler diagnostic, which
+     shares the power-up and cached-entry path.
+3. **Port 3-3, only after port 3-1 returns.** Port 3-3 has never run an
+   eight-core diagnostic and draws power from USB only, so a failure there
+   could not be separated from a supply limit. Repeat steps 1 and 2 on port
+   3-3 only if port 3-1 returned with success.
 
-The existing in-place checks stay. A failure after release still parks,
-because running secondaries cannot be brought to an observed OFF from that
-point. This changes the overlay bytes, so the build, the three instruction
-cases and the nine host cases must be regenerated. It needs no change to the
-native ELF.
-
-### Step 3: separate history from intermittency on port 3-1
-
-After its cold DDR start, run on port 3-1, in order:
-
-1. The read-only CPU power-state check from 2026-10-18.
-2. The step-1 batch.
-3. The cache-off helper and survey.
-4. The corrected diagnostic, with no FreeRTOS image earlier in the lifetime.
-
-The outcomes separate the hypotheses:
-
-- **It returns with success.** Lifetime history becomes the leading
-  explanation. Rerun the kernel check, forced stall and thermal application,
-  then the step-1 batch and the corrected diagnostic again, to find which
-  image leaves the refusing state.
-- **It returns with a failure code.** The code names the check and the
-  state.
-- **It does not return in a clean lifetime.** Intermittency or a change in
-  the board becomes the leading explanation. The next diagnostic is a
-  bounded repeat of the pre-scheduler diagnostic, which shares the power-up
-  and cached-entry path.
-
-## Running the unchanged diagnostic on port 3-3 is not justified
-
-The goal's rule requires a concrete correction, or a narrower diagnostic
-justified by new evidence, before a failed launch is repeated. The unchanged
-diagnostic on port 3-3 meets neither condition:
-
-- **It repeats the suspected condition.** Port 3-3 has the same lifetime
-  history as port 3-1: kernel check, forced stall and thermal application,
-  with no observed CPU state.
-- **A second failure would be just as silent.** It would leave CPU0 parked
-  with no report and cost a power removal.
-- **It adds new variables.** Port 3-3 has never run any eight-core
-  diagnostic, and USB is its only power source. A failure there could not be
-  separated from a supply limit.
-- **The MBUS observation adds nothing.** Both lifetimes ran MBUS at 400 MHz,
-  so it gives no reason to expect a different result.
-
-The step-1 read-only batch on port 3-3 is justified now. A diagnostic launch
-on either board should wait for its result and for the step-2 correction.
+The unchanged bundle `rank-7-first-task/` is superseded and is not run again.
 
 ## Evidence
 
@@ -466,10 +579,17 @@ All paths are under `~/.cache/sunstoneos/evidence/`.
   the sibling `ddr/`, `kernel/`, `timeout/`, `r6-thermal/`, `r7-survey/`.
 - 2026-10-18 pass: `all-core-first-task-20261018/physical-010/` and
   `warm-010/ready/survey/`; lifetime records `reconnect-20261018-120/`,
-  `primary-gic-state-121-20261018/`; queue history in
+  `primary-gic-state-121-20261018/`, `reconnect-20261018-086/`,
+  `gic600-registers-20261018-089/`; queue history in
   `~/.cache/sunstoneos/board-tests.sqlite3`.
-- Frozen bundle: `board-bundles-20261023/rank-7-first-task/`, including
-  `overlay-comparison.json`.
+- Port 3-3 captures: `board-session-20261023/port-3-3/state-capture/`,
+  `state-capture-clean/` and `gic-clock-capture/`; scripts
+  `board-session-20261023/state-capture.py`, `gic-clock-capture.py` and
+  `state-capture-readl.py`.
+- GIC words read by the monitor at each image entry: `result` in
+  `board-session-20261023/port-3-{1,3}/{kernel,timeout,r6-thermal}/session.json`.
+- Bundles: `board-bundles-20261023/rank-7-first-task/` (superseded) and
+  `board-bundles-20261023/rank-7-corrected/`.
 - MBUS observations: `usb-first-fault-20261018/fabric-064/`,
   `usb-returning-20261018/fabric-056/`,
   `second-board-20261018-3-3/sd-pin-clock-state/`,
@@ -477,9 +597,17 @@ All paths are under `~/.cache/sunstoneos/evidence/`.
   `second-board-cold-122-20261018/accelerator-state/npu-state/`,
   `crypto-clocks-20261018-082/`, `board-session-20261023/port-3-3/r9-capture/`;
   DDR initialization records for each lifetime under `*/ddr*/`.
-- Sources: `boot/a733/secondary-identity-probe.{c,S}`,
-  `boot/a733/all-core-first-task-probe.S` at `7ca22b0`,
+- Vendor sources under `~/.cache/sunstoneos/sources/`:
+  `camera-research/A733_User_Manual_V1.00.txt` (sections 4.1.6.71, 4.1.6.72,
+  5.1.6, 5.1.9 and 5.1.10), `board-kernel/ccu-sun60iw2.c`,
+  `board-kernel/sun60iw2p1.dtsi`, `cpu-audit/arm-gic-architecture-ihi0069g.txt`
+  (section 12.1.3), `sunxi-tools-b92f4ed3115a520e3ec406697d268239e3f29488/fel_lib.c`;
+  ROM disassembly `rom-copy-20261016-084055/physical-rom.dis`.
+- Repository sources: `boot/a733/secondary-identity-probe.{c,S}`,
+  `boot/a733/all-core-first-task-probe.S`,
   `boot/a733/primary-local-cache-probe.c`,
   `boot/a733/secondary-local-probe.c`,
-  `boot/a733/secondary-distributor-probe.c`, `platform/a733/monitor.{c,S}`,
-  `tools/run-native-startup-probe.py`.
+  `boot/a733/secondary-distributor-probe.c`, `platform/a733/cpu_continue.c`,
+  `platform/a733-smp-cached/continue.S`, `platform/a733/monitor.{c,S}`,
+  `tools/prepare-secondary-identity-probe.py`,
+  `tools/all-core-first-task-host.py`, `tools/run-native-startup-probe.py`.
