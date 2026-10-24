@@ -15,24 +15,34 @@ that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
 
 **Open work, in order:**
 
-1. Two reviewed packages wait for integration on their own branches:
-   - `audit/tree-checks` (worktree `audit-tree-checks`, commit `56d9d4b2`
-     plus `~/.cache/sunstoneos/build/tree-checks/primary.patch`) renames the
-     PMIC adapter table to `pmic_bus_ops`, adds `a733_pmic_native_bind()`,
-     `a733_pmic_now()` and `a733_pmic_outside()`, and keys
-     `checks/pmic-tree.py` and `checks/power-domains-tree.py` on them; it
-     also makes `checks/power-domains-tree.py` pass again on bundle 8's
-     domain-1 status read.
-   - `audit/pmic-bound` (worktree `audit-pmic-bound`, commit `984ecb55`
-     plus `~/.cache/sunstoneos/build/pmic-bound/primary.patch`) replaces the
-     provisional 155% PMIC step bound with 799 µs median and 839 µs first
-     step (1,268 permille), fitted to the 2026-10-24 bundle 6 run.
+1. `audit/pmic-bound` (worktree `audit-pmic-bound`, commit `984ecb55` plus
+   `~/.cache/sunstoneos/build/pmic-bound/primary.patch`) waits for one fix
+   round before it merges. It replaces the provisional 155% PMIC step bound
+   with 799 µs median and 839 µs first step (1,268 permille) from the
+   2026-10-24 bundle 6 run. The hardware-performance review rejected two
+   claims; the figures themselves reproduce:
+   - "110% is out of reach whatever the barrier placement" holds only for
+     reads. The model's step follows the write cost, and a write without its
+     trailing barrier was never measured. State 110% as open, add a board
+     window of plain back-to-back writes to an S_TWI0 register with no bus
+     effect followed by one barrier, and replace the 379/379 floor row in
+     `checks/power-domains-service.c` with separate read and write floors.
+   - The 299 ns per-poll remainder is fitted to the board median, so the
+     bound is the board median plus 20 µs. Say that plainly and drop the
+     "untimed software" claim, or add a board window that times a whole
+     provider poll.
+   - Minors: use one statistic for read and write costs (the write cost
+     takes the single slowest of 2,040 samples and charges the counter stamps
+     twice); the DCDC3 write splits at 386 ns per poll, not 390; the model
+     step is 757 µs at 250 ns; note that an interrupt landed in 24 of 33
+     steps.
 
-   Each merges into `audit/cpu-wave` with its patch, then runs
-   `~/.cache/sunstoneos/bin/integration-gate.sh`; the two patches both edit
-   `docs/designs/pmic-access.md`, so merge one, regenerate, then the other.
-   After both land, add `checks/pmic-tree.py` and
-   `checks/power-domains-tree.py` to the integration gate.
+   Merge it into `audit/cpu-wave` with its patch and run
+   `~/.cache/sunstoneos/bin/integration-gate.sh`, which now also runs
+   `checks/pmic-tree.py` and `checks/power-domains-tree.py`. The PMIC adapter
+   rename (`pmic_bus_ops`, `a733_pmic_native_bind()`, `a733_pmic_now()`,
+   `a733_pmic_outside()`) and the tightened tree checks merged at
+   `588b1d2c`.
 2. The next bundle refreeze carries the new bound into bundle 6
    (`BB_BOUND_PERMILLE` 1268 in `apps/board-bundles-power/trace.h`, with its
    bins, model and row text) and the `pmic_bus_ops` rename.
