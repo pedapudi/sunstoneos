@@ -166,3 +166,18 @@ Consequently, finite admission does not require native USB mappings, PIO takeove
 or disabled IRQ188/189/190. The monitor preserves inherited SPI enables and
 restores them before ROM return. ROM USB clock, power, supply and writer-exclusion
 authority remains required, as do all numerical NPU and PMIC operating conditions.
+
+## A numerical failure can preserve ROM continuity
+
+`continuity.py --bundle BUNDLE --session SESSION --output NEW_RECORD` is an
+offline producer for a completed numerical failure. It reuses the bundle's
+frozen host validator, checks captured monitor, platform and receipt bytes,
+verifies upload readbacks and compares the full 18 MiB DRAM backup with its
+restoration. Only status 1 with a validated normal return and unchanged failed
+numerical result can produce the existing kernel controlled-outcome record.
+
+The new record references the original session and all consumed inputs by hash.
+It preserves `functional_success=false`, never edits the original session and
+refuses an existing output path. This establishes ROM continuity for later
+admission; it does not authorize an NPU restart, close a queue claim or grant
+peripheral ownership. PLL, domain and rail retention still apply.
