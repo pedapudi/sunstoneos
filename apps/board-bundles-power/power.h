@@ -29,7 +29,7 @@
 
 #define BB_POWER_PMIC_OWNER 2u
 #define BB_POWER_CLIENT_OWNER 3u
-#define BB_POWER_STEPS 160u
+#define BB_POWER_STEPS BB_BOUND_STEPS /* every recorded step enters the median */
 #define BB_POWER_ACCESSES 64u
 #define BB_POWER_STATUS_BOUND (24000000u / 100u) /* 10 ms of CNTPCT */
 #define BB_POWER_COST_READS 256u

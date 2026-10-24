@@ -2,8 +2,31 @@
 /* Records and log lines of bundles 6 and 7; see trace.h. */
 #include "trace.h"
 
+/* Re-spins of a completed phase: polls beyond the second. */
+static unsigned respun(struct bb_twi *t)
+{
+    if (t->polls > t->polls_max) t->polls_max = t->polls;
+    const unsigned extra = t->polls > 2 ? t->polls - 2 : 0;
+    t->respins += extra;
+    t->snapshot_respins += extra;
+    t->mode = 0;
+    return extra;
+}
+
 void bb_twi_observe(struct bb_twi *t, unsigned write, uintptr_t address, uint32_t value)
 {
+    if (address == BB_TWI_STAT) {
+        /* The idle status ends a STOP wait whose STOP bit has cleared. */
+        if (!write && t->mode == 3 && (value & 0xff) == 0xf8) {
+            t->stop_respins += respun(t);
+            if (++t->stops % BB_TWI_SNAPSHOT_STOPS == 0) {
+                if (t->snapshot_respins > t->snapshot_respins_max) t->snapshot_respins_max = t->snapshot_respins;
+                t->snapshot_respins = 0;
+                ++t->snapshots;
+            }
+        }
+        return;
+    }
     if (address != BB_TWI_CNTR)
         return;
     if (write) {
@@ -22,33 +45,62 @@ void bb_twi_observe(struct bb_twi *t, unsigned write, uintptr_t address, uint32_
         }
         if (!(value & 8))
             return;
-        if (t->polls > t->polls_max) t->polls_max = t->polls;
-        if (t->polls > 2) t->respins += t->polls - 2;
+        (void)respun(t);
         if (t->condition) ++t->conditions;
         else ++t->bytes;
-        t->mode = 0;
-    } else if (t->mode == 2 && !(value & 0x10)) {
-        ++t->stops;
-        t->mode = 0;
+    } else if (t->mode >= 2) {
+        /* Every poll of a STOP wait reads CNTR first; the status read
+         * follows once the STOP bit reads clear. */
+        ++t->polls;
+        if (!(value & 0x10))
+            t->mode = 3;
     }
 }
 
-void bb_step_bins(const struct bb_step *s, unsigned count, uint32_t bit_ns, struct bb_step_bins *b)
+void bb_steps_evaluate(const struct bb_step *s, unsigned count, uint32_t bit_ns, uint32_t byte_ns,
+                       struct bb_step_bins *b, struct bb_bound *bound)
 {
     *b = (struct bb_step_bins){{0}, 0, 0};
+    *bound = (struct bb_bound){0, 0, 0, 0};
+    if (count > BB_BOUND_STEPS)
+        count = BB_BOUND_STEPS;
+    uint64_t sorted[BB_BOUND_STEPS];
     for (unsigned i = 0; i < count; ++i) {
         const uint64_t ns = s[i].ticks * 125 / 3; /* 24 MHz counter ticks */
-        const uint64_t wire = bb_twi_wire_bits(s[i].conditions, s[i].bytes, s[i].stops) * bit_ns;
-        const uint64_t ratio = wire ? ns * 1000 / wire : 0;
+        const uint64_t wire = bb_twi_wire_ns(s[i].conditions, s[i].bytes, s[i].stops, bit_ns, byte_ns);
+        const uint64_t ratio = wire ? ns * 1000 / wire : UINT64_MAX;
         b->bins[ratio <= 1000 ? 0 : ratio <= 1050 ? 1 : ratio <= 1100 ? 2 : ratio <= 1550 ? 3 : 4]++;
         b->over_ms += ns > 1100000;
         if (ratio > b->worst)
             b->worst = ratio;
+        if (!i) {
+            bound->first_ns = ns;
+            bound->first_limit_ns = wire * BB_BOUND_PERMILLE / 1000 + BB_BOUND_FIRST_EXTRA_NS;
+        }
+        unsigned j = i;
+        for (; j && sorted[j - 1] > ratio; --j)
+            sorted[j] = sorted[j - 1];
+        sorted[j] = ratio;
     }
+    if (!count)
+        return;
+    bound->median = sorted[count / 2] < UINT32_MAX ? (uint32_t)sorted[count / 2] : UINT32_MAX;
+    bound->pass = bound->median <= BB_BOUND_PERMILLE && bound->first_ns <= bound->first_limit_ns;
+}
+
+unsigned bb_byte_ns(uint32_t bit_ns, unsigned seen, uint64_t clear_ticks, uint32_t *byte_ns)
+{
+    const uint64_t nominal = 9ull * bit_ns, measured = clear_ticks * 125 / 3;
+    *byte_ns = (uint32_t)nominal;
+    if (!seen || measured * 1000 > nominal * BB_BYTE_LIMIT_PERMILLE)
+        return 0;
+    if (measured > nominal)
+        *byte_ns = (uint32_t)measured;
+    return 1;
 }
 
 void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, uint64_t (*now)(void),
-    uintptr_t status, uint64_t start, uint64_t bound, struct bb_status_trace *t)
+    uintptr_t status, uint32_t mask, uint32_t done, uint64_t start, uint64_t bound, struct bb_status_trace *t)
 {
     *t = (struct bb_status_trace){0};
     uint32_t previous = 0;
@@ -70,12 +122,14 @@ void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, u
         }
         if (t->reads == 1)
             t->first = v;
+        const uint64_t before = previous_at;
         previous = v;
         previous_at = at;
         t->last_at = at;
-        if ((v & 15) == 8) {
+        if ((v & mask) == done) {
             t->on = 1;
             t->on_at = at;
+            t->on_before = before;
             return;
         }
         if (at >= bound) {
@@ -154,7 +208,30 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "dropped", s->dropped);
     bb_line_dec(l, "permille_max", s->bins.worst);
     bb_line_dec(l, "excluded", s->wire_excluded);
-    bb_line_dec(l, "respins", s->respins);
+    bb_line_end(l++);
+    bb_line_start(l, "BOUND");
+    bb_line_dec(l, "permille", BB_BOUND_PERMILLE);
+    bb_line_dec(l, "median", s->bound.median);
+    bb_line_dec(l, "first_ns", s->bound.first_ns);
+    bb_line_dec(l, "first_limit_ns", s->bound.first_limit_ns);
+    bb_line_dec(l, "pass", s->bound.pass);
+    bb_line_end(l++);
+    bb_line_start(l, "BYTE");
+    bb_line_dec(l, "ns", s->byte_ns);
+    bb_line_dec(l, "ok", s->byte_ok);
+    bb_line_dec(l, "limit_permille", BB_BYTE_LIMIT_PERMILLE);
+    bb_line_end(l++);
+    bb_line_start(l, "WIRE");
+    bb_line_dec(l, "clear_cntpct", s->cost.wire_clear);
+    bb_line_dec(l, "set_cntpct", s->cost.wire_set);
+    bb_line_dec(l, "seen", s->cost.wire_seen);
+    bb_line_dec(l, "reads", s->cost.wire_reads);
+    bb_line_end(l++);
+    bb_line_start(l, "RESPINS");
+    bb_line_dec(l, "recorded_steps", s->respins);
+    bb_line_dec(l, "stop", s->stop_respins);
+    bb_line_dec(l, "snapshot_max", s->snapshot_respins_max);
+    bb_line_dec(l, "snapshots", s->snapshots);
     bb_line_end(l++);
     bb_line_start(l, "STEPS of wire time");
     bb_line_dec(l, "le100", s->bins.bins[0]);
@@ -166,23 +243,27 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_end(l++);
     bb_line_start(l, "TWI_COST");
     bb_line_dec(l, "reads", s->cost.reads);
+    bb_line_dec(l, "subwindows", BB_COST_SUBWINDOWS);
     bb_line_dec(l, "core", s->cost.core);
-    bb_line_dec(l, "dsb", s->cost.dsb);
-    bb_line_dec(l, "plain_issue", s->cost.plain);
-    bb_line_dec(l, "dependent", s->cost.dependent);
-    bb_line_end(l++);
-    bb_line_start(l, "TWI_COST path");
-    bb_line_dec(l, "time_read", s->cost.time_read);
-    bb_line_dec(l, "adapter_read", s->cost.adapter_read);
-    bb_line_dec(l, "task_check", s->cost.task_check);
     bb_line_dec(l, "task_ticks", s->cost.task_ticks);
-    bb_line_dec(l, "observer", s->cost.observer);
     bb_line_end(l++);
-    bb_line_start(l, "TWI_COST bus");
-    bb_line_dec(l, "writes", s->cost.writes);
-    bb_line_dec(l, "write_ticks", s->cost.write_ticks);
-    bb_line_dec(l, "wire_ticks", s->cost.wire_ticks);
-    bb_line_dec(l, "wire_reads", s->cost.wire_reads);
+    const struct { const char *name; const struct bb_window *w; } windows[] = {
+        {"TWI_COST dsb", &s->cost.dsb}, {"TWI_COST plain_issue", &s->cost.plain},
+        {"TWI_COST dependent", &s->cost.dependent}, {"TWI_COST time_read", &s->cost.time_read},
+        {"TWI_COST adapter_read", &s->cost.adapter_read}, {"TWI_COST task_check", &s->cost.task_check},
+        {"TWI_COST observer", &s->cost.observer}};
+    for (unsigned i = 0; i < sizeof windows / sizeof windows[0]; ++i) {
+        bb_line_start(l, windows[i].name);
+        bb_line_dec(l, "cntpct", windows[i].w->ticks);
+        bb_line_dec(l, "sub_min", windows[i].w->sub_min);
+        bb_line_dec(l, "sub_max", windows[i].w->sub_max);
+        bb_line_end(l++);
+    }
+    bb_line_start(l, "TWI_COST writes");
+    bb_line_dec(l, "count", s->cost.writes);
+    bb_line_dec(l, "cntpct", s->cost.write_ticks);
+    bb_line_dec(l, "min", s->cost.write_min);
+    bb_line_dec(l, "max", s->cost.write_max);
     bb_line_end(l++);
     bb_line_start(l, "PPU_MAPPING");
     bb_line_dec(l, "adapter_mapped", s->mapped);
