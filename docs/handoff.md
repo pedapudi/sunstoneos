@@ -1,5 +1,12 @@
 # Current work
 
+> **Reconnect requested, port `3-3` (second board), 2026-10-23.** Unplug its
+> USB cable, wait 5 seconds and plug it back in; USB is its only power source,
+> so this also power-cycles it. The rank-9 native USB image returned to the
+> ROM with a controlled refusal, and the runner then quarantined the new
+> instance (`003/016`). After the reconnect the board needs a cold DDR start.
+> Port `3-1` stays in use meanwhile.
+
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
