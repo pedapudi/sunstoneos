@@ -4,8 +4,7 @@ Status: **implemented** in the package files and checked in instruction
 models. Section "Implementation results" records the modeled counts and where
 the implementation differs from the design. One board run exists: the core-0
 forced-walk loop on port 3-3, in section "Board result of the core-0 walk
-loop". Cached walks cost 37% fewer cycles per loop iteration there, so the
-revert rule keeps the cached value for that part of the evidence; the
+loop"; the revert rule keeps the cached value for that loop, and the
 workload runs and the core-6 run are still required. Every other figure is
 modeled or estimated. Readers are assumed to know AArch64 stage-1 translation, the
 Secure and Non-secure physical address spaces, and data-cache maintenance by
@@ -331,8 +330,8 @@ blocks ran in ABBA order, six per value, each 1,024 iterations of the
 forced-walk loop with IRQs masked.
 
 Result, per iteration, as the median of the six blocks of each value
-([cpu-table-walks-measurements.md](cpu-table-walks-measurements.md) has every
-event):
+([cpu-table-walks-measurements.md](cpu-table-walks-measurements.md) lists
+every block):
 
 | Per iteration | A, uncached walks | B, cached walks |
 | --- | --- | --- |
@@ -342,8 +341,8 @@ event):
 | `DTLB_WALK`, `ITLB_WALK` | 1, 1 | 1, 1 |
 
 Every block counted exactly 1,024 data walks and 1,024 instruction walks,
-so each iteration walked once for its load and once for the fetch after its
-`TLBI`. Cached walks save 257 cycles per iteration and three bus accesses.
+one of each per iteration ([board-bundles-next.md](board-bundles-next.md),
+section "Samples in bundle 4", explains the counts). Cached walks save 257 cycles per iteration and three bus accesses.
 If the three accesses account for all of the difference, each costs about 86
 cycles (174 ns), above the 50 to 75 cycles that section "Board evidence
 required" estimates for a DRAM descriptor read.

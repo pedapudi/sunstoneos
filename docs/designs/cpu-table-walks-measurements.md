@@ -98,15 +98,8 @@ implemented. A is `TCR_EL1` `0x200803019` (uncached walks), B `0x200803519`
 (cached walks). Each block is 1,024 iterations of `TLBI VMALLE1`, `DSB ISH`,
 `ISB` and one load, with IRQs masked.
 
-The counters were checked first in the same run:
-
-- an empty region retires 20 instructions in each of 64 regions, and takes
-  64 cycles at the minimum and median and 131 at most;
-- a region of 2,000 ALU instructions counts 2,020 instructions, exactly
-  2,000 above the empty median, in 7,238 cycles;
-- `L2D_CACHE_REFILL` is implemented (`PMCEID0_EL0` `0x7fffffff`) and counts
-  1,031 refills for one load per line of a cleaned and invalidated 64 KiB
-  buffer of 1,024 lines.
+The same run checked the counters first; the results are in section "Board
+measurement on core 0" of [cpu-pmu-measurements.md](cpu-pmu-measurements.md).
 
 Counts per block; the six blocks of each value are listed in run order.
 `INST_RETIRED` is 15,388 in every block: 15 loop instructions per iteration
@@ -128,20 +121,6 @@ plus 28 for the calls around the loop.
 | 11 | B | 446,612 | 436.1 | 0 | 0 | 4,096 | 1,024 | 1,024 |
 | 12 | A | 709,792 | 693.2 | 0 | 0 | 7,168 | 1,024 | 1,024 |
 
-Summary of blocks 1 to 12:
-
-| Metric | A, uncached walks | B, cached walks |
-| --- | --- | --- |
-| Cycles per iteration, median | 693.1 | 436.1 |
-| Spread, (max − min) / median | 0.17% | 0.14% |
-| Time per iteration at 494.0 MHz | 1.40 µs | 0.88 µs |
-| Bus accesses per iteration | 7 | 4 |
-| Data and instruction walks per iteration | 1 and 1 | 1 and 1 |
-
-A calibration region before each block (`TLBI VMALLE1`, `DSB ISH`, `ISB`,
-then the end of the region) counted no data walk and one instruction walk in
-every block. The prepared image required each block to count 1,024 plus
-those counts, so it reported all 13 blocks as refused; the corrected check in
-`apps/board-bundles-cpu/walk.h` requires 1,024 of each and accepts all 13.
-The design applies its revert rule to this result in section "Board result
-of the core-0 walk loop".
+The design summarizes blocks 1 to 12 and applies its revert rule in section
+"Board result of the core-0 walk loop" of
+[cpu-table-walks.md](cpu-table-walks.md).

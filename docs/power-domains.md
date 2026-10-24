@@ -228,19 +228,10 @@ the design document's implementation section
 ([docs/designs/power-domains.md](designs/power-domains.md)). The figures are
 modeled, except the service steps of the read-only board run.
 
-At 400 kHz the board's snapshot steps take 917 µs, 146% of their 630 µs
-wire time (median of 34 steps; 149% at most), against 107% in the model
-that assumed 200 ns per register access. Tick interrupts add nothing
-measurable, and the service polls each bus phase only twice. The excess comes
-from the 211 register accesses of a snapshot, each serial with the bus: the
-model reproduces the board's step at 1,300 ns per access, which includes the
-two `DSB SY` barriers and the provider's deadline reads around each access.
-A step within 110% would need about 0.3 µs per access, which no change to the
-polling reaches. The bound is therefore board-derived: a 400 kHz snapshot
-completes in one step of at most 155% of its wire time, below the service's
-1 ms spin limit at about 159%. At this access cost a DCDC3 selector write
-takes two steps with one tick wait in the model. The design document gives
-the breakdown.
+On the board, 400 kHz snapshot steps took 146% of their wire time against a
+110% target; section "Board result of the service steps" of the
+[design](designs/power-domains.md) gives the cause, the provisional 155%
+bound and the provider follow-up.
 
 ## Checks
 
@@ -285,9 +276,8 @@ the breakdown.
   and a bus capture with no second S_TWI0 master.
 - USB0 and audio latency with PMIC requests running, SMP and single core.
 - The duration of each service step during a DCDC3 selector write at the
-  inherited divisor. At 400 kHz the host model at the board's access cost
-  predicts two steps with one tick wait. Snapshot steps were measured: one
-  step each, within the 155% bound.
+  inherited divisor, and the split of a provider register access's cost
+  (section "Board result of the service steps" of the design).
 - Delivery of the S_TWI0 interrupt (GIC SPI 203, `sun60iw2p1.dtsi` line 1962)
   for each bus phase, qualified as the shared interrupt rules require. Only
   with that qualification can the service block on the interrupt instead of
