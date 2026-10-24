@@ -18,7 +18,7 @@ class Image(graph.runtime.base.Image):
   # Private types in separate assembler units can share names. Retain only
   # unambiguous layouts; every layout this check consumes must remain unique.
   from elftools.elf.elffile import ELFFile
-  self.symbols={};self.functions={};self.layouts={};ambiguous=set()
+  self.symbols={};self.functions={};self.variables={};self.layouts={};ambiguous=set()
   with path.open('rb') as stream:
    elf=ELFFile(stream);self.parts=[(int(p['p_vaddr']),p.data()) for p in elf.iter_segments() if p['p_type']=='PT_LOAD']
    for symbol in elf.get_section_by_name('.symtab').iter_symbols():self.symbols.setdefault(symbol.name,set()).add(int(symbol['st_value']))

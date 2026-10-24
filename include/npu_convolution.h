@@ -2,6 +2,7 @@
 #define SUNSTONE_NPU_CONVOLUTION_H
 #include "a733_npu_native.h"
 #include "a733_npu_startup.h"
+#include "npu_service.h"
 #include "nbg_assembly.h"
 
 #define NPU_CONVOLUTION_MODEL_BYTES 1928u /* Baseline artifact only. */
@@ -90,25 +91,15 @@ struct npu_convolution {
  * power/clock/reset and secure attribution remain independent prerequisites. */
 int npu_convolution_prepare(struct npu_convolution *,const struct npu_convolution_config *);
 
-/* Offline composition: copy resource/evidence fields from the template and
- * replace backend, image, command table/count with the prepared private objects.
- * Requires a nonzero externally assigned command-admission evidence identity;
- * the number itself proves no hardware fact. Output must not alias owned storage.
- * Use the resulting record with a733_npu_startup_init/bind_task, then bind below. */
-int npu_convolution_handoff(struct npu_convolution *,const struct a733_npu_handoff *,
-    struct a733_npu_handoff *);
-/* Pre-scheduler, exact authenticated startup record; one live client. This
- * constructs the deferred service with a fixed two-command catalogue. Only the
- * designated startup task may activate it through npu_service_activate. Keep
- * both tasks alive; task abandonment never releases resources. */
+/* Pre-scheduler, an initialized startup with its bootstrap task bound; one
+ * live client. This constructs the deferred service with a fixed two-command
+ * catalogue. Only the startup's task may activate it through
+ * npu_service_activate. Keep both tasks alive; task abandonment never
+ * releases resources. */
 int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
     TaskHandle_t client,UBaseType_t priority,UBaseType_t affinity);
-/* Designated EL1 bootstrap task only. Use this wrapper for EVERY startup poll,
- * before service activation. Validate exact bound artifact/catalogue identities
- * before delegating any resource/power step. Mutation or retained startup stops
- * future delegation and retains every already acquired token and allocation.
- * No recovery/release is attempted. Cooperative privileged callers must not
- * bypass this wrapper through the embedded startup object. */
+/* The startup's EL1 task only: one startup step before service activation. A
+ * retained startup retains every acquired token and allocation. */
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
 /* Single designated client task, finite queue waits. Only OPEN, STATUS, WAIT,

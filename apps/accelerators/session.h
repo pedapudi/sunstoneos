@@ -3,6 +3,8 @@
 #include "../npu-convolution/session.h"
 #include "pvr_compute_package.h"
 #define ACCELERATOR_SESSION_MAGIC UINT64_C(0x4153373341434131)
+/* 2: the embedded NPU record is the reduced version 3. */
+#define ACCELERATOR_SESSION_VERSION 2
 #define ACCELERATOR_CONTRACT_MAGIC UINT64_C(0x4153373341434331)
 #define ACCELERATOR_SESSION_LIMIT UINT64_C(65536)
 #define ACCELERATOR_GPU_CLIENT 7u

@@ -53,71 +53,32 @@ def admission_fixture(prep,image,raw,layout,build,directory):
         path.write_bytes(data);return {'path':str(path),'sha256':sha(data)}
     proof=write('not-hardware.txt',b'SOFTWARE FIXTURE ONLY: establishes no physical facts; never deploy.\n')
     common={'image_sha256':image_hash,'identity':identity,'port':port,'whole_platform':profile['whole_platform']}
-    boot,boot_bytes,pll,pll_bytes=layout[1:5];boot_hash=sha(raw[boot:boot+boot_bytes]);pll_hash=sha(raw[pll:pll+pll_bytes])
+    boot,boot_bytes=layout[1:3];boot_hash=sha(raw[boot:boot+boot_bytes])
     ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],
         'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
     conditions=('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
         'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping',
         'physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')
-    if struct.unpack_from('<Q',raw,8)[0]==2:
+    if struct.unpack_from('<Q',raw,8)[0]==prep.SINGLE_CORE_VERSION:
         conditions=tuple(c for c in conditions if c!='source-backed-cpu-dsu-transition')+(
             'primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover',
             'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded')
     platform=write('platform.json',{**common,**profile,'schema':'a733-npu-convolution-platform-v1',
         'conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
-    clock_conditions={'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
-        'no-autonomous-parent-selector-writers','enabled-retune-snapshot'}
-    if struct.unpack_from('<I',raw,pll+24)[0]==3:
-        clock_conditions.remove('enabled-retune-snapshot')
-        clock_conditions.update({'live-disabled-pll-quiescent-on-snapshot',
-            'native-dram-continuations-and-shared-sram-abandonment','supervised-cross-pll-disturbance-risk'})
-    clock=write('clock.json',{**common,'pll_sha256':pll_hash,'conditions':dict.fromkeys(sorted(clock_conditions),proof)})
+    clock_conditions=('independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
+        'no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk')
+    clock=write('clock.json',{**common,'conditions':dict.fromkeys(clock_conditions,proof)})
     power=write('power.json',{**common,'supply_uv':800000,'boot_sha256':boot_hash,
         'conditions':dict.fromkeys(('dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'),proof)})
     supervision=write('supervision.json',{**common,'supervisor':profile['supervisor'],'one_attempt':True,
         'conditions':dict.fromkeys(('manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure'),proof)})
-    admission={**common,**profile,'schema':'a733-npu-supervised-entry-v1','boot_sha256':boot_hash,'pll_sha256':pll_hash,
+    admission={**common,**profile,'schema':'a733-npu-supervised-entry-v1','boot_sha256':boot_hash,
         'ddr':ddr,'platform':platform,'clock':clock,'power':power,'supervision':supervision}
     admission_ref=write('admission.json',admission);value=bytearray(raw);value[48:80]=build
     value[80:112]=bytes.fromhex(admission_ref['sha256'])
     for offset,ref in ((112,clock),(144,power),(176,supervision)):value[offset:offset+32]=bytes.fromhex(ref['sha256'])
     (directory/'session.bin').write_bytes(value)
     return directory/'session.bin',Path(admission_ref['path'])
-
-def live_checks(image,session,directory):
-    """Only changed mode admission; reuse launcher/USB evidence without execution."""
-    directory.mkdir();prep=load('npu_live_prepare',ROOT/'apps/npu-convolution/prepare-supervised.py')
-    image_raw=image.read_bytes();raw=session.read_bytes()
-    _,_,build,layout=prep.image_data(image_raw)
-    assert len(raw)==608 and struct.unpack_from('<I',raw,layout[3]+24)[0]==3
-    packed,admission=admission_fixture(prep,image_raw,raw,layout,build,directory)
-    raw=packed.read_bytes();admission_raw=admission.read_bytes();cache={}
-    prep.validate_admission(admission_raw,raw,build,layout,sha(image_raw),cache)
-    record=json.loads(admission_raw);clock=Path(record['clock']['path']);original=clock.read_bytes()
-    refused=[]
-    for condition in ('native-dram-continuations-and-shared-sram-abandonment','supervised-cross-pll-disturbance-risk'):
-        facts=json.loads(original);del facts['conditions'][condition]
-        changed=json.dumps(facts,sort_keys=True).encode();clock.write_bytes(changed)
-        changed_record=copy.deepcopy(record);changed_record['clock']['sha256']=sha(changed)
-        changed_admission=json.dumps(changed_record,sort_keys=True).encode()
-        changed_raw=bytearray(raw);changed_raw[112:144]=hashlib.sha256(changed).digest()
-        changed_raw[80:112]=hashlib.sha256(changed_admission).digest()
-        try:prep.validate_admission(changed_admission,bytes(changed_raw),build,layout,sha(image_raw))
-        except ValueError as error:
-            assert str(error)=='clock facts do not cover this entry.',str(error)
-            refused.append({'condition':condition,'reason':str(error)})
-        else:raise AssertionError('Missing live-DRAM evidence was accepted: '+condition)
-        finally:clock.write_bytes(original)
-    invalid=bytearray(raw);struct.pack_into('<I',invalid,layout[3]+24,4)
-    try:prep.session_profile(invalid,layout)
-    except ValueError as error:
-        assert str(error)=='Uploaded deadlines/PLL authority differ.',str(error)
-        refused.append({'condition':'unknown-mode'})
-    else:raise AssertionError('Unknown PLL mode accepted')
-    result={'passed':True,'mode':3,'session_bytes':len(raw),'refused':refused,
-        'image_sha256':sha(image_raw),'runner_sha256':sha(Path(__file__).read_bytes()),
-        'prepare_sha256':sha(Path(prep.__file__).read_bytes()),'physical_access':False}
-    (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -167,7 +128,7 @@ def main():
     case('exact-package',package);prepared=prep.validate_bundle(bundle)
     def launcher(directory):
         original=(ROOT/'checks/a733-smp-supervised-launch.py').read_text()
-        start=original.index('    if args.frequency_only:');end=original.index('    result =',start)
+        start=original.index('    if args.accelerator_profile:\n        cases');end=original.index('    result =',start)
         derived=original[:start]+"    cases=[check('NPU contract publication and handoff',12)]\n"+original[end:]
         assert derived.count('0x4153373353554333')==1
         derived=derived.replace('0x4153373353554333',hex(prep.CONTRACT_MAGIC))
@@ -211,11 +172,13 @@ def main():
         data=bytearray(image);p=next(p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and p['p_vaddr']<=reference_address<p['p_vaddr']+p['p_filesz'])
         data[int(p['p_offset'])+reference_address-int(p['p_vaddr'])]^=1;refused(lambda:prep.image_data(bytes(data)))
     case('embedded-artifact-changed',artifact_mutation)
-    for variation in ('deadline','established','supervisor'):
+    for variation in ('deadline','owner-collision','supervisor'):
         def bad_session(directory,variation=variation):
-            raw=bytearray(prepared['_frozen']['session.bin'])
-            offset={'deadline':layout[3]+16,'established':layout[1]+12*8,'supervisor':208}[variation]
-            struct.pack_into('<Q',raw,offset,1 if variation!='supervisor' else 0);refused(lambda:prep.session_profile(bytes(raw),layout))
+            raw=bytearray(prepared['_frozen']['session.bin']);boot=layout[1]
+            if variation=='deadline':struct.pack_into('<Q',raw,boot+layout[4]+16,1)
+            elif variation=='owner-collision':raw[boot+7*8:boot+8*8]=raw[boot+5*8:boot+6*8]
+            else:struct.pack_into('<Q',raw,208,0)
+            refused(lambda:prep.session_profile(bytes(raw),layout))
         case('typed-session-'+variation,bad_session)
     for variation in ('missing-power-removal','wrong-platform','missing-pmic-pins'):
         def bad_admission(directory,variation=variation):

@@ -15,7 +15,10 @@ def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').SINGLE_CORE
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/npu-convolution/prepare-supervised.py')
-image=args.image;e=native.Image(image);e.path=image;e.ops={}
+# Only the structures this check reads; other units may reuse a tag such as profile.
+LAYOUTS=('npu_session','a733_npu_application_boot','a733_npu_application_profile','a733_npu_reserved',
+ 'a733_observe_identity','npu_convolution','a733_counter_clock','a733_clock_leases','a733_platform_locks','a733_usb_platform')
+image=args.image;e=native.Image(image,layout_names=LAYOUTS);e.path=image;e.ops={}
 original_address=e.address
 def address(n):
  if n=='a733_cpu_coherence_publish':return 0
@@ -26,7 +29,7 @@ for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','-
  if m:e.ops[int(m[1],16)]=m[2].strip()
 private_digest=original_address('digest',unit='drivers/npu/npu_convolution.c')
 events={private_digest}|{a for a,op in e.ops.items() if op.split()[0].lower() in ('mrs','msr','at','wfe')}
-raw=bytearray(args.session.read_bytes());_,_,build,layout=prep.image_data(image.read_bytes());raw[48:80]=build;struct.pack_into('<Q',raw,8,2);raw=bytes(raw)
+raw=bytearray(args.session.read_bytes());_,_,build,layout=prep.image_data(image.read_bytes());raw[48:80]=build;struct.pack_into('<Q',raw,8,prep.SINGLE_CORE_VERSION);raw=bytes(raw)
 class Machine(shared.Machine):
  def __init__(self,variant='nominal'):
   compat=types.SimpleNamespace(session_check=lambda raw:prep.session_profile(raw,layout),embedded_reference=lambda *a:None,request_bytes=lambda address,identity,raw,*ids:prep.request_bytes(address,identity,raw,prep.session_profile(raw,layout)))

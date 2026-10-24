@@ -79,9 +79,10 @@ supply streams or register writes.
 The shared SMP mappings cannot stop another privileged writer, so the session
 rechecks these bytes before the NPU can read them:
 
-- Every startup poll, the service activation check, the bootstrap publication
-  at OPEN and every stop poll verify the private model copy, the descriptor and
-  coefficient digests, and both command payloads with their END padding.
+- The bootstrap publication at OPEN verifies the private model copy, the
+  descriptor and coefficient digests, and both command payloads with their END
+  padding. Startup steps, the service activation check and stop steps hash
+  nothing.
 - Every job publication verifies the descriptor and coefficient digests and the
   convolution command payload with its END padding. It omits the model copy,
   which the device never reads, and the bootstrap stream, which runs only at
@@ -110,18 +111,19 @@ translation or exclude undocumented address routes.
 
 ## Startup and client calls preserve ownership
 
-Before scheduling, call `npu_convolution_prepare`, obtain the handoff with
-`npu_convolution_handoff`, initialize and bind the existing startup adapter,
-then call `npu_convolution_bind`. Supply independently authenticated resource,
-memory and recovery evidence in the handoff. A numeric evidence identifier does
-not establish any physical fact.
+Before scheduling, call `npu_convolution_prepare`, initialize the
+[startup sequencer](npu-startup.md) and bind its bootstrap task, then call
+`npu_convolution_bind`. The session record's evidence identities name the
+resource, memory and recovery records; a numeric identifier does not
+establish any physical fact.
 
-The designated privileged bootstrap task must use
-`npu_convolution_startup_poll` for every startup step. This wrapper checks the
-bound model, both catalogue copies and the immutable allocations, as described
-above, before delegating to the actual startup adapter. Mutation stops further delegation and
-retains partial acquisitions. After READY, the task activates the deferred
-service; its prepared callback checks byte identity and actual startup health.
+The bootstrap task calls `npu_convolution_startup_poll` once per tick. The
+wrapper checks the calling task and the registration's selected model sizes,
+then calls the sequencer's step function. A retained startup faults the
+registration and keeps every acquisition. After READY, the task activates the
+deferred service; its prepared callback compares the service's copy of the
+backend, MMU image and both catalogue commands once and asks the startup
+whether it is READY.
 
 One live client task uses `npu_convolution_send` and
 `npu_convolution_collect`. Its supported sequence is:
@@ -147,11 +149,10 @@ bootstrap observes it with acquire ordering before local shutdown. Further
 requests and reopening are refused. Allocation and shared-resource ownership
 retain platform lifetime.
 
-The original bootstrap can then poll `npu_convolution_stop_poll`. It authenticates
-the immutable registration and delegates through the startup binding's live PMIC,
-PLL and clock-token checks. Local shutdown gates the module and bus before
+The original bootstrap can then call `npu_convolution_stop_poll`, which runs
+the sequencer's local stop. Local shutdown gates the module and bus before
 asserting AHB, AXI and core reset. It preserves SRAM reset, shared clock leaves,
-the PLL, supply and ON domain. This API does not release allocations or establish
+the PLL, supply and ON domain, and keeps every token. This API does not release allocations or establish
 that a particular monitor restores RAM safely.
 
 Faults retain ownership and stop progress. The wrapper provides no cancellation,
@@ -164,9 +165,8 @@ not enforce this contract against malicious privileged or unprivileged code.
 
 Physical execution requires an operation-specific reviewed recovery plan,
 effective page-directory translation and permissions, exclusive NPU and
-remote-controller handoffs, and valid power/clock/reset preparation. The watchdog
-image retains its independently qualified watchdog/ROM-return admission
-requirement. The supervised RAM-only image may use its admitted monitor-return
+remote-controller handoffs, and valid power/clock/reset preparation. The supervised RAM-only image may
+use its admitted monitor-return
 contract and manual whole-board power removal after uncertainty. Manual recovery
 does not replace the selected image's enforced admission conditions. The native
 adapter uses the documented controller page at physical `0x03600000`.
@@ -176,8 +176,9 @@ Internal SRAM has a separate route from ordinary RAM page tables. Reserve all
 retain NPU power. Establish routing and exclusion of alternate address modes.
 An absent RAM page-table entry does not protect this SRAM path.
 
-The initial platform profile uses inherited 492 MHz/800 mV settings. Unsuitable
-inherited PLL state still requires cold provisioning. A general descriptor
+The initial platform profile is 492 MHz at 800 mV: the startup sequencer
+enables PLL_NPU from its disabled state, and the power-domain owner verifies
+the DCDC2 supply. A general descriptor
 verifier is unnecessary for this immutable privileged entry once all access
 routes are constrained; the trusted catalogue does not admit arbitrary models.
 Runtime executable-model upload, hot switching, concurrent models and generalized
@@ -203,25 +204,22 @@ The first image passes fixed artifact and relocation comparison, SHA-256 known
 answers and padding boundaries, complete bootstrap comparison, copied input,
 matched output completion, explicit REAP, varied input and retained publication
 mutation. Its second job runs with a changed model copy and bootstrap padding,
-which a job publication does not check. A separate terminal mode refuses a
-changed command tail before service activation, and the `job-command` mode
-refuses changed convolution command padding at a job publication. A focused follow-up calls the actual startup and platform controllers
-through bounded modeled acquisition, then verifies refusal and token retention
-after bootstrap corruption. It also refuses an unauthorized client without effects.
+which a job publication does not check. The `mutation` mode changes a command tail
+before activation; the bootstrap publication at OPEN refuses it before the
+device fetches the stream. The `job-command` mode
+refuses changed convolution command padding at a job publication. An unauthorized client is refused without effects.
 
-The successful numerical-reference and compiler comparisons, lower-level memory
-checks and prior actual startup resource checks are reused. Full rail/startup
-health is a modeled callback boundary in the convolution lifecycle cases.
-Its independent evidence is recorded in `npu-startup-20261016/evidence.json`,
-`npu-startup-retention-20261016/evidence.json` and the central integration reuse
-record. No previous suite, simulator inference or performance campaign was rerun.
+The successful numerical-reference and compiler comparisons and lower-level
+memory checks are reused. Startup health is a modeled boundary in the
+convolution lifecycle cases; the sequencer itself runs in
+`checks/npu-startup-host.c` and `checks/npu-startup.c`. No previous suite, simulator inference or performance campaign was rerun.
 
 Generate authenticated fixture headers with
 [`checks/npu-convolution.py`](../checks/npu-convolution.py), passing the binary,
 saved input/output, recorded assembly directory and a fresh external destination.
 Configure `NPU_CONVOLUTION_FIXTURES` to that destination and build
 `npu-convolution-model`; its semihosting arguments are `composition`, `mutation`,
-`startup`, `close`, `close-fault` and `job-command`. Archive executable and input identities before execution. The
+`close`, `close-fault` and `job-command`. Archive executable and input identities before execution. The
 private CMake fragment also defines the independent `npu-convolution` native
 object target.
 

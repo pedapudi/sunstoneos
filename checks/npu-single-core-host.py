@@ -8,7 +8,7 @@ def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 prep=mod('prep',r/'apps/npu-convolution/prepare-supervised.py');fixture=mod('fixture',r/'checks/npu-supervised-host.py')
 image=args.image;manifest=args.manifest;body=image.read_bytes();parts,address,build,layout=prep.image_data(body)
-raw=bytearray(args.session.read_bytes());struct.pack_into('<Q',raw,8,2);raw[48:80]=build
+raw=bytearray(args.session.read_bytes());struct.pack_into('<Q',raw,8,prep.SINGLE_CORE_VERSION);raw[48:80]=build
 session,admission=fixture.admission_fixture(prep,body,bytes(raw),layout,build,out)
 profile=prep.image_manifest_check(json.loads(manifest.read_text()),body,session.read_bytes());assert profile=='npu-single-core-supervised-v1'
 checks={}
@@ -17,7 +17,7 @@ for key,value in [('target','a733-npu-convolution-supervised'),('execution_profi
  try:prep.image_manifest_check(m,body,session.read_bytes())
  except ValueError:checks[key+'-refused']=True
  else:raise AssertionError(key)
-wrong=bytearray(session.read_bytes());struct.pack_into('<Q',wrong,8,1)
+wrong=bytearray(session.read_bytes());struct.pack_into('<Q',wrong,8,prep.ALL_CORE_VERSION)
 try:prep.image_manifest_check(json.loads(manifest.read_text()),body,wrong)
 except ValueError:checks['session-version-refused']=True
 else:raise AssertionError('session')

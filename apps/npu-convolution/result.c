@@ -1,7 +1,6 @@
 #include "a733_npu_application.h"
 #include "boot.h"
 #include "result.h"
-#ifdef SUNSTONE_NPU_SUPERVISED
 #include "session.h"
 #ifdef SUNSTONE_ACCELERATORS
 #include "../accelerators/session.h"
@@ -9,29 +8,20 @@ _Static_assert(A733_SMP_CONTRACT_MAGIC==ACCELERATOR_CONTRACT_MAGIC,"combined lau
 #else
 _Static_assert(A733_SMP_CONTRACT_MAGIC==NPU_CONTRACT_MAGIC,"supervised launcher contract");
 #endif
-#define NPU_REQUIRED A733_NPU_HANDOFF_SUPERVISED_REQUIRED
-#define USB_REQUIRED A733_NPU_APPLICATION_USB_SUPERVISED
-#else
-_Static_assert(A733_SMP_CONTRACT_MAGIC==UINT64_C(0x415337334f424331),"compact launcher contract");
-#define NPU_REQUIRED A733_NPU_HANDOFF_REQUIRED
-#define USB_REQUIRED A733_NPU_APPLICATION_USB_REQUIRED
-#endif
 _Static_assert(sizeof(struct a733_smp_contract)==224,"compact contract extent");
-_Static_assert(sizeof(struct a733_npu_application_profile)==112,"host profile ABI");
+_Static_assert(sizeof(struct a733_npu_application_profile)==72,"host profile ABI");
 
 int a733_npu_application_observer_admit(void)
 {
-    const struct a733_npu_application_boot *boot=a733_npu_application_boot_record();
-    if(!boot)return 0;
-    const struct a733_npu_application_profile *p=&boot->profile;
+    const struct npu_session *s=npu_session_get();
+    if(!s)return 0;
+    const struct a733_npu_application_profile *p=&s->boot.profile;
     const struct a733_observe_identity *id=&a733_observe_identity;
     uint64_t now=a733_smp_counter();
     return id->epoch && id->generation && id->lease && id->armed_at<id->deadline &&
-        now>=id->armed_at && now<id->deadline && p->epoch==id->epoch &&
-        p->generation==id->generation && p->lease==id->lease && p->npu_evidence &&
-        p->command_admission && p->usb_evidence && p->pmic_evidence && p->pin_evidence &&
-        p->npu_established==NPU_REQUIRED &&
-        p->usb_established==USB_REQUIRED;
+        now>=id->armed_at && now<id->deadline && s->epoch==id->epoch &&
+        s->generation==id->generation && s->lease==id->lease && p->npu_evidence &&
+        p->command_admission && p->usb_evidence && p->pmic_evidence && p->pin_evidence;
 }
 static uint32_t le32(const uint8_t *p)
 {return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}

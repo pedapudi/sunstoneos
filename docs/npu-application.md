@@ -9,12 +9,12 @@ input into private buffers, waits for matched completion, copies and compares
 the output, and successfully reaps the job before submitting a second input.
 It verifies both results before publishing through USB.
 
-The watchdog profile adopts an inherited PLL rate that can supply 492 MHz and
-requires an existing 800 mV DCDC2 supply. The supervised profile connects the
-PLL controller before local startup. Its explicit live-DRAM profile can enable
-a disabled PLL while adopting a quiescent NPU domain already ON. Neither profile
-programs PMIC voltage. No preserved board measurement
-establishes the cold PLL or DCDC2 state. Runtime model switching, concurrent models and other graph/operator classes
+Every build is supervised. NPU startup runs the
+[startup sequencer](npu-startup.md) on the power-domain owner: it requires
+PLL_NPU disabled and domain 4 OFF, enables PLL_NPU by method 2, and requests
+domain 4 ON through the owner, which also verifies the 800 mV DCDC2 supply. No
+profile programs PMIC voltage. No preserved board measurement establishes the
+cold PLL or DCDC2 state. Runtime model switching, concurrent models and other graph/operator classes
 remain unsupported.
 The fixed model and command streams come from pinned external NPU compiler
 artifacts. DDR initialization also retains its existing pinned boot firmware.
@@ -23,29 +23,24 @@ performance work are complete.
 
 ## Build and admission
 
-Build from the repository root or from the standalone `apps/npu-convolution`
-CMake project with the pinned FreeRTOS and TinyUSB source directories.
-Supply `A733_NPU_HANDOFF_SOURCE`,
-`A733_NPU_MODEL`, `A733_NPU_INPUT` and `A733_NPU_REFERENCE`. The artifact generator
-checks the selected model/input/reference tuple in `tools/npu-models.json`; it does
-not invoke a model compiler. The existing compiler artifacts remain in the
-external cache. The target is `a733-npu-convolution`.
-The root build enables this target only when a handoff source is supplied.
-Application-specific source properties stay within its CMake subdirectory.
+Build from the repository root with `A733_NPU_SUPERVISED=ON`, or from the
+standalone `apps/npu-convolution` CMake project, with the pinned FreeRTOS and
+TinyUSB source directories. The standalone project refuses to configure
+without `A733_NPU_SUPERVISED`. Supply `A733_NPU_MODEL`, `A733_NPU_INPUT` and
+`A733_NPU_REFERENCE`. The artifact generator checks the selected
+model/input/reference tuple in `tools/npu-models.json`; it does not invoke a
+model compiler. The existing compiler artifacts remain in the external cache.
+The target is `a733-npu-convolution-supervised`. Application-specific source
+properties stay within its CMake subdirectory.
 
-The handoff source defines the immutable `a733_npu_application_boot` record.
-Its session identifiers must match the compact observer boot contract. The
-record binds NPU and command admission, PMIC bus and rail authority, pin
-ownership and USB ownership. Owners are nonzero and distinct. Input deadlines
-are zero; initialization derives bounded deadlines from the authenticated boot
-counter deadline. No default qualified record is provided.
-
-A physical launch of the watchdog profile needs established cold-cache and alias exclusion,
-exclusive CPU and memory ownership, coherent mappings, complete NPU SRAM
-ownership, effective command confinement, quiescent remote writers, and an
-independently qualified watchdog with ROM return. USB0, its PHY, clocks and
-complete shared register words must remain owned for the session. Admission
-flags identify that evidence; they cannot establish physical facts.
+The authenticated session page supplies the `a733_npu_application_boot`
+record ([header](../include/a733_npu_application.h)). Its profile holds the
+NPU, command-admission, USB, PMIC and pin evidence identities and the NPU,
+PMIC, USB and bridge owners. Owners are nonzero and distinct. The record also
+holds the fabric record, the PMIC configuration and the pin handoff. The PMIC
+startup deadline is zero in the input; initialization derives it from the
+authenticated boot counter deadline. The identities name reviewed records;
+they cannot establish physical facts.
 
 The cached multicore target applies private FreeRTOS privilege and vector
 patches. Its bootstrap, PMIC provider and NPU worker tasks execute at EL1t;
@@ -60,8 +55,9 @@ application writes.
 
 Initialization runs on the primary core before scheduler release, after the
 existing eight-core preparation guard. It creates one shared counter, clock
-registry, register and I2C mutexes, pin manager and rail ledger. The real PMIC
-provider task and startup task use these same objects. USB retains its exclusive
+registry, register and I2C mutexes, pin manager, rail ledger, GPU/PCK resource
+manager and power-domain owner. The power service task, which runs the PMIC
+provider and the owner, and the startup sequencer use these same objects. USB retains its exclusive
 USB0 and USB reference-clock tokens in that registry.
 
 The actual NPU reservation constructor consumes 265 pages, or 1,085,440 bytes,
@@ -72,8 +68,8 @@ command streams, tables, task stacks, requests and results retain platform
 lifetime. This profile does not establish capacity for concurrent use of every
 board device.
 
-The bootstrap task polls actual PMIC and NPU startup until the deferred worker
-can be activated. Every application-bound NPU operation authenticates the real
+The bootstrap task calls the startup step once per tick until the deferred
+worker can be activated. Every application-bound NPU operation authenticates the real
 worker and permanent allocation, then delegates to the existing native driver.
 Atomic clock, registry or retained-lock faults latch an application failure.
 The result encoder checks those same indicators before publishing status.
@@ -108,51 +104,20 @@ That ROM response alone does not establish watchdog causation.
 
 ## Focused validation
 
-`checks/npu-application.py` links the actual native image with the explicit
-refusal fixture in `checks/npu-application.c`. It preserves generated assembly,
-source dependencies, selected artifacts, tool identities, ELF and map before
-instruction execution. The prepared physical image retains zero admission flags.
-
-The selected instruction check constructs the real application, shared providers,
-FreeRTOS tasks, reserved buffers and convolution service in modeled architectural
-state. Separate client cases inject matching reference bytes, mismatching bytes
-or a failed service reply at the device-service boundary. The actual client
-wrappers copy input and output, enforce matched tickets, reap and publish. A late
-registry failure must override a previously completed result and refuse native
-NPU access while retaining the parent.
-
-The same check exercises the native frame encoder, durable host capture and
-refusal-only launch guard. Architectural translation/cache effects and service
-completion are modeled. The unchanged convolution SHA-256 helper delegates to
-host hashlib over the actual buffer bytes to avoid replaying its instruction
-suite. Its existing constituent evidence is reused. Injecting reference output checks publication and
-comparison; it does not execute numerical inference. Existing controller,
-assembler, service, PMIC, vector and USB constituent evidence remains applicable
-to its original inputs. Physical NPU execution remains unqualified.
-
-The first native image build and link passed with no undefined symbols. The
-focused instruction composition passed on that preserved ELF. Preparation used
-1,087 modeled AT instructions and performed no device MMIO. Matching and
-mismatching cases each executed OPEN, SUBMIT, STATUS and REAP; the failed reply
-stopped before REAP and completion publication. Raw inputs, image and case
-records are in `~/.cache/sunstoneos/evidence/npu-application-20261017/batch1`.
-
-The root configuration also builds and links the native application with the
-explicit refusal fixture. Its 101 unchanged repository dependencies match the
-preserved runtime inputs. The remaining header change is conditional on a
-newlib option that this target does not enable. Application operation renaming
-remains local to the NPU executable; the root component target is unaffected.
-Central artifacts and dependency comparisons are preserved under
-`~/.cache/sunstoneos/evidence/npu-application-20261017/central/`.
-No runtime cases were repeated, and this fixture image is not deployable.
+The application builds only as a supervised image. The supervised instruction
+check, `checks/npu-supervised.py`, constructs the image's providers, the power
+service and the startup sequencer under Unicorn and runs four cases: the
+startup reaching READY, a wrong rail, domain 4 already on, and a PLL_NPU LOCK
+timeout; the three refusals retain their tokens. `checks/npu-supervised-host.py`
+covers packaging, admission, capture and the launcher's contract publication
+in 33 cases with USB, FEL and the queue mocked. Physical NPU execution remains
+unqualified.
 
 ## Supervised startup and retained recovery
 
 Select `A733_NPU_SUPERVISED=ON` and build
-`a733-npu-convolution-supervised`. The root selection is mutually exclusive with
-the default handoff-source application. Supply the same three pinned artifacts,
-FreeRTOS and TinyUSB sources. The image contains no admitted session and cannot
-be launched by the watchdog-profile host tool.
+`a733-npu-convolution-supervised` with the three pinned artifacts and the
+FreeRTOS and TinyUSB sources. The image contains no admitted session.
 
 The host supplies one immutable session at `0x41f00000`. Its complete digest,
 build identity, epoch, generation, lease and supervisor bind the version 3 boot
@@ -163,39 +128,32 @@ copies and rechecks the session after the eight-core preparation barrier;
 it never reads the protected monitor contract. The exported
 `a733_npu_session_layout` gives the exact native session and provider offsets.
 
-NPU flags `0xf7` preserve quiescence, complete shared-SRAM ownership, IRQ masking,
-remote exclusion, I2C authority and memory confinement. Their new supervision
-bit replaces the watchdog-recovery bit. USB flags `0x17` likewise preserve
-USB ownership, mappings and remote exclusion while selecting supervision.
-The original `0x7f` and `0x0f` watchdog contracts remain unchanged. These records
-must identify independently established facts, including command confinement,
-pin ownership, actual PLL consumers and independent DRAM/PHY sources. Nonzero
-digests, reservation identities and observed idle bits do not establish them.
+The session's evidence digests bind reviewed records of admission, clock,
+power and supervision conditions. `prepare-supervised.py` requires these
+conditions in them:
 
-The bootstrap first samples DCDC2 through the real PMIC task and rail ledger.
-An owned startup transition publishes even a partially acquired rail into its
-platform resource record. An unsuitable supply stops startup before PLL writes.
-The same bootstrap then polls the existing PLL controller through task-bound
-native register operations, the common counter and register mutex. Acquisition
-checks the selected oscillator/reference and PERI0 routes before any PLL write,
-reserves the actual shared parents and exclusive PLL/local NPU scopes, and
-retains the authenticated whole-platform reservation. The local startup later
-atomically converts PLL ownership to shared and adopts the replacement token;
-no release/reacquire gap exists. Existing rail settling, PCK, local reset,
-SRAM, backend, memory and command checks still precede service activation.
+- clock: independent DRAM and PHY sources, exclusive PLL_NPU consumers and
+  writers, no autonomous parent-selector writers, and supervised acceptance of
+  the cross-PLL disturbance risk of a method-2 enable;
+- power: DCDC2 stable at 800 mV, and authenticated PMIC pin inheritance;
+- supervision: manual whole-board power removal, all resources retained until
+  that removal, and a stop after the first failure.
 
-Session PLL mode 2 retains enabled-PLL retuning and the original domain-OFF
-startup. Mode 3 selects [live-DRAM enable](npu-pll.md), with disabled PLL, output
-and lock detector, clear LOCK, independent live DDRPLL/PHY sources and a quiescent
-domain already ON. Other partial PLL states are refused. The 608-byte session
-layout and USB protocol are unchanged; the exact PLL bytes bind the selected mode.
+These records must identify independently established facts. Nonzero digests,
+reservation identities and observed idle bits do not establish them.
 
-Mode 3 requires both PCK command and status to report ON. Local startup releases
-the existing core/AXI/AHB resets and enables the module using the retained
-resources. It preserves SRAM reset bit 19 and the SRAM mapping, skips all PCK
-timing and power writes, and never requests OFF. The pinned PCK provider likewise
-avoids a power transition when a domain is already ON. The default OFF startup
-path remains unchanged.
+The power service verifies DCDC2 through the PMIC provider and publishes the
+result in the power-authority word. The bootstrap task then calls the
+[startup sequencer](npu-startup.md). Its register pass checks the reference,
+fabric and PERI0 routes, every PLL_NPU consumer, PLL_NPU disabled and domain 4
+OFF before any write. It then enables PLL_NPU by method 2, opens the local
+clocks and resets, and requests domain 4 ON through the owner. Startup admits
+no other PLL or domain state. The backend, memory and command checks precede
+service activation.
+
+The session record is 456 bytes: version 3 for the single-core profiles and
+version 2 for the all-core profile. Its layout word list
+`a733_npu_session_layout` has six entries. The USB protocol is unchanged.
 
 Before startup, the authenticated session must establish abandonment of both
 shared SRAM aliases: CPU `0x74000..0xf3fff` and the NPU's internal SRAM window.
@@ -209,9 +167,7 @@ The privileged Device mapping still permits SRAM access, so private-image
 ownership does not isolate SRAM from arbitrary privileged code. External users require independent
 exclusion; pointer placement and ON status cannot establish that exclusion.
 
-The host requires explicit live-profile snapshot, SRAM-abandonment and supervised
-cross-PLL disturbance records. They supplement existing clock, rail and recovery
-evidence. The manual's analogue-disturbance warning still applies, and software
+The manual's analogue-disturbance warning still applies, and software
 timeouts require responsive CPU/interconnect hardware. No physical safety or
 successful inference is inferred from the Linux runtime source or modeled tests.
 
@@ -222,13 +178,9 @@ USB disappearance or cable reconnection alone does not prove power removal or
 release ownership. No automatic reset, cold provisioning or voltage writer is
 introduced.
 
-The focused supervised check executes the actual linked constructor, PMIC
-service and rail consumer, bootstrap, enabled-retune controller and startup
-adoption. Its architectural state, device responses and admission evidence are
-modeled. The changed cases cover authenticated-session refusal, real rail
-publication before PLL adoption, unsuitable supply refusal and unstable-parent
-retention. Existing controller, copied-client, numerical-reference and USB
-evidence remain in their original scope; this check does not run inference or
+`checks/npu-supervised.py` links the supervised image and executes its
+constructor, power service, startup sequencer and refusal cases with modeled
+architectural state and device responses. It does not run inference or
 establish physical readiness.
 
 The supervised host tools prepare an immutable bundle and capture the existing
@@ -250,35 +202,12 @@ release resources; recovery requires confirmed full board power removal.
 The preparation module's `validate_bundle` function provides offline bundle
 validation. It currently has no separate validation command.
 
-The preserved supervised evidence is
-`~/.cache/sunstoneos/evidence/npu-supervised-20261017/`. The first root-configured
-native link passed. The focused execution passed after two fixture setup
-corrections, using that same ELF: a Python buffer conversion and the modeled
-interrupt mask before scheduler entry. Native source did not change. The
-successful case performed seven PLL writes and adopted the replacement clock
-token; wrong voltage and an unstable PERI0 parent performed no PLL writes.
-Both failures retained their acquired rail. The check stops at token adoption;
-that evidence does not cover full local startup, worker activation or inference.
-
 The supervised host adapter passes 33 packaging/capture cases and five additional
 checks that bind queue approval to the initially validated bytes. Baseline cases
 were preserved when that binding changed. The host batch built its SRAM launcher
 once and reused the native ELF. Evidence is under
 `npu-supervised-host-20261017/`; the final software record is
 `binding1/software.json`. No host fixture establishes numerical inference.
-
-The live-DRAM mode has separate evidence under
-`~/.cache/sunstoneos/evidence/npu-live-20261017/batch1/`. The first root-configured
-link and focused execution pass with ELF SHA-256
-`16e8952bbf11ebe3cbd84dd94efa4c8b104148dcbc3cb1513c7a546e5d597df9`.
-All 468 build and fixture inputs were archived before execution. The successful
-case reaches actual service activation through the constructor, PMIC sampling,
-PLL enable, token transfer and local ON-domain startup. The worker does not
-execute commands. OFF-domain and lock-timeout cases retain resources; host
-checks refuse missing SRAM-abandonment or disturbance evidence and unknown
-modes. Hardware responses, architecture and external admission are modeled.
-No previous scheduler, controller, numerical or USB workload was rerun, and no
-physical operation was performed.
 
 ## Selected-model application evidence
 
@@ -367,11 +296,10 @@ The smallest useful coordinator observations precede command submission:
   that the image, session, remote CPUs and every DMA writer satisfy the existing
   exclusive-memory and cache-adoption contract.
 - Capture the admitted oscillator, PLL reference, PLL_NPU, selected shared-parent
-  gates, fabric selectors and independent DRAM/PHY sources. Mode 3 requires the
-  disabled-PLL state and an already-ON, quiescent NPU domain; unsupported partial
-  states remain refusals.
-- Read DCDC2 through the existing PMIC service and confirm enabled, settled
-  800 mV under retained PMIC and pin ownership. The application supplies no
+  gates, fabric selectors and independent DRAM/PHY sources. Startup requires
+  PLL_NPU disabled and domain 4 OFF; any other state is refused.
+- Read DCDC2 through the power service and confirm enabled, settled 800 mV
+  under retained PMIC and pin ownership. The application supplies no
   voltage change. Confirm local reset/gate and shared SRAM ownership prerequisites.
 - Bind the focused address-path review to the exact model, command allocations,
   table image and native MMU readback. Establish complete internal SRAM ownership
@@ -423,8 +351,8 @@ the provider's PIO checks, detach interval, device reset and PHY setup.
 
 The host binds the execution profile `npu-single-core-supervised-v1` to immutable
 ELF geometry, the boot entry and the absence of secondary-startup and EL0 SVC
-entry points. Single-core sessions use version 2; the all-core supervised session
-uses version 1. The same preparation and capture tools support both profiles.
+entry points. Single-core sessions use version 3; the all-core supervised session
+uses version 2. The same preparation and capture tools support both profiles.
 The single-core admission additionally requires primary cache-transition and
 secondary-OFF evidence, the ROM USB PIO predecessor, disabled/inactive/clear USB
 interrupts 188–190, and settled USB supplies with their writers excluded.
@@ -447,8 +375,8 @@ inference, scheduler qualification or physical access occurs in these checks.
 The preserved `package-final/bundle` contains conspicuous software-only admission
 fixtures and must not be deployed. A coordinator must produce a fresh bundle from
 actual board evidence using `apps/npu-convolution/prepare-supervised.py`. Bind the
-session to the frozen build identity, exact PLL/provider snapshots and selected
-board instance. Establish exclusive compact DDR, cache/alias exclusion, secondary
+session to the frozen build identity, the fabric and provider records and the
+selected board instance. Establish exclusive compact DDR, cache/alias exclusion, secondary
 OFF state, internal SRAM ownership, supported NPU MMU mode, stable 800 mV DCDC2,
 independent DRAM/PHY sources, USB supplies and the ROM PIO lifetime before launch.
 Use the existing `tools/check-a733-npu-supervised.py` capture command for one
@@ -461,17 +389,13 @@ success. Physical translation, provider state and NPU inference remain unresolve
 
 ## Application clock admission and physical candidate
 
-The current NPU image also validates the normalized reference in the
-application's private acquisition callback. Its shared NPU/PLL drivers already
-contained the normalized-reference correction; the application callback retained
-an older DCXO24/equal-factor restriction. It now uses the same reference decoder
-and PERI0 control policy as the canonical NPU provider. PERI0 bit 24 is permitted;
-input-divider bit 1 remains a refusal.
-
-The clock correction passed six focused acquisition cases, including normalized
-reference acceptance and refusal of unsupported inputs. A later case accepts the
-observed 200/600/400 MHz fabric profile. Model, numerical-reference and unchanged
-startup evidence remain valid for their recorded scope.
+The startup sequencer's register pass validates the normalized reference with
+the shared decoder and applies the PERI0 control policy of the canonical NPU
+provider. PERI0 bit 24 is permitted. `checks/npu-application-clock-reference.py`
+runs six reference-clock cases through the linked image's sequencer: 26 MHz
+and 24 MHz oscillators normalized to the 24 MHz reference are admitted; wrong
+factors, an unstable or disabled reference and a PERI0 input-divider bit are
+refused before any write.
 
 The first physical attempt used the trusted convolution, observed clock/power
 configuration, and reviewed MMU/SRAM ownership. It produced no native USB frames;

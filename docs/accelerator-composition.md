@@ -7,12 +7,14 @@ independently. The native application and its software checks are implemented. P
 execution remains unqualified.
 
 The application reuses the NPU application's counter, clock lease registry,
-register and I2C locks, pin and rail owners, PMIC task, and global GPU/PCK resource
-manager. GPU resource client 7 uses firmware owner 9 and compute owner 10. Root
+register and I2C locks, pin and rail owners, power service with its PMIC
+provider and power-domain owner, and global GPU/PCK resource manager. GPU resource client 7 uses firmware owner 9 and compute owner 10. Root
 admission rejects collisions with the NPU, PMIC, USB and bridge owners. A borrowed
 provider view refers to the original objects; it grants no authority and creates
-no second provider. The NPU startup continues to own its original bootstrap task,
-PLL binding, command admission and permanent allocation checks.
+no second provider. The [NPU startup sequencer](npu-startup.md) borrows the
+counter, registry, register lock, GPU/PCK manager, rail ledger and power-domain
+owner, and keeps its own bootstrap task and domain-4 row. The NPU binding keeps
+its command admission and permanent allocation checks.
 
 The root-owned combined session retains the complete NPU contract and trusted GPU
 package, together with explicit GPU initial-state, memory, electrical and
@@ -71,6 +73,9 @@ Both forms require the exact image manifest, admission file and output directory
 plus the configured Clang, LLD and objcopy paths. The output directory is created
 only after admission validation succeeds.
 
+The combined session is 8,928 bytes with envelope version 2. It embeds the
+456-byte, version-3 NPU record at offset 24; the GPU initial-state evidence
+starts at 480, the package digest at 608 and the package at 640.
 The supported image exports its combined layout and single-core geometry. The
 preparer also verifies the embedded NPU structure sizes and member offsets from
 the image's DWARF information. It refuses stripped images and unsupported layouts.
@@ -127,7 +132,9 @@ Focused checks pass on the combined linked image. The actual constructors
 allocate the NPU parent first, then all GPU firmware, payload and table parents;
 they bind one counter, clock registry, lock set, PMIC and global PCK manager.
 Independent counter, registry, retained-lock and manager failure cases revoke
-both engines. The native clients and common USB parser complete the interleaved
+both engines. `checks/accelerator-providers.py` also checks that the startup
+borrows those same providers, that the owner holds one domain-4 row, and that
+a domain-4 fault leaves the shared providers live. The native clients and common USB parser complete the interleaved
 copied-result sequence and both healthy CLOSE operations. Transport cases cover
 failed NPU upload draining, immutable reply completion after local failure,
 terminal zero-length USB packets, partial-header expiry and stale GPU reads.

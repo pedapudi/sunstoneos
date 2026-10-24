@@ -122,10 +122,10 @@ static int stream_intact(const struct npu_convolution *c,unsigned k)
 /* Integrity policy. The shared SMP mappings cannot stop another privileged
  * writer, so bytes the NPU reads are rechecked against digests taken at
  * preparation. Every check covers descriptors, coefficients or shader, and
- * the job command stream. Preparation-time checks (startup, activation,
- * bootstrap publication, stop) also cover the private model copy and the
- * bootstrap stream. A job publication omits those two: the device never
- * reads the model copy, and the bootstrap stream runs only at OPEN. */
+ * the job command stream. The bootstrap publication also covers the private
+ * model copy and the bootstrap stream. A job publication omits those two: the
+ * device never reads the model copy, and the bootstrap stream runs only at
+ * OPEN. Startup, activation and stop hash nothing. */
 static int unchanged(struct npu_convolution *c,int job)
 {
     unsigned char actual[32];
@@ -342,25 +342,16 @@ static int metadata(const struct npu_convolution *c,const struct a733_npu_ops *o
         image->pd_entry==own->pd_entry && image->tables==own->tables &&
         same_command(&commands[0],&c->commands[0]) && same_command(&commands[1],&c->commands[1]);
 }
-int npu_convolution_handoff(struct npu_convolution *c,const struct a733_npu_handoff *base,
-    struct a733_npu_handoff *out)
-{
-    if(!good(c) || c->bound || !base || !out || !base->command_admission ||
-       base->controller!=c->native.register_physical ||
-       private_overlap(c,(uintptr_t)out,sizeof(*out)))return 0;
-    struct a733_npu_handoff h=*base;
-    h.backend=operations;h.backend_cookie=c;h.image=c->native.memory.image;
-    memset(h.commands,0,sizeof(h.commands));memcpy(h.commands,c->commands,sizeof(c->commands));
-    h.command_count=2;*out=h;return 1;
-}
+/* Service activation, on the startup's task: the service's copy of the
+ * operations, image and catalogue is the only one, checked here once. */
 static int prepared(void *cookie,const struct a733_npu_ops *ops,void *backend,
     const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)
 {
     struct npu_convolution *c=cookie;
-    if(!good(c) || !metadata(c,ops,backend,image,commands,count) || !unchanged(c,0)) {
+    if(!good(c) || !metadata(c,ops,backend,image,commands,count)) {
         fault(c);return -1;
     }
-    int result=a733_npu_startup_prepared(c->startup,ops,backend,image,commands,count);
+    int result=a733_npu_startup_prepared(c->startup);
     if(result<0)fault(c);
     return result;
 }
@@ -368,33 +359,26 @@ int npu_convolution_bind(struct npu_convolution *c,struct a733_npu_startup *star
     TaskHandle_t client,UBaseType_t priority,UBaseType_t affinity)
 {
     if(!good(c) || c->bound || !startup || !startup->initialized || !startup->task ||
-       !client || client==startup->task || startup->handoff.controller!=c->native.register_physical ||
-       private_overlap(c,(uintptr_t)startup,sizeof(*startup)) ||
-       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
-       !metadata(c,&startup->handoff.backend,startup->handoff.backend_cookie,
-           &startup->handoff.image,startup->handoff.commands,startup->handoff.command_count))return 0;
+       !client || client==startup->task || private_overlap(c,(uintptr_t)startup,sizeof(*startup)) ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     c->startup=startup;c->client=client;
     const struct npu_service_activation activation={startup->task,prepared,c};
     if(!npu_service_init_deferred(&c->service,&operations,c,&c->native.memory.image,c->commands,2,
         priority,affinity,&activation) || !npu_service_bind(&c->service,0,client,2))return fault(c);
     c->bound=1;return 1;
 }
-enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *c)
+static enum a733_npu_platform_result platform_step(struct npu_convolution *c,int stop)
 {
     if(!c || !c->bound || !c->startup || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
-       xTaskGetCurrentTaskHandle()!=c->startup->task)return A733_NPU_PLATFORM_RETAINED;
-    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
-    if(level!=4)return A733_NPU_PLATFORM_RETAINED;
-    const struct a733_npu_handoff *h=&c->startup->handoff;
-    const struct npu_service *s=&c->service;
-    if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
-        fault(c);return A733_NPU_PLATFORM_RETAINED;
-    }
-    enum a733_npu_platform_result result=a733_npu_startup_poll(c->startup);
+       xTaskGetCurrentTaskHandle()!=c->startup->task || !good(c))return A733_NPU_PLATFORM_RETAINED;
+    if(stop && !atomic_load_explicit(&c->closed,memory_order_acquire))return A733_NPU_PLATFORM_RETAINED;
+    enum a733_npu_platform_result result=stop ? a733_npu_startup_stop(c->startup) :
+        a733_npu_startup_step(c->startup);
     if(result==A733_NPU_PLATFORM_RETAINED)fault(c);
     return result;
 }
+enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *c)
+{return platform_step(c,0);}
 static int client(const struct npu_convolution *c)
 {return c && c->prepared && c->bound && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
     xTaskGetCurrentTaskHandle()==c->client;}
@@ -473,20 +457,6 @@ int npu_convolution_output(struct npu_convolution *c,void *out,size_t bytes)
 }
 
 /* The copied successful CLOSE reply publishes the worker's completed stop.
- * Only the original bootstrap can use its platform callbacks and shared locks. */
+ * Only the startup's task can use its platform callbacks and shared locks. */
 enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *c)
-{
-    if(!c || !c->bound || !c->startup || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
-       xTaskGetCurrentTaskHandle()!=c->startup->task)return A733_NPU_PLATFORM_RETAINED;
-    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
-    if(level!=4 || !atomic_load_explicit(&c->closed,memory_order_acquire))return A733_NPU_PLATFORM_RETAINED;
-    const struct a733_npu_handoff *h=&c->startup->handoff;
-    const struct npu_service *s=&c->service;
-    if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
-        fault(c);return A733_NPU_PLATFORM_RETAINED;
-    }
-    enum a733_npu_platform_result result=a733_npu_startup_stop_poll(c->startup);
-    if(result==A733_NPU_PLATFORM_RETAINED)fault(c);
-    return result;
-}
+{return platform_step(c,1);}

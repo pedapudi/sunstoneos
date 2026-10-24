@@ -2,6 +2,7 @@
 #define SUNSTONE_NPU_RUNTIME_H
 #include "a733_npu_native.h"
 #include "a733_npu_startup.h"
+#include "npu_service.h"
 #include "a733_storage_digest.h"
 #include "nbg_assembly.h"
 
@@ -139,10 +140,6 @@ size_t npu_runtime_requirements(const struct npu_runtime_model *, unsigned count
  * a block other than 64 bytes. Slots start EMPTY. Any failure after
  * admission is terminal and retains the parent allocation. */
 int npu_runtime_prepare(struct npu_runtime *, const struct npu_runtime_config *);
-/* As npu_session_handoff: copy the template and install the private backend,
- * MMU image and command table (bootstrap, then one command per slot). */
-int npu_runtime_handoff(struct npu_runtime *, const struct a733_npu_handoff *,
-                        struct a733_npu_handoff *);
 /* Pre-scheduler. clients[i] is the only task that may use slot i; tasks are
  * distinct and none is the startup task. Constructs the deferred service in
  * runtime mode with one command per slot. */

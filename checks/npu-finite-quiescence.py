@@ -9,7 +9,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('elf','evidence'):p.add_argument('--'+n,type=Path,required=True)
 a=p.parse_args();root=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf)
+spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf,layout_names=('a733_npu_reserved','a733_npu_startup','a733_npu_startup_config','a733_platform_locks','a733_pmic','a733_pmic_slot','a733_rail_borrow','npu_convolution','npu_service'))
 with a.elf.open('rb') as stream:
     dwarf=ELFFile(stream).get_dwarf_info();objects=[]
     for cu in dwarf.iter_CUs():
@@ -19,7 +19,7 @@ with a.elf.open('rb') as stream:
             ops=DWARFExprParser(dwarf.structs).parse_expr(die.attributes['DW_AT_location'].value);assert len(ops)==1
             app=ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dwarf.get_addr(cu,ops[0].args[0])
             fields={x.attributes['DW_AT_name'].value.decode():int(x.attributes['DW_AT_data_member_location'].value) for x in die.get_DIE_from_attribute('DW_AT_type').iter_children() if x.tag=='DW_TAG_member' and 'DW_AT_name' in x.attributes};objects.append((app,fields))
-assert len(objects)==1;app,f=objects[0];pmic=app+f['pmic'];pl=image.layouts['a733_pmic'];slot=image.layouts['a733_pmic_slot'];locks=app+f['locks'];ll=image.layouts['a733_platform_locks'];conv=app+f['reserved']+image.layouts['a733_npu_reserved']['convolution'];cl=image.layouts['npu_convolution'];service=conv+cl['service'];sl=image.layouts['npu_service'];handoff=app+f['handoff'];deadline=handoff+image.layouts['a733_npu_handoff']['allowed']+image.layouts['a733_npu_platform_config']['deadline_us'];cases=[]
+assert len(objects)==1;app,f=objects[0];pmic=app+f['pmic'];pl=image.layouts['a733_pmic'];slot=image.layouts['a733_pmic_slot'];locks=app+f['locks'];ll=image.layouts['a733_platform_locks'];conv=app+f['reserved']+image.layouts['a733_npu_reserved']['convolution'];cl=image.layouts['npu_convolution'];service=conv+cl['service'];sl=image.layouts['npu_service'];startup=app+f['startup'];deadline=startup+image.layouts['a733_npu_startup']['config']+image.layouts['a733_npu_startup_config']['deadline_us'];cases=[]
 variants=['success','closed-missing','stopped-missing','wrong-client','provider-held','provider-busy','active-request','slot-live','borrow-live','mutex-held','park-timeout','irq-enabled','irq-pending','irq-active','irq-RWP','mapping-failure','checkpoint-idle','checkpoint-active-finishes','checkpoint-unreaped-slot']
 for variant in variants:
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x40000000,0x04000000);u.mem_map(0x03400000,0x10000)
@@ -42,7 +42,7 @@ for variant in variants:
         if variant==name:put(at,value,4)
     checkpoint=variant.startswith('checkpoint-')
     if checkpoint:put(app+f['pmic_stop'],1,4)
-    hooks={image.address(n,unit='/apps/npu-convolution/native.c' if n=='parent' else None):n for n in ['parent','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','vTaskSuspend','vTaskDelay','a733_counter_clock_now','aarch64_device_translate','xQueueGetMutexHolder','a733_pmic_poll']}
+    hooks={image.address(n,unit='/apps/npu-convolution/native.c' if n=='parent' else None):n for n in ['parent','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','vTaskSuspend','vTaskDelay','a733_counter_clock_now','aarch64_device_translate','xQueueGetMutexHolder','a733_pmic_poll','xTaskGenericNotify']}
     def code(cpu,at,size,cookie):
         name=hooks.get(at)
         if name is None:return
@@ -54,6 +54,7 @@ for variant in variants:
         elif name=='aarch64_device_translate':
             put(args[2],args[0]);put(args[2]+8,0,4);put(args[2]+12,2,4);ret(int(variant!='mapping-failure'))
         elif name=='xQueueGetMutexHolder':ret(1 if variant=='mutex-held' else 0)
+        elif name=='xTaskGenericNotify':ret(1)
         elif name=='vTaskSuspend':
             state['suspended'].append(args[0])
             if checkpoint:u.emu_stop()

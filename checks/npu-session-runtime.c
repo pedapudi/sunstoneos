@@ -35,11 +35,26 @@
  *  3 a descriptor byte changes while the slot is idle: A refuses the trigger
  *    and every slot is retained.
  *  4 a coefficient byte changes while the job runs: H fails after the job and
- *    every slot is retained. */
+ *    every slot is retained.
+ *  5 (built with NPU_BOARD_CLIENT_CHECK) slot 3 runs the board image's client
+ *    loop (apps/npu-board/client.c) and the bootstrap task runs the board
+ *    image's USB0 protocol (apps/npu-board/usb.c) over a modeled TinyUSB
+ *    vendor class and plays the host. STATUS and LOAD sent before the client
+ *    has opened are answered not-ready. After the bootstrap starts the
+ *    client, which sends OPEN and publishes ready, the host loads
+ *    ShuffleNetV2 and three times uploads the input in 4 KiB requests,
+ *    submits, reads the output and returns the window, then closes. A SUBMIT
+ *    posted while the read window is lent is refused. The requests, replies
+ *    and client tick waits per inference and the copies per tensor byte in
+ *    each direction are printed. */
 #include "npu_runtime.h"
 #include "aarch64_device_memory.h"
 #include "platform.h"
 #include "npu_session_fixtures.h"
+#ifdef NPU_BOARD_CLIENT_CHECK
+#include "../apps/npu-board/client.h"
+#include "npu-board-usb/npu-board-usb-model.h"
+#endif
 #include <string.h>
 
 #define npu_case (*(volatile unsigned *)UINT64_C(0x47fff000))
@@ -353,20 +368,18 @@ void __wrap_npu_service_release(struct npu_service *s, unsigned client, enum npu
 }
 
 /* Startup stand-ins: the platform layer is outside this check. */
-int a733_npu_startup_prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
-    const struct a733_npu_mmu_image *image, const struct a733_npu_command *commands, unsigned n)
+int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
-    (void)ops; (void)backend; (void)image; (void)commands;
-    configASSERT(cookie == &startup && n == SLOTS + 1);
+    configASSERT(s == &startup);
     return 1;
 }
-enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup);
     return npu_service_activate(&rt.service) == NPU_SERVICE_OK ? A733_NPU_PLATFORM_READY :
                                                                  A733_NPU_PLATFORM_RETAINED;
 }
-enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup && rt.service.controller.state == A733_NPU_CLOSED);
     ++stops;
@@ -515,10 +528,23 @@ static void tail_is_end(unsigned slot)
         configASSERT(word(p + at) == 0x10000000u && !word(p + at + 4));
 }
 
+#ifdef NPU_BOARD_CLIENT_CHECK
+struct npu_board_client board_client;
+static unsigned client_tick_waits;
+void __real_vTaskDelay(TickType_t);
+void __wrap_vTaskDelay(TickType_t ticks)
+{
+    if (xTaskGetCurrentTaskHandle() == clients[3]) ++client_tick_waits;
+    __real_vTaskDelay(ticks);
+}
+#endif
 static void client(void *argument)
 {
     unsigned slot = (unsigned)(uintptr_t)argument;
     configASSERT(task_level() == 0);
+#ifdef NPU_BOARD_CLIENT_CHECK
+    if (npu_case == 5 && slot == 3) { npu_board_client_run(&board_client); configASSERT(0); }
+#endif
     wait_flag(&started, 1);
     struct npu_service_reply r = call(slot, NPU_SERVICE_OPEN, 0, 1000000);
     configASSERT(r.result == NPU_SERVICE_OK && r.owns_session &&
@@ -637,6 +663,9 @@ static void client(void *argument)
         }
         close_slot(slot);
         break;
+    case 5:
+        close_slot(slot);
+        break;
     default:
         if (slot == 0) {
             load(slot, CONV8);
@@ -648,6 +677,7 @@ static void client(void *argument)
             set(&faulted, 3);
         } else if (slot == 1) {
             load(slot, DUAL_U8);
+            set(&parked[slot], 1);
             wait_flag(&faulted, 3);
             uint64_t t;
             configASSERT(!npu_runtime_send(&rt, slot, NPU_SERVICE_SUBMIT, 0, 1000000, 100, &t));
@@ -684,12 +714,231 @@ static void finish_case(const char *text)
     platform_puts(text);
     platform_exit(0);
 }
+#ifdef NPU_BOARD_CLIENT_CHECK
+/* The bootstrap task runs apps/npu-board/usb.c as USB0, over a modeled
+ * TinyUSB vendor class with the shared configuration's buffering, and plays
+ * the host. Received bytes go host -> endpoint buffer (PIO) -> receive FIFO
+ * -> caller; transmitted bytes go caller -> transmit FIFO -> endpoint buffer
+ * -> host (PIO). One OUT and one IN packet move per controller step. */
+#define USB_PACKET 512u
+/* The FIFO sizes of apps/npu-board/tusb_config.h, which the image resolves. */
+#define RX_FIFO CFG_TUD_VENDOR_RX_BUFSIZE
+#define TX_FIFO CFG_TUD_VENDOR_TX_BUFSIZE
+_Static_assert(RX_FIFO == 2048 && TX_FIFO == 4096, "apps/npu-board/tusb_config.h FIFO sizes");
+#define HOST_CHUNK 4096u
+enum { STATUS = 1, LOAD, UPLOAD, SUBMIT, READ, RETURN, CLOSE };
+const uint64_t npu_board_usb_epoch = UINT64_C(0x0123456789abcdef), npu_board_usb_generation = 3;
+_Noreturn void npu_board_usb_stop(void) { platform_puts("FAIL usb.c stopped USB0\n"); platform_exit(1); }
+static struct {
+    uint8_t out[64 + HOST_CHUNK], in[64 + FIXTURE_MAX_TENSOR], chunk[HOST_CHUNK];
+    size_t out_len, out_at, in_len;
+    uint8_t rx_ep[USB_PACKET], rx_ff[RX_FIFO], tx_ep[USB_PACKET], tx_ff[TX_FIFO];
+    size_t rx_head, rx_count, tx_head, tx_count;
+    int zlp;
+    /* Bytes moved per stage; headers counts request and response headers. */
+    uint64_t pio_in, ep_to_fifo, fifo_to_caller, into_window, headers_in;
+    uint64_t caller_to_fifo, from_window, fifo_to_ep, pio_out, headers_out;
+} usb;
+static unsigned host_sequence;
+static void ring_put(uint8_t *ring, size_t size, size_t head, size_t *count, const uint8_t *from, size_t n)
+{
+    size_t at = (head + *count) % size, first = n < size - at ? n : size - at;
+    memcpy(ring + at, from, first); memcpy(ring, from + first, n - first); *count += n;
+}
+static void ring_get(const uint8_t *ring, size_t size, size_t *head, size_t *count, uint8_t *to, size_t n)
+{
+    size_t first = n < size - *head ? n : size - *head;
+    memcpy(to, ring + *head, first); memcpy(to + first, ring, n - first);
+    *head = (*head + n) % size; *count -= n;
+}
+static int in_tensor(const struct npu_board_tensor *t, unsigned n, uintptr_t p)
+{
+    for (unsigned i = 0; i < n; ++i) if (p >= t[i].cpu && p < t[i].cpu + t[i].bytes) return 1;
+    return 0;
+}
+int tud_speed_get(void) { return TUSB_SPEED_HIGH; }
+uint32_t tud_vendor_available(void) { return (uint32_t)usb.rx_count; }
+uint32_t tud_vendor_read(void *buffer, uint32_t bytes)
+{
+    size_t n = bytes < usb.rx_count ? bytes : usb.rx_count;
+    ring_get(usb.rx_ff, RX_FIFO, &usb.rx_head, &usb.rx_count, buffer, n);
+    usb.fifo_to_caller += n;
+    if (in_tensor(board_client.input, board_client.inputs, (uintptr_t)buffer)) usb.into_window += n;
+    return (uint32_t)n;
+}
+uint32_t tud_vendor_write(const void *buffer, uint32_t bytes)
+{
+    size_t room = TX_FIFO - usb.tx_count, n = bytes < room ? bytes : room;
+    ring_put(usb.tx_ff, TX_FIFO, usb.tx_head, &usb.tx_count, buffer, n);
+    usb.caller_to_fifo += n;
+    if (in_tensor(board_client.output, board_client.outputs, (uintptr_t)buffer)) usb.from_window += n;
+    return (uint32_t)n;
+}
+uint32_t tud_vendor_flush(void) { return (uint32_t)usb.tx_count; }
+/* The controller and the class's transfer-complete handling: an OUT packet
+ * only when the receive FIFO has room for it, and after the transmit FIFO
+ * empties on a whole packet, the zero-length packet. */
+static int usb_controller(void)
+{
+    int moved = 0;
+    if (usb.out_at < usb.out_len && RX_FIFO - usb.rx_count >= USB_PACKET) {
+        size_t n = usb.out_len - usb.out_at < USB_PACKET ? usb.out_len - usb.out_at : USB_PACKET;
+        memcpy(usb.rx_ep, usb.out + usb.out_at, n); usb.out_at += n; usb.pio_in += n;
+        ring_put(usb.rx_ff, RX_FIFO, usb.rx_head, &usb.rx_count, usb.rx_ep, n); usb.ep_to_fifo += n;
+        tud_vendor_rx_cb(0, NULL, 0); moved = 1;
+    }
+    if (usb.tx_count) {
+        size_t n = usb.tx_count < USB_PACKET ? usb.tx_count : USB_PACKET;
+        ring_get(usb.tx_ff, TX_FIFO, &usb.tx_head, &usb.tx_count, usb.tx_ep, n); usb.fifo_to_ep += n;
+        configASSERT(usb.in_len + n <= sizeof(usb.in));
+        memcpy(usb.in + usb.in_len, usb.tx_ep, n); usb.in_len += n; usb.pio_out += n;
+        usb.zlp = !usb.tx_count && n == USB_PACKET;
+        tud_vendor_tx_cb(0, (uint32_t)n); moved = 1;
+    } else if (usb.zlp) {
+        usb.zlp = 0; tud_vendor_tx_cb(0, 0); moved = 1;
+    }
+    return moved;
+}
+static void put32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = (uint8_t)(v >> (8 * i)); }
+static void put64(uint8_t *p, uint64_t v) { put32(p, (uint32_t)v); put32(p + 4, (uint32_t)(v >> 32)); }
+static uint64_t word64(const uint8_t *p) { return word(p) | (uint64_t)word(p + 4) << 32; }
+/* One request and its whole response. Returns the result; usb.in holds the
+ * response. While the client works, USB0 makes no progress and the host
+ * waits a tick. */
+static unsigned host(unsigned op, unsigned argument, unsigned offset, const uint8_t *payload, uint32_t bytes)
+{
+    configASSERT(usb.out_at == usb.out_len && 64 + bytes <= sizeof(usb.out));
+    memset(usb.out, 0, 64);
+    put32(usb.out, 0x3151424eu); put32(usb.out + 4, op); put32(usb.out + 8, ++host_sequence);
+    put32(usb.out + 12, bytes); put64(usb.out + 16, npu_board_usb_epoch); put64(usb.out + 24, npu_board_usb_generation);
+    put32(usb.out + 32, argument); put32(usb.out + 36, offset);
+    if (bytes) memcpy(usb.out + 64, payload, bytes);
+    usb.out_len = 64 + bytes; usb.out_at = 0; usb.in_len = 0; usb.headers_in += 64;
+    TickType_t start = xTaskGetTickCount();
+    for (;;) {
+        const size_t in = usb.in_len, out = usb.out_at, rx = usb.rx_count, tx = usb.tx_count;
+        int moved = usb_controller();
+        npu_board_usb_exchange();
+        if (usb.in_len >= 64 && usb.in_len == 64 + word(usb.in + 28) && usb.out_at == usb.out_len &&
+            !usb.tx_count && !usb.zlp) break;
+        if (!moved && in == usb.in_len && out == usb.out_at && rx == usb.rx_count && tx == usb.tx_count) {
+            configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1);
+        }
+    }
+    configASSERT(word(usb.in) == 0x3152424eu && word(usb.in + 4) == op && word(usb.in + 8) == host_sequence &&
+                 word64(usb.in + 32) == npu_board_usb_epoch && word64(usb.in + 40) == npu_board_usb_generation);
+    usb.headers_out += 64;
+    return word(usb.in + 12);
+}
+static void board_usb(void)
+{
+    struct npu_board_client *c = &board_client;
+    /* Before the client has sent OPEN, STATUS and LOAD are answered not-ready
+     * with zero client fields, and nothing is posted. */
+    configASSERT(host(STATUS, 0, 0, NULL, 0) == NPU_BOARD_RESULT_NOT_READY && !word(usb.in + 16));
+    configASSERT(host(LOAD, SHUFFLENET, 0, NULL, 0) == NPU_BOARD_RESULT_NOT_READY && !word(usb.in + 56));
+    configASSERT(!c->requests && !atomic_load(&c->request) && atomic_load(&c->window) == NPU_BOARD_HELD);
+    npu_board_client_start(c);
+    TickType_t start = xTaskGetTickCount();
+    while (!npu_board_client_ready(c)) { configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1); }
+    set(&opened[3], 1);
+    configASSERT(host(STATUS, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && c->requests == 1 && c->replies == 1);
+    configASSERT(host(LOAD, SHUFFLENET, 0, NULL, 0) == NPU_BOARD_RESULT_OK &&
+                 atomic_load(&c->window) == NPU_BOARD_READ_LENT && word(usb.in + 56) == (1u << 16 | 1u));
+    const struct fixture *f = &fixtures[SHUFFLENET];
+    configASSERT(c->input[0].bytes == f->tensor_bytes[0] && c->output[0].bytes == f->tensor_bytes[1]);
+    const unsigned requests = c->requests, replies = c->replies;
+    const uint64_t pio_in = usb.pio_in, ep_to_fifo = usb.ep_to_fifo, into_window = usb.into_window,
+        headers_in = usb.headers_in, from_window = usb.from_window, fifo_to_ep = usb.fifo_to_ep,
+        pio_out = usb.pio_out, headers_out = usb.headers_out;
+    uint64_t upload = 0, output = 0;
+    for (unsigned n = 0; n < JOBS; ++n) {
+        for (uint32_t at = 0; at < f->tensor_bytes[0]; at += HOST_CHUNK) {
+            uint32_t bytes = f->tensor_bytes[0] - at < HOST_CHUNK ? f->tensor_bytes[0] - at : HOST_CHUNK;
+            for (uint32_t x = 0; x < bytes; ++x) usb.chunk[x] = (uint8_t)(f->tensor[0][at + x] ^ (n * 0x25));
+            configASSERT(host(UPLOAD, 0, at, usb.chunk, bytes) == NPU_BOARD_RESULT_OK);
+            upload += bytes;
+        }
+        configASSERT(host(SUBMIT, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK &&
+                     atomic_load(&c->window) == NPU_BOARD_WRITE_LENT);
+        configASSERT(host(READ, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && word(usb.in + 28) == c->output[0].bytes);
+        const struct npu_runtime_slot *s = &rt.slot[3];
+        unsigned i = source_of_output(s, 0);
+        for (unsigned x = 0; x < c->output[0].bytes; ++x)
+            configASSERT(usb.in[64 + x] ==
+                         expected(SHUFFLENET, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
+        output += c->output[0].bytes;
+        configASSERT(host(RETURN, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK);
+    }
+    const unsigned job_requests = c->requests - requests, job_replies = c->replies - replies;
+    configASSERT(job_requests == JOBS && job_replies == JOBS && !client_tick_waits);
+    /* Every payload byte: PIO into the endpoint buffer, one copy into the
+     * receive FIFO and one into the window; every output byte: one copy
+     * from the window into the transmit FIFO, one into the endpoint buffer
+     * and PIO out. */
+    const uint64_t in_copies = usb.ep_to_fifo - ep_to_fifo - (usb.headers_in - headers_in) + usb.into_window - into_window;
+    const uint64_t out_copies = usb.from_window - from_window + usb.fifo_to_ep - fifo_to_ep - (usb.headers_out - headers_out);
+    configASSERT(upload == JOBS * (uint64_t)f->tensor_bytes[0] && output == JOBS * (uint64_t)f->tensor_bytes[1]);
+    configASSERT(usb.into_window - into_window == upload && in_copies == 2 * upload &&
+                 usb.pio_in - pio_in - (usb.headers_in - headers_in) == upload);
+    configASSERT(usb.from_window - from_window == output && out_copies == 2 * output &&
+                 usb.pio_out - pio_out - (usb.headers_out - headers_out) == output);
+    /* A SUBMIT posted while the read window is lent is refused before any
+     * runtime request. */
+    configASSERT(atomic_load(&c->window) == NPU_BOARD_READ_LENT &&
+                 npu_board_client_post(c, ++host_sequence, NPU_BOARD_SUBMIT, 0));
+    start = xTaskGetTickCount();
+    unsigned result;
+    while (!(result = npu_board_client_answer(c, host_sequence))) { configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1); }
+    configASSERT(result == NPU_BOARD_RESULT_REFUSED && c->refused == 1 && c->requests == requests + JOBS);
+    /* The catalogue's largest output: mimus-linear-q's 2,816 bytes, a
+     * 2,880-byte READ response, inside the image's transmit FIFO. */
+    const struct fixture *g = &fixtures[MIMUS];
+    configASSERT(host(LOAD, MIMUS, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_READ_LENT &&
+                 c->inputs == 1 && c->outputs == 1 && c->input[0].bytes == g->tensor_bytes[0] &&
+                 c->output[0].bytes == 2816 && 64 + c->output[0].bytes <= TX_FIFO);
+    for (uint32_t at = 0; at < g->tensor_bytes[0]; at += HOST_CHUNK) {
+        uint32_t bytes = g->tensor_bytes[0] - at < HOST_CHUNK ? g->tensor_bytes[0] - at : HOST_CHUNK;
+        configASSERT(host(UPLOAD, 0, at, g->tensor[0] + at, bytes) == NPU_BOARD_RESULT_OK);
+    }
+    configASSERT(host(SUBMIT, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_WRITE_LENT);
+    configASSERT(host(READ, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && word(usb.in + 28) == 2816 && usb.in_len == 64 + 2816);
+    {
+        const struct npu_runtime_slot *s = &rt.slot[3];
+        unsigned i = source_of_output(s, 0);
+        for (unsigned x = 0; x < 2816; ++x)
+            configASSERT(usb.in[64 + x] ==
+                         expected(MIMUS, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
+    }
+    configASSERT(host(RETURN, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK);
+    configASSERT(host(CLOSE, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && c->state == A733_NPU_CLOSED &&
+                 atomic_load(&c->closed));
+    set(&closed[3], 1);
+    platform_puts("COUNT board_client jobs=3");
+    platform_puts(" requests="); decimal(job_requests); platform_puts(" replies="); decimal(job_replies);
+    platform_puts(" client_tick_waits="); decimal(client_tick_waits);
+    platform_puts(" refused_while_lent="); decimal(c->refused);
+    platform_puts(" upload_bytes="); decimal(upload); platform_puts(" output_bytes="); decimal(output);
+    platform_puts("\n");
+    platform_puts("COUNT board_usb input_copies_per_byte="); decimal(in_copies / upload);
+    platform_puts(" input_pio_per_byte=1 output_copies_per_byte="); decimal(out_copies / output);
+    platform_puts(" output_pio_per_byte=1 header_bytes_in="); decimal(usb.headers_in - headers_in);
+    platform_puts(" header_bytes_out="); decimal(usb.headers_out - headers_out);
+    platform_puts("\n");
+}
+#endif
 static void bootstrap_run(void *unused)
 {
     (void)unused;
     configASSERT(npu_runtime_stop_poll(&rt) == A733_NPU_PLATFORM_RETAINED && !atomic_load(&rt.failed));
     configASSERT(npu_runtime_startup_poll(&rt) == A733_NPU_PLATFORM_READY);
     set(&started, 1);
+#ifdef NPU_BOARD_CLIENT_CHECK
+    if (npu_case == 5) {
+        board_usb();
+        finish_case("PASS NPU runtime: the board client loop hands the windows over, one request and reply per inference, no tick wait\n");
+    }
+#endif
     for (unsigned s = 0; s < SLOTS; ++s) wait_flag(&opened[s], 1);
     if (npu_case == 0) {
         /* One credit at a time, each once every slot with work left has its
@@ -750,8 +999,11 @@ static void bootstrap_run(void *unused)
         platform_puts(" running_ticks="); decimal(model.run_ticks_total); platform_puts("\n");
         finish_case("PASS NPU runtime: late interrupts, idle hint completion within a step, deferred mask retried\n");
     }
-    /* Cases 3 and 4: integrity failures retain every slot. */
+    /* Cases 3 and 4: integrity failures retain every slot. Slot 1's LOAD
+     * completes before the change, which would otherwise fault it under
+     * host load. */
     wait_flag(&faulted, 1);
+    wait_flag(&parked[1], 1);
     uint32_t triggers = get(&model.triggers);
     if (npu_case == 3) {
         ((uint8_t *)rt.slot[0].targets[NBG_ALLOC_NN].cpu)[40] ^= 1;
@@ -835,12 +1087,9 @@ void kernel_main(void)
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4;
+    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5;
     model.late = npu_case == 2;
     model.defer_mask = npu_case == 2 ? 6 : 0;
-    struct a733_npu_handoff base = {.controller = 0x03600000, .command_admission = 1};
-    configASSERT(npu_runtime_handoff(&rt, &base, &startup.handoff));
-    configASSERT(startup.handoff.command_count == SLOTS + 1);
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
                                              stacks[SLOTS], &tasks[SLOTS], 2);
     startup.initialized = 1; startup.task = bootstrap;
@@ -859,5 +1108,9 @@ void kernel_main(void)
     configASSERT(npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(rt.service.runtime && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
+#ifdef NPU_BOARD_CLIENT_CHECK
+    board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,
+        .wait = 20000, .task = clients[3], .bootstrap = bootstrap};
+#endif
     vTaskStartScheduler(); platform_panic("scheduler returned", 0);
 }

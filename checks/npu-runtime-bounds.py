@@ -55,9 +55,12 @@ pool, start and check step counts; and for one ShuffleNetV2 LOAD its step
 count, SHA-256 bytes and staging_check_bytes.
 
 Images: the emulator check image, whose constants this check reads from its
-source, and the planned first consumer, apps/npu-runtime-large with one
+source; the planned first consumer, apps/npu-runtime-large with one
 ShuffleNetV2 slot and USB0 on core 0, whose deadline cap and host request
-deadline it reads from apps/npu-runtime/main.c and apps/npu-runtime-large/host.py.
+deadline it reads from apps/npu-runtime/main.c and apps/npu-runtime-large/host.py;
+and the board image, apps/npu-board, with one slot of the five-model catalogue
+and its worker on core 1, whose slot count, job deadline and client reply wait
+it reads from apps/npu-board.
 """
 import argparse
 import json
@@ -171,11 +174,20 @@ def images():
     deadline = int(constant(check, r'call\(slot, NPU_SERVICE_SUBMIT, 0, (\d+)\)')[0])
     large_cap = max(int(v) for v in constant('apps/npu-runtime/main.c', r'if\(timeout>(\d+)\)timeout='))
     large_request = int(constant('apps/npu-runtime-large/host.py', r'exchange\(BEGIN,rid,timeout_us=(\d+)')[0])
+    board = 'apps/npu-board/main.c'
+    board_slots = int(constant('apps/npu-board/npu-board.h', r'#define NPU_BOARD_SLOTS (\d+)u')[0])
+    board_deadline = int(constant(board, r'\.job_timeout_us=(\d+)')[0])
+    board_collect = int(constant(board, r'\.wait=pdMS_TO_TICKS\((\d+)\)')[0]) * 1000
     return [
         dict(name=check, slots=slots, deadline_us=deadline, usb0_core0=False, collect_us=collect * 1000,
              models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
         dict(name='apps/npu-runtime-large (planned first consumer)', slots=1, deadline_us=large_cap,
              usb0_core0=True, collect_us=large_request, models=['shufflenet-v2-published']),
+        # The board image: one slot that loads any catalogue model, the worker
+        # on core 1 apart from USB0 and the power service on core 0.
+        dict(name='apps/npu-board (board image)', slots=board_slots, deadline_us=board_deadline,
+             usb0_core0=False, collect_us=board_collect,
+             models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
     ]
 
 

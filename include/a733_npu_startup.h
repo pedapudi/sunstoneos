@@ -1,131 +1,79 @@
 #ifndef SUNSTONE_A733_NPU_STARTUP_H
 #define SUNSTONE_A733_NPU_STARTUP_H
+/* The NPU startup sequencer: docs/npu-startup.md and docs/designs/npu-board.md. */
 #include "a733_counter_clock.h"
+#include "a733_gpu_resources.h"
 #include "a733_npu_platform.h"
-#include "a733_npu_pll.h"
 #include "a733_platform_locks.h"
-#include "npu_service.h"
+#include "a733_power_domains.h"
+#include "a733_rail_leases.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
-#define A733_NPU_HANDOFF_QUIET       (1u<<0)
-#define A733_NPU_HANDOFF_SRAM_FREE   (1u<<1)
-#define A733_NPU_HANDOFF_IRQ_MASKED  (1u<<2)
-#define A733_NPU_HANDOFF_RECOVERY    (1u<<3)
-#define A733_NPU_HANDOFF_REMOTE      (1u<<4)
-#define A733_NPU_HANDOFF_I2C         (1u<<5)
-#define A733_NPU_HANDOFF_MEMORY      (1u<<6)
-#define A733_NPU_HANDOFF_REQUIRED    UINT32_C(0x7f)
-#define A733_NPU_HANDOFF_SUPERVISED  (1u<<7)
-#define A733_NPU_HANDOFF_SUPERVISED_REQUIRED UINT32_C(0xf7)
-/* Exactly one recovery contract: independent watchdog, or an authenticated
- * supervisor retaining every resource until confirmed full power removal. */
-static inline int a733_npu_handoff_established(uint32_t flags)
-{return flags==A733_NPU_HANDOFF_REQUIRED || flags==A733_NPU_HANDOFF_SUPERVISED_REQUIRED;}
-#define A733_NPU_RAIL_SETTLE_US UINT64_C(5160)
-/* One global GPU/PCK manager, shared with GPU clients and all legacy change
- * guards. Wrappers bind its operations to the common physical counter and
- * register/PMIC mutexes. Never instantiate a second manager for the same PCK.
- * Native operations preserve existing GPU resource behavior. */
-struct a733_npu_startup_resources {
-    struct a733_gpu_resource_manager manager;
-    struct a733_gpu_resource_native native;
-    struct a733_counter_clock *clock;
+/* The image's providers, borrowed for the startup's lifetime. pck is the
+ * image's only GPU/PCK resource manager; rails is the ledger bound to it and
+ * carries the power-authority word; domains is the power-domain owner. */
+struct a733_npu_startup_providers {
+    struct a733_counter_clock *counter;
+    struct a733_clock_leases *clocks;
     struct a733_platform_locks *locks;
-    unsigned initialized;
+    struct a733_gpu_resource_manager *pck;
+    struct a733_rail_leases *rails;
+    struct a733_power_domains *domains;
 };
-/* Copy private authenticated evidence before scheduling. Flags describe prior
- * independently established proof, including remote/secure firmware exclusion,
- * NPU/shared-SRAM quiescence, secure attribution, inherited I2C clocks/pins,
- * reserved backend/command/MMU memory and the selected recovery contract.
- * Neither flags nor numeric evidence IDs establish those physical facts.
- * Command admission remains an independent prerequisite. Startup authenticates
- * exactly the supplied backend/image/descriptor table, without parsing commands.
- */
-struct a733_npu_handoff {
-    struct a733_npu_platform_config allowed;
-    struct a733_npu_ops backend;
-    void *backend_cookie;
-    struct a733_npu_mmu_image image;
-    struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
-    uintptr_t controller;
-    uint64_t evidence, command_admission;
-    uint32_t established;
-    unsigned command_count, pck_client;
+/* owner: the clock, rail and row owner. deadline_us: the session end in the
+ * counter's microseconds. pck_client: the image's PCK client of the NPU. */
+struct a733_npu_startup_config {
+    struct a733_npu_platform_config fabric;
+    uint64_t owner, deadline_us;
+    unsigned pck_client;
 };
+/* Register, time and lock callbacks. NULL selects the native ones: the NPU
+ * allowlist adapter, the counter clock, CNTPCT_EL0 and the register lock.
+ * now gives monotonic microseconds for deadlines; spin_us gives raw counter
+ * microseconds for LOCK spacing. enter returns 1 held, 0 busy, -1 uncertain.
+ * retain marks the held register lock retained after a sequence stopped
+ * midway; the lock is never released afterwards. */
+struct a733_npu_startup_ops {
+    struct a733_npu_register_ops registers;
+    int (*now)(void *, uint64_t *);
+    uint64_t (*spin_us)(void *);
+    int (*enter)(void *, uint64_t deadline_us);
+    void (*leave)(void *);
+    void (*retain)(void *);
+};
+enum { A733_NPU_STARTUP_TOKENS, A733_NPU_STARTUP_SUPPLY, A733_NPU_STARTUP_ENABLE,
+    A733_NPU_STARTUP_OPEN, A733_NPU_STARTUP_ROW, A733_NPU_STARTUP_SETTLE,
+    A733_NPU_STARTUP_FINAL, A733_NPU_STARTUP_READY, A733_NPU_STARTUP_STOPPED };
 struct a733_npu_startup {
-    struct a733_npu_handoff handoff;
-    struct a733_npu_platform platform;
-    struct a733_npu_platform_operations operations;
-    struct a733_clock_token clock_token,rail_token;
-    struct a733_pmic_consumer pmic;
-    struct a733_npu_pll *pll_source;
-    const struct a733_npu_startup *pll_binding_self;
-    struct a733_npu_pll_config pll_config;
-    struct a733_npu_pll_operations pll_operations;
-    void *pll_cookie;
-    unsigned pll_transferred;
-    uint64_t pll_whole_platform;
-    struct a733_gpu_resource_lease pck_token;
-    struct a733_npu_startup_resources *shared;
-    struct a733_clock_leases *registry;
-    struct a733_i2c bus;
+    struct a733_npu_startup_config config;
+    struct a733_npu_startup_providers providers;
+    struct a733_npu_startup_ops ops;
+    void *cookie;
+    /* The row's request field is written by the bootstrap task and its answer
+     * field by the power service task (a733_power_domain_row.h). */
+    struct a733_power_domain_row row;
+    struct a733_clock_token clock;
+    struct a733_rail_token rail;
+    struct a733_gpu_resource_lease pck;
     TaskHandle_t task;
-    uint64_t settle_until;
-    unsigned initialized,failed,stage,register_held,i2c_held,rail_step;
-    uint8_t rail[6];
+    a733_clock_mask_t shared;
+    uint64_t last_now, wait_until;
+    unsigned initialized, stage, failed, register_held;
 };
-/* EL1, pre-scheduler. Shared counter must already be initialized (24 MHz on
- * A733); locks and registry use that same object. No hardware acquisition.
- * Resource initializer calls the native adapter's counter-frequency check only.
- * All objects are private, disjoint, statically reserved for their lifetimes. */
-int a733_npu_startup_resources_init(struct a733_npu_startup_resources *,
-    struct a733_counter_clock *,struct a733_platform_locks *);
-int a733_npu_startup_init(struct a733_npu_startup *,const struct a733_npu_handoff *,
-    struct a733_npu_startup_resources *,struct a733_clock_leases *);
-/* Shared runtime mode, EL1 before scheduling and before any manager acquisition.
- * Disables the shared native GPU legacy reader even without a GPU view. Both
- * consumers must bind this same provider/ledger/global manager. NPU owns a
- * stable DCDC2 parent and keeps the final observation ticket for service life.
- * An unbound startup is incompatible with a shared-provider native adapter. */
-int a733_npu_startup_bind_pmic(struct a733_npu_startup *,struct a733_pmic *,
-    const struct a733_pmic_lifetime *);
-/* Optional, EL1 pre-scheduler binding before any startup poll. Source registry,
- * owner, handoff and fabric must match. The source may already be prepared by
- * cold boot, or the designated bootstrap task must serialize source polling
- * with startup polling. No concurrent observer/writer of either object is
- * permitted; their state fields are plain C data. One source has one successor.
- * Source, all callback metadata and its whole-platform reservation MUST remain
- * live and immutable for startup/service lifetime. Neither object may be copied
- * or moved. The source provider still has to establish real boot/remote/RAM
- * authority; binding does not infer those facts from metadata.
- * Bootstrap polling atomically publishes stable PLL_NPU ownership and adopts
- * the fresh token while preserving exclusive local NPU and all parent scopes.
- * LIVE_ENABLE additionally selects quiescent-ON adoption, only with the
- * supervised handoff and its independently established SRAM abandonment.
- * This does not bypass rail, PCK, local platform or service admission. */
-int a733_npu_startup_bind_pll(struct a733_npu_startup *,struct a733_npu_pll *);
-int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);
-/* One designated EL1 bootstrap task after scheduler start. Acquisition and rail
- * snapshots never nest platform mutexes. Failure retains every admitted lease;
- * uncertain I/O retains its mutex and blocks later shared transactions.
- * Shared mode queues actual asynchronous observations on the provider task.
- * Isolated legacy I2C has its own bounded physical-counter timeout; startup
- * checks its absolute deadline before and after each transaction.
- * No PMIC data write, bus reset, automatic retry or resource release occurs. */
-/* Optional first supply observation before polling a bound PLL source. The
- * designated bootstrap owns both objects. Publishes actual partial rail leases
- * into this startup's acquisition record; callers never edit platform state.
- * 1 sampled 800 mV, 0 pending/contention, -1 retained. No PLL/local MMIO. */
-int a733_npu_startup_supply_sample(struct a733_npu_startup *);
-enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *);
-/* Original bootstrap, after matched successful controller CLOSE. Preserves the
- * same live PMIC, PLL and resource authority checks during local shutdown.
- * Keep leases, source provider and allocations alive through subsequent return. */
-enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *);
-int a733_npu_startup_ready(const struct a733_npu_startup *);
-/* npu_service_activation.prepared: read-only metadata/health observation,
- * exact backend/image/command comparison, task authority and all live tokens.
- * Returns 1 ready, 0 pending/metadata-lock contention, -1 retained failure.
- * Does not touch MMIO/I2C or authorize arbitrary command semantics. */
-int a733_npu_startup_prepared(void *,const struct a733_npu_ops *,void *,
-    const struct a733_npu_mmu_image *,const struct a733_npu_command *,unsigned);
+/* EL1, before the scheduler starts and before the power service first runs:
+ * copies the configuration and providers and registers the domain-4 row. */
+int a733_npu_startup_init(struct a733_npu_startup *, const struct a733_npu_startup_config *,
+    const struct a733_npu_startup_providers *, const struct a733_npu_startup_ops *, void *cookie);
+int a733_npu_startup_bind_task(struct a733_npu_startup *, TaskHandle_t);
+/* The bound EL1 bootstrap task only. READY once the NPU is powered, clocked
+ * and out of reset; PENDING while a wait is open; RETAINED after a failure. */
+enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *);
+/* After a successful controller CLOSE, the bound task only: the local stop
+ * table in one locked pass. READY when stopped. */
+enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
+/* The service activation check, on the bound task: 1 when READY and no
+ * shared provider has failed, 0 before READY, -1 after a failure or from
+ * another task. No register access. */
+int a733_npu_startup_prepared(struct a733_npu_startup *);
 #endif

@@ -8,7 +8,9 @@ def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def run(image,manifest,accepted,out):
  out.mkdir(parents=True,exist_ok=False);prep=module('runtime_preparation',ROOT/'apps/npu-convolution/prepare-supervised.py');fixture=module('runtime_fixture',ROOT/'checks/npu-supervised-host.py');tool=module('runtime_tool',ROOT/'tools/check-a733-npu-supervised.py');host=module('runtime_protocol',ROOT/'apps/npu-runtime/host.py')
- raw=bytearray((Path.home()/'.cache/sunstoneos/evidence/npu-interrupt-service-20261019/host/bundle/session.bin').read_bytes());parts,address,build,layout=prep.image_data(image.read_bytes());raw[48:80]=build
+ # The reviewed 608-byte page, converted to the image's reduced record.
+ images=module('runtime_images',ROOT/'checks/npu-image-checks.py');parts,address,build,layout=prep.image_data(image.read_bytes())
+ raw=bytearray(images.npu_page((Path.home()/'.cache/sunstoneos/evidence/npu-interrupt-service-20261019/host/bundle/session.bin').read_bytes(),layout,prep.SINGLE_CORE_VERSION));raw[48:80]=build
  session,admission=fixture.admission_fixture(prep,image.read_bytes(),raw,layout,build,out)
  prepared=prep.prepare(image,manifest,session,admission,out/'bundle','/usr/bin/clang-21','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21','/usr/lib/llvm-21/bin/llvm-objcopy');prepared=prep.validate_bundle(out/'bundle');assert prepared['execution_profile']=='npu-runtime-single-core-supervised-v1'
  model=next(v for v in tool.protocol.CATALOGUE if v['name']==prepared['model_name']);n=model['input']['bytes'];inputs=[bytes(i%256 for i in range(n)),bytes((i*7+31)%256 for i in range(n))]

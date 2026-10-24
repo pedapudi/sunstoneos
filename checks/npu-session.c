@@ -262,20 +262,18 @@ int __wrap_aarch64_device_translate(uintptr_t address, int write, struct aarch64
 }
 
 /* Startup stand-ins: the platform layer is outside this check. */
-int a733_npu_startup_prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
-    const struct a733_npu_mmu_image *image, const struct a733_npu_command *commands, unsigned count)
+int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
-    (void)ops; (void)backend; (void)image; (void)commands;
-    configASSERT(cookie == &startup && count == FIXTURES + 1);
+    configASSERT(s == &startup);
     return 1;
 }
-enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup);
     return npu_service_activate(&sessions.service) == NPU_SERVICE_OK ?
         A733_NPU_PLATFORM_READY : A733_NPU_PLATFORM_RETAINED;
 }
-enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup && sessions.service.controller.state == A733_NPU_CLOSED);
     ++stops;
@@ -590,9 +588,6 @@ void kernel_main(void)
 
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
-    struct a733_npu_handoff base = {.controller = 0x03600000, .command_admission = 1};
-    configASSERT(npu_session_handoff(&sessions, &base, &startup.handoff));
-    configASSERT(startup.handoff.command_count == FIXTURES + 1);
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
                                              stacks[FIXTURES], &tasks[FIXTURES], 1);
     startup.initialized = 1; startup.task = bootstrap;

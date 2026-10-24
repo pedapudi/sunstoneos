@@ -301,28 +301,15 @@ static int private_overlap(const struct npu_sessions *s, uintptr_t p, size_t n)
         a733_extents_intersect(p, n, s->native.registers, PAGE) ||
         (s->startup && a733_extents_intersect(p, n, (uintptr_t)s->startup, sizeof(*s->startup)));
 }
-int npu_session_handoff(struct npu_sessions *s, const struct a733_npu_handoff *base,
-                        struct a733_npu_handoff *out)
-{
-    if (!good(s) || s->bound || !base || !out || !base->command_admission ||
-        base->controller != s->native.register_physical ||
-        private_overlap(s, (uintptr_t)out, sizeof(*out))) return 0;
-    struct a733_npu_handoff h = *base;
-    h.backend = operations; h.backend_cookie = s; h.image = s->native.memory.image;
-    memset(h.commands, 0, sizeof(h.commands));
-    memcpy(h.commands, s->commands, (s->count + 1) * sizeof(s->commands[0]));
-    h.command_count = s->count + 1; *out = h;
-    return 1;
-}
 static int prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
                     const struct a733_npu_mmu_image *image, const struct a733_npu_command *commands,
                     unsigned count)
 {
     struct npu_sessions *s = cookie;
-    if (!good(s) || !metadata(s, ops, backend, image, commands, count) || !all_intact(s)) {
+    if (!good(s) || !metadata(s, ops, backend, image, commands, count)) {
         fault(s); return -1;
     }
-    int result = a733_npu_startup_prepared(s->startup, ops, backend, image, commands, count);
+    int result = a733_npu_startup_prepared(s->startup);
     if (result < 0) fault(s);
     return result;
 }
@@ -330,11 +317,8 @@ int npu_session_bind(struct npu_sessions *s, struct a733_npu_startup *startup,
                      const TaskHandle_t clients[], UBaseType_t priority, UBaseType_t affinity)
 {
     if (!good(s) || s->bound || !startup || !startup->initialized || !startup->task || !clients ||
-        startup->handoff.controller != s->native.register_physical ||
         private_overlap(s, (uintptr_t)startup, sizeof(*startup)) ||
-        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        !metadata(s, &startup->handoff.backend, startup->handoff.backend_cookie,
-                  &startup->handoff.image, startup->handoff.commands, startup->handoff.command_count))
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
         return 0;
     for (unsigned m = 0; m < s->count; ++m) {
         if (!clients[m] || clients[m] == startup->task) return 0;
@@ -368,15 +352,9 @@ static enum a733_npu_platform_result platform_step(struct npu_sessions *s, int s
         for (unsigned m = 0; m < s->count; ++m)
             if (!atomic_load_explicit(&s->session[m].closed, memory_order_acquire))
                 return A733_NPU_PLATFORM_RETAINED;
-    const struct a733_npu_handoff *h = &s->startup->handoff;
-    const struct npu_service *service = &s->service;
-    if (!good(s) || !metadata(s, &h->backend, h->backend_cookie, &h->image, h->commands, h->command_count) ||
-        !metadata(s, &service->ops, service->cookie, &service->image, service->commands,
-                  service->command_count) || !all_intact(s)) {
-        fault(s); return A733_NPU_PLATFORM_RETAINED;
-    }
-    enum a733_npu_platform_result result = stop ? a733_npu_startup_stop_poll(s->startup) :
-        a733_npu_startup_poll(s->startup);
+    if (!good(s)) { fault(s); return A733_NPU_PLATFORM_RETAINED; }
+    enum a733_npu_platform_result result = stop ? a733_npu_startup_stop(s->startup) :
+        a733_npu_startup_step(s->startup);
     if (result == A733_NPU_PLATFORM_RETAINED) fault(s);
     return result;
 }
