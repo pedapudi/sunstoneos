@@ -143,9 +143,13 @@ and every row and domain transition, then returns the ticks for
 (`a733_pmic_bind_service`), and a row request notifies through the row. A
 notification from the service task to itself is dropped: the step handles its
 own submissions. During a PMIC transfer the service spins on the raw counter,
-without the provider object, for the expected duration of the bus phase (two
+without the provider object, until the expected duration of the bus phase (two
 bit times for a START, repeated START or STOP, nine for a byte, from the
-inherited S_TWI0 divisor), then polls once. It spins at most 1 ms in one step.
+inherited S_TWI0 divisor) has passed since the provider's time of the write
+that started the phase, and at least a quarter bit time after a poll that
+found the phase unfinished, then polls once
+([pmic-access.md](designs/pmic-access.md)). It spins at most 1 ms and makes
+at most 256 polls in one step.
 The owner's code uses no critical section, scheduler suspension, delay or
 notification wait. The PMIC poll that the step calls can block when it
 activates a request: the pin check takes the register lock and the bus entry

@@ -19,22 +19,22 @@
  * register is read for the record. Success is status 0 with "COMPLETE board
  * bundle 6".
  *
- * After the park, with IRQs masked, the client measures the cost of the
- * parts of a provider register access: 256 back-to-back reads of S_TWI0 CNTR
- * through the DSB SY helper, the same reads without barriers (one DSB SY ends
- * that window), and 256 reads of the provider's time source, each window
- * timed by CNTPCT. A CNTR read has no side effect, and the parked provider
- * makes no access. */
+ * Before its first snapshot the client arms the wire-time spin: the service
+ * times one byte phase from its CNTR write to INT_FLAG set and leaves that
+ * step out of the step records. Every S_TWI0 write of the snapshots is timed
+ * in place. At the park, the service, which is the provider task, runs the
+ * access-cost windows of trace.h while idle: CNTR
+ * reads with the DSB SY helper, plain and discarded, and plain with each
+ * address depending on the previous value; the adapter's time and read
+ * operations; the task check that the adapter no longer makes per access;
+ * and the TWI observer. A CNTR read has no side effect. */
 #include "power.h"
 #include "platform.h"
 #include "boot.h"
 #include "aarch64_device_memory.h"
 #include "a733_power_authority.h"
-#include "a733_mmio.h"
 
 #define SNAPSHOTS 32u
-#define COST_READS 256u
-#define TWI_CNTR UINT32_C(0x0708300c)
 static struct a733_pmic_snapshot snapshots[SNAPSHOTS];
 
 static void snapshot(unsigned i)
@@ -56,32 +56,6 @@ static void snapshot(unsigned i)
     if (r != A733_PMIC_COMPLETE)
         bb_power_fail("board bundle 6: snapshot reap");
 }
-static void access_cost(struct bb6_summary *s)
-{
-    uint64_t daif, now;
-    uint32_t sink = 0;
-    __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(daif) :: "memory");
-    const uint64_t t0 = counter();
-    for (unsigned i = 0; i < COST_READS; ++i)
-        sink |= a733_mmio_read32_dsb_sy_both(TWI_CNTR);
-    const uint64_t t1 = counter();
-    for (unsigned i = 0; i < COST_READS; ++i)
-        sink |= a733_mmio_read32(TWI_CNTR);
-    a733_mmio_dsb_sy();
-    const uint64_t t2 = counter();
-    unsigned failed = 0;
-    for (unsigned i = 0; i < COST_READS; ++i)
-        failed |= bb_power.native_pmic_ops.now(&bb_power.pmic_native, &now) != 1;
-    const uint64_t t3 = counter();
-    __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
-    (void)sink;
-    if (failed)
-        bb_power_fail("board bundle 6: provider time source");
-    s->cost_reads = COST_READS;
-    s->cntr_dsb_ticks = (uint32_t)(t1 - t0);
-    s->cntr_plain_ticks = (uint32_t)(t2 - t1);
-    s->time_read_ticks = (uint32_t)(t3 - t2);
-}
 static uint32_t enable_selector(const struct a733_pmic_snapshot *s)
 { return (uint32_t)s->enable << 8 | s->selector; }
 
@@ -93,6 +67,7 @@ static void client(void *unused)
     struct bb6_summary s = {0};
     s.state = a733_power_authority_load(&bb_power.rails.authority);
     bb_power_acquire(A733_RAIL_BIT(A733_RAIL_DCDC2) | A733_RAIL_BIT(A733_RAIL_DCDC4));
+    atomic_store_explicit(&bb_power.wire_armed, 1, memory_order_release);
     for (unsigned i = 0; i < SNAPSHOTS; ++i)
         snapshot(i);
     if (!bb_power_read(0x070101ac, &s.ppu) || !bb_power_read(0x020025c0, &s.ahb) || !bb_power_read(0x020025e0, &s.mbus))
@@ -102,7 +77,7 @@ static void client(void *unused)
         const uintptr_t base = A733_POWER_PCK_DOMAIN(domains[i]);
         if ((s.ppu & 1) && (!bb_power_read(base, &s.policy[i]) || !bb_power_read(base + 8, &s.status[i])))
             bb_power_fail("board bundle 6: adoption read");
-        s.check[i] = a733_power_domain_check(&bb_power.domains, domains[i]);
+        s.check[i] = a733_power_domain_check(&bb_power.domains, domains[i], NULL);
     }
     struct aarch64_translation t = {0};
     s.mapped = bb_power.domains_native.mapped;
@@ -111,8 +86,12 @@ static void client(void *unused)
         s.par_shareability = t.shareability;
         s.par_physical = t.physical;
     }
+    bb_power.cost_at_park = 1;
     bb_power_park();
-    access_cost(&s);
+    s.cost = bb_power.cost;
+    s.wire_excluded = bb_power.wire_excluded;
+    for (unsigned i = 0; i < bb_power.stepped; ++i)
+        s.respins += bb_power.steps[i].respins;
 
     s.divisor = bb_power.pmic.divider;
     s.bit_ns = bb_power.pmic.bit_ns;

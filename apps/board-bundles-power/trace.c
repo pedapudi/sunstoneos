@@ -23,6 +23,7 @@ void bb_twi_observe(struct bb_twi *t, unsigned write, uintptr_t address, uint32_
         if (!(value & 8))
             return;
         if (t->polls > t->polls_max) t->polls_max = t->polls;
+        if (t->polls > 2) t->respins += t->polls - 2;
         if (t->condition) ++t->conditions;
         else ++t->bytes;
         t->mode = 0;
@@ -152,6 +153,8 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "recorded", s->steps);
     bb_line_dec(l, "dropped", s->dropped);
     bb_line_dec(l, "permille_max", s->bins.worst);
+    bb_line_dec(l, "excluded", s->wire_excluded);
+    bb_line_dec(l, "respins", s->respins);
     bb_line_end(l++);
     bb_line_start(l, "STEPS of wire time");
     bb_line_dec(l, "le100", s->bins.bins[0]);
@@ -162,10 +165,24 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "gt1100us", s->bins.over_ms);
     bb_line_end(l++);
     bb_line_start(l, "TWI_COST");
-    bb_line_dec(l, "reads", s->cost_reads);
-    bb_line_dec(l, "cntr_dsb_ticks", s->cntr_dsb_ticks);
-    bb_line_dec(l, "cntr_plain_ticks", s->cntr_plain_ticks);
-    bb_line_dec(l, "time_read_ticks", s->time_read_ticks);
+    bb_line_dec(l, "reads", s->cost.reads);
+    bb_line_dec(l, "core", s->cost.core);
+    bb_line_dec(l, "dsb", s->cost.dsb);
+    bb_line_dec(l, "plain_issue", s->cost.plain);
+    bb_line_dec(l, "dependent", s->cost.dependent);
+    bb_line_end(l++);
+    bb_line_start(l, "TWI_COST path");
+    bb_line_dec(l, "time_read", s->cost.time_read);
+    bb_line_dec(l, "adapter_read", s->cost.adapter_read);
+    bb_line_dec(l, "task_check", s->cost.task_check);
+    bb_line_dec(l, "task_ticks", s->cost.task_ticks);
+    bb_line_dec(l, "observer", s->cost.observer);
+    bb_line_end(l++);
+    bb_line_start(l, "TWI_COST bus");
+    bb_line_dec(l, "writes", s->cost.writes);
+    bb_line_dec(l, "write_ticks", s->cost.write_ticks);
+    bb_line_dec(l, "wire_ticks", s->cost.wire_ticks);
+    bb_line_dec(l, "wire_reads", s->cost.wire_reads);
     bb_line_end(l++);
     bb_line_start(l, "PPU_MAPPING");
     bb_line_dec(l, "adapter_mapped", s->mapped);
@@ -229,6 +246,7 @@ void bb_step_line(const struct bb_step *s, struct bb_line *l)
     bb_line_dec(l, "set", s->first_set);
     bb_line_dec(l, "clear", s->first_clear);
     bb_line_dec(l, "polls", s->polls_max);
+    bb_line_dec(l, "respins", s->respins);
     bb_line_end(l);
 }
 void bb_access_line(uint32_t address, uint32_t value, unsigned write, uint64_t at, struct bb_line *l)

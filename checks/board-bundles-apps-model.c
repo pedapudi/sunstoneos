@@ -262,17 +262,25 @@ static void spin_case(void)
 static void bins_case(void)
 {
     /* 400 kHz, 2,500 ns bits: one snapshot is 252 bit times, 630,000 ns. */
-    const struct bb_step steps[3] = {{15120, 0, 12, 24, 6, 20, 16, 2},  /* 630,000 ns: 100% */
-                                     {16632, 1, 12, 24, 6, 20, 16, 2},  /* 693,000 ns: 110% */
-                                     {30000, 1, 12, 24, 6, 20, 16, 2}}; /* 1,250,000 ns */
+    const struct bb_step steps[3] = {{15120, 0, 12, 24, 6, 20, 16, 2, 0},  /* 630,000 ns: 100% */
+                                     {16632, 1, 12, 24, 6, 20, 16, 2, 0},  /* 693,000 ns: 110% */
+                                     {30000, 1, 12, 24, 6, 20, 16, 2, 0}}; /* 1,250,000 ns */
     struct bb_step_bins b;
     bb_step_bins(steps, 3, 2500, &b);
     assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
            b.worst == 1984);
     /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
-    const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2};
+    const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2, 0};
     bb_step_bins(&board, 1, 2500, &b);
     assert(b.bins[3] == 1 && b.worst == 1456);
+    /* A byte phase polled four times: the read right after the write, the
+     * read after the spin, and two re-spins. */
+    struct bb_twi twi = {0};
+    bb_twi_observe(&twi, 1, BB_TWI_CNTR, 0x48);
+    for (unsigned i = 0; i < 3; ++i)
+        bb_twi_observe(&twi, 0, BB_TWI_CNTR, 0x40);
+    bb_twi_observe(&twi, 0, BB_TWI_CNTR, 0x48);
+    assert(twi.bytes == 1 && twi.polls_max == 4 && twi.respins == 2 && twi.first_clear == 1);
     printf("\"step distribution against the wire time\",");
 }
 

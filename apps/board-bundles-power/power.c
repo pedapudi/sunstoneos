@@ -6,6 +6,8 @@
 #include "boot.h"
 #include "a733_power_authority.h"
 #include "a733_range.h"
+#include "a733_mmio.h"
+#include "a733_task_context.h"
 
 struct bb_power bb_power;
 static StaticTask_t tasks[2];
@@ -21,7 +23,10 @@ static uint64_t cntpct(void)
 { return counter(); }
 
 /* The provider's callbacks are the native adapter's, with the TWI observer
- * on every completed S_TWI0 access; the cookie is the adapter itself. */
+ * on every completed S_TWI0 access; the cookie is the adapter itself. Each
+ * write is timed in place. Once armed, the first byte-phase CNTR write is
+ * followed by back-to-back CNTR reads until INT_FLAG sets: the wire time of
+ * one byte. */
 static int pmic_read(void *c, uintptr_t a, uint32_t *v)
 {
     const int r = bb_power.native_pmic_ops.read(c, a, v);
@@ -31,9 +36,22 @@ static int pmic_read(void *c, uintptr_t a, uint32_t *v)
 }
 static int pmic_write(void *c, uintptr_t a, uint32_t v)
 {
-    const int r = bb_power.native_pmic_ops.write(c, a, v);
-    if (r == 1)
-        bb_twi_observe(&bb_power.twi, 1, a, v);
+    struct bb_power *p = &bb_power;
+    const uint64_t before = counter();
+    const int r = p->native_pmic_ops.write(c, a, v);
+    const uint64_t after = counter();
+    if (r != 1)
+        return r;
+    ++p->cost.writes;
+    p->cost.write_ticks += after - before;
+    bb_twi_observe(&p->twi, 1, a, v);
+    if (a == BB_TWI_CNTR && v == 0x48 && atomic_exchange_explicit(&p->wire_armed, 0, memory_order_acquire)) {
+        struct bb_status_trace t;
+        bb_status_spin(p->native_pmic_ops.read, c, cntpct, BB_TWI_CNTR, after, BB_POWER_STATUS_BOUND, &t);
+        p->cost.wire_ticks = t.on ? t.on_at : 0;
+        p->cost.wire_reads = t.reads;
+        p->wire_in_step = 1;
+    }
     return r;
 }
 /* Caller buffers must also stay clear of the records this layer writes. */
@@ -78,8 +96,75 @@ static int domain_write(void *c, uintptr_t a, uint32_t v)
 }
 static void domain_notify(void *c) { (void)c; DOMAIN_OPS.notify(DOMAIN_NATIVE); }
 
+/* Bundle 6's access-cost windows, on the service task with the provider
+ * idle and the I2C mutex entered through the adapter, so that the adapter's
+ * read operation runs as the provider runs it. CNTR reads have no side
+ * effect. */
+static void measure(struct bb_power *p)
+{
+    struct bb_cost *c = &p->cost;
+    void *n = &p->pmic_native;
+    const uintptr_t cntr = BB_TWI_CNTR;
+    uint64_t daif, mpidr, now, t[9];
+    uint32_t v = 0;
+    unsigned failed = 0;
+    if (p->native_pmic_ops.enter(n, p->deadline) != 1)
+        bb_power_fail("board bundle 6: cost windows could not enter the I2C mutex");
+    __asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
+    __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(daif) :: "memory");
+    t[0] = counter();
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        (void)a733_mmio_read32_dsb_sy_both(cntr);
+    t[1] = counter();
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        (void)a733_mmio_read32(cntr);
+    a733_mmio_dsb_sy();
+    t[2] = counter();
+    uintptr_t address = cntr;
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i) {
+        uint64_t zero;
+        v = a733_mmio_read32(address);
+        __asm__ volatile("eor %0, %1, %1" : "=r"(zero) : "r"((uint64_t)v));
+        address = cntr + zero;
+    }
+    a733_mmio_dsb_sy();
+    t[3] = counter();
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        failed |= p->native_pmic_ops.now(n, &now) != 1;
+    t[4] = counter();
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        failed |= p->native_pmic_ops.read(n, cntr, &v) != 1;
+    t[5] = counter();
+    /* As a flag poll after a phase-start write that reads the flag clear. */
+    struct bb_twi scratch = {.mode = 1};
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        bb_twi_observe(&scratch, 0, cntr, v & ~UINT32_C(8));
+    t[6] = counter();
+    __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
+    const TickType_t first = xTaskGetTickCount();
+    t[7] = counter();
+    for (unsigned i = 0; i < BB_POWER_COST_READS; ++i)
+        failed |= a733_task_context_owner_el1(p->service) != 1;
+    t[8] = counter();
+    const TickType_t last = xTaskGetTickCount();
+    p->native_pmic_ops.leave(n);
+    if (failed)
+        bb_power_fail("board bundle 6: cost window operation refused");
+    c->reads = BB_POWER_COST_READS;
+    c->core = (uint32_t)((mpidr >> 8) & 0xff);
+    c->dsb = (uint32_t)(t[1] - t[0]);
+    c->plain = (uint32_t)(t[2] - t[1]);
+    c->dependent = (uint32_t)(t[3] - t[2]);
+    c->time_read = (uint32_t)(t[4] - t[3]);
+    c->adapter_read = (uint32_t)(t[5] - t[4]);
+    c->observer = (uint32_t)(t[6] - t[5]);
+    c->task_check = (uint32_t)(t[8] - t[7]);
+    c->task_ticks = (uint32_t)(last - first);
+}
+
 /* The one service task: each step that completes a bus phase is recorded
- * with its CNTPCT span and the scheduler ticks inside it. */
+ * with its CNTPCT span and the scheduler ticks inside it, except a step that
+ * held the wire-time spin. */
 static void service(void *unused)
 {
     (void)unused;
@@ -93,16 +178,22 @@ static void service(void *unused)
         const uint64_t end = counter();
         const TickType_t last = xTaskGetTickCount();
         const struct bb_twi *t = &p->twi;
-        if (t->conditions != before.conditions || t->bytes != before.bytes || t->stops != before.stops) {
+        if (p->wire_in_step) {
+            p->wire_in_step = 0;
+            p->wire_excluded = 1;
+        } else if (t->conditions != before.conditions || t->bytes != before.bytes || t->stops != before.stops) {
             if (p->stepped < BB_POWER_STEPS)
                 p->steps[p->stepped++] = (struct bb_step){end - start, last - first,
                     (uint16_t)(t->conditions - before.conditions), (uint16_t)(t->bytes - before.bytes),
                     (uint16_t)(t->stops - before.stops), (uint16_t)(t->first_set - before.first_set),
-                    (uint16_t)(t->first_clear - before.first_clear), (uint16_t)t->polls_max};
+                    (uint16_t)(t->first_clear - before.first_clear), (uint16_t)t->polls_max,
+                    (uint16_t)(t->respins - before.respins)};
             else
                 ++p->steps_dropped;
         }
         if (atomic_load_explicit(&p->stop, memory_order_acquire) && a733_power_service_idle(&p->domains)) {
+            if (p->cost_at_park)
+                measure(p);
             atomic_store_explicit(&p->parked, 1, memory_order_release);
             for (;;)
                 vTaskSuspend(NULL);
@@ -117,6 +208,7 @@ int bb_power_init(TaskFunction_t client, const char *name)
     p->deadline = RESULT->start_counter / 24 + BB_POWER_SESSION_US;
     atomic_init(&p->stop, 0);
     atomic_init(&p->parked, 0);
+    atomic_init(&p->wire_armed, 0);
     if (!a733_counter_clock_init(&p->counter, 24000000) ||
         !a733_platform_locks_init(&p->locks, a733_counter_clock_now, &p->counter) ||
         !a733_clock_leases_init(&p->clocks, a733_counter_clock_now, &p->counter))

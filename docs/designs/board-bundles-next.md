@@ -269,11 +269,24 @@ record.
   and above 155% of their wire time; 155% is the provisional bound of
   [power-domains.md](power-domains.md), and the 155% bins are in the source
   for the next bundle 6 set. That set also measures the cost of a provider
-  register access. After the service is parked, with IRQs masked, it times
-  by `CNTPCT` 256 back-to-back reads of the S_TWI0 control register with
-  `DSB SY` before and after each, the same reads without barriers, and 256
-  reads of the provider's time source. A control-register read has no side
-  effect, and the parked provider makes no access.
+  register access, as [pmic-access.md](pmic-access.md) plans it. At the
+  park, the service task, which is the provider task, enters the I2C mutex
+  through the adapter while the provider is idle and times by `CNTPCT` 256
+  iterations each of: S_TWI0 control-register reads with `DSB SY` before
+  and after each; plain reads with the value discarded (issue throughput);
+  plain reads, each address depending on the previous value (latency); the
+  adapter's time and read operations; the task check the earlier adapter
+  made per access, with IRQs unmasked; and the trace observer, as a flag poll
+  that reads the flag clear. The record names the service's core
+  (`MPIDR_EL1` Aff1). Every S_TWI0 write of the snapshots is timed in
+  place, and these two stamps per write are inside the step times. Once,
+  after a byte-phase control write, the control register is read back to
+  back until its flag sets, which gives one byte's wire time; that step is
+  excluded from the step records and counted. A control-register read has
+  no side effect. The `TWI_COST` lines print the windows; the
+  `STEPS` line also prints whether that step was excluded and the re-spins,
+  flag polls beyond the second of a phase, over the recorded steps, and each
+  step line its own re-spins.
 - **Bundle 7** reads the domain-1 words before the request, then lets the
   owner run its sequence. After the owner's ON command reaches the PPU, the
   layer reads the status back to back until it reads ON or 10 ms pass, and

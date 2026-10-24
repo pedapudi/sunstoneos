@@ -60,7 +60,8 @@
    "sources"
   ],
   "docs": [
-   "docs/designs/dma-high-memory-measurements.md"
+   "docs/designs/dma-high-memory-measurements.md",
+   "docs/designs/pmic-access-measurements.md"
   ],
   "library": false,
   "pure_host": false,
@@ -567,7 +568,9 @@
   "cache_areas": [
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/pmic-access-measurements.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -1609,7 +1612,8 @@
  "audit-build-safety-configure.py": {
   "cache_areas": [],
   "docs": [
-   "docs/build.md"
+   "docs/build.md",
+   "docs/designs/pmic-access-measurements.md"
   ],
   "library": false,
   "pure_host": true,
@@ -1944,7 +1948,8 @@
    "sources"
   ],
   "docs": [
-   "docs/designs/board-bundles-next.md"
+   "docs/designs/board-bundles-next.md",
+   "docs/designs/pmic-access.md"
   ],
   "library": false,
   "pure_host": false,
@@ -1968,7 +1973,8 @@
    "docs/board-runbooks/README.md",
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/designs/pmic-access.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2540,6 +2546,7 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
+   "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-authority-measurements.md"
   ],
   "library": false,
@@ -5281,6 +5288,7 @@
  "hdmi-framebuffer.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/pmic-access-measurements.md",
    "docs/hdmi-framebuffer.md"
   ],
   "library": false,
@@ -7431,6 +7439,8 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/cpu-power-states.md",
+   "docs/designs/pmic-access-measurements.md",
+   "docs/designs/pmic-access.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
    "docs/pmic-runtime.md"
@@ -7445,6 +7455,7 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/npu-board.md",
+   "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-domains.md",
    "docs/power-domains.md"
   ],
@@ -7539,6 +7550,7 @@
  "provider-clock-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/pmic-access-measurements.md",
    "docs/handoff.md",
    "docs/provider-clock-reference.md"
   ],

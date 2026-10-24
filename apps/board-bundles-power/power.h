@@ -32,6 +32,7 @@
 #define BB_POWER_STEPS 160u
 #define BB_POWER_ACCESSES 64u
 #define BB_POWER_STATUS_BOUND (24000000u / 100u) /* 10 ms of CNTPCT */
+#define BB_POWER_COST_READS 256u
 /* The provider's startup and the service session end 1.5 s after the
  * monitor's entry, inside its 2 s deadline. */
 #define BB_POWER_SESSION_US 1500000u
@@ -67,6 +68,14 @@ struct bb_power {
     unsigned spin_after_on;            /* bundle 7 only */
     struct bb_status_trace status;
     atomic_uint stop, parked;
+    /* Bundle 6 only: the access-cost windows, which the service runs at the
+     * park when cost_at_park is set; and the wire-time spin, armed by the
+     * client, which runs after the next byte-phase CNTR write and leaves that
+     * step out of the step records. */
+    struct bb_cost cost;
+    unsigned cost_at_park;             /* set by the client before bb_power_park() */
+    atomic_uint wire_armed;
+    unsigned wire_in_step, wire_excluded;
 };
 extern struct bb_power bb_power;
 

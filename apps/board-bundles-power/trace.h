@@ -29,6 +29,7 @@ struct bb_twi {
     uint32_t enable_seen;               /* OR of CNTR bit 7 over every read */
     /* Cumulative counts. */
     unsigned conditions, bytes, stops;  /* completed START/RESTART, byte and STOP phases */
+    unsigned respins;                   /* flag polls beyond the second of a phase: polls after a spin that ended early */
     unsigned first_set, first_clear;    /* flag phases whose first read had the flag set or clear */
     unsigned polls_max, reads;
 };
@@ -43,7 +44,7 @@ static inline uint64_t bb_twi_wire_bits(unsigned conditions, unsigned bytes, uns
 struct bb_step {
     uint64_t ticks;                    /* CNTPCT across the step */
     uint32_t interrupts;               /* scheduler ticks inside it */
-    uint16_t conditions, bytes, stops, first_set, first_clear, polls_max;
+    uint16_t conditions, bytes, stops, first_set, first_clear, polls_max, respins;
 };
 /* The distribution of steps against the wire time of their phases at bit
  * time bit_ns, in thousandths: at most 1000, 1050, 1100 (the design's first
@@ -83,6 +84,25 @@ void bb_line_dec(struct bb_line *, const char *name, uint64_t);
 void bb_line_hex(struct bb_line *, const char *name, uint64_t);
 void bb_line_end(struct bb_line *);
 
+/* The parts of a provider register access, measured once by the service
+ * task, which is the provider task, on its core and clock, with the I2C mutex
+ * entered and the provider idle, at the park. Each window is `reads` iterations timed by
+ * CNTPCT; all but the task-check window run with IRQs masked. Writes are
+ * timed in place inside the snapshots' own transfers, so no extra bus write
+ * is made; those two counter stamps per write (about 60 per snapshot) are
+ * inside the step times. The wire time is one byte phase, from the return of
+ * its CNTR write to INT_FLAG set. */
+struct bb_cost {
+    uint32_t reads, core;              /* iterations per window; MPIDR_EL1 Aff1 (the core number) of the service task */
+    uint32_t dsb;                      /* CNTR reads through a733_mmio_read32_dsb_sy_both */
+    uint32_t plain;                    /* plain CNTR reads, value discarded: issue throughput */
+    uint32_t dependent;                /* plain CNTR reads, each address depending on the last value: latency */
+    uint32_t time_read, adapter_read;  /* the native adapter's now and read operations */
+    uint32_t task_check, task_ticks;   /* a733_task_context_owner_el1, IRQs unmasked; scheduler ticks inside */
+    uint32_t observer;                 /* bb_twi_observe on a scratch record, as a flag poll that reads the flag clear */
+    uint32_t writes, wire_reads;       /* writes timed in transfers; CNTR reads of the wire-time spin */
+    uint64_t write_ticks, wire_ticks;  /* their sum; the wire time, 0 when INT_FLAG was not seen */
+};
 /* Bundle 6's summary. */
 struct bb6_summary {
     uint32_t divisor, bit_ns, state, mapped, par_attributes, par_shareability;
@@ -94,12 +114,11 @@ struct bb6_summary {
     struct bb_step_bins bins;
     uint32_t ppu, ahb, mbus, policy[3], status[3];
     int check[3];
-    /* Register-access cost: CNTPCT ticks across cost_reads back-to-back
-     * reads of S_TWI0 CNTR with DSB SY before and after each, the same reads
-     * without barriers, and cost_reads reads of the provider's time source. */
-    uint32_t cost_reads, cntr_dsb_ticks, cntr_plain_ticks, time_read_ticks;
+    unsigned wire_excluded;             /* 1: the step that held the wire-time spin is left out */
+    unsigned respins;                   /* respins over the recorded steps */
+    struct bb_cost cost;
 };
-#define BB6_SUMMARY_LINES 11u
+#define BB6_SUMMARY_LINES 13u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {
