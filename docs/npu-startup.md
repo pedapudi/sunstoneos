@@ -104,7 +104,8 @@ The pass reads each word and compares it under a mask with a constant:
   asserted and SRAM reset released;
 - DRAM0 enabled from DDRPLL with no update pending and its PHY on the
   separate PHY PLL; video and NPU clock-management modes disabled;
-- PLL_NPU disabled, with its pattern and bias words (`+0x2a4`–`+0x2b0`) at
+- PLL_NPU disabled, preserving its initially observed reserved bit 24 under
+  the [PLL rules](npu-pll.md), with its pattern and bias words (`+0x2a4`–`+0x2b0`) at
   their reset values.
 
 The domain-4 policy and status come from the owner's check, which precedes
