@@ -12,7 +12,8 @@
 void npu_board_irq(void);
 #include "../npu-interrupt/irq.c"
 
-const struct a733_irq_route a733_irq_routes[]={{97,NPU_IRQ_CORE,NPU_IRQ_PRIORITY,npu_board_irq}};
+const struct a733_irq_route a733_irq_routes[]={
+    {97,NPU_IRQ_CORE,NPU_IRQ_PRIORITY,npu_board_irq},{71,0,0xd8u,npu_board_thermal_irq}};
 const unsigned a733_irq_route_count=sizeof(a733_irq_routes)/sizeof(a733_irq_routes[0]);
 _Static_assert(NPU_IRQ_PRIORITY>=A733_IRQ_TABLE_MIN_PRIORITY,"NPU priority must permit FreeRTOS FromISR calls");
 

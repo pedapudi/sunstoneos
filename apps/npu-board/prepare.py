@@ -2,7 +2,7 @@
 """Offline preparation of one supervised NPU board session.
 
 Follows apps/g2d/prepare.py: the board prefix and its admission come from
-apps/board/prepare.py; this file adds the 808-byte NPU record of
+apps/board/prepare.py; this file adds the 1,000-byte NPU and thermal record of
 apps/npu-board/npu-board-session.h, its evidence conditions, the extended
 288-byte contract and the SRAM launcher. Tensors reach the image over USB0
 at run time, so the bundle carries the selected model index and the input and
@@ -22,13 +22,15 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('npu_board_board_prepare',ROOT/'apps/board/prepare.py')
+thermal=module('npu_board_thermal_prepare',ROOT/'apps/thermal/prepare.py')
 base=board.base
 require=base.require
 SCHEMA='a733-npu-board-supervised-bundle-v1'
 SESSION_MAGIC=0x415337334e424131
 CONTRACT_MAGIC=0x415337334e424331
 REQUEST_MAGIC=0x415337334e424c31
-SESSION_BYTES=808
+SESSION_BYTES=1000
+SESSION_VERSION=2
 TARGET='sunstone-a733-npu-board'
 PROFILE='npu-board-supervised-v1'
 CATALOGUE=5
@@ -58,11 +60,11 @@ def fabric_check(raw):
             not (mhz*1000000)%divisor and rate==mhz*1000000//divisor,'Unsupported NPU fabric record.')
 
 def session_check(raw):
-    require(len(raw)==SESSION_BYTES,'The NPU board session must be 808 bytes.')
+    require(len(raw)==SESSION_BYTES,'The NPU board session must be 1,000 bytes.')
     require(board.session_check(raw[:592])==2,'The NPU board image requires USB0/provider selection 2.')
     require(raw[80:112]==raw[280:312] and any(raw[80:112]),
         'The board qualification must bind the same recovery evidence.')
-    require(struct.unpack_from('<3Q',raw,592)==(SESSION_MAGIC,1,SESSION_BYTES),'Invalid NPU session extension.')
+    require(struct.unpack_from('<3Q',raw,592)==(SESSION_MAGIC,SESSION_VERSION,SESSION_BYTES),'Invalid NPU session extension.')
     owner,command,supervisor=struct.unpack_from('<3Q',raw,OWNER)
     pck,reserved=struct.unpack_from('<2I',raw,PCK)
     require(owner and command and supervisor and owner not in struct.unpack_from('<4Q',raw,BOARD_OWNERS),
@@ -70,6 +72,13 @@ def session_check(raw):
     require(pck<16 and pck!=struct.unpack_from('<I',raw,BOARD_PCK)[0] and not reserved,'Invalid NPU PCK client.')
     require(all(any(raw[o:o+32]) for o in DIGESTS.values()),'Missing NPU evidence digest.')
     fabric_check(raw)
+    thermal.session_check(thermal_view(raw))
+    thermal_owner=struct.unpack_from('<Q',raw,808)[0]
+    require(thermal_owner not in (owner,*struct.unpack_from('<4Q',raw,BOARD_OWNERS)),
+        'Thermal owner must differ from every NPU and board owner.')
+
+def thermal_view(raw):
+    return raw[:592]+struct.pack('<3Q',0x4153373354484131,1,808)+raw[808:1000]
 
 def embedded_reference(image,session):
     """Bind the record to the image's geometry and linked catalogue."""
@@ -157,6 +166,14 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         if key=='supervision':
             require(fact.get('supervisor')==struct.unpack_from('<Q',raw,SUPERVISOR)[0] and fact.get('one_attempt') is True,
                 'One-attempt supervision identity differs.')
+    # Reuse the thermal application's exact supply, calibration, clock,
+    # interrupt and recovery admission. The board-prefix template hash still
+    # binds this complete NPU session, not the temporary thermal view.
+    refs=record.get('thermal',{})
+    require(set(refs)=={'initial','electrical','clocks','supervision'},'Missing NPU thermal authority.')
+    for item in refs.values():physical_authority(json.loads(evidence(item)))
+    cache=thermal.validate_admission({**record,**refs,'schema':'a733-thermal-supervised-entry-v1'},
+        image_hash,template_hash,thermal_view(raw),cache,frozen)
     return cache
 
 def tensor_check(model,inputs,references):
@@ -270,7 +287,7 @@ def _image_parts(data):
         require(len(match)==1,'NPU board marker is not immutable and file-backed.')
         p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
     _,geometry=immutable('npu_board_geometry',48)
-    require(struct.unpack('<6Q',geometry)==(SESSION_MAGIC,1,SESSION_BYTES,288,0x41f00000,20),'NPU board compiled geometry differs.')
+    require(struct.unpack('<6Q',geometry)==(SESSION_MAGIC,SESSION_VERSION,SESSION_BYTES,288,0x41f00000,20),'NPU board compiled geometry differs.')
     _,catalogue=immutable('npu_board_catalogue_digest',32)
     address,identity=immutable('a733_smp_build_id',32)
     for p in parts:p.pop('flags')

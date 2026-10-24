@@ -10,11 +10,27 @@ struct npu_board_application npu_board;
 
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static void fatal(void *unused){(void)unused;board_fail(NULL);}
+/* Independent core-1 supervisor: the thermal task runs on core 0. Its
+ * frozen publication cannot leave either admission or draining unbounded. */
+static uint64_t supervise(struct npu_board_client *c,uint64_t *now)
+{
+    if(!board_live(NULL)||!a733_counter_clock_now(&providers.shared.counter,now)||*now>=deadline())return 0;
+    const uint64_t word=npu_board_client_watch(c,*now);
+    return (word&NPU_BOARD_STOP)&&*now>=word>>3?0:word;
+}
 static void bootstrap(void *unused)
 {
     (void)unused;struct npu_runtime *rt=&npu_board.runtime;struct npu_board_client *c=&npu_board.client;
+    unsigned begun=0;
     for(;;) {
-        if(!board_live(NULL) || a733_smp_counter()/24>=deadline())break;
+        uint64_t now,word=supervise(c,&now);
+        if(!word)break;
+        if(!begun) {
+            if(word&NPU_BOARD_STOP){atomic_store_explicit(&npu_board.stopped,1,memory_order_release);vTaskSuspend(NULL);}
+            if(!npu_board_client_claim(c)){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
+            npu_board_client_complete(c);
+            begun=1;
+        }
         enum a733_npu_platform_result r=npu_runtime_startup_poll(rt);
         if(r==A733_NPU_PLATFORM_RETAINED)break;
         if(r==A733_NPU_PLATFORM_READY) {
@@ -22,16 +38,17 @@ static void bootstrap(void *unused)
             enum npu_service_result a=npu_service_activate(&rt->service);
             if(a==NPU_SERVICE_OK) {
                 npu_board_client_start(c);
-                /* The session ends with whole-board power removal; the stop
-                 * table runs only after the client's CLOSE, which notifies
-                 * this task. A busy register lock is retried each tick. */
+                /* CLOSE proves controller and interrupt quiescence. A
+                 * thermal stop during startup must still OPEN then CLOSE:
+                 * runtime stop requires every slot CLOSED. No model job is
+                 * admitted by this bootstrap handshake. */
                 for(;;) {
                     if(!atomic_load_explicit(&c->closed,memory_order_acquire))
-                        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-                    if(!board_live(NULL))break;
+                        (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
+                    if(!supervise(c,&now))break;
                     if(!atomic_load_explicit(&c->closed,memory_order_acquire))continue;
                     enum a733_npu_platform_result s=npu_runtime_stop_poll(rt);
-                    if(s==A733_NPU_PLATFORM_READY)vTaskSuspend(NULL);
+                    if(s==A733_NPU_PLATFORM_READY){atomic_store_explicit(&npu_board.stopped,1,memory_order_release);vTaskSuspend(NULL);}
                     if(s==A733_NPU_PLATFORM_RETAINED)break;
                     vTaskDelay(1);
                 }
@@ -46,7 +63,8 @@ static void bootstrap(void *unused)
 static void client(void *unused)
 {(void)unused;npu_board_client_run(&npu_board.client);fatal(NULL);vTaskSuspend(NULL);for(;;){}}
 int board_application_task_privileged(void (*entry)(void *),void *context)
-{return (!context && entry==bootstrap) || npu_service_task_privileged(entry,context)==pdTRUE;}
+{return (!context && entry==bootstrap) || npu_board_thermal_privileged(entry,context) ||
+    npu_service_task_privileged(entry,context)==pdTRUE;}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
     const struct npu_board_session *source=npu_board_admitted_session();
@@ -87,7 +105,12 @@ int board_application_start(void)
     const TaskHandle_t clients[NPU_BOARD_SLOTS]={a->client_task};
     if(!npu_runtime_bind(&a->runtime,&a->startup,clients,4,core)||!npu_board_irq_bind(&a->runtime))return 0;
     a->client=(struct npu_board_client){.rt=&a->runtime,.slot=0,.job_timeout_us=1000000,
-        .wait=pdMS_TO_TICKS(2000),.task=a->client_task,.bootstrap=a->bootstrap};
+        .wait=pdMS_TO_TICKS(2000),.task=a->client_task,.bootstrap=a->bootstrap,
+        .now=a733_counter_clock_now,.clock=&providers.shared.counter,.session_end=deadline()};
+    uint64_t now;
+    if(deadline()>(UINT64_MAX>>3)-5000000||!a733_counter_clock_now(&providers.shared.counter,&now)||now>=deadline())return 0;
+    atomic_init(&a->client.admission,(now+1000000)<<3);
+    if(!npu_board_thermal_start())return 0;
     /* USB0 stays on core 0 with the power service, apart from the NPU work. */
     if(!board.handles[1])return 0;
     vTaskCoreAffinitySet(board.handles[1],1);

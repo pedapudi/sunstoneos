@@ -48,7 +48,7 @@ budgets are the ones in [npu-board.md](npu-board.md).
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | 1,093,632 | Yes |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | 1,509,856 | Yes |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms | 1.15, 4.33, 2.01, 6.58 ms | 1.15, 4.33, 2.02, 6.58 ms | Yes |
-| Wakes while idle | Service worker one per 1,000 ms | Bootstrap 0 and client 0, both wait on notifications without a timeout; service worker one per 1,000 ms | Bootstrap and client 0 | Yes |
+| Wakes while idle | Service worker one per 1,000 ms; bootstrap and client 0 | Bootstrap and thermal monitor each wait at most 25 ms; client 0; service worker one per 1,000 ms | Independent supervision of a frozen monitor; client 0 | Yes |
 | Worker steps and idle-register reads, four running jobs | 1,040 steps, 1,060 reads over 12 ticks | 1,014 steps, 1,034 reads over 11 ticks; bound 1,070 | Reads ≤ steps + 4 × (ticks + 1) + 8 | Yes |
 | USB0, 64 KiB response | 13 ticks | 13 ticks, 128 packets, at most 10 packets and 189 µs per tick | 13 ticks | Yes |
 | One ShuffleNetV2 inference over USB0, upload to output read | No board image | About 40 ticks, estimated: 150,528 input bytes are 294 high-speed packets, 30 ticks at 10 packets per tick; the 6.58 ms slot, 7 ticks; one tick for each of SUBMIT, READ and RETURN | No target; measured on the board | Not measured |

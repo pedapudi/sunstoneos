@@ -211,15 +211,67 @@ def run(image, speed):
                 ram_alignments={f'{name}:{align}':n for (name,align),n in m.word_alignment.items()},
                 executed=dict(m.seen))
 
+def thermal_run(image,speed):
+    t,sizes,enums=base.metadata(image.path);cases=[]
+    for count in (448,2816):
+        m=Machine(image,t,sizes,enums,speed);m.enumerate()
+        m.field('ready',1);m.field('outputs',1);m.field('window',2);m.tensor('output',count)
+        m.write(m.client+m.cl['session_end'],20000000,8)
+        data=bytes((i*17+count)%256 for i in range(count));m.cpu.mem_write(0x48000001,data)
+        m.out(m.packet(5))
+        m.call('npu_board_client_thermal',m.client,0,1,0,1000000)
+        raw=bytearray()
+        while len(raw)<64+count:
+            assert m.word(m.client+m.cl['window'])==2
+            raw.extend(m.take())
+            if len(raw)<64+count or (64+count)%m.mps==0:
+                assert m.word(m.client+m.cl['window'])==2
+        if (64+count)%m.mps==0:
+            assert m.reg(1,0x82)&1 and not m.tx
+            assert m.take()==b''
+        m.tick()
+        assert m.word(m.client+m.cl['window'])==0 and bytes(raw[64:])==data
+        m.out(m.packet(5));refused=m.drain()
+        assert int.from_bytes(refused[12:16],'little')==2
+        cases.append(dict(bytes=count,passed=True,packet_lengths=m.packets,completions=m.completions))
+    # An accepted upload keeps its input window until the payload and its
+    # response finish; thermal stop cannot redirect remaining bytes.
+    m=Machine(image,t,sizes,enums,speed);m.enumerate()
+    m.field('ready',1);m.field('inputs',1);m.field('window',1);m.tensor('input',100)
+    m.write(m.client+m.cl['session_end'],20000000,8)
+    data=bytes(range(100));m.out(m.packet(3,100)+data[:7])
+    m.call('npu_board_client_thermal',m.client,0,1,0,1000000);m.tick()
+    assert m.word(m.client+m.cl['window'])==1
+    m.out(data[7:]);assert m.word(m.client+m.cl['window'])==1
+    raw=m.drain();m.tick()
+    assert len(raw)==64 and bytes(m.cpu.mem_read(0x48000001,100))==data
+    assert m.word(m.client+m.cl['window'])==0
+    return dict(passed=True,speed='high' if speed==2 else 'full',cases=cases,accepted_upload_drained=True)
+
+def refused_upload_run(image,speed):
+    t,sizes,enums=base.metadata(image.path);m=Machine(image,t,sizes,enums,speed);m.enumerate()
+    m.field('ready',1);m.field('inputs',1);m.tensor('input',100)
+    m.write(m.client+m.cl['session_end'],20000000,8)
+    m.cpu.mem_write(0x48000001,b'k'*100)
+    m.call('npu_board_client_thermal',m.client,0,1,0,1000000)
+    m.out(m.packet(3,100)+b'x'*100);raw=m.drain()
+    assert int.from_bytes(raw[12:16],'little')==2
+    assert bytes(m.cpu.mem_read(0x48000001,100))==b'k'*100 and m.word(m.client+m.cl['window'])==0
+    return dict(passed=True,refused_payload_bytes=100,tensor_unchanged=True,speed='high' if speed==2 else 'full')
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
     p.add_argument('--speed', choices=('full','high'), required=True)
+    p.add_argument('--thermal-only',action='store_true',help='Only changed thermal window/IN/ZLP/upload cases')
+    p.add_argument('--refused-upload-only',action='store_true',help='Only payload discard after terminal admission closes')
     a=p.parse_args(); a.output.mkdir(parents=True, exist_ok=False)
     e=base.base.Image(a.image, layout_names=('npu_board_application','npu_board_client','npu_board_tensor','board_application','a733_board_session'))
     e.path=a.image
-    result=run(e, 2 if a.speed=='high' else 1)
+    result=(refused_upload_run if a.refused_upload_only else thermal_run if a.thermal_only else run)(e, 2 if a.speed=='high' else 1)
     result.update(image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(), scope=__doc__, physical_access=False)
     (a.output/'result.json').write_text(json.dumps(result, indent=2)+'\n')
-    print('PASS NPU',a.speed,'USB FIFO PIO, odd/wrapped buffers, completion and queued request ordering')
+    print('PASS NPU',a.speed,'refused upload leaves returned tensor unchanged' if a.refused_upload_only else
+          'thermal window drain through IN/ZLP and accepted upload' if a.thermal_only else
+          'USB FIFO PIO, odd/wrapped buffers, completion and queued request ordering')
 if __name__=='__main__':main()
