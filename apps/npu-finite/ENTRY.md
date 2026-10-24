@@ -94,3 +94,61 @@ request, memory restoration or claim release. After normal return, old SRAM
 belongs to ROM and is never restored. Another NPU start still requires the
 startup contract, including a disabled PLL; successful return does not itself
 satisfy that contract.
+
+## Return before constructing providers
+
+`build.py --entry-checkpoint --evidence <directory>` produces
+`npu-entry-memory-checkpoint-v1`. It uses the finite image's monitor, authenticated
+session copy and seal, CPU entry, platform initialization and local memory-pool
+preparation. Its diagnostic entry creates no task and constructs no provider.
+The linker removes the NPU, PMIC and scheduler startup functions.
+
+Before return, the checkpoint requires zero native application and job-result
+storage, an initialized empty write-back pool, and no non-cacheable pool. Its
+published identities must match the secure monitor's admitted contract. The
+monitor accepts this pre-scheduler caller only in EL1h. It uses the existing
+bounded cache publication, GIC restoration and forced ROM return path.
+
+The checkpoint has a distinct immutable marker, receipt magic and completion
+value. The host reports `ENTRY_MEMORY_READY`, zero jobs and
+`functional_success=false`. This proves execution reached the memory checkpoint;
+it does not establish NPU inference, inherited engine inactivity or power state.
+The ordinary numerical profile cannot accept this receipt. The selected image
+uses 56 bytes of checkpoint state and scans the 140,096-byte native application
+storage twice, once before publication and once at EL3. It cleans 35,840 cache
+lines and creates zero tasks or provider transactions.
+
+The same `host.py session`, `prepare`, `validate` and `run` operations consume the
+checkpoint manifest. Admission requires current CPU, cache, DDR, secondary-OFF,
+ROM transport and remote-writer exclusion evidence. The checkpoint platform
+schema is `a733-npu-checkpoint-platform-v1`. Its source-bound conditions
+`providers-never-constructed` and `npu-clock-power-registers-not-accessed` replace
+the numerical profile's startup and PMIC grants. The power record also requires
+`unconsumed-typed-boot-no-provider-grant`. Typed boot fields retain their original
+syntax; their presence grants no provider operation. No NPU, PLL, power-domain
+or PMIC register is accessed by the checkpoint. Native USB mappings, PIO
+takeover and IRQ188/189/190 state are not checkpoint prerequisites because it
+constructs no USB provider. ROM USB clock, power, supply and writer-exclusion
+authority still applies. The CPU/GIC entry and return accesses also require
+physical authority.
+
+## Finite thermal integration remains planned
+
+The reviewed design reuses the bootstrap task as the owner of the native THS
+controller and fixed thermal policy. All five channels must produce fresh NORMAL
+samples within one second before startup. Hot, critical or stale samples close
+admission permanently. Each submission checks freshness independently, so a
+stalled monitor cannot admit further work. A first refusal starts a fixed
+five-second drain bound, limited by the session deadline.
+
+An accepted startup finishes through OPEN and CLOSE; an accepted job completes
+and is reaped before CLOSE. A never-started outcome must prove that startup was
+not polled, worker admission stayed clear, and no startup token or row was owned.
+It must not synthesize CLOSED or STOPPED. Sensor disable, quiet IRQ71, suspended
+bootstrap/worker tasks and parked PMIC service must precede normal return.
+
+A distinct thermal profile will record the reason and zero, one or two completed
+jobs. Status 2 will mean safely cleaned thermal refusal, separate from numerical
+mismatch. This integration is not implemented by the entry checkpoint. The
+operating point remains 492 MHz at 800 mV; PLL, domain, rail and SRAM ownership
+remain retained, with no in-place restart.

@@ -6,13 +6,19 @@
 #include "result.h"
 #include "cached.h"
 struct npu_finite_receipt npu_finite_receipt __attribute__((section(".npu_runtime_retained")));
-/* Only a successfully quiesced single-core client may take normal return.
- * Failure calls the same SMC without a receipt; EL3 permanently retains it. */
+/* Normal return requires either the finite client quiescence proof or the
+ * separately compiled never-started checkpoint. Failure publishes no receipt. */
 _Noreturn void platform_exit(unsigned status)
 {
     uint64_t now=a733_smp_counter();
+#ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
+    if(status || !npu_entry_checkpoint_ready(a733_observe_identity.epoch,
+       a733_observe_identity.generation,a733_observe_identity.lease,
+       a733_observe_identity.armed_at,a733_observe_identity.deadline) ||
+#else
     if(status>1 || !a733_npu_application_quiescent() ||
        atomic_load_explicit(&a733_npu_application_result.complete,memory_order_acquire)!=(status?2u:1u) ||
+#endif
        now>=a733_observe_identity.deadline || aarch64_device_cache_stride()!=64)npu_finite_smc(4);
     __asm__ volatile("msr daifset,#15\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb":::"memory");
     uintptr_t start=(uintptr_t)__npu_clean_start,end=(uintptr_t)__device_pool_end;
@@ -23,7 +29,7 @@ _Noreturn void platform_exit(unsigned status)
      * task/provider state, active stacks, command buffers and NPU tables. */
     npu_finite_receipt=(struct npu_finite_receipt){NPU_FINITE_RECEIPT_MAGIC,
         a733_observe_identity.epoch,a733_observe_identity.generation,a733_observe_identity.lease,
-        status,status?2u:1u,start,end,(end-start)/64,a733_observe_identity.deadline,RESULT->log_length};
+        status,NPU_FINITE_COMPLETE(status),start,end,(end-start)/64,a733_observe_identity.deadline,RESULT->log_length};
     __asm__ volatile("dsb sy":::"memory");
     for(uintptr_t at=start;at<end;at+=64) {
         if(!(at&4095) && a733_smp_counter()>=npu_finite_receipt.deadline)npu_finite_smc(4);
