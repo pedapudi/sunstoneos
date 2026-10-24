@@ -10,7 +10,7 @@ The A733 PCK600 power controller has one 4 KiB block per power domain at
 `0x07060000 + 0x1000 × domain`. Each block has a policy word (`+0x0`), whose
 bits 3:0 request OFF (0) or ON (8), a status word (`+0x8`) that reports the
 reached state, and a delay row (`+0x170`, `+0x174`, `+0xc00`–`+0xc10`) that the
-pinned vendor driver writes before a power-on.
+pinned vendor driver initializes when it registers each domain.
 [`drivers/power/a733_power_domains.c`](../drivers/power/a733_power_domains.c)
 is the only writer of domain 1 (DE_SYS, the display engine and G2D),
 domain 4 (NPU) and domain 5 (GPU_TOP). Domains 2, 3 and 10 keep their own writers: the video platform,
@@ -80,6 +80,21 @@ A command admitted at or after the session deadline writes no delay or
 policy register and retains the already counted row and pin. A domain-5
 OFF request at count zero rereads the GPU clock gate and reset closed, writes the OFF command and
 waits the same way for status 0, then unpins the token.
+
+Adopting an inherited ON domain remains read-only. Before its first OFF command,
+the owner initializes and reads back all five delay words if this owner has not
+already done so. The reference calls `sunxi_pd_init` at registration even when
+the domain is ON; relying on unknown inherited delays omitted that prerequisite.
+Every ON retains its existing delay writes. The `delays_ready` flag is set only
+after all five readbacks match and uses existing structure padding. After
+initialization, another monotonic time read must precede the session deadline
+before the policy write is permitted. A partial write, failed readback or expired
+clock check retains the counted row and rail pin and prevents the policy write.
+
+This adds five writes, five readbacks and one time sample to the first OFF of an
+inherited ON domain. ON keeps its existing register accesses and adds one time
+sample; subsequent OFF operations add no access. Unrequested domains, including
+a retained NPU domain, receive no initialization or command.
 
 The PCK600 acknowledgement is polled because the pinned `pck-600@7060000`
 device-tree node has no interrupt, and the PPU interrupt registers have no
@@ -280,7 +295,10 @@ and the limits of the cost model.
   domain-5 power-off and reopen, a failed unpin answered FAILED, and the NPU
   interface. `--deadlines` selects ON/OFF samples before, at and after the
   bound, status reads crossing the bound, failed/regressed completion clocks,
-  earlier session cutoffs and expired command admission. With an output
+  earlier session cutoffs and expired command admission. `--delays` selects
+  inherited OFF/ON and repeated transitions, exact first-OFF write/readback order,
+  18 initialization failures with retained pins, and preservation of an untouched
+  domain-4 register block. With an output
   path it writes the GPU power-on and
   power-off register trace that `checks/a733-gpu-power-reference.py`
   compares with the pinned PCK functions.

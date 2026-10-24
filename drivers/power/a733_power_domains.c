@@ -134,15 +134,21 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
      * cannot program delays or request another power transition. */
     if(now>=d->config.deadline){fail_domain(d,m);return;}
     const uintptr_t base=A733_POWER_PCK_DOMAIN(m->id);
-    if(on) {
+    if(on || !m->delays_ready) {
         /* The pinned delay row, each word read back (pck600_domains.c lines
-         * 126-142 and 547-569). 0xc00-0xc10 are absent from the PCK-600 TRM. */
+         * 126-142 and 547-569). The reference initializes it at registration
+         * (line 269), even for an inherited ON domain. Initialize before its
+         * first OFF too, while keeping adoption read-only and the existing
+         * per-ON writes. 0xc00-0xc10 are absent from the PCK-600 TRM. */
         static const unsigned offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
         static const uint32_t values[]={0x1f1f1f,0x1f1f,0x08080808,0x0808,8};
         for(unsigned i=0;i<5;++i) {
             uint32_t v;
             if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || v!=values[i]){fail_domain(d,m);return;}
         }
+        m->delays_ready=1;
+        if(!clock(d,&now)){fail_service(d);fail_domain(d,m);return;}
+        if(now>=d->config.deadline){fail_domain(d,m);return;}
     }
     if(!wr(d,base,(policy&~UINT32_C(15))|(on ? 8 : 0)) || !clock(d,&now) ||
        !a733_deadline_after(now,A733_POWER_PCK_BOUND_US,&m->deadline)){fail_domain(d,m);return;}
