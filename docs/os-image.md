@@ -463,8 +463,9 @@ default; the [design](designs/cpu-a76-dvfs.md) and its
   recognizer runs on core 6 and the engine's second inference worker
   (`apps/mimus/parallel_runtime.cc`) on core 7, through
   [recognition-placement.patch](../apps/os/recognition-placement.patch); the
-  GPU linear build places its recognizer itself and `start.c` asserts that
-  its `OS_RECOGNITION_CORE` equals the header's core. Before the scheduler
+  GPU linear build's own recognizer patch places the recognizer and starts
+  the worker, and `start.c` asserts that its `OS_RECOGNITION_CORE` equals
+  the header's core. Before the scheduler
   the thermal start reads the CPU clock report once (eight reads after the
   mapping check of the oscillator, fuse and CPU PLL pages) and refuses the
   start, panic 11, when CPU-B is not on its locked PLL with a decodable rate.

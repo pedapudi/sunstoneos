@@ -104,10 +104,10 @@ assume. The model ignores the DSU (L3) clock, which the driver never changes.
   `1 << 6`, calls `mimus_parallel_init(6, 7)` before the scheduler and
   `mimus_parallel_bind()` from the recognizer, and `cmake/a733-os.cmake` adds
   `apps/mimus/parallel_runtime.cc`. The worker's owner and worker cores, now
-  fixed at 0 and 1, become those two parameters. In the GPU build, the GPU
-  package's `recognition-dispatch.patch` already places the recognizer, and
-  the GPU package adds the same two calls there; this package does not edit
-  that file.
+  fixed at 0 and 1, become those two parameters. In the GPU build,
+  `recognition-dispatch.patch` places the recognizer itself and makes the
+  same two calls under `A733_A76_ADMITTED`, which this package added after
+  the GPU package merged.
 - **Admission record.** Before the scheduler, `os_thermal_start` calls
   `os_cpu_admit` (new `apps/os/cpu.c`), which makes the eight reads of
   `a733_cpu_clock_report`: the oscillator at `0x07090160`, the fuse word at
@@ -369,7 +369,8 @@ specific to that board through its approval record:
 | `cmake/a733-os.cmake` | Option block after the mSBC check, away from the option lines that the GPU package edits; the worker source and definitions after the headset definitions; one identity append after the input-hash loop | Its option checks, sources, definitions and identity string |
 | `docs/os-image.md` | A new section before "Build and checks" | Its existing sections |
 | `apps/os/start.c`, `thermal.c`, `admission.c`, `os.h`, `prepare.py`; new `cpu.c`, `recognition-placement.patch` | Yes | No |
-| `apps/os/dispatch.c`, `dispatch.h`, `identity.c`, `services.c`, `placement.py`, `application.patch`, `recognition-dispatch.patch`; new `gpu.c`, `gpu_hook.cc` | No | Yes; its recognizer patch calls `mimus_parallel_init(6, 7)` and `mimus_parallel_bind()` |
+| `apps/os/dispatch.c`, `dispatch.h`, `identity.c`, `services.c`, `placement.py`, `application.patch`, `recognition-dispatch.patch`; new `gpu.c`, `gpu_hook.cc` | No, except the A76 calls below | Yes |
+| `apps/os/recognition-dispatch.patch`: `mimus_parallel_init` on the recognition and inference cores, `mimus_parallel_bind()` and the inference progress hook, under `A733_A76_ADMITTED` | Yes, after the merge | Its other hunks |
 | `include/a733_smp_placement.h` (new) | Yes | No; `start.c` checks the GPU build's `OS_RECOGNITION_CORE` against it |
 
 This package also changes `drivers/clock/a733_cpu_clock.c` and its header
