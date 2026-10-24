@@ -44,7 +44,7 @@ static struct {
     uint32_t ccu[0x2000/4];
     uint64_t lock_us,locked_at;
     uint32_t osc;
-    unsigned held,retained,enters,writes,pck_writes,never_lock,flip_b04,pmic_reads_before;
+    unsigned held,retained,enters,writes,never_lock,flip_b04,pmic_reads_before;
 } r;
 static uint32_t *word(uintptr_t a)
 {assert(a>=CCU && a<CCU+0x2000 && !(a&3));return &r.ccu[(a-CCU)/4];}
@@ -190,12 +190,11 @@ int main(void)
     printf("{\"boot\":{\"ticks\":%u,\"elapsed_us\":%llu,\"calls\":%u,\"advancing_calls\":%u,"
         "\"register_reads\":%u,\"register_writes\":%u,\"lock_acquisitions\":%u,\"counter_reads\":%u,"
         "\"counter_reads_on_pending_calls\":%u,\"lock_samples\":%u,\"pmic_transactions_by_startup\":%u,"
-        "\"supply_done_us\":%llu,\"enable_us\":%llu,\"row_us\":%llu,\"settle_us\":%llu,\"final_us\":%llu},",
+        "\"supply_done_us\":%llu,\"row_us\":%llu,\"settle_us\":%llu},",
         b.ticks,(unsigned long long)b.elapsed_us,b.calls,b.advancing,s.reads,s.writes,s.lock_enters,
         s.clock_reads,b.pending_clock_reads,s.lock_samples,r.pmic_reads_before,
-        (unsigned long long)b.supply_done_us,(unsigned long long)b.stage_us[A733_NPU_STARTUP_ENABLE],
-        (unsigned long long)b.stage_us[A733_NPU_STARTUP_ROW],(unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],
-        (unsigned long long)b.stage_us[A733_NPU_STARTUP_FINAL]);
+        (unsigned long long)b.supply_done_us,
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_ROW],(unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE]);
     /* Local stop: one locked pass of five writes with readback. */
     {
         const unsigned reads=s.reads,writes=s.writes,enters=s.lock_enters,clocks=s.clock_reads;
