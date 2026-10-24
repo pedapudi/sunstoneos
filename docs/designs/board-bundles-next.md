@@ -10,8 +10,13 @@ four bundles are prepared in
 `~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-3/`.
 The earlier preparation of the same rows in `board-bundles-20261024-2/` is
 superseded and must not run.
-None of the four has run on a board. Bundle 10 stays refused until its runner
-declares completion counts and its owner names admission values.
+All four ran on port 3-3 on 2026-10-24; the [handoff](../handoff.md) records
+their results. Bundle 4's prepared image refuses every walk block, because
+its per-block check expects one instruction walk too many. Its counts are
+valid, and the check is corrected in the source. The next bundle 4 set must
+be prepared from a tree that carries the correction (section "Samples in
+bundle 4"). Bundle 10 stays refused until its runner declares completion counts and
+its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
 on 2026-10-24 ([handoff](../handoff.md)): ranks 1 to 6 of the
@@ -191,11 +196,18 @@ record.
   discarded warm-up block, then twelve blocks in ABBA order: A installs
   `TCR_EL1` `0x200803019` (uncached walks), B `0x200803519` (cached walks,
   the value `platform_init()` installs). Each block records `CNTPCT` and all
-  six events. The region's own return path may need a walk after the last
-  `TLBI`, depending on whether an instruction-side walk fills the unified
-  TLB, so a calibration region (`TLBI VMALLE1`, `DSB ISH`, `ISB`, then end)
-  precedes each block; `DTLB_WALK` and `ITLB_WALK` must each equal 1,024
-  plus the calibration's count, or the block is refused. The switch is:
+  six events. `DTLB_WALK` and `ITLB_WALK` must each equal 1,024, or the
+  block is refused (`apps/board-bundles-cpu/walk.h`). Each iteration makes
+  one data walk for its load and one instruction walk for the fetch after
+  its `TLBI`; after the last iteration, the return path runs from the 2 MiB
+  block whose entry that walk filled, so it adds none. A calibration region
+  (`TLBI VMALLE1`, `DSB ISH`, `ISB`, then end) before each block records the
+  walks after a lone `TLBI`: on port 3-3, no data walk and one instruction
+  walk, the walk that a block already counts once per iteration. The image
+  prepared on 2026-10-24 required 1,024 plus the calibration's count, so it
+  refused all 13 blocks of its board run, whose counts were 1,024 and 1,024
+  in every block; `checks/board-bundles-apps-model.c` runs the corrected
+  check on those 13 records. The switch is:
   write `TCR_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, `ISB`. No table write
   follows the final flush of both table pages in `platform_init()`
   (`platform/a733/platform.c` lines 138–139), so uncached walks read the
@@ -291,8 +303,8 @@ record.
   trigger need these workloads. Domain 4 ON is bound to bundle 10's records
   once the NPU startup requests it through the owner.
 - **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes,
-  including the service-step timing of a DCDC3 selector write, which the
-  power-domain design's 110% bound also covers;
+  including the service-step timing of a DCDC3 selector write, for which
+  the power-domain design's host model predicts two steps with one tick wait;
   domain 5 ON and OFF, repeated N times, which needs DCDC4 and is the only
   domain that powers off; WDT0 expiry with fault-record retention, which boots
   from microSD; intentional GPU and NPU hangs. Memory qualification also waits
@@ -398,13 +410,18 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
 | Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
-| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases | Bundle 6 STEP lines |
+| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases; the board measured 146% (median) and the owner's design now bounds a snapshot step at 155% ([power-domains.md](power-domains.md)) | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
 | Host sandbox, bytes read, copies | [board-bundles-measurements.md](board-bundles-measurements.md) | Unchanged | `checks/board-bundles.py` |
 
 The board records replace the instruction-model figures of each component
-design. Bundles 1 to 3 recorded only their pass and their words; no other
-figure above was measured on the board.
+design. Bundles 1 to 3 recorded only their pass and their words. The figures
+of bundles 4 to 8 are recorded in the [handoff](../handoff.md) and in the
+designs that own them: [cpu-table-walks.md](cpu-table-walks.md),
+[cpu-pmu-measurements.md](cpu-pmu-measurements.md),
+[cpu-power-states.md](cpu-power-states.md) and
+[power-domains.md](power-domains.md). The other figures in this design are
+estimates or model results.
 
 Offline results of the four new images (`checks/board-bundles-apps.py`):
 
@@ -416,6 +433,15 @@ Offline results of the four new images (`checks/board-bundles-apps.py`):
   and `INST_RETIRED` reads 0. The model whose tick stops before `WFI` prints
   the WFI marker and returns through the secure timer with status 2; its log
   matches the controlled outcome. Image: about 35 KB of text, 3 new objects.
+  With the corrected walk check, the check passes on the bundles' source
+  revision `74d6aeab` plus the correction: the bundle 6, 7 and 8 images are
+  byte-identical to the prepared ones, the bundle 4 image differs only in
+  `main.c`, and its model log keeps 8,343 bytes. On the `bringup` revision
+  `f3cbec23` the check refuses before any image is built, because
+  `platform/a733/platform.c` changed after bundle 2 was frozen and the
+  central kernel-check object no longer equals bundle 2's. The next bundle 4
+  set therefore needs either that source revision with the correction or a
+  new base image.
 - **Bundles 6 and 7.** About 100 KB of text each and 6 new objects; no QEMU
   model exists for the A733 power devices. The host model checks the TWI
   observer on one read transaction (2 conditions, 4 bytes, 1 STOP, 42 bit

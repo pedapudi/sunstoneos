@@ -213,8 +213,9 @@ ROWS = [
                   'Walk A/B: refused when CCU +0x588 reads MBUS_DFS_EN set (bundle 3 read it clear on port 3-3 on '
                   '2026-10-24); otherwise a discarded warm-up block and twelve blocks in ABBA order of 1,024 '
                   'TLBI-and-load iterations, iteration k loading line k of block k, A with TCR_EL1 0x200803019 '
-                  '(uncached walks) and B with 0x200803519, each after a calibration region whose DTLB_WALK and '
-                  'ITLB_WALK counts the block must exceed by exactly 1,024. WFI: started only before 0.9 s after '
+                  '(uncached walks) and B with 0x200803519; each block must count exactly 1,024 DTLB_WALK and 1,024 '
+                  'ITLB_WALK, and a calibration region before it records the walks after a lone TLBI. WFI: '
+                  'started only before 0.9 s after '
                   'the monitor\'s entry, 1,000 ticks of a733_cpu_idle() with IRQs unmasked, reading the counters '
                   'after each wake outside any masked region. Run it after bundle 2 and bundle 3 of the same '
                   'lifetime; report each board separately.',

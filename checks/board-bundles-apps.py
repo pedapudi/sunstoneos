@@ -40,8 +40,9 @@ The check:
   timer with status 2; each log must fit the 16,127 log bytes, and since every
   bundle 4 value prints at a fixed width, the board's log has the same length;
 - runs checks/board-bundles-apps-model.c, the host model of bundle 8's
-  sequence and of the bundle 6 and 7 records, which also bounds the log bytes
-  that bundles 6 and 7 print before their detail lines;
+  sequence, of the bundle 6 and 7 records, which also bounds the log bytes
+  that bundles 6 and 7 print before their detail lines, and of bundle 4's
+  walk-block acceptance on the walk records that port 3-3 returned;
 - writes each image's controlled outcomes, which the runner of --tree must
   accept, and build.json for tools/prepare-board-bundles.py.
 
@@ -408,7 +409,8 @@ def model_check(out):
     exe = work / 'model'
     command = ['/usr/bin/clang', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                '-DSUNSTONE_DRAM_PRIORITY=2', f'-I{ROOT}/include', f'-I{ROOT}/apps/board-bundles-dram',
-               f'-I{ROOT}/apps/board-bundles-power', str(ROOT / 'checks/board-bundles-apps-model.c'),
+               f'-I{ROOT}/apps/board-bundles-power', f'-I{ROOT}/apps/board-bundles-cpu',
+               str(ROOT / 'checks/board-bundles-apps-model.c'),
                str(ROOT / 'apps/board-bundles-dram/sequence.c'), str(ROOT / 'drivers/dram/a733_dram.c'),
                str(ROOT / 'apps/board-bundles-power/trace.c'), '-o', str(exe)]
     subprocess.run(command, check=True)
