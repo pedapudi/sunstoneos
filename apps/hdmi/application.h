@@ -6,6 +6,7 @@
 #include "a733_platform_locks.h"
 #include "a733_pins_native.h"
 #include "a733_pmic_native.h"
+#include "a733_power_domains_native.h"
 #include "task.h"
 #if SUNSTONE_HDMI_AUDIO
 #include "../hdmi-audio/native.h"
@@ -33,6 +34,9 @@ struct hdmi_application {
     struct a733_rail_leases rails;
     struct a733_pmic_native pmic_native;
     struct a733_pmic pmic;
+    /* The power-domain owner; its service task is the PMIC task. */
+    struct a733_power_domains domains;
+    struct a733_power_domains_native domains_native;
     struct a733_hdmi_native hdmi;
     StaticTask_t tasks[HDMI_TASK_COUNT];StackType_t stacks[HDMI_TASK_COUNT][2048];TaskHandle_t handles[HDMI_TASK_COUNT];
     atomic_uint fatal,pmic_ready,state,cancel;

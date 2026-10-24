@@ -340,8 +340,9 @@ functions and modes beyond these bounded applications.
   needs fresh DDR/model-memory, power, DMA and recovery admission; its injected
   native transcript does not establish physical concurrent recognition/storage.
   The DSI image also requires PCK domains 0, 1, 2, 3, 8 and 9 to be ON at
-  entry and powers none of them; the DE_SYS power provider can power domains
-  1 and 9, but the DSI build does not link it. Radio bootstrap needs at least 46.7 s at one
+  entry and powers none of them; the power-domain owner can power domain 1
+  for a registered row, but the DSI image registers none, and the owner has
+  no entry for the other five domains. Radio bootstrap needs at least 46.7 s at one
   data line and 400 kHz, more than the 40 s supervised bound, so the radio
   board test waits for a physically qualified four-bit SDIO profile.
 - **Shared-helper migration:** the consolidation round kept every barrier
@@ -539,7 +540,7 @@ function returns the same result for every input. These copies remain:
 | Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
 | USB host | Adoption of a new Type-C attachment after VBUS removal; Bulk-Only Transport reset and bulk clear-halt recovery; a board workload and wire format for audio capture. | USB host owner. Storage recovery needs changes to the pinned TinyUSB storage class and to bulk-endpoint recovery in the core. |
-| Display | Add `drivers/power/a733_de_sys_power.c` to the DSI and deinterlace builds and power their DE_SYS domains; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
+| Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
 | Camera | A CAM2 binding: a port field in the camera boot record and `apps/camera/prepare.py`, the PK10–PK19 data pins and MCLK2, and a sourced deskew value for receiver port 1. Open the first stream status interval at the sensor's stream-on write. Continuous capture in the native application. | Camera owner. The stream-on change needs a hook inside the sensor's start sequence. |
 | GPU | Compute input and output beyond one 4 KiB page, arbitrary trusted shaders, blend factors, clipping, mipmaps and multisampling. | GPU owner. Multi-page compute changes the package wire format, so it is a package of its own. |
 | NPU | A board image that links the session runtime, with a USB client protocol per model. | NPU owner. A board-derived image needs the NPU startup resources to adopt the board's GPU/PCK resource manager, and a pool larger than 2 MiB or the extended DDR profile; a single-core image needs `apps/npu-convolution/native.c` to select the session runtime. Any mimus offload to the NPU needs an accuracy evaluation. |

@@ -2,6 +2,7 @@
 #define SUNSTONE_GPU_APPLICATION_PRIVATE_H
 #include "a733_board_application.h"
 #include "a733_native_usb.h"
+#include "a733_power_domains_native.h"
 #include "a733_gpu_backend.h"
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_platform_native.h"
@@ -16,6 +17,9 @@
 struct gpu_application {
     struct a733_board_session session;
     struct a733_native_usb shared;
+    /* The power-domain owner; its service task is the PMIC task. */
+    struct a733_power_domains domains;
+    struct a733_power_domains_native domains_native;
     struct a733_gpu_platform_native native;
     struct a733_gpu_platform power;
     struct a733_gpu_backend backend;

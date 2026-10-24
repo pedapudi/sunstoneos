@@ -249,11 +249,12 @@ this path does not admit modes beyond their limits.
 Entry must also find every power domain the media clock selects already ON.
 The DE, VO0 and IOMMU groups select PCK domains 0, 1, 2, 3, 8 and 9 (registers
 at `0x07060000 + 0x1000*n`); each command and status register must read ON
-(low four bits 8). The image powers none of them. The shared domain-ON
-provider in `drivers/power/a733_de_sys_power.c` accepts domains 1 (DE_SYS),
-9 (VO0) and 10 (VO1); the pinned sun60iw2 PCK600 table gives all three the same
-delay row. The DSI image does not link or run it yet, and no provider exists for
-the IOMMU group's domains 0, 2, 3 and 8. The electrical record's
+(low four bits 8). The image powers none of them. The power-domain owner in
+`drivers/power/a733_power_domains.c` powers domain 1 (DE_SYS) for a
+registered row ([docs/power-domains.md](power-domains.md)); it has no entry
+for domain 9 (VO0), although the pinned sun60iw2 PCK600 table gives domain 9
+the same delay row. The DSI image registers no row, and no owner entry exists
+for the IOMMU group's domains 0, 2, 3, 8 and 9. The electrical record's
 `de_vo_power_stable` fact asserts this state. If a domain reads OFF, the
 media-clock stability check refuses the first baseline step and the session
 retains every acquired lease and allocation.

@@ -16,7 +16,7 @@ sunstone_board_application(g2d BOOT "${g2d_build}/boot.c" LINK_SCRIPT "${g2d_bui
  PROFILE g2d-supervised-v1
  SOURCES platform/a733/device_memory_layout.c apps/g2d/main.c apps/g2d/input.c apps/g2d/memory.c
   apps/g2d/native.c apps/g2d/usb.c apps/g2d/admission.c apps/g2d/snapshot.c drivers/g2d/a733_g2d.c
-  drivers/iommu/a733_iommu.c drivers/power/a733_de_sys_power.c
+  drivers/iommu/a733_iommu.c
  INPUTS apps/g2d/extended-boot.patch apps/g2d/extended-link.patch
   platform/a733-smp-cached/link-devices.ld include/a733_g2d_application.h include/a733_g2d.h
-  include/a733_de_sys_power.h drivers/g2d/g2d_mixer_type.h apps/g2d/sources.json)
+  drivers/g2d/g2d_mixer_type.h apps/g2d/sources.json)

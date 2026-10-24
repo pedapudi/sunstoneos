@@ -59,19 +59,23 @@ void a733_storage_maintenance_stop(void)
 {gpu_application_fail(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,2);}
+/* The power service task: every PMIC transaction and the GPU_TOP domain. It
+ * blocks until a submit, row request or stop notifies it, or for the ticks
+ * the step returns, at most until the session deadline, when it parks. */
 static void pmic(void *unused)
 {
     (void)unused;for(;;){
 #ifdef SUNSTONE_GPU_FINITE_RETURN
-        gpu_finite_pmic_checkpoint();
+        /* The finite stop parks only an idle service. */
+        if(a733_power_service_idle(&app.domains))gpu_finite_pmic_checkpoint();
 #endif
         /* A provider must poll once after a consumer fault to retain its mutex. */
-        enum a733_pmic_status r=a733_pmic_poll(&app.shared.pmic);
+        const uint32_t ticks=a733_power_service_step(&app.domains);
         if(!gpu_application_live(NULL))park();
-        if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
-            atomic_store_explicit(&app.shared.pmic_ready,1,memory_order_release);
-        else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY){gpu_application_fail(NULL);park();}
-        vTaskDelay(1);
+        const int ready=a733_power_service_ready(&app.domains);
+        if(ready>0)atomic_store_explicit(&app.shared.pmic_ready,1,memory_order_release);
+        else if(ready<0){gpu_application_fail(NULL);park();}
+        (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
 }
 static _Noreturn void retained(void)
@@ -458,10 +462,11 @@ void a733_smp_diagnostic_start(void)
 #ifdef SUNSTONE_GPU_FINITE_RETURN
         if(i==1)continue; /* No native USB task or controller preparation. */
 #endif
+        /* The power service (task 0) runs below USB0, on A55 core 0. */
 #ifdef SUNSTONE_GPU_SINGLE_CORE
-        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,2,app.stacks[i],&app.tasks[i]);
+        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,i?2:1,app.stacks[i],&app.tasks[i]);
 #else
-        app.handles[i]=xTaskCreateStaticAffinitySet(functions[i],names[i],4096,NULL,2,
+        app.handles[i]=xTaskCreateStaticAffinitySet(functions[i],names[i],4096,NULL,i?2:1,
         app.stacks[i],&app.tasks[i],1);
 #endif
         if(!app.handles[i])platform_panic("GPU tasks",4);}
@@ -470,6 +475,10 @@ void a733_smp_diagnostic_start(void)
 #else
     if(!a733_native_usb_bind(&app.shared,app.handles[0],app.handles[1]))platform_panic("GPU USB bind",5);
 #endif
+    const struct a733_power_service_config service={s->pmic_owner,s->deadline_us,1000000u/configTICK_RATE_HZ,0};
+    if(!a733_power_domains_native_init(&app.domains_native,app.handles[0])||
+       !a733_power_domains_init(&app.domains,&app.shared.pmic,&app.domains_native.operations,
+           &app.domains_native,&service))platform_panic("GPU power domains",5);
 #ifdef SUNSTONE_GPU_TRANSPORT_ONLY
     /* Keep the real PMIC/USB tasks and pending-response protocol. The client
      * parks before OPEN; no GPU platform, firmware or worker is constructed. */

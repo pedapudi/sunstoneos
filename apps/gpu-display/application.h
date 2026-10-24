@@ -9,6 +9,7 @@
 #include "a733_platform_locks.h"
 #include "a733_pins_native.h"
 #include "a733_pmic_native.h"
+#include "a733_power_domains_native.h"
 #include "a733_gpu_backend.h"
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_platform_native.h"
@@ -31,6 +32,9 @@ struct gpu_display_application {
     struct a733_rail_leases rails;
     struct a733_pmic_native pmic_native;
     struct a733_pmic pmic;
+    /* The power-domain owner; its service task is the PMIC task. */
+    struct a733_power_domains domains;
+    struct a733_power_domains_native domains_native;
     struct a733_hdmi_native hdmi;
     struct a733_gpu_platform_native gpu_native;
     struct a733_gpu_platform gpu_power;

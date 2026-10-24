@@ -730,9 +730,11 @@ domain 1) or the VO0 domain (PCK domain 9). It therefore fails when started from
 a cold domain, while HDMI, DisplayPort and G2D power domain 1 themselves. The
 deinterlace application adopts an already powered domain, as documented.
 
-- *Offline:* document domain-ON as a DSI entry precondition. Optionally add the
-  `a733_de_sys_power` step that G2D uses. Generalize it for domain 9 only after
-  the VO0 power sequence is checked against the pinned `pck600_domains.c`.
+- *Offline:* document domain-ON as a DSI entry precondition. Optionally
+  register a domain-1 row on the power-domain owner
+  (`drivers/power/a733_power_domains.c`), as G2D does. Add a domain-9 entry
+  to the owner only after the VO0 power sequence is checked against the
+  pinned `pck600_domains.c`.
 - *Accessory:* no DSI panel is selected, so other DSI gaps come first.
 
 ### Camera

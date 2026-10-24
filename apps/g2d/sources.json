@@ -8,7 +8,7 @@
       "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
       "sha256": "2d9c2b60b3b264d1732538815d12570e45386d30b280a1d0b4f5b9780bdc49ee",
       "license": "GPL-2.0-only",
-      "adaptation": "drivers/power/a733_de_sys_power.c adapts only the sun60iw2 delay row shared by the DE_SYS, VO and VO1 domains, masked ON request, barrier and bounded10ms status observation. Linux genpd, regmap, poweroff and reset handling do not execute."
+      "adaptation": "drivers/power/a733_power_domains.c adapts only the sun60iw2 delay row of the DE_SYS, NPU and GPU_TOP domains, the masked ON and OFF requests, the barrier and the bounded 10 ms status observation. Linux genpd, regmap and reset handling do not execute."
     },
     "sun60iw2-power.h": {
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/include/dt-bindings/power/sun60iw2-power.h",

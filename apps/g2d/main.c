@@ -18,7 +18,8 @@ int board_application_start(void)
     if(!source||memcmp(&source->board,&board.admitted_session,sizeof(source->board)))return 0;
     g2d.session=*source;
     if(!a733_g2d_session_valid(&g2d.session)||memcmp(g2d.session.board.image,a733_smp_build_id,32))return 0;
-    if(!g2d_upload_allocate())return 0;
+    if(!g2d_upload_allocate()||
+       !a733_power_domain_row_init(&g2d.row,&providers.domains,1,g2d.session.owner,&g2d.rail))return 0;
     g2d.handle=xTaskCreateStatic(g2d_task,"g2d",4096,NULL,4,g2d.stack,&g2d.task);
     return g2d.handle!=NULL;
 }

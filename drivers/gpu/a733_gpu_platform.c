@@ -1,4 +1,5 @@
 #include "a733_gpu_platform.h"
+#include "a733_power_domains.h"
 #include "a733_range.h"
 #include "a733_gpu_resources_native.h"
 #include <stddef.h>
@@ -41,11 +42,6 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
     struct a733_gpu_platform *p = context;
     return p->token && p->delegated && p->ops.read(p->context, bank, off, out);
 }
-static int write_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, uint32_t value)
-{
-    struct a733_gpu_platform *p = context;
-    return p->token && p->delegated && p->ops.write(p->context, bank, off, value, p->deadline);
-}
 static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off,
                        uint32_t clear, uint32_t set)
 {
@@ -57,12 +53,12 @@ int a733_gpu_platform_init(struct a733_gpu_platform *p, struct a733_gpu_resource
     unsigned client, const struct a733_gpu_platform_ops *ops, void *context)
 {
     if (!p || !m || !ops || p->initialized || !m->initialized || client >= A733_GPU_RESOURCE_CLIENTS ||
-        !ops->now || !ops->read || !ops->write || !ops->update ||
+        !ops->now || !ops->read || !ops->update ||
         !a733_extents_disjoint_checked((uintptr_t)p, sizeof(*p), (uintptr_t)m, sizeof(*m)) ||
         !a733_extents_disjoint_checked((uintptr_t)p, sizeof(*p), (uintptr_t)ops, sizeof(*ops))) return 0;
     *p = (struct a733_gpu_platform){.manager = m, .ops = *ops, .context = context,
                                    .client = client, .initialized = 1};
-    const struct a733_gpu_power_ops power_ops = {clock_read, acquire, release, read_reg, write_reg, update_reg};
+    const struct a733_gpu_power_ops power_ops = {clock_read, acquire, release, read_reg, update_reg};
     return a733_gpu_power_init(&p->power, &power_ops, p);
 }
 int a733_gpu_platform_begin(void *context, uint64_t deadline)
@@ -85,6 +81,9 @@ int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *p,struct a733_gpu_reso
         !a733_gpu_resources_native_use_pmic(n,p->manager,provider))return 0;
     const struct a733_pmic_consumer_config config={provider,*life,owner,A733_RAIL_DCDC4};
     if(!a733_pmic_consumer_init(&p->pmic,&config) || !a733_gpu_resources_native_bind_view(n,&p->pmic,p->client))return 0;
+    /* GPU_TOP: the row on the provider's power-domain owner, under the same
+     * owner and the consumer's DCDC4 token. */
+    if(provider->domains && !a733_power_domain_row_init(&p->power.row,provider->domains,5,owner,&p->pmic.rail))return 0;
     p->pmic_native=n;return 1;
 }
 static int pmic_health(struct a733_gpu_platform *p)

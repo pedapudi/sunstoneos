@@ -30,7 +30,8 @@ int hdmi_framebuffer_boot(void)
         .locks=&app.locks,.pck=&app.pck,.pck_lease=&app.hdmi.pck_lease,
         .pck_client=app.session.pck_client,.owner=app.session.owner,.authority=sealed.authority,
         .deadline=app.deadline,.parent_bytes=2097152,.frame_span=2097152-32768,
-        .output=A733_DE_TV0_RGB565,.context=&app,.current=current,.output_owned=output_owned,.admit=admit};
+        .output=A733_DE_TV0_RGB565,.context=&app,.current=current,.output_owned=output_owned,.admit=admit,
+        .domains=&app.domains,.rail=&app.hdmi.rail};
     memcpy(c.fabric,sealed.fabric,sizeof(c.fabric));memcpy(c.fabric_hz,sealed.fabric_hz,sizeof(c.fabric_hz));
     memcpy(c.iommu_gates,sealed.iommu_gates,sizeof(c.iommu_gates));
     return a733_display_framebuffer_boot(&framebuffer,&c,1);

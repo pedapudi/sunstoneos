@@ -10,7 +10,6 @@ struct a733_gpu_resource_native;
 struct a733_gpu_platform_ops {
     int (*now)(void *, uint64_t *);
     int (*read)(void *, enum a733_gpu_power_bank, uint32_t, uint32_t *);
-    int (*write)(void *, enum a733_gpu_power_bank, uint32_t, uint32_t, uint64_t);
     int (*update)(void *, enum a733_gpu_power_bank, uint32_t, uint32_t, uint32_t, uint64_t);
 };
 enum a733_gpu_platform_phase { A733_GPU_PLATFORM_NEW, A733_GPU_PLATFORM_ADMIT,

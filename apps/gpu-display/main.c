@@ -38,34 +38,32 @@ static int enter(void *v,uint64_t deadline)
 {return v==&app&&hdmi_live(NULL)?a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline):-1;}
 static void leave(void *v)
 {configASSERT(v==&app);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
+/* The power service task: every PMIC transaction and domains 1 and 5. It
+ * blocks until a submit, row request or the park request notifies it, or for
+ * the ticks the step returns. */
 static void pmic_task(void *unused)
 {
     (void)unused;
     for(;;){
         if(atomic_load_explicit(&app.pmic_park_request,memory_order_acquire)){
-            unsigned expected=0;
-            if(atomic_compare_exchange_strong_explicit(&app.pmic.busy,&expected,1,
-               memory_order_acquire,memory_order_relaxed)){
-                unsigned failed=app.pmic.failed||app.pmic.retained;
-                unsigned idle=!failed&&!app.pmic.held&&app.pmic.active==A733_PMIC_REQUESTS;
-                atomic_store_explicit(&app.pmic.busy,0,memory_order_release);
-                if(failed)hdmi_fail(NULL);
-                if(idle){
-                    /* GPU and HDMI consumers are stopped before this request.
-                     * After publication this owner performs no provider call. */
-                    atomic_store_explicit(&app.pmic_parked,1,memory_order_release);
-                    for(;;)vTaskSuspend(NULL);
-                }
+            if(a733_power_service_ready(&app.domains)<0)hdmi_fail(NULL);
+            else if(a733_power_service_idle(&app.domains)){
+                /* GPU and HDMI consumers are stopped before this request; the
+                 * provider is idle and every domain is ON, OFF or FAILED with
+                 * no row request unanswered. After publication this owner
+                 * performs no provider call. */
+                atomic_store_explicit(&app.pmic_parked,1,memory_order_release);
+                for(;;)vTaskSuspend(NULL);
             }
         }
         /* Let an already borrowed native PMIC transaction observe revocation
          * and retain its lock before this permanent owner parks. */
-        enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
+        const uint32_t ticks=a733_power_service_step(&app.domains);
         if(!hdmi_live(NULL))for(;;)vTaskSuspend(NULL);
-        if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
-            atomic_store_explicit(&app.pmic_ready,1,memory_order_release);
-        else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY)hdmi_fail(NULL);
-        vTaskDelay(1);
+        const int ready=a733_power_service_ready(&app.domains);
+        if(ready>0)atomic_store_explicit(&app.pmic_ready,1,memory_order_release);
+        else if(ready<0)hdmi_fail(NULL);
+        (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
 }
 BaseType_t gpu_display_task_privileged(TaskFunction_t entry,void *context)
@@ -97,13 +95,21 @@ void a733_smp_diagnostic_start(void)
     TaskFunction_t functions[]={pmic_task,gpu_display_output_task,gpu_display_render_task,gpu_display_usb_task};
     const char *names[]={"gpu-display-pmic","gpu-display","gpu-render","gpu-display-usb"};
     for(unsigned i=0;i<4;++i){
-        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,i==2?2:i==3?3:4,app.stacks[i],&app.tasks[i]);
+        /* The power service (task 0) runs below USB0, on A55 core 0. */
+        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,!i||i==2?2:i==3?3:4,app.stacks[i],&app.tasks[i]);
         if(!app.handles[i])platform_panic("GPU display tasks",8);
+#if configNUMBER_OF_CORES > 1
+        if(!i)vTaskCoreAffinitySet(app.handles[i],1);
+#endif
     }
     struct a733_pmic_config pmic=app.session.pmic;pmic.startup_deadline=app.deadline;
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.handles[0]) ||
        !a733_pmic_init(&app.pmic,&pmic,&app.pmic_native.operations,&app.pmic_native,&app.clocks,&app.rails,&app.pins) ||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))platform_panic("GPU display PMIC",9);
+    const struct a733_power_service_config service={app.session.pmic.owner,app.deadline,1000000u/configTICK_RATE_HZ,0};
+    if(!a733_power_domains_native_init(&app.domains_native,app.handles[0])||
+       !a733_power_domains_init(&app.domains,&app.pmic,&app.domains_native.operations,&app.domains_native,&service))
+        platform_panic("GPU display power domains",9);
     struct a733_hdmi_native_config hdmi={.clocks=&app.clocks,.rails=&app.rails,.pmic=&app.pmic,
         .locks=&app.locks,.pck=&app.pck,.pck_client=app.session.pck_client,.task=app.handles[1],
         .owner=app.session.owner,.epoch=app.session.epoch,.request=app.session.request,

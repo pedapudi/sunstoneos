@@ -1067,13 +1067,14 @@ a few correct a design choice inside the subsystem.
 
 ### 12.3 Display
 
-- **Power-up copies** (`display-4`). The PCK600 domain power-up exists in
-  [drivers/power/a733_de_sys_power.c](../../drivers/power/a733_de_sys_power.c)
-  but only G2D uses it; HDMI, DisplayPort and GPU-display carry inline
-  copies, and two more copies power the VO1 domain. The copies rewrite the
-  command word when the domain is already on. Proposal: parameterize the
-  driver by domain base and reword its contract, then adopt it where the
-  extra adapter callbacks are worthwhile.
+- **Power-up copies** (`display-4`). The power-domain owner
+  [drivers/power/a733_power_domains.c](../../drivers/power/a733_power_domains.c)
+  is the only writer of PCK600 domains 1 and 5: the framebuffer, G2D and the
+  GPU request them through rows ([docs/power-domains.md](../power-domains.md)).
+  HDMI and DisplayPort still carry inline copies that power the VO1 domain
+  (domain 10), the video platform powers domains 2 and 3, and the NPU
+  platform powers domain 4 until it moves onto its row. Proposal: give
+  the owner entries for those domains and move their writers onto rows.
 - **Framebuffer pipelines** (`display-5`, medium).
   [apps/hdmi/framebuffer.c](../../apps/hdmi/framebuffer.c),
   [apps/displayport/memory.c](../../apps/displayport/memory.c) and
