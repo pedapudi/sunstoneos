@@ -37,6 +37,9 @@ qualification remains required; model checks do not establish physical behavior.
    60-second window before treating the bundle as launch-ready. Preserving its
    802 MiB RAM reservation requires about 74 minutes of transfers at the
    documented 0.57 MB/s rate; this is an estimate, not a new measurement.
+   The non-admitting preparation records are preserved under
+   `gpu-finite-admission-20261024/`; `proposal-DRAFT.json` lists the missing
+   facts and commands. Unresolved authority fields remain unset.
    Numerical GPU execution and return remain unqualified. Mimus GPU CLOSE now
    refuses outstanding work and atomically prevents later submissions.
 3. NPU startup now adopts a coherent inherited ON state through the shared
