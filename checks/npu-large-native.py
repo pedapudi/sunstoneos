@@ -39,7 +39,7 @@ class Machine(graph.Machine):
   self.trace=[];self.returns={};self.polls=0;self.delays=0;self.phase='constructor';self.cache=[];self.scheduler=1;self.task=1
   super().__init__(image,oracles);self.max_tx=512
   self.traced={image.address(n):n for n in ('nbg_model_open','nbg_sh_nt_requirements','a733_npu_native_init') if image.symbols.get(n)}
-  for name in ('aarch64_device_cache','xTaskGetCurrentTaskHandle','npu_service_send'):
+  for name in ('aarch64_device_cache','xTaskGetCurrentTaskHandle','npu_service_send','vPortEnterCritical','vPortExitCritical'):
    self.hooks[image.address(name)]=name
   self.interesting=set(self.hooks)|set(self.traced)|{0x43fff000,image.address('a733_observe_privileged'),image.address('a733_observe_digest')}
   for base,data in image.parts:
@@ -61,6 +61,7 @@ class Machine(graph.Machine):
   if name=='xTaskGetSchedulerState':self.ret(self.scheduler)
   elif name=='xTaskGetCurrentTaskHandle':self.ret(self.task)
   elif name=='aarch64_device_cache':self.cache.append(a[:3]);self.ret(1)
+  elif name in ('vPortEnterCritical','vPortExitCritical'):self.ret()  # Single-thread fixture; scheduler locking is modeled.
   elif name=='npu_service_send':self.ret(0)  # Direct wrapper check queues no hardware work.
   elif name=='vTaskDelay':
    assert a[0]==1;self.delays+=1;self.ret();self.u.emu_stop()
@@ -94,6 +95,13 @@ def direct_header(m,packet):
  m.u.mem_write(0x43e00000,packet[:64]);return m.call('npu_runtime_header',0x43e00000)
 def check_constructor(a,out,image,inputs,outputs,bad=False):
  m=Machine(image,dict(zip(inputs,outputs)))
+ selected=next(v for v in json.loads((ROOT/'tools/npu-models.json').read_text())['models'] if v['name']=='relative-shift128')['model']
+ model=image.address('a733_npu_application_model')
+ assert m.get(image.address('a733_npu_application_model_bytes'))==selected['bytes'], 'Constructor requires the relative-shift128 image; NN-pool images use npu-nn-pool-native.py'
+ assert hashlib.sha256(m.data(model,selected['bytes'])).hexdigest()==selected['sha256'], 'Unexpected linked relative-shift128 model'
+ # Boot publishes the local pool before the constructor. Run that actual
+ # preparation here; the getter alone no longer initializes its storage.
+ assert m.call('a733_memory_reservations_prepare')==1
  # Locate the private static app type from its actual DWARF variable.
  from elftools.elf.elffile import ELFFile
  with a.image.open('rb') as f:
