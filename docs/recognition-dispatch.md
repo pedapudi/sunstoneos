@@ -16,9 +16,12 @@ configures, links and passes its link check; the GPU
 runtime and its session component are described in
 [gpu-mimus-service.md](gpu-mimus-service.md) and measured in
 [the GPU recognition measurements](designs/gpu-recognition-measurements.md).
-No call reaches the GPU until the mimus engine has its exact-sum hook
-([What other owners provide](#what-other-owners-provide)); until then the
-recognizer never opens the session. No board has run any part of it. The
+No call reaches the GPU until the image build's pinned mimus engine
+declares the exact-sum hook; with an engine that lacks it the recognizer
+never opens the session. The design's
+["Changes needed in the mimus engine"](designs/gpu-recognition.md#changes-needed-in-the-mimus-engine)
+gives the engine commit that provides the hook. No board has run any part
+of it. The
 option is off by default, and with it off every OS image is byte-identical
 to its build without this code apart from the 32-byte build identity.
 
@@ -84,22 +87,25 @@ after the previous one is read out, because it reuses the output region. Per
 job, the recognizer core cleans the job's codes and its 128-byte job words and
 submits it. In a channel split both cores compute half of the CPU channels
 while the first job runs. After each completion the recognizer core
-invalidates the job's tags and sums and reads them out: alone in a channel
-split, and with the second worker, half of the rows each, when the GPU has
-every channel. The seeds, which board measurements replace, are:
+invalidates the job's tags and sums, and the two workers read the job out,
+half of its rows each, as the engine splits them. The seeds, which board
+measurements replace, are:
 
 | Seed | Value |
 | --- | --- |
 | A55 NEON rate | 4,167,910,560 MACs in 14.894 s at 494 MHz, 0.280 G MAC/s per core |
 | A76 NEON rate | Twice the A55's per clock |
 | GPU rate | 32 lanes at 400 MHz, 3.39 instructions per MAC (217 instruction groups per 64 MACs, the built program), over a grid padded to 32 rows by 16 channels; `--load-cycles` adds a load-latency bound |
-| Read-out | 2.9 instructions per GPU output (37.6 M for 12,923,134 outputs, measured on the read-out entry); 1 per clock on an A55, 2 on an A76 |
+| Read-out | 3.0 instructions per GPU output, the engine's compiled read-out counted on the placed shapes ([measurements](designs/gpu-recognition-measurements.md#with-the-engines-hook)); 1 per clock on an A55, 2 on an A76 |
 | Cache maintenance | 20 cycles per 64-byte line |
 | Per-job overhead | 25 µs submit, 25 µs firmware, 25 µs wake; 10 µs to hand work to the second worker |
 
 The recognition core pair is a build constant. Until the A76 cores are
 admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
-6 and 7 at 2,002 MHz. The emitted tables for the bench models are:
+6 and 7 at 2,002 MHz. The recognizer runs on the first core and the engine's
+second inference worker (`apps/mimus/parallel_runtime.cc`) on the second,
+in the GPU build and in every other OS build. The emitted tables for the
+bench models are:
 
 | Layer, K → N | A55 pair: n_gpu, job_rows | A76 pair: n_gpu, job_rows |
 | --- | --- | --- |
@@ -112,12 +118,15 @@ admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
 | Output head, 176 → 1,025 | 897, 256 | 449, 544 |
 
 On the A55 pair the model places 90.2% of the MACs on the GPU and gives a
-linear stage of 1.148 s, against the regression bound of 1.15 s. On the A76
+linear stage of 1.117 s, against the regression bound of 1.12 s. On the A76
 pair it places 45.4% on the GPU and gives 0.535 s, against 0.54 s. These are
-issue-bound figures; with 200-clock GPU loads the A76 pair models at 0.665 s.
-Every bench call is one job, 204 in all, and the generated header also lists
-the 179 placed tensors' model file, weight offset, stride and K for the
-runtime's admission.
+issue-bound figures; with 200-clock GPU loads the A76 pair models at 0.666 s.
+Every bench call is one job, 204 in all. The generated header also lists the
+179 placed tensors' model file, weight offset, stride and K for the
+runtime's admission, and a bitmap of the placed ordinals. The recognizer
+passes the bitmap to the engine's `SetExactSumOrdinals`, so the engine
+offers the hook only those tensors' calls; every other call keeps the
+engine's streamed row ring and its internal-arena codes.
 
 ## The dispatcher
 
@@ -139,7 +148,9 @@ Before every model hash matches there is no OPEN and every row reads as
 CPU-only. A refused or failed OPEN keeps the CPU for the boot and is not
 retried. A refused job runs on the CPU and the session stays open. A missing
 tag or a sum that differs from the CPU's makes `os_dispatch_incomplete`
-clear the active count at once, so every later call runs on the CPU. A lost
+clear the active count at once, and the hook removes itself from the engine
+(`SetExactSumHook(nullptr)`), so every later call runs on the engine's CPU
+paths as it does without a hook. A lost
 job makes `os_dispatch_failed` record it, clear the active count and take the
 recognizer's failure path (`board_fail`, then suspension) before any CPU row
 of the failed job; the watchdog resets the board. A reply that never comes
@@ -213,9 +224,10 @@ so the option combines with either capture source.
 
 - **mimus engine:** the tensor ordinal in `TensorView`, defined as above; the
   exact-sum hook as `checks/gpu-recognition-hook.h` declares it, with its
-  block-sink rules; codes of hooked calls in the arena; the 224-row
-  subsampling producer. The design's "Changes needed in the mimus engine"
-  lists each change.
+  block-sink and job rules; `SetExactSumOrdinals`; codes of hooked calls in
+  the arena; the 224-row subsampling producer. The design's "Changes needed
+  in the mimus engine" lists each change and the engine commit that provides
+  them.
 - **Page-table owner:** A76 admission with `A733_A76_ADMITTED`.
 - **Shared helpers:** `os_dispatch_writable` and `os_dispatch_el0_read_only`
   can move to `a733_mapping_check.h` as general stride-based rules.

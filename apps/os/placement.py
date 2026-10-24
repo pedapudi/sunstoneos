@@ -57,14 +57,15 @@ SUBSAMPLING_BLOCK = 224   # rows per subsampling producer block
 OUT_CHUNK = 32            # mimus kOutChunk: subsampling output rows per call
 SUBSAMPLING = 'encoder.pre_encode.conv.2.weight'
 
-# Time model seeds; board measurements replace them. The GPU and read-out
-# rates are the measured counts of docs/designs/gpu-mimus-compute-measurements.md:
-# 217 USC instruction groups per 64 MACs, and 37.6 M read-out instructions for
-# the bench recording's 12,923,134 GPU outputs.
+# Time model seeds; board measurements replace them. The GPU rate is the
+# measured count of docs/designs/gpu-mimus-compute-measurements.md, 217 USC
+# instruction groups per 64 MACs. The read-out rate is the mimus engine's
+# compiled exact-sum read-out counted per output on the placed shapes
+# (docs/designs/gpu-recognition-measurements.md).
 USC_INSTRUCTIONS_PER_MAC = 217 / 64   # inner loop of the GPU kernel, 3.39
 A55_MAC_PER_CYCLE = 4167910560 / 14.894 / 494e6   # NEON profile, one A55
 A76_MAC_FACTOR = 2.0              # A76 NEON MACs per clock against an A55
-READOUT_INSTRUCTIONS = 37.6e6 / 12923134   # per GPU output, 2.9: conversion and scaling
+READOUT_INSTRUCTIONS = 3.0        # per GPU output: conversion and scaling
 LINE_CYCLES = 20.0                # one DC CVAC or DC CIVAC line
 SUBMIT_US, FIRMWARE_US, WAKE_US, DISPATCH_US = 25.0, 25.0, 25.0, 10.0
 # Optional latency-bound GPU term (checks/gpu-mimus-time-model.py): a pass of
@@ -196,10 +197,10 @@ def call_seconds(rows, k, n_all, n, clocks, totals=None):
     and the GPU, with one job in flight (GPU kernel design). Per job, A
     cleans the job's codes and job words and submits it. While the first job
     runs, A and B each compute half of the CPU channels and join. After each
-    completion A invalidates the job's tags and sums and reads them out: alone
-    when the call splits channels, with B when the GPU has every channel. The
-    next job is submitted only after that read-out, because it reuses the
-    output region."""
+    completion A invalidates the job's tags and sums, and A and B read half of
+    the job's rows out each, as the engine splits them. The next job is
+    submitted only after that read-out, because it reuses the output
+    region."""
     hz, line = clocks.hz, LINE_CYCLES / clocks.hz
     cpu_half = (n_all - n) * rows * k / 2 / clocks.cpu_rate
     if not n:
@@ -214,8 +215,7 @@ def call_seconds(rows, k, n_all, n, clocks, totals=None):
         tags = math.ceil(r / TILE_ROWS) * math.ceil(n / TILE_CHANNELS) * LANES
         invalidate = math.ceil((tags * 4 + r * n * width(k)) / 64)
         readout = r * n * READOUT_INSTRUCTIONS / (clocks.ipc * hz)
-        a = max(a, finish + WAKE_US * 1e-6) + invalidate * line + \
-            (readout if n < n_all else DISPATCH_US * 1e-6 + readout / 2)
+        a = max(a, finish + WAKE_US * 1e-6) + invalidate * line + DISPATCH_US * 1e-6 + readout / 2
         if totals is not None:
             totals['jobs'] = totals.get('jobs', 0) + 1
             totals.setdefault('job_seconds', []).append(gpu_seconds(r, k, n, clocks))
@@ -316,6 +316,16 @@ def header(tensors, placement, clocks, frames):
              'const struct os_placement os_placement_table[OS_PLACEMENT_TENSORS]={']
     for i in range(0, len(placement), 8):
         lines.append('    ' + ''.join('{%d,%d},' % row for row in placement[i:i + 8]))
+    lines.append('};')
+    placed = bytearray((len(placement) + 7) // 8)
+    for i, (n, _) in enumerate(placement):
+        if n:
+            placed[i // 8] |= 1 << (i % 8)
+    lines += ['/* Bit i % 8 of byte i / 8 is set for every ordinal i with n_gpu > 0: the',
+              ' * tensors the recognizer offers the engine\'s exact-sum hook. */',
+              'const uint8_t os_placement_gpu_ordinals[%d]={' % len(placed)]
+    for i in range(0, len(placed), 16):
+        lines.append('    ' + ''.join('%d,' % b for b in placed[i:i + 16]))
     lines.append('};')
     admitted = gpu_tensors(tensors, placement)
     lines += ['/* Tensor admission, one entry per row with n_gpu > 0 in ordinal order:',

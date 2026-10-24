@@ -15,9 +15,10 @@ passes its link check and host checks: `apps/mimus/recorded.h` declares a
 12 MiB arena under the option, and the image links the GPU service, the
 session component and the runtime functions below. Placing a call on the
 GPU also needs a hook inside the mimus engine; "Changes needed in the mimus
-engine" lists it. The recognizer opens the GPU session only when the engine's
-header declares that hook, so until the hook exists the GPU stays unpowered
-and every layer runs on the CPU.
+engine" lists it and the engine commit that provides it. The recognizer
+opens the GPU session only when the engine's header declares that hook, so
+with an engine that lacks it the GPU stays unpowered and every layer runs on
+the CPU.
 
 With the measured GPU program, no channel split meets the recognition goal of
 0.05 times the audio duration: the linear stage alone models at 0.535 s
@@ -201,9 +202,13 @@ transition, SUBMITTED → IDLE by compare-and-swap, so the hook and the worker
 never both run a job. The worker posts the completion after the trailing
 `DSB SY` of its maintenance; the queue's critical section orders the post
 before the recognizer's tag reads. Interrupt mask and rearm keep the service's
-critical sections. A second inference worker on the pair's other core, once
-installed, writes codes before the hook's join; the kernel design's leading
-barrier on the code clean covers that ordering.
+critical sections. The second inference worker on the pair's other core
+writes codes before the hook's join; the kernel design's leading barrier on
+the code clean covers that ordering. That worker also reads half of each
+job's sums. The completion's `DC CIVAC` to the point of coherency acts on
+every core's cache in the inner-shareable domain before the record is
+posted, and the engine's hand-off of the rows orders the worker's reads
+after the record.
 
 ## Mapping check at application start
 
@@ -287,10 +292,11 @@ waits.
 
 `placement.py` takes its rates from
 [the kernel measurements](gpu-mimus-compute-measurements.md): 3.39 GPU
-instructions per MAC (217 groups per 64 MACs) in place of 1.75, and 2.9
-read-out instructions per output (37.6 M for 12,923,134 outputs) in place of
-12. The current A76 table, with 62.9% of MACs on the GPU, models at 0.732 s
-with these rates. The regenerated tables, as n_gpu and job_rows, are:
+instructions per MAC (217 groups per 64 MACs) in place of 1.75, and 3.0
+read-out instructions per GPU output, the engine's compiled read-out counted
+on the placed shapes ([the measurements](gpu-recognition-measurements.md#with-the-engines-hook)),
+in place of 12. Both inference workers read each job out, half of its rows
+each. The regenerated tables, as n_gpu and job_rows, are:
 
 | Layer, K → N | A55 pair, 494 MHz | A76 pair, 2,002 MHz |
 | --- | --- | --- |
@@ -319,14 +325,19 @@ Every bench call stays one job, 204 in all. On the A76 table the jobs take
 | Cache lines at boot and OPEN | Dispatcher design: 294,912 at OPEN | 1,024 per boot in the identity step; at OPEN, 64 per job, program and context page | Host check; `checks/os-image-dispatch.c` |
 | Hang detection | None | `max_job_us` (1 s) plus at most one 1 ms tick after the kick | Host check, timeline never updated |
 | Pool pages for the GPU | 0 | At most 80 WB and 52 uncached pages, allocated after USB2 and audio in the image's admission order | Replay case in `checks/os-image-dispatch.c` |
-| Linear stage, bench recording | 14.894 s on one A55, measured | A76 pair: 0.535 s, 45.4% of MACs on the GPU, regression bound 0.54 s. A55 pair: 1.147 s, 90.2%, bound 1.15 s. These are issue-bound model figures: they bound `placement.py --summary`, and the board needs its own measurement; with 200-clock and 400-clock GPU loads the A76 pair models at 0.665 s and 0.817 s | `placement.py --summary` (model); board |
-| Recognition, PCM to text, bench recording (8.87 s of audio) | 19.476 s on one A55, measured | A76 pair: 0.818 s, 0.092 times the audio duration. A55 pair: 3.438 s, 0.388 times. Goal 0.4435 s, 0.05 times: **not met** | Linear-stage model plus the other stages scaled from the A55 measurement; board |
+| Linear stage, bench recording | 14.894 s on one A55, measured. Two-core QEMU image, CPU only: 14.73 G instructions retired on both cores with the hook engine, 23.23 G with the pinned engine | A76 pair: 0.535 s, 45.4% of MACs on the GPU, regression bound 0.54 s. A55 pair: 1.117 s, 90.2%, bound 1.12 s. These are issue-bound model figures without the hook's validation of every sum: they bound `placement.py --summary`, and the board needs its own measurement; with 200-clock and 400-clock GPU loads the A76 pair models at 0.666 s and 0.818 s | `placement.py --summary` (model); board |
+| Recognition, PCM to text, bench recording (8.87 s of audio) | 19.476 s on one A55, measured. Two-core QEMU image, CPU only: 17.64 G instructions retired on both cores with the hook engine, 26.11 G with the pinned engine | A76 pair: 0.818 s, 0.092 times the audio duration. A55 pair: 3.408 s, 0.384 times. Goal 0.4435 s, 0.05 times: **not met** | Linear-stage model plus the other stages scaled from the A55 measurement; board |
 
 The recognition row adds the linear stage to attention and the remaining
 stages, which took 4.582 s on one A55 at 494 MHz ([mimus.md](../mimus.md)).
 Two A76 cores at 2,002 MHz, each doing twice an A55's work per clock and
 scaling perfectly, would take 0.283 s for them; the A55 pair would take
 2.291 s.
+
+The QEMU figures are instructions retired on both cores, not elapsed time;
+[the measurements](gpu-recognition-measurements.md#with-the-engines-hook)
+give their conditions and why the modeled rows stay derived from the
+single-A55 board baseline.
 
 The host check also reports, without a target, the translations and
 `external()` scans in `gpu_memory.c`, the translations in `gpu_backend.c`
@@ -337,16 +348,19 @@ makes about 47 translations, 26 scans and 12 lock acquisitions.
 
 The goal allows 0.4435 s from PCM to text for the bench recording. With the
 other stages at 0.283 s on the A76 pair, the linear stage may take at most
-0.16 s; the best split takes 0.535 s. The A55 pair cannot meet the goal at
-all, because its other stages alone take 2.291 s, so admission of the A76
-cores is the first requirement. The same model on the A76 pair gives:
+0.161 s; the best split takes 0.535 s, and recognition at 0.818 s is 1.84
+times the goal (0.092 against 0.05 times the audio duration). The A55 pair
+cannot meet the goal at all, because its other stages alone take 2.291 s, so
+admission of the A76 cores is the first requirement. The same model on the
+A76 pair gives:
 
 | Lever (owner) | Linear stage | Recognition |
 | --- | --- | --- |
+| CPU only, no GPU (the CPU baseline of the model) | 0.920 s | 1.203 s, 0.136× |
 | None | 0.535 s | 0.818 s, 0.092× |
-| GPU at 800 MHz (GPU power and thermal owner) | 0.386 s | 0.669 s |
-| 1.75 GPU instructions per MAC (kernel design) | 0.395 s | 0.678 s |
-| NEON int32-lane accumulation at 4× the CPU rate (mimus engine) | 0.219 s | 0.502 s |
+| GPU at 800 MHz (GPU power and thermal owner) | 0.385 s | 0.668 s |
+| 1.75 GPU instructions per MAC (kernel design) | 0.394 s | 0.677 s |
+| NEON int32-lane accumulation at 4× the CPU rate (mimus engine) | 0.220 s | 0.503 s |
 | 800 MHz and 4× | 0.187 s | 0.470 s, 0.053× |
 | 800 MHz, 1.75 instructions per MAC and 4× | 0.157 s | 0.440 s, 0.0496× |
 
@@ -354,6 +368,14 @@ Only all three levers together reach the goal, and only if the other stages
 scale perfectly. No GPU operating point above 400 MHz is recorded, the
 gpu-mimus measurements record no program below 3.39 instructions per MAC, and
 the CPU factor is unmeasured.
+
+The GPU rows exclude the hook's validation of every GPU sum (`SumsEqual` in
+`apps/os/gpu_hook.cc`), a scalar loop on the recognizer core alone that
+costs about 1.9 s per recording on the A76 pair. While it stays, the GPU
+linear stage takes about 2.4 s, slower than the 0.920 s of CPU only;
+splitting it across both workers or vectorizing it would shorten that until
+the board items let it go. The read-out's memory traffic, about 13 GB/s from
+just-invalidated lines on the A76 pair, is unmeasured until the board run.
 
 ## Reused and removed
 
@@ -383,9 +405,6 @@ acknowledgement (`os_dispatch_incomplete` in `dispatch.h`).
 - **Compiling out unused service components.** The image links the compute,
   render and free-list objects that `pvr_gpu_service.c` references; the
   `.text` budget absorbs them.
-- **The second inference worker.** `apps/mimus/parallel_runtime.cc` installs
-  `ParallelFor`; it is SunstoneOS code in this repository and needs no engine
-  change. It lands with the engine hook, which is its first GPU consumer.
 - **Reset recovery and power-off when idle**, as in the dispatcher design.
   After a missing tag the GPU stays powered with no jobs for the rest of the
   boot; that costs power and no recognition time.
@@ -458,6 +477,9 @@ near-identical ones of `pvr_compute_service.c`.
 
 ## Changes needed in the mimus engine
 
+mimus commit `9c57286b7` implements all six; the image build's pinned engine
+must move to it before any call reaches the GPU.
+
 1. `TensorView::ordinal`, set by `Model::Load`: base tensors in file order
    with overlay replacements in place, then the overlay's new tensors.
 2. An installable exact-sum hook on AArch64, declared in a header the
@@ -496,3 +518,8 @@ near-identical ones of `pvr_compute_service.c`.
    arena, with a row stride that is a multiple of 4 bytes and at least 2K.
 5. Subsampling rows produced in blocks of 224 (the last of 184) into one
    709,632-byte code buffer in place of 160-row calls.
+6. `SetExactSumOrdinals` (`kernels.h`), which limits the hook to the placed
+   tensors' calls, so that every other call keeps the streamed row ring and
+   internal-arena codes. `os_gpu_open` passes the generated bitmap of placed
+   ordinals, and the hook removes itself with `SetExactSumHook(nullptr)` when
+   placement closes for the boot.

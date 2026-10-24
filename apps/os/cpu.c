@@ -42,9 +42,6 @@ static int read_word(void *cookie,uintptr_t a,uint32_t *v)
 }
 static uint32_t mhz(enum a733_cpu_domain d)
 {return report.domain[d].decoded?(uint32_t)(report.domain[d].hz/1000000u):0;}
-/* The engine's parallel ranges on the inference worker count as recognizer
- * progress (apps/mimus/parallel_runtime.cc). */
-void mimus_native_inference_progress(void){mimus_board_progress();}
 int os_cpu_admit(void)
 {
     if(!a733_cpu_clock_report(read_word,NULL,&report))return 0;
