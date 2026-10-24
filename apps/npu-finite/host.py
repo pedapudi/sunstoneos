@@ -148,7 +148,7 @@ def validate_bundle(bundle):
 def validate_reports(monitor,platform,receipt,p):
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==88,'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<11Q',receipt);g=p['geometry']
- magic=0x4153373343525331
+ magic=0x415337334e505231
  require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in (0,1) and m[5]==0 and m[7]==1,'No matched normal monitor completion.')
  status=m[4];deadline=r[9];armed=deadline-480000000
  require(r[:6]==(0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,2 if status else 1) and
