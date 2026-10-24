@@ -42,6 +42,9 @@ if(A733_NPU_RUNTIME_INPUT)
   list(APPEND npsc_sources "${npsc_root}/apps/npu-runtime/runtime.c" "${npsc_root}/apps/npu-runtime/usb.c")
  endif()
 endif()
+# The SMP base links its patched tasks.c from the port directory, which the
+# filter removes; a boot-CPU-only image links the kernel's own tasks.c.
+list(APPEND npsc_sources "${FREERTOS_DIR}/tasks.c")
 list(REMOVE_DUPLICATES npsc_sources)
 set_source_files_properties("${npsc_root}/drivers/npu/npu_convolution.c" PROPERTIES
  COMPILE_DEFINITIONS "a733_npu_native_operations=a733_npu_application_operations")
