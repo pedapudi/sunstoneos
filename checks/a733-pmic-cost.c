@@ -43,23 +43,26 @@ static struct count request(const char *name,enum a733_rail rail,unsigned write,
     assert(s.programmed_uv==800000u);
     assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
     assert(a733_rail_release(&m.rails,&t,m.now+1000000)==A733_RAIL_READY);
-    /* Bus-idle reads the extended status word (+0x20) with control and status. */
+    /* A line check reads line control (+0x20): at admission with the idle
+     * control and status reads, and after a request's final STOP. */
     const unsigned idle=c.reads_at[6],setup=c.other_reads+c.reads_at[(0x07083014-0x07083008)/4]+
         c.reads_at[(0x07083018-0x07083008)/4]+c.reads_at[(0x0708301c-0x07083008)/4]+3*idle;
     const unsigned transfer_reads=c.reads_at[0]+c.reads_at[1]+c.reads_at[2]-2*idle;
     printf("{\"request\":\"%s\",\"polls\":%u,\"transactions\":%u,\"writes\":%u,\"transfer_reads\":%u,"
-        "\"setup_reads\":%u,\"bus_idle_checks\":%u,\"time_reads\":%u,\"bus_acquisitions\":%u}\n",
+        "\"setup_reads\":%u,\"line_checks\":%u,\"time_reads\":%u,\"bus_acquisitions\":%u}\n",
         name,c.polls,transactions,c.writes,transfer_reads,setup,idle,c.time_reads,c.acquisitions);
     return c;
 }
-/* Budgets: time reads only around register accesses, one per poll, one at
- * submit and two at publication; one bus acquisition, and so one
- * mutex-holder query, per request. */
-static void limits(struct count k)
+/* Budgets: one time read per completed bus phase, per poll, at submit, at
+ * admission and one at publication, never per register access; the
+ * register accesses of docs/designs/pmic-access.md; one bus acquisition, and
+ * so one mutex-holder query, per request. */
+static void limits(struct count k,unsigned max_time_reads,unsigned max_accesses)
 {
     unsigned accesses=k.other_reads+k.writes;
     for(unsigned i=0;i<8;++i)accesses+=k.reads_at[i];
-    assert(k.time_reads<=2*accesses+k.polls+3);
+    assert(k.time_reads<=max_time_reads);
+    assert(accesses<=max_accesses);
     assert(k.acquisitions==1);
 }
 int main(int argc,char **argv)
@@ -76,6 +79,6 @@ int main(int argc,char **argv)
     /* DCDC3 starts at selector 0; the write programs 800 mV (selector 30). */
     const struct count snapshot=request("DCDC2 snapshot",A733_RAIL_DCDC2,0,6);
     const struct count write=request("DCDC3 selector write",A733_RAIL_DCDC3,1,8);
-    if(check){limits(snapshot);limits(write);puts("PASS PMIC cost budgets");}
+    if(check){limits(snapshot,137,200);limits(write,174,255);puts("PASS PMIC cost budgets");}
     return 0;
 }

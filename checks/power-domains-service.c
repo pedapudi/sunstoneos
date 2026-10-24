@@ -7,7 +7,9 @@
  * follows the inherited S_TWI0 divisor: a byte with acknowledgement takes
  * nine bit times and a START, repeated START or STOP two, at 400 kHz
  * (divisor 0x28) and 100 kHz (divisor 0x2a). A time read costs 40 ns and a
- * register access 200 ns, except in the board-cost case below.
+ * register access 200 ns, except in the board-cost cases below. Every case
+ * sets each bus flag at a sub-microsecond time: the completion time of the
+ * write that starts the phase plus the phase's wire time.
  *
  * Cases, for each rate:
  * - a DCDC2 snapshot and a DCDC3 selector write from another task: the steps,
@@ -23,14 +25,25 @@
  * - the GPU supply consumer, which completes from the boot record with no
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
- * Board cost, 400 kHz only: a register access costs 1,300 ns, the figure at
- * which the model's snapshot step matches the median step of port 3-3
- * (bundle 6, 2026-10-24: 917 us for 630 us of wire time). A snapshot then
- * takes one step of at most 155% of its 630 us bit-time wire time, the
- * interim bound of docs/designs/power-domains.md, and a selector write two
- * steps with one tick wait, because the service spins at most 1 ms per
- * step.
- * Output: one JSON line per rate and one for the board cost, then PASS. */
+ * Board cost, 400 kHz only, one table row per cost set: a register read, a
+ * register write, a provider poll (its task check, the object try-lock and
+ * per-phase software, which the per-access figures do not hold) and a time
+ * read of 100 ns. 1,300 ns per access is the figure at which the model's
+ * snapshot step matched the median step of port 3-3 before the provider spun
+ * from the phase-start write (bundle 6, 2026-10-24: 917 us for 630 us of
+ * wire time); 800 and 850 ns bracket the cost up to which a selector write
+ * fits in one step. Writes cost as much as reads and a poll 200 ns until the
+ * next bundle 6 measures them (docs/designs/pmic-access.md); the rows then
+ * take the measured values. A snapshot takes one step within the interim
+ * bound of 155% of its 630 us bit-time wire time
+ * (docs/designs/power-domains.md); the selector write takes the steps the
+ * row states, at most two with one tick wait, because the service spins at
+ * most 1 ms per step.
+ * Slow bus, 400 kHz: every flag sets 10% later than the divisor implies
+ * (25 us bytes, 6 us conditions). A snapshot and a selector write each take
+ * one step within 110% of that wire time.
+ * Output: one JSON line per rate, one per board-cost row and one for the
+ * slow bus, then PASS. */
 #include "power-domains-model.h"
 #include "a733_pmic_consumer.h"
 
@@ -280,28 +293,48 @@ int main(void)
         service_step();assert(m.provider.held && m.i2c_held && !m.retained);
         a733_power_authority_set(&m.rails.authority,A733_POWER_CLOCK_FAULT);
         assert(a733_pmic_result(&m.provider,&fq,&fs)==A733_PMIC_RETAINED && m.provider.failed && !m.provider.retained);
-        assert(a733_pmic_work(&m.provider,NULL)==(A733_PMIC_WORK_FAILED|A733_PMIC_WORK_RETAIN));
+        assert(a733_pmic_work(&m.provider,0,NULL)==(A733_PMIC_WORK_FAILED|A733_PMIC_WORK_RETAIN));
         const uint32_t retain_ticks=service_step();
         assert(m.provider.retained && m.retained && m.i2c_held);
-        assert(a733_pmic_work(&m.provider,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
+        assert(a733_pmic_work(&m.provider,0,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
         m.now+=TICK_US;assert(service_step()!=1 && a733_power_service_ready(&d.owner)==-1);
         printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
     }
     {
-        /* Board cost at 400 kHz: one snapshot step within the interim bound
-         * of 155% of its wire time at the 2,500 ns bit time (252 bit times,
-         * 630 us, as on the board; the model's own bytes take 23 us); a
-         * selector write in two steps with one tick wait. */
-        const struct rate *r=&rates[0];
+        /* Board cost at 400 kHz. The wire time is the bit-time wire: 252 bit
+         * times of 2,500 ns for a snapshot, as on the board. */
+        static const struct { uint64_t read_ns,write_ns,poll_ns; unsigned write_steps; } rows[]={
+            {800,800,200,1},{850,850,200,2},{1300,1300,200,2}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
-        setup(r,1300);struct request_cost snapshot=request(0,1,0,0);
-        setup(r,1300);struct request_cost write=request(1,1,0,0);
-        printf("{\"rate\":\"400kHz, 1300 ns per register access\",");
+        for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);++i) {
+            const struct rate *r=&rates[0];
+            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            struct request_cost snapshot=request(0,1,0,0);
+            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            struct request_cost write=request(1,1,0,0);
+            printf("{\"rate\":\"400kHz, %llu ns per register read, %llu per write, %llu per poll, 100 per time read\",",
+                (unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,(unsigned long long)rows[i].poll_ns);
+            print_cost("snapshot",snapshot);print_cost("selector_write",write);
+            printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
+                (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
+            assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*1000000<=wire_snapshot_ns*1550);
+            assert(write.steps==rows[i].write_steps && write.tick_waits==rows[i].write_steps-1 &&
+                write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
+        }
+    }
+    {
+        /* Slow bus: flags 10% later than the 400 kHz divisor implies. */
+        static const struct rate slow={"400kHz divisor, 25 us bytes",0x28,25,6};
+        const uint64_t read_us=3*slow.edge_us+4*slow.wire_us,wire_snapshot=6*read_us,
+            wire_write=7*read_us+2*slow.edge_us+3*slow.wire_us;
+        setup(&slow,200);struct request_cost snapshot=request(0,1,0,0);
+        setup(&slow,200);struct request_cost write=request(1,1,0,0);
+        printf("{\"rate\":\"%s\",",slow.name);
         print_cost("snapshot",snapshot);print_cost("selector_write",write);
-        printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
-            (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
-        assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*1000000<=wire_snapshot_ns*1550);
-        assert(write.steps==2 && write.tick_waits==1 && write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
+        printf("\"wire_us\":{\"snapshot\":%llu,\"selector_write\":%llu}}\n",
+            (unsigned long long)wire_snapshot,(unsigned long long)wire_write);
+        assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*10<=wire_snapshot*11);
+        assert(write.steps==1 && !write.tick_waits && write.longest_step_us*10<=wire_write*11);
     }
     puts("PASS PMIC service task: bounded byte spins, no lock in live(), at most one BUSY result per caller, "
          "no idle wakes, one-tick row visibility, no PMIC transaction per GPU start, park predicate");

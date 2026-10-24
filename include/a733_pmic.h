@@ -74,6 +74,10 @@ struct a733_pmic {
     void (*kick)(void *);
     void *kick_context;
     struct a733_power_domains *domains;
+    /* Provider task only: the time read after the write that started the
+     * bus phase now being waited for, in truncated microseconds. Last, so
+     * that the fields before it keep their offsets. */
+    uint64_t phase_at;
 };
 /* Zero private, disjoint storage once; all arguments/callback metadata and
  * shared managers have platform lifetime. No MMIO. All clocks use the same
@@ -89,9 +93,13 @@ int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
  * domain-5 row. 1 bound, 0 refused. */
 int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context,
     struct a733_power_domains *domains);
-/* Provider task only: the work the next poll would do. wait_ns, when not
- * NULL, receives the expected duration of the bus phase being waited for:
- * two bit times for a START, repeated START or STOP, nine for a byte.
+/* Provider task only: the work the next poll would do. spin_until, when not
+ * NULL, receives the time in microseconds of the provider clock until which
+ * the provider task may spin before polling a waiting transfer again: the
+ * expected duration of the bus phase being waited for (two bit times for a
+ * START, repeated START or STOP, nine for a byte) after the time read that
+ * followed the write starting it, and at least a quarter bit time after now,
+ * the caller's time read after the last poll.
  * FAILED comes from one acquire load of the state word, so a fault that a
  * client latched on another core is seen without reading its plain fields.
  * FAILED with RETAIN means the provider task still holds the I2C mutex and
@@ -103,7 +111,7 @@ int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context
 #define A733_PMIC_WORK_WAITING (1u << 3) /* that transfer waits for a bus phase */
 #define A733_PMIC_WORK_FAILED  (1u << 4) /* a provider, clock or ledger fault is set */
 #define A733_PMIC_WORK_RETAIN  (1u << 5) /* with FAILED: the mutex is not yet retained */
-unsigned a733_pmic_work(const struct a733_pmic *,uint32_t *wait_ns);
+unsigned a733_pmic_work(const struct a733_pmic *,uint64_t now,uint64_t *spin_until);
 /* identity returns READY when the metadata copy succeeds, even during startup.
  * Only live reports provider readiness. Neither performs hardware discovery.
  * live takes no lock: it compares the immutable lifetime and makes one acquire
@@ -119,8 +127,12 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_l
  * Startup verifies the S_TWI0 gate and reset and the idle engines once, and
  * sets A733_POWER_PROVIDER_READY. A request is admitted once against the
  * clock registry, its rail borrow, the unchanged clock route and divisor and
- * an idle bus; each later bus phase checks only the state word. The bus-idle
- * registers are read again after every STOP.
+ * an idle bus; each later bus phase checks only the state word, and the
+ * deadline once after its register accesses. After each STOP the control
+ * register must clear M_STP and read 0x40 and the status must read 0xf8; until
+ * then the phase is pending. The final STOP of a request also requires the
+ * idle line state. A register access makes no time read, so a phase that
+ * starts before the deadline completes its accesses, at most three.
  * Failure retains any still-owned mutex, request ticket and all leases. A
  * client-detected fault is latched immediately; the provider task must poll
  * once more to mark its own mutex retained. No client unlocks another task.

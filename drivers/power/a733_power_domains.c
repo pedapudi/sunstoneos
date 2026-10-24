@@ -16,7 +16,7 @@
 /* Bounds for spins whose clock might stop: each is far above the reads that
  * the longest spin makes on the board. */
 #define SPIN_READS (1u<<18)
-#define PMIC_POLLS_PER_STEP 64u
+#define PMIC_POLLS_PER_STEP 256u
 
 /* Per domain: MBUS gates (CCU 0x5c0 and 0x5e0 bits), supply and fault bits
  * (ccu-sun60iw2.c lines 587-601 and 653-677; board device tree npu-supply
@@ -278,25 +278,26 @@ static int verify(struct a733_power_domains *d,uint64_t now)
 }
 
 /* Every queued PMIC request and provider startup. A bus phase is waited for
- * by spinning on the raw counter without the provider object for the phase's
- * expected duration, then polling once, for at most A733_POWER_PMIC_SPIN_US in
- * one step. After a fault latched while this task holds the I2C mutex, one
- * poll marks the mutex retained. Returns 1 while the service must run again
- * within a tick. */
+ * by spinning on the raw counter without the provider object until the time
+ * a733_pmic_work() gives, then polling once, for at most
+ * A733_POWER_PMIC_SPIN_US in one step. A selector write with a slow bus
+ * needs about 56 polls plus re-spins, within PMIC_POLLS_PER_STEP. After a
+ * fault latched while this task holds the I2C mutex, one poll marks the
+ * mutex retained. Returns 1 while the service must run again within a
+ * tick. */
 static int pmic(struct a733_power_domains *d,uint64_t start)
 {
     struct a733_pmic *p=d->pmic;
     for(unsigned n=0;n<PMIC_POLLS_PER_STEP;++n) {
-        uint32_t wait_ns;unsigned work=a733_pmic_work(p,&wait_ns);
+        unsigned work=a733_pmic_work(p,0,NULL);
         if(work&A733_PMIC_WORK_FAILED)return (work&A733_PMIC_WORK_RETAIN) && a733_pmic_poll(p)==A733_PMIC_BUSY;
         if(!(work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)))return 0;
         enum a733_pmic_status r=a733_pmic_poll(p);
         if(r==A733_PMIC_BUSY)return 1;
         if(r==A733_PMIC_RETAINED || r==A733_PMIC_INVALID)return 0;
-        work=a733_pmic_work(p,&wait_ns);
+        uint64_t now,until;if(!clock(d,&now))return 1;
+        work=a733_pmic_work(p,now,&until);
         if(!(work&A733_PMIC_WORK_WAITING))continue;
-        uint64_t now;if(!clock(d,&now))return 1;
-        const uint64_t until=now+(wait_ns+999u)/1000u;
         for(unsigned i=0;now<until;++i) {
             if(now-start>=A733_POWER_PMIC_SPIN_US || i>=SPIN_READS || !clock(d,&now))return 1;
         }
@@ -338,7 +339,7 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     }
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)
         tick|=d->domain[i].state==A733_POWER_DOMAIN_ON_WAIT || d->domain[i].state==A733_POWER_DOMAIN_OFF_WAIT;
-    const unsigned work=a733_pmic_work(d->pmic,NULL);
+    const unsigned work=a733_pmic_work(d->pmic,0,NULL);
     if(work&A733_PMIC_WORK_FAILED ? work&A733_PMIC_WORK_RETAIN :
        d->pmic->held || (work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)))tick=1;
     if(!clock(d,&now)){fail_service(d);return UINT32_MAX;}
@@ -367,7 +368,7 @@ int a733_power_domains_init(struct a733_power_domains *d,struct a733_pmic *p,
 int a733_power_service_idle(const struct a733_power_domains *d)
 {
     if(!d || d->self!=d)return 0;
-    const unsigned work=a733_pmic_work(d->pmic,NULL);
+    const unsigned work=a733_pmic_work(d->pmic,0,NULL);
     if(d->pmic->held || (work&(A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)) ||
        (d->supply_stage!=V_DONE && d->supply_request.id))return 0;
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)
