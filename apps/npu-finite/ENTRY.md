@@ -244,3 +244,34 @@ a newly reviewed host bundle and operating admission in a permitted lifetime.
 The earlier physical capture has already been restored and is unchanged. The
 focused modeled evidence is in `npu-stopped-capture-20261024`; numerical
 correctness and physical buffer contents remain unresolved.
+
+## Compare stopped RAM with the accepted prepared artifacts
+
+`analyze-capture.py` reads an existing numerical bundle, its session and raw
+reports, and the four stopped-capture files. It validates their internal report
+consistency and journal hashes, then compares the fixed allocation contents.
+The command takes `--bundle`, `--session`, `--assembly`, `--bootstrap` and an
+exclusive `--output` JSON path. It performs no device operations and grants no
+execution, restart, continuity or recovery authority.
+
+Use the accepted `npu-models-20261018/conv12/assembly-comparison` directory for
+`--assembly` and `npu-convolution-20261016/fixtures/expected-bootstrap.bin` for
+`--bootstrap`. Their hashes are pinned by the helper. The accepted assembly
+comparison already uses this image's device addresses, so no compiler or
+assembler rerun is needed. Tensor formats and affine quantization parameters
+come from the immutable model and its existing catalogue entry. They describe
+the model; they do not establish the cause of channel saturation.
+
+The report separates descriptor and command changes, coefficient or input
+changes, translation-table changes, and disagreement between stopped output
+and the native copied result. It checks the complete 20 KiB table allocation,
+including unused entries, permissions and padding. Address decoding stays
+within the captured arena and known buffer ranges. Differences include counts
+and bounded offset examples; malformed or missing evidence is reported as
+incomplete. Original files remain unchanged.
+
+Agreement across prepared buffers and copied output narrows the next inquiry
+to execution-time visibility and hardware interpretation. Returned RAM does
+not show what the engine fetched during a job. The nineteen decoder cases in
+`npu-stopped-analysis-20261024` use explicitly synthetic parents and preserved
+historical result bytes; they establish no new physical observation.

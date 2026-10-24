@@ -285,6 +285,14 @@ static void without_radio(struct a733_board_session *b,unsigned workload)
     b->workload=workload;b->radio_profile_address=b->radio_profile_bytes=0;memset(b->radio_profile_digest,0,32);
     b->latch_m_identity=b->latch_m_owner=0;b->latch_m_known_mask=b->latch_m_value=0;
 }
+/* Existing USB0-only board profile: no host pins, latch, owner or supply. */
+static void without_host(struct a733_board_session *b)
+{
+    b->workload=2;b->latch_identity=b->latch_owner=0;b->latch_known_mask=b->latch_value=0;
+    b->typec_owner=b->usb2_owner=0;b->usb_supply_uv[4]=0;b->usb2_revision=b->pck_client=0;
+    b->source_min_mv=b->source_max_mv=b->source_ma=b->zero_threshold_max_mv=b->fusb_device_id=0;
+    memset(b->typec_pins,0,sizeof(b->typec_pins));
+}
 static void admission_cases(void)
 {
     const uint64_t armed=100*HZ,now=armed+HZ/10;
@@ -436,8 +444,9 @@ int main(int argc,char **argv)
 {
     assert(mmap((void *)(uintptr_t)A733_BOARD_SESSION_ADDRESS,4096,PROT_READ|PROT_WRITE,
         MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)==(void *)(uintptr_t)A733_BOARD_SESSION_ADDRESS);
-    if(argc==4&&!strcmp(argv[1],"--write-session")){
+    if(argc==4&&(!strcmp(argv[1],"--write-session")||!strcmp(argv[1],"--write-staged-session"))){
         nominal_session(SESSION,strtoull(argv[3],0,0));
+        if(!strcmp(argv[1],"--write-staged-session")){without_host(&SESSION->board);assert(os_session_valid(SESSION));}
         FILE *f=fopen(argv[2],"wb");assert(f&&fwrite(SESSION,1,sizeof(*SESSION),f)==sizeof(*SESSION));fclose(f);
         return 0;
     }

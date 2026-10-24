@@ -7409,6 +7409,20 @@
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
   "usb": false
  },
+ "os-staged-recorded.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Execute actual AArch64 readiness, result-copy and USB0 protocol for OS workload2.",
+  "usb": false
+ },
  "os-thermal-throttle.py": {
   "cache_areas": [],
   "docs": [

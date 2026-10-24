@@ -56,6 +56,10 @@ not establish physical operation.
    Evidence: `processor-completion-20261024/port-3-1/cpu-local-timer/runtime/session.json`.
    The production thermal owner now keeps startup throttling until all five
    channels have valid readings and policy permits NORMAL; focused checks pass.
+   The optional CPU clock path also rechecks thermal permission immediately
+   before clock writes, closing a reproduced late-THROTTLE frequency increase.
+   Fourteen focused cases pass; native code grows by 36 bytes with no new
+   state or register access. Evidence: `cpu-late-thermal-20261024/`.
    Repeated cold startup, sustained operation, induced-fault recovery, actual
    idle wakeup, runtime core removal and thermal transitions remain open.
    The reviewed idle/wake image is ready at
@@ -71,6 +75,17 @@ not establish physical operation.
    or pending request; they make no claim about inherited domain power state.
    The failed probe reuses an older monitor without the newer restoration
    readback checks; preserve that source distinction in diagnosis.
+   Eight CPU startup/runtime objects match the passing DCDC4 image; the
+   comparison found no additional justified CPU correction. Audit:
+   `gpu-power-id-diagnosis-20261024/cpu-common-audit.json`. The uploaded zero
+   result block was initialization, not a post-execution observation.
+   A separate source-backed shutdown fix now initializes and verifies five
+   PCK delay registers before the first OFF request after inherited ON.
+   Repeated-transition and eighteen injected-failure cases pass under
+   `gpu-first-off-delays-20261024/`; this does not locate the failed launch.
+   No additional clock-update wait is justified by the effective callbacks.
+   Open-PVR and BXM reset ordering differ, but the selected board build remains
+   unresolved. Preserve the current order pending that evidence.
 3. Diagnose the NPU numerical mismatch from exact runtime memory. Image
    `9e4adabf…` passed startup, two jobs, local retirement and ROM return, but
    all 400 output bytes differ from the reference. Frozen model, input and
@@ -88,6 +103,10 @@ not establish physical operation.
    audited numerical image after safe retirement and before RAM restoration.
    Four fixed reads preserve 1,085,880 bytes of metadata and runtime buffers.
    Capture failures retain ownership; correct numerical execution remains open.
+   The reviewed `apps/npu-finite/analyze-capture.py` compares that capture
+   with the accepted commands, tensors and MMU mappings. Nineteen synthetic
+   cases pass; no physical capture exists yet. It reports incomplete evidence
+   separately and does not infer engine behavior from matching RAM bytes.
    No repeat startup is valid with the retained PLL.
 4. Qualify power and thermal behavior after reliable numerical execution. The
    optional CPU-clock path now lowers and restores supported inherited rates
@@ -121,6 +140,16 @@ contents are never described as restored. The default restoration mode remains
 available. Physical thermal transitions, repeated power transitions and
 concurrent CPU/GPU/NPU operation remain completion requirements.
 
+The integrated OS now supports explicit supervised workload 2: staged recorded
+recognition after USB0 startup, without an external USB disk. Workloads 0 and 4
+retain their storage-overlap, attachment and acknowledgement requirements.
+The recorded-only native build and focused runtime, admission and linked-entry
+checks pass. Evidence: `os-staged-recorded-20261024/freeze-final/manifest.json`.
+Its frozen image `ea6eec1c…` derives from `f0d99be9`; CPU clock control is unlinked
+and the older shared power-transition code is unused in this mode. The image
+still requires physical entry review and one bounded capture, followed by USB
+power removal. It has not run on hardware. See the [launch procedure](os-image.md#first-bounded-launch-with-recorded-audio).
+
 The completed integration also includes bounded USB storage stall recovery,
 radio clock admission, the camera frame-enable timing correction and optional
 punctuation handling in paced recognition. Their component evidence remains
@@ -146,6 +175,38 @@ shared-helper check and the dashboard tests pass. No board test ran during
 the audit or any round, so nothing they added is physically tested or
 qualified. That audit evidence applies to its recorded revisions; later physical results
 are listed below. Check Git before publishing subsequent integrations.
+
+## Sequence toward the complete OS
+
+1. **Establish reliable processor operation.** Run the prepared all-core
+   idle/wake check after board recovery. For GPU, first qualify provider and
+   supply readiness before any GPU register access, then resolve power/reset,
+   identity, firmware startup and one checked numerical workload in order.
+   For NPU, inspect stopped command, mapping and tensor memory to locate the
+   observed numerical mismatch. Source-backed corrections precede retries.
+2. **Finish processor lifecycle integration.** Qualify repeated operation,
+   shared power ownership, thermal refusal and shutdown, supported power
+   transitions, and representative concurrent CPU/GPU/NPU work. Safe local
+   task completion alone does not establish device power-off or DMA drain.
+3. **Run the integrated OS and mimus.** Preserve the existing model and
+   transcript parity. Combine recorded-input recognition, storage, services
+   and management in one image, then qualify persistent boot and backup-first
+   updates. Existing standalone transcription is partial completion evidence.
+4. **Complete the hardware inventory.** Qualify the implemented native paths
+   for storage, USB, radios, buses, audio, display, cameras, codecs and other
+   listed hardware. Independent work can proceed alongside processor diagnosis.
+   Missing cameras, a DSI panel, microphones and other required accessories
+   remain physical qualification dependencies. Unpopulated eMMC and UFS media
+   are excluded from the current boards' applicable functions.
+5. **Optimize the completed system.** Measure end-to-end mimus recognition
+   against the 0.05-times-audio target with the required model and formatting.
+   Investigate 0.01 times only as the bounded stretch target. Defer replacing
+   opaque dependencies until hardware functionality and performance tuning.
+
+The dependency graph and hardware inventory define the full scope; this order
+prioritizes shared blockers without requiring every device task to wait for the
+processors. Reuse accepted evidence and run checks only for changed behavior or
+an unresolved requirement.
 
 ## Board state and recovery
 
