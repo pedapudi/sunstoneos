@@ -3,9 +3,11 @@
 Status: **ready** once the coordinator accepts
 [the admission patch](README.md#admission-after-the-forced-stall-return)
 and reviews the two records that step 4 writes. Runs last on each board.
-Bundle: `~/.cache/sunstoneos/evidence/board-bundles-20261023/rank-9-usb-v3/`.
-It replaces `rank-9-usb-v2/`, whose image refused USB takeover on port 3-3
-on 2026-10-23 (below), and `rank-9-usb/`; do not use either.
+Bundle for the next run: `~/.cache/sunstoneos/evidence/board-bundles-20261023/rank-9-usb-v4/`.
+`rank-9-usb-v3/` passed on port 3-3 on 2026-10-24. `rank-9-usb-v4/` runs on
+the current platform, which adds the 12 GiB EL1 map, so its run is a new
+board test. Do not use `rank-9-usb/` or `rank-9-usb-v2/`, whose image
+refused USB takeover on 2026-10-23.
 
 The image runs the production PMIC and USB providers as two FreeRTOS tasks.
 It takes over USB0 from the boot ROM, enumerates a vendor interface as
@@ -15,7 +17,7 @@ monitor. [The application README](../../apps/usb-returning/README.md) gives
 its contract. A failure of the native stack or of the handback leaves the
 board unreachable until its power is removed.
 
-## The 2026-10-23 refusal and the correction in this bundle
+## The 2026-10-23 refusal and the 2026-10-24 pass
 
 `rank-9-usb-v2/` ran once on port 3-3 instance `013` and returned to the
 ROM with monitor status 1 (`board-session-20261023/port-3-3/r9-v2-usb/`).
@@ -25,16 +27,55 @@ It then refused at the soft-disconnect (stage `0x16`): its 32-bit store of
 `0x00029900` to `0x04100040` completed, and the readback still had SoftConn
 (PCTL bit 6) set. No USB exchange began and the PMIC was healthy.
 
-In this bundle the provider removes SoftConn with one 8-bit store of PCTL,
-the access width of the pinned BSP, TinyUSB and the matched ROM, and checks
-SoftConn clear after the 150 ms disconnect interval, before the device
-reset. A SoftConn bit that never clears still refuses before any reset
-write. The admission rule also refuses LSDEV, FSDEV and VEND0 DMA request
-selection. [USB0 takeover from the boot ROM's device session](../designs/usb-session-takeover.md)
-gives the decoding, the rule, the sources and what remains unproven: no
-board has run the byte store.
+`rank-9-usb-v3/` removes SoftConn with one 8-bit store of PCTL, the access
+width of the pinned BSP, TinyUSB and the matched ROM. It passed on port 3-3
+on 2026-10-24 (`board-session-20261023/port-3-3/r9-v3-usb/`): SoftConn
+cleared, the OUT/IN exchange completed with received 1 and sent 40, the
+USB task quiesced and the ROM return was responsive, with
+`native_usb.functional_success` true.
+[USB0 takeover from the boot ROM's device session](../designs/usb-session-takeover.md)
+gives the decoding, the rule, the sources and what remains unproven.
 
-## Bundle
+## Changes in `rank-9-usb-v4/`
+
+`rank-9-usb-v4/` is built with `apps/usb-returning/build.py
+--platform-build` from the current tree (commit `288de66d`). Against
+`rank-9-usb-v3/` it differs in two platform objects and the four USB units:
+
+- `platform/a733/platform.c` adds the 12 GiB EL1 map and one-time local
+  pool preparation, and `platform/a733/cpu_coherence.S` changed with the
+  cached-prepare check. No returning image has run this platform on a
+  board.
+- The PCTL byte store now lives only in the native adapter
+  `a733_usb_platform_native_write`; it is the same `strb` to the same
+  register that `rank-9-usb-v3/` ran.
+- The provider starts the 150 ms detach interval at the first read with
+  SoftConn clear. While the bit still reads set it re-reads without
+  writing, bounded by the provider deadline; a bit that never clears ends
+  with a time failure at stage `0x1d` and no reset write.
+- The admission rule no longer refuses LSDEV and FSDEV; HOSTREQ, HOSTMODE,
+  VEND0 DMA request selection and the sixteen DMA start bits still refuse.
+
+| File | SHA-256 |
+| --- | --- |
+| `probe.bin` (112,328 bytes) | `5ecacbe49cb5ee97a503f71dafa3e2f0038cf41341773719f5275792bb61bf9d` |
+| `build/probe.elf` | `e845183b6bc1b7dea1f76a46f20fa4253c0a8fcde11c42cd88b47920d0615a4d` |
+
+Its host tools, capture script, input builder and rate admission runner are
+byte-identical to `rank-9-usb-v3/`. Offline checks of `rank-9-usb-v4/`:
+27 linked cases (`check-result.json`; the modeled takeover takes 166 polls
+at one per 1 ms tick), 24 host cases, 13 native callback and first-fault
+cases (`first-fault-check.json`, with the first-fault check of
+`primary.patch`), five input-builder fixtures and nine rate admission
+cases. The fixture `package-fixtures/port-3-3-r9-v3-package/` rebuilds the
+input of the 2026-10-24 run from its capture, survey and the `ddr-2` DDR
+record; its `config.json` is byte-identical to that run's.
+
+The rest of this runbook describes `rank-9-usb-v3/`. For `rank-9-usb-v4/`
+set `R=$V/rank-9-usb-v4` and use directory names starting with `r9-v4-`,
+because port 3-3 already holds the `r9-v3-` records.
+
+## Bundle `rank-9-usb-v3/`
 
 | File | SHA-256 |
 | --- | --- |
@@ -257,9 +298,12 @@ the last returning image of ranks 6 to 8. Every directory below starts with
 
    A refusal at USB takeover returns to the ROM with status 1 and prints
    `INCOMPLETE USB: USB preparation` with the provider's first fault.
-   `USB_FAULT_STAGE=0x18` with `USB_FAULT_MASK=0x640` and bit 6 set in
-   `USB_FAULT_OBSERVED` means the PCTL byte store did not remove SoftConn
-   within 150 ms; the design document lists the remaining causes.
+   With `rank-9-usb-v3/`, `USB_FAULT_STAGE=0x18` with `USB_FAULT_MASK=0x640`
+   and bit 6 set in `USB_FAULT_OBSERVED` means the PCTL byte store did not
+   remove SoftConn within 150 ms. With `rank-9-usb-v4/` the same condition
+   ends as `USB_FAULT_KIND=0x1` at `USB_FAULT_STAGE=0x1d` with bit 6 set in
+   `USB_FAULT_OBSERVED`, at the provider deadline. The design document lists
+   the remaining causes.
 
 ## Stop conditions
 

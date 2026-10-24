@@ -93,11 +93,11 @@ static int quiesce(void)
     polling=0;
     if(!clear(0x04100048,UINT32_MAX)||!clear(0x04100050,255)||
        !clear(0x04100500,65535)||!clear(0x04100400,15))return 0;
-    /* One PCTL byte store removes SoftConn; the check after the detach
-     * interval verifies it, as in the provider's ROM takeover. */
+    /* The native adapter removes SoftConn with one PCTL byte store; the
+     * check after the detach interval verifies it. */
     uint32_t pctl;
-    if(!a733_usb_platform_native_read(NULL,A733_NATIVE_USB_PCTL,&pctl)||
-       !a733_native_usb_pctl_write(pctl&~UINT32_C(64)))return 0;
+    if(!a733_usb_platform_native_read(NULL,0x04100040,&pctl)||
+       !a733_usb_platform_native_write(NULL,0x04100040,pctl&~UINT32_C(64)))return 0;
     vTaskDelay(pdMS_TO_TICKS(150));
     /* Hardware remains powered, owned and detached until the monitor resets
      * the CPU and the reviewed forced-FEL path initializes USB0 anew. */

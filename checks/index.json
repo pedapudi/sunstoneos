@@ -9198,7 +9198,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/usb-session-takeover.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
