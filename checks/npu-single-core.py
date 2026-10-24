@@ -15,7 +15,10 @@ def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').SINGLE_CORE
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/npu-convolution/prepare-supervised.py')
-image=args.image;e=native.Image(image);e.path=image;e.ops={}
+# Only the structures this check reads; other units may reuse a tag such as profile.
+LAYOUTS=('npu_session','a733_npu_application_boot','a733_npu_application_profile','a733_npu_reserved',
+ 'a733_observe_identity','npu_convolution','a733_counter_clock','a733_clock_leases','a733_platform_locks','a733_usb_platform')
+image=args.image;e=native.Image(image,layout_names=LAYOUTS);e.path=image;e.ops={}
 original_address=e.address
 def address(n):
  if n=='a733_cpu_coherence_publish':return 0

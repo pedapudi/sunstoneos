@@ -53,7 +53,7 @@ class Machine:
         names=['a733_smp_counter','a733_smp_device_preparation_admitted','aarch64_device_translate',
                'aarch64_device_cache_stride','aarch64_device_cache','a733_counter_clock_init','a733_counter_clock_now',
                'xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xTaskCreateStatic','xQueueGenericCreateStatic',
-               'xQueueCreateMutexStatic','vTaskEnterCritical','vTaskExitCritical','npu_application_irq_bind','platform_panic']
+               'xQueueCreateMutexStatic','vTaskEnterCritical','vTaskExitCritical','vPortEnterCritical','vPortExitCritical','npu_application_irq_bind','platform_panic']
         self.hooks={image.address(n):n for n in names if image.symbols.get(n)}
         self.hooks[image.address('digest',unit='/drivers/npu/npu_convolution.c')]='modeled_digest'
         self.trace=[];self.trace_sites={at:name for (unit,name),values in image.functions.items() if any(k in name for k in ('init','prepare','valid','identity','bind','handoff','admit')) for at in values}
@@ -92,7 +92,7 @@ class Machine:
         elif name=='xTaskCreateStatic':self.tasks.append(a[:7]);self.ret(a[6])
         elif name=='xQueueGenericCreateStatic':self.ret(a[3])
         elif name=='xQueueCreateMutexStatic':self.ret(a[1])
-        elif name in ('vTaskEnterCritical','vTaskExitCritical'):self.ret()
+        elif name in ('vTaskEnterCritical','vTaskExitCritical','vPortEnterCritical','vPortExitCritical'):self.ret()
         elif name=='npu_application_irq_bind':self.ret(1)
         else:raise AssertionError(('Unexpected boundary',name,self.callname,a))
     def call(self,name,*args):
@@ -108,6 +108,9 @@ def main():
     a=parser.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     image=base.Image(a.image);raw=a.session.read_bytes();contract=a.contract.read_bytes();m=Machine(image,a.image,raw,contract)
     sealed=m.sealed;assert m.call('accelerator_session_valid',sealed)==1
+    # The boot prepares both local pools in platform_init before the scheduler
+    # starts; the application's reservation reads the published pool.
+    assert m.call('a733_memory_reservations_prepare')==1 and m.call('a733_memory_uncached_prepare')==1
     assert m.call('npu_session_get'), ('missing retained copy',m.get(image.address('copied'),4))
     client=m.call('accelerator_npu_client_create');result=m.call('a733_npu_application_init',client)
     assert client and result==1,dict(client=client,scheduler=m.scheduler,tasks=m.tasks,result=result,failed=m.get(image.address('a733_npu_application_failed'),4),used=m.get(m.app+m.af['used'],4),trace=m.trace[-30:])
