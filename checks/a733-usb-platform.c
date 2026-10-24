@@ -13,7 +13,8 @@ struct fixture {
     struct a733_usb_platform_config config;
     struct word word[64];unsigned count,reads,writes,leaves,retains,authorized,locked;
     unsigned rom,reset_seen,auth_result,fail_write,stick_write,expire_final,final_seen,tight_wait;
-    uint64_t now,ref_enabled,device_enabled;
+    unsigned pctl_stuck,pctl_pending;uint32_t pctl_value;
+    uint64_t now,ref_enabled,device_enabled,pctl_delay,pctl_at;
     struct a733_clock_token before;
 };
 static uint32_t *reg(struct fixture *f,uintptr_t a)
@@ -44,6 +45,8 @@ static int readreg(void *c,uintptr_t a,uint32_t *v)
         assert(f->now-f->device_enabled>=40);
     }
     if(a==U+0x630 && (*reg(f,U+0x400)&0xf000)==0xf000)f->final_seen=1;
+    /* A delayed SoftConn removal becomes visible at its modeled time. */
+    if(f->pctl_pending && f->now>=f->pctl_at){*reg(f,U+0x40)=f->pctl_value;f->pctl_pending=0;}
     *v=*reg(f,a);return 1;
 }
 static int writereg(void *c,uintptr_t a,uint32_t v)
@@ -65,7 +68,12 @@ static int writereg(void *c,uintptr_t a,uint32_t v)
         }else if(v&0x100)f->device_enabled=f->now;break;
     case 0x1300:mask=0x40000000;assert((*reg(f,U+0x410)&0xa8)==0x20);break;
     default:
-        if(a==U+0x40){mask=64;assert(f->rom);f->ref_enabled=f->now;}
+        if(a==U+0x40){
+            mask=64;assert(f->rom && !(v&64));f->ref_enabled=f->now;
+            assert(((v^old)&~mask)==0);
+            if(f->pctl_stuck || f->writes==f->stick_write)return 1;
+            if(f->pctl_delay){f->pctl_pending=1;f->pctl_value=v;f->pctl_at=f->now+f->pctl_delay;return 1;}
+        }
         else if(a==U+0x48){mask=UINT32_MAX;assert(f->rom);}
         else if(a==U+0x50){mask=255;assert(f->rom);}
         else if(a==U+0x500){mask=65535;assert(f->rom);}

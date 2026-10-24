@@ -1,5 +1,11 @@
 # Current work
 
+**Reconnect request, port `3-1`:** remove every power source from the board
+on host port `3-1` (the separate 5 V/3 A supply and the USB cable), wait a few
+seconds, and reconnect it in FEL mode. The corrected rank 7 diagnostic did not
+return on 2026-10-24 and the board no longer answers. Port `3-3` stays in use
+meanwhile.
+
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
@@ -69,13 +75,24 @@ for unsupported access sizes. Read with 32-bit loads (`sunxi-fel readl`), the
 GIC is clocked (`GIC_CLK_REG` `0x84000003`), out of reset (`CPU_SYS_RST_CTRL`
 `0x7f`) and in its 2026-10-18 state (`GICD_CTLR` `0x37`, `GICD_TYPER`
 `0x007b0408`), also in a clean lifetime. Read GIC registers only with
-`readl`. The rank-7 non-return remains unexplained; the diagnostic waits
-instead of reporting when a state check refuses, and a corrected overlay that
-returns a failure code is being prepared. Rank 9, the native USB channel,
+`readl`. On 2026-10-24 the same capture on port `3-1`, in its clean
+lifetime, matched port `3-3` word for word. The corrected rank 7 diagnostic,
+which checks the startup contract, the GIC and the secondary power words
+before any secondary starts and returns a refusal code instead of parking,
+then launched on port `3-1` in that clean lifetime and again did not return:
+no new FEL instance appeared within 300 s. The board had run no FreeRTOS
+image since its cold DDR start, so state left by earlier images does not
+explain the non-return, and no admission check refused. CPU0 stopped either
+in a parking path before or after the admission (listed in
+`docs/board-runbooks/rank-7-diagnosis.md`) or after release. Rank 7 and rank 8
+are not repeated on either board until an offline diagnosis names a narrower
+diagnostic. Rank 9, the native USB channel,
 then ran on port `3-3` with a builder that accepts MBUS at 400 MHz: the image
-returned to the ROM with a controlled refusal at USB takeover, because the
-inherited device-session bit 6 at `0x04100040` (observed `0x00029940`) is
-still refused, as on 2026-10-18. Both ports were power-cycled afterwards and
+returned to the ROM with a controlled refusal at USB takeover: its 32-bit
+store to `0x04100040` (observed `0x00029940`) did not clear bit 6, which is
+the PCTL SoftConn bit (the D+ pull-up), not the device-session bit. Every
+pinned source writes PCTL with an 8-bit store; a corrected bundle that does
+so, `rank-9-usb-v3/`, awaits review. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);

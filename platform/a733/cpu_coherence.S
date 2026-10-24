@@ -326,7 +326,8 @@ a733_cpu_coherence_enable_el3:
     b.hs .Lrefuse
     mov x14, xzr
     deadline_check
-    /* Tables were published before arrival; preserve every unrelated SCTLR bit. */
+    /* Before arrival core 0 cleaned and invalidated the tables, then wrote them
+     * with Device stores; preserve every unrelated SCTLR bit. */
     dsb sy
     ic iallu
     dsb sy

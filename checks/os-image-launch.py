@@ -12,7 +12,10 @@ then checks that:
   a link check of another configuration and out-of-rule session fields;
 - tools/check-a733-os-supervised.py freezes and revalidates the bundle, bounds
   the generations, and its read-only claim check accepts only the matching
-  claim (through a modeled database connection).
+  claim (through a modeled database connection);
+- its --fault-report flag is refused before any launch step for an image
+  without a733_fault_previous, and otherwise reads the report once through
+  a modeled device before the capture, which a failed read never reaches.
 
 Every physical fact is a labeled synthetic record. No device, USB, queue
 database or FEL program is opened; the launcher's transport is never called.
@@ -26,6 +29,8 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 HZ = 24000000
@@ -321,6 +326,88 @@ def main():
     finally:
         tool.sqlite3.connect = original
     assert not (claim / 'never-opened.sqlite').exists()
+
+    # --fault-report. The supervised transport is replaced by a function that
+    # hands the capture callback a modeled operation 5 device; nothing else of
+    # the launcher's transport runs.
+    faults = module('os_launch_fault_model', ROOT / 'checks/fault-report.py')
+    report = faults.report()
+    stripped = out / 'MODEL-image-without-fault-report.elf'
+    subprocess.run(['/usr/lib/llvm-21/bin/llvm-objcopy', '--strip-symbol=a733_fault_previous',
+                    str(bundle / 'board/image.elf'), str(stripped)], check=True)
+    without = dict(prepared, _combined_frozen=dict(prepared['_combined_frozen'],
+                                                   **{'board/image.elf': stripped.read_bytes()}))
+    tool.require_fault_report(prepared)
+    assert refused(lambda: tool.require_fault_report(without))
+    calls = []
+
+    class Unused:
+        def __enter__(self):
+            calls.append('launch-view')
+            return out / 'never-launched', {}
+
+        def __exit__(self, *unused):
+            return False
+
+    def session(args, view, launch, ready, entry, capture, **unused):
+        calls.append('session')
+        args.evidence.mkdir()
+        record = {}
+        capture(device, lambda: calls.append('same'), time.monotonic() + 60, record, lambda: calls.append('save'))
+        return record
+
+    def captured(device, same, deadline, prepared_value, evidence, record, save):
+        calls.append(('capture', len(device.writes)))
+        return record
+    saved = (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
+             tool.combined.capture_device, tool.supervisor.base.fel_request)
+    tool.combined.launch_view = lambda value: Unused()
+    tool.supervisor.run_session = session
+    tool.combined.capture_device = captured
+    tool.supervisor.base.fel_request = lambda *unused: calls.append('fel')
+
+    def launch(name, value, *flags):
+        tool.freeze_bundle = lambda path, count: value
+        calls.clear()
+        return tool.main(['--bundle', str(bundle), '--fel', str(out / 'no-fel'), '--evidence', str(out / name),
+                          '--database', str(claim / 'never-opened.sqlite'), '--claim', 'model-claim',
+                          '--owner', 'model-owner', '--supervised-manual-reconnect', *flags])
+    try:
+        device = faults.Device(report, 512)
+        assert refused(lambda: launch('fault-refused', without, '--fault-report'))
+        assert calls == [] and not (out / 'fault-refused').exists()
+        cases['fault-report-refused-for-image-without-report'] = True
+
+        record = launch('fault-read', prepared, '--fault-report')
+        assert calls[:2] == ['launch-view', 'session'] and ('capture', 1) in calls and 'fel' not in calls
+        assert device.writes == [faults.tool.REQUEST] and len(device.reads) == 3
+        evidence = out / 'fault-read'
+        assert (evidence / 'fault-report.bin').read_bytes() == report
+        decoded = json.loads((evidence / 'fault-report.json').read_text())
+        assert decoded == json.loads(json.dumps(faults.decoder.decode_report(report)))
+        assert record['fault_report'] == {'path': 'fault-report.bin', 'bytes': len(report),
+                                          'sha256': hashlib.sha256(report).hexdigest(),
+                                          'decoded': 'fault-report.json'}
+        cases['fault-report-read-once-before-capture'] = True
+
+        device = faults.Device(report, 512, stop=True)
+        try:
+            launch('fault-stopped', prepared, '--fault-report')
+            raise AssertionError('a stopped device must end the run')
+        except faults.Stopped:
+            pass
+        assert len(device.writes) == 1 and not any(isinstance(c, tuple) for c in calls)
+        assert not (out / 'fault-stopped/fault-report.bin').exists()
+        cases['fault-report-error-ends-run-before-capture'] = True
+
+        device = faults.Device(report, 512)
+        record = launch('fault-not-requested', prepared)
+        assert ('capture', 0) in calls and not device.writes and 'fault_report' not in record
+        cases['no-fault-report-request-without-flag'] = True
+    finally:
+        (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
+         tool.combined.capture_device, tool.supervisor.base.fel_request) = saved
+    assert not any(name == 'usb' or name.startswith('usb.') for name in sys.modules)
     result = {'passed': True, 'physical_access': False, 'audio': audio, 'image_sha256': image_hash,
               'build_id': manifest['build_id'], 'tool_sha256': tool.digest(Path(tool.__file__)),
               'preparation_sha256': tool.digest(Path(prep.__file__)), 'cases': cases,

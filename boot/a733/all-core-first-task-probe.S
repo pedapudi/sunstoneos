@@ -2,6 +2,8 @@
  * instruction is redirected to SVC; no task body or timer/SGI workload runs.
  * All eight writers stop before cleaning the complete owned writable interval.
  * This profile is offline-only until its instruction and return checks pass. */
+#include "secondary-identity-probe.h"
+
 .section .text.identity_first_task,"ax"
 .balign 4
 .global identity_pre_scheduler_el1, identity_pre_scheduler_clean_done
@@ -260,4 +262,186 @@ identity_first_task_svc:
 identity_pre_scheduler_clean_done:
     mov x25, #1
     ret x19
+#ifndef SUNSTONE_TASK_SWITCH
+/* Pre-release admission for the first-task profile. The builder links with
+ * --wrap=identity_primary_run, so identity_primary_gate runs this code before
+ * the survey releases any secondary. With 32-bit loads (64-bit for GICR_TYPER)
+ * it reads, and never writes, the startup contract, the zeroed report,
+ * CNTFRQ_EL0, the distributor, all eight redistributor frames and the seven
+ * secondaries' power words, and applies the predicates of the later checks
+ * that read the same words. If all pass it tail-calls the survey and leaves
+ * the report untouched. On the first failure it writes the code, the word's
+ * address and the value read into the identity report header, sets state 3
+ * and returns to the ROM through the base overlay's RVBAR/RMR sequence. The
+ * codes are listed in tools/all-core-first-task-host.py. No stack is used. */
+#define CONTRACT 0x42004000
+.section .text.identity_first_task_admit,"ax"
+.balign 4
+.global __wrap_identity_primary_run, identity_first_task_admit
+.type identity_first_task_admit,%function
+__wrap_identity_primary_run:
+identity_first_task_admit:
+    // Register use on refusal: w0 code, x1 address (0 for a system
+    // register), x2 value read, w3 core. x12 holds the contract, x15 the return.
+    mov x15, x30
+    ldr x12, =CONTRACT
+    mov w3, #0
+    mov w0, #1
+    add x1, x12, #24
+    ldr x2, [x1]
+    cbz x2, .Lrefuse
+    add x1, x12, #112
+    ldr x2, [x1]
+    cbz x2, .Lrefuse
+    mov w0, #2
+    add x1, x12, #88
+    ldr x4, [x1]
+    isb
+    mrs x2, cntpct_el0
+    cmp x2, x4
+    b.hs .Lrefuse
+    // The host uploads a zeroed report; the survey refuses any other.
+    mov w0, #3
+    ldr x1, =IDENTITY_REPORT
+    ldr x4, =IDENTITY_REPORT+IDENTITY_REPORT_BYTES
+.Lzero:
+    ldr x2, [x1]
+    cbnz x2, .Lrefuse
+    add x1, x1, #8
+    cmp x1, x4
+    b.lo .Lzero
+    mov w0, #4
+    mov x1, #0
+    mrs x2, cntfrq_el0
+    ldr x4, =24000000
+    cmp x2, x4
+    b.ne .Lrefuse
+    dsb sy
+    // Distributor: readable, then the predicate of secondary_distributor_begin.
+    mov w0, #0x10
+    ldr x8, =0x03400000
+    add x1, x8, #4
+    ldr w2, [x1]
+    cbz w2, .Lrefuse
+    mov w0, #0x11
+    mov x1, x8
+    ldr w2, [x1]
+    tbnz w2, #31, .Lrefuse
+    and w7, w2, #0x70
+    cmp w7, #0x30
+    b.ne .Lrefuse
+    // Redistributor identification as a733_cpu_continue's scan and
+    // secondary_local_probe require it: frame n reports affinity n, no VLPIS,
+    // and the last-frame bit on frame 7 only.
+    mov w0, #0x12
+    ldr x8, =0x03460008
+    ldr x6, =0xffffffff00000012
+.Ltyper:
+    mov x1, x8
+    ldr x2, [x1]
+    and x7, x2, x6
+    lsl x5, x3, #40
+    cmp w3, #7
+    b.ne 1f
+    orr x5, x5, #0x10
+1:  cmp x7, x5
+    b.ne .Lrefuse
+    add x8, x8, #0x20000
+    add w3, w3, #1
+    cmp w3, #8
+    b.lo .Ltyper
+    // Each secondary is OFF and idle in the power controller, as
+    // identity_primary_run requires, then its redistributor is checked.
+    mov w3, #1
+.Lsecondary:
+    mov w0, #0x20
+    ldr x1, =0x07052008
+    add x1, x1, x3, lsl #12
+    ldr w2, [x1]
+    tst w2, #15
+    b.ne .Lrefuse
+    mov w0, #0x21
+    ldr x1, =0x07050200
+    add x1, x1, x3, lsl #2
+    ldr w2, [x1]
+    tbnz w2, #0, .Lrefuse
+    mov w0, #0x22
+    add x1, x1, #0x20
+    ldr w2, [x1]
+    tbnz w2, #0, .Lrefuse
+    ldr x8, =0x03460000
+    add x8, x8, x3, lsl #17
+    mov w13, #0x23
+    mov w14, #6
+    bl .Lframe
+    add w3, w3, #1
+    cmp w3, #8
+    b.lo .Lsecondary
+    // CPU0's redistributor as primary_local_cache_probe requires it.
+    mov w3, #0
+    ldr x8, =0x03460000
+    mov w13, #0x30
+    mov w14, #0
+    bl .Lframe
+    mov x30, x15
+    b __real_identity_primary_run
+.Lframe:
+    // x8 frame, w13 first code, w14 required GICR_WAKER. GICR_PWRR comes
+    // first: the redistributor is powered (RDPD clear) and its power group
+    // is stable (bits 2 and 3 equal). Then GICR_CTLR, GICR_WAKER, and
+    // GICR_ISENABLER0, ISPENDR0 and ISACTIVER0 in the SGI frame.
+    mov w0, w13
+    add x1, x8, #0x24
+    ldr w2, [x1]
+    tbnz w2, #0, .Lrefuse
+    eor w7, w2, w2, lsr #1
+    tbnz w7, #2, .Lrefuse
+    add w0, w13, #1
+    mov x1, x8
+    ldr w2, [x1]
+    cbnz w2, .Lrefuse
+    add w0, w13, #2
+    add x1, x8, #0x14
+    ldr w2, [x1]
+    cmp w2, w14
+    b.ne .Lrefuse
+    add x1, x8, #0x10000
+    mov w4, #3
+.Lsgi:
+    add x1, x1, #0x100
+    add w0, w13, w4
+    ldr w2, [x1]
+    cbnz w2, .Lrefuse
+    add w4, w4, #1
+    cmp w4, #6
+    b.lo .Lsgi
+    ret
+.Lrefuse:
+    ldr x16, =IDENTITY_REPORT
+    ldr x17, =IDENTITY_MAGIC
+    str x17, [x16]
+    mov x17, #1
+    str x17, [x16, #8]
+    mov x17, #IDENTITY_REPORT_BYTES
+    str x17, [x16, #16]
+    ldr x17, [x12, #24]
+    str x17, [x16, #24]
+    ldr x17, [x12, #88]
+    str x17, [x16, #32]
+    str xzr, [x16, #40]
+    mov x17, #3
+    str x17, [x16, #48]
+    str x3, [x16, #56]
+    str x0, [x16, #96]
+    str x1, [x16, #104]
+    str x2, [x16, #112]
+    dsb sy
+    // Displaced first instruction of the physically exercised return sequence.
+    ldr x0, =0x08001004
+    ldr x17, =identity_original_return_next
+    br x17
+.size identity_first_task_admit,.-identity_first_task_admit
+.ltorg
+#endif
+
 .section .note.GNU-stack,"",%progbits

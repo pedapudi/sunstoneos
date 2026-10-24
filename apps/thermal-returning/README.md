@@ -17,7 +17,13 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/thermal-retur
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/thermal-returning/adc-check.py --evidence /absolute/new/adc-evidence
 ```
 
-The build verifies and copies accepted objects, baseline source evidence and unchanged host tools. It records the new compiler dependency closure, linker script, compiler/linker hashes, ELF and binary. The thermal image reuses seventeen accepted objects and compiles four device/client units. The ADC image reuses twenty-six accepted objects and compiles three units. The metadata adapter used by the rail ledger does not access GPU hardware for CLDO3. Builds and raw logs remain outside tracked source.
+Headers that changed after the accepted provider objects were compiled make the default build refuse. `--platform-build DIR` instead compiles the same platform from the current tree, using a central CMake build directory configured with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`: the monitor, platform, start, vector, cache, memory, I2C, FP-context and FreeRTOS port objects of its `a733-power-probe` target, which are the objects of the kernel-check image, and the provider units with the provider probe's FreeRTOS configuration:
+
+```sh
+python3 apps/thermal-returning/build.py --device thermal --platform-build /absolute/central-build --evidence /absolute/new/thermal-evidence
+```
+
+With the default accepted baseline, the build verifies and copies accepted objects, baseline source evidence and unchanged host tools. It records the new compiler dependency closure, linker script, compiler/linker hashes, ELF and binary. The thermal image reuses seventeen accepted objects and compiles four device/client units. The ADC image reuses twenty-six accepted objects and compiles three units. The metadata adapter used by the rail ledger does not access GPU hardware for CLDO3. Builds and raw logs remain outside tracked source.
 
 The linked checks execute actual client, counter conversion, driver, native filters, registry and mutex instructions. The ADC check also executes the actual PMIC state machine and rail/pin managers. Scheduling, queue primitives, architectural observations and MMIO effects are modeled. The cases include partial-channel accumulation, normalized clock adoption/setup, invalid clock/calibration/supply state, inherited activity, missing samples, expected ADC pending IRQ and thermal IRQ loss after mutex acquisition. Separate sanitized ADC clock cases cover 24, 26 and 19.2 MHz start/read/stop. Existing unchanged monitor and device arithmetic evidence is reused.
 

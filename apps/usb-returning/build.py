@@ -7,38 +7,41 @@ import shutil
 import sys
 
 sys.dont_write_bytecode=True;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
-from returning_build import ROOT,ReturningPlatform,digest,image_object_closures,save
+from returning_build import CENTRAL_PLATFORM,PROVIDER_UNITS,ROOT,ReturningPlatform,digest,image_object_closures,save
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
-p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/pmic-provider-probe-20261018')
+group=p.add_mutually_exclusive_group()
+group.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/pmic-provider-probe-20261018')
+group.add_argument('--platform-build',type=Path,help='central CMake build whose a733-power-probe target supplies the platform; the accepted TinyUSB objects are still reused')
 p.add_argument('--transport',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-transport-only-20261018')
 # Per-object compiler dependencies of the accepted TinyUSB objects.
 p.add_argument('--transport-records',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-integration-20261018/frozen/image-objects.json')
 a=p.parse_args();r=ROOT;e=a.evidence.resolve();base=a.baseline.resolve();transport=a.transport.resolve()
-# The accepted TinyUSB objects exist only in evidence, so this image has no
-# central-build platform.
-platform=ReturningPlatform(e,baseline=base)
+# The accepted TinyUSB objects exist only in evidence. With a central build the
+# platform and providers come from the current tree and only TinyUSB is reused.
+central=a.platform_build is not None
+platform=ReturningPlatform(e,build=a.platform_build.resolve()) if central else ReturningPlatform(e,baseline=base)
 tiny=Path.home()/'.cache/sunstoneos/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973/src'
 flags=['-DSUNSTONE_A733_USB=1',f'-I{r}/platform/a733-storage-update',f'-I{r}/drivers/usb',f'-I{tiny}']
 config_pin=Path.home()/'.cache/sunstoneos/evidence/gpu-software-failure-20261018/snapshot/inputs/188-tusb_config.h'
 assert digest(r/'platform/a733-storage-update/tusb_config.h')==digest(config_pin)
 # Recompile the layout-dependent provider for this platform's FreeRTOS config.
 platform.compile([r/'apps/usb-returning/main.c',r/'platform/a733/native_usb.c',r/'drivers/usb/a733_usb_platform.c',r/'drivers/usb/a733_usb_platform_native.c'],flags)
-names=[Path(pin['path']).stem for pin in platform.accepted['new_objects'] if Path(pin['path']).name!='00-pmic-provider-probe.obj']
+names=list(PROVIDER_UNITS) if central else [Path(pin['path']).stem for pin in platform.accepted['new_objects'] if Path(pin['path']).name!='00-pmic-provider-probe.obj']
 # TinyUSB uses OPT_OS_NONE. Its objects consume no FreeRTOS layouts or APIs.
 usb=[item for item in json.loads((transport/'reused-objects.json').read_text())
      if any(Path(item['path']).name.endswith(name) for name in ('dcd_sunxi_musb.c.obj','tusb.c.obj','tusb_fifo.c.obj','usbd.c.obj','vendor_device.c.obj'))]
 recorded=image_object_closures(a.transport_records,'apps/gpu-render/main.c')
 platform.reuse(names,usb,{x['sha256']:recorded[x['sha256']] for x in usb if 'accepted' in x and x['sha256'] in recorded})
-assert len(platform.reused)==31,len(platform.reused)
+assert len(platform.reused)==(len(CENTRAL_PLATFORM)+5 if central else 31),len(platform.reused)
 platform.link();platform.binary();platform.run()
 platform.record(__file__,{'transport_input_records_sha256':digest(transport/'input-identities.json')})
-for root,name in [(base,'baseline'),(transport,'transport')]:
+for root,name in [(transport,'transport')]+([] if central else [(base,'baseline')]):
  for source in ['input-identities.json','reused-objects.json']:
   shutil.copy2(root/source,e/(name+'-'+source))
 platform.copy_helpers('usb-returning',('host-check.py','check.py','prepare.py','README.md'))
-print(f'Built bounded USB returning image; {len(platform.reused)} accepted objects and four new units.')
+print(f'Built bounded USB returning image; {len(platform.reused)} reused objects and four new units.')
 # Freeze the runnable host closure, including the updated kernel observer hook.
 host_files=['tools/check-a733-usb-returning.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/check-a733-smp.py']
 host_inputs={}

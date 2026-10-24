@@ -6,12 +6,15 @@ including its reviewed entry record. The transport, the board lock of
 tools/usb-access.py, the single launch attempt and the retention after entry
 are those of the shared supervised launcher (tools/check-a733-smp-supervised.py).
 The OS image serves the mimus board application's USB0 result protocol, so
-capture reuses tools/check-a733-mimus-board-supervised.py. Host checks of this
-tool (checks/os-image-launch.py) stop before any device access.
+capture reuses tools/check-a733-mimus-board-supervised.py. With
+--fault-report, the capture first requests the previous boot's fault report
+once through tools/fault-report.py and saves it with its decoding. Host checks
+of this tool (checks/os-image-launch.py) stop before any device access.
 """
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -30,6 +33,8 @@ def module(name, path):
 
 combined = module('os_supervised_capture', ROOT / 'tools/check-a733-mimus-board-supervised.py')
 preparation = module('os_supervised_preparation', ROOT / 'apps/os/prepare.py')
+faults = module('os_supervised_fault_report', ROOT / 'tools/fault-report.py')
+fault_decoder = module('os_supervised_fault_decode', ROOT / 'checks/fault-decode.py')
 supervisor = combined.supervisor
 require, digest, reference_bytes = combined.require, combined.digest, combined.reference_bytes
 PREREQUISITES = {'supervised-ram-recovery', 'os-supervised-software'}
@@ -46,6 +51,7 @@ def source_files():
             ('thermal-preparation.py', Path(preparation.thermal.__file__)),
             ('board-preparation.py', Path(preparation.board.__file__)),
             ('dma-nonsecure-access.py', Path(preparation.security_authority.__file__)),
+            ('fault-report.py', Path(faults.__file__)), ('fault-decode.py', Path(fault_decoder.__file__)),
             ('usb-access.py', ROOT / 'tools/usb-access.py')]
 
 
@@ -152,6 +158,34 @@ def entry_check(prepared, identity, port):
     require(admission['identity'] == identity and admission['port'] == port, 'OS entry covers another USB instance.')
 
 
+def require_fault_report(prepared):
+    """Only an image built with SUNSTONE_A733_FAULT_PAGE answers operation 5."""
+    from elftools.elf.elffile import ELFFile
+    symbols = ELFFile(io.BytesIO(prepared['_combined_frozen']['board/image.elf'])).get_section_by_name('.symtab')
+    found = symbols.get_symbol_by_name('a733_fault_previous') if symbols else None
+    require(bool(found) and all(item['st_shndx'] != 'SHN_UNDEF' for item in found),
+            'The OS image keeps no fault report.')
+
+
+def read_fault_report(device, same, deadline, evidence, record, save):
+    """One operation 5 exchange before the capture; any error ends the run."""
+    record['fault_report'] = 'unobserved'
+    save()
+    path = evidence / 'fault-report.bin'
+    raw = faults.fetch(device, same, deadline, lambda data: supervisor.durable_frame(path, data))
+    result = {'path': path.name, 'bytes': len(raw), 'sha256': digest(path)}
+    try:
+        decoded = fault_decoder.decode_report(raw)
+    except ValueError as error:
+        result['decode_error'] = str(error)
+    else:
+        decoded_path = evidence / 'fault-report.json'
+        supervisor.durable_frame(decoded_path, (json.dumps(decoded, indent=2) + '\n').encode())
+        result['decoded'] = decoded_path.name
+    record['fault_report'] = result
+    save()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('bundle', 'fel', 'evidence', 'database'):
@@ -160,9 +194,18 @@ def main(argv=None):
     parser.add_argument('--owner', required=True)
     parser.add_argument('--generations', type=int, default=1)
     parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--fault-report', action='store_true',
+                        help="request the previous boot's fault report once before the capture")
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared = freeze_bundle(bundle, args.generations)
+    if args.fault_report:
+        require_fault_report(prepared)
+
+    def capture(device, same, deadline, record, save):
+        if args.fault_report:
+            read_fault_report(device, same, deadline, args.evidence, record, save)
+        return combined.capture_device(device, same, deadline, prepared, args.evidence, record, save)
     with combined.launch_view(prepared) as (view, launch):
         def ready():
             claimed(args.database, args.claim, args.owner, bundle, prepared)
@@ -172,8 +215,7 @@ def main(argv=None):
                     'Derived upload plan changed.')
             require(digest(view / 'prepared.json') == prepared['_prepared_sha256'], 'Derived launcher metadata changed.')
         return supervisor.run_session(args, view, launch, ready, lambda identity, port: entry_check(prepared, identity, port),
-            lambda device, same, deadline, record, save: combined.capture_device(
-                device, same, deadline, prepared, args.evidence, record, save),
+            capture,
             product=combined.PRODUCT, serial=combined.SERIAL, bcd_device=0x0100,
             capture_seconds=59, result_key='mimus_board_result',
             source_files=source_files() + [('combined-launch-view.json', view / 'combined-launch-view.json'),

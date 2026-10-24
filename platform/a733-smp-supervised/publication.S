@@ -1,5 +1,7 @@
 /* Boot-only publication of clean, externally owned Nonsecure aliases.
- * Secure writes have already reached PoC. No secondary or DMA writer may run.
+ * Secure writes have already reached PoC: the tables because core 0 cleaned and
+ * invalidated them and then wrote them with Device stores, code and initial RAM
+ * through the DC CVAC publication in continue.c. No secondary or DMA writer may run.
  * This is not a dirty-data discard or a general warm OS replacement path. */
 .section .text.a733_supervised_ns_publish,"ax"
 .balign 4
