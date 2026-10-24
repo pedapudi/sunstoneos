@@ -453,9 +453,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `second-board-20261018-3-3/platform-attempt1/`.
   The thermal policy throttles at 85 °C on the DDR temperature channel; this is
   **implemented** and host-modeled, and its board cost is unmeasured.
-  [Memory-bus priority for display scan-out](designs/dram-controller.md) and a
-  display-port latency window are **planned**; they land together with the
-  framebuffer and gpu-display edits that call them. DRAM training, frequency
+  [Memory-bus priority for display scan-out](dram.md), a display-port latency
+  window under an eight-core copy load and the DRAM decode check are
+  **implemented** and host-modeled. No image links them yet: the hook and
+  window enter the gpu-display load images with the framebuffer and
+  gpu-display edits that call them, and the decode check refuses until a
+  boot0 trace names the controller registers. DRAM training, frequency
   scaling, voltage and the firewall remain boot0 dependencies, and the memory
   configuration is not decoded.
   [Board-test bundle preparation](audit/board-test-plan.md#bundles-for-the-memory-gpu-and-npu-paths)
@@ -996,9 +999,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
   [DMA address widths](dma-address-width.md) record one rule per DMA master.
-  DMA0 and the IOMMU enforce named limits at admission, and host checks pass.
-  The NVMe refusal of pools above 4 GiB is **planned**, and no transfer above
-  4 GiB has run on hardware.
+  DMA0, the IOMMU, the native camera, NVMe and xHCI enforce named limits at
+  admission, and host checks pass. The native camera reaches its allocation
+  through fixed IOVAs, so only 184,320 bytes of DMA memory must lie below
+  4 GiB. NVMe refuses queue memory above 4 GiB. No transfer above 4 GiB has run
+  on hardware.
 
   DMA-copy [host admission](dma-pool-session.md#the-host-command-reuses-the-sealed-compact-launcher)
   now requires external digest/session-bound authority for selected-channel

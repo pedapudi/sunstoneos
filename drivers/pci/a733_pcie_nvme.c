@@ -3,6 +3,7 @@
  * Queue memory and doorbells follow its two-entry admin and I/O queues. */
 #include "a733_pcie_nvme.h"
 #include "a733_range.h"
+#include "dma_address_width.h"
 #include <string.h>
 #define DEPTH A733_PCIE_NVME_DEPTH
 #define CC_ENABLE UINT32_C(0x00460001) /* EN, 4 KiB pages, NVM, IOSQES 6, IOCQES 4. */
@@ -12,6 +13,7 @@ enum { FUNCTION,CHECK,CONFIGURE,ENABLING,IDENTIFY_CONTROLLER,IDENTIFY_NAMESPACE,
     QUEUES,CREATE_CQ,CREATE_SQ,READY,READ,DONE,DELETE_SQ,DELETE_CQ,SHUTDOWN,
     SHUTDOWN_WAIT,STOP,PORT,STOPPED };
 enum { ASQ,ACQ,IOSQ,IOCQ,IDENTIFY,DATA,PAGES };
+_Static_assert(PAGES*4096u==A733_PCIE_NVME_POOL_BYTES,"NVMe pool size");
 static volatile uint32_t *page(const struct a733_pcie_nvme *n,unsigned index)
 {return (volatile uint32_t *)(n->memory.cpu+(uintptr_t)index*4096);}
 static uint64_t physical(const struct a733_pcie_nvme *n,unsigned index)
@@ -176,8 +178,11 @@ int a733_pcie_nvme_init(struct a733_pcie_nvme *n,struct a733_pcie *p,
        !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c))||!a733_ranges_disjoint(n,sizeof(*n),pool,sizeof(*pool))||
        !a733_ranges_disjoint(n,sizeof(*n),p,sizeof(*p))||a733_pcie_output_outside(p,n,sizeof(*n))!=1)return 0;
     *n=(struct a733_pcie_nvme){.self=n,.pool=pool,.config=*c,.phase={1,1}};
-    if(!device_memory_acquire(pool,p->config.owner,PAGES*4096,&n->lease,&n->memory)||
-       n->memory.cpu!=n->memory.physical){
+    /* Queue bases and PRP entries carry 64 bits, but the root port's inbound
+     * width is unknown: a pool above 4 GiB could reach another address. */
+    if(!device_memory_acquire(pool,p->config.owner,A733_PCIE_NVME_POOL_BYTES,&n->lease,&n->memory)||
+       n->memory.cpu!=n->memory.physical||
+       !a733_extent_within(0,DMA_ADDRESS_32BIT_LIMIT,n->memory.physical,A733_PCIE_NVME_POOL_BYTES)){
         if(n->lease.generation)(void)device_memory_release(pool,n->lease);
         n->self=NULL;return 0;
     }

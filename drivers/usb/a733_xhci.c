@@ -3,6 +3,7 @@
  * Ordered NC DMA is supplied by the native owner. Never reclaim this parent. */
 #include "a733_xhci.h"
 #include "a733_range.h"
+#include "dma_address_width.h"
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TYPE(n) ((uint32_t)(n)<<10)
@@ -633,7 +634,7 @@ static int capabilities(struct a733_xhci *x)
        !(hcs>>24)||(hcs>>24)>32||db&3||rt&31||db<0x1000||db>=MAX_OFFSET-1024||rt<0x1000||rt>=MAX_OFFSET-64||
        !(db+4*((hcs&255)+1)<=rt||rt+64<=db))return 0;
     x->cap_slots=hcs&255;x->cap_ports=hcs>>24;x->scratchpads=((hcs2>>16)&0x3e0)|((hcs2>>27)&31);
-    if(x->scratchpads>8||(!(hcc&1)&&x->extent.physical+x->extent.bytes>UINT64_C(0x100000000)))return 0;
+    if(x->scratchpads>8||(!(hcc&1)&&x->extent.physical+x->extent.bytes>DMA_ADDRESS_32BIT_LIMIT))return 0;
     x->context_bytes=hcc&4?64:32;x->operational=cap;x->doorbell=db;x->runtime=rt;x->port_power_control=!!(hcc&8);
     if(!rd(x,12,&hcs2))return 0;x->root_u1=hcs2&255;x->root_u2=hcs2>>16;
     x->ext_cursor=(hcc>>16)*4;

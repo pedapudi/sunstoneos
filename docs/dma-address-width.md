@@ -1,9 +1,8 @@
 # DMA address widths and the path above 4 GiB
 
-Status: **implemented** for DMA0 and the system IOMMU, with host checks.
-The NVMe refusal and the camera IOVA change belong to other drivers and are
-**planned**. No transfer above 4 GiB has run on hardware, so every rule below
-is unqualified until the board evidence at the end exists.
+Status: **implemented** for DMA0, the system IOMMU, the native camera, NVMe and
+xHCI, with host checks. No transfer above 4 GiB has run on hardware, so every
+rule below is unqualified until the board evidence at the end exists.
 
 DRAM occupies physical `0x4000_0000`–`0x3_4000_0000`: 3 GiB below 4 GiB and
 9 GiB above it, so a DRAM address uses physical bits 32 and 33. Every device
@@ -32,17 +31,24 @@ Widths come from the board kernel source (`2ac08e8c`), its device tree
 | GPU | Direct through the GPU MMU; physical below 2^36 | `platform/a733/gpu_vm_memory.c:7` |
 | NPU | Direct through the NPU MMU; physical below 2^40. The MMU image must not cross a 4 GiB boundary. Command addresses are 32-bit device addresses that the NPU MMU translates | `drivers/npu/a733_npu_memory.c:7,51`; `a733_npu_controller.c:70,130` |
 | Display engine 0, G2D, deinterlacer, video decoders and encoder, CSI, ISP | IOMMU. Master IOVA below 4 GiB; physical below 2^34, because leaf and directory bits 9:8 hold physical bits 33:32 | `A733_IOMMU_IOVA_LIMIT` in `a733_iommu_init`; `A733_IOMMU_PHYSICAL_LIMIT` in the table builder and validator |
-| xHCI (USB3) | Direct below 2^34 when `HCCPARAMS1.AC64` is 1 (IOMMU bank 0 bypass, which reaches all DRAM); below 4 GiB otherwise | `drivers/usb/a733_xhci.c:636` |
-| PCIe endpoint DMA (NVMe, endpoint test) | Refuse at or above 4 GiB; the root port's inbound address width is unpublished | Endpoint test `drivers/pci/a733_pcie_epf_test.c:45`; NVMe has no check yet |
+| xHCI (USB3) | Direct below 2^34 when `HCCPARAMS1.AC64` is 1 (IOMMU bank 0 bypass, which reaches all DRAM); below 4 GiB otherwise | `DMA_ADDRESS_32BIT_LIMIT` in `capabilities`, `drivers/usb/a733_xhci.c` |
+| PCIe endpoint DMA (NVMe, endpoint test) | Refuse above 4 GiB; the root port's inbound address width is unpublished | `DMA_ADDRESS_32BIT_LIMIT` in `a733_pcie_nvme_init`; endpoint test `drivers/pci/a733_pcie_epf_test.c:45` |
 | USB0 (MUSB), SD/MMC, SDIO | Programmed I/O; no DMA | — |
 | EHCI/OHCI | Disabled | — |
 
 The camera is an IOMMU master like the others. `struct a733_capture_span`
-carries separate IOVA and physical fields, and
-`drivers/camera/a733_camera_capture.c:155` limits only the IOVA. The native
-camera configuration (`a733_camera_native.c:401`) sets each IOVA equal to its
-physical address, so it refuses physical addresses at or above 4 GiB. That
-limit comes from the configuration; the master itself reaches 2^34.
+carries separate IOVA and physical fields. The capture driver limits each IOVA
+with `A733_IOMMU_IOVA_LIMIT`, and the IOMMU builder limits each physical span
+with `A733_IOMMU_PHYSICAL_LIMIT`. The native camera gives the device fixed
+IOVAs from `A733_CAMERA_NATIVE_IOVA` (`0x1000_0000`), so its 663,552-byte
+allocation may lie anywhere in DRAM below 2^34. Its constructor refuses an
+allocation that ends above 2^34 before it writes any byte
+([camera-native.md](camera-native.md)).
+
+The NVMe driver writes queue bases and PRP entries as two 32-bit halves. The
+inbound width of the root port that forwards them is unknown, so
+`a733_pcie_nvme_init` refuses queue memory that ends above 4 GiB, before any
+configuration or BAR access ([pcie.md](pcie.md)).
 
 ## Named limits
 
@@ -130,14 +136,25 @@ method and every figure.
 | AArch64 code of `a733_dma.c`, `dma_memory.c` | 2,228 and 1,588 bytes | Identical instructions |
 | Copies per byte for a buffer above 4 GiB | No such buffers | Zero |
 | IOMMU leaf words per 307,200-byte plane at physical `0xffff_f000` and `0x1_8000_0000` | 75 and 75 | 75 and 75 |
-| DRAM below 4 GiB that width rules require, summed over every driver | 847,872 bytes plus one 4 KiB descriptor page per DMA0 job table | Unchanged; 184,320 bytes once the native camera uses fixed IOVAs |
-| Master paths that can reach a wrong address without an error | One: NVMe | One, until the PCIe driver adds its refusal |
 
-The 847,872 bytes are the xHCI pool when `AC64` is 0 (131,072), the NVMe pool
-of six 4 KiB pages (24,576), the native camera allocation (663,552) and the
-PCIe endpoint test's two 12,288-byte buffers and one 4,096-byte buffer
-(28,672). The figure is an upper bound for one image, because no image links
-every driver.
+The camera and NVMe rules have their own
+[measurement record](designs/dma-high-memory-measurements.md), which compares
+them with their parent commit:
+
+| Metric | Before | After |
+| --- | --- | --- |
+| DRAM below 4 GiB that width rules require, summed over every driver | 847,872 bytes plus one 4 KiB descriptor page per DMA0 job table | 184,320 bytes plus one 4 KiB descriptor page per DMA0 job table |
+| Master paths that can reach a wrong address without an error | One: NVMe | None |
+| IOMMU 4 MiB windows and leaf words used by the native camera | One or two windows, depending on placement; 154 leaf words | One window at any placement; 154 leaf words |
+| Modeled register writes of one native camera capture | 2,348 | 2,348 at the same addresses; only the parameter and two plane address values differ |
+| AArch64 code of the native camera constructor, route and DMA admission | 2,020, 188 and 288 bytes | 2,052, 184 and 284 bytes |
+| AArch64 code of `a733_pcie_nvme_init` | 804 bytes | 816 bytes; the command, poll, read and copy paths have identical instructions |
+| AArch64 code of the capture constructor and xHCI capability check | 1,920 and 532 bytes | Identical instructions |
+
+The 184,320 bytes are the xHCI pool when `AC64` is 0 (131,072), the NVMe pool
+of six 4 KiB pages (24,576) and the PCIe endpoint test's two 12,288-byte
+buffers and one 4,096-byte buffer (28,672). The figure is an upper bound for one
+image, because no image links every driver.
 
 The DMA0 conflict scan walks the 16 channels by pointer and executes six
 instructions for each idle channel, one of them a stack load of the controller
@@ -157,26 +174,17 @@ scan stays inside `submit`.
 
 ## Changes that other drivers must make
 
-- **NVMe (`drivers/pci/a733_pcie_nvme.c`):** after `device_memory_acquire`,
-  refuse the pool unless
-  `a733_extent_within(0, DMA_ADDRESS_32BIT_LIMIT, physical, PAGES * 4096)`
-  holds, and export the pool size in a header. Until then, NVMe writes queue
-  and PRP addresses as two 32-bit halves through a root port of unknown inbound
-  width, and a pool above 4 GiB could reach a different address without an
-  error. The width check repeats the six-page size locally until the header
-  constant exists. The endpoint test already refuses high memory and may switch
-  its literal to the named limit.
-- **Native camera (`drivers/camera/a733_camera_native.c`):** choose fixed
-  IOVAs below `A733_IOMMU_IOVA_LIMIT` instead of IOVAs equal to physical
-  addresses. The capture driver needs no rework.
 - **IOMMU consumers that pass a CPU pointer as a span's physical address**
   (`apps/h264/native.c:305`, `apps/g2d/memory.c:50`,
   `apps/deinterlace/memory.c:70`, `apps/jpeg/native.c:168`,
   `apps/h264-encode/storage.c:30`): a pointer equals the physical address only
   under an identity CPU mapping. A consumer of a class whose virtual address
   differs from its physical address must pass the lease's physical address.
-- **Memory architecture:** keep every memory class below 4 GiB until the
-  changes above are made.
+- **Memory architecture:** keep the memory classes that those consumers use
+  identity mapped until they pass the lease's physical address. The native
+  camera's allocation can move above 4 GiB once a memory class maps that
+  range. The NVMe pool, and the xHCI pool while `AC64` is unread, must stay
+  below 4 GiB.
 
 DMA0 descriptors above 4 GiB, bounce buffers, the mapping of DRAM above 4 GiB,
 IOMMU coverage beyond four 4 MiB windows and IOMMU fault interrupts are not
@@ -187,7 +195,10 @@ implemented.
 The [width check](../checks/dma-address-width.c) asserts the limit values and
 counts IOMMU leaf words for one plane below and above 4 GiB. It admits an IOMMU
 span that ends at 4 GiB, refuses one that ends a page later, and sums the named
-pool sizes. The [controller check](../checks/dma-controller.c) refuses a
+pool sizes. The [native camera fixture](../checks/a733-camera-native.c)
+captures an image from an allocation at physical `0x1_8000_0000` and refuses
+one across 2^34. The [NVMe model](../checks/a733-pcie-nvme.c) admits a pool
+that ends at 4 GiB and refuses one that ends a page later. The [controller check](../checks/dma-controller.c) refuses a
 chain whose second descriptor crosses `0xfffff800` with no descriptor, cache or
 register change, enters recovery for the same chain on a channel that is not
 quiet, and completes a chain that ends at the limit. Removing the builder's

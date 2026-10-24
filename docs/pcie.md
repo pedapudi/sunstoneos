@@ -266,7 +266,15 @@ rollback. A late fault therefore leaves memory decode set as it was.
 4 KiB pages from the device memory pool: the admin submission and completion
 queues, the I/O submission and completion queues, an identify buffer and a
 data buffer. Both queue pairs are two entries deep, so at most one command is
-outstanding.
+outstanding. `A733_PCIE_NVME_POOL_BYTES` names the six pages.
+
+The pages must be identity mapped and must end at or below 4 GiB
+(`DMA_ADDRESS_32BIT_LIMIT`). The driver writes queue bases and PRP entries as
+two 32-bit halves, but no pinned source states the root port's inbound address
+width, so a higher address could reach a different location without an error.
+Initialization checks both conditions after it acquires the pages and before
+any configuration or BAR access. On refusal it releases the pages and returns
+failure, and the port stays usable.
 
 The controller must start disabled: CC and CSTS must both read zero. CAP must
 report the NVM command set, a 4 KiB minimum page size, a nonzero ready
@@ -371,7 +379,7 @@ that revision and requires identical write sequences. Controller and endpoint
 responses, including the speed change, are modeled.
 
 The same script builds `checks/a733-pcie-nvme.c` with the function client and
-NVMe driver and runs its 24 cases. The model supplies an NVMe controller with
+NVMe driver and runs its 26 cases. The model supplies an NVMe controller with
 a 16 KiB 64-bit BAR0, a 4 KiB BAR2, an I/O BAR and an eight-entry MSI-X table.
 It also models the DesignWare MSI and SII latches, PCI power-management resets
 and link loss after PERST.
@@ -391,6 +399,12 @@ and link loss after PERST.
   outside its BAR and a class mismatch.
 - **Port stop.** A configuration-only stop succeeds, the endpoint test client
   cannot stop the port, and a link that stays up retains it.
+- **Pool at 4 GiB.** A pool that ends at 4 GiB reads three ranges with every
+  queue base and PRP high half zero. A pool that ends one page above 4 GiB is
+  refused with no configuration or BAR access, unchanged pool bytes and its
+  pages free again. These two cases map the pool inside AddressSanitizer's
+  shadow gap on x86-64, so the script builds them a second time with only
+  the undefined-behavior sanitizer.
 
 Every modeled DMA requires function bus mastering and device-owned memory,
 and every write passes the native filter's decisions. The endpoint, its
