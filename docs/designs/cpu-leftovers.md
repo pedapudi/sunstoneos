@@ -1,8 +1,10 @@
 # Design: drop the repeated table publication and read the fault report on the host
 
-Status: **design**; nothing here is implemented. The baseline counts below come
-from images built from commit `0fd1b51` and the host checks named in each row.
-No figure has been measured on the board. Readers are assumed to know AArch64
+Status: **implemented and checked in host models; not run on the board.** The
+baseline counts below come from images built from commit `0fd1b51` and the
+host checks named in each row;
+[cpu-leftovers-measurements.md](cpu-leftovers-measurements.md) compares them
+with the implementation. No figure has been measured on the board. Readers are assumed to know AArch64
 data-cache maintenance by virtual address and the Secure and Non-secure
 physical address spaces, and to have read
 [cpu-table-walks.md](cpu-table-walks.md).
@@ -58,10 +60,13 @@ missed, and it cleans lines that step 1 has already removed.
 Without step 2, the tables depend on the rule that data accesses at EL3 with
 the MMU off allocate no cache line. If that rule failed, a dirty Secure line
 over a descriptor could be written back after a core's checksum had passed,
-and the failure would not be bounded. The record handshake already depends on
-the same rule: `prepare_core(0)` writes `a733_cached_records` after the
+and the failure would not be bounded. Each eight-core boot gives evidence that
+the rule holds: `prepare_core(0)` writes `a733_cached_records` after the
 publications with no maintenance, and each secondary reads those records at
-EL3 with the MMU off.
+EL3 with the MMU off. If core 0's record stores allocated lines, the
+secondaries would read stale records and the boot would stop at the record
+barrier's deadline, so a boot that passes the barrier shows that core 0's
+Device stores reached memory without allocating.
 
 ### Why step 3 stays
 
@@ -92,7 +97,12 @@ The covering checks for step 2, which stay in place, are:
 
 - `continue.c`: drop the third `a733_cpu_coherence_publish()` call. The code
   and initial-RAM publications and the stop code `0x102` stay.
-- `publication.S`: no change.
+- `publication.S`: no code change; the `.Lel1_root` and `.Lel1_l2` loops stay.
+
+The comments that state why the tables need no further maintenance, before
+`a733_cpu_coherence_enable_el3()` in `platform/a733/cpu_coherence.S` and at
+the top of `publication.S`, name step 1's clean and invalidate and the Device
+stores that follow it.
 
 `continue.S` does not change, so the `continue.S` hash pins in
 `cmake/a733-smp-observe.cmake` and `cmake/a733-storage-maintenance.cmake` stay
@@ -120,8 +130,9 @@ The new `tools/fault-report.py` holds only
 `apps/mimus-board/host.py`, which a comment names. It writes the 16-byte
 request `struct.pack('<BBHIQ', 5, 0, 0, 0, 0)` to endpoint `0x02` once. It
 then reads endpoint `0x81`, each read requesting the remaining length rounded
-up to a multiple of 512 bytes, until it holds 1,160 bytes; it calls
-`retain(raw)` to save the raw bytes durably and returns them. As in
+up to a multiple of 512 bytes, until it holds 1,160 bytes, appending each
+fragment to one buffer. It calls `retain(raw)` with a read-only view of that
+buffer to save the raw bytes durably, and returns the same view. As in
 `device_exchange()`, it calls `same()` before every transfer, so a changed USB
 identity stops the exchange, and each transfer's timeout is the time left
 before the deadline, capped at 500 ms and at least 1 ms. An empty fragment,
@@ -159,8 +170,15 @@ and no USB access. Its cases are:
   from `apps/mimus-board/usb0.c`, and the response size, compared with
   `REPORT_BYTES` in the decoder;
 - refusals: a device that stops without answering (one write, no retry), an
-  extra byte after the report, an empty fragment, an identity change, and a
-  deadline that expires before the write and during the reads;
+  extra byte in the transfer that completes the report, an empty fragment, an
+  identity change before each transfer and before `retain()`, and a deadline
+  that expires before the write, during the reads and after the last read;
+- an extra byte that arrives in a later transfer, after `fetch()` already
+  holds 1,160 bytes: it stays on endpoint `0x81`, so the first response of the
+  capture exchange that follows begins with it. The frame checks of that
+  exchange (`device_exchange()` and `capture()` in `apps/mimus-board/host.py`)
+  refuse the shifted frame, and the same frame without the extra byte reaches
+  the status check;
 - a static check of the syntax tree of `tools/fault-report.py`: it imports no
   `usb`, `usb1`, `libusb`, `serial` or `subprocess`, its text does not
   contain `/dev/bus/usb` or `usb-access`, and it has no `__main__` block or
@@ -224,14 +242,17 @@ Run only in scheduled board sessions:
   Non-secure space, that Device accesses allocate no cache line, and that
   maintenance issued with the MMU off reaches every core. These come from the
   Arm Architecture Reference Manual, which is not pinned. Removing step 2
-  makes the tables depend on the second rule, on which the record handshake
-  already depends; keeping step 3 avoids a new dependence on the third.
+  makes the tables depend on the second rule; each eight-core boot whose
+  record barrier passes is evidence that the rule holds for core 0's Device
+  stores. Keeping step 3 avoids a new dependence on the third.
 - This change adds no hardware register sequence.
 
 ## Changes outside the owned files
 
 These go to the primary agent in `primary.patch`:
 
+- `platform/a733/cpu_coherence.S`: the comment before the EL3 enable, as
+  stated in "Changes".
 - `checks/cpu-table-walks.py`: measure the table publication from the
   disassembly of `a733_cached_prepare()` and require 0 lines.
 - `checks/device-memory-capacity.c`, `checks/device-memory-capacity-local.c`

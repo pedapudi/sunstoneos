@@ -92,6 +92,21 @@ generation zero) returns the report alone, without the 64-byte frame header.
 python3 checks/fault-decode.py report.bin
 ```
 
+On the host, `fetch()` in [tools/fault-report.py](../tools/fault-report.py)
+sends that request once on a device that a supervised launcher has already
+claimed. It reads until it holds 1,160 bytes, each read asking for the
+remaining length rounded up to 512 bytes, saves the raw report through the
+caller's `retain()` and returns it. An empty fragment, more than 1,160 bytes,
+a changed USB identity, an expired deadline or a transport error stops the
+exchange, which is never retried. The module opens no device and has no
+command line. The supervised OS launcher
+[check-a733-os-supervised.py](../tools/check-a733-os-supervised.py) calls it
+with `--fault-report`, once before the result capture, and saves
+`fault-report.bin` and its `decode_report()` result `fault-report.json` in the
+evidence directory. The launcher refuses the flag before any device access
+when the frozen image does not define `a733_fault_previous`, and a `fetch()`
+error ends the run before the capture.
+
 ## Single-core images
 
 The single-core images keep their FEL transport and do not use the slots.
@@ -123,6 +138,13 @@ without fuzz.
   incomplete, corrupt and empty slots, checks the supervisor's added load by
   disassembly, and compares the C line formatter with the decoder.
 - `checks/reset-latency.py` is described in [reset.md](reset.md).
+- `checks/fault-report.py --output DIR` drives `fetch()` against a modeled
+  device that applies the operation 5 rules parsed from
+  `apps/mimus-board/usb0.c` and answers in fragments of 1, 29 and 512 bytes.
+  It checks the byte-for-byte result and the request bytes, the refusals of
+  a stopped device, an extra byte, an empty fragment, an identity change and
+  an expired deadline, and that the module imports no device library and has
+  no command line.
 
 The resident and supervised radio images pass. Measurements against the
 merge base are in the design document.
