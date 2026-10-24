@@ -361,8 +361,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   These results apply to that prepared lifetime and the frozen CPU image
   `762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`,
   which predates the new fault-capture code. The earlier failed rank 7 launch
-  remains unresolved across cold starts. Cold repeatability, sustained loads,
-  timer delivery on every core and thermal transitions remain unqualified.
+  remains unresolved across cold starts. The current-source finite image
+  `9d90b6f9…` subsequently passed 32 rounds per core, background scheduling,
+  SGIs on every core and 32 CPU0 timer ticks in the same prepared lifetime.
+  Its successful retirement exercised the current stackless capture hooks,
+  drained interrupts, restored controls and confirmed seven CPUs OFF. ROM
+  returned as `003/042`; all 18 MiB of saved DRAM was restored and verified.
+  Evidence: `processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
+  This did not induce an exception or qualify fault recovery. Cold repeatability,
+  sustained loads, timer delivery on every core and thermal transitions remain
+  unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;

@@ -15,7 +15,7 @@ Source diagnosis continues without board access; the failed execution boundary
 is unknown.
 
 **Port `3-1` is usable:** USB is its only power source. Its last validated ROM
-return is `/dev/bus/usb/003/041`, identity `[7, 1618, 1097000, 0, 0]`.
+return is `/dev/bus/usb/003/042`, identity `[7, 1622, 1097001, 0, 0]`.
 Refresh host metadata before access. In this powered lifetime, CPU0 publication,
 all-core preparation, first task entry, task switching and a bounded workload
 passed. All eight cores completed 32 floating-point rounds, background scheduling
@@ -29,6 +29,13 @@ the saved baseline. Thermal acquisition is disabled, with its configuration and
 clock ownership retained. A subsequent DCDC2-only PMIC snapshot completed,
 reaped its request, parked the provider and returned to ROM. It reports the
 NPU rail enabled and programmed to 800 mV. This is not an analogue measurement.
+The current-source CPU image then passed the same bounded workload, including
+its stackless capture and coordinated cleanup hooks. The matching native report
+confirms 32 rounds on every core, background and SGI progress, CPU0 timer
+delivery and seven secondary CPUs OFF. All 18 MiB of saved DRAM was restored
+and verified after ROM return. Evidence:
+`processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
+Fresh cache-off and launcher survey checks passed on the returned instance.
 
 **Current priority: CPU, GPU and NPU robustness**, including power and thermal
 management. Complete startup, repeated operation, interrupt delivery, bounded
@@ -37,13 +44,14 @@ not establish physical operation.
 
 **Open work:**
 
-1. Qualify the current production CPU startup and stackless fault capture
-   through the bounded returning harness. Today's physical diagnostics use the older frozen
-   native image; their prepared-lifetime success does not explain the earlier
-   cold failures. The current-source finite harness is integrated and checked;
-   its physical run/capture adapter is being completed. Repeated cold startup,
-   sustained scheduling, per-core timers, runtime core removal and cluster
-   power-down remain unqualified or incomplete.
+1. Extend the current-source CPU workload to verify a local timer interrupt
+   on every secondary. The current finite image (`9d90b6f9…`) now passes
+   physically in this prepared lifetime. Successful retirement exercises its
+   stackless capture hooks; no induced-fault recovery was attempted. Keep CPU0
+   as the sole global FreeRTOS tick source. Repeated cold startup, sustained
+   scheduling, per-core timer delivery, runtime core removal and cluster
+   power-down remain unqualified or incomplete. The earlier cold failures
+   remain unexplained.
 2. Locate the GPU's failed execution boundary from the frozen image and its
    host inputs before another physical attempt. The entry capture passed eleven
    configuration predicates and confirmed seven secondaries OFF. The numerical
@@ -53,9 +61,9 @@ not establish physical operation.
    entry. Numerical GPU operation and normal shutdown remain unqualified.
    A passive capture on port `3-1` found coherent domain 5 policy/status ON
    with engine clocks gated and reset asserted. The first checkpoint requires
-   OFF and was therefore not launched. The replacement proves that providers
+   OFF and was therefore not launched. The reviewed replacement is integrated. It proves that providers
    were never constructed and retains CPU interrupt checks, without accessing
-   GPU power registers. Exclusive RAM and exclusion of external DMA writers
+   GPU power registers. Its physical entry check is next. Exclusive RAM and exclusion of external DMA writers
    remain mandatory. The observation does not identify the failed second
    board's state or execution boundary.
 3. Prepare the existing single-core NPU finite path for numerical execution and
@@ -65,7 +73,10 @@ not establish physical operation.
    PLL_NPU reads `0x41104500`. The corrected startup preserves inherited bit 24
    and rejects drift or other unsupported bits, following pinned clock-driver
    sources. The DCDC2 supply observation now passed with native settle/reap/park
-   and ROM return. Numerical NPU execution is still unqualified. Evidence:
+   and ROM return. A reviewed pre-provider checkpoint is now integrated to qualify CPU entry,
+   local memory preparation and normal return before device initialization.
+   It reports zero jobs and does not establish NPU computation. Numerical
+   NPU execution is still unqualified. Evidence:
    `processor-completion-20261024/port-3-1/npu-entry/session.json` and
    `pmic-supply/session.json`. The native NPU board image now has thermal admission, independent supervision and bounded
    accepted-work draining, with software checks. Its current multicore USB
