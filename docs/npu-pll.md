@@ -1,11 +1,9 @@
 # NPU PLL enable table
 
-The [PLL module](../drivers/npu/a733_npu_pll.c) holds the PLL_NPU method-2
-enable table and two predicates over the control word. The
-[startup sequencer](npu-startup.md) runs the table under the register lock,
-samples LOCK, and opens the output gate in its local open table
-([npu-platform.md](npu-platform.md)). The module has no state machine and
-takes no lock. Physical PLL qualification is outstanding.
+The [startup sequencer](../drivers/npu/a733_npu_startup.c) holds the PLL_NPU
+method-2 enable table and its predicates over the control word as statics. It
+runs the table under the register lock, samples LOCK, and opens the output
+gate in its local open table ([npu-platform.md](npu-platform.md)). Physical PLL qualification is outstanding.
 
 The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to
 the NPU domain's DCDC2 supply, which the [power-domain owner](power-domains.md)
@@ -38,14 +36,14 @@ the board source's supported 53–105 range and the documented oscillator range.
 
 ## Entry state, table and LOCK
 
-`a733_npu_pll_disabled` admits the entry state: PLL enable, lock enable, LOCK
+The register pass admits this entry state: PLL enable, lock enable, LOCK
 and output gate clear, and every bit outside the documented fields clear. The
 LDO and factor fields may hold any value, because the table writes them. The
 register pass also requires the PLL_NPU pattern and bias words
 (`+0x2a4`–`+0x2b0`) at their reset values, and the video encode, video decode,
 NPU and DRAM0 consumers idle or on other sources ([npu-startup.md](npu-startup.md)).
 
-The enable table (`a733_npu_pll_enable`) has six entries, each read back:
+The enable table has six entries, each read back:
 
 1. software gate enable, CCU `+0x1920` bit 16;
 2. No-Auto, `+0x1920` bit 0;
@@ -60,7 +58,7 @@ readback ignores it. The output gate (bit 27) stays closed.
 After the register lock is released, the sequencer reads the control word at
 least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
 then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
-sampling needs no lock. `a733_npu_pll_locked` requires the control word
+sampling needs no lock. The local open table requires the control word
 `0xe0305100` with LOCK set. The local open table then opens the output gate,
 and the final readback requires `0xe8305100` with LOCK set. A LOCK that never
 appears leaves the PLL enabled with its output closed and retains every token.

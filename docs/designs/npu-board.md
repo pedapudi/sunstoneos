@@ -45,12 +45,17 @@ the bootstrap calls it again after one tick. Each wait has a counter deadline:
    `A733_POWER_SUPPLY_BUDGET_US` (100 ms). The wait's deadline is therefore
    the later of the startup's token step and the provider's startup deadline,
    plus those two figures and one tick, so a slow provider cannot cause a
-   refusal. A refusal or an expired deadline releases the tokens before any
-   NPU write.
-3. Under one register-lock acquisition, `a733_power_domain_check(domains, 4)`
-   and the register pass of npu-platform.md, 22 reads, or 27 when a fabric
-   clock selects PERI0, each compared under a mask with a constant. Startup
-   admits only domain 4 OFF and PLL_NPU disabled.
+   refusal. Every image sets the provider's startup deadline to the session
+   end, so in practice this wait is bounded by the session deadline; a power
+   service whose first step comes 3.5 ms after the token step still reaches
+   READY in `checks/npu-startup-host.c`. A refusal or an expired deadline
+   releases the tokens before any NPU write.
+3. Under one register-lock acquisition, `a733_power_domain_check(domains, 4,
+   &state)` and the register pass of npu-platform.md. The owner's check reads
+   the PCK600 words once and returns the domain state; startup admits only
+   state 0 (OFF) and does not read PCK600 again. The pass reads 20 words, or
+   25 when a fabric clock selects PERI0, each compared under a mask with a
+   constant, and requires PLL_NPU disabled.
 4. Under the same acquisition, the PLL_NPU method-2 enable table. Then release
    the lock and read LOCK without it: up to 100 observations 3 µs apart until
    three in a row read locked, then 20 µs. The spacing reads `CNTPCT_EL0`
@@ -83,10 +88,13 @@ release order; each reads the other's field with acquire order. The owner
 writes the domain-4 delay row and policy word. The NPU platform stops writing
 PCK600 and stops reading the delay row. Its native allowlist keeps the policy
 and status reads (`PCK+0x0`, `PCK+0x8`), which the register pass, the final
-readback and the stop check use. The PLL module keeps a `const` enable table
-and a LOCK predicate. The platform module keeps `const` open and stop tables
-and gains a gate table only when idle gating lands. Both use one
-apply-with-readback helper.
+readback and the stop check use. The sequencer holds the PLL_NPU enable table
+and its LOCK predicates as statics, and one `opened` helper serves the final
+readback and the stop precheck. The platform module keeps `const` open and
+stop tables and the fabric tables that both modules read, and gains a gate
+table only when idle gating lands. One apply-with-readback helper applies
+every table and reuses the last value read when consecutive steps write the
+same word.
 
 **Second resource manager.** The startup constructs no GPU/PCK manager of
 its own; the base's `a733_npu_startup_resources_init` and `struct
@@ -160,9 +168,17 @@ The catalogue is the five models of `drivers/npu/npu_session_models.inc`.
 the record must carry. One slot and one client serve every board step; a
 second slot has no board step that needs it.
 
-**Window hand-offs** (`apps/npu-board/client.h`). npu-breadth.md (data flow,
-item 5) makes the read and write windows device-owned from SUBMIT until its
-reply. After a LOAD the client publishes the tensor addresses and lends the
+**Window hand-offs** (`apps/npu-board/client.h`). After activation the
+bootstrap notifies the client task, which sends OPEN itself and publishes
+`ready` with a release store only after OPEN succeeds. USB0 is the only
+writer of the request word. Before `ready`, USB0 answers every request
+without payload with result 4, not ready, and reports the client fields as
+zero; the host repeats STATUS until it reads OK. An UPLOAD before `ready` has
+no window to receive it and stops USB0. USB0 reads the client's fields for a
+response only after an acquire load of `ready` and of the answer word, after
+which the client does not write them until the next request. npu-breadth.md
+(data flow, item 5) makes the read and write windows device-owned from SUBMIT
+until its reply. After a LOAD the client publishes the tensor addresses and lends the
 read window to the USB0 task with a release store of the window word; USB0
 writes the input chunks into it. Before SUBMIT, USB0 hands it back with a
 release store and a task notification, then posts the request. After the
@@ -174,6 +190,19 @@ that arrives while one is lent. USB0 posts one request at a time and reads
 the answer with an acquire load; neither task waits on a tick. LOAD carries a
 catalogue index and is answered when the slot is READY or the load is
 refused. The USB0 framing is described at the top of `apps/npu-board/usb.c`.
+A READ response enters the empty 4 KiB transmit FIFO in one exchange, so
+TinyUSB sends a zero-length packet only after its last byte; a READ whose
+response would exceed the FIFO is refused. The catalogue's largest output is
+2,816 bytes.
+
+The shared TinyUSB configuration gives the vendor endpoints no dedicated
+hardware FIFO, so each tensor byte is copied twice in memory and moved once by
+PIO in each direction: controller FIFO to endpoint buffer by PIO, endpoint
+buffer to the class FIFO, and class FIFO to the window by `tud_vendor_read`;
+the output path is the reverse. Writing the controller FIFO directly from the
+window (`dcd_edpt_xfer_fifo` in the MUSB driver) would remove one copy in each
+direction; it changes the shared configuration that the other board images
+use, and is a follow-up.
 
 ## Interrupts and polling
 
@@ -195,13 +224,18 @@ refused. The USB0 framing is described at the top of `apps/npu-board/usb.c`.
   level-sensitive and at its priority; the mask, rearm and stop callbacks then
   check only the calling core. The worker is pinned to core 1, and
   `npu_runtime_bind_irq` passes the route mask `1 << 1`, equal to that
-  affinity. The CPU0 binding in `apps/npu-interrupt/irq.c` stays for the
-  single-core images.
+  affinity. The board's `irq.c` includes `apps/npu-interrupt/irq.c` with
+  core 1 and priority `0xd8`; the single-core images compile the same source
+  for core 0.
 - **Unqualified delivery.** Until the board shows one interrupt per job, the
   runtime keeps its idle-register read per worker step and a one-tick timeout
   while a job runs (the section 1.3 heavier form).
 - **Clients and USB0.** The client blocks on its reply queue and task
-  notifications and never calls `vTaskDelay`. USB0 uses the shared loop of
+  notifications without a timeout and never calls `vTaskDelay`. After CLOSE
+  the client notifies the bootstrap, which waits on that notification and
+  checks the board's state on each wake, so neither task wakes while idle.
+  The service worker keeps its 1,000 ms idle timeout, one wake per second
+  while no job runs. USB0 uses the shared loop of
   `apps/board/usb0_service.h`, at most 200 µs or 64 passes per tick, because
   USB0 interrupt delivery is unqualified.
 
@@ -313,9 +347,11 @@ Two of the checks failed on the base for reasons outside the record change:
   preparing the local pools in `platform_init`, a kernel critical section runs
   there before the scheduler. In the single-core port, `uxPortSetInterruptMask`
   masks IRQs through the priority mask and clears DAIF.I, so the admission's
-  DAIF check refused. `platform_init` now sets DAIF.I again after the
-  preparation, which restores the boot's mask; the board image would have
-  refused in the same way.
+  DAIF check refused. DAIF.I is cleared when `uxPortSetInterruptMask`
+  returns, so any later critical section before the scheduler clears it
+  again. `platform_init` now sets DAIF.I after the preparation, and the
+  admission in `a733_smp_diagnostic_start` runs before any task is created and
+  must stay there. The board image would have refused in the same way.
 - `accelerator-providers.py` returned reason 5 from `a733_npu_application_init`
   because the check skipped that same boot preparation, so the NPU reservation
   read a NULL pool. The check now runs both pool preparations first and models
@@ -327,7 +363,7 @@ Two of the checks failed on the base for reasons outside the record change:
 | --- | --- | --- | --- |
 | Boot to READY, board image, scheduler start to READY, PMIC at 400 kHz | No board image | ≤ 12 ticks: supply verification ends 8.4 ms after the service's first step, so the done bit is seen at tick 8 or 9; that call runs the pass, the enable table, LOCK, the local open table and the row request; the next call sees ON and samples the counter; the 2 ms settle ends two ticks later | `checks/npu-startup-host.c`, with the actual PMIC provider, ledger and owner |
 | Startup calls that advance a stage | 9 harness polls (3 local, 6 PLL); 8–9 calls in `checks/npu-startup.c` | 4: tokens; supply done through the row request; row ON and the settle sample; settle end and the final readback | Same |
-| Startup register reads, cold method-2 path, LOCK reads excluded | 90 (51 local, 39 PLL) | ≤ 60 | Same |
+| Startup register reads, cold method-2 path, LOCK reads excluded, counting the owner's domain-check reads | 90 (51 local, 39 PLL) | ≤ 60 | Same; the model counts the sequencer's reads and the owner's in their callbacks |
 | Startup register writes | 18, of which 6 to PCK600 | ≤ 12, none to PCK600 | Same |
 | Register-lock acquisitions in startup | 7 (2 local, 5 PLL) | 3 | Same |
 | Counter reads in startup | 31, with 3 LOCK samples | ≤ 16 in the calls that advance; one in each PENDING call | Same; LOCK spacing reads the raw counter |
@@ -339,13 +375,14 @@ Two of the checks failed on the base for reasons outside the record change:
 | Runtime parent, board image | No board image | 8,388,608 bytes from the 768 MiB pool | `npu-board-providers.py` |
 | Largest free extent after admission; free extents after LOAD and CLOSE | Not modeled | ≥ 8,388,608 bytes; unchanged | `npu-board-providers.py`: the pool's slots, and no allocator call in runtime, service or client code |
 | Requests, replies and client tick waits per inference | Runtime check: 1 request, 1 reply; the client in `apps/npu-runtime/main.c`: one `vTaskDelay(1)` per tick of waiting | 1, 1, 0 | `checks/npu-session.py --mode board-client` |
-| Copies per tensor byte, counting the TinyUSB FIFO copy | No board image | Input 1 (`tud_vendor_read`), output 1 (`tud_vendor_write`) | Same check, counting the bytes moved through the windows |
+| Copies per tensor byte | No board image | Input and output each 2 memory copies plus PIO, with the shared TinyUSB configuration | Same check, which compiles `apps/npu-board/usb.c` against a modeled vendor class that counts each copy |
 | Cache lines maintained per job | 19,442 | 19,442 | `checks/npu-session.py --mode runtime` |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | Same |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms with USB0 on the worker's core | 1.15, 4.33, 2.02, 6.58 ms, without the 1.25 USB0 factor | `checks/npu-runtime-bounds.py` |
-| Worker wakes, idle | 0 (counted from the code: the worker blocks) | 0 | Counted from the code |
-| Worker wakes and idle-register reads per job | One per tick of execution plus one read per worker step | Same until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2 |
+| Wakes while idle | Service worker: one per 1,000 ms timeout | Bootstrap and client 0; service worker one per second | Counted from the code; the board-client case shows no client tick wait |
+| Worker steps and idle-register reads while jobs run | One step per tick of execution, one read per step | Reads ≤ steps + 4 × (ticks + 1) + 8, until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2, which asserts the bound |
+| One ShuffleNetV2 inference over USB0, upload to output read | No board image | No target; estimated about 40 ticks: 294 high-speed packets of input at 10 packets per tick (30 ticks), the 6.58 ms slot (7 ticks) and one tick for each of SUBMIT, READ and RETURN | `checks/usb0-service-burst.py` packet rate and `checks/npu-runtime-bounds.py`; measured on the board |
 | USB0, 64 KiB response | 13 ticks in the shared-loop model | 13 ticks | `checks/usb0-service-burst.py` |
 
 The interim rows stay at their npu-breadth values until the fixed mappings

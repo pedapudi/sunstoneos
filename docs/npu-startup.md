@@ -55,8 +55,9 @@ wait. A waiting stage returns PENDING; every wait has a counter deadline.
    transfer or domain-4 fault bit, a done bit without DCDC2 verified, or an
    expired deadline refuses.
 3. **Register pass and PLL enable.** Under one register-lock acquisition: the
-   owner's domain-4 check, the register pass below, and the PLL_NPU method-2
-   enable table ([PLL table](npu-pll.md)). The lock is released, and LOCK is
+   owner's domain-4 check, which reads the PCK600 words once and returns the
+   domain state (startup requires OFF), the register pass below, and the
+   PLL_NPU method-2 enable table ([PLL table](npu-pll.md)). The lock is released, and LOCK is
    read without it: at most 100 observations 3 µs apart until three in a row
    read locked, then 20 µs. The worst case is about 320 µs, so the spin does
    not yield.
@@ -79,7 +80,8 @@ register and issues no PMIC transaction; the power-domain owner does both.
 
 In the host model with the PMIC at 400 kHz, the sequencer reaches READY 11
 ticks after the scheduler starts, in 12 calls of which 4 advance a stage. It
-makes 60 register reads besides the LOCK samples, 12 writes and 3 lock
+makes 57 register reads besides the LOCK samples (52 by the sequencer and 5
+by the owner's domain check), 12 writes and 3 lock
 acquisitions.
 
 ## The register pass refuses before any write
@@ -101,9 +103,8 @@ The pass reads each word and compares it under a mask with a constant:
   separate PHY PLL; video and NPU clock-management modes disabled;
 - PLL_NPU disabled, with its pattern and bias words (`+0x2a4`–`+0x2b0`) at
   their reset values;
-- domain-4 policy and status OFF.
-
-The pass takes 22 reads, or 27 when PERI0 is selected.
+The domain-4 policy and status come from the owner's check, which precedes
+the pass. The pass takes 20 reads, or 25 when PERI0 is selected.
 
 ## Failure keeps everything after the first write
 
