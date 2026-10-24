@@ -258,8 +258,86 @@ static void inherited_cases(void)
     puts("PASS inherited thermal: both clusters, repeated lower/restore, grant limits, unsupported source, "
         "source changes, insufficient rail, stale sensors, critical, bounded retry; zero PMIC writes");
 }
+/* S_PARK is state 8 in the driver: the next poll would make the first mux
+ * write. Reach it through the actual PMIC completion and ramp paths. */
+static void before_park(void)
+{
+    for(unsigned i=0;i<400 && cpu.state!=8;++i){
+        assert(pmic_model_step(&pm)!=A733_PMIC_RETAINED);
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING);
+        pm.now+=50;
+    }
+    assert(cpu.state==8 && !cpu.request.id && cpu.clock.id && cpu.rail.id);
+    covered();
+}
+static void late_policy_cases(int reproduce)
+{
+    unsigned cases=0;
+    for(unsigned cluster=0;cluster<2;++cluster){
+        for(unsigned ramp=0;ramp<2;++ramp)for(unsigned critical=0;critical<2;++critical){
+            setup(0x00000100,1,ramp?30:45,ramp?30:45,30,&both);
+            *word(PLL(cluster))=LOCKED|(39u<<8);*word(SEL(cluster))=0x03000000;
+            assert(heat(50000)==A733_THERMAL_NORMAL);
+            assert(a733_cpu_clock_inspect(&cpu,cluster,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+            assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1014);
+            assert(a733_cpu_clock_request(&cpu,cluster,1404,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+            before_park();
+            assert(!cm.writes && (first(1)<cm.count)==ramp);
+            uint32_t uv=effective_uv(cluster);unsigned events=cm.count;
+            assert(uv==cpu.to_uv && uv==cpu.rail_uv[cluster]);
+            assert(heat(critical?115000:95000)==(critical?A733_THERMAL_CRITICAL:A733_THERMAL_THROTTLE));
+            enum a733_cpu_clock_status result=run(400);
+            if(reproduce){
+                assert(!critical && !ramp && result==A733_CPU_CLOCK_COMPLETE && cm.writes==5 &&
+                    rate(cluster)==1404000000 && released());
+                puts("REPRODUCED late THROTTLE: 5 clock writes, 1014 -> 1404 MHz after policy change");
+                return;
+            }
+            assert(result==A733_CPU_CLOCK_REFUSED && !cm.writes && cm.count==events && released());
+            assert(rate(cluster)==1014000000 && cpu.applied_mhz[cluster]==1014 &&
+                effective_uv(cluster)==uv && cpu.rail_uv[cluster]==uv);
+            covered();++cases;
+        }
+        /* Inherited restore was admitted at NORMAL; THROTTLE returns only
+         * after its PMIC read. Refuse without consuming a second attempt. */
+        setup(0x00000200,2,45,45,30,&both);
+        *word(PLL(cluster))=LOCKED|(46u<<8);*word(SEL(cluster))=0x03000000;
+        assert(a733_cpu_clock_inspect(&cpu,cluster,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE);
+        assert(heat(95000)==A733_THERMAL_THROTTLE);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1014);
+        assert(heat(50000)==A733_THERMAL_NORMAL);
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING);
+        before_park();unsigned writes=cm.writes,events=cm.count,changes=cpu.changes;
+        assert(heat(95000)==A733_THERMAL_THROTTLE);
+        assert(run(400)==A733_CPU_CLOCK_REFUSED && released() && cm.writes==writes && cm.count==events);
+        assert(cpu.applied_mhz[cluster]==1014 && rate(cluster)==1014000000 && cpu.changes==changes);
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_READY && cm.writes==writes);++cases;
+        /* A user point at the ceiling remains permitted at THROTTLE. */
+        setup(0x00000200,2,45,45,30,&both);
+        *word(PLL(cluster))=LOCKED|(30u<<8);*word(SEL(cluster))=0x03000000;
+        assert(heat(50000)==A733_THERMAL_NORMAL);
+        assert(a733_cpu_clock_request(&cpu,cluster,1014,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+        before_park();assert(heat(95000)==A733_THERMAL_THROTTLE);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && rate(cluster)==1014000000);++cases;
+        /* Cooling does not cancel an already admitted safe lowering. */
+        setup(0x00000200,2,45,45,30,&both);
+        *word(PLL(cluster))=LOCKED|(46u<<8);*word(SEL(cluster))=0x03000000;
+        assert(a733_cpu_clock_inspect(&cpu,cluster,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && heat(95000)==A733_THERMAL_THROTTLE);
+        assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_PENDING);
+        before_park();assert(heat(50000)==A733_THERMAL_NORMAL);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && rate(cluster)==1014000000 &&
+            first(1)==cm.count);++cases;
+    }
+    printf("PASS late thermal policy: %u cases, both clusters, sufficient voltage and completed ramp, "
+        "critical, inherited restore, ceiling request and safe lowering\n",cases);
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
+    if(argc==2 && !strcmp(argv[1],"--late-policy-only")){late_policy_cases(0);return 0;}
+    late_policy_cases(0);
     inherited_cases();
     if(argc==2 && !strcmp(argv[1],"--inherited-only"))return 0;
     /* Read-only report of the recorded configuration: 26 MHz x 38 / 2. */

@@ -64,6 +64,7 @@ enum { A733_POWER_DOMAIN_UNKNOWN, A733_POWER_DOMAIN_OFF, A733_POWER_DOMAIN_ON_WA
        A733_POWER_DOMAIN_ON, A733_POWER_DOMAIN_OFF_WAIT, A733_POWER_DOMAIN_FAILED };
 struct a733_power_domain {
     unsigned id, state, count;
+    unsigned delays_ready; /* all five delay words written and read back */
     uint64_t command_at, deadline;
 };
 #define A733_POWER_DOMAINS 3u /* 1, 4 and 5 */

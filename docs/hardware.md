@@ -374,6 +374,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   FreeRTOS tick owner. Matching cleanup, seven CPUs OFF, distinct ROM return
   and 18 MiB restoration all passed. Evidence:
   `processor-completion-20261024/port-3-1/cpu-local-timer/runtime/session.json`.
+  The optional CPU clock driver now rechecks thermal permission immediately
+  before clock writes. This closes a reproduced increase after THROTTLE began
+  during asynchronous PMIC/ramp work. Fourteen focused software cases pass;
+  no physical clock or voltage changes ran. Evidence: `cpu-late-thermal-20261024/`.
   Cold repeatability, sustained operation, actual idle wakeup, induced-fault
   recovery and thermal transitions remain unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
@@ -1350,6 +1354,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   supplies, then parks before any GPU power request. Its software checks pass;
   physical qualification is pending. GPU identity,
   power transitions and numerical execution remain physically unqualified.
+  The shared owner now initializes and verifies the five source-defined PCK
+  delay words before its first OFF request after adopting an already-ON GPU
+  domain. Repeated transitions and eighteen injected-failure cases pass in
+  software; physical shutdown remains unqualified. This correction does not
+  establish the failed probe's location. Evidence: `gpu-first-off-delays-20261024/`.
   The earlier wrong-guard refusal was recovered through reviewed restoration
   of five SRAM regions on the same instance; that recovery does not qualify
   GPU execution. The preceding entry capture remains configuration evidence
@@ -2189,6 +2198,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   before restoration for this exact numerical image. Four fixed reads capture
   1,085,880 bytes only after validated failure retirement; capture failures
   retain ownership. This diagnostic has not run on hardware.
+  The accompanying offline analyzer compares commands, tensors, address
+  mappings and output copies against the accepted preparation artifacts.
+  Nineteen synthetic cases pass; the physical numerical cause remains unknown.
   Correct numerical execution, power-off/restart and thermal
   management remain unqualified.
   The separate finite thermal profile is now implemented and software-checked.

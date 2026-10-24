@@ -282,7 +282,11 @@ Power and thermal integration remains incomplete:
   thermal ceiling, preserving voltage. It can also lower an inspected,
   supported inherited point when the session grants that cluster and ceiling;
   each inherited lowering consumes an authorized change. Source-rate and
-  voltage checks precede the transition. Restoration needs authority for the
+  voltage checks precede the transition. The driver checks thermal permission
+  again after any voltage ramp, before its first clock write, so a late
+  THROTTLE cannot raise a cluster above the ceiling. Refusal preserves the
+  old frequency and confirmed voltage and releases the leases.
+  Restoration needs authority for the
   original point and another change. Inherited thermal transitions never
   change voltage. Missing or exhausted grants leave inherited rates unchanged.
   The ordinary OS build changes neither CPU clocks nor voltage.
@@ -292,7 +296,9 @@ Power and thermal integration remains incomplete:
   or reusable recovery after an uncertain job; resources remain retained
   until the prescribed reset or power removal.
 - **NPU integration.** The OS start list has no NPU service. Separate NPU
-  images use a fixed 492 MHz clock and 800 mV supply configuration and have
+  images use a fixed 492 MHz clock and 800 mV supply configuration. The
+  [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
+  integrates thermal admission and orderly stop; the other NPU images have
   no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
   resets while retaining the power-domain and PLL ownership; it does not
   establish reusable whole-device power recovery.
@@ -770,7 +776,9 @@ bundle and record, requires the `supervised-ram-recovery` and
 `os-supervised-software` prerequisites, and uses the shared supervised
 transport, which holds the `tools/usb-access.py` board lock and makes one
 attempt. Capture is the mimus board protocol over USB0; the microphone build
-allows at most two recognitions in the 59-second capture window.
+allows at most two recognitions in the 59-second capture window. Recorded
+workload 2 permits one recognition and requests only its transcript and final
+status. The mode comes from the frozen session; missing storage never selects it.
 
 [os-image-launch.py](../checks/os-image-launch.py) checks both tools on a
 linked image with labeled synthetic records. The image's admission, compiled
@@ -790,12 +798,18 @@ without a grant. No device, queue database or FEL program is opened.
 
 ### First bounded launch with recorded audio
 
-The smallest existing OS launch uses the supervised lifetime, recorded audio
-and workload 0. That workload starts one recognition after USB storage attaches
-and requires a sector-zero read to complete during recognition. It needs a
-USB storage device; workload 4 additionally needs the boot keyboard and its
-neutral-to-Enter trigger. The OS recognizer calls whole-recording recognition
-in both workloads. Paced replay is a separate mimus service operation.
+The smallest OS launch uses the supervised lifetime, staged recorded audio
+and explicit board workload 2. The USB0 owner must first finish its provider
+and device-stack startup. Recognition then authenticates the staged models
+and WAV and produces one transcript without an external USB disk.
+
+Workload 0 still requires storage attachment and a sector-zero read completed
+during recognition. Workload 4 additionally requires a boot keyboard and its
+neutral-to-Enter trigger. Both storage modes retain their Type-C freshness,
+attachment identity, copied-sector and recognition/storage overlap checks.
+These profiles remain required for storage integration; workload 2 establishes
+no storage or keyboard coverage. All three call whole-recording recognition.
+Paced replay is a separate mimus service operation.
 
 Select `SUNSTONE_A733_OS=ON`, with `SUNSTONE_A733_OS_RESIDENT`,
 `SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO`,
@@ -808,15 +822,18 @@ This configuration still starts all eight CPUs through
 [cached boot](../platform/a733-smp-cached/boot.c) before the shared scheduler
 runs. Disabling A76 recognition changes task placement; it does not remove
 secondary startup, coherence, interrupt delivery or scheduling from the image.
-The unresolved multicore launch described in the [handoff](handoff.md) therefore
-blocks this image too. Single-core USB and thermal results do not establish
-its multicore execution path.
+The current CPU qualification image has physically completed its finite
+all-eight workload and per-core timer checks, as recorded in the
+[handoff](handoff.md). That evidence establishes the tested CPU path; the
+integrated OS composition still needs its own supervised execution.
 
 Offline preparation requires these inputs for the selected board and image:
 
 - A passed [OS link check](../checks/os-image-link.py) of the exact ELF and a
-  reviewed workload-0 session template. The template must use USB reference
-  mode 1 (cold initialization); the single-core ROM-takeover mode 2 is refused.
+  reviewed workload-2 session template. Workload 2 occupies the existing board
+  field at byte 400. Its latch, Type-C and USB2 owner, pin, source and host-supply
+  fields must be zero. The separate USB reference field at byte 532 must remain
+  mode 1 (cold initialization); single-core ROM-takeover mode 2 is refused.
 - A reviewed `a733-os-supervised-entry-v1` record binding the image, template,
   USB identity and port, session epoch, generation and lease. Its board DDR
   reservation covers `0x41000000..0x42200000`.
@@ -845,17 +862,33 @@ the two prerequisites `supervised-ram-recovery` and `os-supervised-software`.
 The software record must cover the exact image, SRAM launcher, host sources,
 admission cases, launcher cases, capture and lifecycle checks.
 [The launcher](../tools/check-a733-os-supervised.py) validates these bindings
-before device access. It captures one workload-0 result within 59 seconds;
-the native contract expires after 60 seconds. Success requires the copied
-transcript and sector, including the recognition/storage overlap evidence.
+before device access. It captures one workload-2 result within 59 seconds;
+the native contract expires after 60 seconds. Success requires the complete
+transcript and a final live status with matching session identities. The USB
+frame retains version 1 and reports storage state 3, meaning no host workload
+was requested. Recognition uses status and text operations; a sector request
+ends the session. The existing prior-boot fault-report operation remains available. Workloads 0 and 4 continue to require the copied sector and
+recognition/storage overlap evidence.
 The image ends at a terminal halt, so recovery requires whole-board power
 removal even after successful capture. Stop at the first transport failure.
 
 The physical entry record is still missing. Synthetic records used by host
 checks establish validation behavior and cannot authorize this launch.
-Resolving the multicore dependency and establishing the board-specific entry
-facts are separate requirements. This supervised configuration keeps WDT0
-disabled; resident watchdog-expiry qualification is not its prerequisite.
+The current CPU results do not supply USB, thermal, RAM or recovery authority
+for this image. This supervised configuration keeps WDT0 disabled; resident
+watchdog-expiry qualification is not its prerequisite.
+
+The recorded-audio build and link check pass with the options above.
+[The focused check](../checks/os-staged-recorded.py) passes 26 cases using the
+compiled AArch64 readiness, recognizer copy and USB frame producer with the
+actual host capture. It covers startup and later failure, zero Type-C/USB2
+accesses in workload 2, and storage overlap, freshness, sector export and
+keyboard acknowledgment in workloads 0 and 4. USB providers, scheduling and
+inference completion are modeled. The staged preparation check passes 27
+cases, including native admission with cold USB reference mode 1 and refusal
+of host authority or ROM takeover. The linked publication hook passes eight
+cases. Evidence is under `os-staged-recorded-20261024/` in the local cache.
+No integrated OS physical execution is established by these checks.
 
 ## Not yet integrated
 
@@ -874,8 +907,9 @@ disabled; resident watchdog-expiry qualification is not its prerequisite.
   needs a connected, reviewed microphone. The radio and headset builds need
   supervised preparation that stages their profile and firmware, and a
   reachable access point or paired headset. The supervised radio and headset
-  builds also need a faster SDIO mode, because firmware loading cannot finish
-  within their 40 s and 30 s bootstrap bounds. The build with both needs a
+  builds also need selection and physical qualification of the existing optional
+  four-bit 25 MHz SDIO mode. Their default one-bit 400 kHz firmware loading
+  cannot finish within the 40 s and 30 s bootstrap bounds. The build with both needs a
   staged span that holds both profiles and the shared firmware. The resident image needs every
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
   measured service windows; the resident microphone build also needs a

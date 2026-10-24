@@ -38,7 +38,7 @@ def generation_count(count, workload):
     require(type(count) is int and 1 <= count <= MAX_GENERATIONS,
             f'Recognition count must be between one and {MAX_GENERATIONS}; '
             'all generations share the 59-second capture window.')
-    require(workload == 4 or workload == 0 and count == 1,
+    require(workload == 4 or workload in (0, 2) and count == 1,
             'Repeated capture requires keyboard workload four.')
 
 
@@ -208,6 +208,7 @@ def capture_device(device, same, deadline, prepared, evidence, record, save,
     session = prepared['_combined_frozen']['board/session.bin']
     epoch, attachment = struct.unpack_from('<2Q', session, 24)
     keyboard = prepared['workload'] == 4
+    staged = prepared['workload'] == 2
     identity = {'image_sha256': prepared['image_sha256'],
                 'combined_bundle_sha256': prepared['_combined_files']['prepared.json'],
                 'epoch': epoch, 'attachment_generation': attachment}
@@ -251,7 +252,7 @@ def capture_device(device, same, deadline, prepared, evidence, record, save,
                     magic, version, status, size, count, offset, storage, op = struct.unpack_from('<8I', frame)
                     if status != 1:
                         continue
-                    require((magic, version, storage) == (0x424d494d, 3 if keyboard else 1, 1) and
+                    require((magic, version, storage) == (0x424d494d, 3 if keyboard else 1, 3 if staged else 1) and
                             struct.unpack_from('<2Q', frame, 32) == (epoch, attachment),
                             'Copied response identity differs.')
                     if keyboard:
@@ -270,10 +271,10 @@ def capture_device(device, same, deadline, prepared, evidence, record, save,
                     elif op == 3:
                         require(size == 128, 'Copied trigger extent differs.')
                         trigger = frame[64:]
-                require(total == len(text) and sector is not None and (not keyboard or trigger is not None),
+                require(total == len(text) and (staged or sector is not None) and (not keyboard or trigger is not None),
                         'Complete copied outputs required before ACK.')
                 outputs = {}
-                for name, data in [('transcript.txt', bytes(text)), ('sector.bin', sector),
+                for name, data in [('transcript.txt', bytes(text)), *([] if staged else [('sector.bin', sector)]),
                                    *([('trigger.bin', trigger)] if keyboard else [])]:
                     path = evidence / f'recognition-{generation:03}-{name}'
                     supervisor.durable_frame(path, data)
@@ -330,7 +331,7 @@ def capture_device(device, same, deadline, prepared, evidence, record, save,
 
             exchange = host.device_exchange(RetainedDevice(), same, deadline, retain, now=now)
             result = host.capture(exchange, epoch, attachment, deadline, now=now, pause=pause,
-                                  keyboard=keyboard, recognition_generation=generation)
+                                  keyboard=keyboard, recognition_generation=generation, staged=staged)
             if not keyboard:
                 persist_copies()
             require(copied and now() < deadline, 'Combined output capture incomplete or expired.')

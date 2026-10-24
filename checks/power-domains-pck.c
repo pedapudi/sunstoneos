@@ -182,9 +182,112 @@ static void transition_deadlines(void)
         assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
     }
 }
+static const unsigned delay_offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
+static const uint32_t delay_values[]={0x1f1f1f,0x1f1f,0x08080808,0x0808,8};
+static unsigned delay_fault,delay_index,delay_hits;
+static int delay_write(void *v,uintptr_t a,uint32_t value)
+{
+    const int result=owner_write(v,a,value);
+    if(delay_fault==1 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+        ++delay_hits;return 0; /* the write may already have reached the device */
+    }
+    return result;
+}
+static int delay_read(void *v,uintptr_t a,uint32_t *out)
+{
+    const int result=owner_read(v,a,out);
+    if(delay_fault>=2 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+        ++delay_hits;
+        if(delay_fault==2)return 0;
+        if(delay_fault==3)*out^=1;
+        if(delay_fault==4)m.now=d.owner.config.deadline;
+        if(delay_fault>=5)clock_fault_pending=delay_fault-4;
+    }
+    return result;
+}
+static void delay_trace(unsigned from,unsigned initialized,unsigned on)
+{
+    unsigned n=0;
+    for(unsigned i=from;i<d.trace_n;++i) {
+        const struct access *a=&d.trace[i];
+        assert(a->address<A733_POWER_PCK_DOMAIN(4) || a->address>=A733_POWER_PCK_DOMAIN(5));
+        if(!a->write)continue;
+        if(initialized && n<5) {
+            assert(a->address==A733_POWER_PCK_DOMAIN(5)+delay_offsets[n] && a->value==delay_values[n]);
+            assert(i+1<d.trace_n && !d.trace[i+1].write && d.trace[i+1].address==a->address &&
+                   d.trace[i+1].value==a->value);
+        } else assert(n==(initialized ? 5u : 0u) && a->address==A733_POWER_PCK_DOMAIN(5) &&
+                      a->value==(0xa5a50000u|(on ? 8u : 0u)));
+        ++n;
+    }
+    assert(n==(initialized ? 6u : 1u));
+}
+static void transition_delays(void)
+{
+    /* The new flag uses existing padding, preserving every old field offset. */
+    _Static_assert(sizeof(struct a733_power_domain)==32 && offsetof(struct a733_power_domain,id)==0 &&
+        offsetof(struct a733_power_domain,state)==4 && offsetof(struct a733_power_domain,count)==8 &&
+        offsetof(struct a733_power_domain,delays_ready)==12 &&
+        offsetof(struct a733_power_domain,command_at)==16 && offsetof(struct a733_power_domain,deadline)==24,
+        "power-domain layout is unchanged");
+    for(unsigned inherited=0;inherited<2;++inherited) {
+        setup();d.ack_us=0;d.ppu[5][0]|=inherited*8;d.ppu[5][2]|=inherited*8;
+        d.ppu[4][0]|=8;d.ppu[4][2]|=8;d.ppu[4][0x170/4]=0x12345678;
+        uint32_t npu[0x1000/4];memcpy(npu,d.ppu[4],sizeof(npu));
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,77,&token));
+        domains_boot();token=domains_rail(77,A733_RAIL_DCDC4);
+        for(unsigned cycle=0;cycle<2;++cycle) {
+            unsigned from=d.trace_n;
+            assert(a733_power_domain_request(&row,1));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && row.counted);
+            if(inherited && !cycle)assert(!writes_since(from) && !d.owner.domain[2].delays_ready);
+            else delay_trace(from,1,1);
+            from=d.trace_n;
+            assert(a733_power_domain_request(&row,0));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_OFF && !row.counted &&
+                   d.owner.domain[2].delays_ready);
+            delay_trace(from,inherited && !cycle,0);
+        }
+        assert(!memcmp(npu,d.ppu[4],sizeof(npu)) && d.owner.domain[1].state==A733_POWER_DOMAIN_UNKNOWN);
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_READY);
+        printf("delay initialization: inherited %s, two ON/OFF cycles, retained NPU untouched\n",inherited ? "ON" : "OFF");
+    }
+    /* Fault each first-OFF delay write/read/readback. Also cross the deadline
+     * or fail/regress time after the last readback, before the policy write. */
+    unsigned faults=0;
+    for(unsigned fault=1;fault<=6;++fault)for(unsigned index=0;index<(fault<=3 ? 5u : 1u);++index) {
+        setup();d.ack_us=0;d.ppu[5][0]|=8;d.ppu[5][2]|=8;
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,78,&token));
+        domains_boot();token=domains_rail(78,A733_RAIL_DCDC4);
+        assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && !d.owner.domain[2].delays_ready);
+        delay_fault=fault;delay_index=fault<=3 ? index : 4;delay_hits=clock_fault_pending=0;
+        d.owner.ops.read=delay_read;d.owner.ops.write=delay_write;m.provider.pmic_bus_ops.now=deadline_clock;
+        const unsigned from=d.trace_n;
+        assert(a733_power_domain_request(&row,0));service_step();
+        assert(delay_hits==1 && a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted);
+        assert(d.owner.domain[2].delays_ready==(fault>=4));
+        assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN5_FAULT);
+        assert(d.ppu[5][0]==0xa5a50008 && d.ppu[5][2]==0x42000008);
+        for(unsigned i=from;i<d.trace_n;++i)assert(!d.trace[i].write ||
+            (d.trace[i].address>A733_POWER_PCK_DOMAIN(5) && d.trace[i].address<A733_POWER_PCK_DOMAIN(5)+0x1000));
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
+        delay_fault=0;const unsigned retained=d.trace_n;
+        assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && !writes_since(retained));
+        ++faults;
+    }
+    printf("delay initialization: %u injected failures retain row/pin without policy write or revival\n",faults);
+}
+
 int main(int argc,char **argv)
 {
     assert(argc<=2);
+    if(argc==2 && !strcmp(argv[1],"--delays")) {
+        transition_delays();puts("PASS first-transition delay initialization and retained failures");return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--deadlines")) {
         transition_deadlines();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
     }

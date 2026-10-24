@@ -121,6 +121,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
     parser.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/bin/ld.lld-21')
     args = parser.parse_args()
@@ -147,9 +148,13 @@ def main():
                   '-Wl,--gc-sections', 'drivers/clock/a733_cpu_clock.c'] if cpu_clock else []),
                'checks/os-image-model.c', 'drivers/storage/storage_digest.c', '-o', str(model)]
     subprocess.run(command, cwd=ROOT, check=True)
-    subprocess.run([str(model), '--write-session', str(out / 'model-session.bin'), '9'], check=True)
+    subprocess.run([str(model), '--write-staged-session' if args.staged else '--write-session',
+                    str(out / 'model-session.bin'), '9'], check=True)
     raw = bytearray((out / 'model-session.bin').read_bytes())
     assert len(raw) == (992 if audio else 808) + (prep.GRANT_BYTES if cpu_clock else 0)
+    if args.staged:
+        assert not audio and struct.unpack_from('<I', raw, 400)[0] == 2
+        assert struct.unpack_from('<I', raw, 532)[0] == 1
 
     # Synthetic reviewed records, labeled as such, bound to this image.
     facts = out / 'MODEL-NOT-PHYSICAL'
@@ -234,8 +239,8 @@ def main():
     struct.pack_into('<4Q', contract, 80, armed, armed + HZ, armed + 60 * HZ, armed + 60 * HZ)
     (out / 'launched-contract.bin').write_bytes(contract)
 
-    def admit(contract_path, now):
-        run = subprocess.run([str(model), '--admit', str(contract_path), str(bundle / 'board/session.bin'), str(now)],
+    def admit(contract_path, now, session_path=bundle / 'board/session.bin'):
+        run = subprocess.run([str(model), '--admit', str(contract_path), str(session_path), str(now)],
                              capture_output=True, text=True)
         return run.returncode == 0 and run.stdout.strip() == 'admitted'
     assert admit(out / 'launched-contract.bin', armed + HZ // 10)
@@ -245,6 +250,16 @@ def main():
     (out / 'changed-size-contract.bin').write_bytes(changed)
     assert not admit(out / 'changed-size-contract.bin', armed + HZ // 10)
     cases['image-admission-accepts-launched-contract'] = True
+    if args.staged:
+        # Reseal mutated sessions so refusal comes from native field rules.
+        for name, offset, value in (('rom-takeover',532,2),('host-revision',536,1),
+                                    ('typec-owner',472,13),('host-supply',528,3300000)):
+            changed_session=bytearray(session);struct.pack_into('<I',changed_session,offset,value)
+            session_path=out / ('native-refuse-' + name + '.bin');session_path.write_bytes(changed_session)
+            changed_contract=bytearray(contract);changed_contract[192:224]=hashlib.sha256(changed_session).digest()
+            contract_path=out / ('native-contract-' + name + '.bin');contract_path.write_bytes(changed_contract)
+            assert not admit(contract_path,armed + HZ // 10,session_path)
+            cases['native-refuses-' + name]=True
 
     # Preparation refuses each missing or changed reviewed fact before writing.
     def entry_with(change, name):
@@ -268,7 +283,9 @@ def main():
         'other-session-identities': lambda: prepare('r2', entry=entry_with(lambda v: v.update(lease=v['lease'] + 1), 'lease')),
         'missing-input-reservation': lambda: prepare('r3', entry=entry_with(lambda v: v.pop('mimus_ddr'), 'ddr')),
         'thermal-evidence-hash': lambda: prepare('r4', **session_with(lambda v: v.__setitem__(slice(632, 633), b'\0'), 'thermal')),
-        'workload-two': lambda: prepare('r5', **session_with(lambda v: struct.pack_into('<I', v, 400, 2), 'workload')),
+        'unexpected-host-authority' if args.staged else 'workload-two-with-storage-authority':
+            lambda: prepare('r5', **session_with(lambda v: struct.pack_into('<I', v, 536 if args.staged else 400, 2), 'workload')),
+        'rom-takeover-reference': lambda: prepare('r11', **session_with(lambda v: struct.pack_into('<I', v, 532, 2), 'usb-reference')),
     }
     other = dict(manifest, audio=not audio)
     (out / 'other-link-check.json').write_text(json.dumps(other))
@@ -481,7 +498,7 @@ def main():
     assert not any(name == 'usb' or name.startswith('usb.') for name in sys.modules)
     result = {'passed': True, 'physical_access': False, 'audio': audio, 'image_sha256': image_hash,
               'build_id': manifest['build_id'], 'tool_sha256': tool.digest(Path(tool.__file__)),
-              'preparation_sha256': tool.digest(Path(prep.__file__)), 'cases': cases,
+              'preparation_sha256': tool.digest(Path(prep.__file__)), 'workload': inner['workload'], 'cases': cases,
               'limits': 'All physical facts synthetic; the transport, FEL program and board are never used.'}
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print('PASS OS supervised preparation and launcher (%s): %d cases' % ('audio' if audio else 'no audio', len(cases)))

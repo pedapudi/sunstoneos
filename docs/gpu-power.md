@@ -1,11 +1,12 @@
-# GPU power control has host evidence
+# GPU power control still needs physical qualification
 
 The A733 GPU power controller prepares the GPU at 400 MHz and requests power
 for its top-level domain (PCK600 domain 5) through a row of the
 [power-domain owner](power-domains.md). It supports bounded startup, shutdown, and reopening.
-Host checks and an AArch64 compilation pass. Physical execution, regulator
-control, shared-clock management, and integration with the FreeRTOS GPU service
-remain outstanding.
+The native platform integrates the shared clock and rail owners and the FreeRTOS
+GPU service. Host checks and an AArch64 compilation pass. A physical power/identity
+attempt on 2026-10-24 did not return; no startup, identity or shutdown phase was
+observed. GPU operation remains unqualified.
 
 The implementation is [a733_gpu_power.c](../drivers/gpu/a733_gpu_power.c), with
 its callback contract in [a733_gpu_power.h](../include/a733_gpu_power.h).
@@ -57,15 +58,18 @@ Register operations use these address spaces:
 
 Shared gates are read-only in this controller. The platform's register-update
 callback must preserve unrelated fields atomically under the shared register
-lock. GPU clock writes include the update key in bit 27; that key reads as zero.
+lock. GPU clock writes include the update bit at bit 27, which the manual says clears
+when the configuration becomes valid. The controller checks the configured
+fields, not an explicit update-bit completion poll.
 No parent PLL or PMIC register is written by the controller.
 
 ## Startup and shutdown preserve explicit limits
 
 Startup checks the MBUS gates, the power-controller clock, a closed GPU clock
 gate and an asserted reset, then requests the domain-5 row ON. The owner
-programs the source-defined power-controller delays, requests domain state 8
-and waits for that exact status. After the row reads ON the controller selects the 400 MHz peripheral
+adopts a coherent inherited ON domain without a command. From OFF it programs
+the source-defined power-controller delays, requests domain state 8 and waits
+for that exact status. After the row reads ON the controller selects the 400 MHz peripheral
 parent with divisor one, enables the core and bus clocks, waits at least one
 microsecond, and releases external reset. Relevant writes receive readback
 checks. The selected clock requires only 80 ns for 32 cycles, so the one
@@ -73,8 +77,8 @@ microsecond delay covers the reference driver's settling requirement.
 
 Shutdown requires stopped firmware, closed job admission, and masked GPU
 interrupts. It asserts external reset, disables the local bus and core clocks,
-and requests the row OFF; the owner rereads the gate and reset closed, requests
-domain state zero and waits for that exact status. It then releases
+and requests the row OFF. The owner rereads the gate and reset closed, initializes
+the delay row if needed, requests domain state zero and waits for that exact status. It then releases
 shared-resource leases through the resource manager. The controller allows no
 new operation after a failed transition.
 
@@ -152,18 +156,66 @@ corrected shim passed; native controller evidence did not require repeating.
 The later native check adds partial-write and late-release coverage. Its
 successful register trace is unchanged, so the reference result remains valid.
 
-## Physical qualification requires recovery and resource managers
+## Audit of the nonreturning identity probe
 
-No physical test executable or queue submission exists for this controller yet.
-Before a board trial, implement shared leases and ordered register callbacks,
-qualify independent watchdog recovery, and establish a stopped GPU. Preserve
-all memory backing throughout the trial.
+The frozen [power/identity probe](../apps/gpu-power-id/README.md), ELF
+`fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe`, was
+uploaded byte for byte to port 3-1. All six FEL transactions succeeded, including
+launch. The 16 KiB zero file was the prelaunch result initialization; there was
+no post-execution result read. No ROM node or native result was observed within
+30 seconds. This leaves entry, provider readiness, power, identity and return
+unlocalized. The board requires recovery before any further execution.
 
-The first proposed board test should read the initial clock, reset, domain,
-and rail settings under the coordinator's device lock. If the GPU is safely
-stopped, run one bounded startup at the selected operating point, read GPU
-identity, and run one shutdown. Capture every transition and verify ROM return.
-Stop on the first transport failure, unexpected state, or deadline. A successful
-trial would qualify power sequencing and identity access only; firmware boot,
-workload execution, memory isolation, and interrupt delivery need their own
-missing evidence.
+The source audit found one concrete shutdown gap. The reference
+`pck600_domains.c:126–142,269–283` initializes five delay words at domain
+registration, independently of the current power state. Its table and offsets
+at lines 547–569 supply the native values. The failed image instead initialized
+only on an ON command. With inherited ON, adoption skipped the command and its
+first OFF used inherited delay settings. The owner now initializes those words
+before that first OFF, with readbacks and a fresh deadline check. This closes a
+missing transition prerequisite; it does not establish that the failed probe
+reached shutdown, or that the inherited settings were wrong. The vendor fields
+at offsets `0xc00`, `0xc04` and `0xc10` are not described by the PCK-600 TRM;
+the correction follows the pinned implementation without inventing their timing
+semantics. Existing ON writes and later OFF writes are unchanged.
+
+The remaining sequence comparison is:
+
+| Source and location at pinned kernel revision | Finding |
+| --- | --- |
+| A733 manual 4.1.6.121–122; `ccu-sun60iw2.c:1021–1049` | Source 3 selects PERI0 400 MHz, divisor 0 masks no cycles, bit 31 gates the core, and `0xb24` bits 0/16 control bus gate/reset. The native fields agree. |
+| `ccu_div.c:110–140`, `ccu_mux.c:182–208`, `ccu_gate.c:144–148,213–243` | Rate, parent and gate writes include the update key. Only `CCU_FEATURE_CLEAR_MOD` selects a clear-bit wait; GPU has `KEY_FIELD_MOD` alone. There is no demonstrated missing reference wait, so the native clock sequence is unchanged. |
+| Open PVR `pvr_power.c:256–307` | Parent/core/bus enable, at least 1 µs delay, then reset release; shutdown asserts reset before disabling bus/core/parent. Native order follows this path. |
+| BXM `sunxi_platform.c:167–275,911–922` | Initial probe requests runtime power before clocks; its helper releases reset before bus/core enable and explicitly writes bit 27. This differs from open PVR and agrees with the manual's generic reset-before-bus advice in 4.1.4.4. |
+| BXM `sunxi_platform.c:345–353,374–380` | Later power callbacks enable clocks before runtime ON and request runtime OFF before disabling clocks. These are different lifecycle paths, not authority to reorder the native never-booted probe. |
+| Open PVR `pvr_device.c:511–541,595–603,680–739`; `pvr_power.c:353–376` | Runtime power precedes the 64-bit identity read and legacy 32-bit fallback; identity precedes firmware loading. A never-booted unwind skips firmware shutdown. The native ID widths, offsets and no-firmware scope agree. |
+
+The `img,gpu` compatible selects the manual callbacks *within* open PVR
+(`pvr_drv.c:1495–1510`); it does not prove which driver a Linux image loads.
+`bsp/drivers/gpu/Kconfig:35–51` and the imagination Makefile select open PVR with
+`CONFIG_AW_DRM_POWERVR`. The separate `bsp/modules/gpu/Makefile` selects BXM when
+`GPU_TYPE` or `CONFIG_AW_GPU_TYPE` is `bxm`. Neither cached sun60iw2 minimum config
+establishes that selection. No built board `.config` or loaded-module record is
+bound to this audit, so the effective board-driver choice remains unresolved.
+The differing reset orders are recorded rather than used to justify a change.
+The domain driver attaches clocks but does not set `GENPD_FLAG_PM_CLK`
+(`pck600_domains.c:186–213,282`); generic domain code installs automatic clock
+start/stop callbacks only with that flag (`drivers/base/power/domain.c:2084–2086`).
+
+The narrow [provider-readiness checkpoint](../apps/gpu-provider-ready/README.md)
+remains frozen at ELF `3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed`.
+It returns after the actual constructors, PMIC readiness and both boot supply
+verifications, before any GPU power request or PCK access. It is untested on
+hardware. The delay fix does not alter that artifact or its evidence. Its newer
+monitor includes the accepted restoration readbacks; the failed image did not.
+Neither that cleanup change nor matching CPU objects locates the failed stage.
+
+Audit sources, hashes, the exact-image constructor result and the independent
+CPU-object comparison are in
+`~/.cache/sunstoneos/evidence/gpu-power-id-diagnosis-20261024/`. The corrected
+owner's two transition paths, 18 failure cases, deadline cases and AArch64
+compilation are preserved in
+`~/.cache/sunstoneos/evidence/gpu-first-off-delays-20261024/snapshot/manifest.json`.
+The model keeps domain 4 untouched and verifies retained ownership on uncertainty;
+it does not simulate physical PCK handshakes or prove GPU execution. No new native
+image, hardware access or retry was made for this correction.

@@ -2,7 +2,7 @@
 #define board_usb0_task mimus_unused_usb0_task
 #define exchange mimus_unused_exchange
 #define tud_vendor_tx_cb mimus_unused_tx
-#define BOARD_USB0_STOP() do{board_fail(NULL);a733_typec_revoke(&board.typec.provider);}while(0)
+#define BOARD_USB0_STOP() do{board_fail(NULL);if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);}while(0)
 #include "mimus-usb-base.c"
 #undef board_usb0_task
 #undef exchange
@@ -63,7 +63,7 @@ static void exchange(void)
         frame_success=0;sent=transferred=0;frame_bytes=sizeof(a733_fault_previous);return;
     }
 #endif
-    if(op>(keyboard?4u:2u)||request[1]||bytes>1024)stop();
+    if(op>(keyboard?4u:mimus_board_staged()?1u:2u)||request[1]||bytes>1024)stop();
     if((!keyboard||op==0)&&expected)stop();
     if(keyboard&&delivery_generation!=current){
         delivery_generation=current;delivered_text=delivered_sector=delivered_trigger=0;
@@ -73,7 +73,7 @@ static void exchange(void)
     int r=mimus_board_copy(op==1?offset:0,op==1?bytes:0,frame+64,&copied,&total);
     unsigned storage=atomic_load_explicit(&board.result,memory_order_acquire);
     if(!board_live(NULL)||storage==2||(keyboard&&op&&expected!=current))r=-1;
-    if(storage!=1&&r==1)r=0;
+    if(storage!=(mimus_board_staged()?3u:1u)&&r==1)r=0;
     if(r==1){int live=mimus_board_export_live();if(live!=1)r=live;}
     if(op==2&&r==1){memcpy(frame+64,board.sector,512);copied=512;}
     if(op==3&&r==1){r=mimus_board_trigger_copy(frame+64);copied=r==1?128:0;}
@@ -92,5 +92,6 @@ void board_usb0_task(void *unused)
 {
     (void)unused;
     usb0_service_start();
+    mimus_board_usb0_started();
     usb0_service_run(exchange);
 }

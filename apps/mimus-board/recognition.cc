@@ -22,7 +22,7 @@ void fail(){stopped.store(true,std::memory_order_release);state.store(2,std::mem
 [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
 void recognize(void *)
 {
-    /* Board owners must first establish live storage attachment. Hashing is
+    /* Board owners establish the selected USB readiness. Hashing is
      * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
     while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
     for(unsigned i=0;i<3;++i){
@@ -51,7 +51,7 @@ void recognize(void *)
         started.store(0,std::memory_order_release);
         if(!ok||!mimus_board_live()||state.load(std::memory_order_acquire)==2){failed();}
         /* A read finishing after recognition is not overlap. */
-        if(overlap.load(std::memory_order_acquire)!=current){failed();}
+        if(!mimus_board_staged()&&overlap.load(std::memory_order_acquire)!=current){failed();}
         state.store(1,std::memory_order_release);
         if(!mimus_board_keyboard())for(;;){mimus_board_progress();vTaskDelay(1);}
         while(acknowledged.load(std::memory_order_acquire)!=current){
@@ -97,7 +97,7 @@ extern "C" int mimus_board_copy(uint32_t offset,size_t bytes,uint8_t *out,size_t
     *copied=0;*total=0;
     if(!mimus_board_session_live()||state.load(std::memory_order_acquire)==2)return -1;
     if(state.load(std::memory_order_acquire)!=1)return 0;
-    if(!mimus_board_live()||overlap.load(std::memory_order_acquire)!=generation.load(std::memory_order_acquire))return -1;
+    if(!mimus_board_live()||(!mimus_board_staged()&&overlap.load(std::memory_order_acquire)!=generation.load(std::memory_order_acquire)))return -1;
     *total=used;if(offset>used||bytes>used-offset||bytes>1024)return -1;
     std::memcpy(out,transcript+offset,bytes);*copied=bytes;return mimus_board_live()?1:-1;
 }
