@@ -9,11 +9,13 @@ counter access sequences) are compared with the pinned sunxi-nsi sources,
 the nsi0 node of sun60iw2p1.dtsi, the pinned U-Boot NSI driver and the A733
 manual text. The port numbering is checked in the same sources: the sun60iw2
 port enum, the node's sub_node_id_mapping, the register index it selects and
-the clock that times each port's counters. The component is then compiled for
-AArch64 with the image flags. Its code size, its barriers and the copy loop
-are read from the objects, and Unicorn runs the linked objects against
-counting callbacks to count the instructions of the hook and of each window
-step outside those callbacks. Every figure is compared with the budgets of
+the clock that times each port's counters, and the pmu_name[] match that
+sets the port of each field write. The MBUS_CLK_REG bit whose setting makes
+the first start refuse is compared with the manual. The component is then
+compiled for AArch64 with the image flags. Its code size, its barriers and
+the copy loop are read from the objects, and Unicorn runs the linked objects
+against counting callbacks to count the instructions of the hook and of each
+window step outside those callbacks. Every figure is compared with the budgets of
 docs/designs/dram-bus-priority.md. Physical NSI behavior is outside every
 case.
 
@@ -48,7 +50,7 @@ TARGET = ['--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mge
           '-fno-asynchronous-unwind-tables', '-ffunction-sections', '-fdata-sections', '-O2',
           '-include', 'stdint.h', '-Iinclude', '-isystem', str(NEWLIB)]
 TEXT_BUDGET, DATA_BUDGET, DECODE_BUDGET = 2048, 128, 16
-OBJDUMP = 'llvm-objdump-21'
+OBJDUMP, SIZE = 'llvm-objdump-21', 'llvm-size-21'
 # Instructions outside the I/O callbacks, and register accesses per session.
 INSTRUCTION_BUDGET = {'hook': 600, 'start': 200, 'collect': 300, 'pending': 50}
 SESSION_BUDGET = 4100
@@ -160,24 +162,11 @@ def node(text, label):
     raise AssertionError(label)
 
 
-def sizes(path):
-    """Berkeley text, data and bss of an ELF64 relocatable object."""
-    raw = path.read_bytes()
-    assert raw[:4] == b'\x7fELF' and raw[4] == 2 and raw[5] == 1
-    shoff, = struct.unpack_from('<Q', raw, 0x28)
-    shentsize, shnum = struct.unpack_from('<HH', raw, 0x3a)
-    text = data = bss = 0
-    for i in range(shnum):
-        _, kind, flags, _, _, size = struct.unpack_from('<IIQQQQ', raw, shoff + i * shentsize)
-        if not flags & 2:  # SHF_ALLOC
-            continue
-        if kind == 8:  # SHT_NOBITS
-            bss += size
-        elif flags & 1:  # SHF_WRITE
-            data += size
-        else:
-            text += size
-    return text, data, bss
+def flags(source):
+    """Image flags for one source; assembly takes no C-only flag."""
+    if source.endswith('.S'):
+        return [f for f in TARGET if f not in ('-mgeneral-regs-only', '-include', 'stdint.h')]
+    return TARGET
 
 
 def main():
@@ -259,6 +248,17 @@ def main():
     enum = {k: int(v) for k, v in re.findall(r'MBUS_PMU_(\w+)\s*=\s*(\d+),', branch)}
     assert (enum['DE'], enum['IOMMU0'], enum['IOMMU1']) == (table['de'][0], table['iommu0'][0],
                                                           table['iommu1'][0]), enum
+    # Field writes: sunxi_set_nsi_qos_params matches each child's name against
+    # the sun60iw2 pmu_name[] and passes the match's index to the setters, so
+    # the child names give the same ports.
+    names = nsih[nsih.index('#elif IS_ENABLED(CONFIG_ARCH_SUN60IW2)\nstatic const char *const pmu_name[]'):]
+    names = re.findall(r'"(\w+)"', names[:names.index('};')])
+    assert {k: names.index(k) for k in table} == {k: v[0] for k, v in table.items()}, names
+    qos = nsi[nsi.index('static int sunxi_set_nsi_qos_params'):]
+    qos = qos[:qos.index('\n}\n')]
+    assert re.search(r'for_each_ports\(port\) \{\s*if \(strcmp\(child->name, get_name\(port\)\)\)', qos)
+    assert all(f'{setter}(port, val)' in qos for setter in ('nsi_port_setmode', 'nsi_port_setpri', 'nsi_port_setio'))
+    assert re.search(r'#define get_name\(n\)\s+pmu_name\[n\]', nsih)
     # sub_node_id_mapping with child ids makes a port's register index its
     # id. The other mapping subtracts one; the header defines its macro only
     # for sun55iw3, and every subtraction sits under that macro.
@@ -292,6 +292,10 @@ def main():
     assert re.search(r'NSI_RST\.\s*NSI Reset\.\s*30\s+R/W', clk)
     assert re.search(r'NSI_CFG_RST\.\s*NSI Reset\s*16\s+R/W', bgr)
     assert re.search(r'NSI_CFG_GATING\.\s*Gating Clock for NSI_CFG\s*0\s+R/W', bgr)
+    # MBUS_CLK_REG +0x588: dynamic frequency scaling enable, bit 28.
+    assert re.search(r'MBUS_CLK_REG\s+0x0588\s+MBUS Clock Register', manual)
+    mbus = manual[manual.index('4.1.6.76          0x0588'):manual.index('4.1.6.77')]
+    assert re.search(r'MBUS_DFS_EN\.\s*MBUS CLK Dynamic Frequency Scaling Enable\.\s*28\s+R/W', mbus)
     results['sources'] = 'pass'
 
     # Host models under the sanitizers.
@@ -312,6 +316,7 @@ def main():
     assert 'PASS latency window' in log
     window = results['window'] = json.loads(log.splitlines()[0])
     assert window['session_accesses'] <= SESSION_BUDGET and window['after_failure'] == 0, window
+    assert window['mbus'] == [ccu + 0x588, 1 << 28], window['mbus']
 
     # The facts the compiled code showed against the vendor facts.
     hook = results['priority-2']
@@ -348,10 +353,9 @@ def main():
             ('copy', [], 'drivers/dram/a733_dram_copy.S'),
             ('decode', [], 'drivers/dram/a733_dram_decode.c')]:
         obj = out / f'{name}.o'
-        flags = [f for f in TARGET if f not in ('-mgeneral-regs-only', '-include', 'stdint.h')] \
-            if source.endswith('.S') else TARGET
-        run(f'size-{name}', [CLANG, *flags, *defines, '-c', source, '-o', obj])
-        size[name] = dict(zip(('text', 'data', 'bss'), sizes(obj)))
+        run(f'compile-{name}', [CLANG, *flags(source), *defines, '-c', source, '-o', obj])
+        berkeley = run(f'size-{name}', [SIZE, obj]).splitlines()[1].split()
+        size[name] = dict(zip(('text', 'data', 'bss'), map(int, berkeley[:3])))
         listing = run(f'disassemble-{name}', [OBJDUMP, '-d', '--no-show-raw-insn', obj])
         barriers[name] = len(re.findall(r'\t(?:dsb|dmb)\t', listing))
         if name == 'copy':
@@ -367,9 +371,11 @@ def main():
     assert size['decode']['text'] <= DECODE_BUDGET and not size['decode']['data'] + size['decode']['bss'], size
     assert not any(barriers.values()), barriers
     results['aarch64_size'], results['barriers'] = size, barriers
-    # The framebuffer's raw path brackets each access with DSB SY.
+    # Derived, not counted: the framebuffer's raw path source brackets each
+    # access with DSB SY, so each sequence has two per access.
     results['dsb_sy_per_sequence'] = {
         'hook_worst': 2 * (2 + hook['worst']), 'start': 2 * window['start_accesses'],
+        'first_start': 2 * window['first_start_accesses'],
         'collect': [2 * window['collect_accesses'], 2 * window['collect_after_fallback']]}
 
     # Instructions outside the I/O callbacks, from the linked objects.
@@ -382,9 +388,7 @@ def main():
         for name, source in (('hook', 'drivers/dram/a733_dram.c'), ('load', 'drivers/dram/a733_dram_load.c'),
                              ('copy', 'drivers/dram/a733_dram_copy.S')):
             obj = out / f'emulation-{mode}-{name}.o'
-            flags = [f for f in TARGET if f not in ('-mgeneral-regs-only', '-include', 'stdint.h')] \
-                if source.endswith('.S') else TARGET
-            run(f'emulation-{mode}-{name}', [CLANG, *flags, '-g', f'-DSUNSTONE_DRAM_PRIORITY={mode}',
+            run(f'emulation-{mode}-{name}', [CLANG, *flags(source), '-g', f'-DSUNSTONE_DRAM_PRIORITY={mode}',
                                              '-DSUNSTONE_GPU_DISPLAY_DRAM_LOAD=1', '-c', source, '-o', obj])
             objects.append(obj)
         elf = out / f'emulation-{mode}.elf'
@@ -427,7 +431,8 @@ def main():
         assert result == 0 and emu.accesses == accesses and not emu.library, (result, emu.accesses)
         assert struct.unpack('<I', bytes(emu.uc.mem_read(in_flight, 4)))[0] == flying
         return count
-    steps = {'start': [step(0, 6, 1)], 'pending': [step(period // 10, 0, 1)], 'collect': [step(period, 6, 0)]}
+    # The first start also reads MBUS_CLK_REG (0 here: scaling off).
+    steps = {'start': [step(0, 7, 1)], 'pending': [step(period // 10, 0, 1)], 'collect': [step(period, 6, 0)]}
     steps['start'].append(step(0, 6, 1))
     emu.free = True
     steps['collect'].append(step(period, 6, 0))  # Refused as free-running; the fallback engages.
@@ -439,7 +444,7 @@ def main():
         instructions[name] = max(counts)
         assert instructions[name] <= INSTRUCTION_BUDGET[name], (name, counts)
     assert all(v[0] <= INSTRUCTION_BUDGET['hook'] for k, v in instructions.items() if k.startswith('hook')), instructions
-    results['instructions'] = instructions
+    results['instructions'], results['window_steps'] = instructions, steps
     (out / 'results.json').write_text(json.dumps({'results': results, 'inputs': inputs}, indent=1) + '\n')
     print(json.dumps(results, indent=1))
     print('PASS DRAM controller: priority hook, latency window, decode check, observed register facts '

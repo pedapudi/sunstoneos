@@ -115,14 +115,21 @@ rows wait for a board session.
 - **Images.** The gpu-display, HDMI, DisplayPort and integrated OS
   (`SUNSTONE_A733_OS=ON`) images were built from each tree with the
   project's aarch64 Clang toolchain. `llvm-size`, `llvm-nm` and a SHA-256 of
-  each image's `.text` were compared.
+  each image's `.text` were compared. The current revision changes only
+  `drivers/dram/`, `include/a733_dram.h`, `checks/dram-*` and documentation.
+  No image compiles those files: `memory.c` declares
+  `a733_dram_decode_check()` itself, in a layout 2 branch that no image
+  compiles. The image comparison therefore holds for the current revision.
 - **Host check.** `checks/dram-controller.py` ran on the after tree. The
   before tree has no code to run it against, so every figure from it is a
   new value against a baseline of no code. Its source comparison now also
-  checks the port numbering: the sun60iw2 port enum, `sub_node_id_mapping`,
-  the register index it selects, the counter clock, and the U-Boot base and
-  stride read from the pinned U-Boot archive. Two mutations, a 0x100 port
-  stride and port 13 in place of port 14, each fail the check.
+  checks the port numbering: the sun60iw2 port enum, the `pmu_name[]` match
+  that sets the port of each field write, `sub_node_id_mapping`, the
+  register index it selects for the counter reads, the counter clock, and
+  the U-Boot base and stride read from the pinned U-Boot archive. It also
+  compares the `MBUS_CLK_REG` bit whose setting refuses the first start with
+  `MBUS_DFS_EN` in the manual. Three mutations, a 0x100 port stride, port 13
+  in place of port 14 and bit 27 in place of bit 28, each fail the check.
 - **Earlier code.** The "Unmerged code" column repeats the figures the design
   records for commit `02154a1`.
 - No board was used.
@@ -131,24 +138,31 @@ rows wait for a board session.
 
 | Metric | Budget | Before | Unmerged code | After | Within budget |
 | --- | --- | --- | --- | --- | --- |
-| Hook accesses | 2 CCU reads; at most 27 NSI; 9 at the table; 0 with the NSI off; 1 lock pair | 0 | 21 from reset fields, 9 at the table, 27 worst | 2 CCU reads; 21 NSI from reset fields, 9 at the table, 27 worst; 9 reads-only; 0 NSI with the NSI off; the caller's 1 lock pair | Yes |
-| Window accesses per phase | Start 6; collect 6, or 7 after the fallback; pending 0; at most 4,100 per session | 0 | 4,008 per session | Start 6; collect 6, 7 after the fallback; pending 0 and 1 counter read; 4,008 per session (40 phase A and 294 phase B windows) | Yes |
-| Accesses, `enter` calls and counter reads after a failure | 0 | Not modeled | Not modeled | 0 after a failure at each of the 6 start accesses, each of the 6 collect accesses, the fallback write and a failed `enter` | Yes |
-| Instructions outside the callbacks | Hook 600; start 200; collect 300; pending 50 | None | Not counted | Hook 456 from reset fields, 342 at the table, 513 worst, 41 with the NSI off; reads-only 276; start 146; collect 158; pending 39 | Yes |
+| Hook accesses | 2 CCU reads; at most 27 NSI; 9 at the table; 0 with the NSI off; 1 lock pair | 0 | 21 from reset fields, 9 at the table, 27 worst | 2 CCU reads; 21 NSI from reset fields, 9 at the table, 27 worst; 9 reads-only; 0 NSI with the NSI off. The lock pair belongs to the framebuffer caller and is measured only when that caller merges | Yes for the accesses; the lock pair is not yet measurable |
+| Window accesses per phase | Start 6, plus one `+0x588` read in the first start; collect 6, or 7 after the fallback; pending 0; at most 4,100 per session | 0 | 4,008 per session | Start 6, 7 in the first start; collect 6, 7 after the fallback; pending 0 and 1 counter read; 4,009 per session (40 phase A and 294 phase B windows) | Yes |
+| `MBUS_DFS_EN` refusal | 1 CCU read, no port access, phases ended early | Not applicable | No check | Of the 32 bits of `+0x588`, only bit 28 refuses; the refusing start makes 1 read and 1 lock pair, and later steps and abandon make 0 accesses, `enter` calls and counter reads | Yes |
+| Accesses, `enter` calls and counter reads after a failure | 0 | Not modeled | Not modeled | 0 after a failure at the first start's `+0x588` read, each of the 6 start accesses, each of the 6 collect accesses, the fallback write and a failed `enter` | Yes |
+| Instructions outside the callbacks | Hook 600; start 200; collect 300; pending 50 | None | Not counted | Hook 489 from reset fields, 363 at the table, 552 worst, 71 with the NSI off; reads-only 307; start 161 for the first start and 148 later; collect 158; pending 39 | Yes |
 | `DSB` and `DMB` in the component's objects | 0 | 0 | 0 | 0 | Yes |
-| `DSB SY` per sequence, register path included | Hook up to 58; start 12; collect 12–14 | 0 | Same | Hook 58 worst; start 12; collect 12, 14 after the fallback | Yes |
+| `DSB SY` per sequence, register path included | Hook up to 58; start 12; collect 12–14 | 0 | Same | Derived from the raw path's source, two per access, times the modeled access counts: hook 58 worst; start 12, 14 for the first start; collect 12, 14 after the fallback | Yes, as derived; no linked image counts them |
 | `phase_ticks_max` | Longest span, saturating at 65,535 | Not carried | Offset 38 always 0 | Spans of 100 ticks, then 300, then 70,000 give 100, 300, then 65,535 at offset 38 | Yes |
 | Copy kernel | 6 instructions per 64 bytes; 2 acquire loads per pass | None | Same | 6; 2 | Yes |
-| Code size | Outside the load mode at most 2 KiB text, 128 B data; decode check at most 16 B | 0 | Hook 863 B; reads-only 723 B; window 2,452 B; copy 32 B; 0 B data | Hook 728 B; reads-only 608 B; window 2,816 B; copy 32 B; decode 8 B; 0 B data | Yes |
+| Code size | Outside the load mode at most 2 KiB text, 128 B data; decode check at most 16 B | 0 | Hook 863 B; reads-only 723 B; window 2,452 B; copy 32 B; 0 B data | Hook 704 B; reads-only 588 B; window 3,000 B; copy 32 B; decode 8 B; 0 B data | Yes |
 | Added `a733_dram_` symbols, tasks, timers, interrupts and tick wake-ups in the gpu-display, HDMI, DisplayPort and OS images | 0 | 0 | 0 | 0; see the image table | Yes |
 | CPU time per window phase | At most 20 µs (480 ticks) | None | Not measured | Not measured: `phase_ticks_max` from both load images | Board measurement |
 | Scan-out latency | Scan-out row of the DRAM controller design | Not measured | Not measured | Not measured | Board measurement |
 
-The window's text grows by 364 bytes over the unmerged code. That growth is
-the failure latch, the monotonic counter check and the phase span, which the
-design adds. The hook's text shrinks by 135 bytes. Its table holds each
-field's address, mask, target and evidence position, where the unmerged code
-computed the address and target on every access.
+The window's text grows by 548 bytes over the unmerged code. That growth is
+the failure latch, the monotonic counter check, the phase span and the
+`MBUS_DFS_EN` read, which the design adds. The hook's text shrinks by 159
+bytes. Its table holds each field's address, mask, target and evidence
+position, where the unmerged code computed the address and target on every
+access, and the hook writes the evidence block directly instead of through a
+separate structure and copy function. The hook zeroes the 136-byte block
+field by field, because a structure assignment of that size compiles to a
+`memset` call; each hook count above includes that zeroing. Each window phase counts 50 ms of
+about 51 ms, because a collect and the next start run in consecutive 1 ms
+steps; the design records that loss of about 2% as accepted.
 
 Each image has the same text, data and bss sizes and the same symbol names
 and sizes before and after, and none has an `a733_dram_` symbol:

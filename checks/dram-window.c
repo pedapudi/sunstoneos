@@ -16,7 +16,7 @@
 enum { HOLD, FREE };
 struct model {
     uint64_t now,step;          /* Counter value; added by every counter read. */
-    uint32_t enable,clear,cycle;
+    uint32_t enable,clear,cycle,mbus;
     uint32_t rq_rd,rq_wr,dt_rd,dt_wr,la_rd; /* Values the counters hold after a window. */
     unsigned behaviour,held,pairs,busy,fail_at,enter_fails,back_at;
     unsigned reads,writes,counters,accesses,enters;
@@ -25,6 +25,7 @@ struct model {
 static uint32_t *reg(struct model *m,uintptr_t a)
 {
     assert(a733_dram_window_address(a));
+    if(a==A733_MBUS_CLOCK)return &m->mbus;
     switch(a-PORT){
     case 0xc0:return &m->enable;case 0xc4:return &m->clear;case 0xc8:return &m->cycle;
     case 0xcc:return &m->rq_rd;case 0xd0:return &m->rq_wr;case 0xd4:return &m->dt_rd;
@@ -47,7 +48,7 @@ static int wr(void *v,uintptr_t a,uint32_t value)
     struct model *m=v;assert(m->held);
     if(m->accesses<16){m->log[m->accesses]=a;m->values[m->accesses]=value;m->written[m->accesses]=1;}
     if(++m->accesses==m->fail_at)return 0;
-    ++m->writes;*reg(m,a)=value;return 1;
+    assert(a!=A733_MBUS_CLOCK);++m->writes;*reg(m,a)=value;return 1;
 }
 static int enter(void *v)
 {
@@ -71,7 +72,7 @@ static void counts(void){m.reads=m.writes=m.counters=m.pairs=m.accesses=m.enters
 static void setup(uint64_t end)
 {
     memset(&m,0,sizeof(m));memset(&w,0,sizeof(w));
-    m.now=UINT64_C(1)<<40;m.enable=0xa0;m.clear=0x50;
+    m.now=UINT64_C(1)<<40;m.enable=0xa0;m.clear=0x50;m.mbus=0xef00001f; /* Every bit but 28. */
     m.rq_rd=4000;m.dt_rd=20000;m.la_rd=4000*300;
     struct a733_cpu_clock_report r={0};
     r.domain[A733_CPU_LITTLE]=(struct a733_cpu_clock_domain){.hz=1794000000,.decoded=1};
@@ -105,11 +106,14 @@ int main(void)
         memset(&x,0,sizeof(x));assert(a733_dram_window_init(&x,&ops,HZ,FABRIC,1,&r) &&
             !a733_dram_window_init(&x,&ops,HZ,FABRIC,1,&r));
     }
-    /* Counter words: +0xc0..+0xdc of port 2 only. */
+    /* Counter words: +0xc0..+0xdc of port 2, and CCU +0x588. */
     unsigned admitted=0;
     for(uintptr_t a=A733_NSI_BASE;a<A733_NSI_BASE+0x10000;a+=4)admitted+=(unsigned)a733_dram_window_address(a);
     assert(admitted==8 && !a733_dram_window_address(PORT+0xe0) && !a733_dram_window_address(PORT+0xc1) &&
         !a733_dram_window_address(A733_NSI_PORT(14)+0xc0));
+    admitted=0;
+    for(uintptr_t a=0x02002000;a<0x02004000;a+=4)admitted+=(unsigned)a733_dram_window_address(a);
+    assert(admitted==1 && a733_dram_window_address(A733_MBUS_CLOCK));
 
     /* Not eligible (stage 2, state 0, fewer than three presentations): no
      * access and no counter read. */
@@ -118,16 +122,23 @@ int main(void)
     assert(!m.counters && !m.accesses && !m.pairs);
 
     /* Start: period, disable, clear, enable with the saved word; one lock
-     * pair, two counter reads and no barrier of its own. */
+     * pair, two counter reads and no barrier of its own. The first start
+     * reads MBUS_CLK_REG first. */
     assert(a733_dram_window_step(&w,1)==0 && w.in_flight);
-    assert(m.accesses==6 && m.pairs==1 && m.counters==2 && m.writes==4 && m.reads==2);
+    assert(m.accesses==7 && m.pairs==1 && m.counters==2 && m.writes==4 && m.reads==3);
+    assert(m.log[0]==A733_MBUS_CLOCK && !m.written[0] && !w.scaling);
     static const uint32_t offsets[6]={0xc8,0xc0,0xc0,0xc4,0xc4,0xc0};
     static const int writes[6]={1,0,1,0,1,1};
-    for(unsigned i=0;i<6;++i)assert(m.log[i]==PORT+offsets[i] && m.written[i]==writes[i]);
+    for(unsigned i=0;i<6;++i)assert(m.log[1+i]==PORT+offsets[i] && m.written[1+i]==writes[i]);
     uintptr_t start_log[6];int start_written[6];
-    memcpy(start_log,m.log,sizeof(start_log));memcpy(start_written,m.written,sizeof(start_written));
-    assert(m.values[0]==FABRIC/20 && m.values[0]==30000000u); /* P x fabric_hz. */
-    assert(m.values[2]==0xa0 && m.values[4]==0x51 && m.values[5]==0xa1 && m.cycle==30000000u);
+    memcpy(start_log,m.log+1,sizeof(start_log));memcpy(start_written,m.written+1,sizeof(start_written));
+    assert(m.values[1]==FABRIC/20 && m.values[1]==30000000u); /* P x fabric_hz. */
+    assert(m.values[3]==0xa0 && m.values[5]==0x51 && m.values[6]==0xa1 && m.cycle==30000000u);
+    /* Later starts make the six accesses only. */
+    m.now=w.t1+P;assert(a733_dram_window_step(&w,1)==0 && !w.in_flight);
+    counts();assert(a733_dram_window_step(&w,1)==0 && w.in_flight && m.accesses==6 && m.reads==2);
+    for(unsigned i=0;i<6;++i)assert(m.log[i]==PORT+offsets[i] && m.written[i]==writes[i]);
+    setup(18*HZ);assert(a733_dram_window_step(&w,1)==0 && w.in_flight);
     /* Pending: one counter read, nothing else. */
     for(unsigned i=0;i<5;++i){counts();m.now+=P/10;assert(a733_dram_window_step(&w,1)==0);
         assert(m.counters==1 && !m.accesses && !m.pairs);}
@@ -179,18 +190,21 @@ int main(void)
     unsigned after_failure=0;
     struct a733_dram_copy_slot idle;atomic_init(&idle.passes,0);atomic_uint running;atomic_init(&running,1);
     uint8_t byte=0;
-    for(unsigned k=1;k<=8;++k)for(unsigned in_collect=0;in_collect<2;++in_collect){
-        if(k==8&&in_collect)continue;
+    /* k: 1-7 a failed access (the first start's MBUS_CLK_REG read and six
+     * accesses, or the six collect reads), 8 a failed enter, 9 the fallback
+     * write. */
+    for(unsigned k=1;k<=9;++k)for(unsigned in_collect=0;in_collect<2;++in_collect){
+        if(in_collect&&(k==7||k==9))continue;
         setup(18*HZ);
         if(in_collect){assert(a733_dram_window_step(&w,1)==0);m.now+=P;counts();}
-        if(k==7)m.enter_fails=1;
-        else if(k==8){m.behaviour=FREE;assert(window(P)==0 && w.fallback);m.behaviour=HOLD;
+        if(k==8)m.enter_fails=1;
+        else if(k==9){m.behaviour=FREE;assert(window(P)==0 && w.fallback);m.behaviour=HOLD;
             assert(a733_dram_window_step(&w,1)==0);m.now+=P;counts();m.fail_at=1;}
         else m.fail_at=k;
         assert(a733_dram_window_step(&w,1)<0);
-        if(k==7)assert(!m.held && !m.accesses && m.enters==1);
-        else assert(m.held && m.accesses==(k==8?1u:k));
-        assert(w.failed && w.early && atomic_load(&w.phase)==A733_DRAM_ENDED);
+        if(k==8)assert(!m.held && !m.accesses && m.enters==1);
+        else assert(m.held && m.accesses==(k==9?1u:k));
+        assert(w.early && atomic_load(&w.phase)==A733_DRAM_ENDED);
         /* The lock stays held after a failed access, so an enter would assert. */
         m.enter_fails=0;m.fail_at=0;counts();
         for(unsigned i=0;i<3;++i){m.now+=P;assert(a733_dram_window_step(&w,i!=1)==0);}
@@ -208,9 +222,9 @@ int main(void)
         assert(a733_dram_window_step(&w,1)==0);m.now+=P;counts();m.fail_at=3;
         assert(a733_dram_window_step(&w,1)<0 && m.held);counts();
         a733_dram_window_abandon(&w);assert(!m.counters && !w.b_end);
-        struct a733_dram_priority_evidence e={0};struct a733_dram_block value;
+        struct a733_dram_block value={0};
         struct a733_dram_copy_slot none[8];for(unsigned i=0;i<8;++i)atomic_init(&none[i].passes,0);
-        a733_dram_block(&e,1,&value);a733_dram_window_block(&w,none,&value);
+        a733_dram_window_block(&w,none,&value);
         assert(value.result&A733_DRAM_ENDED_EARLY && !value.phase_b_ms);
     }
 
@@ -246,9 +260,8 @@ int main(void)
     m.step=100;assert(window(P)==0 && w.count[A733_DRAM_ACCEPTED_A]==2 && w.ticks_max==300);
     m.step=70000;assert(window(P)==0 && w.count[A733_DRAM_ACCEPTED_A]==3 && w.ticks_max==UINT16_MAX);
     {
-        struct a733_dram_priority_evidence e={0};struct a733_dram_block value;
+        struct a733_dram_block value={0};
         struct a733_dram_copy_slot none[8];for(unsigned i=0;i<8;++i)atomic_init(&none[i].passes,0);
-        a733_dram_block(&e,1,&value);assert(!value.phase_ticks_max);
         a733_dram_window_block(&w,none,&value);assert(value.phase_ticks_max==UINT16_MAX);
     }
 
@@ -273,11 +286,37 @@ int main(void)
     assert(!m.accesses && !m.pairs && m.counters==1 && w.b_end==m.now && w.early);
     assert(w.count[A733_DRAM_ABANDONED]==1 && atomic_load(&w.phase)==A733_DRAM_ENDED);
     {
-        struct a733_dram_priority_evidence e={0};struct a733_dram_block value;
+        struct a733_dram_block value={0};
         struct a733_dram_copy_slot none[8];for(unsigned i=0;i<8;++i)atomic_init(&none[i].passes,0);
-        a733_dram_block(&e,1,&value);a733_dram_window_block(&w,none,&value);
+        a733_dram_window_block(&w,none,&value);
         assert(value.result&A733_DRAM_ENDED_EARLY && value.phase_b_ms==(w.b_end-w.b_start)*1000/HZ && value.phase_b_ms>=25);
     }
+
+    /* MBUS dynamic frequency scaling: the first start reads MBUS_CLK_REG,
+     * leaves after that one read, ends the phases early and records the bit;
+     * nothing accesses the port afterwards. A busy enter reads nothing and
+     * the next step retries the read. */
+    unsigned refuses=0;
+    for(unsigned bit=0;bit<32;++bit){
+        setup(18*HZ);m.mbus=UINT32_C(1)<<bit;
+        int r=a733_dram_window_step(&w,1);
+        if(r!=A733_DRAM_END){assert(!r && w.in_flight && !w.scaling);continue;}
+        refuses|=UINT32_C(1)<<bit;
+        assert(m.accesses==1 && m.reads==1 && m.pairs==1 && !m.held && m.log[0]==A733_MBUS_CLOCK);
+        assert(w.scaling && w.early && !w.in_flight && atomic_load(&w.phase)==A733_DRAM_ENDED);
+        counts();m.now+=P;assert(a733_dram_window_step(&w,1)==0);a733_dram_window_abandon(&w);
+        assert(!m.accesses && !m.enters && !m.counters);
+        struct a733_dram_block value={0};
+        struct a733_dram_copy_slot none[8];for(unsigned i=0;i<8;++i)atomic_init(&none[i].passes,0);
+        a733_dram_window_block(&w,none,&value);
+        assert(value.result==(A733_DRAM_MBUS_SCALING|A733_DRAM_ENDED_EARLY) && !value.count[A733_DRAM_STARTED]);
+    }
+    setup(18*HZ);m.mbus=UINT32_C(1)<<28;m.busy=1;
+    assert(a733_dram_window_step(&w,1)==0 && !m.accesses && atomic_load(&w.phase)==A733_DRAM_IDLE);
+    m.busy=0;assert(a733_dram_window_step(&w,1)==A733_DRAM_END && m.accesses==1 && w.scaling);
+    setup(18*HZ);m.busy=1;
+    assert(a733_dram_window_step(&w,1)==0 && atomic_load(&w.phase)==A733_DRAM_IDLE);
+    m.busy=0;assert(a733_dram_window_step(&w,1)==0 && m.accesses==7 && atomic_load(&w.phase)==A733_DRAM_PHASE_A);
 
     /* Copy load: no pass before phase B, after the end phase or in a state
      * other than 1. */
@@ -328,11 +367,11 @@ int main(void)
     assert(w.sum[0]==(uint64_t)a*300*256 && w.sum[1]==(uint64_t)b*400*256);
     uint64_t ms=(w.b_end-w.b_start)*1000/HZ;assert(ms>=14990 && ms<=15000);
 
-    /* Evidence block with the window and copy slots. */
-    struct a733_dram_priority_evidence e={.nsi_clock=0xc3000002,.nsi_config=0x10001,
-        .inherited={1,2,3},.final={0x4a,0x7e,0x7e}};
+    /* Evidence block with the hook fields, the window and copy slots. */
+    struct a733_dram_block e={.result=A733_DRAM_HOOK_BUILT|A733_DRAM_TABLE_IMAGE|A733_DRAM_HOOK_PASSED,
+        .nsi_clock=0xc3000002,.nsi_config=0x10001,.inherited={1,2,3},.final={0x4a,0x7e,0x7e}};
     w.fallback=1;assert(!w.early);
-    struct a733_dram_block value;a733_dram_block(&e,1,&value);a733_dram_window_block(&w,slots,&value);
+    struct a733_dram_block value=e;a733_dram_window_block(&w,slots,&value);
     const uint8_t *block=(const uint8_t *)&value;
     /* Offsets of docs/designs/dram-controller.md. */
     assert(offsetof(struct a733_dram_block,result)==16 && offsetof(struct a733_dram_block,inherited)==20 &&
@@ -349,8 +388,9 @@ int main(void)
     assert(U32(40)==0xc3000002 && U32(44)==0x10001 && U32(48)==FABRIC && U32(52)==ms);
     for(unsigned i=0;i<2;++i)assert(U64(56+24*i)==w.sum[i] && U64(64+24*i)==w.square[i] && U64(72+24*i)==w.data[i]);
     for(unsigned i=0;i<8;++i)assert(U32(104+4*i)==10*i+1);
-    printf("{\"start_accesses\":6,\"collect_accesses\":6,\"collect_after_fallback\":7,"
-        "\"pending_counter_reads\":%u,\"accepted_a\":%u,\"accepted_b\":%u,\"phase_b_ms\":%u,\"session_accesses\":%u,"
+    printf("{\"start_accesses\":6,\"first_start_accesses\":7,\"collect_accesses\":6,\"collect_after_fallback\":7,"
+        "\"mbus\":[%u,%u],",(unsigned)A733_MBUS_CLOCK,refuses);
+    printf("\"pending_counter_reads\":%u,\"accepted_a\":%u,\"accepted_b\":%u,\"phase_b_ms\":%u,\"session_accesses\":%u,"
         "\"period_cycles\":%u,\"after_failure\":%u,\"start\":[",max_pending,a,b,(unsigned)ms,total,FABRIC/20,
         after_failure);
     /* Observed sequences for the source comparison in checks/dram-controller.py. */

@@ -17,7 +17,7 @@
 #define LATENCY (PORT+0xdc)  /* Read latency sum. */
 #define MIN_DATA 1024u       /* 16 KiB in port 2's 16-byte units. */
 int a733_dram_window_address(uintptr_t a)
-{return !(a&3)&&a>=ENABLE&&a<=LATENCY;}
+{return a==A733_MBUS_CLOCK||(!(a&3)&&a>=ENABLE&&a<=LATENCY);}
 static void bump(struct a733_dram_window *w,unsigned i){if(w->count[i]<UINT16_MAX)++w->count[i];}
 int a733_dram_window_init(struct a733_dram_window *w,const struct a733_dram_window_ops *o,
     uint64_t counter_hz,uint32_t fabric_hz,uint64_t end,const struct a733_cpu_clock_report *r)
@@ -43,7 +43,7 @@ static void span(struct a733_dram_window *w,uint64_t ticks)
  * phases stops the copy tasks, and every later step and abandon returns at
  * once, so nothing calls enter, the I/O pair or the counter again. */
 static int fail(struct a733_dram_window *w)
-{w->failed=1;w->early=1;set_phase(w,A733_DRAM_ENDED);return -1;}
+{w->early=1;set_phase(w,A733_DRAM_ENDED);return -1;}
 void a733_dram_window_abandon(struct a733_dram_window *w)
 {
     if(!w||!w->initialized)return;
@@ -56,15 +56,22 @@ void a733_dram_window_abandon(struct a733_dram_window *w)
     if(phase==A733_DRAM_PHASE_B&&sample(w,&t))w->b_end=t;
     w->early=1;set_phase(w,A733_DRAM_ENDED);
 }
-/* Period, disable, clear, then enable with the saved word: six accesses.
- * The accessor's trailing DSB SY completes the enable write before the
- * counter read that gives t1. */
-static int start(struct a733_dram_window *w,uint64_t t0)
+/* Period, disable, clear, then enable with the saved word: six accesses,
+ * after one read of MBUS_CLK_REG in the first start. The accessor's trailing
+ * DSB SY completes the enable write before the counter read that gives t1. */
+static int start(struct a733_dram_window *w,uint64_t t0,unsigned first)
 {
     const struct a733_dram_io *io=&w->ops.io;
-    uint32_t enable,clear;
+    uint32_t enable,clear,mbus;
     int r=w->ops.enter(io->context);
     if(r!=1)return r==0?0:fail(w);
+    if(first){
+        if(io->read(io->context,A733_MBUS_CLOCK,&mbus)!=1)return fail(w);
+        if(mbus&UINT32_C(1)<<28){
+            w->ops.leave(io->context);
+            w->scaling=w->early=1;set_phase(w,A733_DRAM_ENDED);return A733_DRAM_END;
+        }
+    }
     if(io->write(io->context,CYCLE,w->cycles)!=1||io->read(io->context,ENABLE,&enable)!=1||
        io->write(io->context,ENABLE,enable&~1u)!=1||io->read(io->context,CLEAR,&clear)!=1||
        io->write(io->context,CLEAR,clear|1u)!=1||io->write(io->context,ENABLE,enable|1u)!=1)return fail(w);
@@ -125,14 +132,19 @@ int a733_dram_window_step(struct a733_dram_window *w,unsigned eligible)
         if(phase==A733_DRAM_PHASE_B)w->b_end=t;
         set_phase(w,A733_DRAM_ENDED);return A733_DRAM_END;
     }
-    if(phase==A733_DRAM_IDLE){w->phase_start=t;set_phase(w,A733_DRAM_PHASE_A);}
-    else if(phase==A733_DRAM_PHASE_A&&t-w->phase_start>=w->phase_a){
+    /* Phase A begins with the first start that got past enter. */
+    if(phase==A733_DRAM_IDLE){
+        int r=start(w,t,1);
+        if(r||!w->count[A733_DRAM_STARTED])return r;
+        w->phase_start=t;set_phase(w,A733_DRAM_PHASE_A);return 0;
+    }
+    if(phase==A733_DRAM_PHASE_A&&t-w->phase_start>=w->phase_a){
         w->b_start=t;set_phase(w,A733_DRAM_PHASE_B);return A733_DRAM_BEGIN_B;
     }
     /* Every accepted window fits the 64-bit sums: x < 2^24 and at most
      * 65535 windows. */
     if(w->count[A733_DRAM_STARTED]==UINT16_MAX)return 0;
-    return start(w,t);
+    return start(w,t,0);
 }
 #if defined(__aarch64__)
 void a733_dram_copy_2mib(void *destination,const void *source); /* a733_dram_copy.S */
@@ -154,7 +166,8 @@ int a733_dram_copy_pass(struct a733_dram_window *w,const atomic_uint *state,
 void a733_dram_window_block(const struct a733_dram_window *w,const struct a733_dram_copy_slot slots[8],
     struct a733_dram_block *b)
 {
-    b->result|=(uint16_t)((w->fallback?A733_DRAM_DISABLE_FIRST:0)|(w->early?A733_DRAM_ENDED_EARLY:0));
+    b->result|=(uint16_t)((w->fallback?A733_DRAM_DISABLE_FIRST:0)|(w->early?A733_DRAM_ENDED_EARLY:0)|
+        (w->scaling?A733_DRAM_MBUS_SCALING:0));
     for(unsigned i=0;i<A733_DRAM_COUNTS;++i)b->count[i]=w->count[i];
     for(unsigned i=0;i<A733_CPU_DOMAINS;++i)b->mhz[i]=w->mhz[i];
     uint64_t ms=w->b_end>w->b_start?(w->b_end-w->b_start)*1000/w->counter_hz:0;

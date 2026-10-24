@@ -16,8 +16,8 @@ specification inside its own files. It also adds the
 The package adds these files and no others:
 
 - `include/a733_dram.h`: one header for every declaration below.
-- `drivers/dram/a733_dram.c`: the priority hook, its address set and the hook
-  part of the evidence block.
+- `drivers/dram/a733_dram.c`: the priority hook and its address set. The hook
+  writes the hook part of the evidence block directly.
 - `drivers/dram/a733_dram_load.c` and `a733_dram_copy.S`: the latency window,
   the copy pass and the window part of the evidence block. The C file compiles
   only with `SUNSTONE_GPU_DISPLAY_DRAM_LOAD`.
@@ -27,35 +27,25 @@ The package adds these files and no others:
   instruction counts and code size; `docs/dram.md`.
 
 The hook, window and copy pass derive from an earlier implementation in
-commit `02154a1`, which was never merged, with the four changes listed under
+commit `02154a1`, which was never merged, with the six changes listed under
 "Reuse and removal". No image links the new objects until the framebuffer, gpu-display and build
 edits listed in the DRAM controller design merge. Those files belong to other
 owners. The package's own checks need none of them, so the package delivers
 no patch outside its files.
 
-## Register sources and port numbering
+## Register sources
 
-- **Port numbers.** For `CONFIG_ARCH_SUN60IW2`, the pinned `sunxi-nsi.h` enum
-  gives DE port 2, IOMMU0 port 14 and IOMMU1 port 15. The `nsi0` node of the
-  pinned `sun60iw2p1.dtsi` uses the same ids and sets `sub_node_id_mapping`.
-  In `sunxi-nsi.c` that mapping makes a port's register index equal to its id
-  (`ia_index = i`). The other path subtracts one from the id and sends port 0
-  to a CPU channel. It runs only when `NSI_HARDCODED_PORT_MAPPING` is defined,
-  and `sunxi-nsi.h` defines that macro only for sun55iw3. The pinned U-Boot
-  `drivers/nsi/sunxi_nsi.c` agrees: it addresses `SUNXI_NSI_BASE + 0x200 × id`,
-  with `SUNXI_NSI_BASE` equal to `0x02020000` in
-  `plat-sun60iw2p1/cpu_autogen.h`. Ports 2, 14 and 15 are therefore at
-  `0x02020400`, `0x02021C00` and `0x02021E00`.
+- **Port numbers and counter clock.** The
+  [DRAM controller design](dram-controller.md#de-uses-nsi-port-2-and-its-iommu-walkers-use-ports-14-and-15)
+  derives DE port 2, IOMMU ports 14 and 15 and the MBUS counter clock from
+  the pinned sources: the `pmu_name[]` match for the field writes and
+  `ia_index` for the counter reads.
 - **Field writes.** `nsi_port_setmode`, `nsi_port_setpri` and `nsi_port_setio`
   in `sunxi-nsi.c` read, modify and write bits [1:0] of `+0x10`, bits [3:0] of
   `+0x14` (value `(p << 2) | p`) and bit 0 of `+0x18`. The DT table sets mode
   0 and select 1, with priority 2 for DE and 3 for both IOMMU ports. U-Boot
   writes whole words, and its select case writes `+0x10` instead of `+0x18`.
   The hook follows the Linux read-modify-write sequence.
-- **Counter clock.** With `topology_type = <2>`, `__rate_for_master` takes
-  each port's clock from `master_clks`. Ports 2, 14 and 15 are absent from that
-  list and default to clock index 1, `CLK_MBUS`. The window period is
-  therefore written in MBUS cycles.
 - **Counter sequence.** `__nsi_pmu_timer_store_v2` writes the period, clears
   enable bit 0 of `+0xc0`, sets clear bit 0 of `+0xc4` and then sets enable
   bit 0. `sunxi-nsi-bw.c` divides the latency sum (`+0xdc`) by read requests
@@ -66,31 +56,48 @@ no patch outside its files.
 - **CCU words.** Manual sections 4.1.6.74 and 4.1.6.75 place `NSI_CLK_REG` at
   CCU `+0x580` (gate bit 31, reset bit 30) and `NSI_BGR_REG` at `+0x584` (reset
   bit 16, gate bit 0). In each field, 1 means the gate is open or the reset
-  is deasserted.
+  is deasserted. Section 4.1.6.76 places `MBUS_CLK_REG` at `+0x588`, with
+  `MBUS_DFS_EN` at bit 28.
 
-Unproven on the board: Non-secure access to the NSI ports and to `+0x584`,
-whether the clear bit clears itself, whether the counters hold at the end of
-the period, and the unit of the latency sum. No code in the tree has accessed
-`0x0202xxxx`, and no repository source shows how boot0 or the monitor
-configures the secure peripheral controller. A Secure-only NSI may answer a
-Non-secure access with an external abort; one that ignores Non-secure writes
-shows as a read-back mismatch. The failure classes and the board evidence
-order cover both. The window's refusal rules cover the last three cases. An idle refusal shows a stuck clear bit. The
-free-running fallback handles counters that keep running. The statistic
-compares the two load images at the same recorded MBUS rate, so the unit of
-the latency sum cancels.
+Unproven on the board:
+
+- Non-secure access to the NSI ports and to `+0x584`.
+- Whether bit 30 of `+0x580`, the NSI reset, reads its true value from the
+  Non-secure side. Manual section 4.1.6.74 makes `NSI_CLK_REG` a Secure
+  register by default, with bit 2 of `CCMU_SEC_SWITCH_REG` controlling
+  Non-secure access.
+- Whether `MBUS_DFS_EN` is clear. With it set, the MBUS rate can change, so
+  a period written in MBUS cycles would not span 50 ms. The first start of a
+  session reads `+0x588` and refuses the session when the bit is set.
+- Whether the clear bit clears itself, whether the counters hold at the end
+  of the period, and the unit of the latency sum.
+
+No code in the tree has accessed `0x0202xxxx`, and no repository source
+shows how boot0 or the monitor configures the secure peripheral controller.
+A Secure-only NSI may answer a Non-secure access with an external abort; one
+that ignores Non-secure writes shows as a read-back mismatch. The failure
+classes and the board evidence order cover both. An `NSI_CLK_REG` that reads
+as zero from the Non-secure side refuses the hook before any NSI access. The
+window's refusal rules cover the clear bit, the counter hold and the latency
+unit. An idle refusal shows a stuck clear bit. The free-running fallback
+handles counters that keep running. The statistic compares the two load
+images at the same recorded MBUS rate, so the unit of the latency sum
+cancels.
 
 ## Data flow and ownership
 
 - **Hook.** The framebuffer calls `a733_dram_priority(io, evidence)` once, in
   prepare stage 4, under one register-lock acquisition. Every access goes
-  through the framebuffer's `raw_read` and `raw_write` pair. The hook reads
-  the two CCU words first. When the NSI is not running, it makes zero NSI
-  accesses. Otherwise it reads each of the nine fields. In the table image, it
-  writes and reads back only the fields that differ from the table.
+  through the framebuffer's `raw_read` and `raw_write` pair. The hook zeroes
+  the evidence block and reads the two CCU words first. A failed CCU read
+  stores stopping field 10. When the NSI is not running, the hook makes zero
+  NSI accesses and leaves the stopping field 0. Otherwise it reads each of
+  the nine fields. In the table image, it writes and reads back only the
+  fields that differ from the table.
 - **Window.** The gpu-display output task calls `a733_dram_window_step()` once
   per pass of its existing 1 ms loop. A window programs port 2's counters for
-  P = 50 ms and then collects six counts. Per-phase sums of the latency
+  P = 50 ms and then collects six counts. The first start of a session also
+  reads `+0x588` (see the unproven list above). Per-phase sums of the latency
   statistic go into the evidence block, which the output task copies once into
   the observation reply (136 bytes). The block's `u16` at offset 38, formerly
   zero, becomes `phase_ticks_max`: the longest start or collect in 24 MHz
@@ -98,6 +105,15 @@ the latency sum cancels.
   collect measures t_end minus the counter value that the step read before
   calling it. Both spans include `enter` and every access but not `leave`, and
   neither adds a counter read.
+- **Accepted duty-cycle loss.** A collect and the next start run in
+  consecutive 1 ms steps, so each window counts 50 ms of about 51 ms and
+  about 2% of each phase goes uncounted. The statistic is a mean per read
+  request, so the gap lowers the number of windows (40 in phase A, 294 in
+  the modeled phase B) and leaves each window's value unchanged. Starting
+  the next window inside the collect step, under the same lock pair, would
+  remove the gap, but that step would run about 306 instructions (collect
+  158 and start 148), above the collect budget of 300, and would need its
+  own phase-change cases.
 - **Copy load.** Eight tasks, one pinned to each core, call
   `a733_dram_copy_pass()` in a loop. Each call copies 2 MiB inside a 32 MiB
   lease that stays in `DEVICE_MEMORY_CPU` until power-off. No device is ever
@@ -121,7 +137,9 @@ the latency sum cancels.
   lease.
 - **Barriers now.** The new code adds no `DSB` or `DMB`. The framebuffer's
   raw path keeps its `DSB SY` before and after each access: up to 58 for the
-  hook's 29 accesses, 12 per start and 12–14 per collect. That pair also
+  hook's 29 accesses, 12 per start (14 for the first start of a session) and
+  12–14 per collect. These figures are derived from the raw path's source,
+  two per access, and are not counted from a linked image. That pair also
   completes the last NSI access of a phase before the counter read that ends
   the phase, the case section 1.2 names. Timestamps are an `ISB` followed by
   `MRS CNTPCT_EL0`. Every counter sample passes `a733_monotonic_advance()` from
@@ -150,8 +168,9 @@ further access to it.
 | Failure | Class (section 1.8) | Retained | Later accesses |
 | --- | --- | --- | --- |
 | NSI reset asserted or gate closed | Refused before any NSI access; the framebuffer's existing stage 4 failure path still retains its resources | Framebuffer lease and clock tokens | 0; the stage never repeats |
-| Failed hook access, or read-back mismatch | Unknown | Register lock if held, clock tokens, framebuffer lease | 0 |
-| Failed window access, or `enter` failure | Unknown | As above, through the load accessor | 0: the window latches failed, stores the ended phase with release and returns at once from every later step and abandon, without calling `enter`, the I/O pair or the counter |
+| Failed hook access (a CCU read stores stopping field 10), or read-back mismatch | Unknown | Register lock if held, clock tokens, framebuffer lease | 0 |
+| Failed window access, or `enter` failure | Unknown | As above, through the load accessor | 0: the window stores the ended phase with release and returns at once from every later step and abandon, without calling `enter`, the I/O pair or the counter |
+| `MBUS_DFS_EN` set at the first start | Refused after one CCU read and no port access | Nothing | 0: the phases end early and a result bit records the refusal |
 | Synchronous external abort or SError from an NSI or `+0x584` access, in the hook or the window | Unknown; the access never returns to the failure path | Everything; the platform's exception capture records ESR, ELR and FAR and ends the image | 0: nothing retries the access |
 | Window refused or abandoned | Refused | Nothing | Abandon makes 0 register accesses |
 | Decode check refusal | Refused before any access | Nothing | Not applicable |
@@ -165,13 +184,18 @@ fabric clock compare and fabric exclusion. It also reuses
 reply, and `a733_monotonic_advance()` from `a733_range.h`. It adds no
 register path, mapping check or failure class, and removes no existing code.
 
-The code differs from the unmerged implementation in four ways:
+The code differs from the unmerged implementation in six ways:
 
-1. The failure latch in the table above. In the unmerged code, a step after
-   a failed access could call `enter` again.
+1. The failure latch in the table above: after a failure the ended phase
+   makes every later step and abandon return at once. In the unmerged code,
+   a step after a failed access could call `enter` again.
 2. The monotonic counter check.
 3. The `phase_ticks_max` field.
-4. The decode check below.
+4. The `MBUS_DFS_EN` read in the first start.
+5. The hook writes the evidence block itself, with stopping field 10 for a
+   failed CCU read, in place of a separate evidence structure and copy
+   function.
+6. The decode check below.
 
 ## The decode check refuses until a register source exists
 
@@ -207,17 +231,17 @@ Figures for the unmerged code come from its own host check.
 
 | Metric | Baseline | Unmerged code | Budget | Measured by |
 | --- | --- | --- | --- | --- |
-| Hook accesses | 0 | 2 CCU reads; 21 NSI accesses from reset fields, 9 at the table, worst 27 | 2 CCU reads; at most 27 NSI; 9 at the table; 0 when the NSI is off; 1 lock pair | Counting register model, `checks/dram-priority.c` |
-| Window accesses per phase | 0 | Start 6; collect 6, or 7 after the fallback; pending 0 | Same; at most 4,100 per 20 s session (unmerged code: 4,008) | Counting model, `checks/dram-window.c` |
+| Hook accesses | 0 | 2 CCU reads; 21 NSI accesses from reset fields, 9 at the table, worst 27 | 2 CCU reads; at most 27 NSI; 9 at the table; 0 when the NSI is off; 1 lock pair | Counting register model, `checks/dram-priority.c`; the lock pair belongs to the framebuffer caller and is measured only when that caller merges |
+| Window accesses per phase | 0 | Start 6; collect 6, or 7 after the fallback; pending 0 | Same, plus one `+0x588` read in the first start of a session; at most 4,100 per 20 s session (unmerged code: 4,008) | Counting model, `checks/dram-window.c` |
 | Accesses, `enter` calls and counter reads after a failure | Not modeled | Not modeled | 0 | New case in `checks/dram-window.c` |
 | Instructions outside the I/O callbacks | None | Not counted | Hook at most 600; start at most 200; collect at most 300; pending step at most 50 | Unicorn run of the AArch64 objects built with image flags, with counting stubs for the callbacks |
 | `DSB` and `DMB` in package objects | 0 | 0 | 0; 2 after the raw path moves to plain accessors | `llvm-objdump` scan |
-| `DSB SY` per sequence, raw path included | 0 | Hook up to 58; start 12; collect 12–14 | Same now. After the raw path moves to plain accessors: hook 0, start 1, collect 1 | Counting model of the raw path; `llvm-objdump` scan |
+| `DSB SY` per sequence, raw path included | 0 | Hook up to 58; start 12; collect 12–14 | Same now, and 14 for the first start of a session. After the raw path moves to plain accessors: hook 0, start 1, collect 1 | Derived: two per access from the raw path's source, times the modeled access counts; `llvm-objdump` scan of the package objects |
 | `phase_ticks_max` | Not carried | Offset 38 always 0 | Largest span, saturating at 65,535 | New case in `checks/dram-window.c`: model counter spans of 100 and 70,000 ticks give 100, then 65,535 |
 | Copy kernel | None | 6 instructions per 64 bytes; 2 acquire loads per 2 MiB pass | Same | Disassembly count |
 | Code size | 0 | Hook 863 B text; reads-only hook 723 B; window 2,452 B; copy 32 B; 0 B data | Outside the load mode, at most 2 KiB text and 128 B data; decode check at most 16 B | `llvm-size` |
 | Added tasks, timers, interrupts and tick wake-ups in HDMI, DisplayPort and steady-state images | 0 | 0 | 0 | `llvm-nm` on the default images shows no `a733_dram_` symbol |
-| CPU time per window phase | None | Not measured | At most 20 µs (480 ticks). Each raw access costs an estimated 1–2 µs at 494 MHz, mostly its `AT` translation and two `DSB SY` | `phase_ticks_max` in the evidence block, from both load images |
+| CPU time per window phase | None | Not measured | At most 20 µs (480 ticks). Each raw access costs an estimated 1–2 µs at 494 MHz, mostly its `AT` translation, two `DSB SY` and two `timely()` calls. Each `timely()` call takes the counter clock's ticket lock with DAIF masked, 12–14 calls per phase | `phase_ticks_max` in the evidence block, from both load images |
 | Scan-out latency | Not measured | Not measured | The scan-out row of the DRAM controller design | Both load images in one board session |
 
 QEMU is not used: no case depends on the scheduler or the translation
@@ -231,8 +255,10 @@ tables.
 - Removing the raw path's per-access `AT` translation (section 1.5). The
   framebuffer owns that path; verifying its register window once at admission
   replaces the per-access check and needs no barrier qualification.
-- Removing the raw path's per-access `DSB SY` pair (section 1.2). The
-  framebuffer owns that path, and the change needs the barrier qualification in
+- Removing the raw path's per-access `DSB SY` pair (section 1.2) and its two
+  `timely()` calls per access, each of which takes the counter clock's ticket
+  lock with DAIF masked (12–14 per window phase). The framebuffer owns that
+  path, and the barrier change needs the barrier qualification in
   `docs/shared-helpers.md`. The placement above makes the package's part of
   that migration mechanical.
 - Other masters, limiters, runtime priority changes and the hook in HDMI and

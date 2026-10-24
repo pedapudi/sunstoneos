@@ -36,20 +36,12 @@ configuration (type, rank, size and refresh settings) is not decoded.
 
 The NSI is the A733 memory-bus interconnect. Each master's port has its own
 mode, priority and select words and its own counters, at
-`0x02020000 + 0x200 × port`.
-
-- The `CONFIG_ARCH_SUN60IW2` branch of `enum nsi_pmu` in the pinned
-  `sunxi-nsi.h` gives DE port 2, IOMMU0 port 14 and IOMMU1 port 15. The
-  `nsi0` node of the pinned `sun60iw2p1.dtsi` uses the same ids. The IOMMU
-  ports carry the page-table walks for DE's translated reads.
-- The node sets `sub_node_id_mapping`, so `sunxi-nsi.c` uses each id as the
-  register index. Its other mapping subtracts one from the id. That mapping
-  needs `NSI_HARDCODED_PORT_MAPPING`, which `sunxi-nsi.h` defines only for
-  sun55iw3.
-- The pinned U-Boot `drivers/nsi/sunxi_nsi.c` addresses the same words, with
-  `SUNXI_NSI_BASE` equal to `0x02020000` in its sun60iw2p1 `cpu_autogen.h`.
-- The node lists no clock for ports 2, 14 and 15 in `master_clks`, so their
-  counters run on clock index 1, `CLK_MBUS`.
+`0x02020000 + 0x200 × port`. DE uses port 2, and the IOMMU0 and IOMMU1
+page-table walkers, which serve DE's translated reads, use ports 14 and 15.
+Their counters run on the MBUS clock. The
+[DRAM controller design](designs/dram-controller.md#de-uses-nsi-port-2-and-its-iommu-walkers-use-ports-14-and-15)
+derives these numbers and the clock from the pinned vendor and U-Boot
+sources.
 
 ## The priority hook writes the table once, with read-back
 
@@ -63,7 +55,8 @@ evidence.
 1. Two CCU reads: `NSI_CLK_REG` (`+0x580`) must have gate bit 31 and reset
    bit 30 set, and `NSI_BGR_REG` (`+0x584`) must have reset bit 16 and gate
    bit 0 set. Otherwise the hook records both words, makes no NSI access and
-   returns failure.
+   returns failure with stopping field 0. A failed CCU read returns failure
+   with stopping field 10.
 2. For each of the nine fields of ports 2, 14 and 15, one read. A field that
    differs from the table is written with every other bit kept and read back
    under the field mask.
@@ -75,9 +68,9 @@ evidence.
 `SUNSTONE_DRAM_PRIORITY` selects the build: 2 applies the table and 1 makes
 the same reads and writes nothing. The source fails to compile without
 either value. `a733_dram_address()` admits the eleven words the hook may
-access. `a733_dram_block()` fills the hook part of the evidence block. It
-takes the result bits from the build macro and from the hook's return value,
-and the stopping field goes in the block's second `u16`.
+access. The hook writes the evidence block directly: it zeroes the block,
+fills the hook part and sets the result bits from the build macro and its
+own result. The stopping field goes in the block's second `u16`.
 
 ## The latency window measures port 2 over 50 ms
 
@@ -87,6 +80,11 @@ only with `SUNSTONE_GPU_DISPLAY_DRAM_LOAD`. The gpu-display output task calls
 programs port 2's counters for 50 ms and then reads six counts. Phase A has
 scan-out only. Phase B adds the copy load on all eight cores.
 
+- **MBUS frequency scaling.** The first start of a session reads CCU
+  `+0x588` before its six accesses. With `MBUS_DFS_EN` (bit 28) set, the
+  MBUS rate can change, so a period written in MBUS cycles would not span
+  50 ms. That start then makes no port access, ends the phases early and
+  sets the result bit `A733_DRAM_MBUS_SCALING`.
 - **Barriers.** The window adds none. The framebuffer's register path ends
   every access with `DSB SY`, so the last NSI access of a phase has completed
   before the counter read (ISB, then `MRS CNTPCT_EL0`) that ends the phase.
@@ -117,8 +115,8 @@ scan-out only. Phase B adds the copy load on all eight cores.
 - **Failures.** A lock reported busy changes nothing and the next step
   retries. A failed access or a failed `enter` returns a negative value,
   with the lock still held after a failed access, for the caller's retain
-  path. The window then latches failed and stores the ended phase with
-  release, which stops the copy tasks. Every later step and abandon returns
+  path. The window then stores the ended phase with release, which stops
+  the copy tasks. Every later step and abandon returns
   at once, without calling `enter`, the register pair or the counter. A
   synchronous external abort or SError from an NSI access never returns to
   the window; the platform's exception capture ends the image.
@@ -159,12 +157,14 @@ UndefinedBehaviorSanitizer against counting register models:
 - `checks/dram-priority.c`, built with the table and reads-only values,
   covers the decode refusal, the NSI clock gating cases, the access counts,
   kept bits, a difference outside the mask, the subfield rewrite, a stuck
-  field at each of the nine positions, a failed access at every position and
-  the evidence block, including the stopping field of a failed hook;
+  field at each of the nine positions, a failed access at every position,
+  with its own stopping field for a failed CCU read, and the evidence block,
+  including the stopping field of a failed hook;
 - `checks/dram-window.c` covers the start and collect sequences, the pending
   cost, each refusal rule, the fallback after one free-running window, busy
   and failed locks and accesses, the failure latch after a failure at every
-  access of a start and a collect and after a failed `enter`, backward
+  access of a start and a collect and after a failed `enter`, the
+  `MBUS_DFS_EN` refusal at each of the 32 bits of `+0x588`, backward
   counter samples, the phase spans and their saturation, abandon in phase A
   and in phase B, the copy-load stop rule, an 18 s session and the block
   layout.
@@ -175,7 +175,7 @@ port word in access order, each field's mask and written value, and the
 window's access sequences. The script compares those facts with the pinned
 `sunxi-nsi.c`, `sunxi-nsi.h`, `sunxi-nsi-bw.c`, the `nsi0` node, the U-Boot
 NSI driver and the A733 manual text, together with the port numbering facts
-in the previous sections. It then compiles the component for AArch64 with
+of the DRAM controller design. It then compiles the component for AArch64 with
 the image flags, reads its size, barriers and copy loop from the objects, and
 runs the linked objects under Unicorn to count instructions outside the
 register callbacks.
@@ -183,14 +183,14 @@ register callbacks.
 | Metric | Budget | Result |
 | --- | --- | --- |
 | Hook accesses | 2 CCU reads; at most 27 NSI accesses; 9 at the table; 0 with the NSI not running | 21 NSI accesses from reset values, 9 at the table, 27 worst case; 9 reads-only; 0 with the NSI not running |
-| Window accesses | Start 6, collect 6 (7 after the fallback), pending 0; at most 4,100 per session | As budgeted; 4,008 register accesses over an 18 s session of 40 phase A and 294 phase B windows |
+| Window accesses | Start 6 (and one `+0x588` read in the first start), collect 6 (7 after the fallback), pending 0; at most 4,100 per session | As budgeted; 4,009 register accesses over an 18 s session of 40 phase A and 294 phase B windows |
 | Accesses, `enter` calls and counter reads after a failure | 0 | 0 |
-| Instructions outside the callbacks | Hook 600, start 200, collect 300, pending step 50 | Hook 513 worst case (276 reads-only), start 146, collect 158, pending step 39 |
+| Instructions outside the callbacks | Hook 600, start 200, collect 300, pending step 50 | Hook 552 worst case (307 reads-only), start 161, collect 158, pending step 39 |
 | `DSB` and `DMB` in the component's objects | 0 | 0 |
 | Copy loop | 6 instructions per 64 bytes; 2 acquire loads per pass | 6; 2 |
-| Hook code | At most 2 KiB text and 128 B data | 728 B text (608 B reads-only), 0 B data |
+| Hook code | At most 2 KiB text and 128 B data | 704 B text (588 B reads-only), 0 B data |
 | Decode check | At most 16 B | 8 B |
-| Load code | Load images only | 2,816 B text in C, 32 B of assembly |
+| Load code | Load images only | 3,000 B text in C, 32 B of assembly |
 
 No image links the component, so the gpu-display, HDMI, DisplayPort and
 integrated OS images contain no `a733_dram_` symbol and match the integrated

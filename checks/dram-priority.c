@@ -51,7 +51,7 @@ static void setup(struct model *m,uint32_t other)
     memset(m,0,sizeof(*m));m->clock=CCU_ON|0x03000002;m->config=CFG_ON;
     for(unsigned p=0;p<3;++p)for(unsigned f=0;f<3;++f)m->word[p][f]=other;
 }
-static int run(struct model *m,struct a733_dram_priority_evidence *e)
+static int run(struct model *m,struct a733_dram_block *e)
 {
     const struct a733_dram_io io={m,rd,wr};
     return a733_dram_priority(&io,e);
@@ -60,7 +60,7 @@ static uint16_t packed(uint32_t mode,uint32_t priority,uint32_t select)
 {return (uint16_t)((mode&3)|(priority&15)<<2|(select&1)<<6);}
 int main(void)
 {
-    struct model m;struct a733_dram_priority_evidence e;
+    struct model m;struct a733_dram_block e;
     /* No register source for the decode exists, so the check refuses and
      * stage 2 stays compiled out of every admitted layout. */
     assert(a733_dram_decode_check()==0);
@@ -75,7 +75,7 @@ int main(void)
     static const uint32_t configs[]={CFG_ON,CFG_ON,CFG_ON&~1u,CFG_ON&~(1u<<16)};
     for(unsigned i=0;i<4;++i){
         setup(&m,0);m.clock=clocks[i];m.config=configs[i];
-        assert(!run(&m,&e) && m.ccu==2 && !m.nsi && !e.failed && e.nsi_clock==clocks[i] &&
+        assert(!run(&m,&e) && m.ccu==2 && !m.nsi && !e.failed && !(e.result&A733_DRAM_HOOK_PASSED) && e.nsi_clock==clocks[i] &&
             e.nsi_config==configs[i]);
     }
     /* Reset values (all fields zero) with unrelated bits set in every word. */
@@ -120,26 +120,27 @@ int main(void)
         assert(!ok && e.failed==i+1 && m.last==i+1);
         assert(m.log[m.access-1]==A733_NSI_PORT(ports[i/3])+0x10+4*(i%3));
     }
-    /* A failed access at any position stops the hook with no further access. */
+    /* A failed access at any position stops the hook with no further access.
+     * A failed CCU read has its own code, so it differs from the NSI being
+     * off (failed 0). */
     setup(&m,0);assert(run(&m,&e));unsigned total=(unsigned)m.access;
     unsigned stopped=0;
     for(int k=1;k<=(int)total;++k){
         setup(&m,0);m.fail_at=k;
-        assert(!run(&m,&e) && m.access==k);
-        assert(k<=2 ? !e.failed : e.failed>=stopped && e.failed>=1 && e.failed<=9);
-        stopped=e.failed;
+        assert(!run(&m,&e) && m.access==k && !(e.result&A733_DRAM_HOOK_PASSED));
+        assert(k<=2 ? e.failed==A733_DRAM_CCU_FAILED && !m.nsi : e.failed>=stopped && e.failed>=1 && e.failed<=9);
+        if(k>2)stopped=e.failed;
     }
-    /* Evidence block outside the load images: hook fields only, the result
-     * bits from the build and the return value. */
-    setup(&m,0);int ok=run(&m,&e);assert(ok);
+    /* Evidence block outside the load images: the hook zeroes it and fills
+     * the hook fields and the result bits from the build and its result. */
     struct a733_dram_block value;memset(&value,0xee,sizeof(value));
-    a733_dram_block(&e,ok,&value);
+    setup(&m,0);int ok=run(&m,&value);assert(ok);
     const uint8_t *block=(const uint8_t *)&value; /* The host and the board are little-endian. */
     for(unsigned i=0;i<16;++i)assert(!block[i]);
     assert(block[16]==(TABLE?7:5) && !block[17] && !block[18] && !block[19]);
     for(unsigned p=0;p<3;++p){
-        assert((block[20+2*p]|block[21+2*p]<<8)==e.inherited[p]);
-        assert((block[26+2*p]|block[27+2*p]<<8)==e.final[p]);
+        assert((block[20+2*p]|block[21+2*p]<<8)==packed(0,0,0));
+        assert((block[26+2*p]|block[27+2*p]<<8)==(TABLE?packed(0,pri[p]<<2|pri[p],1):packed(0,0,0)));
     }
     uint32_t w0=(uint32_t)block[40]|(uint32_t)block[41]<<8|(uint32_t)block[42]<<16|(uint32_t)block[43]<<24;
     uint32_t w1=(uint32_t)block[44]|(uint32_t)block[45]<<8|(uint32_t)block[46]<<16|(uint32_t)block[47]<<24;
@@ -150,9 +151,10 @@ int main(void)
     /* The read of port 14's +0x14 word: after 2 CCU reads, port 2's 7 table
      * accesses (3 reads only) and port 14's mode read. */
     setup(&m,0);m.fail_at=TABLE?11:7;
-    ok=run(&m,&e);assert(!ok && e.failed==5);
-    a733_dram_block(&e,ok,&value);
+    ok=run(&m,&value);assert(!ok && value.failed==5);
     assert(block[16]==(TABLE?3:1) && block[18]==5 && !block[19]);
+    setup(&m,0);m.fail_at=2;
+    ok=run(&m,&value);assert(!ok && block[16]==(TABLE?3:1) && block[18]==A733_DRAM_CCU_FAILED && !block[19]);
 
     /* Observed facts for the source comparison in checks/dram-controller.py.
      * CCU: the bits whose clearing alone refuses the hook. Ports: in the table

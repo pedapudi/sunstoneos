@@ -14,9 +14,10 @@
 #define A733_NSI_PORT(n) (A733_NSI_BASE+UINT32_C(0x200)*(n))
 #define A733_NSI_CLOCK UINT32_C(0x02002580)  /* NSI_CLK_REG: gate 31, reset 30. */
 #define A733_NSI_CONFIG UINT32_C(0x02002584) /* NSI_BGR_REG: configuration gate 0, reset 16. */
+#define A733_MBUS_CLOCK UINT32_C(0x02002588) /* MBUS_CLK_REG: dynamic frequency scaling 28. */
 #define A733_DRAM_DE_PORT 2u
-/* DE port 2, IOMMU0 port 14, IOMMU1 port 15: the sun60iw2 enum nsi_pmu in
- * sunxi-nsi.h and the nsi0 child ids (drivers/dram/a733_dram.c). */
+/* DE port 2, IOMMU0 port 14, IOMMU1 port 15, derived in "DE uses NSI port 2
+ * and its IOMMU walkers use ports 14 and 15" of docs/designs/dram-controller.md. */
 #define A733_DRAM_PORTS 3u
 
 /* Register access as the framebuffer provides it: 1 on success. */
@@ -26,26 +27,21 @@ struct a733_dram_io {
     int (*write)(void *,uintptr_t,uint32_t);
 };
 
-/* One port's three fields packed as mode in bits 1-0, the two priority
- * subfields in bits 5-2 and select in bit 6. */
-struct a733_dram_priority_evidence {
-    uint32_t nsi_clock, nsi_config;
-    uint16_t inherited[A733_DRAM_PORTS], final[A733_DRAM_PORTS];
-    uint16_t failed; /* 0, or 1 + 3 * port index + field index of the stopping field. */
-};
-
+struct a733_dram_block;
 /* Built only with SUNSTONE_DRAM_PRIORITY set to 1 (reads only) or 2 (table).
  * The arguments are not checked: the one caller passes the framebuffer's own
- * register pair and evidence. The caller holds the register lock for the
- * whole call and runs it once per framebuffer instance, after the media clock has verified the NSI and MBUS clock gates
- * and before any master on ports 2, 14 or 15 starts. Two CCU reads first: an
- * NSI reset asserted or gate closed fails with no NSI access. Then, for each
- * field, one read; in mode 2 a field that differs from the table is written
- * with the other bits kept and read back under the field mask. The first
- * failed access or mismatch stops the call. Returns 1 on success; on failure
- * the caller takes its retain path. The evidence is filled either way, and
- * the caller keeps the return value for a733_dram_block. */
-int a733_dram_priority(const struct a733_dram_io *,struct a733_dram_priority_evidence *);
+ * register pair and evidence block. The caller holds the register lock for
+ * the whole call and runs it once per framebuffer instance, after the media
+ * clock has verified the NSI and MBUS clock gates and before any master on
+ * ports 2, 14 or 15 starts. The hook zeroes the block and fills its hook
+ * fields and result bits. Two CCU reads first: a failed read stops the call
+ * with failed set to A733_DRAM_CCU_FAILED, and an NSI reset asserted or gate
+ * closed fails with failed 0 and no NSI access. Then, for each field, one
+ * read; in mode 2 a field that differs from the table is written with the
+ * other bits kept and read back under the field mask. The first failed
+ * access or mismatch stops the call. Returns 1 on success; on failure the
+ * caller takes its retain path. */
+int a733_dram_priority(const struct a733_dram_io *,struct a733_dram_block *);
 /* The words the hook may access: CCU +0x580 and +0x584 and the +0x10, +0x14
  * and +0x18 words of ports 2, 14 and 15. */
 int a733_dram_address(uintptr_t);
@@ -83,7 +79,7 @@ struct a733_dram_window {
     uint32_t cycles, fabric_hz, enable;
     uint16_t count[A733_DRAM_COUNTS], mhz[A733_CPU_DOMAINS];
     uint16_t ticks_max; /* Longest start or collect in counter ticks, saturating. */
-    unsigned initialized, in_flight, fallback, early, failed;
+    unsigned initialized, in_flight, fallback, early, scaling; /* scaling: MBUS_DFS_EN was set. */
     atomic_uint phase; /* Written by the output task only, read by the copy tasks. */
 };
 /* Zeroed storage once. P is 50 ms: counter_hz and fabric_hz (the MBUS rate
@@ -96,13 +92,17 @@ int a733_dram_window_init(struct a733_dram_window *,const struct a733_dram_windo
 /* Output task, once per loop pass. eligible is display stage 3, application
  * state 1 and three presentations done. Phase A starts with the first
  * eligible step, which also starts a window, and lasts 2 s; phase B runs
- * until end. Phases change only between windows. The step that begins phase
- * B and the step that ends the phases start no window and make no register
- * access. Returns a negative value on a failed access or a failed enter, with
- * the lock still held after a failed access, for the caller's retain path.
- * The window then latches failed and ends the phases (release), and every
- * later step and abandon returns at once with no enter, access or counter
- * read. Otherwise returns 0 or one of A733_DRAM_BEGIN_B and A733_DRAM_END.
+ * until end. Phases change only between windows. The first start reads
+ * MBUS_CLK_REG before its six accesses: with dynamic frequency scaling
+ * enabled the MBUS rate can change, so P in MBUS cycles would not be 50 ms;
+ * the step then sets scaling, leaves, ends the phases early and returns
+ * A733_DRAM_END. The step that begins phase B and the step that ends the
+ * phases start no window and make no register access. Returns a negative
+ * value on a failed access or a failed enter, with the lock still held after
+ * a failed access, for the caller's retain path. The window then ends the
+ * phases (release), and every later step and abandon returns at once with no
+ * enter, access or counter read. Otherwise returns 0 or one of
+ * A733_DRAM_BEGIN_B and A733_DRAM_END.
  * Once eligibility is lost the window in flight is abandoned and the phases
  * end. The span of each start (t1 - t0) and collect (t_end minus the step's
  * pending sample), which covers enter and every access but not leave, goes
@@ -113,7 +113,7 @@ int a733_dram_window_step(struct a733_dram_window *,unsigned eligible);
  * records the end of phase B. After the phases have ended, including after
  * a failure, it does nothing. */
 void a733_dram_window_abandon(struct a733_dram_window *);
-/* Counter words +0xc0..+0xdc of port 2. */
+/* Counter words +0xc0..+0xdc of port 2, and CCU +0x588 for reading. */
 int a733_dram_window_address(uintptr_t);
 
 /* One copy task's pass counter, in its own cache line. */
@@ -134,9 +134,11 @@ int a733_dram_copy_pass(struct a733_dram_window *,const atomic_uint *state,
 #define A733_DRAM_HOOK_PASSED 4u
 #define A733_DRAM_DISABLE_FIRST 8u
 #define A733_DRAM_ENDED_EARLY 16u
+#define A733_DRAM_MBUS_SCALING 32u /* The first start found MBUS_DFS_EN set. */
+#define A733_DRAM_CCU_FAILED 10u   /* failed: a CCU read of the hook failed. */
 struct a733_dram_block {
     uint16_t count[A733_DRAM_COUNTS];
-    uint16_t result, failed; /* Result bits above; the hook's stopping field. */
+    uint16_t result, failed; /* Result bits; 0, 1 + 3 * port index + field index, or A733_DRAM_CCU_FAILED. */
     uint16_t inherited[A733_DRAM_PORTS], final[A733_DRAM_PORTS];
     uint16_t mhz[A733_CPU_DOMAINS], phase_ticks_max;
     uint32_t nsi_clock, nsi_config, fabric_hz, phase_b_ms;
@@ -144,10 +146,7 @@ struct a733_dram_block {
     uint32_t passes[8];
 };
 _Static_assert(sizeof(struct a733_dram_block)==136,"evidence block size");
-/* Zeroes the block and fills the hook fields; hook_result is the hook's
- * return value. */
-void a733_dram_block(const struct a733_dram_priority_evidence *,int hook_result,struct a733_dram_block *);
-/* Load images only, after a733_dram_block: the window and copy-slot fields. */
+/* Load images only, after a733_dram_priority: the window and copy-slot fields. */
 void a733_dram_window_block(const struct a733_dram_window *,const struct a733_dram_copy_slot slots[8],
     struct a733_dram_block *);
 

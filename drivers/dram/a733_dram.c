@@ -1,14 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Port field writes adapted from nsi_port_setmode(), nsi_port_setpri() and
  * nsi_port_setio() in sunxi-nsi.c; the table is the nsi0 node of
- * sun60iw2p1.dtsi.
- * Port numbers: the CONFIG_ARCH_SUN60IW2 branch of enum nsi_pmu in
- * sunxi-nsi.h gives DE 2, IOMMU0 14 and IOMMU1 15, the ids of the nsi0
- * child nodes. That node sets sub_node_id_mapping, so sunxi-nsi.c uses each
- * id as the register index; its subtract-one mapping needs
- * NSI_HARDCODED_PORT_MAPPING, which sunxi-nsi.h defines only for sun55iw3.
- * The pinned U-Boot drivers/nsi/sunxi_nsi.c addresses the same words at
- * 0x02020000 + 0x200 * id.
+ * sun60iw2p1.dtsi. docs/designs/dram-controller.md derives the port numbers
+ * 2, 14 and 15 in "DE uses NSI port 2 and its IOMMU walkers use ports 14 and
+ * 15".
  * Copyright(c) 2020 - 2023 Allwinner Technology Co.,Ltd. All rights reserved. */
 #include "a733_dram.h"
 #if SUNSTONE_DRAM_PRIORITY!=1 && SUNSTONE_DRAM_PRIORITY!=2
@@ -29,11 +24,21 @@ int a733_dram_address(uintptr_t a)
     for(unsigned i=0;i<3*A733_DRAM_PORTS;++i)if(a==fields[i].address)return 1;
     return 0;
 }
-int a733_dram_priority(const struct a733_dram_io *io,struct a733_dram_priority_evidence *e)
+int a733_dram_priority(const struct a733_dram_io *io,struct a733_dram_block *e)
 {
-    *e=(struct a733_dram_priority_evidence){0};
+    /* Zeroed field by field: assigning the 136-byte structure compiles to a
+     * memset call. */
+    for(unsigned i=0;i<A733_DRAM_COUNTS;++i)e->count[i]=0;
+    for(unsigned i=0;i<A733_DRAM_PORTS;++i)e->inherited[i]=e->final[i]=0;
+    for(unsigned i=0;i<A733_CPU_DOMAINS;++i)e->mhz[i]=0;
+    for(unsigned i=0;i<6;++i)e->phase[i/3][i%3]=0;
+    for(unsigned i=0;i<8;++i)e->passes[i]=0;
+    e->phase_ticks_max=0;e->nsi_clock=e->nsi_config=e->fabric_hz=e->phase_b_ms=0;
+    e->result=A733_DRAM_HOOK_BUILT|(SUNSTONE_DRAM_PRIORITY==2?A733_DRAM_TABLE_IMAGE:0);
+    e->failed=A733_DRAM_CCU_FAILED;
     if(io->read(io->context,A733_NSI_CLOCK,&e->nsi_clock)!=1||
        io->read(io->context,A733_NSI_CONFIG,&e->nsi_config)!=1)return 0;
+    e->failed=0;
     /* A set bit opens a gate or deasserts a reset. The media clock compares
      * only gate bit 31 of +0x580; this adds its reset and the +0x584 word. */
     if((e->nsi_clock&(BIT(31)|BIT(30)))!=(BIT(31)|BIT(30))||
@@ -51,13 +56,5 @@ int a733_dram_priority(const struct a733_dram_io *io,struct a733_dram_priority_e
         }
         e->final[port]|=(uint16_t)((word&mask)<<fields[i].shift);
     }
-    e->failed=0;return 1;
-}
-void a733_dram_block(const struct a733_dram_priority_evidence *e,int hook_result,struct a733_dram_block *b)
-{
-    *b=(struct a733_dram_block){
-        .result=(uint16_t)(A733_DRAM_HOOK_BUILT|(SUNSTONE_DRAM_PRIORITY==2?A733_DRAM_TABLE_IMAGE:0)|
-            (hook_result==1?A733_DRAM_HOOK_PASSED:0)),
-        .failed=e->failed,.nsi_clock=e->nsi_clock,.nsi_config=e->nsi_config};
-    for(unsigned i=0;i<A733_DRAM_PORTS;++i){b->inherited[i]=e->inherited[i];b->final[i]=e->final[i];}
+    e->failed=0;e->result|=A733_DRAM_HOOK_PASSED;return 1;
 }
