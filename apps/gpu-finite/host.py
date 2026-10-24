@@ -27,8 +27,9 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,journal):
    require(backup.stat().st_size==size,'Incomplete '+name+' snapshot.');base.sync_file(backup);backups.append((name,address+offset,backup,base.digest(backup)))
  record.update(dram_backups={name:{'address':address,'bytes':backup.stat().st_size,'sha256':digest} for name,address,backup,digest in backups},dram_restored=False);journal()
  record['dirty']=True;journal();base.preload(transaction,bundle,p,evidence)
- pins=[int(x,16) for x in transaction(*[v for _ in range(4) for v in ('readl','0x03000024')]).split()]
- require(len(pins)==4 and all(0<=x<=0xffffffff and not x&0x100 for x in pins),'Protected FEL input is not consistently low.')
+ # RVBAR=0x20 enters forced FEL directly; the normal-boot input is irrelevant.
+ words=[int(x,16) for x in transaction(*[v for address in ('0x20','0x24','0x28','0x3c','0x40') for v in ('readl',address)]).split()]
+ require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
  ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before GPU execution.')
  record.update(launch_attempted=True,backup_sha256=p['_backup_hashes'].copy());journal();transaction('exe','0x52000');wait_return()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')

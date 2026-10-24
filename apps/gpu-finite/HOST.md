@@ -13,7 +13,7 @@ The supervision record must cover successful CLOSE/stop/quiescence followed by R
 
 The default mode restores the original RAM contents. Its save and restoration envelopes are `0x41000000..0x42200000` and `0x48000000..0x79000000`. The first 18 MiB covers code, writable image data, retained session and receipt, BSS, stacks, uploaded session, protected contract/result, monitor state/log and translation tables. The second 784 MiB preserves the complete authenticated 768 MiB WB and 16 MiB NC geometry. The five allocated GPU parents occupy smaller intervals, but that fact does not establish confinement or permit a smaller snapshot.
 
-In restoration mode, `host.py` divides these envelopes into 201 chunks, each at most 4 MiB. The last CPU chunk is 2 MiB; the GPU chunks end at `0x79000000`. Each snapshot is size-checked, synchronized and SHA-256 bound before launch. The shared protected preload helper separately snapshots SRAM and uploads the immutable ELF segments, session, request and launcher with readback. The adapter requires four low protected-pin samples and a disabled watchdog before the sole execution request.
+In restoration mode, `host.py` divides these envelopes into 201 chunks, each at most 4 MiB. The last CPU chunk is 2 MiB; the GPU chunks end at `0x79000000`. Each snapshot is size-checked, synchronized and SHA-256 bound before launch. The shared protected preload helper separately snapshots SRAM and uploads the immutable ELF segments, session, request and launcher with readback. After preload has saved the helper scratch, the adapter checks the five pinned ROM instructions at the direct forced-FEL entry. It requires a disabled watchdog before the sole execution request.
 
 The live lock, transport failure latch, passive new-ROM lookup and failure retention come from `tools/a733-returning-host.py`. The coordinator supplies an existing root-owned claim; the adapter creates no queue authority. The shared helper uses the existing per-port lock and guard, validates live identity before requests and stops all further transport after failure. GPU admission and report interpretation remain local to this application.
 
@@ -192,3 +192,16 @@ records eight host cases and eleven admission/producer cases. The modeled
 capture makes 410 transport calls in restoration mode and eight in discard
 mode, excluding unchanged protected preload. Both producers retain the same
 native image and launcher. Model ownership records grant no physical authority.
+
+Normal return writes RVBAR `0x20` and requests `RMR_EL3 = 2`. The pinned ROM
+entry sets `r6 = 0x5c` and branches to the FEL dispatcher, bypassing the normal
+boot-input sampler. The host checks the same five instruction words as the
+physically exercised CPU return runner. A high boot-input sample does not
+refuse this finite profile. Native failures still retain ownership and require
+coordinator recovery; this correction supplies no watchdog recovery guarantee.
+
+The instruction check uses the existing FEL `readl` helper, which writes SRAM
+scratch. It therefore follows the protected preload and retains ownership on
+any refusal. Direct ROM reads are not substituted: the captured board ROM
+rejected that access. Recovery from a known pre-launch refusal needs separate
+coordinator review; the runner neither restores automatically nor retries.
