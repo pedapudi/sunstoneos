@@ -2601,8 +2601,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   On 2026-10-24 that image passed on port 3-3: SoftConn cleared, the 40-byte
   OUT/IN exchange completed, the USB task quiesced and the ROM return was
   responsive (`r9-v3-usb/`). The detach interval now starts at the first
-  clear SoftConn read; that image and the 12 GiB EL1 map platform it runs on
-  (`rank-9-usb-v4/`) have not run on a board.
+  clear SoftConn read; that image, built on the current platform
+  (`rank-9-usb-v4/`), passed the same exchange and returned in the same
+  lifetime (`r9-v4-usb/`).
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through
