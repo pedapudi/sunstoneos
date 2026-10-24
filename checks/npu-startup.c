@@ -100,7 +100,7 @@ static int device_read(void *c,unsigned o,uint32_t *v){(void)c;(void)o;(void)v;c
 static int device_write(void *c,unsigned o,uint32_t v){(void)c;(void)o;(void)v;configASSERT(0);return 0;}
 static uint64_t microseconds(void *c)
 {
-    configASSERT(c==&command_token && a733_npu_startup_ready(&startup) && xTaskGetCurrentTaskHandle()==service.worker);
+    configASSERT(c==&command_token && startup.stage==A733_NPU_STARTUP_READY && !startup.failed && xTaskGetCurrentTaskHandle()==service.worker);
     atomic_fetch_add(&backend_calls,1);uint64_t now;configASSERT(a733_counter_clock_now(&clock_source,&now));return now;
 }
 static void delay(void *c,unsigned us){(void)c;(void)us;configASSERT(0);}

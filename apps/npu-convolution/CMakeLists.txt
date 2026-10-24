@@ -72,7 +72,7 @@ set(npu_units
   arch/aarch64/device_memory.c platform/a733/npu_native.c runtime/counter_clock.c
   platform/a733/counter_clock.c platform/a733/shared_locks.c
   drivers/power/a733_pmic_native.c drivers/pinctrl/a733_pins_native.c
-  drivers/npu/npu_convolution.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_pll.c
+  drivers/npu/npu_convolution.c drivers/npu/a733_npu_startup.c
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c drivers/i2c/a733_i2c.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c
   drivers/npu/a733_npu_memory.c drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c

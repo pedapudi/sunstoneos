@@ -237,7 +237,8 @@ int npu_runtime_prepare(struct npu_runtime *rt, const struct npu_runtime_config 
     return 1;
 }
 
-/* Startup and stop checks: the bootstrap allocation and the NPU tables. */
+/* Activation and bootstrap-publication check: the bootstrap allocation and the
+ * NPU tables. */
 static int bootstrap_intact(struct npu_runtime *rt)
 {
     return npu_runtime_crc32c(UINT32_MAX, (const void *)rt->bootstrap.cpu, rt->bootstrap.bytes) ==
@@ -770,9 +771,10 @@ static enum a733_npu_platform_result platform_step(struct npu_runtime *rt, int s
     if (stop)
         for (unsigned i = 0; i < rt->slots; ++i)
             if (state(&rt->slot[i]) != NPU_RUNTIME_CLOSED) return A733_NPU_PLATFORM_RETAINED;
-    /* The service holds the only copy of the operations, image and
-     * catalogue, checked once at activation. */
-    if (!good(rt) || !bootstrap_intact(rt)) {
+    /* The bootstrap allocation and the NPU tables are checked once, at
+     * activation (prepared); the startup and stop tables write only clock and
+     * reset words. */
+    if (!good(rt)) {
         fault(rt); return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result = stop ? a733_npu_startup_stop(rt->startup) :

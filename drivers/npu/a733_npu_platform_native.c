@@ -26,6 +26,7 @@ int a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t *value
 int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
     (void)cookie;
+    if (address!=CCU+0xb00 && address!=CCU+0xb04 && address!=CCU+0x1920 && address!=CCU+0x2a0) return 0;
     uint32_t old=a733_mmio_read32_dsb_sy_both(address);
     switch (address) {
     case CCU+0xb00:

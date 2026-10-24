@@ -11,6 +11,29 @@
 #define BIT(n) (UINT32_C(1)<<(n))
 #define TICK_US (1000000u/configTICK_RATE_HZ)
 #define SETTLE_US 2000u
+/* PLL_NPU at CCU+0x2a0 (A733 User Manual V1.00 §4.1.6.56-60): enable 31, LDO
+ * 30, lock enable 29, LOCK status 28, output gate 27, factors N 8-15, P0 20-22
+ * and M1 1. The profile is N=82, M1=1, P0=4: a 1,968 MHz oscillator divided to
+ * 492 MHz (docs/npu-pll.md). */
+#define PLL (CCU+0x2a0)
+#define PLL_LOCK BIT(28)
+#define PLL_ENABLED UINT32_C(0xe0305100) /* After the enable table, LOCK clear. */
+#define PLL_OPEN UINT32_C(0xe8305100)    /* With the output gate open. */
+/* LOCK sampling (manual §4.1.4.2 and the lock helper of the pinned board
+ * clock source): three locked observations in a row, 3 us apart, at most 100
+ * observations, then a 20 us wait. */
+#define PLL_SAMPLE_US 3u
+#define PLL_SAMPLES 100u
+#define PLL_SETTLE_US 20u
+/* Method-2 enable of a disabled PLL (manual §4.1.4.1): software gate enable
+ * before No-Auto in CCU+0x1920, then LDO, factors, PLL enable and lock
+ * enable. The output gate stays closed until LOCK. */
+static const struct a733_npu_step pll_enable[]={
+    {CCU+0x1920,BIT(16),BIT(16),0}, {CCU+0x1920,1,1,0}, {PLL,BIT(30),BIT(30),PLL_LOCK},
+    {PLL,UINT32_C(0x0070ff02),UINT32_C(0x00305100),PLL_LOCK}, {PLL,BIT(31),BIT(31),PLL_LOCK},
+    {PLL,BIT(29),BIT(29),PLL_LOCK}
+};
+#define PLL_ENABLE_STEPS (sizeof(pll_enable)/sizeof(*pll_enable))
 /* The supply wait ends when the owner sets its done bit. The owner bounds that
  * by its settle time after its first step, or by the PMIC provider's startup
  * deadline, plus its verification budget (docs/power-domains.md). */
@@ -51,20 +74,16 @@ static void native_leave(void *v)
 static void native_retain(void *v)
 {struct a733_npu_startup *s=v;(void)a733_platform_lock_retain(s->providers.locks,A733_PLATFORM_REGISTER_LOCK);}
 
-static int counted_read(void *v,uintptr_t a,uint32_t *out)
-{struct a733_npu_startup *s=v;++s->reads;return s->ops.registers.read(s->cookie,a,out);}
-static int counted_write(void *v,uintptr_t a,uint32_t value)
-{struct a733_npu_startup *s=v;++s->writes;return s->ops.registers.write(s->cookie,a,value);}
-static const struct a733_npu_register_ops counted={counted_read,counted_write};
-
 static int now(struct a733_npu_startup *s,uint64_t *out)
 {
-    uint64_t t;++s->clock_reads;
+    uint64_t t;
     if(s->ops.now(s->cookie,&t)!=1 || !a733_deadline_admit(t,&s->last_now,s->config.deadline_us))return 0;
     if(out)*out=t;
     return 1;
 }
-static int rd(struct a733_npu_startup *s,uintptr_t a,uint32_t *v){return counted_read(s,a,v)==1;}
+static int rd(struct a733_npu_startup *s,uintptr_t a,uint32_t *v){return s->ops.registers.read(s->cookie,a,v)==1;}
+static unsigned apply(struct a733_npu_startup *s,const struct a733_npu_step *t,unsigned n)
+{return a733_npu_apply(&s->ops.registers,s->cookie,t,n);}
 static int check(struct a733_npu_startup *s,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(s,a,&v) && (v&mask)==expected;}
 static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
@@ -84,7 +103,6 @@ static enum a733_npu_platform_result refuse(struct a733_npu_startup *s)
 }
 static int enter(struct a733_npu_startup *s)
 {
-    ++s->lock_enters;
     int held=s->ops.enter(s->cookie,s->config.deadline_us);
     if(held==1)s->register_held=1;
     return held;
@@ -96,10 +114,6 @@ static int leave(struct a733_npu_startup *s)
 }
 
 static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
-static const uint32_t fabric_masks[]={0x0300001f,0x8700001f,0x8700001f};
-static const uint32_t parent_mhz[3][8]={
-    {24,0,0,600,0,0,0,0}, {24,0,800,600,480,0,0,0}, {24,600,0,480,400,0,0,0}
-};
 /* PERI0 outputs that a fabric clock selects: the PLL is enabled, locked and
  * unmodulated, and each selected output has its No-Auto route, software
  * enable and effective gate (A733 User Manual §4.1.4.6, §4.1.6.255, 264). */
@@ -112,7 +126,7 @@ static int peri0(struct a733_npu_startup *s)
     unsigned n=((pll>>8)&255)+1;
     if(n<53 || n>105)return 0;
     for(unsigned i=0;i<3;++i) {
-        unsigned mhz=parent_mhz[i][(s->config.fabric.fabric[i]>>24)&7],divisor,mask;
+        unsigned mhz=a733_npu_parent_mhz[i][(s->config.fabric.fabric[i]>>24)&7],divisor,mask;
         switch(mhz) {
         case 24:continue;
         case 600:divisor=(((pll>>20)&7)+1)*2;mask=BIT(11)|BIT(9);break;
@@ -128,14 +142,14 @@ static int peri0(struct a733_npu_startup *s)
 }
 /* The register pass before the first write (npu-platform.md): the reference
  * clock, the fabric words against the record, PERI0 when selected, every
- * PLL_NPU consumer under its mask, PLL_NPU disabled with its tuning words at
- * reset, and domain 4 OFF. */
+ * PLL_NPU consumer under its mask, and PLL_NPU disabled with its tuning words
+ * at reset. The owner's domain check has read domain 4 OFF. */
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
     if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref) || !a733_clock_ref24_valid(osc,ref))return 0;
     for(unsigned i=0;i<3;++i) {
-        if(!rd(s,CCU+fabric_offsets[i],&v) || (v&fabric_masks[i])!=s->config.fabric.fabric[i] ||
+        if(!rd(s,CCU+fabric_offsets[i],&v) || (v&a733_npu_fabric_masks[i])!=s->config.fabric.fabric[i] ||
            (i && (v&(BIT(28)|BIT(27)))))return 0;
     }
     if((s->shared&A733_CLOCK_PERI0) && !peri0(s))return 0;
@@ -154,11 +168,12 @@ static int pass(struct a733_npu_startup *s)
         check(s,CCU+0xc00,BIT(31)|BIT(27)|UINT32_C(0x07010000),BIT(31)) &&
         check(s,CCU+0xc0c,BIT(16),BIT(16)) &&
         check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
-        rd(s,A733_NPU_PLL_CONTROL,&v) && a733_npu_pll_disabled(v) &&
+        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
+         * and no bit outside the documented fields. */
+        rd(s,PLL,&v) && !(v&UINT32_C(0xb8000000)) && !(v&~UINT32_C(0xf870ff02)) &&
         check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
         check(s,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
-        check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000)) &&
-        check(s,PCK,0xf,0) && check(s,PCK+8,0xf,0);
+        check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
 }
 /* LOCK without the register lock: the exclusive PLL_NPU token makes this
  * task the only writer of the control word. At most 100 observations 3 us
@@ -167,20 +182,29 @@ static int lock_wait(struct a733_npu_startup *s)
 {
     unsigned consecutive=0;
     uint64_t next=s->ops.spin_us(s->cookie);
-    for(s->lock_samples=0;s->lock_samples<A733_NPU_PLL_SAMPLES;) {
+    for(unsigned samples=0;samples<PLL_SAMPLES;++samples) {
         while(s->ops.spin_us(s->cookie)<next){}
         uint32_t v;
-        if(!rd(s,A733_NPU_PLL_CONTROL,&v) || (v&~A733_NPU_PLL_LOCK)!=UINT32_C(0xe0305100))return 0;
-        ++s->lock_samples;
-        consecutive=(v&A733_NPU_PLL_LOCK) ? consecutive+1 : 0;
-        next+=A733_NPU_PLL_SAMPLE_US;
+        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=PLL_ENABLED)return 0;
+        consecutive=(v&PLL_LOCK) ? consecutive+1 : 0;
+        next+=PLL_SAMPLE_US;
         if(consecutive==3) {
-            next+=A733_NPU_PLL_SETTLE_US-A733_NPU_PLL_SAMPLE_US;
+            next+=PLL_SETTLE_US-PLL_SAMPLE_US;
             while(s->ops.spin_us(s->cookie)<next){}
             return now(s,0);
         }
     }
     return 0;
+}
+/* The opened state: domain 4 ON, the NPU resets released and its gates open,
+ * the module selector at PLL_NPU divider 1, PLL_NPU locked with its output
+ * gate open. */
+static int opened(struct a733_npu_startup *s)
+{
+    uint32_t v;
+    return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) &&
+        check(s,CCU+0xb04,0xf0001,0xf0001) && check(s,CCU+0xb00,0x8700001f,BIT(31)) &&
+        rd(s,PLL,&v) && v==(PLL_OPEN|PLL_LOCK);
 }
 static int owner_task(const struct a733_npu_startup *s)
 {
@@ -190,7 +214,6 @@ static int owner_task(const struct a733_npu_startup *s)
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
     if(!owner_task(s))return RETAINED;
-    ++s->calls;
     uint64_t t;
     if(!now(s,&t))return s->stage<A733_NPU_STARTUP_ENABLE ? refuse(s) : fault(s);
     const uint64_t deadline=s->config.deadline_us;
@@ -242,11 +265,11 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         int held=enter(s);
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
-        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4)!=1 || !pass(s)) {
+        unsigned domain=8;
+        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain || !pass(s)) {
             s->ops.leave(s->cookie);s->register_held=0;return refuse(s);
         }
-        if(!now(s,0) || a733_npu_apply(&counted,s,a733_npu_pll_enable,0,A733_NPU_PLL_ENABLE_STEPS,0)!=
-           A733_NPU_PLL_ENABLE_STEPS)return fault(s);
+        if(!now(s,0) || apply(s,pll_enable,PLL_ENABLE_STEPS)!=PLL_ENABLE_STEPS)return fault(s);
         if(!leave(s) || !lock_wait(s))return fault(s);
         s->stage=A733_NPU_STARTUP_OPEN;
         break;
@@ -255,9 +278,9 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         int held=enter(s);
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         uint32_t v;
-        if(!now(s,0) || !rd(s,A733_NPU_PLL_CONTROL,&v) || !a733_npu_pll_locked(v) ||
+        if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_ENABLED|PLL_LOCK) ||
            !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
-           a733_npu_apply(&counted,s,a733_npu_local_open,0,A733_NPU_LOCAL_OPEN_STEPS,0)!=A733_NPU_LOCAL_OPEN_STEPS ||
+           apply(s,a733_npu_local_open,A733_NPU_LOCAL_OPEN_STEPS)!=A733_NPU_LOCAL_OPEN_STEPS ||
            !now(s,0))return fault(s);
         if(!leave(s))return fault(s);
         /* The row was admitted before the scheduler; a refusal of the request
@@ -283,11 +306,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     case A733_NPU_STARTUP_FINAL: {
         int held=enter(s);
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
-        uint32_t v;
-        if(!now(s,0) || !check(s,PCK,0xf,8) || !check(s,PCK+8,0xf,8) ||
-           !check(s,CCU+0xb04,0xf0001,0xf0001) || !check(s,CCU+0xb00,0x8700001f,BIT(31)) ||
-           !rd(s,A733_NPU_PLL_CONTROL,&v) || (v&~A733_NPU_PLL_LOCK)!=UINT32_C(0xe8305100) ||
-           !(v&A733_NPU_PLL_LOCK) || !now(s,0))return fault(s);
+        if(!now(s,0) || !opened(s) || !now(s,0))return fault(s);
         if(!leave(s))return fault(s);
         s->stage=A733_NPU_STARTUP_READY;
         return READY;
@@ -305,23 +324,17 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
     if(s->stage!=A733_NPU_STARTUP_READY || !now(s,0))return fault(s);
     int held=enter(s);
     if(held!=1)return held==0 && now(s,0) ? A733_NPU_PLATFORM_BUSY : fault(s);
-    uint32_t v;
-    if(!now(s,0) || !rd(s,A733_NPU_PLL_CONTROL,&v) || (v&~A733_NPU_PLL_LOCK)!=UINT32_C(0xe8305100) ||
-       !check(s,PCK,0xf,8) || !check(s,PCK+8,0xf,8) ||
-       !check(s,CCU+0xb00,0x8700001f,BIT(31)) || !check(s,CCU+0xb04,0xf0001,0xf0001) ||
-       a733_npu_apply(&counted,s,a733_npu_local_stop,0,A733_NPU_LOCAL_STOP_STEPS,0)!=A733_NPU_LOCAL_STOP_STEPS ||
-       !now(s,0))return fault(s);
+    if(!now(s,0) || !opened(s) ||
+       apply(s,a733_npu_local_stop,A733_NPU_LOCAL_STOP_STEPS)!=A733_NPU_LOCAL_STOP_STEPS || !now(s,0))return fault(s);
     if(!leave(s))return fault(s);
     s->stage=A733_NPU_STARTUP_STOPPED;
     return READY;
 }
-int a733_npu_startup_ready(const struct a733_npu_startup *s)
-{return s && s->initialized && !s->failed && s->stage==A733_NPU_STARTUP_READY;}
 int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
     if(!owner_task(s))return -1;
     if(s->stage<A733_NPU_STARTUP_READY)return 0;
-    if(!a733_npu_startup_ready(s) ||
+    if(s->stage!=A733_NPU_STARTUP_READY ||
        atomic_load_explicit(&s->providers.counter->failed,memory_order_acquire) ||
        atomic_load_explicit(&s->providers.clocks->failed,memory_order_acquire) ||
        atomic_load_explicit(&s->providers.locks->retained,memory_order_acquire)) {

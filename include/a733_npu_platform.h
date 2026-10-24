@@ -6,8 +6,6 @@
  * (docs/designs/npu-board.md). The fields follow the pinned board kernel:
  * CCU+0xb00 module divider bits 0-4, selector 24-26, gate 31; CCU+0xb04 bus
  * gate 0, core reset 16, AXI 17, AHB 18, SRAM reset 19. */
-#define A733_NPU_INITIAL_HZ UINT32_C(492000000)
-#define A733_NPU_INITIAL_UV UINT32_C(800000)
 enum a733_npu_platform_result { A733_NPU_PLATFORM_READY, A733_NPU_PLATFORM_BUSY,
     A733_NPU_PLATFORM_PENDING, A733_NPU_PLATFORM_RETAINED };
 /* AHB, NSI and MBUS selector, divisor and enable fields, and their exact
@@ -15,6 +13,10 @@ enum a733_npu_platform_result { A733_NPU_PLATFORM_READY, A733_NPU_PLATFORM_BUSY,
 struct a733_npu_platform_config {
     uint32_t fabric[3], rate_hz[3];
 };
+/* Per fabric word (AHB, NSI, MBUS): the documented fields, and the parent
+ * rate in MHz of each selector value, 0 where the selector is refused. */
+extern const uint32_t a733_npu_fabric_masks[3];
+extern const uint16_t a733_npu_parent_mhz[3][8];
 /* Pure validation of the fabric record. Writes the shared clock scopes the
  * NPU needs (fabric, reference, oscillator, and PERI0 when a fabric clock
  * selects it). Refusal leaves the output unchanged. */
@@ -39,9 +41,8 @@ struct a733_npu_register_ops {
     int (*read)(void *, uintptr_t, uint32_t *);
     int (*write)(void *, uintptr_t, uint32_t);
 };
-/* Apply steps [first, count) with a readback of each write; a field that
- * already holds its value is not written. Returns the number of steps that
- * completed; *wrote counts the writes. */
-unsigned a733_npu_apply(const struct a733_npu_register_ops *, void *,
-    const struct a733_npu_step *, unsigned first, unsigned count, unsigned *wrote);
+/* Apply the steps in order with a readback of each write; a field that
+ * already holds its value is not written. Consecutive steps on one word use
+ * the value last read from it. Returns the number of steps that completed. */
+unsigned a733_npu_apply(const struct a733_npu_register_ops *, void *, const struct a733_npu_step *, unsigned count);
 #endif

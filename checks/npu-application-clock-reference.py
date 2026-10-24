@@ -4,7 +4,8 @@
 The image's actual sequencer (a733_npu_startup_init and _step) and its native
 allowlist adapter run under Unicorn from the register-pass step, with the
 tokens and the supply already admitted. Scheduler state, the current task,
-the counter, the register lock and the domain-4 check are modeled; the CCU
+the counter, the register lock and the domain-4 check, which reads domain 4
+OFF, are modeled; the CCU
 and PCK words are modeled memory. An admitted case reaches the PLL_NPU enable
 table, whose first write is the software gate enable at CCU+0x1920; a refused
 case writes nothing. No LOCK is modeled, so an admitted case then retains
@@ -28,7 +29,6 @@ FABRIC=(0x03000002,0x83000000,0x81000000);RATES=(200000000,600000000,600000000)
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--session',type=Path,help='unused; kept for existing invocations')
     p.add_argument('--cases',nargs='+')
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     e=harness.Image(a.image,layout_names=LAYOUTS);L=e.layouts
@@ -81,6 +81,7 @@ def main():
             elif n=='xTaskGetCurrentTaskHandle':returned(task)
             elif n=='a733_counter_clock_now':state['time']+=1;put(c.reg_read(UC_ARM64_REG_X1),state['time']);returned(1)
             elif n=='a733_platform_lock_leave':returned(0)
+            elif n=='a733_power_domain_check':put(c.reg_read(UC_ARM64_REG_X2),0,4);returned(1)  # domain 4 OFF
             else:returned(1)
         for at in sites:u.hook_add(UC_HOOK_CODE,hook,begin=at,end=at)
         def call(name,*args):

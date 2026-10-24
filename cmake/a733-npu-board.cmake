@@ -33,7 +33,7 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
   drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c
   drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c
-  drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c drivers/npu/a733_npu_pll.c
+  drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
  INPUTS apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
   apps/npu-board/catalogue.py tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
   "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/a733_npu_startup.h)

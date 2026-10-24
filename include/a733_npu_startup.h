@@ -1,27 +1,9 @@
 #ifndef SUNSTONE_A733_NPU_STARTUP_H
 #define SUNSTONE_A733_NPU_STARTUP_H
-/* The NPU startup sequencer (docs/designs/npu-board.md). One bootstrap task
- * calls a733_npu_startup_step() once per tick until it returns READY. Each
- * call runs steps until one waits on time or on another task:
- *
- * 1. one clock-registry token (exclusive PLL_NPU and NPU, shared fabric,
- *    reference, oscillator and PERI0 when selected), one DCDC2 rail token and
- *    one stable OSC/PCK lease from the image's GPU/PCK resource manager;
- * 2. supply: the power-authority word shows DCDC2 verified with no fault;
- * 3. under one register-lock acquisition, the domain-4 check, the register
- *    pass and the PLL_NPU enable table; LOCK is then sampled without the lock;
- * 4. under a second acquisition, the local open table;
- * 5. the domain-4 row request, answered by the power-domain owner;
- * 6. a 2 ms settle from a counter sample taken when the row reads ON, then the
- *    final readback under a third acquisition.
- *
- * Every wait has a counter deadline. A refusal before the first NPU register
- * write releases the tokens; any later failure retains them, the row and the
- * register lock if a table stopped midway. */
+/* The NPU startup sequencer: docs/npu-startup.md and docs/designs/npu-board.md. */
 #include "a733_counter_clock.h"
 #include "a733_gpu_resources.h"
 #include "a733_npu_platform.h"
-#include "a733_npu_pll.h"
 #include "a733_platform_locks.h"
 #include "a733_power_domains.h"
 #include "a733_rail_leases.h"
@@ -77,9 +59,7 @@ struct a733_npu_startup {
     TaskHandle_t task;
     a733_clock_mask_t shared;
     uint64_t last_now, wait_until;
-    unsigned initialized, stage, failed, register_held, lock_samples;
-    /* Work counters, read by the host checks. */
-    unsigned calls, reads, writes, clock_reads, lock_enters;
+    unsigned initialized, stage, failed, register_held;
 };
 /* EL1, before the scheduler starts and before the power service first runs:
  * copies the configuration and providers and registers the domain-4 row. */
@@ -92,7 +72,6 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *);
 /* After a successful controller CLOSE, the bound task only: the local stop
  * table in one locked pass. READY when stopped. */
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
-int a733_npu_startup_ready(const struct a733_npu_startup *);
 /* The service activation check, on the bound task: 1 when READY and no
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */
