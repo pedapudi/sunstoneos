@@ -18,6 +18,12 @@ USB active until its 20-second deadline and supplies no normal ROM return.
 The finite image currently has no thermal admission or sensor-stop integration.
 Numerical return qualification therefore cannot establish thermal behavior.
 
+The monitor report uses the NPU-specific magic `0x415337334e505231`.
+The host check executes the linked monitor initializer and feeds its report
+identity into the modeled completion parser. It refuses the generic cached-SMP
+magic. Contract admission, time and later completion fields are modeled in
+that check; it establishes no physical entry or numerical result.
+
 ## Construct the session from explicit physical inputs
 
 Use the exact image and manifest together. The `session` operation takes an

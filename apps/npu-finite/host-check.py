@@ -14,6 +14,34 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  # The reviewed 608-byte page, converted to the image's reduced record.
  spec=importlib.util.spec_from_file_location('finite_images',r/'checks/npu-image-checks.py');images=importlib.util.module_from_spec(spec);spec.loader.exec_module(images)
  raw=bytearray(images.npu_page((Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/startup-usb-resume/session-fixture.bin').read_bytes(),layout,h.original.SINGLE_CORE_VERSION));raw[48:80]=build;profile=h.original.session_profile(raw,layout);boot,boot_bytes=layout[1:3]
+ # Read the report identity from the actual linked monitor initializer.
+ # Only contract admission and architectural time are modeled. Stop before seal.
+ from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
+ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
+ spec=importlib.util.spec_from_file_location('finite_report_layout',r/'checks/harness.py')
+ harness=importlib.util.module_from_spec(spec);spec.loader.exec_module(harness)
+ native_image=harness.Image(image,layout_names=('a733_smp_contract',));u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+ u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
+ for at,value in native_image.parts:
+  if value:u.mem_write(at,value)
+ contract=native_image.layouts['a733_smp_contract']
+ for key in ('epoch','generation','lease'):
+  u.mem_write(0x42004000+contract[key],struct.pack('<Q',profile[key]))
+ observed={'seal':False}
+ def initialize(cpu,at,size,cookie):
+  if at==native_image.address('a733_smp_contract_valid'):
+   u.reg_write(UC_ARM64_REG_X0,1);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR));return
+  if at==native_image.address('npu_single_core_seal'):
+   observed['seal']=True;u.emu_stop();return
+  word=int.from_bytes(u.mem_read(at,4),'little')
+  if word&0xffffffe0==0xd53be020:
+   u.reg_write(UC_ARM64_REG_X0+(word&31),11000000);u.reg_write(UC_ARM64_REG_PC,at+4)
+ u.hook_add(UC_HOOK_CODE,initialize);u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000)
+ u.emu_start(native_image.address('sd_single_core_monitor_init'),0x43fff000,count=1000000)
+ assert observed['seal'];initialized=bytes(u.mem_read(0x42000000,128));native_report=struct.unpack('<16Q',initialized)
+ assert native_report[1:4]==(profile['epoch'],profile['generation'],1)
+ (a.evidence/'native-initial-report.bin').write_bytes(initialized)
+ results.append({'name':'actual-native-report-initializer','passed':True,'magic':hex(native_report[0]),'sha256':sha(initialized)})
  fact=t/'modeled-fact.txt';fact.write_text('Software-only mocked host evidence. No physical observation or live target.\n')
  # An impossible test port prevents these temporary records matching a live board.
  identity=[0,0,0,0,1];port='mock-npu-port';common={'image_sha256':sha(data),'identity':identity,'port':port,'whole_platform':profile['whole_platform']}
@@ -63,7 +91,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if variant=='false-success':second=bytes([second[0]^1])+second[1:]
   text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
   if variant=='duplicate-log':text+=text
-  monitor=[0x4153373343525331,profile['epoch'],profile['generation'],5,status,0,11000000,1,12000000]+[0]*7
+  monitor=list(native_report);monitor[3:9]=[5,status,0,11000000,1,12000000]
+  if variant=='old-generic-monitor-magic':monitor[0]=0x4153373343525331
   header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
   receipt=[0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,2 if status else 1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
   if variant=='stale-generation':monitor[2]+=1
@@ -76,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
- variants=['nominal','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
+ variants=['nominal','old-generic-monitor-magic','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  assert not set(a.case)-set(variants),'Unknown selected case'
  for variant in variants:
   if a.case and variant not in a.case:continue
@@ -133,4 +162,4 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)
   assert all(address>=h.DRAM[0] for address,size,after_ROM in state['writes'] if after_ROM)
   results.append({'name':variant,'passed':True,'restore_writes':state['restore_writes'],'retained':not normal,'functional_success':record.get('npu_result',{}).get('functional_success')})
-(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha((r/'apps/npu-finite/host.py').read_bytes()),'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no native checks, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
+(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha((r/'apps/npu-finite/host.py').read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
