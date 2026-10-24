@@ -3,8 +3,10 @@
 **Reconnect request, port `3-1`:** remove every power source from the board
 on host port `3-1` (the separate 5 V/3 A supply and the USB cable), wait a few
 seconds, and reconnect it in FEL mode. The corrected rank 7 diagnostic did not
-return on 2026-10-24 and the board no longer answers. Port `3-3` stays in use
-meanwhile.
+return on 2026-10-24 and the board no longer answers. After the reconnect,
+port `3-1` runs a cold DDR start and then the all-core pre-scheduler bundle
+(`docs/board-runbooks/rank-7-pre-scheduler.md`), byte-identical to the build
+that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
 
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
