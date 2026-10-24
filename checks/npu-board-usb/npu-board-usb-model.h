@@ -1,12 +1,9 @@
 #ifndef SUNSTONE_NPU_BOARD_USB_MODEL_H
 #define SUNSTONE_NPU_BOARD_USB_MODEL_H
 /* Compiles apps/npu-board/usb.c into checks/npu-session-runtime.c, case 5.
- * The check supplies a modeled TinyUSB vendor class with the buffering of the
- * image's own configuration, apps/npu-board/tusb_config.h, which this header
- * includes: FIFO sizes from that file and no dedicated hardware FIFO, so received bytes go
- * controller FIFO -> endpoint buffer (PIO) -> receive FIFO -> caller, and
- * transmitted bytes go caller -> transmit FIFO -> endpoint buffer -> controller
- * FIFO (PIO). It counts every copy. */
+ * The model uses the image's FIFO sizes and direct hardware-FIFO mode:
+ * controller FIFO <-> class FIFO by PIO, class FIFO <-> window by one copy.
+ * Native stack checks cover transfer completion and ring wrap separately. */
 #include "../../apps/npu-board/client.h"
 #include "../../apps/npu-board/tusb_config.h"
 #include <stdbool.h>

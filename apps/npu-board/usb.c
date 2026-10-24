@@ -18,15 +18,11 @@
  * UPLOAD before ready has no window to go to and stops, as does a malformed
  * or out-of-order request; stopping fails the board session.
  *
- * The shared TinyUSB configuration has no dedicated hardware FIFO for the
- * vendor endpoints (CFG_TUD_EDPT_DEDICATED_HWFIFO unset). An UPLOAD byte is
- * therefore moved by PIO from the controller FIFO into the endpoint buffer,
- * copied into the class's receive FIFO, and copied by tud_vendor_read into
- * the lent read window: two memory copies plus PIO. A READ byte is copied by
- * tud_vendor_write from the lent write window into the transmit FIFO, then
- * into the endpoint buffer, then moved by PIO: two memory copies plus PIO.
- * checks/npu-session-runtime.c, case 5, counts these copies through this
- * file with a modeled vendor class. */
+ * The private TinyUSB configuration selects the dedicated hardware-FIFO
+ * path: controller FIFO <-> class FIFO by PIO, class FIFO <-> lent window
+ * by one memory copy. The linked MUSB driver advances class FIFO pointers
+ * as packets move; its completion callback reports the complete armed
+ * transfer, which can span several packets. */
 #ifdef NPU_BOARD_USB_MODEL
 #include "npu-board-usb-model.h"
 static _Noreturn void stop(void){npu_board_usb_stop();}

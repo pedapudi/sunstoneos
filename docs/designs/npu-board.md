@@ -191,9 +191,8 @@ the answer with an acquire load; neither task waits on a tick. LOAD carries a
 catalogue index and is answered when the slot is READY or the load is
 refused. The USB0 framing is described at the top of `apps/npu-board/usb.c`.
 The image has its own TinyUSB configuration, `apps/npu-board/tusb_config.h`,
-first in its include path. It differs from the board's storage-update
-configuration only in the vendor transmit FIFO, 4 KiB instead of 2 KiB; the
-other images keep theirs. A READ response no larger than the FIFO enters the
+first in its include path. It selects the dedicated hardware-FIFO path
+and a 4 KiB vendor transmit FIFO, instead of the board's 2 KiB FIFO. A READ response no larger than the FIFO enters the
 empty FIFO in one exchange, so TinyUSB sends a zero-length packet only after
 its last byte; `usb.c` refuses a READ whose response would exceed
 `CFG_TUD_VENDOR_TX_BUFSIZE`. The catalogue's largest output, mimus-linear-q's
@@ -201,14 +200,24 @@ its last byte; `usb.c` refuses a READ whose response would exceed
 The 2 KiB increase is `.bss`; the image's memory is the 768 MiB pool and the
 kernel sections, which this does not approach.
 
-The image's TinyUSB configuration gives the vendor endpoints no dedicated
-hardware FIFO, so each tensor byte is copied twice in memory and moved once by
-PIO in each direction: controller FIFO to endpoint buffer by PIO, endpoint
-buffer to the class FIFO, and class FIFO to the window by `tud_vendor_read`;
-the output path is the reverse. Writing the controller FIFO directly from the
-window (`dcd_edpt_xfer_fifo` in the MUSB driver) would remove one copy in each
-direction; it changes the shared configuration that the other board images
-use, and is a follow-up.
+The image sets `CFG_TUD_EDPT_DEDICATED_HWFIFO=1`. The MUSB driver moves
+bytes by programmed I/O (PIO) between each controller FIFO and the TinyUSB
+class FIFO. `tud_vendor_read` and `tud_vendor_write` copy bytes between the
+class FIFO and the lent tensor window. Each tensor byte therefore needs one
+memory copy and one PIO move in either direction. No endpoint staging buffer
+is used for the vendor endpoints.
+
+The shared MUSB patch handles unaligned ring addresses with byte loads or
+stores when assembling a controller word. Aligned ring addresses keep the
+word loop. Controller accesses remain 32-bit words followed by byte tails;
+there is no temporary packet buffer or per-word `memcpy` call.
+
+`checks/npu-board-usb-stack.py` executes the linked USB task, TinyUSB and MUSB
+bulk transfer and interrupt code. Its register model covers full and high
+speed, odd addresses, ring wrap, the largest catalogue response and terminal
+zero-length packets. An early RETURN keeps the window lent until the final
+completion. Client replies, endpoint opening and hardware register effects
+are modeled; this check does not execute inference or qualify physical USB.
 
 ## Interrupts and polling
 
@@ -284,6 +293,33 @@ worker does not share a core with USB0. Section 2 item 7 moves them to cores 6
 and 7 after the multicore work admits the A76 cores for this image. Requests
 and replies use FreeRTOS queues. Startup takes the shared register lock three
 times in total.
+
+## Physical entry requires the inherited eight-core startup
+
+The generated NPU boot starts cores 1 through 7 before the scheduler. Pinning
+its NPU tasks to core 1 does not reduce that startup requirement. The image
+needs a qualified eight-core entry, coherent extended DDR reservation and
+matching recovery evidence on the target board. A single-core USB result
+cannot supply those conditions.
+
+The first NPU attempt also needs the preparer's authenticated conditions:
+
+- Exclusive CPU, memory and DMA ownership, with remote writers excluded.
+- NPU SRAM confinement and drain ownership, plus disabled, inactive, clear INTID 97.
+- Exclusive PLL_NPU consumers and writers, with independent DRAM clock sources.
+- Stable DCDC2 at 800 mV and inherited PMIC pin ownership.
+- The extended DDR reservation and a USB reference matching the cached-SMP cold-entry profile.
+
+Runtime readbacks can reject changed settings but do not establish these
+external conditions.
+
+After those conditions are established, the smallest inference attempt uses
+catalogue model 0, one upload, one SUBMIT, a byte comparison with its pinned
+72-byte reference, RETURN and CLOSE. Freeze the image, session and evidence
+before launch. Retain resources for the prescribed whole-board power removal,
+and stop communication after the first failure. This image has no qualified
+ROM-return path. Current board recovery and admission state belong in the
+[handoff](../handoff.md).
 
 ## Reuse and change
 
@@ -381,7 +417,7 @@ Two of the checks failed on the base for reasons outside the record change:
 | Runtime parent, board image | No board image | 8,388,608 bytes from the 768 MiB pool | `npu-board-providers.py` |
 | Largest free extent after admission; free extents after LOAD and CLOSE | Not modeled | ≥ 8,388,608 bytes; unchanged | `npu-board-providers.py`: the pool's slots, and no allocator call in runtime, service or client code |
 | Requests, replies and client tick waits per inference | Runtime check: 1 request, 1 reply; the client in `apps/npu-runtime/main.c`: one `vTaskDelay(1)` per tick of waiting | 1, 1, 0 | `checks/npu-session.py --mode board-client` |
-| Copies per tensor byte | No board image | Input and output each 2 memory copies plus PIO, with the image's TinyUSB configuration | Same check, which compiles `apps/npu-board/usb.c` against a modeled vendor class that counts each copy |
+| Copies per tensor byte | No board image | Input and output each 1 memory copy plus PIO, with the image's dedicated hardware-FIFO configuration | Same check, which compiles `apps/npu-board/usb.c` against a modeled vendor class that counts each copy |
 | Cache lines maintained per job | 19,442 | 19,442 | `checks/npu-session.py --mode runtime` |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | Same |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |

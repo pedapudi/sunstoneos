@@ -3,9 +3,10 @@
 The session runtime is **implemented** and passes FreeRTOS emulator checks on two
 QEMU cores with a register model in place of the NPU. It runs up to eight
 compiled models on the one NPU, each owned by its own client task, and starts
-their jobs one at a time in round-robin order. No board image links it yet,
-and physical execution, memory confinement and numerical inference on the
-NPU remain unqualified.
+their jobs one at a time in round-robin order. This concurrent-session
+implementation has no board consumer. The [supervised NPU board image](designs/npu-board.md)
+uses its replacement, the model-loading runtime with one slot and one client.
+Physical execution, memory confinement and numerical inference remain unqualified.
 
 The interface is [npu_session.h](../include/npu_session.h), implemented in
 [npu_session.c](../drivers/npu/npu_session.c). It uses the

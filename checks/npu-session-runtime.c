@@ -715,16 +715,15 @@ static void finish_case(const char *text)
     platform_exit(0);
 }
 #ifdef NPU_BOARD_CLIENT_CHECK
-/* The bootstrap task runs apps/npu-board/usb.c as USB0, over a modeled
- * TinyUSB vendor class with the shared configuration's buffering, and plays
- * the host. Received bytes go host -> endpoint buffer (PIO) -> receive FIFO
- * -> caller; transmitted bytes go caller -> transmit FIFO -> endpoint buffer
- * -> host (PIO). One OUT and one IN packet move per controller step. */
+/* The bootstrap runs the board USB protocol over modeled class FIFOs.
+ * PIO moves bytes between the host and each class FIFO directly. One OUT
+ * and one IN packet move per step; native stack checks cover aggregated
+ * transfer completion, short packets and ring wrap. */
 #define USB_PACKET 512u
 /* The FIFO sizes of apps/npu-board/tusb_config.h, which the image resolves. */
 #define RX_FIFO CFG_TUD_VENDOR_RX_BUFSIZE
 #define TX_FIFO CFG_TUD_VENDOR_TX_BUFSIZE
-_Static_assert(RX_FIFO == 2048 && TX_FIFO == 4096, "apps/npu-board/tusb_config.h FIFO sizes");
+_Static_assert(CFG_TUD_EDPT_DEDICATED_HWFIFO == 1 && RX_FIFO == 2048 && TX_FIFO == 4096, "apps/npu-board/tusb_config.h FIFO sizes");
 #define HOST_CHUNK 4096u
 enum { STATUS = 1, LOAD, UPLOAD, SUBMIT, READ, RETURN, CLOSE };
 const uint64_t npu_board_usb_epoch = UINT64_C(0x0123456789abcdef), npu_board_usb_generation = 3;
@@ -732,12 +731,12 @@ _Noreturn void npu_board_usb_stop(void) { platform_puts("FAIL usb.c stopped USB0
 static struct {
     uint8_t out[64 + HOST_CHUNK], in[64 + FIXTURE_MAX_TENSOR], chunk[HOST_CHUNK];
     size_t out_len, out_at, in_len;
-    uint8_t rx_ep[USB_PACKET], rx_ff[RX_FIFO], tx_ep[USB_PACKET], tx_ff[TX_FIFO];
+    uint8_t rx_ff[RX_FIFO], tx_ff[TX_FIFO];
     size_t rx_head, rx_count, tx_head, tx_count;
     int zlp;
     /* Bytes moved per stage; headers counts request and response headers. */
-    uint64_t pio_in, ep_to_fifo, fifo_to_caller, into_window, headers_in;
-    uint64_t caller_to_fifo, from_window, fifo_to_ep, pio_out, headers_out;
+    uint64_t pio_in, fifo_to_caller, into_window, headers_in;
+    uint64_t caller_to_fifo, from_window, pio_out, headers_out;
 } usb;
 static unsigned host_sequence;
 static void ring_put(uint8_t *ring, size_t size, size_t head, size_t *count, const uint8_t *from, size_t n)
@@ -783,15 +782,15 @@ static int usb_controller(void)
     int moved = 0;
     if (usb.out_at < usb.out_len && RX_FIFO - usb.rx_count >= USB_PACKET) {
         size_t n = usb.out_len - usb.out_at < USB_PACKET ? usb.out_len - usb.out_at : USB_PACKET;
-        memcpy(usb.rx_ep, usb.out + usb.out_at, n); usb.out_at += n; usb.pio_in += n;
-        ring_put(usb.rx_ff, RX_FIFO, usb.rx_head, &usb.rx_count, usb.rx_ep, n); usb.ep_to_fifo += n;
+        ring_put(usb.rx_ff, RX_FIFO, usb.rx_head, &usb.rx_count, usb.out + usb.out_at, n);
+        usb.out_at += n; usb.pio_in += n;
         tud_vendor_rx_cb(0, NULL, 0); moved = 1;
     }
     if (usb.tx_count) {
         size_t n = usb.tx_count < USB_PACKET ? usb.tx_count : USB_PACKET;
-        ring_get(usb.tx_ff, TX_FIFO, &usb.tx_head, &usb.tx_count, usb.tx_ep, n); usb.fifo_to_ep += n;
         configASSERT(usb.in_len + n <= sizeof(usb.in));
-        memcpy(usb.in + usb.in_len, usb.tx_ep, n); usb.in_len += n; usb.pio_out += n;
+        ring_get(usb.tx_ff, TX_FIFO, &usb.tx_head, &usb.tx_count, usb.in + usb.in_len, n);
+        usb.in_len += n; usb.pio_out += n;
         usb.zlp = !usb.tx_count && n == USB_PACKET;
         tud_vendor_tx_cb(0, (uint32_t)n); moved = 1;
     } else if (usb.zlp) {
@@ -848,8 +847,8 @@ static void board_usb(void)
     const struct fixture *f = &fixtures[SHUFFLENET];
     configASSERT(c->input[0].bytes == f->tensor_bytes[0] && c->output[0].bytes == f->tensor_bytes[1]);
     const unsigned requests = c->requests, replies = c->replies;
-    const uint64_t pio_in = usb.pio_in, ep_to_fifo = usb.ep_to_fifo, into_window = usb.into_window,
-        headers_in = usb.headers_in, from_window = usb.from_window, fifo_to_ep = usb.fifo_to_ep,
+    const uint64_t pio_in = usb.pio_in, into_window = usb.into_window,
+        headers_in = usb.headers_in, from_window = usb.from_window,
         pio_out = usb.pio_out, headers_out = usb.headers_out;
     uint64_t upload = 0, output = 0;
     for (unsigned n = 0; n < JOBS; ++n) {
@@ -872,16 +871,13 @@ static void board_usb(void)
     }
     const unsigned job_requests = c->requests - requests, job_replies = c->replies - replies;
     configASSERT(job_requests == JOBS && job_replies == JOBS && !client_tick_waits);
-    /* Every payload byte: PIO into the endpoint buffer, one copy into the
-     * receive FIFO and one into the window; every output byte: one copy
-     * from the window into the transmit FIFO, one into the endpoint buffer
-     * and PIO out. */
-    const uint64_t in_copies = usb.ep_to_fifo - ep_to_fifo - (usb.headers_in - headers_in) + usb.into_window - into_window;
-    const uint64_t out_copies = usb.from_window - from_window + usb.fifo_to_ep - fifo_to_ep - (usb.headers_out - headers_out);
+    /* Each tensor byte has one class-FIFO/window copy and one PIO move. */
+    const uint64_t in_copies = usb.into_window - into_window;
+    const uint64_t out_copies = usb.from_window - from_window;
     configASSERT(upload == JOBS * (uint64_t)f->tensor_bytes[0] && output == JOBS * (uint64_t)f->tensor_bytes[1]);
-    configASSERT(usb.into_window - into_window == upload && in_copies == 2 * upload &&
+    configASSERT(usb.into_window - into_window == upload && in_copies == upload &&
                  usb.pio_in - pio_in - (usb.headers_in - headers_in) == upload);
-    configASSERT(usb.from_window - from_window == output && out_copies == 2 * output &&
+    configASSERT(usb.from_window - from_window == output && out_copies == output &&
                  usb.pio_out - pio_out - (usb.headers_out - headers_out) == output);
     /* A SUBMIT posted while the read window is lent is refused before any
      * runtime request. */
