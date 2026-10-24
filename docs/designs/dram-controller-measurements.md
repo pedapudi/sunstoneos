@@ -1,11 +1,14 @@
 # DRAM controller measurements
 
-These measurements compare the tree before the DRAM controller work (commit
-`041c09a`) with the tree that adds the DDR passive trip (commit `13037cf`),
-against the budgets in the [DRAM controller design](dram-controller.md). The
-second tree implements only the DDR trip. The memory-bus priority hook, the
-display-port latency window and the copy load are designed but have no code
-in either tree, so their rows record no measurement.
+The first comparison sets the tree before the DRAM controller work (commit
+`041c09a`) against the tree that adds the DDR passive trip (commit `13037cf`),
+using the budgets in the [DRAM controller design](dram-controller.md). Neither
+tree has code for the memory-bus priority hook, the display-port latency
+window or the copy load, so their rows in that comparison record no
+measurement. The
+[second comparison](#memory-bus-priority-window-and-decode-check) measures
+that code against the budgets of the
+[memory-bus priority design](dram-bus-priority.md).
 
 ## Conditions
 
@@ -96,6 +99,77 @@ outstanding reads. These figures match the design.
 
 Every measurable metric is within its budget. The one metric worse than
 before, 11 instructions per steady-state policy update, is the DDR trip's
-own comparison, which the design requires. The hook, window and copy-load
-rows wait for their code, and the scan-out and real-time-factor rows wait for
-a board session.
+own comparison, which the design requires. The scan-out and real-time-factor
+rows wait for a board session.
+
+## Memory-bus priority, window and decode check
+
+### Conditions
+
+- **Trees.** Before: the integrated tree at commit `dfa5174`, which has no
+  hook, window, copy or decode code. After: that tree with
+  `drivers/dram/`, `include/a733_dram.h` and the three `checks/dram-*` files
+  added. Both were copied to paths of equal length under
+  `~/.cache/sunstoneos/build/dram-bus-priority/` (`mb-src`, `hd-src`), so
+  embedded source paths do not change image sizes.
+- **Images.** The gpu-display, HDMI, DisplayPort and integrated OS
+  (`SUNSTONE_A733_OS=ON`) images were built from each tree with the
+  project's aarch64 Clang toolchain. `llvm-size`, `llvm-nm` and a SHA-256 of
+  each image's `.text` were compared.
+- **Host check.** `checks/dram-controller.py` ran on the after tree. The
+  before tree has no code to run it against, so every figure from it is a
+  new value against a baseline of no code. Its source comparison now also
+  checks the port numbering: the sun60iw2 port enum, `sub_node_id_mapping`,
+  the register index it selects, the counter clock, and the U-Boot base and
+  stride read from the pinned U-Boot archive. Two mutations, a 0x100 port
+  stride and port 13 in place of port 14, each fail the check.
+- **Earlier code.** The "Unmerged code" column repeats the figures the design
+  records for commit `02154a1`.
+- No board was used.
+
+### Results
+
+| Metric | Budget | Before | Unmerged code | After | Within budget |
+| --- | --- | --- | --- | --- | --- |
+| Hook accesses | 2 CCU reads; at most 27 NSI; 9 at the table; 0 with the NSI off; 1 lock pair | 0 | 21 from reset fields, 9 at the table, 27 worst | 2 CCU reads; 21 NSI from reset fields, 9 at the table, 27 worst; 9 reads-only; 0 NSI with the NSI off; the caller's 1 lock pair | Yes |
+| Window accesses per phase | Start 6; collect 6, or 7 after the fallback; pending 0; at most 4,100 per session | 0 | 4,008 per session | Start 6; collect 6, 7 after the fallback; pending 0 and 1 counter read; 4,008 per session (40 phase A and 294 phase B windows) | Yes |
+| Accesses, `enter` calls and counter reads after a failure | 0 | Not modeled | Not modeled | 0 after a failure at each of the 6 start accesses, each of the 6 collect accesses, the fallback write and a failed `enter` | Yes |
+| Instructions outside the callbacks | Hook 600; start 200; collect 300; pending 50 | None | Not counted | Hook 456 from reset fields, 342 at the table, 513 worst, 41 with the NSI off; reads-only 276; start 146; collect 158; pending 39 | Yes |
+| `DSB` and `DMB` in the component's objects | 0 | 0 | 0 | 0 | Yes |
+| `DSB SY` per sequence, register path included | Hook up to 58; start 12; collect 12–14 | 0 | Same | Hook 58 worst; start 12; collect 12, 14 after the fallback | Yes |
+| `phase_ticks_max` | Longest span, saturating at 65,535 | Not carried | Offset 38 always 0 | Spans of 100 ticks, then 300, then 70,000 give 100, 300, then 65,535 at offset 38 | Yes |
+| Copy kernel | 6 instructions per 64 bytes; 2 acquire loads per pass | None | Same | 6; 2 | Yes |
+| Code size | Outside the load mode at most 2 KiB text, 128 B data; decode check at most 16 B | 0 | Hook 863 B; reads-only 723 B; window 2,452 B; copy 32 B; 0 B data | Hook 728 B; reads-only 608 B; window 2,816 B; copy 32 B; decode 8 B; 0 B data | Yes |
+| Added `a733_dram_` symbols, tasks, timers, interrupts and tick wake-ups in the gpu-display, HDMI, DisplayPort and OS images | 0 | 0 | 0 | 0; see the image table | Yes |
+| CPU time per window phase | At most 20 µs (480 ticks) | None | Not measured | Not measured: `phase_ticks_max` from both load images | Board measurement |
+| Scan-out latency | Scan-out row of the DRAM controller design | Not measured | Not measured | Not measured | Board measurement |
+
+The window's text grows by 364 bytes over the unmerged code. That growth is
+the failure latch, the monotonic counter check and the phase span, which the
+design adds. The hook's text shrinks by 135 bytes. Its table holds each
+field's address, mask, target and evidence position, where the unmerged code
+computed the address and target on every access.
+
+Each image has the same text, data and bss sizes and the same symbol names
+and sizes before and after, and none has an `a733_dram_` symbol:
+
+| Image | Text (B) | Data (B) | Symbols | `a733_dram_` symbols |
+| --- | --- | --- | --- | --- |
+| gpu-display | 532,124 | 33 | 1,131 | 0 |
+| HDMI | 159,248 | 0 | 434 | 0 |
+| DisplayPort | 610,292 | 145 | 1,818 | 0 |
+| Integrated OS | 889,492 | 3,216 | 2,482 | 0 |
+
+The `.text` bytes of the OS image are identical. Those of the gpu-display,
+HDMI and DisplayPort images differ, but two builds of the before tree's HDMI
+image also differ from each other at the same section layout and symbol
+addresses. These builds are not byte-reproducible, so the byte comparison
+cannot attribute the difference to this change; the matching sizes and
+symbol tables show that no new code is linked.
+
+### Conclusion
+
+Every host-measurable budget is met, and no image changes, because no image
+links the component until the framebuffer and gpu-display edits merge. The
+CPU time per phase and the scan-out latency need the two load images in one
+board session.

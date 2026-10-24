@@ -1,7 +1,9 @@
 # Design: memory-bus priority for scan-out and DRAM latency under copy load
 
-Status: design only. No code for this design is on the branch yet. Section
-numbers refer to [performance architecture](../performance-architecture.md).
+Status: implemented and host-modeled; no image links the code. The
+[measurement record](dram-controller-measurements.md#memory-bus-priority-window-and-decode-check)
+compares every budget below with the integrated tree. Section numbers refer to
+[performance architecture](../performance-architecture.md).
 The [DRAM controller design](dram-controller.md) remains the full
 specification for the port table, the window rules, the evidence block layout
 and the board session. This document covers how this package implements that
@@ -24,10 +26,9 @@ The package adds these files and no others:
   `checks/dram-controller.py`: host cases, the source comparison, the
   instruction counts and code size; `docs/dram.md`.
 
-An implementation of the hook, window and copy pass already exists in commit
-`02154a1`, which was never merged. The package moves it onto the current
-integrated tree and makes the four changes listed under "Reuse and removal".
-No image links the new objects until the framebuffer, gpu-display and build
+The hook, window and copy pass derive from an earlier implementation in
+commit `02154a1`, which was never merged, with the four changes listed under
+"Reuse and removal". No image links the new objects until the framebuffer, gpu-display and build
 edits listed in the DRAM controller design merge. Those files belong to other
 owners. The package's own checks need none of them, so the package delivers
 no patch outside its files.
@@ -164,10 +165,10 @@ fabric clock compare and fabric exclusion. It also reuses
 reply, and `a733_monotonic_advance()` from `a733_range.h`. It adds no
 register path, mapping check or failure class, and removes no existing code.
 
-Four changes are made to the unmerged implementation:
+The code differs from the unmerged implementation in four ways:
 
-1. The failure latch in the table above. Before this change, a step after a
-   failed access could call `enter` again.
+1. The failure latch in the table above. In the unmerged code, a step after
+   a failed access could call `enter` again.
 2. The monotonic counter check.
 3. The `phase_ticks_max` field.
 4. The decode check below.
@@ -202,8 +203,7 @@ declaration that `memory.c` already uses.
 ## Performance budgets
 
 The baseline is the integrated tree, which has no hook, window or copy code.
-Figures for the unmerged code come from its own host check. They
-become measured baselines when the package's check reproduces them.
+Figures for the unmerged code come from its own host check.
 
 | Metric | Baseline | Unmerged code | Budget | Measured by |
 | --- | --- | --- | --- | --- |

@@ -453,9 +453,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `second-board-20261018-3-3/platform-attempt1/`.
   The thermal policy throttles at 85 °C on the DDR temperature channel; this is
   **implemented** and host-modeled, and its board cost is unmeasured.
-  [Memory-bus priority for display scan-out](designs/dram-controller.md) and a
-  display-port latency window are **planned**; they land together with the
-  framebuffer and gpu-display edits that call them. DRAM training, frequency
+  [Memory-bus priority for display scan-out](dram.md), a display-port latency
+  window under an eight-core copy load and the DRAM decode check are
+  **implemented** and host-modeled. No image links them yet: the hook and
+  window enter the gpu-display load images with the framebuffer and
+  gpu-display edits that call them, and the decode check refuses until a
+  boot0 trace names the controller registers. DRAM training, frequency
   scaling, voltage and the firewall remain boot0 dependencies, and the memory
   configuration is not decoded.
   [Board-test bundle preparation](audit/board-test-plan.md#bundles-for-the-memory-gpu-and-npu-paths)

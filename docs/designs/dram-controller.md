@@ -1,8 +1,9 @@
 # DRAM controller and memory-bus priority
 
 Status: the DDR trip is implemented and host-modeled in the thermal policy.
-The priority hook, the latency window and the copy load are implemented and
-host-modeled but not merged. Their code merges together with the framebuffer,
+The priority hook, the latency window and the copy load are implemented in
+`drivers/dram/` and host-modeled ([memory-bus priority](dram-bus-priority.md)),
+but no image links them. They enter an image together with the framebuffer,
 gpu-display and build edits that call them and with the integration host
 cases listed under the changes outside this component. Physical behavior
 stays unqualified until the board evidence in the last section exists.
