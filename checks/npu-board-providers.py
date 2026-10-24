@@ -13,7 +13,9 @@ runtime's parent is one 8,388,608-byte, 2 MiB-aligned allocation inside the
 pool, which keeps a largest free extent of the rest; no runtime, service or
 client function acquires device memory after admission; the worker, the
 bootstrap and the client are pinned to core 1 and USB0 to core 0; INTID 97 is
-bound once with its route to core 1 checked.
+bound once with its route to core 1 checked; the linked TinyUSB vendor class
+has the transmit FIFO of apps/npu-board/tusb_config.h, which usb.c's READ
+limit assumes.
 """
 import argparse,hashlib,json,re,struct,subprocess,sys
 from pathlib import Path
@@ -28,6 +30,20 @@ LAYOUTS=('npu_board_application','npu_board_session','a733_board_session','board
     'a733_platform_locks','npu_runtime','npu_service','a733_pmic','a733_pmic_config')
 WB,WB_END=0x48000000,0x78000000
 PARENT=8388608
+def vendor_fifos(path):
+    """The transmit and receive FIFO sizes of the linked TinyUSB vendor class,
+    from the member offsets of vendord_interface_t in vendor_device.c."""
+    from elftools.elf.elffile import ELFFile
+    with path.open('rb') as f:
+        for cu in ELFFile(f).get_dwarf_info().iter_CUs():
+            if not cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith('class/vendor/vendor_device.c'):continue
+            for die in cu.iter_DIEs():
+                if die.tag!='DW_TAG_structure_type':continue
+                m={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value)
+                   for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes}
+                if 'tx_ff_buf' in m and 'rx_ff_buf' in m:
+                    return m['rx_ff_buf']-m['tx_ff_buf'],die.attributes['DW_AT_byte_size'].value-m['rx_ff_buf']
+    raise AssertionError('no vendord_interface_t in the image')
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
@@ -147,7 +163,11 @@ def main():
     assert state['affinity']==[(usb0,1)],state['affinity']
     binding=e.address('binding',unit='/irq.c')
     assert get(binding)==app+na['runtime']+L['npu_runtime']['service']
-    record=dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
+    config=(ROOT/'apps/npu-board/tusb_config.h').read_text()
+    tx_bufsize=int(re.search(r'#define CFG_TUD_VENDOR_TX_BUFSIZE (\d+)',config).group(1))
+    tx,rx=vendor_fifos(a.image)
+    assert tx==tx_bufsize>=64+2816,(tx,tx_bufsize)
+    record=dict(passed=True,physical_access=False,vendor_fifos=dict(tx=tx,rx_at_least=rx),image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
         providers={k:hex(v) for k,v in expected.items()},domain_rows=len(rows),parent=dict(cpu=hex(cpu),bytes=size),
         largest_free_extent_bytes=largest,acquire_callers=sorted(callers),tasks=[(t[0],t[1]) for t in state['tasks']],scope=__doc__)
     (a.output/'result.json').write_text(json.dumps(record,indent=2)+'\n')

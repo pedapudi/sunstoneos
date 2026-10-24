@@ -37,3 +37,11 @@ sunstone_board_application(npu-board BOOT "${npub_build}/boot.c" LINK_SCRIPT "${
  INPUTS apps/npu-interrupt/irq.c apps/npu-interrupt/irq.h apps/npu-board/boot.patch apps/npu-board/extended-boot.patch apps/npu-board/extended-link.patch
   apps/npu-board/catalogue.py tools/npu-session-models.json platform/a733-smp-cached/link-devices.ld
   "${SUNSTONE_NPU_BOARD_CATALOGUE}" include/npu_runtime.h include/a733_npu_startup.h)
+# apps/npu-board/tusb_config.h, first in the image's include path, replaces the
+# board's TinyUSB configuration. A build that compiled the TinyUSB sources
+# before that file existed recorded the board's file as their dependency, so
+# the sources also depend on this one; the image would otherwise link a 2 KiB
+# transmit FIFO under a usb.c compiled for 4 KiB.
+get_target_property(npub_sources sunstone-a733-npu-board SOURCES)
+list(FILTER npub_sources INCLUDE REGEX "/tinyusb")
+set_property(SOURCE ${npub_sources} APPEND PROPERTY OBJECT_DEPENDS "${SUNSTONE_SOURCE_ROOT}/apps/npu-board/tusb_config.h")

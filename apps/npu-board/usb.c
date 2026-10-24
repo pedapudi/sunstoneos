@@ -36,6 +36,12 @@ static _Noreturn void stop(void){npu_board_usb_stop();}
 #include "platform.h"
 #include "tusb.h"
 #include "device/dcd.h"
+#endif
+/* The image and the case-5 model both compile with apps/npu-board/tusb_config.h. */
+#ifndef SUNSTONE_NPU_BOARD_TUSB_CONFIG_H
+#error "usb.c needs apps/npu-board/tusb_config.h"
+#endif
+#ifndef NPU_BOARD_USB_MODEL
 #define USB0_PID 0xefe8
 static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskDelay(1);}
 #define USB0_PRODUCT "sunstoneos native NPU"
@@ -137,11 +143,12 @@ static void request(void)
         return;
     case READ:
         if(window!=NPU_BOARD_WRITE_LENT||argument>=c->outputs)stop();
-        /* The whole response enters the empty transmit FIFO in one exchange,
-         * so TinyUSB sends a zero-length packet only after its last byte. A
-         * larger tensor would let the FIFO drain on a packet boundary
-         * mid-response; it is refused. The catalogue's largest output is
-         * 2,816 bytes. */
+        /* A response no larger than the transmit FIFO enters the empty FIFO
+         * in one exchange, so TinyUSB sends a zero-length packet only after
+         * its last byte. A larger one could let the FIFO drain on a packet
+         * boundary mid-response; it is refused. The image's FIFO is 4 KiB
+         * (tusb_config.h here); the catalogue's largest output is 2,816
+         * bytes. */
         if(sizeof(response)+c->output[argument].bytes>CFG_TUD_VENDOR_TX_BUFSIZE){respond(NPU_BOARD_RESULT_REFUSED,0,0);return;}
         respond(NPU_BOARD_RESULT_OK,c->output[argument].bytes,c->output[argument].cpu);return;
     case LOAD:case SUBMIT:case RETURN:case CLOSE:

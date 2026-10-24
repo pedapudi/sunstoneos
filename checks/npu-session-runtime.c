@@ -721,7 +721,10 @@ static void finish_case(const char *text)
  * -> caller; transmitted bytes go caller -> transmit FIFO -> endpoint buffer
  * -> host (PIO). One OUT and one IN packet move per controller step. */
 #define USB_PACKET 512u
-#define USB_FIFO 4096u
+/* The FIFO sizes of apps/npu-board/tusb_config.h, which the image resolves. */
+#define RX_FIFO CFG_TUD_VENDOR_RX_BUFSIZE
+#define TX_FIFO CFG_TUD_VENDOR_TX_BUFSIZE
+_Static_assert(RX_FIFO == 2048 && TX_FIFO == 4096, "apps/npu-board/tusb_config.h FIFO sizes");
 #define HOST_CHUNK 4096u
 enum { STATUS = 1, LOAD, UPLOAD, SUBMIT, READ, RETURN, CLOSE };
 const uint64_t npu_board_usb_epoch = UINT64_C(0x0123456789abcdef), npu_board_usb_generation = 3;
@@ -729,7 +732,7 @@ _Noreturn void npu_board_usb_stop(void) { platform_puts("FAIL usb.c stopped USB0
 static struct {
     uint8_t out[64 + HOST_CHUNK], in[64 + FIXTURE_MAX_TENSOR], chunk[HOST_CHUNK];
     size_t out_len, out_at, in_len;
-    uint8_t rx_ep[USB_PACKET], rx_ff[USB_FIFO], tx_ep[USB_PACKET], tx_ff[USB_FIFO];
+    uint8_t rx_ep[USB_PACKET], rx_ff[RX_FIFO], tx_ep[USB_PACKET], tx_ff[TX_FIFO];
     size_t rx_head, rx_count, tx_head, tx_count;
     int zlp;
     /* Bytes moved per stage; headers counts request and response headers. */
@@ -737,16 +740,16 @@ static struct {
     uint64_t caller_to_fifo, from_window, fifo_to_ep, pio_out, headers_out;
 } usb;
 static unsigned host_sequence;
-static void ring_put(uint8_t *ring, size_t head, size_t *count, const uint8_t *from, size_t n)
+static void ring_put(uint8_t *ring, size_t size, size_t head, size_t *count, const uint8_t *from, size_t n)
 {
-    size_t at = (head + *count) % USB_FIFO, first = n < USB_FIFO - at ? n : USB_FIFO - at;
+    size_t at = (head + *count) % size, first = n < size - at ? n : size - at;
     memcpy(ring + at, from, first); memcpy(ring, from + first, n - first); *count += n;
 }
-static void ring_get(const uint8_t *ring, size_t *head, size_t *count, uint8_t *to, size_t n)
+static void ring_get(const uint8_t *ring, size_t size, size_t *head, size_t *count, uint8_t *to, size_t n)
 {
-    size_t first = n < USB_FIFO - *head ? n : USB_FIFO - *head;
+    size_t first = n < size - *head ? n : size - *head;
     memcpy(to, ring + *head, first); memcpy(to + first, ring, n - first);
-    *head = (*head + n) % USB_FIFO; *count -= n;
+    *head = (*head + n) % size; *count -= n;
 }
 static int in_tensor(const struct npu_board_tensor *t, unsigned n, uintptr_t p)
 {
@@ -758,15 +761,15 @@ uint32_t tud_vendor_available(void) { return (uint32_t)usb.rx_count; }
 uint32_t tud_vendor_read(void *buffer, uint32_t bytes)
 {
     size_t n = bytes < usb.rx_count ? bytes : usb.rx_count;
-    ring_get(usb.rx_ff, &usb.rx_head, &usb.rx_count, buffer, n);
+    ring_get(usb.rx_ff, RX_FIFO, &usb.rx_head, &usb.rx_count, buffer, n);
     usb.fifo_to_caller += n;
     if (in_tensor(board_client.input, board_client.inputs, (uintptr_t)buffer)) usb.into_window += n;
     return (uint32_t)n;
 }
 uint32_t tud_vendor_write(const void *buffer, uint32_t bytes)
 {
-    size_t room = USB_FIFO - usb.tx_count, n = bytes < room ? bytes : room;
-    ring_put(usb.tx_ff, usb.tx_head, &usb.tx_count, buffer, n);
+    size_t room = TX_FIFO - usb.tx_count, n = bytes < room ? bytes : room;
+    ring_put(usb.tx_ff, TX_FIFO, usb.tx_head, &usb.tx_count, buffer, n);
     usb.caller_to_fifo += n;
     if (in_tensor(board_client.output, board_client.outputs, (uintptr_t)buffer)) usb.from_window += n;
     return (uint32_t)n;
@@ -778,15 +781,15 @@ uint32_t tud_vendor_flush(void) { return (uint32_t)usb.tx_count; }
 static int usb_controller(void)
 {
     int moved = 0;
-    if (usb.out_at < usb.out_len && USB_FIFO - usb.rx_count >= USB_PACKET) {
+    if (usb.out_at < usb.out_len && RX_FIFO - usb.rx_count >= USB_PACKET) {
         size_t n = usb.out_len - usb.out_at < USB_PACKET ? usb.out_len - usb.out_at : USB_PACKET;
         memcpy(usb.rx_ep, usb.out + usb.out_at, n); usb.out_at += n; usb.pio_in += n;
-        ring_put(usb.rx_ff, usb.rx_head, &usb.rx_count, usb.rx_ep, n); usb.ep_to_fifo += n;
+        ring_put(usb.rx_ff, RX_FIFO, usb.rx_head, &usb.rx_count, usb.rx_ep, n); usb.ep_to_fifo += n;
         tud_vendor_rx_cb(0, NULL, 0); moved = 1;
     }
     if (usb.tx_count) {
         size_t n = usb.tx_count < USB_PACKET ? usb.tx_count : USB_PACKET;
-        ring_get(usb.tx_ff, &usb.tx_head, &usb.tx_count, usb.tx_ep, n); usb.fifo_to_ep += n;
+        ring_get(usb.tx_ff, TX_FIFO, &usb.tx_head, &usb.tx_count, usb.tx_ep, n); usb.fifo_to_ep += n;
         configASSERT(usb.in_len + n <= sizeof(usb.in));
         memcpy(usb.in + usb.in_len, usb.tx_ep, n); usb.in_len += n; usb.pio_out += n;
         usb.zlp = !usb.tx_count && n == USB_PACKET;
@@ -888,6 +891,26 @@ static void board_usb(void)
     unsigned result;
     while (!(result = npu_board_client_answer(c, host_sequence))) { configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1); }
     configASSERT(result == NPU_BOARD_RESULT_REFUSED && c->refused == 1 && c->requests == requests + JOBS);
+    /* The catalogue's largest output: mimus-linear-q's 2,816 bytes, a
+     * 2,880-byte READ response, inside the image's transmit FIFO. */
+    const struct fixture *g = &fixtures[MIMUS];
+    configASSERT(host(LOAD, MIMUS, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_READ_LENT &&
+                 c->inputs == 1 && c->outputs == 1 && c->input[0].bytes == g->tensor_bytes[0] &&
+                 c->output[0].bytes == 2816 && 64 + c->output[0].bytes <= TX_FIFO);
+    for (uint32_t at = 0; at < g->tensor_bytes[0]; at += HOST_CHUNK) {
+        uint32_t bytes = g->tensor_bytes[0] - at < HOST_CHUNK ? g->tensor_bytes[0] - at : HOST_CHUNK;
+        configASSERT(host(UPLOAD, 0, at, g->tensor[0] + at, bytes) == NPU_BOARD_RESULT_OK);
+    }
+    configASSERT(host(SUBMIT, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && atomic_load(&c->window) == NPU_BOARD_WRITE_LENT);
+    configASSERT(host(READ, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && word(usb.in + 28) == 2816 && usb.in_len == 64 + 2816);
+    {
+        const struct npu_runtime_slot *s = &rt.slot[3];
+        unsigned i = source_of_output(s, 0);
+        for (unsigned x = 0; x < 2816; ++x)
+            configASSERT(usb.in[64 + x] ==
+                         expected(MIMUS, 0, i == UINT32_MAX ? 0 : ((const uint8_t *)c->input[i].cpu)[x % c->input[i].bytes]));
+    }
+    configASSERT(host(RETURN, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK);
     configASSERT(host(CLOSE, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && c->state == A733_NPU_CLOSED &&
                  atomic_load(&c->closed));
     set(&closed[3], 1);
