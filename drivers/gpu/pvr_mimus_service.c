@@ -60,12 +60,12 @@ static int ring_barrier(void *ctx, enum pvr_ccb_barrier kind)
 static uint32_t timeline(const struct pvr_mimus_service *m)
 { return *(const volatile uint32_t *)m->config->firmware[TIMELINE].storage.cpu; }
 
-static void post(struct pvr_mimus_service *m, uint32_t sequence, uint32_t result)
+static int post(struct pvr_mimus_service *m, uint32_t sequence, uint32_t result)
 {
     const struct pvr_mimus_record record = {sequence, result};
     m->owed = 0;
     /* One record is owed at a time, so the one-entry queue is empty here. */
-    (void)xQueueSend(m->completions, &record, 0);
+    return xQueueSend(m->completions, &record, 0) == pdTRUE;
 }
 
 static int object_valid(const struct pvr_mips_buffer *b, uint32_t address)
@@ -131,6 +131,7 @@ int pvr_mimus_service_bind(struct pvr_mimus_service *m, struct pvr_gpu_service *
     for (unsigned i = 0; i < PVR_MIMUS_SERVICE_OBJECTS; ++i)
         value.objects[i] = (struct pvr_mips_object){c->firmware[i].pages, 1, c->firmware_address[i], PVR_MIPS_UNCACHED};
     *m = value;
+    atomic_store(&m->slot_state, PVR_MIMUS_SLOT_CLOSED);
     m->completions = xQueueCreateStatic(1, sizeof(struct pvr_mimus_record), m->completion_storage,
                                         &m->completion_state);
     if (!m->completions) { m->phase = PVR_MIMUS_SERVICE_FAILED; return 0; }
@@ -146,16 +147,18 @@ int pvr_mimus_service_prepare(struct pvr_mimus_service *m, uint64_t deadline)
     m->owed = 1;
     m->epoch = m->service->epoch;
     m->deadline = deadline;
-    if (!pvr_mimus_session_open(&m->session, &c->session)) return 0;
+    struct pvr_mimus_session_config session = c->session;
+    session.last_sequence = m->sequence;
+    if (!pvr_mimus_session_open(&m->session, &session)) return 0;
     memset(m->command, 0, sizeof(m->command));
     /* The program samples nothing, so the command names no border table. */
     pvr_mimus_session_command(&m->session, m->command, 0, c->resume);
     put32(m->update, c->firmware_address[TIMELINE]);
     put32(m->update + 4, 0);
-    /* Timeline 0: the first job's sequence is 1. */
-    *(volatile uint32_t *)c->firmware[TIMELINE].storage.cpu = 0;
+    /* Sequence numbers survive healthy power cycles, so old output tags
+     * cannot satisfy a later job. The first boot starts at zero. */
+    *(volatile uint32_t *)c->firmware[TIMELINE].storage.cpu = m->sequence;
     a733_mmio_dsb_sy();
-    m->sequence = 0;
     m->publish_index = m->publish_page = 0;
     m->phase = PVR_MIMUS_SERVICE_PUBLISHING;
     return 1;
@@ -172,6 +175,10 @@ int pvr_mimus_service_publish_poll(struct pvr_mimus_service *m)
         }
         if (++m->publish_page == b->page_count) { m->publish_page = 0; ++m->publish_index; }
         if (m->publish_index == PVR_MIMUS_SERVICE_PUBLISH) {
+            if (c->vm->phase == A733_GPU_VM_MEMORY_PUBLISHED) {
+                m->phase = PVR_MIMUS_SERVICE_PUBLISHED;
+                return 1;
+            }
             if (a733_gpu_vm_memory_publish_begin(c->vm) != A733_GPU_VM_MEMORY_AGAIN) {
                 m->error = PVR_MIMUS_SERVICE_PUBLICATION; return -1;
             }
@@ -293,7 +300,13 @@ int pvr_mimus_service_poll(struct pvr_mimus_service *m)
         if (r == PVR_CCCB_FAULT || r == PVR_CCCB_INVALID) return fault(m, PVR_MIMUS_SERVICE_RING);
         if (m->client.phase != PVR_CCCB_IDLE) return 0;
         m->phase = PVR_MIMUS_SERVICE_IDLE;
-        post(m, 0, PVR_MIMUS_OK);
+        /* Queue publication orders the ready slot before the client's OPEN
+         * result. A failed publication instead closes admission through abort. */
+        atomic_store(&m->slot_state, PVR_MIMUS_SLOT_IDLE);
+        if (!post(m, 0, PVR_MIMUS_OK)) {
+            m->owed = 1;
+            return fault(m, PVR_MIMUS_SERVICE_LIFECYCLE);
+        }
         return 1;
     }
     case PVR_MIMUS_SERVICE_IDLE: return take(m);

@@ -31,6 +31,7 @@ struct a733_gpu_mimus_layout {
 };
 /* Private static image storage, zeroed once. */
 struct a733_gpu_mimus {
+    struct a733_gpu_reserved *firmware;
     struct device_memory_lease payload_lease, firmware_lease, table_lease;
     struct device_memory_extent payload_extent, firmware_extent, table_extent;
     struct pvr_mimus_service component;
@@ -54,4 +55,9 @@ struct a733_gpu_mimus {
  * acquired page retained. */
 struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *, struct a733_gpu_reserved *,
     struct pvr_gpu_service *, uint32_t owner, const struct a733_gpu_mimus_layout *);
+/* Worker only, after healthy CLOSE and before the next OPEN epoch. Require
+ * exact native stopped proof, unchanged leases and no unread completion.
+ * Keep allocations and immutable published VM tables; rebuild mutable context
+ * backing. 1 ready, 0 refused without writes, -1 failed with backing retained. */
+int a733_gpu_mimus_reopen(struct pvr_gpu_service *);
 #endif

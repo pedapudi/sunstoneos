@@ -140,12 +140,16 @@ table's length after a successful OPEN and zero before OPEN, after a refused
 OPEN and after a GPU fault. The recognizer task runs the hook, so the count
 and the dispatch record need no atomic operations or locks.
 
-The thermal gate applies at each layer's `Begin`. A layer already admitted
-can finish its remaining batches through `Finish`. Returning to NORMAL
-restores placement only while the session remains open; it cannot reopen
-a faulted or incomplete session. Moving work to the CPU alone does not
-establish lower temperature. The OS also delays recognition checkpoints
-during THROTTLE and closes admission on CRITICAL, as described in
+The thermal gate applies at each layer's `Begin`, after the preceding call's
+output has been consumed. A layer already admitted can finish its remaining
+batches through `Finish`. THROTTLE then closes the healthy GPU session;
+NORMAL reopens its retained allocations before another job. If throttle
+arrives during reopen, the client closes again before admitting work.
+This boundary performs at most two transitions and cannot reopen faulted or
+incomplete dispatch admission. The [GPU component](gpu-mimus-service.md#lifecycle-and-power-limits)
+defines the bounded waits and retained-failure behavior. Physical cooling
+remains unqualified. The OS also delays recognition checkpoints during
+THROTTLE and closes admission on CRITICAL, as described in
 [the thermal service](os-image.md#thermal-service).
 
 The dispatch record, `os_dispatch_record`, counts calls placed on the GPU and

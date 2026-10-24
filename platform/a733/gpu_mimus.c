@@ -6,10 +6,11 @@
 #include "a733_range.h"
 #include "a733_gpu_mapping.h"
 #include "pvr_compute_context.h"
+#include "a733_gpu_backend.h"
 #include <string.h>
 
 extern unsigned char __device_pool_start[];
-enum { NEW, ACQUIRED, BUILT, BOUND, FAILED };
+enum { NEW, ACQUIRED, BUILT, BOUND, FAILED, REBUILDING };
 #define PAGE 4096u
 #define BLOCK (UINT64_C(2) << 20)
 static const uint32_t context_bytes[PVR_MIMUS_SERVICE_OBJECTS] = {232, 4, 32, PVR_MIMUS_SERVICE_RING_BYTES, 32, 64};
@@ -56,7 +57,7 @@ static struct pvr_mimus_service *failed(struct a733_gpu_mimus *s, struct a733_gp
 static int admit_programs(void *ctx, const struct pvr_compute_program_config *p)
 {
     struct a733_gpu_mimus *s = ctx;
-    return s && p == &s->programs && s->stage == ACQUIRED;
+    return s && p == &s->programs && (s->stage == ACQUIRED || s->stage == REBUILDING);
 }
 
 struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *s, struct a733_gpu_reserved *g,
@@ -151,6 +152,58 @@ struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *s, struc
     c->resume = s->program_result.cdm_resume_address;
     c->max_job_us = l->max_job_us;
     if (!pvr_mimus_service_bind(&s->component, service, &g->config, c)) return failed(s, g);
+    s->firmware = g;
+    g->config.mimus_owner = s;
     s->stage = BOUND;
     return &s->component;
+}
+
+static int held(struct device_memory_pool *pool, struct device_memory_lease lease,
+                const struct device_memory_extent *expected)
+{
+    struct device_memory_extent actual;
+    enum device_memory_state state;
+    return device_memory_describe(pool, lease, &actual, &state) && state == DEVICE_MEMORY_DEVICE &&
+        actual.cpu == expected->cpu && actual.physical == expected->physical && actual.bytes == expected->bytes;
+}
+
+int a733_gpu_mimus_reopen(struct pvr_gpu_service *service)
+{
+    struct a733_gpu_mimus *s = service ? service->config.mimus_owner : NULL;
+    if (!s || s->stage != BOUND || service->config.mimus != &s->component ||
+        s->component.service != service || s->component.config != &s->config || !s->firmware ||
+        service->phase != PVR_GPU_SERVICE_STOPPED || s->component.phase != PVR_MIMUS_SERVICE_IDLE ||
+        s->component.owed || atomic_load(&s->component.lost) ||
+        atomic_load(&s->component.slot_state) != PVR_MIMUS_SLOT_CLOSED ||
+        s->component.sequence == UINT32_MAX || uxQueueMessagesWaiting(s->component.completions) ||
+        s->vm.phase != A733_GPU_VM_MEMORY_PUBLISHED || s->config.vm != &s->vm ||
+        !a733_gpu_backend_stopped(service->config.context, service)) return 0;
+    struct a733_gpu_reserved *g = s->firmware;
+    if (g->memory.phase != A733_GPU_MEMORY_OFFLINE ||
+        !held(g->wb_pool, s->payload_lease, &s->payload_extent) ||
+        !held(g->wb_pool, s->table_lease, &s->table_extent) ||
+        !held(g->nc_pool, s->firmware_lease, &s->firmware_extent)) return 0;
+    uint64_t now;
+    if (pvr_gpu_service_now(service, &now) != 1 || now >= service->deadline) return -1;
+    /* The native stopped proof precedes every write. Restore the firmware VM
+     * context as pvr_gpu_vm_build does; its immutable tables stay published. */
+    memset(s->vm.context_cpu, 0, PVR_GPU_VM_CONTEXT_BYTES);
+    memcpy(s->vm.context_cpu, &s->table_pages[0], sizeof(uint64_t));
+    const uint32_t unallocated = UINT32_MAX;
+    memcpy((unsigned char *)s->vm.context_cpu + 8, &unallocated, sizeof(unallocated));
+    s->stage = REBUILDING;
+    if (!pvr_compute_programs_build(&s->programs, &s->program_result)) return failed(s, g), -1;
+    struct pvr_compute_buffer contexts[5];
+    for (unsigned i = 0; i < 5; ++i)
+        contexts[i] = (struct pvr_compute_buffer){s->config.firmware[i].storage.cpu, context_bytes[i],
+                                                s->config.firmware_address[i]};
+    struct pvr_compute_config context = {.bvnc = PVR_FW_A733_BVNC, .priority = 1,
+        .context_id = 1, .owner_id = (uint32_t)s->payload_lease.owner};
+    memcpy(context.switch_registers, s->program_result.switch_registers, sizeof(context.switch_registers));
+    if (!pvr_compute_context_build(&context, contexts) ||
+        pvr_gpu_service_now(service, &now) != 1 || now >= service->deadline) return failed(s, g), -1;
+    s->component.client = (struct pvr_cccb){0};
+    s->component.phase = PVR_MIMUS_SERVICE_BOUND;
+    s->stage = BOUND;
+    return 1;
 }
