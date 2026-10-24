@@ -149,10 +149,12 @@ stop therefore preserves the admitted row, its rail pin and every lease.
 The supported operating point remains fixed at 492 MHz and 800 mV; there
 is no NPU frequency or voltage transition API. A stopped or faulted startup
 cannot restart in place, and faults retain resources until whole-board
-power removal. The NPU applications have no thermal admission, throttling
-or thermal cancellation callback, and the OS has no NPU service entry.
-These lifecycle and thermal gaps, plus physical startup qualification,
-remain after inherited-ON admission.
+power removal. The board image now supplies
+[thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop)
+through the existing sensor controller and policy. The other NPU application
+images have no thermal callbacks, and the OS has no NPU service entry.
+Frequency/voltage transitions, in-place recovery and physical startup and
+thermal qualification remain open.
 
 ## Service activation
 

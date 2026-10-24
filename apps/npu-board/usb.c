@@ -58,7 +58,7 @@ void tud_suspend_cb(bool wake){(void)wake;}
 enum { STATUS=1, LOAD, UPLOAD, SUBMIT, READ, RETURN, CLOSE };
 static uint8_t header[64],response[64];
 static unsigned header_used,operation,sequence,last_sequence,posted,tensor;
-static uintptr_t upload_at;static size_t upload_left;
+static uintptr_t upload_at;static size_t upload_left;static unsigned discard_upload;
 static uintptr_t payload;static size_t response_bytes,sent,transferred;static unsigned terminal_zlp;
 static uint32_t le32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static uint64_t le64(const uint8_t *p){return le32(p)|(uint64_t)le32(p+4)<<32;}
@@ -94,7 +94,8 @@ static void respond(unsigned result,size_t extra,uintptr_t from)
     put32(response,RESPONSE_MAGIC);put32(response+4,operation);put32(response+8,sequence);put32(response+12,result);
     if(npu_board_client_ready(c)) {
         (void)atomic_load_explicit(&c->answer,memory_order_acquire);
-        put32(response+16,c->state);put32(response+20,atomic_load_explicit(&c->window,memory_order_acquire));
+        put32(response+16,atomic_load_explicit(&c->closed,memory_order_acquire)?A733_NPU_CLOSED:c->state);
+        put32(response+20,atomic_load_explicit(&c->window,memory_order_acquire));
         put32(response+24,c->model);put64(response+48,c->job);
         put32(response+56,c->inputs<<16|c->outputs);
         put32(response+60,operation==READ&&tensor<c->outputs?c->output[tensor].bytes:
@@ -129,6 +130,12 @@ static void request(void)
         respond(NPU_BOARD_RESULT_NOT_READY,0,0);return;
     }
     const unsigned window=atomic_load_explicit(&c->window,memory_order_acquire);
+    if(npu_board_client_stopping(c)&&operation!=STATUS) {
+        /* Drain a refused payload into the fixed header scratch area, never
+         * into a returned tensor window. A stalled host retains at deadline. */
+        if(operation==UPLOAD&&bytes){upload_left=bytes;discard_upload=1;return;}
+        respond(NPU_BOARD_RESULT_REFUSED,0,0);return;
+    }
     switch(operation) {
     case STATUS:respond(NPU_BOARD_RESULT_OK,0,0);return;
     case UPLOAD:
@@ -164,13 +171,22 @@ static void exchange(void)
         if(!result)return;
         posted=0;respond(result,0,0);if(result==NPU_BOARD_RESULT_FAULT)stop();return;
     }
+    /* Thermal stop returns a window only after the complete response and
+     * terminal ZLP, any accepted upload and any partial header have drained.
+     * The independent bootstrap deadline retains a stalled transfer. */
+    if(npu_board_client_stopping(CLIENT)&&!upload_left&&!header_used&&
+       atomic_load_explicit(&CLIENT->window,memory_order_acquire)!=NPU_BOARD_HELD) {
+        npu_board_client_return(CLIENT);return;
+    }
     uint32_t available=tud_vendor_available();
     if(!available)return;
     if(upload_left) {
         size_t n=available<upload_left?available:upload_left;
-        if(tud_vendor_read((void *)upload_at,(uint32_t)n)!=n)stop();
-        upload_at+=n;upload_left-=n;
-        if(!upload_left)respond(NPU_BOARD_RESULT_OK,0,0);
+        if(discard_upload&&n>sizeof(header))n=sizeof(header);
+        if(tud_vendor_read(discard_upload?header:(void *)upload_at,(uint32_t)n)!=n)stop();
+        if(!discard_upload)upload_at+=n;
+        upload_left-=n;
+        if(!upload_left){respond(discard_upload?NPU_BOARD_RESULT_REFUSED:NPU_BOARD_RESULT_OK,0,0);discard_upload=0;}
         return;
     }
     size_t n=sizeof(header)-header_used;if(n>available)n=available;

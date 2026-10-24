@@ -54,6 +54,9 @@
 #ifdef NPU_BOARD_CLIENT_CHECK
 #include "../apps/npu-board/client.h"
 #include "npu-board-usb/npu-board-usb-model.h"
+static unsigned thermal_on_trigger,thermal_window_checks;
+static int board_time(void *unused,uint64_t *out)
+{(void)unused;*out=(uint64_t)xTaskGetTickCount()*1000;return 1;}
 #endif
 #include <string.h>
 
@@ -265,6 +268,12 @@ static int write32(void *cookie, unsigned offset, uint32_t value)
         uint32_t n = get(&model.triggers);
         uint32_t command = model.regs[0x654/4];
         model.bootstrap = command == rt.bootstrap.device;
+#ifdef NPU_BOARD_CLIENT_CHECK
+        if(!model.bootstrap&&thermal_on_trigger) {
+            uint64_t now;configASSERT(board_time(NULL,&now));thermal_on_trigger=0;
+            npu_board_client_thermal(&board_client,0,1,0,now);
+        }
+#endif
         unsigned slot = SLOTS;
         for (unsigned i = 0; i < rt.slots; ++i) if (rt.slot[i].command.device == command) slot = i;
         configASSERT(model.bootstrap || slot < SLOTS);
@@ -543,7 +552,7 @@ static void client(void *argument)
     unsigned slot = (unsigned)(uintptr_t)argument;
     configASSERT(task_level() == 0);
 #ifdef NPU_BOARD_CLIENT_CHECK
-    if (npu_case == 5 && slot == 3) { npu_board_client_run(&board_client); configASSERT(0); }
+    if ((npu_case == 5||npu_case == 6) && slot == 3) { npu_board_client_run(&board_client); configASSERT(0); }
 #endif
     wait_flag(&started, 1);
     struct npu_service_reply r = call(slot, NPU_SERVICE_OPEN, 0, 1000000);
@@ -663,7 +672,7 @@ static void client(void *argument)
         }
         close_slot(slot);
         break;
-    case 5:
+    case 5:case 6:
         close_slot(slot);
         break;
     default:
@@ -787,6 +796,10 @@ static int usb_controller(void)
         tud_vendor_rx_cb(0, NULL, 0); moved = 1;
     }
     if (usb.tx_count) {
+        if(npu_case==6&&npu_board_client_stopping(&board_client)&&!atomic_load(&board_client.closed)) {
+            configASSERT(atomic_load(&board_client.window)==NPU_BOARD_WRITE_LENT);
+            ++thermal_window_checks;
+        }
         size_t n = usb.tx_count < USB_PACKET ? usb.tx_count : USB_PACKET;
         configASSERT(usb.in_len + n <= sizeof(usb.in));
         ring_get(usb.tx_ff, TX_FIFO, &usb.tx_head, &usb.tx_count, usb.in + usb.in_len, n);
@@ -842,6 +855,28 @@ static void board_usb(void)
     while (!npu_board_client_ready(c)) { configASSERT(xTaskGetTickCount() - start < 20000); vTaskDelay(1); }
     set(&opened[3], 1);
     configASSERT(host(STATUS, 0, 0, NULL, 0) == NPU_BOARD_RESULT_OK && c->requests == 1 && c->replies == 1);
+    if(npu_case==6) {
+        const struct fixture *f=&fixtures[CONV8];
+        configASSERT(host(LOAD,CONV8,0,NULL,0)==NPU_BOARD_RESULT_OK);
+        configASSERT(host(UPLOAD,0,0,f->tensor[0],f->tensor_bytes[0])==NPU_BOARD_RESULT_OK);
+        uint64_t now;configASSERT(board_time(NULL,&now));
+        npu_board_client_thermal(c,0,0,now+1000000,now);
+        const unsigned before=c->requests;
+        configASSERT(host(SUBMIT,0,0,NULL,0)==NPU_BOARD_RESULT_REFUSED&&c->requests==before);
+        npu_board_client_thermal(c,1,0,now+1000000,now);thermal_on_trigger=1;
+        configASSERT(host(SUBMIT,0,0,NULL,0)==NPU_BOARD_RESULT_OK);
+        configASSERT(!thermal_on_trigger&&npu_board_client_stopping(c)&&!(atomic_load(&c->admission)&NPU_BOARD_ACCEPTED));
+        configASSERT(thermal_window_checks);
+        start=xTaskGetTickCount();
+        while(!atomic_load(&c->closed)) {
+            npu_board_usb_exchange();configASSERT(xTaskGetTickCount()-start<5000);vTaskDelay(1);
+        }
+        configASSERT(atomic_load(&c->window)==NPU_BOARD_HELD&&c->requests==before+2&&c->replies==c->requests);
+        configASSERT(host(STATUS,0,0,NULL,0)==NPU_BOARD_RESULT_OK&&word(usb.in+16)==A733_NPU_CLOSED);
+        configASSERT(host(SUBMIT,0,0,NULL,0)==NPU_BOARD_RESULT_REFUSED);
+        configASSERT(!client_tick_waits&&rt.counters.jobs==1);
+        set(&closed[3],1);return;
+    }
     configASSERT(host(LOAD, SHUFFLENET, 0, NULL, 0) == NPU_BOARD_RESULT_OK &&
                  atomic_load(&c->window) == NPU_BOARD_READ_LENT && word(usb.in + 56) == (1u << 16 | 1u));
     const struct fixture *f = &fixtures[SHUFFLENET];
@@ -930,9 +965,10 @@ static void bootstrap_run(void *unused)
     configASSERT(npu_runtime_startup_poll(&rt) == A733_NPU_PLATFORM_READY);
     set(&started, 1);
 #ifdef NPU_BOARD_CLIENT_CHECK
-    if (npu_case == 5) {
+    if (npu_case == 5||npu_case == 6) {
         board_usb();
-        finish_case("PASS NPU runtime: the board client loop hands the windows over, one request and reply per inference, no tick wait\n");
+        finish_case(npu_case==6?"PASS NPU runtime: thermal refusal, accepted-job drain, USB window handback and automatic CLOSE with no client tick wait\n":
+            "PASS NPU runtime: the board client loop hands the windows over, one request and reply per inference, no tick wait\n");
     }
 #endif
     for (unsigned s = 0; s < SLOTS; ++s) wait_flag(&opened[s], 1);
@@ -1083,7 +1119,7 @@ void kernel_main(void)
     model.regs[0x20/4] = 0x9000; model.regs[0x24/4] = 0x9202;
     model.regs[0x30/4] = 0x1000003b; model.regs[0x28/4] = 0x20240101; model.regs[1] = IDLE;
     model.masked = 1;
-    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5;
+    model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4 || npu_case == 5 || npu_case == 6;
     model.late = npu_case == 2;
     model.defer_mask = npu_case == 2 ? 6 : 0;
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
@@ -1106,7 +1142,8 @@ void kernel_main(void)
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
 #ifdef NPU_BOARD_CLIENT_CHECK
     board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,
-        .wait = 20000, .task = clients[3], .bootstrap = bootstrap};
+        .wait = 20000, .task = clients[3], .bootstrap = bootstrap,.now=board_time,.session_end=60000000};
+    atomic_init(&board_client.admission,(UINT64_C(60000000)<<3)|NPU_BOARD_ALLOW);
 #endif
     vTaskStartScheduler(); platform_panic("scheduler returned", 0);
 }

@@ -8,7 +8,7 @@
  #include "a733_cpu_continue.h"
  #include <stddef.h>
  static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
-@@ -84,8 +85,13 @@
+@@ -84,8 +85,14 @@
      #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
      if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
      #endif
@@ -16,15 +16,16 @@
 -    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
 +    extern int npu_board_session_prepare(const struct a733_smp_contract *);
 +    if(!npu_board_session_prepare(&admission))a733_smp_stop(3,0x30b);
-+    /* USB0 (INTID 188-190) and the NPU (INTID 97) must have no inherited
++    /* USB0 (INTID 188-190), THS (71) and NPU (97) must have no inherited
 +     * enable, pending or active state. */
 +    if(((read32(0x0340010c)|read32(0x0340020c)|read32(0x0340030c))&0x2)||
++       ((read32(0x03400108)|read32(0x03400208)|read32(0x03400308))&0x80)||
 +       ((read32(0x03400114)|read32(0x03400214)|read32(0x03400314))&0x70000000))
 +        a733_smp_stop(3,0x30b);
      if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
      a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
-@@ -96,6 +102,9 @@
+@@ -96,6 +103,9 @@
      for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
      wait_clear(0x03400000,1u<<31);
      write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);

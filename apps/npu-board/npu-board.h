@@ -22,8 +22,12 @@ struct npu_board_application {
     StaticTask_t tasks[2];
     StackType_t stacks[2][NPU_BOARD_STACK] __attribute__((aligned(16)));
     TaskHandle_t bootstrap,client_task;
+    atomic_uint stopped;
 };
 extern struct npu_board_application npu_board;
 int npu_board_irq_bind(struct npu_runtime *);
 void board_usb0_task(void *);
+int npu_board_thermal_start(void);
+int npu_board_thermal_privileged(void (*)(void *),void *);
+void npu_board_thermal_irq(void);
 #endif

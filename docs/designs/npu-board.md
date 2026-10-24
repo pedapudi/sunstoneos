@@ -137,19 +137,20 @@ supervised boot, `extended-link.patch` over `link-devices.ld`, and
 - `board_application_start`, which takes the runtime's parent, prepares the
   runtime, constructs the startup and its row, creates the bootstrap and the
   EL0 client task, binds the service and the interrupt, and pins the board's
-  USB0 task to core 0;
+  USB0 task to core 0, and creates the thermal monitor on core 0;
 - `board_application_task_privileged`, which admits the NPU worker and the
-  bootstrap task at EL1t. `npu_runtime_startup_poll` refuses a caller below
+  bootstrap and thermal tasks at EL1t. `npu_runtime_startup_poll` refuses a caller below
   EL1 (`a733_npu_runtime.c` lines 784–785), and the bootstrap writes CCU
   registers;
-- `admission.c`, which validates the record. The 808-byte record
+- `admission.c`, which validates the record. The 1,000-byte record
   (`npu-board-session.h`) extends `struct a733_board_session`, as `struct
   a733_g2d_session` does, with NPU owner, command admission, supervisor, PCK
-  client, catalogue digest and the four evidence digests. The board workload
+  client, catalogue digest, four NPU evidence digests and the thermal payload
+  described below. The board workload
   is 2: USB0 and the providers, no USB2 host and no radio. Admission requires
   the owner to differ from the board's owners and the PCK client to differ
   from the board session's, which the USB2 host would use; neither G2D nor the
-  framebuffer is linked into this image. The record has version 1;
+  framebuffer is linked into this image. The record has version 2;
 - `prepare.py` and `launch.c`, which follow their G2D counterparts, and the
   supervised capture `tools/check-a733-npu-board-supervised.py`. The launcher
   authenticates the physical-memory and remote-firmware exclusion that
@@ -164,6 +165,15 @@ The preparer requires these conditions, each bound into its evidence digest:
 | Clock | `supervised-cross-pll-disturbance-risk`, `exclusive-pll-npu-consumers-and-writers`, `independent-dram-phy-sources`, `no-autonomous-parent-selector-writers` |
 | Power | `dcdc2-stable-800mv`, `authenticated-pmic-pin-inheritance` |
 | Supervision | `manual-whole-board-power-removal`, `retain-all-resources-until-power-removal`, `stop-after-first-failure` |
+
+The appended thermal payload uses a distinct owner, an authority identifier,
+APB1 and GPADC settings, five hardware threshold rows and four evidence
+digests. Host preparation reuses `apps/thermal/prepare.py` for the THS/IRQ71
+ownership, cold controller state, SID calibration access, analog and digital
+supplies, mappings, stable clocks and supervised retention requirements.
+The thermal facts sit under `thermal` in the admission record and must carry
+physical authority. A model record cannot authorize a board launch. Older
+808-byte sessions are refused.
 
 The catalogue is the five models of `drivers/npu/npu_session_models.inc`.
 `apps/npu-board/catalogue.py` checks each model file against
@@ -249,14 +259,80 @@ are modeled; this check does not execute inference or qualify physical USB.
 - **Unqualified delivery.** Until the board shows one interrupt per job, the
   runtime keeps its idle-register read per worker step and a one-tick timeout
   while a job runs (the section 1.3 heavier form).
-- **Clients and USB0.** The client blocks on its reply queue and task
-  notifications without a timeout and never calls `vTaskDelay`. After CLOSE
-  the client notifies the bootstrap, which waits on that notification and
-  checks the board's state on each wake, so neither task wakes while idle.
+- **Clients and USB0.** The client bounds each runtime request and reply wait
+  to two seconds, waits indefinitely for task notifications, and never calls
+  `vTaskDelay`. After CLOSE it notifies the bootstrap. The bootstrap also
+  wakes every 25 ms to supervise thermal freshness and the stop deadline.
   The service worker keeps its 1,000 ms idle timeout, one wake per second
   while no job runs. USB0 uses the shared loop of
   `apps/board/usb0_service.h`, at most 200 µs or 64 passes per tick, because
   USB0 interrupt delivery is unqualified.
+
+## Thermal admission and orderly stop
+
+`apps/npu-board/thermal.c` runs the existing native THS controller and fixed
+board policy with the board's counter, clock registry and register mutex.
+Its task owns IRQ71 on core 0, at priority `0xd8`. The ISR masks the source
+and notifies the task; the task reads the five channels, clears observed
+events and rearms the source. It also reads every 25 ms. Startup validates
+the live clock token and device mappings and applies the factory SID
+calibration. An inherited thermal service or invalid calibration refuses.
+
+The NPU bootstrap and every SUBMIT require all five channels to have fresh
+readings and the policy to be NORMAL. The existing policy throttles CPU/GPU
+at 90 °C and DDR at 85 °C; all channels are critical at 110 °C. Its NPU
+channel has no passive trip. A reading older than one second blocks new
+work, and five seconds without readings is critical. THROTTLE blocks new
+SUBMIT requests; fresh readings below the policy's hysteresis limits can
+restore admission. No frequency or voltage changes occur.
+
+One atomic word carries a freshness deadline and the admission, accepted
+work and terminal stop bits. A compare-and-exchange claims startup or a
+job before it enters the runtime, then a second counter read checks that
+the claim did not expire while the task was preempted. Clearing accepted
+work preserves a concurrent stop. Initial NORMAL without valid samples
+cannot admit startup. Sensor faults close admission without immediately
+revoking the board-live condition needed to drain the NPU.
+
+CRITICAL latches a five-second stop deadline, capped by the board session
+deadline. It never renews that deadline. An accepted job retains its
+one-second controller deadline and two-second request/reply bounds. A
+failure retains its resources. USB completes an accepted upload or an
+active IN response, including its terminal zero-length packet, before
+returning the window. Later READ requests are refused; later uploads are
+discarded into fixed scratch storage. The client sends CLOSE only with
+both windows returned. Automatic CLOSE publishes only the atomic closed
+flag, leaving USB's plain result snapshot stable.
+
+Successful service CLOSE proves controller quiescence and stops the NPU
+interrupt before the bootstrap applies the existing local gate/reset table.
+A critical observation before startup prevents any NPU startup call. If
+startup was already accepted, it finishes under its existing bounds, then
+OPEN and CLOSE establish the runtime's required closed-slot state. No
+model job is admitted during this handshake. Domain 4, PLL_NPU, the rail
+pin and all leases remain held; neither fault reset nor restart is added.
+
+The bootstrap independently checks the publication every 25 ms on core 1.
+If the core-0 monitor freezes, it refuses stale admission and latches stop
+at five seconds since the oldest reading. The five-second drain then gives
+a maximum of about ten seconds since that reading, plus scheduling delay,
+before retained failure. A stalled host or retained register mutex cannot
+extend the deadline or authorize reclaiming an active window.
+
+The monitor adds one static task with a 2,048-word stack. Successful startup
+and SUBMIT claims each add two counter queries and one atomic claim. The
+bootstrap and monitor each have a 25 ms periodic wait; the client retains
+zero idle tick wakes and the tensor path retains one copy plus PIO per
+direction. These bounded monitoring wakes replace the earlier sleeping
+bootstrap so a frozen monitor cannot leave shutdown unbounded.
+
+Focused checks execute the linked sensor/controller/policy, the real runtime
+client and service under QEMU, and the linked TinyUSB/MUSB transfer path.
+They cover calibration, fresh/hot/stale readings, critical and frozen-monitor
+deadlines, accepted-job completion, automatic CLOSE, IRQ masking/rearm and
+window retention through IN/ZLP at both USB speeds. MMIO effects, NPU output
+and task boundaries are modeled as described by each check. Physical
+thermal response, numerical NPU execution and startup remain unqualified.
 
 ## Memory placement and cache policy
 
@@ -426,7 +502,7 @@ Two of the checks failed on the base for reasons outside the record change:
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | Same |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms with USB0 on the worker's core | 1.15, 4.33, 2.02, 6.58 ms, without the 1.25 USB0 factor | `checks/npu-runtime-bounds.py` |
-| Wakes while idle | Service worker: one per 1,000 ms timeout | Bootstrap and client 0; service worker one per second | Counted from the code; the board-client case shows no client tick wait |
+| Wakes while idle | Service worker: one per 1,000 ms timeout; bootstrap and client 0 | Bootstrap and thermal monitor: one per 25 ms, plus notifications; client 0; service worker one per second | Independent thermal supervision; board-client and board-thermal cases show no client tick wait |
 | Worker steps and idle-register reads while jobs run | Four running jobs: 1,040 steps and 1,060 reads over 12 ticks | Reads ≤ steps + 4 × (ticks + 1) + 8, until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2, which asserts the bound |
 | One ShuffleNetV2 inference over USB0, upload to output read | No board image | No target; estimated about 40 ticks: 294 high-speed packets of input at 10 packets per tick (30 ticks), the 6.58 ms slot (7 ticks) and one tick for each of SUBMIT, READ and RETURN | `checks/usb0-service-burst.py` packet rate and `checks/npu-runtime-bounds.py`; measured on the board |
 | USB0, 64 KiB response | 13 ticks in the shared-loop model | 13 ticks | `checks/usb0-service-burst.py` |

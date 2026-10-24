@@ -12,7 +12,8 @@ manager, ledger and owner; the domain-4 row is on the owner's list once; the
 runtime's parent is one 8,388,608-byte, 2 MiB-aligned allocation inside the
 pool, which keeps a largest free extent of the rest; no runtime, service or
 client function acquires device memory after admission; the worker, the
-bootstrap and the client are pinned to core 1 and USB0 to core 0; INTID 97 is
+bootstrap and the client are pinned to core 1, USB0 and thermal to core 0;
+the thermal constructor uses the actual clock registry; INTID 97 is
 bound once with its route to core 1 checked; the linked TinyUSB vendor class
 has the transmit FIFO of apps/npu-board/tusb_config.h, which usb.c's READ
 limit assumes.
@@ -60,22 +61,26 @@ def main():
     shared=providers+L['board_provider']['shared'];domains=providers+L['board_provider']['domains']
     nu=L['a733_native_usb']
     put(shared+nu['counter']+L['a733_counter_clock']['initialized'],1,4)
-    put(shared+nu['clocks']+L['a733_clock_leases']['initialized'],1,4)
     put(shared+nu['locks']+L['a733_platform_locks']['initialized'],1,4)
     put(domains+L['a733_power_domains']['self'],domains);put(domains+L['a733_power_domains']['pmic'],shared+nu['pmic'])
     put(shared+nu['pmic']+L['a733_pmic']['config']+L['a733_pmic_config']['startup_deadline'],10**9)
     # The admitted session, also the board's own copy.
-    session=bytearray(808);s=L['npu_board_session']
+    session=bytearray(1000);s=L['npu_board_session']
     build=bytes(u.mem_read(e.address('a733_smp_build_id'),32))
     session[L['a733_board_session']['image']:L['a733_board_session']['image']+32]=build
     struct.pack_into('<Q',session,L['a733_board_session']['deadline_us'],20*10**6)
     struct.pack_into('<3I',session,L['a733_board_session']['fabric'],0x03000002,0x83000000,0x81000000)
     struct.pack_into('<3I',session,L['a733_board_session']['fabric_hz'],200000000,600000000,600000000)
     struct.pack_into('<Q',session,s['owner'],31);struct.pack_into('<I',session,s['pck_client'],4)
+    struct.pack_into('<Q',session,s['thermal_owner'],32);struct.pack_into('<Q',session,s['thermal_authority'],91)
+    struct.pack_into('<I',session,s['apb1_hz'],24000000)
+    for field in ('configure_adc_clock','alarm_mask','critical_mask'):session[s[field]]=1 if field=='configure_adc_clock' else 31
+    for i in range(5):struct.pack_into('<3H',session,s['limits']+6*i,1400,1600,1000)
     admitted=e.address('admitted',unit='apps/npu-board/snapshot.c')
-    u.mem_write(admitted,bytes(session));put(admitted+808,1,4);put(admitted+812,1,4)
+    u.mem_write(admitted,bytes(session));put(admitted+1000,1,4);put(admitted+1004,1,4)
     ba=L['board_application']
     u.mem_write(board+ba['admitted_session'],bytes(session[:592]));u.mem_write(board+ba['session'],bytes(session[:592]))
+    put(board+ba['live_until'],20000000)
     usb0=0x43f00000;put(board+ba['handles']+8,usb0)
     gicd=0x03400000;put(gicd+0x460,0xd8<<8,4);put(gicd+0x6308,0x100)
     state={'done':False,'scheduler':1,'tasks':[],'affinity':[],'acquire_callers':[]}
@@ -95,7 +100,7 @@ def main():
         if at==ret:state['done']=True;c.emu_stop();return
         if at not in hooks:
             w=get(at,4);reg=UC_ARM64_REG_X0+(w&31)
-            v={0xd5384240:4,0xd53b00e0:4,0xd53be020:10**9,0xd53be000:24000000,0xd53800a0:0x100}[w&0xffffffe0]
+            v={0xd5384240:4,0xd53b00e0:4,0xd53be020:24000,0xd53be000:24000000,0xd53800a0:0x100}[w&0xffffffe0]
             c.reg_write(reg,v);c.reg_write(UC_ARM64_REG_PC,at+4);return
         n=hooks[at];r=[c.reg_read(UC_ARM64_REG_X0+i) for i in range(8)]
         if n=='npu_board_session_valid':returned(1)
@@ -126,6 +131,7 @@ def main():
     # The extended pool getter returns the pool once device preparation ends.
     hooks[e.address('a733_memory_reservations_init')]='pool';sites.add(e.address('a733_memory_reservations_init'))
     u.hook_add(UC_HOOK_CODE,lambda c,at,size,x:returned(pool),begin=e.address('a733_memory_reservations_init'),end=e.address('a733_memory_reservations_init'))
+    assert call('a733_clock_leases_init',shared+nu['clocks'],e.address('a733_counter_clock_now'),shared+nu['counter'])==1
     assert call('board_application_start')==1,'board_application_start refused'
     na=L['npu_board_application'];sl=L['a733_npu_startup'];pl=L['a733_npu_startup_providers']
     startup=app+na['startup'];pv=startup+sl['providers']
@@ -160,6 +166,7 @@ def main():
     assert 'board_application_start' in callers and not any(re.match(r'(npu_runtime|npu_service|npu_board_client|a733_npu_)',c) for c in callers),callers
     tasks={t[0]:t for t in state['tasks']}
     assert {k:tasks[k][1] for k in ('npu-boot','npu-client','npu-service')}=={'npu-boot':2,'npu-client':2,'npu-service':2},state['tasks']
+    assert tasks['npu-thermal'][1]==1,state['tasks']
     assert state['affinity']==[(usb0,1)],state['affinity']
     binding=e.address('binding',unit='/irq.c')
     assert get(binding)==app+na['runtime']+L['npu_runtime']['service']
