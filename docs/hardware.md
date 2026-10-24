@@ -336,18 +336,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `primary-context-probe-20261018/physical-005/runtime/session.json`.
   Its bounded application callback does not request a task switch; task selection
   and eight-core scheduling remain unqualified.
-  All eight CPUs also pass the production pre-scheduler barrier and 256 atomic
-  lock-protected increments. All participants finish before cleaning both shared
+  On 2026-10-18, all eight CPUs also passed the production pre-scheduler
+  barrier and 256 atomic lock-protected increments. All participants finish before cleaning both shared
   pages and their own stack page. CPU0 restores awake interrupt state; every
   secondary restores local state and reaches observed OFF. Exact physical page
   contents, saved DRAM restoration and responsive ROM return pass under
   `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/`.
-  All eight CPUs physically execute FreeRTOS task construction and initial
-  context restoration through idle-task entry. Task pointers, arguments, stacks
+  On that date, all eight CPUs physically executed FreeRTOS task construction
+  and initial context restoration through idle-task entry. Task pointers, arguments, stacks
   and exception state match. Every core cleans the complete 145-page writable
   interval before CPU0 restoration and acknowledged, independently observed
   secondary shutdown. Saved DRAM restoration and responsive ROM return pass.
   Evidence: `all-core-first-task-20261018/physical-010/runtime/session.json`.
+  The corrected rank 7 diagnostic failed to return on port `3-1` on
+  2026-10-24. That board requires complete power removal before the narrower
+  [pre-scheduler diagnostic](board-runbooks/rank-7-pre-scheduler.md); the
+  historical pass does not establish current recovery or repeatability.
   This diagnostic stops before task bodies; task switching and sustained
   eight-core scheduling remain physically unqualified. The complete returning
   workload passes instruction checks through 32 floating-point rounds per core,
@@ -520,16 +524,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   places mimus linear layers on the CPU or the GPU from a generated table,
   with INTID 95 and the GPU worker on the recognition core; it is
   **implemented** and host-modeled, with exact sums equal to a CPU-only
-  reference on the bench call list. It does not build until the mimus port
-  shrinks its arena to 12 MiB and the GPU runtime and the page-table owner
-  provide five functions and two build constants.
+  reference on the bench call list. The option configures, links and passes
+  its link check. The local mimus revision `9c57286b7` supplies the exact-sum
+  hook; publishing that revision still requires user approval. Physical GPU
+  execution and end-to-end recognition qualification remain outstanding.
   A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
   refuses the radio and headset builds until it stages their profile and
   firmware. The supervised radio and headset builds cannot finish firmware
   loading within their 40 s and 30 s bootstrap bounds at the admitted SDIO
   clock, and the resident image depends on the stage-2 entry prerequisites.
-  No board has run any variant. Display, camera, GPU and NPU are not part of
-  the image.
+  No board has run any variant. Display, camera and NPU remain separate
+  images; GPU linear execution is an optional OS build.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -762,8 +767,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is the only writer of PCK600 domains 1 and 5 and verifies DCDC2 and DCDC4
   once per boot; the framebuffer, G2D and the GPU hold rows, and one service
   task per image runs every PMIC transaction and domain transition. It is
-  **host-modeled**; no board run has used it. Domain 4 moves onto a row in
-  the NPU startup's next stage. CPU rail lowering stops at the boot baseline.
+  **physically exercised** on port `3-3` on 2026-10-24 for supply verification
+  and adoption of domain 1 already ON; no domain switch-on time was measured.
+  The 155% PMIC step bound remains provisional, and the proposed replacement
+  remains under review ([current evidence](handoff.md#board-state-and-recovery)).
+  NPU startup now uses the owner's domain-4 row. CPU rail lowering stops at
+  the boot baseline.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
   and native compilation pass. A physical returning test now completes production
@@ -1499,8 +1508,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   stage takes at least 0.535 s on the A76 pair against 0.396 s, and 0.664 s
   if GPU loads take 200 clocks
   ([measurements](designs/gpu-mimus-compute-measurements.md)). The GPU
-  runtime's session, worker and interrupt, the mimus port's hook and GPU
-  execution remain required.
+  runtime's session, worker and interrupt are implemented in
+  [the GPU service](gpu-mimus-service.md), and local mimus `9c57286b7` supplies
+  the exact-sum hook. Physical GPU execution remains required.
   Wider dispatch geometry, shape/program replacement, graphics, concurrency
   and physical computation remain required. The accepted
   fixed-workload returning profile is preserved separately.
@@ -2173,12 +2183,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   catalogue graph. Sessions reserve memory from the platform pool by model
   size, which is DDR in the extended cached profile. QEMU checks with modeled
   device output pass for polled, interrupt, integrity-fault and 6.2 MiB
-  reserved cases. No board image links the runtime. An image derived from the
-  board image would construct a second GPU/PCK resource manager beside the
-  board's, and its 2 MiB device pool is smaller than the 2,195,456 bytes that
-  the three small catalogue models need. An image derived from the single-core
-  NPU images needs their provider setup to select the session runtime
-  ([remaining work](npu-session.md#remaining-work)).
+  reserved cases. This earlier session API is superseded by the runtime below.
   The [NPU runtime](designs/npu-breadth.md) replaces the session code: up to
   eight client tasks each load any catalogue model into a fixed slot at
   runtime, switch it, and run it with inputs and outputs in place, one request
@@ -2186,9 +2191,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   round-robin starts with interrupt completion. QEMU checks with modeled
   device output pass for model switching, refused loads, concurrent loading,
   late and dropped interrupts and interim integrity faults, and a host check
-  bounds start and reply latency per image. No board image links it; the
-  single-core provider must construct it for the large-graph image, and
-  shader graphs cannot yet be loaded. Physical execution remains unqualified.
+  bounds start and reply latency per image. The supervised
+  [NPU board image](designs/npu-board.md), `sunstone-a733-npu-board`, links
+  this runtime with one slot, the five-model catalogue, shared board providers
+  and extended memory. It is implemented and host-modeled; the FIFO-direct
+  USB path and physical inference qualification remain outstanding. Shader
+  graphs cannot yet be loaded.
   The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A

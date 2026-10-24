@@ -84,14 +84,16 @@ OS image variants build, and the PWM and crypto build options configure. The
 QEMU kernel check, the eight-core emulator soak, the mimus parity check, the
 shared-helper check and the dashboard tests pass. No board test ran during
 the audit or any round, so nothing they added is physically tested or
-qualified. The merged work is published on the `bringup` branch of `origin`.
+qualified. That audit evidence applies to its recorded revisions; later physical results
+are listed below. Check Git before publishing subsequent integrations.
 
 ## Board state and recovery
 
-Two boards are attached in FEL mode, on host USB ports `3-1` and `3-3`: the
-host's USB device list shows each as the boot ROM's FEL device, an observation
-that involved no communication with either board. Physical recovery is
-available, but the user can reconnect a board only once every several hours, so
+The latest recorded state is from 2026-10-24: port `3-1` failed the
+corrected rank 7 diagnostic and requires removal of every power source. Port
+`3-3` returned to a responsive ROM after the native USB exchange on the
+changed PMIC provider. A cached FEL descriptor does not establish recovery.
+The user can reconnect a board only once every several hours, so
 a lost connection takes that board out of use until its next reconnect. Request
 a reconnect at the top of this document, naming the port and the physical
 action, and continue with the other board or offline work meanwhile.
@@ -252,10 +254,10 @@ prepared set (`board-bundles-20261024-5/`, records `set5-*`):
   time measured nominal (22.5 µs) with no re-spins. The access-cost windows
   give, per access: a bare S_TWI0 read about 378 ns, the barrier about 41 ns
   more, the new adapter read path about 462 ns, a time read 144 ns, the
-  task check 76 ns and a write about 358 ns. Because the bus read alone
-  takes about 378 ns, a step within 110% of wire time is out of reach on
-  this bus whatever the barrier placement; the post-change bound comes from
-  these figures by the procedure in `docs/designs/pmic-access.md`.
+  task check 76 ns and a write about 358 ns. The 110% target remains open: the service step follows write cost,
+  and writes without a trailing barrier were not measured. The proposed
+  replacement for the provisional 155% bound remains under the review
+  described at the top of this document.
 - **Bundle 7 (`set5-bb7-run/`):** the owner again found domain 1 ON and
   adopted it.
 - **Native USB on the changed provider (`set5-r9-v6-usb/`, from
@@ -267,7 +269,7 @@ prepared set (`board-bundles-20261024-5/`, records `set5-*`):
 On 2026-10-23, after the rank 9 refusal, both ports were power-cycled and
 passed a fresh cold DDR start (`ddr-2/`). Port `3-3` has stayed in that
 lifetime since: every 2026-10-24 run above, from `r9-v3-usb/` through
-`bb8-run/`, is a warm return within it. Port `3-1` ran the corrected rank 7
+`set5-r9-v6-usb/`, is a warm return within it. Port `3-1` ran the corrected rank 7
 diagnostic in its own `ddr-2` lifetime and waits for a power removal. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
@@ -283,26 +285,24 @@ target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
 | Board | Power and access facts | Continuation requirement |
 | --- | --- | --- |
-| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Queue bound to port `3-1`. Ranks 1 to 5 passed on 2026-10-23; ranks 6 to 9 wait for refrozen bundles, starting with the returning thermal image, whose build reuses objects compiled from sources that have since changed. |
-| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Queue bound to port `3-3`. Cold DDR and ranks 1 to 5 passed on 2026-10-23; it is ready for independent device work once the next bundles are frozen. |
+| Original, host port `3-1` | Corrected rank 7 did not return on 2026-10-24. Separate 5 V/3 A supply; removing USB alone can leave power applied. The 2026-10-18 all-core pass is historical evidence. | Remove every power source and reconnect in FEL. Then follow the cold DDR and narrower pre-scheduler plan at the top of this document; do not repeat the failed launch. |
+| Second, host port `3-3` | Latest recorded run `set5-r9-v6-usb/` completed the native USB exchange, quiesced and returned to a responsive ROM on 2026-10-24. USB is its only power source. | Continue eligible independent device work with current admission and frozen inputs. Reuse the passing thermal, kernel and USB evidence while its relevant inputs match. |
 
 Per-port permissions, locks, queues and failure records remain independent.
-Neither queue has a running test; the original board's queue has four blocked
-entries. Neither queue database records
-its board port, and the runners that check the binding refuse claims from an
-unbound queue before any device request. The coordinator binds each queue with
-`tools/board-test-queue.py ... bind-port` before its next launch, as described
-in the [queue procedure](board-test-queue.md). Reconnect rules last covered
-`3-1` and `3-3` until host reboot; future access must verify permissions and
-explicitly select the port. The separate ESP32 mimus keyboard is unrelated: do
-not use it as the Orange Pi console or send desktop keyboard events.
+A read-only queue inspection on 2026-10-24 found both queues bound to their
+ports. Port `3-1` retained one claimed entry, one ready entry and four blocked
+entries; port `3-3` had one blocked entry and no claimed entry. These records
+do not establish a live process or physical recovery. Preserve the failed
+session's ownership until the coordinator resolves recovery; do not rebind or
+release it merely to resume work. Follow the [queue procedure](board-test-queue.md)
+and verify current permissions and ownership before a launch.
+The separate ESP32 mimus keyboard is unrelated: do not use it as the Orange Pi
+console or send desktop keyboard events.
 
-The second board's last USB takeover attempt returned to ROM with native status 1
-before controller writes. Its guard rejected the inherited device-session bit at
-`0x04100040`. The integrated correction permits that bit while requiring device
-role, excluding host request/mode and retaining DMA checks. Software checks and
-review pass under `usb-rom-session-20261018/`; physical takeover is unqualified.
-Failure evidence: `usb-first-fault-20261018/physical-064/runtime/`.
+The earlier USB guard refusal in
+`usb-first-fault-20261018/physical-064/runtime/` is historical. The subsequent
+byte-store correction and successful native USB exchanges are recorded above;
+full USB modes and device-specific consumers still need their own qualification.
 
 ## Integrated OS image
 
@@ -352,25 +352,30 @@ module, but the image still ends the session on any headset failure, also
 while the radio is up. The headset build excludes the microphone, because the
 recognizer takes one capture source. A link check and host models of
 interrupt delivery, supervision and admission pass for every combination of
-lifetime and options. No board has run any of them. Display, camera, GPU and
-NPU remain separate images.
+lifetime and options. No board has run any of them. Display, camera and NPU remain separate
+images. The optional resident GPU linear build links the GPU service and the
+local mimus exact-sum hook; physical GPU recognition remains unqualified.
 
 ## CPU evidence and next physical decision
 
-The primary agent owns all multicore implementation, review and board testing.
+Multicore implementation and review may be delegated. The coordinator alone
+runs board tests.
 [Arm/Linux source audit](a733-multicore-reference-audit.md) and
 [startup records](a733-smp-supervised.md) preserve the architectural decisions.
 
-All eight CPUs physically reach their initial FreeRTOS task context and return
-safely. Actual construction and restoration record each core's idle-task pointer,
+On 2026-10-18, all eight CPUs reached their initial FreeRTOS task context
+and returned safely. Actual construction and restoration record each core's idle-task pointer,
 stack, argument and exception state. The production barrier and 256 atomic
 increments also pass. All writers finish before cleaning the 145-page writable
 interval, or 9,280 cache lines per CPU. CPU0 restores controls; all seven
 secondaries acknowledge shutdown and reach independently observed OFF. Saved
 DRAM restoration and responsive ROM return pass. Reuse
 `all-core-first-task-20261018/physical-010/runtime/session.json`.
-This physical diagnostic excludes task bodies, timer interrupts and application
-SGIs; it does not qualify sustained multicore scheduling.
+That physical diagnostic excludes task bodies, timer interrupts and application
+SGIs; it does not qualify sustained multicore scheduling. The corrected rank 7
+launch failed to return on 2026-10-24, so the earlier pass supplies no current
+launch authority. The recovery and narrower pre-scheduler plan above governs
+the next physical attempt.
 
 The following extensions pass software checks only:
 
@@ -379,15 +384,15 @@ The following extensions pass software checks only:
 | Context switching | Actual idle yield, context save/selection/restoration and pinned-worker entry on all eight cores; wrong arguments retain cores. USB observer is suppressed. Worker bodies and timer/SGI work remain excluded. | `all-core-task-switch-20261018/build-no-observer/`, `host/software.json`, `host-root-review.json` in that evidence directory |
 | Full returning workload | Each core completes 32 floating-point rounds, background work and SGIs; CPU0 services the production timer. Final-writer stop, interrupt cleanup, Nonsecure memory publication and matched shutdown are reviewed. Timing/coherence remain modeled. | `all-core-task-workload-20261019/frozen/`, `host-frozen/`, `host-root-review.json` |
 | [Eight-core emulator soak](smp.md#eight-emulated-cores-pass-a-scheduling-soak) | Ten QEMU trials pass a cross-core queue ring, shared-mutex exclusion, migration through all cores with FP context and preemption of a non-yielding task on every core. QEMU models identical Cortex-A55 cores and uses the QEMU platform, not the A733 cached platform. | `smp8-soak.json` |
-| [Resident contract](a733-smp-cached.md#resident-contract) and [interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners) | Cold-boot contract with an armed four-second watchdog, no FEL return and no diagnostic deadline; EL3 route programming and per-core dispatch for listed shared peripheral interrupts. Host checks cover admission and every refusal. The integrated OS image uses both. | Not frozen; rerun `checks/a733-resident-contract.c` and `checks/a733-irq-table.c` |
+| [Resident contract](a733-smp-cached.md#resident-contract) and [interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners) | Cold-boot contract with an armed four-second watchdog, no FEL return and no diagnostic deadline; EL3 route programming and per-core dispatch for listed shared peripheral interrupts. Host checks cover admission and every refusal. The integrated OS image uses both. | Not frozen; relevant checks: `checks/a733-resident-contract.c` and `checks/a733-irq-table.c` |
 
 The full-workload damaged-round-count refusal reuses its saved completed
 checkpoint. Host checks validate workload results, epochs, task contexts,
 timer-priority restoration, saved RAM and retained transport failure. Do not
-repeat the earlier unobserved full launch unchanged. When recovery becomes
-available, ranks 7 and 8 of the [board test plan](audit/board-test-plan.md)
-are the CPU tests: the accepted first-task diagnostic, then the full returning
-workload. Each needs refreshed board admission first; no CPU test is queued.
+repeat the earlier unobserved full launch unchanged. After recovery, use the narrower
+[pre-scheduler diagnostic](board-runbooks/rank-7-pre-scheduler.md) identified
+at the top of this document. Ranks 7 and 8 remain blocked pending its result
+and a concrete correction or justified diagnostic.
 
 Preserve the accepted returning CPU diagnostic ELF
 `762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
@@ -402,7 +407,7 @@ raised clusters to 1014 MHz at THROTTLE. Every transition needs a session
 grant record, and no image grants a transition: no image carries a grant or
 calls the driver. The user reviewed the CPU clock plan and agreed with the
 design on 2026-10-21. Any physical change still needs the user's approval for
-each change, and the board cannot be reconnected yet. CPU-L therefore stays at
+each change. CPU-L therefore stays at
 the 494 MHz that boot0 leaves.
 
 ## Integrated component status
@@ -415,9 +420,9 @@ functions and modes beyond these bounded applications.
 
 | Component and canonical specification | Current scope and remaining limit | Accepted evidence |
 | --- | --- | --- |
-| [Integrated OS image](os-image.md), [stage-2 loader](boot-slots.md) | Mimus board application plus a continuous thermal service, one interrupt table and a fixed start list, in the nine variants [above](#integrated-os-image). Resident renewal requires progress from every listed service within 1 s windows (3 s for recognition). Link check and host models pass for every variant, including each service stalling or never reporting. The loader admits the SD controller state that boot0 leaves; its entry prerequisites refuse on a board. Service windows are unmeasured. | Not frozen; rerun `checks/os-image-link.py`, `checks/os-image-model.c`, `checks/os-image-stage2.py`, `checks/os-image-audio.py`, `checks/os-image-radio.py`, `checks/os-image-headset.py`, `checks/os-image-identity.py` and `checks/os-image-launch.py` |
+| [Integrated OS image](os-image.md), [stage-2 loader](boot-slots.md) | Mimus board application plus a continuous thermal service, one interrupt table and a fixed start list, in the nine variants [above](#integrated-os-image). Resident renewal requires progress from every listed service within 1 s windows (3 s for recognition). Link check and host models pass for every variant, including each service stalling or never reporting. The loader admits the SD controller state that boot0 leaves; its entry prerequisites refuse on a board. Service windows are unmeasured. | Not frozen; relevant checks: `checks/os-image-link.py`, `checks/os-image-model.c`, `checks/os-image-stage2.py`, `checks/os-image-audio.py`, `checks/os-image-radio.py`, `checks/os-image-headset.py`, `checks/os-image-identity.py` and `checks/os-image-launch.py` |
 | [PCIe endpoint COPY](pcie-test-application.md) | One trusted direct `pci-epf-test` endpoint: selected BAR/iATU, 4,096-byte DMA COPY, one-shot MSI and immutable copied USB output. Hardware/scheduling are modeled. Requires endpoint-specific DMA-before-unmap and data-before-status/MSI authority; none exists yet. All resources remain retained; physical DMA/MSI, all-core startup and recovery remain unqualified. | `pcie-endpoint-20261019/root-integration.json`; `root/review.json` in that directory |
-| [PCIe NVMe block read](pcie-nvme.md) | Supervised image `sunstone-a733-pcie-nvme`: one admitted 4096-byte block from a direct NVMe controller with polled completion, then controller shutdown and port stop with PERST held; copied USB0 result. Failures retain the port's leases and the queue and data pages. Linked-image and host cases pass against a modeled controller; no NVMe device has been attached. | Not frozen; rerun `checks/pcie-nvme-fixture.py`, `checks/pcie-nvme-native.py` and `checks/pcie-nvme-host.py` |
+| [PCIe NVMe block read](pcie-nvme.md) | Supervised image `sunstone-a733-pcie-nvme`: one admitted 4096-byte block from a direct NVMe controller with polled completion, then controller shutdown and port stop with PERST held; copied USB0 result. Failures retain the port's leases and the queue and data pages. Linked-image and host cases pass against a modeled controller; no NVMe device has been attached. | Not frozen; relevant checks: `checks/pcie-nvme-fixture.py`, `checks/pcie-nvme-native.py` and `checks/pcie-nvme-host.py` |
 | [GPU→HDMI copied USB observations](gpu-display.md#copied-usb-observations) | Two immutable 720p converted frames and ordered 0→1→0 replay; GPU CLOSE precedes HDMI start. Typed USB authority and full-session digest bind copied hashes/16 samples per frame, three presentations and healthy GPU/HDMI/DE/PMIC terminal state. Final `70041393…`: fifteen framing cases; earlier components/eight root cases reused via 102 unchanged objects, seven SRAM cases separately. Durable host capture uses 19 s/native 20 s. Effects remain modeled; no full-pixel, visible-output, physical or concurrent GPU/HDMI qualification. All resources retained. | `gpu-display-capture-20261020/root-integration.json`; host: `gpu-display-observation-host-20261020/`, [capture scope](gpu-display-preparation.md#bundle-and-evidence-limits) |
 | [Finite HDMI PCM](hdmi-audio.md), [copied USB observation](hdmi-audio-preparation.md#optional-copied-usb-observation) | Stereo S16LE/48 kHz, 1–48,000 frames via DMA0→I2S3→HDMI. Original `432b7c10…` models finite playback. Observation `0c661c29…` adds identity-bound 512-byte USB replies, with actual TinyUSB/publisher cases and host refusal/durability/readiness checks; prior audio disposition seeded, no PCM/DMA replay. Four boot assertions passed before reporting-only failure; repaired source unexecuted. Resources retained; common health failure can prevent fault retrieval. No physical USB/sound, serializer drain or SMP qualification. | `hdmi-audio-usb-20261020/root-integration.json`; earlier finite scope: `hdmi-audio-nc-20261020/root-integration.json` |
 | [DisplayPort implementation](displayport-native.md) | Four-lane 1.62 Gb/s, 720p60 RGB8/C-or-E profile. Final `91646247…` passes linked constructor/PD/controller/PHY/AUX/DE lifecycle and retained shutdown, twelve host cases and one linked HS USB packet-completion case with modeled effects. Nominal schedule defers ticks under the register mutex; no contention/SMP guarantee. AUX APB source/rate authority remains required. COMB0 excludes USB3/PCIe; resources retained. No trained physical link or visible-output qualification. | `displayport-native-20261020/root-integration.json`; earlier admission/boot/launcher checks retain their image scopes; [preparation limits](displayport-preparation.md) |
@@ -437,7 +442,7 @@ functions and modes beyond these bounded applications.
 | [VGA/legacy H.264](h264-native.md) | VGA admits 256 prepared 640×480 pictures, 512 KiB/AU; legacy 48×32 IDR/P remains separate. Input refill, reference retirement and copied-output ACK are distinct. Corrected launcher and supervisor-policy evidence are bounded as below. Physical pixels, reference visibility, confinement and drain remain unqualified; no reclamation. | `h264-vga-20261019/root-integration.json`; `h264-launcher-20261019/root-integration.json`; `h264-supervisor-entry-20261019/result.json` |
 | [DI301 WEAVE/motion/fixed TNR](deinterlace-native.md), [host](deinterlace-preparation.md) | Modes 1/2 retain their original scopes. Mode 3 requires reset-held entry and uses two 640×480 NV12 frames with zero history, copying planar YUV420; each guarded flag buffer is 307,200 bytes. Native plan/allocation/resumed completion/serializer and host/SRAM cases pass with hardware/pixels/timing modeled. One allocation replay repaired an omitted checkpoint and reproduced proof/table bytes; completion then resumed without replay. One image/launcher. Image `9a4c1c38…` adds a selectable TNR strength (not frozen). Resources retained; numerical/physical filtering, gain feedback, film detection, repeated jobs and drain remain unqualified or required. | `deinterlace-tnr-20261020/root-integration.json`; prior: `deinterlace-motion-20261020/`, `deinterlace-native-20261020/` |
 | [Recorded Bayer ISP0](camera-isp0.md), [host](isp0-preparation.md) | One 640×480 BGGR12→NV16 frame via TOP/ISP600/VIPP0/camera DMA0, with guarded masters 1/2 and immutable copied output. Final `32eb5b93…`: bounded-call nominal, classified failures, serializer/host/allocation and separate boot/SRAM checks. Pixels/device effects modeled; no numerical, full TinyUSB/DCD, scheduler or physical proof. GPL defaults/setters, no opaque tuning/runtime blob; all resources retained after ACK. Sensor-dependent ISP1 path stays separate. | `isp0-native-20261020/`; `root-integration.json` binds the final closure |
-| [HEVC decode](hevc-native.md) | One uploaded two-picture clip, Main profile 8-bit 4:2:0 640×480, IDR then P, for decode on the VE with copied NV12 output. `sunstone-a733-hevc` builds; host models check parsing, storage and register programming, and the IDR picture's register writes match a vendor-library trace. Preparation refuses a launch bundle until physical allocation and page-table evidence exists. No numerical or physical decode result. | Not frozen; rerun `checks/hevc-decode-model.py`, `checks/hevc-native-access.py` and `checks/hevc-image.py`; earlier source-only scope: `hevc-host-source-20261020/root-integration.json` |
+| [HEVC decode](hevc-native.md) | One uploaded two-picture clip, Main profile 8-bit 4:2:0 640×480, IDR then P, for decode on the VE with copied NV12 output. `sunstone-a733-hevc` builds; host models check parsing, storage and register programming, and the IDR picture's register writes match a vendor-library trace. Preparation refuses a launch bundle until physical allocation and page-table evidence exists. No numerical or physical decode result. | Not frozen; relevant checks: `checks/hevc-decode-model.py`, `checks/hevc-native-access.py` and `checks/hevc-image.py`; earlier source-only scope: `hevc-host-source-20261020/root-integration.json` |
 | [H.264 encoding](h264-encode-native.md) | Two caller 640×480 NV12 frames, Baseline level 3.1/CAVLC/QP 26 IDR→P; immutable copied outputs with delivery-gated ACK. All input/reference/output resources retained. Actual provider/IOMMU/copy/USB and 140 SDK-reference register-write checks pass with entropy/completion modeled; no opaque CPU library linked. Final image `2e4a93b0…`. Current source encodes sequences of 1 to 30 pictures with ring reuse, and its 2,128 writes for 30 pictures match the library (not frozen; rerun `checks/h264-encode-native.py --case gop --frames 30` and `checks/h264-encode-registers.py`); the supervised capture tool still captures two pictures. Real entropy, reconstruction, numerical encoding, visibility and drain unqualified. Rate control and broader encoding remain required. | `h264-encode-20261020/root/integration.json`; [source provenance](../apps/h264-encode/sources.json) |
 | [JPEG encoding](jpeg-encode-native.md) | One retained caller 640×480 NV12 job, stride 640/quality 75; copied JPEG ≤1 MiB. Inherited PCK3, exclusive encoder lease and IOMMU master 3. Provider/IOMMU/copy checks model completion and entropy; native image linked, not executed. No numerical, burst, visibility, drain or physical claim; all resources retained. Frozen workload 2 uses private USB0, with eight inactive radio/USB-host input deltas. Broader encoding remains required. | `jpeg-encode-native-20261020/root/integration.json`, `closure-summary.json`, `commit-binding.json` |
 | [JPEG](jpeg-application.md) | Authenticated supplied baseline YCbCr420 image and copied pixels with dimensions; independent oracle optional. Current source admits up to 512 KiB of input and 640×480 planes, and version 3 sessions decode up to eight images in order; the supervised tool still sends one image, and neither change is frozen. Pixel correctness and confinement remain physically unqualified. | `jpeg-runtime-input-20261018/` |
@@ -551,28 +556,20 @@ functions and modes beyond these bounded applications.
 1. Check session access on both ports before each board session. Board work
    and the [next offline work](#next-offline-work) proceed in parallel; a
    pending reconnect pauses only the board it names.
-2. Before the first board test after recovery, bind both queues to their ports
-   and prepare again every launch bundle whose launcher changed. Recorded
-   storage and mimus bundles hash `tools/check-a733-storage-launch.py`, and
-   recorded storage launch bundles also hash `tools/storage-update.py`; both
-   tools changed, so the old bundles are refused. Every board-derived image
-   now has a new build ID, and software-evidence records that hash the edited
-   host tools, `tools/check-a733-smp-supervised.py` and the device runners,
-   must be regenerated before the next supervised launch. Rounds seven and
-   eight changed the objects of most images again, and every board-derived
-   image now suspends its stopped service tasks, so each needs new evidence
-   before its first board run. Use the cached eight-core base; the uncached
-   diagnostic is superseded and must not be launched unchanged.
-3. Run the [ranked board test plan](audit/board-test-plan.md) in its order:
-   ROM identity, the returning SRAM probe, DDR initialization, the single-core
-   kernel check, the forced-stall return, the boot-clock and thermal report, the
-   accepted all-core first-task diagnostic, the full returning eight-core
-   workload, and the native USB0 channel last. Each test runs once under the
-   port lock with a frozen image and an evidence directory chosen in advance.
-   Stop at the first transport failure, preserve evidence and wait for explicit
-   recovery; never retry.
-4. After the USB0 channel passes, peripheral paths that report through USB0
-   become eligible, one bounded test per concrete question. The first run of the
+2. Inspect the selected port's queue binding and retained ownership before a
+   launch. Both queues were already bound in the 2026-10-24 snapshot above.
+   Match each frozen image, launcher and admission record to its evidence;
+   regenerate only records whose relevant inputs changed. Preserve the accepted
+   returning CPU ELF and its bindings.
+3. Continue from each board's recorded result in the
+   [ranked board test plan](audit/board-test-plan.md). Port `3-1` first needs
+   power removal and the narrower pre-scheduler plan above. Port `3-3` has
+   passed the native USB channel and can continue eligible peripheral work.
+   Each test runs once under the port lock with frozen inputs and a chosen
+   evidence directory. Stop at the first transport failure and await explicit
+   recovery; never retry a failed launch unchanged.
+4. The passing USB0 channel on port `3-3` makes peripheral paths that report
+   through USB0 eligible, one bounded test per concrete question. The first run of the
    integrated OS image uses the supervised variant; its launcher exists, and it
    needs a reviewed entry record built from physical evidence first. Record the
    measurements that the rounds left open where a test reaches them:
@@ -605,7 +602,8 @@ Evidence reuse follows these rules:
   documentation edit or handoff is not a rerun reason. Follow
   [selective validation](validation.md) and the [reference index](reference-index.md).
   Tables above select continuation records; their linked component documents
-  preserve full evidence inventories.
+  preserve full evidence inventories. A “not frozen” label identifies missing
+  artifact preservation, not a requirement to rerun otherwise valid checks.
 - Preserve each accepted ELF, full source/object closure, generated inputs and
   evidence scope. The fix rounds rebuilt many images: a frozen image keeps its
   recorded evidence and scope, and a rebuilt image needs new evidence. Never mix
@@ -645,8 +643,9 @@ enters no image. The [remote-writer check](remote-writers.md) reads the reset,
 clock and DMA-enable state of every DRAM bus master without writing, but it
 cannot prove the OR100 processor or the crypto engine excluded, and no boot
 image calls it. Memory ownership, physical boot, media writes and recovery are
-not established either, so standalone OS boot remains incomplete. Packer license/source equivalence remains unresolved. The primary
-agent owns cold-entry/component authority and CPU integration.
+not established either, so standalone OS boot remains incomplete. Packer
+license/source equivalence remains unresolved. The coordinator owns physical
+admission; implementation and review may be delegated.
 
 DMA fabric admission accepts correctly normalized 24 MHz references from
 supported raw oscillators and retains REF in every admitted profile. Ten focused
@@ -699,7 +698,7 @@ function returns the same result for every input. These copies remain:
 | The radio-profile page loop in `apps/board/main.c` | Every single-core `main.patch` and the OS image's `main.patch` are built from this file and must be regenerated in the same change. |
 | `clock_ok()` in `drivers/uart/a733_uart.c`, `time_ok()` in `drivers/audio/a733_i2s_platform.c`, four samplers in the crypto engine driver and one overlap test in `drivers/npu/nbg_relocation.c` | None: the final reviews found that these have header equivalents and were missed. Move them with the method in [docs/shared-helpers.md](shared-helpers.md#migration-rule). |
 | The overlap test in `drivers/storage/fatfs_port.c` | It runs without first checking that both ranges fit, as the removed copy did. Adding the span check changes behavior, so it needs its own change and checks. |
-| Task-context checks in CPU startup and the FreeRTOS port | The primary agent owns them. |
+| Task-context checks in CPU startup and the FreeRTOS port | Coordinate with the assigned multicore implementation owner and reviewer. |
 
 ### Build recipes and patches
 
@@ -717,7 +716,6 @@ function returns the same result for every input. These copies remain:
 | --- | --- |
 | One shared contract version for the extended images (supervisor-apps-3 with bringup-gaps-11) | It changes the contract layout in `platform/a733-smp-cached/boot.h`, every application's boot record, extended-boot patch and preparation script, and the EL3 writers, so every board and extended image changes identity. |
 | Sealing the board session once (supervisor-apps-6) | Seven native checks call an application's session preparation without the board seal; the storage-read snapshot is the input to an SD session patch; the DisplayPort and H.264 encoder images prepare their session before the board's. |
-| One provider root for the board and the NPU (supervisor-apps-10) | It changes the shared native USB header and the NPU startup and PMIC ownership so that the NPU borrows providers. The same change unblocks a board-derived NPU session image. |
 | Core affinity for the board service tasks (the rest of supervisor-apps-12) | The Type-C and PMIC tasks yield while an I2C transfer is in flight, so pinning both to one core risks starving it, and the benefit depends on multicore recognition. |
 | The USB0 `stop()` loop in `apps/board/usb0.c` | It still delays one tick per pass, because `cmake/a733-bluetooth.cmake` requires its exact text. |
 | Shared WDT0 values (security-misc-7) | [docs/watchdog.md](watchdog.md#launchers-arm-the-watchdog-for-runtime-images) lists the five writers. The launcher build tools copy only each launcher's files, a host check compares the SMP and observe launchers as text, and the expiry probe's binary hash is pinned. |
@@ -735,7 +733,7 @@ function returns the same result for every input. These copies remain:
 | Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
 | Camera | A CAM2 binding: a port field in the camera boot record and `apps/camera/prepare.py`, the PK10–PK19 data pins and MCLK2, and a sourced deskew value for receiver port 1. Open the first stream status interval at the sensor's stream-on write. Continuous capture in the native application. | Camera owner. The stream-on change needs a hook inside the sensor's start sequence. |
 | GPU | Compute input and output beyond one 4 KiB page, arbitrary trusted shaders, blend factors, clipping, mipmaps and multisampling. | GPU owner. Multi-page compute changes the package wire format, so it is a package of its own. |
-| NPU | A board image that links the session runtime, with a USB client protocol per model. | NPU owner. A board-derived image needs the NPU startup resources to adopt the board's GPU/PCK resource manager, and a pool larger than 2 MiB or the extended DDR profile; a single-core image needs `apps/npu-convolution/native.c` to select the session runtime. Any mimus offload to the NPU needs an accuracy evaluation. |
+| NPU | Complete the FIFO-direct USB path for the [existing runtime board image](designs/npu-board.md), resolve the recorded check failures, then obtain physical inference evidence. | NPU owner. The image already shares the board provider resources and uses extended memory; do not recreate it. Any mimus offload needs an accuracy evaluation. |
 | Codecs, G2D and DI301 | Supervised capture of H.264 sequences longer than two pictures in `tools/check-a733-h264-encode-supervised.py`; H.264 frame-level rate control; supervised capture of JPEG sequences; repeated JPEG encode; an extended uncached pool for full-HD JPEG; G2D rotation once `g2d_rotate.c` is pinned, and YUV conversion; repeated DI301 jobs in one session, with gain feedback and film detection. | Video and graphics owners. Rate control needs a rate-controlled reference run of the pinned library to check against. Long-term B references stay refused until hardware evidence shows how the engine treats them. |
 | PCIe, storage, serial and timing | Interrupt completion in the NVMe image, which needs GIC routing for INTID 184 or 185; reads of more than one block; a consumer of the FAT filesystem, with its FatFs pin added to `sources.lock.json`; an S_PWM clock-registry scope; GPADC window admission in the native adapter once an application selects windows; an image that runs the SNTP client with the RTC service; the new crypto modes in the crypto application's request format. | Each component owner. |
 
