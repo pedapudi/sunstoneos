@@ -180,8 +180,13 @@ bundles (`board-bundles-20261024-1/` and `-3/`):
   Non-secure EL1 reads. The table write on ports 2, 14 and 15 changed their
   fields from `0x40` to `0x68`, `0x7c` and `0x7c` and read back correctly,
   and the USB_PCIE port fields stayed unchanged. The written priorities
-  persist until port `3-3` loses power. Both ports were power-cycled afterwards and
-passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
+  persist until port `3-3` loses power.
+
+On 2026-10-23, after the rank 9 refusal, both ports were power-cycled and
+passed a fresh cold DDR start (`ddr-2/`). Port `3-3` has stayed in that
+lifetime since: every 2026-10-24 run above, from `r9-v3-usb/` through
+`bb8-run/`, is a warm return within it. Port `3-1` ran the corrected rank 7
+diagnostic in its own `ddr-2` lifetime and waits for a power removal. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
