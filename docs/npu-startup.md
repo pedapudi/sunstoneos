@@ -150,12 +150,60 @@ stop therefore preserves the admitted row, its rail pin and every lease.
 The supported operating point remains fixed at 492 MHz and 800 mV; there
 is no NPU frequency or voltage transition API. A stopped or faulted startup
 cannot restart in place, and faults retain resources until whole-board
-power removal. The board image now supplies
-[thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop)
-through the existing sensor controller and policy. The other NPU application
-images have no thermal callbacks, and the OS has no NPU service entry.
-Frequency/voltage transitions, in-place recovery and physical startup and
-thermal qualification remain open.
+power removal. The board image supplies
+[thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop),
+and the optional [finite thermal image](../apps/npu-finite/ENTRY.md) supplies
+polling admission and bounded cleanup through the same sensor policy.
+The ordinary numerical image has no thermal integration, and the OS has no
+NPU service entry. Frequency/voltage transitions, in-place recovery, repeated
+physical startup and thermal qualification remain open.
+
+### CLOSE and power-off establish different boundaries
+
+The controller requires completed work, full idle `0x7fffffff`, no pending
+interrupt, and readback of disabled interrupt and MMU controls. It checks idle
+again after a barrier. The service requires result reap and, when IRQ-bound, route retirement before
+publishing CLOSE. The polling finite consumer independently checks GIC IRQ97
+quiet before normal return, after local stop gates the engine and asserts its
+resets. These checks do not expose a separate A733 interconnect-drain or
+power-isolation acknowledgement. PCK policy/status equality establishes the
+selected domain state; its interpretation as complete fabric isolation depends
+on the SoC's low-power-interface wiring. The generic PCK-600 description does
+not identify that wiring for the NPU.
+
+The pinned VIPLite PM state machine waits for all-module idle in its default
+parallel-synchronous profile. Its optional asynchronous profile first excludes
+the command frontend from the idle mask, then ends the wait/link loop and waits
+for full idle. `Kbuild` permits a task-profile override; these source branches
+are not evidence of a deployed Linux configuration. The native finite stream
+already ends with END and has no wait/link loop. The Linux platform enables
+its power wrapper only with `CONFIG_AW_PM_DOMAINS` and a `power-domains`
+device-tree property.
+
+The platform calls `pm_runtime_put()` before `npu_clk_uninit()`. In the
+[pinned kernel helper](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/pm_runtime.h#L454),
+that call drops a usage reference and requests asynchronous idle processing
+when the usage count reaches zero. An eventual generic-domain suspend may
+attempt domain power-off. This establishes no synchronous order between
+OFF completion and local clock/reset teardown, and proves neither order unsafe.
+
+The manual's shared SRAM range is `0x00074000`–`0x000f3fff`. The approved numerical
+lifetime already granted exclusive NPU SRAM/drain ownership and excluded other
+CPU, DMA and auxiliary-firmware writers. The known launcher, stack and FEL
+scratch lie below that range. No current shared-SRAM conflict was identified;
+a future lifetime must carry its own ownership grant.
+
+A normal OFF implementation still needs the A733-specific quiescence/isolation
+contract and permitted ordering of local clocks/resets against PCK completion.
+An observed full-idle value or PCK state alone cannot supply that contract.
+A documented interface description or qualified trace exposing those handshake
+boundaries would decide the sequence. Until then, keep the row, DCDC2 rail pin,
+PLL/local/fabric/reference clock leases and SRAM state retained. Restart also
+requires a consumer that retires and reconstructs terminal backend, service,
+startup and IRQ ownership; calling OPEN again does not do that. The immediate
+bounded observation remains the already prepared stopped-RAM capture for the
+numerical failure. This audit adds no runtime code or device operations; its
+source identities are in `npu-lifecycle-audit-20261024`.
 
 ## Service activation
 
