@@ -491,7 +491,7 @@ function returns the same result for every input. These copies remain:
 
 | Area | Next deliverable | Reason it remains and owner |
 | --- | --- | --- |
-| Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | Primary agent only. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
+| Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | The coordinator runs its board tests. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
 | OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
 | Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
@@ -549,10 +549,10 @@ file's owner fixes them:
   TWI9 controller, and `docs/pcie.md` says no image links the function
   client.
 
-Use Sol 6.1 medium implementation workers and focused Astra correctness review.
+Use implementation workers and a separate focused correctness reviewer.
 Keep each native path and its host preparation consistent before building. Use
 separate worktrees and coordinate shared interfaces before concurrent edits.
-CPU, GIC, startup and multicore work remain the primary agent's responsibility.
+Only the coordinator runs board tests.
 Resume checks from saved state and reuse successful evidence while its relevant
 inputs match. Defer performance optimization and recurring measurements until
 required hardware functionality is established. Update canonical hardware and

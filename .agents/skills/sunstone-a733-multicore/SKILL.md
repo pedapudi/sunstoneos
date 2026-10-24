@@ -1,13 +1,13 @@
 ---
 name: sunstone-a733-multicore
-description: Diagnose or change A733 secondary CPU startup, GIC-600 initialization, memory coherence and FreeRTOS SMP in SunstoneOS. This work is reserved for the primary agent; use the documented physical checkpoints and pinned native-image contracts.
+description: Diagnose or change A733 secondary CPU startup, GIC-600 initialization, memory coherence and FreeRTOS SMP in SunstoneOS, using the documented physical checkpoints and pinned native-image contracts.
 ---
 
 # Advance multicore startup from the last observed boundary
 
-The user reserves multicore diagnosis, implementation, review and board tests
-for the primary agent. Do not delegate this work. Apply the
-[board operations skill](../sunstone-a733-board/SKILL.md) for physical execution.
+Multicore diagnosis, implementation and review may be delegated; only the
+coordinator runs board tests, following the
+[board operations skill](../sunstone-a733-board/SKILL.md).
 Use [current startup evidence](../../../docs/a733-smp-supervised.md) to establish
 what has run; a successful instruction model is not a physical checkpoint.
 Read the [Arm/Linux comparison](../../../docs/a733-multicore-reference-audit.md)
