@@ -65,6 +65,16 @@ end it. Release returns `BUSY` while any borrow of the token remains, so a rail
 cannot be released under a pending request. Borrow and status operations make
 no timer or hardware callback.
 
+## A counted power-domain row pins its token
+
+The power-domain owner ([docs/power-domains.md](power-domains.md)) calls
+`a733_rail_pin` when it counts a consumer's row and `a733_rail_unpin` after
+domain 5 reaches OFF. A pin raises the holder's pin count, which borrows also
+use, so release returns `BUSY` while the row is counted. A pin needs no borrow
+slot. An unpin of a holder with no pin is corruption and latches a ledger
+fault. A failed domain keeps its pins, so the token cannot be released while
+the domain is uncertain.
+
 ## Faults latch in the power-authority state word
 
 The ledger embeds the power-authority state word, one 64-byte line described in
@@ -119,11 +129,14 @@ of `docs/designs/power-authority.md`.
   UndefinedBehaviorSanitizer, covers acquire, poll and release in production
   order for all fifteen outputs with no registry or GPU lease and no bus
   access; refusal of every other output; exclusion; aliases; a full table;
-  never-reused identifiers; borrow capacity; and fault retention,
-  including a registry fault reported in the state word.
+  never-reused identifiers; borrow capacity; fault retention, including a
+  registry fault reported in the state word; and row pins.
 - `checks/rail-leases.py` runs that model and compiles every affected native
   unit with its recorded flags, archiving inputs and the executable.
-- `checks/rail-leases-cost.py` measures the costs above.
+- `checks/rail-leases-cost.py` measures the costs above and the power-domain
+  row read: 12 instructions with one acquire load and no exclusive access,
+  against one DE_SYS provider poll at the merge base of 344 instructions with
+  a lock entry and two register reads.
 
 These checks establish metadata behavior only; physical PMIC, rail and
 peripheral qualification remains pending.

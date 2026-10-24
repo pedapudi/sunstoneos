@@ -8,6 +8,12 @@ for the Cortex-A55. Unicorn runs each operation once and counts the
 instructions it executes outside the cost_* wrappers and the distinct 64-byte
 lines of the ledger, registry and GPU manager objects it reads or writes. Pass --root to measure
 another tree, such as the merge base, and --limits to enforce the budgets.
+
+It also measures the power-domain state read that the GPU platform poll, the
+framebuffer and G2D make once per poll (checks/rail-leases-cost-row.c): the
+instructions, the acquire loads (LDAR) and the exclusive or atomic accesses
+that a lock would need. A tree with the DE_SYS provider instead measures one
+provider poll while the domain waits, with its lock entries and register reads.
 """
 import argparse
 import json
@@ -33,6 +39,56 @@ SMALL = (42, 16)
 FULL_CLOCKS = 126
 
 
+FLAGS = ['--target=aarch64-none-elf', '-march=armv8-a', '-mtune=cortex-a55', '-mstrict-align',
+         '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-O2', '-std=gnu11',
+         '-Wall', '-Wextra', '-Werror']
+
+
+def build_row(root, out):
+    sources = [HERE / 'rail-leases-cost-row.c']
+    owner = root / 'drivers/power/a733_power_domains.c'
+    if not owner.exists():
+        sources.append(root / 'drivers/power/a733_de_sys_power.c')
+    objects = []
+    for i, source in enumerate(sources):
+        obj = out / f'row{i}.o'
+        subprocess.run([CLANG, *FLAGS, '-ffunction-sections', '-I', str(root / 'include'), '-c', source, '-o', obj],
+                       check=True)
+        objects.append(obj)
+    elf = out / 'row.elf'
+    # The owner's other functions reference the PMIC provider; only the state
+    # read is linked and measured.
+    subprocess.run([LLD, '-static', '-nostdlib', '-e', 'cost_row_state', '-u', 'cost_setup', '-u', 'cost_lock_entries', '-u', 'cost_register_reads', '--gc-sections', '--unresolved-symbols=ignore-all',
+                    f'--image-base={BASE:#x}', *objects, '-o', elf], check=True)
+    return elf, owner.exists()
+
+
+def is_acquire_load(word):
+    # LDAR and LDAPR, 32 or 64 bit.
+    return (word & 0xbffffc00) == 0x88dffc00 or (word & 0xbffffc00) == 0xb8bfc000
+
+
+def is_exclusive(word):
+    # Load/store exclusive (LDXR, LDAXR, STXR, STLXR and pairs).
+    return (word & 0x3f000000) == 0x08000000 and (word & 0x00800000) == 0
+
+
+def measure_row(root):
+    with tempfile.TemporaryDirectory() as d:
+        elf, owner = build_row(root, Path(d))
+        m = Machine(elf, objects=[])
+        m.call('cost_setup', 0, 0)
+        m.decode = True
+        m.acquires = m.exclusives = 0
+        result = m.call('cost_row_state')
+        row = {'owner': owner, 'instructions': result['instructions'],
+               'acquire_loads': m.acquires, 'exclusive_accesses': m.exclusives}
+        if not owner:
+            row['lock_entries'] = m.word('cost_lock_entries')
+            row['register_reads'] = m.word('cost_register_reads')
+        return row
+
+
 def build(root, out):
     flags = ['--target=aarch64-none-elf', '-march=armv8-a', '-mtune=cortex-a55', '-mstrict-align',
              '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-O2', '-std=gnu11',
@@ -51,7 +107,7 @@ def build(root, out):
 
 
 class Machine:
-    def __init__(self, elf):
+    def __init__(self, elf, objects=None):
         self.u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         self.u.mem_map(BASE, 0x1000000)
         with elf.open('rb') as f:
@@ -63,8 +119,10 @@ class Machine:
         # The cost_* wrappers only call the operation; their instructions are
         # not counted.
         self.wrappers = [(v, v + n) for name, (v, n) in self.symbols.items() if name.startswith('cost_') and n]
-        objects = ['cost_clocks', 'cost_gpu', 'cost_rails']
+        objects = ['cost_clocks', 'cost_gpu', 'cost_rails'] if objects is None else objects
         self.ranges = [(self.symbols[n][0], self.symbols[n][0] + self.symbols[n][1]) for n in objects]
+        self.decode = False
+        self.acquires = self.exclusives = 0
         self.count = 0
         self.lines = set()
         self.u.hook_add(UC_HOOK_CODE, self._code)
@@ -73,6 +131,10 @@ class Machine:
     def _code(self, uc, address, size, data):
         if not any(lo <= address < hi for lo, hi in self.wrappers):
             self.count += 1
+            if self.decode:
+                word = int.from_bytes(uc.mem_read(address, 4), 'little')
+                self.acquires += is_acquire_load(word)
+                self.exclusives += is_exclusive(word)
 
     def _memory(self, uc, access, address, size, value, data):
         for lo, hi in self.ranges:
@@ -117,7 +179,8 @@ def measure(root):
             row['authority_per_transaction'] = m.call('cost_authority')
             row['end_borrow'] = m.call('cost_end_borrow')
             results[label] = row
-        return results
+    results['row_state'] = measure_row(root)
+    return results
 
 
 def main():
@@ -142,7 +205,10 @@ def main():
         # No scan: the cost does not grow with the number of holders.
         for op in ['rail_status', 'clock_status', 'acquire_poll_release', 'authority_per_transaction']:
             assert results['small'][op]['instructions'] == results['full'][op]['instructions'], op
-        print('PASS rail and clock lease costs within the design budgets')
+        row = results['row_state']
+        assert row['owner'] and row['instructions'] <= 100 and row['acquire_loads'] == 1, row
+        assert row['exclusive_accesses'] == 0, row
+        print('PASS rail and clock lease costs and the domain-state read within the design budgets')
 
 
 if __name__ == '__main__':

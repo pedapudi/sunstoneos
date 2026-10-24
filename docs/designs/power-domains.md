@@ -1,11 +1,14 @@
 # Design: one power-domain owner and one PMIC service task
 
-Status: **design, not implemented**. It completes the planned parts of
+Status: **implemented and host-modeled**; the section "Implemented state and
+measurements" at the end records what exists, the measured values and the
+differences from this design. [docs/power-domains.md](../power-domains.md)
+describes the component. It completes the planned parts of
 [power-authority.md](power-authority.md), whose rail ledger, state word and
 lock-free PMIC time reads exist. Section numbers refer to
-[docs/performance-architecture.md](../performance-architecture.md). Baselines
-were counted on commit `b3b1289` with the host models in the budget table; no
-figure comes from the board.
+[docs/performance-architecture.md](../performance-architecture.md). The
+design's baselines were counted on commit `b3b1289` with the host models in
+the budget table; no figure comes from the board.
 
 ## Ownership and data flow
 
@@ -253,3 +256,109 @@ does not change.
 - G2D and the framebuffer move to the row interface as listed under
   **Moved**.
 - The GPU and NPU native adapters drop their PCK write offsets.
+
+## Implemented state and measurements
+
+Implemented:
+
+- the owner, `drivers/power/a733_power_domains.c`, with rows, supply
+  verification, domains 1, 4 and 5, the read-only check and the service step;
+  its native adapter `drivers/power/a733_power_domains_native.c`;
+- the row header `include/a733_power_domain_row.h`, whose request and state
+  calls are inline, so that targets that link only the GPU controller or the
+  supply consumer do not need the owner;
+- in the PMIC provider: the service binding with its notification hook, the
+  work query that reports the pending bus phase and its expected duration,
+  the bit time recorded from the admitted divisor, a lock-free
+  `a733_pmic_live`, and a count of queued requests;
+- `a733_rail_pin` and `a733_rail_unpin` in the rail ledger;
+- the GPU controller's domain steps as one row step, with its preconditions
+  kept, and the GPU supply consumer completing from the boot record;
+- the deletion of `a733_de_sys_power.c` and its header;
+- outside this package, in one patch for the primary agent: the five image
+  loops, the framebuffer and G2D rows, the GPU display park predicate, the
+  stop notifications, the GPU native adapter without PCK offsets, the build
+  lists, and the checks that model the GPU controller.
+
+Baselines come from the merge base `dfa5174b2e09ac0dc27df3809183189f7ad00c41`,
+extracted with `git archive`, configured with the package's build script and
+built for all 68 central targets. The PMIC figures come from
+`checks/a733-pmic-cost.c` and `checks/a733-pmic-polls.c` at the merge base, the
+DE_SYS and GPU figures from small harnesses over the merge-base drivers, and
+the instruction counts from `checks/rail-leases-cost.py --root`. The new
+figures come from `checks/power-domains-service.c` (400 kHz: divisor `0x28`;
+100 kHz: `0x2a`; a byte with acknowledgement takes nine bit times and a START,
+repeated START or STOP two; a time read costs 40 ns and a register access
+200 ns), `checks/power-domains-pck.c`, `checks/rail-leases-cost.py` and
+`checks/power-domains-tree.py`. Every figure is modeled.
+
+| Metric | Merge base | Now | Target |
+| --- | --- | --- | --- |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs); 100 kHz: 2 and 3, at most 1,000 µs spin per step | 400 kHz: 0, one step of ≤ 0.6 ms and ≤ 0.8 ms; 100 kHz: ≤ 1 ms per step, 2 and 3 |
+| BUSY results seen by another caller during one snapshot | `a733_pmic_live`: 211 per snapshot | `a733_pmic_live` 0; `a733_pmic_result` at most 1 with two cores, 0 with one; `a733_pmic_reap` 0 | `a733_pmic_live` 0; result and reap ≤ 1 per caller |
+| CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in all five images | 0: the service runs below USB0 in all five images, and the step has no critical section, scheduler suspension or blocking call | 0 on one core and on two |
+| Service wakes per second with no work | 1,000 | 0; 2 in the resident board image, which caps the block at 500 ms; one wake per park, stop or row notification | 0 until the session deadline |
+| Row-state read by GPU platform poll, framebuffer and G2D | DE_SYS poll while waiting: 344 instructions, a lock entry and 2 register reads | 12 instructions, 1 acquire load, no exclusive access | ≤ 100 instructions, 1 acquire load, no lock |
+| Ticks from row request to visible ON, acknowledgement within 50 µs | DE_SYS: 1; GPU: 0 | 1 for the GPU and the framebuffer, at their next poll; G2D reads the same row the same way | 1 for GPU, framebuffer and G2D |
+| PMIC result polls by the other submitters | One per tick | One per tick | Unchanged |
+| PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | 0; 12 per boot |
+| Slow acknowledgement | DE_SYS: one caller poll per tick; GPU: a 50 µs spin per poll | 54 µs spin after the command, then one status read per one-tick step; FAILED 10,092 µs after the command, after 10 retries | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick |
+| Register accesses per domain-5 ON | 13 PPU operations by the GPU (14 with the native read-modify-write of the policy word) | 14 PPU accesses by the owner (2 adoption reads, 5 delay-row writes and 5 readbacks, the command, 1 status read), plus 5 domain-level reads | 14, once per transition |
+| Files that write the delay row | 6, plus 2 native allowlists | 5, plus 1 native allowlist (the NPU's) | 5 after this package; 4 after the NPU stage |
+
+The 400 kHz step durations exceed the design's 0.6 ms and 0.8 ms by the
+difference between the model's wire time and the design's estimate of 240 and
+320 bit times, plus 7% for polls and time reads. Supply verification ends
+8.4 ms after the service's first step at 400 kHz and 14.9 ms at 100 kHz.
+
+Differences from the design, each with its reason:
+
+- **No separate PPU clock lease.** The owner reads R_CCU `0x1ac` bit 0 at
+  every admission and transition. Every consumer already holds a stable PCK
+  lease of the GPU resource manager before it requests its row, and the
+  manager never disables a shared gate it enabled ("shared gate enablement
+  persists for the resource manager's OS lifetime"). A lease for the owner
+  would need a client slot in every image that no session reserves.
+- **Bus-phase spin length.** The service spins for the pending phase's
+  expected duration from the provider (two bit times for START, repeated
+  START and STOP, nine for a byte) instead of nine bit times for every phase.
+  With nine bit times for every phase, a 400 kHz snapshot took three steps in
+  the model, because a transaction has three conditions and four bytes.
+- **Fail functions do not notify.** The design asks every liveness-revocation
+  path to notify the service. `gpu_application_fail` and the board's
+  `board_fail` run from interrupt and fault paths, where a FreeRTOS
+  notification is not safe. An idle service holds no bus or lock, and a
+  pending transfer keeps it on one-tick steps, so it observes a revocation
+  within one tick or at its next timed wake, at the latest the session
+  deadline. Park and stop requests from task context notify.
+- **Idle cap in the resident board image.** The integrated OS image's
+  watchdog requires the board PMIC service to report progress within 1 s, so
+  that image's service blocks at most 500 ms when idle.
+- **The GPU row is registered by the image.** The images call
+  `a733_power_domain_row_init` on the GPU controller's row after
+  `a733_gpu_platform_bind_pmic`, with the platform's DCDC4 consumer token,
+  because the GPU platform file is outside this package.
+- **Verification only where a row exists, and a released token.** The rail
+  ledger has 32 holder slots for the 31 holders the images create, so a
+  permanent verification token could leave a later runtime holder without a
+  slot. The service releases the token after a successful verification and
+  keeps it only after a failure, when an uncertain request may still borrow
+  it. An image that registers no row, such as the integrated OS image,
+  verifies nothing and makes no PMIC read at boot.
+- **Domain 1 and 4 OFF requests are refused** at the request call, since no
+  caller needs those domains off.
+- **The GPU check models the owner.** `checks/a733-gpu-power.c` keeps its
+  GPU-local cases with a stand-in that answers the row; the real owner's
+  trace for `checks/a733-gpu-power-reference.py` comes from
+  `checks/power-domains-pck.c`.
+
+Not implemented, with the dependency that blocks each:
+
+- The NPU on domain 4, the blocking `a733_power_domain_wait` and its row
+  semaphore: they land with the NPU startup's next stage
+  ([docs/power-domains.md](../power-domains.md) lists the NPU owner's
+  changes).
+- The deinterlace consumer of domain 1 still requires the domain already ON
+  and reads its policy and status; it moves onto a row in its own package.
+- `checks/g2d-power-native.py` emulates the merge-base DE_SYS provider inside
+  a built G2D image; it needs its owner to emulate the row instead.

@@ -8,6 +8,7 @@ enum a733_pmic_status {
     A733_PMIC_EXPIRED, A733_PMIC_INVALID, A733_PMIC_RETAINED
 };
 struct a733_pmic;
+struct a733_power_domains;
 struct a733_pmic_lifetime { const struct a733_pmic *provider; uint64_t owner, identity; };
 struct a733_pmic_request { struct a733_pmic_lifetime lifetime; uint64_t id, owner; };
 struct a733_pmic_snapshot {
@@ -62,10 +63,17 @@ struct a733_pmic {
     struct a733_pin_lease_banked pin;
     struct a733_pmic_slot slots[A733_PMIC_REQUESTS];
     atomic_uint busy;
+    atomic_uint queued; /* QUEUED slots; submit adds, the provider task removes. */
     uint64_t last_now, next_id, deadline;
     uint32_t divider, last_status, apbs1, apbs0, dcxo_hz;
+    uint32_t bit_ns; /* S_TWI0 bit time from the admitted divisor; immutable after startup. */
     unsigned stage, held, retained, failed, active, phase, byte_index;
+    unsigned waiting; /* The last poll ended at a bus phase whose flag was still clear. */
     uint8_t values[8]; /* Six snapshot bytes, written selector, readback. */
+    /* Service binding, set once before concurrency. */
+    void (*kick)(void *);
+    void *kick_context;
+    const struct a733_power_domains *domains;
 };
 /* Zero private, disjoint storage once; all arguments/callback metadata and
  * shared managers have platform lifetime. No MMIO. All clocks use the same
@@ -75,11 +83,26 @@ struct a733_pmic {
 int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
     const struct a733_pmic_ops *,void *,struct a733_clock_leases *,
     struct a733_rail_leases *,struct a733_pins *);
+/* Before concurrency, once: submit calls kick(context) after queuing a
+ * request, and domains names the power-domain owner whose supply record the
+ * GPU supply consumer reads. 1 bound, 0 refused. */
+int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context,
+    const struct a733_power_domains *domains);
+/* Provider task only: the work the next poll would do. wait_ns, when not
+ * NULL, receives the expected duration of the bus phase being waited for:
+ * two bit times for a START, repeated START or STOP, nine for a byte. */
+#define A733_PMIC_WORK_STARTUP (1u << 0) /* startup has not reached READY */
+#define A733_PMIC_WORK_QUEUED  (1u << 1) /* a request waits for activation */
+#define A733_PMIC_WORK_ACTIVE  (1u << 2) /* a transfer holds the I2C mutex */
+#define A733_PMIC_WORK_WAITING (1u << 3) /* that transfer waits for a bus phase */
+#define A733_PMIC_WORK_FAILED  (1u << 4) /* the provider is retained */
+unsigned a733_pmic_work(const struct a733_pmic *,uint32_t *wait_ns);
 /* identity returns READY when the metadata copy succeeds, even during startup.
  * Only live reports provider readiness. Neither performs hardware discovery.
- * live takes the provider object's try-lock and reads the power-authority
- * state word of the bound rail ledger; it queries no other lock. A provider,
- * clock registry or rail ledger fault in that word retains the provider. */
+ * live takes no lock: it compares the immutable lifetime and makes one acquire
+ * load of the power-authority state word, so it never returns BUSY. A
+ * provider, clock registry or rail ledger fault in that word returns
+ * RETAINED; the provider task's next poll latches it. */
 enum a733_pmic_status a733_pmic_identity(struct a733_pmic *,struct a733_pmic_lifetime *);
 enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_lifetime *);
 /* One designated task advances one bounded state per call. No busy waits,

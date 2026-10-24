@@ -135,7 +135,11 @@ static int route(struct a733_pmic *p)
     uint32_t parent=apbs?24000000:a733_clock_dcxo_hz(osc);
     if((uint64_t)parent<UINT64_C(10000)*denominator ||
        (uint64_t)parent>UINT64_C(400000)*denominator)return 0;
-    if(p->stage==S_BASELINE){p->apbs1=apbs;p->apbs0=apbs0;p->divider=divider;p->dcxo_hz=dcxo;}
+    if(p->stage==S_BASELINE){
+        p->apbs1=apbs;p->apbs0=apbs0;p->divider=divider;p->dcxo_hz=dcxo;
+        /* One SCL period, rounded up: the service spins nine of them per byte. */
+        p->bit_ns=(uint32_t)((UINT64_C(1000000000)*denominator+parent-1)/parent);
+    }
     else if(divider!=p->divider)return 0;
     return 1;
 }
@@ -173,7 +177,25 @@ int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
         !a733_pin_config_valid_banked(A733_PIN_L,i,c->pins[i]))return 0;
     *p=(struct a733_pmic){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,.rails=rails,
         .pins=pins,.next_id=1,.deadline=c->startup_deadline,.active=A733_PMIC_REQUESTS};
-    atomic_init(&p->busy,0);return 1;
+    atomic_init(&p->busy,0);atomic_init(&p->queued,0);return 1;
+}
+int a733_pmic_bind_service(struct a733_pmic *p,void (*kick)(void *),void *context,
+    const struct a733_power_domains *domains)
+{
+    if(!p || p->self!=p || !kick || !domains || p->kick || p->stage!=S_CLOCK)return 0;
+    p->kick=kick;p->kick_context=context;p->domains=domains;return 1;
+}
+unsigned a733_pmic_work(const struct a733_pmic *p,uint32_t *wait_ns)
+{
+    /* A START, repeated START or STOP condition takes about two bit times;
+     * a byte with its acknowledgement nine. */
+    const int edge=p->phase==P_WAIT_START || p->phase==P_WAIT_RESTART || p->phase==P_WAIT_STOP;
+    if(wait_ns)*wait_ns=(edge ? 2u : 9u)*p->bit_ns;
+    if(p->failed)return A733_PMIC_WORK_FAILED;
+    unsigned work=p->stage!=S_READY ? A733_PMIC_WORK_STARTUP : 0;
+    if(atomic_load_explicit(&p->queued,memory_order_acquire))work|=A733_PMIC_WORK_QUEUED;
+    if(p->active<A733_PMIC_REQUESTS)work|=A733_PMIC_WORK_ACTIVE|(p->waiting ? A733_PMIC_WORK_WAITING : 0);
+    return work;
 }
 enum a733_pmic_status a733_pmic_identity(struct a733_pmic *p,struct a733_pmic_lifetime *out)
 {
@@ -181,14 +203,14 @@ enum a733_pmic_status a733_pmic_identity(struct a733_pmic *p,struct a733_pmic_li
     if(!enter(p))return A733_PMIC_BUSY;
     *out=identity(p);return leave(p,p->failed ? A733_PMIC_RETAINED : A733_PMIC_READY);
 }
+/* No lock: the lifetime and bindings are immutable after init, and the state
+ * word carries readiness and every fault that fault() records. */
 enum a733_pmic_status a733_pmic_live(struct a733_pmic *p,const struct a733_pmic_lifetime *v)
 {
-    if(!p || p->self!=p || !v || !outside(p,v,sizeof(*v)))return A733_PMIC_INVALID;
-    if(!enter(p))return A733_PMIC_BUSY;
-    if(!same(p,v))return leave(p,A733_PMIC_INVALID);
-    if(p->failed)return leave(p,A733_PMIC_RETAINED);
-    if(p->stage!=S_READY)return leave(p,A733_PMIC_PENDING);
-    return leave(p,authorized(p) ? A733_PMIC_READY : fault(p));
+    if(!p || p->self!=p || !v || !outside(p,v,sizeof(*v)) || !same(p,v))return A733_PMIC_INVALID;
+    const unsigned word=a733_power_authority_load(&p->rails->authority);
+    if(word&A733_POWER_PMIC_TRANSFER)return A733_PMIC_RETAINED;
+    return word&A733_POWER_PROVIDER_READY ? A733_PMIC_READY : A733_PMIC_PENDING;
 }
 /* Only the CPU rails accept writes, and only within the pinned CPU operating
  * points' 800-1050 mV, so a wrong caller value cannot leave that range. */
@@ -226,7 +248,10 @@ static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,
     s->request=(struct a733_pmic_request){identity(p),p->next_id++,owner};
     s->snapshot=(struct a733_pmic_snapshot){.rail=which};s->deadline=deadline;s->state=QUEUED;
     s->write=write;s->expected=expected;s->target=target;
-    *out=s->request;return leave(p,A733_PMIC_PENDING);
+    atomic_fetch_add_explicit(&p->queued,1,memory_order_release);
+    *out=s->request;leave(p,A733_PMIC_PENDING);
+    if(p->kick)p->kick(p->kick_context);
+    return A733_PMIC_PENDING;
 }
 enum a733_pmic_status a733_pmic_submit(struct a733_pmic *p,uint64_t owner,
     const struct a733_rail_token *rail,enum a733_rail which,uint64_t deadline,struct a733_pmic_request *out)
@@ -330,16 +355,17 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
 }
 /* One poll advances consecutive bus phases while the I2C mutex stays held, so
  * a snapshot does not cost one scheduler tick per phase. The poll ends at the
- * first wait phase whose flag is still clear, and after POLL_PHASES phases.
- * This keeps the provider object busy for only a few register accesses;
- * a733_pmic_live() callers on other cores observe a busy object as BUSY.
+ * first wait phase whose flag is still clear, recorded in waiting, and after
+ * POLL_PHASES phases. The provider object is held only for those few register
+ * accesses; result() and reap() callers on other cores see BUSY only then.
  * The state word is checked again before each further phase. */
 static enum a733_pmic_status transfer(struct a733_pmic *p)
 {
     for(unsigned n=1;;++n) {
         unsigned before=p->phase,index=p->byte_index;
         enum a733_pmic_status r=phase(p);
-        if(r!=A733_PMIC_PENDING || n==POLL_PHASES || (p->phase==before && p->byte_index==index))return r;
+        if(r==A733_PMIC_PENDING && p->phase==before && p->byte_index==index){p->waiting=1;return r;}
+        if(r!=A733_PMIC_PENDING || n==POLL_PHASES)return r;
         if(!authorized(p))return fault(p);
     }
 }
@@ -347,6 +373,7 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
 {
     if(!p || p->self!=p || p->ops.current(p->cookie)!=1)return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
+    p->waiting=0;
     if(p->failed)return leave(p,fault(p));
     if(!time_now(p))return leave(p,fault(p));
     if(p->stage!=S_READY && p->last_now>=p->deadline)return leave(p,fault(p));
@@ -385,7 +412,10 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
        (selected==A733_PMIC_REQUESTS || p->slots[i].request.id<p->slots[selected].request.id))selected=i;
     if(selected==A733_PMIC_REQUESTS)return leave(p,A733_PMIC_READY);
     struct a733_pmic_slot *s=&p->slots[selected];p->deadline=s->deadline;
-    if(p->last_now>=p->deadline){s->state=EXPIRED;return leave(p,A733_PMIC_EXPIRED);}
+    if(p->last_now>=p->deadline){
+        s->state=EXPIRED;atomic_fetch_sub_explicit(&p->queued,1,memory_order_relaxed);
+        return leave(p,A733_PMIC_EXPIRED);
+    }
     enum a733_rail_result r=a733_rail_borrow_status(p->rails,&s->borrow);
     if(r==A733_RAIL_BUSY)return leave(p,A733_PMIC_BUSY);
     if(r!=A733_RAIL_READY)return leave(p,fault(p));
@@ -411,5 +441,6 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
      * bus-idle registers are read again after every STOP. */
     if(!route(p) || !bus_idle(p))return leave(p,fault(p));
     p->active=selected;s->state=ACTIVE;p->byte_index=0;p->phase=P_START;
+    atomic_fetch_sub_explicit(&p->queued,1,memory_order_relaxed);
     return leave(p,A733_PMIC_PENDING);
 }

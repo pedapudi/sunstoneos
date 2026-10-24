@@ -149,6 +149,25 @@ enum a733_rail_result a733_rail_borrow_status(struct a733_rail_leases *m,const s
 {return borrowed(m,b,0);}
 enum a733_rail_result a733_rail_end_borrow(struct a733_rail_leases *m,const struct a733_rail_borrow *b)
 {return borrowed(m,b,1);}
+enum a733_rail_result a733_rail_pin(struct a733_rail_leases *m,const struct a733_rail_token *t,
+    a733_rail_mask_t rails)
+{
+    if(!m || m->self!=m || !t || !rails || (rails&~A733_RAIL_ALL))return A733_RAIL_INVALID;
+    enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
+    struct a733_rail_slot *s=find(m,t);
+    if(!s || (rails&~(s->shared|s->exclusive)))return leave(m,A733_RAIL_INVALID);
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    return leave(m,pin(m,s));
+}
+enum a733_rail_result a733_rail_unpin(struct a733_rail_leases *m,const struct a733_rail_token *t)
+{
+    if(!m || m->self!=m || !t)return A733_RAIL_INVALID;
+    enum a733_rail_result r=enter(m);if(r!=A733_RAIL_READY)return r;
+    struct a733_rail_slot *s=find(m,t);if(!s)return leave(m,A733_RAIL_INVALID);
+    if(!m->pins[slot_index(m,s)])return leave(m,fault(m));
+    if(faulted(m))return leave(m,A733_RAIL_RETAINED);
+    --m->pins[slot_index(m,s)];return leave(m,A733_RAIL_READY);
+}
 enum a733_rail_result a733_rail_floor(struct a733_rail_leases *m,const struct a733_rail_token *t,
     enum a733_rail rail,uint32_t observed_uv,uint32_t *floor_uv)
 {

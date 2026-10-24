@@ -3,11 +3,14 @@
 #include <stddef.h>
 
 #define BIT(n) (UINT32_C(1) << (n))
-enum kind { CHECK, WRITE, UPDATE, WAIT, DELAY, DOMAIN_STATE };
+enum kind { CHECK, UPDATE, DELAY, DOMAIN };
 struct step { enum kind kind; enum a733_gpu_power_bank bank;
     uint32_t offset, mask, value; };
-/* The GPU_TOP domain is PCK domain 5. GPU_CORE is not independently enabled by
- * the board device tree. GPU local clock selects pll-peri0-400m / 1.
+/* The GPU_TOP domain is PCK domain 5, which the power-domain owner powers
+ * through the GPU's row. The MBUS gates, PPU clock, closed clock gate and
+ * asserted reset are checked here before the request, and again by the owner
+ * at admission. GPU_CORE is not independently enabled by the board device
+ * tree. GPU local clock selects pll-peri0-400m / 1.
  */
 static const struct step on_steps[] = {
     {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
@@ -15,19 +18,7 @@ static const struct step on_steps[] = {
     {CHECK, A733_GPU_R_CCU, 0x01ac, BIT(0), BIT(0)},
     {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
-    {DOMAIN_STATE, A733_GPU_PCK, 0x5008, 0xf, 0},
-    {WRITE, A733_GPU_PCK, 0x5170, 0, 0x1f1f1f},
-    {CHECK, A733_GPU_PCK, 0x5170, UINT32_MAX, 0x1f1f1f},
-    {WRITE, A733_GPU_PCK, 0x5174, 0, 0x1f1f},
-    {CHECK, A733_GPU_PCK, 0x5174, UINT32_MAX, 0x1f1f},
-    {WRITE, A733_GPU_PCK, 0x5c00, 0, 0x08080808},
-    {CHECK, A733_GPU_PCK, 0x5c00, UINT32_MAX, 0x08080808},
-    {WRITE, A733_GPU_PCK, 0x5c04, 0, 0x0808},
-    {CHECK, A733_GPU_PCK, 0x5c04, UINT32_MAX, 0x0808},
-    {WRITE, A733_GPU_PCK, 0x5c10, 0, 0x8},
-    {CHECK, A733_GPU_PCK, 0x5c10, UINT32_MAX, 0x8},
-    {UPDATE, A733_GPU_PCK, 0x5000, 0xf, 8},
-    {WAIT, A733_GPU_PCK, 0x5008, 0xf, 8},
+    {DOMAIN, A733_GPU_CCU, 0, 0, 1},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x0b000000},
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x03000000},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
@@ -45,8 +36,7 @@ static const struct step off_steps[] = {
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
     {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
     {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
-    {UPDATE, A733_GPU_PCK, 0x5000, 0xf, 0},
-    {WAIT, A733_GPU_PCK, 0x5008, 0xf, 0},
+    {DOMAIN, A733_GPU_CCU, 0, 0, 0},
 };
 static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
                                        enum a733_gpu_power_error error)
@@ -79,11 +69,12 @@ int a733_gpu_power_init(struct a733_gpu_power *s,
 static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
                                         uint64_t deadline, int on)
 {
-    if (!s || !s->ops.now || (on ?
+    if (!s || !s->ops.now || !s->row.domains || (on ?
         (s->phase != A733_GPU_POWER_NEW && s->phase != A733_GPU_POWER_OFF) :
         s->phase != A733_GPU_POWER_ON)) return A733_GPU_POWER_INVALID;
     s->deadline = deadline;
     s->index = 0;
+    s->requested = 0;
     s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
     if (on) s->lease_attempted = 0;
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
@@ -113,14 +104,28 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
     }
     uint32_t count = on ? sizeof(on_steps) / sizeof(*on_steps) :
                           sizeof(off_steps) / sizeof(*off_steps);
-    /* Steps run back to back. A delay waits on the clock inside the poll. A
-     * status wait re-reads for at most A733_GPU_SPIN_US from its first read,
-     * so the lease callback and earlier steps do not consume it. A wait whose
-     * clock stops advancing returns AGAIN without advancing the step. Every
-     * wait ends at the deadline. */
-    struct a733_gpu_spin wait = {0};
+    /* Steps run back to back. A delay waits on the clock inside the poll. The
+     * domain step requests the row once and returns AGAIN until the service
+     * answers, one acquire load per poll. A delay whose clock stops advancing
+     * returns AGAIN without advancing the step. Every wait ends at the
+     * deadline. */
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
+        if (p->kind == DOMAIN) {
+            if (!s->requested) {
+                if (!a733_power_domain_request(&s->row, p->value)) return fail(s, A733_GPU_POWER_STATE);
+                s->requested = 1;
+            }
+            enum a733_power_row_state state = a733_power_domain_state(&s->row);
+            if (state == A733_POWER_ROW_PENDING) return A733_GPU_POWER_AGAIN;
+            if (state == A733_POWER_ROW_REFUSED) return fail(s, A733_GPU_POWER_STATE);
+            if (state != (p->value ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF))
+                return fail(s, A733_GPU_POWER_DOMAIN);
+            s->requested = 0;
+            ++s->index;
+            if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+            continue;
+        }
         if (p->kind == DELAY) {
             /* The clock may round down to whole microseconds; passing the
              * start sample by more than the delay guarantees the delay. */
@@ -140,26 +145,14 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         int ok;
         if (p->kind == UPDATE)
             ok = s->ops.update(s->context, p->bank, p->offset, p->mask, p->value);
-        else if (p->kind == WRITE)
-            ok = s->ops.write(s->context, p->bank, p->offset, p->value);
         else {
             ok = s->ops.read(s->context, p->bank, p->offset, &value);
             if (ok) s->last_value = value;
         }
         if (!ok) return fail(s, A733_GPU_POWER_IO);
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
-        if (p->kind == DOMAIN_STATE) {
-            if ((value & p->mask) != 0 && (value & p->mask) != 8)
-                return fail(s, A733_GPU_POWER_STATE);
-        } else if (p->kind == CHECK || p->kind == WAIT) {
-            if ((value & p->mask) != p->value) {
-                if (p->kind == CHECK) return fail(s, A733_GPU_POWER_STATE);
-                if (!a733_gpu_spin_again(&wait, s->last_now)) return A733_GPU_POWER_AGAIN;
-                continue;
-            }
-        }
+        if (p->kind == CHECK && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_STATE);
         ++s->index;
-        wait = (struct a733_gpu_spin){0};
     }
     if (!on) {
         if (!s->ops.release(s->context)) return fail(s, A733_GPU_POWER_IO);
