@@ -36,35 +36,36 @@ budgets are the ones in [npu-board.md](npu-board.md).
 | Bytes hashed by startup polls, accelerator image | 20.7 MB; the call graph of `npu_convolution_startup_poll` reaches `digest` and `hash_block` | 0; its call graph reaches 29 functions and no digest function, nor do the startup and GPU callbacks it calls through pointers | 0 | Yes |
 | GPU/PCK managers in an image with the NPU | 1 in the accelerator image | 1 in the accelerator image; 1 in the board image | 1 | Yes |
 | `sizeof(struct npu_session)`, single-core image | 608 bytes | 456 bytes | ≤ 456 bytes | Yes |
-| Source lines, code + header: startup | 445 + 131 | 369 + 79 | ≤ 260 + 60 | No |
-| Source lines: platform tables | 223 + 96 | 48 + 48 | ≤ 90 + 30 | Code yes, header no |
+| Source lines, code + header: startup | 445 + 131 | 408 + 79 | ≤ 260 + 60 | No |
+| Source lines: platform tables | 223 + 96 | 19 + 28, the fabric validation only | ≤ 90 + 30 | Yes |
 | Source lines: PLL table | 204 + 109 | Folded into the sequencer as statics | ≤ 60 + 25 | Yes |
 | Source lines: clock adapter | 128 + 19 | Deleted | Deleted | Yes |
 | Runtime parent, board image | No board image | 8,388,608 bytes at `0x48000000`, 2 MiB aligned | 8,388,608 bytes | Yes |
 | Largest free extent after admission | Not modeled | 796,917,760 bytes; the only pool callers are the CE session, USB2 and `board_application_start`, so LOAD and CLOSE leave the extents unchanged | ≥ 8,388,608 bytes; unchanged | Yes |
 | Requests, replies and client tick waits per inference | 1, 1; one `vTaskDelay(1)` per tick of waiting | 3 jobs: 3 requests, 3 replies, 0 tick waits; a STATUS and a LOAD before ready are answered not-ready | 1, 1, 0 | Yes |
-| Copies per tensor byte | No board image | Input 2 memory copies plus PIO, output 2 memory copies plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes | 2 plus PIO each way with the shared TinyUSB configuration | Yes |
+| Copies per tensor byte | No board image | Input 2 memory copies plus PIO, output 2 memory copies plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes; a READ of mimus-linear-q's 2,816-byte output fits the image's 4 KiB transmit FIFO, which `npu-board-providers.py` reads from the linked TinyUSB class | 2 plus PIO each way with the shared TinyUSB configuration | Yes |
 | Cache lines maintained per job | 19,442 | 19,442 | 19,442 | Yes |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | 1,093,632 | Yes |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | 1,509,856 | Yes |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms | 1.15, 4.33, 2.01, 6.58 ms | 1.15, 4.33, 2.02, 6.58 ms | Yes |
 | Wakes while idle | Service worker one per 1,000 ms | Bootstrap 0 and client 0, both wait on notifications without a timeout; service worker one per 1,000 ms | Bootstrap and client 0 | Yes |
-| Worker steps and idle-register reads, four running jobs | 1,040 steps, 1,060 reads over 12 ticks | 1,016 steps, 1,036 reads over 12 ticks; bound 1,076 | Reads ≤ steps + 4 × (ticks + 1) + 8 | Yes |
+| Worker steps and idle-register reads, four running jobs | 1,040 steps, 1,060 reads over 12 ticks | 1,014 steps, 1,034 reads over 11 ticks; bound 1,070 | Reads ≤ steps + 4 × (ticks + 1) + 8 | Yes |
 | USB0, 64 KiB response | 13 ticks | 13 ticks, 128 packets, at most 10 packets and 189 µs per tick | 13 ticks | Yes |
 | One ShuffleNetV2 inference over USB0, upload to output read | No board image | About 40 ticks, estimated: 150,528 input bytes are 294 high-speed packets, 30 ticks at 10 packets per tick; the 6.58 ms slot, 7 ticks; one tick for each of SUBMIT, READ and RETURN | No target; measured on the board | Not measured |
 
 The worker step counts follow QEMU's timing; earlier branch runs of the same
-case took 746 steps over 10 ticks and 1,056 over 25. The check asserts the
+case took 746 steps over 10 ticks, 1,016 over 12 and 1,056 over 25. The check asserts the
 read bound for every job.
 
-The source-line budget is missed. The register pass, which the base kept in
-the platform file, is in the sequencer (`pass`, `peri0` and their tables, 65
-lines), and so are the PLL_NPU enable table and its predicates. The platform
-header carries the step, result and register-callback types and the fabric
-tables that the sequencer shares. The sequencer and platform files hold 417
-lines of code, against 410 in the three targets, and 127 header lines against
+The source-line budget is missed for the sequencer. It holds the register
+pass, which the base kept in the platform file (`pass`, `peri0` and their
+tables, 65 lines), the PLL_NPU enable table and its predicates, and the local
+open and stop tables with their apply helper, each with the comment that cites
+its source. The platform module keeps only the fabric validation that the
+session validators share. Together the sequencer and platform files hold 427
+lines of code, against 410 in the three targets, and 107 header lines against
 115. With the clock adapter and the PLL native file, the base held 1,455 lines
-in the files this design replaces or deletes; the branch holds 611 in their
+in the files this design replaces or deletes; the branch holds 601 in their
 place, counting the merged native allowlist.
 
 ## Image checks

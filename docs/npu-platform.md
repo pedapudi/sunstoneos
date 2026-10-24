@@ -1,11 +1,13 @@
 # NPU clock and reset tables
 
-The [platform module](../drivers/npu/a733_npu_platform.c) holds the A733 NPU's
-local clock and reset tables, the fabric-record validation and one
-apply-with-readback helper. The [startup sequencer](npu-startup.md) runs them;
-the module has no state machine, takes no lock and makes no resource request.
-The [header](../include/a733_npu_platform.h) also defines the result codes and
-register callbacks that the sequencer and the [PLL table](npu-pll.md) share.
+The A733 NPU's local clock and reset tables and the apply-with-readback helper
+are statics of the [startup sequencer](../drivers/npu/a733_npu_startup.c),
+beside its [PLL table](npu-pll.md). The
+[platform module](../drivers/npu/a733_npu_platform.c) holds the fabric-record
+validation, which the sequencer and the session validators share; it has no
+state machine, takes no lock and makes no resource request. The
+[header](../include/a733_npu_platform.h) also defines the result codes and the
+register callbacks of the sequencer.
 
 Status: host-modeled and checked in the linked images under Unicorn. Physical
 startup, inference and recovery are unqualified. The initial operating point
@@ -52,9 +54,9 @@ leaves the output unchanged on refusal.
 
 A table entry names an address, a field mask, the field's value, and the
 read-only status bits that are written as zero and ignored on readback.
-`a733_npu_apply` reads each word, skips a field that already holds its value,
-writes the new word and reads it back. It returns the number of entries that
-completed.
+The sequencer's apply helper reads each word, skips a field that already
+holds its value, writes the new word and reads it back; consecutive entries on
+one word reuse the value last read. It stops at the first entry that fails.
 
 The open table runs after PLL_NPU locks. It follows the clock-before-power
 order of the pinned VIPLite `vip_drv_device_platform.c` (lines 419–428):

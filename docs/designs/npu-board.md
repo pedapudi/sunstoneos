@@ -88,13 +88,13 @@ release order; each reads the other's field with acquire order. The owner
 writes the domain-4 delay row and policy word. The NPU platform stops writing
 PCK600 and stops reading the delay row. Its native allowlist keeps the policy
 and status reads (`PCK+0x0`, `PCK+0x8`), which the register pass, the final
-readback and the stop check use. The sequencer holds the PLL_NPU enable table
-and its LOCK predicates as statics, and one `opened` helper serves the final
-readback and the stop precheck. The platform module keeps `const` open and
-stop tables and the fabric tables that both modules read, and gains a gate
-table only when idle gating lands. One apply-with-readback helper applies
-every table and reuses the last value read when consecutive steps write the
-same word.
+readback and the stop check use. The sequencer holds the PLL_NPU enable
+table, the local open and stop tables, their LOCK predicates and one
+apply-with-readback helper as statics; the helper reuses the last value read
+when consecutive steps write the same word, and one `opened` helper serves the
+final readback and the stop precheck. A gate table joins them only when idle
+gating lands. The platform module keeps the fabric-record validation and its
+tables, which the sequencer and the session validators share.
 
 **Second resource manager.** The startup constructs no GPU/PCK manager of
 its own; the base's `a733_npu_startup_resources_init` and `struct
@@ -190,10 +190,16 @@ that arrives while one is lent. USB0 posts one request at a time and reads
 the answer with an acquire load; neither task waits on a tick. LOAD carries a
 catalogue index and is answered when the slot is READY or the load is
 refused. The USB0 framing is described at the top of `apps/npu-board/usb.c`.
-A READ response enters the empty 4 KiB transmit FIFO in one exchange, so
-TinyUSB sends a zero-length packet only after its last byte; a READ whose
-response would exceed the FIFO is refused. The catalogue's largest output is
-2,816 bytes.
+The image has its own TinyUSB configuration, `apps/npu-board/tusb_config.h`,
+first in its include path. It differs from the board's storage-update
+configuration only in the vendor transmit FIFO, 4 KiB instead of 2 KiB; the
+other images keep theirs. A READ response no larger than the FIFO enters the
+empty FIFO in one exchange, so TinyUSB sends a zero-length packet only after
+its last byte; `usb.c` refuses a READ whose response would exceed
+`CFG_TUD_VENDOR_TX_BUFSIZE`. The catalogue's largest output, mimus-linear-q's
+2,816 bytes, gives a 2,880-byte response, which the board-client case reads.
+The 2 KiB increase is `.bss`; the image's memory is the 768 MiB pool and the
+kernel sections, which this does not approach.
 
 The shared TinyUSB configuration gives the vendor endpoints no dedicated
 hardware FIFO, so each tensor byte is copied twice in memory and moved once by
@@ -381,7 +387,7 @@ Two of the checks failed on the base for reasons outside the record change:
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms with USB0 on the worker's core | 1.15, 4.33, 2.02, 6.58 ms, without the 1.25 USB0 factor | `checks/npu-runtime-bounds.py` |
 | Wakes while idle | Service worker: one per 1,000 ms timeout | Bootstrap and client 0; service worker one per second | Counted from the code; the board-client case shows no client tick wait |
-| Worker steps and idle-register reads while jobs run | One step per tick of execution, one read per step | Reads ≤ steps + 4 × (ticks + 1) + 8, until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2, which asserts the bound |
+| Worker steps and idle-register reads while jobs run | Four running jobs: 1,040 steps and 1,060 reads over 12 ticks | Reads ≤ steps + 4 × (ticks + 1) + 8, until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2, which asserts the bound |
 | One ShuffleNetV2 inference over USB0, upload to output read | No board image | No target; estimated about 40 ticks: 294 high-speed packets of input at 10 packets per tick (30 ticks), the 6.58 ms slot (7 ticks) and one tick for each of SUBMIT, READ and RETURN | `checks/usb0-service-burst.py` packet rate and `checks/npu-runtime-bounds.py`; measured on the board |
 | USB0, 64 KiB response | 13 ticks in the shared-loop model | 13 ticks | `checks/usb0-service-burst.py` |
 
