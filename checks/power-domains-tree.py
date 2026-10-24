@@ -45,6 +45,20 @@ READERS = {
     'drivers/gpu/a733_gpu_resources_native.c': 'reads domain-5 status at the LOCAL lease release',
     'apps/g2d/admission.c': 'records the domain-1 base in the admission profile',
 }
+# Bundle 8 reads the domain-1 PPU_PWSR as a gate before its NSI access and
+# writes nothing in the domain. These are the only lines of its app that may
+# name the domain-1 block; the status register's other uses must be reads.
+GATE_LINES = {
+    'apps/board-bundles-dram/sequence.h':
+        re.compile(r'#define BB8_DOMAIN1_STATUS UINT32_C\(0x07061008\)\s*/\*[^*]*\*/'),
+    'apps/board-bundles-dram/main.c':
+        re.compile(r'static const uintptr_t read\[\] = \{[^}]*\b0x07061000\b[^}]*\}, '
+                   r'written\[\] = \{(?![^}]*0x0706)[^}]*\};'),
+}
+GATE_DEFINITION, GATE_SEQUENCE = 'apps/board-bundles-dram/sequence.h', 'apps/board-bundles-dram/sequence.c'
+GATE_DEFINE = re.compile(r'#define BB8_DOMAIN1_STATUS\b')
+GATE_READ = re.compile(r'\brd\(io,BB8_DOMAIN1_STATUS,&')
+GATE_HELPER = 'static int rd(const struct a733_dram_io *io,uintptr_t a,uint32_t *v)\n{return io->read(io->context,a,v)==1;}'
 DOMAIN_REGISTER = re.compile(r'0x0706[15][0-9a-fA-F]{3}\b|A733_DE_SYS_PCK_BASE|A733_PCK_DOMAIN_BASE\(\s*[15]\s*\)')
 WRITE_HINT = re.compile(r'write|store|update|=\s*value', re.I)
 # Writers of the delay row for domains the owner does not hold: video (2, 3),
@@ -101,7 +115,14 @@ def main():
         if DOMAIN4_ROW.search(re.sub(r'/\*.*?\*/', '', text, flags=re.S)):
             domain4_rows.add(rel)
         for n, line in enumerate(text.splitlines(), 1):
+            gate = line.count('BB8_DOMAIN1_STATUS')
+            if gate and not (rel == GATE_DEFINITION and GATE_DEFINE.match(line)) and not (
+                    rel == GATE_SEQUENCE and len(GATE_READ.findall(line)) == gate):
+                problems.append(f'{rel}:{n}: uses the bundle 8 domain-1 status other than as a read: '
+                                f'{line.strip()}')
             if not DOMAIN_REGISTER.search(line):
+                continue
+            if rel in GATE_LINES and GATE_LINES[rel].fullmatch(line.strip()):
                 continue
             if rel not in READERS:
                 problems.append(f'{rel}:{n}: names a domain-1 or domain-5 PPU register: {line.strip()}')
@@ -130,6 +151,10 @@ def main():
         for fact in (service, single, placement):
             if fact and fact not in text:
                 problems.append(f'{source}: the {image} service task is not created as listed: {fact}')
+    gate = root / GATE_SEQUENCE
+    if GATE_HELPER not in gate.read_text():
+        problems.append(f'{gate.relative_to(root)}: the bundle 8 read helper rd() is not the plain read '
+                        'that the domain-1 status gate requires')
     owner = (root / 'drivers/power/a733_power_domains.c').read_text()
     step = re.sub(r'/\*.*?\*/', '', owner, flags=re.S)
     for m in BLOCKING.finditer(step):
@@ -139,8 +164,8 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS power-domain tree facts in {scanned} sources: domains 1 and 5 written only by the owner; '
           f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists; {len(domain4_rows)} '
-          'domain-4 row sources and no NPU write to domain 4; five images run their PMIC work from one service '
-          'task below USB0 on core 0; '
+          'domain-4 row sources and no NPU write to domain 4; bundle 8 only reads the domain-1 status; '
+          'five images run their PMIC work from one service task below USB0 on core 0; '
           'no critical section, scheduler suspension or wait in the owner')
 
 

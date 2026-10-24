@@ -21,14 +21,19 @@ check fails when:
   enter() when it takes the I2C mutex;
 - outside the adapter itself and the board-bundle forwarders and cost
   windows (apps/board-bundles-power/power.c), a source uses the operations of
-  a struct a733_pmic_native other than as the &...operations argument of
-  a733_pmic_init(), names struct a733_pmic_ops, or uses the register,
-  mutex or retention operations among the ops of a struct a733_pmic. Any
-  such use could reach the accessors without the
-  poll's task check: a call, a copy of the table, or a function pointer
-  passed on. The rule is keyed on the declared type: it collects the names
-  that each translation unit, with the project headers it includes, declares
-  as struct a733_pmic_native or struct a733_pmic.
+  a struct a733_pmic_native other than as the &...operations third argument
+  of a733_pmic_init(), names struct a733_pmic_ops, or uses the ops of a
+  struct a733_pmic other than to read its now or outside query. Any such
+  use could reach the accessors without the poll's task check: a call, a
+  copy of the table, or a function pointer passed on. The rule is keyed on
+  the declared type: it collects the names that each translation unit, with
+  the project headers it includes, declares as struct a733_pmic_native or
+  struct a733_pmic, including functions that return one. A member access
+  counts as a use when the expression before it ends in such a name, or
+  ends in ')' or ']' and the brackets contain such a name or a cast to the
+  type, or follow such a name: (&native)->operations,
+  ((struct a733_pmic_native *)x)->operations, natives[0].operations and
+  get()->operations all count.
 
 It reads source text only and runs no build.
 """
@@ -77,11 +82,73 @@ def unit_text(root, path, seen):
     return '\n'.join(parts)
 
 
-def statement(text, start, end):
-    """The statement around text[start:end]: from the previous ';', '{' or '}' to the next ';'."""
-    left = max(text.rfind(c, 0, start) for c in ';{}') + 1
-    right = text.find(';', end)
-    return text[left:right if right >= 0 else len(text)]
+def opening(text, close):
+    """The index of the bracket that text[close], a ')' or ']', closes; -1 if none."""
+    pair, depth = {')': '(', ']': '['}[text[close]], 0
+    for i in range(close, -1, -1):
+        depth += text[i] == text[close]
+        depth -= text[i] == pair
+        if not depth:
+            return i
+    return -1
+
+
+def operand(text, end):
+    """The start of the postfix expression that ends before text[end], and its object's possible names.
+
+    The names are the last name of the expression, such as a variable, a
+    member, an array or a called function, and every name inside the
+    brackets that follow it, so that (&x)->, ((T *)x)-> and x[0]. all yield x.
+    Names further out denote enclosing objects and are not returned; a cast
+    stays in the expression text."""
+    names, i, last = set(), end, True
+    while True:
+        while i and text[i - 1].isspace():
+            i -= 1
+        if i and text[i - 1] in ')]':
+            j = opening(text, i - 1)
+            if j < 0:
+                break
+            if last:
+                names |= set(re.findall(r'[A-Za-z_]\w*', text[j:i]))
+            i = j
+            continue
+        name = re.search(r'[A-Za-z_]\w*$', text[max(0, i - 256):i])
+        if not name:
+            break
+        if last:
+            names.add(name[0])
+        last = False
+        i -= len(name[0])
+        k = i
+        while k and text[k - 1].isspace():
+            k -= 1
+        if text[k - 1:k] == '.':
+            i = k - 1
+        elif text[k - 2:k] == '->':
+            i = k - 2
+        else:
+            break
+    return i, names
+
+
+def init_argument(text, start, end):
+    """Whether &text[start:end] is the whole third argument, the operations, of a733_pmic_init()."""
+    if not re.search(r'&\s*$', text[max(0, start - 64):start]) or not re.match(r'\s*,', text[end:]):
+        return False
+    depth, commas = 0, 0
+    for i in range(start - 1, -1, -1):
+        depth += {')': 1, ']': 1, '}': 1, '(': -1, '[': -1, '{': -1}.get(text[i], 0)
+        commas += not depth and text[i] == ','
+        if depth < 0:
+            return (text[i] == '(' and commas == 2 and
+                    re.search(r'\ba733_pmic_init\s*$', text[max(0, i - 64):i]) is not None)
+    return False
+
+
+ACCESS_NATIVE = re.compile(r'(?:\.|->)\s*operations\b')
+ACCESS_PROVIDER = re.compile(r'(?:\.|->)\s*ops\b')
+QUERY = re.compile(r'\s*\.\s*(?:now|outside)\b(?!\s*=[^=])')
 
 
 def adapter_uses(root):
@@ -92,30 +159,35 @@ def adapter_uses(root):
         if rel in ADAPTER_FILES:
             continue
         own = strip_comments(path.read_text(errors='replace'))
-        if not re.search(r'\b(a733_pmic_native|a733_pmic|a733_pmic_ops)\b', own):
+        if not re.search(r'\b(operations|ops|a733_pmic_ops)\b', own):
             continue
         unit = unit_text(root, path.resolve(), set())
-        natives = set(re.findall(r'struct\s+a733_pmic_native\s*\*?\s*(?:const\s+)?(\w+)', unit))
-        providers = set(re.findall(r'struct\s+a733_pmic\s*\*?\s*(?:const\s+)?(\w+)\s*[;,=)\[]', unit))
+        natives = set(re.findall(r'struct\s+a733_pmic_native\b[\s*]*(?:const\b[\s*]*)?(\w+)', unit))
+        providers = set(re.findall(r'struct\s+a733_pmic\b[\s*]*(?:const\b[\s*]*)?(\w+)\s*[;,=)(\[]', unit))
         for m in re.finditer(r'\bstruct\s+a733_pmic_ops\b', own):
             line = own.count('\n', 0, m.start()) + 1
             problems.append(f'{rel}:{line}: names struct a733_pmic_ops outside the provider and its adapter')
-        for m in re.finditer(r'\b(\w+)\s*(?:\.|->)\s*operations\b', own):
-            if m.group(1) not in natives:
+        for m in ACCESS_NATIVE.finditer(own):
+            begin, names = operand(own, m.start())
+            if not names & natives and not re.search(r'\bstruct\s+a733_pmic_native\b', own[begin:m.start()]):
                 continue
-            line = own.count('\n', 0, m.start()) + 1
-            text = statement(own, m.start(), m.end())
-            argument = re.search(r'a733_pmic_init\s*\([^;]*&\s*[\w.\->]*\b' + m.group(1) +
-                                 r'\s*(?:\.|->)\s*operations\s*,', text)
-            if not argument:
+            if not init_argument(own, begin, m.end()):
+                line = own.count('\n', 0, m.start()) + 1
                 problems.append(f'{rel}:{line}: uses the native PMIC adapter\'s operations other than as '
                                 'a733_pmic_init()\'s argument')
-        # The register, mutex and retention operations; now and outside are
-        # read-only queries that the power service and consumers make.
-        for m in re.finditer(r'\b(\w+)\s*(?:\.|->)\s*ops\s*\.\s*(?:read|write|enter|leave|retain)\b', own):
-            if m.group(1) in providers:
-                line = own.count('\n', 0, m.start()) + 1
-                problems.append(f'{rel}:{line}: uses the PMIC provider\'s copy of the adapter operations')
+        # Only the now and outside queries, which the power service and
+        # consumers make, may be read from a provider's copy of the adapter
+        # operations. A call of any other operation, a copy of the table or a
+        # pointer into it could reach the accessors without the poll's task check.
+        for m in ACCESS_PROVIDER.finditer(own):
+            begin, names = operand(own, m.start())
+            if not names & providers and not re.search(r'\bstruct\s+a733_pmic\b', own[begin:m.start()]):
+                continue
+            if QUERY.match(own, m.end()):
+                continue
+            line = own.count('\n', 0, m.start()) + 1
+            problems.append(f'{rel}:{line}: uses the PMIC provider\'s copy of the adapter operations other '
+                            'than the now and outside queries')
     return problems
 
 
@@ -169,8 +241,9 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
           'only to DCDC3 and DCDC5, INTID 235 only in the provider, no lock in the native adapter\'s '
-          'per-phase time read or per-access ownership check, no task check per access, adapter register '
-          'operations called only by the provider and the bundle forwarders')
+          'per-phase time read or per-access ownership check, no task check per access, adapter '
+          'operations used only by the provider and the bundle forwarders, and only the now and outside '
+          'queries read from a provider\'s copy')
 
 
 if __name__ == '__main__':

@@ -43,6 +43,10 @@ struct pmic_model {
      * at every time read, which includes the service task's spins. */
     unsigned probe_live,live_busy;
     void (*concurrent)(struct pmic_model *);
+    /* in_time_read: concurrent() runs from a time read, between bus
+     * accesses, and not from a register access. stop_read: the first time
+     * read after the latest STOP write. */
+    unsigned in_time_read,stop_pending;uint64_t stop_read;
     unsigned worker,register_held,i2c_held,retained,wire,selected,reads,writes;
     unsigned fail_phase,fail_status,stall_phase,stop_stall;
     /* Optional observer of each PMIC register data write. */
@@ -64,8 +68,11 @@ static int pmic_model_now(void *v,uint64_t *out)
 {
     struct pmic_model *m=v;
     if(m->replace_parent){*m->replace_parent=m->replacement;m->replace_parent=0;}
+    m->in_time_read=1;
     if(m->concurrent)m->concurrent(m);
+    m->in_time_read=0;
     *out=m->now;
+    if(m->stop_pending){m->stop_read=m->now;m->stop_pending=0;}
     if(m->now_ns){m->frac_ns+=m->now_ns;m->now+=m->frac_ns/1000;m->frac_ns%=1000;}
     else m->now+=m->now_step;
     return 1;
@@ -132,7 +139,7 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
         }
         ++m->wire;
     } else {
-        assert(value==0x58 && m->wire==6);
+        assert(value==0x58 && m->wire==6);m->stop_pending=1;
         if(m->stop_stall){*pmic_model_word(m,address)=0x58;return 1;}
         m->wire=0;m->status_late=m->stop_status_reads;*pmic_model_word(m,0x07083010)=m->status_late ? 0x58 : 0xf8;
         *pmic_model_word(m,0x07083020)=m->stops<8 && m->stop_line[m->stops] ? m->stop_line[m->stops] : 0x30;++m->stops;
@@ -291,6 +298,71 @@ static void deadline_cases(void)
     printf("deadline: %u admission reads; %u deadlines inside admission, %u inside the transfer, at most %u late accesses, %u complete\n",
         admission,admitted,transferred,worst,completed);
 }
+/* Revocation between phases: a clock fault that another core sets while the
+ * provider reads the time after a phase stops the transfer before its next
+ * access, for a fault after each write of a snapshot. The poll's entry check
+ * and result() would see the fault later, after further bus phases. */
+static unsigned revoke_after,revoked,revoked_writes;
+static void revoke(struct pmic_model *m)
+{
+    if(!m->in_time_read || revoked || m->writes<revoke_after)return;
+    a733_power_authority_set(&m->rails.authority,A733_POWER_CLOCK_FAULT);
+    revoked=1;revoked_writes=m->writes;
+}
+/* The deadline passes after the final STOP wait, at the time read of the
+ * publish phase: the only time read with the request active and the I2C
+ * mutex already released. */
+static unsigned published_late;
+static void publish_late(struct pmic_model *m)
+{
+    if(!m->in_time_read || m->provider.held || m->provider.active>=A733_PMIC_REQUESTS || published_late)return;
+    m->now=m->provider.deadline;published_late=1;
+}
+static void phase_cases(void)
+{
+    struct a733_rail_token t;struct a733_pmic_request q;struct a733_pmic_snapshot s;
+    unsigned total=0,cases=0;
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    finish(&m,&q,&s);total=m.writes;assert(total>=6);
+    for(revoke_after=1;revoke_after<=total;++revoke_after,++cases) {
+        pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+        assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+        revoked=0;m.concurrent=revoke;
+        for(unsigned i=0;i<150 && !m.provider.failed;++i)pmic_model_step(&m);
+        assert(revoked && m.provider.failed && m.retained && m.i2c_held && m.writes==revoked_writes);
+        assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_RETAINED);
+    }
+    /* Publication after the deadline is a fault, and the request is not
+     * completed. */
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    published_late=0;m.concurrent=publish_late;s=(struct a733_pmic_snapshot){.programmed_uv=99};
+    for(unsigned i=0;i<150 && !m.provider.failed && a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_PENDING;++i)
+        pmic_model_step(&m);
+    assert(published_late && m.provider.failed && m.stops==6 && !m.i2c_held && s.programmed_uv==99);
+    assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_RETAINED && s.programmed_uv==99);
+    /* The STOP spin starts at the time read after the STOP write. With a
+     * 25 us byte and a 5 us edge, a spin from the receive phase's write
+     * would end before the next poll's quarter bit. */
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+    m.now_ns=40;m.access_ns=200;m.wire_us=25;m.edge_us=5;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    for(unsigned i=0;i<4000 && !(m.stops==1 && m.provider.waiting &&
+        m.trace[m.trace_count-1].address==0x0708300c && m.trace[m.trace_count-1].value==0x58);++i)
+        assert(pmic_model_step(&m)==A733_PMIC_PENDING);
+    assert(m.stops==1 && m.provider.waiting);
+    const uint64_t bit_ns=m.provider.bit_ns,stop_end=m.stop_read+(2*bit_ns+999)/1000,
+        respin=m.now+(bit_ns/4+999)/1000;
+    uint64_t until=0;
+    assert(a733_pmic_work(&m.provider,m.now,&until)&A733_PMIC_WORK_WAITING);
+    assert(stop_end>respin && until==stop_end);
+    const uint64_t edge_us=stop_end-m.stop_read;
+    assert(run(&m,&q,20000)==A733_PMIC_COMPLETE && a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
+    printf("phases: revocation after each of %u writes stops the transfer before its next access; "
+           "late publication retained; STOP spin ends %llu us after the STOP time read\n",
+           cases,(unsigned long long)edge_us);
+}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--decode")) {
@@ -365,9 +437,10 @@ int main(int argc,char **argv)
     m.now=1000000;assert(pmic_model_step(&m)==A733_PMIC_RETAINED && m.retained);
     assert(!a733_pmic_native_address(0x07083018,1) && !a733_pmic_native_address(0x07083314,1) &&
         !a733_pmic_native_address(0x07083014,1));
-    stop_cases();deadline_cases();
+    stop_cases();deadline_cases();phase_cases();
     puts("PASS actual PMIC state machine, shared rail borrows, six snapshots, engine exclusion, arbitration and deadline retention, "
-         "late and missing STOP status, STOP control error, line control at the final STOP, deadline per bus phase");
+         "late and missing STOP status, STOP control error, line control at the final STOP, deadline per bus phase, "
+         "revocation between phases, deadline at publication, STOP spin from its write");
     return 0;
 }
 #endif
