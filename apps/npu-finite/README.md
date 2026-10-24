@@ -49,3 +49,10 @@ The monitor report, platform log and receipt must agree on completion status, ep
 `tools/a733-returning-host.py` owns the shared live transport loop. The NPU adapter supplies its admission callback and finite execution callback; the helper imports no device model or admission schema. The board lock uses the selected A733 physical port, and the USB churn record names that same port. Every request rechecks instance identity and physical port. The returning-ROM lookup stays on the original sysfs path. The existing USB guard still enforces its host-controller health and shared churn spacing policy.
 
 `transport-check.py` exercises only the extracted loop and NPU callback composition. It checks terminal transport failure, changed identity, missing or inaccessible new ROM, wrong return port, dirty-state retention and numerical-status propagation. It does not repeat native handoff or pure report validation cases. The helper is part of the host source hashes required by root review, so extraction requires a freshly bound host review record.
+
+The [entry procedure](ENTRY.md) describes explicit session construction, the
+forced-ROM instruction check and the missing physical authority. The host
+constructs session bytes only from a supplied typed boot payload and complete
+admission, validates them before writing, and refuses existing output files.
+The return/profile/client fixtures select only their consumed DWARF layouts,
+so unrelated private structure names cannot block those checks.

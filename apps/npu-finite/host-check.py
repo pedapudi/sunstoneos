@@ -29,6 +29,21 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':h.PROFILE,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
  entry={**common,**profile,'schema':h.SCHEMA,'execution_profile':h.PROFILE,'boot_sha256':boot_hash,'ddr':ref(ddr),'platform':ref(platform),'root_review':ref(review),**{k:ref(v) for k,v in facts.items()}}
  admission=write('admission.json',entry);raw[80:112]=hashlib.sha256(admission.read_bytes()).digest();session=t/'session.bin';session.write_bytes(raw)
+ boot_path=t/'typed-boot.bin';boot_path.write_bytes(raw[boot:boot+boot_bytes])
+ constructed=t/'constructed-session.bin';h.construct_session(image,manifest,boot_path,admission,constructed)
+ assert constructed.read_bytes()==session.read_bytes();results.append({'name':'explicit-session-construction','passed':True})
+ for label,change in [('boot-hash',lambda:boot_path.write_bytes(bytes(boot_bytes))),
+                      ('build',lambda:write('admission.json',{**entry,'image_sha256':'f'*64})),
+                      ('identity',lambda:write('admission.json',{**entry,'npu_owner':entry['npu_owner']+1}))]:
+  saved_boot=boot_path.read_bytes();saved_entry=admission.read_bytes();change();target=t/(label+'.bin')
+  try:h.construct_session(image,manifest,boot_path,admission,target)
+  except ValueError:assert not target.exists()
+  else:raise AssertionError(label+' admitted')
+  boot_path.write_bytes(saved_boot);admission.write_bytes(saved_entry);results.append({'name':'session-'+label+'-refused-before-output','passed':True})
+ try:h.construct_session(image,manifest,boot_path,admission,constructed)
+ except ValueError:assert constructed.read_bytes()==session.read_bytes()
+ else:raise AssertionError('existing output overwritten')
+ results.append({'name':'session-existing-output-preserved','passed':True})
  # Launcher compilation is unchanged and uses preserved accepted bytes here.
  def launcher_copy(output,*args):shutil.copy2(launcher,output/'launch.bin')
  with patch.object(h.original,'build_launcher',launcher_copy):h.prepare(image,manifest,session,admission,t/'bundle','mock-compiler','mock-linker','mock-objcopy')
@@ -61,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
- variants=['nominal','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','protected-input-high']
+ variants=['nominal','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  assert not set(a.case)-set(variants),'Unknown selected case'
  for variant in variants:
   if a.case and variant not in a.case:continue
@@ -82,7 +97,11 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
      if variant=='changed-backup':(out/'before-DRAM.bin').write_bytes(b'x'*h.DRAM[1])
      continue
     address=int(args[i],0);i+=1
-    if op=='readl':words.append('0x100' if variant=='protected-input-high' and address==0x03000024 else '0');continue
+    if op=='readl':
+     assert address!=0x03000024,'Normal boot GPIO is not a forced-FEL precondition'
+     rom={0x20:0xeb00008f,0x24:0xe3a00911,0x28:0xe3a0193d,0x3c:0xe3a0605c,0x40:0xea00004d}
+     if address in rom:assert all((out/('before-'+name+'.bin')).exists() for name,_,_ in h.base.REGIONS)
+     words.append(hex(rom.get(address,0) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
     if op=='write':
      source=Path(args[i]);i+=1;data=source.read_bytes()
      state['writes'].append((address,len(data),state['new_ROM']))
@@ -109,6 +128,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    assert state['restore_writes']==1
   else:
    assert not record.get('complete') and not record.get('dram_restored')
+   if variant=='wrong-ROM-entry':assert 'exe' not in state['calls'] and 'Forced-FEL ROM entry' in str(failure)
    assert state['restore_writes']==int(variant=='restore-readback-failure'),variant
    held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)
   assert all(address>=h.DRAM[0] for address,size,after_ROM in state['writes'] if after_ROM)

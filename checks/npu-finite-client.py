@@ -11,7 +11,7 @@ p=argparse.ArgumentParser(description=__doc__)
 for name in ('elf','evidence'):p.add_argument('--'+name,type=Path,required=True)
 a=p.parse_args();r=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('layout',r/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
-image=layout.Image(a.elf);cases=[]
+image=layout.Image(a.elf,layout_names=('a733_observe_identity','npu_service_reply'));cases=[]
 for variant in ('matched','mismatch','close-fault','stop-never-ready','quiesce-failed','quiescence-lost'):
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x40000000,0x04000000)
     for at,data in image.parts:

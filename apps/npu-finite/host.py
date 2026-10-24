@@ -79,6 +79,25 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None):
  require(review.get('host_sources')=={n:sha((ROOT/n).read_bytes()) for n in HOST_SOURCES},'Root review covers different host sources.')
  return profile,collected
 
+def construct_session(image,manifest,boot,admission,output):
+ """Serialize supplied authority; validation establishes no new physical facts."""
+ data=image.read_bytes();_,_,build,layout,_=image_profile(data,json.loads(manifest.read_bytes()))
+ entry=admission.read_bytes();record=json.loads(entry);typed=boot.read_bytes()
+ size,offset,boot_bytes=layout[:3]
+ require(not output.exists(),'Session output already exists.')
+ require(offset==224 and size==offset+boot_bytes and len(typed)==boot_bytes and
+  sha(typed)==record.get('boot_sha256'),'Typed boot bytes differ from admission.')
+ raw=bytearray(size)
+ identities=[record[k] for k in ('epoch','generation','lease','supervisor','whole_platform')]
+ require(all(type(v) is int and 0<v<2**64 for v in identities),'Explicit nonzero session identities required.')
+ struct.pack_into('<6Q',raw,0,original.SESSION_MAGIC,original.SINGLE_CORE_VERSION,size,*identities[:3])
+ raw[48:80]=build;raw[80:112]=hashlib.sha256(entry).digest()
+ for name,at in (('clock',112),('power',144),('supervision',176)):
+  raw[at:at+32]=hashlib.sha256(evidence_ref(record[name])).digest()
+ struct.pack_into('<2Q',raw,208,*identities[3:]);raw[offset:]=typed
+ validate_admission(entry,bytes(raw),build,layout,sha(data))
+ with output.open('xb') as stream:stream.write(raw)
+
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
  data=image.read_bytes();parts,address,build,layout,geometry=image_profile(data,json.loads(manifest.read_bytes()));raw=session.read_bytes();entry=admission.read_bytes()
  profile,cache=validate_admission(entry,raw,build,layout,sha(data));output.mkdir(parents=True,exist_ok=False)
@@ -157,8 +176,10 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,save):
  require(backup.stat().st_size==DRAM[1],'Incomplete full DRAM backup.');base.sync_file(backup);backup_hash=base.digest(backup)
  record.update(dram_backup_sha256=backup_hash,dram_restored=False);save()
  record['dirty']=True;save();base.preload(transaction,bundle,p,evidence)
- words=[int(v,16) for v in transaction(*[a for _ in range(4) for a in ('readl','0x03000024')]).split()]
- require(len(words)==4 and all(0<=v<=0xffffffff and not v&0x100 for v in words),'Protected FEL input is not consistently low.')
+ # The linked return tail sets RVBAR=0x20, bypassing the normal boot input.
+ # readl uses SRAM scratch, so preserve it through preload before this batch.
+ words=[int(v,16) for v in transaction(*[a for address in ('0x20','0x24','0x28','0x3c','0x40') for a in ('readl',address)]).split()]
+ require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
  ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before execution.')
  record.update(launch_attempted=True,backup_sha256=p['_backup_hashes'].copy());save();transaction('exe','0x52000');wait_return()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')
@@ -189,6 +210,8 @@ def run(args):
 
 def main(argv=None):
  p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)
+ q=sub.add_parser('session')
+ for n in ('image','manifest','boot','admission','output'):q.add_argument('--'+n,type=Path,required=True)
  q=sub.add_parser('prepare')
  for n in ('image','manifest','session','admission','output','clang','lld','objcopy'):q.add_argument('--'+n,type=Path,required=True)
  q=sub.add_parser('validate');q.add_argument('--bundle',type=Path,required=True)
@@ -196,6 +219,7 @@ def main(argv=None):
  for n in ('bundle','fel','evidence','ddr-evidence','platform-survey'):q.add_argument('--'+n,type=Path,required=True)
  q.add_argument('--warm-return',type=Path,action='append',default=[]);q.add_argument('--root-owned-claim',required=True,help='Existing root claim; this program does not create or close queue records.')
  a=p.parse_args(argv)
+ if a.operation=='session':construct_session(a.image,a.manifest,a.boot,a.admission,a.output);return 0
  if a.operation=='prepare':prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy);return 0
  if a.operation=='validate':validate_bundle(a.bundle);print('Validated exact NPU returning bundle; no hardware access');return 0
  return run(a)
