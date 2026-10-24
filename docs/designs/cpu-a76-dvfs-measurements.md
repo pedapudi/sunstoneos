@@ -124,5 +124,23 @@ All passed unless stated otherwise.
   probabilities, frame count, words, punctuation, capitals and formatted
   text match the host reference, with the worker's cores at their defaults.
 
-Evidence: `~/.cache/sunstoneos/build/cpu-a76-dvfs/evidence/` and the build
-directories beside it.
+## After the GPU recognition package merged
+
+The integration branch at `db7b77ce` adds the GPU recognition package. On
+the merged tree, with the A76 worker calls added to the GPU recognizer patch
+and `primary.patch` applied, the four default OS images were compared with
+the same images built from `db7b77ce` at one shared path. The same four
+functions differ, and only they: `mimus_transcribe_recorded` (1,868 to 1,932
+bytes, the `CLOCK` hook), `vTaskStartScheduler` (564 to 568, the
+default-affinity constant), `vInterruptCore` (28 to 100, the in-line send)
+and `xTaskIncrementTick` (1,060 to 856, the time-slice rule). The default,
+A76 (supervised and resident), clock and GPU-linear builds, the last with
+and without `A733_A76_ADMITTED`, link and pass their link checks; with
+admission the GPU interrupt routes to core 6 and the image links the
+inference worker. `checks/os-image-dispatch.py --configure-from` on the GPU
+build, `checks/os-image-launch.py` on the default (21 cases) and clock (31)
+builds, `checks/smp-sgi-send.py` on the rebuilt cached diagnostic and
+`checks/check-index.py --verify` pass.
+
+Evidence: `~/.cache/sunstoneos/build/cpu-a76-dvfs/evidence/`,
+`evidence-m/` and the build directories beside them.
