@@ -143,8 +143,14 @@ bundles (`board-bundles-20261024-1/` and `-3/`):
     per iteration against 4. Each block counted exactly 1,024 data and 1,024
     instruction walks. The bundle's per-block check marked every block
     refused because it expected the calibration region's one instruction
-    walk to recur per block; the raw counts are valid and the check needs
-    correcting before the next run.
+    walk to recur per block; the raw counts are valid. The table-walk
+    design's revert rule keeps cached walks for this loop; its core-0
+    workload runs are still required. The corrected check
+    (`apps/board-bundles-cpu/walk.h`) requires 1,024 of each. The next
+    bundle 4 set must carry it and must be prepared from the bundles' source
+    revision `74d6aeab` with the correction, or on a new base image: at the
+    current revision `platform/a733/platform.c` no longer reproduces bundle
+    2's object.
   - **WFI:** over 1,000 tick wakes in 1.0 s the cycle counter advanced
     841,417 cycles, so the A55's cycle counter stops in WFI.
   - **CPU-L clock:** the core ran at 494 MHz.
@@ -156,8 +162,17 @@ bundles (`board-bundles-20261024-1/` and `-3/`):
   - **Mapping:** the domain 1 controller is mapped outer-shareable, as the
     adapter requires.
   - **Owner budget missed:** all 34 recorded service steps exceeded the
-    owner's bound of 110% of wire time, with a maximum of 149%. The owner's
-    budget needs a board-derived figure.
+    owner's bound of 110% of wire time: 146% at the median, 149% at most
+    (the first step). Tick interrupts add nothing measurable. The host model
+    matches the board at about 1.3 µs for each of a snapshot's 211 register
+    accesses. The owner's leaner reads in the same region take 0.63 to
+    0.96 µs, so an estimated half of that is provider software per access
+    (two deadline reads, a task check and, in this image, the bundle's trace
+    hook); the next bundle 6 measures the split. The
+    accesses add to the step because the service times each phase's spin
+    from the end of its poll rather than from the phase start, a provider
+    follow-up. The power-domain design sets 155% as a provisional bound for
+    a 400 kHz snapshot step under this run's conditions.
 - **Domain 1 ON (bundle 7, `bb7-run/`):** the owner found domain 1 already
   ON and adopted it without a transition, so no switch-on time was measured
   in this lifetime.

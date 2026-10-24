@@ -7,7 +7,7 @@
  * follows the inherited S_TWI0 divisor: a byte with acknowledgement takes
  * nine bit times and a START, repeated START or STOP two, at 400 kHz
  * (divisor 0x28) and 100 kHz (divisor 0x2a). A time read costs 40 ns and a
- * register access 200 ns.
+ * register access 200 ns, except in the board-cost case below.
  *
  * Cases, for each rate:
  * - a DCDC2 snapshot and a DCDC3 selector write from another task: the steps,
@@ -23,7 +23,14 @@
  * - the GPU supply consumer, which completes from the boot record with no
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
- * Output: one JSON line per rate, then PASS. */
+ * Board cost, 400 kHz only: a register access costs 1,300 ns, the figure at
+ * which the model's snapshot step matches the median step of port 3-3
+ * (bundle 6, 2026-10-24: 917 us for 630 us of wire time). A snapshot then
+ * takes one step of at most 155% of its 630 us bit-time wire time, the
+ * interim bound of docs/designs/power-domains.md, and a selector write two
+ * steps with one tick wait, because the service spins at most 1 ms per
+ * step.
+ * Output: one JSON line per rate and one for the board cost, then PASS. */
 #include "power-domains-model.h"
 #include "a733_pmic_consumer.h"
 
@@ -78,10 +85,10 @@ static struct a733_power_domain_row fb_row;
 
 struct rate { const char *name; uint32_t divider; uint64_t wire_us,edge_us; };
 struct request_cost { unsigned steps,tick_waits,submitter_polls; uint64_t longest_step_us,elapsed_us; };
-static void setup(const struct rate *r)
+static void setup(const struct rate *r,uint64_t access_ns)
 {
     domains_model_setup(r->divider,r->wire_us);
-    m.now_ns=40;m.access_ns=200;m.edge_us=r->edge_us;
+    m.now_ns=40;m.access_ns=access_ns;m.edge_us=r->edge_us;
     gpu=(struct a733_gpu_power){0};fb_row=(struct a733_power_domain_row){0};
     gpu_rail=fb_rail=submitter=(struct a733_rail_token){0};
     assert(a733_gpu_power_init(&gpu,&gpu_ops,0) && a733_power_domain_row_init(&gpu.row,&d.owner,5,9,&gpu_rail));
@@ -175,18 +182,18 @@ int main(void)
         const struct rate *r=&rates[k];
         printf("{\"rate\":\"%s\",",r->name);
         /* Boot: provider startup and supply verification. */
-        setup(r);
+        setup(r,200);
         const uint64_t first_step=d.owner.verify_at-A733_POWER_SUPPLY_SETTLE_US;
         printf("\"boot\":{\"steps\":%u,\"tick_waits\":%u,\"self_notifies\":%u,\"verified_at_us\":%llu},",
             d.steps,d.tick_waits,d.self_notifies,(unsigned long long)(m.now-first_step));
         assert(m.now>=d.owner.verify_at);
         /* Requests on one core and on two, at every phase of the other caller. */
-        setup(r);struct request_cost snapshot=request(0,1,0,0);
-        setup(r);struct request_cost write=request(1,1,0,0);
+        setup(r,200);struct request_cost snapshot=request(0,1,0,0);
+        setup(r,200);struct request_cost write=request(1,1,0,0);
         unsigned busy[2][3]={{0}},live=0;
         for(unsigned cores=1;cores<=2;++cores)for(uint64_t phase=0;phase<TICK_US;phase+=97)
             for(unsigned kind=0;kind<2;++kind) {
-                setup(r);
+                setup(r,200);
                 (void)request(kind,cores,phase,1);
                 if(other.result_busy>busy[cores-1][0])busy[cores-1][0]=other.result_busy;
                 if(other.reap_busy>busy[cores-1][1])busy[cores-1][1]=other.reap_busy;
@@ -214,16 +221,16 @@ int main(void)
             assert(snapshot.longest_step_us<=A733_POWER_PMIC_SPIN_US+100 && write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
         }
         /* No work: no wake for one second; a notification wakes it once. */
-        setup(r);
+        setup(r,200);
         unsigned idle=service_until(m.now+1000000);
         d.owner.ops.notify(d.owner.context);unsigned notified=service_until(m.now+1);
         /* An image whose service reports progress to a watchdog caps the block. */
-        setup(r);d.owner.config.idle_us=500000;service_step();
+        setup(r,200);d.owner.config.idle_us=500000;service_step();
         unsigned capped=service_until(m.now+1000001);
         printf("\"idle_wakes_per_second\":%u,\"notified_wakes\":%u,\"capped_wakes_per_second\":%u,",idle,notified,capped);
         assert(idle==0 && notified==1 && capped==2);
         /* GPU and framebuffer rows: ON is visible at the consumer's next poll. */
-        setup(r);
+        setup(r,200);
         gpu_rail=domains_rail(9,A733_RAIL_DCDC4);fb_rail=domains_rail(11,A733_RAIL_DCDC2);
         const unsigned twi=m.writes;
         unsigned gpu_on=consumer_ticks(1,1),gpu_twi=m.writes-twi;
@@ -235,7 +242,7 @@ int main(void)
             gpu_on,gpu_off,fb_on,gpu_twi);
         assert(gpu_on==1 && gpu_off==1 && fb_on==1 && !gpu_twi);
         /* Park predicate: not idle during a transfer or a transition. */
-        setup(r);
+        setup(r,200);
         struct a733_rail_token pt=domains_rail(14,A733_RAIL_DCDC2);struct a733_pmic_request pq;
         assert(a733_power_service_idle(&d.owner));
         assert(a733_pmic_submit(&m.provider,14,&pt,A733_RAIL_DCDC2,m.now+1000000,&pq)==A733_PMIC_PENDING);
@@ -266,7 +273,7 @@ int main(void)
         /* A fault that a client latches while the service holds the I2C
          * mutex for a transfer: the next step polls once and retains the
          * mutex, then the service stops ticking. */
-        setup(r);
+        setup(r,200);
         struct a733_rail_token ft=domains_rail(16,A733_RAIL_DCDC2);struct a733_pmic_request fq;struct a733_pmic_snapshot fs;
         assert(a733_pmic_submit(&m.provider,16,&ft,A733_RAIL_DCDC2,m.now+1000000,&fq)==A733_PMIC_PENDING);
         m.edge_us=m.wire_us=100000; /* the transfer stays active across steps */
@@ -279,6 +286,22 @@ int main(void)
         assert(a733_pmic_work(&m.provider,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
         m.now+=TICK_US;assert(service_step()!=1 && a733_power_service_ready(&d.owner)==-1);
         printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
+    }
+    {
+        /* Board cost at 400 kHz: one snapshot step within the interim bound
+         * of 155% of its wire time at the 2,500 ns bit time (252 bit times,
+         * 630 us, as on the board; the model's own bytes take 23 us); a
+         * selector write in two steps with one tick wait. */
+        const struct rate *r=&rates[0];
+        const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
+        setup(r,1300);struct request_cost snapshot=request(0,1,0,0);
+        setup(r,1300);struct request_cost write=request(1,1,0,0);
+        printf("{\"rate\":\"400kHz, 1300 ns per register access\",");
+        print_cost("snapshot",snapshot);print_cost("selector_write",write);
+        printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
+            (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
+        assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*1000000<=wire_snapshot_ns*1550);
+        assert(write.steps==2 && write.tick_waits==1 && write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
     }
     puts("PASS PMIC service task: bounded byte spins, no lock in live(), at most one BUSY result per caller, "
          "no idle wakes, one-tick row visibility, no PMIC transaction per GPU start, park predicate");
