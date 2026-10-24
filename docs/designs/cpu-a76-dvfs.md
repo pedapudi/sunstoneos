@@ -1,6 +1,8 @@
 # Design: Cortex-A76 recognition cores, CPU operating points and in-line SGIs in the integrated OS image
 
-Status: **design**, revised after the first review; no code exists yet. It
+Status: **implemented and measured in host models and emulation**; no board
+has run it. [The measurements](cpu-a76-dvfs-measurements.md) compare each
+budget with the base tree. It
 follows [performance-architecture.md](../performance-architecture.md), whose
 section numbers it cites, implements the placement constants of
 [smp-heterogeneous.md](smp-heterogeneous.md) and uses the CPU clock driver of
@@ -19,6 +21,25 @@ mux switch. Three changes:
 3. **Fewer SGIs, sent in line.** The tick asks a core to give up its time
    slice only when a ready task can take that core, and `vInterruptCore`
    writes `ICC_SGI1R_EL1` directly at EL1 instead of taking `SVC 117`.
+
+The implementation differs from this design in these places:
+
+- The native register adapter lives in `apps/os/cpu.c` beside the owner,
+  as `apps/os/thermal.c` keeps its own; no `drivers/clock` file is added.
+- The adapter issues `DSB SY` after every mux write: the park, the P write
+  and the select, three per frequency change.
+- The clock build's read-only inspection re-reads the clock report for each
+  cluster: 11 reads per cluster, 22 in all, and two PMIC snapshots.
+- `mimus_parallel_init` takes the owner and worker cores as default
+  arguments of 0 and 1, so `apps/mimus/main.cc` and `checks/mimus-linear.cc`
+  need no change.
+- The tick misses the instruction and SGI targets: the scan of the ready
+  list costs about 350 instructions per tick in the cached instruction
+  model, and ticks that wake tasks still send their SGIs. The measurements
+  give the distribution.
+- The EL0 round-trip bound is 24 instructions per send instead of 16. A
+  control run with five no-ops in the base send path shows how much QEMU's
+  lock-wait interleaving amplifies a longer send.
 
 ## A76 admission alone does not give the GPU design's figure
 
@@ -171,11 +192,11 @@ most parked on the oscillator.
 
 Driver state and the record word are static in `apps/os/cpu.c`; only the
 thermal task writes them. No DMA buffer, device memory or cache maintenance
-is added. The adapter `drivers/clock/a733_cpu_clock_native.c` (new) uses
-plain 32-bit accessors on the Device-nGnRnE pages, which the peripheral
-observes in program order. It issues one `DSB SY` after the park write and
-after the select write, before the 2 µs wait that assumes the write arrived
-(section 1.2): two per frequency change.
+is added. The register adapter in `apps/os/cpu.c` uses plain 32-bit
+accessors on the Device-nGnRnE pages, which the peripheral observes in
+program order. It issues one `DSB SY` after each mux write, before the 2 µs
+wait that assumes the write arrived (section 1.2): three per frequency
+change.
 
 ## Synchronization across cores
 
@@ -231,8 +252,8 @@ the diagnostic built from this branch after the bringup merge.
 | --- | --- | --- | --- |
 | Default OS images, first commit | — | Loadable bytes differ only in the default-affinity constant in `tasks.c` and the build identity | `llvm-objcopy -O binary`, disassembly |
 | Call sites that place work on cores 6 or 7 (A76 build) | Every task without affinity | Three: recognizer, inference worker, GPU worker | Compile-time default; the call sites named above |
-| A76 admission | No path | 8 reads, no writes, once per boot; the clock build adds 6 reads and 2 read-only PMIC snapshots | `cpu-clock-model.c` with the OS owner |
-| CPU-B raise with a voltage write | No path | 5 clock register writes, 2 PMIC requests, 2 adapter `DSB SY` | Same |
+| A76 admission | No path | 8 reads, no writes, once per boot; the clock build adds 22 inspection reads and 2 read-only PMIC snapshots | `cpu-clock-model.c` with the OS owner |
+| CPU-B raise with a voltage write | No path | 5 clock register writes, 2 PMIC requests, 3 adapter `DSB SY` | Same |
 | Owner ticks while parked | No path | 0 when the PLL locks in about 20 µs; the model rejects a PLL write without the 2 µs settle | Same |
 | Longest park | No path | About 90 ms; RETAINED stays parked until the halt | Same |
 | Owner wake-ups added | — | 0 | Same |
@@ -329,7 +350,15 @@ specific to that board through its approval record:
   relock of a running cluster.
 - **A2.** CPU-B to the highest point of that board's bin (2,002 MHz at
   1,050 mV on board `3-3`), with the DCDC3 write and ramp, and recognition
-  timed at that point.
+  timed at that point. The recognizer starts the timed run only after the
+  clock owner has finished its requests, and the `CLOCK` lines before and
+  after the run show the point and the largest parked interval. A2 runs the
+  supervised build without the GPU, so its target is CPU-only recognition
+  on the A76 pair: 14.894 s × 494 ÷ (2 × 2 × 2,002) for the linear stage
+  plus 0.283 s for the other stages, about 1.20 s at 2,002 MHz. When
+  recognition is CPU-bound, B1's time divided by A2's equals 2,002 MHz
+  divided by B1's CPU-B rate; a smaller ratio shows a limit outside the
+  cores, such as the DSU clock.
 - **A3**, optional. CPU-L to 1,196 MHz, the first trial that
   [cpu-clock.md](../cpu-clock.md) names, for the service cores.
 
@@ -343,12 +372,15 @@ specific to that board through its approval record:
 | `apps/os/dispatch.c`, `dispatch.h`, `identity.c`, `services.c`, `placement.py`, `application.patch`, `recognition-dispatch.patch`; new `gpu.c`, `gpu_hook.cc` | No | Yes; its recognizer patch calls `mimus_parallel_init(6, 7)` and `mimus_parallel_bind()` |
 | `include/a733_smp_placement.h` (new) | Yes | No; `start.c` checks the GPU build's `OS_RECOGNITION_CORE` against it |
 
-This package also changes `drivers/clock/a733_cpu_clock.c` (the 2 µs settles
-and a query for the parked state), `drivers/clock/a733_cpu_clock_native.c`
-(new), `platform/a733-smp-cached/FreeRTOSConfig.h`,
-`patches/freertos-smp-c.patch`, `patches/freertos-smp-tasks.patch`,
-`checks/cpu-clock-model.c`, `checks/a733-smp-cached.py`,
-`checks/smp-port-cost.c`, `docs/cpu-clock.md` and `docs/smp.md`.
+This package also changes `drivers/clock/a733_cpu_clock.c` and its header
+(the 2 µs settles, the parked time, the read-only inspection and the burst),
+`platform/a733-smp-cached/FreeRTOSConfig.h`,
+`platform/a733-smp/FreeRTOSConfig.h`, `patches/freertos-smp-c.patch`,
+`patches/freertos-smp-tasks.patch`, `checks/cpu-clock-model.c`,
+`checks/a733-smp-cached.py`, `checks/smp-port-cost.c` and `.py`,
+`checks/smp-sgi-send.py` (new), `checks/os-image-model.c`,
+`checks/os-image-launch.py`, `docs/cpu-clock.md`, `docs/smp.md` and
+`docs/os-image.md`.
 
 ## Changes outside this package
 
@@ -356,11 +388,12 @@ These land through `primary.patch`:
 
 - `patches/freertos-a733-smp.patch`: delete the `vInterruptCore` hunk.
 - `apps/mimus/parallel_runtime.cc` and `parallel_runtime.h`: the owner core
-  and worker core become parameters of `mimus_parallel_init`, which the
-  `WORKERS` line's core mask follows; `apps/mimus/main.cc` and
-  `checks/mimus-linear.cc` pass 0 and 1.
+  and worker core become parameters of `mimus_parallel_init`, with defaults
+  0 and 1, and the `WORKERS` line's core mask follows them.
 - `apps/mimus/recorded.cc`: in native builds, `report_clock` prints the line
   from a weak `os_cpu_clock_line` hook, before and after recognition.
+- `checks/index.json`: regenerated for `checks/smp-sgi-send.py`.
 
-Other owners: the GPU package regenerates its table with `--cpu-mhz` for the
-point that A2 qualifies.
+Other owners: the GPU package regenerates its placement table with
+`--cpu-mhz` for the point that A2 qualifies once a resident-lifetime grant
+exists, because the GPU build runs only in the resident lifetime.

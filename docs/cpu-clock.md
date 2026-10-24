@@ -2,9 +2,12 @@
 
 Status: implemented and host-modeled. The driver follows the board thermal
 policy, reads its permission from a grant record that an OS session can
-carry, and times work in cycles of the cluster that ran it. No image calls the
-driver yet, and no image carries a grant. Nothing in it has run on the board.
-Any physical use needs the user's approval for each clock or voltage change.
+carry, and times work in cycles of the cluster that ran it. The integrated OS
+image calls it only in the supervised build with `SUNSTONE_A733_OS_CPU_CLOCK`,
+which is off by default ([the OS owner](#the-integrated-os-image-owns-the-driver-in-its-thermal-task)).
+No prepared session carries a grant that names a cluster. Nothing in it has
+run on the board. Any physical use needs the user's approval for each clock or
+voltage change.
 
 The A733 has two CPU clusters and a shared DynamIQ unit:
 
@@ -212,8 +215,39 @@ This driver reads the three words for the cluster and refuses the transition
 when PAT0 bit 29 or 30, PAT1 bit 31 or LFM bit 31 is set. It never writes
 them. Their values after boot0 are unknown, so the first physical trial
 shows whether this check admits the board's inherited state. Parking on the
-oscillator keeps the cluster on a stable clock while the PLL relocks. A
-transition to the present rate completes without writes.
+oscillator keeps the cluster on a stable clock while the PLL relocks. After
+each mux write, the park and the reselection, the driver spins 2 µs on its
+time source before the next register write: twice the fixed 1 µs delay of
+the mainline sunxi-ng CPU mux notifier (Linux `e5f0a698`, `ccu_mux.c`
+`ccu_mux_notifier_cb`; `delay_us = 1` in `ccu-sun50i-a64.c` and
+`ccu-sun50i-h6.c`). No A733 source states a delay, because the pinned driver
+never reparents at run time, so parking a running cluster stays unproven. The
+driver records the time from the park write to the select readback of each
+frequency change, and its largest value. A transition to the present rate
+completes without writes.
+
+`a733_cpu_clock_inspect` runs a read-only pass over one cluster without a
+grant: the leases, the report and the cluster's pattern and LFM words, and
+one PMIC snapshot, whose voltage it keeps and which records the rail's boot
+floor. It writes no clock or PMIC register and consumes no change.
+`a733_cpu_clock_burst` polls once and then keeps polling while the cluster
+is parked, up to a time budget, so an owner that polls once per tick does not
+leave a cluster on the oscillator across ticks when the PLL locks quickly.
+
+## The integrated OS image owns the driver in its thermal task
+
+With `SUNSTONE_A733_OS_CPU_CLOCK` (supervised lifetime and `A733_A76_ADMITTED`
+only), the OS session carries the grant record after its other facts, and the
+OS admission loads it against the session's epoch and generation. The thermal
+task, which runs every tick, calls the driver after each thermal step, so a
+CRITICAL reading ends the session before any clock step. It inspects CPU-L
+and CPU-B, requests each granted cluster's highest point once with a 120 ms
+deadline when that cluster's sensor has a reading, and then lets the driver
+follow the thermal level. Each pass is one burst with a 200 µs budget. The
+register adapter in `apps/os/cpu.c` issues `DSB SY` after each mux write. The
+recognizer prints a `CLOCK` line before and after each recognition with the
+applied points, the rail voltages, the transition count and the largest
+parked time ([design](designs/cpu-a76-dvfs.md)).
 
 ## Failure handling keeps ownership after any write
 
@@ -339,11 +373,21 @@ In separate manual runs, each of these altered drivers failed the model:
   throttle lowering within the same episode and one that keeps a failed
   lowering across episodes;
 - one that ignores the grant's epoch, one that ignores its approval hash and
-  one that accepts timing samples from two cores.
+  one that accepts timing samples from two cores;
+- one without the settle after the park, and ones with a settle of 0 or
+  1 µs: the model rejects a PLL write less than 2 µs after the park;
+- one whose burst polls only once, which leaves the cluster parked at a tick
+  boundary.
+
+The model also runs a read-only inspection of both clusters with no grant,
+and an A2 raise on a modeled board `3-3` (fuse word `0x00000496`, vf0400):
+CPU-B from 1,014 to 2,002 MHz with DCDC3 from 900 to 1,050 mV, 5 clock
+register writes and one PMIC write, the cluster parked 25 µs and no owner
+tick inside the parked window with a 20 µs lock. With a 300 µs lock the owner
+sleeps one tick while parked.
 
 Altered native cycle code failed the instruction model when it restored DAIF
 after all reads, ignored the filter, wrote a counter reset or kept `D` set.
-The check passed on 2026-10-21.
+The check passed on 2026-10-24.
 These are software results only. Physical lock time, settling, rail
-accuracy, frequency, PMU access and thermal behavior remain unmeasured, and
-the clock transitions have no native adapter.
+accuracy, frequency, PMU access and thermal behavior remain unmeasured.
