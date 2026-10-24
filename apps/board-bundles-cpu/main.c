@@ -23,11 +23,8 @@
  *    of block k, so that the loaded lines fall in different cache sets and
  *    stay in L1 and none evicts a table line; no load targets the result
  *    block or the block that holds this image, its stacks and the PMU state.
- *    A block whose DTLB_WALK or ITLB_WALK differs from 1,024 is refused
- *    (walk.h). Before each block, a calibration region (TLBI VMALLE1, DSB
- *    ISH, ISB, then end) records the walks after a lone TLBI: on port 3-3
- *    none for data and one for instructions, which a block counts once per
- *    iteration and not again.
+ *    A calibration region (TLBI VMALLE1, DSB ISH, ISB, then end) precedes
+ *    each block; walk.h states which walk counts a block is accepted with.
  *    No table write follows the final flush of both table pages in
  *    platform_init() (checked on the host by checks/board-bundles-apps.py),
  *    so uncached walks read the descriptors that cached walks read.
@@ -272,7 +269,7 @@ static void walks(void)
         k = walk(k, WALK_ITERATIONS, image);
         measure_status(a733_cpu_pmu_end(&region, &record), "walk end");
         irq_restore(daif);
-        const unsigned accepted = bb4_walk_accepted(&record, WALK_ITERATIONS);
+        const unsigned accepted = bb4_walk_accepted(&record, &calibration, WALK_ITERATIONS);
         put(b ? "WALK block=" : "WALK warm-up block=", b);
         platform_puts(uncached[b] ? "  mode=A uncached walk\n" : "  mode=B cached walk\n");
         record_put("  record", &record);

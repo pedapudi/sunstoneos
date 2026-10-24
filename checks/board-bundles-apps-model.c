@@ -17,11 +17,10 @@
  * line and the detail reserve of each image fit the 16,127 log bytes, so the
  * outcome line always reaches the log.
  *
- * Bundle 4: apps/board-bundles-cpu/walk.h on the 13 walk records that port
- * 3-3 returned on 2026-10-24 (bb4-run/kernel.log). Every block is accepted,
- * although no block's ITLB_WALK equals 1,024 plus its calibration's count; a
- * block with one walk more or fewer, an unimplemented walk event or an
- * overflowed one is refused. */
+ * Bundle 4: apps/board-bundles-cpu/walk.h on one walk block of port 3-3
+ * (2026-10-24) and its calibration region, accepted, and on the same block
+ * with one walk more or fewer, an unimplemented or overflowed walk event, or
+ * another calibration count, each refused. */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -268,7 +267,12 @@ static void bins_case(void)
                                      {30000, 1, 12, 24, 6, 20, 16, 2}}; /* 1,250,000 ns */
     struct bb_step_bins b;
     bb_step_bins(steps, 3, 2500, &b);
-    assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 1 && b.over_ms == 1 && b.worst == 1984);
+    assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
+           b.worst == 1984);
+    /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
+    const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2};
+    bb_step_bins(&board, 1, 2500, &b);
+    assert(b.bins[3] == 1 && b.worst == 1456);
     printf("\"step distribution against the wire time\",");
 }
 
@@ -313,60 +317,38 @@ static void log_bound_case(void)
            six, seven, room, widest);
 }
 
-/* Per block of bb4-run: cycles, CNTPCT ticks, the six events in record
- * order, and the calibration region's DTLB_WALK and ITLB_WALK. Block 0 is the
- * warm-up; the A blocks (uncached walks) are 0, 1, 4, 5, 8, 9 and 12. */
-static const struct {
-    uint64_t cycles, ticks;
-    uint32_t events[A733_CPU_PMU_EVENTS], calibration[2];
-} bb4_blocks[13] = {
-    {715999, 34785, {15388, 63, 63, 7468, 1024, 1024}, {0, 1}},
-    {709968, 34492, {15388, 6, 0, 7168, 1024, 1024}, {0, 1}},
-    {447234, 21728, {15388, 4, 6, 4124, 1024, 1024}, {0, 1}},
-    {446624, 21698, {15388, 0, 0, 4096, 1024, 1024}, {0, 1}},
-    {709614, 34475, {15388, 1, 0, 7168, 1024, 1024}, {0, 1}},
-    {709747, 34482, {15388, 0, 0, 7168, 1024, 1024}, {0, 1}},
-    {446597, 21698, {15388, 0, 0, 4096, 1024, 1024}, {0, 1}},
-    {446621, 21698, {15388, 0, 0, 4096, 1024, 1024}, {0, 1}},
-    {709023, 34446, {15388, 0, 0, 7168, 1024, 1024}, {0, 1}},
-    {710207, 34504, {15388, 0, 0, 7168, 1024, 1024}, {0, 1}},
-    {446609, 21697, {15388, 0, 0, 4096, 1024, 1024}, {0, 1}},
-    {446612, 21697, {15388, 0, 0, 4096, 1024, 1024}, {0, 1}},
-    {709792, 34484, {15388, 0, 0, 7168, 1024, 1024}, {0, 1}},
-};
-static struct a733_cpu_pmu_record bb4_record(unsigned b)
+/* Block 3 of the board run (cached walks) and its calibration region. */
+static struct a733_cpu_pmu_record bb4_record(uint32_t dtlb, uint32_t itlb)
 {
     struct a733_cpu_pmu_record r = {.format = A733_CPU_PMU_FORMAT, .counters = 6, .supported = 0x3f,
-                                    .midr = 0x412fd050, .cntfrq = 24000000, .cycles = bb4_blocks[b].cycles,
-                                    .ticks = bb4_blocks[b].ticks};
-    memcpy(r.events, bb4_blocks[b].events, sizeof r.events);
+                                    .midr = 0x412fd050, .cntfrq = 24000000, .cycles = 446624, .ticks = 21698,
+                                    .events = {15388, 0, 0, 4096, 0, 0}};
+    r.events[A733_CPU_PMU_DTLB_WALK] = dtlb;
+    r.events[A733_CPU_PMU_ITLB_WALK] = itlb;
     return r;
 }
 static void walk_case(void)
 {
-    for (unsigned b = 0; b < 13; ++b) {
-        const struct a733_cpu_pmu_record r = bb4_record(b);
-        assert(bb4_walk_accepted(&r, 1024));
-        /* The rule that refused all 13 blocks on the board. */
-        assert(r.events[A733_CPU_PMU_DTLB_WALK] == 1024 + bb4_blocks[b].calibration[0]);
-        assert(r.events[A733_CPU_PMU_ITLB_WALK] != 1024 + bb4_blocks[b].calibration[1]);
-    }
+    const struct a733_cpu_pmu_record block = bb4_record(1024, 1024), calibration = bb4_record(0, 1);
+    assert(bb4_walk_accepted(&block, &calibration, 1024));
     for (unsigned e = A733_CPU_PMU_DTLB_WALK; e <= A733_CPU_PMU_ITLB_WALK; ++e) {
-        struct a733_cpu_pmu_record r = bb4_record(3);
+        struct a733_cpu_pmu_record r = block, c = calibration;
         r.events[e] = 1025;
-        assert(!bb4_walk_accepted(&r, 1024));
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
         r.events[e] = 1023;
-        assert(!bb4_walk_accepted(&r, 1024));
-        r = bb4_record(3);
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        r = block;
         r.supported &= (uint8_t)~(1u << e);
         r.events[e] = 0;
-        assert(!bb4_walk_accepted(&r, 1024));
-        r = bb4_record(3);
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        r = block;
         r.overflow = (uint8_t)(1u << e);
         r.events[e] = 0;
-        assert(!bb4_walk_accepted(&r, 1024));
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        c.events[e] += 1;
+        assert(!bb4_walk_accepted(&block, &c, 1024));
     }
-    printf("\"bundle 4 walk blocks of port 3-3: 13 of 13 accepted at 1,024 data and 1,024 instruction walks\",");
+    printf("\"bundle 4 walk block of port 3-3 accepted at 1,024 data and 1,024 instruction walks\",");
 }
 
 int main(void)
