@@ -10,10 +10,13 @@ def sha(data):return hashlib.sha256(data).hexdigest()
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
- t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));execution=h.CHECKPOINT if checkpoint else h.PROFILE
+ t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));execution=h.geometry_profile(g)
  # The reviewed 608-byte page, converted to the image's reduced record.
  spec=importlib.util.spec_from_file_location('finite_images',r/'checks/npu-image-checks.py');images=importlib.util.module_from_spec(spec);spec.loader.exec_module(images)
- raw=bytearray(images.npu_page((Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/startup-usb-resume/session-fixture.bin').read_bytes(),layout,h.original.SINGLE_CORE_VERSION));raw[48:80]=build;profile=h.original.session_profile(raw,layout);boot,boot_bytes=layout[1:3]
+ base_layout=(456,224,232,*layout[3:]) if thermal else layout
+ raw=bytearray(images.npu_page((Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/startup-usb-resume/session-fixture.bin').read_bytes(),base_layout,h.original.SINGLE_CORE_VERSION))
+ if thermal:raw+=bytes(160);struct.pack_into('<Q',raw,16,616)
+ raw[48:80]=build;profile=h.original.session_profile(raw,layout);boot,boot_bytes=layout[1:3]
  # Read the report identity from the actual linked monitor initializer.
  # Only contract admission and architectural time are modeled. Stop before seal.
  from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
@@ -47,6 +50,19 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  identity=[0,0,0,0,1];port='mock-npu-port';common={'image_sha256':sha(data),'identity':identity,'port':port,'whole_platform':profile['whole_platform']}
  def write(name,value):path=t/name;path.write_text(json.dumps(value,indent=2)+'\n');return path
  required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
+ thermal_facts={}
+ if thermal:
+  required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
+  required['supervision'].add('matched-close-local-stop-or-proved-never-started-with-configured-THS-stop-and-provider-park')
+  at=boot+232;struct.pack_into('<2Q',raw,at,0x12345,0x23456);struct.pack_into('<2IB',raw,at+144,1,12000000,1)
+  conditions={
+   'initial':('exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'),
+   'electrical':('avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'),
+   'clocks':('stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded'),
+   'supervision':('whole_board_power_removal','failure_permanent_retention','no_reuse','one_attempt','configured_sensor_stop_retains_clocks','normal_return_after_provider_quiescence')}
+  for index,(name,keys) in enumerate(conditions.items()):
+   path=write('thermal-'+name+'.json',{**common,'schema':'a733-thermal-'+name+'-v1','reviewed':True,'owner':0x12345,'authority':0x23456,**dict.fromkeys(keys,True)})
+   thermal_facts[name]=ref(path);raw[at+16+32*index:at+48+32*index]=hashlib.sha256(path.read_bytes()).digest()
  if checkpoint:
   required['clock']={'npu-clock-power-registers-not-accessed'}
   required['power']={'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'}
@@ -63,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
  review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':execution,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
  entry={**common,**profile,'schema':h.SCHEMA,'execution_profile':execution,'boot_sha256':boot_hash,'ddr':ref(ddr),'platform':ref(platform),'root_review':ref(review),**{k:ref(v) for k,v in facts.items()}}
+ if thermal:entry['thermal']=thermal_facts
  admission=write('admission.json',entry);raw[80:112]=hashlib.sha256(admission.read_bytes()).digest();session=t/'session.bin';session.write_bytes(raw)
  boot_path=t/'typed-boot.bin';boot_path.write_bytes(raw[boot:boot+boot_bytes])
  constructed=t/'constructed-session.bin';h.construct_session(image,manifest,boot_path,admission,constructed)
@@ -114,12 +131,26 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
    rejected('checkpoint-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
   platform.write_bytes(saved_platform)
+ if thermal:
+  for label,at,value in [('owner',boot+232,profile['npu_owner']),('APB-rate',boot+232+148,1),('padding',boot+232+153,1)]:
+   bad=bytearray(raw);struct.pack_into('<Q' if label=='owner' else '<I' if label=='APB-rate' else '<B',bad,at,value)
+   changed={**entry,'boot_sha256':sha(bad[boot:])};power=json.loads(facts['power'].read_bytes());power['boot_sha256']=changed['boot_sha256'];other=write('bad-power.json',power);changed['power']=ref(other);bad[144:176]=hashlib.sha256(other.read_bytes()).digest()
+   encoded=json.dumps(changed).encode();bad[80:112]=hashlib.sha256(encoded).digest()
+   rejected('thermal-'+label+'-refused',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
+  changed={**entry,'thermal':{k:v for k,v in thermal_facts.items() if k!='electrical'}};encoded=json.dumps(changed).encode();bad=bytearray(raw);bad[80:112]=hashlib.sha256(encoded).digest()
+  rejected('missing-thermal-electrical-authority',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
  saved=(bundle/'request.bin').read_bytes();(bundle/'request.bin').write_bytes(bytes(len(saved)));rejected('changed-packet-refused',lambda:h.validate_bundle(bundle));(bundle/'request.bin').write_bytes(saved)
  def reports(variant):
-  status=int(variant=='mismatch');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
+  status=int(variant=='mismatch' or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
   if status:first=bytes([first[0]^1])+first[1:]
   if variant=='false-success':second=bytes([second[0]^1])+second[1:]
-  text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
+  jobs=2;reason=0
+  if thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch'):
+   jobs=int(variant!='thermal-zero');reason=2;status=1 if variant=='thermal-one-mismatch' else 2
+   if jobs==0:first=bytes(32);second=bytes(len(reference))
+   elif status==1:second=bytes([reference[0]^1])+reference[1:];first=hashlib.sha256(second).digest()
+  text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('REFUSED NPU thermal admission; configured sensor disabled and providers parked' if status==2 else 'FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
+  if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
   if checkpoint:
    text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
    if variant=='false-success':text=text.replace('jobs=0','jobs=1')
@@ -127,7 +158,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else 0,11000000,1,12000000]
   if variant=='old-generic-monitor-magic':monitor[0]=0x4153373343525331
   header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
-  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else 2 if status else 1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+  if thermal:receipt += [reason,jobs,12000000 if variant=='thermal-late-drain' else 130000000]
+  if variant=='thermal-fault-reason':receipt[11]=4
   if variant=='ordinary-receipt':receipt[0]=0x4e50555245543031;receipt[5]=1;monitor[5]=0
   if variant=='stale-generation':monitor[2]+=1
   if variant=='stale-lease':receipt[3]+=1
@@ -137,14 +170,15 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if variant=='invalid-time':monitor[8]=490000000
   if variant=='oversized-log':header[3]=20000
   plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
-  return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
+  return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<14Q' if thermal else '<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
  variants=['nominal','old-generic-monitor-magic','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
- if checkpoint:variants.append('ordinary-receipt')
+ if checkpoint or thermal:variants.append('ordinary-receipt')
+ if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
  assert not set(a.case)-set(variants),'Unknown selected case'
  for variant in variants:
   if a.case and variant not in a.case:continue
-  out=t/variant;out.mkdir();state={'calls':[],'failed':False,'new_ROM':False,'restore_writes':0,'writes':[]};memory=bytearray(h.DRAM[1]);sram=bytearray(0x100000);record={'launch_attempted':False,'dirty':False};p2=h.validate_bundle(bundle);frame=reports(variant)
+  out=t/variant;out.mkdir();state={'calls':[],'failed':False,'new_ROM':False,'restore_writes':0,'writes':[]};memory=bytearray(h.DRAM[1]);sram=bytearray(0x100000);record={'mode':'kernel','launch_attempted':False,'dirty':False};p2=h.validate_bundle(bundle);frame=reports(variant)
   def readmem(address,size):
    if h.DRAM[0]<=address<address+size<=h.DRAM[0]+h.DRAM[1]:return bytes(memory[address-h.DRAM[0]:address-h.DRAM[0]+size])
    if 0<=address<address+size<=len(sram):return bytes(sram[address:address+size])
@@ -185,13 +219,16 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   failure=None
   try:result=h.run_once(transaction,wait_return,lambda:None,bundle,p2,out,record,lambda:None)
   except ValueError as error:failure=error
-  normal=variant=='nominal' or variant=='mismatch' and not checkpoint;assert (failure is None)==normal,(variant,failure)
+  normal=variant=='nominal' or variant=='mismatch' and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant=='mismatch')
+   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','thermal-one-mismatch'))
    assert state['restore_writes']==1
+   if result['status']:
+    kernel=h.module('check_controlled_outcome',r/'tools/check-a733-kernel.py');assert kernel.controlled_return(record)
+   else:assert 'controlled' not in record
   else:
-   assert not record.get('complete') and not record.get('dram_restored')
+   assert not record.get('complete') and not record.get('dram_restored') and 'controlled' not in record
    if variant=='wrong-ROM-entry':assert 'exe' not in state['calls'] and 'Forced-FEL ROM entry' in str(failure)
    assert state['restore_writes']==int(variant=='restore-readback-failure'),variant
    held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)

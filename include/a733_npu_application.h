@@ -14,6 +14,16 @@ struct a733_npu_application_profile {
     uint64_t npu_evidence,command_admission,usb_evidence,pmic_evidence,pin_evidence;
     uint64_t npu_owner,pmic_owner,usb_owner,bridge_owner;
 };
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+/* Consumed polling-controller configuration and four authenticated records. */
+struct a733_npu_thermal_boot {
+    uint64_t owner,authority;
+    uint8_t initial[32],electrical[32],clocks[32],supervision[32];
+    uint32_t apb1,apb1_hz;
+    uint8_t configure_adc_clock,reserved[7];
+};
+_Static_assert(sizeof(struct a733_npu_thermal_boot)==160,"finite thermal wire record");
+#endif
 struct a733_npu_application_boot {
     struct a733_npu_application_profile profile;
     /* The fabric record; the PMIC startup deadline must be zero in this
@@ -21,6 +31,9 @@ struct a733_npu_application_boot {
     struct a733_npu_platform_config npu;
     struct a733_pmic_config pmic;
     struct a733_pin_handoff pins;
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    struct a733_npu_thermal_boot thermal;
+#endif
 };
 const struct a733_npu_application_boot *a733_npu_application_boot_record(void);
 extern const unsigned char a733_npu_application_model[];
@@ -36,6 +49,9 @@ struct a733_npu_application_result {
     atomic_uint complete;
     uint64_t start,end,job,previous_job;
     unsigned jobs;
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    unsigned thermal_reason;
+#endif
     unsigned char first_digest[32];
     unsigned char output[NPU_CONVOLUTION_IO_CAPACITY];
 };
@@ -45,6 +61,15 @@ extern atomic_uint a733_npu_application_failed;
 int a733_npu_application_init(TaskHandle_t client);
 struct npu_convolution *a733_npu_application_client(void);
 unsigned a733_npu_application_ready(void);
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+unsigned a733_npu_application_thermal_live(void);
+unsigned a733_npu_application_thermal_claim(void);
+void a733_npu_application_thermal_complete(void);
+void a733_npu_application_thermal_close(void);
+unsigned a733_npu_application_thermal_reason(void);
+uint64_t a733_npu_application_thermal_deadline(void);
+unsigned a733_npu_application_never_started(void);
+#endif
 /* Finite adapter only: original bootstrap publishes after matched CLOSE and
  * successful local gate/reset stop. Allocations and shared leases stay owned. */
 unsigned a733_npu_application_stopped(void);

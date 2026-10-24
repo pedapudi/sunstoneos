@@ -15,7 +15,7 @@ A failed or uncertain attempt retains ownership for physical recovery.
 
 The SMP USB thermal image is a separate consumer. Its local CLOSE leaves
 USB active until its 20-second deadline and supplies no normal ROM return.
-The finite image currently has no thermal admission or sensor-stop integration.
+The ordinary numerical image has no thermal admission or sensor-stop integration.
 Numerical return qualification therefore cannot establish thermal behavior.
 
 The monitor report uses the NPU-specific magic `0x415337334e505231`.
@@ -135,26 +135,63 @@ constructs no USB provider. ROM USB clock, power, supply and writer-exclusion
 authority still applies. The CPU/GIC entry and return accesses also require
 physical authority.
 
-## Finite thermal integration remains planned
+## Finite thermal admission bounds work and cleanup
 
-The reviewed design reuses the bootstrap task as the owner of the native THS
-controller and fixed thermal policy. All five channels must produce fresh NORMAL
-samples within one second before startup. Hot, critical or stale samples close
-admission permanently. Each submission checks freshness independently, so a
-stalled monitor cannot admit further work. A first refusal starts a fixed
-five-second drain bound, limited by the session deadline.
+`build.py --thermal --evidence DIRECTORY` selects the optional
+`npu-finite-thermal-return-v1` profile. The existing bootstrap task owns the native
+thermal sensor controller (THS) and fixed board policy. All five channels must
+produce individually fresh NORMAL readings within one second before startup.
+Hot, critical or stale readings close admission permanently. Every submission
+checks freshness before and after its atomic reservation. A first refusal starts
+a fixed five-second drain bound, limited by the session deadline. The client
+independently detects a stalled bootstrap, so stale monitoring cannot admit work.
 
 An accepted startup finishes through OPEN and CLOSE; an accepted job completes
-and is reaped before CLOSE. A never-started outcome must prove that startup was
-not polled, worker admission stayed clear, and no startup token or row was owned.
-It must not synthesize CLOSED or STOPPED. Sensor disable, quiet IRQ71, suspended
-bootstrap/worker tasks and parked PMIC service must precede normal return.
+and is reaped before CLOSE. A `NEVER_STARTED` result proves that startup was
+not polled, worker admission stayed clear, startup tokens are absent and the
+power-domain row was never requested. It does not manufacture CLOSED or STOPPED.
+Configured THS disable and quiet IRQ71 precede suspension of the bootstrap and
+worker tasks, followed by PMIC parking. The first refusal deadline also bounds
+parking, cache publication, secondary-state checks and GIC restoration.
 
-A distinct thermal profile will record the reason and zero, one or two completed
-jobs. Status 2 will mean safely cleaned thermal refusal, separate from numerical
-mismatch. This integration is not implemented by the entry checkpoint. The
-operating point remains 492 MHz at 800 mV; PLL, domain, rail and SRAM ownership
-remain retained, with no in-place restart.
+The polling configuration keeps all peripheral interrupt enables zero. Admission
+checks the monitor's saved incoming IRQ71 enable state and its current pending
+and active bits before THS writes. Cleanup checks IRQ71 again after GIC
+restoration. Disabled-converter readback proves the configured stop only; analog
+conversion drain and release of inherited clocks remain unproved.
+
+The version-3 session is 616 bytes, with a 392-byte boot payload. Its consumed
+160-byte thermal suffix supplies a distinct owner, authority, four evidence
+hashes, APB1 selection/rate and the GPADC configuration choice. Exact image layout
+and immutable profile markers reject cross-profile, truncated and extra records.
+The thermal owner must differ from all four existing provider owners. Physical
+records retain the existing THS electrical, clock, SID and exclusion requirements.
+Supervision covers matched CLOSE/local stop or proved NEVER_STARTED, followed by
+configured THS stop and provider parking. It grants no clock release.
+
+A distinct 112-byte receipt records completed jobs, the first refusal reason and
+the fixed cleanup deadline in 24 MHz counter ticks. Status 0 requires two matching
+jobs. Status 1 preserves a numerical mismatch even when thermal refusal follows.
+Status 2 means a safely cleaned thermal refusal after zero or one matching job.
+Sensor or ownership faults cannot produce a normal-return receipt. The original
+numerical and checkpoint receipts remain 88 bytes. After validated reports and
+full DRAM restoration, nonzero normal outcomes also carry the existing kernel
+controlled-outcome fields for ROM continuity. Their failed numerical or refused
+work status remains unchanged; restore failures publish no controlled outcome.
+
+The thermal image adds no task or stack. Compared with the selected numerical
+image, application storage grows by 640 bytes and the receipt by 24 bytes. The
+first measured build adds 17,656 code bytes and 384 read-only data bytes. Normal
+monitoring runs every 25 ms. A modeled five-channel sample executes 19 MMIO reads,
+one status-clear write and 39 counter queries; a successful work reservation uses
+two counter queries. Startup and initial admission retain one-tick waits.
+
+Evidence in `npu-finite-thermal-20261024` covers linked native THS operations,
+policy, claims, caller cleanup, native receipt publication and host parsing.
+Registers, scheduling, coherence and engine completion remain modeled at their
+stated boundaries. Physical thermal qualification remains outstanding. The
+operating point stays 492 MHz at 800 mV; PLL, domain, rail and clock leases remain
+retained, with no in-place restart or speculative voltage transition.
 
 ## Finite numerical execution leaves USB to ROM
 

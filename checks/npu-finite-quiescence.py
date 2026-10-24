@@ -7,10 +7,11 @@ from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 p=argparse.ArgumentParser(description=__doc__)
+p.add_argument('--thermal',action='store_true',help='check thermal stop acknowledgements and fixed drain deadline')
 p.add_argument('--case',action='append',help='Run only a named case; preserve completed evidence separately')
 for n in ('elf','evidence'):p.add_argument('--'+n,type=Path,required=True)
 a=p.parse_args();root=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf,layout_names=('a733_npu_reserved','a733_npu_startup','a733_npu_startup_config','a733_platform_locks','a733_pmic','a733_pmic_slot','a733_rail_borrow','npu_convolution','npu_service','a733_power_domains','a733_power_domain_ops','a733_power_service_config','a733_pmic_ops','a733_rail_leases'))
+spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf,layout_names=('a733_npu_reserved','a733_npu_startup','a733_npu_startup_config','a733_platform_locks','a733_pmic','a733_pmic_slot','a733_rail_borrow','npu_convolution','npu_service','a733_power_domains','a733_power_domain_ops','a733_power_service_config','a733_pmic_ops','a733_rail_leases','npu_finite_thermal'))
 with a.elf.open('rb') as stream:
     dwarf=ELFFile(stream).get_dwarf_info();objects=[]
     for cu in dwarf.iter_CUs():
@@ -22,6 +23,7 @@ with a.elf.open('rb') as stream:
             fields={x.attributes['DW_AT_name'].value.decode():int(x.attributes['DW_AT_data_member_location'].value) for x in die.get_DIE_from_attribute('DW_AT_type').iter_children() if x.tag=='DW_TAG_member' and 'DW_AT_name' in x.attributes};objects.append((app,fields))
 assert len(objects)==1;app,f=objects[0];pmic=app+f['pmic'];pl=image.layouts['a733_pmic'];slot=image.layouts['a733_pmic_slot'];locks=app+f['locks'];ll=image.layouts['a733_platform_locks'];conv=app+f['reserved']+image.layouts['a733_npu_reserved']['convolution'];cl=image.layouts['npu_convolution'];service=conv+cl['service'];sl=image.layouts['npu_service'];startup=app+f['startup'];deadline=startup+image.layouts['a733_npu_startup']['config']+image.layouts['a733_npu_startup_config']['deadline_us'];cases=[]
 variants=['success','closed-missing','stopped-missing','wrong-client','provider-held','provider-busy','active-request','slot-live','borrow-live','mutex-held','park-timeout','irq-enabled','irq-pending','irq-active','irq-RWP','mapping-failure','checkpoint-idle','checkpoint-active-finishes','checkpoint-unreaped-slot']
+if a.thermal:variants=['success','thermal-never-started','thermal-not-stopped','thermal-park-deadline','thermal-late-IRQ']
 if a.case:
     assert set(a.case)<=set(variants),a.case
     variants=a.case
@@ -36,6 +38,14 @@ for variant in variants:
     for name,v in [('client',client),('bootstrap_task',bootstrap),('pmic_task',provider),('used',1),('stopped',int(variant!='stopped-missing'))]:put(app+f[name],v,4 if name in ('used','stopped') else 8)
     put(conv+cl['closed'],int(variant!='closed-missing'),4);put(service+sl['worker'],worker);put(pmic+pl['active'],8,4);put(deadline,3000000)
     put(locks+ll['mutex'],0x43001000);put(locks+ll['mutex']+8,0x43001100)
+    if a.thermal:
+        thermal=app+f['thermal'];tl=image.layouts['npu_finite_thermal']
+        put(thermal+tl['clock'],app+f['clock']);put(thermal+tl['deadline'],3000000)
+        put(thermal+tl['gate'],((1500000 if variant=='thermal-park-deadline' else 3000000)<<6)|4)
+        put(thermal+tl['stopped'],int(variant!='thermal-not-stopped'),4)
+        if variant=='thermal-never-started':
+            put(app+f['stopped'],0,4);put(app+f['never_started'],1,4);put(conv+cl['closed'],0,4)
+        if variant=='thermal-late-IRQ':put(0x03400208,128,4)
     state={'time':1000000,'suspended':[],'delays':0,'polls':0,'writes':[]}
     if variant=='provider-held':put(pmic+pl['held'],1,4)
     if variant=='provider-busy':put(pmic+pl['busy'],1,4)
@@ -123,7 +133,7 @@ for variant in variants:
         assert parked==(variant!='checkpoint-unreaped-slot'),(variant,state)
         assert state['suspended']==[0],(variant,state)
         assert state['polls']==({'checkpoint-idle':0,'checkpoint-active-finishes':1,'checkpoint-unreaped-slot':0}[variant]),(variant,state)
-    elif variant=='success':
+    elif variant in ('success','thermal-never-started'):
         assert u.reg_read(UC_ARM64_REG_X0)==1 and quiescent and parked,(variant,state)
         assert state['suspended']==[worker,bootstrap,provider],state
     else:assert u.reg_read(UC_ARM64_REG_X0)==0 and not quiescent,(variant,state)

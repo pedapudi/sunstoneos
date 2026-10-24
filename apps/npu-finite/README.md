@@ -32,7 +32,15 @@ The coordinator must supply fresh physical admission and review the changed norm
 
 Before uploading, the host must save and hash the complete exclusive DRAM reservation `0x41000000..0x42200000`. After one bounded launch, it must confirm a responsive new ROM instance and copy the monitor report, platform log and return receipt. Only a validated normal completion permits restoring and comparing saved DRAM. Old SRAM must never overwrite the newly running ROM. Missing or uncertain completion retains ownership and requires explicit recovery.
 
-This software image has modeled handoff evidence and completed root source review of its architecture/reset sequence and host capture path. Review records are `npu-finite-return-20261018/root-return-source-review.json` and `npu-finite-host-20261018/root-host-source-review.json`. Target-specific admission, physical inference and physical ROM return remain outstanding. Neither source review nor instruction checks establish those physical results.
+On 2026-10-24 the coordinator ran the frozen numerical image `9e4adabf` on
+port 3-1. Both jobs completed and were reaped, but both copied outputs failed the
+reference comparison. CLOSE, local stop, provider parking and normal ROM return
+completed; the host restored all 18 MiB of saved DRAM. The immutable session is
+`processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json` in the
+evidence cache. It records status 1 and `functional_success=false`. Numerical
+correctness remains unresolved, and retained PLL/domain/rail state forbids an
+unreviewed repeat startup. This result does not qualify the separate thermal
+profile, whose software evidence is described in [ENTRY.md](ENTRY.md).
 
 The application-local `host.py` implements the returned-RAM host path. `prepare` requires explicit image, manifest, session, admission, compiler, linker and objcopy paths. It reuses the original NPU image/session/request producers and protected SRAM launcher. `validate --bundle PATH` verifies all copied evidence, current host source hashes, exact ELF load bytes, request packets and launcher hash without accessing hardware. The prepared bundle includes evidence and source snapshots; it creates no qualified defaults.
 
