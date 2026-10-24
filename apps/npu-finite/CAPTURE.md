@@ -69,7 +69,7 @@ For a mask and expected value, acceptance means `(word & mask) == expected`.
 | `0x02003b10` | Clock-management mode: bit0 clear |
 | `0x02003b14` | Clock-management mode: bit0 clear |
 | `0x02003b1c` | Clock-management mode: bit0 clear |
-| `0x020022a0` | PLL_NPU: mask `0xb8000000` must be zero; bits outside `0xf870ff02` must also be zero |
+| `0x020022a0` | PLL_NPU: mask `0xb8000000` must be zero; bits outside `0xf970ff02` must also be zero; capture inherited bit24 and require it unchanged throughout startup |
 | `0x020022a4` | PLL_NPU pattern: bit0 clear |
 | `0x020022a8` | PLL_NPU pattern: bit31 clear |
 | `0x020022ac` | PLL_NPU bias: mask `0xff100000`, expected `0x30000000` |

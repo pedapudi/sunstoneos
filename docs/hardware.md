@@ -2122,6 +2122,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Shared-provider admission](pmic-consumers.md) retains two actual observations
   around the required settling interval and checks their ownership before readiness.
   Focused native instruction checks pass with modeled scheduling and hardware.
+  On port `3-1`, a guarded configuration capture and a separate returning
+  DCDC2 snapshot now establish the current pin/fabric configuration, coherent
+  domain 4 ON, and an enabled supply programmed to 800 mV. The PMIC request
+  completed and was reaped before provider park and ROM return. No voltage
+  change or NPU access occurred. Evidence: `processor-completion-20261024/port-3-1/`
+  under `npu-entry`, `pmic-access` and `pmic-supply`.
+  Observed PLL_NPU bit 24 is now preserved and checked for drift during startup,
+  following the pinned clock-driver implementation. Focused checks preserve
+  MMIO counts and reject drift and other unsupported bits. Neither the capture
+  nor the startup correction establishes physical NPU execution.
   Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
   release. [Trusted convolution registration](npu-convolution.md) authenticates
@@ -2199,9 +2209,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass; modeled output does not establish numerical inference. The supervised
   image runs the power service and the startup sequencer; focused checks pass
   with modeled device responses. Its host path passes 33 packaging/capture
-  cases and five frozen-input binding regressions. Startup admits only a
-  disabled PLL_NPU and an OFF domain 4; unsuitable supply voltage remains
-  unsupported. Concrete boot
+  cases and five frozen-input binding regressions. Startup requires a disabled PLL_NPU and admits coherent OFF or ON domain 4
+  through the shared owner; unsuitable supply voltage remains unsupported. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 

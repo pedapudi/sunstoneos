@@ -15,7 +15,7 @@ Source diagnosis continues without board access; the failed execution boundary
 is unknown.
 
 **Port `3-1` is usable:** USB is its only power source. Its last validated ROM
-return is `/dev/bus/usb/003/040`, identity `[7, 1614, 1096999, 0, 0]`.
+return is `/dev/bus/usb/003/041`, identity `[7, 1618, 1097000, 0, 0]`.
 Refresh host metadata before access. In this powered lifetime, CPU0 publication,
 all-core preparation, first task entry, task switching and a bounded workload
 passed. All eight cores completed 32 floating-point rounds, background scheduling
@@ -26,7 +26,9 @@ ROM with owned DRAM restored. Evidence:
 its preceding records. A returning thermal check measured all five sensors
 below 40°C; the affected interrupt-controller state was then checked against
 the saved baseline. Thermal acquisition is disabled, with its configuration and
-clock ownership retained.
+clock ownership retained. A subsequent DCDC2-only PMIC snapshot completed,
+reaped its request, parked the provider and returned to ROM. It reports the
+NPU rail enabled and programmed to 800 mV. This is not an analogue measurement.
 
 **Current priority: CPU, GPU and NPU robustness**, including power and thermal
 management. Complete startup, repeated operation, interrupt delivery, bounded
@@ -35,11 +37,13 @@ not establish physical operation.
 
 **Open work:**
 
-1. Integrate a bounded return path with the current production CPU startup and
-   stackless fault capture. Today's physical diagnostics use the older frozen
+1. Qualify the current production CPU startup and stackless fault capture
+   through the bounded returning harness. Today's physical diagnostics use the older frozen
    native image; their prepared-lifetime success does not explain the earlier
-   cold failures. Repeated cold startup, sustained scheduling, per-core timers,
-   runtime core removal and cluster power-down remain unqualified or incomplete.
+   cold failures. The current-source finite harness is integrated and checked;
+   its physical run/capture adapter is being completed. Repeated cold startup,
+   sustained scheduling, per-core timers, runtime core removal and cluster
+   power-down remain unqualified or incomplete.
 2. Locate the GPU's failed execution boundary from the frozen image and its
    host inputs before another physical attempt. The entry capture passed eleven
    configuration predicates and confirmed seven secondaries OFF. The numerical
@@ -47,9 +51,23 @@ not establish physical operation.
    at an inapplicable boot-input guard; a reviewed same-instance SRAM rollback
    recovered that refusal. The corrected host checks the direct forced-FEL ROM
    entry. Numerical GPU operation and normal shutdown remain unqualified.
+   A passive capture on port `3-1` found coherent domain 5 policy/status ON
+   with engine clocks gated and reset asserted. The first checkpoint requires
+   OFF and was therefore not launched. The replacement proves that providers
+   were never constructed and retains CPU interrupt checks, without accessing
+   GPU power registers. Exclusive RAM and exclusion of external DMA writers
+   remain mandatory. The observation does not identify the failed second
+   board's state or execution boundary.
 3. Prepare the existing single-core NPU finite path for numerical execution and
-   normal ROM return, using the production startup and power owner. The native
-   NPU board image now has thermal admission, independent supervision and bounded
+   normal ROM return, using the production startup and power owner. A guarded
+   configuration capture on port `3-1` passed with scratch restoration. Domain 4
+   is coherently ON, and the fabric and pin settings match the native contract.
+   PLL_NPU reads `0x41104500`. The corrected startup preserves inherited bit 24
+   and rejects drift or other unsupported bits, following pinned clock-driver
+   sources. The DCDC2 supply observation now passed with native settle/reap/park
+   and ROM return. Numerical NPU execution is still unqualified. Evidence:
+   `processor-completion-20261024/port-3-1/npu-entry/session.json` and
+   `pmic-supply/session.json`. The native NPU board image now has thermal admission, independent supervision and bounded
    accepted-work draining, with software checks. Its current multicore USB
    lifetime has no normal return, so it is not the next finite board test.
 4. Qualify power and thermal behavior after reliable numerical execution. The
@@ -67,6 +85,14 @@ not establish physical operation.
 6. Publishing mimus `9c57286b7` and each physical CPU clock or PMIC voltage
    change still require their specific approvals. Independent implementation
    and modeling continue without those operations.
+
+Both finite accelerator host parsers now use their actual native monitor
+identifiers, with producer-derived regression evidence. The earlier fixtures
+had duplicated incorrect parser constants. That defect would reject a returned
+result; it does not explain the GPU non-return. The base single-core monitor
+also now reports cleanup failure when interrupt restoration cannot be verified;
+its existing host retains ownership on that result. These new monitor bytes
+still need physical qualification.
 
 The finite GPU host permits 60 seconds of native execution plus 30 seconds for
 ROM discovery. Explicitly discardable, exclusively owned RAM avoids unnecessary
