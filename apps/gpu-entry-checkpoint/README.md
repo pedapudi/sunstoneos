@@ -66,12 +66,14 @@ The entire application scan reads 638,048 bytes per proof invocation. It uses
 character accesses, which may inspect structure padding without aliasing
 violations. Normal return performs the proof five times, reading about 3.1 MiB
 of application state; each proof also checks two 1,024-byte ledgers. These are
-CPU counts, not physical latency measurements. No GPU instruction, allocation,
-shader compilation, firmware start or power transition runs.
+CPU counts, not physical latency measurements. Compared with the first
+checkpoint, this variant removes eight successful-path GPU-CCU/PCK reads and
+adds four GIC reads plus one counter sample after restoration. No GPU instruction,
+allocation, shader compilation, firmware start or power transition runs.
 
 ## Admission and capture
 
-The distinct profile is `gpu-entry-memory-checkpoint-v1`. The producer reuses
+The distinct profile is `gpu-entry-memory-checkpoint-v2`. The producer reuses
 the finite bundle serializer and exact-byte validator with explicitly named
 checkpoint policies. The host uses the shared returning transport and the
 reviewed five-word direct-ROM guard from commit `2f086241`. It never tests the
@@ -88,15 +90,35 @@ though this image does not write their payloads.
 | CPU image, private state and monitor | `0x41000000–0x42200000` | Restore after validated return, or explicitly authorize discard |
 | Original WB and NC pools | `0x48000000–0x79000000` | Same choice; both complete ranges require authority |
 
-The passive entry record requires the already documented CCU gates to be off,
-PCK command/status low four bits to be zero, and INTID 95 disabled, inactive and
-not pending. The return checks use the existing 32-bit reads at `0x02002b20`,
-`0x02002b24`, `0x07065000`, `0x07065008` and the GIC distributor. They never read
-the gated GPU register window. These facts and exclusion must remain valid
-through return. This image grants no PMIC, GPU clock or GPU power operation.
+The passive entry record requires INTID 95 disabled, inactive and not pending,
+and exclusion of all device and remote writers through return. The inherited
+monitor already checks that interrupt at entry. The checkpoint keeps the four
+GIC-only reads of distributor RWP and INTID 95 enable, pending and active state,
+including a final check after GIC restoration followed by a deadline check.
+Current CPU/GIC entry and continuity facts protect those accesses.
+
+This variant performs no GPU-engine, GPU-CCU, PPU or PCK register access. The
+complete zero application and empty allocation ledgers prove that it never
+constructed or opened a provider. They do not prove absence of preexisting
+DMA; full RAM ownership and writer exclusion must come from the coordinator.
+The inherited GPU/PCK state is unobserved and unchanged by this software, not
+qualified. This image grants no PMIC, GPU clock or GPU power operation.
+
+On 2026-10-24, a safe passive capture on port 3-1 observed PCK domain-5 policy
+and status low nibbles both 8. The earlier OFF-only checkpoint was not launched.
+An OFF requirement belonged to the normal GPU shutdown proof and was unnecessary
+at this never-open boundary. The normal GPU workload's OFF-only predicate is
+unchanged. There is one checkpoint image for either inherited state.
+
+The frozen `a733_gpu_power.c` (`410cbb99…`) accepts domain status 0 or 8 in
+`DOMAIN_STATE` before proceeding through timing writes and its ON request.
+It therefore would not refuse solely because status was already ON. This source
+finding and the port 3-1 capture do not establish port 3-3's earlier state or
+diagnose its failed attempt.
+
 The shared 592-byte session retains legacy owner/supply fields for syntactic
 admission; no provider consumes them here. Its `gpu` evidence reference and
-`cold_master` token bind passive isolation and exclusion only.
+`cold_master` token bind interrupt state and writer exclusion only.
 
 A root review binds the exact image, launcher, source closure, board instance,
 port, RAM disposition and supervisor. Use the existing direct retained runner;
@@ -132,8 +154,13 @@ python3 apps/gpu-entry-checkpoint/host.py \
 `check.py` exercises the actual checkpoint proof, publication and return
 instructions with the existing architectural model. It checks binding, ownership,
 ledger and pointer refusals, EL1h success, EL1t refusal and publication expiry.
-`host-check.py` checks the real producer, cross-profile refusals and capture
-adapter using the native model's written reports. Neither check accesses hardware.
+The focused return checks use `--return-only --cases normal late-irq
+late-irq-during-restore`. They fail on any GPU-engine, GPU-CCU, PPU or PCK
+access, exercise normal return with inherited domain ON, and reject a pending
+interrupt introduced before or during EL3 restoration. The unchanged resource
+and ownership checks reuse their earlier evidence. `host-check.py` checks the
+real producer, cross-profile refusals and capture adapter using the native
+model's written reports. Neither check accesses hardware.
 
 The larger mimus proposal remains separate: one K=4, N=16, 32-row job before
 and after the actual OS thermal caller's healthy CLOSE→OPEN. Weights
@@ -143,11 +170,14 @@ ending the output borrow. That proposal needs its own model/arena/output
 reservations and mimus lease proof. It is paused until the earlier physical
 boundary is understood; no runnable mimus qualification artifact is claimed.
 
-The frozen candidate is
-`gpu-entry-checkpoint-20261024/final-image/build/checkpoint.elf` under the evidence
-cache, SHA-256 `232b773ce60c021ce7388342e9a849c22123e169dd811c2c10444badcd98268f`.
-Ten focused native/model cases and nine producer/capture cases passed.
-`final-native/` preserves the actual model-written reports; `final-host/` holds
-the synthetic bundle and adapter journals. `snapshot/manifest.json` binds the
-source, object, image, launcher and check artifacts. `proposal-DRAFT.json` lists
-the remaining coordinator bindings; it is not physical admission.
+The current candidate is
+`gpu-entry-checkpoint-private-20261024/final-image/build/checkpoint.elf` under
+the evidence cache, SHA-256
+`8974f81a282c213f36e95f76da617399f4d9886999df5ca0db518c8a0116ecb7`.
+`final-native/` preserves the focused return results and actual model-written
+reports; `final-host/` holds the synthetic bundle and adapter journals. The
+earlier ten native checks remain in `gpu-entry-checkpoint-20261024/final-native/`;
+their unchanged resource and retirement evidence is reused.
+`snapshot/manifest.json` binds the current source, object, image, launcher and
+check artifacts. `proposal-DRAFT.json` lists the remaining coordinator bindings;
+it is not physical admission.

@@ -17,7 +17,7 @@ def validate_reports(monitor, platform, receipt, packet, prepared):
     magic, version, size, epoch, generation, first, second, count, lines = struct.unpack_from('<QIIQQ4I', packet)
     words = struct.unpack_from('<64I', packet, 48); start, end = struct.unpack_from('<2Q', packet, 304)
     g = prepared['geometry']; clean_lines = (g['clean_end'] - g['clean_start']) // 64
-    require(prepared['execution_profile'] == 'gpu-entry-memory-checkpoint-v1', 'Wrong entry checkpoint profile.')
+    require(prepared['execution_profile'] == 'gpu-entry-memory-checkpoint-v2', 'Wrong entry checkpoint profile.')
     require(m[:3] == (0x4153373347535232, prepared['epoch'], prepared['generation']) and
             m[3:6] == (5, 0, ENTRY_MEMORY_READY) and m[7] == 1, 'No matched pre-provider checkpoint.')
     require((magic, version, size, epoch, generation, first, second, count) ==

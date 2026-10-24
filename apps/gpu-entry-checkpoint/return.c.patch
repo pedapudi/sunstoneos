@@ -6,7 +6,7 @@
  #include "../gpu-render/application.h"
  #include "../gpu-render/session.h"
  #include "a733_storage_digest.h"
-@@ -18,61 +19,18 @@
+@@ -18,69 +19,24 @@
      if(now<last_tick||now>=deadline)return 0;
      last_tick=now;return 1;
  }
@@ -67,11 +67,22 @@
 -    expected.deadline_us=c->diagnostic_deadline/24;
 -    if(memcmp(&app.session,&expected,sizeof(expected))||app.compute_sequence[0]!=1||
 -       app.compute_sequence[1]!=2||!gpu_return_allocations())return 0;
+-    return gpu_return_device_quiet();
 +    if(!gpu_return_allocations())return 0;
-     return gpu_return_device_quiet();
++    return gpu_checkpoint_interrupt_quiet();
  }
- int gpu_return_device_quiet(void)
-@@ -118,7 +76,7 @@
+-int gpu_return_device_quiet(void)
++int gpu_checkpoint_interrupt_quiet(void)
+ {
+     __asm__ volatile("dsb sy":::"memory");
+-    return !(mmio_read(0x02002b20)&0x80000000)&&!(mmio_read(0x02002b24)&0x10001)&&
+-        !(mmio_read(0x07065000)&15)&&!(mmio_read(0x07065008)&15)&&
+-        !(mmio_read(GICD_BASE)&0x80000000)&&
++    return !(mmio_read(GICD_BASE)&0x80000000)&&
+         !((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|mmio_read(GICD_BASE+0x308))&0x80000000);
+ }
+ static int wait_clear(uintptr_t address,uint32_t bits,uint64_t deadline)
+@@ -118,7 +74,7 @@
          "mrs %0,CurrentEL\n mrs %1,sctlr_el3\n mrs %2,daif\n mrs %3,scr_el3\n mrs %4,ctr_el0\n mrs %5,spsr_el3\n mrs %6,sctlr_el1"
          :"=r"(el),"=r"(control),"=r"(flags),"=r"(scr),"=r"(ctr),"=r"(caller),"=r"(el1)::"memory");
      if((el1&0x1005)||el!=12||(control&0x02001005)||(flags&0x3c0)!=0x3c0||!(scr&1)||
@@ -80,7 +91,7 @@
      uint64_t start=counter(),deadline=start+2*A733_SMP_COUNTER_HZ;
      if(deadline<start||start>=c->base.diagnostic_deadline)fail(2);
      if(deadline>c->base.diagnostic_deadline)deadline=c->base.diagnostic_deadline;
-@@ -127,10 +85,10 @@
+@@ -127,26 +83,27 @@
      uintptr_t private_start=(uintptr_t)__gpu_private_start;
      uintptr_t private_end=((uintptr_t)__gpu_private_end+63)&~(uintptr_t)63;
      if(receipt->magic!=GPU_RETURN_RECEIPT_MAGIC||receipt->epoch!=c->base.epoch||
@@ -95,7 +106,10 @@
         receipt->deadline<=start||receipt->deadline>c->base.diagnostic_deadline||
         receipt->log_length!=RESULT->log_length)fail(3);
      if(deadline>receipt->deadline)deadline=receipt->deadline;
-@@ -140,13 +98,13 @@
+     if(!state(c)||!bounded(deadline))fail(4);
+     if(!restore(s,deadline))fail(5);
++    if(!gpu_checkpoint_interrupt_quiet()||!bounded(deadline))fail(6);
+     /* Only published Nonsecure bytes have been consumed. EL3 VA maintenance
       * cannot publish Nonsecure EL1 cache lines and is deliberately absent. */
      volatile struct gpu_return_result *out=(void *)GPU_RETURN_RESULT_ADDRESS;
      out->magic=0;out->version=1;out->bytes=sizeof(*out);out->epoch=c->base.epoch;out->generation=c->base.generation;

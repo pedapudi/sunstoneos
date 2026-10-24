@@ -35,7 +35,7 @@ gpu_ddr = dump('pool-ddr.json', fact('a733-ddr-reservation-v1', exclusive=True, 
     remote_writers_excluded=True, contents_discardable=True, ranges=[[0x48000000,0x79000000]], evidence=[ref]))
 platform = dump('platform.json', fact('a733-gpu-entry-checkpoint-platform-v1',
     entry_conditions_established=True, conditions={n:ref for n in prep.PLATFORM_CONDITIONS}))
-passive = dump('passive.json', fact('a733-gpu-entry-checkpoint-passive-v1', reservation=100, cold_master=200,
+passive = dump('passive.json', fact('a733-gpu-entry-checkpoint-passive-v2', reservation=100, cold_master=200,
     entry_conditions_established=True, provider_access_authorized=False, conditions={n:ref for n in prep.PASSIVE_CONDITIONS}))
 raw = bytearray((Path.home()/'.cache/sunstoneos/evidence/gpu-single-core-20261018/provider-valid-fixture/fixtures/session-template.bin').read_bytes())
 raw[80:112] = bytes.fromhex(passive['sha256']); struct.pack_into('<Q', raw, 192, 200)
@@ -43,11 +43,11 @@ template = a.output/'session-template.bin'; template.write_bytes(raw)
 launcher = a.output/'launcher'; launcher.mkdir()
 clang = Path('/usr/lib/llvm-21/bin/clang'); lld = Path.home()/'.cache/sunstoneos/host/usr/bin/ld.lld-21'
 prep.original.build_launcher(launcher, clang, lld)
-review = dump('review-MODELED.json', fact('a733-gpu-entry-checkpoint-review-v1', reviewed=True,
+review = dump('review-MODELED.json', fact('a733-gpu-entry-checkpoint-review-v2', reviewed=True,
     execution_profile=prep.PROFILE, build_id=build.hex(), supervisor='modeled-supervisor', ram_disposition='discard',
     conditions={n:ref for n in prep.REVIEW_CONDITIONS}, host_sources={n:sha(ROOT/n) for n in prep.HOST_SOURCES},
     launcher_sha256=sha(launcher/'launch.bin')))
-admission = fact('a733-gpu-entry-checkpoint-admission-v1', execution_profile=prep.PROFILE,
+admission = fact('a733-gpu-entry-checkpoint-admission-v2', execution_profile=prep.PROFILE,
     supervisor='modeled-supervisor', session_template_sha256=sha(template), reservation=100, ram_disposition='discard',
     ddr=ddr, gpu_ddr=gpu_ddr, platform=platform, gpu=passive, root_review=review, one_attempt=True,
     supervision={n:ref for n in ('never-open-empty-resources-and-ROM-retirement', 'failure-retain-until-whole-power-removal',
@@ -67,7 +67,7 @@ bad = copy.deepcopy(admission); bad['schema'] = 'a733-gpu-finite-entry-v1'
 refused('normal-admission-refused', lambda: prep.validate_admission(bad,h,bytes(raw),build))
 for name, field, change in [('provider-authority-refused','gpu',lambda v:v.update(provider_access_authorized=True)),
                           ('partial-pool-reservation-refused','gpu_ddr',lambda v:v.update(ranges=[[0x48000000,0x48001000]])),
-                          ('missing-passive-condition-refused','gpu',lambda v:v['conditions'].pop('pck-command-and-status-zero'))]:
+                          ('missing-passive-condition-refused','gpu',lambda v:v['conditions'].pop('no-device-or-remote-writes-through-return'))]:
     bad = copy.deepcopy(admission); value = json.loads(Path(bad[field]['path']).read_bytes()); change(value)
     bad[field] = dump(name+'.json', value)
     refused(name, lambda: prep.validate_admission(bad,h,bytes(raw),build))
@@ -101,6 +101,8 @@ results['actual-adapter-checkpoint-journals'] = True
 reports = [(a.native/n).read_bytes() for n in ('monitor.bin','platform.bin','receipt.bin','packet.bin')]
 changed = list(reports); value = bytearray(changed[2]); struct.pack_into('<Q',value,32,0); changed[2] = bytes(value)
 refused('normal-receipt-status-refused', lambda: host.report.validate_reports(*changed,prepared))
+old_profile = copy.deepcopy(prepared); old_profile['execution_profile'] = 'gpu-entry-memory-checkpoint-v1'
+refused('v1-profile-refused', lambda: host.report.validate_reports(*reports,old_profile))
 dump('result.json', dict(passed=True, physical_access=False, physical_admission_created=False,
     synthetic_fixtures_only=True, image_sha256=h, launcher_sha256=sha(launcher/'launch.bin'), cases=results,
     scope='Actual checkpoint producer/validator and local run_once with captured modeled native reports; shared transport/preload modeled.'))

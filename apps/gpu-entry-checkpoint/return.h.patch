@@ -1,6 +1,6 @@
 --- return.h
 +++ checkpoint-return.h
-@@ -18,9 +18,9 @@
+@@ -18,16 +18,16 @@
      uint32_t words[64];
      uint64_t cleanup_start,cleanup_end;
  };
@@ -12,3 +12,11 @@
  struct gpu_return_receipt {
      uint64_t magic,epoch,generation,lease,status,complete;
      uint64_t clean_start,clean_end,wb_start,wb_end,clean_lines,deadline,log_length;
+ };
+ extern struct gpu_return_receipt gpu_return_receipt;
+ int gpu_return_allocations(void);
+-int gpu_return_device_quiet(void);
++int gpu_checkpoint_interrupt_quiet(void);
+ _Noreturn void gpu_finite_smc(unsigned status);
+ int gpu_finite_return_ready(void);
+ _Noreturn void gpu_return_finish(const struct gpu_boot_contract *,const struct gpu_return_gic *);

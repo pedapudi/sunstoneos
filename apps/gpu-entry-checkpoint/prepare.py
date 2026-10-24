@@ -17,15 +17,14 @@ def module(name, path):
 
 finite = module('checkpoint_finite_serializer', ROOT / 'apps/gpu-finite/prepare.py')
 original = finite.original; base = finite.base; require = finite.require
-PROFILE = 'gpu-entry-memory-checkpoint-v1'
-SCHEMA = 'a733-gpu-entry-checkpoint-bundle-v1'
+PROFILE = 'gpu-entry-memory-checkpoint-v2'
+SCHEMA = 'a733-gpu-entry-checkpoint-bundle-v2'
 HOST_SOURCES = tuple(n for n in finite.HOST_SOURCES if n not in ('apps/gpu-finite/host.py', 'apps/gpu-finite/report.py')) + (
     'apps/gpu-entry-checkpoint/prepare.py', 'apps/gpu-entry-checkpoint/host.py', 'apps/gpu-entry-checkpoint/report.py')
 PLATFORM_CONDITIONS = {'primary-cache-transition-and-secondary-off', 'cold-cache-and-dirty-alias-exclusion',
     'dual-pas-dram', 'exclusive-cpus-memory-dma', 'remote-writers-excluded', 'physical-code-publication',
     'physical-counter-continuity', 'usb-clock-power-reset-ownership', 'usb-supplies-stable-and-writers-excluded'}
-PASSIVE_CONDITIONS = {'gpu-ccu-gates-off', 'pck-command-and-status-zero', 'gpu-int95-disabled-inactive-clear',
-                      'no-device-or-remote-writes-through-return'}
+PASSIVE_CONDITIONS = {'gpu-int95-disabled-inactive-clear', 'no-device-or-remote-writes-through-return'}
 REVIEW_CONDITIONS = {'architecture-reset-reviewed', 'never-open-empty-resource-proof-reviewed',
                      'private-publication-and-EL1h-return-reviewed', 'failure-retention-reviewed'}
 
@@ -41,7 +40,7 @@ def image_profile(path, manifest):
     def at(name):
         require(name in symbols and symbols[name][0], 'Missing checkpoint symbol: ' + name); return symbols[name][0]
     for name in ('gpu_entry_checkpoint', 'gpu_checkpoint_ready', 'gpu_return_finish', 'gpu_return_reset',
-                 'gpu_finite_smc', 'gpu_return_allocations', 'gpu_return_device_quiet'): at(name)
+                 'gpu_finite_smc', 'gpu_return_allocations', 'gpu_checkpoint_interrupt_quiet'): at(name)
     require(at('sd_single_core_entry') == 0x41000000 and not any(n in symbols for n in
         ('a733_smp_diagnostic_start', 'a733_native_usb_init', 'a733_pmic_poll', 'pvr_gpu_service_init',
          'a733_cpu_start_init', 'a733_cpu_primary_continue', 'FreeRTOS_SGI_Handler')), 'Provider or multicore entry linked.')
@@ -67,7 +66,7 @@ def validate_admission(record, image_hash, template, build, cache=None, frozen=F
         require(sha(cache[name]) == ref['sha256'], 'Changed checkpoint evidence.'); return cache[name]
     require(len(template) == 592, 'Checkpoint requires exactly 592 session bytes.')
     original.session_check(template)
-    require(record.get('schema') == 'a733-gpu-entry-checkpoint-admission-v1' and record.get('execution_profile') == PROFILE
+    require(record.get('schema') == 'a733-gpu-entry-checkpoint-admission-v2' and record.get('execution_profile') == PROFILE
             and record.get('image_sha256') == image_hash and record.get('session_template_sha256') == sha(template)
             and type(record.get('reservation')) is int and 0 < record['reservation'] < 2**64, 'Distinct checkpoint admission required.')
     disposition = record.get('ram_disposition', 'restore')
@@ -89,9 +88,9 @@ def validate_admission(record, image_hash, template, build, cache=None, frozen=F
             and set(platform.get('conditions', {})) == PLATFORM_CONDITIONS, 'Checkpoint CPU entry facts differ.')
     for ref in platform['conditions'].values(): evidence(ref)
     # The shared 592-byte wire format calls this binding gpu/cold_master. Here
-    # it authenticates passive isolation and exclusion only, never an OPEN grant.
+    # it authenticates interrupt state and writer exclusion only, never an OPEN grant.
     passive = json.loads(evidence(record['gpu']))
-    require(passive.get('schema') == 'a733-gpu-entry-checkpoint-passive-v1' and bound(passive)
+    require(passive.get('schema') == 'a733-gpu-entry-checkpoint-passive-v2' and bound(passive)
             and passive.get('reservation') == record['reservation'] and passive.get('entry_conditions_established') is True
             and passive.get('provider_access_authorized') is False and type(passive.get('cold_master')) is int
             and 0 < passive['cold_master'] < 2**64 and set(passive.get('conditions', {})) == PASSIVE_CONDITIONS,
@@ -101,7 +100,7 @@ def validate_admission(record, image_hash, template, build, cache=None, frozen=F
             struct.unpack_from('<Q', template, 192)[0] == passive['cold_master'] and not record.get('payloads')
             and record.get('radio_ddr') is None, 'Checkpoint wire binding differs.')
     review = json.loads(evidence(record['root_review']))
-    require(review.get('schema') == 'a733-gpu-entry-checkpoint-review-v1' and bound(review) and review.get('reviewed') is True
+    require(review.get('schema') == 'a733-gpu-entry-checkpoint-review-v2' and bound(review) and review.get('reviewed') is True
             and review.get('execution_profile') == PROFILE and review.get('build_id') == build.hex()
             and review.get('supervisor') == supervisor and review.get('ram_disposition', 'restore') == disposition
             and set(review.get('conditions', {})) == REVIEW_CONDITIONS, 'Exact checkpoint return review required.')

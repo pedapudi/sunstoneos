@@ -13,8 +13,9 @@
          :"=r"(el),"=r"(ctr),"=r"(control));
      if(status||el!=4||(control&0x1005)!=0x1005||((ctr>>16)&15)!=4||
 -       ((ctr>>24)&15)!=4||!gpu_finite_return_ready()||!gpu_return_allocations()||
+-       !gpu_return_device_quiet())retain();
 +       ((ctr>>24)&15)!=4||!gpu_checkpoint_ready()||!gpu_return_allocations()||
-        !gpu_return_device_quiet())retain();
++       !gpu_checkpoint_interrupt_quiet())retain();
      __asm__ volatile("msr daifset,#15\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb":::"memory");
      uintptr_t start=(uintptr_t)__gpu_private_start,end=((uintptr_t)__gpu_private_end+63)&~(uintptr_t)63;
      uint64_t now=counter(),last=now,deadline=now+2*A733_SMP_COUNTER_HZ;

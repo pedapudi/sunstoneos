@@ -128,7 +128,7 @@ for dep in objects.glob('*.d'):
         dependencies[name] = sha(name)
 save('compiled-inputs.json', dependencies); save('frozen-bindings.json', bindings)
 save('image-objects.json', linked); save('identity.json', dict(identity=identity, build_id=build_id))
-save('manifest.json', dict(target='sunstone-a733-gpu-entry-checkpoint', execution_profile='gpu-entry-memory-checkpoint-v1',
+save('manifest.json', dict(target='sunstone-a733-gpu-entry-checkpoint', execution_profile='gpu-entry-memory-checkpoint-v2',
     workload='entry-memory-ready-no-providers', build_id=build_id, final_elf=sha(build / 'checkpoint.elf'),
     baseline_elf=BASE_HASH, physical_access=False, physical_eligible=False,
     root_architecture_and_admission_review_required=True))
