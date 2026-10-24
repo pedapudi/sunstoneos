@@ -22,25 +22,12 @@ from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'checks'))
 import harness
-from elftools.elf.elffile import ELFFile
-from elftools.dwarf.dwarf_expr import DWARFExprParser
 LAYOUTS=('npu_board_application','npu_board_session','a733_board_session','board_provider','board_application',
     'a733_native_usb','a733_npu_startup','a733_npu_startup_providers','a733_power_domains','a733_power_domain_row',
     'device_memory_pool','device_memory_allocation','device_memory_extent','a733_counter_clock','a733_clock_leases',
     'a733_platform_locks','npu_runtime','npu_service','a733_pmic','a733_pmic_config')
 WB,WB_END=0x48000000,0x78000000
 PARENT=8388608
-def variable(path,unit,name):
-    with path.open('rb') as f:
-        dwarf=ELFFile(f).get_dwarf_info()
-        for cu in dwarf.iter_CUs():
-            if not cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith(unit):continue
-            for die in cu.iter_DIEs():
-                if die.tag=='DW_TAG_variable' and die.attributes.get('DW_AT_name') and die.attributes['DW_AT_name'].value.decode()==name \
-                   and 'DW_AT_location' in die.attributes:
-                    ops=DWARFExprParser(dwarf.structs).parse_expr(die.attributes['DW_AT_location'].value)
-                    return ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dwarf.get_addr(cu,ops[0].args[0])
-    raise AssertionError((unit,name))
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
@@ -69,7 +56,7 @@ def main():
     struct.pack_into('<3I',session,L['a733_board_session']['fabric'],0x03000002,0x83000000,0x81000000)
     struct.pack_into('<3I',session,L['a733_board_session']['fabric_hz'],200000000,600000000,600000000)
     struct.pack_into('<Q',session,s['owner'],31);struct.pack_into('<I',session,s['pck_client'],4)
-    admitted=variable(a.image,'apps/npu-board/snapshot.c','admitted')
+    admitted=e.address('admitted',unit='apps/npu-board/snapshot.c')
     u.mem_write(admitted,bytes(session));put(admitted+808,1,4);put(admitted+812,1,4)
     ba=L['board_application']
     u.mem_write(board+ba['admitted_session'],bytes(session[:592]));u.mem_write(board+ba['session'],bytes(session[:592]))
@@ -118,7 +105,7 @@ def main():
         state['done']=False;u.reg_write(UC_ARM64_REG_SP,0x43ffeff0);u.reg_write(UC_ARM64_REG_LR,ret)
         for i,v in enumerate(args):u.reg_write(UC_ARM64_REG_X0+i,v)
         u.emu_start(e.address(name),0,count=400000000);assert state['done'],name;return u.reg_read(UC_ARM64_REG_X0)&0xffffffff
-    pool=e.address('boot_pool') if e.symbols.get('boot_pool') else variable(a.image,'platform/a733/memory_reservations.c','boot_pool')
+    pool=e.address('boot_pool') if e.symbols.get('boot_pool') else e.address('boot_pool',unit='platform/a733/memory_reservations.c')
     assert call('device_memory_pool_init_typed',pool,WB,WB,WB_END-WB,1,0)==1
     # The extended pool getter returns the pool once device preparation ends.
     hooks[e.address('a733_memory_reservations_init')]='pool';sites.add(e.address('a733_memory_reservations_init'))
@@ -158,7 +145,7 @@ def main():
     tasks={t[0]:t for t in state['tasks']}
     assert {k:tasks[k][1] for k in ('npu-boot','npu-client','npu-service')}=={'npu-boot':2,'npu-client':2,'npu-service':2},state['tasks']
     assert state['affinity']==[(usb0,1)],state['affinity']
-    binding=variable(a.image,'apps/npu-board/irq.c','binding')
+    binding=e.address('binding',unit='/irq.c')
     assert get(binding)==app+na['runtime']+L['npu_runtime']['service']
     record=dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
         providers={k:hex(v) for k,v in expected.items()},domain_rows=len(rows),parent=dict(cpu=hex(cpu),bytes=size),
