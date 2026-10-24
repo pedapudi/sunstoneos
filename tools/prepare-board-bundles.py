@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare frozen board-test bundles and queue submissions for the memory, GPU and NPU paths.
+"""Prepare frozen board-test bundles and queue submissions for the single-core, memory, GPU and NPU paths.
 
 The tool never contacts the board, never submits and never claims. It holds a
-fixed table of rows (docs/designs/board-bundles.md). For each row the caller
+fixed table of rows (docs/designs/board-bundles.md and
+docs/designs/board-bundles-next.md). For each row the caller
 supplies the keyword arguments of the row's preparation module in one JSON
 file, keyed by row name; the tool adds `output`. The outer process creates
 ~/.cache/sunstoneos/evidence/board-bundles-<date>-<n>/ exclusively and runs the
@@ -14,14 +15,20 @@ directories.
 For each row with inputs, the step refuses a Terminal row whose runner does
 not declare COMPLETION_COUNTS. It calls the module's prepare(), which ends
 with the module's own validate_bundle(), and refuses the row unless the
-admitted value carries the row's admission fields. It then scans a Monitor
-row's image.elf with nm, removes write permission from every bundle entry,
+admitted value carries the row's admission fields. A Read row's bundle must
+carry the fixed reader and a word list that the reader's own plan() admits.
+It then scans a Monitor row's image.elf with nm, refuses a returning image
+whose objects differ from the images that passed outside its declared overlay
+or whose controlled outcomes the bundle's runner does not admit, removes write
+permission from every bundle entry,
 hashes each bundle file once into artifacts.json, derives a Terminal row's
-queue timeout from the runner's own bounds and the bundle's file sizes,
-snapshots the row's sources with tools/evidence-snapshot.py, and writes
+queue timeout from the runner's own bounds and the bundle's file sizes, and a
+returning row's from its runner's FEL requests and the churn guard's wait,
+snapshots the row's sources with tools/evidence-snapshot.py, writes
 submission.json after checking it with submission() from
-tools/board-test-queue.py. run.json records every row's outcome. The exit
-status is 0 when no row was refused.
+tools/board-test-queue.py, and writes runbook.md in the format of
+docs/board-runbooks/. run.json records every row's outcome. The exit status
+is 0 when no row was refused.
 
   prepare-board-bundles.py --inputs inputs.json
 """
@@ -29,6 +36,7 @@ import argparse
 import ast
 from datetime import datetime, timezone
 import hashlib
+import shutil
 import importlib.util
 import json
 import os
@@ -64,6 +72,17 @@ COUNT_FIELDS = ('interrupt_completions', 'fallback_completions', 'client_wakeups
 # USB stacks, the shared USB0 loop and secondary-core power-up.
 FORBIDDEN_PREFIXES = ('dcd_', 'hcd_', 'tud_', 'tuh_', 'usb0_', 'a733_cpu_start_', 'a733_cpu_secondary_')
 ENVIRONMENT = ('PATH', 'HOME', 'LANG', 'PYTHONDONTWRITEBYTECODE')
+OBJCOPY = '/usr/lib/llvm-21/bin/llvm-objcopy'
+# Read and returning rows run under the queue's supervised RAM recovery: the
+# user removes power after a stall (docs/designs/board-bundles-next.md).
+SUPERVISED_PREREQUISITE = 'supervised-ram-recovery'
+READER = 'tools/board-bundles-next-read.py'
+# A Read bundle makes no re-enumeration, so its attempt needs no guard wait:
+# its 30 s FEL bound per command and the scratch save and restore fit 120 s.
+READ_TIMEOUT = 120
+HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
+# Objects of an image that passed on the board, by the record that shows it.
+PASSED_ORIGINS = {'rank-4-kernel-check', 'rank-9-usb-v4'}
 
 TERMINAL_PROCEDURE = [
     'Confirm that ranks 1 to 5 and rank 9 of docs/audit/board-test-plan.md passed earlier in this power cycle.',
@@ -82,7 +101,125 @@ OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/m
               'apps/thermal/prepare.py', 'apps/board/prepare.py', 'tools/prepare-board-bundles.py',
               *TRANSPORT_SOURCES]
 
+SINGLE_CORE_SOURCES = ['tools/prepare-board-bundles.py', READER, *HOST_TOOLS]
+RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-images.py', 'tools/check-a733-kernel.py',
+                     *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
+                     'platform/a733/link.ld']
+RETURNING_STOP = ('Stop at any nonzero exit. The runner keeps the A733 port lock and quarantines the instance after '
+                  'any outcome that its bundle does not list as controlled; a hang ends at the monitor\'s 2 s '
+                  'deadline, and a stalled bus access needs a power removal. Do not retry.')
+READ_STOP = ('Stop at any nonzero exit. The reader keeps the A733 port lock and quarantines the instance after a '
+             'failed FEL command; a stalled or aborted read needs a power removal. Do not retry.')
+
+
+def read_row(name, position, component, purpose, words, expected):
+    return {'name': name, 'class': 'read', 'position': position, 'component': component,
+            'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_read', 'runner': READER,
+            'admission': {'schema': 'board-read-bundle-v1', 'row': name},
+            'sources': SINGLE_CORE_SOURCES, 'purpose': purpose, 'words': words,
+            'expected_result': expected, 'stop_condition': READ_STOP,
+            'procedure': ['Claim this test, then run the bundle\'s board-read.py on {bundle}/WORDS.json once.',
+                          'Save session.json, scratch-before.bin and scratch-restored.bin with the evidence.']}
+
+
+def word(address, block=None, condition=None, note=''):
+    value = {'address': f'0x{address:08x}', 'note': note}
+    if block:
+        value['block'] = block
+    else:
+        value['condition'] = {'address': f'0x{condition[0]:08x}', 'mask': f'0x{condition[1]:08x}',
+                              'value': f'0x{condition[2]:08x}'}
+    return value
+
+
+CCU = 0x02002000
+R_CCU_RTC = (0x0701020c, 0x00010001, 0x00010001)  # RTC bus gate bit 0, reset bit 16
+PPU_CLOCK = (0x070101ac, 1, 1)                    # R_CCU PPU clock gate
+NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500, 0x5c0, 0x5e0, 0xa80, 0xa88, 0xa8c,
+           0xb00, 0xb04, 0xc00, 0xc0c, 0x1908, 0x1920, 0x1988, 0x19a0, 0x1b10, 0x1b14, 0x1b1c)
+
+
+def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None):
+    return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
+            'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
+            'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
+            'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
+            'overlay': overlay, 'expect': expect, 'controlled': controlled, 'intro': intro,
+            'sources': RETURNING_SOURCES, 'expected_result': expected, 'stop_condition': RETURNING_STOP,
+            'needs': needs,
+            'procedure': ['Run the cache-off helper and a survey of the current instance.',
+                          'Claim this test, then run {bundle}/host/tools/check-a733-kernel.py once on '
+                          '{bundle}/probe.bin with the DDR record and warm-return chain of this lifetime.']}
+
+
 ROWS = [
+    # The single-core bundles of docs/designs/board-bundles-next.md, in the
+    # order of least recovery risk on port 3-3.
+    returning_row('fault-capture', 1, 'Fault capture on core 0 of the returning platform',
+                  ['checks/kernel.c.obj'], 'CHECK fault capture: load 0x400000000', True,
+                  'Monitor status 1 with exactly one FAIL exception line: ESR_EL1 class 0x25 with a level-1 '
+                  'translation fault, FAR_EL1 0x400000000 and ELR_EL1 inside board_bundles_fault_load, in task '
+                  'fault, then a responsive ROM.',
+                  'One task loads from 0x4_0000_0000, above every valid level-1 entry, so the load takes a '
+                  'translation fault before any bus access; platform_exception() writes one FAIL exception line '
+                  'and exits with monitor status 1, the bundle\'s one controlled outcome.'),
+    returning_row('kernel-check-counter-option', 2, 'Kernel check built with the returning monitor\'s counter option',
+                  ['platform/a733/monitor.c.obj'],
+                  'PASS kernel: timer preemption, queue ordering, blocking wakeup, FP context; rounds=100', False,
+                  'The kernel check\'s 100 rounds pass and the monitor returns to a responsive ROM.',
+                  'The rank 4 kernel check with SUNSTONE_MONITOR_COUNTERS: the monitor writes MDCR_EL3, HSTR_EL2 and '
+                  'MDCR_EL2.HPMN before EL1 entry. It is the equivalence base of the counter, walk and WFI image.'),
+    read_row('clock-words', 3, 'Clock words for the CPU-L boot-clock report, MBUS and NSI',
+             'CPU-L configured rate, MBUS_DFS_EN and the NSI gate and reset, read before any image needs them',
+             [word(CCU + 0x580, 'ccu', note='NSI_CLK_REG: gate 31, reset 30'),
+              word(CCU + 0x588, 'ccu', note='MBUS_CLK_REG: MBUS_DFS_EN 28'),
+              word(R_CCU_RTC[0], 'r_ccu', note='RTC bus gate 0 and reset 16'),
+              word(0x07090160, condition=R_CCU_RTC, note='DCXO register of the RTC clock driver'),
+              word(0x08871000, 'cpu_pll', note='PLL_CPU_L'), word(0x0887101c, 'cpu_pll', note='CPU_L mux and P')],
+             'Every word is read, the oscillator word only after its R_CCU gate reads open and its reset released, '
+             'and the 128 scratch bytes are restored and equal.'),
+    returning_row('cpu-counters-walk-wfi', 4, 'Event counters, core-0 walk A/B and idle WFI in one image',
+                  ['platform/a733/monitor.c.obj'], '', True, 'The three stages complete with their records.',
+                  '', admission=False,
+                  needs='A returning app from the counter, table-walk and power-state owners with three stage '
+                        'markers, the single-core a733_cpu_pmu_begin and end of primary.patch, its controlled '
+                        'WFI outcome, and admission values.'),
+    read_row('power-domain-words', 5, 'Policy and status words of power domains 1, 4 and 5',
+             'Adoption state of the PCK600 domains, read only while the PPU clock is open',
+             [word(PPU_CLOCK[0], 'r_ccu', note='PPU clock gate 0')] +
+             [word(0x07060000 + 0x1000 * d + o, condition=PPU_CLOCK, note=f'domain {d} {name}')
+              for d in (1, 4, 5) for o, name in ((0, 'policy'), (8, 'status'))],
+             'Every word is read while R_CCU 0x1ac bit 0 reads 1, and the 128 scratch bytes are restored and equal.'),
+    returning_row('pmic-power-domain-reads', 6, 'PMIC service task and power-domain owner, read-only',
+                  [], '', False, 'Supply verification and adoption reads complete.',
+                  '', admission=False,
+                  needs='A returning app from the power-domain owner that runs the PMIC service task read-only, '
+                        'records each service step and the TWI interrupt flag, and names admission values.'),
+    returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner', [], '', True,
+                  'Domain 1 reaches ON with every intermediate status recorded.',
+                  '', admission=False,
+                  needs='A returning app from the power-domain owner that turns domain 1 ON with the delay-row and '
+                        'back-to-back status records, its FAILED controlled outcome, and admission values.'),
+    returning_row('dram-bus-priority', 8, 'DRAM bus priority reads and table write', [], '', True,
+                  'Inherited and final NSI fields of ports 2, 14 and 15.',
+                  '', admission=False,
+                  needs='A returning app from the DRAM owner that calls a733_dram_priority() with its own register '
+                        'pair after domain 1 reads ON, its abort and readback controlled outcomes, and admission '
+                        'values.'),
+    read_row('npu-clock-words', 9, 'Speed-bin word and the CCU words of the NPU register pass',
+             'The NPU speed bin and the CCU state that NPU startup admits, read before the NPU bundle',
+             [word(0x0300624c, 'sid', note='SID speed-bin word')] +
+             [word(CCU + o, 'ccu', note=f'CCU +0x{o:x}') for o in NPU_CCU],
+             'Every word is read, and the 128 scratch bytes are restored and equal.'),
+    {'name': 'npu-single-core', 'class': 'terminal', 'position': 10, 'admission': None,
+     'transport': SUPERVISED_TRANSPORT,
+     'component': 'NPU single-core image with native USB takeover',
+     'module': 'apps/npu-convolution/prepare-supervised.py', 'runner': 'tools/check-a733-npu-supervised.py',
+     'sources': ['apps/npu-convolution/prepare-supervised.py', 'tools/check-a733-npu-supervised.py',
+                 'drivers/npu/npu_service.c', 'tools/prepare-board-bundles.py', *TRANSPORT_SOURCES],
+     'expected_result': 'Startup reaches READY and the outputs match the SDK simulator.' + TERMINAL_COUNTS,
+     'needs': 'tools/check-a733-npu-supervised.py must declare and report COMPLETION_COUNTS, and the NPU owner must '
+              'name admission values and record domain 1 and NSI state with the outputs.'},
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -94,8 +231,9 @@ ROWS = [
                         'address-line pass, a page-signature match, no external abort and no expired DMA0 '
                         'deadline, over the tested range the contract names.',
      'procedure': [
-         'Confirm that ranks 1 to 7 of docs/audit/board-test-plan.md passed earlier in this power cycle, with '
-         'rank 3 reporting dram_mib 12288 and rank 6 reporting the boot clock.',
+         'Confirm that ranks 1 to 6 of docs/audit/board-test-plan.md and the clock-words Read bundle passed '
+         'earlier in this power cycle, with rank 3 reporting dram_mib 12288; nothing else has run since the cold '
+         'DDR start.',
          'Claim this test, then run the memory qualification profile through {runner} on the frozen bundle '
          '{bundle}.',
          'Save the run record in this evidence directory; the next run is prepared from it on the host.'],
@@ -139,6 +277,8 @@ ROWS = [
      'reason': 'A voltage or clock change needs physical recovery and the user\'s approval.'},
     {'name': 'display-output', 'class': 'excluded',
      'reason': 'Display output needs a connected monitor or panel.'},
+    {'name': 'power-domain-5', 'class': 'excluded',
+     'reason': 'Domain 5 ON and OFF needs DCDC4 and the user\'s approval.'},
 ]
 
 
@@ -207,8 +347,10 @@ def transport_bounds(path):
 
 def terms(row, root):
     """Prerequisites, capture window and transport bounds of one row; refuses a Terminal row without counts."""
+    if row['class'] == 'read':
+        return [SUPERVISED_PREREQUISITE], None, None
     if row['class'] == 'monitor':
-        return [MONITOR_PREREQUISITE], None, None
+        return [row.get('prerequisite', MONITOR_PREREQUISITE)], None, None
     prerequisites, counts, seconds = runner_terms(root / row['runner'])
     require(counts == sorted(COUNT_FIELDS),
             f'Runner {row["runner"]} does not declare COMPLETION_COUNTS {", ".join(COUNT_FIELDS)}; its record '
@@ -240,6 +382,22 @@ def terminal_timeout(seconds, sizes, bounds):
     return total, parts
 
 
+def returning_timeout(path):
+    """One returning attempt's worst case: the churn guard's wait for the run's two re-enumerations, every
+    default-bounded FEL request the runner makes, its default return window, and margin."""
+    text = Path(path).read_text()
+    bound = re.search(r'def transaction\(\*arguments, timeout=(\d+)\)', text)
+    window = re.search(r'"--return-timeout", type=float, default=(\d+)', text)
+    require(bound and window, f'Runner {path} has no FEL request bound or return window.')
+    calls = [m for m in re.finditer(r'(?<!def )transaction\(([^()]|\([^()]*\))*\)', text)]
+    # A request with its own timeout argument moves the optional RAM input,
+    # which no returning bundle carries.
+    counted = sum('timeout=' not in m.group(0) for m in calls)
+    parts = {'guard_wait': GUARD_WAIT, 'fel_requests': counted * int(bound.group(1)),
+             'return_window': int(window.group(1)), 'margin': TERMINAL_MARGIN}
+    return sum(parts.values()), parts
+
+
 def admit(row, admitted):
     """The admitted value names this row's build."""
     expected = row.get('admission')
@@ -251,7 +409,7 @@ def admit(row, admitted):
             ', '.join(f'{k} is {admitted.get(k)!r}, not {expected[k]!r}' for k in wrong))
 
 
-def monitor_scan(elf, nm, renewal_cap):
+def monitor_scan(elf, nm, renewal_cap, returning=False):
     """The defined symbols of a Monitor image allow the forced return to the ROM."""
     result = subprocess.run([nm, '--defined-only', '-P', str(elf)], capture_output=True, text=True)
     require(result.returncode == 0, f'nm failed on {elf}: {result.stderr.strip()}')
@@ -262,6 +420,176 @@ def monitor_scan(elf, nm, renewal_cap):
     require(not forbidden, 'Monitor image defines USB or secondary-core startup symbols: ' + ', '.join(forbidden[:8]))
     require(not renewal_cap or 'monitor_renewal_cap' in names,
             'Memory image does not define monitor_renewal_cap, the capped deadline renewal.')
+    # monitor_sync renews the deadline without a cap; a returning image must
+    # return within the monitor's 2 s deadline.
+    require(not returning or 'monitor_sync' not in names, 'Returning image defines monitor_sync, the uncapped renewal.')
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def reader():
+    """The fixed reader, loaded without running it; its plan() admits a word list."""
+    return load('board_bundles_reader', ROOT / READER)
+
+
+def copy_host_tools(output, extra=None):
+    tools = output / 'host/tools'
+    tools.mkdir(parents=True)
+    for rel in HOST_TOOLS:
+        shutil.copyfile(ROOT / rel, tools / Path(rel).name)
+    for name, path in (extra or {}).items():
+        shutil.copyfile(path, tools / name)
+
+
+def prepare_read(row, output):
+    """A Read bundle: the fixed reader, the row's word list and the reader's host modules."""
+    output.mkdir()
+    shutil.copyfile(ROOT / READER, output / 'board-read.py')
+    (output / 'WORDS.json').write_text(json.dumps({'schema': 'board-read-words-v1', 'purpose': row['purpose'],
+                                                   'words': row['words']}, indent=2) + '\n')
+    copy_host_tools(output)
+    return validate_read(row, output)
+
+
+def validate_read(row, output):
+    require(sha256(output / 'board-read.py') == sha256(ROOT / READER), 'The bundle\'s reader is not the fixed reader.')
+    words = reader().plan(json.loads((output / 'WORDS.json').read_text()))
+    return {'schema': 'board-read-bundle-v1', 'row': row['name'], 'words': len(words),
+            'conditions': sum(1 for w in words if w[2] is not None),
+            'reader_sha256': sha256(output / 'board-read.py'), 'words_sha256': sha256(output / 'WORDS.json')}
+
+
+def prepare_returning(row, build, output):
+    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence and
+    controlled outcomes."""
+    record = json.loads(Path(build).read_text())
+    output.mkdir()
+    shutil.copyfile(record['elf'], output / 'image.elf')
+    shutil.copyfile(record['bin'], output / 'probe.bin')
+    tools = dict(record['host_tools'])
+    require(set(tools) == {'check-a733-kernel.py', 'check-a733-smp.py', 'usb-access.py'},
+            'The build names another runner closure.')
+    copy_host_tools(output, {'check-a733-kernel.py': tools['check-a733-kernel.py']})
+    (output / 'equivalence.json').write_text(json.dumps({'objects': record['objects'], 'overlay': record['overlay'],
+                                                         'image_sha256': record['elf_sha256']}, indent=2) + '\n')
+    if row['controlled']:
+        require(record['controlled'] is not None, 'The build lists no controlled outcome for this row.')
+        (output / 'controlled.json').write_text(json.dumps(record['controlled'], indent=2) + '\n')
+    else:
+        require(record['controlled'] is None, 'The build lists controlled outcomes that this row does not take.')
+    require(record['expect'] == row['expect'], 'The build\'s success text is not this row\'s.')
+    return validate_returning(row, output)
+
+
+def validate_returning(row, output):
+    """The uploaded bytes are image.elf's loadable segments, and the equivalence and outcome files hold."""
+    flat = output.parent / (output.name + '-objcopy.bin')
+    result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
+                            text=True)
+    require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
+    same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
+    flat.unlink()
+    require(same, 'probe.bin is not the loadable segments of image.elf.')
+    equivalence = json.loads((output / 'equivalence.json').read_text())
+    require(equivalence['image_sha256'] == sha256(output / 'image.elf'), 'image.elf is not the built image.')
+    objects = equivalence['objects']
+    require(objects and all(o['origin'] in PASSED_ORIGINS | {'new'} for o in objects.values()),
+            'An object has no recorded origin.')
+    new = sorted(rel for rel, o in objects.items() if o['origin'] == 'new')
+    require(set(new) <= set(row['overlay']),
+            'Objects differ from the images that passed outside the overlay: ' + ', '.join(new))
+    value = {'schema': 'board-returning-bundle-v1', 'row': row['name'], 'new_objects': new,
+             'passed_objects': len(objects) - len(new), 'image_sha256': equivalence['image_sha256']}
+    if row['controlled']:
+        runner = load('board_bundles_returning_runner', output / 'host/tools/check-a733-kernel.py')
+        outcomes = runner.controlled_outcomes((output / 'controlled.json').read_bytes())
+        value['controlled'] = [o['name'] for o in outcomes]
+    return value
+
+
+def runbook(row, bundle, value, artifacts, prerequisites, timeout):
+    """runbook.md for one prepared row, in the format of docs/board-runbooks/."""
+    n = row['position']
+    lines = [f'# Bundle {n}: {row["component"]}', '',
+             f'Status: **prepared** by `tools/prepare-board-bundles.py`; not run. Position {n} of the single-core '
+             'order of docs/audit/board-test-plan.md and docs/designs/board-bundles-next.md.',
+             f'Bundle: `{bundle}`.', '']
+    if row['class'] == 'read':
+        lines += [f'A Read bundle: `board-read.py` reads {value["words"]} words with 32-bit FEL `readl` commands, '
+                  f'{value["conditions"]} of them only after their condition word matches. No board code runs '
+                  'beyond the readl stub, which the reader confines to the saved and restored 128 scratch bytes '
+                  'at 0x71000; the USB instance does not change.', '']
+    else:
+        lines += [row['intro'], '']
+    lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
+    lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
+    lines += ['']
+    if row['class'] == 'monitor':
+        lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
+                  'that passed on the board (the kernel check of ranks 4 and 5, `574245e2…`, and '
+                  '`rank-9-usb-v4/`), listed per object in `equivalence.json`. New: '
+                  + ', '.join(f'`{x}`' for x in value['new_objects']) + '.', '']
+    lines += ['## Commands', '',
+              'Set the variables of docs/board-runbooks/README.md ("Names used in every runbook"), with `S` '
+              f'naming this lifetime\'s session directory, and `B={bundle}`.', '']
+    expected = row['expected_result'].replace('"', "'")
+    if row['class'] == 'read':
+        lines += ['1. Read the words once:', '', '   ```sh',
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-read {timeout} \\',
+                  f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
+                  f'     -- $PY -B $B/board-read.py $B/WORDS.json $S/bb{n}-read', '   ```', '',
+                  '   Success: `{"port": "PORT", "complete": true, "words": ' + str(value['words'])
+                  + ', "skipped": 0}`. A nonzero `skipped` count is recorded with each skipped word and the '
+                  'condition that stopped it; the bundle is then inconclusive and is not repeated.', '',
+                  f'   Prerequisite: `{prerequisites[0]}`, written by `bundle-run.py` for the current instance. '
+                  f'Queue timeout: {timeout} s.', '']
+    else:
+        controlled = ' --controlled $B/controlled.json' if row['controlled'] else ''
+        lines += ['1. Turn the instruction cache off and survey the current instance:', '', '   ```sh',
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-cache-off 120 \\',
+                  f'     "Board $PORT: returning instruction-cache disable before bundle {n}" \\',
+                  '     "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." '
+                  '\\', f'     -- $PY -B $V/common/cache-off.py $S/bb{n}-cache-off',
+                  f'   $PY -B $V/common/survey.py $PORT $S/bb{n}-survey "Board $PORT before bundle {n}"', '   ```', '',
+                  '   Each prints `"result": "passed"`.', '',
+                  '2. Run the image once. `D` is the DDR record of this lifetime\'s cold start; give one '
+                  '`--warm-return` for each returning run since then, in order:', '', '   ```sh',
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-run {timeout} \\',
+                  f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
+                  '     -- $PY -B $B/host/tools/check-a733-kernel.py --fel $FEL --image $B/probe.bin --mode kernel '
+                  '\\', f'        --expect "{row["expect"]}"{controlled} --evidence $S/bb{n}-run \\',
+                  f'        --ddr-evidence $D --platform-survey $S/bb{n}-survey/session.json [--warm-return ...]',
+                  '   ```', '',
+                  f'   Prerequisite: `{prerequisites[0]}`. Queue timeout: {timeout} s, the runner\'s worst case '
+                  'including the churn guard\'s 615 s wait.', '']
+        if row['controlled']:
+            lines += ['   Success: `CONTROLLED: level-1-translation-fault, status 1, FEL recovery, automatic USB '
+                      'access.`, and `controlled` in `$S/bb' + str(n) + '-run/session.json` with the parsed EL1 '
+                      'values. That session is a valid `--warm-return` link for later bundles.', '',
+                      '## Controlled outcomes', '',
+                      'Each outcome in `controlled.json` is matched on the full result record and log; any other '
+                      'nonzero status quarantines the instance:', '']
+            for o in json.loads((bundle / 'controlled.json').read_text())['outcomes']:
+                f = o['fault']
+                lines += [f'- `{o["name"]}`: status {o["status"]}, {o["fail_lines"]} FAIL exception line, ESR & '
+                          f'`0x{f["esr_mask"]:08x}` = `0x{f["esr_value"]:08x}`, FAR `0x{f["far"]:x}`, ELR in '
+                          f'`[0x{f["elr_low"]:x}, 0x{f["elr_high"]:x})`, task `{f["task"]}`, log containing '
+                          + ', '.join(f'`{t}`' for t in o['log_contains']) + '.']
+            lines += ['']
+        else:
+            lines += [f'   Success: `{row["expect"]}`, then `PASS: kernel check, FEL recovery, automatic USB access.`',
+                      '']
+    lines += ['## Stop conditions', '', f'- {row["stop_condition"]}', '']
+    if row['class'] == 'monitor':
+        lines += ['## Without the patch', '',
+                  'The bundle\'s `host/tools/check-a733-kernel.py` carries the admission patch of '
+                  '`board-bundles-20261023/common/primary.patch` and the controlled outcomes of this tranche\'s '
+                  '`primary.patch`. Without them, the unpatched runner in `bringup` refuses a warm-return chain '
+                  'with a forced-stall, native or controlled link'
+                  + (' and quarantines this bundle\'s status 1.' if row['controlled'] else '.'), '']
+    return '\n'.join(lines)
 
 
 def entries(bundle):
@@ -357,20 +685,27 @@ def prepare_row(row, arguments, row_dir, request, queue):
         stage = 'prepare'
         module = load('board_bundle_' + row['name'].replace('-', '_'), module_path)
         kwargs = {k: paths(v) for k, v in arguments.items()}
-        admitted = module.prepare(**kwargs, output=bundle)
+        if row.get('function'):
+            admitted = getattr(module, row['function'])(row, **kwargs, output=bundle)
+        else:
+            admitted = module.prepare(**kwargs, output=bundle)
         record['admission_schema'] = admitted.get('schema') if isinstance(admitted, dict) else None
         stage = 'admission'
         admit(row, admitted)
         if row['class'] == 'monitor':
             stage = 'monitor-scan'
-            monitor_scan(bundle / 'image.elf', request['nm'], row.get('renewal_cap', False))
+            monitor_scan(bundle / 'image.elf', request['nm'], row.get('renewal_cap', False), row.get('returning', False))
         stage = 'freeze'
         freeze(bundle)
         stage = 'artifacts'
         artifacts, sizes, metrics = artifact_pass(bundle)
         record['metrics'] = metrics
         stage = 'timeout'
-        if row['class'] == 'monitor':
+        if row['class'] == 'read':
+            timeout = READ_TIMEOUT
+        elif row.get('returning'):
+            timeout, record['timeout_terms'] = returning_timeout(root / row['runner'])
+        elif row['class'] == 'monitor':
             timeout = MONITOR_TIMEOUT
         else:
             timeout, record['timeout_terms'] = terminal_timeout(seconds, sizes, bounds)
@@ -389,6 +724,10 @@ def prepare_row(row, arguments, row_dir, request, queue):
                  'evidence_directory': str(row_dir / 'evidence')}
         queue.submission(value)
         save(row_dir / 'submission.json', value)
+        if 'position' in row:
+            stage = 'runbook'
+            with (row_dir / 'runbook.md').open('x') as stream:
+                stream.write(runbook(row, bundle, admitted, artifacts, prerequisites, timeout) + '\n')
         record.update(status='prepared', submission=str(row_dir / 'submission.json'), revision=manifest['revision'],
                       timeout_seconds=timeout, prerequisites=prerequisites)
     except Exception as error:
@@ -409,6 +748,8 @@ def step(run_dir):
             rows[row['name']] = {'class': 'excluded', 'status': 'excluded', 'message': row['reason']}
         elif row['name'] not in request['inputs']:
             rows[row['name']] = {'class': row['class'], 'status': 'no-inputs'}
+            if row.get('needs'):
+                rows[row['name']]['needs'] = row['needs']
         else:
             rows[row['name']] = prepare_row(row, request['inputs'][row['name']], run_dir / row['name'], request,
                                             queue)

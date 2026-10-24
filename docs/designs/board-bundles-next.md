@@ -17,8 +17,9 @@ runs the rank 7 pre-scheduler bundle first; this order then applies to it.
 Read and Returning are new recovery classes; bundle 10 uses the existing
 Terminal class.
 
-- **Read.** One fixed reader, `common/board-read.py`, is new; the tool ships
-  and hashes it. It generalizes the coordinator's
+- **Read.** One fixed reader, `tools/board-bundles-next-read.py`, is new; the
+  tool copies it unchanged into every Read bundle as `board-read.py` and
+  hashes it there. It generalizes the coordinator's
   `~/.cache/sunstoneos/evidence/board-session-20261023/state-capture-readl.py`.
   Each bundle supplies only a data file `WORDS.json`. The reader saves the
   128 FEL scratch bytes at `0x71000` with `read`, then issues `readl`. The
@@ -42,9 +43,10 @@ Terminal class.
   covers a hang but not a stalled bus access. Each run re-enumerates the
   board twice.
 
-**Gates.** Three blocks have no software gate: CCU, R_CCU and the CPU PLL
-block at `0x08870000`, whose pinned device-tree node (`sun60iw2p1.dtsi`
-lines 908–915) names only its oscillator parent and no bus clock or reset.
+**Gates.** Four blocks have no software gate: CCU, R_CCU, the SID block at
+`0x03006000` (`sun60iw2p1.dtsi` lines 1406–1408 name no clock or reset) and
+the CPU PLL block at `0x08870000`, whose pinned device-tree node (lines
+908–915) names only its oscillator parent and no bus clock or reset.
 A record of the same port and lifetime admits their words. In a lifetime
 without such a record, a word there is a first read and sits after every
 bundle that does not need it. Every other word needs a condition word. The
@@ -202,10 +204,13 @@ deadline and the monitor's 2 s deadline.
 Owners build each image under `~/.cache/sunstoneos/build/<package>/`; the
 tool builds nothing. In `tools/prepare-board-bundles.py`:
 
-- **Read rows** name a `WORDS.json` that the tool carries: entries of an
-  address and a gate (condition address, mask, value, or a same-lifetime
-  record for CCU, R_CCU and the CPU PLL block). The tool refuses a gate read after its dependent
-  and a file with any key outside that schema. It runs no capture script.
+- **Read rows** carry their words in the row table, and the tool writes them
+  to `WORDS.json`: each entry is an address and either the ungated block that
+  holds it or a condition word (address, mask, value) listed earlier. The
+  reader's `plan()`, which the tool runs on every Read bundle, refuses a gate
+  read after its dependent, a word outside its named block and any key
+  outside that schema. A same-lifetime record is a matter of order in the
+  plan, so the file carries none. The tool runs no capture script.
 - **Returning rows** are Monitor rows with per-row fields: prerequisite
   `supervised-ram-recovery`, runner `tools/check-a733-kernel.py`, the queue
   timeout below, the equivalence base, and the controlled-outcome file. The

@@ -31,6 +31,21 @@ rows. It checks that:
 - the fixed row table names existing runners and transports, every
   Terminal runner's attempt bound without uploads lies within 3,600 s, and
   the table records which runners declare COMPLETION_COUNTS;
+- a Read row is prepared with the fixed reader and its word list and the
+  reader's 120 s timeout, and refused for a word list with a key outside the
+  schema, a condition that is not an earlier word, and an ungated word outside
+  its block;
+- a returning row is prepared with its controlled outcomes and the runner's
+  925 s worst case, and refused for an image that defines monitor_sync, a new
+  object outside its overlay, a binary that is not the ELF's loadable
+  segments, and controlled outcomes that the bundle's runner refuses;
+- each prepared single-core row has a runbook naming every bundle file's
+  SHA-256 and its run command;
+- the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
+  reads each condition word in its own command, skips the dependents of a
+  condition that does not match, restores and rereads the scratch bytes,
+  issues no FEL command other than read, readl and write, and quarantines
+  when the restored bytes differ;
 - the sandbox starts within 100 ms.
 
 Every fixture lives in a new directory under
@@ -69,6 +84,7 @@ def module(name, path):
 
 
 tool = module('board_bundles_tool', ROOT / 'tools/prepare-board-bundles.py')
+reader = module('board_bundles_reader_check', ROOT / tool.READER)
 queue = module('board_bundles_queue', ROOT / 'tools/board-test-queue.py')
 transport = module('board_bundles_transport', ROOT / tool.SUPERVISED_TRANSPORT)
 SCHEMAS = {'monitor.py': 'fixture-monitor-v1', 'nested.py': 'fixture-nested-v1', 'many.py': 'fixture-many-v1'}
@@ -184,9 +200,182 @@ def git(repo, *arguments):
                            *arguments], check=True, capture_output=True, text=True).stdout
 
 
+CONTROLLED_RUNNER = """
+import json
+
+
+def controlled_outcomes(raw):
+    value = json.loads(raw)
+    if value.get('schema') != 'kernel-controlled-outcomes-v1' or not value.get('outcomes'):
+        raise ValueError('Fixture runner refuses these outcomes.')
+    return value['outcomes']
+"""
+OUTCOME = {'name': 'fixture-fault', 'status': 1, 'interrupt': None, 'fail_lines': 1,
+           'fault': {'esr_mask': 0xfe00007f, 'esr_value': 0x96000005, 'far': 0x400000000, 'elr_low': 0x41001000,
+                     'elr_high': 0x41001040, 'task': 'fault'}, 'log_contains': ['CHECK fixture']}
+
+
+def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False):
+    """A build.json as checks/board-bundles-images.py writes it, for one fixture image."""
+    directory = work / 'builds' / name
+    directory.mkdir(parents=True)
+    binary = directory / 'probe.bin'
+    subprocess.run([tool.OBJCOPY, '-O', 'binary', str(elf), str(binary)], check=True)
+    if bad_bin:
+        binary.write_bytes(binary.read_bytes() + b'x')
+    runner = directory / 'runner.py'
+    runner.write_text(CONTROLLED_RUNNER)
+    record = {'elf': str(elf), 'bin': str(binary), 'elf_sha256': hashlib.sha256(elf.read_bytes()).hexdigest(),
+              'objects': objects or {'checks/kernel.c.obj': {'sha256': '1' * 64, 'origin': 'new'},
+                                     'platform/a733/platform.c.obj': {'sha256': '2' * 64, 'origin': 'rank-9-usb-v4'},
+                                     'platform/a733/monitor.c.obj': {'sha256': '3' * 64,
+                                                                     'origin': 'rank-4-kernel-check'}},
+              'overlay': ['checks/kernel.c.obj'],
+              'controlled': {'schema': 'kernel-controlled-outcomes-v1' if controlled != 'bad' else 'other',
+                             'outcomes': [OUTCOME]} if controlled else None,
+              'expect': 'CHECK fixture',
+              'host_tools': {'check-a733-kernel.py': str(runner), 'check-a733-smp.py': str(ROOT / tool.HOST_TOOLS[0]),
+                             'usb-access.py': str(ROOT / tool.HOST_TOOLS[1])}}
+    (directory / 'build.json').write_text(json.dumps(record))
+    return str(directory / 'build.json')
+
+
+class FakeFel:
+    """sunxi-fel's read, readl and write commands over a word map and the 128 scratch bytes."""
+
+    def __init__(self, words, restore=True):
+        self.words, self.restore = dict(words), restore
+        self.scratch = bytes(range(128))
+        self.commands, self.ops = [], []
+
+    def run(self, command, **kwargs):
+        args = command[3:]
+        self.commands.append(args)
+        out = []
+        while args:
+            op = args[0]
+            self.ops.append(op)
+            if op == 'readl':
+                address = int(args[1], 16)
+                assert address in self.words, hex(address)
+                # The stub and the word's slot: the first 52 bytes.
+                self.scratch = bytes(52) + self.scratch[52:]
+                out.append(f'0x{self.words[address]:08x}')
+                args = args[2:]
+            elif op == 'read':
+                assert int(args[1], 16) == reader.SCRATCH and int(args[2]) == 128
+                Path(args[3]).write_bytes(self.scratch)
+                args = args[4:]
+            elif op == 'write':
+                assert int(args[1], 16) == reader.SCRATCH
+                if self.restore:
+                    self.scratch = Path(args[2]).read_bytes()
+                args = args[3:]
+            else:
+                raise AssertionError(op)
+        return subprocess.CompletedProcess(command, 0, '\n'.join(out) + '\n', '')
+
+
+def run_reader(work, name, words, values, restore=True):
+    """reader.main() with its device modules and FEL process modeled; returns the session, commands and quarantine."""
+    from contextlib import contextmanager, redirect_stdout
+    import io
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    fel = FakeFel(values, restore)
+    quarantined, held = [], []
+
+    @contextmanager
+    def board_lock():
+        yield Path('/dev/bus/usb/003/011')
+
+    @contextmanager
+    def sealed_source(data):
+        path = work / f'{name}-sealed.bin'
+        path.write_bytes(data)
+        yield str(path), 0
+
+    def stop_after_failure(record, save, quarantine, error):
+        quarantine()
+
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError(message)
+
+    base = SimpleNamespace(require=require, digest=lambda path: 'pinned', FEL_HASH='pinned',
+                           save_json=lambda path, value: Path(path).write_text(json.dumps(value)),
+                           sync_file=lambda path: None, sealed_source=sealed_source,
+                           stop_after_failure=stop_after_failure, hold_ownership=lambda: held.append(True))
+    access = SimpleNamespace(board_lock=board_lock, require_session=lambda node: None,
+                             require_rom=lambda node: None, identity=lambda node: [7, 1, 2, 0, 0],
+                             target=lambda node: Path('/sys/bus/usb/devices/3-3'),
+                             quarantine_instance=lambda *a: quarantined.append(a))
+    words_path = work / f'{name}-WORDS.json'
+    words_path.write_text(json.dumps({'schema': 'board-read-words-v1', 'purpose': 'fixture', 'words': words}))
+    evidence = work / f'{name}-evidence'
+    modules = {'board_read_base': base, 'board_read_access': access}
+    error = None
+    with patch.object(reader, 'module', lambda n, path: modules[n]), patch.object(reader.subprocess, 'run', fel.run), \
+            patch.object(sys, 'argv', ['board-read.py', str(words_path), str(evidence)]), \
+            redirect_stdout(io.StringIO()):
+        try:
+            reader.main()
+        except RuntimeError as e:
+            error = str(e)
+    assert set(fel.ops) <= {'read', 'readl', 'write'}, fel.ops
+    return json.loads((evidence / 'session.json').read_text()), fel.commands, quarantined, error
+
+
+def check_reader(work):
+    """The fixed reader's command sequence, with the device modeled."""
+    w = tool.word
+    gate = (0x0701020c, 0x10001, 0x10001)
+    words = [w(0x02002580, 'ccu'), w(0x02002588, 'ccu'), w(gate[0], 'r_ccu'), w(0x07090160, condition=gate),
+             w(0x07090164, condition=gate), w(0x08871000, 'cpu_pll')]
+    values = {0x02002580: 0xc3000000, 0x02002588: 0x81000000, gate[0]: 0x10001, 0x07090160: 0x983fb0f7,
+              0x07090164: 0x1, 0x08871000: 0xf8802600}
+    session, commands, quarantined, error = run_reader(work, 'open', words, values)
+    assert error is None and session['complete'] and session['scratch_restored'] and not quarantined, session
+    assert session['words'] == {hex(a): v for a, v in values.items()} and session['skipped'] == []
+    verbs = [c[0] for c in commands]
+    assert verbs[0] == 'read' and commands[-1][0] == 'write' and commands[-1][3] == 'read', commands
+    readls = [c for c in commands if c[0] == 'readl']
+    assert ['readl', hex(gate[0])] in readls, 'the condition word is read in its own command'
+    assert ['readl', '0x2002580', 'readl', '0x2002588'] in readls
+    assert ['readl', '0x7090160', 'readl', '0x7090164'] in readls
+    closed = {**values, gate[0]: 0x1}
+    session, commands, quarantined, error = run_reader(work, 'closed', words, closed)
+    assert error is None and session['complete'] and not quarantined
+    assert [x['address'] for x in session['skipped']] == ['0x7090160', '0x7090164'], session['skipped']
+    assert not any('0x7090160' in c for c in commands), 'no dependent of a closed gate is read'
+    session, commands, quarantined, error = run_reader(work, 'unrestored', words, values, restore=False)
+    assert error == 'Scratch restoration failed' and len(quarantined) == 1 and not session['complete'], error
+    refusals = {}
+    for name, bad, reason in [
+            ('extra-key', [dict(words[0], width=8)], 'keys outside'),
+            ('later-condition', [words[3], words[2]], 'not an earlier word'),
+            ('outside-block', [w(0x07010000, 'ccu')], 'not inside the ungated block'),
+            ('both-gates', [dict(words[3], block='ccu')], 'exactly one of'),
+            ('unaligned', [w(0x02002582, 'ccu')], 'aligned'),
+            ('value-outside-mask', [words[2], w(0x07090160, condition=(gate[0], 1, 3))], 'outside it')]:
+        try:
+            reader.plan({'schema': 'board-read-words-v1', 'purpose': 'x', 'words': bad})
+        except reader.Refused as e:
+            assert reason in str(e), (name, str(e))
+            refusals[name] = True
+        else:
+            raise AssertionError(name)
+    return {'commands_open': len(commands), 'refusals': refusals}
+
+
 def fixture_repository(work):
     repo = work / 'repo'
     (repo / 'fixture').mkdir(parents=True)
+    (repo / 'tools').mkdir()
+    # The single-core rows load the tool itself, its reader and host modules,
+    # and the kernel runner whose FEL requests bound the returning timeout.
+    for rel in ('tools/prepare-board-bundles.py', tool.READER, *tool.HOST_TOOLS, 'tools/check-a733-kernel.py'):
+        shutil.copyfile(ROOT / rel, repo / rel)
     uncounted = RUNNER.replace('COMPLETION_COUNTS', 'OTHER_COUNTS')
     for name, text in [('nested.py', NESTED), ('monitor.py', MONITOR), ('failing.py', FAILING), ('many.py', MANY),
                        ('runner.py', RUNNER), ('uncounted.py', uncounted), ('dirty.c', 'int dirty;\n'),
@@ -226,7 +415,10 @@ def check_table():
     """The fixed rows: runners and transports exist, and Terminal attempt bounds without uploads fit 3,600 s."""
     names = [r['name'] for r in tool.ROWS]
     assert len(names) == len(set(names))
-    classes = [r['class'] for r in tool.ROWS]
+    positioned = [r for r in tool.ROWS if 'position' in r]
+    assert [r['position'] for r in positioned] == list(range(1, len(positioned) + 1)), 'single-core plan order'
+    assert tool.ROWS[:len(positioned)] == positioned, 'the single-core rows come first'
+    classes = [r['class'] for r in tool.ROWS[len(positioned):]]
     assert classes == sorted(classes, key=['monitor', 'terminal', 'excluded'].index), 'rows follow the plan order'
     results = {}
     for r in tool.ROWS:
@@ -247,6 +439,25 @@ def check_table():
             assert fixed >= attempt_bound([], seconds) and fixed <= 3600, fixed
             entry.update(prerequisites=prerequisites, counts_declared=counts == sorted(tool.COUNT_FIELDS),
                          timeout_without_uploads=fixed)
+        elif r['class'] == 'read':
+            prerequisites, _, _ = tool.terms(r, ROOT)
+            assert prerequisites == [queue.SUPERVISED_RECOVERY] and r['runner'] == tool.READER
+            planned = reader.plan({'schema': 'board-read-words-v1', 'purpose': r['purpose'], 'words': r['words']})
+            assert r['admission'] == {'schema': 'board-read-bundle-v1', 'row': r['name']}
+            entry.update(prerequisites=prerequisites, timeout_seconds=tool.READ_TIMEOUT, words=len(planned),
+                         conditions=sum(1 for x in planned if x[2] is not None))
+        elif r.get('returning'):
+            prerequisites, _, _ = tool.terms(r, ROOT)
+            timeout, parts = tool.returning_timeout(ROOT / r['runner'])
+            # The guard's 615 s, eight 30 s FEL requests (version, the ROM entry
+            # words, the result-page read, the upload and readback, the result
+            # blank, reset64, version, the result read), the 10 s return
+            # window and 60 s of margin.
+            assert prerequisites == [queue.SUPERVISED_RECOVERY] and timeout == 615 + 8 * 30 + 10 + 60 == 925, parts
+            assert r['admission'] is None or r['admission'] == {'schema': 'board-returning-bundle-v1',
+                                                                'row': r['name']}
+            assert r['admission'] is not None or r['needs'], r['name']
+            entry.update(prerequisites=prerequisites, timeout_seconds=timeout)
         else:
             prerequisites, _, _ = tool.terms(r, ROOT)
             # 615 s of churn-guard wait plus 435 s of transaction and return bounds.
@@ -274,7 +485,7 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
     work = WORK / ('check-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
     work.mkdir()
-    result = {'table': check_table()}
+    result = {'table': check_table(), 'reader': check_reader(work)}
 
     elves = work / 'elf'
     elves.mkdir()
@@ -315,6 +526,41 @@ def main():
              {'name': 'excluded', 'class': 'excluded', 'reason': 'Fixture needs physical recovery.'}]
     inputs.update({name: {'source': source} for name in ('nested', 'failing', 'dirty', 'absent', 'service-wrong-build',
                                                          'service-unnamed', 'uncounted', 'too-long')})
+    # Read and returning rows, as the single-core table declares them.
+    read_words = [tool.word(0x02002580, 'ccu'), tool.word(0x0701020c, 'r_ccu'),
+                  tool.word(0x07090160, condition=(0x0701020c, 0x10001, 0x10001))]
+    single = ['tools/prepare-board-bundles.py', tool.READER, *tool.HOST_TOOLS]
+
+    def read_fixture(name, words, position):
+        value = tool.read_row(name, position, 'Fixture ' + name, 'fixture words', words, 'Fixture result.')
+        value['sources'] = single
+        return value
+
+    def returning_fixture(name, position, controlled=True):
+        value = tool.returning_row(name, position, 'Fixture ' + name, ['checks/kernel.c.obj'], 'CHECK fixture',
+                                   controlled, 'Fixture result.', 'Fixture image.')
+        value['sources'] = single + ['tools/check-a733-kernel.py']
+        return value
+
+    sync = build_elf(elves, 'returning-sync', good + 'int monitor_sync(void){return 3;}\n')
+    plain = Path(inputs['monitor-no-cap']['image'])
+    rows += [read_fixture('read-good', read_words, 1),
+             read_fixture('read-extra-key', [dict(read_words[0], width=8)], 2),
+             read_fixture('read-later-condition', [read_words[2], read_words[1]], 3),
+             read_fixture('read-outside-block', [tool.word(0x07010000, 'ccu')], 4),
+             returning_fixture('returning-good', 5), returning_fixture('returning-plain', 6, controlled=False),
+             returning_fixture('returning-sync', 7), returning_fixture('returning-new-object', 8),
+             returning_fixture('returning-bad-bin', 9), returning_fixture('returning-bad-controlled', 10)]
+    inputs.update({name: {} for name in ('read-good', 'read-extra-key', 'read-later-condition', 'read-outside-block')})
+    inputs.update({
+        'returning-good': {'build': fixture_build(work, 'good', plain)},
+        'returning-plain': {'build': fixture_build(work, 'plain', plain, controlled=False)},
+        'returning-sync': {'build': fixture_build(work, 'sync', sync)},
+        'returning-new-object': {'build': fixture_build(work, 'new-object', plain, objects={
+            'checks/kernel.c.obj': {'sha256': '1' * 64, 'origin': 'new'},
+            'platform/a733/platform.c.obj': {'sha256': '2' * 64, 'origin': 'new'}})},
+        'returning-bad-bin': {'build': fixture_build(work, 'bad-bin', plain, bad_bin=True)},
+        'returning-bad-controlled': {'build': fixture_build(work, 'bad-controlled', plain, controlled='bad')}})
     repo = fixture_repository(work)
     evidence = work / 'evidence'
 
@@ -327,7 +573,8 @@ def main():
     record = json.loads((run_dir / 'run.json').read_text())
     states = {name: r['status'] for name, r in record['rows'].items()}
     expected = {'memory-good': 'prepared', 'monitor-no-cap': 'prepared', 'nested': 'prepared',
-                'no-inputs': 'no-inputs', 'excluded': 'excluded'}
+                'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared',
+                'returning-good': 'prepared', 'returning-plain': 'prepared'}
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
@@ -335,7 +582,11 @@ def main():
                'memory-wrong-build': "schema is 'fixture-monitor-v1', not 'fixture-memory-v1'",
                'service-wrong-build': "schema is 'fixture-nested-v1', not 'fixture-npu-service-v1'",
                'memory-unnamed': 'refused until it does', 'service-unnamed': 'refused until it does',
-               'uncounted': 'does not declare COMPLETION_COUNTS', 'too-long': "more than the queue's 3600 s"}
+               'uncounted': 'does not declare COMPLETION_COUNTS', 'too-long': "more than the queue's 3600 s",
+               'read-extra-key': 'keys outside', 'read-later-condition': 'not an earlier word',
+               'read-outside-block': 'not inside the ungated block', 'returning-sync': 'uncapped renewal',
+               'returning-new-object': 'outside the overlay: checks/kernel.c.obj, platform/a733/platform.c.obj',
+               'returning-bad-bin': 'not the loadable segments', 'returning-bad-controlled': 'Fixture runner refuses'}
     stages = {'memory-wrong-build': 'admission', 'service-wrong-build': 'admission', 'memory-unnamed': 'admission',
               'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout'}
     reasons.update({'prefix-' + p.rstrip('_').replace('_', '-'): p + 'probe' for p in tool.FORBIDDEN_PREFIXES})
@@ -388,6 +639,27 @@ def main():
         prepared[name] = {'files': len(files), **metrics}
     assert {p.parent.name for p in (run_dir / 'nested/bundle').rglob('*') if p.is_file()} == {'bundle', 'board',
                                                                                              'assets'}
+    for name, timeout, files in (('read-good', tool.READ_TIMEOUT, {'board-read.py', 'WORDS.json', 'check-a733-smp.py',
+                                                                   'usb-access.py'}),
+                                 ('returning-good', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                                          'controlled.json', 'check-a733-kernel.py',
+                                                          'check-a733-smp.py', 'usb-access.py'}),
+                                 ('returning-plain', 925, {'image.elf', 'probe.bin', 'equivalence.json',
+                                                           'check-a733-kernel.py', 'check-a733-smp.py',
+                                                           'usb-access.py'})):
+        submission = json.loads((run_dir / name / 'submission.json').read_text())
+        queue.submission(submission)
+        assert submission['prerequisites'] == [queue.SUPERVISED_RECOVERY] and submission['timeout_seconds'] == timeout
+        bundle = run_dir / name / 'bundle'
+        assert {p.name for p in bundle.rglob('*') if p.is_file()} == files, name
+        assert unwritable(bundle)
+        text = (run_dir / name / 'runbook.md').read_text()
+        artifacts = json.loads((run_dir / name / 'artifacts.json').read_text())
+        assert all(a['sha256'] in text for a in artifacts) and '## Commands' in text and '## Stop conditions' in text
+        assert ('board-read.py $B/WORDS.json' if name == 'read-good' else 'check-a733-kernel.py --fel') in text
+        assert ('--controlled $B/controlled.json' in text) == (name == 'returning-good'), name
+        prepared[name] = {'files': len(files), 'timeout_seconds': timeout}
+    assert (run_dir / 'read-good/bundle/board-read.py').read_bytes() == (ROOT / tool.READER).read_bytes()
     status, second = tool.run({}, rows, evidence, repo)
     assert status == 0 and second.name.endswith('-2'), 'a second run gets its own directory'
 
