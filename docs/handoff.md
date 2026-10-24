@@ -1,12 +1,5 @@
 # Current work
 
-> **Reconnect requested, port `3-3` (second board), 2026-10-23.** Unplug its
-> USB cable, wait 5 seconds and plug it back in; USB is its only power source,
-> so this also power-cycles it. The rank-9 native USB image returned to the
-> ROM with a controlled refusal, and the runner then quarantined the new
-> instance (`003/016`). After the reconnect the board needs a cold DDR start.
-> Port `3-1` stays in use meanwhile.
-
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
@@ -66,7 +59,20 @@ at least in the MBUS clock: a read-only capture today shows `+0x588` =
 because its input requires 600 MHz. Rank 7 is not repeated on either board
 until an offline diagnosis names a concrete correction or a narrower
 diagnostic. The rank 6 to 9 bundles and runbooks are in
-`~/.cache/sunstoneos/evidence/board-bundles-20261023/`. Earlier identities and admission
+`~/.cache/sunstoneos/evidence/board-bundles-20261023/`.
+
+A read-only capture of the CPU power, CPU configuration and GIC-600 words on
+port `3-3` returned the expected CPU power words but zero for every GIC-600
+word, including `GICD_TYPER`, which read `0x007b0408` on 2026-10-18. The
+capture gives the same zeros in a clean lifetime, after only a cold start and
+DDR training, so the GIC is gated or held in reset after every cold start, and
+something earlier in the 2026-10-18 lifetimes enabled it; the rank-7
+diagnostic waits there instead of reporting. Rank 9, the native USB channel,
+then ran on port `3-3` with a builder that accepts MBUS at 400 MHz: the image
+returned to the ROM with a controlled refusal at USB takeover, because the
+inherited device-session bit 6 at `0x04100040` (observed `0x00029940`) is
+still refused, as on 2026-10-18. Both ports were power-cycled afterwards and
+passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
