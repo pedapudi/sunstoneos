@@ -61,7 +61,13 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if(v!=4)return 0;
     } else if(a==UINT32_C(0x02002d10)||a==UINT32_C(0x02002d1c)) {
         uint32_t mask=a==UINT32_C(0x02002d10)?UINT32_C(0x87001f1f):UINT32_C(0x10001);
-        if(a==UINT32_C(0x02002d10)&&(v&(mask&~UINT32_C(0x80000000)))!=29)return 0;
+        if(a==UINT32_C(0x02002d10)) {
+            /* Identification: SYS24M / 30. Four-bit default speed: PERI0
+             * 400 MHz / 8. The platform owns and verifies the parent lease;
+             * both gate states occur during its checked clock transition. */
+            uint32_t clock=v&(mask&~UINT32_C(0x80000000));
+            if(clock!=29&&clock!=UINT32_C(0x01000007))return 0;
+        }
         a733_mmio_dsb_sy();
         uint32_t old=a733_mmio_read32(a);
         if((old^v)&~mask)return 0;
