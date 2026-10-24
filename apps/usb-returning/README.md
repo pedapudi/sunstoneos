@@ -48,13 +48,20 @@ masking, and recorded a value mismatch in ROM_DISCONNECT (stage `0x16`) at
 `USB0+0x40`: mask `0x40`, expected 0, observed `0x00029940`, with three
 write attempts and completions. Its 32-bit store of `0x00029900` completed,
 and the readback still had SoftConn (PCTL bit 6) set. The pinned BSP,
-TinyUSB and the matched ROM write PCTL with 8-bit stores. The provider now
-removes SoftConn with one PCTL byte store and verifies it after the 150 ms
-disconnect interval, before the device reset. The admission rule now also
-refuses LSDEV, FSDEV and VEND0 DMA request selection.
+TinyUSB and the matched ROM write PCTL with 8-bit stores. The native
+adapter now writes PCTL with one byte store; the provider starts the 150 ms
+disconnect interval at the first read with SoftConn clear and checks the bit
+again before the device reset. The admission rule also refuses VEND0 DMA
+request selection.
 [USB0 takeover from the boot ROM's device session](../../docs/designs/usb-session-takeover.md)
 gives the decoding, the rule and its sources. Evidence is
 `~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/r9-v2-usb/`.
+
+On 2026-10-24 the image with the byte store (`rank-9-usb-v3/`) passed on
+port 3-3: SoftConn cleared, the OUT/IN exchange completed with received 1
+and sent 40, the USB task quiesced and the monitor returned to the ROM, with
+`native_usb.functional_success` true. Evidence is
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/r9-v3-usb/`.
 
 
 The current provider preserves the first failed condition before entering FAULTED. The error log copies its original stage, check kind, address, mask, expected value, observation-valid flag, existing observed value, callback result and write counters. It performs no diagnostic MMIO. `USB_FAULT_WROTE` is the legacy attempted-write flag. `USB_FAULT_WRITES_ATTEMPTED` counts write callbacks attempted; `USB_FAULT_WRITES_COMPLETED` counts successful callbacks. Neither proves engine completion or bus drain. A time failure reports the last good time, the existing callback's sample and the deadline; the sample is valid only when its callback result is 1.
@@ -88,21 +95,17 @@ Thirteen focused cases execute actual native callbacks, PMIC live/BUSY handling,
 
 ## Build and focused checks
 
-Run from the repository root:
-
-```sh
-python3 apps/usb-returning/build.py --evidence ~/.cache/sunstoneos/evidence/usb-returning-20261018
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/check.py --evidence ~/.cache/sunstoneos/evidence/usb-returning-20261018
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/host-check.py --evidence ~/.cache/sunstoneos/evidence/usb-returning-20261018
-```
-
-Headers that changed after the accepted provider objects were compiled make the default build refuse. `--platform-build DIR` compiles the platform and providers from the current tree, as for the thermal client, and still reuses the five accepted TinyUSB objects after their header closures match the current tree:
+Run from the repository root. `--platform-build DIR` names a central CMake build whose `a733-power-probe` target supplies the platform; platform and providers are compiled from the current tree, and the five accepted TinyUSB objects are reused after their header closures match it:
 
 ```sh
 python3 apps/usb-returning/build.py --platform-build /absolute/central-build --evidence /absolute/new/usb-evidence
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/check.py --evidence /absolute/new/usb-evidence
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/host-check.py --evidence /absolute/new/usb-evidence
 ```
 
-Twenty-eight linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Nineteen take their configuration from an existing session producer's retained board fields. Nine run the actual provider ROM takeover and native callbacks from the 2026-10-23 port 3-3 input, clock capture and observed USB0 word. One of them runs the image refused that day and must reproduce its fault record; the others run the built image: takeover to PREPARED, refusal when SoftConn never clears, and six admission refusals. In the register model a 32-bit store to USB0+0x40 leaves PCTL unchanged and an 8-bit store replaces it. Scheduler behavior, TinyUSB FIFO events and register effects are modeled. Twenty-four host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency, the 2026-10-23 refusal record and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
+`--baseline DIR` only reproduces the 2026-10-18 evidence from its accepted provider objects; current provider headers make it refuse. The builder requires one of the two options.
+
+Twenty-seven linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Nineteen take their configuration from an existing session producer's retained board fields. Eight run the actual provider ROM takeover and native callbacks from the 2026-10-23 port 3-3 input, clock capture and observed USB0 word. One of them runs the image refused that day and must reproduce its fault record; the others run the built image: takeover to PREPARED, refusal at the deadline when SoftConn never clears, and five admission refusals. In the register model a 32-bit store to USB0+0x40 leaves PCTL unchanged and an 8-bit store replaces it. Scheduler behavior, TinyUSB FIFO events and register effects are modeled. Twenty-four host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency, the 2026-10-23 refusal record and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
 
 The diagnostic input producer reads existing board-configuration JSON fields `fabric`, `fabric_hz`, `usb_supply_uv` and `pmic_expected`. The first three contain 3, 3 and 4 unsigned words; the last contains two three-word pin configurations. It emits a 96-byte diagnostic input with an explicit generation. This input carries configuration, not physical authority. The checker-generated fixture is not a board admission record.
 

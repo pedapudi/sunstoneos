@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build finite USB client on the frozen returning platform and real providers."""
+"""Build the finite USB client on the returning platform and the real providers.
+
+Pass --platform-build with a central CMake build whose a733-power-probe target
+supplies the platform; platform and providers then come from the current tree
+and only the five accepted TinyUSB objects are reused. --baseline only
+reproduces the 2026-10-18 evidence: its accepted provider objects predate the
+current provider headers and are refused for current source."""
 import argparse
 import json
 from pathlib import Path
@@ -7,21 +13,20 @@ import shutil
 import sys
 
 sys.dont_write_bytecode=True;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
-from returning_build import CENTRAL_PLATFORM,PROVIDER_UNITS,ROOT,ReturningPlatform,digest,image_object_closures,save
+from returning_build import CENTRAL_PLATFORM,PROVIDER_UNITS,ROOT,digest,image_object_closures,platform_arguments,platform_from,save
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
-group=p.add_mutually_exclusive_group()
-group.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/pmic-provider-probe-20261018')
-group.add_argument('--platform-build',type=Path,help='central CMake build whose a733-power-probe target supplies the platform; the accepted TinyUSB objects are still reused')
+platform_arguments(p)
 p.add_argument('--transport',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-transport-only-20261018')
 # Per-object compiler dependencies of the accepted TinyUSB objects.
 p.add_argument('--transport-records',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-integration-20261018/frozen/image-objects.json')
-a=p.parse_args();r=ROOT;e=a.evidence.resolve();base=a.baseline.resolve();transport=a.transport.resolve()
-# The accepted TinyUSB objects exist only in evidence. With a central build the
-# platform and providers come from the current tree and only TinyUSB is reused.
+a=p.parse_args();r=ROOT;e=a.evidence.resolve();transport=a.transport.resolve()
+if not a.platform_build and not a.baseline:
+    p.error('pass --platform-build; --baseline only reproduces the 2026-10-18 evidence')
+# The accepted TinyUSB objects exist only in evidence.
 central=a.platform_build is not None
-platform=ReturningPlatform(e,build=a.platform_build.resolve()) if central else ReturningPlatform(e,baseline=base)
+platform=platform_from(a,e)
 tiny=Path.home()/'.cache/sunstoneos/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973/src'
 flags=['-DSUNSTONE_A733_USB=1',f'-I{r}/platform/a733-storage-update',f'-I{r}/drivers/usb',f'-I{tiny}']
 config_pin=Path.home()/'.cache/sunstoneos/evidence/gpu-software-failure-20261018/snapshot/inputs/188-tusb_config.h'
@@ -37,7 +42,7 @@ platform.reuse(names,usb,{x['sha256']:recorded[x['sha256']] for x in usb if 'acc
 assert len(platform.reused)==(len(CENTRAL_PLATFORM)+5 if central else 31),len(platform.reused)
 platform.link();platform.binary();platform.run()
 platform.record(__file__,{'transport_input_records_sha256':digest(transport/'input-identities.json')})
-for root,name in [(transport,'transport')]+([] if central else [(base,'baseline')]):
+for root,name in [(transport,'transport')]+([] if central else [(a.baseline.resolve(),'baseline')]):
  for source in ['input-identities.json','reused-objects.json']:
   shutil.copy2(root/source,e/(name+'-'+source))
 platform.copy_helpers('usb-returning',('host-check.py','check.py','prepare.py','README.md'))
