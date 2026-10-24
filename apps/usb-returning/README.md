@@ -82,7 +82,13 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/usb-returning/host-check.py --evidence ~/.cache/sunstoneos/evidence/usb-returning-20261018
 ```
 
-Fifteen linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Their configuration comes from an existing session producer's retained board fields. Scheduler behavior, hardware provider progression, TinyUSB FIFO events and register effects are modeled. Twenty-three host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
+Headers that changed after the accepted provider objects were compiled make the default build refuse. `--platform-build DIR` compiles the platform and providers from the current tree, as for the thermal client, and still reuses the five accepted TinyUSB objects after their header closures match the current tree:
+
+```sh
+python3 apps/usb-returning/build.py --platform-build /absolute/central-build --evidence /absolute/new/usb-evidence
+```
+
+Nineteen linked cases execute actual input copying, task construction, production provider/resource constructors, response accounting, and native shutdown MMIO guards. Their configuration comes from an existing session producer's retained board fields. Scheduler behavior, hardware provider progression, TinyUSB FIFO events and register effects are modeled. Twenty-three host cases check one-attempt capture, disappearance, early admission cutoff, transport failure, result consistency and the kernel runner's lock/deadline integration. Earlier passing provider and TinyUSB checks are reused. These checks establish no physical operation.
 
 The diagnostic input producer reads existing board-configuration JSON fields `fabric`, `fabric_hz`, `usb_supply_uv` and `pmic_expected`. The first three contain 3, 3 and 4 unsigned words; the last contains two three-word pin configurations. It emits a 96-byte diagnostic input with an explicit generation. This input carries configuration, not physical authority. The checker-generated fixture is not a board admission record.
 

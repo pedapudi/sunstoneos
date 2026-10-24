@@ -54,6 +54,17 @@ the rules forbid a retry.
 | 8 | Full returning eight-core workload (frozen in `all-core-task-workload-20261019/frozen/`) | Task bodies, floating point, SGIs and the CPU0 timer on all cores: the main unqualified multicore step | As in rank 7, plus scheduler faults under load |
 | 9 | Native USB device channel (`tools/check-a733-usb-returning.py`) | The native USB0 driver can carry results and hand the controller back | Any native USB failure leaves the board unreachable until power-cycled |
 
+Ranks 1 to 5 passed on both boards on 2026-10-23. [The runbooks for ranks
+6 to 9](../board-runbooks/README.md) list each remaining command per board,
+its admission records, success text, timeout and stop condition, and the
+frozen bundles under `~/.cache/sunstoneos/evidence/board-bundles-20261023/`.
+After the forced-stall return, the kernel runner that ranks 6 and 9 use
+refuses the DDR continuity chain, because it accepts only kernel-mode
+returns as links; the runbooks give the runner change that accepts
+forced-stall and native-runner returns, and the alternatives without it. No
+runner for the boot-clock report exists, so rank 6 runs the thermal
+application alone.
+
 ### Why this order
 
 - Ranks 1 to 5 re-establish the conditions that every later test depends on:
