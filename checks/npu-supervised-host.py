@@ -128,7 +128,7 @@ def main():
     case('exact-package',package);prepared=prep.validate_bundle(bundle)
     def launcher(directory):
         original=(ROOT/'checks/a733-smp-supervised-launch.py').read_text()
-        start=original.index('    if args.frequency_only:');end=original.index('    result =',start)
+        start=original.index('    if args.accelerator_profile:\n        cases');end=original.index('    result =',start)
         derived=original[:start]+"    cases=[check('NPU contract publication and handoff',12)]\n"+original[end:]
         assert derived.count('0x4153373353554333')==1
         derived=derived.replace('0x4153373353554333',hex(prep.CONTRACT_MAGIC))

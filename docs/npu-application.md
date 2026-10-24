@@ -104,45 +104,14 @@ That ROM response alone does not establish watchdog causation.
 
 ## Focused validation
 
-`checks/npu-application.py` links the native image with the explicit refusal
-fixture in `checks/npu-application.c`, passed as the handoff source of the
-unsupervised build. That build is removed, so the check does not build on this
-tree; the results below are its preserved record. It preserves generated assembly,
-source dependencies, selected artifacts, tool identities, ELF and map before
-instruction execution. The prepared physical image retains zero admission flags.
-
-The selected instruction check constructs the real application, shared providers,
-FreeRTOS tasks, reserved buffers and convolution service in modeled architectural
-state. Separate client cases inject matching reference bytes, mismatching bytes
-or a failed service reply at the device-service boundary. The actual client
-wrappers copy input and output, enforce matched tickets, reap and publish. A late
-registry failure must override a previously completed result and refuse native
-NPU access while retaining the parent.
-
-The same check exercises the native frame encoder, durable host capture and
-refusal-only launch guard. Architectural translation/cache effects and service
-completion are modeled. The unchanged convolution SHA-256 helper delegates to
-host hashlib over the actual buffer bytes to avoid replaying its instruction
-suite. Its existing constituent evidence is reused. Injecting reference output checks publication and
-comparison; it does not execute numerical inference. Existing controller,
-assembler, service, PMIC, vector and USB constituent evidence remains applicable
-to its original inputs. Physical NPU execution remains unqualified.
-
-The first native image build and link passed with no undefined symbols. The
-focused instruction composition passed on that preserved ELF. Preparation used
-1,087 modeled AT instructions and performed no device MMIO. Matching and
-mismatching cases each executed OPEN, SUBMIT, STATUS and REAP; the failed reply
-stopped before REAP and completion publication. Raw inputs, image and case
-records are in `~/.cache/sunstoneos/evidence/npu-application-20261017/batch1`.
-
-The root configuration also builds and links the native application with the
-explicit refusal fixture. Its 101 unchanged repository dependencies match the
-preserved runtime inputs. The remaining header change is conditional on a
-newlib option that this target does not enable. Application operation renaming
-remains local to the NPU executable; the root component target is unaffected.
-Central artifacts and dependency comparisons are preserved under
-`~/.cache/sunstoneos/evidence/npu-application-20261017/central/`.
-No runtime cases were repeated, and this fixture image is not deployable.
+The application builds only as a supervised image. The supervised instruction
+check, `checks/npu-supervised.py`, constructs the image's providers, the power
+service and the startup sequencer under Unicorn and runs four cases: the
+startup reaching READY, a wrong rail, domain 4 already on, and a PLL_NPU LOCK
+timeout; the three refusals retain their tokens. `checks/npu-supervised-host.py`
+covers packaging, admission, capture and the launcher's contract publication
+in 33 cases with USB, FEL and the queue mocked. Physical NPU execution remains
+unqualified.
 
 ## Supervised startup and retained recovery
 

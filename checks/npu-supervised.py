@@ -243,6 +243,8 @@ def execute(image,out,selected_case=None):
     for name in ('probe_arrived','probe_finished'):write(sym[name],struct.pack('<8I',*([1]*8)))
     uint(sym['probe_release'],1)
     word(sym['a733_cached_runtime']+off('a733_cached_runtime','startup_deadline'),24000024)
+    # The boot prepares the local pools in platform_init before this entry.
+    assert call('a733_memory_reservations_prepare')==1 and call('a733_memory_uncached_prepare')==1
     cpu();run(sym['a733_smp_diagnostic_start'],{sym['vTaskStartScheduler']})
     assert m.translations>512 and not m.writes
     address=sym['app'];startup=address+app['startup'];domains=address+app['domains'];registry=address+app['registry']

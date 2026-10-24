@@ -9,7 +9,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('elf','evidence'):p.add_argument('--'+n,type=Path,required=True)
 a=p.parse_args();root=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf)
+spec=importlib.util.spec_from_file_location('layout',root/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout);image=layout.Image(a.elf,layout_names=('a733_npu_reserved','a733_npu_startup','a733_npu_startup_config','a733_platform_locks','a733_pmic','a733_pmic_slot','a733_rail_borrow','npu_convolution','npu_service'))
 with a.elf.open('rb') as stream:
     dwarf=ELFFile(stream).get_dwarf_info();objects=[]
     for cu in dwarf.iter_CUs():
@@ -42,7 +42,7 @@ for variant in variants:
         if variant==name:put(at,value,4)
     checkpoint=variant.startswith('checkpoint-')
     if checkpoint:put(app+f['pmic_stop'],1,4)
-    hooks={image.address(n,unit='/apps/npu-convolution/native.c' if n=='parent' else None):n for n in ['parent','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','vTaskSuspend','vTaskDelay','a733_counter_clock_now','aarch64_device_translate','xQueueGetMutexHolder','a733_pmic_poll']}
+    hooks={image.address(n,unit='/apps/npu-convolution/native.c' if n=='parent' else None):n for n in ['parent','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','vTaskSuspend','vTaskDelay','a733_counter_clock_now','aarch64_device_translate','xQueueGetMutexHolder','a733_pmic_poll','xTaskGenericNotify']}
     def code(cpu,at,size,cookie):
         name=hooks.get(at)
         if name is None:return
@@ -54,6 +54,7 @@ for variant in variants:
         elif name=='aarch64_device_translate':
             put(args[2],args[0]);put(args[2]+8,0,4);put(args[2]+12,2,4);ret(int(variant!='mapping-failure'))
         elif name=='xQueueGetMutexHolder':ret(1 if variant=='mutex-held' else 0)
+        elif name=='xTaskGenericNotify':ret(1)
         elif name=='vTaskSuspend':
             state['suspended'].append(args[0])
             if checkpoint:u.emu_stop()
