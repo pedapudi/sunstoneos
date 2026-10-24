@@ -267,9 +267,12 @@ copies the memory to the host. `sunxi-fel readl ADDRESS` instead uploads a
 12-word A32 stub to the FEL scratch area at `0x71000`, executes it, and reads
 back the value of one `LDR` (`fel_lib.c`, `aw_fel_readl_n`). The ROM's FEL
 copy code lies outside the 68 KiB captured ROM (the dispatcher jumps to
-`0x17000`), so its access width is not known. The GIC architecture supports
-only 32-bit and 64-bit accesses to these registers; any other access returns
-UNKNOWN data (IHI 0069G, section 12.1.3).
+`0x17000`), so its access width is not known. The GIC architecture requires
+support only for 32-bit accesses to these registers (and 64-bit accesses to
+the 64-bit ones). For any other access it states that "it is UNPREDICTABLE
+whether: the access generates an external abort or not; the defined
+side-effects of a read occur or not. A read returns UNKNOWN data" (IHI 0069G,
+section 12.1.3).
 
 Three port 3-3 captures compare the two methods:
 
@@ -283,8 +286,9 @@ The `readl` values in the clean lifetime match 2026-10-18 and satisfy every
 predicate of the diagnostic that they cover: `GICD_CTLR` `0x37`,
 `GICD_TYPER` `0x007b0408`; CPU0 redistributor `GICR_PWRR`, `GICR_CTLR`,
 `GICR_WAKER` and the enable, pending, active, group, modifier, configuration
-and priority words all 0; secondary frame n `GICR_TYPER` `(n << 40) | 0x21`
-(with `0x10` added on frame 7), `GICR_PWRR` `n << 8`, `GICR_CTLR` 0 and
+and priority words all 0; secondary frame n `GICR_TYPER`
+`(n << 40) | (n << 8) | 0x21`, with `0x10` added on frame 7 (low word `0x121`
+on frame 1, `0x731` on frame 7), `GICR_PWRR` `n << 8`, `GICR_CTLR` 0 and
 `GICR_WAKER` 6. The FEL scratch bytes were restored and compared.
 
 The CPU power, control and mode words read the same values with `read` as
@@ -341,8 +345,10 @@ Answers to the three questions about MBUS:
    address in a literal pool. The only native code that builds a CCU
    address, in `a733_usb_prepare`, is unreachable from the overlay's entry.
    DSU and interconnect settings are system-register writes independent of
-   the bus clocks. A slower memory bus could stretch the 5.3 ms run, but the
-   deadline leaves a margin near 190 times.
+   the bus clocks. A slower memory bus could stretch the 5.3 ms run. With
+   the corrected diagnostic's extra scan of the 20,736-byte report, the
+   worst case is estimated at about 10.6 ms against the 0.996 s startup
+   deadline, a margin of about 94 times.
 3. **Rank: last.** The rate was the same in both lifetimes and nothing in the
    executed path reads it.
 
@@ -471,9 +477,10 @@ The corrected first-task overlay adds one function,
 (`tools/prepare-secondary-identity-probe.py --first-task`) links the overlay
 with `--wrap=identity_primary_run`, so `identity_primary_gate` calls the new
 function before the sequential survey. The function uses no stack and writes
-no device register. It reads each word below with a 32-bit load (64-bit for
-`GICR_TYPER`) and applies the predicate of the later check that reads the
-same word. If every word passes, it branches to `identity_primary_run`, and
+no device register. It reads the startup contract and the report with 64-bit
+loads, `CNTFRQ_EL0` as a system register, `GICR_TYPER` with 64-bit loads and
+every other GIC and power word with a 32-bit load. It applies to each word
+the predicate of the later check that reads the same word. If every word passes, it branches to `identity_primary_run`, and
 the run continues as before with the report untouched.
 
 On the first failing word it writes a refusal into the identity report header
@@ -518,14 +525,39 @@ quarantine the instance.
 The secondary words are checked core by core, `GICR_PWRR` before the other
 words of the same frame, and CPU0's frame last.
 
-Some failures still park, because they happen after release, when running
-secondaries cannot be brought to an observed OFF. They are each secondary's
-checks of its own identity and control registers, the power-on, wake and
-configuration handshakes of `a733_cpu_continue`, the cached EL1 entry, every
-cleanup readback and every deadline that expires after release. The base overlay's
-entry checks (EL3, boot CPU, masked interrupts, CPU revision) run before the
-survey and also park; the primary report's state field records how far that
-overlay got.
+Other failures still end without a return. They fall into four groups, in
+execution order:
+
+- **CPU0 before the admission.** The native startup `a733_smp_boot`
+  (`platform/a733-smp-cached/boot.c`) stops in a `wfe` loop through
+  `a733_smp_stop` if CPU0's entry state, the startup contract, or the
+  watchdog, FEL and redirect words differ from the admission. The base
+  overlay `primary_publication_probe` (`boot/a733/primary-publication-probe.S`)
+  then branches to `primary_publication_park` if CPU0 is not at EL3, is not
+  the boot CPU, has interrupts unmasked or has a different CPU revision or
+  cluster identification. It parks again if `probe_production_prepare`
+  (`a733_cached_prepare`) leaves `SCTLR_EL3`, `TCR_EL3`, `TTBR0_EL3` or
+  `MAIR_EL3` changed or `SCTLR_EL1` and `TCR_EL1` unrestored. A stop inside
+  `a733_cached_prepare` also ends without a return.
+- **The admission itself.** A GIC or power-controller read that stalls does
+  not return.
+- **CPU0 after the admission, before release.** `identity_primary_run`
+  repeats its own entry checks. It parks if CPU0 is not at EL3, is not the
+  boot CPU, has an `SCTLR_EL3` bit of `A733_ENTRY_SCTLR_REJECT`
+  (`0x02001005`) set or has interrupts unmasked. It also parks if the
+  deadline expires between the admission and these checks. `secondary_distributor_begin`
+  parks if a distributor RWP wait reaches the deadline or a readback after
+  its distributor writes differs.
+- **After release**, when running secondaries cannot be brought to an
+  observed OFF: each secondary's checks of its own identity and control
+  registers, the power-on, wake and configuration handshakes of
+  `a733_cpu_continue`, the cached EL1 entry, CPU0's own continue and EL3
+  cache steps, every cleanup readback and every deadline that expires after
+  release.
+
+The primary report's state field records how far the base overlay got, and
+the native result block records an `a733_smp_stop` status, but the host reads
+neither without a return.
 
 The executed bytes change only in the identity extension of the overlay. The
 extension grows from 11,096 to 11,736 bytes of its 12,288-byte reservation;
@@ -558,11 +590,17 @@ commands. The order:
      more.
    - **It returns with a refusal code.** The code, address and value name the
      state; correct its owner before another attempt.
-   - **It does not return.** The failure is after release, so it is an
-     intermittent failure or a fault that does not depend on the inherited
-     state. Remove every power source from port 3-1. The next diagnostic is a
-     bounded repeat of the all-eight-core pre-scheduler diagnostic, which
-     shares the power-up and cached-entry path.
+   - **It does not return.** CPU0 stopped in one of the parking paths listed
+     above: before the admission, in a stalled admission read, after the
+     admission but before release, or after release. A non-return therefore
+     does not exclude hypothesis 1: a CPU0 control register that the warm
+     reset does not restore can still stop CPU0 before release. It also
+     remains consistent with an intermittent failure after release. Remove
+     every power source from port 3-1. The next diagnostic must separate
+     these paths: a bounded repeat of the all-eight-core pre-scheduler
+     diagnostic, which shares the CPU0 startup, publication and power-up
+     paths, distinguishes a CPU0 stop from a failure in the cached first-task
+     path.
 3. **Port 3-3, only after port 3-1 returns.** Port 3-3 has never run an
    eight-core diagnostic and draws power from USB only, so a failure there
    could not be separated from a supply limit. Repeat steps 1 and 2 on port

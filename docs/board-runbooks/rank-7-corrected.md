@@ -14,13 +14,14 @@ workload runs. Every core then cleans the 145-page owned writable interval,
 CPU0 restores its controls, the seven secondaries reach OFF and CPU0 returns
 to the ROM.
 
-Before it releases any secondary, the overlay reads the inherited state with
-32-bit loads: the startup contract, the zeroed report, `CNTFRQ_EL0`, the
-GIC-600 distributor, all eight redistributor frames and the seven
-secondaries' power words. On the first word that a later check would refuse,
+Before it releases any secondary, the overlay reads the inherited state. It
+reads the startup contract and the zeroed report with 64-bit loads and
+`CNTFRQ_EL0` as a system register. It reads the GIC-600 distributor, all
+eight redistributor frames and the seven secondaries' power words with 32-bit
+loads, except `GICR_TYPER`, which it reads with 64-bit loads. On the first word that a later check would refuse,
 it writes a failure code, the word's address and the value read into the
 report, and returns to the ROM. [The diagnosis](rank-7-diagnosis.md#the-corrected-diagnostic-checks-the-inherited-state-before-releasing-any-secondary)
-lists the codes and the checks that still park after release.
+lists the codes and the checks that still end without a return.
 
 ## Bundle contents
 
@@ -134,10 +135,20 @@ success.
   `rom_usable` and `dram_restored` true. `runtime/report.bin` holds the code
   at offset `0x160`, the address at `0x168` and the value at `0x170`. The ROM
   answers on a new instance and needs no power removal. Do not retry; report
-  the code.
-- **No return within the runner's 10 s window.** The failure happened after
-  release. Keep the runner's lock, record the failure and request a power
-  removal for this port. Do not retry, and do not run rank 8 or port 3-3.
+  the code. For codes `0x01` to `0x03` (zero epoch or lease, expired
+  deadline, nonzero report) the host decoder can instead report `Admission
+  refusal report is inconsistent.`, because its decoder requires a nonzero
+  epoch and deadline and an otherwise zero report, which these refusals need
+  not have. The code is then read from `runtime/report.bin` at offset
+  `0x160`.
+- **No return within the runner's 10 s window.** CPU0 stopped in one of the
+  parking paths the diagnosis lists: in the native startup or the base
+  overlay before the admission, in a stalled admission read, in
+  `identity_primary_run` or `secondary_distributor_begin` after the
+  admission but before release, or after release. The observation alone does
+  not tell these apart. Keep the runner's lock, record the failure and
+  request a power removal for this port. Do not retry, and do not run rank 8
+  or port 3-3.
 
 ## Stop conditions
 
