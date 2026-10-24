@@ -25,7 +25,7 @@ int a733_usb2_platform_outside(struct a733_usb2_platform *p,const void *v,size_t
         a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
         a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&a733_ranges_disjoint(p->pck,sizeof(*p->pck),v,n)&&
         a733_ranges_disjoint(p->typec,sizeof(*p->typec),v,n)&&p->ops.outside(p->cookie,v,n)==1&&
-        p->pmic->ops.outside(p->pmic->cookie,v,n)==1&&
+        a733_pmic_outside(p->pmic,v,n)==1&&
         p->typec->config.ops.outside(p->typec->config.context,v,n)==1;
 }
 static int valid(const struct a733_usb2_platform_config *c)
@@ -55,7 +55,7 @@ int a733_usb2_platform_init(struct a733_usb2_platform *p,const struct a733_usb2_
         !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
         !a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||!a733_ranges_disjoint(p,sizeof(*p),pck,sizeof(*pck))||
         !a733_ranges_disjoint(p,sizeof(*p),typec,sizeof(*typec))||o->outside(cookie,p,sizeof(*p))!=1||
-        pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||
+        a733_pmic_outside(pmic,p,sizeof(*p))!=1||
         typec->config.ops.outside(typec->config.context,p,sizeof(*p))!=1)return 0;
     *p=(struct a733_usb2_platform){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,
         .rails=rails,.pmic=pmic,.pck=pck,.typec=typec,.deadline=c->deadline};

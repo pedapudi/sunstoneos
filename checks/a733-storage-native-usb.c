@@ -64,7 +64,7 @@ static void setup(void)
     for(unsigned b=1;b<A733_PIN_BANKS;++b)handoff.authorized[b]=a733_pin_bank_mask(b);
     for(unsigned i=0;i<2;++i)handoff.latch[i]=(struct a733_pin_latch_handoff){100+i,900,a733_pin_bank_mask(A733_PIN_L+i),0};
     assert(a733_pins_init_banks(&u->pins,&po,&power,&handoff));
-    assert(a733_pmic_init(&u->pmic,&power.provider.config,&power.provider.ops,&power,&u->clocks,&u->rails,&u->pins));
+    assert(a733_pmic_init(&u->pmic,&power.provider.config,&power.provider.pmic_bus_ops,&power,&u->clocks,&u->rails,&u->pins));
     assert(a733_pmic_identity(&u->pmic,&u->usb_power)==A733_PMIC_READY);
     for(unsigned i=0;i<16&&a733_pmic_live(&u->pmic,&u->usb_power)!=A733_PMIC_READY;++i){power.worker=1;assert(a733_pmic_poll(&u->pmic)!=A733_PMIC_RETAINED);power.worker=0;}
     assert(a733_pmic_live(&u->pmic,&u->usb_power)==A733_PMIC_READY);

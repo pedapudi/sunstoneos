@@ -22,7 +22,7 @@ int a733_pcie_output_outside(const struct a733_pcie *p,const void *v,size_t n)
     return a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
         a733_ranges_disjoint(p->pins,sizeof(*p->pins),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
         a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&a733_ranges_disjoint(p->pck,sizeof(*p->pck),v,n)&&
-        p->ops.outside(p->cookie,v,n)==1&&p->pmic->ops.outside(p->pmic->cookie,v,n)==1;
+        p->ops.outside(p->cookie,v,n)==1&&a733_pmic_outside(p->pmic,v,n)==1;
 }
 static int config_valid(const struct a733_pcie_config *c)
 {
@@ -56,7 +56,7 @@ int a733_pcie_init(struct a733_pcie *p,const struct a733_pcie_config *c,
         !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
         !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
         !a733_ranges_disjoint(p,sizeof(*p),pck,sizeof(*pck))||o->outside(cookie,p,sizeof(*p))!=1||
-        pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1)return 0;
+        a733_pmic_outside(pmic,p,sizeof(*p))!=1)return 0;
     *p=(struct a733_pcie){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,
         .pins=pins,.rails=rails,.pmic=pmic,.pck=pck,.deadline=c->deadline};
     atomic_init(&p->busy,0);return 1;

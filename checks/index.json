@@ -7441,6 +7441,7 @@
    "docs/designs/pmic-access.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
+   "docs/handoff.md",
    "docs/pmic-runtime.md"
   ],
   "library": false,
@@ -7455,6 +7456,7 @@
    "docs/designs/npu-board.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-domains.md",
+   "docs/handoff.md",
    "docs/power-domains.md"
   ],
   "library": false,

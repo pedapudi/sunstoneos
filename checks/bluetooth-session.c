@@ -15,7 +15,7 @@ int aic8800_security_init(struct aic8800_security *s){(void)s;return 1;}
 int main(void)
 {
     platform.initialized=1;platform.clocks=&clocks;platform.pins=&pins;platform.rails=&rails;platform.pmic=&pmic;
-    platform.ops.current=current;pmic.ops.outside=provider_outside;rails.binding.gpu=&gpu;
+    platform.ops.current=current;pmic.pmic_bus_ops.outside=provider_outside;rails.binding.gpu=&gpu;
     platform.config.deadline_us=100;platform.config.lifetime_deadline_us=10000;
     struct a733_radio_session_config c={.owner_task=task,.owner=22,.bootstrap_deadline=900,
         .runtime_lease_us=1000,.renew_margin_us=200,.transport={.ticks_per_ms=1000}};

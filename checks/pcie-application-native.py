@@ -50,7 +50,7 @@ class Machine:
    self.hooks[image.address(name)]=name
   self.cpu.hook_add(UC_HOOK_CODE,self.code);self.cpu.hook_add(UC_HOOK_MEM_READ,self.memory,begin=0x20000000,end=0x20000fff)
   assert self.call('a733_pmic_native_init',self.objects['pmic_native'],self.objects['locks'],2)==1
-  data=bytes(self.cpu.mem_read(self.objects['pmic_native']+image.layouts['a733_pmic_native']['operations'],image.sizes['a733_pmic_ops']));self.cpu.mem_write(self.objects['pmic']+image.layouts['a733_pmic']['ops'],data)
+  data=bytes(self.cpu.mem_read(self.objects['pmic_native']+image.layouts['a733_pmic_native']['pmic_bus_ops'],image.sizes['a733_pmic_ops']));self.cpu.mem_write(self.objects['pmic']+image.layouts['a733_pmic']['pmic_bus_ops'],data)
  def field(self,name,value=None,size=4):
   if value is not None:self.cpu.mem_write(self.base+self.layout[name],value.to_bytes(size,'little'))
   return int.from_bytes(self.cpu.mem_read(self.base+self.layout[name],size),'little')

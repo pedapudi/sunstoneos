@@ -34,7 +34,7 @@ static struct a733_power_authority *word(const struct a733_power_domains *d)
 static int clock(struct a733_power_domains *d,uint64_t *now)
 {
     uint64_t t;
-    if(d->pmic->ops.now(d->pmic->cookie,&t)!=1 || !a733_monotonic_advance(t,&d->last_now))return 0;
+    if(a733_pmic_now(d->pmic,&t)!=1 || !a733_monotonic_advance(t,&d->last_now))return 0;
     *now=t;return 1;
 }
 static int rd(const struct a733_power_domains *d,uintptr_t a,uint32_t *v)

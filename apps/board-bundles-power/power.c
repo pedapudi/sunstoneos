@@ -241,7 +241,7 @@ int bb_power_init(TaskFunction_t client, const char *name)
     p->client = xTaskCreateStatic(client, name, 4096, NULL, 1, stacks[1], &tasks[1]);
     if (!p->service || !p->client || !a733_pmic_native_init(&p->pmic_native, &p->locks, p->service))
         return 0;
-    p->native_pmic_ops = p->pmic_native.operations;
+    p->native_pmic_ops = p->pmic_native.pmic_bus_ops;
     struct a733_pmic_ops ops = p->native_pmic_ops;
     ops.read = pmic_read;
     ops.write = pmic_write;

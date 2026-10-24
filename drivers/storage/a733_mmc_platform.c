@@ -23,7 +23,7 @@ static int outside(const struct a733_mmc_platform *p,const void *v,size_t n)
     return a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
         a733_ranges_disjoint(p->pins,sizeof(*p->pins),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
         a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&
-        a733_ranges_disjoint(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),v,n)&&p->ops.outside(p->cookie,v,n)==1&&p->pmic->ops.outside(p->pmic->cookie,v,n)==1;
+        a733_ranges_disjoint(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),v,n)&&p->ops.outside(p->cookie,v,n)==1&&a733_pmic_outside(p->pmic,v,n)==1;
 }
 int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock_mask_t *out)
 {
@@ -261,8 +261,8 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
        !o->read_fifo||!o->write_fifo||
        !clocks||!clocks->initialized||!pins||!pins->initialized||!rails||rails->self!=rails||
        rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||
-       pmic->rails!=rails||pmic->pins!=pins||!pmic->ops.outside||
-       pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||!a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||
+       pmic->rails!=rails||pmic->pins!=pins||
+       a733_pmic_outside(pmic,p,sizeof(*p))!=1||!a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||
        !a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||!a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||
        !a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||!a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
        !a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||

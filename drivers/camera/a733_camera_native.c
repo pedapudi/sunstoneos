@@ -373,7 +373,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
 {
     if(!n || n->self || instance || !c || !c->boot || !c->media || !c->clocks || !c->pins ||
        !c->rails || !c->rail_parent || !c->pmic || !c->locks || !c->task ||
-       c->pmic->self!=c->pmic || !c->pmic->ops.outside ||
+       c->pmic->self!=c->pmic ||
        !c->locks->initialized || c->locks->now!=a733_counter_clock_now || !c->locks->context ||
        c->clocks->now!=c->locks->now || c->clocks->context!=c->locks->context ||
        c->media->registry!=c->clocks || c->media->config.owner!=c->boot->owner ||
@@ -392,9 +392,9 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        !a733_ranges_disjoint(n,sizeof(*n),c->locks,sizeof(*c->locks)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock)) ||
        !a733_smp_device_preparation_admitted() ||
-       c->pmic->ops.outside(c->pmic->cookie,n,sizeof(*n))!=1 ||
-       c->pmic->ops.outside(c->pmic->cookie,c,sizeof(*c))!=1 ||
-       c->pmic->ops.outside(c->pmic->cookie,c->boot,sizeof(*c->boot))!=1)return 0;
+       a733_pmic_outside(c->pmic,n,sizeof(*n))!=1 ||
+       a733_pmic_outside(c->pmic,c,sizeof(*c))!=1 ||
+       a733_pmic_outside(c->pmic,c->boot,sizeof(*c->boot))!=1)return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||

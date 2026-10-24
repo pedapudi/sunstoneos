@@ -85,8 +85,9 @@ that find the flag clear and re-spin are therefore expected.
   object and has checked the task at entry, so a per-access task check adds
   no case. `checks/pmic-tree.py` keeps both facts (see the last section).
 - **Revocation.** Unchanged: one acquire load of the power-authority state
-  word before each further phase and at publication, and the lock's retained
-  bit on every access.
+  word at the entry of each poll and before each further phase, including
+  the publish phase, and the lock's retained bit on every access. The
+  publish phase itself checks the deadline and not the state word.
 - **Bounded failure.** Inside `transfer()`, a deadline that passes during a
   phase is detected after at most that phase's accesses, three at most (an
   address phase writes `DATA` and `CNTR`; the final STOP wait reads three
@@ -230,7 +231,13 @@ Committed checks, added with the implementation:
   - a retained fault for the control error;
   - a request that completes with a held line after an intermediate STOP,
     and one retained after the final STOP;
-  - the deadline bounds above.
+  - the deadline bounds above;
+  - for a clock fault set between phases after any write of a snapshot, no
+    further bus access;
+  - a retained request when the deadline passes between the final STOP and
+    publication;
+  - a STOP spin that ends two bit times after the time read that follows
+    the STOP write.
 
   Each of the matching provider mutants fails it.
 - `checks/a733-pmic-time.c`: the reciprocal division against integer
@@ -343,18 +350,25 @@ image built from it. None of them is board-qualified.
   with 155% kept until the access-cost run.
 - `checks/pmic-tree.py`: fail if `owned()`, `read32()` or `write32()` in
   `drivers/power/a733_pmic_native.c` call `current(` or any
-  `a733_task_context_` function. Keyed on the declared type, fail when a
-  source other than the adapter and `apps/board-bundles-power/power.c` uses
-  a `struct a733_pmic_native`'s operations other than as `a733_pmic_init()`'s
-  argument (a call, a copy, a function pointer), names
-  `struct a733_pmic_ops`, or uses a `struct a733_pmic`'s register, mutex or
-  retention operations. Planted uses in `apps/thermal-returning/adc.c` and
-  `apps/npu-returning/main.c` fail it.
+  `a733_task_context_` function. Fail when a source other than the
+  provider, its adapter and `apps/board-bundles-power/power.c` and
+  `power.h` names `pmic_bus_ops`, `a733_pmic_ops` or `a733_pmic_init`.
+  `pmic_bus_ops` is the member of `struct a733_pmic_native` and
+  `struct a733_pmic` that holds the adapter operations; no other code uses
+  the name. Other sources use three helpers instead:
+  `a733_pmic_native_bind()` passes the native adapter to
+  `a733_pmic_init()`, and `a733_pmic_now()` and `a733_pmic_outside()` make
+  the two consumer queries. A name built by token pasting, or a call through
+  a pointer cast to the adapter's first member, is not caught. Planted uses
+  in `apps/thermal-returning/adc.c` and `apps/npu-returning/main.c` fail it.
 - `apps/board-bundles-power/bundle6.c`, `power.c`, `power.h`, `trace.c` and
   `trace.h`, for the next refreeze: the windows at the park, write timing,
   wire-time spin, re-spin counts and core record of the measurement plan, in
   place of the client's `access_cost()`. The same edit passes the third argument of
   `a733_power_domain_check()`, which `bundle6.c` omits on the current tree.
+  `power.c` also names the adapter member `pmic_bus_ops`, which replaced
+  `operations`; the frozen bundle 6 image keeps the old name until this
+  refreeze.
 - `docs/designs/board-bundles-next.md`: the bundle 6 row's measurements and
   bound procedure.
 - `checks/board-bundles-apps-model.c`, in the patch: the step records'

@@ -78,6 +78,6 @@ int a733_pmic_native_init(struct a733_pmic_native *n,struct a733_platform_locks 
        !a733_ranges_disjoint(n,sizeof(*n),locks,sizeof(*locks)) ||
        !a733_ranges_disjoint(n,sizeof(*n),locks->context,sizeof(struct a733_counter_clock)))return 0;
     n->locks=locks;n->task=task;n->holding=0;n->ticks_per_us=(struct a733_pmic_divisor){0};
-    n->operations=(struct a733_pmic_ops){now,current,enter,leave,retain,read32,write32,outside};
+    n->pmic_bus_ops=(struct a733_pmic_ops){now,current,enter,leave,retain,read32,write32,outside};
     n->initialized=1;return 1;
 }

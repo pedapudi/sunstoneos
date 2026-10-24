@@ -37,7 +37,7 @@ class Machine:
   rl=e.layouts['a733_rail_leases'];rb=e.layouts['a733_rail_binding'];self.write(rails+rl['self'],rails,8);self.write(rails+rl['binding']+rb['clocks'],self.clock,8);self.write(rails+rl['binding']+rb['gpu'],gpu,8)
   pl=e.layouts['a733_pmic'];po=e.layouts['a733_pmic_ops']
   for field,value in [('clocks',self.clock),('pins',pins),('rails',rails),('cookie',self.native)]:self.write(self.pmic+pl[field],value,8)
-  self.write(self.pmic+pl['ops']+po['outside'],e.address('outside','/drivers/pwm/a733_pwm_native.c'),8)
+  self.write(self.pmic+pl['pmic_bus_ops']+po['outside'],e.address('outside','/drivers/pwm/a733_pwm_native.c'),8)
   self.regs={0x07090160:0x10000002,0x02002000:0xf8000000|(99<<16)|(99<<8),0x03400088:8,0x03400440:0xd8000000}
   self.hooks={e.address(n):n for n in HOOKS};self.cpu.hook_add(UC_HOOK_CODE,self.code);self.cpu.hook_add(UC_HOOK_MEM_READ,self.mmread,begin=0x02000000,end=0x07ffffff);self.cpu.hook_add(UC_HOOK_MEM_WRITE,self.mmwrite,begin=0x02000000,end=0x07ffffff)
  def write(self,a,v,n=4):self.cpu.mem_write(a,int(v).to_bytes(n,'little'))

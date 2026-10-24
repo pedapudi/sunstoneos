@@ -33,7 +33,7 @@ static int outside(void *p,const void *x,unsigned long bytes)
         a733_ranges_disjoint(n->config.pmic,sizeof(*n->config.pmic),x,bytes)&&
         a733_ranges_disjoint(n->config.locks,sizeof(*n->config.locks),x,bytes)&&
         a733_ranges_disjoint(n->config.locks->context,sizeof(struct a733_counter_clock),x,bytes)&&
-        n->config.pmic->ops.outside(n->config.pmic->cookie,x,bytes)==1;
+        a733_pmic_outside(n->config.pmic,x,bytes)==1;
 }
 static int ownership(struct a733_typec_native *n,unsigned require_pin)
 {
@@ -207,9 +207,9 @@ int a733_typec_native_init(struct a733_typec_native *n,const struct a733_typec_n
        c->provider_task==c->power_task||!c->locks->initialized||c->locks->now!=a733_counter_clock_now||
        c->clocks->now!=c->locks->now||c->clocks->context!=c->locks->context||
        c->rails->binding.clocks!=c->clocks||c->pmic->self!=c->pmic||c->pmic->clocks!=c->clocks||
-       c->pmic->rails!=c->rails||c->pmic->pins!=c->pins||!c->pmic->ops.outside||
-       c->pmic->ops.outside(c->pmic->cookie,n,sizeof(*n))!=1||
-       c->pmic->ops.outside(c->pmic->cookie,c,sizeof(*c))!=1)return 0;
+       c->pmic->rails!=c->rails||c->pmic->pins!=c->pins||
+       a733_pmic_outside(c->pmic,n,sizeof(*n))!=1||
+       a733_pmic_outside(c->pmic,c,sizeof(*c))!=1)return 0;
     const void *objects[]={n,c,c->clocks,c->rails,c->pins,c->pmic,c->locks,c->locks->context};
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->clocks),sizeof(*c->rails),sizeof(*c->pins),sizeof(*c->pmic),sizeof(*c->locks),sizeof(struct a733_counter_clock)};
     for(unsigned i=0;i<8;i++)for(unsigned j=i+1;j<8;j++)if(!a733_ranges_disjoint(objects[i],sizes[i],objects[j],sizes[j]))return 0;

@@ -105,7 +105,7 @@ void a733_smp_diagnostic_start(void)
     }
     struct a733_pmic_config pmic=app.session.pmic;pmic.startup_deadline=app.deadline;
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.handles[0])||
-       !a733_pmic_init(&app.pmic,&pmic,&app.pmic_native.operations,&app.pmic_native,
+       !a733_pmic_native_bind(&app.pmic,&pmic,&app.pmic_native,
           &app.clocks,&app.rails,&app.pins)||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))
         platform_panic("HDMI PMIC",9);

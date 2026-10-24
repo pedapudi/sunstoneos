@@ -32,7 +32,7 @@ class Machine:
   cl=image.layouts['a733_clock_leases'];self.write(clock+cl['initialized'],1);self.write(clock+cl['next_id'],1,8);self.write(clock+cl['now'],image.address('a733_counter_clock_now'),8)
   self.write(pins+image.layouts['a733_pins']['initialized'],1)
   rl=image.layouts['a733_rail_leases'];rb=image.layouts['a733_rail_binding'];self.write(rails+rl['self'],rails,8);self.write(rails+rl['binding']+rb['clocks'],clock,8);self.write(rails+rl['binding']+rb['gpu'],gpu,8)
-  pl=image.layouts['a733_pmic'];po=image.layouts['a733_pmic_ops'];self.write(pmic+pl['clocks'],clock,8);self.write(pmic+pl['pins'],pins,8);self.write(pmic+pl['rails'],rails,8);self.write(pmic+pl['cookie'],self.native,8);self.write(pmic+pl['ops']+po['outside'],image.address('outside','/drivers/storage/a733_mmc_platform_native.c'),8)
+  pl=image.layouts['a733_pmic'];po=image.layouts['a733_pmic_ops'];self.write(pmic+pl['clocks'],clock,8);self.write(pmic+pl['pins'],pins,8);self.write(pmic+pl['rails'],rails,8);self.write(pmic+pl['cookie'],self.native,8);self.write(pmic+pl['pmic_bus_ops']+po['outside'],image.address('outside','/drivers/storage/a733_mmc_platform_native.c'),8)
   self.regs={0x07090160:(1<<28)|2,0x02002000:0xf8000000|(99<<8)|(99<<16),0x02002580:1<<31,0x02002588:1<<31,0x020025c0:1<<24,0x020025e0:1<<30,0x0200259c:0x30001,0x02000040:2<<10,0x02000048:2<<10,0x02000070:1,
    0x04020300:0x03050530,0x0402005c:0x81710331,0x0402010c:0x80001234,0x04020054:0x12345676,0x04020058:0xffff,0x04020104:7,0x04020140:0xa5a40000}
   csd=(1<<126)|(9<<80)|(5<<84)|(0x7fff<<48);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)];self.cid=[0x12345678+i for i in range(4)]

@@ -443,7 +443,7 @@ int a733_npu_application_init(TaskHandle_t client)
     if(!app.pmic_task || !app.bootstrap_task)goto failed;
     app.pmic_config=b->pmic;app.pmic_config.startup_deadline=deadline;
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.pmic_task) ||
-       !a733_pmic_init(&app.pmic,&app.pmic_config,&app.pmic_native.operations,&app.pmic_native,
+       !a733_pmic_native_bind(&app.pmic,&app.pmic_config,&app.pmic_native,
            &app.registry,&app.rails,&app.pins) ||
        a733_pmic_identity(&app.pmic,&app.pmic_lifetime)!=A733_PMIC_READY ||
        !a733_gpu_resources_native_use_pmic(&app.gpu_native,&app.gpu,&app.pmic))goto failed;

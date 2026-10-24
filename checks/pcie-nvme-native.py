@@ -109,7 +109,7 @@ class Machine:
   cpu.hook_add(UC_HOOK_MEM_READ,self.bar_read,begin=BAR0,end=BAR0+0xfffff)
   cpu.hook_add(UC_HOOK_MEM_WRITE,self.bar_write,begin=BAR0,end=BAR0+0xfffff)
   assert self.call('a733_pmic_native_init',objects['pmic_native'],objects['locks'],2)==1
-  data=bytes(cpu.mem_read(objects['pmic_native']+L['a733_pmic_native']['operations'],image.sizes['a733_pmic_ops']));cpu.mem_write(objects['pmic']+L['a733_pmic']['ops'],data)
+  data=bytes(cpu.mem_read(objects['pmic_native']+L['a733_pmic_native']['pmic_bus_ops'],image.sizes['a733_pmic_ops']));cpu.mem_write(objects['pmic']+L['a733_pmic']['pmic_bus_ops'],data)
  def field(self,name,value=None,size=4):
   if value is not None:self.cpu.mem_write(self.base+self.layout[name],value.to_bytes(size,'little'))
   return int.from_bytes(self.cpu.mem_read(self.base+self.layout[name],size),'little')

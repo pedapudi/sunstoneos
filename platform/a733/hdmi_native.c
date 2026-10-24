@@ -313,8 +313,8 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
         c->clocks->now!=c->locks->now||c->clocks->context!=c->locks->context||
         c->rails->binding.clocks!=c->clocks||c->rails->binding.gpu!=c->pck||
         c->pmic->self!=c->pmic||c->pmic->clocks!=c->clocks||c->pmic->rails!=c->rails||
-        !c->pmic->ops.outside||c->pmic->ops.outside(c->pmic->cookie,n,sizeof(*n))!=1||
-        c->pmic->ops.outside(c->pmic->cookie,c,sizeof(*c))!=1)return 0;
+        a733_pmic_outside(c->pmic,n,sizeof(*n))!=1||
+        a733_pmic_outside(c->pmic,c,sizeof(*c))!=1)return 0;
     const void *objects[]={n,c,c->clocks,c->rails,c->pmic,c->locks,c->pck};
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->clocks),sizeof(*c->rails),
         sizeof(*c->pmic),sizeof(*c->locks),sizeof(*c->pck)};

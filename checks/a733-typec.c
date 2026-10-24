@@ -79,7 +79,7 @@ static void finish_setup(void)
     assert(a733_pins_init_banks(&pins,&pin_native.operations,&pin_native,&handoff));
     assert(a733_pmic_native_init(&pmic_native,&locks,(void *)2));
     const struct a733_pmic_config pmic_config={777,888,1000000,{{2,1,1},{2,1,1}}};
-    assert(a733_pmic_init(&pmic,&pmic_config,&pmic_native.operations,&pmic_native,&clocks,&rails,&pins));
+    assert(a733_pmic_native_bind(&pmic,&pmic_config,&pmic_native,&clocks,&rails,&pins));
     config=(struct a733_typec_native_config){.clocks=&clocks,.pins=&pins,.rails=&rails,.pmic=&pmic,.locks=&locks,
         .provider_task=(void *)1,.power_task=(void *)3,
         .electrical={.owner=42,.generation=51,.qualification=52,.recovery=53,.source_min_mv=4750,
