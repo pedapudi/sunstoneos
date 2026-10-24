@@ -12,7 +12,7 @@ reference. The [design](designs/recognition-dispatch.md) states the budgets;
 the result with them.
 
 Status: **implemented** and host-modeled. The image with the option
-configures in its validation build, links and passes its link check; the GPU
+configures, links and passes its link check; the GPU
 runtime and its session component are described in
 [gpu-mimus-service.md](gpu-mimus-service.md) and measured in
 [the GPU recognition measurements](designs/gpu-recognition-measurements.md).
@@ -135,14 +135,17 @@ recognizer is its only writer.
 
 ## Session lifecycle and failures
 
-| Event | Action | Retained |
-| --- | --- | --- |
-| Before every model hash matches | No OPEN; every row reads as CPU-only | Nothing |
-| OPEN refused or failed | CPU for the boot; OPEN is not retried | Nothing |
-| Job refused before device access | The hook computes those rows on the CPU and counts the refusal; the session stays open | Nothing |
-| Job reports OK with a missing tag, or in the validation build a sum that differs from the CPU's | `os_dispatch_incomplete` records it and clears the active count at once; the engine computes the rest of the call on the CPU, and every later call runs on the CPU. The session stays open and idle | The session and the output region for the boot |
-| RESET or LOST completion | `os_dispatch_failed` records it, clears the active count and takes the recognizer's failure path (`board_fail`, then suspension) before any CPU row of the failed job; the watchdog resets the board | Output region, model regions and code span until the reset |
-| No reply | The recognizer records no progress, its 3 s service window expires, renewal stops and the watchdog resets the board within 4 s of the last renewal | Everything |
+Before every model hash matches there is no OPEN and every row reads as
+CPU-only. A refused or failed OPEN keeps the CPU for the boot and is not
+retried. A refused job runs on the CPU and the session stays open. A missing
+tag or a sum that differs from the CPU's makes `os_dispatch_incomplete`
+clear the active count at once, so every later call runs on the CPU. A lost
+job makes `os_dispatch_failed` record it, clear the active count and take the
+recognizer's failure path (`board_fail`, then suspension) before any CPU row
+of the failed job; the watchdog resets the board. A reply that never comes
+stops the recognizer's progress, and the watchdog resets the board within 4 s
+of the last renewal. [gpu-mimus-service.md](gpu-mimus-service.md#failure-classes)
+gives each failure's class and what stays retained.
 
 RESET ends the boot like LOST because the models and the code span are
 trustworthy after a GPU fault only if the GPU's MMU enforces its read-only
@@ -158,12 +161,14 @@ boot reads it from the retained fault slot and keeps OPEN refused.
 With the option, `mimus_board_pins` checks the first 12 MiB of the arena as
 writable with `os_dispatch_writable` and calls `os_dispatch_el0_read_only` on
 the 4 MiB from `0x46C00000`. The second requires an EL0 read translation that
-succeeds as inner-shareable write-back memory at the same address and an EL0
-write translation that faults. Both check at the stride of the image's
+succeeds as inner-shareable write-back memory at the same address and EL0 and
+EL1 write translations that fault. Both check at the stride of the image's
 tables, `a733_local_pool_stride`: 2 MiB in the OS image, whose tables map
-image RAM with level-2 blocks only, where they translate the first and the
-last 4 KiB page of each block. That makes 12 + 2 × 4 = 20 translations at
-application start, against 4,096 without the option. The QEMU golden
+image RAM with level-2 blocks only. The arena check
+(`a733_mapping_check_stride`) translates one page per block, 6 translations;
+the view check translates the first and the last 4 KiB page of each block
+three times, 12 translations; 18 at application start, against 4,096 without
+the option. The QEMU golden
 comparison of `checks/device-memory-capacity.py` fails if any of these
 entries becomes a page table.
 
@@ -181,10 +186,6 @@ worker EL1 and creates it before the scheduler starts.
 stops unless:
 
 - `SUNSTONE_A733_OS_RESIDENT` is on;
-- `SUNSTONE_A733_OS_GPU_VALIDATE` is on: until the board shows GPU cache
-  invalidation at job start, GPU read-only enforcement, cross-core code
-  writes and fault-slot retention across a WDT0 reset, only the build that
-  compares every GPU sum with a CPU sum may place a layer on the GPU;
 - `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,
   which maps `0x46C00000`–`0x47000000` read-only at EL0 and EL1 as two 2 MiB
   blocks, so no CPU store can leave a dirty line whose eviction overwrites
@@ -194,14 +195,14 @@ stops unless:
 - `SUNSTONE_A733_OS_MODEL_DIR` names the directory with `base.mimus` and
   `overlay.mimus`, from which the build generates the table.
 
-The link check requires that the session's completion calls
-`aarch64_device_cache` with clean-and-invalidate: `DC IVAC` is checked as a
-write and faults on the read-only region, while `DC CIVAC` needs read
-permission only.
+Until the board shows GPU cache invalidation at job start, GPU read-only
+enforcement, cross-core code writes and fault-slot retention across a WDT0
+reset, the hook compares every GPU sum with a CPU sum before the engine reads
+it ([gpu-mimus-service.md](gpu-mimus-service.md#one-job)).
 
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  -DSUNSTONE_A733_OS_RESIDENT=ON -DSUNSTONE_A733_OS_GPU_LINEAR=ON -DSUNSTONE_A733_OS_GPU_VALIDATE=ON \
+  -DSUNSTONE_A733_OS_RESIDENT=ON -DSUNSTONE_A733_OS_GPU_LINEAR=ON \
   -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models> [-DSUNSTONE_A733_OS_AUDIO=ON]
 ```
 
@@ -237,7 +238,7 @@ writable, unreadable or Device page at each checked position, a replay of the
 pool admission order for the GPU's pages, the order of OPEN after the hashes
 in both recognizer patch chains, and the lookup's AArch64 instructions. With
 `--configure-from` and a configured OS build, it also runs CMake for the
-gate's refusals and for the validation build, with and without the
+gate's refusals and for the resident build, with and without the
 microphone. `checks/gpu-recognition-engine.py` and
 `checks/pvr-mimus-service.py` cover the hook and the GPU session
 ([gpu-mimus-service.md](gpu-mimus-service.md)).

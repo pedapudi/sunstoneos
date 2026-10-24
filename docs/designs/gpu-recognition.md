@@ -56,40 +56,12 @@ reads past the arena. Such a read reaches tags and sums that the GPU may
 already write, so the design accepts these over-reads and leaves no unmapped
 gap.
 
-Per job:
-
-1. The hook writes the job into a one-entry slot (tensor ordinal, code offset,
-   rows, row stride) and stores the slot state SUBMITTED with release order.
-   It sends the worker a wake message with a wait of zero ticks: client
-   `PVR_GPU_SERVICE_CLIENTS` and ticket `PVR_GPU_SERVICE_MIMUS_WAKE` (1).
-   Ticket 0 stays the interrupt handler's wake, and only that message clears
-   `irq_wake_pending`. If the send fails, the hook moves the slot from
-   SUBMITTED to IDLE by compare-and-swap. When the swap succeeds the job is
-   REFUSED and the hook computes its rows on the CPU; when the worker has
-   already taken the slot, the hook waits for the completion as usual. The
-   hook then computes its CPU channels.
-2. The worker, at a priority above the recognizer on the same core, takes
-   the slot by compare-and-swap from SUBMITTED to TAKEN with acquire order and
-   copies it once into its own memory; every later check and use reads that
-   copy, because `pvr_mimus_submit` reads the code offset twice. In one step,
-   under one interrupt mask and re-enable, it looks up the tensor admitted at
-   start (one bounds compare), assigns the next sequence, checks that the
-   timeline equals the sequence minus one, as `pvr_compute_service` does, and
-   calls `pvr_mimus_submit`. Any other timeline value means that something
-   other than this session's jobs wrote it, so the job is LOST. It then writes two client-ring
-   commands, publishes the ring and submits the kick through the kernel ring.
-   The commands are the 96-byte compute command, which
-   `pvr_mimus_session_command` wrote once at OPEN into a zeroed buffer, and an
-   8-byte timeline UPDATE carrying the sequence. The job deadline is the kick
-   time plus `max_job_us`. OPEN writes timeline 0, and sequences start at 1.
-3. On INTID 95 the worker drains firmware events. When the timeline equals
-   the sequence it calls `pvr_mimus_complete`, sets the slot to IDLE and posts
-   an 8-byte record (sequence, result) to a static one-entry completion queue.
-4. The hook receives that record and checks every tag with
-   `pvr_mimus_tags_complete`. It returns to the engine the job's rows and the
-   address, row stride and width (4 or 8 bytes) of its sums. The engine reads
-   the sums out with its own code, then calls the hook for the call's next
-   job, which may reuse the output region.
+Per job, the hook writes one job into a slot that the GPU service worker
+takes and submits in one step; after the job's timeline update the worker
+maintains the output region and posts an 8-byte record, and the hook checks
+the tags and every sum before the engine reads the sums out.
+[gpu-mimus-service.md](../gpu-mimus-service.md#one-job) gives the sequence and
+its ordering, and is the one description of it.
 
 ## Runtime functions and where they live
 
@@ -109,7 +81,9 @@ Per job:
   OPEN refused, so the boot continues on the CPU.
 - `apps/os/gpu_hook.cc` (new) is the hook the engine calls. `os_gpu_open`,
   which the recognizer calls after the model hashes, opens the session and
-  installs the hook only when the engine's header exists.
+  installs the hook only when the engine's header exists. Without the header
+  the `gpu-linear` start entry prepares nothing: no pool page, firmware check
+  or worker exists for a session that cannot open.
 - `a733_gpu_mimus_worker` is removed from `dispatch.h`. The service creates
   its own worker, and `os_gpu_linear_task_privileged` grants it EL1 through
   `pvr_gpu_service_task_privileged`, as the accelerator image does.
@@ -117,12 +91,13 @@ Per job:
   service: firmware objects, the client ring, the slot, the completion queue
   and the tensor table. `pvr_gpu_service.c` reaches it through a
   `config.mimus` pointer, as it reaches the compute and render components
-  through `config.compute` and `config.render`. The changes are: the object
-  list, publication at OPEN, the core-mode admission before firmware start,
-  the READY poll, event forwarding, the wait bound, the submit window, the
-  progress identity, failure, the configuration checks at init, and in the
-  worker loop ticket `PVR_GPU_SERVICE_MIMUS_WAKE` as a wake that leaves
-  `irq_wake_pending` alone. Images without the component pass a null
+  through `config.compute` and `config.render`. The changes are twelve: the
+  object list, publication at OPEN, the core-mode admission before firmware
+  start, the READY poll, event forwarding, the wait bound, the submit window,
+  the progress identity, the end of a burst once the session has nothing to
+  submit and the interrupt is re-enabled, failure, the configuration checks
+  at init, and in the worker loop ticket `PVR_GPU_SERVICE_MIMUS_WAKE` as a
+  wake that leaves `irq_wake_pending` alone. Images without the component pass a null
   pointer and do not link `pvr_mimus_service.c`; its functions are weak
   references in `pvr_gpu_service.c`, and no other image's source list
   changes.
@@ -165,10 +140,13 @@ waits for hardware steps longer than 50 µs, which section 1.3 permits.
   program pages, the context-switch programs and the GPU table pages. The
   uncached pool (2 MiB, of which USB2 takes 128 KiB) gives 45 firmware pages
   and the six session objects.
-- **Boot.** The identity step zeroes the tag area and publishes it, 1,024
-  lines once per boot. DRAM therefore holds no tag of an earlier boot at OPEN,
-  and a tag that matches a sequence was written by this boot's job with that
-  sequence.
+- **Boot.** The identity step zeroes the tag area with Device stores that
+  reach DRAM directly, then publishes it, which cleans 1,024 lines to the
+  point of coherency and invalidates none. No cached copy can hold an earlier
+  tag, because the loader runs with caches off and no CPU writes the area, and
+  each job's completion cleans and invalidates its tags before the recognizer
+  reads them. A tag that matches a sequence was therefore written by this
+  boot's job with that sequence.
 - **Open.** OPEN cleans the job, program and context pages once. It does not
   clean the models, which boot publication covers, or the output region,
   because boot publication covers the tags and every job cleans and
@@ -184,12 +162,14 @@ waits for hardware steps longer than 50 µs, which section 1.3 permits.
 
 **Barriers per job.** Each `gpu_memory.c` write and each GPU register access
 issues two `DSB SY`, and each `gpu_memory.c` read one. The counts below were
-read from the code at the baseline commit, assume an empty firmware queue on
-each check, and leave out the step that `burst()` runs after each kick
-because the kernel ring's serial changed, which repeats the firmware-queue
-check and the mask and re-enable (about 78 per job with it). The QEMU host
-check counts about 87 per job in transport, which misses this budget; the
-measurements give the count per source.
+read from the code at the baseline commit and assume an empty firmware queue
+on each check. `burst()` would run further steps after the kick and after the
+post, because the kernel ring's serial and the session's state change; the
+service therefore ends a burst once a ready session has nothing to submit and
+the interrupt is re-enabled, so a job takes two worker steps, the kick step
+and the step that posts its record. The QEMU host check counts 57 per job in
+transport, 18 per timed wake and 11 per firmware event
+([the measurements](gpu-recognition-measurements.md)).
 
 | Step | Source | `DSB SY` |
 | --- | --- | --- |
@@ -228,13 +208,14 @@ barrier on the code clean covers that ordering.
 ## Mapping check at application start
 
 With the option, `mimus_board_pins` checks the 12 MiB arena as EL1-writable
-and the 4 MiB view at `0x46C00000` as EL0-readable and not EL0-writable, at
-the link-time stride `a733_local_pool_stride` (2 MiB in images that link
+with `a733_mapping_check_stride`, and the 4 MiB view at `0x46C00000` as
+EL0-readable and writable at neither EL0 nor EL1, at the link-time stride
+`a733_local_pool_stride` (2 MiB in images that link
 `platform/a733-smp-cached/memory.c`, 4 KiB elsewhere). That builder maps image
-RAM with level-2 block descriptors only. With the 2 MiB stride the check
-translates the first and the last 4 KiB page of each block: 12 translations
-for the arena and 8 for the view (an EL0 read and an EL0 write probe per
-page), 20 in all. The QEMU golden comparison of
+RAM with level-2 block descriptors only. With the 2 MiB stride the arena
+check translates one page per block, 6 translations, and the view check the
+first and the last 4 KiB page of each block with an EL0 read, an EL0 write
+and an EL1 write probe, 12 translations: 18 in all. The QEMU golden comparison of
 `checks/device-memory-capacity.py`, including its read-only-view fixture,
 fails if any entry becomes a page table. The asset checks and the default
 build's 16 MiB check are unchanged.
@@ -244,9 +225,10 @@ build's 16 MiB check are unchanged.
 `cmake/a733-os.cmake` sets `A733_GPU_OUTPUT_EL0_READ_ONLY` itself in the GPU
 branch and refuses a user-supplied value. `A733_GPU_OUTPUT_CLEAN_INVALIDATE`
 is deleted with its refusal and its cases in `checks/os-image-dispatch.py`,
-because no source reads it. `os-image-link.py` checks in the built image
-that `pvr_mimus_complete` passes operation 1 (clean and invalidate) to
-`aarch64_device_cache`. The branch adds the GPU service, the session code, the
+because no source reads it. `checks/pvr-mimus-service.py` asserts that every
+cache operation on the output region is clean-and-invalidate, because
+`DC IVAC` is checked as a write and faults on the read-only region. The
+branch adds the GPU service, the session code, the
 firmware (`SUNSTONE_GPU_FIRMWARE`, SHA-256 pinned as in the accelerator image)
 and `SUNSTONE_A733_OS_GPU_LINEAR` as a target definition. `recorded.h`
 declares 12 MiB when `SUNSTONE_A733_OS_GPU_LINEAR` is defined; the arena peak
@@ -254,27 +236,22 @@ is at most 2,784,048 bytes.
 
 Until the board items on GPU cache invalidation at job start, cross-core code
 writes, GPU read-only enforcement and fault-slot retention across a WDT0
-reset pass, the CMake branch refuses the option without
-`SUNSTONE_A733_OS_GPU_VALIDATE`. In that validation build the hook compares
-every GPU sum with an int64 sum that a scalar CPU loop computes from the same
-codes and weights, before it returns the job to the engine. A mismatch is
-handled as a missing tag. At two cycles per MAC the check costs about 60 ms
+reset pass, the hook compares every GPU sum with an int64 sum that a scalar
+CPU loop computes from the same codes and weights, before it returns the job
+to the engine; the comparison is unconditional and has no build switch. A
+mismatch is handled as a missing tag. At two cycles per MAC the check costs about 60 ms
 for the largest job (62,447,616 MACs) at 2,002 MHz, about 1.9 s per bench
 recording on the A76 pair (1.89 G GPU MACs) and about 15 s on the A55 pair at
 494 MHz (3.76 G GPU MACs).
 
 ## Failure classes
 
-| Failure | Class (section 1.8) | Result | Retained |
-| --- | --- | --- | --- |
-| Preparation refused in `start` (pool, firmware hash, owner collision, GPU loss in the previous-boot report) | 1 | OPEN refused; CPU for the boot | Acquired pool pages |
-| OPEN fails after power or firmware access | 3 | CPU for the boot | Everything the service holds; the GPU can write only the output region and firmware memory |
-| Job refused before the first client-ring write, including a failed wake send | 1 | Completion REFUSED; slot IDLE; the hook computes the rows | Nothing |
-| Tag missing, or in the validation build a sum that differs from the CPU's | 2 | `os_dispatch_incomplete` closes placement at once; `finish` returns no rows for that job and the rest of the call, and the engine computes channels `[0, n_gpu)` of every row no job returned | The session and the output region for the boot; the GPU stays powered and idle |
-| After the client ring is published: deadline missed, CONTEXT_RESET event, service FAILED | 3 | Completion LOST; `os_dispatch_failed`, `board_fail`, watchdog reset | Everything |
-| No completion | Unknown | Service window expires; watchdog reset | Everything |
+[gpu-mimus-service.md](../gpu-mimus-service.md#failure-classes) lists each
+failure with its class, result and what stays retained, and is the one table
+of them.
 
-`max_job_us` is a hang bound of 1 s. The largest bench job, with every
+`max_job_us` is a hang bound of 1 s, which is also the most the session's
+bind accepts. The largest bench job, with every
 channel on the GPU, models at 26 ms with 200-clock loads and about 50 ms with
 400-clock loads, and near 100 ms if fewer than 8 tasks stay resident. One
 second leaves a tenfold margin inside the 3 s service window; board timing per
@@ -282,8 +259,8 @@ layer shape sets the tighter bound. No reset recovery exists, so the runtime
 reports LOST and never RESET.
 
 A GPU loss must not repeat after the watchdog reset. On LOST, or when the
-recognizer's service window expires while the session is being opened or
-places calls, `board_resident_stop_detail` (`apps/os/services.c`) returns the
+recognizer's service window expires while it waits for OPEN or for a job's
+record, `board_resident_stop_detail` (`apps/os/services.c`) returns the
 GPU-loss detail `OS_STOP_DETAIL_GPU_LOSS`, a value outside the service numbers
 1 to `OS_SERVICES`. It reads the dispatcher's atomic session state, which the
 recognizer stores before its `board_fail` release store and the supervisor
@@ -331,9 +308,9 @@ Every bench call stays one job, 204 in all. On the A76 table the jobs take
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
 | Default OS images (supervised, resident, resident with microphone, resident with headset) | — | Loadable bytes identical apart from the 32-byte build identity | `llvm-objcopy -O binary` at both commits |
-| Other images that link `drivers/gpu/` | — | Existing host checks pass; code changes only at the eight service points | Their host checks |
+| Other images that link `drivers/gpu/` | — | Existing host checks pass; code changes only at the twelve service points | Their host checks |
 | GPU linear image | Stops at the arena assertion | Links; link check passes; `.text` + `.rodata` at most 1.75 MiB of the 2 MiB read-only block (base 888 KiB) | Build, `llvm-size -A` |
-| Translations in `mimus_board_pins`, arena and view | 5,120 | 20 | Counter in `checks/os-image-dispatch.c` |
+| Translations in `mimus_board_pins`, arena and view | 5,120 | 18, with an EL1 write probe on each view page checked | Counter in `checks/os-image-dispatch.c` |
 | Per job, slot write to kick: translations, hashes, allocations, tick waits in the session component | No path | 0, 0, 0, 0; at most 13 compares | Host check |
 | Worker steps from slot write to kick | No path | 1, with one mask and re-enable and one firmware-queue check; barriers, translations, distributor accesses and critical sections reported | Host check |
 | `DSB SY` per job | Compute path: 16 per submit, 11 per event + 5 per drain, 2 per cache call | 6 in maintenance; 59 in transport, plus 19 per timed wake and 11 per firmware event; any increase fails | Host check, per source |
@@ -437,7 +414,10 @@ encodings. These sources do not establish on this board:
   [fault-capture.md](../fault-capture.md), which the option's gate includes;
 - a compute command without a border-colour table (address zero): the
   program samples nothing, and no source states that the firmware or the
-  TPU reads the table of a compute job that does not sample.
+  TPU reads the table of a compute job that does not sample. If either reads
+  it, the read reaches an unmapped GPU address, the GPU raises a page fault,
+  the firmware resets the context and the job ends LOST; the fix is a zeroed
+  read-only table mapped as the compute path maps its own.
 
 If the board shows stale lines at job start, the arena and the job page are
 mapped with the GPU's system-level-cache bypass instead; no source here gives
@@ -447,15 +427,18 @@ that encoding.
 
 - OPEN reaches READY on a cold and a warm boot, and the tag area reads zero
   at OPEN.
-- In the validation build with the engine hook, the bench recording's 204
-  jobs give GPU sums equal to the CPU's, and text and CRCs equal to the host
+- With the engine hook, the bench recording's 204 jobs pass the hook's
+  comparison of every GPU sum with the CPU's, and text and CRCs equal to the host
   reference, while the second inference worker rewrites codes at the same
   addresses. INTID 95 arrives on the recognition core for every job, with
   submit-to-kick and completion-to-wake times. GPU time per layer shape
   replaces the model's rates.
 - A GPU store probe to a read-only mapping faults.
-- An injected missing tag ends in an INCOMPLETE record and CPU-only
-  recognition.
+- The bench jobs run with the compute command's border-colour table at
+  address zero and raise no GPU page fault or context reset.
+- A fault slot written before a WDT0 reset reads back after it.
+- An injected missing tag closes placement and the recognition runs on the
+  CPU.
 - An injected hang ends in LOST, a watchdog reset and a CPU-only next boot.
   This case is an intentional watchdog expiry, which AGENTS.md defers until
   the reset destination and recovery are qualified
@@ -467,8 +450,11 @@ The interrupt table already leaves enabling to the device owner, the
 read-only view and EL0 translation exist, and `identity.c`, `services.c` and
 `dispatch.h` lie under `apps/os/`. The one edit outside this package is
 `checks/index.json`, regenerated by `checks/check-index.py --write` for the
-three new checks. Other owners: the GPU runtime owner reviews the service
-points in `pvr_gpu_service.c`.
+two new checks, and a comment in `platform/a733-smp-cached/memory.c` that the
+identity step's stores to the tag area make outdated. Other owners: the GPU
+runtime owner reviews the service points in `pvr_gpu_service.c`, and may
+merge the session's client-ring callbacks in `pvr_mimus_service.c` with the
+near-identical ones of `pvr_compute_service.c`.
 
 ## Changes needed in the mimus engine
 
@@ -481,8 +467,12 @@ points in `pvr_gpu_service.c`.
    `LinearProducedAccumulate` for int8 weights and int16 codes. `begin` is
    called only after every row's codes and scales for the call are final in
    the arena, after the `ParallelFor` join; the streamed SRAM-ring path is
-   off for hooked calls. It receives the ordinal, rows, K, N, code pointer
-   and row stride, and returns `n_gpu`; the engine computes channels
+   off for hooked calls. It receives the ordinal, the weight codes and their
+   row stride, rows, K, N, code pointer and row stride, and returns `n_gpu`;
+   the hook returns 0 unless the weights, their stride, K and N equal the
+   tensor admitted under that ordinal, because the four attention
+   projections share K and N and an ordinal that names another of them would
+   otherwise use the wrong weights unnoticed; the engine computes channels
    `[n_gpu, N)`. `finish`, called until it returns false, returns one job's
    first row, row count and the address, row stride and width of its sums.
    The engine converts each sum to float and calls `kernels.cc` `Combine()`

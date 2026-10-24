@@ -13,9 +13,8 @@ thermal service together. Four optional builds add more services:
   the recorded WAV. An mSBC option adds wideband headset speech;
 - the GPU linear build places mimus linear layers on the CPU or the GPU
   ([recognition dispatch](recognition-dispatch.md)). It needs the resident
-  lifetime and, until the board items of its design pass, the validation
-  build; no call reaches the GPU until the mimus engine has its exact-sum
-  hook.
+  lifetime, and no call reaches the GPU until the mimus engine has its
+  exact-sum hook.
 
 The radio build combines with either capture build. With the headset, one
 owner of the AIC8800 module loads the firmware once and serves the Wi-Fi
@@ -471,7 +470,7 @@ the interrupt table follow the options:
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
 set without the headset. With `SUNSTONE_A733_OS_GPU_LINEAR` it stops unless
-the lifetime is resident, `SUNSTONE_A733_OS_GPU_VALIDATE` is set,
+the lifetime is resident,
 `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given, `SUNSTONE_GPU_FIRMWARE` names the
 pinned firmware and `SUNSTONE_A733_OS_MODEL_DIR` holds the models
 ([recognition dispatch](recognition-dispatch.md#build-gate)). The supervised radio and headset builds link, but at
