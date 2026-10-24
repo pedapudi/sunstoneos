@@ -105,7 +105,26 @@ lifetime, `rank-9-usb-v4/`, rebuilt on the current platform with the PCTL
 byte store only in the shared native USB adapter, passed the same exchange
 and returned (`r9-v4-usb/`). The current platform's 12 GiB EL1 map code was
 present but installs no high map, because the DRAM decode check still
-returns 0. Both ports were power-cycled afterwards and
+returns 0.
+
+In the same lifetime on 2026-10-24, port `3-3` passed the first three
+single-core bundles of `docs/designs/board-bundles-next.md`
+(`board-bundles-20261024/`):
+
+- **Fault capture:** one load from `0x4_0000_0000` took a level-1
+  translation fault before any bus access. The platform printed one `FAIL
+  exception` line (`ESR` `0x96000005`, `FAR` `0x400000000`, `ELR`
+  `0x4100360c`, core 0, task `fault`), the monitor returned status 1 and the
+  ROM answered again (`bb1-run/`). This is the first board run of the fault
+  path, and the runner accepted it as a controlled outcome.
+- **Kernel check with the monitor counter option:** the monitor's
+  `MDCR_EL3`, `HSTR_EL2` and `MDCR_EL2` writes ran, all 100 kernel rounds
+  passed and the ROM answered again (`bb2-run/`).
+- **Clock words:** six words read with no gate closed, and the 128 FEL
+  scratch bytes restored (`bb3-read/`): CCU `+0x580` `0xc3000000`, `+0x588`
+  `0x84000000` (MBUS at 400 MHz, `MBUS_DFS_EN` clear), R_CCU `0x20c`
+  `0x00010001`, oscillator word `0x983fb0f7`, CPU-L PLL `0xf8802600` and
+  CPU-L mux `0x03010000`. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
