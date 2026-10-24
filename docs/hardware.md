@@ -1322,6 +1322,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `processor-completion-20261024/port-3-3/gpu-corrected-guard/runtime/session.json`.
   The session remains retained, with no further device requests permitted
   until recovery. No computation, shutdown or return result was captured.
+  A narrower entry checkpoint subsequently passed on port `3-1`, using image
+  `8974f81a…`. It completed CPU startup and local memory preparation, proved
+  providers had never been constructed, and returned to ROM as `003/043`.
+  The matched receipt reports zero GPU jobs. Its explicitly discardable RAM
+  reservation was released after validation. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-entry-checkpoint/runtime/session.json`.
+  No GPU-engine or GPU clock/power register access occurred. GPU computation remains
+  unqualified; this result localizes progress in the checkpoint variant.
+  The DCDC4-only snapshot then passed, reporting the GPU rail enabled and
+  programmed to 800 mV. It reaped the request, parked the PMIC provider and
+  returned normally; no voltage was changed. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-supply/`. A targeted comparison
+  verified the interrupt state affected by that returning probe.
   The earlier wrong-guard refusal was recovered through reviewed restoration
   of five SRAM regions on the same instance; that recovery does not qualify
   GPU execution. The preceding entry capture remains configuration evidence
@@ -2140,6 +2153,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   following the pinned clock-driver implementation. Focused checks preserve
   MMIO counts and reject drift and other unsupported bits. Neither the capture
   nor the startup correction establishes physical NPU execution.
+  The separate pre-provider checkpoint (`9afb6738…`) subsequently passed
+  CPU/platform startup and local-memory preparation on port `3-1`. Its matched
+  receipt reports zero jobs and no functional NPU success. ROM returned as
+  `003/044`, and all 18 MiB of saved DRAM was restored and verified. Evidence:
+  `processor-completion-20261024/port-3-1/npu-entry-checkpoint/runtime/session.json`.
+  A subsequent guarded GIC capture found interrupt 97 disabled, clear and
+  inactive. These results admit further diagnosis; numerical execution and
+  thermal management remain unqualified.
   Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
   release. [Trusted convolution registration](npu-convolution.md) authenticates

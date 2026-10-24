@@ -15,7 +15,7 @@ Source diagnosis continues without board access; the failed execution boundary
 is unknown.
 
 **Port `3-1` is usable:** USB is its only power source. Its last validated ROM
-return is `/dev/bus/usb/003/042`, identity `[7, 1622, 1097001, 0, 0]`.
+return is `/dev/bus/usb/003/045`, identity `[7, 1634, 1097004, 0, 0]`.
 Refresh host metadata before access. In this powered lifetime, CPU0 publication,
 all-core preparation, first task entry, task switching and a bounded workload
 passed. All eight cores completed 32 floating-point rounds, background scheduling
@@ -35,7 +35,20 @@ confirms 32 rounds on every core, background and SGI progress, CPU0 timer
 delivery and seven secondary CPUs OFF. All 18 MiB of saved DRAM was restored
 and verified after ROM return. Evidence:
 `processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
-Fresh cache-off and launcher survey checks passed on the returned instance.
+The subsequent GPU entry checkpoint also returned normally. It established
+CPU startup and memory preparation before provider construction, reported zero
+GPU jobs and released the explicitly discardable RAM reservation. Evidence:
+`processor-completion-20261024/port-3-1/gpu-entry-checkpoint/runtime/session.json`.
+The NPU entry checkpoint then passed its CPU, platform and local-memory
+preparation, reported zero jobs and returned with 18 MiB of saved RAM restored.
+Evidence: `processor-completion-20261024/port-3-1/npu-entry-checkpoint/runtime/session.json`.
+A guarded capture found NPU interrupt 97 disabled, clear and inactive. Fresh
+cache-off and launcher survey checks passed on the returned instance.
+The later DCDC4-only snapshot also completed, reaped and parked its provider,
+and returned normally. The GPU rail is enabled and programmed to 800 mV;
+no voltage was changed. Evidence: `processor-completion-20261024/port-3-1/gpu-supply/`.
+The affected 24 interrupt-controller words matched the saved baseline, followed
+by fresh cache-off and launcher survey checks.
 
 **Current priority: CPU, GPU and NPU robustness**, including power and thermal
 management. Complete startup, repeated operation, interrupt delivery, bounded
@@ -63,7 +76,9 @@ not establish physical operation.
    with engine clocks gated and reset asserted. The first checkpoint requires
    OFF and was therefore not launched. The reviewed replacement is integrated. It proves that providers
    were never constructed and retains CPU interrupt checks, without accessing
-   GPU power registers. Its physical entry check is next. Exclusive RAM and exclusion of external DMA writers
+   GPU power registers. This entry check now passes physically on port `3-1`.
+   Advance into the next reviewed initialization interval; the full numerical
+   image has not been retried. Exclusive RAM and exclusion of external DMA writers
    remain mandatory. The observation does not identify the failed second
    board's state or execution boundary.
 3. Prepare the existing single-core NPU finite path for numerical execution and
@@ -73,9 +88,10 @@ not establish physical operation.
    PLL_NPU reads `0x41104500`. The corrected startup preserves inherited bit 24
    and rejects drift or other unsupported bits, following pinned clock-driver
    sources. The DCDC2 supply observation now passed with native settle/reap/park
-   and ROM return. A reviewed pre-provider checkpoint is now integrated to qualify CPU entry,
-   local memory preparation and normal return before device initialization.
-   It reports zero jobs and does not establish NPU computation. Numerical
+   and ROM return. The pre-provider checkpoint now passes CPU entry, local memory preparation
+   and normal return physically. It reports zero jobs and does not establish
+   NPU computation. The next proposed execution uses the existing two-job
+   finite image with the PLL fix, after its full operating admission is reviewed. Numerical
    NPU execution is still unqualified. Evidence:
    `processor-completion-20261024/port-3-1/npu-entry/session.json` and
    `pmic-supply/session.json`. The native NPU board image now has thermal admission, independent supervision and bounded
