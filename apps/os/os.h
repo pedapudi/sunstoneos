@@ -60,9 +60,23 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 /* One finite capture of 1 to 5 s of 16 kHz mono S16 per recognition. */
 #define OS_AUDIO_MIN_SAMPLES 16000u
 #define OS_AUDIO_MAX_SAMPLES 80000u
-#define OS_SESSION_BYTES (A733_OS_SESSION_BYTES+OS_AUDIO_SESSION_BYTES)
+#define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_AUDIO_SESSION_BYTES)
 #else
-#define OS_SESSION_BYTES A733_OS_SESSION_BYTES
+#define OS_SESSION_BASE_BYTES A733_OS_SESSION_BYTES
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+/* Supervised only: the grant names the session's epoch, which the stage-2
+ * loader replaces on every resident boot. */
+#ifdef SUNSTONE_BOARD_RESIDENT
+#error CPU operating-point grants need the supervised lifetime
+#endif
+#ifndef A733_A76_ADMITTED
+#error CPU operating-point grants need the admitted Cortex-A76 cores
+#endif
+#include "a733_cpu_clock.h"
+#define OS_SESSION_BYTES (OS_SESSION_BASE_BYTES+96u)
+#else
+#define OS_SESSION_BYTES OS_SESSION_BASE_BYTES
 #endif
 /* Immutable little-endian session: the board session (workload 0 or 4)
  * followed by the thermal owner's facts. The evidence hashes identify
@@ -78,6 +92,10 @@ struct os_session {
     uint8_t reserved[6];
 #ifdef SUNSTONE_A733_OS_AUDIO
     struct os_audio_session audio;
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* The CPU clock driver's grant record (include/a733_cpu_clock.h). */
+    struct a733_cpu_clock_grant_record cpu_clock;
 #endif
 };
 _Static_assert(sizeof(struct os_session)==OS_SESSION_BYTES,"OS session geometry");
@@ -102,6 +120,14 @@ void os_thermal_irq(void);
  * configuration once (apps/os/cpu.c); 0 when CPU-B is not on its locked PLL
  * with a decodable rate. */
 int os_cpu_admit(void);
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+/* Thermal task, after each thermal step once the policy has its first
+ * reading: one bounded CPU clock step. -1 ends the session. */
+struct a733_thermal_policy;
+int os_cpu_clock_step(const struct a733_thermal_policy *);
+/* EL0-safe: 1 once the grant's requests have finished, whatever their result. */
+int os_cpu_clock_ready(void);
 #endif
 #ifdef SUNSTONE_A733_OS_AUDIO
 void os_audio_task(void *);

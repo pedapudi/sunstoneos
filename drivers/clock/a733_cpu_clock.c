@@ -24,6 +24,12 @@
 #define PAT1_LFM BIT(31)            /* lfm_en and the LFM ramp enable. */
 #define LFM_ON BIT(31)
 #define RAMP_UV_US 250u   /* Board DTS regulator-ramp-delay of DCDC3/DCDC5. */
+/* After each mux switch, twice the fixed 1 us delay that the mainline
+ * sunxi-ng CPU mux notifier makes (Linux e5f0a698 ccu_mux.c
+ * ccu_mux_notifier_cb; delay_us = 1 in ccu-sun50i-a64.c and ccu-sun50i-h6.c).
+ * No A733 source states a delay; the pinned driver never reparents. */
+#define SETTLE_US 2u
+#define SETTLE_READS 100000u /* A counter that stops is a fault. */
 #define RELEASE_US 100000u
 #define THERMAL_US 500000u
 enum { USER, LOWER, RESTORE }; /* Who started the transition. */
@@ -259,12 +265,24 @@ static int put(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
 {return a733_cpu_clock_address(a,1) && c->ops.write(c->cookie,a,v)==1;}
 static int wr(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
 {uint32_t back;return put(c,a,v) && rd(c,a,&back) && back==v;}
+/* Spin on the time source for SETTLE_US after a mux write. */
+static int settle(struct a733_cpu_clock *c)
+{
+    if(!time_now(c))return 0;
+    const uint64_t until=c->last_now+SETTLE_US;
+    for(unsigned i=0;i<SETTLE_READS;++i){
+        if(!time_now(c))return 0;
+        if(c->last_now>=until)return 1;
+    }
+    return 0;
+}
 static enum a733_cpu_clock_status start(struct a733_cpu_clock *c,unsigned cluster,uint32_t mhz,
     uint64_t deadline,unsigned thermal)
 {
     c->cluster=cluster;c->target_mhz=mhz;c->deadline=deadline;c->thermal=thermal;
     c->clock=(struct a733_clock_token){0};c->rail=(struct a733_rail_token){0};
-    c->request=(struct a733_pmic_request){0};c->after=S_IDLE;c->state=S_CLOCK;return A733_CPU_CLOCK_PENDING;
+    c->request=(struct a733_pmic_request){0};c->after=S_IDLE;c->state=S_CLOCK;c->inspect_only=0;
+    return A733_CPU_CLOCK_PENDING;
 }
 enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
     enum a733_cpu_domain cluster,uint32_t mhz,uint64_t deadline)
@@ -281,6 +299,17 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
     --c->changes;c->throttled&=~BIT(cluster);c->throttle_failed&=~BIT(cluster);
     return start(c,cluster,mhz,deadline,USER);
 }
+enum a733_cpu_clock_status a733_cpu_clock_inspect(struct a733_cpu_clock *c,enum a733_cpu_domain cluster,
+    uint64_t deadline)
+{
+    if(!c || c->self!=c || (cluster!=A733_CPU_LITTLE && cluster!=A733_CPU_BIG))return A733_CPU_CLOCK_INVALID;
+    if(c->failed)return A733_CPU_CLOCK_RETAINED;
+    if(c->state!=S_IDLE)return A733_CPU_CLOCK_BUSY;
+    if(!time_now(c))return fault(c);
+    if(c->last_now>=deadline)return A733_CPU_CLOCK_EXPIRED;
+    enum a733_cpu_clock_status r=start(c,cluster,0,deadline,USER);
+    c->inspect_only=1;return r;
+}
 /* Inherited state and the target point, checked before any write. */
 static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
 {
@@ -288,6 +317,14 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
     uint32_t pat0,pat1,lfm;
     if(!a733_cpu_clock_report(c->ops.read,c->cookie,r) || !rd(c,pll_word(c->cluster)+PAT0,&pat0) ||
        !rd(c,pll_word(c->cluster)+PAT1,&pat1) || !rd(c,pll_word(c->cluster)+LFM,&lfm))return fault(c);
+    c->words[c->cluster][0]=pat0;c->words[c->cluster][1]=pat1;c->words[c->cluster][2]=lfm;
+    if(c->inspect_only) {
+        enum a733_pmic_status s=a733_pmic_submit(c->pmic,c->config.owner,&c->rail,rail_of(c->cluster),c->deadline,&c->request);
+        if(s==A733_PMIC_BUSY)return A733_CPU_CLOCK_PENDING;
+        if(s==A733_PMIC_EXPIRED)return finish(c,A733_CPU_CLOCK_EXPIRED);
+        if(s!=A733_PMIC_PENDING || !c->request.id)return fault(c);
+        c->state=S_READ;return A733_CPU_CLOCK_PENDING;
+    }
     const struct a733_cpu_clock_domain *d=&r->domain[c->cluster];
     const struct a733_cpu_opp *o=row(c->cluster,c->target_mhz);
     const unsigned nmax=c->cluster==A733_CPU_LITTLE ? 84u : 86u; /* 26 MHz VCO range. */
@@ -362,6 +399,7 @@ static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
         return finish(c,A733_CPU_CLOCK_EXPIRED);
     }
     if(!c->snapshot.enabled || !c->snapshot.decoded || c->snapshot.programmed_uv!=c->to_uv)return fault(c);
+    c->rail_uv[c->cluster]=c->to_uv;
     uint32_t delta=c->to_uv>c->from_uv ? c->to_uv-c->from_uv : c->from_uv-c->to_uv;
     c->timer=c->last_now+(delta+RAMP_UV_US-1)/RAMP_UV_US;c->state=S_SETTLE;
     return A733_CPU_CLOCK_PENDING;
@@ -456,6 +494,8 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(!k)return out;
         if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
         if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
+        c->rail_uv[c->cluster]=c->snapshot.programmed_uv;
+        if(c->inspect_only){c->snapshot=(struct a733_pmic_snapshot){0};return finish(c,A733_CPU_CLOCK_COMPLETE);}
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
         if(c->to_uv<floor)c->to_uv=floor;
@@ -481,6 +521,8 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(!rd(c,pll_word(c->cluster),&pll) || (pll&(PLL_ON|UPDATE))!=PLL_ON ||
            !rd(c,select_word(c->cluster),&select) || select!=c->select ||
            !wr(c,select_word(c->cluster),c->select&~MUX))return fault(c);
+        c->park_at=c->last_now;
+        if(!settle(c))return fault(c);
         pll=(pll&~FIELD_N)|(c->n<<8);
         if(!put(c,pll_word(c->cluster),pll) || !put(c,pll_word(c->cluster),pll|UPDATE))return fault(c);
         c->timer=c->last_now+UPDATE_US;c->state=S_UPDATE;return A733_CPU_CLOCK_PENDING;
@@ -498,7 +540,10 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         const uint32_t parked=(c->select&~(MUX|DIVP))|(c->p<<16);
         uint32_t pll;struct a733_cpu_clock_domain d;
         if(!wr(c,select_word(c->cluster),parked) || !wr(c,select_word(c->cluster),parked|(MUX_PLL<<24)) ||
-           !rd(c,pll_word(c->cluster),&pll))return fault(c);
+           !time_now(c))return fault(c);
+        c->parked_us=c->last_now-c->park_at;
+        if(c->parked_us>c->parked_max_us)c->parked_max_us=c->parked_us;
+        if(!settle(c) || !rd(c,pll_word(c->cluster),&pll))return fault(c);
         a733_cpu_clock_decode(c->report.dcxo_hz,pll,parked|(MUX_PLL<<24),&d);
         if(!d.decoded || d.hz!=(uint64_t)c->target_mhz*1000000u)return fault(c);
         if(c->after==S_VOLTAGE){c->state=S_VOLTAGE;c->after=S_RELEASE;return A733_CPU_CLOCK_PENDING;}
@@ -506,4 +551,15 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     }
     default:return fault(c);
     }
+}
+int a733_cpu_clock_parked(const struct a733_cpu_clock *c)
+{return c && c->self==c && (c->state==S_UPDATE || c->state==S_LOCK || c->state==S_UNPARK);}
+enum a733_cpu_clock_status a733_cpu_clock_burst(struct a733_cpu_clock *c,uint64_t budget_us)
+{
+    enum a733_cpu_clock_status r=a733_cpu_clock_poll(c);
+    if(r!=A733_CPU_CLOCK_PENDING)return r;
+    const uint64_t begin=c->last_now;
+    while(r==A733_CPU_CLOCK_PENDING && a733_cpu_clock_parked(c) && c->last_now-begin<budget_us)
+        r=a733_cpu_clock_poll(c);
+    return r;
 }

@@ -133,6 +133,10 @@ static int step(void)
         thermal.next_read=n+25000;
     }
     if(!rearm())return fault();
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* After the thermal step, so a CRITICAL reading ends the session first. */
+    if(os_cpu_clock_step(&thermal.policy)<0)return fault();
+#endif
     return 1;
 }
 void os_thermal_task(void *unused)

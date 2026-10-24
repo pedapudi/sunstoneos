@@ -10,6 +10,9 @@
  *     -DA733_SMP_CONTRACT_MAGIC=<OS magic for that lifetime> \
  *     checks/os-image-model.c drivers/storage/storage_digest.c -o model && ./model
  *
+ * The CPU clock build adds -DA733_A76_ADMITTED=1 -DSUNSTONE_A733_OS_CPU_CLOCK=1
+ * and drivers/clock/a733_cpu_clock.c, whose grant loader the admission calls.
+ *
  * With --write-session PATH GENERATION it writes a nominal session for the
  * stage-2 check; with --admit CONTRACT SESSION NOW it reports whether the
  * image's admission accepts that pair at counter value NOW. */
@@ -252,6 +255,11 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_ESTABLISHED;
     a->dma_owned_channels=0xffff;a->dma_service_channels=1;a->capture_samples=48000;
 #endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* A grant that names no cluster: every clock and voltage stays. */
+    struct a733_cpu_clock_grant_record *g=&s->cpu_clock;
+    g->magic=A733_CPU_CLOCK_GRANT_MAGIC;g->version=A733_CPU_CLOCK_GRANT_VERSION;g->bytes=sizeof(*g);g->owner=18;
+#endif
 }
 /* The contract this lifetime's producer writes: the stage-2 loader for the
  * resident image, the FEL host for the supervised one. */
@@ -363,10 +371,32 @@ static void admission_cases(void)
     /* A contract for the 808-byte session cannot admit the audio image. */
     CONTRACT_REFUSED(c.reserved[1]=A733_OS_SESSION_BYTES);
 #endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* The grant record follows a733_cpu_clock_grant_load against this
+     * session, and its owner is distinct from every other owner. */
+    struct a733_cpu_clock_grant_record *g=&SESSION->cpu_clock;
+    SESSION_REFUSED(g->magic^=1);
+    SESSION_REFUSED(g->bytes=95);
+    SESSION_REFUSED(g->owner=0);
+    SESSION_REFUSED(g->owner=SESSION->thermal_owner);
+    SESSION_REFUSED(g->owner=SESSION->board.pmic_owner);
+    SESSION_REFUSED(g->changes=1);
+    SESSION_REFUSED(g->clusters=4);
+    SESSION_REFUSED((g->clusters=2,g->max_mhz[1]=2002,g->changes=1,memset(g->approval,7,32),g->generation=9));
+    SESSION_REFUSED((g->clusters=2,g->max_mhz[1]=2000,g->changes=1,memset(g->approval,7,32),
+        g->epoch=0x1234,g->generation=9));
+    SESSION_REFUSED((g->clusters=2,g->max_mhz[1]=2002,g->changes=65,memset(g->approval,7,32),
+        g->epoch=0x1234,g->generation=9));
+    /* A grant of 2,002 MHz on CPU-B for this session is admitted. */
+    nominal_session(SESSION,9);g->clusters=2;g->max_mhz[1]=2002;g->changes=1;memset(g->approval,7,32);
+    g->epoch=0x1234;g->generation=9;c=nominal_contract(SESSION,armed);
+    assert(a733_smp_contract_valid(&c,armed+HZ/10));
+    CONTRACT_REFUSED(c.reserved[1]=OS_SESSION_BASE_BYTES);
+#endif
     /* A start after the startup deadline is refused. */
     nominal_session(SESSION,9);c=nominal_contract(SESSION,armed);
     assert(!a733_smp_contract_valid(&c,armed+HZ));++refused;
-    printf("PASS %s%s%s%s OS admission: nominal contract and session accepted, %u refusals\n",
+    printf("PASS %s%s%s%s%s OS admission: nominal contract and session accepted, %u refusals\n",
 #ifdef SUNSTONE_BOARD_RESIDENT
         "resident",
 #else
@@ -384,6 +414,11 @@ static void admission_cases(void)
 #endif
 #ifdef SUNSTONE_A733_OS_HEADSET
         " headset",
+#else
+        "",
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+        " cpu-clock",
 #else
         "",
 #endif

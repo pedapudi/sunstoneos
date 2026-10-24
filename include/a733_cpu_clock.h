@@ -110,6 +110,10 @@ struct a733_cpu_clock {
     unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained, critical;
     unsigned throttled;       /* Cluster bits lowered by THROTTLE, to restore at NORMAL. */
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
+    unsigned inspect_only;    /* The active transition only reads (a733_cpu_clock_inspect). */
+    uint32_t rail_uv[2];      /* Last read or confirmed voltage of DCDC5 and DCDC3; 0 unread. */
+    uint32_t words[2][3];     /* Last pattern 0, pattern 1 and LFM words read per cluster. */
+    uint64_t park_at, parked_us, parked_max_us; /* Park write to select readback, microseconds. */
 };
 /* Zeroed private storage once. Managers, the PMIC provider and the thermal
  * policy have platform lifetime; the policy must already be initialized. The
@@ -149,6 +153,19 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
  * consumes a change; without a change it stays at the ceiling. Idle with
  * nothing to do: READY. */
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
+/* Owner task. A read-only pass over one cluster that needs no grant: the
+ * leases, the inspection reads and one PMIC snapshot, whose voltage it keeps
+ * in rail_uv and which records the rail's boot floor. It writes no clock or
+ * PMIC register and consumes no change. PENDING starts it; poll completes it
+ * with COMPLETE, or REFUSED for a disabled or undecodable rail. */
+enum a733_cpu_clock_status a733_cpu_clock_inspect(struct a733_cpu_clock *,enum a733_cpu_domain,uint64_t deadline);
+/* 1 while a frequency change holds the cluster on the oscillator: from the
+ * park write to the select readback. Each mux write is followed by a 2 us
+ * settle spin on the time source before the next register write. */
+int a733_cpu_clock_parked(const struct a733_cpu_clock *);
+/* Owner task: one poll, then further polls while the cluster stays parked
+ * and the driver's time has advanced less than budget_us since the first. */
+enum a733_cpu_clock_status a733_cpu_clock_burst(struct a733_cpu_clock *,uint64_t budget_us);
 
 /* Cycle timing on one core. A sample holds MIDR_EL1, MPIDR_EL1, PMCCNTR_EL0
  * and CNTPCT_EL0 read together. Both samples must name the same A733 core:

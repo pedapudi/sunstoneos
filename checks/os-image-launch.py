@@ -15,7 +15,11 @@ then checks that:
   claim (through a modeled database connection);
 - its --fault-report flag is refused before any launch step for an image
   without a733_fault_previous, and otherwise reads the report once through
-  a modeled device before the capture, which a failed read never reaches.
+  a modeled device before the capture, which a failed read never reaches;
+- in the CPU clock build (docs/designs/cpu-a76-dvfs.md), a grant that names
+  a cluster is prepared only with an approval record bound to one board, the
+  image, the session and one step, which cites that board's B1 record, and
+  every changed binding is refused.
 
 Every physical fact is a labeled synthetic record. No device, USB, queue
 database or FEL program is opened; the launcher's transport is never called.
@@ -55,6 +59,59 @@ def refused(action):
     raise AssertionError('refusal expected')
 
 
+def clock_cases(raw, record, put, target, identities, prepare, refused, out, cases):
+    """A2 on a modeled board 3-3: CPU-B to 2,002 MHz (fuse word 0x00000496,
+    column vf0400) under an approval bound to this board, image and session,
+    which cites that board's read-only B1 record. Each refusal changes one
+    binding."""
+    tail = len(raw) - prep.GRANT_BYTES
+    assert struct.unpack_from('<4I', raw, tail + 48) == (0, 0, 0, 0), 'the nominal grant names nothing'
+    b1 = {**target, 'schema': prep.B1_SCHEMA, 'sid_word': 0x496, 'dcdc3_mv': 900, 'dcdc5_mv': 850,
+          'pattern_lfm_clear': True, 'warning': 'Synthetic fixture only. Never physical authority.'}
+    approval = {**target, **identities, 'schema': prep.APPROVAL_SCHEMA, 'step': 'A2', 'cluster': 'cpu-b',
+                'highest_mhz': 2002, 'changes': 1, 'approval_text': 'MODEL: no user approval exists',
+                'approval_date': '2026-10-24', 'b1': put('cpu-clock-b1', b1)}
+
+    def granted(name, facts=approval, maxima=(0, 2002), clusters=2, changes=1, with_record=True):
+        ref = put('cpu-clock-approval-' + name, facts)
+        value = bytearray(raw)
+        struct.pack_into('<2Q', value, tail + 32, identities['epoch'], identities['generation'])
+        struct.pack_into('<4I', value, tail + 48, clusters, *maxima, changes)
+        value[tail + 64:tail + 96] = bytes.fromhex(ref['sha256'])
+        path = out / ('MODEL-session-clock-' + name + '.bin')
+        path.write_bytes(value)
+        entry = dict(record, session_template_sha256=hashlib.sha256(value).hexdigest())
+        if with_record:
+            entry['cpu_clock_approval'] = ref
+        entry_path = out / ('MODEL-admission-clock-' + name + '.json')
+        entry_path.write_text(json.dumps(entry))
+        return {'session': path, 'entry': entry_path}
+    bundle = prepare('MODEL-NOT-DEPLOYABLE-clock-a2', **granted('a2'))
+    session = (out / 'MODEL-NOT-DEPLOYABLE-clock-a2/board/session.bin').read_bytes()
+    assert bundle['audio'] is prep.session_layout(session)[0]
+    assert prep.grant_fields(session)['max_mhz'] == (0, 2002)
+    cases['prepared-a2-grant-bound-to-board-image-session-and-b1'] = True
+    other_b1 = put('cpu-clock-b1-envelope', dict(b1, sid_word=0))
+    refusals = {
+        'approval-for-another-port': granted('port', dict(approval, port='OTHER-PORT')),
+        'approval-for-another-session': granted('lease', dict(approval, lease=identities['lease'] + 1)),
+        'b1-envelope-bin-tops-at-1508': granted('envelope', dict(approval, b1=other_b1)),
+        'grant-above-approval': granted('above', maxima=(0, 1794)),
+        'a1-at-2002': granted('a1', dict(approval, step='A1')),
+        'grant-without-approval-record': granted('missing', with_record=False),
+        'two-changes-for-one': granted('changes', changes=2),
+        'little-cluster-for-cpu-b-step': granted('cluster', maxima=(2002, 0), clusters=1),
+    }
+    nothing = dict(record, cpu_clock_approval=approval['b1'])
+    (out / 'MODEL-admission-clock-nothing.json').write_text(json.dumps(nothing))
+    for index, (name, files) in enumerate(refusals.items()):
+        assert refused((lambda f, n: lambda: prepare(n, **f))(files, 'c%d' % index)), name
+        cases['refuses-clock-' + name] = True
+    assert refused(lambda: prepare('cn', entry=out / 'MODEL-admission-clock-nothing.json'))
+    cases['refuses-clock-approval-without-grant'] = True
+    assert not any((out / ('c%d' % i)).exists() for i in range(len(refusals))) and not (out / 'cn').exists()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
@@ -68,6 +125,8 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
+    # The CPU clock build appends the driver's 96-byte grant record.
+    cpu_clock = 'SUNSTONE_A733_OS_CPU_CLOCK:BOOL=ON' in (args.build / 'CMakeCache.txt').read_text()
     image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
     cases = {}
 
@@ -79,11 +138,13 @@ def main():
                '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DA733_SMP_CONTRACT_MAGIC=0x415337334f534331ULL',
                '-DOS_MODEL_BUILD_ID=' + ','.join(str(b) for b in build_id),
                *(['-DSUNSTONE_A733_OS_AUDIO=1'] if audio else []),
+               *(['-DA733_A76_ADMITTED=1', '-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-ffunction-sections',
+                  '-Wl,--gc-sections', 'drivers/clock/a733_cpu_clock.c'] if cpu_clock else []),
                'checks/os-image-model.c', 'drivers/storage/storage_digest.c', '-o', str(model)]
     subprocess.run(command, cwd=ROOT, check=True)
     subprocess.run([str(model), '--write-session', str(out / 'model-session.bin'), '9'], check=True)
     raw = bytearray((out / 'model-session.bin').read_bytes())
-    assert len(raw) == (992 if audio else 808)
+    assert len(raw) == (992 if audio else 808) + (prep.GRANT_BYTES if cpu_clock else 0)
 
     # Synthetic reviewed records, labeled as such, bound to this image.
     facts = out / 'MODEL-NOT-PHYSICAL'
@@ -175,7 +236,7 @@ def main():
     assert admit(out / 'launched-contract.bin', armed + HZ // 10)
     assert not admit(out / 'launched-contract.bin', armed + HZ)
     changed = bytearray(contract)
-    struct.pack_into('<Q', changed, 184, 808 if audio else 992)
+    struct.pack_into('<Q', changed, 184, 992 if len(raw) == 808 else 808)
     (out / 'changed-size-contract.bin').write_bytes(changed)
     assert not admit(out / 'changed-size-contract.bin', armed + HZ // 10)
     cases['image-admission-accepts-launched-contract'] = True
@@ -246,6 +307,9 @@ def main():
     # Every refusal comes before the bundle directory is created.
     assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'a1', 'a2', 'a3',
                                                  'a4', 'a5', 'a6', 'a7', 'n1'))
+
+    if cpu_clock:
+        clock_cases(raw, record, put, target, identities, prepare, refused, out, cases)
 
     # The frozen bundle no longer depends on the original evidence files.
     shutil.rmtree(facts)

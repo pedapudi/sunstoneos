@@ -14,8 +14,9 @@
 #define REG_DCDC5 0x16
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
-    unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count;
+    unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, now_cost;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
+    uint64_t park_at[2]; /* Time of each cluster's latest park write. */
     struct { uint32_t from_uv, to_uv; uint64_t at; } ramp[2]; /* DCDC5, DCDC3. */
     struct event events[64];
 };
@@ -73,7 +74,9 @@ static void pmic_written(void *v,uint8_t reg,uint8_t value)
     cm.ramp[r].from_uv=old;cm.ramp[r].to_uv=selector_uv(value);cm.ramp[r].at=pm.now;
     record(1,reg,value);covered();
 }
-static int cpu_now(void *v,uint64_t *out){(void)v;return pmic_model_now(&pm,out);}
+/* Each CPU clock time read costs now_cost microseconds, so the driver's
+ * settle spin sees time advance. */
+static int cpu_now(void *v,uint64_t *out){(void)v;int r=pmic_model_now(&pm,out);pm.now+=cm.now_cost;return r;}
 static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
@@ -91,12 +94,14 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
     (void)v;assert(a733_cpu_clock_address(a,1));++cm.writes;record(0,(uint32_t)a,value);
     for(unsigned d=0;d<2;++d) {
         if(a==PLL(d)) {
-            /* The PLL changes only while its cluster runs from the DCXO. */
+            /* The PLL changes only while its cluster runs from the DCXO, and
+             * at least 1 us (the mainline mux notifier delay) after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
+            assert(pm.now>=cm.park_at[d]+1);
             *word(a)=value&~(1u<<28);
             if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
         }
-        if(a==SEL(d)){*word(a)=value;covered();}
+        if(a==SEL(d)){if(!((value>>24)&7))cm.park_at[d]=pm.now;*word(a)=value;covered();}
     }
     return 1;
 }
@@ -110,7 +115,7 @@ static void setup(uint32_t sid,unsigned bin,uint8_t dcdc5,uint8_t dcdc3,unsigned
     *word(0x07090160)=0x10008002;*word(0x07010010)=0x04000000;
     *word(0x02002000)=LOCKED|(95u<<8)|(103u<<16);
     pm.pmic[REG_DCDC5]=dcdc5;pm.pmic[REG_DCDC3]=dcdc3;pm.pmic_written=pmic_written;
-    memset(&cm,0,sizeof(cm));cm.bin=bin;
+    memset(&cm,0,sizeof(cm));cm.bin=bin;cm.now_cost=1;
     cm.ramp[0].from_uv=cm.ramp[0].to_uv=selector_uv(dcdc5);
     cm.ramp[1].from_uv=cm.ramp[1].to_uv=selector_uv(dcdc3);
     *word(0x0300624c)=sid;
@@ -479,8 +484,51 @@ int main(void)
         }
         assert(!a733_cpu_clock_timing(&x,&y,hz,&report,&timing) && !memcmp(&timing,&held,sizeof(held)));
     }
+    /* Read-only inspection, as the OS owner takes for B1: no grant, no
+     * write, no change consumed; the voltage, the pattern and LFM words and the
+     * boot floor are recorded. Board 3-3's fuse word 0x00000496 selects vf0400. */
+    setup(0x00000496,4,35,40,30,0);assert(heat(50000)==A733_THERMAL_NORMAL);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,1196,pm.now+120000)==A733_CPU_CLOCK_REFUSED);
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && !cm.writes && first(1)==cm.count);
+    assert(cpu.rail_uv[1]==900000 && !cpu.words[1][0] && !cpu.words[1][2] && pm.rails.floor_uv[0]==900000);
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_LITTLE,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && released() && !cm.writes && cpu.rail_uv[0]==850000);
+    /* A2 on board 3-3: CPU-B 1014 -> 2002 MHz at 1,050 mV with the OS owner's
+     * 120 ms deadline, one burst per 1 ms tick with a 200 us budget. A lock of
+     * 20 us leaves no tick boundary inside the parked window. */
+    const struct a733_cpu_clock_grant a2={77,2,{0,2002},1};
+    setup(0x00000496,4,35,40,30,&a2);assert(heat(50000)==A733_THERMAL_NORMAL);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    unsigned ticks=0,parked_ticks=0;enum a733_cpu_clock_status r2=A733_CPU_CLOCK_PENDING;
+    for(;r2==A733_CPU_CLOCK_PENDING && ticks<200;++ticks) {
+        for(unsigned i=0;i<4;++i)assert(pmic_model_step(&pm)!=A733_PMIC_RETAINED);
+        r2=a733_cpu_clock_burst(&cpu,200);
+        if(a733_cpu_clock_parked(&cpu))++parked_ticks;
+        pm.now+=1000;
+    }
+    assert(r2==A733_CPU_CLOCK_COMPLETE && released() && *word(PLL(1))==(LOCKED|(77u<<8)) && pm.pmic[REG_DCDC3]==55);
+    assert(cpu.rail_uv[1]==1050000 && cpu.applied_mhz[1]==2002 && !parked_ticks && cpu.parked_max_us<200);
+    unsigned writes=0;for(unsigned i=0;i<cm.count;++i)writes+=!cm.events[i].pmic;
+    printf("BUDGET raise_with_voltage clock_writes=%u pmic_writes=%u owner_ticks=%u parked_ticks=%u parked_us=%llu\n",
+        writes,cm.count-writes,ticks,parked_ticks,(unsigned long long)cpu.parked_max_us);
+    assert(writes==5 && cm.count-writes==1);
+    /* A lock of 300 us exceeds the burst budget: the owner sleeps parked ticks
+     * and the parked time is recorded. */
+    setup(0x00000496,4,35,55,30,&a2);assert(heat(50000)==A733_THERMAL_NORMAL);cm.lock_us=300;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,2002,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    ticks=parked_ticks=0;r2=A733_CPU_CLOCK_PENDING;
+    for(;r2==A733_CPU_CLOCK_PENDING && ticks<200;++ticks) {
+        for(unsigned i=0;i<4;++i)assert(pmic_model_step(&pm)!=A733_PMIC_RETAINED);
+        r2=a733_cpu_clock_burst(&cpu,200);
+        if(a733_cpu_clock_parked(&cpu))++parked_ticks;
+        pm.now+=1000;
+    }
+    assert(r2==A733_CPU_CLOCK_COMPLETE && parked_ticks==1 && cpu.parked_max_us>=300 && first(1)==cm.count);
+    printf("BUDGET slow_lock parked_ticks=%u parked_us=%llu\n",parked_ticks,(unsigned long long)cpu.parked_max_us);
     puts("PASS CPU clock: report, bins, grant records, grant and thermal-policy admission, "
          "voltage-before-frequency raise, frequency-before-voltage lowering, DSU rail share, throttle and "
-         "restore, refusals, expiry before the PLL waits, retained faults and cycle timing");
+         "restore, refusals, expiry before the PLL waits, retained faults, cycle timing, settle after "
+         "each mux switch, read-only inspection and parked bursts");
     return 0;
 }

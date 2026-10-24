@@ -35,6 +35,15 @@ endif()
 # inference worker run on cores 6 and 7, and every other task keeps the A55
 # default affinity. The option is also the compile definition.
 option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
+# CPU operating points granted by a sealed supervised session; each change
+# needs the user's approval before the run (docs/cpu-clock.md).
+option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
+if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT)
+  message(FATAL_ERROR "CPU operating-point grants name the supervised session's epoch; the resident loader replaces it on every boot")
+endif()
+if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
+  message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
+endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The recognizer waits for GPU replies without a timer of its own; only the
   # resident lifetime's mimus service window and watchdog bound those waits.
@@ -272,7 +281,8 @@ if(SUNSTONE_A733_OS_HEADSET)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_RECOGNITION=1)
 endif()
 if(A733_A76_ADMITTED)
-  target_compile_definitions(sunstone-a733-os PRIVATE A733_A76_ADMITTED=1)
+  target_compile_definitions(sunstone-a733-os PRIVATE A733_A76_ADMITTED=1
+    "$<$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>:SUNSTONE_A733_OS_CPU_CLOCK=1>")
 endif()
 if(SUNSTONE_A733_OS_MSBC)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
@@ -298,7 +308,7 @@ foreach(input IN LISTS os_inputs)
   string(APPEND os_identity "${hash}")
 endforeach()
 if(A733_A76_ADMITTED)
-  string(APPEND os_identity ";a76=1")
+  string(APPEND os_identity ";a76=1;cpu_clock=${SUNSTONE_A733_OS_CPU_CLOCK}")
 endif()
 string(SHA256 os_build_id "${os_identity}")
 string(REGEX REPLACE "(..)" "0x\\1," os_id_bytes "${os_build_id}")

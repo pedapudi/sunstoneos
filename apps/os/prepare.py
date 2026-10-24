@@ -3,8 +3,11 @@
 
 No hardware access. The bundle holds the linked image, its link-check record as
 the image manifest, the reviewed entry record with every evidence byte it cites,
-the 808-byte session (992 bytes with audio), the SRAM launcher built for the OS
-contract, and the three fixed recognition inputs. The reviewed entry record is
+the 808-byte session (992 bytes with audio, and 96 more with the CPU clock
+grant record), the SRAM launcher built for the OS contract, and the three
+fixed recognition inputs. A grant that names a cluster needs a reviewed
+approval record bound to one board, this image, this session and that
+board's read-only B1 record (docs/designs/cpu-a76-dvfs.md). The reviewed entry record is
 mandatory: it carries the board's supervised entry facts, the thermal owner's
 facts, the DDR reservation of the recognition inputs and, for the audio build,
 the I2S receive and DMA0 authority. The session identities come from the
@@ -16,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -54,6 +58,51 @@ AUDIO_CONDITIONS = {
     'i2s0-pins-bank-voltage-and-microphone-wiring', 'device-mappings-and-cache-alias-exclusion',
     'manual-whole-board-power-removal', 'retain-all-resources-until-power-removal',
     'stop-after-first-failure'}
+# CPU clock grant record (include/a733_cpu_clock.h), after the thermal and
+# audio facts in the SUNSTONE_A733_OS_CPU_CLOCK build.
+GRANT_MAGIC, GRANT_BYTES, GRANT_CHANGES = 0x4153373343505531, 96, 64
+APPROVAL_SCHEMA = 'a733-os-cpu-clock-approval-v1'
+B1_SCHEMA = 'a733-os-cpu-clock-b1-v1'
+BIN_CODES = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x14, 0x15)  # Columns 1..8; code 0: envelope.
+STEPS = {'A1': ('cpu-b', 1196), 'A2': ('cpu-b', None), 'A3': ('cpu-l', 1196)}
+
+
+def opp_rows(cluster):
+    """The driver's 26 MHz table rows: (MHz, mV per column) for 'little' or 'big'."""
+    text = (ROOT / 'drivers/clock/a733_cpu_clock.c').read_text()
+    body = re.search(r'static const struct a733_cpu_opp ' + cluster + r'\[\]=\{(.*?)\n\};', text, re.S)[1]
+    return [(int(m[1]), [int(v) for v in m[2].split(',')]) for m in re.finditer(r'\{(\d+),\{([\d,]+)\}\}', body)]
+
+
+def bin_column(sid_word):
+    """The driver's bin map: a column index, 9 for the code-0 envelope, None if refused."""
+    code = (sid_word >> 16) & 255 or (sid_word >> 8) & 255
+    return 9 if not code else BIN_CODES.index(code) + 1 if code in BIN_CODES else None
+
+
+def supported(cluster, column):
+    """MHz points that the column (or the envelope) supports, ascending."""
+    rows = opp_rows('little' if cluster == 'cpu-l' else 'big')
+    return [mhz for mhz, mv in rows if (all(mv) if column == 9 else mv[column])]
+
+
+def session_layout(raw):
+    """(audio, grant): the session sizes that apps/os/os.h defines."""
+    extra = len(raw) - OS_BYTES
+    require(extra in (0, AUDIO_BYTES, GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES), 'Unknown OS session size.')
+    return extra >= AUDIO_BYTES, extra in (GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES)
+
+
+def grant_fields(raw):
+    """The grant record's fields, or None without one."""
+    if not session_layout(raw)[1]:
+        return None
+    g = raw[len(raw) - GRANT_BYTES:]
+    magic, version, size, owner, epoch, generation = struct.unpack_from('<6Q', g)
+    clusters, little, big, changes = struct.unpack_from('<4I', g, 48)
+    return {'magic': magic, 'version': version, 'bytes': size, 'owner': owner, 'epoch': epoch,
+            'generation': generation, 'clusters': clusters, 'max_mhz': (little, big), 'changes': changes,
+            'approval': bytes(g[64:96])}
 
 
 def image_manifest_check(manifest, raw):
@@ -74,7 +123,7 @@ def image_manifest_check(manifest, raw):
 
 def session_check(raw, audio):
     """Python statement of apps/os/admission.c os_session_valid for the bundle."""
-    require(len(raw) == OS_BYTES + (AUDIO_BYTES if audio else 0), 'OS session size differs from the image.')
+    require(session_layout(raw)[0] is audio, 'OS session size differs from the image.')
     require(board.session_check(raw[:BOARD_BYTES], usb_reference_modes=(1,)) in (0, 4),
             'The OS image admits board workloads 0 and 4 only.')
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
@@ -93,6 +142,18 @@ def session_check(raw, audio):
     for i in range(5):
         hot, hysteresis, limit = struct.unpack_from('<3H', raw, 772 + 6 * i)
         require(0 < limit <= hot < hysteresis <= 4095, 'Invalid thermal thresholds.')
+    g = grant_fields(raw)
+    if g is not None:
+        # a733_cpu_clock_grant_load and the owner rule of apps/os/admission.c.
+        dma_owner = struct.unpack_from('<Q', raw, AUDIO_DMA + 48)[0] if audio else 0
+        require((g['magic'], g['version'], g['bytes']) == (GRANT_MAGIC, 1, GRANT_BYTES) and g['owner'] and
+                g['owner'] not in owners + (owner, dma_owner) and not g['clusters'] & ~3, 'Invalid CPU clock grant.')
+        if not g['clusters']:
+            require(not (g['epoch'] or g['generation'] or any(g['max_mhz']) or g['changes'] or any(g['approval'])),
+                    'A grant that names no cluster carries nothing else.')
+        else:
+            require((g['epoch'], g['generation']) == (epoch, generation) and 0 < g['changes'] <= GRANT_CHANGES and
+                    any(g['approval']), 'The CPU clock grant must name this session and an approval.')
     if not audio:
         return
     a = raw[OS_BYTES:]
@@ -115,7 +176,7 @@ def capture_profile(raw):
     """The session identities and, with audio, the capture profile."""
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     profile = {'epoch': epoch, 'generation': generation, 'lease': lease}
-    if len(raw) > OS_BYTES:
+    if session_layout(raw)[0]:
         profile['audio_cold'], profile['capture_samples'] = struct.unpack_from('<2I', raw, AUDIO_TAIL)
     return profile
 
@@ -183,6 +244,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
+    cpu_clock_admission(record, image_hash, raw, profile, evidence)
     if not audio:
         require('audio' not in record and 'dma_nonsecure_access' not in record,
                 'Audio authority supplied for an image without audio.')
@@ -211,6 +273,41 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
                     dma_handoff=profile['lease'], configuration_sha256=dma_sha256)
     security_authority.validate(evidence(record['dma_nonsecure_access']), expected, evidence, require)
     return cache
+
+
+def cpu_clock_admission(record, image_hash, raw, profile, evidence):
+    """A grant that names a cluster is bound to one reviewed approval of one
+    step on one board, which cites that board's read-only B1 record."""
+    g = grant_fields(raw)
+    if g is None or not g['clusters']:
+        require('cpu_clock_approval' not in record, 'CPU clock approval supplied without a grant.')
+        return
+    require(isinstance(record.get('cpu_clock_approval'), dict), 'Reviewed CPU clock approval record required.')
+    data = evidence(record['cpu_clock_approval'])
+    a = json.loads(data)
+    require(a.get('schema') == APPROVAL_SCHEMA and a.get('identity') == record['identity'] and
+            a.get('port') == record['port'] and a.get('image_sha256') == image_hash and
+            all(a.get(k) == profile[k] for k in ('epoch', 'generation', 'lease')) and
+            isinstance(a.get('approval_text'), str) and a['approval_text'].strip() and
+            isinstance(a.get('approval_date'), str) and a.get('step') in STEPS,
+            'The approval record names another board, image, session or step.')
+    cluster, fixed = STEPS[a['step']]
+    index = 0 if cluster == 'cpu-l' else 1
+    b1 = json.loads(evidence(a.get('b1')))
+    require(b1.get('schema') == B1_SCHEMA and b1.get('identity') == record['identity'] and
+            b1.get('port') == record['port'] and b1.get('pattern_lfm_clear') is True and
+            all(isinstance(b1.get(k), int) and 800 <= b1[k] <= 1050 for k in ('dcdc3_mv', 'dcdc5_mv')) and
+            isinstance(b1.get('sid_word'), int), "The approval must cite this board's B1 record.")
+    column = bin_column(b1['sid_word'])
+    require(column is not None, 'B1 recorded a fuse code without a table column.')
+    points = supported(cluster, column)
+    highest = fixed if fixed else points[-1]
+    require(a.get('cluster') == cluster and a.get('highest_mhz') == highest and highest in points and
+            isinstance(a.get('changes'), int) and 0 < a['changes'] <= GRANT_CHANGES,
+            "The approval's step, cluster or highest point does not fit this board's bin.")
+    maxima = (highest, 0) if index == 0 else (0, highest)
+    require(g['clusters'] == 1 << index and g['max_mhz'] == maxima and g['changes'] == a['changes'] and
+            g['approval'] == hashlib.sha256(data).digest(), 'The session grant differs from the approval record.')
 
 
 def prepare(image, link_check, admission, template, assets, output, clang, lld):
