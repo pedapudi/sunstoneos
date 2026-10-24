@@ -101,10 +101,12 @@ as they are (section 1.2).
 
 ## Budgets and measurement
 
-Baselines come from commit `745a6ec`. Object sizes come from a freestanding
+Baselines come from commit `745a6ec`; later integrated commits with the same
+sources give the same figures. Object sizes come from a freestanding
 compile of each file with the image's C flags (`clang-21 --target=aarch64-none-elf
 -O2 -march=armv8-a -mstrict-align -mgeneral-regs-only -ffreestanding
--fno-builtin`). Builds go under `~/.cache/sunstoneos/build/dma-high-memory/`.
+-fno-builtin`). The [measurement record](dma-high-memory-measurements.md)
+names its build directories.
 
 | Metric | Baseline | Budget | Measured by |
 | --- | --- | --- | --- |
@@ -115,8 +117,9 @@ compile of each file with the image's C flags (`clang-21 --target=aarch64-none-e
 | Camera MMIO writes per capture and per rearm | Not counted | Same count and offsets as the baseline; only the three address values differ | Write trace added to the native camera model, compared before and after |
 | Copies per byte (camera readout, NVMe read) | One and one | Unchanged | Code reading; `memcpy` and byte-loop calls counted in the models |
 | Object size: capture `initialize`, xHCI `capabilities` | 1,920 and 532 bytes | Identical instructions | `llvm-objdump-21 -d` comparison |
-| Object size: `a733_pcie_nvme_init` | 804 bytes | At most 16 bytes larger; `poll`, `read`, `copy`, `write_allowed` and `build` identical | Same |
-| Object size: native camera `initialize`, `route_admit`, `dma_admit` | 2,020, 188 and 288 bytes | `initialize` at most 32 bytes larger; the two admission callbacks no larger | Same, built with `SUNSTONE_CAMERA_MODEL` |
+| Object size: `a733_pcie_nvme_init` | 804 bytes | At most 16 bytes larger; `poll`, `read`, `copy`, `write_allowed` and `build` identical. Measured growth is 12 bytes: three instructions that compare the pool address with a constant and branch to the refusal, run once per controller initialization | Same |
+| Object size: native camera `initialize`, `route_admit`, `dma_admit` | 2,020, 188 and 288 bytes | `initialize` at most 32 bytes larger; the two admission callbacks no larger. Measured growth is 32 bytes: eight instructions, run once per camera start, that build each span's IOVA and physical address separately, where one value served both before | Same, built with `SUNSTONE_CAMERA_MODEL` |
+| `.text` of the camera, NVMe and board images | 205,208, 548,676 and 498,736 bytes | No more than the function growth in the two rows above: 24 bytes for the camera image (32 − 4 − 4), 12 for the NVMe image, none for the board image | `llvm-size-21 -A` of each image |
 
 The camera model also gains a case with the allocation's physical address at
 `0x1_8000_0000` and its CPU address at the host mapping. The case requires
