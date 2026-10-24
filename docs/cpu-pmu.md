@@ -1,8 +1,9 @@
 # Per-core cycle and event counts for measurement regions
 
 Status: **implemented** and checked under instruction emulation and on QEMU
-Cortex-A55 and Cortex-A76 cores. No image links the module yet, and no
-result comes from the board. Event counting needs a change to the EL3
+Cortex-A55 and Cortex-A76 cores. Board bundle 4 links its single-core form, and core 0 of
+port 3-3 measured it on 2026-10-24 (section "Board measurement on core 0" of
+[the measurements](designs/cpu-pmu-measurements.md)). Event counting needs a change to the EL3
 continuation, described under [Prerequisite](#prerequisite-mdcr_el2-gives-el1-the-event-counters),
 before any image uses it. The design and its budgets are in
 [designs/cpu-pmu.md](designs/cpu-pmu.md), and the measured figures in
