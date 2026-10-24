@@ -46,11 +46,11 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None):
  record=json.loads(admission_raw);collected={}
  def evidence(item):
   data=evidence_ref(item,cache);collected[item['path']]=data;return data
- profile=original.session_profile(raw,layout);boot,boot_bytes,pll,pll_bytes=layout[1:5]
+ profile=original.session_profile(raw,layout);boot,boot_bytes=layout[1:3]
  require(record.get('schema')==SCHEMA and record.get('execution_profile')==PROFILE and
   record.get('image_sha256')==image_hash and raw[48:80]==build and raw[80:112]==hashlib.sha256(admission_raw).digest(),'Session does not bind returning entry/image.')
- require(struct.unpack_from('<Q',raw,8)[0]==2 and all(record.get(k)==v for k,v in profile.items()),'Returning admission/profile identities differ.')
- require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]) and record.get('pll_sha256')==sha(raw[pll:pll+pll_bytes]),'Typed boot/PLL bytes differ.')
+ require(struct.unpack_from('<Q',raw,8)[0]==original.SINGLE_CORE_VERSION and all(record.get(k)==v for k,v in profile.items()),'Returning admission/profile identities differ.')
+ require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]),'Typed boot bytes differ.')
  identity,port=record.get('identity'),record.get('port');require(identity and port,'Fresh target identity required.')
  ddr=json.loads(evidence(record['ddr']))
  require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and
@@ -61,14 +61,13 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None):
  platform=json.loads(evidence(record['platform']));fn=original.protocol.validate_platform
  validate=types.FunctionType(fn.__code__,{**fn.__globals__,'artifact':evidence})
  validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':'npu-single-core-supervised-v1'},identity,port)
- required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','enabled-retune-snapshot'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
- if struct.unpack_from('<I',raw,pll+24)[0]==3:
-  required['clock'].remove('enabled-retune-snapshot');required['clock'].update({'live-disabled-pll-quiescent-on-snapshot','native-dram-continuations-and-shared-sram-abandonment','supervised-cross-pll-disturbance-risk'})
+ # The clock facts are those of prepare-supervised.validate_admission: startup
+ # admits PLL_NPU disabled and enables it with method 2.
+ required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
  for name,offset in [('clock',112),('power',144),('supervision',176)]:
   data=evidence(record[name]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],name+' digest differs.');facts=json.loads(data)
   require(facts.get('image_sha256')==image_hash and facts.get('identity')==identity and facts.get('port')==port and facts.get('whole_platform')==profile['whole_platform'] and set(facts.get('conditions',{}))==required[name],name+' facts do not cover returning entry.')
   for ref in facts['conditions'].values():evidence(ref)
-  if name=='clock':require(facts.get('pll_sha256')==record['pll_sha256'],'Clock snapshot differs.')
   if name=='power':require(facts.get('supply_uv')==800000 and facts.get('boot_sha256')==record['boot_sha256'],'Power configuration differs.')
   if name=='supervision':require(facts.get('supervisor')==profile['supervisor'] and facts.get('one_attempt') is True,'One-attempt supervisor differs.')
  review=json.loads(evidence(record['root_review']))

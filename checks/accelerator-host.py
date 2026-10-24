@@ -154,7 +154,7 @@ def main():
         firmware=next(v['data'][start-v['address']:end-v['address']] for v in parts if v['address']<=start<end<=v['address']+len(v['data']))
         path=root/'gpu-firmware.bin';path.write_bytes(firmware);outer['gpu_firmware']=ref(path)
         admission=put('MODELED-admission.json',outer);session=root/'session.bin';session.write_bytes(changed)
-        assert p.assemble_session(bytes(changed[24:632]),package,Path(admission['path']).read_bytes(),layout)==bytes(changed)
+        assert p.assemble_session(bytes(changed[layout[1]:layout[1]+layout[2]]),package,Path(admission['path']).read_bytes(),layout)==bytes(changed)
         manifest_path=root/'manifest.json';p.save_json(manifest_path,manifest)
         # Production refuses this nominal-looking fixture through the unchanged
         # physical admission validator; nonzero outer records add no authority.
