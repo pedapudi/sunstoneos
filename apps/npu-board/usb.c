@@ -34,7 +34,7 @@ enum { STATUS=1, LOAD, UPLOAD, SUBMIT, READ, RETURN, CLOSE };
 static uint8_t header[64],response[64];
 static unsigned header_used,operation,sequence,last_sequence,posted,tensor;
 static uintptr_t upload_at;static size_t upload_left;
-static uintptr_t payload;static size_t response_bytes,sent,transferred;
+static uintptr_t payload;static size_t response_bytes,sent,transferred;static unsigned terminal_zlp;
 /* Counts for the host model: bytes moved between the FIFO and the windows. */
 uint64_t npu_board_usb_upload_bytes,npu_board_usb_output_bytes;
 static uint32_t le32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -45,11 +45,21 @@ void tud_mount_cb(void){}
 void tud_umount_cb(void){}
 void tud_suspend_cb(bool wake){(void)wake;}
 void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes){(void)buffer;(void)bytes;if(interface)stop();}
+/* A response that ends on a whole packet is closed by the zero-length packet
+ * that follows it, as in the G2D image; the next response waits for it. */
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {
-    if(interface||bytes>sent-transferred)stop();
+    if(interface||!response_bytes||bytes>sent-transferred)stop();
+    if(!bytes){
+        if(!terminal_zlp||transferred!=response_bytes||sent!=response_bytes)stop();
+        response_bytes=0;terminal_zlp=0;return;
+    }
+    if(terminal_zlp)stop();
     transferred+=bytes;
-    if(transferred==response_bytes&&sent==response_bytes)response_bytes=0;
+    if(transferred==response_bytes&&sent==response_bytes){
+        unsigned packet=tud_speed_get()==TUSB_SPEED_HIGH?512:64;
+        if(bytes%packet==0)terminal_zlp=1;else response_bytes=0;
+    }
 }
 void tud_vendor_tx_complete_cb(uint8_t interface){if(interface)stop();}
 static void respond(unsigned result,size_t extra,uintptr_t from)
@@ -63,7 +73,7 @@ static void respond(unsigned result,size_t extra,uintptr_t from)
     put32(response+56,c->inputs<<16|c->outputs);
     put32(response+60,operation==READ&&tensor<c->outputs?c->output[tensor].bytes:
         operation==UPLOAD&&tensor<c->inputs?c->input[tensor].bytes:0);
-    payload=from;sent=transferred=0;response_bytes=sizeof(response)+extra;
+    payload=from;sent=transferred=0;terminal_zlp=0;response_bytes=sizeof(response)+extra;
 }
 /* Header first, then the output tensor straight from the write window. */
 static void transmit(void)
