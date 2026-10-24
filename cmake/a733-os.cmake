@@ -205,17 +205,20 @@ if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_HEADSET)
   set(os_recognition "${os_build}/recognition.cc")
   list(APPEND os_patches "${os_root}/apps/os/recognition.patch")
 endif()
+# The recognizer and the engine's second inference worker run on the
+# recognition pair: A55 cores 2 and 3, or A76 cores 6 and 7 once admitted.
+list(APPEND os_added apps/mimus/parallel_runtime.cc)
+list(APPEND os_external_inputs "${os_root}/include/a733_smp_placement.h" "${os_root}/apps/mimus/parallel_runtime.h")
+if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
+  # The GPU build's recognizer patch places the recognizer itself.
+  apply_build_patch("${os_build}/recognition-placed.cc" "${os_recognition}" "${os_root}/apps/os/recognition-placement.patch")
+  set(os_recognition "${os_build}/recognition-placed.cc")
+  list(APPEND os_patches "${os_root}/apps/os/recognition-placement.patch")
+endif()
 if(A733_A76_ADMITTED)
   # The admission record reads the CPU clock words once before the scheduler.
-  list(APPEND os_added apps/os/cpu.c drivers/clock/a733_cpu_clock.c apps/mimus/parallel_runtime.cc)
-  list(APPEND os_external_inputs "${os_root}/include/a733_smp_placement.h" "${os_root}/include/a733_cpu_clock.h"
-    "${os_root}/apps/mimus/parallel_runtime.h")
-  if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
-    # The GPU build's recognizer patch places the recognizer itself.
-    apply_build_patch("${os_build}/recognition-a76.cc" "${os_recognition}" "${os_root}/apps/os/recognition-placement.patch")
-    set(os_recognition "${os_build}/recognition-a76.cc")
-    list(APPEND os_patches "${os_root}/apps/os/recognition-placement.patch")
-  endif()
+  list(APPEND os_added apps/os/cpu.c drivers/clock/a733_cpu_clock.c)
+  list(APPEND os_external_inputs "${os_root}/include/a733_cpu_clock.h")
 endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The placement table comes from the models the image embeds by hash, for

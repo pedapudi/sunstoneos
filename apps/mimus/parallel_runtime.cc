@@ -57,7 +57,11 @@ void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
         const size_t middle = count / 2;
         const Job job{function, nullptr, context, middle, count, ++submitted};
         // Cacheable, inner-shareable memory and the FreeRTOS queue barriers
-        // publish CPU stores; this target has no noncoherent DMA producer.
+        // publish CPU stores. The one noncoherent producer is the GPU of the
+        // GPU linear build: its runtime's DC CIVAC over each completed job's
+        // tags and sums (pvr_mimus_complete) reaches every core's cache before
+        // the recognizer reads them, so the sums this worker reads out are
+        // coherent.
         configASSERT(xQueueSend(jobs, &job, 0) == pdTRUE);
         function(context, 0, middle, 0);
         uint64_t sequence;

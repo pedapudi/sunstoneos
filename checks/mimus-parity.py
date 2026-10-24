@@ -66,9 +66,14 @@ fields = dict(item.split('=') for item in metrics[1].split())
 expected = rows[0]
 for key in ['feat_crc', 'lp_crc', 'frames']:
     if fields[key] != str(expected[key]): raise SystemExit(f'{key} differs.')
+# A model without a punctuation head has no marks or capitals in the host
+# reference, and the candidate must then print neither line.
 for name, key in [('TEXT', 'text'), ('MARKS', 'marks'), ('CAPS', 'caps')]:
     found = re.search(r'^' + name + r' (.*)$', log, re.M)
-    if not found or found[1] != expected[key]: raise SystemExit(f'{name} differs.')
+    if key in expected:
+        if not found or found[1] != expected[key]: raise SystemExit(f'{name} differs.')
+    elif key == 'text' or found:
+        raise SystemExit(f'{name} differs from a reference without it.')
 formatted = re.search(r'^FORMATTED (.*)$', log, re.M)
 if not formatted or formatted[1] != expected['typed'] + rows[1]['typed']:
     raise SystemExit('Formatted text differs.')

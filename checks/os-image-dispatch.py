@@ -62,7 +62,7 @@ EXPECTED = {
             '176x176': (80, 3264), '176x352': (160, 1632), '176x1025': (449, 544)},
 }
 # The design's regression bound on the modeled linear stage, in seconds.
-DESIGN_BOUND = {'a55': 1.15, 'a76': 0.54}
+DESIGN_BOUND = {'a55': 1.12, 'a76': 0.54}
 BENCH = {'placed_calls': 204, 'jobs': 204, 'block_jobs': 20, 'block_padded_rows': 8,
          'block_codes': 7032960, 'block_clean_lines': 219780, 'outputs': 12923134}
 BENCH_FRAMES = 222

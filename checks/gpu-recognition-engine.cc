@@ -31,7 +31,9 @@ extern "C" {
 #include "pvr_compute_mimus.h"
 }
 #ifdef ENGINE_HOOK
+#include <span>
 #include "mimus/asr/exact_sum_hook.h"
+#include "mimus/asr/kernels.h"
 #endif
 
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); std::exit(1); } } while (0)
@@ -44,6 +46,17 @@ struct Tensor { uint32_t k, n, stride, offset; };
 extern "C" const struct os_placement os_placement_table[];
 extern "C" const struct os_placement_tensor os_placement_tensors[];
 extern "C" const uint32_t os_placement_rows, os_placement_gpu_rows;
+#ifdef ENGINE_HOOK
+// The installed hook and the ordinals it is offered (SetExactSumOrdinals; an
+// empty span offers every call), as kernels.cc keeps them.
+static const mimus::asr::ExactSumHook *engine_hook;
+static std::span<const uint8_t> engine_ordinals;
+static bool offered(uint32_t ordinal)
+{
+    return engine_ordinals.empty() ||
+        (ordinal / 8 < engine_ordinals.size() && (engine_ordinals[ordinal / 8] >> (ordinal % 8) & 1));
+}
+#endif
 
 // ---- Modeled recognizer and GPU runtime -----------------------------------
 static jmp_buf stop;
@@ -162,8 +175,7 @@ static void linear(const Call &c, float *y, const Sink *sink, bool use_hook, boo
 {
     size_t n_gpu = 0;
 #ifdef ENGINE_HOOK
-    extern const mimus::asr::ExactSumHook *engine_hook;
-    if (use_hook && engine_hook)
+    if (use_hook && engine_hook && offered(c.ordinal))
         n_gpu = engine_hook->begin(engine_hook->ctx, c.ordinal, c.w, c.w_stride, c.rows, c.k, c.n, c.codes, c.stride);
 #else
     (void)use_hook;
@@ -178,9 +190,17 @@ static void linear(const Call &c, float *y, const Sink *sink, bool use_hook, boo
     std::vector<bool> covered(c.rows, false);
 #ifdef ENGINE_HOOK
     if (n_gpu) {
+        // The hook may remove itself inside finish; this call keeps it.
+        const mimus::asr::ExactSumHook *hook = engine_hook;
         mimus::asr::ExactSumJob job;
-        while (engine_hook->finish(engine_hook->ctx, &job)) {
-            CHECK(job.first_row + job.rows <= c.rows && (job.width == 4 || job.width == 8) && job.stride == n_gpu * job.width);
+        size_t next = 0;
+        while (hook->finish(hook->ctx, &job)) {
+            // The engine's rules: jobs in row order, int64 sums when K
+            // rounded up to 16 exceeds 512, a stride that holds the sums.
+            CHECK(job.first_row == next && job.rows && job.first_row + job.rows <= c.rows &&
+                  (job.width == 8 || (job.width == 4 && (c.k + 15) / 16 * 16 <= 512)) &&
+                  job.stride == n_gpu * job.width);
+            next += job.rows;
             for (size_t r = 0; r < job.rows; ++r) {
                 CHECK(!covered[job.first_row + r]);
                 covered[job.first_row + r] = true;
@@ -203,8 +223,10 @@ static void linear(const Call &c, float *y, const Sink *sink, bool use_hook, boo
     }
 }
 #ifdef ENGINE_HOOK
-const mimus::asr::ExactSumHook *engine_hook;
-namespace mimus::asr { void SetExactSumHook(const ExactSumHook *hook) { engine_hook = hook; } }
+namespace mimus::asr {
+void SetExactSumHook(const ExactSumHook *hook) { engine_hook = hook; }
+void SetExactSumOrdinals(std::span<const uint8_t> placed) { engine_ordinals = placed; }
+}
 #endif
 
 // ---- Cases ------------------------------------------------------------------
@@ -263,6 +285,10 @@ static void reset()
 {
     std::memset(&os_dispatch_record, 0, sizeof(os_dispatch_record));
     os_dispatch_active = 0;
+#ifdef ENGINE_HOOK
+    engine_hook = nullptr;
+    engine_ordinals = {};
+#endif
     opens = board_fails = 0; open_reply = 1; script = {~0u, NONE}; submitted_jobs = 0; busy = false;
     os_gpu_open();
 }
@@ -304,7 +330,10 @@ int main()
     std::printf("PASS engine model without the hook: no OPEN, %zu calls on the CPU\n", sizeof(nominal) / sizeof(*nominal));
     return 0;
 #else
-    CHECK(opens == 1 && os_dispatch_record.opened);
+    CHECK(opens == 1 && os_dispatch_record.opened && engine_hook);
+    // The hook is offered exactly the table's placed ordinals.
+    CHECK(engine_ordinals.size() == (os_placement_rows + 7) / 8);
+    for (uint32_t i = 0; i < os_placement_rows; ++i) CHECK(offered(i) == (os_placement_table[i].n_gpu != 0));
     unsigned jobs = 0, calls = 0;
     for (auto &t : nominal) {
         unsigned before = submitted_jobs;
@@ -340,6 +369,8 @@ int main()
         for (auto &t : nominal) CHECK(compare(t.spec, t.n) == 1);
         bool closes = f.fault == DROP_TAG || f.fault == CORRUPT_SUM;
         CHECK(!board_fails && os_dispatch_record.incomplete == (closes ? 1u : 0u));
+        // Closing placement removes the hook, which restores the CPU paths.
+        CHECK(closes ? !engine_hook : engine_hook != nullptr);
         CHECK(closes ? !os_dispatch_active : os_dispatch_record.refused == 1);
         std::printf("%s: every output bit-identical, %s\n", f.name, closes ? "placement closed for the boot" : "session open");
     }

@@ -455,16 +455,20 @@ authority or PM latch other than the radio's.
 
 Every OS build sets `configTASK_DEFAULT_CORE_AFFINITY` to the A55 mask 0x3F
 ([a733_smp_placement.h](../include/a733_smp_placement.h)), so a task created
-without an affinity runs only on cores 0 to 5. The options below are off by
+without an affinity runs only on cores 0 to 5. The recognizer runs on core 2
+and the engine's second inference worker (`apps/mimus/parallel_runtime.cc`)
+on core 3, through
+[recognition-placement.patch](../apps/os/recognition-placement.patch) or the
+GPU linear build's own recognizer patch. The shared-peripheral interrupts
+and the PMIC task are on core 0; other unplaced tasks may run on any A55
+core, including the recognition pair. The
+options below are off by
 default; the [design](designs/cpu-a76-dvfs.md) and its
 [measurements](designs/cpu-a76-dvfs-measurements.md) give the budgets.
 
 - **`A733_A76_ADMITTED`**, a CMake option and compile definition. The
-  recognizer runs on core 6 and the engine's second inference worker
-  (`apps/mimus/parallel_runtime.cc`) on core 7, through
-  [recognition-placement.patch](../apps/os/recognition-placement.patch); the
-  GPU linear build's own recognizer patch places the recognizer and starts
-  the worker, and `start.c` asserts that its `OS_RECOGNITION_CORE` equals
+  recognizer moves to core 6 and the inference worker to core 7, and
+  `start.c` asserts that the GPU linear build's `OS_RECOGNITION_CORE` equals
   the header's core. Before the scheduler
   the thermal start reads the CPU clock report once (eight reads after the
   mapping check of the oscillator, fuse and CPU PLL pages) and refuses the

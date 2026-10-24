@@ -66,7 +66,7 @@ CPU-only image or the design's stated baseline.
 
 | Metric | Baseline | Target | Result | Within budget |
 | --- | --- | --- | --- | --- |
-| Default OS images, loadable bytes | — | Identical apart from the 32-byte build identity | 4 of 4 identical apart from the identity; section sizes equal (resident `.text` / `.rodata` 861,216 / 41,609 B at both commits) | Yes |
+| Default OS images, loadable bytes | — | Identical apart from the 32-byte build identity, before the second A55 worker | Identical apart from the identity before the worker; the worker then adds 1,632 to 1,712 B of code and read-only data and a 64 KiB stack in `.bss`, loadable length unchanged | Yes |
 | Other images that link `drivers/gpu/` | — | Existing host checks pass; changes only at the service points | `pvr-gpu-service.py` cases 1 to 6, `pvr-gpu-irq.py` 1 and 2, `pvr-gpu-freelist-service.py` 1 to 4 and `pvr-compute-service.py` 1 to 3 pass; the GPU render image links. The service changes at the twelve points the design lists | Yes |
 | GPU linear image | Stopped at the arena assertion | Links; link check passes; `.text` + `.rodata` at most 1.75 MiB | Links and passes the link check both ways. With the hook engine 1,023,776 + 189,401 = 1,213,177 B (1.16 MiB) for the A76 pair and 1,022,112 + 189,177 = 1,211,289 B for the A55 pair; with the pinned engine 1,011,657 B, because nothing of the session is prepared. The resident default image has 902,825 B | Yes |
 | Translations in `mimus_board_pins`, arena and view | 5,120 | 18 | 18: 6 for the arena, 12 for the view (EL0 read, EL0 write and EL1 write on the first and last page of each block) | Yes |
@@ -81,7 +81,7 @@ CPU-only image or the design's stated baseline.
 | Tag area at boot | — | 1,024 lines per boot | `identity.c` zeroes and publishes 64 KiB, which is 1,024 lines; the step runs at EL3 on the board only and was not run on the host | Not measured |
 | Hang detection | None | 1 s plus at most one 1 ms tick after the kick | LOST 1,000,751 µs after the kick, then submit returns -1 | Yes |
 | Pool pages for the GPU | 0 | At most 80 write-back and 52 uncached, after USB2 and audio | 79 write-back (34 firmware, 21 payload, 24 table) and 51 uncached (45, 6), in the QEMU construction and in the replay with USB2 and 10 audio pages first | Yes |
-| Linear stage, bench recording (model) | 14.894 s on one A55 | 0.535 s, bound 0.54 s (A76); 1.117 s, bound 1.12 s (A55) | 0.5351 s, 45.4% on the GPU; 1.1166 s, 90.2%; 0.666 s and 0.818 s on the A76 pair with 200-clock and 400-clock loads | Yes (model) |
+| Linear stage, bench recording (model) | 14.894 s on one A55 | 0.535 s, bound 0.54 s (A76); 1.117 s, bound 1.12 s (A55) | 0.5351 s, 45.4% on the GPU; 1.1166 s, 90.2%; 0.665 s and 0.818 s on the A76 pair with 200-clock and 400-clock loads | Yes (model) |
 | Recognition, PCM to text, bench recording (model) | 19.476 s on one A55 | Goal 0.4435 s, 0.05 times the audio | 0.818 s (0.092 times) on the A76 pair, 3.408 s on the A55 pair | **No**, as the design states |
 
 ## Other host results
@@ -128,7 +128,7 @@ recognition rows stay derived from that baseline.
 
 ## Conclusion
 
-Default images are unchanged apart from their build identity, the GPU
+Default images change only by the second A55 inference worker, the GPU
 linear image links within its code budget, and every budget of the GPU
 session that the host can measure is met: 18 translations at application
 start, one worker step to the kick and two per job, 57 transport and 6

@@ -22,8 +22,9 @@ never opens the session. The design's
 ["Changes needed in the mimus engine"](designs/gpu-recognition.md#changes-needed-in-the-mimus-engine)
 gives the engine commit that provides the hook. No board has run any part
 of it. The
-option is off by default, and with it off every OS image is byte-identical
-to its build without this code apart from the 32-byte build identity.
+option is off by default. With it off, the default OS images differ from
+their earlier builds only by the inference worker on core 3 (about 1.6 KiB
+of code and a 64 KiB stack) and the build identity.
 
 ## Parts in this package
 
@@ -120,7 +121,7 @@ bench models are:
 On the A55 pair the model places 90.2% of the MACs on the GPU and gives a
 linear stage of 1.117 s, against the regression bound of 1.12 s. On the A76
 pair it places 45.4% on the GPU and gives 0.535 s, against 0.54 s. These are
-issue-bound figures; with 200-clock GPU loads the A76 pair models at 0.666 s.
+issue-bound figures; with 200-clock GPU loads the A76 pair models at 0.665 s.
 Every bench call is one job, 204 in all. The generated header also lists the
 179 placed tensors' model file, weight offset, stride and K for the
 runtime's admission, and a bitmap of the placed ordinals. The recognizer
