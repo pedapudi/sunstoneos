@@ -10,10 +10,10 @@ compare the result with them. The OS image's
 [placement of linear layers](recognition-dispatch.md) decides which output
 channels of each layer run here.
 
-Status: **implemented** and host-modeled. No GPU has executed the program, and
-no image links the session code yet: the GPU runtime's session, worker and
-interrupt (`a733_gpu_mimus_open`, `a733_gpu_mimus_worker`,
-`a733_gpu_mimus_irq`) and the mimus port's hook do not exist. Two design
+Status: **implemented** and host-modeled. No GPU has executed the program. The
+OS image's GPU linear build links the session code through the GPU service's
+mimus component ([gpu-mimus-service.md](gpu-mimus-service.md)); no call
+reaches it until the mimus engine has its exact-sum hook. Two design
 budgets are missed: the program has 3.39 GPU instructions per
 multiply-accumulate (MAC) against 1.75, and 7,624 code bytes against 4,000.
 
@@ -200,23 +200,19 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
 
 ## What other owners provide
 
-- **GPU runtime:** the session (leases, the GPU mappings above with 2 MiB pages
-  for the large ranges and two 4 KiB program pages, the compute context and
-  its heaps, the client ring), the worker on the recognition core, the kick,
-  the completion record with `max_job_us` from the kick, the stop request and
-  its acknowledgement, and SPI 63. It calls the session functions above and
-  submits, per job, the 96-byte command that `pvr_mimus_session_command`
-  writes into a zeroed buffer and a timeline UPDATE. The image's GPU build must add `drivers/gpu/pvr_compute_mimus.c`
-  and `pvr_compute_mimus_usc.c`. The program needs one more 4 KiB GPU leaf
-  entry than the design planned: 18 in all.
-- **mimus port:** the hook that splits a call into jobs on 32-row
-  boundaries, runs the CPU channels, submits, checks tags with
-  `pvr_mimus_tags_complete`, falls back to the CPU and calls the read-out
-  entry for each tensor class.
-- **Primary agent:** the output region read-only at EL0 and EL1, and the tag
-  area zeroed and cleaned in each boot before that mapping takes effect. With
-  the session code using DC CIVAC, `A733_GPU_OUTPUT_CLEAN_INVALIDATE` may be
-  set.
+- **GPU runtime:** provided by the GPU service's mimus component
+  ([gpu-mimus-service.md](gpu-mimus-service.md)): the GPU mappings above with
+  2 MiB pages for the large ranges, the compute context, the client ring, the
+  worker on the recognition core, the completion record with `max_job_us`
+  from the kick, and SPI 63. Per job it submits the 96-byte command that
+  `pvr_mimus_session_command` wrote into a zeroed buffer and a timeline
+  UPDATE. The OS image also zeroes and publishes the tag area at boot and maps
+  the output region read-only at EL0 and EL1.
+- **mimus engine:** the exact-sum hook that `apps/os/gpu_hook.cc`
+  implements: the hook splits a call into jobs on 32-row boundaries and
+  checks tags with `pvr_mimus_tags_complete`, and the engine runs its CPU
+  channels, reads the sums out with its own `Combine()` and computes the rows
+  no job returned ([gpu-recognition.md](designs/gpu-recognition.md)).
 
 ## Board evidence that would confirm it
 

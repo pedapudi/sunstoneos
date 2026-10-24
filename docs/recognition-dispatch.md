@@ -11,18 +11,16 @@ reference. The [design](designs/recognition-dispatch.md) states the budgets;
 [the measurements](designs/recognition-dispatch-measurements.md) compare
 the result with them.
 
-Status: **implemented** and host-modeled on the OS image side. The image with
-the option does not build yet. The recognizer stops at a compile-time
-assertion until the mimus port shrinks its arena to 12 MiB, and the image
-then needs four functions from the GPU runtime and one translation function
-from the page-table owner to link (listed under
-[What other owners provide](#what-other-owners-provide)). CMake refuses the
-option until the two build constants below exist. The modeled linear stage
-does not meet the design's first regression bound; the design restates the
-bound pending the performance panel's acceptance. No board has run any part
-of it. The option is off by default, and with it off every OS image is
-byte-identical to its build without this code apart from the 32-byte build
-identity.
+Status: **implemented** and host-modeled. The image with the option
+configures in its validation build, links and passes its link check; the GPU
+runtime and its session component are described in
+[gpu-mimus-service.md](gpu-mimus-service.md) and measured in
+[the GPU recognition measurements](designs/gpu-recognition-measurements.md).
+No call reaches the GPU until the mimus engine has its exact-sum hook
+([What other owners provide](#what-other-owners-provide)); until then the
+recognizer never opens the session. No board has run any part of it. The
+option is off by default, and with it off every OS image is byte-identical
+to its build without this code apart from the 32-byte build identity.
 
 ## Parts in this package
 
@@ -31,15 +29,16 @@ identity.
 | Placement table | [placement.py](../apps/os/placement.py), generated `placement.h` | One row per model tensor: GPU channels and the largest job |
 | Dispatcher | [dispatch.c](../apps/os/dispatch.c), [dispatch.h](../apps/os/dispatch.h) | Session state, the per-call lookup, the dispatch record and the failure path |
 | Recognizer change | [recognition-dispatch.patch](../apps/os/recognition-dispatch.patch) | OPEN after the model hashes, failure path, recognition core, 12 MiB arena assertion |
+| GPU runtime | [gpu.c](../apps/os/gpu.c), [gpu_hook.cc](../apps/os/gpu_hook.cc) | Start, OPEN, jobs and INTID 95 ([gpu-mimus-service.md](gpu-mimus-service.md)); the engine's exact-sum hook |
 | Mapping check | [application.patch](../apps/os/application.patch) | The 4 MiB above the arena, which holds the GPU output region, read-only at EL0 |
 | Start entry and interrupt | [start.c](../apps/os/start.c), [irq.c](../apps/os/irq.c) | `gpu-linear` and INTID 95 on the recognition core |
 | Build gate | [a733-os.cmake](../cmake/a733-os.cmake) | `SUNSTONE_A733_OS_GPU_LINEAR` and its prerequisites |
 | Host checks | [os-image-dispatch.py](../checks/os-image-dispatch.py), [os-image-dispatch.c](../checks/os-image-dispatch.c), [os-image-link.py](../checks/os-image-link.py) | Table, dispatcher, supervision, link layout |
 
-The GPU kernel, the hook inside mimus that splits a call into GPU jobs, the
-submit message, the worker and its cache maintenance belong to the GPU kernel
-design (`docs/designs/gpu-mimus-compute.md` at commit f60d41c on branch
-`audit/gpu-mimus-compute`).
+The GPU kernel and its cache maintenance belong to the GPU kernel design
+([gpu-mimus-compute.md](designs/gpu-mimus-compute.md)); the session in the GPU
+service, the worker and the hook belong to the GPU recognition design
+([gpu-recognition.md](designs/gpu-recognition.md)).
 
 ## Memory and data flow
 
@@ -93,8 +92,8 @@ every channel. The seeds, which board measurements replace, are:
 | --- | --- |
 | A55 NEON rate | 4,167,910,560 MACs in 14.894 s at 494 MHz, 0.280 G MAC/s per core |
 | A76 NEON rate | Twice the A55's per clock |
-| GPU rate | 32 lanes at 400 MHz, 1.75 instructions per MAC, over a grid padded to 32 rows by 16 channels |
-| Read-out | 12 instructions per GPU output; 1 per clock on an A55, 2 on an A76 |
+| GPU rate | 32 lanes at 400 MHz, 3.39 instructions per MAC (217 instruction groups per 64 MACs, the built program), over a grid padded to 32 rows by 16 channels; `--load-cycles` adds a load-latency bound |
+| Read-out | 2.9 instructions per GPU output (37.6 M for 12,923,134 outputs, measured on the read-out entry); 1 per clock on an A55, 2 on an A76 |
 | Cache maintenance | 20 cycles per 64-byte line |
 | Per-job overhead | 25 µs submit, 25 µs firmware, 25 µs wake; 10 µs to hand work to the second worker |
 
@@ -104,21 +103,21 @@ admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
 
 | Layer, K → N | A55 pair: n_gpu, job_rows | A76 pair: n_gpu, job_rows |
 | --- | --- | --- |
-| Subsampling convolution, 1,584 → 176 | 176, 224 | 112, 352 |
-| Subsampling output, 3,520 → 176 | 176, 96 | 112, 160 |
-| Feed-forward first linear, 176 → 704 | 704, 352 | 432, 576 |
-| Feed-forward second linear, 704 → 176 | 176, 512 | 112, 832 |
-| Attention projections and pointwise convolution 2, 176 → 176 | 176, 1,472 | 112, 2,336 |
-| Pointwise convolution 1, 176 → 352 | 352, 736 | 208, 1,248 |
-| Output head, 176 → 1,025 | 1,025, 224 | 625, 384 |
+| Subsampling convolution, 1,584 → 176 | 160, 256 | 80, 512 |
+| Subsampling output, 3,520 → 176 | 160, 96 | 80, 224 |
+| Feed-forward first linear, 176 → 704 | 624, 416 | 320, 800 |
+| Feed-forward second linear, 704 → 176 | 160, 576 | 80, 1,184 |
+| Attention projections and pointwise convolution 2, 176 → 176 | 160, 1,632 | 80, 3,264 |
+| Pointwise convolution 1, 176 → 352 | 304, 832 | 160, 1,632 |
+| Output head, 176 → 1,025 | 897, 256 | 449, 544 |
 
-On the A55 pair the model places every MAC on the GPU, because a channel
-split moves read-out that both cores would share onto the recognizer core:
-the feed-forward first linear takes 6.25 ms GPU-only and 7.95 ms with 16 CPU
-channels. The linear stage takes 0.812 s, against the design's restated
-regression bound of 0.82 s. On the A76 pair the model places 62.9% of the MACs
-on the GPU and gives 0.414 s, against 0.42 s. Every bench call is one job,
-204 in all.
+On the A55 pair the model places 90.2% of the MACs on the GPU and gives a
+linear stage of 1.148 s, against the regression bound of 1.15 s. On the A76
+pair it places 45.4% on the GPU and gives 0.535 s, against 0.54 s. These are
+issue-bound figures; with 200-clock GPU loads the A76 pair models at 0.665 s.
+Every bench call is one job, 204 in all, and the generated header also lists
+the 179 placed tensors' model file, weight offset, stride and K for the
+runtime's admission.
 
 ## The dispatcher
 
@@ -141,7 +140,7 @@ recognizer is its only writer.
 | Before every model hash matches | No OPEN; every row reads as CPU-only | Nothing |
 | OPEN refused or failed | CPU for the boot; OPEN is not retried | Nothing |
 | Job refused before device access | The hook computes those rows on the CPU and counts the refusal; the session stays open | Nothing |
-| Job reports OK with a missing tag | After the worker's stop acknowledgement, `os_dispatch_incomplete` records it and clears the active count; the hook computes the rest of the call on the CPU, and every later call runs on the CPU. Without the acknowledgement, LOST applies | The output region for the boot |
+| Job reports OK with a missing tag, or in the validation build a sum that differs from the CPU's | `os_dispatch_incomplete` records it and clears the active count at once; the engine computes the rest of the call on the CPU, and every later call runs on the CPU. The session stays open and idle | The session and the output region for the boot |
 | RESET or LOST completion | `os_dispatch_failed` records it, clears the active count and takes the recognizer's failure path (`board_fail`, then suspension) before any CPU row of the failed job; the watchdog resets the board | Output region, model regions and code span until the reset |
 | No reply | The recognizer records no progress, its 3 s service window expires, renewal stops and the watchdog resets the board within 4 s of the last renewal | Everything |
 
@@ -149,16 +148,24 @@ RESET ends the boot like LOST because the models and the code span are
 trustworthy after a GPU fault only if the GPU's MMU enforces its read-only
 mappings, which no board has shown. The recognizer has no timer of its own:
 the resident lifetime's service window bounds every GPU wait, so CMake
-refuses the option in the supervised lifetime.
+refuses the option in the supervised lifetime. After a GPU fault, or when the
+recognizer's window expires while the session is being opened or places
+calls, the supervisor's stop detail is `OS_STOP_DETAIL_GPU_LOSS`, and the next
+boot reads it from the retained fault slot and keeps OPEN refused.
 
 ## Mapping check, interrupt and start entry
 
 With the option, `mimus_board_pins` checks the first 12 MiB of the arena as
-writable, as before, and calls `os_dispatch_el0_read_only` on the 4 MiB from
-`0x46C00000`. That function requires, for every 4 KiB page, an EL0 read translation
-that succeeds as inner-shareable write-back memory at the same address and an
-EL0 write translation that faults. The check makes 3,072 + 2 × 1,024 = 5,120
-translations at application start, against 4,096 without the option.
+writable with `os_dispatch_writable` and calls `os_dispatch_el0_read_only` on
+the 4 MiB from `0x46C00000`. The second requires an EL0 read translation that
+succeeds as inner-shareable write-back memory at the same address and an EL0
+write translation that faults. Both check at the stride of the image's
+tables, `a733_local_pool_stride`: 2 MiB in the OS image, whose tables map
+image RAM with level-2 blocks only, where they translate the first and the
+last 4 KiB page of each block. That makes 12 + 2 × 4 = 20 translations at
+application start, against 4,096 without the option. The QEMU golden
+comparison of `checks/device-memory-capacity.py` fails if any of these
+entries becomes a page table.
 
 The interrupt table gains INTID 95, the GPU's SPI 63, at priority `0xd8` on
 the recognition core. The recognizer task is created with affinity to the
@@ -174,20 +181,28 @@ worker EL1 and creates it before the scheduler starts.
 stops unless:
 
 - `SUNSTONE_A733_OS_RESIDENT` is on;
-- `A733_GPU_OUTPUT_EL0_READ_ONLY` is set by the page-table owner once
-  `0x46C00000`–`0x47000000` is mapped read-only at EL0 as two 2 MiB blocks.
-  Without it, a stray EL0 store leaves a dirty line whose eviction can
-  overwrite GPU sums or tags;
-- `A733_GPU_OUTPUT_CLEAN_INVALIDATE` is set by the GPU kernel owner once the
-  output region's completion uses `DC CIVAC`. `DC IVAC` is checked as a write
-  and faults on a read-only page; `DC CIVAC` needs read permission only;
+- `SUNSTONE_A733_OS_GPU_VALIDATE` is on: until the board shows GPU cache
+  invalidation at job start, GPU read-only enforcement, cross-core code
+  writes and fault-slot retention across a WDT0 reset, only the build that
+  compares every GPU sum with a CPU sum may place a layer on the GPU;
+- `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,
+  which maps `0x46C00000`–`0x47000000` read-only at EL0 and EL1 as two 2 MiB
+  blocks, so no CPU store can leave a dirty line whose eviction overwrites
+  GPU sums or tags;
+- `SUNSTONE_GPU_FIRMWARE` names the GPU firmware with the pinned SHA-256 of
+  the accelerator image;
 - `SUNSTONE_A733_OS_MODEL_DIR` names the directory with `base.mimus` and
   `overlay.mimus`, from which the build generates the table.
 
+The link check requires that the session's completion calls
+`aarch64_device_cache` with clean-and-invalidate: `DC IVAC` is checked as a
+write and faults on the read-only region, while `DC CIVAC` needs read
+permission only.
+
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  -DSUNSTONE_A733_OS_RESIDENT=ON -DSUNSTONE_A733_OS_GPU_LINEAR=ON \
-  -DSUNSTONE_A733_OS_MODEL_DIR=<models> [-DSUNSTONE_A733_OS_AUDIO=ON]
+  -DSUNSTONE_A733_OS_RESIDENT=ON -DSUNSTONE_A733_OS_GPU_LINEAR=ON -DSUNSTONE_A733_OS_GPU_VALIDATE=ON \
+  -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models> [-DSUNSTONE_A733_OS_AUDIO=ON]
 ```
 
 The recognizer patch applies after the microphone or headset capture patch,
@@ -195,46 +210,37 @@ so the option combines with either capture source.
 
 ## What other owners provide
 
-- **GPU runtime:** `a733_gpu_mimus_open` (OPEN: lease the model regions, the
-  code span and the output region, and clean the model regions and the output
-  region once),
-  `a733_gpu_mimus_worker`, `a733_gpu_mimus_start(core)` and
-  `a733_gpu_mimus_irq`, declared in [dispatch.h](../apps/os/dispatch.h).
-- **GPU kernel design:** the hook in mimus, which calls `os_dispatch_place`,
-  `os_dispatch_placed`, `os_dispatch_refused`, `os_dispatch_incomplete` after
-  the stop acknowledgement for a missing tag and, on RESET or LOST before any
-  CPU row, `os_dispatch_failed`; `DC CIVAC` completion on the output region
-  with `A733_GPU_OUTPUT_CLEAN_INVALIDATE`; the tag area cleared at OPEN
-  without a CPU store, because the region is read-only at EL1 too.
-- **Page-table owner:** `0x46C00000`–`0x47000000` mapped read-only at EL0 with
-  `A733_GPU_OUTPUT_EL0_READ_ONLY`, and `aarch64_device_translate_el0`
-  (`AT S1E0R` and `AT S1E0W`) with the signature of
-  `aarch64_device_translate`; A76 admission with `A733_A76_ADMITTED`.
-- **mimus port:** under the option, a 12 MiB arena: `kMimusArenaBytes` in
-  `apps/mimus/recorded.h` at most `OS_DISPATCH_CODE_BYTES`, which the
-  recognizer patch asserts at compile time; the tensor ordinal in
-  `TensorView`, defined as above; the 224-row subsampling producer; the
-  second inference worker on the second core of the pair.
-- **Shared helpers:** `os_dispatch_el0_read_only` can move to
-  `a733_mapping_check.h` as a general EL0 read-only rule.
+- **mimus engine:** the tensor ordinal in `TensorView`, defined as above; the
+  exact-sum hook as `checks/gpu-recognition-hook.h` declares it, with its
+  block-sink rules; codes of hooked calls in the arena; the 224-row
+  subsampling producer. The design's "Changes needed in the mimus engine"
+  lists each change.
+- **Page-table owner:** A76 admission with `A733_A76_ADMITTED`.
+- **Shared helpers:** `os_dispatch_writable` and `os_dispatch_el0_read_only`
+  can move to `a733_mapping_check.h` as general stride-based rules.
 
 ## Host checks
 
 `checks/os-image-dispatch.py` runs without hardware. It emits both tables
 from the bench models, compares them with the design's values, checks every
 row's `job_rows` against the worker's formula, and fails when the modeled
-linear stage exceeds the design's regression bound. It compiles the
+linear stage exceeds the design's regression bound. It checks the
+generated admission list against the model files, and compiles the
 recognizer patch's arena assertion with a 12 MiB arena, which passes, and
 with a 16 MiB arena or another base, which fail. It builds `checks/os-image-dispatch.c` with
 AddressSanitizer and UndefinedBehaviorSanitizer and runs the dispatcher over
 the bench call list, comparing every output's exact sum with a CPU-only
 reference, and over the longest accepted input, the 1 MiB WAV slot
 (820 encoder frames). It covers the cases in the lifecycle table, the
-read-only mapping rule with one writable, unreadable or Device page among 1,024, the
-order of OPEN after the hashes in both recognizer patch chains, and the
-lookup's AArch64 instructions. With `--configure-from` and a configured OS
-build, it also runs CMake for the gate's refusals and for configurations
-with both constants, with and without the microphone.
+supervisor's GPU-loss detail, the mapping rules at both strides with one
+writable, unreadable or Device page at each checked position, a replay of the
+pool admission order for the GPU's pages, the order of OPEN after the hashes
+in both recognizer patch chains, and the lookup's AArch64 instructions. With
+`--configure-from` and a configured OS build, it also runs CMake for the
+gate's refusals and for the validation build, with and without the
+microphone. `checks/gpu-recognition-engine.py` and
+`checks/pvr-mimus-service.py` cover the hook and the GPU session
+([gpu-mimus-service.md](gpu-mimus-service.md)).
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/os-image-dispatch.py \
@@ -249,8 +255,9 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/os-image-di
 - An EL0 store into `0x46C00000`–`0x47000000` faults, and the check in
   `mimus_board_pins` passes.
 - INTID 95 arrives on the recognition core for every job.
-- An injected hang ends in RESET, `board_fail` and a watchdog reset, and an
-  injected LOST does the same; after each, the loader's model hashes match. A
-  one-hour resident run never stops watchdog renewal.
+- An injected hang ends in LOST, `board_fail`, a watchdog reset and a
+  CPU-only next boot; after it, the loader's model hashes match. This is an
+  intentional watchdog expiry, which waits for a qualified reset destination
+  and recovery. A one-hour resident run never stops watchdog renewal.
 - CPU and GPU rates per shape at each admitted clock replace the table's
   seeds.
