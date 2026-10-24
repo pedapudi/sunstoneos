@@ -209,9 +209,10 @@ boot preparation of both pools and one getter call, and traces
 
 The check also scans the sources for writes to the cached tables outside
 their builder. With `--images DIR`, it reads the symbol table of every built
-image under `DIR`: which decode check definition it links, whether its local
-pools use the block stride exactly where the cached builder is linked, and
-whether a linked local preparation is called.
+image under `DIR`: which decode check and pool stride definitions it links,
+and every branch to a pool preparation. It fails when a linked local
+preparation is never called, and when an extended-layout image calls a pool
+preparation from any function other than `a733_device_memory_prepare()`.
 
 | Measurement | Before | After |
 | --- | --- | --- |

@@ -7,8 +7,8 @@ use it. For each range the document gives what the entry maps and which
 exception level can use it. Readers are assumed to know AArch64 stage-1 translation and the
 FreeRTOS SMP port. Status: both layouts are **implemented** and checked entry
 by entry in QEMU, with the DRAM decode check passing and failing. No part of
-the map is qualified on the board, and the decode check has no definition yet
-that can pass, so every image built today keeps the map below `0x4800_0000`
+the map is qualified on the board, and the decode check has no definition
+yet that can pass, so every image built today keeps the map below `0x4800_0000`
 (local layout) or `0x7900_0000` (extended layout).
 
 ## EL1 maps 12,174 MiB of DRAM when the decode check passes
@@ -74,10 +74,16 @@ linearly from `0x4000_0000` with no alias, the decoded size reaches
 protected region overlapping. When it returns 0, the builder writes none of
 the entries and preparation continues with the map below the boot image.
 
-The DRAM-controller package owns the check. Until its definition lands,
-`memory.c` links a weak definition that returns 0. The capacity check reports
-from each built image's symbol table which definition the image links; every
-image built today links the weak one.
+`include/a733_dram.h` declares the check once. Its definition in
+`drivers/dram/a733_dram_decode.c` makes no access and returns 0, because no
+pinned source documents the controller and firewall registers
+([DRAM controller](dram.md)). No image links that file, so `memory.c` links a
+weak definition that also returns 0. The capacity check reports from each
+built image's symbol table which definition the image links; every image
+built today links the weak one. The check does not show that no boot0
+payload, remote firmware or leftover bus master uses
+`0x8000_0000`–`0x3_4000_0000`; a consumer that takes ownership of that range
+needs that launch evidence first.
 
 The new entries cost one store each: 11 in the extended layout and 403 in the
 local layout. They enter the checksum that every core compares with its own
@@ -110,9 +116,10 @@ and one permission to all 2 MiB it maps. One address translation (`AT`) of
 any address in the block therefore reports what every page of the block
 reports. Extended pool preparation makes one write translation per 2 MiB
 block: 384 for `dma32` and 8 for `uncached`. Local pool preparation in images
-whose tables come from the cached builder makes one write translation at the
-pool start and one at each following 2 MiB boundary below the end: two or
-three for 2 MiB pools, and three with the large NPU graph.
+whose tables come from the cached builder or from `platform/a733/platform.c`
+makes one write translation at the pool start and one at each following
+2 MiB boundary below the end: two or three for 2 MiB pools, and three with
+the large NPU graph.
 
 This holds only while every pool entry is a block descriptor. The QEMU
 fixtures in `checks/device-memory-capacity.py` compare all 1,024 EL1 level-1
@@ -124,16 +131,20 @@ descriptor and that no valid entry is writable and executable. A change to
 any entry, including one that splits a pool block into pages, fails that
 comparison.
 
-The compile definition `A733_LOCAL_POOLS_BLOCK_MAPPED` selects the block
-stride, and `memory.c` stops with `#error` without it.
-`cmake/a733-smp-cached.cmake` sets it on every target in its directory whose
-sources include `memory.c`, and the cached single-core cmake files set it on
-their targets. The definition leaves the absolute symbol
-`a733_local_pools_block_mapped` in the image. The capacity check confirms
-from every built image's symbol table that each image with that symbol links
-`a733_cached_memory_prepare()`, and that each image linking both the builder
-and a local pool has the symbol. Images whose tables come from `platform/a733/platform.c` have no golden
-comparison and keep one write translation per pool page.
+The stride is a link-time constant, `a733_local_pool_stride`. `memory.c`
+defines it as 2 MiB. `platform/a733/platform.c`, which maps image RAM with
+2 MiB level-2 block descriptors only, defines the same value except in cached
+single-core images, which link `memory.c`. A weak default of 4096 beside the
+check in `include/a733_memory_critical.h` makes every other image check
+each page. The golden comparison covers the tables of `memory.c`; those of
+`platform.c` have none, and hold only level-2 block descriptors for image
+RAM.
+
+The capacity check also finds every branch to a pool preparation in each
+built image. An image that links local pools must call each linked
+preparation. An extended-layout image may call them only from
+`a733_device_memory_prepare()`, because a call from elsewhere, such as
+`platform_init()`, makes that function refuse and stops the boot.
 
 Level-1 entry 0, the MMIO block, has a shareability field of zero in the
 builder's tables. Two monitor variants (`apps/storage-read-single-core/monitor.c`

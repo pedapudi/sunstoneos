@@ -18,9 +18,12 @@ import shlex
 import shutil
 import struct
 import subprocess
+import sys
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'checks'))
+import harness  # noqa: E402  Refuses to run with assertions disabled.
 
 
 def digest(path):
@@ -35,14 +38,13 @@ BUILDERS = {'platform/a733-smp-cached/memory.c'}
 LATER_WRITE = re.compile(r'a733_cached_el[13]_l1\[0\]\|=UINT64_C\(2\)<<8;')
 
 
-# Encodings with operand bits masked.
-BARRIERS = {'dsb': (0xfffff0ff, 0xd503309f), 'dmb': (0xfffff0ff, 0xd50330bf), 'isb': (0xfffff0ff, 0xd50330df)}
 DC_CRM = {4, 6, 10, 11, 12, 13, 14}
+COUNTED = ['at', 'dc', 'tlbi', *harness.BARRIERS]
 
 
 def classify(word):
-    """Instruction classes counted per traced call."""
-    found = [name for name, (mask, value) in BARRIERS.items() if word & mask == value]
+    """Instruction classes counted per traced call: AT, DC, TLBI and barriers."""
+    found = harness.barriers(word)
     if word & 0xfff80000 == 0xd5080000:  # SYS, op0 = 1
         crn, crm = (word >> 12) & 15, (word >> 8) & 15
         if crn == 7 and crm in (8, 9):
@@ -54,43 +56,10 @@ def classify(word):
     return found
 
 
-def trace_sections(log):
-    """Counts of the code CPU 0 executes after each semihosting call, from the
-    translated blocks (in_asm) and their executions (exec, nochain)."""
-    blocks, sections, counts, words, address = {}, [], None, None, None
-    exec_line = re.compile(r'^Trace 0: \S+ \[[0-9a-f]+/([0-9a-f]+)/')
-    with log.open(errors='replace') as stream:
-        for line in stream:
-            if line.startswith('IN:'):
-                words, address = [], None
-                continue
-            if words is not None:
-                if address is None and line.startswith('0x'):
-                    address = int(line.split(':')[0], 16)
-                    continue
-                if line.startswith('OBJD-T:'):
-                    data = bytes.fromhex(line.split(':', 1)[1].strip())
-                    words += [int.from_bytes(data[i:i + 4], 'little') for i in range(0, len(data), 4)]
-                    continue
-                blocks[address] = words
-                words = None
-            if 'Taking exception 16 [Semihosting call] on CPU 0' in line:
-                counts = {'instructions': 0, 'at': 0, 'dc': 0, 'tlbi': 0, **{name: 0 for name in BARRIERS}}
-                sections.append(counts)
-                continue
-            match = exec_line.match(line)
-            if match and counts is not None:
-                for word in blocks[int(match[1], 16)]:
-                    counts['instructions'] += 1
-                    for name in classify(word):
-                        counts[name] += 1
-    return sections
-
-
 def labelled(output, log):
     """Each traced call's counts, keyed by the marker printed before it."""
     lines = [l.strip() for l in output.splitlines() if re.match(r'(TRACE|MEASURE|PASS|FAIL)', l.strip())]
-    sections = trace_sections(log)
+    sections = harness.trace_sections(log, classify, COUNTED)
     if len(sections) != len(lines) + 1:  # The last call is the exit.
         raise RuntimeError(f'{len(sections)} semihosting calls for {len(lines)} lines')
     return {line: counts for line, counts in zip(lines, sections) if line.startswith('TRACE')}
@@ -100,10 +69,28 @@ def minus(a, b):
     return {k: a[k] - b[k] for k in a}
 
 
+POOL_PREPARATIONS = ('a733_memory_reservations_prepare', 'a733_memory_uncached_prepare')
+
+
+def branches(parts):
+    """(site, target) of every B and BL word in the executable parts."""
+    words = {}
+    for base, data in parts:
+        for index, (word,) in enumerate(struct.iter_unpack('<I', data[:len(data) & ~3])):
+            words[base + 4 * index] = word
+    found = []
+    for site in harness.instruction_sites(parts, lambda word: word & 0x7c000000 == 0x14000000):
+        offset = words[site] & 0x3ffffff
+        found.append((site, site + 4 * (offset - ((offset & 0x2000000) << 1))))
+    return found
+
+
 def scan_images(directories):
-    """Symbol-table facts of every built image: which decode check definition
-    it links, and whether the local pools make one translation per 2 MiB block
-    exactly where the tables come from the cached builder."""
+    """Symbol-table and call facts of every built image: which decode check
+    and pool stride definitions it links, and where it calls the pool
+    preparations. An image that links local pools calls each linked
+    preparation; an extended image calls them only from
+    a733_device_memory_prepare(), whose binding state orders them."""
     images = {}
     for directory in directories:
         for path in sorted(Path(directory).rglob('*.elf')):
@@ -118,39 +105,37 @@ def scan_images(directories):
                 for sym in elf.get_section_by_name('.symtab').iter_symbols():
                     if sym['st_shndx'] != 'SHN_UNDEF' and sym.name:
                         symbols[sym.name] = sym
-                builder = 'a733_cached_memory_prepare' in symbols
-                marker = 'a733_local_pools_block_mapped' in symbols
-                # The pool sources define the preparations strongly; the weak
-                # definitions of a733_memory_local.h stand for absent pools.
-                strong = [n for n in ('a733_memory_reservations_prepare', 'a733_memory_uncached_prepare')
-                          if n in symbols and symbols[n]['st_info']['bind'] == 'STB_GLOBAL']
-                local = bool(strong) and 'a733_device_memory_prepare' not in symbols
-                decode = symbols.get('a733_dram_decode_check')
-                record = {'cached_builder': builder, 'block_mapped': marker, 'local_pools': local,
-                          'decode_check': None if decode is None else decode['st_info']['bind']}
-                if marker and not builder:
-                    raise RuntimeError(f'{path}: block-stride pool check without the cached builder')
-                if builder and local and not marker:
-                    raise RuntimeError(f'{path}: cached builder with per-page local pool check')
-                if builder and record['decode_check'] is None:
-                    raise RuntimeError(f'{path}: cached builder without a decode check')
+                parts = [(seg['p_vaddr'], seg.data()) for seg in elf.iter_segments()
+                         if seg['p_type'] == 'PT_LOAD' and seg['p_flags'] & 1]
+            builder = 'a733_cached_memory_prepare' in symbols
+            extended = 'a733_device_memory_prepare' in symbols
+            # The pool sources define the preparations strongly; the weak
+            # definitions of a733_memory_local.h stand for absent pools.
+            linked = {symbols[n]['st_value']: n for n in POOL_PREPARATIONS if n in symbols}
+            strong = {a for a, n in linked.items() if symbols[n]['st_info']['bind'] == 'STB_GLOBAL'}
+            decode = symbols.get('a733_dram_decode_check')
+            stride = symbols.get('a733_local_pool_stride')
+            record = {'cached_builder': builder, 'extended': extended, 'local_pools': bool(strong) and not extended,
+                      'decode_check': None if decode is None else decode['st_info']['bind'],
+                      'pool_stride': None if stride is None else stride['st_info']['bind']}
+            if builder and record['decode_check'] is None:
+                raise RuntimeError(f'{path}: cached builder without a decode check')
+            calls = [(site, target) for site, target in branches(parts) if target in linked]
+            if extended:
+                start = symbols['a733_device_memory_prepare']['st_value']
+                end = start + symbols['a733_device_memory_prepare']['st_size']
+                outside = sorted({f'{linked[t]} at {s:#x}' for s, t in calls if not start <= s < end})
+                if outside:
+                    raise RuntimeError(f'{path}: extended image calls a pool preparation outside '
+                                       f'a733_device_memory_prepare: {", ".join(outside)}')
+                record['preparation_calls'] = len(calls)
+            elif strong:
                 # A linked local preparation is called: the getters no longer prepare.
-                if local:
-                    text = elf.get_section_by_name('.text')
-                    base, data = text['sh_addr'], text.data()
-                    targets = {symbols[n]['st_value'] for n in strong}
-                    called = set()
-                    for i, (word,) in enumerate(struct.iter_unpack('<I', data[:len(data) & ~3])):
-                        if word & 0xfc000000 == 0x94000000:
-                            offset = word & 0x3ffffff
-                            offset -= (offset & 0x2000000) << 1
-                            target = base + 4 * i + 4 * offset
-                            if target in targets:
-                                called.add(target)
-                    record['local_prepare_called'] = called == targets
-                    if called != targets:
-                        raise RuntimeError(f'{path}: a linked local pool preparation is never called')
-                images[str(path)] = record
+                called = {t for _, t in calls}
+                if not strong <= called:
+                    raise RuntimeError(f'{path}: a linked local pool preparation is never called')
+                record['preparation_calls'] = len(calls)
+            images[str(path)] = record
     return images
 
 
@@ -224,8 +209,6 @@ def main():
                 cmd += ['-mgeneral-regs-only']
         if extended:
             cmd += ['-DSUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1']
-        if not host:
-            cmd += ['-DA733_LOCAL_POOLS_BLOCK_MAPPED=1']
         cmd += list(extra) + ['-MMD', '-MF', str(obj.with_suffix('.d')), '-c', str(source), '-o', str(obj)]
         run('compile-' + name, cmd)
         dependencies.add(source)

@@ -1,8 +1,10 @@
 /* Local-layout pool preparation against a modeled translation callback.
  * The runner links the pool sources with --defsym pool addresses and counts
  * the write translations the boot preparation makes: one per page of either
- * pool, or one per 2 MiB block that holds a pool byte when built with
- * A733_LOCAL_POOLS_BLOCK_MAPPED. */
+ * pool with the weak default stride, or one per 2 MiB block that holds a pool
+ * byte when built with TEST_POOL_STRIDE, which defines the stride as an image
+ * with 2 MiB block descriptors does. */
+#include "a733_device_memory_layout.h"
 #include "a733_memory_local.h"
 #include "a733_memory_reservations.h"
 #include "a733_memory_uncached.h"
@@ -11,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if defined(TEST_POOL_STRIDE)
+const uintptr_t a733_local_pool_stride = TEST_POOL_STRIDE;
+#endif
 static unsigned translations, fault_block = UINT32_MAX;
 unsigned aarch64_device_cache_stride(void) { return 64; }
 int aarch64_device_cache(enum aarch64_cache_op op, uintptr_t cpu, size_t bytes)

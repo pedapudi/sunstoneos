@@ -2,13 +2,12 @@
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
-/* The local pool checks in platform/a733/memory_reservations.c and
- * memory_uncached.c make one translation per 2 MiB block in images whose
- * tables come from this builder, because it maps image RAM with 2 MiB level-2
- * block descriptors. Every target that compiles this file must say so. */
-#if !defined(A733_LOCAL_POOLS_BLOCK_MAPPED)
-#error "Targets that compile platform/a733-smp-cached/memory.c define A733_LOCAL_POOLS_BLOCK_MAPPED"
-#endif
+/* This builder maps image RAM, and so every local pool byte, with 2 MiB
+ * level-2 block descriptors; the QEMU golden comparison in
+ * checks/device-memory-capacity.c fixes them. The local pool check of
+ * a733_memory_critical.h therefore makes one translation per 2 MiB block in
+ * every image that links this file. */
+const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY) && defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
 #error "The read-only GPU output view rewrites local-layout entries; the extended layout has none"
 #endif
@@ -31,11 +30,13 @@ static const struct a733_dram_range dram_map[] = {
 #if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     {UINT64_C(0x48000000), UINT64_C(0x79000000) - UINT64_C(0x48000000)},
 #endif
-    {UINT64_C(0x80000000), A733_DRAM_END - UINT64_C(0x80000000)},
+    {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)},
 };
 #define DRAM_MAP_RANGES (unsigned)(sizeof dram_map / sizeof dram_map[0])
-/* Placeholder until the DRAM-controller package links its definition: no
- * decode evidence, so no entry above the current map. */
+/* No image links drivers/dram/a733_dram_decode.c yet, so this default is the
+ * one definition in every image: no decode evidence, so no entry above the
+ * current map. The driver's definition, which has the same declaration in
+ * a733_dram.h, replaces it in an image that links the driver. */
 __attribute__((weak)) int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count)
 {
     (void)ranges; (void)count;

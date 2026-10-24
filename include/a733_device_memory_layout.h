@@ -2,6 +2,7 @@
 #define SUNSTONE_A733_DEVICE_MEMORY_LAYOUT_H
 #include <stdint.h>
 #include <stddef.h>
+#include "a733_dram.h"
 /* The large NPU graph uses existing identity-mapped image RAM. This fixed
  * exception grants no external-memory, cache, device or physical authority. */
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
@@ -37,21 +38,17 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
  * image's tested map both use it. */
 #define A733_EL1_DRAM_BLOCK(pa) ((uint64_t)(pa) | (UINT64_C(1) << 54) | (UINT64_C(1) << 53) | \
     (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | (UINT64_C(1) << 2) | 1)
-/* The top of DRAM that the EL1 tables can map: 12 GiB from 0x40000000. */
-#define A733_DRAM_END UINT64_C(0x340000000)
-struct a733_dram_range {
-    uint64_t base, size;
-};
-/* The per-boot DRAM decode check. It runs on core 0 at EL3 with the MMU off,
- * before the cached builder writes the EL1 entries for `ranges`. It returns 1
- * only when, for every byte of every listed range, the DRAM controller
- * decodes the address linearly from 0x40000000 with no alias, the decoded
- * size reaches A733_DRAM_END, and the boot0 firewall grants Non-secure read
- * and write with no protected region overlapping. Any other result, including
- * an unreadable firewall, returns 0, and the builder then writes none of the
- * entries. The DRAM-controller package owns the definition; until it lands,
- * platform/a733-smp-cached/memory.c links a weak one that returns 0. */
-int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count);
+/* The top of DRAM that the EL1 tables can map: 12 GiB from 0x40000000. The
+ * cached builder maps DRAM above the boot image only when
+ * a733_dram_decode_check() of a733_dram.h passes for those ranges. */
+#define A733_DRAM_MAP_END UINT64_C(0x340000000)
+/* The address step of the local pool check, a733_memory_local_check() in
+ * a733_memory_critical.h. An image whose tables map every local pool byte
+ * with 2 MiB level-2 block descriptors defines it as 2 MiB:
+ * platform/a733-smp-cached/memory.c and platform/a733/platform.c do. The
+ * weak default beside the check, 4096, checks every page. A file that defines
+ * it must not include a733_memory_critical.h. */
+extern const uintptr_t a733_local_pool_stride;
 struct a733_device_memory_layout {
     uint64_t profile, wb_start, wb_end, nc_start, nc_end;
 };

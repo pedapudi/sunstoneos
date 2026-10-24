@@ -28,12 +28,13 @@ The [native preparation](../platform/a733/memory_reservations.c),
 `a733_memory_reservations_prepare()`, derives CPU and physical addresses from
 the linker symbols and requires identity translation, Normal write-back
 memory and inner shareability. In images whose tables come from the cached
-table builder (`platform/a733-smp-cached/memory.c`) it makes one write address
-translation per 2 MiB block that holds a pool byte, because the QEMU golden
-comparison of that builder proves every such entry is a block descriptor: two
-translations for an unaligned 2 MiB pool. In images whose tables come from
-`platform/a733/platform.c` no golden comparison covers the tables, so it
-makes one write translation per pool page: 512 for a 2 MiB pool. The optional
+table builder (`platform/a733-smp-cached/memory.c`) or from
+`platform/a733/platform.c`, which both map image RAM with 2 MiB level-2 block
+descriptors, it makes one write address translation per 2 MiB block that
+holds a pool byte: two translations for an unaligned 2 MiB pool. Each of
+those files defines the link-time stride `a733_local_pool_stride` as 2 MiB.
+Other images link the weak default of 4096 and make one write translation per
+pool page: 512 for a 2 MiB pool. The optional
 uncached pool has its own preparation, `a733_memory_uncached_prepare()`, with
 the same stride and one write translation per block or page. Preparation
 performs no writes to pool backing and no peripheral MMIO. It returns 1 when

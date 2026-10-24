@@ -17,10 +17,11 @@ Status:
   edits that call them belong to other owners and have not merged. The
   integration host cases in the DRAM controller design are a merge condition
   for that change, and the hook is not recorded as tested before they pass.
-- **Decode check: implemented; it refuses.** No pinned source documents the
-  DRAM controller or firewall registers, so the check makes no access and
-  returns 0. Its only caller, the cached memory layout 2 branch of
-  `platform/a733-smp-cached/memory.c`, is compiled out.
+- **Decode check: implemented; it refuses; no image links it.** No pinned
+  source documents the DRAM controller or firewall registers, so the check
+  makes no access and returns 0. Its caller, the cached table builder in
+  `platform/a733-smp-cached/memory.c`, links a weak definition with the same
+  result in every image.
 - **DDR passive trip: implemented and host-modeled** in the thermal policy
   that the OS and thermal images link. Its board cost is unmeasured, and
   connecting THROTTLE to the CPU clock driver waits for the DDR trip
@@ -135,18 +136,30 @@ notification.
 
 ## The decode check refuses until a register source exists
 
-`a733_dram_decode_check()` in
+`int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned
+count)` in
 [drivers/dram/a733_dram_decode.c](../drivers/dram/a733_dram_decode.c) is the
-EL3 function that cached memory preparation calls before it maps
-`0x8000_0000`–`0xFFFF_FFFF` as write-back
-([CPU table walks](designs/cpu-table-walks.md#stage-2-level-1-blocks)). A
-mapped write-back block receives speculative reads, so the check may return 1
-only when this boot's controller configuration shows a linear decode to
-`0x3_4000_0000` with no protected region in that range. No pinned source
-documents the DRAMC Common, controller, SMC0 or SMC1 registers that would
-show it. The function therefore makes no access and returns 0. It may return
-1 only after a trace of boot0's DRAM initialization names those registers and
-an EL3 board read on both boards matches the trace.
+EL3 function that the cached table builder in
+`platform/a733-smp-cached/memory.c` calls once on core 0, with the MMU off,
+before it maps DRAM above the boot image at EL1
+([12 GiB EL1 map](designs/memory-map-12g.md)). The builder passes
+`0x4800_0000`–`0x7900_0000` (local layout only) and
+`0x8000_0000`–`0x3_4000_0000`. A mapped write-back block receives speculative
+reads, so the check must refuse any range it cannot prove safe. It may return
+1 only when, for every byte of every listed range, this boot's controller
+configuration decodes the address linearly from `0x4000_0000` with no alias,
+the decoded size reaches `0x3_4000_0000`, and the firewall grants Non-secure
+read and write with no protected region overlapping. Any other result returns 0, and the builder then maps none of
+the ranges. Its budget is controller and firewall register reads only, no
+DRAM access, at most 64 register reads and 2,000 instructions.
+
+No pinned source documents the DRAMC Common, controller, SMC0 or SMC1
+registers that would show the decode. The function therefore makes no access
+and returns 0. It may return 1 only after a trace of boot0's DRAM
+initialization names those registers and an EL3 board read on both boards
+matches the trace. No image links this file yet; `memory.c` links a weak
+definition that returns 0, and the declaration in `include/a733_dram.h` is
+the one both definitions use.
 
 ## Host checks and measurements
 
@@ -155,7 +168,7 @@ toolchains. It runs two host programs under AddressSanitizer and
 UndefinedBehaviorSanitizer against counting register models:
 
 - `checks/dram-priority.c`, built with the table and reads-only values,
-  covers the decode refusal, the NSI clock gating cases, the access counts,
+  covers the decode refusal for both ranges the builder passes, the NSI clock gating cases, the access counts,
   kept bits, a difference outside the mask, the subfield rewrite, a stuck
   field at each of the nine positions, a failed access at every position,
   with its own stopping field for a failed CCU read, and the evidence block,

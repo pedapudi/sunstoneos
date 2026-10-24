@@ -80,11 +80,11 @@ static void golden_tables(void)
      * when the check passed. */
     CHECK(decode_calls==1 && decode_count==2 &&
           decode_seen[0].base==UINT64_C(0x48000000) && decode_seen[0].size==UINT64_C(0x31000000) &&
-          decode_seen[1].base==UINT64_C(0x80000000) && decode_seen[1].size==A733_DRAM_END-UINT64_C(0x80000000));
+          decode_seen[1].base==UINT64_C(0x80000000) && decode_seen[1].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {
         uint64_t pa=(uint64_t)i<<30;
-        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_END?A733_EL1_DRAM_BLOCK(pa):0));
+        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_MAP_END?A733_EL1_DRAM_BLOCK(pa):0));
         CHECK(!a733_cached_el3_l1[i]);
         if(a733_cached_el1_l1[i]){mapped+=1024;++valid;}
     }

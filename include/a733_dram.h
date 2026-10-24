@@ -150,10 +150,22 @@ _Static_assert(sizeof(struct a733_dram_block)==136,"evidence block size");
 void a733_dram_window_block(const struct a733_dram_window *,const struct a733_dram_copy_slot slots[8],
     struct a733_dram_block *);
 
-/* EL3, before memory.c maps 0x8000_0000-0xFFFF_FFFF as write-back (layout
- * 2). Returns 1 only when this boot's controller configuration shows a linear
- * decode to 0x3_4000_0000 with no protected region in that range. No pinned
- * source documents the DRAMC, SMC0 or SMC1 registers, so it makes no access
- * and returns 0, which keeps stage 2 refused (docs/designs/dram-bus-priority.md). */
-int a733_dram_decode_check(void);
+/* One range of physical DRAM: base and size in bytes. */
+struct a733_dram_range {
+    uint64_t base, size;
+};
+/* The per-boot DRAM decode check. platform/a733-smp-cached/memory.c calls it
+ * once on core 0 at EL3 with the MMU off, before it writes the EL1 entries
+ * for `ranges`. The ranges lie in 0x4800_0000-0x7900_0000 and
+ * 0x8000_0000-0x3_4000_0000. It returns 1 only when, for every byte of every
+ * listed range, this boot's controller configuration decodes the address
+ * linearly from 0x4000_0000 with no alias, the decoded size reaches
+ * 0x3_4000_0000, and the firewall grants Non-secure read and write with no
+ * protected region overlapping. Any other result, including an unreadable
+ * register, returns 0, and memory.c then writes none of the entries. Budget:
+ * controller and firewall register reads only, no DRAM access, at most 64
+ * register reads and 2,000 instructions. No pinned source documents the
+ * DRAMC, SMC0 or SMC1 registers, so drivers/dram/a733_dram_decode.c makes no
+ * access and returns 0 (docs/designs/dram-bus-priority.md). */
+int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count);
 #endif

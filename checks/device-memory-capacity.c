@@ -315,11 +315,11 @@ static void golden_tables(void)
     /* The builder passed one range, 0x80000000-0x340000000, and wrote level-1
      * entries 2-12 for it only when the check passed. */
     CHECK(decode_calls==1 && decode_count==1 && decode_seen[0].base==UINT64_C(0x80000000) &&
-          decode_seen[0].size==A733_DRAM_END-UINT64_C(0x80000000));
+          decode_seen[0].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {
         uint64_t pa=(uint64_t)i<<30;
-        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_END?A733_EL1_DRAM_BLOCK(pa):0));
+        CHECK(a733_cached_el1_l1[i]==(decode_passes() && pa<A733_DRAM_MAP_END?A733_EL1_DRAM_BLOCK(pa):0));
         if(a733_cached_el1_l1[i]){mapped+=1024;++valid;}
     }
     /* EL3 maps nothing above 0x80000000. */
@@ -395,14 +395,14 @@ void fixture_el1(unsigned core)
         for(uintptr_t a=0x48000000;a<0x79000000;a+=0x200000)CHECK(translate0(a)&1);
         /* Above 0x80000000: EL1 read/write write-back inner shareable when the
          * check passed, nothing otherwise; never EL0. */
-        for(uint64_t a=UINT64_C(0x80000000);a<A733_DRAM_END;a+=UINT64_C(0x3ffff000)) {
+        for(uint64_t a=UINT64_C(0x80000000);a<A733_DRAM_MAP_END;a+=UINT64_C(0x3ffff000)) {
             for(int w=0;w<2;++w) {
                 CHECK(aarch64_device_translate((uintptr_t)a,w,&t)==decode_passes());
                 CHECK(!decode_passes() || (t.physical==a && t.attributes==0xff && t.shareability==3));
                 CHECK(!aarch64_device_translate_el0((uintptr_t)a,w,&t));
             }
         }
-        CHECK(!aarch64_device_translate(A733_DRAM_END,0,&t));
+        CHECK(!aarch64_device_translate(A733_DRAM_MAP_END,0,&t));
     }
     CHECK(a733_smp_pre_scheduler(core,7,startup/24));
     if(core){for(;;)__asm__ volatile("wfe");}

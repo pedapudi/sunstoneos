@@ -16,8 +16,9 @@
  * In the local layout, a733_memory_local_prepare() runs preparation once on
  * core 0 at EL1 before the scheduler starts, and a refusal stops the boot.
  * The local check makes one write translation per 2 MiB block in images whose
- * tables come from platform/a733-smp-cached/memory.c and one per page in the
- * others (a733_memory_local_check()). Preparation returns 1 when the image
+ * tables come from platform/a733-smp-cached/memory.c or
+ * platform/a733/platform.c and one per page in the others
+ * (a733_memory_local_check()). Preparation returns 1 when the image
  * links no local pool. The getter makes one acquire load and returns NULL
  * before preparation, after a refusal and when the image links no pool.
  *

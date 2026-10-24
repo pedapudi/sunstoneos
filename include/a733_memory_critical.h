@@ -26,25 +26,17 @@ static inline void a733_memory_critical_exit(void) { taskEXIT_CRITICAL(); }
 #endif
 
 /* The mapping check of one local pool [start, end) through
- * aarch64_device_translate(). Images whose tables come from
- * platform/a733-smp-cached/memory.c define A733_LOCAL_POOLS_BLOCK_MAPPED:
- * there image RAM is 2 MiB level-2 block descriptors, which the QEMU golden
- * comparison in checks/device-memory-capacity.c fixes, so one translation at
- * the pool start and one at each following 2 MiB boundary below the end check
- * every page. Other images check every page. The definition also leaves the
- * absolute symbol a733_local_pools_block_mapped in the image, which the
- * capacity check reads. */
+ * aarch64_device_translate(): one translation at the pool start and one at
+ * each following multiple of a733_local_pool_stride below the end. The
+ * stride is 2 MiB in images whose tables map image RAM with 2 MiB level-2
+ * block descriptors, where one translation checks every page of a block, and
+ * this weak default, one page, elsewhere (a733_device_memory_layout.h). */
 #include "a733_mapping_check.h"
-#if defined(A733_LOCAL_POOLS_BLOCK_MAPPED)
-__asm__(".weak a733_local_pools_block_mapped\n.set a733_local_pools_block_mapped, 1");
-#define A733_MEMORY_LOCAL_STRIDE ((uintptr_t)2 << 20)
-#else
-#define A733_MEMORY_LOCAL_STRIDE ((uintptr_t)4096)
-#endif
+__attribute__((weak)) const uintptr_t a733_local_pool_stride = 4096;
 static inline int a733_memory_local_check(uintptr_t start, uintptr_t end, const struct a733_mapping_rule *rule)
 {
-    for (uintptr_t address = start; address < end;
-         address = (address | (A733_MEMORY_LOCAL_STRIDE - 1)) + 1)
+    uintptr_t step = a733_local_pool_stride;
+    for (uintptr_t address = start; address < end; address = (address | (step - 1)) + 1)
         if (!a733_mapping_check(aarch64_device_translate, address, address, rule)) return 0;
     return start < end;
 }
@@ -59,9 +51,11 @@ static inline int a733_memory_local_check(uintptr_t start, uintptr_t end, const 
  *
  * `check` reads only linker symbols and the translation tables, which do not
  * change once they are installed, so it runs outside the lock and concurrent
- * callers reach the same verdict. `init` writes the pool
- * structure and runs once, inside the critical section, which therefore holds
- * no translation. The release store publishes the pool with the result. */
+ * callers reach the same verdict. `init` writes the pool structure and runs
+ * once, inside the critical section, which therefore holds no translation.
+ * The release store of the pool pointer inside `init` publishes the pool to
+ * its getter; the release store of `*result` orders only the verdict that
+ * later calls of this function read. */
 static inline int a733_memory_prepare_once(int *result, int (*check)(void), int (*init)(void))
 {
     int r = __atomic_load_n(result, __ATOMIC_ACQUIRE);

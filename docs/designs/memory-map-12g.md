@@ -17,8 +17,9 @@ pool classes of stage 2 stay with their owners.
   becomes read-only at EL0 and EL1.
 - `aarch64_device_translate_el0()` translates with `AT S1E0R` and `AT S1E0W`.
 - Both local pools are prepared once at boot, and their getters stop
-  preparing. In images whose tables come from `memory.c`, the pool check
-  translates once per 2 MiB block instead of once per page.
+  preparing. In images whose tables come from `memory.c` or
+  `platform/a733/platform.c`, the pool check translates once per 2 MiB block
+  instead of once per page.
 
 ## Data flow and ownership
 
@@ -49,21 +50,41 @@ below 4 GiB plus eleven 1 GiB blocks. The stage-2 branch under
 this one. The layout constant stays 1, because it also names the boot-record
 profile that the class owners raise.
 
-**Decode check contract.** `a733_device_memory_layout.h` declares
+**Decode check contract.** `include/a733_dram.h` declares
 `int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned
-count)`, where each range is a 64-bit physical base and size. `memory.c`
+count)`, where each range is a 64-bit physical base and size, and
+`include/a733_device_memory_layout.h` includes that header. `memory.c`
 builds the list from the same constant table that drives its entry writes:
 `0x8000_0000`–`0x3_4000_0000` in both layouts, and
 `0x4800_0000`–`0x7900_0000` first in the local layout. The check returns 1
 only when, for every byte of every listed range, the DRAM controller decodes
 the address linearly from `0x4000_0000` with no alias, the decoded size
-reaches `0x3_4000_0000`, and the boot0 firewall grants Non-secure read and
-write with no protected region overlapping. Any other result, including an
-unreadable firewall, returns 0. The golden comparison records the ranges
-passed and asserts that they equal the entries written in each layout.
-The check belongs to the DRAM-controller package. Until its strong
-definition lands, `memory.c` holds a weak definition that returns 0. The capacity check reads each built
+reaches `0x3_4000_0000`, and the firewall grants Non-secure read and write
+with no protected region overlapping. Any other result, including an
+unreadable register, returns 0. Its budget is controller and firewall
+register reads only, with no DRAM access, at most 64 register reads and at
+most 2,000 instructions. The golden comparison records the ranges passed and
+asserts that they equal the entries written in each layout.
+
+The DRAM-controller code defines the check in
+`drivers/dram/a733_dram_decode.c`. That definition makes no access and
+returns 0, because no pinned source documents the DRAMC and firewall
+registers ([DRAM bus priority](dram-bus-priority.md)). No image links that
+file, so `memory.c` keeps a weak definition that also returns 0, and every
+image links one definition. Both definitions see the one declaration
+in `a733_dram.h`, so their types match. An image that links the driver file
+replaces the weak definition with it. The capacity check reads each built
 image's symbol table and reports which definition was linked.
+
+**Launch evidence the gate does not cover.** A decode check that returns 1
+shows that the controller decodes the range and the firewall admits
+Non-secure access. It does not show that no boot0 payload, remote firmware
+or bus master left running from an earlier boot stage uses
+`0x8000_0000`–`0x3_4000_0000`. The new map grants no memory to any
+allocator, so such a writer can corrupt only the clean lines that
+speculative reads allocate there. A consumer that later takes ownership of
+the range must first obtain that launch evidence, as the remote-writer
+prerequisite of [memory-architecture.md](memory-architecture.md) requires.
 
 **GPU output view.** When `A733_GPU_OUTPUT_EL0_READ_ONLY` is defined, the
 builder rewrites local-layout level-2 entries 54 and 55 with AP[2:1] = 0b11,
@@ -90,34 +111,50 @@ MMU and data cache on, as the EL1 form requires.
 `a733_memory_uncached_prepare()`. The header holds weak definitions that
 return 1, which the strong definitions in the pool sources replace, so an
 unlinked pool source counts as an absent pool. Weak references would need a
-GOT entry, which the native linker scripts do not place. Images that link no pool source then
-link and boot unchanged. It is called once on core 0 at EL1, after the tables
-are installed and before the scheduler starts: in `platform_init()` of
-`platform/a733/platform.c` for single-core images, and on the core-0 path of
-`platform/a733-smp-cached/continue.c` for cached images. Extended-layout
-images do not call it, because `a733_device_memory_prepare()` already
-prepares both pools. A refusal stops the boot as an extended-preparation
-refusal does. The pool initialization publishes the pool
-pointer with a release store, and each getter returns that pointer after one
-load-acquire. Before preparation, after a refusal and when the image links no
-pool it returns NULL.
+GOT entry, which the native linker scripts do not place. Images that link no
+pool source then link and boot unchanged. It is called once on core 0 at
+EL1, after the tables are installed and before the scheduler starts: in
+`platform_init()` of `platform/a733/platform.c` for single-core images, and
+on the core-0 path of `platform/a733-smp-cached/continue.c` for cached
+images. A refusal stops the boot as an extended-preparation refusal does.
+The pool initialization publishes the pool pointer with a release store, and
+each getter returns that pointer after one load-acquire. Before
+preparation, after a refusal and when the image links no pool it returns
+NULL.
 
-**Local pool check stride.** In images whose tables come from `memory.c`,
-both pools sit in 2 MiB level-2 block descriptors; `memory.c` writes entry 14
-for the uncached pool, for example. There `check_local()` runs one write
-`AT` per 2 MiB block that holds a pool byte: at the pool start, then at each
-following 2 MiB boundary below the end. A compile definition,
-`A733_LOCAL_POOLS_BLOCK_MAPPED`, selects this stride. One directory-scope rule
-in `cmake/a733-smp-cached.cmake` sets it on every target in that directory
-whose sources include `memory.c`; the cached single-core cmake files, whose
-targets other projects define in other directories, set it on their targets.
-`memory.c` stops with `#error` without it. The definition
-leaves the absolute symbol `a733_local_pools_block_mapped` in the image. The
-capacity check confirms from each image's symbol table that the images with
-that symbol link `a733_cached_memory_prepare()`, and that every image that
-links the builder and a local pool has it. The golden local-layout comparison proves
-that each checked entry is a block descriptor. Images whose tables come from
-`platform/a733/platform.c` keep the per-page stride.
+Extended-layout images do not call it, because `a733_device_memory_prepare()`
+prepares both pools inside its binding state machine; a second preparation
+outside it makes that function refuse. `platform.c` compiles the call only
+without `SUNSTONE_A733_EXTENDED_DEVICE_MEMORY`, which the GPU single-core
+compute, draw and texture images inherit from the GPU render image. The
+capacity check's image scan finds every `B` and `BL` to a pool preparation
+in each built image and fails when an image that links
+`a733_device_memory_prepare()` makes one from any other function.
+
+In the QEMU fixtures on `platform/qemu-smp/platform.c`, the preparation runs
+after the secondary cores report online. Each secondary core then waits at
+most one second for the primary to start the scheduler. Those fixtures use
+the per-page stride, so a 2 MiB pool and the uncached pool cost 1,024
+translations, about 50,000 instructions, which TCG runs in milliseconds even
+on a loaded host.
+
+**Local pool check stride.** `a733_memory_local_check()` in
+`include/a733_memory_critical.h` translates once at the pool start and once
+at each following multiple of `a733_local_pool_stride` below the end. The
+stride is chosen at link time. `memory.c` defines it as 2 MiB, because it
+maps image RAM, and so both local pools, with 2 MiB level-2 block
+descriptors; it writes entry 14 for the uncached pool, for example.
+`platform/a733/platform.c` also maps image RAM with 2 MiB level-2 blocks
+(entries 0–63, and the uncached pool through `a733_memory_boot_uncached()`),
+so it defines the same 2 MiB value, except in cached single-core images,
+which take their tables and the stride from `memory.c`. A weak definition of
+4096 beside the check, which checks every page, serves every other image,
+such as the QEMU fixtures. The host check links a test definition for its
+2 MiB cases. A file that defines the stride does not include
+`a733_memory_critical.h`; it sees the declaration in
+`a733_device_memory_layout.h`. The golden local-layout comparison proves that
+each checked entry of `memory.c` is a block descriptor; `platform.c` writes
+only block descriptors in level 2 and has no comparison.
 
 ## Interrupts, synchronization and cache policy
 
@@ -140,7 +177,8 @@ bytes before the CPU reads them.
 
 ## Reused and removed
 
-- Reused: the single table builder and its later-writer scan,
+- Reused: the single table builder and its later-writer scan, the QEMU
+  trace parser and `instruction_sites()` of `checks/harness.py`,
   `A733_EL1_DRAM_BLOCK`, the table sum, `a733_cpu_coherence_flush()`, the
   `TRANSLATE` sequence of `aarch64_device_translate()`, and the QEMU golden
   comparison in `checks/device-memory-capacity.{c,py}`.
@@ -171,9 +209,10 @@ polls the counter.
 | Instructions in `a733_cached_memory_prepare()`, decode check excluded | 20,699 extended, 15,636 local | at most 2,000 above baseline | 20,785 extended (+86); 16,882 local (+1,246); 39 and 1,227 above the decode-fail path | QEMU execution trace |
 | Extended pool check | 392 `AT` | 392 `AT` | 392 `AT`; 22,541 instructions | translation callback count |
 | Local pool check, tables from `memory.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | 2 `AT` (2 to 3 with the large NPU graph), once at boot | 3 for an unaligned 2 MiB pool and the uncached pool, 2 for a 2 MiB-aligned pool, 3 with the large NPU graph, 1 for a 64 KiB pool alone | host callback count, QEMU trace |
-| Local pool check, tables from `platform.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | same count, once at boot | 1,024 and 1,536, once at boot | host callback count |
-| Local getter after preparation | 17 instructions, one load-acquire | at most 8 instructions, one load-acquire, no barrier | 5 instructions, one load-acquire, no barrier | QEMU SMP fixture |
-| Critical-section hold of first local preparation | 344 instructions at the first getter call | unchanged, once at boot before the scheduler | 347 instructions (the release store of the pool pointer), once at boot | QEMU SMP fixture |
+| Local pool check, tables from `platform.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | 2 `AT` (2 to 3 with the large NPU graph), once at boot | same as tables from `memory.c`: the stride is the same 2 MiB definition | host callback count |
+| Local getter after preparation | 17 instructions, one load-acquire | at most 8 instructions, one load-acquire, no barrier | 5 instructions in the QEMU SMP fixture (PMU count); 6 in the local-layout fixture trace, which also counts one caller instruction; one load-acquire, no barrier | QEMU SMP fixture, local-layout fixture trace |
+| Critical-section hold of first local preparation | 344 instructions at the first getter call | 344 plus the publishing store, at most 347, once at boot | 347 instructions, once at boot | QEMU SMP fixture |
+| `a733_dram_decode_check()` | none | controller and firewall register reads only, no DRAM access; at most 64 register reads and 2,000 instructions | no access; 2 instructions (8 bytes) in the driver and in the weak default | `checks/dram-controller.py` code size |
 | `aarch64_device_translate_el0()` per call | none | equal to `aarch64_device_translate()`; one `ISB`, no `DSB` | 48 instructions in both functions; traced call 40 against 41, one `AT`, one `ISB`, no `DSB` | QEMU fixture |
 
 The getter loads a pool pointer that the preparation publishes with a release
@@ -209,9 +248,6 @@ brings the getter from 8 instructions to 4 plus the call.
 - EL3 entries above `0x8000_0000`: EL3 does not access that range.
 - A query that reports whether the high map exists: no consumer; a consumer
   translates its own range at admission.
-- One `AT` per block for the local pools in images whose tables come from
-  `platform/a733/platform.c`: those tables have no golden comparison that
-  proves block descriptors, so the per-page check stays there.
 - An EL0 read-only rule in `a733_mapping_check.h`: the shared-helper owner.
 - The 128 MiB map of the non-cached returning images: they are neither OS nor
   cached images, and the memory qualification image already maps all DRAM.
@@ -242,12 +278,9 @@ These go to the primary agent as one patch:
   `platform_init()`, for the QEMU fixtures that link local pools.
 - `cmake/a733-os.cmake`: `A733_GPU_OUTPUT_EL0_READ_ONLY=1` as a compile
   definition of `sunstone-a733-os` in the GPU linear branch.
-- `cmake/a733-smp-cached.cmake`: `A733_LOCAL_POOLS_BLOCK_MAPPED=1` on every
-  target in that directory whose sources include `memory.c`, through one
-  `add_compile_definitions()` generator expression; and
-  `cmake/a733-application-single-core.cmake`, `cmake/a733-gpu-single-core.cmake`
-  and `cmake/a733-npu-single-core.cmake`: the same definition on their
-  targets, which other projects define in other directories.
+- `checks/harness.py`: the QEMU trace parser and the barrier classifier that
+  `checks/device-memory-capacity.py` and `checks/memory-architecture-smp.py`
+  share.
 - `apps/storage-read-single-core/platform.patch` needed no change: it still
   applies with `--fuzz=0` at an offset.
 - `checks/cached-device-reservations.c`, the one fixture that calls a local
@@ -256,8 +289,10 @@ These go to the primary agent as one patch:
 
 These go to other owners as requests:
 
-- DRAM-controller package: implement `a733_dram_decode_check()` to the
-  contract above.
+- DRAM-controller code: make `a733_dram_decode_check()` read the controller
+  and firewall registers to the contract above once a register source
+  exists, and link `drivers/dram/a733_dram_decode.c` into the images that
+  build `memory.c`.
 - Owners of [cpu-table-walks.md](cpu-table-walks.md) and
   [cpu-coherence.md](../cpu-coherence.md): replace the
   `0x8000_0000`–`0xFFFF_FFFF` requirement with this contract, and remove the

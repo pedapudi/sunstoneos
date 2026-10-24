@@ -22,11 +22,11 @@ SOURCES = [
 ]
 # Local-layout preparation cases: pool range, extra definitions, and the
 # translations expected: one write translation per page of either pool, or,
-# in images whose tables come from the cached builder, one per 2 MiB block
-# that holds a pool byte.
+# with the 2 MiB stride that images with 2 MiB block descriptors link, one
+# per 2 MiB block that holds a pool byte.
 LARGE_GRAPH = ['-DSUNSTONE_NPU_LARGE_GRAPH', '-DSUNSTONE_NPU_SINGLE_CORE', '-DSUNSTONE_NPU_RUNTIME_INPUT',
                '-DSUNSTONE_NPU_INTERRUPT', '-DSUNSTONE_NPU_SUPERVISED']
-BLOCKS = ['-DA733_LOCAL_POOLS_BLOCK_MAPPED=1']
+BLOCKS = ['-DTEST_POOL_STRIDE=0x200000']
 LOCAL_CASES = {
     'unaligned-2mib': (0x41500000, 0x41700000, [], 512 + 512),
     'large-graph': (0x41600000, 0x41a00000, LARGE_GRAPH, 1024 + 512),
