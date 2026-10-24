@@ -69,10 +69,11 @@ static struct { unsigned call,job,status; } script={~0u,~0u,JOB_OK};
 int a733_gpu_mimus_open(void){++opens;return open_reply;}
 
 /* Modeled EL1 and EL0 translations: every page inner-shareable write-back
- * at its own address; the arena EL1-writable, the read-only span EL0-readable
- * and not EL0-writable, except the page faults that a case selects. */
-static uintptr_t writable_page=~(uintptr_t)0,unreadable_page=~(uintptr_t)0,device_page=~(uintptr_t)0,
-    read_only_page=~(uintptr_t)0;
+ * at its own address; the arena EL1-writable, the read-only span
+ * EL0-readable and writable at neither EL0 nor EL1, except the page faults
+ * that a case selects. */
+static uintptr_t writable_page=~(uintptr_t)0,el1_writable_page=~(uintptr_t)0,unreadable_page=~(uintptr_t)0,
+    device_page=~(uintptr_t)0,arena_read_only_page=~(uintptr_t)0;
 static unsigned translations;
 static int translate_el0(uintptr_t address,int write,struct aarch64_translation *t)
 {
@@ -86,66 +87,67 @@ static int translate_el1(uintptr_t address,int write,struct aarch64_translation 
 {
     ++translations;
     uintptr_t page=address&~(uintptr_t)4095;
-    if(write&&page==read_only_page)return 0;
+    int view=page>=OS_DISPATCH_READ_ONLY&&page<OS_DISPATCH_READ_ONLY+OS_DISPATCH_READ_ONLY_BYTES;
+    if(write&&(page==arena_read_only_page||(view&&page!=el1_writable_page)))return 0;
     *t=(struct aarch64_translation){address,page==device_page?A733_MAIR_DEVICE_NGNRNE:A733_MAIR_NORMAL_WB,3};
     return 1;
 }
 /* Translations that mimus_board_pins makes for the arena and the view. */
 static unsigned pins_translations;
+static int view(uintptr_t stride)
+{
+    return os_dispatch_read_only(translate_el0,translate_el1,OS_DISPATCH_READ_ONLY,OS_DISPATCH_READ_ONLY_BYTES,stride);
+}
 static void mapping_cases(void)
 {
-    const uintptr_t block=(uintptr_t)2<<20,view=OS_DISPATCH_READ_ONLY,view_bytes=OS_DISPATCH_READ_ONLY_BYTES;
-    /* A 4 KiB stride checks every page: 2,048 EL0 translations, and one
-     * writable, unreadable or Device page among the 1,024 refuses. */
+    static const struct a733_mapping_rule writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    const uintptr_t block=(uintptr_t)2<<20,base=OS_DISPATCH_READ_ONLY,bytes=OS_DISPATCH_READ_ONLY_BYTES;
+    /* A 4 KiB stride checks every page: 3,072 translations (EL0 read, EL0
+     * write, EL1 write), and one EL0-writable, EL1-writable, unreadable or
+     * Device page among the 1,024 refuses. */
     translations=0;
-    assert(os_dispatch_el0_read_only(translate_el0,view,view_bytes,4096)&&translations==2048);
-    uintptr_t last=view+view_bytes-4096,middle=view+0x200000+0x10000;
-    uintptr_t *faults[3]={&writable_page,&unreadable_page,&device_page};
-    for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j){
-        *faults[i]=j==0?view:j==1?middle:last;
-        assert(!os_dispatch_el0_read_only(translate_el0,view,view_bytes,4096));
+    assert(view(4096)&&translations==3072);
+    uintptr_t last=base+bytes-4096,middle=base+0x200000+0x10000;
+    uintptr_t *faults[4]={&writable_page,&el1_writable_page,&unreadable_page,&device_page};
+    for(unsigned i=0;i<4;++i)for(unsigned j=0;j<3;++j){
+        *faults[i]=j==0?base:j==1?middle:last;
+        assert(!view(4096));
         *faults[i]=~(uintptr_t)0;
     }
     /* The 2 MiB stride of platform/a733-smp-cached/memory.c: the first and
-     * the last page of each block, 8 EL0 translations for the view and 12 EL1
-     * translations for the arena. A fault at either end of any block
-     * refuses; one inside a block cannot exist while the QEMU golden
-     * comparison of checks/device-memory-capacity.py keeps every entry a
-     * block descriptor. */
+     * the last page of each block of the view, 12 translations, and one EL1
+     * write translation per arena block, 6. A fault at either end of a view
+     * block, or at the start of an arena block, refuses; one elsewhere cannot
+     * exist while the QEMU golden comparison of
+     * checks/device-memory-capacity.py keeps every entry a block descriptor. */
     translations=0;
-    assert(os_dispatch_el0_read_only(translate_el0,view,view_bytes,block)&&translations==8);
+    assert(view(block)&&translations==12);
     translations=0;
-    assert(os_dispatch_writable(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,block)&&translations==12);
-    translations=0;
-    assert(os_dispatch_writable(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,block)&&
-           os_dispatch_el0_read_only(translate_el0,view,view_bytes,block));
-    pins_translations=translations;
-    assert(pins_translations==20);
-    const uintptr_t ends[4]={view,view+block-4096,view+block,last};
-    for(unsigned i=0;i<3;++i)for(unsigned j=0;j<4;++j){
+    assert(a733_mapping_check_stride(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,block,
+                                     &writable)&&translations==6);
+    pins_translations=12+6;
+    const uintptr_t ends[4]={base,base+block-4096,base+block,last};
+    for(unsigned i=0;i<4;++i)for(unsigned j=0;j<4;++j){
         *faults[i]=ends[j];
-        assert(!os_dispatch_el0_read_only(translate_el0,view,view_bytes,block));
+        assert(!view(block));
         *faults[i]=~(uintptr_t)0;
     }
-    const uintptr_t arena_ends[4]={OS_DISPATCH_ARENA,OS_DISPATCH_ARENA+block-4096,OS_DISPATCH_ARENA+5*block,
-        OS_DISPATCH_ARENA+OS_DISPATCH_CODE_BYTES-4096};
-    for(unsigned j=0;j<4;++j){
-        read_only_page=arena_ends[j];
-        assert(!os_dispatch_writable(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,block));
-        read_only_page=~(uintptr_t)0;
-        device_page=arena_ends[j];
-        assert(!os_dispatch_writable(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,block));
-        device_page=~(uintptr_t)0;
+    for(unsigned j=0;j<6;++j){
+        uintptr_t start=OS_DISPATCH_ARENA+j*block;
+        arena_read_only_page=start;
+        assert(!a733_mapping_check_stride(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,
+                                          block,&writable));
+        arena_read_only_page=~(uintptr_t)0;
     }
     /* Ranges and strides that do not fit the rule refuse. */
-    assert(!os_dispatch_el0_read_only(translate_el0,view+64,4096,4096)&&
-        !os_dispatch_el0_read_only(translate_el0,view,100,4096)&&
-        !os_dispatch_el0_read_only(translate_el0,view,0,4096)&&
-        !os_dispatch_el0_read_only(NULL,view,4096,4096)&&
-        !os_dispatch_el0_read_only(translate_el0,view+4096,block,block)&&
-        !os_dispatch_el0_read_only(translate_el0,view,block+4096,block)&&
-        !os_dispatch_el0_read_only(translate_el0,view,view_bytes,3*4096)&&
-        !os_dispatch_writable(translate_el1,OS_DISPATCH_ARENA,OS_DISPATCH_CODE_BYTES,0));
+    assert(!os_dispatch_read_only(translate_el0,translate_el1,base+64,4096,4096)&&
+        !os_dispatch_read_only(translate_el0,translate_el1,base,100,4096)&&
+        !os_dispatch_read_only(translate_el0,translate_el1,base,0,4096)&&
+        !os_dispatch_read_only(NULL,translate_el1,base,4096,4096)&&
+        !os_dispatch_read_only(translate_el0,NULL,base,4096,4096)&&
+        !os_dispatch_read_only(translate_el0,translate_el1,base+4096,block,block)&&
+        !os_dispatch_read_only(translate_el0,translate_el1,base,block+4096,block)&&
+        !os_dispatch_read_only(translate_el0,translate_el1,base,bytes,3*4096));
     /* The output region is the first 2 MiB of the span; mimus's arena ends
      * where the span begins. */
     assert(OS_DISPATCH_OUTPUT==OS_DISPATCH_READ_ONLY&&OS_DISPATCH_OUTPUT_BYTES<=OS_DISPATCH_READ_ONLY_BYTES&&
@@ -217,11 +219,14 @@ static void stop_detail_cases(void)
     assert(os_dispatch_open());
     if(!setjmp(stop))os_dispatch_failed(OS_DISPATCH_LOST);
     assert(os_dispatch_gpu_state()==OS_DISPATCH_GPU_FAULT&&board_resident_stop_detail()==OS_STOP_DETAIL_GPU_LOSS);
-    /* A silent recognizer while the session is open is a GPU loss; another
-     * service's expiry is not. */
+    /* A silent recognizer while it waits for a job's record is a GPU loss;
+     * outside that wait, or for another service's expiry, it is not. */
     reset_state_for_detail();assert(os_dispatch_open());
-    stop_detail=OS_SERVICE_MIMUS+1;assert(board_resident_stop_detail()==OS_STOP_DETAIL_GPU_LOSS);
+    stop_detail=OS_SERVICE_MIMUS+1;assert(board_resident_stop_detail()==OS_SERVICE_MIMUS+1);
+    os_dispatch_waiting(1);
+    assert(board_resident_stop_detail()==OS_STOP_DETAIL_GPU_LOSS);
     stop_detail=OS_SERVICE_THERMAL+1;assert(board_resident_stop_detail()==OS_SERVICE_THERMAL+1);
+    os_dispatch_waiting(0);
     /* After a missing tag the session is idle and placement closed. */
     os_dispatch_incomplete();
     stop_detail=OS_SERVICE_MIMUS+1;assert(board_resident_stop_detail()==OS_SERVICE_MIMUS+1);
@@ -382,7 +387,7 @@ static int run(void)
 static void reset(void)
 {
     memset(&os_dispatch_record,0,sizeof(os_dispatch_record));os_dispatch_active=0;
-    atomic_store(&gpu_state,OS_DISPATCH_GPU_CLOSED);
+    atomic_store(&gpu_state,OS_DISPATCH_GPU_IDLE);
     opens=0;board_fails=0;open_reply=1;script.call=script.job=~0u;script.status=JOB_OK;
 }
 static void reset_state_for_detail(void){reset();}

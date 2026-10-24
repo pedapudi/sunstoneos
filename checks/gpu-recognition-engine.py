@@ -3,14 +3,13 @@
 
 Builds checks/gpu-recognition-engine.cc with apps/os/gpu_hook.cc and
 apps/os/dispatch.c for the host, with AddressSanitizer and
-UndefinedBehaviorSanitizer, three times: without the engine's hook header
-(the recognizer must not open the session), with the header as
-checks/gpu-recognition-hook.h declares it, and with the header in the
-validation build. Each build runs a generated table of seven tensors through
+UndefinedBehaviorSanitizer, twice: without the engine's hook header (the
+recognizer must not open the session) and with the header as
+checks/gpu-recognition-hook.h declares it. Each build runs a generated table of seven tensors through
 the engine model and compares every output bit for bit with the engine's
 CPU path: SiLU and GLU block sinks with n_gpu < N and n_gpu = N, int32 and
-int64 sums, a residual call, calls of several jobs, and refused, lost and
-incomplete jobs. No hardware is accessed.
+int64 sums, a residual call, calls of several jobs, an ordinal that names
+another tensor of the same shape, and refused, lost and incomplete jobs. No hardware is accessed.
 
   gpu-recognition-engine.py --output DIR
 """
@@ -25,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # ordinal: K, N, n_gpu, job_rows. job_rows is below each tensor's worker bound
 # and small enough that the 222-row calls take several jobs.
 TENSORS = [(176, 704, 320, 64), (176, 352, 160, 96), (704, 176, 80, 128), (176, 352, 352, 832),
-           (176, 704, 704, 416), (1584, 176, 176, 224), (176, 176, 0, 0)]
+           (176, 704, 704, 416), (1584, 176, 176, 224), (176, 176, 0, 0), (176, 176, 80, 3264)]
 
 
 def headers(out):
@@ -34,7 +33,7 @@ def headers(out):
         stride = k
         rows.append('{%d,%d}' % (n_gpu, job_rows))
         if n_gpu:
-            admitted.append('{%d,%d,%d,%d,0}' % (offset, ordinal, stride, k))
+            admitted.append('{%d,%d,%d,%d,%d,0}' % (offset, ordinal, stride, k, n))
         engine.append('{%d,%d,%d,%d}' % (k, n, stride, offset))
         offset += (n * stride + 4095) // 4096 * 4096
     assert offset <= 8 << 20
@@ -59,8 +58,7 @@ def main():
               '-ffp-contract=off', '-Iinclude', '-Iapps/os', '-I' + str(out), '-DOS_RECOGNITION_CORE=6',
               '-DSUNSTONE_A733_OS_GPU_LINEAR=1']
     results = []
-    for name, extra in (('no-hook', []), ('hook', ['-I' + str(out / 'engine-include'), '-DENGINE_HOOK=1']),
-                        ('validate', ['-I' + str(out / 'engine-include'), '-DENGINE_HOOK=1', '-DSUNSTONE_A733_OS_GPU_VALIDATE=1'])):
+    for name, extra in (('no-hook', []), ('hook', ['-I' + str(out / 'engine-include'), '-DENGINE_HOOK=1'])):
         build = out / name
         build.mkdir()
         subprocess.run(['clang', '-std=c11'] + common + extra + ['-c', 'apps/os/dispatch.c', '-o', str(build / 'dispatch.o')],

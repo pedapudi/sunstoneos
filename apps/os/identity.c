@@ -35,8 +35,12 @@ int board_identity_prepare(uint64_t deadline)
     /* The GPU's 64 KiB tag area, before a733_cached_prepare maps the output
      * region read-only at EL1 too: here EL3 runs with translation off, so
      * every access is a Device access and only aligned 64-bit volatile stores
-     * are made, no memset or DC ZVA. Publication then removes any stale line,
-     * so DRAM holds no tag of an earlier boot when the session opens. */
+     * are made, no memset or DC ZVA. The stores reach DRAM directly;
+     * publication cleans the range to the point of coherency (DC CVAC, then
+     * DSB SY) and invalidates nothing. No cached copy of the area can hold an
+     * earlier tag: the loader runs with caches off, nothing in the image
+     * writes the area, and each job's completion cleans and invalidates its
+     * tags before the recognizer reads them. */
     volatile uint64_t *tags=(volatile uint64_t *)(uintptr_t)OS_DISPATCH_OUTPUT;
 #pragma clang loop unroll(disable)
     for(unsigned i=0;i<OS_DISPATCH_TAG_BYTES/8;++i)tags[i]=0;

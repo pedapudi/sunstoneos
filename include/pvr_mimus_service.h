@@ -11,6 +11,7 @@
  * cache maintenance and the tag check; this component adds the firmware
  * objects, the client ring, the timeline and the job's life cycle. */
 #include "pvr_compute_mimus.h"
+#include "pvr_mimus_job.h"
 #include "pvr_cccb.h"
 #include "pvr_mips.h"
 #include "a733_gpu_vm_memory.h"
@@ -30,18 +31,9 @@ struct pvr_gpu_service_config;
 #define PVR_MIMUS_SERVICE_PUBLISH 10u
 
 enum pvr_mimus_slot_state { PVR_MIMUS_SLOT_IDLE, PVR_MIMUS_SLOT_SUBMITTED, PVR_MIMUS_SLOT_TAKEN };
-/* Record results. OK after OPEN means the session is ready; after a job it
- * means the timeline reached the job's sequence and the output region is
- * maintained (the tags still need checking). REFUSED: nothing reached the
- * client ring, the slot is IDLE again and the caller computes the job's rows.
- * LOST: the GPU or the service failed; nothing in the output region is valid. */
-enum pvr_mimus_result { PVR_MIMUS_OK, PVR_MIMUS_REFUSED, PVR_MIMUS_LOST };
-struct pvr_mimus_request {
-    uint64_t x_offset;            /* codes, from the arena span's start */
-    uint32_t ordinal, rows, x_stride;
-};
-struct pvr_mimus_record { uint32_t sequence, result; };
-_Static_assert(sizeof(struct pvr_mimus_record) == 8, "completion record");
+/* The longest hang bound bind accepts, from the kick: one third of the
+ * recognizer's 3 s service window. */
+#define PVR_MIMUS_SERVICE_MAX_JOB_US UINT64_C(1000000)
 
 struct pvr_mimus_service_config {
     /* Job and program pages, arena and output region, as pvr_mimus_session_open
@@ -59,7 +51,8 @@ struct pvr_mimus_service_config {
     uint32_t tensor_count;
     /* CDM resume program address for the compute command. */
     uint64_t resume;
-    /* Hang bound from the kick, in microseconds. */
+    /* Hang bound from the kick, in microseconds, at most
+     * PVR_MIMUS_SERVICE_MAX_JOB_US. */
     uint64_t max_job_us;
 };
 enum pvr_mimus_service_phase { PVR_MIMUS_SERVICE_NEW, PVR_MIMUS_SERVICE_BOUND,
@@ -70,10 +63,6 @@ enum pvr_mimus_service_error { PVR_MIMUS_SERVICE_NO_ERROR, PVR_MIMUS_SERVICE_CLO
     PVR_MIMUS_SERVICE_PUBLICATION, PVR_MIMUS_SERVICE_RING, PVR_MIMUS_SERVICE_TIMELINE,
     PVR_MIMUS_SERVICE_DEADLINE, PVR_MIMUS_SERVICE_RESET, PVR_MIMUS_SERVICE_MAINTENANCE,
     PVR_MIMUS_SERVICE_LIFECYCLE };
-/* Per-job counters the host check reads. */
-struct pvr_mimus_service_counts {
-    uint32_t jobs, refused, kick_steps, completions;
-};
 struct pvr_mimus_service {
     const struct pvr_mimus_service_config *config;
     struct pvr_gpu_service *service;
@@ -87,7 +76,6 @@ struct pvr_mimus_service {
     uint32_t owed;
     /* The worker's own copy of the job taken from the slot. */
     struct pvr_mimus_request job;
-    struct pvr_mimus_service_counts counts;
     /* Shared with the client: the slot and the lost flag. */
     atomic_uint slot_state, lost;
     struct pvr_mimus_request slot;

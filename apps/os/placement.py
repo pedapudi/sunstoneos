@@ -288,9 +288,10 @@ def summary(tensors, placement, clocks, frames):
 
 
 def gpu_tensors(tensors, placement):
-    """(offset, ordinal, stride, k, region) for every row with n_gpu > 0:
-    the admission record OPEN passes to pvr_mimus_tensor_open. offset is the
-    entry's data_offset, the byte offset of weight row 0 in its own file."""
+    """(offset, ordinal, stride, k, n, region) for every row with n_gpu > 0:
+    the admission record the runtime passes to pvr_mimus_tensor_open, with N
+    for the hook's check of each call. offset is the entry's data_offset, the
+    byte offset of weight row 0 in its own file."""
     out = []
     for ordinal, (t, (n, _)) in enumerate(zip(tensors, placement)):
         if not n:
@@ -298,10 +299,10 @@ def gpu_tensors(tensors, placement):
         offset, stride, k = t['data_offset'], t['row_stride'], t['k']
         extent = (n - 1) * stride + k
         assert k % 4 == 0 and stride % 4 == 0 and offset % 4 == 0 and k <= stride < 65536, t['name']
-        assert ordinal < 65536 and t['region'] in (0, 1), t['name']
+        assert ordinal < 65536 and t['n'] < 65536 and t['region'] in (0, 1), t['name']
         assert extent <= t['data_size'] and offset + extent <= t['file_bytes'] and \
             offset + extent <= REGION_BYTES, '%s leaves its model region' % t['name']
-        out.append((offset, ordinal, stride, k, t['region']))
+        out.append((offset, ordinal, stride, k, t['n'], t['region']))
     return out
 
 
@@ -317,14 +318,14 @@ def header(tensors, placement, clocks, frames):
         lines.append('    ' + ''.join('{%d,%d},' % row for row in placement[i:i + 8]))
     lines.append('};')
     admitted = gpu_tensors(tensors, placement)
-    lines += ['/* OPEN admission, one entry per row with n_gpu > 0 in ordinal order:',
-              ' * {offset, ordinal, stride, k, region}. offset is the tensor entry\'s',
+    lines += ['/* Tensor admission, one entry per row with n_gpu > 0 in ordinal order:',
+              ' * {offset, ordinal, stride, k, n, region}. offset is the tensor entry\'s',
               ' * data_offset, weight row 0 within its model file; region 0 is the base',
               ' * file and 1 the overlay, each mapped at the start of its own 8 MiB. */',
               '#define OS_PLACEMENT_GPU_TENSORS %du' % len(admitted),
               'const struct os_placement_tensor os_placement_tensors[OS_PLACEMENT_GPU_TENSORS]={']
     for i in range(0, len(admitted), 4):
-        lines.append('    ' + ''.join('{%d,%d,%d,%d,%d},' % row for row in admitted[i:i + 4]))
+        lines.append('    ' + ''.join('{%d,%d,%d,%d,%d,%d},' % row for row in admitted[i:i + 4]))
     lines.append('};')
     return '\n'.join(lines) + '\n'
 

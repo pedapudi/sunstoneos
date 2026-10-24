@@ -1,4 +1,4 @@
-// The SunstoneOS side of mimus's exact-sum hook (docs/recognition-dispatch.md,
+// The SunstoneOS side of mimus's exact-sum hook (docs/gpu-mimus-service.md,
 // docs/designs/gpu-recognition.md). The recognizer task runs every function
 // here: os_gpu_open once after the model hashes, then Begin and Finish from
 // inside the engine's matmul calls. Without the engine's header the hook
@@ -19,10 +19,11 @@ namespace {
 // read the previous one out.
 struct Call {
   uint64_t x_offset;
-  size_t rows, next, stride, k;
+  size_t rows, next, stride;
   uint32_t ordinal, n_gpu, job_rows, width;
   bool in_flight, stopped;
-  a733_gpu_mimus_job job;
+  os_gpu_tensor tensor;
+  pvr_mimus_request job;
 };
 Call call;
 // The sequence of the last job that completed with OK; each OK record must
@@ -45,19 +46,19 @@ bool Submit() {
   return true;
 }
 
-#ifdef SUNSTONE_A733_OS_GPU_VALIDATE
-// The validation build's check: every GPU sum against a scalar int64 sum of
-// the same codes and weights.
+// Every GPU sum against a scalar int64 sum of the same codes and weights.
+// The check stays until the board shows GPU cache invalidation at job start,
+// GPU read-only enforcement, cross-core code writes and fault-slot retention
+// across a WDT0 reset (docs/designs/gpu-recognition.md); at two cycles per
+// MAC it costs about 1.9 s per bench recording on the A76 pair.
 bool SumsEqual(size_t first, size_t rows) {
-  uint32_t k, stride;
-  const int8_t* weights;
-  if (!a733_gpu_mimus_tensor(call.ordinal, &k, &stride, &weights)) return false;
   const auto* base = reinterpret_cast<const unsigned char*>(OS_DISPATCH_OUTPUT + OS_DISPATCH_TAG_BYTES);
   for (size_t r = 0; r < rows; ++r) {
     const auto* x = reinterpret_cast<const int16_t*>(OS_DISPATCH_ARENA + call.x_offset + (first + r) * call.stride);
     for (uint32_t c = 0; c < call.n_gpu; ++c) {
       int64_t sum = 0;
-      for (size_t i = 0; i < k; ++i) sum += static_cast<int64_t>(x[i]) * weights[static_cast<size_t>(c) * stride + i];
+      for (size_t i = 0; i < call.tensor.k; ++i)
+        sum += static_cast<int64_t>(x[i]) * call.tensor.weights[static_cast<size_t>(c) * call.tensor.stride + i];
       const unsigned char* p = base + (r * call.n_gpu + c) * call.width;
       const int64_t gpu = call.width == 4 ? *reinterpret_cast<const volatile int32_t*>(p)
                                           : *reinterpret_cast<const volatile int64_t*>(p);
@@ -66,23 +67,25 @@ bool SumsEqual(size_t first, size_t rows) {
   }
   return true;
 }
-#endif
 
-size_t Begin(void*, uint32_t ordinal, size_t rows, size_t k, size_t n, const int16_t* codes, size_t stride) {
+size_t Begin(void*, uint32_t ordinal, const int8_t* weights, size_t weight_stride, size_t rows, size_t k, size_t n,
+             const int16_t* codes, size_t stride) {
   call = {};
   const os_placement p = os_dispatch_place(ordinal);
-  if (!p.n_gpu || !p.job_rows || !rows || p.n_gpu > n) return 0;
-  uint32_t admitted_k, weight_stride;
-  const int8_t* weights;
+  if (!p.n_gpu || !p.job_rows || !rows) return 0;
+  os_gpu_tensor t;
   const uintptr_t x = reinterpret_cast<uintptr_t>(codes);
-  // The engine's call must match the tensor admitted at start, and its codes
-  // must lie in the arena span the GPU reads.
-  if (!a733_gpu_mimus_tensor(ordinal, &admitted_k, &weight_stride, &weights) || admitted_k != k ||
-      (stride & 3) || stride < 2 * k || stride > 0xffff || (x & 3) || x < OS_DISPATCH_ARENA)
+  // The call must be the tensor admitted under this ordinal, weights included:
+  // the attention projections share K and N, so an ordinal that names
+  // another of them would otherwise run on the wrong weights unnoticed. Its
+  // codes must lie in the arena span the GPU reads.
+  if (!a733_gpu_mimus_tensor(ordinal, &t) || t.weights != weights || t.stride != weight_stride || t.k != k ||
+      t.n != n || p.n_gpu > n || (stride & 3) || stride < 2 * k || stride > 0xffff || (x & 3) ||
+      x < OS_DISPATCH_ARENA)
     return 0;
   const uint64_t offset = x - OS_DISPATCH_ARENA, extent = (rows - 1) * stride + 2 * k;
   if (offset > OS_DISPATCH_CODE_BYTES || extent > OS_DISPATCH_CODE_BYTES - offset) return 0;
-  call = {offset, rows, 0, stride, k, ordinal, p.n_gpu, p.job_rows, k > 512 ? 8u : 4u, false, false, {}};
+  call = {offset, rows, 0, stride, ordinal, p.n_gpu, p.job_rows, k > 512 ? 8u : 4u, false, false, t, {}};
   if (!Submit()) return 0;
   os_dispatch_placed();
   return p.n_gpu;
@@ -91,23 +94,24 @@ size_t Begin(void*, uint32_t ordinal, size_t rows, size_t k, size_t n, const int
 bool Finish(void*, mimus::asr::ExactSumJob* out) {
   if (call.stopped || call.next >= call.rows) return false;
   if (!call.in_flight && !Submit()) return false;
-  a733_gpu_mimus_completion done;
+  pvr_mimus_record done;
+  // Only this wait counts as waiting on the GPU for the supervisor's stop
+  // detail; the engine's own channels ran before it.
+  os_dispatch_waiting(1);
   a733_gpu_mimus_finish(&done);
+  if (done.result == PVR_MIMUS_LOST) os_dispatch_failed(OS_DISPATCH_LOST);
+  os_dispatch_waiting(0);
   call.in_flight = false;
-  if (done.result == A733_GPU_MIMUS_LOST) os_dispatch_failed(OS_DISPATCH_LOST);
-  if (done.result != A733_GPU_MIMUS_OK) {
+  if (done.result != PVR_MIMUS_OK) {
     os_dispatch_refused();
     call.stopped = true;
     return false;
   }
   const size_t rows = call.job.rows;
-  bool complete = done.sequence == completed + 1 &&
-      pvr_mimus_tags_complete(OS_DISPATCH_OUTPUT, static_cast<uint32_t>(rows), call.n_gpu, done.sequence);
-#ifdef SUNSTONE_A733_OS_GPU_VALIDATE
-  complete = complete && SumsEqual(call.next, rows);
-#endif
-  if (done.sequence == completed + 1) completed = done.sequence;
-  if (!complete) {
+  const bool next = done.sequence == completed + 1;
+  if (next) completed = done.sequence;
+  if (!next || !pvr_mimus_tags_complete(OS_DISPATCH_OUTPUT, static_cast<uint32_t>(rows), call.n_gpu, done.sequence) ||
+      !SumsEqual(call.next, rows)) {
     // Placement closes for the boot; the session stays open and idle.
     os_dispatch_incomplete();
     call.stopped = true;

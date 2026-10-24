@@ -30,9 +30,9 @@ The check covers docs/recognition-dispatch.md on the host; no device is used:
   whether apps/mimus/recorded.h already fits;
 - os_dispatch_place compiles for AArch64 to two loads and one compare;
 - with --configure-from, CMake refuses the option in the supervised
-  lifetime, without SUNSTONE_A733_OS_GPU_VALIDATE, and with a user-supplied
-  A733_GPU_OUTPUT_EL0_READ_ONLY, which it sets itself; it configures the
-  validation build with and without the microphone.
+  lifetime and with a user-supplied A733_GPU_OUTPUT_EL0_READ_ONLY, which it
+  sets itself; it configures the resident build with and without the
+  microphone.
 """
 import argparse
 import hashlib
@@ -134,7 +134,7 @@ def arena_bound(out):
         source.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" {\n#include "dispatch.h"\n}\n'
                           'inline constexpr uintptr_t kMimusArenaBase = %#x;\n'
                           'inline constexpr size_t kMimusArenaBytes = %d;\n%s\n' % (base, size, assertion))
-        result = subprocess.run(['clang++', '-std=c++20', '-fsyntax-only', '-Iapps/os', str(source)], cwd=ROOT,
+        result = subprocess.run(['clang++', '-std=c++20', '-fsyntax-only', '-Iinclude', '-Iapps/os', str(source)], cwd=ROOT,
                                 capture_output=True, text=True)
         results[name] = result.returncode == 0
     assert results == {'12 MiB': True, '16 MiB': False, 'moved base': False}, results
@@ -197,24 +197,25 @@ def admission_list(directory, tensors, table, models, core):
     placed = [i for i, (n, _) in enumerate(table) if n]
     assert [e[1] for e in entries] == placed, 'admission list differs from the placed rows'
     sizes = [m.stat().st_size for m in models]
-    for offset, ordinal, stride, k, region in entries:
+    for offset, ordinal, stride, k, n, region in entries:
         t, n_gpu = tensors[ordinal], table[ordinal][0]
         end = offset + (n_gpu - 1) * stride + k
-        assert region in (0, 1) and k == t['k'] and stride == t['row_stride'] and k % 4 == 0 and \
+        assert region in (0, 1) and k == t['k'] and n == t['n'] and n_gpu <= n and stride == t['row_stride'] and \
+            k % 4 == 0 and \
             stride % 4 == 0 and k <= stride < 65536 and end <= sizes[region] and end <= 8 << 20, t['name']
     source = directory / 'admission.c'
     source.write_text('#include <stdio.h>\n#include "dispatch.h"\n#include "placement.h"\nint main(void){\n'
                       '    for(unsigned i=0;i<OS_PLACEMENT_GPU_TENSORS;++i){const struct os_placement_tensor *t='
                       '&os_placement_tensors[i];\n'
-                      '        printf("%u %u %u %u %u\\n",(unsigned)t->offset,(unsigned)t->ordinal,(unsigned)t->stride,'
-                      '(unsigned)t->k,(unsigned)t->region);}\n    return 0;\n}\n')
+                      '        printf("%u %u %u %u %u %u\\n",(unsigned)t->offset,(unsigned)t->ordinal,(unsigned)t->stride,'
+                      '(unsigned)t->k,(unsigned)t->n,(unsigned)t->region);}\n    return 0;\n}\n')
     binary = directory / 'admission'
     subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-Iinclude', '-Iapps/os', '-I' + str(directory),
                     '-DOS_RECOGNITION_CORE=%d' % core, str(source), '-o', str(binary)], cwd=ROOT, check=True)
     lines = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.split('\n')
     read = [tuple(int(v) for v in line.split()) for line in lines if line]
     assert read == entries, 'the C struct reads other values than the time model wrote'
-    return {'entries': len(entries), 'regions': [sum(1 for e in entries if e[4] == r) for r in (0, 1)],
+    return {'entries': len(entries), 'regions': [sum(1 for e in entries if e[5] == r) for r in (0, 1)],
             'largest_end': max(e[0] + (table[e[1]][0] - 1) * e[2] + e[3] for e in entries)}
 
 
@@ -256,18 +257,13 @@ def configure_cases(out, build, models):
         ['-D%s=%s' % item for item in sorted(cache.items())]
     env = dict(os.environ, PATH=str(Path(cache['SUNSTONE_LLD']).parent) + os.pathsep + os.environ['PATH'])
     model_dir = '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)
-    validate = '-DSUNSTONE_A733_OS_GPU_VALIDATE=ON'
-    # Until the board items on GPU cache invalidation, cross-core code writes
-    # and GPU read-only enforcement pass, only the validation build
-    # configures; CMake sets the read-only view's constant itself.
+    # CMake sets the read-only view's constant itself.
     cases = [
-        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', validate, model_dir], 'resident lifetime'),
-        ('no-validate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', model_dir], 'SUNSTONE_A733_OS_GPU_VALIDATE'),
-        ('user-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', validate, '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
+        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', model_dir], 'resident lifetime'),
+        ('user-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
                             model_dir], 'A733_GPU_OUTPUT_EL0_READ_ONLY'),
-        ('validate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', validate, model_dir], None),
-        ('validate-audio', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON', validate,
-                            model_dir], None),
+        ('resident', ['-DSUNSTONE_A733_OS_RESIDENT=ON', model_dir], None),
+        ('resident-audio', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON', model_dir], None),
     ]
     results = {}
     for name, options, refusal in cases:

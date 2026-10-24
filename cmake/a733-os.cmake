@@ -14,9 +14,9 @@
 # option adds wideband headset speech through the pinned libsbc. The GPU
 # linear option places mimus linear layers on the CPU or the GPU from a
 # generated table (docs/recognition-dispatch.md). It needs the resident
-# lifetime, and until the board shows GPU cache invalidation at job start,
-# cross-core code writes and GPU read-only enforcement, the validation build
-# that compares every GPU sum with the CPU's.
+# lifetime; until the board shows GPU cache invalidation at job start,
+# cross-core code writes, GPU read-only enforcement and fault-slot retention
+# across a WDT0 reset, its hook compares every GPU sum with a CPU sum.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OFF)
@@ -24,7 +24,6 @@ option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF
 option(SUNSTONE_A733_OS_HEADSET "Integrated OS with Bluetooth headset recognition" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
-option(SUNSTONE_A733_OS_GPU_VALIDATE "GPU linear layers checked against a CPU sum of every output" OFF)
 if(NOT SUNSTONE_A733_OS)
   return()
 endif()
@@ -45,12 +44,6 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   if(DEFINED A733_GPU_OUTPUT_EL0_READ_ONLY)
     message(FATAL_ERROR "The GPU linear build sets A733_GPU_OUTPUT_EL0_READ_ONLY itself; do not supply it")
   endif()
-  # Until the board items on GPU cache invalidation at job start, cross-core
-  # code writes and GPU read-only enforcement pass, only the build that checks
-  # every GPU sum against the CPU's may place a layer on the GPU.
-  if(NOT SUNSTONE_A733_OS_GPU_VALIDATE)
-    message(FATAL_ERROR "GPU linear layers need SUNSTONE_A733_OS_GPU_VALIDATE until the GPU cache and read-only board items pass")
-  endif()
   set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
   if(NOT SUNSTONE_GPU_FIRMWARE)
     message(FATAL_ERROR "The GPU linear build requires SUNSTONE_GPU_FIRMWARE")
@@ -59,8 +52,6 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   if(NOT os_gpu_firmware_hash STREQUAL "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2")
     message(FATAL_ERROR "GPU firmware identity refused")
   endif()
-elseif(SUNSTONE_A733_OS_GPU_VALIDATE)
-  message(FATAL_ERROR "SUNSTONE_A733_OS_GPU_VALIDATE is a GPU linear option")
 endif()
 if(NOT TARGET sunstone-a733-mimus-board)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-mimus-board.cmake")
@@ -281,8 +272,7 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
   # 0x46C00000-0x47000000 read-only at EL0 and EL1.
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1
-    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1
-    SUNSTONE_A733_OS_GPU_VALIDATE=1)
+    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1)
   set_source_files_properties("${os_root}/drivers/gpu/a733_gpu_platform_native.c" TARGET_DIRECTORY sunstone-a733-os
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
@@ -311,7 +301,7 @@ if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
   list(APPEND os_inputs "${os_recognition}")
 endif()
 list(REMOVE_ITEM os_inputs "${mb_build}/build-id.c")
-set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};gpu_validate=${SUNSTONE_A733_OS_GPU_VALIDATE};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
+set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
 foreach(input IN LISTS os_inputs)
   file(SHA256 "${input}" hash)
   string(APPEND os_identity "${hash}")

@@ -6,6 +6,7 @@
  * once, after every model hash matched, and ends the boot on a GPU fault. */
 #include <stddef.h>
 #include <stdint.h>
+#include "pvr_mimus_job.h"
 
 /* One row per tensor of the merged model, indexed by the tensor's ordinal:
  * base tensors in file order with overlay replacements in place, then the
@@ -14,10 +15,10 @@
  * 32 at or below the GPU worker's own bound for the tensor; n_gpu = 0 keeps
  * the tensor on the CPU. */
 struct os_placement { uint16_t n_gpu, job_rows; };
-/* One generated entry per row with n_gpu > 0, in ordinal order, for OPEN's
- * tensor admission: the model file (region 0 base, 1 overlay), the byte
- * offset of weight row 0 in it, the weight row stride and K. */
-struct os_placement_tensor { uint32_t offset; uint16_t ordinal, stride, k; uint8_t region; };
+/* One generated entry per row with n_gpu > 0, in ordinal order, for the
+ * runtime's tensor admission: the model file (region 0 base, 1 overlay), the
+ * byte offset of weight row 0 in it, the weight row stride, K and N. */
+struct os_placement_tensor { uint32_t offset; uint16_t ordinal, stride, k, n; uint8_t region; };
 
 /* Completion states the hook reports (GPU kernel design). */
 enum { OS_DISPATCH_RESET = 1, OS_DISPATCH_LOST = 2 };
@@ -48,15 +49,19 @@ struct os_placement os_dispatch_place(uint32_t ordinal);
 /* Hook, per placed call and per job refused before device access. */
 void os_dispatch_placed(void);
 void os_dispatch_refused(void);
-/* Hook, after a job reported OK without every lane's tag (or, in the
- * validation build, with a sum that differs from the CPU's): records it and
- * puts every later call on the CPU for the boot at once. The session stays
- * open and idle; the hook then computes the job's rows on the CPU. */
+/* Hook, after a job reported OK without every lane's tag or with a sum that
+ * differs from the CPU's: records it and puts every later call on the CPU for
+ * the boot at once. The session stays open and idle; the engine then
+ * computes the job's rows on the CPU. */
 void os_dispatch_incomplete(void);
-/* Any task: OS_DISPATCH_GPU_OPEN while the session is being opened or
- * places calls, so a silent recognizer waits on the GPU; OS_DISPATCH_GPU_FAULT
- * once a GPU fault ends the boot. */
-enum { OS_DISPATCH_GPU_CLOSED, OS_DISPATCH_GPU_OPEN, OS_DISPATCH_GPU_FAULT };
+/* Hook, around each wait for a job's record: the recognizer is waiting on
+ * the GPU from the job's submission until its record arrives. */
+void os_dispatch_waiting(int waiting);
+/* Any task: OS_DISPATCH_GPU_WAITING while OPEN runs or the recognizer waits
+ * for a job's record, so a silent recognizer means a silent GPU;
+ * OS_DISPATCH_GPU_FAULT once a GPU fault ends the boot; otherwise
+ * OS_DISPATCH_GPU_IDLE. */
+enum { OS_DISPATCH_GPU_IDLE, OS_DISPATCH_GPU_WAITING, OS_DISPATCH_GPU_FAULT };
 unsigned os_dispatch_gpu_state(void);
 /* Hook, on a RESET or LOST completion and before it computes any row on the
  * CPU: records the state and ends the boot through the recognizer's failure
@@ -77,20 +82,16 @@ extern struct tskTaskControlBlock *os_recognizer;
  * ready. Its waits record no service progress. */
 int a733_gpu_mimus_start(unsigned core);
 int a733_gpu_mimus_open(void);
-/* One job of a placed call: rows activation rows from x_offset in the arena,
- * x_stride bytes apart, of tensor `ordinal`. begin writes the slot and wakes
- * the worker without waiting: 1 submitted (finish returns its record), 0
- * refused before any device access (the caller computes the rows), -1 the
- * session is lost. finish waits for the record; result is one of
- * A733_GPU_MIMUS_*. */
-struct a733_gpu_mimus_job { uint64_t x_offset; uint32_t ordinal, rows, x_stride; };
-struct a733_gpu_mimus_completion { uint32_t sequence, result; };
-enum { A733_GPU_MIMUS_OK, A733_GPU_MIMUS_REFUSED, A733_GPU_MIMUS_LOST };
-int a733_gpu_mimus_begin(const struct a733_gpu_mimus_job *);
-void a733_gpu_mimus_finish(struct a733_gpu_mimus_completion *);
-/* The tensor admitted at start: K, weight stride and the CPU address of
+/* One job of a placed call. begin writes the slot and wakes the worker
+ * without waiting: 1 submitted (finish returns its record), 0 refused before
+ * any device access (the caller computes the rows), -1 the session is lost.
+ * finish waits for the record. */
+int a733_gpu_mimus_begin(const struct pvr_mimus_request *);
+void a733_gpu_mimus_finish(struct pvr_mimus_record *);
+/* The tensor admitted at start: K, N, weight stride and the CPU address of
  * weight row 0; 0 when the tensor is not on the GPU. */
-int a733_gpu_mimus_tensor(uint32_t ordinal, uint32_t *k, uint32_t *stride, const int8_t **weights);
+struct os_gpu_tensor { uint32_t k, n, stride; const int8_t *weights; };
+int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *);
 /* INTID 95, on the recognition core. */
 void a733_gpu_mimus_irq(void);
 /* The recognizer, after every model hash matched: opens the session and
@@ -122,22 +123,21 @@ int os_gpu_linear_start(void);
 #define OS_DISPATCH_MODELS UINT64_C(0x44000000)
 #define OS_DISPATCH_MODEL_BYTES UINT64_C(0x00800000)
 
-/* Mapping checks at application start, at the stride of the image's tables
- * (a733_local_pool_stride: 2 MiB where platform/a733-smp-cached/memory.c maps
- * image RAM with level-2 blocks only, 4 KiB elsewhere). With a 4 KiB stride
- * every page is checked; with a block stride the first and the last 4 KiB
- * page of each block. address and bytes are multiples of the stride.
- * writable: each checked page is EL1-writable inner-shareable write-back
- * memory at the same address. el0_read_only: each checked page translates for
- * an EL0 read as such memory and faults for an EL0 write; checking pages,
- * instead of negating a writable-range rule, refuses a range in which only
- * some pages are read-only. translate is aarch64_device_translate or, for the
- * EL0 rule, aarch64_device_translate_el0 (AT S1E0R / AT S1E0W). */
+/* The read-only view's check at application start, at the stride of the
+ * image's tables (a733_local_pool_stride: 2 MiB where
+ * platform/a733-smp-cached/memory.c maps image RAM with level-2 blocks only,
+ * 4 KiB elsewhere). With a 4 KiB stride every page is checked; with a block
+ * stride the first and the last 4 KiB page of each block. address and bytes
+ * are multiples of the stride. Each checked page translates for an EL0 read
+ * as inner-shareable write-back memory at its own address, faults for an
+ * EL0 write (el0, AT S1E0R / AT S1E0W) and faults for an EL1 write (el1,
+ * AT S1E1W). Checking pages, instead of negating a writable-range rule,
+ * refuses a range in which only some pages are read-only. */
 struct aarch64_translation;
 typedef int (*os_dispatch_translate_fn)(uintptr_t, int, struct aarch64_translation *);
 int aarch64_device_translate(uintptr_t, int, struct aarch64_translation *);
 int aarch64_device_translate_el0(uintptr_t, int, struct aarch64_translation *);
 extern const uintptr_t a733_local_pool_stride;
-int os_dispatch_writable(os_dispatch_translate_fn translate, uintptr_t address, size_t bytes, uintptr_t stride);
-int os_dispatch_el0_read_only(os_dispatch_translate_fn translate, uintptr_t address, size_t bytes, uintptr_t stride);
+int os_dispatch_read_only(os_dispatch_translate_fn el0, os_dispatch_translate_fn el1, uintptr_t address,
+                          size_t bytes, uintptr_t stride);
 #endif

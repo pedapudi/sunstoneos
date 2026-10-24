@@ -38,7 +38,8 @@
 /* 1 bench with exact sums; 2 bench with pattern sums (instrumented runs);
  * 3 as 2 with jobs that complete at once; 4 as 3 with one firmware event per
  * job; 5 refused jobs; 6 failed wake send; 7 missing tag; 8 hang; 9 context
- * reset; 10 OPEN only. */
+ * reset; 10 OPEN only; 11 an unexpected timeline value before a submit; 12 the
+ * completion's clean and invalidate fails. */
 volatile uint32_t mimus_service_case = 1;
 /* Nonzero in the runner's instrumented runs, which execute many times slower
  * against wall-clock deadlines: OPEN then gets 60 s instead of 1 s. */
@@ -250,11 +251,31 @@ static void pool_pages(unsigned *wb, unsigned *nc)
         if (n->allocations[i].state != DEVICE_MEMORY_FREE) *nc += n->allocations[i].pages;
     }
 }
-/* --wrap counters of the two architecture helpers. */
-uint64_t cache_calls, cache_lines, translations;
+/* --wrap counters of the two architecture helpers and the session code.
+ * Every maintenance call on the output region must clean and invalidate:
+ * DC IVAC is checked as a write and faults on the image's read-only view.
+ * Case 12 makes the first such call of a job fail once. */
+uint64_t cache_calls, cache_lines, translations, output_cache_calls;
+uint32_t submit_calls, complete_calls, ring_polls, fail_output_cache;
 int __real_aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
 int __wrap_aarch64_device_cache(enum aarch64_cache_op op, uintptr_t address, size_t bytes)
-{ ++cache_calls; cache_lines += (bytes + 63) / 64; return __real_aarch64_device_cache(op, address, bytes); }
+{
+    ++cache_calls; cache_lines += (bytes + 63) / 64;
+    if (address < PVR_MIMUS_OUTPUT_GPU + PVR_MIMUS_OUTPUT_BYTES && address + bytes > PVR_MIMUS_OUTPUT_GPU) {
+        configASSERT(op == AARCH64_CACHE_CLEAN_INVALIDATE && address >= PVR_MIMUS_OUTPUT_GPU &&
+                     address + bytes <= PVR_MIMUS_OUTPUT_GPU + PVR_MIMUS_OUTPUT_BYTES);
+        ++output_cache_calls;
+        if (__atomic_exchange_n(&fail_output_cache, 0, __ATOMIC_ACQ_REL)) return 0;
+    }
+    return __real_aarch64_device_cache(op, address, bytes);
+}
+int __real_pvr_mimus_submit(struct pvr_mimus_session *, const struct pvr_mimus_tensor *, const struct pvr_mimus_job *);
+int __wrap_pvr_mimus_submit(struct pvr_mimus_session *s, const struct pvr_mimus_tensor *t, const struct pvr_mimus_job *j)
+{ ++submit_calls; return __real_pvr_mimus_submit(s, t, j); }
+int __real_pvr_mimus_complete(struct pvr_mimus_session *);
+int __wrap_pvr_mimus_complete(struct pvr_mimus_session *s) { ++complete_calls; return __real_pvr_mimus_complete(s); }
+enum pvr_cccb_result __real_pvr_cccb_poll(struct pvr_cccb *);
+enum pvr_cccb_result __wrap_pvr_cccb_poll(struct pvr_cccb *c) { ++ring_polls; return __real_pvr_cccb_poll(c); }
 int __real_aarch64_device_translate(uintptr_t, int, struct aarch64_translation *);
 int __wrap_aarch64_device_translate(uintptr_t a, int w, struct aarch64_translation *t)
 { ++translations; return __real_aarch64_device_translate(a, w, t); }
@@ -295,9 +316,10 @@ static void client(void *unused)
         metric("ready-timed-waits", service.ready_timed_waits - waits0);
         metric("ready-wait-expiries", service.ready_wait_expiries - expiries0);
         metric("interrupts", irq_count); metric("hook-wakes", hook_wakes);
-        metric("kicks", kick_step_count); metric("kick-steps", mimus->counts.kick_steps);
-        metric("completions", mimus->counts.completions);
-        configASSERT(mimus->counts.jobs == FIXTURE_JOBS && mimus->counts.completions == FIXTURE_JOBS);
+        metric("kicks", kick_step_count); metric("ring-polls", ring_polls);
+        metric("completions", complete_calls); metric("output-cache-calls", output_cache_calls);
+        configASSERT(submit_calls == FIXTURE_JOBS && kick_step_count == FIXTURE_JOBS &&
+                     complete_calls == FIXTURE_JOBS && output_cache_calls == FIXTURE_JOBS);
         platform_puts("PASS mimus service case "); platform_hex(c);
         platform_puts("; 204 bench jobs with every tag and sum\n"); platform_exit(0);
     }
@@ -312,7 +334,8 @@ static void client(void *unused)
         configASSERT(pvr_mimus_service_submit(mimus, &outside) == 1);
         r = receive(); configASSERT(r.result == PVR_MIMUS_REFUSED && r.sequence == 1);
         configASSERT(atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_IDLE && !kick_step_count);
-        configASSERT(mimus->counts.refused == 2 && bench_job(0) && bench_job(1));
+        /* The bad ordinal never reaches the session code; the row count does. */
+        configASSERT(submit_calls == 1 && bench_job(0) && bench_job(1));
         platform_puts("PASS mimus service case "); platform_hex(c);
         platform_puts("; refused jobs leave the slot idle and later jobs run\n"); platform_exit(0);
     }
@@ -327,7 +350,7 @@ static void client(void *unused)
         configASSERT(atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_IDLE);
         vTaskResume(service.worker);
         vTaskDelay(5);
-        configASSERT(!kick_step_count && !mimus->counts.jobs && bench_job(0));
+        configASSERT(!kick_step_count && !submit_calls && bench_job(0));
         platform_puts("PASS mimus service case "); platform_hex(c);
         platform_puts("; a failed wake send refuses the job with the slot idle\n"); platform_exit(0);
     }
@@ -337,18 +360,35 @@ static void client(void *unused)
         platform_puts("PASS mimus service case "); platform_hex(c);
         platform_puts("; a missing tag reaches the client with the session idle\n"); platform_exit(0);
     }
-    /* 8, 9: the job is LOST; afterwards submit reports the loss. */
-    const struct pvr_mimus_request job = {0, fixture_jobs[0].ordinal, fixture_jobs[0].rows, 2 * fixture_jobs[0].k};
+    /* 8, 9, 11, 12: the job is LOST; afterwards submit reports the loss. */
+    unsigned lost_job = 0;
+    if (c == 11) {
+        /* A timeline the session did not expect, written while it is idle:
+         * the next job is refused at its timeline check as LOST, before any
+         * ring write. */
+        configASSERT(bench_job(0));
+        __atomic_store_n((uint32_t *)mimus->config->firmware[5].storage.cpu, completed + 5, __ATOMIC_RELEASE);
+        lost_job = 1;
+    }
+    if (c == 12) __atomic_store_n(&fail_output_cache, 1, __ATOMIC_RELEASE);
+    const struct pvr_mimus_request job = {0, fixture_jobs[lost_job].ordinal, fixture_jobs[lost_job].rows,
+                                          2 * fixture_jobs[lost_job].k};
+    uint32_t kicks_before = kick_step_count;
     configASSERT(pvr_mimus_service_submit(mimus, &job) == 1);
     uint64_t at; wait_record_time(&at, &r);
     configASSERT(r.result == PVR_MIMUS_LOST && service.phase == PVR_GPU_SERVICE_FAILED);
-    configASSERT(mimus->error == (c == 8 ? PVR_MIMUS_SERVICE_DEADLINE : PVR_MIMUS_SERVICE_RESET));
+    configASSERT(mimus->error == (c == 8 ? PVR_MIMUS_SERVICE_DEADLINE : c == 9 ? PVR_MIMUS_SERVICE_RESET :
+                                  c == 11 ? PVR_MIMUS_SERVICE_TIMELINE : PVR_MIMUS_SERVICE_MAINTENANCE));
+    if (c == 11) configASSERT(kick_step_count == kicks_before && submit_calls == 1);
+    if (c == 12) configASSERT(complete_calls == 1 && !__atomic_load_n(&fail_output_cache, __ATOMIC_ACQUIRE));
     metric("lost-after-kick-us", at - kick_us);
     if (c == 8) configASSERT(at - kick_us >= 1000000 && at - kick_us <= 1000000 + 1000 + 2000);
     configASSERT(pvr_mimus_service_submit(mimus, &job) == -1);
     platform_puts("PASS mimus service case "); platform_hex(c);
     platform_puts(c == 8 ? "; a hang ends in LOST after max_job_us and submit then reports the loss\n" :
-                  "; a context reset ends in LOST and submit then reports the loss\n");
+                  c == 9 ? "; a context reset ends in LOST and submit then reports the loss\n" :
+                  c == 11 ? "; an unexpected timeline ends the next job in LOST and submit then reports the loss\n" :
+                  "; a failed completion clean-and-invalidate ends in LOST and submit then reports the loss\n");
     platform_exit(0);
 }
 /* Unused parts of the included model. */
@@ -359,7 +399,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 10);
+    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 12);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (mimus_service_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();

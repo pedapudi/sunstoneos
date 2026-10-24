@@ -14,10 +14,7 @@ and the audio start entry, a radio build the radio entry and a headset build
 the headset entry. A GPU linear build adds the GPU interrupt (INTID 95) and
 the gpu-linear entry, and routes INTID 95 to the recognition core that the
 image records in os_recognition_core; its arena is the recognizer header's
-12 MiB value, followed by the GPU's 4 MiB read-only view, and its session's
-completion must call aarch64_device_cache with operation 1 (clean and
-invalidate), because DC IVAC is checked as a write and faults on the
-read-only output region. Radio and headset builds also keep the
+12 MiB value, followed by the GPU's 4 MiB read-only view. Radio and headset builds also keep the
 1 MiB profile and firmware span at 0x43000000 clear of the image and the
 recognition regions.
 The standard library suffices, so the build can run this check. Its output also serves the supervised preparation (apps/os/prepare.py)
@@ -103,37 +100,6 @@ def arena_bytes(text, gpu_linear):
         branch = text[text.index('#ifdef SUNSTONE_A733_OS_GPU_LINEAR'):]
         assert branch.index('kMimusArenaBytes') < branch.index('#else'), 'arena branches out of order'
     return values[0] if gpu_linear or len(values) == 1 else values[1]
-
-
-def calls_operation(elf, function, callee, operation):
-    """Every call from `function` to `callee` sets w0 to `operation` last."""
-    def symbol(name):
-        found = [s for s in elf.symbols if s['name'] == name and s['type'] == 2 and s['shndx'] not in (0, 0xfff1)]
-        assert len(found) == 1, '%s must have one definition, found %d' % (name, len(found))
-        return found[0]
-    f, target = symbol(function), symbol(callee)['value']
-    words = struct.unpack('<%dI' % (f['size'] // 4), elf.read(f['value'], f['size'] // 4 * 4))
-    calls = 0
-    for i, w in enumerate(words):
-        if (w & 0x7c000000) != 0x14000000:  # B or BL
-            continue
-        offset = (w & 0x3ffffff) - ((w & 0x2000000) << 1)
-        if f['value'] + 4 * i + 4 * offset != target:
-            continue
-        calls += 1
-        for j in range(i - 1, max(-1, i - 25), -1):
-            v = words[j]
-            if v & 0x1f or (v & 0x1c000000) == 0x14000000:  # another register, or a branch
-                continue
-            if (v & 0x0a000000) == 0x08000000 and not v & (1 << 22):  # a store reads w0
-                continue
-            assert v == 0x52800000 | operation << 5, \
-                '%s calls %s with w0 set by %#010x, not mov w0, #%d' % (function, callee, v, operation)
-            break
-        else:
-            raise AssertionError('%s calls %s without setting w0' % (function, callee))
-    assert calls, '%s does not call %s' % (function, callee)
-    return calls
 
 
 def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
@@ -228,7 +194,6 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         assert core in (2, 6), 'recognition core %d is not the first of a core pair' % core
         assert interrupts[ids.index(95)]['core'] == core, \
             'INTID 95 is routed to core %d, the recognizer runs on core %d' % (interrupts[ids.index(95)]['core'], core)
-        calls_operation(elf, 'pvr_mimus_complete', 'aarch64_device_cache', 1)
     return {'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 

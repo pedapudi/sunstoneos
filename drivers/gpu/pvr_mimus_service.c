@@ -17,8 +17,6 @@ enum { CONTEXT, STATE, CONTROL, RING, MEMORY, TIMELINE };
 /* The firmware's 16 MiB MIPS heap; each object needs its own address there. */
 #define FIRMWARE_HEAP UINT32_C(0xc0000000)
 #define FIRMWARE_HEAP_END UINT32_C(0xc1000000)
-/* Hang bound: below the 3 s service window of the recognizer. */
-#define MAX_JOB_US UINT64_C(2000000)
 
 static void put32(unsigned char *p, uint32_t v)
 { for (unsigned i = 0; i < 4; ++i) p[i] = (unsigned char)(v >> (8 * i)); }
@@ -111,7 +109,7 @@ int pvr_mimus_service_bind(struct pvr_mimus_service *m, struct pvr_gpu_service *
         m->phase != PVR_MIMUS_SERVICE_NEW || g->initialized || gc->mimus || gc->compute ||
         !a733_ranges_disjoint_nonempty(m, sizeof(*m), c, sizeof(*c)) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        c->session.last_sequence || !c->resume || !c->max_job_us || c->max_job_us > MAX_JOB_US ||
+        c->session.last_sequence || !c->resume || !c->max_job_us || c->max_job_us > PVR_MIMUS_SERVICE_MAX_JOB_US ||
         !c->tensor_count || c->tensor_count > 0xffffu ||
         !a733_span_excl_nonempty(c->tensors, c->tensor_count * sizeof(*c->tensors)) ||
         !a733_span_excl_nonempty(c->vm, sizeof(*c->vm)) || c->vm->phase != A733_GPU_VM_MEMORY_PREPARED ||
@@ -200,7 +198,6 @@ static int drive_to_kick(struct pvr_mimus_service *m)
         enum pvr_cccb_result r = pvr_cccb_poll(&m->client);
         if (r == PVR_CCCB_FAULT || r == PVR_CCCB_INVALID) return fault(m, PVR_MIMUS_SERVICE_RING);
         if (m->client.phase == before && m->client.cursor == cursor && m->client.index == index) break;
-        ++m->counts.kick_steps;
     }
     if (m->client.phase == PVR_CCCB_WAIT) {
         uint64_t now;
@@ -223,7 +220,6 @@ static int take(struct pvr_mimus_service *m)
     /* At most 13 compares: the ordinal bound and the session's admission. */
     const struct pvr_mimus_tensor *t = m->job.ordinal < c->tensor_count ? &c->tensors[m->job.ordinal] : NULL;
     if (!t || !t->job_rows || sequence == UINT32_MAX || m->client.phase != PVR_CCCB_IDLE) {
-        ++m->counts.refused;
         atomic_store_explicit(&m->slot_state, PVR_MIMUS_SLOT_IDLE, memory_order_release);
         post(m, sequence, PVR_MIMUS_REFUSED);
         return 1;
@@ -232,7 +228,6 @@ static int take(struct pvr_mimus_service *m)
     if (timeline(m) != m->sequence) return fault(m, PVR_MIMUS_SERVICE_TIMELINE);
     const struct pvr_mimus_job job = {m->job.x_offset, m->job.rows, m->job.x_stride, sequence};
     if (!pvr_mimus_submit(&m->session, t, &job)) {
-        ++m->counts.refused;
         atomic_store_explicit(&m->slot_state, PVR_MIMUS_SLOT_IDLE, memory_order_release);
         post(m, sequence, PVR_MIMUS_REFUSED);
         return 1;
@@ -248,7 +243,6 @@ static int take(struct pvr_mimus_service *m)
     m->sequence = sequence;
     m->deadline = deadline;
     m->phase = PVR_MIMUS_SERVICE_IN_FLIGHT;
-    ++m->counts.jobs;
     if (!pvr_cccb_begin(&m->client, commands, 2, NULL, 0, deadline)) return fault(m, PVR_MIMUS_SERVICE_RING);
     return drive_to_kick(m);
 }
@@ -268,7 +262,6 @@ static int complete(struct pvr_mimus_service *m)
         uint32_t value = timeline(m);
         if (value == m->sequence) {
             if (!pvr_mimus_complete(&m->session)) return fault(m, PVR_MIMUS_SERVICE_MAINTENANCE);
-            ++m->counts.completions;
             m->phase = PVR_MIMUS_SERVICE_IDLE;
             atomic_store_explicit(&m->slot_state, PVR_MIMUS_SLOT_IDLE, memory_order_release);
             post(m, m->sequence, PVR_MIMUS_OK);

@@ -35,14 +35,6 @@ extern const uint32_t os_placement_rows, os_placement_gpu_rows;
 /* The recognizer's finite waits; they record no service progress. */
 #define OS_GPU_WAIT_TICKS 10u
 
-_Static_assert(sizeof(struct a733_gpu_mimus_job) == sizeof(struct pvr_mimus_request) &&
-    __builtin_offsetof(struct a733_gpu_mimus_job, x_offset) == __builtin_offsetof(struct pvr_mimus_request, x_offset) &&
-    __builtin_offsetof(struct a733_gpu_mimus_job, ordinal) == __builtin_offsetof(struct pvr_mimus_request, ordinal) &&
-    __builtin_offsetof(struct a733_gpu_mimus_job, rows) == __builtin_offsetof(struct pvr_mimus_request, rows) &&
-    __builtin_offsetof(struct a733_gpu_mimus_job, x_stride) == __builtin_offsetof(struct pvr_mimus_request, x_stride),
-    "job layout");
-_Static_assert(A733_GPU_MIMUS_OK == PVR_MIMUS_OK && A733_GPU_MIMUS_REFUSED == PVR_MIMUS_REFUSED &&
-    A733_GPU_MIMUS_LOST == PVR_MIMUS_LOST, "record results");
 _Static_assert(OS_DISPATCH_ARENA == PVR_MIMUS_ARENA_GPU && OS_DISPATCH_CODE_BYTES == PVR_MIMUS_ARENA_BYTES &&
     OS_DISPATCH_OUTPUT == PVR_MIMUS_OUTPUT_GPU && OS_DISPATCH_OUTPUT_BYTES == PVR_MIMUS_OUTPUT_BYTES &&
     OS_DISPATCH_TAG_BYTES == PVR_MIMUS_TAG_BYTES && OS_DISPATCH_MODEL_BYTES == PVR_MIMUS_MODEL_BYTES,
@@ -58,6 +50,8 @@ static struct {
     struct pvr_gpu_service service;
     struct pvr_mimus_service *component;
     struct pvr_mimus_tensor tensors[OS_GPU_TENSORS];
+    /* N of each admitted tensor, which the hook compares with the call's. */
+    uint16_t channels[OS_GPU_TENSORS];
     /* Set once in start; read by the recognizer after the scheduler starts. */
     unsigned started;
 } gpu;
@@ -86,9 +80,10 @@ static int admit_tensors(void)
         if (t->ordinal >= os_placement_rows || t->region >= PVR_MIMUS_MODELS) return 0;
         const struct os_placement p = os_placement_table[t->ordinal];
         struct pvr_mimus_tensor *admitted = &gpu.tensors[t->ordinal];
-        if (!p.n_gpu || admitted->job_rows ||
+        if (!p.n_gpu || admitted->job_rows || p.n_gpu > t->n ||
             !pvr_mimus_tensor_open(admitted, t->region, t->offset, t->stride, t->k, p.n_gpu) ||
             p.job_rows > admitted->job_rows) return 0;
+        gpu.channels[t->ordinal] = t->n;
     }
     return 1;
 }
@@ -148,22 +143,16 @@ int a733_gpu_mimus_open(void)
     while (!pvr_mimus_service_receive(gpu.component, &record, OS_GPU_WAIT_TICKS)) {}
     return record.result == PVR_MIMUS_OK;
 }
-int a733_gpu_mimus_begin(const struct a733_gpu_mimus_job *job)
-{ return pvr_mimus_service_submit(gpu.component, (const struct pvr_mimus_request *)job); }
-void a733_gpu_mimus_finish(struct a733_gpu_mimus_completion *completion)
-{
-    struct pvr_mimus_record record;
-    while (!pvr_mimus_service_receive(gpu.component, &record, OS_GPU_WAIT_TICKS)) {}
-    completion->sequence = record.sequence;
-    completion->result = record.result;
-}
-int a733_gpu_mimus_tensor(uint32_t ordinal, uint32_t *k, uint32_t *stride, const int8_t **weights)
+int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
+{ return pvr_mimus_service_submit(gpu.component, job); }
+void a733_gpu_mimus_finish(struct pvr_mimus_record *record)
+{ while (!pvr_mimus_service_receive(gpu.component, record, OS_GPU_WAIT_TICKS)) {} }
+int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *out)
 {
     if (ordinal >= os_placement_rows || !gpu.tensors[ordinal].job_rows) return 0;
     const struct pvr_mimus_tensor *t = &gpu.tensors[ordinal];
-    *k = t->k;
-    *stride = t->stride;
-    *weights = (const int8_t *)(uintptr_t)(OS_DISPATCH_MODELS + (t->weights - PVR_MIMUS_MODEL_GPU));
+    *out = (struct os_gpu_tensor){t->k, gpu.channels[ordinal], t->stride,
+        (const int8_t *)(uintptr_t)(OS_DISPATCH_MODELS + (t->weights - PVR_MIMUS_MODEL_GPU))};
     return 1;
 }
 void a733_gpu_mimus_irq(void)
@@ -179,4 +168,14 @@ void a733_gpu_mimus_irq(void)
 int os_gpu_linear_task_privileged(void (*entry)(void *), void *context)
 { return pvr_gpu_service_task_privileged(entry, context) == pdTRUE; }
 int os_gpu_linear_pins(struct a733_pin_handoff *pins) { return pins != NULL; }
-int os_gpu_linear_start(void) { return a733_gpu_mimus_start(OS_RECOGNITION_CORE) == 1; }
+/* Without the engine's exact-sum hook no call can reach the GPU and the
+ * recognizer never opens the session (apps/os/gpu_hook.cc), so nothing is
+ * prepared: no pool page, firmware check or worker. */
+int os_gpu_linear_start(void)
+{
+#if __has_include("mimus/asr/exact_sum_hook.h")
+    return a733_gpu_mimus_start(OS_RECOGNITION_CORE) == 1;
+#else
+    return 1;
+#endif
+}

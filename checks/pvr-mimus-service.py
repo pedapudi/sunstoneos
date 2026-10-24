@@ -28,7 +28,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs complete at once',
          4: 'as 3 with one firmware event per job', 5: 'refused jobs', 6: 'failed wake send',
-         7: 'missing tag', 8: 'hang', 9: 'context reset', 10: 'OPEN only'}
+         7: 'missing tag', 8: 'hang', 9: 'context reset', 10: 'OPEN only',
+         11: 'unexpected timeline before a submit', 12: 'completion clean and invalidate fails'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',
@@ -63,7 +64,9 @@ def fixture(models, out):
              '#define FIXTURE_TENSORS %du' % len(tensors), '#define FIXTURE_GPU_TENSORS %du' % len(admitted),
              '#define FIXTURE_JOBS %du' % len(jobs),
              'static const struct fixture_tensor fixture_tensors[FIXTURE_GPU_TENSORS]={']
-    lines += ['    {%d,%d,%d,%d,%d,%d,%d},' % (o, i, s, k, table[i][0], table[i][1], g) for o, i, s, k, g in admitted]
+    # gpu_tensors() rows begin (offset, ordinal, stride, k) and end with the region.
+    lines += ['    {%d,%d,%d,%d,%d,%d,%d},' % (a[0], a[1], a[2], a[3], table[a[1]][0], table[a[1]][1], a[-1])
+              for a in admitted]
     lines += ['};', 'static const struct fixture_job fixture_jobs[FIXTURE_JOBS]={']
     lines += ['    {%d,%d,%d,%d,%d},' % j for j in jobs]
     lines.append('};')
@@ -241,7 +244,8 @@ target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
-  -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--wrap=aarch64_device_cache -Wl,--wrap=aarch64_device_translate)
+  -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--wrap=aarch64_device_cache -Wl,--wrap=aarch64_device_translate
+  -Wl,--wrap=pvr_mimus_submit -Wl,--wrap=pvr_mimus_complete -Wl,--wrap=pvr_cccb_poll)
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')

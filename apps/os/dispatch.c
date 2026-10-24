@@ -18,19 +18,20 @@ const uint32_t os_placement_rows=OS_PLACEMENT_TENSORS,os_placement_gpu_rows=OS_P
  * external linkage so that the lookup stays one load and one compare instead
  * of a flag test plus a compare with the table length. */
 uint32_t os_dispatch_active;
-/* OS_DISPATCH_GPU_OPEN from the OPEN request until a refused OPEN or a
- * missing tag; OS_DISPATCH_GPU_FAULT from a GPU fault on. The supervisor
- * reads it (apps/os/services.c). */
+/* OS_DISPATCH_GPU_WAITING during OPEN and each job's wait,
+ * OS_DISPATCH_GPU_FAULT from a GPU fault on. The supervisor reads it
+ * (apps/os/services.c). */
 static atomic_uint gpu_state;
 unsigned os_dispatch_gpu_state(void){return atomic_load_explicit(&gpu_state,memory_order_acquire);}
 
 int os_dispatch_open(void)
 {
     if(os_dispatch_record.opened||os_dispatch_record.open_failed)return os_dispatch_record.opened;
-    atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_OPEN,memory_order_release);
+    atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_WAITING,memory_order_release);
     if(a733_gpu_mimus_open()!=1){
-        os_dispatch_record.open_failed=1;atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_CLOSED,memory_order_release);return 0;
+        os_dispatch_record.open_failed=1;atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_IDLE,memory_order_release);return 0;
     }
+    atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_IDLE,memory_order_release);
     os_dispatch_record.opened=1;os_dispatch_active=OS_PLACEMENT_TENSORS;return 1;
 }
 struct os_placement os_dispatch_place(uint32_t ordinal)
@@ -40,7 +41,9 @@ struct os_placement os_dispatch_place(uint32_t ordinal)
 void os_dispatch_placed(void){++os_dispatch_record.placed;}
 void os_dispatch_refused(void){++os_dispatch_record.refused;}
 void os_dispatch_incomplete(void)
-{os_dispatch_record.incomplete=1;os_dispatch_active=0;atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_CLOSED,memory_order_release);}
+{os_dispatch_record.incomplete=1;os_dispatch_active=0;}
+void os_dispatch_waiting(int waiting)
+{atomic_store_explicit(&gpu_state,waiting?OS_DISPATCH_GPU_WAITING:OS_DISPATCH_GPU_IDLE,memory_order_release);}
 void os_dispatch_failed(unsigned state)
 {
     /* The models and the code span are trustworthy after a GPU fault only if
@@ -56,22 +59,17 @@ void os_dispatch_failed(unsigned state)
  * the last 4 KiB page of each block: one block descriptor maps every page of
  * its block alike, and the two pages show that no entry of the range became
  * a table with pages of its own at either end. */
-static int pages(os_dispatch_translate_fn translate,uintptr_t address,size_t bytes,uintptr_t stride,int el0_read_only)
+int os_dispatch_read_only(os_dispatch_translate_fn el0,os_dispatch_translate_fn el1,uintptr_t address,size_t bytes,
+                          uintptr_t stride)
 {
-    static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1},
-        writable={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
-    if(!translate||!bytes||stride<4096||(stride&(stride-1))||((address|bytes)&(stride-1))||bytes>UINTPTR_MAX-address)
+    static const struct a733_mapping_rule readable={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
+    if(!el0||!el1||!bytes||stride<4096||(stride&(stride-1))||((address|bytes)&(stride-1))||bytes>UINTPTR_MAX-address)
         return 0;
     for(uintptr_t block=address;block-address<bytes;block+=stride)
         for(uintptr_t page=block;;page=block+stride-4096){
             struct aarch64_translation t={0};
-            if(!a733_mapping_check(translate,page,page,el0_read_only?&readable:&writable)||
-               (el0_read_only&&translate(page,1,&t)))return 0;
+            if(!a733_mapping_check(el0,page,page,&readable)||el0(page,1,&t)||el1(page,1,&t))return 0;
             if(page==block+stride-4096)break;
         }
     return 1;
 }
-int os_dispatch_writable(os_dispatch_translate_fn translate,uintptr_t address,size_t bytes,uintptr_t stride)
-{return pages(translate,address,bytes,stride,0);}
-int os_dispatch_el0_read_only(os_dispatch_translate_fn translate,uintptr_t address,size_t bytes,uintptr_t stride)
-{return pages(translate,address,bytes,stride,1);}

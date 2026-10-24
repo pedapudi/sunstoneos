@@ -783,6 +783,10 @@ static int step(struct pvr_gpu_service *s)
     uint64_t before = progress(s);
     advance(s);
     if (s->phase == PVR_GPU_SERVICE_FAILED) return 0;
+    /* A ready mimus session whose step rearmed the interrupt has no CPU work
+     * until the next slot wake, the interrupt or the job poll bound. */
+    if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY && s->config.mimus &&
+        !s->irq_masked && !pvr_mimus_service_submitting(s->config.mimus)) return 0;
     if (phase == PVR_GPU_SERVICE_BUILDING || phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS ||
         phase == PVR_GPU_SERVICE_PUBLISHING || phase == PVR_GPU_SERVICE_DISPOSING) return 1;
     return progress(s) != before;

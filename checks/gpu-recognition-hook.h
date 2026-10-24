@@ -31,12 +31,18 @@ struct ExactSumJob {
 // LinearProduced, LinearProducedParallel and LinearProducedAccumulate call
 // it as follows, on the task that installed it:
 //
-// begin(ctx, ordinal, rows, k, n, codes, stride) once per call, after every
-// row's codes and scales are final (after the producers' ParallelFor join),
-// with the tensor's ordinal (TensorView::ordinal), the call's rows, K and N,
-// row 0's codes and the row stride in bytes. codes lie in the inference
-// arena; stride is a multiple of 4 and at least 2 * k. It returns n_gpu,
-// 0 <= n_gpu <= n: the engine computes output channels [n_gpu, n) itself.
+// begin(ctx, ordinal, weights, weight_stride, rows, k, n, codes, stride)
+// once per call, after every row's codes and scales are final (after the
+// producers' ParallelFor join), with the tensor's ordinal
+// (TensorView::ordinal), its int8 weight codes (TensorView::data, channel 0)
+// and weight row stride in bytes (TensorView::row_stride), the call's rows,
+// K and N, row 0's codes and the code row stride in bytes. codes lie in the
+// inference arena; stride is a multiple of 4 and at least 2 * k. It returns
+// n_gpu, 0 <= n_gpu <= n: the engine computes output channels [n_gpu, n)
+// itself. The hook compares the weights, their stride, K and N with the
+// tensor it admitted under that ordinal and returns 0 on any difference, so
+// an ordinal that names another tensor of the same shape never uses its
+// weights.
 //
 // After its own channels, the engine calls finish(ctx, &job) until it
 // returns false. Each true return hands over one job, which the engine reads
@@ -51,8 +57,8 @@ struct ExactSumJob {
 // done(0, n) once, on worker 0, after every column of every row is final.
 // The streamed SRAM-ring path is off for hooked calls.
 struct ExactSumHook {
-  size_t (*begin)(void* ctx, uint32_t ordinal, size_t rows, size_t k, size_t n,
-                  const int16_t* codes, size_t stride);
+  size_t (*begin)(void* ctx, uint32_t ordinal, const int8_t* weights, size_t weight_stride,
+                  size_t rows, size_t k, size_t n, const int16_t* codes, size_t stride);
   bool (*finish)(void* ctx, ExactSumJob* job);
   void* ctx;
 };

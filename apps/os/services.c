@@ -56,14 +56,14 @@ int os_services_healthy(uint64_t now)
 static uint64_t stop_detail;
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
 /* A GPU loss: a GPU fault ended the boot, or the recognizer went silent while
- * it opened or used the GPU session. The supervisor calls this after
+ * it waited for OPEN or for a job's record. The supervisor calls this after
  * board_live's acquire of the board failure, and the recognizer records the
  * session state before its release of that failure, so no renewal pass is
  * needed: after board_fail, supervise() never calls board_resident_renew. */
 uint64_t board_resident_stop_detail(void)
 {
     unsigned gpu=os_dispatch_gpu_state();
-    if(gpu==OS_DISPATCH_GPU_FAULT||(gpu==OS_DISPATCH_GPU_OPEN&&stop_detail==OS_SERVICE_MIMUS+1))
+    if(gpu==OS_DISPATCH_GPU_FAULT||(gpu==OS_DISPATCH_GPU_WAITING&&stop_detail==OS_SERVICE_MIMUS+1))
         return OS_STOP_DETAIL_GPU_LOSS;
     return stop_detail;
 }
