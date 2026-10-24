@@ -85,7 +85,8 @@ int hdmi_framebuffer_boot(void)
         .pck_client=app.session.pck_client,.owner=app.session.owner,.authority=sealed.authority,
         .deadline=app.deadline,.parent_bytes=GPU_DISPLAY_PARENT_BYTES,.frame_span=4096u+GPU_DISPLAY_BANK_BYTES,
         .output=A733_DE_TV0_RGB565,.context=&app,.current=current,.output_owned=output_owned,.admit=admit,
-        .replay=replay,.rcq_submit=a733_display_native_rcq_submit};
+        .replay=replay,.rcq_submit=a733_display_native_rcq_submit,
+        .domains=&app.domains,.rail=&app.hdmi.rail};
     memcpy(c.fabric,sealed.fabric,sizeof(c.fabric));memcpy(c.fabric_hz,sealed.fabric_hz,sizeof(c.fabric_hz));
     memcpy(c.iommu_gates,sealed.iommu_gates,sizeof(c.iommu_gates));
     /* The bank stays CPU-owned until both copied frames are sealed. */
@@ -174,7 +175,8 @@ int gpu_display_output_step(void)
         r=hdmi_framebuffer_stop();if(r<0)return output_fault();if(!r)return 0;
         if(app.presentations!=3 || app.presented[0]!=1 || app.presented[1]!=2 || app.presented[2]!=1)
             return output_fault();
-        atomic_store_explicit(&app.pmic_park_request,1,memory_order_release);
+        /* The service blocks until it is notified or its deadline. */
+        if(!atomic_exchange_explicit(&app.pmic_park_request,1,memory_order_acq_rel))xTaskNotifyGive(app.handles[0]);
         if(!atomic_load_explicit(&app.pmic_parked,memory_order_acquire))return 0;
         atomic_store_explicit(&app.state,2,memory_order_release);return 1;
     default:return output_fault();

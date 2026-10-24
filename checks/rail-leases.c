@@ -203,9 +203,27 @@ static void terminal_faults(void)
     assert(a733_rail_acquire(&m.rails,1,D4,0,100,&t)==A733_RAIL_BUSY);
     atomic_store(&m.rails.busy,0);
 }
+/* A counted power-domain row pins its token; release waits for the unpin. */
+static void domain_pins(void)
+{
+    struct model m;init(&m);struct a733_rail_token t,other;
+    assert(a733_rail_acquire(&m.rails,1,D2,0,100,&t)==A733_RAIL_PENDING);
+    assert(a733_rail_acquire(&m.rails,2,D4,0,100,&other)==A733_RAIL_PENDING);
+    assert(a733_rail_pin(&m.rails,&t,D4)==A733_RAIL_INVALID && a733_rail_pin(&m.rails,&t,0)==A733_RAIL_INVALID);
+    assert(a733_rail_unpin(&m.rails,&other)==A733_RAIL_RETAINED); /* never pinned: corrupt count */
+    init(&m);
+    assert(a733_rail_acquire(&m.rails,1,D2,0,100,&t)==A733_RAIL_PENDING);
+    assert(a733_rail_pin(&m.rails,&t,D2)==A733_RAIL_READY && a733_rail_pin(&m.rails,&t,D2)==A733_RAIL_READY);
+    assert(a733_rail_release(&m.rails,&t,100)==A733_RAIL_BUSY);
+    assert(a733_rail_unpin(&m.rails,&t)==A733_RAIL_READY && a733_rail_release(&m.rails,&t,100)==A733_RAIL_BUSY);
+    atomic_store(&m.rails.busy,1);assert(a733_rail_unpin(&m.rails,&t)==A733_RAIL_BUSY);atomic_store(&m.rails.busy,0);
+    assert(a733_rail_unpin(&m.rails,&t)==A733_RAIL_READY && a733_rail_release(&m.rails,&t,100)==A733_RAIL_READY);
+    assert(a733_rail_pin(&m.rails,&t,D2)==A733_RAIL_INVALID);
+    assert(!atomic_load(&m.rails.authority.word));
+}
 int main(void)
 {
-    scopes();fifteen_rails();exclusion();aliases_and_capacity();terminal_faults();
+    scopes();fifteen_rails();exclusion();aliases_and_capacity();terminal_faults();domain_pins();
     puts("PASS: fifteen rails READY on the first poll without bus access, exclusion, aliases, "
-        "capacity, never-reused identifiers and fault retention");
+        "capacity, never-reused identifiers, fault retention and domain-row pins");
 }

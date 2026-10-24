@@ -92,7 +92,8 @@ int main(void)
     assert(usb_read(u,0x02000000,&value)&&usb_write(u,0x02000000,0)&&io_calls==2);
     atomic_store(&u->clocks.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->clocks.busy,0);
     atomic_store(&u->rails.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->rails.busy,0);
-    atomic_store(&u->pmic.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==0);atomic_store(&u->pmic.busy,0);
+    /* a733_pmic_live takes no lock: a held provider object does not delay it. */
+    atomic_store(&u->pmic.busy,1);assert(usb_authorize(u,&u->usb.config,&u->usb.token)==1);atomic_store(&u->pmic.busy,0);
     atomic_store(&u->clocks.busy,1);a733_usb_poll();assert(delays==1&&dcd_calls==1);
     /* Fault published before the callback's post-mutex check. */
     assert(a733_clock_retain(&u->clocks,&u->usb.token)==A733_CLOCK_FAULT);

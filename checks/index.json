@@ -435,7 +435,9 @@
  "a733-gpu-power-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-power.md"
+   "docs/designs/power-domains.md",
+   "docs/gpu-power.md",
+   "docs/power-domains.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3656,7 +3658,9 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/power-domains.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -7270,6 +7274,18 @@
   "summary": "Check the source-tree facts that keep PMIC outputs under the provider's control.",
   "usb": false
  },
+ "power-domains-tree.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/power-domains.md",
+   "docs/power-domains.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check the source-tree facts that give PCK600 domains 1 and 5 one owner.",
+  "usb": false
+ },
  "primary-cache-host.py": {
   "cache_areas": [],
   "docs": [
@@ -8102,6 +8118,8 @@
    "docs/clock-leases.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/power-authority.md",
+   "docs/designs/power-domains.md",
+   "docs/power-domains.md",
    "docs/rail-leases.md"
   ],
   "library": false,

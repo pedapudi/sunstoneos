@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check the source-tree facts that keep PMIC outputs under the provider's control.
 
-The planned power-domain owner in docs/designs/power-authority.md reads DCDC2,
-DCDC4, CLDO2 and CLDO5 once per boot, so no agent the OS controls may change
-those outputs afterwards. This check fails when:
+The power-domain owner (docs/power-domains.md) reads DCDC2 and DCDC4 once per
+boot, so no agent the OS controls may change those outputs afterwards. This
+check fails when:
 
 - a PSCI CPU_OFF, CPU_SUSPEND or SYSTEM_SUSPEND function identifier appears in
   OS sources, because firmware may change PMIC outputs on those calls;

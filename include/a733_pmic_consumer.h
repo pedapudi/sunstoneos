@@ -10,6 +10,9 @@ struct a733_pmic_consumer_config {
 };
 /* Private, immovable, single-task storage for a platform-lifetime 800 mV
  * accelerator supply. The completed request retains its real provider borrow.
+ * A DCDC4 consumer of a provider bound to a power-domain owner instead takes
+ * the owner's boot verification record: it submits no request, and health is
+ * its rail token plus one acquire load of the state word.
  * No consumer release or automatic retry is provided after uncertainty. */
 struct a733_pmic_consumer {
     struct a733_pmic_consumer *self;

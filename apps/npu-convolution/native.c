@@ -7,6 +7,7 @@
 #endif
 #include <string.h>
 #include "a733_mapping_check.h"
+#include "a733_power_domains_native.h"
 #include "a733_mmio.h"
 #ifdef SUNSTONE_NPU_SINGLE_CORE
 #include "a733_usb_platform.h"
@@ -36,6 +37,9 @@ static struct {
     struct a733_pmic pmic;
     struct a733_pmic_lifetime pmic_lifetime;
     struct a733_pmic_config pmic_config;
+    /* The power-domain owner; its service task is the PMIC task. */
+    struct a733_power_domains domains;
+    struct a733_power_domains_native domains_native;
     struct a733_npu_reserved reserved;
     struct device_memory_lease lease;
     struct device_memory_extent extent;
@@ -213,13 +217,17 @@ BaseType_t a733_npu_application_task_privileged(TaskFunction_t entry,void *argum
     return (app.creating && argument==&app && (entry==pmic_task || entry==bootstrap)) ||
         npu_service_task_privileged(entry,argument) ? pdTRUE : pdFALSE;
 }
+/* The power service task: every PMIC transaction and the GPU's domain 5. It
+ * blocks until a submit, row request or the quiescence stop notifies it, or
+ * for the ticks the step returns. */
 static void pmic_task(void *argument)
 {
     if(argument!=&app)fatal(NULL);
     for(;;) {
 #ifdef SUNSTONE_NPU_FINITE_RETURN
         if(atomic_load_explicit(&app.pmic_stop,memory_order_acquire)) {
-            unsigned idle=!app.pmic.held && !app.pmic.retained && !app.pmic.failed &&
+            unsigned idle=a733_power_service_idle(&app.domains) &&
+                !app.pmic.held && !app.pmic.retained && !app.pmic.failed &&
                 !atomic_load_explicit(&app.pmic.busy,memory_order_acquire) &&
                 app.pmic.active==A733_PMIC_REQUESTS;
             for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
@@ -232,9 +240,9 @@ static void pmic_task(void *argument)
 #endif
         /* Shared owner outlives either engine's local failure or CLOSE. */
         if(!provider_live())break;
-        enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
-        if(r!=A733_PMIC_READY && r!=A733_PMIC_PENDING && r!=A733_PMIC_BUSY)break;
-        vTaskDelay(1);
+        const uint32_t ticks=a733_power_service_step(&app.domains);
+        if(a733_power_service_ready(&app.domains)<0)break;
+        (void)ulTaskNotifyTake(pdTRUE,(TickType_t)ticks);
     }
 #ifdef SUNSTONE_ACCELERATORS
     accelerator_shared_fail(3);
@@ -334,6 +342,7 @@ unsigned a733_npu_application_quiesce(void)
     vTaskSuspend(app.reserved.convolution.service.worker);
     vTaskSuspend(app.bootstrap_task);
     atomic_store_explicit(&app.pmic_stop,1,memory_order_release);
+    xTaskNotifyGive(app.pmic_task); /* The service blocks until notified. */
     while(!atomic_load_explicit(&app.pmic_parked,memory_order_acquire)) {
         uint64_t now;
         if(!live() || !a733_counter_clock_now(&app.clock,&now) ||
@@ -416,7 +425,8 @@ int a733_npu_application_init(TaskHandle_t client)
     app.pool=app.reserved.pool;app.backing=app.pool->backing;
     app.allocation=*device_memory_lookup(app.reserved.pool,app.lease);
     app.creating=1;
-    app.pmic_task=xTaskCreateStaticAffinitySet(pmic_task,"npu-pmic",4096,&app,4,app.stack[0],&app.task[0],1);
+    /* The power service runs below the USB0 task, on A55 core 0. */
+    app.pmic_task=xTaskCreateStaticAffinitySet(pmic_task,"npu-pmic",4096,&app,3,app.stack[0],&app.task[0],1);
     app.bootstrap_task=xTaskCreateStaticAffinitySet(bootstrap,"npu-boot",4096,&app,4,app.stack[1],&app.task[1],1);
     app.creating=0;
     if(!app.pmic_task || !app.bootstrap_task)goto failed;
@@ -425,6 +435,10 @@ int a733_npu_application_init(TaskHandle_t client)
        !a733_pmic_init(&app.pmic,&app.pmic_config,&app.pmic_native.operations,&app.pmic_native,
            &app.registry,&app.rails,&app.pins) ||
        a733_pmic_identity(&app.pmic,&app.pmic_lifetime)!=A733_PMIC_READY)goto failed;
+    const struct a733_power_service_config service={p->pmic_owner,deadline,1000000u/configTICK_RATE_HZ,0};
+    if(!a733_power_domains_native_init(&app.domains_native,app.pmic_task) ||
+       !a733_power_domains_init(&app.domains,&app.pmic,&app.domains_native.operations,&app.domains_native,&service))
+        goto failed;
     struct a733_npu_handoff base={.allowed=b->npu,.controller=0x03600000,
         .evidence=p->npu_evidence,.command_admission=p->command_admission,
         .established=(uint32_t)p->npu_established,.pck_client=0};

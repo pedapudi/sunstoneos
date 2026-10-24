@@ -64,6 +64,7 @@ _Noreturn void gpu_finite_complete(void)
     /* CLOSE retired device callbacks. Suspend the worker before its next poll. */
     vTaskSuspend(app.service.worker);
     atomic_store_explicit(&pmic_stop,1,memory_order_release);
+    xTaskNotifyGive(app.handles[0]); /* The service blocks until notified. */
     while(!atomic_load_explicit(&pmic_parked,memory_order_acquire)){
         if(!gpu_application_live(NULL))retained(2);vTaskDelay(1);
     }

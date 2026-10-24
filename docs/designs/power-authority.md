@@ -1,8 +1,11 @@
 # Design: one owner for supply rails and one for power domains
 
-Status: **implemented in part and host-modeled**; the power-domain owner is
-**planned**. The section "Implemented state and measurements" at the end lists
-what exists, what differs from this design and what remains. Physical behavior stays unqualified until the board
+Status: **implemented in part and host-modeled**. The power-domain owner and
+the PMIC service task are implemented as designed in
+[power-domains.md](power-domains.md), which supersedes the sections below on
+the domain owner and the service task. The section "Implemented state and
+measurements" at the end lists what exists, what differs from this design and
+what remains. Physical behavior stays unqualified until the board
 evidence exists. Section numbers refer to `docs/performance-architecture.md`.
 
 Today the clock registry holds AXP8191 output DCDC2, the GPU resource manager
@@ -55,29 +58,34 @@ deadline, then spins on raw counter ticks as the PMIC phases do. The driver
 has no production caller; a core placement mask for its settle spin and a
 ledger-held floor record are preconditions for its first production caller.
 
-## The DE_SYS provider becomes the domain owner
+## One power-domain owner
 
-Status: **planned**. The owner lands in the same change as its first consumer,
-which replaces and deletes its own PCK600 sequence; until then it would add a
-fifth copy of that sequence without removing one. The first consumer is the
-framebuffer and G2D path through `a733_de_sys_power.c` (domains 1 and 10) or
-the GPU's domain-5 steps, coordinated with those packages. The owner then also
-needs these properties, which a host model must cover:
+Status: **implemented and host-modeled** for domains 1, 4 and 5;
+[power-domains.md](power-domains.md) is the design that was built and records
+its measurements, and [docs/power-domains.md](../power-domains.md) describes
+the component. `drivers/power/a733_power_domains.c` replaced the DE_SYS
+provider (`a733_de_sys_power.c`, deleted) and the GPU's own PCK600 steps. It
+is the only writer of domains 1 (DE_SYS) and 5 (GPU_TOP); the framebuffer,
+G2D and the GPU request them through rows, and the service task of each image
+runs every transition. Domain 4 has an owner entry and a row interface, but
+the NPU platform still writes it until the NPU startup moves onto its row.
+Domain 10 (VO1) has no owner entry: HDMI and DisplayPort still power it
+themselves, and CLDO2 and CLDO5 are not verified. Domains 0, 2, 3 and 6–9 and
+the CPU cluster and core domains keep their current owners. The owner has
+these properties, which `checks/power-domains-pck.c` covers:
 
 - A release that meets the ledger try-lock held on another core returns BUSY
-  and keeps the row counted; only a corrupt pin count or a ledger fault
-  returns RETAINED, and it sets the domain's fault bit, so RETAINED always
-  means a set fault bit.
-- Supply verification compares its own deadline at every stage, including
-  while the ledger stays BUSY. Any terminal failure (an expired deadline, a
-  refused token or submission, a time source that runs backwards) sets the
-  done bit with the verified bits clear, so row requests become REFUSED
-  within a bounded time instead of PENDING forever.
+  and keeps the row counted; a failed unpin answers the row FAILED and keeps
+  it counted, and a later ON request from that row is answered FAILED.
+- Supply verification starts 5,160 µs after the service's first step and
+  ends within 100 ms of the provider becoming READY. Any terminal failure (an
+  expired deadline, a refused token or submission, a provider, clock or
+  ledger fault) sets the done bit with no verified bit at once, so
+  row requests become REFUSED within a bounded time instead of PENDING
+  forever.
 
-`drivers/power/a733_de_sys_power.c`, renamed `a733_power_domains.c`, owns
-domains 1, 4, 5 and 10. Its per-consumer ops, `authorize` callback and
-unused domain-9 path are removed. Domains 0, 2, 3 and 6–9 and the CPU
-cluster and core domains keep their current owners.
+The table lists every domain the design covered; the text above states which
+rows exist.
 
 | Domain | Consumer rows | Required supply bits | Domain-level reads |
 | --- | --- | --- | --- |
@@ -92,19 +100,18 @@ agreement between its command and status fields. The NPU runs only at
 26 speed bins (`checks/npu-platform-reference.py`), so the NPU supply
 selection is the DCDC2 verified bit. Nothing writes DCDC2 or DCDC4.
 
-- **Supply verification once per boot.** The service task waits until
-  provider start plus 5,160 µs (the full-range ramp and enable delay in the
-  device tree), then reads the enable and selector of DCDC2, DCDC4, CLDO2
-  and CLDO5: 16 transactions, about 1.8 ms. Each rail at its expected value
-  (800 mV for DCDC2 and DCDC4, 1,800 mV for CLDO2 and CLDO5) sets its
-  verified bit, and then the done bit is set. A row request passes its rail
-  token, checked once, and makes one acquire load of the state word. It
-  returns PENDING before the done bit, and is refused if a required verified
-  bit is clear or a relevant fault bit is set. No row request submits a
-  PMIC read. The scheme relies on no agent writing those four rails after
-  boot: the OS issues no PSCI CPU_OFF or suspend call, and `checks/pmic-*`
-  fails if such a function identifier appears in the tree. Firmware writes
-  and a second S_TWI0 master stay open until the board evidence exists.
+- **Supply verification once per boot.** The service task waits until its
+  first step plus 5,160 µs (the full-range ramp and enable delay in the
+  device tree), then reads the enable and selector of DCDC2 and DCDC4: 12
+  transactions. Each rail at 800 mV sets its verified bit, and then the done
+  bit is set. A row request passes its rail token, checked once, and makes
+  one acquire load of the state word. It waits before the done bit, and is
+  refused if a required verified bit is clear or a relevant fault bit is
+  set. No row request submits a PMIC read. The scheme relies on no agent
+  writing those rails after boot: the OS issues no PSCI CPU_OFF or suspend
+  call, and `checks/pmic-*` fails if such a function identifier appears in
+  the tree. Firmware writes and a second S_TWI0 master stay open until the
+  board evidence exists.
 - **Read-only check before consumer writes.** `a733_power_domain_check`
   runs the domain-level reads and the adoption check and writes nothing.
   Each consumer calls it before its first reset or clock write, and the
@@ -128,13 +135,13 @@ selection is the DCDC2 verified bit. Nothing writes DCDC2 or DCDC4.
   release returns RETAINED. Domains 1, 4 and 10 have several masters each,
   no caller needs them off, and they stay on.
 - **Adoption and transitions.** Command and status both OFF give OFF; both
-  ON give ON with zero rows, and domain 5 also needs its gate and reset bits
-  clear; anything else gives FAILED. A domain is OFF, ON_WAIT, ON, OFF_WAIT
-  or FAILED, with a deadline 10 ms after its command. Any requester's step
-  reads the state under the owner lock, spins on status with the lock
-  released, and publishes ON, OFF or FAILED only if the state is still the
-  one it read. Commands are written only from OFF or ON, so no newer command
-  can arrive during a poll.
+  ON give ON, and domain 5 also needs its gate and reset bits clear;
+  anything else gives FAILED without a write. A domain is UNKNOWN, OFF,
+  ON_WAIT, ON, OFF_WAIT or FAILED, with a deadline 10 ms after its command.
+  Only the service task reads or changes this state, so the owner takes no
+  lock: it spins on status for up to 50 µs after the command, then reads it
+  once per step, and publishes ON, OFF or FAILED to the rows with release
+  order. Commands are written only from OFF or ON.
 - **PCK600 acknowledgement is polled.** The pinned `pck-600@7060000` node
   has no `interrupts` property. The owner spins up to a provisional 50 µs,
   then returns RETRY_TICK; board evidence replaces the bound with the
@@ -150,6 +157,13 @@ selection is the DCDC2 verified bit. Nothing writes DCDC2 or DCDC4.
   from the command reaching the PPU.
 
 ## One PMIC service task wakes requesters
+
+Status: **superseded.** The service task that exists is
+`a733_power_service_step()` in `drivers/power/a733_power_domains.c`, one task
+per image on A55 core 0 below its USB0 task, whose design and measurements are
+in [power-domains.md](power-domains.md). Submitters keep polling
+`a733_pmic_result` once per tick, so the requester notifications below do not
+exist. The rest of this section is the earlier proposal.
 
 `a733_pmic_service` replaces the PMIC loops in the board and OS images and in
 camera, gpu-display, gpu-render, gpu-finite, hdmi, i2s, mimus,
@@ -368,9 +382,9 @@ equals its register accesses.
 
 Differences from the design, each with its reason:
 
-- `a733_pmic_live` keeps the provider object's try-lock and drops only the
-  registry query. The USB2, storage and Type-C checks, which this package does
-  not own, inject a busy provider object and expect BUSY.
+- `a733_pmic_live` takes no lock: it compares the immutable lifetime and
+  makes one acquire load of the state word, so it never returns BUSY
+  ([power-domains.md](power-domains.md)).
 - Request admission rereads the clock route and divisor (four or five reads),
   because `checks/a733-clock-reference-pmic.c` requires drift detection there.
 - Exclusive tokens remain accepted on all fifteen outputs as pure exclusion;
@@ -397,22 +411,16 @@ Differences from the design, each with its reason:
   One barrier per control write is unqualified until a board run completes
   snapshots and selector writes with identical results under both placements;
   `docs/shared-helpers.md` requires that qualification for a weaker barrier.
-- `a733_de_sys_power.c` accepts domains 1 and 10 only; the unused domain-9 path
-  is removed.
+- The DE_SYS provider `a733_de_sys_power.c` is deleted; the power-domain
+  owner has no domain-9 or domain-10 entry.
 
 Not implemented, with the dependency that blocks each:
 
-- The power-domain owner, supply verification, `a733_rail_pin` and
-  `a733_rail_unpin`, and the NPU supply selection: they land with the first
-  consumer that replaces its own PCK600 sequence (GPU, NPU or display
-  package), as the section on the domain owner states.
-- The PMIC service task and its notifications, which remove the per-tick
-  polls: they need
-  `configTASK_NOTIFICATION_ARRAY_ENTRIES` of 2 and a scheduled-core constant
-  from the primary agent, and the image PMIC loops belong to the image
-  packages. Until then a snapshot takes 44 polls in the model.
-- Consumer migration to rows and verified bits (GPU, NPU, display, HDMI,
-  DisplayPort) and removal of the NPU startup's direct S_TWI0 path, which the
-  NPU startup and clock-handoff models outside this package still use.
+- The NPU on its domain-4 row and removal of the NPU startup's direct S_TWI0
+  path, which the NPU startup and clock-handoff models outside this package
+  still use ([docs/power-domains.md](../power-domains.md) lists the NPU
+  owner's changes).
+- Domain 10 (VO1) rows for HDMI and DisplayPort, and the CLDO2 and CLDO5
+  verified bits they need.
 - The settle spin and core placement for the CPU clock driver, which has no
   production caller.

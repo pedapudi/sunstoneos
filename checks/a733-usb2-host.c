@@ -69,23 +69,26 @@ static void observe_role(void)
     if(!atomic_load(&role.revoked))role.published=(struct a733_typec_token){(uintptr_t)&role,70,71,m.now,ss_reverse?2:1};
 }
 /* busy-read: momentary provider BUSY in the middle of register sequences.
- * Platform accesses see the PMIC object's flag held for one observation.
+ * Platform accesses see the clock registry's flag held for one observation;
+ * a733_pmic_live takes no lock, so the registry is the shared provider whose
+ * try-lock the platform still meets.
  * Every third xHCI access sees one busy live() observation right after it;
  * the first observation after an access is always the core's own check. */
 static unsigned busy_inject,busy_pending,platform_calls,platform_busy,live_calls,live_busy,accessed;
-/* busy-stuck: provider BUSY that never clears, as from a stalled holder. Each
+/* busy-stuck: provider BUSY that never clears, as from a stalled holder of
+ * the clock registry (the platform) or of the controller's live check. Each
  * observation advances time 10 us; the access must fail after the BUSY budget,
  * long before the deadline. 2 starts it at the platform's first observation
  * under REGISTER_LOCK, 5 after its first register read. */
 static uint64_t stuck_at;
 static int platform_now(void *v,uint64_t *out)
 {
-    if(busy_stuck==2&&n.platform.held){unsigned zero=0;assert(atomic_compare_exchange_strong(&m.provider.busy,&zero,1));busy_stuck=4;stuck_at=m.now;}
+    if(busy_stuck==2&&n.platform.held){unsigned zero=0;assert(atomic_compare_exchange_strong(&m.clocks.busy,&zero,1));busy_stuck=4;stuck_at=m.now;}
     if(busy_stuck==4)m.now+=10;
-    else if(busy_pending){atomic_store(&m.provider.busy,0);busy_pending=0;}
+    else if(busy_pending){atomic_store(&m.clocks.busy,0);busy_pending=0;}
     else if(busy_inject&&n.platform.held&&++platform_calls%4==2){
         unsigned zero=0;
-        if(atomic_compare_exchange_strong(&m.provider.busy,&zero,1)){busy_pending=1;++platform_busy;}
+        if(atomic_compare_exchange_strong(&m.clocks.busy,&zero,1)){busy_pending=1;++platform_busy;}
     }
     return pmic_model_now(v,out);
 }
@@ -613,8 +616,8 @@ int main(int argc,char **argv)
         while(n.platform.phase<8){observe_role();assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;}
         /* The stuck BUSY starts after the platform's first register read. */
         busy_stuck=5;for(unsigned i=0;i<100&&!n.platform.failed;++i){observe_role();(void)a733_usb2_platform_poll(&n.platform);m.now+=20;}
-        assert(busy_stuck==4&&n.platform.failed&&!n.platform.held&&reg_fault);busy_stuck=0;atomic_store(&m.provider.busy,0);
-        printf("PASS register access under REGISTER_LOCK fails after %llu us of PMIC BUSY, before the deadline\n",(unsigned long long)(m.now-stuck_at));
+        assert(busy_stuck==4&&n.platform.failed&&!n.platform.held&&reg_fault);busy_stuck=0;atomic_store(&m.clocks.busy,0);
+        printf("PASS register access under REGISTER_LOCK fails after %llu us of registry BUSY, before the deadline\n",(unsigned long long)(m.now-stuck_at));
         assert(m.now-stuck_at>=2000&&m.now-stuck_at<3000&&m.now<n.platform.config.deadline);return 0;}
     if(!strcmp(mode,"busy-stuck-lock")){
         while(n.platform.phase<8){observe_role();assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;}
@@ -625,11 +628,11 @@ int main(int argc,char **argv)
         assert(busy_stuck==4&&!n.platform.failed&&!n.platform.held&&!m.register_held&&!reg_fault);
         assert(n.platform.phase==phase&&platform_writes==writes&&platform_reads==reads);
         uint64_t waited=m.now-stuck_at;assert(waited>=2000&&waited<3000);
-        busy_stuck=0;atomic_store(&m.provider.busy,0);
+        busy_stuck=0;atomic_store(&m.clocks.busy,0);
         enum a733_usb2_result r=A733_USB2_PENDING;
         for(unsigned i=0;i<100&&r!=A733_USB2_READY;++i){m.now+=20;observe_role();r=a733_usb2_platform_poll(&n.platform);assert(r!=A733_USB2_RETAINED);}
         assert(r==A733_USB2_READY&&!reg_fault);
-        printf("PASS PMIC BUSY for %llu us before the first register access releases REGISTER_LOCK; the platform then reaches READY\n",(unsigned long long)waited);
+        printf("PASS registry BUSY for %llu us before the first register access releases REGISTER_LOCK; the platform then reaches READY\n",(unsigned long long)waited);
         return 0;}
     if(!strcmp(mode,"mutex-loss")){
         while(n.platform.phase<8){observe_role();assert(a733_usb2_platform_poll(&n.platform)!=A733_USB2_RETAINED);assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);m.now+=20;}

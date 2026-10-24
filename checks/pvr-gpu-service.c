@@ -4,6 +4,8 @@
 #ifdef SUNSTONE_GPU_ASYNC_POWER
 #include "a733_gpu_power.h"
 static struct a733_gpu_power power_controller;
+/* Banks: CCU, R_CCU and, for the owner stand-in, PCK at 0x07060000. */
+#define MODEL_PCK 2
 static uint32_t power_registers[3][0x6000/4], power_lease, power_requested;
 #endif
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
@@ -115,21 +117,32 @@ static int power_read(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, ui
     callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
     *out = power_registers[bank][off/4]; return 1;
 }
-static int power_write(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t value)
-{
-    callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
-    power_registers[bank][off/4] = value;
-    if (bank == A733_GPU_CCU && off == 0xb20) power_registers[bank][off/4] &= ~(1u << 27);
-    if (bank == A733_GPU_PCK && off == 0x5000) {
-        set(&power_requested, value & 15);
-        if (gpu_service_case != 5) power_registers[bank][0x5008/4] = value & 15;
-    }
-    return 1;
-}
 static int power_update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t clear, uint32_t value)
 {
     uint32_t old;
-    return power_read(ctx, bank, off, &old) && power_write(ctx, bank, off, (old & ~clear) | value);
+    if (!power_read(ctx, bank, off, &old)) return 0;
+    callback(ctx); configASSERT((unsigned)bank < 2 && !(off & 3) && off < 0x6000);
+    power_registers[bank][off/4] = (old & ~clear) | value;
+    if (bank == A733_GPU_CCU && off == 0xb20) power_registers[bank][off/4] &= ~(1u << 27);
+    return 1;
+}
+/* Stands in for the power-domain owner's service task, which
+ * checks/power-domains-pck.c and checks/power-domains-service.c cover: it
+ * answers the GPU_TOP row from the modeled PPU words. In case 5 the domain
+ * never acknowledges, so the row stays pending until the GPU's deadline. */
+static void power_notify(void *ctx) { (void)ctx; }
+static void power_domain_answer(void)
+{
+    struct a733_power_domain_row *r = &power_controller.row;
+    const unsigned q = atomic_load_explicit(&r->request, memory_order_acquire);
+    const unsigned g = (q >> 1) & A733_POWER_ROW_GENERATION_MASK, on = q & 1;
+    if ((atomic_load_explicit(&r->state, memory_order_relaxed) >> 3) == g) return;
+    uint32_t *policy = &power_registers[MODEL_PCK][0x5000/4];
+    *policy = (*policy & ~15u) | (on ? 8 : 0); set(&power_requested, on ? 8 : 0);
+    if (gpu_service_case == 5) return;
+    power_registers[MODEL_PCK][0x5008/4] = *policy & 15;
+    atomic_store_explicit(&r->state, g << 3 | (on ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF),
+                          memory_order_release);
 }
 static int enable_begin(void *ctx, uint64_t absolute_deadline)
 {
@@ -140,6 +153,7 @@ static int enable_begin(void *ctx, uint64_t absolute_deadline)
 static int enable_poll(void *ctx)
 {
     callback(ctx); configASSERT(service.phase == PVR_GPU_SERVICE_ENABLING);
+    power_domain_answer();
     enum a733_gpu_power_result r = a733_gpu_power_poll(&power_controller);
     if (r == A733_GPU_POWER_AGAIN) return 0;
     if (r != A733_GPU_POWER_OK) return -1;
@@ -294,7 +308,8 @@ static int isolate(void *ctx)
      * This bounded, preemptible model callback exercises real power release. */
     configASSERT(a733_gpu_power_off(&power_controller, service.deadline) == A733_GPU_POWER_AGAIN);
     enum a733_gpu_power_result result;
-    do { result = a733_gpu_power_poll(&power_controller); if (result == A733_GPU_POWER_AGAIN) vTaskDelay(1); }
+    do { power_domain_answer(); result = a733_gpu_power_poll(&power_controller);
+         if (result == A733_GPU_POWER_AGAIN) vTaskDelay(1); }
     while (result == A733_GPU_POWER_AGAIN);
     configASSERT(result == A733_GPU_POWER_OK && !get(&power_lease));
 #endif
@@ -443,11 +458,16 @@ static void owner(void *arg)
         configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
         metric("open-ticks", observe_phase(PVR_GPU_SERVICE_READY));
         /* The model answers every hardware wait at once, so start and stop
-         * need no timed waits. */
+         * need no timed waits, except that with asynchronous power the GPU
+         * reads the GPU_TOP row's answer at its next poll: one timed wait. */
         uint32_t measured = get(&active_ticks) - active;
         metric("open-active-ticks", measured);
         measured = lifecycle_timed_waits() - waits;
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+        metric("open-timed-waits", measured); configASSERT(measured == 1);
+#else
         metric("open-timed-waits", measured); configASSERT(measured == 0);
+#endif
         vTaskDelay(2); active = get(&active_ticks); uint32_t expired = ready_expiries();
         vTaskDelay(200);
         measured = get(&active_ticks) - active;
@@ -532,8 +552,10 @@ void kernel_main(void)
     power_registers[A733_GPU_CCU][0x5e0/4] = 1u << 16;
     power_registers[A733_GPU_R_CCU][0x1ac/4] = 1;
     const struct a733_gpu_power_ops power_ops = {now, power_acquire, power_release,
-                                               power_read, power_write, power_update};
+                                               power_read, power_update};
     configASSERT(a733_gpu_power_init(&power_controller, &power_ops, &config));
+    power_controller.row = (struct a733_power_domain_row){
+        .domains = (struct a733_power_domains *)(void *)power_registers, .notify = power_notify, .domain = 5};
 #endif
     unsigned byte = 0, page = 0;
     for (unsigned i=0;i<22;++i) {

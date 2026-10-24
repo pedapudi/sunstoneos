@@ -11,7 +11,6 @@
 #include "task.h"
 #include <string.h>
 #define CCU UINT32_C(0x02002000)
-#define PCK A733_DE_SYS_PCK_BASE
 #define IOVA UINT64_C(0x10000000)
 #define TABLE_BYTES 32768u
 #define FRAME_OFFSET (TABLE_BYTES+4096u)
@@ -58,7 +57,7 @@ static int address(uintptr_t a)
 {
     return !(a&3)&&((a>=A733_DE_BASE&&a<A733_DE_BASE+0x400000)||
         (a>=A733_IOMMU_BASE&&a<A733_IOMMU_BASE+0x20000)||
-        (a>=CCU&&a<CCU+0x2000)||(a>=PCK&&a<PCK+0x1000)||
+        (a>=CCU&&a<CCU+0x2000)||
         a==0x07090160||a==0x070101ac);
 }
 static int lock(fb_t *f,uint64_t d)
@@ -232,23 +231,12 @@ static int iommu_write(void *v,uint64_t token,uint32_t off,uint32_t value,uint64
 {fb_t *f=self(v);return f&&token==f->config.authority&&off<0x20000&&d==f->config.deadline&&write32(f,A733_IOMMU_BASE+off,value)?1:-1;}
 static int publish(void *v,uint64_t token,const void *p,size_t bytes,uint64_t d)
 {fb_t *f=self(v);return f&&token==f->config.authority&&p==f->tables.words&&bytes==TABLE_BYTES&&d==f->config.deadline&&barrier(f)?1:-1;}
-/* PCK domain 1 adapters for the shared fixed domain-ON provider. Its exclusive
- * DE_SYS token, borrowed output PCK lease and the media token's DCDC2 share
- * are authenticated by owns(); the isolation record supplies initial drain. */
-static int domain_authorize(void *v)
-{fb_t *f=self(v);return f&&f->media.token.id&&f->exclusion.id&&owns(f)&&memory(f)?1:-1;}
-static int domain_enter(void *v,uint64_t d)
-{
-    fb_t *f=self(v);if(!f)return -1;
-    uint64_t bound=f->domain.wait_deadline?f->domain.wait_deadline:f->config.deadline;
-    return d==bound&&d<=f->config.deadline?lock(f,d):-1;
-}
-static int domain_address(uintptr_t a)
-{return a==PCK||a==PCK+8||a==PCK+0x170||a==PCK+0x174||a==PCK+0xc00||a==PCK+0xc04||a==PCK+0xc10;}
-static int domain_read(void *v,uintptr_t a,uint32_t *out)
-{return domain_address(a)&&raw_read(v,a,out);}
-static int domain_write(void *v,uintptr_t a,uint32_t value)
-{return a!=PCK+8&&domain_address(a)&&raw_write(v,a,value);}
+/* PCK domain 1 belongs to the power-domain owner. Before the row request the
+ * exclusive DE_SYS token, borrowed output PCK lease and the media token's
+ * DCDC2 share are authenticated by owns(); the isolation record supplies
+ * initial drain. */
+static int domain_authorize(fb_t *f)
+{return f->media.token.id&&f->exclusion.id&&owns(f)&&memory(f)?1:-1;}
 static int allocate(fb_t *f,unsigned colorbars)
 {
     const struct a733_display_framebuffer_config *c=&f->config;
@@ -282,8 +270,9 @@ int a733_display_framebuffer_boot(fb_t *f,const struct a733_display_framebuffer_
        !c->deadline||!c->current||!c->output_owned||!c->admit||(c->replay==NULL)!=(c->rcq_submit==NULL)||
        (c->output!=A733_DE_TV0_RGB565&&c->output!=A733_DE_TV1_RGB565)||
        c->frame_span<4096u+1280u*720u*2u||c->parent_bytes<TABLE_BYTES||
-       c->frame_span>c->parent_bytes-TABLE_BYTES)return 0;
+       c->frame_span>c->parent_bytes-TABLE_BYTES||!c->domains||!c->rail)return 0;
     f->self=f;f->config=*c;
+    if(!a733_power_domain_row_init(&f->row,c->domains,1,c->owner,c->rail)){a733_display_framebuffer_retain(f);return 0;}
     if(!allocate(f,colorbars)){a733_display_framebuffer_retain(f);return 0;}
     f->boot_ready=1;
     if(colorbars&&!a733_display_framebuffer_publish(f)){a733_display_framebuffer_retain(f);return 0;}
@@ -293,14 +282,12 @@ int a733_display_framebuffer_boot(fb_t *f,const struct a733_display_framebuffer_
  * ownership is borrowed from the output, never fabricated or released. */
 static int cold_step(fb_t *f)
 {
-    uint32_t value,other;
+    uint32_t value;
     switch(f->index){
     case 0:
-        /* Refuse an incoherent domain before the resets change. */
-        if(!read32(f,PCK,&value)||!read32(f,PCK+8,&other)||
-           (value&15)!=(other&15)||((value&15)!=0&&(value&15)!=8))return -1;
-        if(!read32(f,CCU+0x5c0,&value)||!(value&(1u<<5))||
-           !read32(f,CCU+0x5e0,&value)||!(value&(1u<<11)))return -1;
+        /* Refuse an incoherent domain, closed MBUS gates or a stopped PPU
+         * clock before the resets change; the owner reads, never writes. */
+        if(a733_power_domain_check(f->config.domains,1)!=1)return -1;
         if(!read32(f,CCU+0xa00,&value)||(value&0x80000000)||
            !read32(f,CCU+0xa04,&value)||(value&1))return -1;
         for(unsigned i=0;i<2;++i)if(!read32(f,CCU+(i?0x5b4:0x58c),&value)||
@@ -311,12 +298,14 @@ static int cold_step(fb_t *f)
         if(f->index==2)f->until=f->last_now+10;break;}
     case 3:if(!timely(f))return -1;if(f->last_now<f->until)return 0;break;
     case 4:{
-        if(!f->domain.self){
-            const struct a733_de_sys_power_ops ops={domain_authorize,now,domain_enter,leave,
-                domain_read,domain_write};
-            if(!a733_de_sys_power_init(&f->domain,&ops,f,f->config.deadline))return -1;
+        if(!f->domain_requested){
+            if(domain_authorize(f)!=1||!a733_power_domain_request(&f->row,1))return -1;
+            f->domain_requested=1;
         }
-        int r=a733_de_sys_power_poll(&f->domain);if(r!=1)return r;break;}
+        enum a733_power_row_state r=a733_power_domain_state(&f->row);
+        if(r==A733_POWER_ROW_PENDING)return timely(f)?0:-1;
+        if(r!=A733_POWER_ROW_ON)return -1;
+        break;}
     default:return 1;
     }
     ++f->index;return 0;

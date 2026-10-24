@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_A733_DISPLAY_FRAMEBUFFER_H
 #define SUNSTONE_A733_DISPLAY_FRAMEBUFFER_H
 #include "a733_counter_clock.h"
-#include "a733_de_sys_power.h"
+#include "a733_power_domains.h"
 #include "a733_display_engine.h"
 #include "a733_iommu.h"
 #include "a733_media_clock.h"
@@ -10,9 +10,10 @@
 /* Retained 1280x720 RGB565 DE1 source for one TV output. One uncached parent
  * holds the 32 KiB IOMMU table, a 4 KiB guard page and the frame bank, which
  * IOMMU master 8 reads at IOVA 0x10001000. The source owns the DE media-clock
- * token, the IOMMU/VI/VE exclusion and PCK domain 1 power-on. The output
- * controller lends its clock, rail, PMIC and stable PCK lease; they are never
- * released here. Every fault keeps the parent, tokens and mutex retained. */
+ * token and the IOMMU/VI/VE exclusion, and holds a domain-1 row of the
+ * power-domain owner. The output controller lends its clock, rail, PMIC and
+ * stable PCK lease; they are never released here. Every fault keeps the
+ * parent, tokens and mutex retained. */
 struct a733_display_framebuffer_config {
     struct a733_counter_clock *counter;
     struct a733_clock_leases *clocks;
@@ -38,6 +39,10 @@ struct a733_display_framebuffer_config {
      * request deadline, and rcq_submit performs the platform RCQ write. */
     int (*replay)(void *,uint64_t deadline);
     int (*rcq_submit)(void);
+    /* The image's power-domain owner and the lent output rail token, which
+     * holds DCDC2; the domain-1 row is registered at boot. */
+    struct a733_power_domains *domains;
+    const struct a733_rail_token *rail;
 };
 struct a733_display_framebuffer {
     struct a733_display_framebuffer *self;
@@ -48,13 +53,13 @@ struct a733_display_framebuffer {
     struct a733_clock_token exclusion;
     struct a733_media_clock media;
     struct a733_media_clock_config media_config;
-    struct a733_de_sys_power domain;
+    struct a733_power_domain_row row;
     struct a733_iommu iommu;
     struct a733_iommu_tables tables;
     struct a733_de de;
     struct a733_de_config de_config;
     uint64_t last_now,until;
-    unsigned stage,index,held,failed,boot_ready;
+    unsigned stage,index,held,failed,boot_ready,domain_requested;
 };
 /* Boot only, before the scheduler: bind zeroed storage, acquire the parent,
  * fill it with 0xa5 and build the IOMMU table. With colorbars, the frame is
@@ -65,8 +70,8 @@ int a733_display_framebuffer_boot(struct a733_display_framebuffer *,
 /* Barrier, then the single CPU->DEVICE transition of the complete parent. */
 int a733_display_framebuffer_publish(struct a733_display_framebuffer *);
 /* Designated task while the output is PREPARED: 0 pending, 1 DE armed for
- * start, -1 retained. Asserts the DE resets, powers PCK domain 1 from OFF0
- * or adopts ON8, prepares the media clock, MBUS gates, IOMMU and DE. */
+ * start, -1 retained. Asserts the DE resets, requests PCK domain 1 through its
+ * row, prepares the media clock, MBUS gates, IOMMU and DE. */
 int a733_display_framebuffer_prepare(struct a733_display_framebuffer *);
 /* Designated task after output stop: 0 pending, 1 DE disabled, -1 retained. */
 int a733_display_framebuffer_stop(struct a733_display_framebuffer *);

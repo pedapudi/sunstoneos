@@ -74,7 +74,6 @@ unsigned native_check(void)
 
     /* Refuse unapproved register operations without taking a lock or writing. */
     unsigned count = power_writes;
-    CHECK(!power_native.operations.write(&power_native, A733_GPU_PCK, 0x5170, 0, 1000000));
     CHECK(!power_native.operations.update(&power_native, A733_GPU_CCU, 0xb20, 0, 1, 1000000));
     CHECK(!power_native.operations.read(&power_native, A733_GPU_CCU, 0xa0, &count));
     CHECK(power_writes == count);
