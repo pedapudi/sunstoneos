@@ -57,10 +57,16 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     __asm__ volatile("msr daifset,#15\n msr cntps_ctl_el1,xzr\n msr cntp_ctl_el0,xzr\n msr cntv_ctl_el0,xzr\n isb\n mrs %0,esr_el3\n mrs %1,sctlr_el1":"=r"(esr),"=r"(control)::"memory");
     const struct npu_finite_receipt *r=&npu_finite_receipt;
     uint64_t now=counter(),deadline=admission.diagnostic_deadline;
+#ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
+    uint64_t caller;__asm__ volatile("mrs %0,spsr_el3":"=r"(caller));
+    if(status || (caller&15)!=5 || !(caller&0x80) ||
+       !npu_entry_checkpoint_ready(admission.epoch,admission.generation,admission.lease,
+           admission.armed_at,admission.diagnostic_deadline))a733_smp_stop(6,operation);
+#endif
     if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status>1 || (control&0x1005) ||
        now>=deadline || r->magic!=NPU_FINITE_RECEIPT_MAGIC || r->epoch!=admission.epoch ||
        r->generation!=admission.generation || r->lease!=admission.lease || r->status!=status ||
-       r->complete!=(status?2u:1u) || r->deadline!=deadline ||
+       r->complete!=NPU_FINITE_COMPLETE(status) || r->deadline!=deadline ||
        r->clean_start!=(uintptr_t)__npu_clean_start || r->clean_end!=(uintptr_t)__device_pool_end ||
        r->clean_start!=UINT64_C(0x41200000) || r->clean_end<=r->clean_start ||
        r->clean_end>UINT64_C(0x41f00000) || ((r->clean_start|r->clean_end)&4095) ||
@@ -69,7 +75,13 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     /* No normal return follows a recovery timer, CPU exception, absent receipt,
      * late cleanup or uncertain device state. Resources remain retained. */
     if(!return_secondaries(deadline) || !return_gic(deadline))a733_smp_stop(7,operation);
-    REPORT->status=status;REPORT->detail=0;REPORT->end_counter=counter();REPORT->completed_mask=1;
+    REPORT->status=status;
+#ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
+    REPORT->detail=NPU_ENTRY_MEMORY_READY;
+#else
+    REPORT->detail=0;
+#endif
+    REPORT->end_counter=counter();REPORT->completed_mask=1;
     RESULT->status=status;RESULT->end_counter=REPORT->end_counter;RESULT->stage=5;
     __asm__ volatile("dsb sy":::"memory");
     REPORT->stage=5;
