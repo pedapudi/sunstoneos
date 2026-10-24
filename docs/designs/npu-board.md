@@ -1,15 +1,15 @@
 # Design: NPU startup on the power-domain owner, and a board image with the NPU runtime
 
-Status: **design**; no code exists yet.
-Section numbers refer to
+Status: **implemented and host-modeled**. No board run has used it; the
+board evidence that would qualify it is listed at the end, and
+[the measurements](npu-board-measurements.md) give every budget row against
+the base. Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md). Startup
 baselines come from the two register-model harnesses
-`checks/npu-platform-budget.c` and `checks/npu-platform-pll-budget.c`, rerun on
-2026-10-24 after merging `a37c694`, and from
-[npu-platform-measurements.md](npu-platform-measurements.md). Runtime
-baselines come from [npu-breadth.md](npu-breadth.md). Check results come from
-images built on 2026-10-24 from `66e0ef6` with the link fix described below.
-No figure comes from the board.
+`checks/npu-platform-budget.c` and `checks/npu-platform-pll-budget.c` at the
+base and from [npu-platform-measurements.md](npu-platform-measurements.md).
+Runtime baselines come from [npu-breadth.md](npu-breadth.md). No figure comes
+from the board.
 
 This package does three things:
 
@@ -39,14 +39,18 @@ the bootstrap calls it again after one tick. Each wait has a counter deadline:
 2. **Supply.** One acquire load of the authority word must show
    `A733_POWER_SUPPLY_DONE` and `A733_POWER_DCDC2_VERIFIED` with no provider,
    clock, ledger or domain-4 fault bit. While `A733_POWER_SUPPLY_DONE` is
-   clear the step returns PENDING. The deadline is the first step plus
-   `A733_POWER_SUPPLY_SETTLE_US` (5,160 µs) plus `A733_POWER_SUPPLY_BUDGET_US`
-   (100 ms) plus one tick. A refusal or an expired deadline releases the
-   tokens before any NPU write.
+   clear the step returns PENDING. The owner sets the done bit within its own
+   bound: `A733_POWER_SUPPLY_SETTLE_US` (5,160 µs) after its first step, or
+   the PMIC provider's startup deadline before the provider is READY, plus
+   `A733_POWER_SUPPLY_BUDGET_US` (100 ms). The wait's deadline is therefore
+   the later of the startup's token step and the provider's startup deadline,
+   plus those two figures and one tick, so a slow provider cannot cause a
+   refusal. A refusal or an expired deadline releases the tokens before any
+   NPU write.
 3. Under one register-lock acquisition, `a733_power_domain_check(domains, 4)`
-   and the 29- or 30-word register pass of npu-platform.md, which compares
-   each word under a mask with a constant. Startup admits only domain 4 OFF
-   and PLL_NPU disabled.
+   and the register pass of npu-platform.md, 22 reads, or 27 when a fabric
+   clock selects PERI0, each compared under a mask with a constant. Startup
+   admits only domain 4 OFF and PLL_NPU disabled.
 4. Under the same acquisition, the PLL_NPU method-2 enable table. Then release
    the lock and read LOCK without it: up to 100 observations 3 µs apart until
    three in a row read locked, then 20 µs. The spacing reads `CNTPCT_EL0`
@@ -68,8 +72,10 @@ the bootstrap calls it again after one tick. Each wait has a counter deadline:
 
 Steps 5 and 6 keep the vendor order, clocks before domain power
 (`vip_drv_device_platform.c` lines 419–428), which the owner's interface in
-docs/power-domains.md also prescribes. Step 2 confines the time that the
-clocks run into an unpowered domain to the PCK600 transition.
+docs/power-domains.md also prescribes. Step 2 removes the supply wait from
+the time that the clocks run into an unpowered domain; what remains is
+bounded by the step 6 deadline, the PCK bound plus two ticks, which covers the
+service's wake latency and its rail-pin retries.
 
 The domain-4 row lives in startup storage. The bootstrap task writes its
 request field and the service task writes its answer field, each with
@@ -82,20 +88,19 @@ and a LOCK predicate. The platform module keeps `const` open and stop tables
 and gains a gate table only when idle gating lands. Both use one
 apply-with-readback helper.
 
-**Second resource manager.** `a733_npu_startup_resources_init` constructs a
-GPU/PCK manager inside the startup today. The supervised board image already
-owns one, and its rail ledger is bound to that one, so a derived image would
-hold two managers of one PCK. The function and `struct
-a733_npu_startup_resources` are deleted. `apps/npu-convolution/native.c`
-constructs its image's manager as one provider among the others. The board
-image passes `providers.shared.gpu`. Every image then has one manager. The
-merged owner reads the PPU clock bit but holds no lease on it, so the NPU
-keeps its PCK lease, as G2D and the framebuffer do. Moving that lease into the
-owner, so that all three drop theirs together, is a follow-up change for the
-power-domain owner.
+**Second resource manager.** The startup constructs no GPU/PCK manager of
+its own; the base's `a733_npu_startup_resources_init` and `struct
+a733_npu_startup_resources` are deleted, because a board-derived image would
+otherwise hold two managers of one PCK and its rail ledger is bound to the
+board's. `apps/npu-convolution/native.c` constructs its image's manager as
+one provider among the others, and the board image passes
+`providers.shared.gpu`. Every image has one manager. The merged owner reads
+the PPU clock bit but holds no lease on it, so the NPU keeps its PCK lease, as
+G2D and the framebuffer do. Moving that lease into the owner, so that all
+three drop theirs together, is a follow-up change for the power-domain owner.
 
-**Reduced session record.** `struct npu_session` is 608 bytes today. The PLL
-configuration with its 13 consumer snapshots goes (88 bytes). So do the
+**Reduced session record.** `struct npu_session` goes from 608 to 456
+bytes. The PLL configuration with its 13 consumer snapshots goes (88 bytes). So do the
 platform configuration's `owner`, `handoff` and `deadline_us`, which
 initialization requires to equal `npu_owner`, `npu_evidence` and zero (24
 bytes), and the profile's second copy of epoch, generation and lease (24
@@ -104,8 +109,8 @@ flags, and `usb_established` go as well (16 bytes); the evidence conditions
 of npu-platform.md carry their facts. The record keeps one fabric copy, the
 PMIC configuration and the pin handoff. npu-platform.md removed the last two,
 but every NPU image now runs the power service, whose PMIC provider reads
-them. `NPU_SESSION_VERSION` becomes 3 for the single-core profiles (2 today)
-and 2 for the multicore profile (1 today). The combined accelerator session
+them. `NPU_SESSION_VERSION` is 3 for the single-core profiles (2 in the base)
+and 2 for the multicore profile (1 in the base). The combined accelerator session
 goes from version 1 to 2, because its embedded NPU record shrinks.
 `prepare-supervised.py`, `apps/accelerators/prepare.py` and the session
 checks change with it.
@@ -117,18 +122,22 @@ supervised boot, `extended-link.patch` over `link-devices.ld`, and
 `SUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1` and `SUNSTONE_A733_IRQ_TABLE=1`.
 `apps/npu-board/` supplies:
 
-- `board_application_start`, which registers the row, constructs the startup
-  and the runtime, binds one EL0 client task and creates the bootstrap and
-  USB0 tasks;
+- `board_application_start`, which takes the runtime's parent, prepares the
+  runtime, constructs the startup and its row, creates the bootstrap and the
+  EL0 client task, binds the service and the interrupt, and pins the board's
+  USB0 task to core 0;
 - `board_application_task_privileged`, which admits the NPU worker and the
   bootstrap task at EL1t. `npu_runtime_startup_poll` refuses a caller below
   EL1 (`a733_npu_runtime.c` lines 784–785), and the bootstrap writes CCU
   registers;
-- `admission.c`, which validates the record. The record extends `struct
-  a733_board_session`, as `struct a733_g2d_session` does, with NPU owner,
-  command admission, PCK client, catalogue digest, the four evidence digests
-  and supervisor identity. Admission requires the PCK client to differ from
-  the G2D and framebuffer clients, and the record has version 1;
+- `admission.c`, which validates the record. The 808-byte record
+  (`npu-board-session.h`) extends `struct a733_board_session`, as `struct
+  a733_g2d_session` does, with NPU owner, command admission, supervisor, PCK
+  client, catalogue digest and the four evidence digests. The board workload
+  is 2: USB0 and the providers, no USB2 host and no radio. Admission requires
+  the owner to differ from the board's owners and the PCK client to differ
+  from the board session's, which the USB2 host would use; neither G2D nor the
+  framebuffer is linked into this image. The record has version 1;
 - `prepare.py` and `launch.c`, which follow their G2D counterparts, and the
   supervised capture `tools/check-a733-npu-board-supervised.py`. The launcher
   authenticates the physical-memory and remote-firmware exclusion that
@@ -144,20 +153,27 @@ The preparer requires these conditions, each bound into its evidence digest:
 | Power | `dcdc2-stable-800mv`, `authenticated-pmic-pin-inheritance` |
 | Supervision | `manual-whole-board-power-removal`, `retain-all-resources-until-power-removal`, `stop-after-first-failure` |
 
-The catalogue is the five models of `drivers/npu/npu_session_models.inc`,
-which the image links read-only. One slot and one client serve every board
-step; a second slot has no board step that needs it.
+The catalogue is the five models of `drivers/npu/npu_session_models.inc`.
+`apps/npu-board/catalogue.py` checks each model file against
+`tools/npu-session-models.json` and links it read-only, with
+`npu_board_catalogue_digest`, the SHA-256 over the five model digests, which
+the record must carry. One slot and one client serve every board step; a
+second slot has no board step that needs it.
 
-**Window hand-offs.** npu-breadth.md (data flow, item 5) makes the read and
-write windows device-owned from SUBMIT until its reply. The client lends the
-read window to the USB0 task, which writes the input chunks into it. USB0
-hands it back with a release store of (slot, length) and a task notification
-to the client. Only then may the client send SUBMIT. After the reply, the
-client lends the write window to USB0, which transmits the output. USB0 hands
-it back the same way after the last output byte. Only then may the client send
-the next SUBMIT, LOAD or CLOSE. The runtime check with the board client loop
-asserts both preconditions. LOAD carries a catalogue index and is answered
-when the slot is READY or the load is refused.
+**Window hand-offs** (`apps/npu-board/client.h`). npu-breadth.md (data flow,
+item 5) makes the read and write windows device-owned from SUBMIT until its
+reply. After a LOAD the client publishes the tensor addresses and lends the
+read window to the USB0 task with a release store of the window word; USB0
+writes the input chunks into it. Before SUBMIT, USB0 hands it back with a
+release store and a task notification, then posts the request. After the
+reply the client lends the write window, and USB0 transmits the output from
+it in place. USB0 hands it back the same way after the last output byte and
+posts RETURN, and the client lends the read window again. The client sends
+SUBMIT, LOAD or CLOSE only while it holds both windows and refuses a request
+that arrives while one is lent. USB0 posts one request at a time and reads
+the answer with an acquire load; neither task waits on a tick. LOAD carries a
+catalogue index and is answered when the slot is READY or the load is
+refused. The USB0 framing is described at the top of `apps/npu-board/usb.c`.
 
 ## Interrupts and polling
 
@@ -173,9 +189,11 @@ when the slot is READY or the load is refused.
   `boot.patch` calls `a733_irq_table_route(admission.startup_deadline,
   a733_smp_counter)` at the point where the OS and I2S boot patches call it.
   The ISR masks the level-high SPI with `gicv3_spi_mask` before
-  `npu_service_irq_notify_from_isr`. The mask, rearm and stop callbacks refuse
-  any core but core 1 and check that `GICD_IROUTER` for INTID 97
-  (`GICD+0x6308`) holds core 1's affinity. The worker is pinned to core 1, and
+  `npu_service_irq_notify_from_isr`. The bind, before the scheduler, checks
+  once that `GICD_IROUTER` for INTID 97 (`GICD+0x6308`) holds core 1's
+  affinity and that the source is disabled, inactive, not pending,
+  level-sensitive and at its priority; the mask, rearm and stop callbacks then
+  check only the calling core. The worker is pinned to core 1, and
   `npu_runtime_bind_irq` passes the route mask `1 << 1`, equal to that
   affinity. The CPU0 binding in `apps/npu-interrupt/irq.c` stays for the
   single-core images.
@@ -197,8 +215,9 @@ ShuffleNetV2-sized slot, the placement rules of `npu_runtime_requirements`
 give 8,388,608 bytes (counted from the code). The read-only group holds
 2,953,216 bytes and ends at 4 MiB. The input group holds 151,552 bytes and the
 pool and output group 1,097,728 bytes, and each ends on the next 2 MiB
-boundary. The
-image's allocations are replayed in `checks/device-memory-capacity.c`.
+boundary. `checks/npu-board-providers.py` runs the image's own construction
+and reads the pool's slots afterwards; no runtime, service or client function
+calls the allocator, so LOAD and CLOSE leave the free extents unchanged.
 
 The runtime's cache policy per job, by address through
 `aarch64_device_cache`:
@@ -217,7 +236,8 @@ memory and hashed once.
 
 ## Synchronization across cores
 
-USB0 and the power service run on core 0, as the board places them. The
+The power service runs on core 0, where the board places it, and
+`board_application_start` pins the board's USB0 task there too. The
 worker, the bootstrap task and the client run on core 1, the core that
 receives INTID 97, so a completion needs no inter-processor interrupt and the
 worker does not share a core with USB0. Section 2 item 7 moves them to cores 6
@@ -230,10 +250,11 @@ times in total.
 Reused unchanged: the power-domain owner and power service, the board
 providers, `npu_service.c`, the controller, MMU builder and NBG assembler, the
 USB0 shared loop, `irq_table.c`, `gicv3_spi.c` and `device_memory_layout.c`.
-`a733_npu_runtime.c` changes in one place: `platform_step` calls the new step
-function and drops its comparison of the handoff's backend, image and command
-copies (lines 789–793). The service keeps the only copy, which
-`npu_service_init_deferred` checks once, and `bootstrap_intact` stays.
+`a733_npu_runtime.c`, `npu_session.c` and `npu_convolution.c` change in the
+same two places: `platform_step` calls the new step function without
+comparing the handoff's backend, image and command copies or hashing the
+models, and the activation callback checks the service's copy once and asks
+the startup whether it is READY. `bootstrap_intact` stays in the runtime.
 
 Removed: the PLL and platform stage machines, `apps/npu-convolution/clock.c`
 and `clock.h`, `a733_npu_pll_native.c`, the startup's PMIC consumer, I2C bus
@@ -264,63 +285,67 @@ With it, all three images link.
 
 ## The four checks
 
-`checks/npu-image-checks.py`, a new runner, builds the images, writes the
-fixtures and invokes the checks; each check keeps its own result record.
+`checks/npu-image-checks.py` builds the images of a configured
+`apps/accelerators` build and, when given, the root `sunstone-a733-npu-board`,
+with `nice -n 10` and six jobs. It converts the reviewed session fixtures,
+608-byte version-2 NPU pages and the 9,080-byte combined session, to the
+reduced layout the image's DWARF and layout words describe, and invokes each
+check, which keeps its own result record:
 
-1. It configures `apps/accelerators` under
-   `~/.cache/sunstoneos/build/npu-board/` with the standard cross options, the
-   complete-graph model, input and reference, and the pinned GPU firmware. It
-   builds the single-core, multicore and accelerator images and the root
-   `sunstone-a733-npu-board`, with `nice -n 10` and six jobs.
-2. It writes session and contract fixtures from each image's DWARF layout. It
-   uses `admission_fixture` from `checks/npu-supervised-host.py`,
-   `request_bytes` from `prepare-supervised.py`, and `assemble_session` from
-   `apps/accelerators/prepare.py`, with the GPU package frozen in
-   `gpu-npu-composition-20261020`. The existing fixtures predate the record
-   changes and cannot be reused.
+| Check | Images | Change |
+| --- | --- | --- |
+| `npu-application-clock-reference.py` | Single-core, accelerator, board | The six reference cases drive the image's sequencer through its register pass; refused cases make no write and admitted ones write the enable table, first the gate enable at `CCU+0x1920` |
+| `npu-stop-native.py` | All four | Layout reader restricted to no structure; adds refused domain-4 policy and delay-row writes and the PLL gate rules, fourteen cases |
+| `npu-single-core.py --retention-only` | Single-core | Restricted layout reader; reduced-record fixture at version 3 |
+| `accelerator-providers.py` | Accelerator | The view of the application's one GPU/PCK manager, the startup's borrowed providers and its single domain-4 row; a domain-4 fault leaves the shared providers live |
+| `npu-board-providers.py` | Board | New; see Memory placement |
 
-| Check | Images | Change | Result at `66e0ef6` with the link fix |
-| --- | --- | --- | --- |
-| `npu-application-clock-reference.py` | Single-core, accelerator, board | The six reference cases drive the register pass; refused cases make no write and accepted ones write the enable table first | Pass, six cases, once the layout reader is restricted; the unrestricted reader refuses the image |
-| `npu-stop-native.py` | All four | Restricted layout reader; adds refused domain-ON and delay-row writes to `0x07064000` and `0x07064170` | Pass, ten cases, on the three images |
-| `npu-single-core.py --retention-only` | Single-core | Restricted layout reader; reduced-record fixture | Fails at its third case: `a733_smp_device_preparation_admitted` returns 0 in the model |
-| `accelerator-providers.py` | Accelerator | Provider view without `a733_npu_startup_resources`, with the domain owner; a domain-4 FAILED row revokes the NPU only | Fails: `a733_npu_application_init` returns 0 (reason 5) with the 20 October fixtures |
-
-Both failures need their root cause found and fixed before this package
-merges. `checks/storage-read-native.py` refuses images in which two
-compilation units define different structures with one tag; `a733_pmic.c` and
-`a733_power_domains.c` both define `struct profile`. Each NPU check passes
+`checks/storage-read-native.py` refuses images in which two compilation units
+define different structures with one tag; `a733_pmic.c` and
+`a733_power_domains.c` both define `struct profile`. Each check passes
 `layout_names` to `Image` with the structures it reads, as
-`checks/displayport-admission.py` does, so no source rename is needed.
-`checks/npu-board-providers.py` runs `board_application_start` of the board
-image in Unicorn. It asserts one manager, one domain-4 row and a runtime
-parent of 8,388,608 bytes inside the extended pool.
+`checks/displayport-admission.py` does, so no source is renamed.
+
+Two of the checks failed on the base for reasons outside the record change:
+
+- `npu-single-core.py --retention-only` stopped at its third case because
+  `a733_smp_device_preparation_admitted` returned 0. Since the boot began
+  preparing the local pools in `platform_init`, a kernel critical section runs
+  there before the scheduler. In the single-core port, `uxPortSetInterruptMask`
+  masks IRQs through the priority mask and clears DAIF.I, so the admission's
+  DAIF check refused. `platform_init` now sets DAIF.I again after the
+  preparation, which restores the boot's mask; the board image would have
+  refused in the same way.
+- `accelerator-providers.py` returned reason 5 from `a733_npu_application_init`
+  because the check skipped that same boot preparation, so the NPU reservation
+  read a NULL pool. The check now runs both pool preparations first and models
+  the port's critical sections they enter.
 
 ## Budgets
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Boot to READY, board image, scheduler start to READY, PMIC at 400 kHz | No board image | ≤ 12 ticks: about 6 for the supply settle, 1 for verification, 1 for the row, 3 for the 2 ms settle, 1 to open | `checks/npu-startup.c` with the real power service and PMIC model |
-| Startup calls that advance a step, excluding PENDING returns | 9 harness polls (3 local, 6 PLL); 9–10 calls in `checks/npu-startup.c` | ≤ 3 | Call counter in `checks/npu-startup.c` |
-| Startup register reads, cold method-2 path, LOCK reads excluded | 90 (51 local, 39 PLL) | ≤ 60 | `checks/npu-platform-budget.c`, `checks/npu-platform-pll-budget.c` live-enable mode |
-| Startup register writes | 18, of which 6 to PCK600 | ≤ 12, none to PCK600 | Same harnesses |
+| Boot to READY, board image, scheduler start to READY, PMIC at 400 kHz | No board image | ≤ 12 ticks: supply verification ends 8.4 ms after the service's first step, so the done bit is seen at tick 8 or 9; that call runs the pass, the enable table, LOCK, the local open table and the row request; the next call sees ON and samples the counter; the 2 ms settle ends two ticks later | `checks/npu-startup-host.c`, with the actual PMIC provider, ledger and owner |
+| Startup calls that advance a stage | 9 harness polls (3 local, 6 PLL); 8–9 calls in `checks/npu-startup.c` | 4: tokens; supply done through the row request; row ON and the settle sample; settle end and the final readback | Same |
+| Startup register reads, cold method-2 path, LOCK reads excluded | 90 (51 local, 39 PLL) | ≤ 60 | Same |
+| Startup register writes | 18, of which 6 to PCK600 | ≤ 12, none to PCK600 | Same |
 | Register-lock acquisitions in startup | 7 (2 local, 5 PLL) | 3 | Same |
-| Counter reads in startup | 31, with 3 LOCK samples | ≤ 16 plus one per LOCK sample | Same |
+| Counter reads in startup | 31, with 3 LOCK samples | ≤ 16 in the calls that advance; one in each PENDING call | Same; LOCK spacing reads the raw counter |
 | PMIC traffic in startup | 12 register reads, 6 bus-state reads, 5,160 µs wait | None | Same; the owner's once-per-boot verification is counted in docs/power-domains.md |
-| Bytes hashed by startup polls, accelerator image | 20.7 MB (11 calls × 1,881,936) | 0 | A digest counter added to `checks/npu-convolution.c` |
+| Bytes hashed by startup polls, accelerator image | 20.7 MB (11 calls × 1,881,936) | 0 | Disassembly of the linked image: no digest call reachable from the startup poll |
 | GPU/PCK managers in an image with the NPU | 1 (accelerator); 2 in a board-derived image | 1 | `accelerator-providers.py`, `npu-board-providers.py` |
 | `sizeof(struct npu_session)` | 608 bytes | ≤ 456 bytes | Geometry word in the linked single-core image |
 | Source lines, code + header | Startup 445 + 131; platform 223 + 96; PLL 204 + 109; adapter 128 + 19 | ≤ 260 + 60; ≤ 90 + 30; ≤ 60 + 25; adapter deleted | `wc -l` |
 | Runtime parent, board image | No board image | 8,388,608 bytes from the 768 MiB pool | `npu-board-providers.py` |
-| Largest free extent after admission; free extents after LOAD and CLOSE | Not modeled | ≥ 8,388,608 bytes at the runtime's admission; unchanged after the cycle | Replay in `checks/device-memory-capacity.c` |
-| Requests, replies and client tick waits per inference | Runtime check: 1 request, 1 reply; the client in `apps/npu-runtime/main.c`: one `vTaskDelay(1)` per tick of waiting | 1, 1, 0 | `checks/npu-session.py --mode runtime` with the board client loop |
-| Copies per tensor byte, counting the TinyUSB FIFO copy | No board image | Input 1 (`tud_vendor_read`), output 1 (`tud_vendor_write`) | Same check, asserting byte counts and window addresses |
-| Cache lines maintained per job | 19,442 | 19,442 | Same check |
-| Bytes zeroed per job | 1,093,632 | 1,093,632 | Same check |
-| Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same check |
+| Largest free extent after admission; free extents after LOAD and CLOSE | Not modeled | ≥ 8,388,608 bytes; unchanged | `npu-board-providers.py`: the pool's slots, and no allocator call in runtime, service or client code |
+| Requests, replies and client tick waits per inference | Runtime check: 1 request, 1 reply; the client in `apps/npu-runtime/main.c`: one `vTaskDelay(1)` per tick of waiting | 1, 1, 0 | `checks/npu-session.py --mode board-client` |
+| Copies per tensor byte, counting the TinyUSB FIFO copy | No board image | Input 1 (`tud_vendor_read`), output 1 (`tud_vendor_write`) | Same check, counting the bytes moved through the windows |
+| Cache lines maintained per job | 19,442 | 19,442 | `checks/npu-session.py --mode runtime` |
+| Bytes zeroed per job | 1,093,632 | 1,093,632 | Same |
+| Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms with USB0 on the worker's core | 1.15, 4.33, 2.02, 6.58 ms, without the 1.25 USB0 factor | `checks/npu-runtime-bounds.py` |
-| Worker wakes, idle | 0 (counted from the code: the worker blocks) | 0 | Wake counter added to `checks/npu-session.py --mode runtime` |
-| Worker wakes and idle-register reads per job | One per tick of execution plus one read per worker step | Same until the board shows one INTID 97 per job; then one wake per job | Same counter, in the runtime check image |
+| Worker wakes, idle | 0 (counted from the code: the worker blocks) | 0 | Counted from the code |
+| Worker wakes and idle-register reads per job | One per tick of execution plus one read per worker step | Same until the board shows one INTID 97 per job; then one wake per job | `checks/npu-session.py --mode runtime`, case 2 |
 | USB0, 64 KiB response | 13 ticks in the shared-loop model | 13 ticks | `checks/usb0-service-burst.py` |
 
 The interim rows stay at their npu-breadth values until the fixed mappings
@@ -352,19 +377,28 @@ and the pool comparison remove T, A, H and the pool clear.
 ## Edits outside the owned files (primary.patch)
 
 - `CMakeLists.txt`: option `SUNSTONE_A733_NPU_BOARD` and the include of
-  `cmake/a733-npu-board.cmake`.
-- `checks/power-domains-tree.py`: four delay-row writers, no NPU write
-  offsets in the allowlist, domain-4 rows accepted.
-- `checks/device-memory-capacity.c`: the board image's allocation replay.
-- `cmake/npu.cmake`, `cmake/npu-startup.cmake`, `cmake/npu-clock-handoff.cmake`,
-  `cmake/npu-convolution.cmake`: fixture source lists without the clock
-  adapter and PLL native file, with the owner sources.
-- `checks/a733-pmic-consumers.c`, `checks/a733-npu-pll-clock-reference.c`,
-  `checks/a733-npu-platform-clock-reference.c`,
-  `checks/a733-accelerator-clock-reference.py`: the NPU PMIC consumer case
-  removed; reference checks on the register-pass constants.
-- `tools/check-a733-npu-supervised.py`: the version-3 record.
+  `cmake/a733-npu-board.cmake`; the removed `A733_NPU_HANDOFF_SOURCE` path and
+  the include of `cmake/npu-clock-handoff.cmake`.
+- `platform/a733/platform.c`: DAIF.I set again after the local pool
+  preparation (the four checks, above).
+- `checks/power-domains-tree.py`: four delay-row writers, no native allowlist
+  that admits the delay row, domain-4 rows accepted.
+- `cmake/npu-startup.cmake`, `cmake/npu-convolution.cmake`: fixture source
+  lists without the clock adapter, the PLL native file and the PMIC consumer,
+  with the owner sources. `cmake/npu-clock-handoff.cmake`,
+  `checks/a733-npu-pll-clock-reference.c` and
+  `checks/a733-npu-platform-clock-reference.c` are deleted with the PLL
+  adoption and stage machines they exercised.
+- `checks/a733-pmic-consumers.c`: the NPU startup cases removed; the GPU
+  consumer cases build their own GPU/PCK manager.
+  `checks/a733-accelerator-clock-reference.py`: GPU cases only; the NPU
+  reference cases run in `checks/npu-startup-host.c` and
+  `npu-application-clock-reference.py`.
+- `docs/power-domains.md`: domain 4 in use by the NPU startup.
 - `checks/index.json`, which `checks/check-index.py` regenerates.
+
+`tools/check-a733-npu-supervised.py` needs no change: it validates through
+`prepare-supervised.py`, which reads the version-3 record.
 
 ## Board evidence
 
