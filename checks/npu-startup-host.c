@@ -135,24 +135,29 @@ static enum a733_npu_platform_result step(void)
     r.pmic_reads_before+=m.reads+m.writes-pmic; /* PMIC traffic caused by startup. */
     return x;
 }
-struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us; };
+struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us,stage_us[A733_NPU_STARTUP_STOPPED+1],supply_done_us; };
 /* Boot: both tasks start at one tick. Each tick the bootstrap calls the step
  * once; the service runs after it whenever notified or due. */
 static struct run boot(unsigned limit,unsigned service)
 {
-    struct run x={A733_NPU_PLATFORM_PENDING,0,0,0,0,0};
+    struct run x={.result=A733_NPU_PLATFORM_PENDING};
     const uint64_t t0=m.now;uint64_t next=t0;d.wake_at=0;
     while(x.ticks<limit) {
         if(m.now>=next) {
             const unsigned stage=s.stage,clock_reads=s.clock_reads;
             x.result=step();++x.calls;
             if(s.stage!=stage || x.result==A733_NPU_PLATFORM_READY)++x.advancing;
+            if(s.stage!=stage && s.stage<=A733_NPU_STARTUP_STOPPED)x.stage_us[s.stage]=m.now-t0;
             else x.pending_clock_reads+=s.clock_reads-clock_reads;
             if(x.result!=A733_NPU_PLATFORM_PENDING){x.elapsed_us=m.now-t0;break;}
             x.ticks=(unsigned)((m.now-t0)/TICK_US)+1;next=t0+(uint64_t)x.ticks*TICK_US;
             continue;
         }
-        if(service && (d.notified || m.now>=d.wake_at)){service_step();continue;}
+        if(service && (d.notified || m.now>=d.wake_at)){
+            service_step();
+            if(!x.supply_done_us && (a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE))x.supply_done_us=m.now-t0;
+            continue;
+        }
         uint64_t until=next;
         if(service && d.wake_at<until)until=d.wake_at;
         if(until>m.now)m.now=until;
@@ -184,9 +189,13 @@ int main(void)
     assert(!r.held && !r.pmic_reads_before && tokens_held());
     printf("{\"boot\":{\"ticks\":%u,\"elapsed_us\":%llu,\"calls\":%u,\"advancing_calls\":%u,"
         "\"register_reads\":%u,\"register_writes\":%u,\"lock_acquisitions\":%u,\"counter_reads\":%u,"
-        "\"counter_reads_on_pending_calls\":%u,\"lock_samples\":%u,\"pmic_transactions_by_startup\":%u},",
+        "\"counter_reads_on_pending_calls\":%u,\"lock_samples\":%u,\"pmic_transactions_by_startup\":%u,"
+        "\"supply_done_us\":%llu,\"enable_us\":%llu,\"row_us\":%llu,\"settle_us\":%llu,\"final_us\":%llu},",
         b.ticks,(unsigned long long)b.elapsed_us,b.calls,b.advancing,s.reads,s.writes,s.lock_enters,
-        s.clock_reads,b.pending_clock_reads,s.lock_samples,r.pmic_reads_before);
+        s.clock_reads,b.pending_clock_reads,s.lock_samples,r.pmic_reads_before,
+        (unsigned long long)b.supply_done_us,(unsigned long long)b.stage_us[A733_NPU_STARTUP_ENABLE],
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_ROW],(unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_FINAL]);
     /* Local stop: one locked pass of five writes with readback. */
     {
         const unsigned reads=s.reads,writes=s.writes,enters=s.lock_enters,clocks=s.clock_reads;
