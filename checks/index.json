@@ -1529,6 +1529,7 @@
  "all-core-pre-scheduler-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/rank-7-pre-scheduler.md",
    "docs/designs/cpu-table-walks.md"
   ],
   "library": false,
@@ -8553,6 +8554,7 @@
    "docs/board-runbooks/rank-7-corrected.md",
    "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-7-pre-scheduler.md",
    "docs/board-runbooks/rank-8-workload.md"
   ],
   "library": false,
