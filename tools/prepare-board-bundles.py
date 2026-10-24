@@ -104,7 +104,8 @@ OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/m
 SINGLE_CORE_SOURCES = ['tools/prepare-board-bundles.py', READER, *HOST_TOOLS]
 RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-images.py', 'tools/check-a733-kernel.py',
                      *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
-                     'platform/a733/link.ld']
+                     'platform/a733/link.ld', 'arch/aarch64/vectors.S', 'include/a733_fault.h', 'checks/kernel.c',
+                     'checks/board-bundles-fault.c']
 RETURNING_STOP = ('Stop at any nonzero exit. The runner keeps the A733 port lock and quarantines the instance after '
                   'any outcome that its bundle does not list as controlled; a hang ends at the monitor\'s 2 s '
                   'deadline, and a stalled bus access needs a power removal. Do not retry.')
