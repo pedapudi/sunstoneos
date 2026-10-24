@@ -190,9 +190,9 @@ that many frame slots of `slot_bytes` each. `slot_bytes` is a multiple of 4096
 that covers one plane, so no cache line holds bytes of two slots, and the
 slots must fit both spans. `a733_camera_capture_open_stream` runs the same
 preparation as a still image, except that the receiver uses continuous video
-capture (`VCAP`) and the DMA enters its ring mode just before the sensor
-starts. The coordinator returns 1 from each poll once the sensor has started,
-and each poll performs one DMA operation.
+capture (`VCAP`) and the DMA enters its ring mode immediately before the
+sensor's frame-enable write. The coordinator returns 1 from each poll once
+the sensor has started, and each poll performs one DMA operation.
 
 The absolute deadline given to `a733_camera_capture_open_stream` bounds the
 preparation, including admissions and handoffs that stay pending. It then
@@ -246,17 +246,25 @@ starts may have merged into one observation and the count may be short. A short 
 would let a late flag pay for a frame the device is still writing. The DMA
 then marks the count unknown, and from that point every frame is dropped, as
 after merged flags, until the owner stops the stream. The DMA's first
-interval starts with a clock reading taken just before the sensor start, when
-no frame can have started.
+interval starts with a clock reading immediately before the sensor write
+that enables frame transmission, when no frame can have started.
 
-The first interval also covers the sensor's stream-on sequence: two register
-writes, their read-backs and the DMA start callback, about six owner polls
-plus their I2C transfer times. If that exceeds the interval, the first read
-marks the count unknown and the stream delivers nothing, although every slot
-stays owned correctly. Whether a real OV5640 start fits is unmeasured. The
-fix is to open the first interval at the stream-on write itself, which needs
-a hook inside the sensor's start sequence; until a sensor is attached to
-measure it, the stream can fail closed in this way.
+The coordinator's sensor-write adapter opens that interval before writing
+`0x4202 = 0`. The pinned Linux
+[`ov5640_set_stream_mipi`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c#L1828)
+enables the MIPI interface through `0x300e`, then enables frames through
+`FRAME_CTRL01` (`0x4202`). Sensor preparation verifies that frame transmission
+is disabled before either write. Pending receiver admission and the first
+write therefore consume only the absolute preparation deadline. DMA already
+owns the image spans and has programmed slot zero during that preparation.
+
+The frame-enable transfer, its readbacks and the DMA start callback remain
+inside the first interval. If they exceed it, the first status read marks
+the count unknown and subsequent frames are dropped with every slot retained.
+A failed interval clock prevents the frame-enable write. An uncertain write,
+bad readback or expired deadline faults and retains every lease. The interval
+is never restarted after transmission is enabled. Actual startup timing still
+requires a sensor on the board.
 
 While the owner polls within that bound, a delivered slot is never one that
 either address register names or that any frame may still write: its
@@ -284,7 +292,15 @@ Whether the address registers latch at frame start, and whether frame done
 precedes the next frame start in every mode, needs a module on the board. The
 1080p and QSXGA modes have only 24 lines of vertical blanking, so a frame-done
 flag after the next start is most likely there; it drops frames.
-The native application does not use continuous capture yet.
+The native application does not use continuous capture yet. Its binding
+allocates one image per plane and calls `open_retained`; it supplies no
+`sync_slot` callback. Continuous capture needs ring allocation and admission,
+per-slot cache synchronization, bounded polling and deadline renewal, and
+application ownership through `take` and `give`. The native receiver write
+policy must also admit video stop, and the current `no_drain` callbacks need
+real packet-quiescence and transaction-drain providers before stream closure.
+Concurrent USB frame delivery additionally needs the shared-master IOMMU
+policy described above.
 
 ## Faults retain resources without automatic rollback
 
@@ -333,10 +349,11 @@ passed AddressSanitizer and UndefinedBehaviorSanitizer. A final publication
 check also passed after strengthening the coordinator's reentry guard; earlier
 composition evidence remains preserved. Existing leaf suites were not rerun.
 
-The AArch64 coordinator object with continuous capture contains 8,396 bytes of
+The AArch64 coordinator object with continuous capture contains 8,752 bytes of
 code/read-only data and no mutable globals. Compiler reports show direct stack
-frames of 608 bytes for initialization and 48 bytes for polling. Stack provisioning must
-also include the called leaf controllers and platform callbacks. These are
+frames of 608 bytes for initialization, 48 bytes for polling and 64 bytes for
+the sensor-write adapter. Stack provisioning must also include the called
+leaf controllers and platform callbacks. These are
 static build facts, not performance measurements.
 
 A separate continuous-capture model, `checks/a733-camera-stream.py`, runs the
@@ -352,6 +369,14 @@ every delivered frame is complete and matches its frame-start count. The cases
 are:
 
 - both ports and both byte orders, with every frame delivered;
+- receiver admission pending for 25 ms and an interface-enable transfer taking
+  50 ms, followed by all eleven completed frames delivered after twelve starts;
+- a 100 ms frame-enable transfer or a 100 ms owner stall after that write,
+  each suppressing delivery because the first interval was exceeded;
+- refused receiver admission, uncertain interface/frame writes, bad readback,
+  overdue frame enable, and deadline expiry before enable, all retaining leases;
+- failed, backward and overdue clocks, and callback reentry at interval
+  opening, each preventing frame enable and retaining leases;
 - a consumer holding two of three slots, with the dropped frames counted;
 - a frame start racing the first or the second address write, which drops two
   frames and keeps every later frame correct;
@@ -386,6 +411,19 @@ with late frame done then gets slots delivered while the device still writes
 their last bytes. The model passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 Its results are under
 `~/.cache/sunstoneos/build/audit-camera-streaming/dev/stream-check/`.
+
+The startup fix passes the streaming and still-image composition checks under
+`~/.cache/sunstoneos/build/camera-resume-1024/stream-reentry/` and
+`~/.cache/sunstoneos/build/camera-resume-1024/capture/`. They include AArch64
+compilation and the existing status-interval mutation check. The preceding
+coordinator fails the delayed-start delivery assertion with the same model inputs.
+For each port's nominal twelve-start case, before and after counts match:
+5,229 clock calls, 355 sensor accesses, 408 DMA accesses and eleven slot
+synchronizations. Opening still initializes the ring once. The change adds
+no per-frame operations or copies. The coordinator object grows from 8,588 to 8,752
+bytes because the write adapter checks the stream state and initializes the
+ring at frame enable. These are software-model and build results; no camera
+hardware was used.
 
 Exact commands, inputs, executable artifacts and snapshots are retained under
 `~/.cache/sunstoneos/evidence/camera-capture-20261016/`; the `publication/`

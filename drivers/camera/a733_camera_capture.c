@@ -31,7 +31,17 @@ static int mmu_publish(void *p,uint64_t t,const void *x,size_t n,uint64_t d){BEG
 static int sensor_acquire(void *p,uint64_t d,uint64_t *t){BEGIN;return CALL(sensor,acquire,d,t);}
 static int sensor_line(void *p,uint64_t t,enum ov5640_line l,int a,uint64_t d){BEGIN;return CALL(sensor,line,t,l,a,d);}
 static int sensor_read(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t *v,uint64_t d){BEGIN;return CALL(sensor,read,t,a,r,v,d);}
-static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){BEGIN;return CALL(sensor,write,t,a,r,v,d);}
+static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){
+    BEGIN;
+    /* Linux ov5640_set_stream_mipi enables 0x300e before FRAME_CTRL01.
+     * Frame transmission stays disabled until this 0x4202 write. Open the
+     * first status interval before its transfer, including any bus latency. */
+    if(s->streaming && s->state==A733_CAPTURE_SENSOR_START &&
+       s->sensor.state==OV5640_STARTING && r==0x4202 && !v &&
+       (a733_camera_dma_stream(&s->dma,s->config.slots,s->config.slot_bytes,
+                               s->status_us,d)!=1 || !live(s)))return -1;
+    return CALL(sensor,write,t,a,r,v,d);
+}
 static int sensor_write_block(void *p,uint64_t t,uint8_t a,uint16_t r,const uint8_t *v,unsigned n,uint64_t d){
     BEGIN;return CALL(sensor,write_block,t,a,r,v,n,d);
 }
@@ -39,7 +49,7 @@ static int sensor_receiver(void *p,uint64_t t,uint64_t rt,const struct ov5640_mo
     BEGIN;
     if(!s->packets_granted || rt!=s->receiver.token || s->receiver.state!=A733_CSI_ARMED ||
        s->receiver.image_mode==s->streaming || s->route.state!=A733_ROUTE_ARMED ||
-       s->dma.state!=(s->streaming?A733_CAM_DMA_STREAM_START:A733_CAM_DMA_START) ||
+       s->dma.state!=(s->streaming?A733_CAM_DMA_ARMED:A733_CAM_DMA_START) ||
        s->iommu.state!=A733_IOMMU_ACTIVE)return -1;
     return CALL(sensor,receiver,t,rt,m,d);
 }
@@ -280,10 +290,8 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         }
         r=s->config.ops.handoff(s->config.context,s->token,A733_CAPTURE_PACKETS,s,s->deadline);
         if(r==1){s->packets_granted=1;next(s,A733_CAPTURE_SENSOR_START);}break;
-    /* The DMA's first status interval opens before the sensor can start a frame. */
     case A733_CAPTURE_SENSOR_START:
-        RUN((!s->streaming || a733_camera_dma_stream(&s->dma,s->config.slots,s->config.slot_bytes,
-             s->status_us,s->deadline)==1)?ov5640_start(&s->sensor,s->receiver.token,s->deadline):-1,
+        RUN(ov5640_start(&s->sensor,s->receiver.token,s->deadline),
             ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
     case A733_CAPTURE_DMA_RUN:
         r=a733_camera_dma_poll(&s->dma);

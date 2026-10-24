@@ -30,6 +30,9 @@ struct model {
     unsigned frames,writing,plane_bytes,global_held,local,packets,quiet,syncs,final_syncs;
     unsigned releases,drains,race,race_middle,missing_done,error_frame,fail_slot_sync;
     unsigned delivered,checked_frames;
+    unsigned clocks,sensor_ops,dma_ops;
+    unsigned receiver_pending,start_fault,injections,enable_writes,clock_fault,clock_target;
+    uint64_t interface_delay,enable_delay,enable_at;
     /* Late frame done: delay after the next start, and the one late frame
      * (counted from 1), or every frame when zero. */
     uint64_t late,late_frame,tail_at;
@@ -109,7 +112,16 @@ static void advance(struct model *m){
         return;
     }
 }
-static int now(void *p,uint64_t *v){struct model *m=p;advance(m);*v=m->now;return 1;}
+static int now(void *p,uint64_t *v){
+    struct model *m=p;++m->clocks;advance(m);*v=m->now;
+    if(m->clock_target==m->clocks){
+        ++m->injections;
+        if(m->clock_fault==1)return -1;
+        if(m->clock_fault==4){assert(a733_camera_capture_poll(m->capture)==-1);return 1;}
+        *v=m->clock_fault==2?0:m->capture->deadline;
+    }
+    return 1;
+}
 static int global_acquire(void *p,const struct a733_camera_capture_config *c,uint64_t d,uint64_t *t){
     struct model *m=p;assert(c==&m->capture->config && m->now<d);*t=101;m->global_held=1;return 1;
 }
@@ -159,14 +171,32 @@ static int sensor_line(void *p,uint64_t t,enum ov5640_line l,int a,uint64_t d){
     struct model *m=p;(void)l;assert(t==203 && !a && m->now<d);return 1;
 }
 static int sensor_read(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t *v,uint64_t d){
-    struct model *m=p;assert(t==203 && a==0x3c && m->now<d);*v=m->sensor[r];return 1;
+    struct model *m=p;++m->sensor_ops;assert(t==203 && a==0x3c && m->now<d);*v=m->sensor[r];
+    if(m->start_fault==4 && m->capture->sensor.state==OV5640_STARTING){
+        ++m->injections;*v^=1;
+    }
+    return 1;
 }
 static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){
-    struct model *m=p;assert(t==203 && a==0x3c && m->now<d);m->sensor[r]=v;return 1;
+    struct model *m=p;++m->sensor_ops;assert(t==203 && a==0x3c && m->now<d);m->sensor[r]=v;
+    if(m->capture->sensor.state==OV5640_STARTING){
+        if(r==0x300e){
+            m->now+=m->interface_delay;
+            if(m->start_fault==2){++m->injections;return -1;}
+        }else{
+            assert(r==0x4202 && !v);++m->enable_writes;m->enable_at=m->now;
+            m->now+=m->enable_delay;
+            if(m->start_fault==3){++m->injections;return -1;}
+            if(m->start_fault==5){++m->injections;m->now=d;}
+        }
+    }
+    return 1;
 }
 static int sensor_receiver(void *p,uint64_t t,uint64_t rt,const struct ov5640_mode *mode,uint64_t d){
     struct model *m=p;assert(t==203 && rt==206 && m->packets && m->now<d);
     assert(mode->width==m->capture->config.mode.width && mode->height==m->capture->config.mode.height);
+    if(m->receiver_pending){--m->receiver_pending;return 0;}
+    if(m->start_fault==1){++m->injections;return -1;}
     return 1;
 }
 static int sensor_release(void *p,uint64_t t,uint64_t d){
@@ -220,10 +250,10 @@ static int dma_admit(void *p,const struct a733_camera_dma_config *c,uint64_t d,u
     *t=205;return 1;
 }
 static int dma_read(void *p,uint64_t t,uint16_t o,uint32_t *v,uint64_t d){
-    struct model *m=p;assert(t==205 && o<4096 && m->now<d);*v=m->dma[o/4];return 1;
+    struct model *m=p;++m->dma_ops;assert(t==205 && o<4096 && m->now<d);*v=m->dma[o/4];return 1;
 }
 static int dma_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){
-    struct model *m=p;assert(t==205 && o<4096 && m->now<d);
+    struct model *m=p;++m->dma_ops;assert(t==205 && o<4096 && m->now<d);
     /* A frame start between the acknowledgement and an address write. */
     if(m->race && m->frames>=m->race && o==(m->race_middle?0x228:0x220)){
         /* A stalled owner: the current frame ends and the next one starts
@@ -356,7 +386,35 @@ static void stop(void){
     /* Both complete spans now belong to the caller. */
     assert(!memcmp(y_cpu,y_device,SPAN) && !memcmp(uv_cpu,uv_device,SPAN));
 }
-int main(void){
+static void start_failures(void){
+    for(unsigned kind=1;kind<=10;kind++){
+        setup(0,OV5640_UYVY);
+        if(kind<=5)model.start_fault=kind;
+        else{
+            /* Reach the poll that will enable frames without changing native
+             * state. Its first two clocks belong to the coordinator and
+             * sensor; the third opens the DMA status interval. */
+            while(capture.sensor.state!=OV5640_STARTING || capture.sensor.index!=1)
+                assert(poll()>=0);
+            if(kind==6)model.now=capture.deadline;
+            else{model.clock_target=model.clocks+3;model.clock_fault=kind-6;}
+        }
+        while(poll()>=0)assert(model.now<600001000);
+        assert(capture.state==A733_CAPTURE_FAULT && model.global_held);
+        assert(capture.dma.token==205 && capture.sensor.token==203 && capture.receiver.token==206);
+        assert(capture.route.token==204 && capture.iommu.admission.token==202);
+        assert(capture.dma.owner==A733_CAMERA_DEVICE && !model.releases && !model.drains);
+        assert(!model.syncs && !model.final_syncs && !capture.dma.ring.delivered);
+        assert(model.injections==(kind==6?0u:1u));
+        assert(model.enable_writes==((kind>=3 && kind<=5)?1u:0u));
+        for(unsigned i=0;i<SPAN;i++)assert(y_cpu[i]==0xcc && uv_cpu[i]==0xcc);
+        unsigned clocks=model.clocks,ops=model.sensor_ops+model.dma_ops;
+        assert(poll()==-1 && poll()==-1);
+        assert(model.clocks==clocks && model.sensor_ops+model.dma_ops==ops);
+    }
+}
+int main(int argc,char **argv){
+    assert(argc==1 || (argc==2 && !strcmp(argv[1],"nominal")));
     /* Every frame delivered when the consumer keeps up, on both ports and
      * in both YUV422 orders, at 320x240. */
     for(unsigned port=0;port<2;port++){
@@ -364,8 +422,36 @@ int main(void){
         const struct a733_camera_ring *g=&capture.dma.ring;
         assert(g->starts==12 && g->dropped==0 && model.checked_frames==11 && model.syncs==11);
         assert(capture.receiver.format.width==320 && capture.dma.format.order==port);
+        printf("Nominal port %u: clocks=%u sensor_ops=%u dma_ops=%u syncs=%u\n",
+               port,model.clocks,model.sensor_ops,model.dma_ops,model.syncs);
         stop();
     }
+    if(argc==2)return 0;
+    /* Receiver admission and interface setup can exceed the status interval
+     * while FRAME_CTRL01 still blocks frames. The first interval starts at
+     * the enable transfer and every frame is delivered. */
+    setup(0,OV5640_UYVY);model.receiver_pending=25;model.interface_delay=50000;
+    while(capture.state!=A733_CAPTURE_STREAMING)assert(poll()>=0);
+    assert(!model.receiver_pending && model.enable_writes==1);
+    assert(model.interface_delay>capture.status_us);
+    uint64_t first_status_at=capture.dma.ring.status_at;
+    run(12,0,0);assert(model.checked_frames==11 && !capture.dma.ring.dropped);
+    assert(first_status_at==model.enable_at);stop();
+    /* The actual enable transfer and later readbacks stay inside the first
+     * interval. A long transfer or owner stall after enable loses the count
+     * and delivers nothing, even if later polling is prompt. */
+    for(unsigned stall=0;stall<2;stall++){
+        setup(0,OV5640_UYVY);
+        if(!stall)model.enable_delay=100000;
+        else{
+            while(!model.enable_writes)assert(poll()>=0);
+            model.now+=100000;
+        }
+        run(12,0,0);
+        assert(capture.dma.ring.owed==A733_CAMERA_DMA_OWED_UNKNOWN && !model.checked_frames && !model.syncs);
+        stop();
+    }
+    start_failures();
     /* A consumer holding two slots of three leaves none free: the active
      * slot repeats, each repeated frame is dropped and counted. */
     setup(0,OV5640_UYVY);run(20,2,70);
@@ -480,7 +566,7 @@ int main(void){
      * single-image configuration cannot stream. */
     assert(setup_mode(0,OV5640_UYVY,0,0,SPAN)==1 && a733_camera_capture_open_stream(&capture,1000000)==-1);
     puts("PASS camera streaming: ring delivery on both ports and orders, dropped-frame accounting, "
-         "start races, late and merged frame done, a stalled owner, deadline renewal and expiry, "
+         "delayed startup and retained startup failures, start races, late and merged frame done, a stalled owner, deadline renewal and expiry, "
          "derived quiet interval, missing frame done, owed-count saturation, faults and refusals");
     return 0;
 }
