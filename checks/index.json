@@ -414,6 +414,18 @@
   "summary": "Check pinned identity decoding and reuse verified register traces for the native binding.",
   "usb": false
  },
+ "a733-gpu-core-native.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--libc-include"
+  ],
+  "summary": "Check actual CORE native access widths, allowlists and shared-lock refusal.",
+  "usb": false
+ },
  "a733-gpu-isolation.py": {
   "cache_areas": [],
   "docs": [],
@@ -451,7 +463,7 @@
    "sources",
    "evidence"
   ],
-  "summary": "Compare native GPU power writes with pinned PCK functions and CCU definitions.",
+  "summary": "Compare native TOP/CCU writes with pinned functions; CORE has a separate BXM audit.",
   "usb": false
  },
  "a733-gpu-resources-emulate.py": {

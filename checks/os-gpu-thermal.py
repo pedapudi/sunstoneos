@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True, help='Accepted OS build with compile_commands.json')
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--lld', type=Path, default=LLD)
-parser.add_argument('--cases', type=int, nargs='+', choices=range(7), default=list(range(7)))
+parser.add_argument('--cases', type=int, nargs='+', choices=range(14), default=list(range(14)))
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 steps = Steps(out, 'commands.json')
@@ -36,7 +36,9 @@ steps.command('link', [args.lld, '-Ttext=0x41000000', '--entry=os_gpu_thermal_ch
                        *objects, '-o', elf])
 image = Image(elf); identity = hashlib.sha256(elf.read_bytes()).hexdigest()
 cases = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
-         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-record']
+         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-record',
+         'terminal-retire', 'retire-close-busy', 'retire-deadline', 'retire-critical',
+         'retire-wrong-client', 'retire-pending-ticket', 'retire-stale-stopped-epoch']
 results = {}
 for mode, name in enumerate(cases):
     if mode not in args.cases: continue

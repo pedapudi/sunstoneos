@@ -17,6 +17,27 @@ static struct a733_gpu_platform gpu;
 static uint64_t last_now;
 static unsigned id_reads;
 
+static _Noreturn void gpu_fail(const char *reason)
+{
+    /* Cached observations only: a refusal must not make another device read. */
+    const struct a733_gpu_power *p = &gpu.power;
+    struct bb_line line;
+    bb_line_start(&line, "GPU power");
+    bb_line_dec(&line, "phase", p->phase); bb_line_dec(&line, "error", p->error);
+    bb_line_dec(&line, "step", p->index); bb_line_hex(&line, "last", p->last_value);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU CORE entry");
+    bb_line_dec(&line, "seen", p->core_seen); bb_line_hex(&line, "policy", p->core_policy);
+    bb_line_hex(&line, "status", p->core_status); bb_line_hex(&line, "pwcr", p->core_config);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_power_fail(reason);
+}
+static void gpu_pause(const char *reason)
+{
+    if (bb_power_now() >= bb_power.deadline) gpu_fail(reason);
+    vTaskDelay(1);
+}
+
 static void before(void)
 {
     uint64_t now = bb_power_now();
@@ -66,10 +87,10 @@ void gpu_power_id_client(void *unused)
     (void)unused;
     bb_power_wait_ready();
     before();
-    if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) bb_power_fail("GPU ON begin");
+    if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) gpu_fail("GPU ON begin");
     int result;
-    while ((result = a733_gpu_platform_poll(&gpu)) == 0) bb_power_pause("GPU ON deadline");
-    if (result != 1) bb_power_fail("GPU ON poll");
+    while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
+    if (result != 1) gpu_fail("GPU ON poll");
 
     uint64_t raw = id_read(0x20, 8), bvnc = raw;
     uint32_t revision = 0, core = 0;
@@ -84,9 +105,9 @@ void gpu_power_id_client(void *unused)
     /* No firmware was constructed or booted, and no GPU command/DMA backing
      * exists. The admitted clean initial state is required for this unwind. */
     before();
-    if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) bb_power_fail("GPU OFF begin");
-    while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) bb_power_pause("GPU OFF deadline");
-    if (result != 1) bb_power_fail("GPU OFF poll");
+    if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
+    while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
+    if (result != 1) gpu_fail("GPU OFF poll");
     off_proof();
     bb_power_park();
     off_proof();
