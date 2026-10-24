@@ -87,7 +87,7 @@ read-only file system outside its new run directory under
 | After rank 9, next board session | GPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
 | After rank 9, next board session | GPU and NPU jobs under the memory and power arbiter | Terminal | `tools/check-a733-accelerators-supervised.py` | 930 s plus the uploads |
 | After rank 9, next board session | Recognition dispatcher in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
-| Waits for physical recovery | GPU and NPU hang reset; voltage and clock changes; display output | Excluded | None | None |
+| Last in a connection window, after the ranks pass | GPU and NPU hang reset; voltage and clock changes; display output | Not yet bundled | None | None |
 
 - **Monitor.** The EL3 monitor's secure timer forces the return to the boot
   ROM. Before it records a Monitor bundle, the tool checks the bundle's
@@ -154,13 +154,14 @@ owner supplies what the row needs:
   `tools/check-a733-accelerators-supervised.py` does not report them or
   declare `COMPLETION_COUNTS`.
 
-## Tests that must wait for physical recovery
+## Tests that need a reconnect budget or an accessory
 
-These need the ability to power-cycle or reconnect the board, or an
-accessory, and are excluded from this plan:
+These risk the board's connection or need an accessory, so they run after the
+ranked tests pass on that board and last in a connection window, or wait for
+the accessory:
 
-- any test that writes either microSD card, including the persistent-boot
-  package and the stage-2 loader;
+- any test that writes a microSD card, including the persistent-boot package
+  and the stage-2 loader, after a host backup of that card;
 - intentional watchdog expiry;
 - intentional GPU or NPU hangs, including hang-reset tests;
 - raising the CPU clock or changing any PMIC voltage;

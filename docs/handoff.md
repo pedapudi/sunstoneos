@@ -17,32 +17,39 @@ OS image variants build, and the PWM and crypto build options configure. The
 QEMU kernel check, the eight-core emulator soak, the mimus parity check, the
 shared-helper check and the dashboard tests pass. No board test ran during
 the audit or any round, so nothing they added is physically tested or
-qualified. The merged work is committed locally and has not been pushed.
+qualified. The merged work is published on the `bringup` branch of `origin`.
 
 ## Board state and recovery
 
-One board is attached, on host USB port `3-1`, in FEL mode: the host's USB
-device list shows it as the boot ROM's FEL device, an observation that involved
-no communication with the board. The user cannot reconnect it if its USB
-connection drops, so one lost connection ends board access until further
-notice. No board test may run, and no board command may be sent, until the user
-says physical recovery is available. Do not request a reconnect. Nothing in
-rounds four to eight ran on the board. The second board is disconnected. Earlier
-identities and admission records supply no current authority. When recovery is
-available, the physical steps follow the
+Two boards are attached in FEL mode, on host USB ports `3-1` and `3-3`: the
+host's USB device list shows each as the boot ROM's FEL device, an observation
+that involved no communication with either board. Physical recovery is
+available, but the user can reconnect a board only once every several hours, so
+a lost connection takes that board out of use until its next reconnect. Request
+a reconnect at the top of this document, naming the port and the physical
+action, and continue with the other board or offline work meanwhile.
+
+Session access for both ports lasts until the next host reboot. After a reboot,
+the user runs `sudo python3 tools/usb-access.py enable-session --port <port>
+--user sunil` for each port; `python3 tools/usb-access.py check-session --port
+<port>` confirms access without communicating with the board. Nothing after the
+eight-core first-task result ran on a board. Earlier identities and admission
+records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
 Until then, continue the [offline work](#next-offline-work).
 
 Neither board has populated eMMC or UFS. Do not probe or require qualification of
-these absent devices. Preserve both microSD cards and their native support.
+these absent devices. Preserve both microSD cards and their native support;
+writes to a card follow [section 4 of the goal](goal.md), starting with a host
+backup of that card.
 No MIPI camera, display or microphone is attached. OV5640 is the first sensor
 target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
 | Board | Power and access facts | Continuation requirement |
 | --- | --- | --- |
-| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. The user cannot reconnect it if the connection drops. Accepted eight-core first-task result is below. | No access until the user says physical recovery is available. Then bind its queue to the port and refresh identity, recovery and admission in the order of the board test plan. Full workload execution is deferred until those ranks pass. |
-| Second, host port `3-3` | Disconnected. USB was its only power source. Last confirmed removal recovered `003:073`, identity `[7,3858,1097032,0,0]`; ROM/access passed, retained processes stopped and the failed claim closed. | That recovery predates its disconnection. Require reconnection by the user, then fresh cold DDR and platform admission. Evidence: `usb-first-fault-20261018/root-physical-064/recovery-073.json`. |
+| Original, host port `3-1` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Bind its queue to the port, then refresh identity, recovery and admission in the order of the board test plan. Full workload execution is deferred until those ranks pass. |
+| Second, host port `3-3` | Attached; the host lists the boot ROM's FEL device (`1f3a:efe8`). USB is its only power source, so a reconnect also power-cycles it. Its last USB takeover returned to the ROM with native status 1 before controller writes. | Bind its queue to the port, then run fresh cold DDR and platform admission before any other test. Its earlier recovery evidence, `usb-first-fault-20261018/root-physical-064/recovery-073.json`, predates the reconnection. |
 
 Per-port permissions, locks, queues and failure records remain independent.
 Neither queue has a running test; the original board's queue has four blocked
@@ -305,10 +312,9 @@ functions and modes beyond these bounded applications.
 
 ## Continuation and evidence reuse
 
-1. Until the user says physical recovery is available, work offline only. Do
-   not run a board launcher, a FEL tool or any program that opens a USB device,
-   and do not request a reconnect. The [next offline work](#next-offline-work)
-   lists the current priorities.
+1. Check session access on both ports before each board session. Board work
+   and the [next offline work](#next-offline-work) proceed in parallel; a
+   pending reconnect pauses only the board it names.
 2. Before the first board test after recovery, bind both queues to their ports
    and prepare again every launch bundle whose launcher changed. Recorded
    storage and mimus bundles hash `tools/check-a733-storage-launch.py`, and
@@ -342,9 +348,9 @@ functions and modes beyond these bounded applications.
    advertises no call feature, whether its voice button starts a recording,
    and whether the AIC8800 module is still admitted when Bluetooth fails
    first.
-5. Tests that need more physical recovery come last, after the user confirms
-   power-cycle and reconnection. They include card writes, after both cards are
-   backed up; the stage-2 loader, a read-only snapshot of the remote-writer
+5. Tests that risk the connection come last in a board's connection window,
+   after the ranks above pass on that board. They include card writes, after a
+   host backup of that card; the stage-2 loader, a read-only snapshot of the remote-writer
    registers after a cold boot, and the resident lifetime; intentional
    watchdog expiry; CPU clock or PMIC voltage changes, each with the user's
    approval; and tests that need a camera, display, microphone, headset, PCIe
@@ -485,7 +491,7 @@ function returns the same result for every input. These copies remain:
 
 | Area | Next deliverable | Reason it remains and owner |
 | --- | --- | --- |
-| Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | Primary agent only. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
+| Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | The coordinator runs its board tests. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
 | OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
 | Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
@@ -543,10 +549,10 @@ file's owner fixes them:
   TWI9 controller, and `docs/pcie.md` says no image links the function
   client.
 
-Use Sol 6.1 medium implementation workers and focused Astra correctness review.
+Use implementation workers and a separate focused correctness reviewer.
 Keep each native path and its host preparation consistent before building. Use
 separate worktrees and coordinate shared interfaces before concurrent edits.
-CPU, GIC, startup and multicore work remain the primary agent's responsibility.
+Only the coordinator runs board tests.
 Resume checks from saved state and reuse successful evidence while its relevant
 inputs match. Defer performance optimization and recurring measurements until
 required hardware functionality is established. Update canonical hardware and
