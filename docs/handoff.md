@@ -204,6 +204,11 @@ prepared set (`board-bundles-20261024-5/`, records `set5-*`):
   these figures by the procedure in `docs/designs/pmic-access.md`.
 - **Bundle 7 (`set5-bb7-run/`):** the owner again found domain 1 ON and
   adopted it.
+- **Native USB on the changed provider (`set5-r9-v6-usb/`, from
+  `board-bundles-20261024-6/`):** the OUT/IN exchange completed, the task
+  quiesced and the ROM answered again, so rank 9 is requalified on the
+  PMIC access-path change. The returning thermal image of rank 6 does not
+  link the provider and needs no rerun.
 
 On 2026-10-23, after the rank 9 refusal, both ports were power-cycled and
 passed a fresh cold DDR start (`ddr-2/`). Port `3-3` has stayed in that
