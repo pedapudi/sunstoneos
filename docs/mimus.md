@@ -12,6 +12,12 @@ The [native USB application](mimus-usb.md) adds model and recording uploads,
 repeated recognition requests, and result retrieval within one running OS session.
 That document records the native asset layout and transport evidence.
 
+The [integrated OS recorded-audio mode](os-image.md#first-bounded-launch-with-recorded-audio)
+now accepts an explicitly selected USB0-only workload. It waits for USB0 startup,
+authenticates the staged model and recording, and exposes one transcript without
+requiring a USB disk. The native build and focused software checks pass; physical
+execution remains pending. The storage profiles retain their overlap checks.
+
 ## Engine and model
 
 The companion mimus port is pinned in [apps/mimus/source.json](../apps/mimus/source.json).
