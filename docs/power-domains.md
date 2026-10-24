@@ -230,12 +230,17 @@ the actual owner.
 The host models, the merge-base comparison and the commands are recorded in
 the design document's implementation section
 ([docs/designs/power-domains.md](designs/power-domains.md)). The figures are
-modeled, except the service steps of the read-only board run.
+modeled, except the service steps of the read-only board runs.
 
 On the board, 400 kHz snapshot steps took 146% of their wire time against a
-110% target; section "Board result of the service steps" of the
-[design](designs/power-domains.md) gives the cause, the provisional 155%
-bound and the provider follow-up.
+110% target, and 123.7% (779 µs, median) after the provider follow-up.
+The provisional median limit is 1,268 permille of each step's measured
+wire time, with another 40 µs for the first step, at CPU-L 494 MHz under
+bundle 6's conditions. At nominal wire time those limits round to 799 µs
+and 839 µs. The 110% target remains open because a write without its
+trailing barrier has not been measured. Section "Board result of the
+service steps" of the [design](designs/power-domains.md) gives the evidence
+and the limits of the cost model.
 
 ## Checks
 

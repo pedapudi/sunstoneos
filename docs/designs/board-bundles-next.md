@@ -277,10 +277,10 @@ record.
   bytes and STOPs, the flag at the first read of each byte phase and the
   most polls of one phase; the wire time follows from the phases and the bit
   time (two bit times per START, repeated START or STOP, nine per byte). The
-  summary counts the steps at most 100%, up to 105%, up to 110%, up to 155%
-  and above 155% of their wire time; 155% is the provisional bound of
-  [power-domains.md](power-domains.md), and the 155% bins are in the source
-  for the next bundle 6 set. That set also measures the cost of a provider
+  current summary counts steps at most 1,000, 1,050, 1,100 and 1,268
+  permille of their measured wire time, then those above 1,268. Ratios
+  round up from counter ticks. The fifth and sixth sets' frozen images
+  used the earlier 1,550-permille limit. The image also measures a provider
   register access, as [pmic-access.md](pmic-access.md) plans it. At the
   park, the service task, which is the provider task, enters the I2C mutex
   through the adapter while the provider is idle and times by `CNTPCT` 256
@@ -320,8 +320,13 @@ record.
   ([pmic-access.md](pmic-access.md) gives why the larger byte fails); a mismatch is a `FAIL`. Each cost window
   prints its total over 256 iterations and its fastest and slowest of eight
   sub-windows, and the write record its fastest and slowest write. After
-  the run, the post-change bound of [pmic-access.md](pmic-access.md) is
-  computed from those windows and replaces 155% for later runs.
+  the run, the provisional empirical limit of [pmic-access.md](pmic-access.md)
+  was selected from the observed median plus approximately 20 µs. The
+  current source sets `BB_BOUND_PERMILLE` to 1,268 of measured wire time
+  and adds 40 µs for the first step. At nominal wire time these limits
+  round to 799 µs and 839 µs. A newly frozen image is required to apply
+  them on the board; the preserved board pass used 1,550 permille.
+
 - **Bundle 7** reads the domain-1 words before the request, then lets the
   owner run its sequence. After the owner's ON command reaches the PPU, the
   layer reads the status back to back until it reads ON or 10 ms pass, and
@@ -520,7 +525,7 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
 | Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
-| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases; the board measured 146% (median), and the owner's design sets a provisional bound of 155% for a snapshot step ([power-domains.md](power-domains.md)) | Bundle 6 STEP lines |
+| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | Provisional median limit 1,268 permille of measured wire time, first plus 40 µs, at CPU-L 494 MHz; about 799/839 µs only at nominal wire time. The 110% target remains open ([pmic-access.md](pmic-access.md)) | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
 | Host sandbox, bytes read, copies | [board-bundles-measurements.md](board-bundles-measurements.md) | Unchanged | `checks/board-bundles.py` |
 

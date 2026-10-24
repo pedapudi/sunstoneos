@@ -25,24 +25,14 @@
  * - the GPU supply consumer, which completes from the boot record with no
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
- * Board cost, 400 kHz only, one table row per cost set: a register read, a
- * register write, a provider poll (its task check plus the object try-lock and
- * per-phase software, which no access-cost window times) and a time read.
- * The costs come from bundle 6 on port 3-3 on 2026-10-24 with the changed
- * provider, each at the slowest of its eight timed sub-windows of 32
- * iterations of the 24 MHz counter (docs/designs/pmic-access.md, "Bound"):
- * a read 529 ns (the adapter's read 470 ns plus the bundle's trace observer
- * 59 ns); a write 1,026 ns (the slowest timed write, 16 ticks or 667 ns, plus
- * the observer and two counter stamps of 150 ns); a time read 150 ns; a poll
- * 81 ns, the task check. At those costs the model's snapshot step is 756 us,
- * 23 us below the board's median of 779 us. About 300 ns more per poll, the
- * software between the timed operations, reproduces the median; the
- * post-change bound is that step plus 20 us, 799 us (1,268 permille of the
- * 630 us bit-time wire time). A third row charges the per-poll remainder of
- * the base provider's 1,300 ns fit, 2,340 ns; its step overstates the board's
- * by 71 us. Two rows with no software cost show the bus floor: at the bare
- * S_TWI0 read of 379 ns per access a snapshot exceeds 110% of its bit-time
- * wire time, and at 300 ns it stays within it.
+ * Board-cost sensitivity, 400 kHz: read, write, poll and time-read costs
+ * are independent. Component means give illustrative 506/402/77/144 ns;
+ * they omit wrapper work and do not independently predict a board limit.
+ * Legacy 529/1026 ns rows preserve the rejected fit for comparison only.
+ * Separate read and write floors assume 1 ns for the other access (zero
+ * write_ns would silently reuse the read cost). Equal-cost rows at 22 and
+ * 23 us per byte expose the rounding sensitivity. No row establishes a
+ * hardware floor or the attainable benefit of changing barriers.
  * Slow bus, 400 kHz: every flag sets 10% later than the divisor implies
  * (25 us bytes, 6 us conditions). A snapshot and a selector write each take
  * one step within 110% of that wire time.
@@ -192,10 +182,12 @@ static unsigned consumer_ticks(int gpu_consumer,unsigned on)
         assert(++ticks<20);
     }
 }
-int main(void)
+int main(int argc,char **argv)
 {
+    const unsigned board_only=argc==2 && !strcmp(argv[1],"--board-costs");
+    assert(argc==1 || board_only);
     static const struct rate rates[]={{"400kHz",0x28,23,5},{"100kHz",0x2a,90,20}};
-    for(unsigned k=0;k<2;++k) {
+    for(unsigned k=0;k<2 && !board_only;++k) {
         const struct rate *r=&rates[k];
         printf("{\"rate\":\"%s\",",r->name);
         /* Boot: provider startup and supply verification. */
@@ -305,39 +297,42 @@ int main(void)
         printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
     }
     {
-        /* Board cost at 400 kHz. The wire time is the bit-time wire: 252 bit
-         * times of 2,500 ns for a snapshot, as on the board. The model's byte
-         * stays 23 us, the service's spin target for a 22.5 us byte; bundle 6
-         * measured the byte at nine bit times. */
-        enum { FLOOR_ABOVE=1, FLOOR_WITHIN, BOUNDED };
-        static const struct { uint64_t read_ns,write_ns,poll_ns,now_ns; unsigned write_steps,kind; } rows[]={
-            {529,1026,81,150,1,BOUNDED},{529,1026,380,150,1,BOUNDED},{529,1026,2340,150,2,0},
-            {379,379,0,40,1,FLOOR_ABOVE},{300,300,0,40,1,FLOOR_WITHIN}};
-        /* The post-change bound of a median snapshot step and its margin. */
-        const uint64_t bound_us=799,margin_us=20;
+        /* 252 nominal bit times; the board bound is empirical and is
+         * exercised by board-bundles-apps-model.c against measured wire. */
+        static const struct {
+            const char *name;
+            uint64_t read_ns,write_ns,poll_ns,now_ns,byte_us;
+            unsigned write_steps;
+            uint64_t snapshot_us;
+        } rows[]={
+            {"component means, incomplete",506,402,77,144,23,1,731},
+            {"legacy fit at 250 ns poll",529,1026,250,150,23,1,757},
+            {"legacy median fit",529,1026,380,150,23,1,779},
+            {"legacy selector split",529,1026,386,150,23,2,781},
+            {"legacy base remainder",529,1026,2340,150,23,2,850},
+            {"read floor, assumed 1 ns write",379,1,0,40,23,1,688},
+            {"write floor, assumed 1 ns read",1,379,0,40,23,1,685},
+            {"assumed equal costs, 22 us byte",379,379,0,40,22,1,694},
+            {"assumed equal costs, 23 us byte",379,379,0,40,23,1,712}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
-        assert(bound_us*1000*1000/wire_snapshot_ns==1268);
         for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);++i) {
-            const struct rate *r=&rates[0];
-            setup(r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            const struct rate r={"400kHz",0x28,rows[i].byte_us,5};
+            setup(&r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
             struct request_cost snapshot=request(0,1,0,0);
-            setup(r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            setup(&r,rows[i].read_ns);m.now_ns=rows[i].now_ns;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
             struct request_cost write=request(1,1,0,0);
-            printf("{\"rate\":\"400kHz, %llu ns per register read, %llu per write, %llu per poll, %llu per time read\",",
-                (unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,(unsigned long long)rows[i].poll_ns,
-                (unsigned long long)rows[i].now_ns);
+            printf("{\"case\":\"%s\",\"read_ns\":%llu,\"write_ns\":%llu,\"poll_ns\":%llu,\"now_ns\":%llu,\"byte_us\":%llu,",
+                rows[i].name,(unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,
+                (unsigned long long)rows[i].poll_ns,(unsigned long long)rows[i].now_ns,(unsigned long long)rows[i].byte_us);
             print_cost("snapshot",snapshot);print_cost("selector_write",write);
-            const uint64_t permille=snapshot.longest_step_us*1000000/wire_snapshot_ns;
-            printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",(unsigned long long)permille);
-            assert(snapshot.steps==1 && !snapshot.tick_waits);
+            printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
+                (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
+            assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us==rows[i].snapshot_us);
             assert(write.steps==rows[i].write_steps && write.tick_waits==rows[i].write_steps-1 &&
                 write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
-            if(rows[i].kind==BOUNDED)assert(snapshot.longest_step_us+margin_us<=bound_us);
-            if(rows[i].kind==FLOOR_ABOVE)assert(permille>1100);
-            if(rows[i].kind==FLOOR_WITHIN)assert(permille<=1100);
         }
     }
-    {
+    if(!board_only) {
         /* Slow bus: flags 10% later than the 400 kHz divisor implies. */
         static const struct rate slow={"400kHz divisor, 25 us bytes",0x28,25,6};
         const uint64_t read_us=3*slow.edge_us+4*slow.wire_us,wire_snapshot=6*read_us,
@@ -351,6 +346,7 @@ int main(void)
         assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us*10<=wire_snapshot*11);
         assert(write.steps==1 && !write.tick_waits && write.longest_step_us*10<=wire_write*11);
     }
+    if(board_only) {puts("PASS PMIC board-cost sensitivity rows");return 0;}
     puts("PASS PMIC service task: bounded byte spins, no lock in live(), at most one BUSY result per caller, "
          "no idle wakes, one-tick row visibility, no PMIC transaction per GPU start, park predicate");
     return 0;

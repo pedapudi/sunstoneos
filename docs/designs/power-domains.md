@@ -10,10 +10,11 @@ lock-free PMIC time reads exist. Section numbers refer to
 design's baselines were counted on commit `b3b1289` with the host models in
 the budget table. One set of figures comes from the board: the service steps
 of a read-only run on port 3-3, in section "Board result of the service
-steps". They exceed the 110% wire-time target; this design sets a
-provisional bound of 155% for a snapshot step at 400 kHz under that run's
-conditions and records the provider follow-up, which shortens the step and
-leaves 110% to a lighter barrier placement.
+steps". They exceed the 110% wire-time target. The provider follow-up
+shortened the step, and a second run with it measured the register access
+costs. The provisional median limit for a 400 kHz snapshot is 1,268 permille of
+its measured wire time, with another 40 µs for the first step. The 110%
+target remains open because plain write cost has not been measured.
 
 ## Ownership and data flow
 
@@ -216,7 +217,7 @@ and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: snapshot 0, one step of at most 155% of its wire time (provisional, from one board run; replaced after the next bundle 6 measures the access cost, section "Board result of the service steps"); selector write at most 1 tick wait in 2 steps; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c`; bundle 6 on the board |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: snapshot 0, one step; median at most 1,268 permille of measured wire time, first at most that limit plus 40 µs (bundle 6, section "Board result of the service steps"); selector write at most 1 tick wait in 2 steps; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c`; bundle 6 on the board |
 | BUSY results seen by other cores during one snapshot | `a733_pmic_live`: BUSY whenever it meets a poll | `a733_pmic_live` 0; `a733_pmic_result` and `a733_pmic_reap` ≤ 1 per caller | `power-domains-service.c`, concurrent caller on the second core |
 | CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in every image in the table | 0 on one core and on two | `power-domains-service.c` |
 | Service wakes per second with no work | 1,000 | 0 until the session deadline; park, stop and revocation notify | `power-domains-service.c` |
@@ -262,10 +263,6 @@ GPU liveness park complete before their deadlines.
   400 kHz the host model at the board's fitted register-access cost predicts
   two steps with one tick wait. DCDC2 and DCDC4 snapshot steps were measured
   (section "Board result of the service steps").
-- The cost of a provider register access, divided into the bus access with
-  its barriers, the time reads and the provider's software, from the next
-  bundle 6, which runs the provider follow-up; then the bound that replaces
-  155%.
 - Qualified delivery of the S_TWI0 interrupt, GIC SPI 203, for each bus
   phase. It is the condition under which the service blocks on the
   interrupt instead of spinning for each bus phase.
@@ -322,7 +319,7 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 
 | Metric | Merge base | Now | Target |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | Model at 200 ns per register access, 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs, so 107%). Model at the board's fitted 1,300 ns: snapshot 0, one step of 915 µs (145% of the 630 µs bit-time wire time); selector write 1, in 2 steps. Board, snapshot: one step of 917 µs, 146% of 630 µs (median of 34). 100 kHz model: 2 and 3, at most 1,000 µs spin per step | 400 kHz: snapshot 0, one step of at most 155% of wire time (provisional); selector write at most 1 in 2 steps; 100 kHz: ≤ 1 ms per step, 2 and 3 |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | Model at 200 ns per register access, 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs, so 107%). Model at the board's fitted 1,300 ns: snapshot 0, one step of 915 µs (145% of the 630 µs bit-time wire time); selector write 1, in 2 steps. Board, snapshot: one step of 917 µs, 146% of 630 µs (median of 34); with the provider follow-up, 779 µs, 123.7% (median of 33). 100 kHz model: 2 and 3, at most 1,000 µs spin per step | 400 kHz: snapshot 0, one step with a provisional median limit of 1,268 permille of measured wire time; selector write at most 1 in 2 steps; 100 kHz: ≤ 1 ms per step, 2 and 3 |
 | BUSY results seen by another caller during one snapshot | `a733_pmic_live`: 211 per snapshot | `a733_pmic_live` 0; `a733_pmic_result` at most 1 with two cores, 0 with one; `a733_pmic_reap` 0 | `a733_pmic_live` 0; result and reap ≤ 1 per caller |
 | CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in all five images | 0: the service runs below USB0 in all five images, and the owner's code has no critical section or scheduler suspension; the provider's lock waits at activation are one-tick blocks, which USB0 preempts | 0 on one core and on two |
 | Service wakes per second with no work | 1,000 | 0; 2 in the resident board image, which caps the block at 500 ms; one wake per park, stop or row notification | 0 until the session deadline |
@@ -340,7 +337,7 @@ phases. The design's first estimate of 240 and 320 bit times (0.6 ms and
 0.8 ms) is below the model's wire time, which counts nine bit times per byte
 and two per condition, so the target is stated relative to wire time. The
 board's register accesses cost more, and section "Board result of the service
-steps" sets a provisional bound of 155% for a snapshot step;
+steps" gives the bound for a snapshot step;
 `checks/power-domains-service.c` checks both access costs. Supply verification
 ends 8.4 ms after the service's first step at 400 kHz and 15.0 ms at 100 kHz, with flags set at sub-microsecond times,
 in the model.
@@ -417,35 +414,41 @@ accesses of the next poll before its phase-start write, add to the wire
 time. The provider follow-up, [pmic-access.md](pmic-access.md), times each
 spin from the provider's time of the phase-start write with a minimum re-spin
 of a quarter bit time, and reads the time once per bus phase instead of twice
-per access. With flags set at sub-microsecond times,
-`checks/power-domains-service.c` then gives a 400 kHz snapshot step of
-846 µs at 1,300 ns per access (134% of the 630 µs bit-time wire), 758 µs at
-800 ns and 782 µs at 850 ns, and a DCDC3 selector write in one step at
-800 ns and in two at 850 ns, with 200 ns per provider poll and 100 ns per
-time read. A step within 110%
-would still need about 0.3 µs per access in the model. The owner's fastest
-measured interval, 0.42 µs between CCU reads with recording, exceeds that,
-so 110% needs a lighter barrier placement, which needs board
-qualification.
+per access.
 
-The next bundle 6 times the parts of a provider register access in the
-service task, which gives the split, and counts its steps against the bound
-below (section "Records of bundles 6, 7 and 8" of
-[board-bundles-next.md](board-bundles-next.md)).
+A second bundle 6 ran the follow-up on port 3-3 on 2026-10-24, with CPU-L at
+494 MHz in the same lifetime and the bundle's trace observer and write
+stamps active. Its median snapshot step was 779 µs, 123.7% of the 630 µs
+wire time (33 steps, 777 to 788 µs after the first), and its first step
+809 µs, 128.4%. The byte measured the nominal 22.5 µs, and no phase needed a
+re-spin. Timed in the service task, a bare S_TWI0 read takes about 378 ns,
+the `DSB SY` pair adds about 41 ns, the adapter's read takes 462 ns on
+average, a time read 144 ns and a write about 358 ns. Section "Board result"
+of [pmic-access.md](pmic-access.md) gives the windows, the model at those
+costs and explains why the model does not independently derive the bound.
+Interrupts landed in 24 of the 33 recorded steps.
 
-**Provisional bound.** At 400 kHz a snapshot completes in one step of at most
-155% of its wire time. The bound holds only for this run's conditions: CPU-L
-at 494 MHz, one core, the bundle 6 trace hook active, port 3-3 and one
-lifetime. Its headroom is judged against step 1, the slowest step at
-149.4%, which is 5.6 points below the bound. A step above about 159% (1,000 µs for a 630 µs
-snapshot) would reach the service's 1 ms spin limit and split the snapshot
-across a tick wait. The bound is replaced after the access-cost
-measurement, by the model's step at the measured access cost plus a margin
-for the median step and a separate bound for the first step
-([pmic-access.md](pmic-access.md)). At 1,300 ns per access, a
-selector write, wire time 828 µs in the model, takes two steps with one tick
-wait. Until a DCDC3 write is measured on the board or the follow-up lands,
-its bound is at most one tick wait in two steps.
+The 110% target remains open. A plain read costs about 379 ns, but plain
+write cost has not been measured. Assuming 379 ns for every access gives
+694–712 µs depending on whether model bytes take 22 or 23 µs. Separate
+read/write assumptions give different results; these rows establish no
+hardware floor. The optional write-throughput window is specified in
+[pmic-access.md](pmic-access.md) pending safe-register review.
+
+**Provisional empirical bound.** At 400 kHz a snapshot completes in one
+step. Its median limit is 1,268 permille of its measured wire time; the
+first-step limit adds 40 µs. At the nominal 22.5 µs byte, these limits are
+798.840 µs and 838.840 µs, approximately 799 µs and 839 µs. They come from
+the observed median plus approximately 20 µs and hold for bundle 6 at
+CPU-L 494 MHz on one service core with its trace observer and write stamps.
+The fitted 299 ns per-poll remainder does not measure software overhead.
+
+At a step near 1 ms, the service can split a snapshot across a tick wait.
+The DCDC3 selector-write bound remains at most two steps with one tick
+wait, pending a board run. The historical mixed-cost model takes one
+1,001 µs step at 380 ns per poll and splits at 386 ns; the 250 ns poll row
+gives a 757 µs snapshot. These are sensitivity results from a rejected
+calibration, not independent hardware limits.
 
 Differences from the design, each with its reason:
 

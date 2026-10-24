@@ -63,16 +63,14 @@ struct bb_step {
     uint32_t interrupts;               /* scheduler ticks inside it */
     uint16_t conditions, bytes, stops, first_set, first_clear, polls_max, respins;
 };
-/* Step evaluation against the wire time of the steps' phases (bit time
- * bit_ns, byte time byte_ns), with each step's ratio computed once:
- * - the distribution in thousandths: at most 1000, 1050, 1100, 1550, above;
- *   steps longer than 1.1 ms; and the largest ratio;
- * - the provisional bound of docs/designs/pmic-access.md, which holds until a
- *   bundle 6 run has measured the access costs: the median step at most 155%
- *   of its wire time (the larger middle value of an even count) and the first
- *   step at most 155% of its wire time plus 40 us. Re-spins are reported, not
- *   bounded. */
-#define BB_BOUND_PERMILLE 1550u
+/* Step evaluation against each step's measured wire time. Ratios round up
+ * to thousandths using the counter ticks directly: at most 1000, 1050,
+ * 1100, BB_BOUND_PERMILLE, then above. The provisional empirical limit is
+ * 1268 permille for the median (larger middle value for an even count), and
+ * the same wire-relative limit plus 40 us for the first step. It applies to
+ * bundle 6 at CPU-L 494 MHz with its observer and write stamps enabled.
+ * Re-spins are reported; see docs/designs/pmic-access.md. */
+#define BB_BOUND_PERMILLE 1268u
 #define BB_BOUND_FIRST_EXTRA_NS 40000u
 #define BB_BOUND_STEPS 160u
 struct bb_step_bins { unsigned bins[5], over_ms; uint64_t worst; };
