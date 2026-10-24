@@ -21,11 +21,14 @@ Terminal class.
   and hashes it. It generalizes the coordinator's
   `~/.cache/sunstoneos/evidence/board-session-20261023/state-capture-readl.py`.
   Each bundle supplies only a data file `WORDS.json`. The reader saves the
-  128 FEL scratch bytes at `0x71000` with `read`, then issues `readl`. Each
-  `readl` command writes a 48-byte A32 stub and its result into that scratch
-  area and runs it in the ROM's context (`aw_fel_readl_n` in the pinned
-  sunxi-tools `fel_lib.c`, lines 352–386). One word takes 52 bytes, so the
-  128-byte save covers up to 20 words per command. The first FEL write of
+  128 FEL scratch bytes at `0x71000` with `read`, then issues `readl`. The
+  cited lines are those of the A733 build of sunxi-tools,
+  `~/.cache/sunstoneos/build/sunxi-a733/fel_lib.c` (revision `b92f4ed` with
+  pull request 259 applied). Each command-line `readl` reads one word
+  (`fel.c` line 408): it writes a 48-byte A32 stub and the word's slot, the
+  same first 52 bytes of scratch whatever the word count, and runs the stub
+  in the ROM's context (`aw_fel_readl_n`, lines 352–386). The 128-byte save
+  therefore covers every `readl` command. The first FEL write of
   a session also clears `SCTLR.I` in the ROM's context: `aw_fel_write` calls
   `aw_disable_icache` (lines 298–323) because `icache_fix` is set for the
   A733 ([boot.md](../boot.md)). Each condition word is read in its own
@@ -45,9 +48,12 @@ lines 908–915) names only its oscillator parent and no bus clock or reset.
 A record of the same port and lifetime admits their words. In a lifetime
 without such a record, a word there is a first read and sits after every
 bundle that does not need it. Every other word needs a condition word. The
-oscillator word `0x07090160` lies in the RTC window, whose bus gate and reset
-are R_CCU `0x20c` bits 0 and 16 (`ccu-sun60iw2-r.c` lines 169–171 and 232;
-`sun60iw2p1.dtsi` lines 962–970), so that R_CCU word is its condition.
+oscillator word `0x07090160` is the DCXO register of the RTC clock driver
+(`ccu-sun60iw2-rtc.c` lines 71 and 78), whose node (`sun60iw2p1.dtsi` lines
+901–906) names no gate. The RTC node overlaps the same window with the bus
+gate and reset R_CCU `0x20c` bits 0 and 16 (`ccu-sun60iw2-r.c` lines 169–171
+and 232; `sun60iw2p1.dtsi` lines 962–970). Gating the word on that R_CCU word
+is the conservative choice.
 
 **Order.** Known results come first, and each first access to a register
 block follows every bundle that can run without it, so a stall loses only the
@@ -240,7 +246,7 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 
 | Sequence | Source | Status |
 | --- | --- | --- |
-| Oscillator word behind R_CCU `0x20c` | `ccu-sun60iw2-r.c` lines 169–171 and 232; `sun60iw2p1.dtsi` lines 962–970 | Board-read in earlier lifetimes |
+| Oscillator word, gated on R_CCU `0x20c` | `ccu-sun60iw2-rtc.c` lines 71 and 78; `ccu-sun60iw2-r.c` lines 169–171 and 232; `sun60iw2p1.dtsi` lines 901–906 and 962–970 | Board-read in earlier lifetimes |
 | CPU-L words, CPU PLL block without a bus gate | Pinned `ccu-sun60iw2-cpupll.c`; `sun60iw2p1.dtsi` lines 908–915; read by the mimus runtime ([mimus.md](../mimus.md)) | Board-read in earlier lifetimes |
 | Speed-bin, PLL_NPU and NPU clock words | [cpu-clock.md](../cpu-clock.md); [npu-platform.md](npu-platform.md) | First read |
 | CCU `+0x580` to `+0x588` | Manual sections 4.1.6.74 to 4.1.6.76 | `+0x584` first read |
