@@ -264,10 +264,13 @@ Power and thermal integration remains incomplete:
 - **CPU operating points.** The optional supervised CPU clock build uses
   the pinned 26 MHz tables, speed-bin limits and session grant. The tables
   extend to 1,794 MHz for CPU-L and 2,002 MHz for CPU-B, subject to the bin.
-  The existing driver lowers only clusters that it raised above **1,014 MHz**
-  to that thermal ceiling, preserving voltage. Restoration consumes an
-  authorized change; exhausted grants leave the lower rate in place.
-  Inherited high rates that the driver did not set are not reduced.
+  The driver lowers clusters that it raised above **1,014 MHz** to that
+  thermal ceiling, preserving voltage. It can also lower an inspected,
+  supported inherited point when the session grants that cluster and ceiling;
+  each inherited lowering consumes an authorized change. Source-rate and
+  voltage checks precede the transition. Restoration needs authority for the
+  original point and another change. Inherited thermal transitions never
+  change voltage. Missing or exhausted grants leave inherited rates unchanged.
   The ordinary OS build changes neither CPU clocks nor voltage.
 - **GPU lifetime.** Critical thermal failure revokes the GPU backend through
   `board.fatal`. The resident supervisor ends renewal on a stalled GPU wait
