@@ -48,6 +48,17 @@ int os_session_valid(const struct os_session *s)
         return 0;
     for(unsigned i=0;i<4;++i)if(owners[i]==d->owner)return 0;
 #endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    /* The grant names this session; its owner holds only the CPU clock and
+     * rail leases. */
+    struct a733_cpu_clock_config cpu;
+    if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
+       cpu.owner==s->thermal_owner||cpu.grant.clusters==3)return 0; /* One cluster per approved step. */
+    for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
+#ifdef SUNSTONE_A733_OS_AUDIO
+    if(cpu.owner==s->audio.dma.owner)return 0;
+#endif
+#endif
     return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)

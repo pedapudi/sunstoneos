@@ -8,7 +8,12 @@ With --count, the scheduler run also counts, for each call of the kernel and
 port functions in COUNTED, the instructions, SVC, DSB, DMB and ISB that the
 calling core executes until the call returns, and the lock calls it makes.
 Instructions of other tasks and of interrupts taken during the call are not
-counted. The result gives the median of each count over all calls.
+counted. The result gives the median of each count over all calls; sgi_sends
+counts the calls of vInterruptCore and woken the entries of prvYieldForTask
+(a task made ready that must run now) during the counted call. tick_by_wakes
+separates the tick handler's calls that woke nothing, those taken while the
+scheduler was suspended, which only pend the tick, and those that woke a
+task, whose SGIs are required preemptions.
 """
 import argparse
 import ctypes
@@ -29,7 +34,8 @@ GPR=[UC_ARM64_REG_X0+i for i in range(29)]+[UC_ARM64_REG_X29,UC_ARM64_REG_LR]
 MASK=(1<<64)-1
 COUNTED=('vTaskEnterCritical','vTaskExitCritical','xTaskGetCurrentTaskHandle','ucPortGetCoreID',
     'FreeRTOS_SGI_Handler','FreeRTOS_Tick_Handler','vTaskSwitchContext','vTaskEnterCriticalFromISR',
-    'vTaskExitCriticalFromISR','vTaskDelay','xTaskGenericNotify','ulTaskGenericNotifyTake')
+    'vTaskExitCriticalFromISR','vTaskDelay','xTaskGenericNotify','ulTaskGenericNotifyTake','vInterruptCore',
+    'xTaskIncrementTick')
 # TPIDRRO_EL0 is UNKNOWN at reset. The scheduler run seeds a value whose task
 # field is nonzero and whose core field is 0xff; the entry code must clear it.
 TPIDRRO_RESET=(0xff<<48)|0x41ff0000
@@ -319,15 +325,29 @@ class Machine:
             done=calls.pop();self.samples[done['name']].append(done['counts'])
         if a in self.entries:
             calls.append({'name':self.entries[a],'return':u.reg_read(UC_ARM64_REG_LR),'sp':sp,'irqs':irqs,
-                'task':task,'counts':dict.fromkeys(('instructions','svc','dsb','dmb','isb','lock_calls'),0)})
+                'task':task,'counts':dict.fromkeys(('instructions','svc','dsb','dmb','isb','lock_calls','sgi_sends','woken'),0)})
+            # A tick taken while the scheduler is suspended only pends the tick.
+            calls[-1]['counts']['suspended']=int(self.q(self.symbols['uxSchedulerSuspended'])!=0)
         for call in calls:
             if call['irqs']!=irqs or call['task']!=task:continue
             counts=call['counts'];counts['instructions']+=1
             if op in counts:counts[op]+=1
             if a==self.symbols['vPortRecursiveLock']:counts['lock_calls']+=1
+            if a==self.symbols['vInterruptCore']:counts['sgi_sends']+=1
+            if a==self.symbols['prvYieldForTask']:counts['woken']+=1
     def counts(self):
-        return {name:{'calls':len(samples),**{key:statistics.median_low(s[key] for s in samples)
+        result={name:{'calls':len(samples),**{key:statistics.median_low(s[key] for s in samples)
             for key in samples[0]}} for name,samples in self.samples.items() if samples}
+        ticks=self.samples['FreeRTOS_Tick_Handler']
+        quiet=[s for s in ticks if not s['woken'] and not s['suspended']];woke=[s for s in ticks if s['woken']]
+        median=lambda rows,key:statistics.median_low(s[key] for s in rows) if rows else None
+        result['tick_by_wakes']={
+            'woke_nothing':{'ticks':len(quiet),'max_instructions':max((s['instructions'] for s in quiet),default=None),
+                **{key:median(quiet,key) for key in ('instructions','svc','dsb','isb','sgi_sends')}},
+            'pended':{'ticks':sum(s['suspended'] for s in ticks),'instructions':median([s for s in ticks if s['suspended']],'instructions')},
+            'woke_tasks':{'ticks':len(woke),'sgi_sends_total':sum(s['sgi_sends'] for s in woke),
+                **{key:median(woke,key) for key in ('instructions','woken','sgi_sends')}}}
+        return result
     def mappings(self):
         names=['a733_cached_el3_l1','a733_cached_el3_l2','a733_cached_el3_l3',
                'a733_cached_el1_l1','a733_cached_el1_l2']

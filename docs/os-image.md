@@ -451,6 +451,51 @@ headset. At run time, the headset pin entry refuses PG or PM pins that
 another owner already holds. With the radio, it refuses a module pin
 authority or PM latch other than the radio's.
 
+## Recognition on the Cortex-A76 cores and granted CPU operating points
+
+Every OS build sets `configTASK_DEFAULT_CORE_AFFINITY` to the A55 mask 0x3F
+([a733_smp_placement.h](../include/a733_smp_placement.h)), so a task created
+without an affinity runs only on cores 0 to 5. The options below are off by
+default; the [design](designs/cpu-a76-dvfs.md) and its
+[measurements](designs/cpu-a76-dvfs-measurements.md) give the budgets.
+
+- **`A733_A76_ADMITTED`**, a CMake option and compile definition. The
+  recognizer runs on core 6 and the engine's second inference worker
+  (`apps/mimus/parallel_runtime.cc`) on core 7, through
+  [recognition-placement.patch](../apps/os/recognition-placement.patch); the
+  GPU linear build's own recognizer patch places the recognizer and starts
+  the worker, and `start.c` asserts that its `OS_RECOGNITION_CORE` equals
+  the header's core. Before the scheduler
+  the thermal start reads the CPU clock report once (eight reads after the
+  mapping check of the oscillator, fuse and CPU PLL pages) and refuses the
+  start, panic 11, when CPU-B is not on its locked PLL with a decodable rate.
+  The recognizer prints a `CLOCK` line before and after each recognition.
+- **`SUNSTONE_A733_OS_CPU_CLOCK`**, supervised lifetime and
+  `A733_A76_ADMITTED` only. The session appends the CPU clock driver's
+  96-byte grant record and is 904 bytes, or 1,088 with the microphone. The
+  admission loads the record against the board session's epoch and
+  generation and refuses a grant owner equal to any other owner and a grant
+  that names both clusters. The
+  thermal task owns the driver ([CPU clock](cpu-clock.md#the-integrated-os-image-owns-the-driver-in-its-thermal-task));
+  a record that names no cluster changes no clock or voltage. The recognizer
+  starts each timed run only after the owner has finished its requests; an
+  owner that has not finished within one second ends the session with an
+  `ERROR` line. The link check records the build as `cpu_clock`.
+
+Preparation (`apps/os/prepare.py`) writes a session whose grant names a
+cluster only from an approval record of schema
+`a733-os-cpu-clock-approval-v1` in the entry record's `cpu_clock_approval`.
+The approval names the board identity and port, the image SHA-256, the
+session's epoch, generation and lease, the step (A1: CPU-B at 1,196 MHz; A2:
+CPU-B at the highest point of the board's bin; A3: CPU-L at 1,196 MHz), the
+cluster, the highest point, the change count, the user's approval text and
+date, and the board's read-only B1 record (`a733-os-cpu-clock-b1-v1`: a
+passed run with a grant that named no cluster, the fuse word, DCDC3 and
+DCDC5 readings, pattern and LFM enables clear). Every grant field must equal
+the approval's, and the grant's approval hash is the record's SHA-256. The
+session size must agree with the link check's `cpu_clock` record. No new start entry, interrupt, task or resident service is
+added.
+
 ## Build and checks
 
 Each row below builds in the supervised lifetime and, with
@@ -666,7 +711,11 @@ another configuration and out-of-rule session fields, each before writing any
 output. The launcher freezes the bundle without the original evidence files,
 refuses another USB instance and a changed session, and its read-only claim
 check accepts only the matching claim through a modeled database connection.
-No device, queue database or FEL program is opened.
+In the CPU clock build it also prepares an A2 grant for a modeled board
+`3-3` and refuses an approval for another port or session, a B1 record whose
+bin tops at 1,508 MHz, a grant above the approval, the A1 step at 2,002 MHz,
+a missing approval, a second change, the other cluster and an approval
+without a grant. No device, queue database or FEL program is opened.
 
 ## Not yet integrated
 

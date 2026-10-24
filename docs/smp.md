@@ -129,11 +129,10 @@ per call over its scheduler run:
 | `vTaskSwitchContext` | 1,747, 10, 47, 24 | 305, 0, 9, 0 |
 | `vTaskExitCritical`, EL0 task | 373, 2, 19, 5 | 255, 1, 18, 4 |
 
-The seven supervisor calls left in the tick are `SVC 117`, which sends the
-yield SGI to other cores. The tick interrupts EL0 tasks, whose bit 56 is clear,
-so `vInterruptCore` takes the supervisor call although the handler runs at EL1.
-In this image every task runs at EL0, so the remaining critical-section calls
-also use the supervisor path for the mask.
+The seven supervisor calls that this table still shows in the tick were
+`SVC 117`, which sends the yield SGI to other cores; the next section removes
+them. In this image every task runs at EL0, so the remaining
+critical-section calls use the supervisor path for the mask.
 
 ```sh
 cache="$HOME/.cache/sunstoneos"
@@ -148,6 +147,63 @@ python3 checks/a733-smp-cached.py --evidence "$cache/evidence/smp-cached-count" 
 The counts are emulator evidence. QEMU models no cache-line transfer between
 cores, so it shows neither the cost of a nesting word written by another core
 nor the benefit of the per-core lines; only a board session can measure those.
+
+### SGIs leave EL1 code without a supervisor call
+
+`vInterruptCore` reads `TPIDRRO_EL0` once. When the register names a resumed
+task and either bit 56 is set (an EL1 task, or a handler that interrupted
+one) or the interrupt-nesting count of the core in bits [55:48] is nonzero (a
+handler that interrupted an EL0 task), it writes `ICC_SGI1R_EL1` after
+`DSB ISHST`. The EL1-task form ends with `ISB`, as Linux `gic_ipi_send_mask`
+does; a handler's exception return synchronizes the context instead. EL0
+tasks, and a core that has not resumed a task, keep `SVC 117`, because the
+register is UNDEFINED at EL0 (IHI 0069G §12.2.21). The kernel calls the
+function from task context inside its critical section, so the task cannot
+migrate between the register read and the nesting load, and an EL0 task reads
+a zero count because no handler is active on a core that runs a task. The
+target value comes from `portSGI1R_VALUE`, which defaults to the upstream
+Aff0 formula; the A733 configurations define it in line as `(core << 16) | 1`,
+the Aff1 core number with target-list bit 0, after asserting SGI 0.
+
+The tick no longer asks a core to give up its time slice merely because its
+priority's ready list holds another task. Above the idle priority a core
+yields only to a ready task that is not running (`taskTASK_NOT_RUNNING`) and
+admits that core; the union of those tasks' affinity masks is computed once
+per distinct running priority per tick. The idle priority keeps its length
+test, so idle tasks without per-core affinity behave as before.
+
+Measured with the cached eight-core instruction model on the diagnostic built
+from the base tree and from this tree (2026-10-24). `checks/a733-smp-cached.py
+--count` reports, in `tick_by_wakes`, the ticks that wake no task (no
+`prvYieldForTask` entry), the ticks taken while the scheduler is suspended,
+which only pend the tick, and the ticks that wake tasks, whose SGIs are
+required preemptions:
+
+| Metric | Base | Changed |
+| --- | --- | --- |
+| Ticks that wake no task: count, median and largest instructions, median `SVC`, `DSB`, SGI sends | 16, 1,345, 1,667, 5, 28, 5 | 9, 554, 590, 0, 18, 0 |
+| Pended ticks: count, median instructions | 15, 229 | 8, 231 |
+| Ticks that wake tasks: count, SGI sends over the run | 36, 246 | 47, 177 |
+| `vInterruptCore` median: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | 18, 0, 1, 0 |
+| SGI handler calls; `vTaskSwitchContext` calls over the run | 407; 708 | 185; 480 |
+
+On a tick that wakes nothing the base sent five time-slice SGIs to cores
+whose same-priority peers are pinned elsewhere; the changed tick sends none.
+Skipping the scan when a priority's list is no longer than the cores running
+it was tried and left out: the zero-wake median rose to 618 instructions in
+that run. [checks/smp-sgi-send.py](../checks/smp-sgi-send.py)
+runs the linked `vInterruptCore` under Unicorn: an EL0 task while another
+core is in a handler takes `SVC 117`, a handler that interrupted an EL0 task
+writes the register without `ISB`, an EL1 task writes it with `ISB`, and a
+core without a resumed task takes the supervisor call. The base image fails
+the second case.
+
+In QEMU (`checks/smp-port-cost.py`), the EL1 cross-core round trip falls from
+12,191 to 11,994 instructions and every other operation is unchanged. The new
+EL0 round trip rises from 14,127 to 14,169 instructions: the EL0 send path is
+5 instructions longer, and QEMU's lock-wait interleaving amplifies a longer
+send, as a control build with five no-ops in the base send path shows (EL0
+round trip 14,147, EL1 12,240). The check allows 24 instructions per EL0 send.
 
 ### One cached base builds every cached eight-core image
 

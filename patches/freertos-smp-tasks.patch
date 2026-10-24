@@ -10,22 +10,77 @@
                              xTaskScheduled = pdTRUE;
                          }
                      }
-@@ -4983,7 +4986,13 @@
+@@ -4981,9 +4984,68 @@
+             {
+                 BaseType_t xCoreID;
  
++                /* The cores that a ready, not-running task of each running
++                 * priority admits, computed once per distinct priority. */
++                UBaseType_t uxPriorities[ configNUMBER_OF_CORES ];
++                UBaseType_t uxAdmitted[ configNUMBER_OF_CORES ];
++                UBaseType_t uxSeen = 0U;
++
                  for( xCoreID = 0; xCoreID < ( ( BaseType_t ) configNUMBER_OF_CORES ); xCoreID++ )
                  {
 -                    if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ pxCurrentTCBs[ xCoreID ]->uxPriority ] ) ) > 1U )
 +                    UBaseType_t uxPriority = pxCurrentTCBs[ xCoreID ]->uxPriority;
++                    UBaseType_t uxIndex;
 +
 +                    /* The idle-priority list always holds one idle task per
 +                     * core. A core shares its time slice only when another task
 +                     * of its priority is ready, the test prvIdleTask applies. */
-+                    if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ uxPriority ] ) ) >
-+                        ( ( uxPriority == tskIDLE_PRIORITY ) ? ( UBaseType_t ) configNUMBER_OF_CORES : 1U ) )
++                    if( uxPriority == tskIDLE_PRIORITY )
++                    {
++                        if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ uxPriority ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++                        {
++                            xYieldPendings[ xCoreID ] = pdTRUE;
++                        }
++
++                        continue;
++                    }
++
++                    /* Above the idle priority a core yields its slice only to a
++                     * ready task that is not running and may run on it. Tasks
++                     * pinned to other cores would only reselect the same task
++                     * after an inter-processor interrupt. */
++                    for( uxIndex = 0U; ( uxIndex < uxSeen ) && ( uxPriorities[ uxIndex ] != uxPriority ); uxIndex++ )
++                    {
++                    }
++
++                    if( uxIndex == uxSeen )
++                    {
++                        const List_t * const pxList = &( pxReadyTasksLists[ uxPriority ] );
++                        UBaseType_t uxMask = 0U;
++
++                        if( listCURRENT_LIST_LENGTH( pxList ) > 1U )
++                        {
++                            const ListItem_t * pxItem;
++
++                            for( pxItem = listGET_HEAD_ENTRY( pxList ); pxItem != listGET_END_MARKER( pxList ); pxItem = listGET_NEXT( pxItem ) )
++                            {
++                                const TCB_t * const pxTCB = ( const TCB_t * ) listGET_LIST_ITEM_OWNER( pxItem );
++
++                                if( pxTCB->xTaskRunState == taskTASK_NOT_RUNNING )
++                                {
++                                    #if ( configUSE_CORE_AFFINITY == 1 )
++                                        uxMask |= pxTCB->uxCoreAffinityMask;
++                                    #else
++                                        uxMask = ~( UBaseType_t ) 0U;
++                                    #endif
++                                }
++                            }
++                        }
++
++                        uxPriorities[ uxSeen ] = uxPriority;
++                        uxAdmitted[ uxSeen ] = uxMask;
++                        uxSeen++;
++                    }
++
++                    if( ( uxAdmitted[ uxIndex ] & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
                      {
                          xYieldPendings[ xCoreID ] = pdTRUE;
                      }
-@@ -6665,11 +6674,19 @@
+@@ -6665,11 +6727,19 @@
  
              traceENTER_xTaskGetCurrentTaskHandle();
  

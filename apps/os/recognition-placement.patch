@@ -1,0 +1,51 @@
+--- recognition.cc
++++ recognition-a76.cc
+@@ -3,4 +3,10 @@
+ #include "../mimus/recorded.h"
+ #include "runtime.h"
++#include "../mimus/parallel_runtime.h"
++#include "a733_smp_placement.h"
++#ifdef SUNSTONE_A733_OS_CPU_CLOCK
++extern "C" int os_cpu_clock_ready(void);
++extern "C" void platform_puts(const char *);
++#endif
+ extern "C" {
+ #include "a733_storage_digest.h"
+@@ -23,4 +29,6 @@
+ void recognize(void *)
+ {
++    /* The engine's second worker runs on the other A76 core. */
++    mimus_parallel_bind();
+     /* Board owners must first establish live storage attachment. Hashing is
+      * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
+@@ -48,4 +56,16 @@
+         started.store(current,std::memory_order_release);
+         /* Authenticated above: load once, then reuse the retained engine. */
++#ifdef SUNSTONE_A733_OS_CPU_CLOCK
++        /* Time recognition at the granted operating point: the clock owner
++         * has finished its requests, whatever their result. Its two
++         * inspections and one request each have a 120 ms deadline and the
++         * first CPU sensor reading follows within 25 ms, so one second bounds
++         * the wait; an owner that has not finished by then ends the session. */
++        for(TickType_t waited=0;!os_cpu_clock_ready();++waited){
++            if(waited>=pdMS_TO_TICKS(1000)){platform_puts("ERROR cpu clock owner unfinished\n");failed();}
++            if(!mimus_board_live()){failed();}
++            mimus_board_progress();vTaskDelay(1);
++        }
++#endif
+         bool ok=mimus_transcribe_recorded(input,scratch,&stopped,kMimusWarm|kMimusVerified);
+         started.store(0,std::memory_order_release);
+@@ -79,5 +99,12 @@
+ {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
+ extern "C" int mimus_board_start(void)
+-{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}
++{
++    /* Recognition and its inference worker run on the admitted A76 pair;
++     * every other task keeps the A55 default affinity. */
++    runtime_smp_init();runtime_init();
++    mimus_parallel_init(A733_SMP_RECOGNITION_CORE,A733_SMP_INFERENCE_CORE);
++    return xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,3,stack,&task,
++        UBaseType_t{1}<<A733_SMP_RECOGNITION_CORE)!=nullptr;
++}
+ extern "C" unsigned mimus_board_started(void){return started.load(std::memory_order_acquire);}
+ extern "C" unsigned mimus_board_generation(void){return generation.load(std::memory_order_acquire);}

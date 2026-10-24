@@ -11,6 +11,12 @@
  * deleted tasks runs on core 0, which the tick wakes every millisecond. */
 #define configUSE_PASSIVE_IDLE_HOOK 1
 #define configIDLE_AFFINITY 1
+#ifdef SUNSTONE_A733_OS
+/* The integrated OS image keeps every task created without an affinity on
+ * the A55 cluster; only explicit placements reach the Cortex-A76 cores. */
+#include "../../include/a733_smp_placement.h"
+#define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
+#endif
 #define INCLUDE_vTaskDelete 1
 /* The patched port obtains the primary redistributor from discovery. */
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0
@@ -28,6 +34,14 @@
 #include <stdint.h>
 void a733_smp_startup_check(void);
 uintptr_t a733_smp_priority_address(void);
-uint64_t a733_smp_sgi_value(unsigned interrupt, unsigned core);
+/* The port's ICC_SGI1R_EL1 value for one core: MPIDR Aff1 is the A733 core
+ * number, so the target list holds bit 0 and Aff1 the core
+ * (a733_cpu_sgi1r). The port sends only SGI 0. */
+static inline uint64_t a733_smp_sgi1r(unsigned interrupt, unsigned core)
+{
+    configASSERT(interrupt == 0 && core < 8);
+    return ((uint64_t)core << 16) | 1;
+}
+#define portSGI1R_VALUE(interrupt, core) a733_smp_sgi1r((interrupt), (core))
 #endif
 #endif

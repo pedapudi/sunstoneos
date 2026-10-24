@@ -8,7 +8,12 @@
 #include "../board/session.h"
 #include "../mimus-board/application.h"
 #include "boot.h"
+#include "a733_smp_placement.h"
 #include <string.h>
+#ifdef OS_RECOGNITION_CORE
+/* The GPU build's recognition core comes from cmake/a733-os.cmake. */
+_Static_assert(OS_RECOGNITION_CORE==A733_SMP_RECOGNITION_CORE,"recognition core differs from the placement header");
+#endif
 _Static_assert(OS_SERVICE_MIMUS==BOARD_SERVICES,"recognizer service follows the board services");
 struct os_application {
     const char *name;

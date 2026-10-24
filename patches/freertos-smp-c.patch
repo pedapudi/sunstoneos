@@ -164,7 +164,7 @@
      }
  
      return ullPMRValue;
-@@ -1538,12 +1581,15 @@
+@@ -1538,27 +1581,62 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
  
@@ -183,10 +183,69 @@
 +        volatile uint64_t ullRecursionCount;
 +    } __attribute__( ( aligned( 64 ) ) ) PortLock_t;
 +    PRIVILEGED_DATA PortLock_t xPortLocks[ eLockCount ];
++
++/* The ICC_SGI1R_EL1 value that interrupts one core. A platform with another
++ * affinity layout defines its own in FreeRTOSConfig.h. */
++    #ifndef portSGI1R_VALUE
++        #define portSGI1R_VALUE( ulInterruptID, ucCoreID ) \
++    ( ( uint64_t ) ( ( ( 1UL << ( ucCoreID ) ) & 0xFFFFU ) | ( ( ( uint64_t ) ( ulInterruptID ) & 0xFU ) << 24U ) ) )
++    #endif
++
++    /* The core field indexes the nesting array through a mask. */
++    _Static_assert( ( configNUMBER_OF_CORES & ( configNUMBER_OF_CORES - 1 ) ) == 0, "core count is a power of two" );
  
      void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID )
      {
-@@ -1570,8 +1616,8 @@
+-        uint64_t ulRegVal = 0;
+-        uint32_t ulCoreMask = ( 1UL << ucCoreID );
+-        ulRegVal |= ( (ulCoreMask & 0xFFFF) | ( ( ulInterruptID & 0xF ) << 24U ) );
+-        __asm volatile (
+-            "str  x0, [ sp, #-0x10 ]!       \n"
+-            "mov  x0, %0                    \n"
+-            "svc  %1                        \n"
+-            "ldr  x0, [ sp ], # 0x10        \n"
+-            :
+-            : "r" ( ulRegVal ), "i" ( portSVC_INTERRUPT_CORE )
+-            : "memory", "w1"
+-        );
++        register uint64_t ulRegVal __asm( "x0" ) = portSGI1R_VALUE( ulInterruptID, ucCoreID );
++        const uint64_t ullTaskRegister = ullPortGetTaskRegister();
++
++        /* EL1 code writes ICC_SGI1R_EL1 directly; the register is UNDEFINED at
++         * EL0 (IHI 0069G 12.2.21), so EL0 tasks keep the supervisor call. An
++         * interrupt handler is EL1 code whatever task it interrupted. From
++         * task context the kernel calls this inside its critical section, so
++         * the task cannot migrate between the register read and the nesting
++         * load, and an EL0 task reads zero: no handler is active on a core
++         * that runs a task. A zero TCB field means the core has not resumed a
++         * task yet, and the supervisor call is used. The DSB orders this
++         * core's stores before the SGI, as gic_ipi_send_mask does. */
++        if( ( ullTaskRegister & portTASK_REGISTER_TCB_MASK ) != 0U )
++        {
++            if( ( ullTaskRegister >> portTASK_REGISTER_EL1_BIT ) & 1U )
++            {
++                /* An EL1 task, or a handler that interrupted one. */
++                __asm volatile ( "DSB ISHST                 \n"
++                                 "MSR ICC_SGI1R_EL1, %0     \n"
++                                 "ISB SY                    \n" ::"r" ( ulRegVal ) : "memory" );
++                return;
++            }
++
++            if( ullPortInterruptNestings[ ( ullTaskRegister >> portTASK_REGISTER_CORE_SHIFT ) & ( configNUMBER_OF_CORES - 1U ) ] != 0U )
++            {
++                /* A handler that interrupted an EL0 task; its exception
++                 * return synchronizes the context. */
++                __asm volatile ( "DSB ISHST                 \n"
++                                 "MSR ICC_SGI1R_EL1, %0     \n" ::"r" ( ulRegVal ) : "memory" );
++                return;
++            }
++        }
++
++        __asm volatile ( "svc %1" : "+r" ( ulRegVal ) : "i" ( portSVC_INTERRUPT_CORE ) : "memory" );
+     }
+ 
+ /*-----------------------------------------------------------*/
+@@ -1570,8 +1648,8 @@
              "dmb sy         \n"
              "mov w1, #0     \n"
              "str w1, [%x0]  \n"
@@ -196,7 +255,7 @@
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1651,21 +1697,17 @@
+@@ -1651,21 +1729,17 @@
               * If the core owns the lock wait increment the lock count by the core.
               * If core does not own the lock wait for the spinlock.
               */
@@ -223,7 +282,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1721,7 @@
+@@ -1679,7 +1753,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -232,7 +291,7 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1689,27 +1731,27 @@
+@@ -1689,27 +1763,27 @@
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
@@ -271,7 +330,7 @@
                  /* Add barrier to ensure lock status is reflected before we proceed. */
                  __asm__ __volatile__ ( "dmb sy" ::: "memory" );
              }
-@@ -1720,6 +1762,15 @@
+@@ -1720,6 +1794,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -287,7 +346,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1791,7 @@
+@@ -1740,7 +1823,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -296,7 +355,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1814,10 @@
+@@ -1763,22 +1846,10 @@
          }
          #endif /* configASSERT_DEFINED */
  

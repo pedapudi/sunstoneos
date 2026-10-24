@@ -53,12 +53,6 @@ int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
         if(a733_smp_counter()/24>=deadline)return 0;
     return 1;
 }
-uint64_t a733_smp_sgi_value(unsigned interrupt,unsigned target)
-{
-    uint64_t value;
-    configASSERT(interrupt==0 && a733_cpu_sgi1r(target,&value));
-    return value;
-}
 _Noreturn void a733_smp_exit_privileged(unsigned status,uint64_t detail)
 {
     __asm__ volatile("msr daifset,#15":::"memory");
