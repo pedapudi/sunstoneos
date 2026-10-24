@@ -77,9 +77,11 @@ uncached pages. Nothing is released; a failure retains every page.
    further step until the next wake.
 3. On INTID 95, or at the 4 ms bound of each wait while the job runs, the
    worker drains firmware events. When the kick's return is collected and the
-   timeline reaches the sequence, it calls `pvr_mimus_complete` (`DC CIVAC`
-   over the job's tags and sums), sets the slot IDLE and posts an 8-byte
-   record (sequence, OK) to the one-entry completion queue.
+   timeline reaches the sequence, it requires a clock sample before the job
+   deadline, then calls `pvr_mimus_complete` (`DC CIVAC` over the job's tags
+   and sums). A second monotonic clock sample must still precede the deadline
+   before it sets the slot IDLE and posts an 8-byte record (sequence, OK)
+   to the one-entry completion queue.
 4. The hook receives the record, requires the sequence after the previous
    OK record's, checks every tag with `pvr_mimus_tags_complete` and compares
    every sum with an int64 sum that a scalar CPU loop computes from the same
@@ -96,6 +98,11 @@ previous sequence before a submit or other than the previous or current one
 while a job runs, a failed completion maintenance, or any service failure
 posts LOST for an owed record and sets the lost flag, which makes later
 submits return -1.
+Completion at the deadline is late, including when output cache maintenance
+consumes the remaining time. A failed or backward final clock sample also
+faults. These checks retain the slot until output acquisition succeeds within
+the deadline; they cannot interrupt a CPU instruction or hardware access that
+does not return.
 
 ## Failure classes
 
@@ -122,6 +129,40 @@ Classes follow section 1.8 of
 - `checks/os-image-dispatch.py` and `checks/os-image-link.py` cover the
   dispatcher, the mapping checks, the pool replay, the supervisor's GPU-loss
   detail and the linked image.
+
+The focused completion checks run one job each through the actual service
+clock sampler and caller abort path. They cover completion at the deadline,
+output acquisition reaching the deadline, completion one microsecond before
+the deadline, a failed final clock read and a backward final sample.
+The four fault cases require one LOST record, a retained TAKEN slot, refusal
+of later submits and unchanged pool ownership. The successful case checks
+the tags and sums. Successful completion adds one clock read and no extra
+output cache maintenance.
+
+The five cases passed under QEMU with the software firmware model on
+2026-10-24. The evidence directory is
+`~/.cache/sunstoneos/evidence/gpu-deadline-20261024/`; its `snapshot/manifest.json`
+preserves selected sources, executables and records. The unmodified service
+fails the deadline-equality assertion in `before-fixture-fixed/`.
+The earlier `before/` attempt failed fixture initialization and provides no
+deadline result. Existing 204-job arithmetic and startup evidence was reused;
+these five cases provide no physical GPU execution or timing qualification.
+
+## Lifecycle and power limits
+
+The current image fixes the GPU at 400 MHz and 800 mV. The
+[runtime design](designs/gpu-runtime.md) reserves 600 MHz and thermal rate
+fallback for later board qualification. Startup and acknowledged shutdown
+exist, but automatic idle park and full fault recovery remain
+[unimplemented designs](gpu-recovery.md). Deadline failure retains resources;
+it does not establish that the GPU stopped or cooled.
+
+The native backend checks its external revocation flag before normal hardware
+access. Revocation prevents further access through those callbacks; it is not
+an acknowledged GPU power-off. OS thermal placement and critical-temperature
+handling therefore need their own integration evidence. CLOSE also needs a
+mimus-specific check for an outstanding job before the generic service starts
+shutdown; the existing compute and render guards do not cover that session.
 
 ## Board evidence that would confirm it
 

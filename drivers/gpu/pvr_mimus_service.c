@@ -258,10 +258,15 @@ static int complete(struct pvr_mimus_service *m)
     }
     uint64_t now;
     if (pvr_gpu_service_now(m->service, &now) != 1) return fault(m, PVR_MIMUS_SERVICE_CLOCK);
+    if (now >= m->deadline) return fault(m, PVR_MIMUS_SERVICE_DEADLINE);
     if (m->client.phase == PVR_CCCB_IDLE) {
         uint32_t value = timeline(m);
         if (value == m->sequence) {
             if (!pvr_mimus_complete(&m->session)) return fault(m, PVR_MIMUS_SERVICE_MAINTENANCE);
+            /* Acquiring the output can consume the remaining job budget.
+             * Keep the slot owned until that work is timely and visible. */
+            if (pvr_gpu_service_now(m->service, &now) != 1) return fault(m, PVR_MIMUS_SERVICE_CLOCK);
+            if (now >= m->deadline) return fault(m, PVR_MIMUS_SERVICE_DEADLINE);
             m->phase = PVR_MIMUS_SERVICE_IDLE;
             atomic_store_explicit(&m->slot_state, PVR_MIMUS_SLOT_IDLE, memory_order_release);
             post(m, m->sequence, PVR_MIMUS_OK);
@@ -269,7 +274,7 @@ static int complete(struct pvr_mimus_service *m)
         }
         if (value != m->sequence - 1) return fault(m, PVR_MIMUS_SERVICE_TIMELINE);
     }
-    return now >= m->deadline ? fault(m, PVR_MIMUS_SERVICE_DEADLINE) : 0;
+    return 0;
 }
 
 int pvr_mimus_service_poll(struct pvr_mimus_service *m)
