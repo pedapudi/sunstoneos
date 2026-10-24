@@ -39,7 +39,7 @@ void bb_step_bins(const struct bb_step *s, unsigned count, uint32_t bit_ns, stru
         const uint64_t ns = s[i].ticks * 125 / 3; /* 24 MHz counter ticks */
         const uint64_t wire = bb_twi_wire_bits(s[i].conditions, s[i].bytes, s[i].stops) * bit_ns;
         const uint64_t ratio = wire ? ns * 1000 / wire : 0;
-        b->bins[ratio <= 1000 ? 0 : ratio <= 1050 ? 1 : ratio <= 1100 ? 2 : 3]++;
+        b->bins[ratio <= 1000 ? 0 : ratio <= 1050 ? 1 : ratio <= 1100 ? 2 : ratio <= 1550 ? 3 : 4]++;
         b->over_ms += ns > 1100000;
         if (ratio > b->worst)
             b->worst = ratio;
@@ -157,8 +157,15 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "le100", s->bins.bins[0]);
     bb_line_dec(l, "le105", s->bins.bins[1]);
     bb_line_dec(l, "le110", s->bins.bins[2]);
-    bb_line_dec(l, "gt110", s->bins.bins[3]);
+    bb_line_dec(l, "le155", s->bins.bins[3]);
+    bb_line_dec(l, "gt155", s->bins.bins[4]);
     bb_line_dec(l, "gt1100us", s->bins.over_ms);
+    bb_line_end(l++);
+    bb_line_start(l, "TWI_COST");
+    bb_line_dec(l, "reads", s->cost_reads);
+    bb_line_dec(l, "cntr_dsb_ticks", s->cntr_dsb_ticks);
+    bb_line_dec(l, "cntr_plain_ticks", s->cntr_plain_ticks);
+    bb_line_dec(l, "time_read_ticks", s->time_read_ticks);
     bb_line_end(l++);
     bb_line_start(l, "PPU_MAPPING");
     bb_line_dec(l, "adapter_mapped", s->mapped);

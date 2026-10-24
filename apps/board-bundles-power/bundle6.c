@@ -13,18 +13,28 @@
  * be Device-nGnRnE and outer-shareable before bundle 7 writes it.
  *
  * The summary (TWI divisor and bit time, supply bits, step distribution
- * against the wire time, mapping, adoption reads) and the outcome line print
+ * against the wire time, access cost, mapping, adoption reads) and the outcome line print
  * first; the detail lines (each service step that completed a bus phase,
  * each snapshot, each owner access) follow while they fit in the log. No GIC
  * register is read for the record. Success is status 0 with "COMPLETE board
- * bundle 6". */
+ * bundle 6".
+ *
+ * After the park, with IRQs masked, the client measures the cost of the
+ * parts of a provider register access: 256 back-to-back reads of S_TWI0 CNTR
+ * through the DSB SY helper, the same reads without barriers (one DSB SY ends
+ * that window), and 256 reads of the provider's time source, each window
+ * timed by CNTPCT. A CNTR read has no side effect, and the parked provider
+ * makes no access. */
 #include "power.h"
 #include "platform.h"
 #include "boot.h"
 #include "aarch64_device_memory.h"
 #include "a733_power_authority.h"
+#include "a733_mmio.h"
 
 #define SNAPSHOTS 32u
+#define COST_READS 256u
+#define TWI_CNTR UINT32_C(0x0708300c)
 static struct a733_pmic_snapshot snapshots[SNAPSHOTS];
 
 static void snapshot(unsigned i)
@@ -45,6 +55,32 @@ static void snapshot(unsigned i)
         bb_power_pause("board bundle 6: snapshot reap deadline");
     if (r != A733_PMIC_COMPLETE)
         bb_power_fail("board bundle 6: snapshot reap");
+}
+static void access_cost(struct bb6_summary *s)
+{
+    uint64_t daif, now;
+    uint32_t sink = 0;
+    __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(daif) :: "memory");
+    const uint64_t t0 = counter();
+    for (unsigned i = 0; i < COST_READS; ++i)
+        sink |= a733_mmio_read32_dsb_sy_both(TWI_CNTR);
+    const uint64_t t1 = counter();
+    for (unsigned i = 0; i < COST_READS; ++i)
+        sink |= a733_mmio_read32(TWI_CNTR);
+    a733_mmio_dsb_sy();
+    const uint64_t t2 = counter();
+    unsigned failed = 0;
+    for (unsigned i = 0; i < COST_READS; ++i)
+        failed |= bb_power.native_pmic_ops.now(&bb_power.pmic_native, &now) != 1;
+    const uint64_t t3 = counter();
+    __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
+    (void)sink;
+    if (failed)
+        bb_power_fail("board bundle 6: provider time source");
+    s->cost_reads = COST_READS;
+    s->cntr_dsb_ticks = (uint32_t)(t1 - t0);
+    s->cntr_plain_ticks = (uint32_t)(t2 - t1);
+    s->time_read_ticks = (uint32_t)(t3 - t2);
 }
 static uint32_t enable_selector(const struct a733_pmic_snapshot *s)
 { return (uint32_t)s->enable << 8 | s->selector; }
@@ -76,6 +112,7 @@ static void client(void *unused)
         s.par_physical = t.physical;
     }
     bb_power_park();
+    access_cost(&s);
 
     s.divisor = bb_power.pmic.divider;
     s.bit_ns = bb_power.pmic.bit_ns;

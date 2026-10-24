@@ -231,8 +231,9 @@ ROWS = [
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle6.c.obj'],
                   'COMPLETE board bundle 6: PMIC service and domain adoption reads', False,
                   'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
-                  'step distribution against the 110% wire-time bound, the domain-1 mapping and the adoption reads '
-                  'of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the STEP '
+                  'step distribution against 100%, 105%, 110% and the interim 155% bound of wire time, the access '
+                  'cost, the domain-1 mapping and the adoption reads of domains 1, 4 and 5), COMPLETE board bundle '
+                  '6, and then, while they fit in the log, the STEP '
                   'lines, the 32 snapshots and the owner accesses.',
                   'rank-9-usb-v4\'s platform and PMIC provider objects with apps/board-bundles-power/ (bundle6.c, '
                   'power.c, trace.c), the power-domain owner, its native adapter and device_memory.c; no USB unit. '
@@ -243,7 +244,10 @@ ROWS = [
                   'and outer-shareable for bundle 7. Each STEP line gives the step\'s CNTPCT span, the scheduler '
                   'ticks inside it, the phases it completed, the TWI interrupt flag (CNTR bit 3) at the first read '
                   'of each byte phase with the interrupt enable (bit 7) clear, and the most polls of one phase; '
-                  'the wire time follows from the phases and the bit time. The summary and outcome print before '
+                  'the wire time follows from the phases and the bit time. After the provider is parked, with '
+                  'IRQs masked, the client times by CNTPCT 256 back-to-back reads of S_TWI0 CNTR with DSB SY '
+                  'before and after each, the same reads without barriers, and 256 reads of the provider\'s time '
+                  'source. The summary and outcome print before '
                   'the detail lines, which stop while 256 log bytes remain, so no record cuts the outcome line. No '
                   'GIC register is read for the record, and no PPU or PMIC register is written.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c']),
