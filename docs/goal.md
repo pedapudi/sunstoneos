@@ -14,7 +14,9 @@ FreeRTOS must be the runtime OS. Linux may supply driver source and development 
 
 Multicore diagnosis, implementation and review may be delegated like any other work. The coordinator runs every board test.
 
-Reuse the physical evidence that exists: all eight cores reach their first FreeRTOS task and shut down with their state restored. Qualify FreeRTOS scheduling under load on all eight cores, cache coherence between them, per-core interrupt delivery and admission of the two Cortex-A76 cores.
+Reuse the historical physical evidence for all eight cores reaching their first FreeRTOS task and shutting down with their state restored. Later startup failures remain unresolved; that earlier success does not establish current robustness. Qualify FreeRTOS scheduling under load on all eight cores, cache coherence between them, per-core interrupt delivery and admission of the two Cortex-A76 cores.
+
+Prioritize CPU, GPU and NPU robustness, including their power and thermal management. Establish repeated startup and operation, bounded fault handling, safe quiescence and the supported power transitions. Qualify thermal throttling and critical-temperature protection, including representative concurrent workloads, before claiming these processors fully functional.
 
 Do not repeat a failed launch without a concrete correction or a narrower diagnostic justified by new evidence.
 

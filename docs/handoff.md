@@ -13,59 +13,45 @@ port `3-1` runs a cold DDR start and then the all-core pre-scheduler bundle
 (`docs/board-runbooks/rank-7-pre-scheduler.md`), byte-identical to the build
 that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
 
+**Current priority: CPU, GPU and NPU robustness**, including power and
+thermal management. Complete startup, repeated operation, interrupt delivery,
+bounded failure handling and safe shutdown before performance tuning. Hardware
+qualification remains required; model checks do not establish physical behavior.
+
 **Open work, in order:**
 
-1. `audit/pmic-bound` (worktree `audit-pmic-bound`, commit `984ecb55` plus
-   `~/.cache/sunstoneos/build/pmic-bound/primary.patch`) waits for one fix
-   round before it merges. It replaces the provisional 155% PMIC step bound
-   with 799 µs median and 839 µs first step (1,268 permille) from the
-   2026-10-24 bundle 6 run. The hardware-performance review rejected two
-   claims; the figures themselves reproduce:
-   - "110% is out of reach whatever the barrier placement" holds only for
-     reads. The model's step follows the write cost, and a write without its
-     trailing barrier was never measured. State 110% as open, add a board
-     window of plain back-to-back writes to an S_TWI0 register with no bus
-     effect followed by one barrier, and replace the 379/379 floor row in
-     `checks/power-domains-service.c` with separate read and write floors.
-   - The 299 ns per-poll remainder is fitted to the board median, so the
-     bound is the board median plus 20 µs. Say that plainly and drop the
-     "untimed software" claim, or add a board window that times a whole
-     provider poll.
-   - Minors: use one statistic for read and write costs (the write cost
-     takes the single slowest of 2,040 samples and charges the counter stamps
-     twice); the DCDC3 write splits at 386 ns per poll, not 390; the model
-     step is 757 µs at 250 ns; note that an interrupt landed in 24 of 33
-     steps.
-   - From the correctness review, which agrees on both points: state the
-     bound in permille of the run's own wire time (799 µs holds only at the
-     nominal 22.5 µs byte); the model's 110% floor is 694–712 µs depending
-     on byte rounding, so the "22 or 23 µs gives the same step" sentence is
-     false; the 380 ns host assertion sits at exact equality (779 + 20 =
-     799), and the DCDC3 write is judged against at most two steps with one
-     tick wait, not one step; the base provider's model also overshoots its
-     own run with the remainder method (941 against 917 µs).
+1. CPU runtime fault capture must work when the interrupted stack is invalid.
+   The separate [pre-scheduler diagnostic](board-runbooks/rank-7-pre-scheduler.md)
+   has frozen host inputs and a wrapper that retains ownership after its
+   observation deadline. Its 110 input files verified locally. Port `3-1`
+   still needs the power removal described above before a new attempt.
+2. GPU completion must enforce its deadline before accepting a timeline result
+   and after acquiring output data. Prepare the reviewed single-core
+   [entry capture](../apps/gpu-finite/ENTRY.md) on port `3-3`; it reads accessible
+   configuration words and does not enter the gated GPU window. Numerical
+   execution and return remain physically unqualified.
+3. NPU startup must account for the observed inherited ON state of power
+   domain 4. Resolve its ownership and reset prerequisites from sources before
+   attempting execution. The board application's direct USB FIFO transfer is
+   integrated and model-checked; numerical accelerator execution is unqualified.
+4. OS thermal supervision must reduce work during THROTTLE and preserve its
+   existing critical-temperature stop. Coordinate application pacing and GPU
+   placement with the accelerator owners. Physical thermal response, repeated
+   power transitions and sustained concurrent CPU/GPU/NPU operation remain open.
+5. The reviewed PMIC timing changes are integrated. The provisional snapshot
+   bound is 1,268 permille of the run's measured wire time, with 40 µs extra
+   for the first step. Exact comparisons and focused fixtures pass; the 110%
+   target remains open. Reuse that evidence. A future bundle refreeze must
+   include the revised trace and row text before physical measurement.
+6. Publishing mimus `9c57286b7` and each physical CPU clock or PMIC voltage
+   change still require their specific approvals. Independent implementation
+   and modeling continue without those operations.
 
-   Merge it into `audit/cpu-wave` with its patch and run
-   [the selective integration gate](validation.md#select-the-integration-gate-explicitly)
-   with the affected targets and variants, `--check pmic-tree` and
-   `--check power-domains-tree`, and a `--reason` describing the changed
-   behavior. Reuse valid checks from the preceding integration; do not run
-   the full suite merely because a merge occurred. The PMIC adapter
-   rename (`pmic_bus_ops`, `a733_pmic_native_bind()`, `a733_pmic_now()`,
-   `a733_pmic_outside()`) and the tightened tree checks merged at
-   `588b1d2c`.
-2. The next bundle refreeze carries the new bound into bundle 6
-   (`BB_BOUND_PERMILLE` 1268 in `apps/board-bundles-power/trace.h`, with its
-   bins, model and row text) and the `pmic_bus_ops` rename.
-3. Port `3-1`, after its reconnect, as described above.
-4. Waiting on the user: publishing mimus `9c57286b7`; approval for each CPU
-   clock or PMIC voltage board run (the A76 operating points A1 and A2, a
-   DCDC3 selector write).
-5. Follow-ups: the core-0 workload walk A/B and the core-6 walk run; the
-   FIFO-direct USB path for the NPU board image; moving the copied G2D board
-   files into `apps/board`; `apps/mimus/paced.cc` with a model that has no
-   punctuation head; the pre-existing `npu-large-native`, quiescence
-   checkpoint, NPU-returning and type-C check failures.
+The completed integration also includes bounded USB storage stall recovery,
+radio clock admission, the camera frame-enable timing correction and optional
+punctuation handling in paced recognition. Their component evidence remains
+valid; do not repeat broad suites because they were merged. Defer new peripheral
+breadth while the processor and accelerator robustness work progresses.
 
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
