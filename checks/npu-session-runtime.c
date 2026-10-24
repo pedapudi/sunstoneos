@@ -353,20 +353,18 @@ void __wrap_npu_service_release(struct npu_service *s, unsigned client, enum npu
 }
 
 /* Startup stand-ins: the platform layer is outside this check. */
-int a733_npu_startup_prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
-    const struct a733_npu_mmu_image *image, const struct a733_npu_command *commands, unsigned n)
+int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
-    (void)ops; (void)backend; (void)image; (void)commands;
-    configASSERT(cookie == &startup && n == SLOTS + 1);
+    configASSERT(s == &startup);
     return 1;
 }
-enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup);
     return npu_service_activate(&rt.service) == NPU_SERVICE_OK ? A733_NPU_PLATFORM_READY :
                                                                  A733_NPU_PLATFORM_RETAINED;
 }
-enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *s)
+enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup && rt.service.controller.state == A733_NPU_CLOSED);
     ++stops;
@@ -838,9 +836,6 @@ void kernel_main(void)
     model.immediate = npu_case == 1 || npu_case == 3 || npu_case == 4;
     model.late = npu_case == 2;
     model.defer_mask = npu_case == 2 ? 6 : 0;
-    struct a733_npu_handoff base = {.controller = 0x03600000, .command_admission = 1};
-    configASSERT(npu_runtime_handoff(&rt, &base, &startup.handoff));
-    configASSERT(startup.handoff.command_count == SLOTS + 1);
     bootstrap = xTaskCreateStaticAffinitySet(bootstrap_run, "bootstrap", 4096, NULL, 3,
                                              stacks[SLOTS], &tasks[SLOTS], 2);
     startup.initialized = 1; startup.task = bootstrap;

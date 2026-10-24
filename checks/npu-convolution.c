@@ -15,30 +15,10 @@ static StackType_t check_stacks[2][4096];
 static TaskHandle_t check_bootstrap,check_client;
 static atomic_uint check_allow,check_accesses,check_publishes,check_finishes;
 static unsigned check_activation_mutation,check_prepared_calls,check_job;
-static unsigned check_resource_calls;
-static struct a733_platform_locks check_locks;
-static struct a733_npu_startup_resources check_resources;
 static uint32_t check_registers[0x800/4];
 static unsigned check_running,check_is_bootstrap;
 extern const struct a733_npu_ops __real_a733_npu_native_operations;
 static const struct a733_npu_ops *check_native=&__real_a733_npu_native_operations;
-static int check_resource_time(void *cookie,uint64_t *out)
-{(void)cookie;*out=check_native->microseconds(&convolution.native);return 1;}
-static enum a733_npu_platform_result check_acquire(void *cookie,
-    const struct a733_npu_platform_config *config,a733_clock_mask_t shared,
-    struct a733_npu_platform_resources *resources)
-{
-    (void)cookie;(void)config;(void)shared;++check_resource_calls;
-    resources->clock.id=42; /* Modeled partial acquisition; no real lease claim. */
-    return A733_NPU_PLATFORM_PENDING;
-}
-static int check_enter(void *cookie,uint64_t deadline)
-{(void)cookie;(void)deadline;configASSERT(0);return 0;}
-static int check_leave(void *cookie){(void)cookie;configASSERT(0);return 0;}
-static int check_power_read(void *cookie,uintptr_t address,uint32_t *out)
-{(void)cookie;(void)address;(void)out;configASSERT(0);return 0;}
-static int check_power_write(void *cookie,uintptr_t address,uint32_t value)
-{(void)cookie;(void)address;(void)value;configASSERT(0);return 0;}
 int __real_aarch64_device_translate(uintptr_t,int,struct aarch64_translation *);
 int __wrap_aarch64_device_translate(uintptr_t address,int write,struct aarch64_translation *out)
 {
@@ -103,12 +83,12 @@ static int check_finish(void *cookie,const struct a733_npu_command *command,int 
 }
 const struct a733_npu_ops __wrap_a733_npu_native_operations={
     check_read,check_write,check_now,check_delay,check_barrier,check_publish,check_finish};
-int __wrap_a733_npu_startup_prepared(void *cookie,const struct a733_npu_ops *ops,void *backend,
-    const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)
+/* Startup health is a modeled boundary here; checks/npu-startup.c and
+ * checks/npu-startup-host.c run the sequencer. */
+int __wrap_a733_npu_startup_prepared(struct a733_npu_startup *startup)
 {
-    configASSERT(cookie==&startup_record && xTaskGetCurrentTaskHandle()==check_bootstrap);
-    configASSERT(metadata(&convolution,ops,backend,image,commands,count));
-    ++check_prepared_calls;return 1; /* Existing rail/platform health evidence is reused. */
+    configASSERT(startup==&startup_record && xTaskGetCurrentTaskHandle()==check_bootstrap);
+    ++check_prepared_calls;return 1;
 }
 static struct npu_service_reply check_request(enum npu_service_operation op,const void *input)
 {
@@ -132,23 +112,20 @@ static void check_client_run(void *unused)
     memset(output,0xa5,sizeof(output));
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_OPEN,NULL,0,5000000,0,&ignored));
     configASSERT(ignored==999 && !atomic_load(&check_accesses));
-    if(check_activation_mutation==2) {
-        configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_RETAINED);
-        configASSERT(!atomic_load(&convolution.failed) && !check_resource_calls);
-    }
+    /* Another task cannot step the startup. */
+    configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_RETAINED);
+    configASSERT(!atomic_load(&convolution.failed));
     xTaskNotifyGive(check_bootstrap);configASSERT(ulTaskNotifyTake(pdTRUE,2000)==1);
-    if(check_activation_mutation==2) {
-        configASSERT(atomic_load(&convolution.failed) && check_resource_calls==1);
-        configASSERT(startup_record.platform.resources.clock.id==42);
-        configASSERT(!check_prepared_calls && !atomic_load(&check_accesses));
-        platform_puts("PASS convolution startup guard: actual startup/platform delegation reaches bounded partial acquisition; mutation stops further resource callbacks and retains admitted token\n");
-        platform_exit(0);
-    }
     if(check_activation_mutation==1) {
-        configASSERT(atomic_load(&convolution.failed) && !check_prepared_calls);
-        configASSERT(!atomic_load(&check_accesses) && !atomic_load(&check_publishes));
+        /* The bootstrap publication hashes every immutable byte before the
+         * device fetches the stream, so a changed command tail stops there. */
+        uint64_t open;struct npu_service_reply reply;
+        configASSERT(check_prepared_calls==1 && !atomic_load(&convolution.failed));
+        configASSERT(npu_convolution_send(&convolution,NPU_SERVICE_OPEN,NULL,0,5000000,0,&open));
+        (void)npu_convolution_collect(&convolution,open,&reply,2000);
+        configASSERT(atomic_load(&convolution.failed) && !atomic_load(&check_publishes));
         configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
-        platform_puts("PASS fixed convolution activation: mutated private command tail refuses before startup/backend callbacks; reservations retained\n");
+        platform_puts("PASS fixed convolution activation: a mutated private command tail is refused at the bootstrap publication, before the device fetches it; reservations retained\n");
         platform_exit(0);
     }
     uint64_t ticket;struct npu_service_reply reply={.ticket=77};
@@ -233,18 +210,8 @@ static void check_client_run(void *unused)
 static void check_bootstrap_run(void *unused)
 {
     (void)unused;configASSERT(ulTaskNotifyTake(pdTRUE,2000)==1);
-    if(check_activation_mutation==2) {
-        configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_PENDING);
-        configASSERT(check_resource_calls==1 && startup_record.platform.resources.clock.id==42);
-        check_commands[1][524287]^=1;
-        configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_RETAINED);
-        configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_RETAINED && check_resource_calls==1);
-        configASSERT(npu_service_activate(&convolution.service)==NPU_SERVICE_FAULT);
-        xTaskNotifyGive(check_client);vTaskSuspend(NULL);configASSERT(0);
-    }
     if(check_activation_mutation==1)check_commands[0][524287]^=1;
-    configASSERT(npu_service_activate(&convolution.service)==
-        (check_activation_mutation==1 ? NPU_SERVICE_FAULT : NPU_SERVICE_OK));
+    configASSERT(npu_service_activate(&convolution.service)==NPU_SERVICE_OK);
     xTaskNotifyGive(check_client);vTaskSuspend(NULL);configASSERT(0);
 }
 BaseType_t npu_convolution_task_privileged(TaskFunction_t entry,void *argument)
@@ -259,7 +226,6 @@ static unsigned check_mode(void)
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"job-command",11))return 5;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"close-fault",11))return 4;
     for(unsigned i=0;i+5<sizeof(command);++i)if(!memcmp(command+i,"close",5))return 3;
-    for(unsigned i=0;i+7<sizeof(command);++i)if(!memcmp(command+i,"startup",7))return 2;
     for(unsigned i=0;i+8<sizeof(command);++i)if(!memcmp(command+i,"mutation",8))return 1;
     return 0;
 }
@@ -289,24 +255,11 @@ void kernel_main(void)
     memset(check_model,0,sizeof(check_model)); /* No borrowed model remains. */
     configASSERT(!memcmp(convolution.immutable_digest,fixture_immutable,sizeof(fixture_immutable)));
     configASSERT(convolution.commands[0].token!=convolution.commands[1].token);
-    struct a733_npu_handoff template={.command_admission=1,.controller=0x03600000},handoff;
-    configASSERT(npu_convolution_handoff(&convolution,&template,&handoff));
     check_registers[0x20/4]=0x9000;check_registers[0x24/4]=0x9202;
     check_registers[0x30/4]=0x1000003b;check_registers[0x28/4]=0x20240101;check_registers[1]=0x7fffffff;
     check_bootstrap=xTaskCreateStaticAffinitySet(check_bootstrap_run,"conv-start",4096,NULL,4,check_stacks[0],&check_tasks[0],2);
     check_client=xTaskCreateStaticAffinitySet(check_client_run,"conv-client",4096,NULL,4,check_stacks[1],&check_tasks[1],1);
-    /* Existing startup health is a modeled boundary here; its independent
-     * resource/rail composition evidence is reused, not claimed by these flags. */
-    startup_record.initialized=1;startup_record.task=check_bootstrap;startup_record.handoff=handoff;
-    if(check_activation_mutation==2) {
-        configASSERT(a733_platform_locks_init(&check_locks,check_resource_time,NULL));
-        check_resources.locks=&check_locks;startup_record.shared=&check_resources;
-        const struct a733_npu_platform_config config={.fabric={0x03000001,0x82000001,0x84000000},
-            .rate_hz={300000000,400000000,400000000},.owner=1,.handoff=1,.deadline_us=5000000};
-        const struct a733_npu_platform_operations operations={check_acquire,check_enter,check_leave,
-            check_resource_time,check_power_read,check_power_write};
-        configASSERT(a733_npu_platform_init(&startup_record.platform,&config,&operations,NULL));
-    }
+    startup_record.initialized=1;startup_record.task=check_bootstrap;
     configASSERT(npu_convolution_bind(&convolution,&startup_record,check_client,3,1));
     vTaskStartScheduler();platform_panic("scheduler returned",0);
 }
