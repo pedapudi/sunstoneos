@@ -35,6 +35,46 @@ Root source review found no new blocker in admission, copied-result validation o
 
 `host-check.py` exercises the exact image/profile layout, report mutations and actual GPU capture callback with modeled transport/files. The file model preserves the full declared lengths without allocating 802 MiB per case. It checks all chunk addresses, the CPU/GPU boundary, final extent and failures midway through backup or restoration. `prepare-check.py` runs the actual launcher and bundle producers using explicitly synthetic software-only evidence, then checks admission, root-review and bundle rejection. Its fixtures name no physical port and provide no physical authority. The accepted 25 native handoff cases and separately reviewed shared transport checks are reused.
 
+## Failed physical attempt and input audit
+
+The corrected two-job candidate was attempted on 2026-10-24. Evidence is under
+`~/.cache/sunstoneos/evidence/processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
+Its `runtime/session.json` records 27 successful FEL transactions, including
+`exe 0x52000`, followed by no distinct ROM instance within 90 seconds. The host
+retained ownership on that outcome. This establishes execution request delivery; launcher
+admission, AArch64 entry, provider construction and GPU execution remain
+unobserved.
+
+The offline audit compared the frozen host, preload and launcher with the
+candidate's source closure in
+`gpu-returning-repeat-fix-20261019/object-source-closure.json`. All nine uploaded
+regions matched their frozen bytes on readback. The 592-byte session, 288-byte
+contract ABI within its 4,096-byte buffer, and 128-byte request agree on image,
+entry digest, epoch, generation, lease and reservation. No binding mismatch was
+found. The session SHA-256 is
+`a4e48a555995ee49ef3e4f1279e98939fe8a91e016792c6e79badc1b04d6a5ec`;
+the bundle records the candidate image and launcher hashes.
+
+The candidate's frozen monitor parks on faults or deadline expiry with timers
+disabled. Absence of a ROM return therefore cannot identify the failing native
+stage. Its normal return uses RVBAR `0x20` and `RMR_EL3=2`; the
+[boot-input guard classification](../../docs/watchdog.md#choose-the-boot-input-guard-from-the-reset-path)
+explains why that path has no low-input requirement. The ROM instruction check
+runs after preload snapshots SRAM because FEL `readl` executes a helper in
+scratch RAM. A raw ROM read is not a verified replacement; the captured-ROM
+procedure records its rejection.
+
+The frozen monitor writes result magic `0x4153373347535232`, selected by its
+`A733_SMP_RESULT_MAGIC` build definition in `commands.json`. The normal host
+parser requires that magic and completion detail `0`. A checkpoint with detail
+`1` or a zero-job packet cannot satisfy the normal two-job result contract.
+The focused `host-check.py --writer-only` check connects the actual frozen
+monitor writer to the host parser. It preserves the unchanged monitor bytes
+and labels its arithmetic/log/receipt companions as synthetic.
+Evidence is under `~/.cache/sunstoneos/evidence/gpu-monitor-parser-20261024/`.
+This corrects a future capture rejection; it cannot explain absence of ROM
+before any result capture.
+
 ## Candidate and bounded physical procedure
 
 Use the corrected two-job image under
