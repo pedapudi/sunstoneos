@@ -17,7 +17,10 @@ def transfer(transaction,address,data,destination):
  require(destination.read_bytes()==data,'GPU DRAM restoration readback differs.');base.sync_file(destination)
 def run_once(transaction,wait_return,ready,bundle,p,evidence,record,journal):
  require(not record.get('launch_attempted'),'One GPU attempt only.');ready();backups=[]
- for parent,address,length in CAPTURE_RANGES:
+ disposition=json.loads(p['_frozen']['admission.json']).get('ram_disposition','restore')
+ require(disposition in ('restore','discard'),'Unknown GPU RAM disposition.')
+ record.update(ram_policy=disposition,ram_disposition='unresolved')
+ for parent,address,length in (() if disposition=='discard' else CAPTURE_RANGES):
   for offset in range(0,length,CHUNK_BYTES):
    size=min(CHUNK_BYTES,length-offset);name=parent+'-%04d'%(offset//CHUNK_BYTES);backup=evidence/('before-'+name+'.bin')
    transaction('read',hex(address+offset),size,backup)
@@ -37,7 +40,7 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,journal):
  for name,address,path,digest in backups:require(base.digest(path)==digest,'Saved '+name+' DRAM changed.')
  for name,address,path,digest in backups:
   data=path.read_bytes();require(0<len(data)<=CHUNK_BYTES and hashlib.sha256(data).hexdigest()==digest,'Saved '+name+' bytes changed.');transfer(transaction,address,data,evidence/(name+'-restored.bin'))
- record.update(complete=True,dirty=False,dram_restored=True,rom_usable=True,sram_restored=False,ownership_release_permitted=True);journal();return result
+ record.update(complete=True,dirty=False,dram_restored=disposition=='restore',ram_disposition='discarded' if disposition=='discard' else 'restored',rom_usable=True,sram_restored=False,ownership_release_permitted=True);journal();return result
 
 def admit(args,p,node,identity,port):
  admission=json.loads(p['_frozen']['admission.json']);require(admission['identity']==identity and admission['port']==port,'GPU admission covers another live instance.')

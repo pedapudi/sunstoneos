@@ -31,14 +31,15 @@ class Store:
  def __str__(self):return self.name
 
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019');args=parser.parse_args();args.evidence.mkdir(parents=True,exist_ok=True)
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--disposition-only',action='store_true');parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019');args=parser.parse_args();args.evidence.mkdir(parents=True,exist_ok=True)
  image=args.image_evidence/'build/return.elf';manifest=json.loads((args.image_evidence/'manifest.json').read_bytes());parts,address,build,g=host.prepare.image_profile(image,manifest)
  p={'epoch':101,'generation':102,'lease':103,'geometry':g};raw=reports(p);assert report.validate_reports(*raw,p)['functional_success'];cases={'matched-arithmetic-two-results':True}
- for part,offset in [(0,x) for x in (0,8,16,24,32,40,56,64)]+[(1,x) for x in (0,8,16,24,32,71,72,256)]+[(2,x if x!=88 else 95) for x in range(0,104,8)]+[(3,x) for x in (0,8,12,16,24,32,36,40,44,48,300,311,312)]:
-  bad=list(raw);data=bytearray(bad[part]);data[offset]^=1;bad[part]=bytes(data)
-  try:report.validate_reports(*bad,p)
-  except (ValueError,UnicodeError):cases[f'report-{part}-offset-{offset}']=True
-  else:raise AssertionError((part,offset))
+ if not args.disposition_only:
+  for part,offset in [(0,x) for x in (0,8,16,24,32,40,56,64)]+[(1,x) for x in (0,8,16,24,32,71,72,256)]+[(2,x if x!=88 else 95) for x in range(0,104,8)]+[(3,x) for x in (0,8,12,16,24,32,36,40,44,48,300,311,312)]:
+   bad=list(raw);data=bytearray(bad[part]);data[offset]^=1;bad[part]=bytes(data)
+   try:report.validate_reports(*bad,p)
+   except (ValueError,UnicodeError):cases[f'report-{part}-offset-{offset}']=True
+   else:raise AssertionError((part,offset))
  # The I/O model keeps full declared lengths without allocating802MiB per case.
  # It exercises the actual GPU run_once; transport and file contents are modeled.
  original_base=host.base;original_hash=host.hashlib;original_report=host.report
@@ -48,8 +49,10 @@ def main():
  @contextlib.contextmanager
  def sealed(data):yield data,17
  variants=['normal','backup-short','backup-transport','preload-failure','protected-pin','watchdog','exe-failure','no-new-rom','wrong-rom','short-report','bad-report','changed-CPU-backup','changed-GPU-backup','restore-transport','restore-readback','second-attempt','middle-backup-failure','middle-restore-failure']
- for variant in variants:
-  files={};e=Store('evidence',files);record={};commands=[];restores=[];returned=False;prepared={**copy.deepcopy(p),'_backup_hashes':{}}
+ variants=[('restore',v) for v in variants]
+ if args.disposition_only:variants=[('restore','normal')]+[('discard',v) for v in ('normal','preload-failure','exe-failure','no-new-rom','bad-report','second-attempt')]
+ for disposition,variant in variants:
+  files={};e=Store('evidence',files);record={};commands=[];restores=[];returned=False;prepared={**copy.deepcopy(p),'_backup_hashes':{},'_frozen':{'admission.json':json.dumps({'ram_disposition':disposition}).encode()}}
   def digest(path):return Hash(path.read_bytes()).hexdigest()
   def preload(*unused):
    if variant=='preload-failure':raise ValueError('modeled preload fault')
@@ -96,10 +99,15 @@ def main():
    if variant not in ('restore-readback','middle-restore-failure'):assert not restores,variant
   else:
    assert variant=='normal' and result['functional_success'] and record['complete'] and record['sram_restored'] is False
-   assert restores==[(a+off,min(host.CHUNK_BYTES,n-off)) for _,a,n in host.CAPTURE_RANGES for off in range(0,n,host.CHUNK_BYTES)]
-   assert len(restores)==201 and restores[4]==(0x42000000,2*1024*1024) and restores[5][0]==0x48000000 and restores[-1][0]+restores[-1][1]==0x79000000
-  cases['capture-'+variant]=True
+   assert record['dram_restored']==(disposition=='restore') and record['ram_disposition']==('restored' if disposition=='restore' else 'discarded')
+   if disposition=='restore':
+    assert restores==[(a+off,min(host.CHUNK_BYTES,n-off)) for _,a,n in host.CAPTURE_RANGES for off in range(0,n,host.CHUNK_BYTES)]
+    assert len(restores)==201 and restores[4]==(0x42000000,2*1024*1024) and restores[5][0]==0x48000000 and restores[-1][0]+restores[-1][1]==0x79000000
+   else:
+    assert not restores and not record['dram_backups'] and not any('/before-' in n for n in files)
+   assert len(commands)==(410 if disposition=='restore' else 8),len(commands)
+  cases['capture-'+disposition+'-'+variant]=True
  host.base=original_base;host.hashlib=original_hash;host.report=original_report
  assert host.CAPTURE_RANGES==( ('CPU',0x41000000,0x1200000),('GPU',0x48000000,0x31000000))
- (args.evidence/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'physical_admission_created':False,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':cases,'source_hashes':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [ROOT/'apps/gpu-finite/host.py',ROOT/'apps/gpu-finite/prepare.py',ROOT/'apps/gpu-finite/report.py',Path(__file__)]},'scope':'Linked exact GPU image/profile layout; arithmetic/log/receipt/packet decoder mutations; actual run_once full declared save/restore addresses and lengths with modeled files/transport. No USB or physical admission. Accepted25native handoff cases reused.'},indent=2)+'\n');print('PASS GPU returning host:',len(cases),'modeled cases')
+ (args.evidence/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'physical_admission_created':False,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':cases,'source_hashes':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [ROOT/'apps/gpu-finite/host.py',ROOT/'apps/gpu-finite/prepare.py',ROOT/'apps/gpu-finite/report.py',Path(__file__)]},'selection':'disposition-only' if args.disposition_only else 'all','scope':'Linked exact GPU image/profile layout; arithmetic/log/receipt/packet decoder mutations; actual run_once full declared save/restore addresses and lengths with modeled files/transport. No USB or physical admission. Accepted25native handoff cases reused.'},indent=2)+'\n');print('PASS GPU returning host:',len(cases),'modeled cases')
 if __name__=='__main__':main()
