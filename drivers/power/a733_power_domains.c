@@ -99,11 +99,12 @@ static void reached(struct a733_power_domains *d,struct a733_power_domain *m)
  * Status may read the starting value or the target, nothing else. */
 static int status(struct a733_power_domains *d,struct a733_power_domain *m,uint64_t now)
 {
+    if(now>=m->deadline)return -1;
     uint32_t v;const unsigned target=m->state==A733_POWER_DOMAIN_ON_WAIT ? 8 : 0;
     if(!rd(d,A733_POWER_PCK_DOMAIN(m->id)+8,&v))return -1;
     if((v&15)==target)return 1;
     if((v&15)!=(8-target))return -1;
-    return now<m->deadline ? 0 : -1;
+    return 0;
 }
 /* Spin on status for up to A733_POWER_PCK_SPIN_US after the command; the
  * spin bound is timed from the command, which the write accessor has
@@ -114,13 +115,24 @@ static void advance(struct a733_power_domains *d,struct a733_power_domain *m,int
         uint64_t now;
         if(!clock(d,&now)){fail_service(d);return;}
         int r=status(d,m,now);
-        if(r>0){reached(d,m);return;}
+        if(r>0) {
+            /* The status read can cross the bound. Never publish a late
+             * acknowledgement or release the rail pin on a late OFF. */
+            if(!clock(d,&now)){fail_service(d);return;}
+            if(now>=m->deadline){fail_domain(d,m);return;}
+            reached(d,m);return;
+        }
         if(r<0){fail_domain(d,m);return;}
         if(!spin || n>=SPIN_READS || now-m->command_at>=A733_POWER_PCK_SPIN_US)return;
     }
 }
 static void command(struct a733_power_domains *d,struct a733_power_domain *m,uint32_t policy,unsigned on)
 {
+    uint64_t now;
+    if(!clock(d,&now)){fail_service(d);fail_domain(d,m);return;}
+    /* The service deadline is also an admission bound. An expired session
+     * cannot program delays or request another power transition. */
+    if(now>=d->config.deadline){fail_domain(d,m);return;}
     const uintptr_t base=A733_POWER_PCK_DOMAIN(m->id);
     if(on) {
         /* The pinned delay row, each word read back (pck600_domains.c lines
@@ -132,9 +144,9 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
             if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || v!=values[i]){fail_domain(d,m);return;}
         }
     }
-    uint64_t now;
     if(!wr(d,base,(policy&~UINT32_C(15))|(on ? 8 : 0)) || !clock(d,&now) ||
        !a733_deadline_after(now,A733_POWER_PCK_BOUND_US,&m->deadline)){fail_domain(d,m);return;}
+    if(m->deadline>d->config.deadline)m->deadline=d->config.deadline;
     m->command_at=now;m->state=on ? A733_POWER_DOMAIN_ON_WAIT : A733_POWER_DOMAIN_OFF_WAIT;
     advance(d,m,1);
 }
