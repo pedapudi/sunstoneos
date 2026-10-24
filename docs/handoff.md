@@ -182,6 +182,29 @@ bundles (`board-bundles-20261024-1/` and `-3/`):
   and the USB_PCIE port fields stayed unchanged. The written priorities
   persist until port `3-3` loses power.
 
+Still in that lifetime, port `3-3` then passed steps 1 to 4 of the fifth
+prepared set (`board-bundles-20261024-5/`, records `set5-*`):
+
+- **New base (`set5-bb2-run/`):** the kernel check built from the current
+  tree with the monitor counter option, including the interrupt mask that
+  `platform_init` now restores after pool preparation, passed 100 rounds and
+  returned. It is the equivalence base for later single-core images.
+- **Bundle 4 with the corrected walk check (`set5-bb4-run/`):** all stages
+  passed and no walk block was refused; WFI again counted about 845,000
+  cycles over 1,000 wakes.
+- **Bundle 6 on the changed PMIC provider (`set5-bb6-run/`):** the median
+  service step fell from 146% to 123.6% of wire time, and the cold first
+  step from 941 µs to 809 µs, inside the provisional 155% bound. The byte
+  time measured nominal (22.5 µs) with no re-spins. The access-cost windows
+  give, per access: a bare S_TWI0 read about 378 ns, the barrier about 41 ns
+  more, the new adapter read path about 462 ns, a time read 144 ns, the
+  task check 76 ns and a write about 358 ns. Because the bus read alone
+  takes about 378 ns, a step within 110% of wire time is out of reach on
+  this bus whatever the barrier placement; the post-change bound comes from
+  these figures by the procedure in `docs/designs/pmic-access.md`.
+- **Bundle 7 (`set5-bb7-run/`):** the owner again found domain 1 ON and
+  adopted it.
+
 On 2026-10-23, after the rank 9 refusal, both ports were power-cycled and
 passed a fresh cold DDR start (`ddr-2/`). Port `3-3` has stayed in that
 lifetime since: every 2026-10-24 run above, from `r9-v3-usb/` through
