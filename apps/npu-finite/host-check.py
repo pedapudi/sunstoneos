@@ -23,13 +23,33 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
  spec=importlib.util.spec_from_file_location('finite_report_layout',r/'checks/harness.py')
  harness=importlib.util.module_from_spec(spec);spec.loader.exec_module(harness)
- native_image=harness.Image(image,layout_names=('a733_smp_contract',));u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
+ native_image=harness.Image(image,layout_names=('a733_smp_contract','npu_convolution','a733_npu_native','a733_npu_memory','a733_npu_reserved','device_memory_extent'));u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
  u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
  for at,value in native_image.parts:
   if value:u.mem_write(at,value)
  contract=native_image.layouts['a733_smp_contract']
  for key in ('epoch','generation','lease'):
   u.mem_write(0x42004000+contract[key],struct.pack('<Q',profile[key]))
+ if g.get('stopped_capture'):
+  # Independently resolve the audited fixed reads through actual DWARF fields.
+  import io
+  from elftools.elf.elffile import ELFFile
+  elf=ELFFile(io.BytesIO(data));app_fields=[]
+  for cu in elf.get_dwarf_info().iter_CUs():
+   if not cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith('/apps/npu-convolution/native.c'):continue
+   for die in cu.iter_DIEs():
+    if die.tag=='DW_TAG_variable' and die.attributes.get('DW_AT_name') and die.attributes['DW_AT_name'].value==b'app':
+     app_fields.append({x.attributes['DW_AT_name'].value.decode():int(x.attributes['DW_AT_data_member_location'].value) for x in die.get_DIE_from_attribute('DW_AT_type').iter_children() if x.tag=='DW_TAG_member' and 'DW_AT_name' in x.attributes})
+  assert len(app_fields)==1
+  reserved=native_image.address('app',unit='apps/npu-convolution/native.c')+app_fields[0]['reserved'];layouts=native_image.layouts
+  convolution=reserved+layouts['a733_npu_reserved']['convolution'];cl=layouts['npu_convolution']
+  memory=convolution+cl['native']+layouts['a733_npu_native']['memory'];ml=layouts['a733_npu_memory']
+  expected=[('lengths-buffers',convolution+cl['model_bytes'],cl['stream_bytes']+16-cl['model_bytes']),
+   ('extent',reserved+layouts['a733_npu_reserved']['extent'],24),('memory',memory+ml['count'],ml['image']+24-ml['count'])]
+  assert expected==list(h.stopped.METADATA)
+  assert cl['buffers']-cl['model_bytes']==32 and cl['stream_bytes']-cl['model_bytes']==352
+  results.append({'name':'actual-ELF-DWARF-binds-stopped-metadata-ranges','passed':True})
+  assert h.stopped.layout('0'*64,None,None,None,None) is None
  observed={'seal':False}
  def initialize(cpu,at,size,cookie):
   if at==native_image.address('a733_smp_contract_valid'):
@@ -141,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   rejected('missing-thermal-electrical-authority',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
  saved=(bundle/'request.bin').read_bytes();(bundle/'request.bin').write_bytes(bytes(len(saved)));rejected('changed-packet-refused',lambda:h.validate_bundle(bundle));(bundle/'request.bin').write_bytes(saved)
  def reports(variant):
-  status=int(variant=='mismatch' or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
+  status=int(variant=='mismatch' or variant.startswith('capture-') or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
   if status:first=bytes([first[0]^1])+first[1:]
   if variant=='false-success':second=bytes([second[0]^1])+second[1:]
   jobs=2;reason=0
@@ -173,6 +193,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<14Q' if thermal else '<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
  variants=['nominal','old-generic-monitor-magic','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
+ if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal:variants.append('ordinary-receipt')
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
  assert not set(a.case)-set(variants),'Unknown selected case'
@@ -192,6 +213,19 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     if op=='exe':
      i+=1
      for address,data in zip((0x42000000,g['log'],g['receipt']),frame):memory[address-h.DRAM[0]:address-h.DRAM[0]+len(data)]=data
+     plan=g.get('stopped_capture')
+     if plan and struct.unpack('<16Q',frame[0])[4]==1:
+      header=bytearray(368);struct.pack_into('<3QI',header,0,2056,432,400,2)
+      for index,(offset,size,device,role) in enumerate(h.stopped.SLOTS):struct.pack_into('<QQQII',header,32+32*index,h.stopped.PARENT+offset,h.stopped.PARENT+offset,size,device,role)
+      struct.pack_into('<2Q',header,352,136,208)
+      if variant=='capture-metadata-invalid':struct.pack_into('<Q',header,32,0x03600000)
+      extent=struct.pack('<3Q',h.stopped.PARENT,h.stopped.PARENT,h.stopped.BYTES)
+      arena=h.stopped.ARENA;mem=struct.pack('<5Q2I',6,arena,20480,arena,20480,(arena>>8)|1,1)
+      for item,value in zip(plan['metadata'],(header,extent,mem)):
+       offset=item['address']-h.DRAM[0];memory[offset:offset+len(value)]=value
+      parent=bytearray([0xa5])*h.stopped.BYTES;reference=bytes.fromhex(g['reference']);parent[0x83000:0x83000+len(reference)]=reference
+      if variant=='capture-output-differs':parent[0x83000]^=1
+      offset=h.stopped.PARENT-h.DRAM[0];memory[offset:offset+len(parent)]=parent
      if variant=='changed-backup':(out/'before-DRAM.bin').write_bytes(b'x'*h.DRAM[1])
      continue
     address=int(args[i],0);i+=1
@@ -201,6 +235,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
      if address in rom:assert all((out/('before-'+name+'.bin')).exists() for name,_,_ in h.base.REGIONS)
      words.append(hex(rom.get(address,0) ^ (1 if variant=='wrong-ROM-entry' and address==0x3c else 0)));continue
     if op=='write':
+     if state['new_ROM'] and g.get('stopped_capture') and struct.unpack('<16Q',frame[0])[4]==1:assert record.get('stopped_capture',{}).get('complete')
      source=Path(args[i]);i+=1;data=source.read_bytes()
      state['writes'].append((address,len(data),state['new_ROM']))
      if len(data)==h.DRAM[1]:state['restore_writes']+=1
@@ -209,7 +244,14 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
      continue
     assert op=='read';size=int(args[i]);path=Path(args[i+1]);i+=2
     if variant=='capture-transport-failure' and state['new_ROM'] and address==g['receipt']:state['failed']=True;record['transport_failed']=True;raise ValueError('Modeled transport loss')
+    if path.name.startswith('npu-stopped-'):
+     assert record.get('npu_result',{}).get('normal_return') and record['npu_result']['status']==1
+     state.setdefault('capture_reads',[]).append([address,size])
+     assert not state['restore_writes'] and 'controlled' not in record
+     if variant=='capture-extent-transport-failure' and path.name=='npu-stopped-extent.bin':
+      path.write_bytes(b'partial');state['failed']=True;record['transport_failed']=True;raise ValueError('Modeled capture transport loss')
     value=readmem(address,size)
+    if variant=='capture-parent-short' and path.name=='npu-stopped-parent.bin':value=value[:-1]
     if state['new_ROM'] and size==h.DRAM[1] and variant=='restore-readback-failure':value=bytes([1])+value[1:]
     path.write_bytes(value)
    return '\n'.join(words)
@@ -217,12 +259,17 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='no-new-ROM':raise ValueError('Modeled return deadline')
    state['new_ROM']=True
   failure=None
-  try:result=h.run_once(transaction,wait_return,lambda:None,bundle,p2,out,record,lambda:None)
-  except ValueError as error:failure=error
-  normal=variant=='nominal' or variant=='mismatch' and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
+  real_sync=h.base.sync_file
+  def sync(path):
+   if variant=='capture-durability-failure' and path.name=='npu-stopped-lengths-buffers.bin':raise OSError('Modeled capture durability loss')
+   return real_sync(path)
+  try:
+   with patch.object(h.base,'sync_file',sync):result=h.run_once(transaction,wait_return,lambda:None,bundle,p2,out,record,lambda:None)
+  except (ValueError,OSError) as error:failure=error
+  normal=variant in ('nominal','capture-output-differs') or variant=='mismatch' and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','thermal-one-mismatch'))
+   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','thermal-one-mismatch','capture-output-differs'))
    assert state['restore_writes']==1
    if result['status']:
     kernel=h.module('check_controlled_outcome',r/'tools/check-a733-kernel.py');assert kernel.controlled_return(record)
@@ -232,6 +279,22 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='wrong-ROM-entry':assert 'exe' not in state['calls'] and 'Forced-FEL ROM entry' in str(failure)
    assert state['restore_writes']==int(variant=='restore-readback-failure'),variant
    held=[];h.retain_failure(record,lambda:None,lambda:held.append('quarantine'),failure,hold=lambda:held.append('hold'));assert held==['quarantine','hold'],(variant,held)
+  if g.get('stopped_capture'):
+   capture=record.get('stopped_capture')
+   if variant in ('mismatch','capture-output-differs'):
+    assert capture and capture['complete'] and len(state['capture_reads'])==4
+    assert capture['output_matches_returned_copy']==(variant=='mismatch')
+    for item in capture['files']:assert sha((out/item['name']).read_bytes())==item['sha256']
+   elif variant in ('nominal','invalid-time','capture-transport-failure'):assert capture is None and not state.get('capture_reads')
+   elif variant.startswith('capture-') and variant!='capture-transport-failure':
+    assert capture and not capture['complete'] and not state['restore_writes']
+    assert len(state['capture_reads'])=={'capture-metadata-invalid':3,'capture-parent-short':4,'capture-extent-transport-failure':2,'capture-durability-failure':1}[variant]
+   if state.get('capture_reads'):
+    expected=[[item['address'],item['bytes']] for item in g['stopped_capture']['metadata']]+[[h.stopped.PARENT,h.stopped.BYTES]]
+    assert state['capture_reads']==expected[:len(state['capture_reads'])]
   assert all(address>=h.DRAM[0] for address,size,after_ROM in state['writes'] if after_ROM)
-  results.append({'name':variant,'passed':True,'restore_writes':state['restore_writes'],'retained':not normal,'functional_success':record.get('npu_result',{}).get('functional_success')})
-(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha((r/'apps/npu-finite/host.py').read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
+  results.append({'name':variant,'passed':True,'restore_writes':state['restore_writes'],'retained':not normal,'functional_success':record.get('npu_result',{}).get('functional_success'),'capture_reads':state.get('capture_reads',[]),'stopped_capture':record.get('stopped_capture')})
+  if record.get('stopped_capture'):
+   preserved=a.evidence/variant;preserved.mkdir()
+   for path in out.glob('npu-stopped-*.bin'):shutil.copyfile(path,preserved/path.name)
+(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha((r/'apps/npu-finite/host.py').read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))

@@ -6,11 +6,12 @@ from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+stopped=module('finite_npu_stopped',ROOT/'apps/npu-finite/stopped-capture.py')
 original=module('finite_npu_original',ROOT/'apps/npu-convolution/prepare-supervised.py')
 base=original.supervisor.base
 require,sha=base.require,original.sha
 PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
-HOST_SOURCES=('apps/npu-finite/host.py','tools/a733-returning-host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
+HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 def evidence_ref(item,cache=None):
  require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid evidence reference.')
@@ -53,6 +54,8 @@ def image_profile(data,manifest):
   geometry['thermal']=True
  else:require('npu_finite_thermal_profile' not in symbols and layout[:3]==(456,224,232),'Ordinary profile cannot consume thermal suffix.')
  if checkpoint:geometry['checkpoint']=True
+ capture=stopped.layout(sha(data),symbols,read,lo,hi)
+ if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
 def geometry_profile(g):return CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
@@ -271,6 +274,7 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,save):
  for name,address,size in [('monitor',0x42000000,128),('platform',p['geometry']['log'],16384),('receipt',p['geometry']['receipt'],112 if p['execution_profile']==THERMAL else 88)]:
   path=evidence/(name+'.bin');transaction('read',hex(address),size,path);require(path.stat().st_size==size,'Short '+name+' report.');base.sync_file(path);reports.append(path.read_bytes())
  result=validate_reports(*reports,p);record['npu_result']=result;record['result']={'magic':0x534b4552,'stage':5,'status':result['status']};save()
+ stopped.capture(transaction,base,p,evidence,record,save,result)
  # No exception/report failure can reach restoration. The new ROM owns SRAM.
  restoration=backup.read_bytes();require(sha(restoration)==backup_hash,'Saved DRAM changed.');transfer(transaction,DRAM[0],restoration,evidence/'DRAM-restored.bin')
  if result['status']:
