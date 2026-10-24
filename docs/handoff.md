@@ -13,6 +13,39 @@ port `3-1` runs a cold DDR start and then the all-core pre-scheduler bundle
 (`docs/board-runbooks/rank-7-pre-scheduler.md`), byte-identical to the build
 that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
 
+**Open work, in order:**
+
+1. Two reviewed packages wait for integration on their own branches:
+   - `audit/tree-checks` (worktree `audit-tree-checks`, commit `56d9d4b2`
+     plus `~/.cache/sunstoneos/build/tree-checks/primary.patch`) renames the
+     PMIC adapter table to `pmic_bus_ops`, adds `a733_pmic_native_bind()`,
+     `a733_pmic_now()` and `a733_pmic_outside()`, and keys
+     `checks/pmic-tree.py` and `checks/power-domains-tree.py` on them; it
+     also makes `checks/power-domains-tree.py` pass again on bundle 8's
+     domain-1 status read.
+   - `audit/pmic-bound` (worktree `audit-pmic-bound`, commit `984ecb55`
+     plus `~/.cache/sunstoneos/build/pmic-bound/primary.patch`) replaces the
+     provisional 155% PMIC step bound with 799 µs median and 839 µs first
+     step (1,268 permille), fitted to the 2026-10-24 bundle 6 run.
+
+   Each merges into `audit/cpu-wave` with its patch, then runs
+   `~/.cache/sunstoneos/bin/integration-gate.sh`; the two patches both edit
+   `docs/designs/pmic-access.md`, so merge one, regenerate, then the other.
+   After both land, add `checks/pmic-tree.py` and
+   `checks/power-domains-tree.py` to the integration gate.
+2. The next bundle refreeze carries the new bound into bundle 6
+   (`BB_BOUND_PERMILLE` 1268 in `apps/board-bundles-power/trace.h`, with its
+   bins, model and row text) and the `pmic_bus_ops` rename.
+3. Port `3-1`, after its reconnect, as described above.
+4. Waiting on the user: publishing mimus `9c57286b7`; approval for each CPU
+   clock or PMIC voltage board run (the A76 operating points A1 and A2, a
+   DCDC3 selector write).
+5. Follow-ups: the core-0 workload walk A/B and the core-6 walk run; the
+   FIFO-direct USB path for the NPU board image; moving the copied G2D board
+   files into `apps/board`; `apps/mimus/paced.cc` with a model that has no
+   punctuation head; the pre-existing `npu-large-native`, quiescence
+   checkpoint, NPU-returning and type-C check failures.
+
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
