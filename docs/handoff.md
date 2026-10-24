@@ -59,7 +59,24 @@ at least in the MBUS clock: a read-only capture today shows `+0x588` =
 because its input requires 600 MHz. Rank 7 is not repeated on either board
 until an offline diagnosis names a concrete correction or a narrower
 diagnostic. The rank 6 to 9 bundles and runbooks are in
-`~/.cache/sunstoneos/evidence/board-bundles-20261023/`. Earlier identities and admission
+`~/.cache/sunstoneos/evidence/board-bundles-20261023/`.
+
+A read-only capture of the CPU power, CPU configuration and GIC-600 words on
+port `3-3` returned the expected CPU power words. Its GIC-600 words read as
+zero only because that capture used `sunxi-fel read`, which has the ROM copy
+memory with an access width no source establishes; GICv3 returns unknown data
+for unsupported access sizes. Read with 32-bit loads (`sunxi-fel readl`), the
+GIC is clocked (`GIC_CLK_REG` `0x84000003`), out of reset (`CPU_SYS_RST_CTRL`
+`0x7f`) and in its 2026-10-18 state (`GICD_CTLR` `0x37`, `GICD_TYPER`
+`0x007b0408`), also in a clean lifetime. Read GIC registers only with
+`readl`. The rank-7 non-return remains unexplained; the diagnostic waits
+instead of reporting when a state check refuses, and a corrected overlay that
+returns a failure code is being prepared. Rank 9, the native USB channel,
+then ran on port `3-3` with a builder that accepts MBUS at 400 MHz: the image
+returned to the ROM with a controlled refusal at USB takeover, because the
+inherited device-session bit 6 at `0x04100040` (observed `0x00029940`) is
+still refused, as on 2026-10-18. Both ports were power-cycled afterwards and
+passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
