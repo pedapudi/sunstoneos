@@ -1,5 +1,84 @@
 # Current work
 
+**Paused at the user's request on 2026-10-24 because the weekly limit is near.**
+The coordinator interrupted the GPU and NPU implementation agents and their
+active reviewers. Do not resume development, builds, tests or hardware work
+until the user asks. No board access occurred during this board-free tranche.
+There is no active goal object to update.
+
+## Resume checkpoint
+
+Main worktree: `/home/sunil/git/sunstoneos-worktrees/bringup`.
+The last published revision is `fa9bb2fc`. Local commit `12613f42` integrates
+reviewed live GPU/NPU shared-owner checks; it is not pushed yet. Its four
+sanitizer cases passed, covering overlapping admission, each domain's timeout
+and global PMIC transport retention. No production defect was found. Reuse
+`accelerator-shared-owner-20261024/snapshot/manifest.json`; do not rerun it for
+this pause or documentation commit. The associated power-domain documentation
+is saved with this handoff. Check-index aggregation remains pending.
+
+**Uncommitted GPU integration:** preserve
+`/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024`, branch
+`work/gpu-provider-ready-1024`, based on merge `50db83c6`.
+The finite returning GPU and resident OS GPU-linear profiles both build using
+current dependency objects. The GPU-specific CMake option and current-monitor
+patch remove historical application-object mixing. Return admission now checks
+CORE6 OFF as well as TOP5. Actual typed allocator output exposed a further
+legacy-geometry defect: payload starts at `0x48030000`, the first-fit table fills
+`0x48022000..0x4802e000`, and the WB span ends at `0x48088000`. Earlier estimates
+of table/end addresses were superseded by these producer results.
+Six affected linked return cases passed; three OS caller cases and three finite
+backend cases were preserved. Evidence: `gpu-full-integration-20261024/`.
+Final review still needs the immutable ELF span marker, native-report-to-host
+round trip, malformed-span refusal and final dependency/artifact closure.
+The marker must preserve the historical `0x86000` span only when absent and
+refuse malformed present values. Do not replay unchanged successful cases.
+Untracked files include `apps/gpu-finite/current-monitor.patch` and
+`checks/gpu-linked-lifecycle.py`; preserve them with all tracked edits.
+Owner: `/root/gpu_resume_1024`; reviewer: `/root/pmic_review_1024`.
+
+**Uncommitted NPU OS integration:** preserve
+`/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
+`work/npu-thermal-1024`, based on merge `925f143e`.
+The optional supervised profile links the existing five-model runtime and a
+trusted task-bound application API. It reserves `0x47400000..0x47c00000` after
+the cold/stage-2 monitor, uses existing WB/ISH mappings and shared power owners,
+and leaves mimus inputs/output unchanged. The complete catalogue fits in CODE:
+text plus rodata measured 1,998,889 bytes, with roughly 98 KiB spare. Private
+static state is 140,224 bytes including three task stacks. Build succeeded;
+constructor, API, session and actual allocator/runtime preparation checks are
+in progress under `os-npu-20261024/`.
+
+The latest reviewer finding is a concrete privilege requirement:
+`a733_counter_clock_now` masks DAIF, so the registered NPU application client
+must execute at EL1. Verify/finalize the narrow
+`os_npu_client_task(NULL)` privilege-hook correction and test the actual task
+frame SPSR. Unregistered tasks must remain refused. The older
+`apps/npu-board/main.c` client appears to share this problem; inspect it as a
+separate source issue, without assuming its unqualified image works.
+A proposed read-only vendor opcode 6 exposes a separate fixed 104-byte NPU
+report; its implementation/review is not complete. Verify actual framed USB
+length, immutable completion publication and preservation of mimus protocol
+semantics. Numerical mismatch must be reported separately from transport or
+hardware failure. Critical faults retain resources; no full OFF/restart is claimed.
+NPU-only behavior is feature-gated, and old manifests without NPU metadata mean
+OFF. Reconcile only genuinely affected GPU-profile code after integration.
+Untracked NPU sources and `checks/os-npu.py` are part of this unfinished work;
+do not remove them. Owner: `/root/npu_resume_1024`; reviewer:
+`/root/application_review_1024`.
+
+**CPU audit:** the shutdown/publication review found no justified correction.
+Existing checks cover all-core capture/drain before cache cleaning and retained
+fatal exits. No tests were repeated. Idle/wake and induced-fault recovery still
+need physical qualification.
+
+On resume, finish and review the two isolated implementations, integrate their
+commits, regenerate the check index once, update canonical status/issues and
+push after the normal scan. Preserve all existing freezes and evidence. Both
+board sessions below still require the previously requested physical recovery;
+board-free work does not authorize probing them.
+
+
 **Engine revision:** `bringup` now builds against mimus `9c57286b7`, the
 exact-sum hook and the AArch64 epilogue default, on the local branch
 `port/sunstoneos` in `~/git/mimus-worktrees/sunstoneos`. That revision is
@@ -50,6 +129,19 @@ GPU probe was admitted with those retained resources explicitly preserved.
 management. Complete startup, repeated operation, interrupt delivery, bounded
 failure handling and safe shutdown before performance tuning. Model checks do
 not establish physical operation.
+
+**Board-free work at pause:** rebuild the finite GPU and OS GPU-linear profiles
+with current dependency layouts; integrate the existing five-model NPU runtime
+into an explicit supervised OS profile; and check simultaneous GPU/NPU use of
+the shared power owners. The CPU shutdown/publication audit found no new defect
+or uncovered software requirement, so its accepted checks were not repeated.
+The NPU design reserves `0x47400000..0x47c00000` after the cold/stage-2 monitor,
+using existing mappings and a session-bound ownership record. Implementation
+and its focused evidence are still in progress.
+The live shared-owner composition now passes four focused cases covering
+simultaneous admissions, domain-local timeouts and global PMIC failure. It
+preserves NPU ownership through local stop and GPU shutdown; no production
+defect was found. Evidence: `accelerator-shared-owner-20261024/`.
 
 **Open work:**
 

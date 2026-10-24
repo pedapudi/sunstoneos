@@ -317,6 +317,20 @@ and the limits of the cost model.
 - `checks/g2d-power-native.py` runs the G2D task of a linked G2D image with
   the row answered by the model: ON, REFUSED, FAILED and never answered.
 
+The [live accelerator composition check](../checks/accelerator-shared-owner.py)
+exercises the actual NPU startup, GPU power and resource manager, PMIC consumers,
+rail ledger, clock registry and domain owner together. Four focused sanitizer
+cases cover overlapping domain-4/domain-5 admission, each domain's local timeout,
+and shared PMIC transport failure. They also verify that local NPU stop retains
+its domain, PLL and rail ownership while the GPU shuts down. Domain-local failure
+can leave the other admitted consumer progressing; global transport uncertainty
+retains ownership and prevents further device access.
+
+Evidence is under `accelerator-shared-owner-20261024/snapshot/manifest.json`.
+Hardware effects, task context and scheduling are modeled. These cases establish
+shared-owner behavior, not firmware drain, thermal orchestration, multicore
+concurrency or physical operation. No production change was needed.
+
 ## Board evidence required
 
 - The inherited S_TWI0 divisor (`TWI+0x14`) and the bus rate it gives.
