@@ -13,8 +13,10 @@
 # and serves Wi-Fi and the Bluetooth client from one firmware load. The mSBC
 # option adds wideband headset speech through the pinned libsbc. The GPU
 # linear option places mimus linear layers on the CPU or the GPU from a
-# generated table (docs/recognition-dispatch.md); it needs the resident
-# lifetime and two build constants that other owners provide.
+# generated table (docs/recognition-dispatch.md). It needs the resident
+# lifetime; until the board shows GPU cache invalidation at job start,
+# cross-core code writes, GPU read-only enforcement and fault-slot retention
+# across a WDT0 reset, its hook compares every GPU sum with a CPU sum.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OFF)
@@ -50,16 +52,18 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   if(NOT SUNSTONE_A733_OS_RESIDENT)
     message(FATAL_ERROR "GPU linear layers need the resident lifetime, whose watchdog bounds every GPU wait")
   endif()
-  # The page-table owner sets this once 0x46C00000-0x47000000 is mapped
-  # read-only at EL0 as two 2 MiB blocks, so no CPU store can dirty a line of
-  # the GPU's output region.
-  if(NOT A733_GPU_OUTPUT_EL0_READ_ONLY)
-    message(FATAL_ERROR "GPU linear layers need the GPU output region mapped read-only at EL0 (A733_GPU_OUTPUT_EL0_READ_ONLY)")
+  # This branch maps 0x46C00000-0x47000000 read-only itself (below); a value
+  # given on the command line could only disagree with it.
+  if(DEFINED A733_GPU_OUTPUT_EL0_READ_ONLY)
+    message(FATAL_ERROR "The GPU linear build sets A733_GPU_OUTPUT_EL0_READ_ONLY itself; do not supply it")
   endif()
-  # The GPU kernel owner sets this once its completion uses DC CIVAC on the
-  # output region: DC IVAC is checked as a write and faults on a read-only page.
-  if(NOT A733_GPU_OUTPUT_CLEAN_INVALIDATE)
-    message(FATAL_ERROR "GPU linear layers need clean-and-invalidate completion on the GPU output region (A733_GPU_OUTPUT_CLEAN_INVALIDATE)")
+  set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
+  if(NOT SUNSTONE_GPU_FIRMWARE)
+    message(FATAL_ERROR "The GPU linear build requires SUNSTONE_GPU_FIRMWARE")
+  endif()
+  file(SHA256 "${SUNSTONE_GPU_FIRMWARE}" os_gpu_firmware_hash)
+  if(NOT os_gpu_firmware_hash STREQUAL "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2")
+    message(FATAL_ERROR "GPU firmware identity refused")
   endif()
 endif()
 if(NOT TARGET sunstone-a733-mimus-board)
@@ -239,9 +243,31 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   apply_build_patch("${os_build}/recognition-gpu.cc" "${os_recognition}" "${os_root}/apps/os/recognition-dispatch.patch")
   set(os_recognition "${os_build}/recognition-gpu.cc")
   list(APPEND os_patches "${os_root}/apps/os/recognition-dispatch.patch")
-  list(APPEND os_added apps/os/dispatch.c)
+  # The GPU runtime: the service, its mimus session and the A733 platform,
+  # backend and firmware memory, as the accelerator image composes them. The
+  # service's compute, render and free-list objects come with it.
+  list(APPEND os_added apps/os/dispatch.c apps/os/gpu.c apps/os/gpu_hook.cc
+    platform/a733/gpu_reserved.c platform/a733/gpu_mimus.c platform/a733/gpu_compute_reserved.c
+    platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c
+    platform/a733/gpu_backend.c drivers/gpu/a733_gpu_power.c drivers/gpu/a733_gpu_platform.c
+    drivers/gpu/a733_gpu_platform_native.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
+    drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c
+    drivers/gpu/pvr_compute_context.c drivers/gpu/pvr_compute_mimus.c drivers/gpu/pvr_compute_mimus_usc.c
+    drivers/gpu/pvr_mimus_service.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_render_target.c drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
+    drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
+    drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c
+    drivers/gpu/pvr_mips.c drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c
+    drivers/gpu/pvr_gpu_control.c drivers/gpu/pvr_gpu_stop.c drivers/gpu/pvr_free_list.c
+    drivers/gpu/pvr_gpu_events.c)
+  file(WRITE "${os_build}/gpu-firmware.S"
+    ".section .rodata.gpu_firmware,\"a\"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n.incbin \"${SUNSTONE_GPU_FIRMWARE}\"\n.global gpu_firmware_end\ngpu_firmware_end:\n")
+  list(APPEND os_sources "${os_build}/gpu-firmware.S")
+  file(GLOB os_gpu_headers "${os_root}/include/pvr_*.h" "${os_root}/include/a733_gpu_*.h")
   list(APPEND os_external_inputs "${os_root}/apps/os/placement.py" "${os_build}/placement.h"
-    "${SUNSTONE_A733_OS_MODEL_DIR}/base.mimus" "${SUNSTONE_A733_OS_MODEL_DIR}/overlay.mimus")
+    "${SUNSTONE_A733_OS_MODEL_DIR}/base.mimus" "${SUNSTONE_A733_OS_MODEL_DIR}/overlay.mimus"
+    "${SUNSTONE_GPU_FIRMWARE}" ${os_gpu_headers} "${os_root}/drivers/gpu/pvr_compute_probe.inc"
+    "${os_root}/drivers/gpu/pvr_compute_usc.inc")
   list(APPEND os_include_dirs "${os_build}")
 endif()
 if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
@@ -272,6 +298,8 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   # 0x46C00000-0x47000000 read-only at EL0 and EL1.
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1
     OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1)
+  set_source_files_properties("${os_root}/drivers/gpu/a733_gpu_platform_native.c" TARGET_DIRECTORY sunstone-a733-os
+    PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
 target_include_directories(sunstone-a733-os BEFORE PRIVATE "${os_root}/apps/os")
 if(os_include_dirs)

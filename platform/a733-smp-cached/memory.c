@@ -96,7 +96,9 @@ int a733_cached_memory_prepare(void)
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
     /* GPU output region 0x46c00000-0x47000000: AP = 0b11, read-only at EL0
      * and EL1 as the text block is, UXN and PXN, still write-back inner
-     * shareable. No CPU store can dirty a line of it. EL3 never touches it. */
+     * shareable. No EL1 or EL0 store can dirty a line of it. EL3 does not
+     * map it; only the OS image's identity step stores to its tag area, with
+     * translation off, before these tables take effect. */
     a733_cached_el1_l2[54] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
     a733_cached_el1_l2[55] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
 #endif

@@ -2965,10 +2965,13 @@
    "docs/designs/cpu-leftovers.md",
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/gpu-recognition-measurements.md",
+   "docs/designs/gpu-recognition.md",
    "docs/designs/memory-architecture-measurements.md",
    "docs/designs/memory-map-12g.md",
    "docs/device-memory-capacity.md",
-   "docs/memory-protection.md"
+   "docs/memory-protection.md",
+   "docs/recognition-dispatch.md"
   ],
   "library": false,
   "pure_host": false,
@@ -4287,6 +4290,22 @@
   "pure_host": true,
   "required_arguments": [],
   "summary": "Per-core time model of mimus linear layers with exact sums on the GPU.",
+  "usb": false
+ },
+ "gpu-recognition-engine.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
+   "docs/gpu-mimus-service.md",
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the SunstoneOS exact-sum hook against a model of the mimus engine.",
   "usb": false
  },
  "gpu-render-cleanup.py": {
@@ -6968,7 +6987,10 @@
    "inputs"
   ],
   "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
+   "docs/designs/gpu-recognition.md",
    "docs/designs/recognition-dispatch-measurements.md",
+   "docs/gpu-mimus-service.md",
    "docs/os-image.md",
    "docs/recognition-dispatch.md"
   ],
@@ -7039,7 +7061,9 @@
  "os-image-link.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-recognition.md",
    "docs/designs/recognition-dispatch.md",
+   "docs/gpu-mimus-service.md",
    "docs/handoff.md",
    "docs/os-image.md",
    "docs/recognition-dispatch.md"
@@ -7574,6 +7598,7 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/gpu-mimus-compute-measurements.md",
+   "docs/designs/gpu-recognition-measurements.md",
    "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-compute-mode.md",
    "docs/gpu-compute-service.md"
@@ -7708,6 +7733,7 @@
  "pvr-gpu-freelist-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
    "docs/gpu-freelist-service.md"
   ],
   "library": false,
@@ -7724,6 +7750,7 @@
  "pvr-gpu-irq.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
    "docs/gpu-interrupts.md"
   ],
   "library": false,
@@ -7740,6 +7767,7 @@
  "pvr-gpu-service.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
    "docs/designs/gpu-runtime-measurements.md",
    "docs/gpu-memory.md",
    "docs/gpu-service.md"
@@ -7788,6 +7816,7 @@
  "pvr-gpu-vm-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-recognition.md",
    "docs/gpu-vm.md"
   ],
   "library": false,
@@ -7797,6 +7826,30 @@
    "evidence"
   ],
   "summary": "Compare offline GPU translations with pinned driver entry encoders.",
+  "usb": false
+ },
+ "pvr-mimus-service.py": {
+  "cache_areas": [
+   "inputs"
+  ],
+  "docs": [
+   "docs/designs/gpu-recognition-measurements.md",
+   "docs/designs/gpu-recognition.md",
+   "docs/gpu-mimus-service.md",
+   "docs/os-image.md",
+   "docs/recognition-dispatch.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tinyusb",
+   "--firmware",
+   "--qemu",
+   "--lld"
+  ],
+  "summary": "Run the GPU service with its mimus session over the bench recording in QEMU.",
   "usb": false
  },
  "pvr-mips-reference.py": {
