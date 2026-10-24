@@ -20,6 +20,12 @@ struct os_placement { uint16_t n_gpu, job_rows; };
  * byte offset of weight row 0 in it, the weight row stride, K and N. */
 struct os_placement_tensor { uint32_t offset; uint16_t ordinal, stride, k, n; uint8_t region; };
 
+/* The table's length, and the bitmap generated with it: bit i % 8 of byte
+ * i / 8 is set when ordinal i has n_gpu > 0. The recognizer offers the
+ * engine's exact-sum hook only these tensors' calls (apps/os/gpu_hook.cc). */
+extern const uint32_t os_placement_rows;
+extern const uint8_t os_placement_gpu_ordinals[];
+
 /* Completion states the hook reports (GPU kernel design). */
 enum { OS_DISPATCH_RESET = 1, OS_DISPATCH_LOST = 2 };
 /* Why the resident supervisor stopped renewal after a GPU loss: a value

@@ -16,10 +16,10 @@ board or GPU was used.
   binary` gave the loadable bytes and `llvm-size-21 -A` the section sizes. The
   GPU linear image was built at the change only, resident, with the pinned
   GPU firmware and the bench models (`~/.cache/sunstoneos/inputs/mimus-bench`),
-  for the A76 pair, twice: as the tree builds it today, without the engine's
-  hook header, and with a copy of `checks/gpu-recognition-hook.h` on the
-  include path and the engine's `SetExactSumHook` replaced by a linker
-  symbol, which is the image once the engine has its hook.
+  for the A76 pair, twice: with the pinned engine, which has no hook
+  header, and with the engine of mimus commit `9c57286b7`, which declares
+  and implements the hook. "With the engine's hook" below gives the later
+  measurements with that engine.
 - **Session in QEMU.** `checks/pvr-mimus-service.py` built a two-core
   FreeRTOS image for QEMU's `virt` machine. It constructs the session with
   the image's `a733_gpu_reserved_prepare` and `a733_gpu_mimus_prepare` over
@@ -68,7 +68,7 @@ CPU-only image or the design's stated baseline.
 | --- | --- | --- | --- | --- |
 | Default OS images, loadable bytes | — | Identical apart from the 32-byte build identity | 4 of 4 identical apart from the identity; section sizes equal (resident `.text` / `.rodata` 861,216 / 41,609 B at both commits) | Yes |
 | Other images that link `drivers/gpu/` | — | Existing host checks pass; changes only at the service points | `pvr-gpu-service.py` cases 1 to 6, `pvr-gpu-irq.py` 1 and 2, `pvr-gpu-freelist-service.py` 1 to 4 and `pvr-compute-service.py` 1 to 3 pass; the GPU render image links. The service changes at the twelve points the design lists | Yes |
-| GPU linear image | Stopped at the arena assertion | Links; link check passes; `.text` + `.rodata` at most 1.75 MiB | Links and passes the link check both ways. With the hook header 1,012,576 + 188,953 = 1,201,529 B (1.15 MiB); without it 1,011,657 B, because nothing of the session is prepared. The resident default image has 902,825 B | Yes |
+| GPU linear image | Stopped at the arena assertion | Links; link check passes; `.text` + `.rodata` at most 1.75 MiB | Links and passes the link check both ways. With the hook engine 1,023,776 + 189,401 = 1,213,177 B (1.16 MiB) for the A76 pair and 1,022,112 + 189,177 = 1,211,289 B for the A55 pair; with the pinned engine 1,011,657 B, because nothing of the session is prepared. The resident default image has 902,825 B | Yes |
 | Translations in `mimus_board_pins`, arena and view | 5,120 | 18 | 18: 6 for the arena, 12 for the view (EL0 read, EL0 write and EL1 write on the first and last page of each block) | Yes |
 | Slot write to kick in the session component | No path | 0 translations, hashes, allocations and tick waits; at most 13 compares | 0 translations (the window's 18 are all in `gpu_memory.c`); no hash, allocation or tick wait on the path; compares not counted | Yes, compares unmeasured |
 | Worker steps per job | No path | 1 from slot write to kick, with one mask and re-enable and one firmware-queue check | 1 to the kick (1 mask, 3 critical sections, 1 queue send, 33 transport and 4 maintenance `DSB SY`); 2.00 per job in all with jobs that complete at once, 2.10 with modeled durations | Yes |
@@ -81,8 +81,8 @@ CPU-only image or the design's stated baseline.
 | Tag area at boot | — | 1,024 lines per boot | `identity.c` zeroes and publishes 64 KiB, which is 1,024 lines; the step runs at EL3 on the board only and was not run on the host | Not measured |
 | Hang detection | None | 1 s plus at most one 1 ms tick after the kick | LOST 1,000,751 µs after the kick, then submit returns -1 | Yes |
 | Pool pages for the GPU | 0 | At most 80 write-back and 52 uncached, after USB2 and audio | 79 write-back (34 firmware, 21 payload, 24 table) and 51 uncached (45, 6), in the QEMU construction and in the replay with USB2 and 10 audio pages first | Yes |
-| Linear stage, bench recording (model) | 14.894 s on one A55 | 0.535 s, bound 0.54 s (A76); 1.147 s, bound 1.15 s (A55) | 0.5351 s, 45.4% on the GPU; 1.1476 s, 90.2%; 0.665 s and 0.817 s on the A76 pair with 200-clock and 400-clock loads | Yes (model) |
-| Recognition, PCM to text, bench recording (model) | 19.476 s on one A55 | Goal 0.4435 s, 0.05 times the audio | 0.818 s (0.092 times) on the A76 pair, 3.439 s on the A55 pair | **No**, as the design states |
+| Linear stage, bench recording (model) | 14.894 s on one A55 | 0.535 s, bound 0.54 s (A76); 1.117 s, bound 1.12 s (A55) | 0.5351 s, 45.4% on the GPU; 1.1166 s, 90.2%; 0.666 s and 0.818 s on the A76 pair with 200-clock and 400-clock loads | Yes (model) |
+| Recognition, PCM to text, bench recording (model) | 19.476 s on one A55 | Goal 0.4435 s, 0.05 times the audio | 0.818 s (0.092 times) on the A76 pair, 3.408 s on the A55 pair | **No**, as the design states |
 
 ## Other host results
 
@@ -96,6 +96,35 @@ CPU-only image or the design's stated baseline.
 | `gpu_memory.c` per job, no target | 27.0 translations (design reading: about 47), 24.0 `external()` scans (about 26), 26.4 clock samples, each one counter-clock lock acquisition in the image (about 12); 25.0 critical sections and 5.24 from the interrupt handler |
 | Steps by kind | The kick step 32 `DSB SY` and 4 for register accesses; the step that posts the record 14 and 6 |
 | Validation cost (estimate) | The hook's comparison of every sum costs about 1.9 s per bench recording on the A76 pair and 15 s on the A55 pair at two cycles per MAC, until the board items let it go |
+
+## With the engine's hook
+
+These runs use mimus commit `9c57286b7` (the hook engine) and, for
+comparison, the pinned mimus commit `3e05158e3`, at the change and at its
+base, commit `9e631433`. QEMU runs use the two-core `virt` image of
+[mimus-smp.md](../mimus-smp.md) with the bench recording. Under
+`-icount shift=0` the guest clock advances one nanosecond per instruction, so
+each "us" figure that the image prints counts thousands of instructions
+retired on both cores, including the FreeRTOS idle loop of a core with no
+work; the figures are not elapsed time.
+
+The pinned engine ran the packed GEMM's read-out on the other worker by
+default, and the hook engine does not. The single-A55 board baseline had no
+other worker, so that offload never ran there, and the design's modeled
+recognition rows stay derived from that baseline.
+
+| Measurement | Result |
+| --- | --- |
+| CPU only, two workers, pinned engine | 26.11 G instructions on both cores, of which the linear stage 23.23 G |
+| CPU only, two workers, hook engine | 17.64 G, of which the linear stage 14.73 G: 32% fewer in all, with the same CRCs and text; the other stages 2.91 G against 2.88 G |
+| CPU only, one worker, hook engine | 27.84 G, of which the linear stage 24.10 G, with output equal to the two-worker run. The default OS images ran recognition this way before the change installed the second worker |
+| Hook path over a CPU stand-in for the GPU, A76 table | The QEMU image links `apps/os/gpu_hook.cc` and `apps/os/dispatch.c` with a stand-in for the GPU runtime that computes each job's exact sums and tags on the recognizer core. 204 placed calls, 204 jobs, 5,870,398 GPU sums (the time model's count), no refusal or missing tag. CRCs, words, marks, capitals and formatted text equal the host reference (`tools/check-mimus-smp.py`). 93.75 G instructions on both cores, 45.59 G of them inside the stand-in. Arena peak 1,865,968 bytes |
+| Read-out, instructions per output on the placed shapes | The engine's compiled `MimusExactSumRows` from the image build, run under Unicorn for 32 rows with a bias: int32 sums 3.01 (80 channels), 2.82 (160), 2.73 (304), 2.72 (320), 2.74 (449), 2.67 (624), 2.68 (897); with the residual add 3.61 (80), 3.43 (160); int64 sums 3.77 (80), 3.57 (160); with the residual add 4.37 (80), 4.19 (160). Weighted by the bench recording's placed outputs: 2.99 on the A55 table, 3.11 on the A76 table. The time model uses 3.0; every value from 2.9 to 3.11 gives the same tables |
+| Time model | Tables unchanged. With the read-out split across both workers, the A55 pair's linear stage models at 1.117 s and the A76 pair's at 0.535 s; with one worker the same A55 table models at 1.603 s |
+| GPU linear image | Links and passes the link check for both pairs: `.text` + `.rodata` 1,023,776 + 189,401 B (A76) and 1,022,112 + 189,177 B (A55). It contains `SetExactSumOrdinals`, `SetExactSumHook`, the engine's read-out, the 74-byte bitmap of placed ordinals and, on both pairs, the second inference worker. INTID 95 routes to core 2 on the A55 pair and core 6 on the A76 pair |
+| Default OS images (supervised, resident, resident with microphone, resident with headset), hook engine | After the change every variant creates the recognizer on core 2 and the inference worker on core 3; the service core 0 keeps INTID 71 and, with the microphone, INTID 143. Loadable bytes keep their length (2,100,320 B; 2,100,336 B with the headset); code and read-only data grow by 1,632 to 1,712 B and zero-initialized data by 65,536 B, the worker's stack. The link check passes for each |
+| Model without a punctuation head | The two-core QEMU image recognizes the bench recording with the log-probability CRC of host `asr_cli` and prints no marks or capitals |
+| Host checks | `gpu-recognition-engine.py --mimus-dir` passes both builds, with the hook header equal to the engine's token for token, the bitmap of placed ordinals and the hook's removal when placement closes; `os-image-dispatch.py --configure-from` the A76 build passes; `pvr-mimus-service.py` passes its 12 cases; `check-mimus-smp.py` passes whole-recording and paced parity with the hook engine |
 
 ## Conclusion
 

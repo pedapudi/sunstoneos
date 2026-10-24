@@ -1,13 +1,11 @@
 --- recognition.cc
 +++ recognition-gpu.cc
-@@ -2,7 +2,16 @@
+@@ -2,7 +2,14 @@
  #include "assets.h"
  #include "../mimus/recorded.h"
  #include "runtime.h"
-+#ifdef A733_A76_ADMITTED
 +#include "../mimus/parallel_runtime.h"
 +#include "a733_smp_placement.h"
-+#endif
  extern "C" {
 +#include "dispatch.h"
 +/* mimus allocates only from the first 12 MiB; the GPU owns the output region
@@ -17,18 +15,16 @@
  #include "a733_storage_digest.h"
  #include "FreeRTOS.h"
  #include "task.h"
-@@ -22,6 +31,10 @@
+@@ -22,6 +29,8 @@
  [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
  void recognize(void *)
  {
-+#ifdef A733_A76_ADMITTED
-+    /* The engine's second worker runs on the other A76 core. */
++    /* The engine's second worker runs on the pair's other core. */
 +    mimus_parallel_bind();
-+#endif
      /* Board owners must first establish live storage attachment. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
      while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
-@@ -35,6 +48,10 @@
+@@ -35,6 +44,10 @@
          uint8_t hash[32];storage_digest_end(&digest,hash);
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
      }
@@ -39,7 +35,7 @@
      std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
          input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
      /* Only this task mutates recognizer/transcript storage. USB0 publishes an
-@@ -65,6 +82,8 @@
+@@ -65,8 +78,13 @@
      }
  }
  }
@@ -47,8 +43,13 @@
 +extern "C" void os_dispatch_stop(void){failed();}
  extern "C" void mimus_native_checkpoint(void)
  {if(!mimus_board_live())failed();mimus_board_progress();}
++/* The engine's parallel ranges on the inference worker count as recognizer
++ * progress (apps/mimus/parallel_runtime.cc). */
++extern "C" void mimus_native_inference_progress(void){mimus_board_progress();}
  extern "C" void platform_puts(const char *text)
-@@ -78,7 +97,18 @@
+ {
+     mimus_native_checkpoint();
+@@ -78,7 +96,16 @@
  extern "C" void platform_hex(uint64_t x)
  {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
  extern "C" int mimus_board_start(void)
@@ -57,10 +58,8 @@
 +    /* The recognizer shares the recognition core with the GPU worker and
 +     * INTID 95, so a completion needs no inter-processor interrupt. */
 +    runtime_smp_init();runtime_init();
-+#ifdef A733_A76_ADMITTED
-+    /* Recognition and its inference worker run on the admitted A76 pair. */
++    /* Recognition and its inference worker run on the recognition pair. */
 +    mimus_parallel_init(A733_SMP_RECOGNITION_CORE,A733_SMP_INFERENCE_CORE);
-+#endif
 +    os_recognizer=xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,3,stack,&task,
 +        UBaseType_t{1}<<OS_RECOGNITION_CORE);
 +    return os_recognizer!=nullptr;

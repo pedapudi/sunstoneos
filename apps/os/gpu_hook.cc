@@ -11,7 +11,9 @@ extern "C" {
 #include <cstdint>
 
 #if __has_include("mimus/asr/exact_sum_hook.h")
+#include <span>
 #include "mimus/asr/exact_sum_hook.h"
+#include "mimus/asr/kernels.h"
 
 namespace {
 // The call in progress. One job is in flight at a time, because each job
@@ -113,7 +115,10 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
   if (!next || !pvr_mimus_tags_complete(OS_DISPATCH_OUTPUT, static_cast<uint32_t>(rows), call.n_gpu, done.sequence) ||
       !SumsEqual(call.next, rows)) {
     // Placement closes for the boot; the session stays open and idle.
+    // Removing the hook restores every CPU path of the engine for later
+    // calls, the streamed ring and internal-arena codes included.
     os_dispatch_incomplete();
+    mimus::asr::SetExactSumHook(nullptr);
     call.stopped = true;
     return false;
   }
@@ -127,7 +132,11 @@ const mimus::asr::ExactSumHook hook{Begin, Finish, nullptr};
 }  // namespace
 
 extern "C" void os_gpu_open(void) {
-  if (os_dispatch_open()) mimus::asr::SetExactSumHook(&hook);
+  if (!os_dispatch_open()) return;
+  // The engine offers the hook only the placed tensors' calls; every other
+  // call keeps the CPU paths it has without a hook.
+  mimus::asr::SetExactSumOrdinals(std::span<const uint8_t>(os_placement_gpu_ordinals, (os_placement_rows + 7) / 8));
+  mimus::asr::SetExactSumHook(&hook);
 }
 #else
 // The engine has no exact-sum hook: no call could reach the GPU, so the

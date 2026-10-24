@@ -12,8 +12,8 @@ result with them.
 
 Status: **implemented** and host-modeled. The GPU option's image links and
 passes its link check and host checks. No board has run it, and no call
-reaches the GPU until the mimus engine has its exact-sum hook (the design's
-"Changes needed in the mimus engine").
+reaches the GPU until the image build's pinned mimus engine has the
+exact-sum hook (the design's "Changes needed in the mimus engine").
 
 ## Parts
 
@@ -83,9 +83,11 @@ uncached pages. Nothing is released; a failure retains every page.
    OK record's, checks every tag with `pvr_mimus_tags_complete` and compares
    every sum with an int64 sum that a scalar CPU loop computes from the same
    codes and weights. It hands the engine the job's rows and the address, row
-   stride and width (4 or 8 bytes) of its sums; the engine reads them out with
-   its own code and then asks for the call's next job, which reuses the
-   output region.
+   stride and width (4 or 8 bytes) of its sums. The engine reads them out
+   with its own code on both inference workers, half of the rows each, and
+   then asks for the call's next job, which reuses the output region. The
+   design's "Synchronization across cores" gives why the second worker reads
+   the sums coherently.
 
 The hang bound `max_job_us` is 1 s from the kick, the most that bind accepts.
 A missed deadline, a context-reset event, a timeline value other than the
