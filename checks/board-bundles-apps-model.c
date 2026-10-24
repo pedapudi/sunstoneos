@@ -10,9 +10,11 @@
  * writes reach only ports 2, 14 and 15.
  *
  * Bundles 6 and 7: apps/board-bundles-power/trace.c. The TWI observer is fed
- * the S_TWI0 accesses of one modeled read transaction; the status spin is fed
- * a modeled status sequence; the step distribution is computed for modeled
- * steps. Every summary and detail line is formatted with each field at its
+ * the S_TWI0 accesses of one modeled read transaction, of flag phases and
+ * STOP waits polled after a spin that ended early, and of whole snapshots;
+ * the status spin is fed a modeled status sequence; the step distribution
+ * and the provisional bound are computed for modeled steps and for the board
+ * steps of port 3-3. Every summary and detail line is formatted with each field at its
  * widest value: no line is cut, and the begin line, the summary, the outcome
  * line and the detail reserve of each image fit the 16,127 log bytes, so the
  * outcome line always reaches the log.
@@ -215,10 +217,14 @@ static void twi_case(void)
     bb_twi_observe(&t, 0, data, 0x03);
     bb_twi_observe(&t, 1, cntr, 0x58);
     bb_twi_observe(&t, 0, cntr, 0x50);           /* STOP pending */
-    bb_twi_observe(&t, 0, cntr, 0x40);           /* STOP done */
+    bb_twi_observe(&t, 0, cntr, 0x40);           /* STOP bit clear */
+    assert(t.stops == 0 && t.mode == 3);
+    bb_twi_observe(&t, 0, stat, 0xf8);           /* idle: STOP done */
     bb_twi_observe(&t, 0, cntr, 0x40);           /* idle check */
+    bb_twi_observe(&t, 0, stat, 0xf8);           /* idle check */
     assert(t.conditions == 2 && t.bytes == 4 && t.stops == 1 && t.mode == 0);
     assert(t.first_set == 3 && t.first_clear == 3 && t.polls_max == 3 && !t.enable_seen);
+    assert(t.respins == 2 && t.stop_respins == 0 && t.snapshot_respins == 2 && t.snapshots == 0);
     assert(bb_twi_wire_bits(t.conditions, t.bytes, t.stops) == 42);
     bb_twi_observe(&t, 0, cntr, 0xc0);
     assert(t.enable_seen == 0x80 && t.conditions == 2);
@@ -259,6 +265,20 @@ static void spin_case(void)
     printf("\"status spin: ON after an intermediate value; bounded when it never changes\"");
 }
 
+/* One STOP wait: the STOP write, CNTR polls (the last with the STOP bit
+ * clear) and the status reads, the last 0xf8. */
+static void stop_wait(struct bb_twi *t, unsigned stop_polls, unsigned status_polls)
+{
+    bb_twi_observe(t, 1, BB_TWI_CNTR, 0x58);
+    for (unsigned i = 1; i < stop_polls; ++i)
+        bb_twi_observe(t, 0, BB_TWI_CNTR, 0x50);
+    bb_twi_observe(t, 0, BB_TWI_CNTR, 0x40);
+    for (unsigned i = 1; i < status_polls; ++i) {
+        bb_twi_observe(t, 0, BB_TWI_STAT, 0xe0);
+        bb_twi_observe(t, 0, BB_TWI_CNTR, 0x40);
+    }
+    bb_twi_observe(t, 0, BB_TWI_STAT, 0xf8);
+}
 static void bins_case(void)
 {
     /* 400 kHz, 2,500 ns bits: one snapshot is 252 bit times, 630,000 ns. */
@@ -266,13 +286,18 @@ static void bins_case(void)
                                      {16632, 1, 12, 24, 6, 20, 16, 2, 0},  /* 693,000 ns: 110% */
                                      {30000, 1, 12, 24, 6, 20, 16, 2, 0}}; /* 1,250,000 ns */
     struct bb_step_bins b;
-    bb_step_bins(steps, 3, 2500, &b);
+    bb_step_bins(steps, 3, 2500, 22500, &b);
     assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
            b.worst == 1984);
     /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
     const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2, 0};
-    bb_step_bins(&board, 1, 2500, &b);
+    bb_step_bins(&board, 1, 2500, 22500, &b);
     assert(b.bins[3] == 1 && b.worst == 1456);
+    /* A measured byte of 25 us, longer than nine 2,500 ns bits: the snapshot
+     * wire is 36 x 2,500 + 24 x 25,000 = 690,000 ns, so the same step is
+     * 1,329 thousandths. */
+    bb_step_bins(&board, 1, 2500, 25000, &b);
+    assert(b.bins[3] == 1 && b.worst == 1329);
     /* A byte phase polled four times: the read right after the write, the
      * read after the spin, and two re-spins. */
     struct bb_twi twi = {0};
@@ -281,7 +306,62 @@ static void bins_case(void)
         bb_twi_observe(&twi, 0, BB_TWI_CNTR, 0x40);
     bb_twi_observe(&twi, 0, BB_TWI_CNTR, 0x48);
     assert(twi.bytes == 1 && twi.polls_max == 4 && twi.respins == 2 && twi.first_clear == 1);
-    printf("\"step distribution against the wire time\",");
+    /* STOP waits: two polls (the read after the write, the read after the
+     * spin) are no re-spin; a third CNTR poll with the STOP bit still set,
+     * or a status read before 0xf8 and its next poll, is one. */
+    twi = (struct bb_twi){0};
+    stop_wait(&twi, 2, 1);
+    assert(twi.stops == 1 && twi.respins == 0 && twi.stop_respins == 0);
+    stop_wait(&twi, 3, 1);
+    assert(twi.stops == 2 && twi.respins == 1 && twi.stop_respins == 1 && twi.polls_max == 3);
+    stop_wait(&twi, 2, 2);
+    assert(twi.stops == 3 && twi.respins == 2 && twi.stop_respins == 2);
+    /* Six STOPs end a snapshot: its re-spins are its maximum; the next
+     * snapshot counts from zero. */
+    for (unsigned i = 0; i < 3; ++i)
+        stop_wait(&twi, 2, 1);
+    assert(twi.snapshots == 1 && twi.snapshot_respins_max == 2 && twi.snapshot_respins == 0);
+    for (unsigned i = 0; i < 6; ++i)
+        stop_wait(&twi, i == 5 ? 3 : 2, 1);
+    assert(twi.snapshots == 2 && twi.snapshot_respins_max == 2 && twi.stop_respins == 3);
+    printf("\"step distribution against the wire time; re-spins of flag phases and STOP waits\",");
+}
+
+static void bound_case(void)
+{
+    struct bb_bound b;
+    /* The board's 34 steps of 2026-10-24 (first 22,590 ticks, the others
+     * 22,011 to 22,166): median 1,456 and first 941,250 ns against
+     * 976,500 + 40,000 ns, so the run would pass the provisional bound. */
+    struct bb_step board[34];
+    for (unsigned i = 0; i < 34; ++i)
+        board[i] = (struct bb_step){i ? 22011u + (i * 7) % 156 : 22590u, 1, 12, 24, 6, 0, 36, 2, 0};
+    bb_bound(board, 34, 2500, 22500, 0, &b);
+    assert(b.pass && b.first_ns == 941250 && b.first_limit_ns == 1016500 && b.median >= 1456 && b.median <= 1470);
+    /* Re-spins above 12 in one snapshot fail it. */
+    bb_bound(board, 34, 2500, 22500, BB_BOUND_RESPINS + 1, &b);
+    assert(!b.pass);
+    /* A first step above its own bound fails it: 1,016,500 ns is 24,396
+     * ticks. */
+    board[0].ticks = 24400;
+    bb_bound(board, 34, 2500, 22500, 0, &b);
+    assert(!b.pass && b.first_ns == 1016666);
+    board[0].ticks = 24395;
+    bb_bound(board, 34, 2500, 22500, 0, &b);
+    assert(b.pass);
+    /* The median is the larger middle value: 17 steps at 1,600 thousandths
+     * of 34 fail it, 16 do not. */
+    board[0].ticks = 22590;
+    for (unsigned i = 1; i < 34; ++i)
+        board[i].ticks = i <= 17 ? 24192 : 22019; /* 1,008,000 ns: 1,600 */
+    bb_bound(board, 34, 2500, 22500, 0, &b);
+    assert(!b.pass && b.median == 1600);
+    board[17].ticks = 22019;
+    bb_bound(board, 34, 2500, 22500, 0, &b);
+    assert(b.pass && b.median == 1494); /* the first step, 941,250 ns */
+    bb_bound(board, 0, 2500, 22500, 0, &b);
+    assert(!b.pass);
+    printf("\"provisional bound: median 155%%, first step 155%% plus 40 us, 12 re-spins per snapshot\",");
 }
 
 static size_t length(const struct bb_line *l)
@@ -296,7 +376,8 @@ static void log_bound_case(void)
     struct bb6_summary s6;
     memset(&s6, 0xff, sizeof s6);
     for (unsigned i = 0; i < 3; ++i) s6.check[i] = 1;
-    size_t six = strlen(BB6_BEGIN) + strlen(BB6_COMPLETE) + reserve;
+    size_t six = strlen(BB6_BEGIN) + (strlen(BB6_COMPLETE) > strlen(BB6_BOUND_MISSED) ? strlen(BB6_COMPLETE) :
+                                       strlen(BB6_BOUND_MISSED)) + reserve;
     const unsigned n6 = bb6_summary_lines(&s6, lines);
     assert(n6 == BB6_SUMMARY_LINES);
     for (unsigned i = 0; i < n6; ++i) six += length(&lines[i]);
@@ -374,6 +455,7 @@ int main(void)
     refused_case();
     alias_case();
     bins_case();
+    bound_case();
     log_bound_case();
     twi_case();
     spin_case();

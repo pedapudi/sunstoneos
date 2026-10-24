@@ -8,10 +8,12 @@
  * order, and classifies the reads of the control register CNTR (+0x0c):
  * after a START or repeated START (CNTR write 0x68) or a byte (0x48), each
  * read is a poll of the interrupt flag (bit 3) until the flag reads 1; after
- * a STOP (0x58), each read is a poll of the STOP bit (bit 4) until it reads
- * 0; any other read (the provider's idle checks) is neither. Every CNTR read
- * also records the interrupt enable (bit 7), which stays 0: the provider
- * never writes it, and no GIC register is read for this record.
+ * a STOP (0x58), each read is a poll of the STOP wait, which ends when the
+ * STOP bit (bit 4) reads 0 and then the status register (+0x10) reads the
+ * idle state 0xf8; any other read (the provider's idle checks) is neither.
+ * Every CNTR read also records the interrupt enable (bit 7), which stays 0:
+ * the provider never writes it, and no GIC register is read for this
+ * record.
  *
  * Every log line of both images is built here in a bounded buffer. The
  * summary lines come first and end with the outcome line; the detail lines
@@ -22,14 +24,24 @@
 #include <stdint.h>
 
 #define BB_TWI_CNTR UINT32_C(0x0708300c)
+#define BB_TWI_STAT UINT32_C(0x07083010)
+/* A snapshot is six read transactions, each ending in a STOP. */
+#define BB_TWI_SNAPSHOT_STOPS 6u
 struct bb_twi {
-    unsigned mode;                      /* 0 none, 1 flag poll, 2 STOP poll */
+    unsigned mode;                      /* 0 none, 1 flag poll, 2 STOP bit poll, 3 idle status wait */
     unsigned condition;                 /* the pending flag poll follows a START */
-    unsigned polls;                     /* reads in the pending poll */
+    unsigned polls;                     /* CNTR reads in the pending phase */
     uint32_t enable_seen;               /* OR of CNTR bit 7 over every read */
     /* Cumulative counts. */
     unsigned conditions, bytes, stops;  /* completed START/RESTART, byte and STOP phases */
-    unsigned respins;                   /* flag polls beyond the second of a phase: polls after a spin that ended early */
+    /* Re-spins: CNTR polls of a phase beyond the second, that is, polls after
+     * a service spin that ended before the phase did. The first poll reads
+     * right after the phase-start write and the second after the spin. They
+     * are counted for flag phases and STOP waits alike; respins holds both,
+     * stop_respins the STOP waits' share. */
+    unsigned respins, stop_respins;
+    unsigned snapshot_respins;          /* re-spins since the last snapshot's final STOP */
+    unsigned snapshot_respins_max, snapshots; /* most re-spins of one snapshot; snapshots ended */
     unsigned first_set, first_clear;    /* flag phases whose first read had the flag set or clear */
     unsigned polls_max, reads;
 };
@@ -39,6 +51,11 @@ void bb_twi_observe(struct bb_twi *, unsigned write, uintptr_t address, uint32_t
  * query and checks/power-domains-service.c count them. */
 static inline uint64_t bb_twi_wire_bits(unsigned conditions, unsigned bytes, unsigned stops)
 { return 2ull * conditions + 9ull * bytes + 2ull * stops; }
+/* The same wire time in nanoseconds with a byte of byte_ns, which bundle 6
+ * sets to its measured byte wire time when that exceeds nine bit times. */
+static inline uint64_t bb_twi_wire_ns(unsigned conditions, unsigned bytes, unsigned stops, uint32_t bit_ns,
+                                      uint32_t byte_ns)
+{ return (2ull * conditions + 2ull * stops) * bit_ns + (uint64_t)bytes * byte_ns; }
 
 /* One service step that completed a bus phase. */
 struct bb_step {
@@ -46,12 +63,25 @@ struct bb_step {
     uint32_t interrupts;               /* scheduler ticks inside it */
     uint16_t conditions, bytes, stops, first_set, first_clear, polls_max, respins;
 };
-/* The distribution of steps against the wire time of their phases at bit
- * time bit_ns, in thousandths: at most 1000, 1050, 1100 (the design's first
- * target), 1550 (the interim bound of docs/designs/power-domains.md), above;
- * steps longer than 1.1 ms; and the largest ratio. */
+/* The distribution of steps against the wire time of their phases (bit
+ * time bit_ns, byte time byte_ns), in thousandths: at most 1000, 1050, 1100
+ * (the design's first target), 1550 (the interim bound of
+ * docs/designs/power-domains.md), above; steps longer than 1.1 ms; and the
+ * largest ratio. */
 struct bb_step_bins { unsigned bins[5], over_ms; uint64_t worst; };
-void bb_step_bins(const struct bb_step *, unsigned count, uint32_t bit_ns, struct bb_step_bins *);
+void bb_step_bins(const struct bb_step *, unsigned count, uint32_t bit_ns, uint32_t byte_ns, struct bb_step_bins *);
+/* The provisional pass bound of docs/designs/pmic-access.md, which holds
+ * until a bundle 6 run has measured the access costs: the median step at
+ * most 155% of its wire time, the first step at most 155% of its wire time
+ * plus 40 us, and at most 12 re-spins in any snapshot. The median of an even
+ * count is the larger middle value. */
+#define BB_BOUND_PERMILLE 1550u
+#define BB_BOUND_FIRST_EXTRA_NS 40000u
+#define BB_BOUND_RESPINS 12u
+#define BB_BOUND_STEPS 160u
+struct bb_bound { uint32_t median; uint64_t first_ns, first_limit_ns; unsigned respins_max, pass; };
+void bb_bound(const struct bb_step *, unsigned count, uint32_t bit_ns, uint32_t byte_ns, unsigned respins_max,
+              struct bb_bound *);
 
 /* Domain status read back to back after the ON command, with CNTPCT stamps
  * relative to the command's completion, until the status reads ON (8) or the
@@ -70,6 +100,7 @@ void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, u
 /* Fixed lines of both images, which the host model counts in the log bound. */
 #define BB6_BEGIN "BEGIN board bundle 6: PMIC service and power-domain owner, read-only\n"
 #define BB6_COMPLETE "COMPLETE board bundle 6: PMIC service and domain adoption reads\n"
+#define BB6_BOUND_MISSED "FAILED board bundle 6: provisional step bound\n"
 #define BB7_BEGIN "BEGIN board bundle 7: domain 1 ON through the owner\n"
 #define BB7_ON "COMPLETE board bundle 7: domain 1 ON\n"
 #define BB7_REFUSED "COMPLETE board bundle 7: inconclusive, the owner refused domain 1 before any PPU write\n"
@@ -116,9 +147,12 @@ struct bb6_summary {
     int check[3];
     unsigned wire_excluded;             /* 1: the step that held the wire-time spin is left out */
     unsigned respins;                   /* respins over the recorded steps */
+    unsigned stop_respins, snapshot_respins_max, snapshots; /* from the observer, over every transfer */
+    uint32_t byte_ns;                   /* byte time of the wire model */
+    struct bb_bound bound;
     struct bb_cost cost;
 };
-#define BB6_SUMMARY_LINES 13u
+#define BB6_SUMMARY_LINES 15u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {

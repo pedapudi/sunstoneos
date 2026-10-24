@@ -31,7 +31,21 @@ tools/board-test-queue.py, and writes runbook.md in the format of
 docs/board-runbooks/. run.json records every row's outcome. The exit status
 is 0 when no row was refused.
 
-  prepare-board-bundles.py --inputs inputs.json
+A returning row may name a base row of the same table. Its image may then link
+objects of the base row's image (origin set-base) besides those of images that
+passed on the board; the tool prepares the row only when the base row was
+prepared in the same run, and requires each such object to equal the base
+bundle's object of the same unit. The base and every row named in a row's
+`after` list must pass on the board first, in the same lifetime.
+
+With --lifetime, the runbooks name the board lifetime they run in: its DDR
+record, the warm-return chain of the runs since then, and the order of this
+run's rows and of external bundles (such as a native USB image) with the
+record directory of each. Each row's runbook then gives its full
+--warm-return list, and the run directory receives runbook.md with the order,
+the gates and the chain.
+
+  prepare-board-bundles.py --inputs inputs.json [--lifetime lifetime.json]
 """
 import argparse
 import ast
@@ -89,7 +103,10 @@ HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
 PASSED_ORIGINS = {'rank-4-kernel-check', 'rank-9-usb-v4', 'kernel-check-counter-option'}
 PASSED_RECORDS = {'rank-4-kernel-check': 'the kernel check of ranks 4 and 5, `574245e2…`',
                   'rank-9-usb-v4': '`board-bundles-20261023/rank-9-usb-v4/`',
-                  'kernel-check-counter-option': 'bundle 2, `a8e6ecac…`, passed as `bb2-run` on port 3-3'}
+                  'kernel-check-counter-option': 'bundle 2, `a8e6ecac…`, passed as `bb2-run` on port 3-3',
+                  'set-base': 'the base image of this set, which must pass first in the same lifetime'}
+# Objects of the base row prepared in the same run.
+SET_BASE = 'set-base'
 
 TERMINAL_PROCEDURE = [
     'Confirm that ranks 1 to 5 and rank 9 of docs/audit/board-test-plan.md passed earlier in this power cycle.',
@@ -148,9 +165,12 @@ NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500,
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
-                  passes=True, sources=()):
-    """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one."""
+                  passes=True, sources=(), base=None, after=()):
+    """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one.
+    base: the row whose image this row links objects of, prepared in the same run and run first; after: further
+    rows of the same run that must pass first."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
+            'base': base, 'after': list(after),
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
@@ -162,13 +182,21 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
                           '{bundle}/probe.bin with the DDR record and warm-return chain of this lifetime.']}
 
 
+# The PMIC provider, its native adapter and consumer, and the GPU resource
+# adapter, which recompile differently since the PMIC access path
+# (docs/designs/pmic-access.md); checks/board-bundles-apps.py declares them.
+PROVIDER_OVERLAY = ['drivers/gpu/a733_gpu_resources_native.c.obj', 'drivers/power/a733_pmic.c.obj',
+                    'drivers/power/a733_pmic_consumer.c.obj', 'drivers/power/a733_pmic_native.c.obj']
 POWER_OVERLAY = ['apps/board-bundles-power/power.c.obj', 'apps/board-bundles-power/trace.c.obj',
                  'arch/aarch64/device_memory.c.obj', 'drivers/power/a733_power_domains.c.obj',
-                 'drivers/power/a733_power_domains_native.c.obj']
+                 'drivers/power/a733_power_domains_native.c.obj'] + PROVIDER_OVERLAY
 POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/power.h',
                  'apps/board-bundles-power/trace.c', 'apps/board-bundles-power/trace.h',
                  'drivers/power/a733_power_domains.c', 'drivers/power/a733_power_domains_native.c',
-                 'drivers/power/a733_pmic.c', 'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
+                 'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c', 'drivers/power/a733_pmic_consumer.c',
+                 'drivers/gpu/a733_gpu_resources_native.c', 'include/a733_pmic.h', 'include/a733_pmic_native.h',
+                 'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
+BASE_ROW = 'kernel-check-counter-option'
 
 ROWS = [
     # The single-core bundles of docs/designs/board-bundles-next.md, in the
@@ -181,12 +209,15 @@ ROWS = [
                   'One task loads from 0x4_0000_0000, above every valid level-1 entry, so the load takes a '
                   'translation fault before any bus access; platform_exception() writes one FAIL exception line '
                   'and exits with monitor status 1, the bundle\'s one controlled outcome.', passes=False),
-    returning_row('kernel-check-counter-option', 2, 'Kernel check built with the returning monitor\'s counter option',
-                  ['platform/a733/monitor.c.obj'],
+    returning_row(BASE_ROW, 2, 'Kernel check built with the returning monitor\'s counter option',
+                  ['platform/a733/monitor.c.obj', 'platform/a733/platform.c.obj'],
                   'PASS kernel: timer preemption, queue ordering, blocking wakeup, FP context; rounds=100', False,
                   'The kernel check\'s 100 rounds pass and the monitor returns to a responsive ROM.',
-                  'The rank 4 kernel check with SUNSTONE_MONITOR_COUNTERS: the monitor writes MDCR_EL3, HSTR_EL2 and '
-                  'MDCR_EL2.HPMN before EL1 entry. It is the equivalence base of the counter, walk and WFI image.'),
+                  'The rank 4 kernel check with SUNSTONE_MONITOR_COUNTERS, built from the source revision: the '
+                  'monitor writes MDCR_EL3, HSTR_EL2 and MDCR_EL2.HPMN before EL1 entry. Against bundle 2, which '
+                  'passed on port 3-3, only platform/a733/platform.c differs: platform_init() now sets DAIF.I again '
+                  'after the local pool preparation. Its pass makes it the equivalence base of the other returning '
+                  'images prepared in the same run, which link its platform.c object.'),
     read_row('clock-words', 3, 'Clock words for the CPU-L boot-clock report, MBUS and NSI',
              'CPU-L configured rate, MBUS_DFS_EN and the NSI gate and reset, read before any image needs them',
              [word(CCU + 0x580, 'ccu', note='NSI_CLK_REG: gate 31, reset 30'),
@@ -205,7 +236,7 @@ ROWS = [
                   'before 0.9 s after the monitor\'s entry; or the controlled outcome wfi-stopped-waking: status 2, '
                   'interrupt 29, after the WFI stage marker with fewer than 1,000 wakes and the last wake more than '
                   'two ticks before the forced return.',
-                  'Bundle 2\'s image with checks/kernel.c replaced by apps/board-bundles-cpu/main.c, the '
+                  'The base image with checks/kernel.c replaced by apps/board-bundles-cpu/main.c, the '
                   'single-core platform/a733/cpu_pmu.c and arch/aarch64/device_memory.c. One task runs three '
                   'stages, each with a log marker and a progress record at 0x42000080 (magic, stage, wakes, last '
                   'wake CNTPCT). Counters: 64 empty regions, 2,000 ALU instructions, a 1 ms CNTPCT loop, a refill '
@@ -219,8 +250,8 @@ ROWS = [
                   'the monitor\'s entry, 1,000 ticks of a733_cpu_idle() with IRQs unmasked, reading the counters '
                   'after each wake outside any masked region. Run it after bundle 2 and bundle 3 of the same '
                   'lifetime; report each board separately.',
-                  sources=['apps/board-bundles-cpu/main.c', 'platform/a733/cpu_pmu.c', 'arch/aarch64/device_memory.c',
-                           'platform/a733/link.ld']),
+                  sources=['apps/board-bundles-cpu/main.c', 'apps/board-bundles-cpu/walk.h', 'platform/a733/cpu_pmu.c',
+                           'arch/aarch64/device_memory.c', 'platform/a733/link.ld'], base=BASE_ROW),
     read_row('power-domain-words', 5, 'Policy and status words of power domains 1, 4 and 5',
              'Adoption state of the PCK600 domains, read only while the PPU clock is open',
              [word(PPU_CLOCK[0], 'r_ccu', note='PPU clock gate 0')] +
@@ -229,28 +260,37 @@ ROWS = [
              'Every word is read while R_CCU 0x1ac bit 0 reads 1, and the 128 scratch bytes are restored and equal.'),
     returning_row('pmic-power-domain-reads', 6, 'PMIC service task and power-domain owner, read-only',
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle6.c.obj'],
-                  'COMPLETE board bundle 6: PMIC service and domain adoption reads', False,
+                  'COMPLETE board bundle 6: PMIC service and domain adoption reads', True,
                   'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
-                  'step distribution against 100%, 105%, 110% and the interim 155% bound of wire time, the access '
-                  'cost, the domain-1 mapping and the adoption reads of domains 1, 4 and 5), COMPLETE board bundle '
-                  '6, and then, while they fit in the log, the STEP '
-                  'lines, the 32 snapshots and the owner accesses.',
-                  'rank-9-usb-v4\'s platform and PMIC provider objects with apps/board-bundles-power/ (bundle6.c, '
-                  'power.c, trace.c), the power-domain owner, its native adapter and device_memory.c; no USB unit. '
+                  'provisional bound and its verdict, the re-spins, the step distribution against 100%, 105%, '
+                  '110% and 155% of wire time, the access-cost windows, the domain-1 mapping and the adoption '
+                  'reads of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the '
+                  'STEP lines, the 32 snapshots and the owner accesses; or the controlled outcome '
+                  'provisional-step-bound-missed: status 1 after the same summary with BOUND pass=0 and FAILED '
+                  'board bundle 6: provisional step bound.',
+                  'The PMIC provider and adapter of the PMIC access path (docs/designs/pmic-access.md) with '
+                  'apps/board-bundles-power/ (bundle6.c, power.c, trace.c), the power-domain owner, its native '
+                  'adapter and device_memory.c, on rank-9-usb-v4\'s and the base\'s platform objects; no USB unit. '
                   'The service task verifies DCDC2 and DCDC4 once; a client then takes 32 snapshots, DCDC2 and '
                   'DCDC4 in turn, and makes the adoption reads: R_CCU 0x1ac, CCU 0x5c0 and 0x5e0, and the policy '
                   'and status of domains 1, 4 and 5 only while 0x1ac bit 0 reads 1. It records the owner adapter\'s '
-                  'mapping result and the PAR_EL1 translation of the domain-1 block, which must be Device-nGnRnE '
-                  'and outer-shareable for bundle 7. Each STEP line gives the step\'s CNTPCT span, the scheduler '
-                  'ticks inside it, the phases it completed, the TWI interrupt flag (CNTR bit 3) at the first read '
-                  'of each byte phase with the interrupt enable (bit 7) clear, and the most polls of one phase; '
-                  'the wire time follows from the phases and the bit time. After the provider is parked, with '
-                  'IRQs masked, the client times by CNTPCT 256 back-to-back reads of S_TWI0 CNTR with DSB SY '
-                  'before and after each, the same reads without barriers, and 256 reads of the provider\'s time '
-                  'source. The summary and outcome print before '
-                  'the detail lines, which stop while 256 log bytes remain, so no record cuts the outcome line. No '
-                  'GIC register is read for the record, and no PPU or PMIC register is written.',
-                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c']),
+                  'mapping result and the PAR_EL1 translation of the domain-1 block. Before the first snapshot the '
+                  'service times one byte phase from its CNTR write to INT_FLAG set (that step is left out of the '
+                  'step records), and every S_TWI0 write is timed in place. Each STEP line gives the step\'s CNTPCT '
+                  'span, the scheduler ticks inside it, the phases it completed, the TWI interrupt flag at the first '
+                  'read of each byte phase, the most polls of one phase and its re-spins: CNTR polls beyond the '
+                  'second of a flag phase or a STOP wait. The wire time of a step counts two bit times per START, '
+                  'repeated START or STOP and, per byte, nine bit times or the measured byte time when that is '
+                  'longer. At the park, the service, which is the provider task, times 256 iterations each of '
+                  'CNTR reads with DSB SY on both sides, plain CNTR reads (issue throughput), dependent CNTR reads '
+                  '(latency), the adapter\'s time and read operations, the task check with IRQs unmasked, and the '
+                  'TWI observer, and names its core. Pass: both supplies verified, every snapshot 0xff9e, the '
+                  'median step at most 155% of its wire time, the first step at most 155% plus 40 us, at most 12 '
+                  're-spins in any of the 34 snapshots. A missed bound is the controlled outcome; a supply or '
+                  'snapshot mismatch is not. The summary and outcome print before the detail lines, which stop '
+                  'while 256 log bytes remain. No GIC register is read for the record, and no PPU or PMIC register '
+                  'is written.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c'], base=BASE_ROW),
     returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner',
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle7.c.obj'], 'COMPLETE board bundle 7:', True,
                   'Monitor status 0 with COMPLETE board bundle 7: domain 1 ON, the owner\'s access trace and every '
@@ -266,8 +306,10 @@ ROWS = [
                   'never reaches ON fails up to 20 ms after the command. The client reads the same words again. '
                   'Domain 1 stays ON until power removal, so the bundle gives one sample per board lifetime. A '
                   'refusal (closed gate, unverified DCDC2 or incoherent adoption) writes nothing and is '
-                  'inconclusive: bundle 8 then finds domain 1 not ON.',
-                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle7.c']),
+                  'inconclusive: bundle 8 then finds domain 1 not ON. It runs the PMIC provider of bundle 6, so it '
+                  'runs only after bundle 6 of the same set passed in the same lifetime.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle7.c'], base=BASE_ROW,
+                  after=['pmic-power-domain-reads']),
     returning_row('dram-bus-priority', 8, 'DRAM bus priority reads and table write',
                   ['apps/board-bundles-dram/main.c.obj', 'apps/board-bundles-dram/sequence.c.obj',
                    'arch/aarch64/device_memory.c.obj', 'drivers/dram/a733_dram.c.obj'],
@@ -276,7 +318,7 @@ ROWS = [
                   'ports 2, 14 and 15, the USB_PCIE fields unchanged and every access with its CNTPCT span; or '
                   'status 0 with COMPLETE board bundle 8: inconclusive and the skipped stage; or a controlled '
                   'outcome: an NSI synchronous external abort or a readback mismatch.',
-                  'rank-9-usb-v4\'s platform objects and the provider\'s tasks.c and queue.c with '
+                  'rank-9-usb-v4\'s and the base\'s platform objects and the provider\'s tasks.c and queue.c with '
                   'apps/board-bundles-dram/ (main.c, sequence.c), drivers/dram/a733_dram.c in table mode and '
                   'device_memory.c. It reads R_CCU 0x1ac, the domain 1 status only while 0x1ac bit 0 reads 1, and '
                   'CCU +0x580, +0x584 and +0x588. Only while domain 1 reads ON (8) and NSI_CLK bits 31 and 30 and '
@@ -290,7 +332,8 @@ ROWS = [
                   'framebuffer\'s register path. Run it after bundle 7 of the same lifetime.',
                   sources=['apps/board-bundles-dram/main.c', 'apps/board-bundles-dram/sequence.c',
                            'apps/board-bundles-dram/sequence.h', 'drivers/dram/a733_dram.c', 'include/a733_dram.h',
-                           'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']),
+                           'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c'], base=BASE_ROW,
+                  after=['power-domain-1-on']),
     read_row('npu-clock-words', 9, 'Speed-bin word and the CCU words of the NPU register pass',
              'The NPU speed bin and the CCU state that NPU startup admits, read before the NPU bundle',
              [word(0x0300624c, 'sid', note='SID speed-bin word')] +
@@ -580,13 +623,20 @@ def validate_returning(row, output):
     equivalence = json.loads((output / 'equivalence.json').read_text())
     require(equivalence['image_sha256'] == sha256(output / 'image.elf'), 'image.elf is not the built image.')
     objects = equivalence['objects']
-    require(objects and all(o['origin'] in PASSED_ORIGINS | {'new'} for o in objects.values()),
+    require(objects and all(o['origin'] in PASSED_ORIGINS | {'new', SET_BASE} for o in objects.values()),
             'An object has no recorded origin.')
     new = sorted(rel for rel, o in objects.items() if o['origin'] == 'new')
     require(set(new) <= set(row['overlay']),
             'Objects differ from the images that passed outside the overlay: ' + ', '.join(new))
-    value = {'schema': 'board-returning-bundle-v1', 'row': row['name'], 'new_objects': new,
-             'passed_objects': len(objects) - len(new), 'image_sha256': equivalence['image_sha256']}
+    based = sorted(rel for rel, o in objects.items() if o['origin'] == SET_BASE)
+    if based:
+        # The base row's bundle of the same run, prepared before this row.
+        require(row.get('base'), 'Objects name the set\'s base, but the row has no base row: ' + ', '.join(based))
+        base = json.loads((output.parent.parent / row['base'] / 'bundle/equivalence.json').read_text())['objects']
+        wrong = [rel for rel in based if base.get(rel, {}).get('sha256') != objects[rel]['sha256']]
+        require(not wrong, 'Objects differ from the base bundle\'s object of the same unit: ' + ', '.join(wrong))
+    value = {'schema': 'board-returning-bundle-v1', 'row': row['name'], 'new_objects': new, 'base_objects': based,
+             'passed_objects': len(objects) - len(new) - len(based), 'image_sha256': equivalence['image_sha256']}
     if row['controlled']:
         runner = load('board_bundles_returning_runner', output / 'host/tools/check-a733-kernel.py')
         outcomes = runner.controlled_outcomes((output / 'controlled.json').read_bytes())
@@ -594,12 +644,39 @@ def validate_returning(row, output):
     return value
 
 
-def runbook(row, bundle, value, artifacts, prerequisites, timeout):
+def lifetime_runs(lifetime, name):
+    """This row's record stem and the warm-return records before it, or None without a lifetime order."""
+    if not lifetime:
+        return None
+    order = lifetime['order']
+    index = next((i for i, e in enumerate(order) if e.get('row') == name), None)
+    if index is None:
+        return None
+    links = list(lifetime['chain']) + [e['run'] for e in order[:index]]
+    return order[index], index + 1, links
+
+
+def gates(row, entry):
+    """The rows of this set that must pass before this row, with the reason."""
+    found = []
+    if row.get('base'):
+        found.append((row['base'], 'its image links objects of that image'))
+    for name in row.get('after', []) + (entry or {}).get('after', []):
+        if name not in [g for g, _ in found]:
+            found.append((name, 'it runs after that row in this set'))
+    return found
+
+
+def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None):
     """runbook.md for one prepared row, in the format of docs/board-runbooks/."""
     n = row['position']
+    placed = lifetime_runs(lifetime, row['name'])
+    entry, step, links = placed if placed else (None, None, None)
+    stem = entry['stem'] if entry else f'bb{n}'
     lines = [f'# Bundle {n}: {row["component"]}', '',
-             f'Status: **prepared** by `tools/prepare-board-bundles.py`; not run. Position {n} of the single-core '
-             'order of docs/audit/board-test-plan.md and docs/designs/board-bundles-next.md.',
+             f'Status: **prepared** by `tools/prepare-board-bundles.py`; not run. Bundle {n} of '
+             'docs/designs/board-bundles-next.md.' + (f' Step {step} of this set\'s order for port {lifetime["port"]} '
+                                                      '(`../runbook.md`).' if entry else ''),
              f'Bundle: `{bundle}`.', '']
     if row['class'] == 'read':
         lines += [f'A Read bundle: `board-read.py` reads {value["words"]} words with 32-bit FEL `readl` commands, '
@@ -608,6 +685,12 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
                   'at 0x71000; the USB instance does not change.', '']
     else:
         lines += [row['intro'], '']
+    required = gates(row, entry)
+    if required:
+        lines += ['## Run only after', '']
+        lines += [f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
+                  'controlled outcome of that row is not a pass.' for name, reason in required]
+        lines += ['']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
     lines += ['']
@@ -615,7 +698,10 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
         origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
                          - {'new'})
         lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
-                  'that passed on the board (' + ', '.join(f'`{o}`' for o in origins) + '; '
+                  'that passed on the board' + (f' and {len(value.get("base_objects", []))} to objects of the base '
+                                                f'image `{row["base"]}` of this set'
+                                                if value.get('base_objects') else '') + ' ('
+                  + ', '.join(f'`{o}`' for o in origins) + '; '
                   + ', '.join(f'{k}: {v}' for k, v in PASSED_RECORDS.items() if k in origins)
                   + '), listed per object in `equivalence.json`. New: '
                   + ', '.join(f'`{x}`' for x in value['new_objects']) + '.', '']
@@ -625,9 +711,9 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
     expected = row['expected_result'].replace('"', "'")
     if row['class'] == 'read':
         lines += ['1. Read the words once:', '', '   ```sh',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-read {timeout} \\',
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-read {timeout} \\',
                   f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
-                  f'     -- $PY -B $B/board-read.py $B/WORDS.json $S/bb{n}-read', '   ```', '',
+                  f'     -- $PY -B $B/board-read.py $B/WORDS.json $S/{stem}-read', '   ```', '',
                   '   Success: `{"port": "PORT", "complete": true, "words": ' + str(value['words'])
                   + ', "skipped": 0}`. A nonzero `skipped` count is recorded with each skipped word and the '
                   'condition that stopped it; the bundle is then inconclusive and is not repeated.', '',
@@ -636,19 +722,28 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
     else:
         controlled = ' --controlled $B/controlled.json' if row['controlled'] else ''
         lines += ['1. Turn the instruction cache off and survey the current instance:', '', '   ```sh',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-cache-off 120 \\',
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-cache-off 120 \\',
                   f'     "Board $PORT: returning instruction-cache disable before bundle {n}" \\',
                   '     "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." '
-                  '\\', f'     -- $PY -B $V/common/cache-off.py $S/bb{n}-cache-off',
-                  f'   $PY -B $V/common/survey.py $PORT $S/bb{n}-survey "Board $PORT before bundle {n}"', '   ```', '',
-                  '   Each prints `"result": "passed"`.', '',
-                  '2. Run the image once. `D` is the DDR record of this lifetime\'s cold start; give one '
-                  '`--warm-return` for each returning run since then, in order:', '', '   ```sh',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/bb{n}-run {timeout} \\',
+                  '\\', f'     -- $PY -B $V/common/cache-off.py $S/{stem}-cache-off',
+                  f'   $PY -B $V/common/survey.py $PORT $S/{stem}-survey "Board $PORT before bundle {n}"', '   ```', '',
+                  '   Each prints `"result": "passed"`.', '']
+        if links is None:
+            lines += ['2. Run the image once. `D` is the DDR record of this lifetime\'s cold start; give one '
+                      '`--warm-return` for each returning run since then, in order:', '', '   ```sh']
+            tail = [f'        --ddr-evidence $D --platform-survey $S/{stem}-survey/session.json [--warm-return ...]']
+        else:
+            lines += [f'2. Run the image once, with the DDR record `{lifetime["ddr"]}` of this lifetime\'s cold start '
+                      f'and one `--warm-return` for each of the {len(links)} returning runs since then, in order:',
+                      '', '   ```sh']
+            tail = [f'        --ddr-evidence $S/{lifetime["ddr"]}/session.json '
+                    f'--platform-survey $S/{stem}-survey/session.json \\']
+            tail += [f'        --warm-return $S/{x}/session.json' + (' \\' if i + 1 < len(links) else '')
+                     for i, x in enumerate(links)]
+        lines += [f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-run {timeout} \\',
                   f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
                   '     -- $PY -B $B/host/tools/check-a733-kernel.py --fel $FEL --image $B/probe.bin --mode kernel '
-                  '\\', f'        --expect "{row["expect"]}"{controlled} --evidence $S/bb{n}-run \\',
-                  f'        --ddr-evidence $D --platform-survey $S/bb{n}-survey/session.json [--warm-return ...]',
+                  '\\', f'        --expect "{row["expect"]}"{controlled} --evidence $S/{stem}-run \\', *tail,
                   '   ```', '',
                   f'   Prerequisite: `{prerequisites[0]}`. Queue timeout: {timeout} s, the runner\'s worst case '
                   'including the churn guard\'s 615 s wait.', '']
@@ -659,7 +754,7 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
             names = ' or '.join(f'`CONTROLLED: {o["name"]}, status {o["status"]}, FEL recovery, automatic USB '
                                 f'access.`' for o in outcomes)
             lines += ['   Success: ' + (f'{passed}; or a controlled outcome: ' if passed else '') + names
-                      + f', with `controlled` in `$S/bb{n}-run/session.json` holding the parsed EL1 values. A '
+                      + f', with `controlled` in `$S/{stem}-run/session.json` holding the parsed EL1 values. A '
                       'controlled session is a valid `--warm-return` link for later bundles.', '',
                       '## Controlled outcomes', '',
                       'Each outcome in `controlled.json` is matched on the full result record and log; any other '
@@ -670,16 +765,44 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
             lines += [f'   Success: {passed}', '']
     lines += ['## Stop conditions', '', f'- {row["stop_condition"]}', '']
     if row['class'] == 'monitor':
-        progress = row['controlled'] and any('progress' in o for o in json.loads(
-            (bundle / 'controlled.json').read_text())['outcomes'])
-        lines += ['## Without the patch', '',
-                  'The bundle\'s `host/tools/check-a733-kernel.py` carries the warm-return admission and the '
-                  'controlled outcomes that `bringup` merged, and the controlled-outcome progress record of the '
-                  'bundle apps\' `primary.patch`. '
-                  + ('Without that patch, the runner in `bringup` refuses this bundle\'s `controlled.json`, '
-                     'whose outcome names a progress record.' if progress else
-                     'This bundle\'s outcomes name no progress record, so the runner in `bringup` accepts them '
-                     'as well.'), '']
+        lines += ['## Runner', '',
+                  'The bundle\'s `host/tools/check-a733-kernel.py` is `tools/check-a733-kernel.py` of the source '
+                  'revision, which carries the warm-return admission, the controlled outcomes and their progress '
+                  'record; it needs no patch.', '']
+    return '\n'.join(lines)
+
+
+def set_runbook(run_dir, lifetime, rows, table):
+    """runbook.md of the run directory: the order of this lifetime, its gates and its warm-return chain."""
+    names = {row['name']: row for row in table}
+    lines = ['# Prepared set ' + run_dir.name + f' on port {lifetime["port"]}', '',
+             'Status: **prepared** by `tools/prepare-board-bundles.py`; nothing here has run. Run the steps below '
+             f'in order on port {lifetime["port"]}, in the lifetime that `$S/{lifetime["ddr"]}/` started. Each '
+             'step runs once. A step that exits nonzero, or a gate that its step names and that did not pass, '
+             'stops the steps after it; later bundles are not run out of order.', '']
+    if lifetime.get('note'):
+        lines += [lifetime['note'], '']
+    lines += ['## Order', '', '| Step | Bundle | Records | Run only after |', '| --- | --- | --- | --- |']
+    for i, entry in enumerate(lifetime['order'], 1):
+        if 'row' in entry:
+            row = names[entry['row']]
+            status = rows.get(entry['row'], {}).get('status', 'not prepared')
+            what = f'Bundle {row["position"]}, `{entry["row"]}/runbook.md` ({status})'
+            after = [g for g, _ in gates(row, entry)]
+        else:
+            what = f'`{entry["external"]}`, `{entry["runbook"]}`'
+            after = entry.get('after', [])
+        lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
+                     + (', '.join(f'`{a}` passed' for a in after) or 'none') + ' |')
+    lines += ['', '## Warm-return chain', '',
+              f'Before step 1 the lifetime holds `{lifetime["ddr"]}` and these returning runs, in order: '
+              + ', '.join(f'`{x}`' for x in lifetime['chain']) + '. Each step\'s runbook gives its complete '
+              '`--warm-return` list: this chain, then the record of every earlier step of the order. A controlled '
+              'outcome is a valid link; a step that did not return ends the lifetime.', '']
+    for item in lifetime.get('state', []):
+        lines += [f'- {item}']
+    if lifetime.get('state'):
+        lines += ['']
     return '\n'.join(lines)
 
 
@@ -778,13 +901,15 @@ def paths(value):
     return [paths(v) for v in value] if isinstance(value, list) else value
 
 
-def prepare_row(row, arguments, row_dir, request, queue):
+def prepare_row(row, arguments, row_dir, request, queue, prepared=()):
     """Prepare, admit, scan, freeze, hash, snapshot and submit one row."""
     record = {'class': row['class']}
     stage = 'inputs'
     try:
         require(isinstance(arguments, dict) and 'output' not in arguments,
                 'Row inputs must be an object of prepare() keyword arguments without output.')
+        missing = [name for name in [row.get('base')] + list(row.get('after', [])) if name and name not in prepared]
+        require(not missing, 'Rows that this row runs after are not prepared earlier in this run: ' + ', '.join(missing))
         root = Path(request['repository'])
         module_path = root / row['module']
         require(module_path.is_file(), f'Preparation module {row["module"]} does not exist.')
@@ -837,7 +962,8 @@ def prepare_row(row, arguments, row_dir, request, queue):
         if 'position' in row:
             stage = 'runbook'
             with (row_dir / 'runbook.md').open('x') as stream:
-                stream.write(runbook(row, bundle, admitted, artifacts, prerequisites, timeout) + '\n')
+                stream.write(runbook(row, bundle, admitted, artifacts, prerequisites, timeout,
+                                     request.get('lifetime')) + '\n')
         record.update(status='prepared', submission=str(row_dir / 'submission.json'), revision=manifest['revision'],
                       timeout_seconds=timeout, prerequisites=prerequisites)
     except Exception as error:
@@ -861,19 +987,47 @@ def step(run_dir):
             if row.get('needs'):
                 rows[row['name']]['needs'] = row['needs']
         else:
+            prepared = {name for name, r in rows.items() if r['status'] == 'prepared'}
             rows[row['name']] = prepare_row(row, request['inputs'][row['name']], run_dir / row['name'], request,
-                                            queue)
+                                            queue, prepared)
     save(run_dir / 'run.json', {'schema': 'board-bundles-run-v1', 'physical_access': False, 'rows': rows})
+    if request.get('lifetime'):
+        with (run_dir / 'runbook.md').open('x') as stream:
+            stream.write(set_runbook(run_dir, request['lifetime'], rows, request['rows']) + '\n')
     for name, record in rows.items():
         print(f'{name}: {record["status"]}' + (f' ({record["message"]})' if 'message' in record else ''))
     return 1 if any(r['status'] == 'refused' for r in rows.values()) else 0
 
 
-def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM):
+def check_lifetime(lifetime, names, inputs):
+    """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems."""
+    require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
+            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'note', 'state'},
+            'The lifetime names port, ddr, chain and order, and optionally note and state.')
+    require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
+            'The DDR record and the chain are record directory names of the session directory.')
+    stems, runs = set(), set(lifetime['chain'])
+    for entry in lifetime['order']:
+        require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
+                'or an external bundle.')
+        require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
+                f'Order entry {entry} names no returning row of these inputs.')
+        require('external' not in entry or entry.get('runbook'), f'External entry {entry} names no runbook.')
+        require(entry.get('stem') and entry['stem'] not in stems and entry.get('run') and entry['run'] not in runs,
+                f'Order entry {entry} reuses a record stem or run directory.')
+        stems.add(entry['stem'])
+        runs.add(entry['run'])
+        require('row' not in entry or entry['run'] == entry['stem'] + '-run',
+                f'A row\'s run directory is its stem followed by -run: {entry}')
+
+
+def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None):
     """Create the run directory and wait once on the sandboxed step; return (exit status, run directory)."""
     names = {row['name']: row for row in rows}
     unknown = sorted(set(inputs) - set(names))
     require(not unknown, 'Inputs name unknown rows: ' + ', '.join(unknown))
+    if lifetime is not None:
+        check_lifetime(lifetime, names, inputs)
     excluded = sorted(n for n in inputs if names[n]['class'] == 'excluded')
     require(not excluded, 'Inputs name excluded rows: ' + ', '.join(excluded))
     require(Path(BWRAP).is_file(), f'{BWRAP} is missing; preparation needs the sandbox.')
@@ -888,7 +1042,8 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM):
             break
         except FileExistsError:
             n += 1
-    save(run_dir / 'request.json', {'rows': rows, 'inputs': inputs, 'repository': str(repository), 'nm': str(nm)})
+    save(run_dir / 'request.json', {'rows': rows, 'inputs': inputs, 'repository': str(repository), 'nm': str(nm),
+                                    'lifetime': lifetime})
     command = sandbox(run_dir) + [sys.executable, str(Path(__file__).resolve()), '--step', str(run_dir)]
     status = subprocess.run(command).returncode
     require((run_dir / 'run.json').is_file(), f'The sandboxed step stopped before recording a result ({status}).')
@@ -898,6 +1053,7 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--inputs', type=Path, help='JSON object: row name to prepare() keyword arguments')
+    parser.add_argument('--lifetime', type=Path, help='JSON object: the board lifetime and order the runbooks name')
     parser.add_argument('--evidence', type=Path, default=EVIDENCE, help='Directory that receives the run directory')
     parser.add_argument('--nm', default=NM)
     parser.add_argument('--step', type=Path, help=argparse.SUPPRESS)
@@ -906,7 +1062,8 @@ def main():
         return step(args.step)
     if args.inputs is None:
         parser.error('--inputs is required')
-    status, run_dir = run(json.loads(args.inputs.read_text()), evidence=args.evidence, nm=args.nm)
+    lifetime = json.loads(args.lifetime.read_text()) if args.lifetime else None
+    status, run_dir = run(json.loads(args.inputs.read_text()), evidence=args.evidence, nm=args.nm, lifetime=lifetime)
     print(run_dir)
     return status
 

@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Build and check the returning images of bundles 4, 6, 7 and 8.
+"""Build and check the base image and the returning images of bundles 4, 6, 7 and 8.
 
-docs/designs/board-bundles-next.md specifies the four bundles. Each image
-links the objects of an image that ran on the board with its new units:
+docs/designs/board-bundles-next.md specifies the bundles. Every image links
+objects of an image that passed on the board, objects of the set's own base
+image, which runs first, and its declared new units:
 
-- bundle 4 (apps/board-bundles-cpu/) on bundle 2's image, the kernel check
-  with the monitor's counter option, which passed on port 3-3: its
-  checks/kernel.c object is replaced by the bundle's main.c,
-  platform/a733/cpu_pmu.c and arch/aarch64/device_memory.c;
-- bundles 6 and 7 (apps/board-bundles-power/) on rank-9-usb-v4: its 13
-  platform objects and 14 provider objects, without the USB units, plus the
-  bundle's main file, power.c, trace.c, the power-domain owner, its native
-  adapter and device_memory.c;
-- bundle 8 (apps/board-bundles-dram/) on rank-9-usb-v4: its platform
-  objects and the provider's tasks.c and queue.c, plus main.c, sequence.c,
+- the base: the central kernel check with
+  platform/a733/monitor.c compiled with the monitor's counter option, as
+  bundle 2 was built. Objects that differ from every image that passed
+  (platform/a733/platform.c since bundle 2) are its declared new units, so
+  its board pass makes it the equivalence base of the images below;
+- bundle 4 (apps/board-bundles-cpu/) on the base: its checks/kernel.c object
+  is replaced by the bundle's main.c, platform/a733/cpu_pmu.c and
+  arch/aarch64/device_memory.c, and every other object equals the base's;
+- bundles 6 and 7 (apps/board-bundles-power/) on rank-9-usb-v4 and the
+  base: the 13 returning platform objects and 14 provider objects, without
+  the USB units, plus the bundle's main file, power.c, trace.c, the
+  power-domain owner, its native adapter and device_memory.c. The PMIC
+  provider, its native adapter and its consumer changed with the PMIC access
+  path (docs/designs/pmic-access.md); they and every other provider object
+  that recompiles differently are declared new units of both images;
+- bundle 8 (apps/board-bundles-dram/) on the same platform objects and the
+  provider's tasks.c and queue.c, plus main.c, sequence.c,
   drivers/dram/a733_dram.c in table mode and device_memory.c.
 
 The check:
@@ -21,28 +29,37 @@ The check:
 - requires the rank 4 build to be the kernel check that passed on both
   boards, bundle 2's frozen image to be the one that bb2-run passed on port
   3-3, and every reused rank-9-usb-v4 object to equal its recorded digest;
-- reproduces the reused objects from this tree: the central kernel-check
-  objects equal bundle 2's, monitor.c compiled with the counter option equals
-  bundle 2's monitor object, each rank-9-usb-v4 provider object recompiles
-  byte-identical, and each rank-9-usb-v4 platform object equals the central
-  a733-power-probe object, except monitor.c, whose instructions are equal
-  (its line table moved with the counter option's lines);
+- recompiles checks/kernel.c and platform/a733/monitor.c and requires each to
+  equal the central object, so the compile method adds nothing of its own;
+- takes each returning platform object of rank-9-usb-v4 when this tree's
+  a733-power-probe object equals it (monitor.c: equal instructions, its line
+  table moved with the counter option's lines), and otherwise this tree's
+  object, which must equal the base's object of the same unit;
+- recompiles every provider unit and takes rank-9-usb-v4's object when they
+  are byte-identical; a differing unit must be a declared new provider unit;
 - checks that no translation-table write follows platform_init()'s final
   flush of both table pages: in the source, every table write and every call
   that receives a table precedes the two final flush calls, and in the linked
   platform object only platform_init()'s code refers to the tables;
 - links each image and records each object's origin: an image that passed
-  (rank-4-kernel-check, kernel-check-counter-option, rank-9-usb-v4) or new,
-  and refuses a new object outside the image's overlay;
-- builds bundle 4's secure QEMU model twice: the normal model must print the
-  three stage markers and the COMPLETE line and exit 0; the model whose tick
-  stops before WFI must print the WFI marker and return through the secure
-  timer with status 2; each log must fit the 16,127 log bytes, and since every
-  bundle 4 value prints at a fixed width, the board's log has the same length;
+  (rank-4-kernel-check, kernel-check-counter-option, rank-9-usb-v4), the
+  set's base (set-base) or new, and refuses a new object outside the image's
+  overlay;
+- runs the base's secure QEMU model, which must print the kernel check's PASS
+  line and exit 0, and builds bundle 4's secure QEMU model twice: the normal
+  model must print the three stage markers and the COMPLETE line and exit 0;
+  the model whose tick stops before WFI must print the WFI marker and return
+  through the secure timer with status 2; each log must fit the 16,127 log
+  bytes, and since every bundle 4 value prints at a fixed width, the board's
+  log has the same length;
 - runs checks/board-bundles-apps-model.c, the host model of bundle 8's
-  sequence, of the bundle 6 and 7 records, which also bounds the log bytes
-  that bundles 6 and 7 print before their detail lines, and of bundle 4's
-  walk-block acceptance on the walk records that port 3-3 returned;
+  sequence, of the bundle 6 and 7 records and bundle 6's provisional bound,
+  which also bounds the log bytes that bundles 6 and 7 print before their
+  detail lines, and of bundle 4's walk-block acceptance on the walk records
+  that port 3-3 returned;
+- with --usb, records the origin of every object of a native USB image built
+  by apps/usb-returning/build.py --platform-build from this tree against
+  rank-9-usb-v4, the base and bundle 6's new provider objects;
 - writes each image's controlled outcomes, which the runner of --tree must
   accept, and build.json for tools/prepare-board-bundles.py.
 
@@ -50,7 +67,7 @@ Run it from the source tree, which must lie outside ~/.cache/sunstoneos: the
 provider objects record the compile directory. No step contacts a device.
 
   board-bundles-apps.py --central BUILD --rank4 BUILD --bundle2 BUNDLE --bundle2-run SESSION_DIR \\
-      --v4 EVIDENCE --tree TREE --output NEW_DIRECTORY
+      --v4 EVIDENCE --tree TREE [--usb EVIDENCE] --output NEW_DIRECTORY
 """
 import argparse
 import hashlib
@@ -77,7 +94,20 @@ TARGETS = (('a733-kernel-check', 'image'), ('a733-kernel-model', 'model'))
 # has woken less than one tick before any forced return.
 PROGRESS = {'offset': 128, 'magic': 0x3130535342344242, 'stage': 3, 'count_below': 1000, 'age_above': 48000}
 BUNDLE4_MARKERS = ['STAGE 1 counters complete', 'STAGE 2 walk complete', 'STAGE 3 wfi begin']
+KERNEL_PASS = 'PASS kernel: timer preemption, queue ordering, blocking wakeup, FP context; rounds=100'
+# Units of the base that differ from every image that passed: platform.c
+# since bundle 2 (the IRQ mask after pool preparation), and monitor.c, which
+# equals bundle 2's object with the counter option.
+BASE_OVERLAY = ['platform/a733/monitor.c.obj', 'platform/a733/platform.c.obj']
+# Provider units that the PMIC access path changed (docs/designs/pmic-access.md):
+# the provider, its native adapter and its consumer, and the GPU resource
+# adapter, whose instructions are unchanged but whose debug information
+# records the changed layout of struct a733_pmic. Any other provider unit must
+# recompile byte-identical to rank-9-usb-v4's.
+PROVIDER_NEW = ('drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c', 'drivers/power/a733_pmic_consumer.c',
+                'drivers/gpu/a733_gpu_resources_native.c')
 EXPECT = {
+    'base': KERNEL_PASS,
     'cpu': 'COMPLETE board bundle 4:',
     'pmic': 'COMPLETE board bundle 6: PMIC service and domain adoption reads',
     'domain': 'COMPLETE board bundle 7:',
@@ -221,7 +251,7 @@ def objcopy(elf, binary):
 
 
 class Origins:
-    """Object digests of the images that passed on the board."""
+    """Object digests of the images that passed on the board, then of the set's base."""
 
     def __init__(self, rank4, bundle2, v4_objects):
         self.known = {}
@@ -231,6 +261,11 @@ class Origins:
             self.known.setdefault(o['sha256'], 'kernel-check-counter-option')
         for path in v4_objects:
             self.known.setdefault(sha(path), 'rank-9-usb-v4')
+
+    def add_base(self, objects):
+        """The base's objects; those of no passed image take the origin set-base."""
+        for o in objects.values():
+            self.known.setdefault(o['sha256'], 'set-base')
 
     def record(self, objects, overlay, image):
         record = {rel: {'sha256': sha(path), 'origin': self.known.get(sha(path), 'new')}
@@ -270,31 +305,88 @@ def v4_parts(v4):
     return platform, provider, linked
 
 
-def reproduce_v4(platform, provider, rp, central, work):
-    """Each reused rank-9-usb-v4 object, reproduced from this tree."""
-    result = {}
+def platform_and_provider(platform, provider, rp, central, base_objects, work):
+    """The returning platform and provider objects of the v4-based images, each with how it was chosen.
+
+    A platform object is rank-9-usb-v4's when this tree's a733-power-probe
+    object equals it (monitor.c: equal instructions), and otherwise this
+    tree's, which must equal the base's object of the same unit. A provider
+    object is rank-9-usb-v4's when the unit recompiles byte-identical, and
+    otherwise the recompiled one, which must be a declared new unit."""
+    chosen, result = [], {}
     for rel, path in platform:
         mine = central / 'CMakeFiles/a733-power-probe.dir' / rel
-        if rel == MONITOR_OBJ:
+        if sha(mine) == sha(path):
+            chosen.append((rel, path))
+            result[rel] = 'rank-9-usb-v4, byte-identical'
+        elif rel == MONITOR_OBJ:
             require(instructions(mine) == instructions(path),
                     'This tree\'s monitor.c changes rank-9-usb-v4 monitor instructions.')
-            result[rel] = 'same instructions'
+            chosen.append((rel, path))
+            result[rel] = 'rank-9-usb-v4, same instructions as this tree'
         else:
-            require(sha(mine) == sha(path), f'This tree\'s {rel} differs from rank-9-usb-v4\'s.')
-            result[rel] = 'byte-identical'
+            require(rel in base_objects and sha(mine) == base_objects[rel]['sha256'],
+                    f'This tree\'s {rel} differs from rank-9-usb-v4\'s and from the base\'s.')
+            chosen.append((rel, mine))
+            result[rel] = 'set-base, byte-identical'
     rp.objects_dir = work
     rp.commands = []
     sources = [rp.freertos / u[9:] if u.startswith('FREERTOS/') else ROOT / u for u in provider]
     objects = rp.compile(sources, linked=False, prefix='provider')
     returning_build.run_logged(rp.commands, work)
+    units = {}
     for unit, obj in zip(provider, objects):
-        require(sha(obj) == sha(provider[unit]), f'{unit} recompiled differs from rank-9-usb-v4\'s provider object.')
-        result[unit] = 'byte-identical'
-    return result
+        if sha(obj) == sha(provider[unit]):
+            units[unit] = provider[unit]
+            result[unit] = 'rank-9-usb-v4, byte-identical'
+        else:
+            require(unit in PROVIDER_NEW, f'{unit} recompiled differs from rank-9-usb-v4\'s provider object and is not '
+                                          'a declared new provider unit.')
+            units[unit] = obj
+            result[unit] = 'new provider unit' + (', same instructions as rank-9-usb-v4'
+                                                  if instructions(obj) == instructions(provider[unit]) else '')
+    return chosen, units, result
 
 
-def build_v4_image(name, rp, units, platform, provider, flags, origins, out):
-    """One image on rank-9-usb-v4: platform objects, new units, then the named provider objects."""
+def base_image(central, origins, out):
+    """The kernel check with the monitor's counter option, and its secure QEMU model."""
+    directory = out / 'base'
+    directory.mkdir()
+    objects_dir = directory / 'objects'
+    objects_dir.mkdir()
+    entry = {'reproduced': {}}
+    for target, suffix in TARGETS:
+        # The compile method reproduces the central objects.
+        for source, rel, general in (('checks/kernel.c', KERNEL_OBJ, False), ('platform/a733/monitor.c', MONITOR_OBJ, True)):
+            obj = objects_dir / f'{Path(source).name}-{suffix}-plain.obj'
+            compile_object(central, target, ROOT / source, obj, general_regs=general)
+            require(sha(obj) == sha(central / f'CMakeFiles/{target}.dir' / rel),
+                    f'Recompiled {source} for {target} differs from the central object.')
+            entry['reproduced'][f'{target} {source}'] = 'byte-identical'
+        monitor = objects_dir / f'monitor-{suffix}.obj'
+        compile_object(central, target, ROOT / 'platform/a733/monitor.c', monitor, ('-DSUNSTONE_MONITOR_COUNTERS=1',),
+                       general_regs=True)
+        elf = directory / f'{suffix}.elf'
+        linked = link_target(central, target, {MONITOR_OBJ: [(MONITOR_OBJ, monitor)]}, elf)
+        if suffix == 'image':
+            binary = directory / 'probe.bin'
+            objcopy(elf, binary)
+            entry.update(objects=origins.record(linked, BASE_OVERLAY, 'base'), overlay=list(BASE_OVERLAY),
+                         monitor=str(monitor), elf=str(elf), elf_sha256=sha(elf), bin=str(binary),
+                         bin_sha256=sha(binary), bin_bytes=binary.stat().st_size)
+            continue
+        status, log = qemu(elf, directory / 'qemu.log')
+        require(status == 0 and KERNEL_PASS in log and len(log) <= LOG_ROOM,
+                f'The base model did not pass the kernel check: {status}\n{log}')
+        entry['qemu'] = {'normal': {'exit_status': status, 'log_sha256': sha(directory / 'qemu.log'),
+                                    'log_bytes': len(log)}}
+    entry['controlled'] = None
+    return directory, entry
+
+
+def build_v4_image(name, rp, units, platform, provider, flags, origins, out, provider_overlay=()):
+    """One image on rank-9-usb-v4 and the base: platform objects, new units, then the named provider objects,
+    of which provider_overlay names the declared new ones."""
     directory = out / name
     directory.mkdir()
     rp.objects_dir = directory
@@ -312,15 +404,15 @@ def build_v4_image(name, rp, units, platform, provider, flags, origins, out):
     subprocess.run(command, check=True)
     binary = directory / 'probe.bin'
     objcopy(elf, binary)
-    overlay = sorted(rel_object(ROOT / u) for u in units)
+    overlay = sorted([rel_object(ROOT / u) for u in units] + list(provider_overlay))
     entry = {'compile': compile_commands, 'link': command, 'objects': origins.record(linked, overlay, name),
              'overlay': overlay, 'elf': str(elf), 'elf_sha256': sha(elf), 'bin': str(binary), 'bin_sha256': sha(binary),
              'bin_bytes': binary.stat().st_size}
     return directory, entry
 
 
-def bundle4(central, origins, out, runner, bundle2_objects):
-    """The counter, walk and WFI image and its two QEMU models."""
+def bundle4(central, origins, out, runner, base):
+    """The counter, walk and WFI image on the base, and its two QEMU models."""
     directory = out / 'cpu'
     directory.mkdir()
     objects_dir = directory / 'objects'
@@ -332,8 +424,8 @@ def bundle4(central, origins, out, runner, bundle2_objects):
         compile_object(central, target, ROOT / 'platform/a733/monitor.c', monitor,
                               ('-DSUNSTONE_MONITOR_COUNTERS=1',), general_regs=True)
         if suffix == 'image':
-            require(sha(monitor) == bundle2_objects[MONITOR_OBJ]['sha256'],
-                    'monitor.c with the counter option differs from bundle 2\'s monitor object.')
+            require(sha(monitor) == base['objects'][MONITOR_OBJ]['sha256'],
+                    'monitor.c with the counter option differs from the base\'s monitor object.')
         variants = [('', ())] if suffix == 'image' else [('', ()), ('-hang', ('-DBB4_MODEL_HANG=1',))]
         for variant, defines in variants:
             new = []
@@ -347,7 +439,12 @@ def bundle4(central, origins, out, runner, bundle2_objects):
                 binary = directory / 'probe.bin'
                 objcopy(elf, binary)
                 overlay = sorted(rel for rel, _ in new)
-                entry.update(objects=origins.record(linked, overlay, 'bundle 4'), overlay=overlay, elf=str(elf),
+                record = origins.record(linked, overlay, 'bundle 4')
+                differ = sorted(rel for rel, o in record.items() if rel not in overlay
+                                and base['objects'].get(rel, {}).get('sha256') != o['sha256'])
+                require(not differ and set(base['objects']) - set(record) == {KERNEL_OBJ},
+                        f'bundle 4 objects outside its overlay differ from the base: {differ}')
+                entry.update(objects=record, overlay=overlay, elf=str(elf),
                              elf_sha256=sha(elf), bin=str(binary), bin_sha256=sha(binary),
                              bin_bytes=binary.stat().st_size)
                 continue
@@ -385,6 +482,12 @@ def bundle4_outcome():
                 log_contains=list(BUNDLE4_MARKERS), progress=dict(PROGRESS))
 
 
+def bundle6_outcomes():
+    """A missed provisional bound returns to the ROM with status 1 after the summary."""
+    return [dict(name='provisional-step-bound-missed', status=1, interrupt=None, fail_lines=0, fault=None,
+                 log_contains=['BOUND permille=1550', 'FAILED board bundle 6: provisional step bound'])]
+
+
 def bundle7_outcomes():
     return [dict(name='domain-1-failed', status=1, interrupt=None, fail_lines=0, fault=None,
                  log_contains=['FAILED board bundle 7: domain 1', 'TRACE END board bundle 7'])]
@@ -400,6 +503,38 @@ def bundle8_outcomes(elf):
     outcomes.append(dict(name='nsi-readback-mismatch', status=1, interrupt=None, fail_lines=0, fault=None,
                          log_contains=['BEGIN board bundle 8 NSI access', 'FAIL board bundle 8: NSI readback mismatch']))
     return outcomes
+
+
+def usb_origins(usb, origins, provider_new, v4_monitor):
+    """Each object of a native USB image built from this tree: its origin and, for the platform and provider
+    objects, its unit. Platform and provider objects must come from an image that passed, the base or bundle
+    6's new provider objects; the builder links this tree's monitor.c object, whose instructions must equal
+    rank-9-usb-v4's. Only the USB units and the accepted TinyUSB objects may be new."""
+    known = dict(origins.known)
+    for unit, path in provider_new.items():
+        known.setdefault(sha(path), 'set-bundle-6')
+    commands = json.loads((usb / 'commands.json').read_text())
+    record, units = {}, {}
+    for command in commands[:-2]:
+        out = Path(command[command.index('-o') + 1])
+        units[out.name] = command[command.index('-c') + 1]
+    for item in json.loads((usb / 'reused-objects.json').read_text()):
+        units.setdefault(Path(item['path']).name, item['original'])
+    linked = [Path(x) for x in commands[-2] if x.endswith('.obj')]
+    for path in linked:
+        digest = sha(path)
+        unit = units.get(path.name, '')
+        origin = known.get(digest, 'new')
+        if origin == 'new' and unit.endswith('a733-power-probe.dir/' + MONITOR_OBJ):
+            require(instructions(path) == instructions(v4_monitor),
+                    'The native USB image\'s monitor.c changes rank-9-usb-v4 monitor instructions.')
+            origin = 'rank-9-usb-v4, same instructions'
+        record[path.name] = {'unit': unit, 'sha256': digest, 'origin': origin}
+    new = sorted(n for n, o in record.items() if o['origin'] == 'new')
+    platform = [n for n in new if n.startswith('provider-') or ('a733-power-probe.dir/' in record[n]['unit'])]
+    require(not platform, f'native USB image: platform or provider objects of no passed image or set image: {platform}')
+    return {'objects': record, 'new': new, 'elf_sha256': sha(usb / 'build/probe.elf'),
+            'bin_sha256': sha(usb / 'probe.bin')}
 
 
 def model_check(out):
@@ -430,6 +565,7 @@ def main():
     parser.add_argument('--v4', type=Path, required=True, help='rank-9-usb-v4 bundle directory')
     parser.add_argument('--tree', type=Path, required=True,
                         help='Source tree whose tools/check-a733-kernel.py carries the controlled-outcome progress record')
+    parser.add_argument('--usb', type=Path, help='Evidence of apps/usb-returning/build.py --platform-build from this tree')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     # The provider objects record the compile directory: it must be this
@@ -450,23 +586,25 @@ def main():
     result = {'physical_access': False, 'central': str(central), 'tree': str(tree), 'qemu_sha256': sha(QEMU),
               'reproduced': {}, 'images': {}}
 
-    # Bundle 2's other objects are the central kernel-check objects.
-    bundle2_objects = json.loads((bundle2 / 'equivalence.json').read_text())['objects']
-    for rel, o in bundle2_objects.items():
-        if rel != MONITOR_OBJ:
-            require(sha(central / 'CMakeFiles/a733-kernel-check.dir' / rel) == o['sha256'],
-                    f'The central {rel} differs from bundle 2\'s.')
-            result['reproduced'][f'bundle 2 {rel}'] = 'byte-identical'
     platform, provider, v4_linked = v4_parts(v4)
+    origins = Origins(rank4, bundle2, v4_linked)
+    builds = {}
+    directory, base = base_image(central, origins, out)
+    base['expect'] = EXPECT['base']
+    builds['base'] = (directory, base)
+    result['reproduced'].update({f'base {k}': v for k, v in base.pop('reproduced').items()})
+    origins.add_base(base['objects'])
+
     rp = returning_build.ReturningPlatform(out / 'platform', build=central)
     (out / 'provider').mkdir()
-    result['reproduced'].update({f'rank-9-usb-v4 {k}': v for k, v in
-                                 reproduce_v4(platform, provider, rp, central, out / 'provider').items()})
+    platform, provider, chosen = platform_and_provider(platform, provider, rp, central, base['objects'],
+                                                       out / 'provider')
+    result['reproduced'].update(chosen)
     result['table_flush'] = table_flush_check(dict(platform)['platform/a733/platform.c.obj'])
-    origins = Origins(rank4, bundle2, v4_linked)
+    provider_new = {u: p for u, p in provider.items() if chosen[u].startswith('new provider unit')}
+    new_units = sorted(provider_new)
 
-    builds = {}
-    directory, entry = bundle4(central, origins, out, runner, bundle2_objects)
+    directory, entry = bundle4(central, origins, out, runner, base)
     entry['expect'] = EXPECT['cpu']
     builds['cpu'] = (directory, entry)
     for name, units, flags, keep in (
@@ -474,16 +612,21 @@ def main():
             ('domain', POWER_UNITS + ['apps/board-bundles-power/bundle7.c'], (), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
-        directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out)
+        directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out,
+                                          [u + '.obj' for u in new_units if u in units_provider])
         entry['expect'] = EXPECT[name]
         entry['controlled'] = None
-        if name == 'domain':
+        if name == 'pmic':
+            entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': bundle6_outcomes()}
+        elif name == 'domain':
             entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': bundle7_outcomes()}
         elif name == 'dram':
             entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1',
                                    'outcomes': bundle8_outcomes(Path(entry['elf']))}
         builds[name] = (directory, entry)
     result['model'] = model_check(out)
+    if args.usb:
+        result['usb'] = usb_origins(args.usb.resolve(), origins, provider_new, dict(platform)[MONITOR_OBJ])
 
     for name, (directory, entry) in builds.items():
         if entry['controlled'] is not None:
@@ -495,11 +638,15 @@ def main():
         result['images'][name] = {'build': str(directory / 'build.json'), 'elf_sha256': entry['elf_sha256'],
                                   'bin_bytes': entry['bin_bytes'],
                                   'new_objects': [r for r, o in entry['objects'].items() if o['origin'] == 'new'],
+                                  'base_objects': [r for r, o in entry['objects'].items() if o['origin'] == 'set-base'],
                                   'controlled': [o['name'] for o in (entry['controlled'] or {}).get('outcomes', [])]}
         if 'qemu' in entry:
             result['images'][name]['qemu'] = entry['qemu']
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-    print(json.dumps(result['images'], indent=1))
+    print(json.dumps({k: {x: v[x] for x in ('elf_sha256', 'new_objects', 'base_objects')}
+                      for k, v in result['images'].items()}, indent=1))
+    if 'usb' in result:
+        print(json.dumps({'usb_new': result['usb']['new'], 'usb_elf_sha256': result['usb']['elf_sha256']}))
 
 
 if __name__ == '__main__':

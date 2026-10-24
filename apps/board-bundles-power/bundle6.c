@@ -13,11 +13,21 @@
  * be Device-nGnRnE and outer-shareable before bundle 7 writes it.
  *
  * The summary (TWI divisor and bit time, supply bits, step distribution
- * against the wire time, access cost, mapping, adoption reads) and the outcome line print
- * first; the detail lines (each service step that completed a bus phase,
- * each snapshot, each owner access) follow while they fit in the log. No GIC
- * register is read for the record. Success is status 0 with "COMPLETE board
- * bundle 6".
+ * against the wire time, the provisional bound, re-spins, access cost,
+ * mapping, adoption reads) and the outcome line print first; the detail
+ * lines (each service step that completed a bus phase, each snapshot, each
+ * owner access) follow while they fit in the log. No GIC register is read
+ * for the record.
+ *
+ * The wire time of a step counts two bit times per START, repeated START or
+ * STOP, and per byte nine bit times, or the measured byte wire time when that
+ * is longer. Success is status 0 with "COMPLETE board bundle 6": both supplies
+ * verified, every snapshot 0xff9e (enabled, 800 mV) and the provisional bound
+ * of docs/designs/pmic-access.md met (trace.h, bb_bound). A missed bound
+ * ends with status 1 after "FAILED board bundle 6: provisional step bound",
+ * a controlled outcome: the board returns, and bundle 7 and the native USB
+ * image of the same set do not run. A supply or snapshot mismatch is an
+ * uncontrolled failure.
  *
  * Before its first snapshot the client arms the wire-time spin: the service
  * times one byte phase from its CNTR write to INT_FLAG set and leaves that
@@ -35,6 +45,9 @@
 #include "a733_power_authority.h"
 
 #define SNAPSHOTS 32u
+/* Enable byte 0xff and selector 0x9e: DCDC2 and DCDC4 enabled at 800 mV, as
+ * port 3-3 read them on 2026-10-24. */
+#define SNAPSHOT_EXPECTED 0xff9eu
 static struct a733_pmic_snapshot snapshots[SNAPSHOTS];
 
 static void snapshot(unsigned i)
@@ -107,12 +120,25 @@ static void client(void *unused)
     s.dropped = bb_power.steps_dropped;
     s.twi_reads = bb_power.twi.reads;
     s.enable_seen = bb_power.twi.enable_seen;
-    bb_step_bins(bb_power.steps, bb_power.stepped, s.bit_ns, &s.bins);
+    s.stop_respins = bb_power.twi.stop_respins;
+    s.snapshot_respins_max = bb_power.twi.snapshot_respins_max;
+    s.snapshots = bb_power.twi.snapshots;
+    /* The measured byte: CNTPCT ticks of 125/3 ns. */
+    const uint64_t byte_ns = s.cost.wire_ticks * 125 / 3;
+    s.byte_ns = byte_ns > 9ull * s.bit_ns ? (uint32_t)byte_ns : 9u * s.bit_ns;
+    bb_step_bins(bb_power.steps, bb_power.stepped, s.bit_ns, s.byte_ns, &s.bins);
+    bb_bound(bb_power.steps, bb_power.stepped, s.bit_ns, s.byte_ns, s.snapshot_respins_max, &s.bound);
+    /* The two verification snapshots and the 32 client snapshots each end
+     * in six STOPs; another count leaves the per-snapshot re-spins unknown. */
+    s.bound.pass &= s.snapshots == SNAPSHOTS + 2;
     struct bb_line lines[BB6_SUMMARY_LINES];
     const unsigned n = bb6_summary_lines(&s, lines);
     for (unsigned i = 0; i < n; ++i)
         bb_power_print(&lines[i]);
-    platform_puts(BB6_COMPLETE);
+    if (!s.dcdc2 || !s.dcdc4 || !s.unchanged || s.dcdc2_first != SNAPSHOT_EXPECTED ||
+        s.dcdc4_first != SNAPSHOT_EXPECTED)
+        bb_power_fail("board bundle 6: supply verification or snapshot mismatch");
+    platform_puts(s.bound.pass ? BB6_COMPLETE : BB6_BOUND_MISSED);
     for (unsigned i = 0; i < bb_power.stepped; ++i) {
         bb_step_line(&bb_power.steps[i], &lines[0]);
         bb_power_detail(&lines[0]);
@@ -123,7 +149,7 @@ static void client(void *unused)
     }
     bb_power_detail_accesses();
     bb_power_details_end();
-    platform_exit(0);
+    platform_exit(s.bound.pass ? 0 : 1);
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t handle, char *name)

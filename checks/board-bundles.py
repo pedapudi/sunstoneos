@@ -42,6 +42,15 @@ rows. It checks that:
   that defines monitor_sync, a new object outside its overlay, a binary that
   is not the ELF's loadable segments, and controlled outcomes that the
   bundle's runner refuses;
+- a returning row that links objects of a base row of the same run is
+  prepared when each such object equals the base bundle's object of the same
+  unit, and refused when one differs or when the base row was not prepared
+  earlier in the run;
+- with a lifetime, each row's runbook gives its record directories, the full
+  --warm-return list (the lifetime's chain, then every earlier step) and the
+  rows it runs after, and the run directory receives runbook.md with the
+  order; a lifetime that reuses a record stem or names a row without inputs
+  stops before any run directory exists;
 - each prepared single-core row has a runbook naming every bundle file's
   SHA-256 and its run command;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
@@ -552,11 +561,21 @@ def main():
         value['sources'] = single
         return value
 
-    def returning_fixture(name, position, controlled=True):
+    def returning_fixture(name, position, controlled=True, base=None, after=()):
         value = tool.returning_row(name, position, 'Fixture ' + name, ['checks/kernel.c.obj'], 'CHECK fixture',
-                                   controlled, 'Fixture result.', 'Fixture image.')
+                                   controlled, 'Fixture result.', 'Fixture image.', base=base, after=after)
         value['sources'] = single + ['tools/check-a733-kernel.py']
         return value
+
+    # A base whose platform.c is new, and images that link it.
+    base_objects = {'checks/kernel.c.obj': {'sha256': '1' * 64, 'origin': 'rank-4-kernel-check'},
+                    'platform/a733/platform.c.obj': {'sha256': '4' * 64, 'origin': 'new'},
+                    'platform/a733/monitor.c.obj': {'sha256': '3' * 64, 'origin': 'rank-4-kernel-check'}}
+
+    def on_base(platform_sha):
+        return {'checks/kernel.c.obj': {'sha256': '5' * 64, 'origin': 'new'},
+                'platform/a733/platform.c.obj': {'sha256': platform_sha, 'origin': tool.SET_BASE},
+                'platform/a733/monitor.c.obj': {'sha256': '3' * 64, 'origin': 'rank-4-kernel-check'}}
 
     sync = build_elf(elves, 'returning-sync', good + 'int monitor_sync(void){return 3;}\n')
     plain = Path(inputs['monitor-no-cap']['image'])
@@ -567,7 +586,13 @@ def main():
              returning_fixture('returning-good', 5), returning_fixture('returning-plain', 6, controlled=False),
              returning_fixture('returning-sync', 7), returning_fixture('returning-new-object', 8),
              returning_fixture('returning-bad-bin', 9), returning_fixture('returning-bad-controlled', 10),
-             returning_fixture('returning-progress', 11), returning_fixture('returning-extra-request', 12)]
+             returning_fixture('returning-progress', 11), returning_fixture('returning-extra-request', 12),
+             returning_fixture('returning-base', 13, controlled=False),
+             returning_fixture('returning-on-base', 14, base='returning-base'),
+             returning_fixture('returning-after', 15, base='returning-base', after=['returning-on-base']),
+             returning_fixture('returning-base-differs', 16, base='returning-base'),
+             returning_fixture('returning-base-refused', 17, base='returning-sync')]
+    rows[-5]['overlay'] = ['checks/kernel.c.obj', 'platform/a733/platform.c.obj']
     inputs.update({name: {} for name in ('read-good', 'read-extra-key', 'read-later-condition', 'read-outside-block')})
     inputs.update({
         'returning-good': {'build': fixture_build(work, 'good', plain)},
@@ -579,22 +604,40 @@ def main():
         'returning-bad-bin': {'build': fixture_build(work, 'bad-bin', plain, bad_bin=True)},
         'returning-bad-controlled': {'build': fixture_build(work, 'bad-controlled', plain, controlled='bad')},
         'returning-progress': {'build': fixture_build(work, 'progress', plain, outcomes=(PROGRESS_OUTCOME,))},
-        'returning-extra-request': {'build': fixture_build(work, 'extra-request', plain, runner_extra=EXTRA_REQUEST)}})
+        'returning-extra-request': {'build': fixture_build(work, 'extra-request', plain, runner_extra=EXTRA_REQUEST)},
+        'returning-base': {'build': fixture_build(work, 'base', plain, controlled=False, objects=base_objects)},
+        'returning-on-base': {'build': fixture_build(work, 'on-base', plain, objects=on_base('4' * 64))},
+        'returning-after': {'build': fixture_build(work, 'after', plain, objects=on_base('4' * 64))},
+        'returning-base-differs': {'build': fixture_build(work, 'base-differs', plain, objects=on_base('6' * 64))},
+        'returning-base-refused': {'build': fixture_build(work, 'base-refused', plain, objects=on_base('4' * 64))}})
     repo = fixture_repository(work)
     evidence = work / 'evidence'
+    lifetime = {'port': '3-3', 'ddr': 'ddr-f', 'chain': ['link-1', 'link-2'],
+                'order': [{'row': 'returning-base', 'stem': 'f-base', 'run': 'f-base-run'},
+                          {'row': 'returning-on-base', 'stem': 'f-on', 'run': 'f-on-run'},
+                          {'external': 'fixture-usb', 'stem': 'f-usb', 'run': 'f-usb-run', 'runbook': 'usb.md',
+                           'after': ['returning-on-base']},
+                          {'row': 'returning-after', 'stem': 'f-after', 'run': 'f-after-run'}],
+                'state': ['Fixture state.']}
 
     harness.refused(lambda: tool.run({'unknown': {}}, rows, evidence, repo), 'unknown rows')
     harness.refused(lambda: tool.run({'excluded': {}}, rows, evidence, repo), 'excluded rows')
+    reused = dict(lifetime, order=lifetime['order'] + [{'external': 'again', 'stem': 'f-base', 'run': 'x',
+                                                        'runbook': 'x.md'}])
+    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=reused), 'reuses a record stem')
+    absent = dict(lifetime, order=[{'row': 'returning-good', 'stem': 'g', 'run': 'g-run'}])
+    harness.refused(lambda: tool.run({}, rows, evidence, repo, lifetime=absent), 'names no returning row')
     assert not evidence.exists(), 'refused inputs created no run directory'
 
-    status, run_dir = tool.run(inputs, rows, evidence, repo)
+    status, run_dir = tool.run(inputs, rows, evidence, repo, lifetime=lifetime)
     assert status == 1 and run_dir == evidence / f'board-bundles-{datetime.now(timezone.utc):%Y%m%d}-1'
     record = json.loads((run_dir / 'run.json').read_text())
     states = {name: r['status'] for name, r in record['rows'].items()}
     expected = {'memory-good': 'prepared', 'monitor-no-cap': 'prepared', 'nested': 'prepared',
                 'no-inputs': 'no-inputs', 'excluded': 'excluded', 'read-good': 'prepared',
                 'returning-good': 'prepared', 'returning-plain': 'prepared', 'returning-progress': 'prepared',
-                'returning-extra-request': 'prepared'}
+                'returning-extra-request': 'prepared', 'returning-base': 'prepared', 'returning-on-base': 'prepared',
+                'returning-after': 'prepared'}
     assert states == {r['name']: expected.get(r['name'], 'refused') for r in rows}, states
     reasons = {'memory-no-cap': 'monitor_renewal_cap', 'memory-stripped': 'no symbol table',
                'memory-no-entry': 'does not define monitor_entry', 'failing': 'Fixture admission refused',
@@ -606,9 +649,13 @@ def main():
                'read-extra-key': 'keys outside', 'read-later-condition': 'not an earlier word',
                'read-outside-block': 'not inside the ungated block', 'returning-sync': 'uncapped renewal',
                'returning-new-object': 'outside the overlay: checks/kernel.c.obj, platform/a733/platform.c.obj',
-               'returning-bad-bin': 'not the loadable segments', 'returning-bad-controlled': 'Fixture runner refuses'}
+               'returning-bad-bin': 'not the loadable segments', 'returning-bad-controlled': 'Fixture runner refuses',
+               'returning-base-differs': "differ from the base bundle's object of the same unit: "
+                                         'platform/a733/platform.c.obj',
+               'returning-base-refused': 'not prepared earlier in this run: returning-sync'}
     stages = {'memory-wrong-build': 'admission', 'service-wrong-build': 'admission', 'memory-unnamed': 'admission',
-              'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout'}
+              'service-unnamed': 'admission', 'uncounted': 'inputs', 'too-long': 'timeout',
+              'returning-base-refused': 'inputs'}
     reasons.update({'prefix-' + p.rstrip('_').replace('_', '-'): p + 'probe' for p in tool.FORBIDDEN_PREFIXES})
     for name, reason in reasons.items():
         assert reason in record['rows'][name]['message'], (name, record['rows'][name])
@@ -693,6 +740,25 @@ def main():
         assert f'Queue timeout: {timeout} s' in text, name
         prepared[name] = {'files': len(files), 'timeout_seconds': timeout}
     assert (run_dir / 'read-good/bundle/board-read.py').read_bytes() == (ROOT / tool.READER).read_bytes()
+    # The base and the rows on it, with the lifetime's records.
+    admitted = {name: json.loads((run_dir / name / 'submission.json').read_text()) for name in
+                ('returning-base', 'returning-on-base', 'returning-after')}
+    assert all(queue.submission(v) is None or True for v in admitted.values())
+    text = {name: (run_dir / name / 'runbook.md').read_text() for name in admitted}
+    links = {'returning-base': ['link-1', 'link-2'], 'returning-on-base': ['link-1', 'link-2', 'f-base-run'],
+             'returning-after': ['link-1', 'link-2', 'f-base-run', 'f-on-run', 'f-usb-run']}
+    for name, chain in links.items():
+        found = [line.split('$S/')[1].split('/')[0] for line in text[name].splitlines() if '--warm-return $S/' in line]
+        assert found == chain, (name, found)
+        assert '--ddr-evidence $S/ddr-f/session.json' in text[name], name
+    assert '$S/f-on-run' in text['returning-on-base'] and '1 to objects of the base image' in text['returning-on-base']
+    assert '## Run only after' not in text['returning-base']
+    assert '- `returning-base` of this set passed' in text['returning-on-base']
+    assert '- `returning-on-base` of this set passed' in text['returning-after']
+    order = (run_dir / 'runbook.md').read_text()
+    assert '| 3 | `fixture-usb`, `usb.md` | `$S/f-usb-*`; link `f-usb-run` | `returning-on-base` passed |' in order, order
+    assert '`link-1`, `link-2`' in order and 'Fixture state.' in order
+    prepared['lifetime'] = {name: len(chain) for name, chain in links.items()}
     status, second = tool.run({}, rows, evidence, repo)
     assert status == 0 and second.name.endswith('-2'), 'a second run gets its own directory'
 
