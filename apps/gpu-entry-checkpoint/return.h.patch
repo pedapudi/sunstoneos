@@ -1,0 +1,14 @@
+--- return.h
++++ checkpoint-return.h
+@@ -18,9 +18,9 @@
+     uint32_t words[64];
+     uint64_t cleanup_start,cleanup_end;
+ };
+-#define GPU_RETURN_MAGIC UINT64_C(0x3154455255504741)
++#define GPU_RETURN_MAGIC UINT64_C(0x3150434555504741)
+ #define GPU_RETURN_RESULT_ADDRESS UINT64_C(0x42000100)
+-#define GPU_RETURN_RECEIPT_MAGIC UINT64_C(0x4750555245433031)
++#define GPU_RETURN_RECEIPT_MAGIC UINT64_C(0x475055454e543031)
+ struct gpu_return_receipt {
+     uint64_t magic,epoch,generation,lease,status,complete;
+     uint64_t clean_start,clean_end,wb_start,wb_end,clean_lines,deadline,log_length;

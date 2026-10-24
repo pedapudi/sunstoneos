@@ -1,0 +1,11 @@
+--- runtime.c
++++ checkpoint-runtime.c
+@@ -68,6 +68,7 @@
+     do{ready=a733_device_memory_prepare();}while(ready==0);
+     if(ready!=1)platform_panic("GPU single-core memory",1);
+ #endif
+-    a733_smp_diagnostic_start();
++    extern _Noreturn void gpu_entry_checkpoint(void);
++    gpu_entry_checkpoint();
+     platform_panic("SD scheduler returned",2);
+ }
