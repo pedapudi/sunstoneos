@@ -208,8 +208,10 @@ interface:
    (CCU `0x5c0` bit 6, `0x5e0` bit 18), the PPU clock and the policy and
    status words, writes nothing, and returns the status read in `state`, 0
    for OFF or 8 for ON. The sequencer calls it before its first NPU reset or
-   clock write, requires OFF, and does not read the policy and status words
-   again in its register pass.
+   clock write, accepts coherent OFF or ON, and does not read the policy and
+   status words again in its register pass. Both states must pass the same
+   NPU gate, reset and disabled-PLL checks. An ON request for an inherited ON
+   domain adopts it and pins the rail without writing PCK600.
 3. The sequencer releases the NPU resets (`0xb04` bits 18, 17, 16), sets the
    module rate and enables its clocks, in the order of the pinned VIPLite
    driver (`vip_drv_device_platform.c` lines 419–428).

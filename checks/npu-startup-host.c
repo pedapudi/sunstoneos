@@ -187,9 +187,61 @@ static int tokens_held(void)
         a733_rail_status(&m.rails,&s.rail)==A733_RAIL_READY &&
         a733_gpu_resources_status(&m.gpu,s.config.pck_client,&s.pck)==A733_GPU_RESOURCE_OK;
 }
-int main(void)
+/* The inherited ON state still requires exclusive external ownership, closed
+ * local gates, asserted engine resets and a disabled PLL. The register model
+ * supplies those facts; physical PCK reads alone cannot establish them. */
+static int inherited_on(void)
+{
+    setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+    struct run b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_READY && tokens_held());
+    assert(!d.ppu_writes && s.row.counted==1 && d.owner.domain[1].count==1);
+    assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    assert(b.ticks<=12 && r.writes<=12 && !r.pmic_reads_before);
+    printf("{\"inherited_on\":{\"ticks\":%u,\"elapsed_us\":%llu,\"settle_us\":%llu,\"local_writes\":%u,\"pck_writes\":%u},",
+        b.ticks,(unsigned long long)b.elapsed_us,
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],r.writes,d.ppu_writes);
+    /* Local CLOSE keeps the power-domain row and rail pin. The actual owner
+     * refuses a later OFF request for domain 4, without releasing its pin. */
+    bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+    assert(tokens_held() && s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes);
+    const unsigned request=atomic_load(&s.row.request),state=atomic_load(&s.row.state);
+    assert(!a733_power_domain_request(&s.row,0));service_step();
+    assert(atomic_load(&s.row.request)==request && atomic_load(&s.row.state)==state &&
+        a733_power_domain_state(&s.row)==A733_POWER_ROW_ON);
+    assert(s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes && tokens_held());
+    assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    /* Each field below invalidates the inherited-state precheck separately. */
+    static const struct { unsigned offset,bit; } unsafe[]={
+        {0xb00,31},{0xb04,0},{0xb04,16},{0xb04,17},{0xb04,18},{0x2a0,31}};
+    for(unsigned i=0;i<sizeof(unsafe)/sizeof(*unsafe);++i) {
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+        r.ccu[unsafe[i].offset/4]|=1u<<unsafe[i].bit;
+        b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes &&
+            !s.row.counted && !r.held && tokens_released());
+    }
+    /* Policy/status mismatch and a transitioning status are not adoption. */
+    for(unsigned status=0;status<2;++status) {
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=status ? 1 : 0;
+        b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && tokens_released());
+    }
+    /* A later failed write has changed hardware and retains resources. */
+    setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;r.flip_b04=7;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && r.writes && r.held && r.retained &&
+        tokens_held() && !d.ppu_writes);
+    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_refused\":true}");
+    puts("PASS inherited NPU domain ownership, local-state refusal, retention and release policy");
+    return 0;
+}
+int main(int argc,char **argv)
+
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
+    assert(argc==1);
     /* Boot to READY. */
     setup();
     struct run b=boot(200,1,0);

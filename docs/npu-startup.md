@@ -56,7 +56,7 @@ wait. A waiting stage returns PENDING; every wait has a counter deadline.
    expired deadline refuses.
 3. **Register pass and PLL enable.** Under one register-lock acquisition: the
    owner's domain-4 check, which reads the PCK600 words once and returns the
-   domain state (startup requires OFF), the register pass below, and the
+   coherent domain state (OFF or ON), the register pass below, and the
    PLL_NPU method-2 enable table ([PLL table](npu-pll.md)). The lock is released, and LOCK is
    read without it: at most 100 observations 3 µs apart until three in a row
    read locked, then 20 µs. The worst case is about 320 µs, so the spin does
@@ -78,11 +78,14 @@ Steps 4 and 5 keep the clock-before-power order of the pinned VIPLite
 `vip_drv_device_platform.c` (lines 419–428). The sequencer writes no PCK600
 register and issues no PMIC transaction; the power-domain owner does both.
 
-In the host model with the PMIC at 400 kHz, the sequencer reaches READY 11
-ticks after the scheduler starts, in 12 calls of which 4 advance a stage. It
+In the host model with the PMIC at 400 kHz and domain 4 initially OFF, the
+sequencer reaches READY 11 ticks after the scheduler starts, in 12 calls of
+which 4 advance a stage. It
 makes 57 register reads besides the LOCK samples (52 by the sequencer and 5
 by the owner's domain check), 12 writes and 3 lock
-acquisitions.
+acquisitions. The inherited-ON case takes 11,001 modeled microseconds and
+the same 12 local writes, with no PCK600 writes. Its reported tick count
+rounds elapsed time up to 12; it does not take another scheduler tick.
 
 ## The register pass refuses before any write
 
@@ -107,6 +110,21 @@ The pass reads each word and compares it under a mask with a constant:
 The domain-4 policy and status come from the owner's check, which precedes
 the pass. The pass takes 20 reads, or 25 when PERI0 is selected.
 
+An inherited ON domain passes only with the same closed gates, asserted
+engine resets and disabled PLL. The later ON request lets the existing
+power-domain owner adopt the domain and pin its rail without a PCK600 write.
+An OFF domain follows the owner's normal power-on sequence. A mismatched or
+transitioning policy/status pair refuses before any NPU write. Neither
+state establishes exclusive ownership: the supervised image still needs
+the startup confinement, drain and ownership admissions.
+
+The physical read session at
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb5-read/session.json`
+records domain-4 policy and status as `0x8`. It establishes an observed ON
+state, with no launch or transition; it does not establish the remaining
+startup conditions. Requiring OFF would refuse that observed state even
+if the remaining conditions passed.
+
 ## Failure keeps everything after the first write
 
 A refusal before the first NPU register write releases the PCK lease, the rail
@@ -125,6 +143,16 @@ applies the local stop table: module gate off, bus gate off, then the AHB, AXI
 and core resets asserted, in the order of `npu_clk_uninit` in the pinned
 VIPLite platform. Each write is read back. PLL_NPU, the SRAM reset, domain 4
 and every token stay held.
+
+Domain 4 rejects an OFF request before publishing it to the owner. Local
+stop therefore preserves the admitted row, its rail pin and every lease.
+The supported operating point remains fixed at 492 MHz and 800 mV; there
+is no NPU frequency or voltage transition API. A stopped or faulted startup
+cannot restart in place, and faults retain resources until whole-board
+power removal. The NPU applications have no thermal admission, throttling
+or thermal cancellation callback, and the OS has no NPU service entry.
+These lifecycle and thermal gaps, plus physical startup qualification,
+remain after inherited-ON admission.
 
 ## Service activation
 
@@ -152,7 +180,10 @@ Integration follows this order:
   sequencer with the actual PMIC provider, rail ledger, clock registry,
   GPU/PCK manager and power-domain owner over a register model. It checks
   boot to READY with its counts, local stop, three refusals before any write,
-  three retentions and seven reference-clock cases.
+  three retentions and seven reference-clock cases. Its `--inherited-on`
+  cases check owner adoption without PCK600 writes, six unsafe local-state
+  refusals, two incoherent-state refusals, retention after a failed write,
+  and retained ownership after local stop and a refused OFF request.
 - [`checks/npu-startup.c`](../checks/npu-startup.c) runs it on two QEMU cores
   with real FreeRTOS tasks and the real counter, registry, ledger and register
   lock. The success mode reaches service activation; the readback mode shows a

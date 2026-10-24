@@ -52,10 +52,14 @@ the bootstrap calls it again after one tick. Each wait has a counter deadline:
    releases the tokens before any NPU write.
 3. Under one register-lock acquisition, `a733_power_domain_check(domains, 4,
    &state)` and the register pass of npu-platform.md. The owner's check reads
-   the PCK600 words once and returns the domain state; startup admits only
-   state 0 (OFF) and does not read PCK600 again. The pass reads 20 words, or
+   the PCK600 words once and returns the coherent domain state; startup
+   admits state 0 (OFF) or 8 (ON) and does not reread PCK600 in this pass.
+   Both states require the same closed local gates and asserted engine
+   resets. The pass reads 20 words, or
    25 when a fabric clock selects PERI0, each compared under a mask with a
-   constant, and requires PLL_NPU disabled.
+   constant, and requires PLL_NPU disabled. An inherited ON domain is later
+   adopted by the existing owner with a rail pin and no PCK600 write;
+   [startup ownership and lifecycle limits](../npu-startup.md) still apply.
 4. Under the same acquisition, the PLL_NPU method-2 enable table. Then release
    the lock and read LOCK without it: up to 100 observations 3 µs apart until
    three in a row read locked, then 20 µs. The spacing reads `CNTPCT_EL0`

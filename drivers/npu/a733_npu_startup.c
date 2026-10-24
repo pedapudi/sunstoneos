@@ -182,7 +182,8 @@ static int peri0(struct a733_npu_startup *s)
 /* The register pass before the first write (npu-platform.md): the reference
  * clock, the fabric words against the record, PERI0 when selected, every
  * PLL_NPU consumer under its mask, and PLL_NPU disabled with its tuning words
- * at reset. The owner's domain check has read domain 4 OFF. */
+ * at reset. The owner has checked coherent domain-4 policy and status;
+ * an inherited ON domain still requires the same local reset/gate state. */
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
@@ -305,7 +306,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
         unsigned domain=8;
-        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain || !pass(s)) {
+        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 ||
+           (domain!=0 && domain!=8) || !pass(s)) {
             (void)leave(s);return refuse(s);
         }
         if(!now(s,0) || !apply(s,pll_enable,STEPS(pll_enable)))return fault(s);
