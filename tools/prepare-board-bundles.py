@@ -23,7 +23,8 @@ or whose controlled outcomes the bundle's runner does not admit, removes write
 permission from every bundle entry,
 hashes each bundle file once into artifacts.json, derives a Terminal row's
 queue timeout from the runner's own bounds and the bundle's file sizes, and a
-returning row's from its runner's FEL requests and the churn guard's wait,
+returning row's from the FEL requests of the bundle's copy of its runner and
+the churn guard's wait,
 snapshots the row's sources with tools/evidence-snapshot.py, writes
 submission.json after checking it with submission() from
 tools/board-test-queue.py, and writes runbook.md in the format of
@@ -81,8 +82,14 @@ READER = 'tools/board-bundles-next-read.py'
 # its 30 s FEL bound per command and the scratch save and restore fit 120 s.
 READ_TIMEOUT = 120
 HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
-# Objects of an image that passed on the board, by the record that shows it.
-PASSED_ORIGINS = {'rank-4-kernel-check', 'rank-9-usb-v4'}
+# Objects of an image that passed on the board, by the record that shows it:
+# the kernel check of ranks 4 and 5, rank-9-usb-v4 on port 3-3, and bundle 2's
+# image with the monitor's counter option, which passed on port 3-3
+# (board-session-20261023/port-3-3/bb2-run).
+PASSED_ORIGINS = {'rank-4-kernel-check', 'rank-9-usb-v4', 'kernel-check-counter-option'}
+PASSED_RECORDS = {'rank-4-kernel-check': 'the kernel check of ranks 4 and 5, `574245e2…`',
+                  'rank-9-usb-v4': '`board-bundles-20261023/rank-9-usb-v4/`',
+                  'kernel-check-counter-option': 'bundle 2, `a8e6ecac…`, passed as `bb2-run` on port 3-3'}
 
 TERMINAL_PROCEDURE = [
     'Confirm that ranks 1 to 5 and rank 9 of docs/audit/board-test-plan.md passed earlier in this power cycle.',
@@ -102,7 +109,7 @@ OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/m
               *TRANSPORT_SOURCES]
 
 SINGLE_CORE_SOURCES = ['tools/prepare-board-bundles.py', READER, *HOST_TOOLS]
-RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-images.py', 'tools/check-a733-kernel.py',
+RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-apps.py', 'tools/check-a733-kernel.py',
                      *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
                      'platform/a733/link.ld', 'arch/aarch64/vectors.S', 'include/a733_fault.h', 'checks/kernel.c',
                      'checks/board-bundles-fault.c']
@@ -140,18 +147,28 @@ NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500,
            0xb00, 0xb04, 0xc00, 0xc0c, 0x1908, 0x1920, 0x1988, 0x19a0, 0x1b10, 0x1b14, 0x1b1c)
 
 
-def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None):
+def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
+                  passes=True, sources=()):
+    """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
-            'overlay': overlay, 'expect': expect, 'controlled': controlled, 'intro': intro,
-            'sources': RETURNING_SOURCES, 'expected_result': expected, 'stop_condition': RETURNING_STOP,
-            'needs': needs,
+            'overlay': overlay, 'expect': expect, 'controlled': controlled, 'intro': intro, 'passes': passes,
+            'sources': RETURNING_SOURCES + list(sources), 'expected_result': expected,
+            'stop_condition': RETURNING_STOP, 'needs': needs,
             'procedure': ['Run the cache-off helper and a survey of the current instance.',
                           'Claim this test, then run {bundle}/host/tools/check-a733-kernel.py once on '
                           '{bundle}/probe.bin with the DDR record and warm-return chain of this lifetime.']}
 
+
+POWER_OVERLAY = ['apps/board-bundles-power/power.c.obj', 'apps/board-bundles-power/trace.c.obj',
+                 'arch/aarch64/device_memory.c.obj', 'drivers/power/a733_power_domains.c.obj',
+                 'drivers/power/a733_power_domains_native.c.obj']
+POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/power.h',
+                 'apps/board-bundles-power/trace.c', 'apps/board-bundles-power/trace.h',
+                 'drivers/power/a733_power_domains.c', 'drivers/power/a733_power_domains_native.c',
+                 'drivers/power/a733_pmic.c', 'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
 
 ROWS = [
     # The single-core bundles of docs/designs/board-bundles-next.md, in the
@@ -163,7 +180,7 @@ ROWS = [
                   'fault, then a responsive ROM.',
                   'One task loads from 0x4_0000_0000, above every valid level-1 entry, so the load takes a '
                   'translation fault before any bus access; platform_exception() writes one FAIL exception line '
-                  'and exits with monitor status 1, the bundle\'s one controlled outcome.'),
+                  'and exits with monitor status 1, the bundle\'s one controlled outcome.', passes=False),
     returning_row('kernel-check-counter-option', 2, 'Kernel check built with the returning monitor\'s counter option',
                   ['platform/a733/monitor.c.obj'],
                   'PASS kernel: timer preemption, queue ordering, blocking wakeup, FP context; rounds=100', False,
@@ -180,11 +197,29 @@ ROWS = [
              'Every word is read, the oscillator word only after its R_CCU gate reads open and its reset released, '
              'and the 128 scratch bytes are restored and equal.'),
     returning_row('cpu-counters-walk-wfi', 4, 'Event counters, core-0 walk A/B and idle WFI in one image',
-                  ['platform/a733/monitor.c.obj'], '', True, 'The three stages complete with their records.',
-                  '', admission=False,
-                  needs='A returning app from the counter, table-walk and power-state owners with three stage '
-                        'markers, the single-core a733_cpu_pmu_begin and end of primary.patch, its controlled '
-                        'WFI outcome, and admission values.'),
+                  ['apps/board-bundles-cpu/main.c.obj', 'arch/aarch64/device_memory.c.obj',
+                   'platform/a733/cpu_pmu.c.obj'],
+                  'COMPLETE board bundle 4:', True,
+                  'Monitor status 0 with the three stage records and COMPLETE board bundle 4: counters, walk A/B '
+                  'and WFI; or status 0 with COMPLETE board bundle 4: inconclusive when the WFI stage could not start '
+                  'before 0.9 s after the monitor\'s entry; or the controlled outcome wfi-stopped-waking: status 2, '
+                  'interrupt 29, after the WFI stage marker with fewer than 1,000 wakes and the last wake more than '
+                  'two ticks before the forced return.',
+                  'Bundle 2\'s image with checks/kernel.c replaced by apps/board-bundles-cpu/main.c, the '
+                  'single-core platform/a733/cpu_pmu.c and arch/aarch64/device_memory.c. One task runs three '
+                  'stages, each with a log marker and a progress record at 0x42000080 (magic, stage, wakes, last '
+                  'wake CNTPCT). Counters: 64 empty regions, 2,000 ALU instructions, a 1 ms CNTPCT loop, a refill '
+                  'read of a cleaned 64 KiB buffer, PMCR_EL0 and PMCEID0/1_EL0, with IRQs masked around each region. '
+                  'Walk A/B: refused when CCU +0x588 reads MBUS_DFS_EN set (bundle 3 read it clear on port 3-3 on '
+                  '2026-10-24); otherwise a discarded warm-up block and twelve blocks in ABBA order of 1,024 '
+                  'TLBI-and-load iterations, iteration k loading line k of block k, A with TCR_EL1 0x200803019 '
+                  '(uncached walks) and B with 0x200803519, each after a calibration region whose DTLB_WALK and '
+                  'ITLB_WALK counts the block must exceed by exactly 1,024. WFI: started only before 0.9 s after '
+                  'the monitor\'s entry, 1,000 ticks of a733_cpu_idle() with IRQs unmasked, reading the counters '
+                  'after each wake outside any masked region. Run it after bundle 2 and bundle 3 of the same '
+                  'lifetime; report each board separately.',
+                  sources=['apps/board-bundles-cpu/main.c', 'platform/a733/cpu_pmu.c', 'arch/aarch64/device_memory.c',
+                           'platform/a733/link.ld']),
     read_row('power-domain-words', 5, 'Policy and status words of power domains 1, 4 and 5',
              'Adoption state of the PCK600 domains, read only while the PPU clock is open',
              [word(PPU_CLOCK[0], 'r_ccu', note='PPU clock gate 0')] +
@@ -192,21 +227,65 @@ ROWS = [
               for d in (1, 4, 5) for o, name in ((0, 'policy'), (8, 'status'))],
              'Every word is read while R_CCU 0x1ac bit 0 reads 1, and the 128 scratch bytes are restored and equal.'),
     returning_row('pmic-power-domain-reads', 6, 'PMIC service task and power-domain owner, read-only',
-                  [], '', False, 'Supply verification and adoption reads complete.',
-                  '', admission=False,
-                  needs='A returning app from the power-domain owner that runs the PMIC service task read-only, '
-                        'records each service step and the TWI interrupt flag, and names admission values.'),
-    returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner', [], '', True,
-                  'Domain 1 reaches ON with every intermediate status recorded.',
-                  '', admission=False,
-                  needs='A returning app from the power-domain owner that turns domain 1 ON with the delay-row and '
-                        'back-to-back status records, its FAILED controlled outcome, and admission values.'),
-    returning_row('dram-bus-priority', 8, 'DRAM bus priority reads and table write', [], '', True,
-                  'Inherited and final NSI fields of ports 2, 14 and 15.',
-                  '', admission=False,
-                  needs='A returning app from the DRAM owner that calls a733_dram_priority() with its own register '
-                        'pair after domain 1 reads ON, its abort and readback controlled outcomes, and admission '
-                        'values.'),
+                  POWER_OVERLAY + ['apps/board-bundles-power/bundle6.c.obj'],
+                  'COMPLETE board bundle 6: PMIC service and domain adoption reads', False,
+                  'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
+                  'step distribution against the 110% wire-time bound, the domain-1 mapping and the adoption reads '
+                  'of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the STEP '
+                  'lines, the 32 snapshots and the owner accesses.',
+                  'rank-9-usb-v4\'s platform and PMIC provider objects with apps/board-bundles-power/ (bundle6.c, '
+                  'power.c, trace.c), the power-domain owner, its native adapter and device_memory.c; no USB unit. '
+                  'The service task verifies DCDC2 and DCDC4 once; a client then takes 32 snapshots, DCDC2 and '
+                  'DCDC4 in turn, and makes the adoption reads: R_CCU 0x1ac, CCU 0x5c0 and 0x5e0, and the policy '
+                  'and status of domains 1, 4 and 5 only while 0x1ac bit 0 reads 1. It records the owner adapter\'s '
+                  'mapping result and the PAR_EL1 translation of the domain-1 block, which must be Device-nGnRnE '
+                  'and outer-shareable for bundle 7. Each STEP line gives the step\'s CNTPCT span, the scheduler '
+                  'ticks inside it, the phases it completed, the TWI interrupt flag (CNTR bit 3) at the first read '
+                  'of each byte phase with the interrupt enable (bit 7) clear, and the most polls of one phase; '
+                  'the wire time follows from the phases and the bit time. The summary and outcome print before '
+                  'the detail lines, which stop while 256 log bytes remain, so no record cuts the outcome line. No '
+                  'GIC register is read for the record, and no PPU or PMIC register is written.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c']),
+    returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner',
+                  POWER_OVERLAY + ['apps/board-bundles-power/bundle7.c.obj'], 'COMPLETE board bundle 7:', True,
+                  'Monitor status 0 with COMPLETE board bundle 7: domain 1 ON, the owner\'s access trace and every '
+                  'status value with its CNTPCT stamp; or status 0 with COMPLETE board bundle 7: inconclusive when '
+                  'the owner refused the row before any PPU write; or the controlled outcome domain-1-failed.',
+                  'The image of bundle 6 with bundle7.c in place of bundle6.c. After supply verification, a client '
+                  'with a shared DCDC2 token reads R_CCU 0x1ac and, while it reads 1, the delay row (+0x170, '
+                  '+0x174, +0xc00, +0xc04, +0xc10), policy and status of domain 1, then requests ON through the '
+                  'domain-1 row. The owner checks CCU 0x5c0 bit 5, 0x5e0 bit 11 and R_CCU 0x1ac bit 0, adopts the '
+                  'domain, writes and reads back each delay-row word and writes the ON command; the status is then '
+                  'read back to back with CNTPCT stamps, each change with the stamp of the read before it, until it '
+                  'reads ON or 10 ms pass. The owner starts its own 10 ms bound after that spin, so a domain that '
+                  'never reaches ON fails up to 20 ms after the command. The client reads the same words again. '
+                  'Domain 1 stays ON until power removal, so the bundle gives one sample per board lifetime. A '
+                  'refusal (closed gate, unverified DCDC2 or incoherent adoption) writes nothing and is '
+                  'inconclusive: bundle 8 then finds domain 1 not ON.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle7.c']),
+    returning_row('dram-bus-priority', 8, 'DRAM bus priority reads and table write',
+                  ['apps/board-bundles-dram/main.c.obj', 'apps/board-bundles-dram/sequence.c.obj',
+                   'arch/aarch64/device_memory.c.obj', 'drivers/dram/a733_dram.c.obj'],
+                  'COMPLETE board bundle 8:', True,
+                  'Monitor status 0 with COMPLETE board bundle 8: table written, the inherited and final fields of '
+                  'ports 2, 14 and 15, the USB_PCIE fields unchanged and every access with its CNTPCT span; or '
+                  'status 0 with COMPLETE board bundle 8: inconclusive and the skipped stage; or a controlled '
+                  'outcome: an NSI synchronous external abort or a readback mismatch.',
+                  'rank-9-usb-v4\'s platform objects and the provider\'s tasks.c and queue.c with '
+                  'apps/board-bundles-dram/ (main.c, sequence.c), drivers/dram/a733_dram.c in table mode and '
+                  'device_memory.c. It reads R_CCU 0x1ac, the domain 1 status only while 0x1ac bit 0 reads 1, and '
+                  'CCU +0x580, +0x584 and +0x588. Only while domain 1 reads ON (8) and NSI_CLK bits 31 and 30 and '
+                  'NSI_BGR bits 16 and 0 read 1 does it make the first NSI accesses: the +0x10, +0x14 and +0x18 '
+                  'words of ports 2, 14 and 15, those of the USB_PCIE port 13, a733_dram_priority() in table mode '
+                  '(writes and readbacks of ports 2, 14 and 15 only), and port 13 again, which must read back '
+                  'unchanged. Otherwise it makes no NSI access and ends inconclusive, which admits no NSI '
+                  'comparison in bundle 10. Inherited fields that read zero on all three ports are recorded as '
+                  'possibly protected; the readback separates that case. Each timed span holds one DSB SY-fenced '
+                  'access and its barriers only, without the address translation and deadline checks of the '
+                  'framebuffer\'s register path. Run it after bundle 7 of the same lifetime.',
+                  sources=['apps/board-bundles-dram/main.c', 'apps/board-bundles-dram/sequence.c',
+                           'apps/board-bundles-dram/sequence.h', 'drivers/dram/a733_dram.c', 'include/a733_dram.h',
+                           'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']),
     read_row('npu-clock-words', 9, 'Speed-bin word and the CCU words of the NPU register pass',
              'The NPU speed bin and the CCU state that NPU startup admits, read before the NPU bundle',
              [word(0x0300624c, 'sid', note='SID speed-bin word')] +
@@ -528,9 +607,12 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
     lines += ['']
     if row['class'] == 'monitor':
+        origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
+                         - {'new'})
         lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
-                  'that passed on the board (the kernel check of ranks 4 and 5, `574245e2…`, and '
-                  '`rank-9-usb-v4/`), listed per object in `equivalence.json`. New: '
+                  'that passed on the board (' + ', '.join(f'`{o}`' for o in origins) + '; '
+                  + ', '.join(f'{k}: {v}' for k, v in PASSED_RECORDS.items() if k in origins)
+                  + '), listed per object in `equivalence.json`. New: '
                   + ', '.join(f'`{x}`' for x in value['new_objects']) + '.', '']
     lines += ['## Commands', '',
               'Set the variables of docs/board-runbooks/README.md ("Names used in every runbook"), with `S` '
@@ -565,32 +647,53 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout):
                   '   ```', '',
                   f'   Prerequisite: `{prerequisites[0]}`. Queue timeout: {timeout} s, the runner\'s worst case '
                   'including the churn guard\'s 615 s wait.', '']
+        passed = (f'`{row["expect"]}`, then `PASS: kernel check, FEL recovery, automatic USB access.`'
+                  if row.get('passes', True) else None)
         if row['controlled']:
-            lines += ['   Success: `CONTROLLED: level-1-translation-fault, status 1, FEL recovery, automatic USB '
-                      'access.`, and `controlled` in `$S/bb' + str(n) + '-run/session.json` with the parsed EL1 '
-                      'values. That session is a valid `--warm-return` link for later bundles.', '',
+            outcomes = json.loads((bundle / 'controlled.json').read_text())['outcomes']
+            names = ' or '.join(f'`CONTROLLED: {o["name"]}, status {o["status"]}, FEL recovery, automatic USB '
+                                f'access.`' for o in outcomes)
+            lines += ['   Success: ' + (f'{passed}; or a controlled outcome: ' if passed else '') + names
+                      + f', with `controlled` in `$S/bb{n}-run/session.json` holding the parsed EL1 values. A '
+                      'controlled session is a valid `--warm-return` link for later bundles.', '',
                       '## Controlled outcomes', '',
                       'Each outcome in `controlled.json` is matched on the full result record and log; any other '
                       'nonzero status quarantines the instance:', '']
-            for o in json.loads((bundle / 'controlled.json').read_text())['outcomes']:
-                f = o['fault']
-                lines += [f'- `{o["name"]}`: status {o["status"]}, {o["fail_lines"]} FAIL exception line, ESR & '
-                          f'`0x{f["esr_mask"]:08x}` = `0x{f["esr_value"]:08x}`, FAR `0x{f["far"]:x}`, ELR in '
-                          f'`[0x{f["elr_low"]:x}, 0x{f["elr_high"]:x})`, task `{f["task"]}`, log containing '
-                          + ', '.join(f'`{t}`' for t in o['log_contains']) + '.']
+            lines += [f'- {outcome_text(o)}' for o in outcomes]
             lines += ['']
         else:
-            lines += [f'   Success: `{row["expect"]}`, then `PASS: kernel check, FEL recovery, automatic USB access.`',
-                      '']
+            lines += [f'   Success: {passed}', '']
     lines += ['## Stop conditions', '', f'- {row["stop_condition"]}', '']
     if row['class'] == 'monitor':
+        progress = row['controlled'] and any('progress' in o for o in json.loads(
+            (bundle / 'controlled.json').read_text())['outcomes'])
         lines += ['## Without the patch', '',
-                  'The bundle\'s `host/tools/check-a733-kernel.py` carries the admission patch of '
-                  '`board-bundles-20261023/common/primary.patch` and the controlled outcomes of this tranche\'s '
-                  '`primary.patch`. Without them, the unpatched runner in `bringup` refuses a warm-return chain '
-                  'with a forced-stall, native or controlled link'
-                  + (' and quarantines this bundle\'s status 1.' if row['controlled'] else '.'), '']
+                  'The bundle\'s `host/tools/check-a733-kernel.py` carries the warm-return admission and the '
+                  'controlled outcomes that `bringup` merged, and the controlled-outcome progress record of the '
+                  'bundle apps\' `primary.patch`. '
+                  + ('Without that patch, the runner in `bringup` refuses this bundle\'s `controlled.json`, '
+                     'whose outcome names a progress record.' if progress else
+                     'This bundle\'s outcomes name no progress record, so the runner in `bringup` accepts them '
+                     'as well.'), '']
     return '\n'.join(lines)
+
+
+def outcome_text(o):
+    """One controlled outcome as the runbook lists it."""
+    parts = [f'`{o["name"]}`: status {o["status"]}']
+    if o['interrupt'] is not None:
+        parts.append(f'interrupt {o["interrupt"]}')
+    parts.append(f'{o["fail_lines"]} FAIL exception line' + ('' if o['fail_lines'] == 1 else 's'))
+    f = o['fault']
+    if f:
+        parts.append(f'ESR & `0x{f["esr_mask"]:08x}` = `0x{f["esr_value"]:08x}`, FAR `0x{f["far"]:x}`, ELR in '
+                     f'`[0x{f["elr_low"]:x}, 0x{f["elr_high"]:x})`, task `{f["task"]}`')
+    p = o.get('progress')
+    if p:
+        parts.append(f'progress record at result offset {p["offset"]} with magic `0x{p["magic"]:x}`, stage '
+                     f'{p["stage"]}, count below {p["count_below"]} and a last stamp more than {p["age_above"]} '
+                     'counter ticks before the monitor\'s end_counter')
+    return ', '.join(parts) + ', log containing ' + ', '.join(f'`{t}`' for t in o['log_contains']) + '.'
 
 
 def entries(bundle):
@@ -705,7 +808,8 @@ def prepare_row(row, arguments, row_dir, request, queue):
         if row['class'] == 'read':
             timeout = READ_TIMEOUT
         elif row.get('returning'):
-            timeout, record['timeout_terms'] = returning_timeout(root / row['runner'])
+            # The bundle's own copy of the runner is what the queue runs.
+            timeout, record['timeout_terms'] = returning_timeout(bundle / 'host/tools/check-a733-kernel.py')
         elif row['class'] == 'monitor':
             timeout = MONITOR_TIMEOUT
         else:
