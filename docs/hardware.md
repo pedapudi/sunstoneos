@@ -368,9 +368,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   drained interrupts, restored controls and confirmed seven CPUs OFF. ROM
   returned as `003/042`; all 18 MiB of saved DRAM was restored and verified.
   Evidence: `processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
-  This did not induce an exception or qualify fault recovery. Cold repeatability,
-  sustained loads, timer delivery on every core and thermal transitions remain
-  unqualified.
+  This did not induce an exception or qualify fault recovery. A subsequent
+  revision (`f5ba965d…`) passed the same workload with one physical timer
+  interrupt on each secondary and 32 CPU0 ticks. CPU0 remains the sole global
+  FreeRTOS tick owner. Matching cleanup, seven CPUs OFF, distinct ROM return
+  and 18 MiB restoration all passed. Evidence:
+  `processor-completion-20261024/port-3-1/cpu-local-timer/runtime/session.json`.
+  Cold repeatability, sustained operation, actual idle wakeup, induced-fault
+  recovery and thermal transitions remain unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
@@ -1335,6 +1340,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   returned normally; no voltage was changed. Evidence:
   `processor-completion-20261024/port-3-1/gpu-supply/`. A targeted comparison
   verified the interrupt state affected by that returning probe.
+  The later power/identity/OFF probe (`fd3d5839…`) launched from port `3-1`
+  but did not return within 30 seconds. All six FEL transactions succeeded;
+  no native result identifies the failed stage. The session remains retained
+  pending USB power removal. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-power-id-corrected/session.json`.
+  Exact upload checks and an instruction-model constructor run found no static
+  mismatch. A reviewed candidate verifies actual provider readiness and both
+  supplies, then parks before any GPU power request. Its software checks pass;
+  physical qualification is pending. GPU identity,
+  power transitions and numerical execution remain physically unqualified.
   The earlier wrong-guard refusal was recovered through reviewed restoration
   of five SRAM regions on the same instance; that recovery does not qualify
   GPU execution. The preceding entry capture remains configuration evidence
@@ -2159,8 +2174,30 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `003/044`, and all 18 MiB of saved DRAM was restored and verified. Evidence:
   `processor-completion-20261024/port-3-1/npu-entry-checkpoint/runtime/session.json`.
   A subsequent guarded GIC capture found interrupt 97 disabled, clear and
-  inactive. These results admit further diagnosis; numerical execution and
-  thermal management remain unqualified.
+  inactive. The finite numerical image (`9e4adabf…`) then completed two jobs,
+  copied and reaped their outputs, reached local CLOSE/stop and provider
+  quiescence, returned to ROM and restored 18 MiB. Numerical comparison failed:
+  the captured 400-byte output has 100 zeros followed by 300 `ff` bytes, and
+  its digest matches the first job's digest. Evidence:
+  `processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json`.
+  This establishes the checked job and retirement path, not correct inference.
+  A reviewed derived record supplies ROM continuity without changing status 1
+  or the original capture. PLL_NPU, domain 4, DCDC2 and SRAM remain powered;
+  another startup requires a separately valid disabled-PLL lifetime. Offline
+  audit found no compiler-artifact mismatch or justified register correction.
+  The reviewed host now preserves the stopped runtime allocation and metadata
+  before restoration for this exact numerical image. Four fixed reads capture
+  1,085,880 bytes only after validated failure retirement; capture failures
+  retain ownership. This diagnostic has not run on hardware.
+  Correct numerical execution, power-off/restart and thermal
+  management remain unqualified.
+  The separate finite thermal profile is now implemented and software-checked.
+  It requires fresh observations from all five sensors before work, stops new
+  submissions on refusal, drains accepted work within a fixed deadline, and
+  verifies THS disable, interrupt quiet and final cleanup before normal return.
+  A synchronized fault latch and post-restoration checks preserve that deadline
+  through provider parking, cache cleaning and GIC restoration. It has not
+  run on hardware and does not resolve the observed numerical mismatch.
   Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
   release. [Trusted convolution registration](npu-convolution.md) authenticates

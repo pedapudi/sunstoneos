@@ -14,41 +14,33 @@ Evidence is under `processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
 Source diagnosis continues without board access; the failed execution boundary
 is unknown.
 
-**Port `3-1` is usable:** USB is its only power source. Its last validated ROM
-return is `/dev/bus/usb/003/045`, identity `[7, 1634, 1097004, 0, 0]`.
-Refresh host metadata before access. In this powered lifetime, CPU0 publication,
-all-core preparation, first task entry, task switching and a bounded workload
-passed. All eight cores completed 32 floating-point rounds, background scheduling
-and software-generated interrupts; CPU0 also delivered its timer interrupt.
-Each diagnostic restored controls, shut down seven secondaries and returned to
-ROM with owned DRAM restored. Evidence:
-`processor-completion-20261024/port-3-1/task-workload/runtime/session.json` and
-its preceding records. A returning thermal check measured all five sensors
-below 40°C; the affected interrupt-controller state was then checked against
-the saved baseline. Thermal acquisition is disabled, with its configuration and
-clock ownership retained. A subsequent DCDC2-only PMIC snapshot completed,
-reaped its request, parked the provider and returned to ROM. It reports the
-NPU rail enabled and programmed to 800 mV. This is not an analogue measurement.
-The current-source CPU image then passed the same bounded workload, including
-its stackless capture and coordinated cleanup hooks. The matching native report
-confirms 32 rounds on every core, background and SGI progress, CPU0 timer
-delivery and seven secondary CPUs OFF. All 18 MiB of saved DRAM was restored
-and verified after ROM return. Evidence:
-`processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
-The subsequent GPU entry checkpoint also returned normally. It established
-CPU startup and memory preparation before provider construction, reported zero
-GPU jobs and released the explicitly discardable RAM reservation. Evidence:
-`processor-completion-20261024/port-3-1/gpu-entry-checkpoint/runtime/session.json`.
-The NPU entry checkpoint then passed its CPU, platform and local-memory
-preparation, reported zero jobs and returned with 18 MiB of saved RAM restored.
-Evidence: `processor-completion-20261024/port-3-1/npu-entry-checkpoint/runtime/session.json`.
-A guarded capture found NPU interrupt 97 disabled, clear and inactive. Fresh
-cache-off and launcher survey checks passed on the returned instance.
-The later DCDC4-only snapshot also completed, reaped and parked its provider,
-and returned normally. The GPU rail is enabled and programmed to 800 mV;
-no voltage was changed. Evidence: `processor-completion-20261024/port-3-1/gpu-supply/`.
-The affected 24 interrupt-controller words matched the saved baseline, followed
-by fresh cache-off and launcher survey checks.
+**Port `3-1` also needs USB power removal:** the GPU power/identity probe
+launched from `/dev/bus/usb/003/047`, identity `[7, 1642, 1097006, 0, 0]`,
+but did not return within 30 seconds. Do not probe or retry it. Runner PID
+`3974830`, wrapper PID `3974825` and tool session `49981` retain claim
+`a7c35b3b0e5c0bce0d06cfb9db6039b8830898ec4115509636115de998db0cc8`.
+Evidence: `processor-completion-20261024/port-3-1/gpu-power-id-corrected/`.
+All six FEL transactions succeeded, including launch; no native report locates
+the failure. A preceding command-path error stopped before board access and
+was closed as blocked; it did not require physical recovery. USB is the only
+power source. A reconnect request is pending while software work continues.
+
+**Physical progress before that failure:** the current CPU workload passed on
+all eight cores, followed by a separate revision that delivered one physical
+timer interrupt to each secondary. Both restored controls, confirmed seven
+CPUs OFF, returned to ROM and verified restoration of 18 MiB. GPU and NPU
+entry checkpoints also returned normally before provider construction.
+The DCDC2 and DCDC4 snapshots each reported an enabled rail programmed to
+800 mV, without changing voltage.
+
+The numerical NPU image then completed two copied/reaped jobs and local
+CLOSE/stop, parked its provider, returned to ROM and restored 18 MiB.
+Numerical comparison failed. The captured second output has 100 zero bytes
+followed by 300 `ff` bytes, and its digest matches the first job's digest.
+The numerical test is recorded as failed. Its verified retirement permitted
+further unrelated work; PLL_NPU, domain 4, DCDC2 and NPU SRAM remained powered
+and externally owned. No second NPU startup was authorized. The subsequent
+GPU probe was admitted with those retained resources explicitly preserved.
 
 **Current priority: CPU, GPU and NPU robustness**, including power and thermal
 management. Complete startup, repeated operation, interrupt delivery, bounded
@@ -57,52 +49,53 @@ not establish physical operation.
 
 **Open work:**
 
-1. Extend the current-source CPU workload to verify a local timer interrupt
-   on every secondary. The current finite image (`9d90b6f9…`) now passes
-   physically in this prepared lifetime. Successful retirement exercises its
-   stackless capture hooks; no induced-fault recovery was attempted. Keep CPU0
-   as the sole global FreeRTOS tick source. Repeated cold startup, sustained
-   scheduling, per-core timer delivery, runtime core removal and cluster
-   power-down remain unqualified or incomplete. The earlier cold failures
-   remain unexplained.
-2. Locate the GPU's failed execution boundary from the frozen image and its
-   host inputs before another physical attempt. The entry capture passed eleven
-   configuration predicates and confirmed seven secondaries OFF. The numerical
-   image still failed to return. Its first attempt had stopped before execution
-   at an inapplicable boot-input guard; a reviewed same-instance SRAM rollback
-   recovered that refusal. The corrected host checks the direct forced-FEL ROM
-   entry. Numerical GPU operation and normal shutdown remain unqualified.
-   A passive capture on port `3-1` found coherent domain 5 policy/status ON
-   with engine clocks gated and reset asserted. The first checkpoint requires
-   OFF and was therefore not launched. The reviewed replacement is integrated. It proves that providers
-   were never constructed and retains CPU interrupt checks, without accessing
-   GPU power registers. This entry check now passes physically on port `3-1`.
-   Advance into the next reviewed initialization interval; the full numerical
-   image has not been retried. Exclusive RAM and exclusion of external DMA writers
-   remain mandatory. The observation does not identify the failed second
-   board's state or execution boundary.
-3. Prepare the existing single-core NPU finite path for numerical execution and
-   normal ROM return, using the production startup and power owner. A guarded
-   configuration capture on port `3-1` passed with scratch restoration. Domain 4
-   is coherently ON, and the fabric and pin settings match the native contract.
-   PLL_NPU reads `0x41104500`. The corrected startup preserves inherited bit 24
-   and rejects drift or other unsupported bits, following pinned clock-driver
-   sources. The DCDC2 supply observation now passed with native settle/reap/park
-   and ROM return. The pre-provider checkpoint now passes CPU entry, local memory preparation
-   and normal return physically. It reports zero jobs and does not establish
-   NPU computation. The next proposed execution uses the existing two-job
-   finite image with the PLL fix, after its full operating admission is reviewed. Numerical
-   NPU execution is still unqualified. Evidence:
-   `processor-completion-20261024/port-3-1/npu-entry/session.json` and
-   `pmic-supply/session.json`. The native NPU board image now has thermal admission, independent supervision and bounded
-   accepted-work draining, with software checks. Its current multicore USB
-   lifetime has no normal return, so it is not the next finite board test.
+1. Qualify actual scheduler idle/wake behavior and complete CPU power/thermal
+   integration. Image `f5ba965d…` passed 32 floating-point rounds per core,
+   background scheduling, SGIs on all cores, 32 CPU0 timer ticks and one timer
+   interrupt on each secondary. CPU0 remains the global FreeRTOS tick owner.
+   Evidence: `processor-completion-20261024/port-3-1/cpu-local-timer/runtime/session.json`.
+   The production thermal owner now keeps startup throttling until all five
+   channels have valid readings and policy permits NORMAL; focused checks pass.
+   Repeated cold startup, sustained operation, induced-fault recovery, actual
+   idle wakeup, runtime core removal and thermal transitions remain open.
+   The reviewed idle/wake image is ready at
+   `cpu-idle-wake-20261024/snapshot/`; it has not run on hardware.
+2. Locate the GPU failure before another power attempt. The entry-only image
+   `8974f81a…` passed CPU startup, local memory preparation and normal return.
+   The subsequent `fd3d5839…` power/identity/OFF probe did not return. Its exact
+   uploads match, and the new constructors reach scheduler start in the
+   instruction model; neither result establishes physical driver progress.
+   The reviewed candidate at `gpu-provider-ready-20261024/` verifies actual
+   PMIC/provider readiness and both boot supplies, then parks before any GPU
+   power request. Software checks establish no GPU/PCK register access, token
+   or pending request; they make no claim about inherited domain power state.
+   The failed probe reuses an older monitor without the newer restoration
+   readback checks; preserve that source distinction in diagnosis.
+3. Diagnose the NPU numerical mismatch from exact runtime memory. Image
+   `9e4adabf…` passed startup, two jobs, local retirement and ROM return, but
+   all 400 output bytes differ from the reference. Frozen model, input and
+   reference match the compiler export; no source-backed correction has been
+   identified. The next useful observation is the stopped runtime allocation,
+   command/descriptor/MMU data and metadata before host restoration, in a new
+   admitted lifetime. The existing run already restored that memory.
+   Evidence: `processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json`
+   and `npu-numerical-diagnosis-20261024/output-audit.json`.
+   A reviewed derived continuity record preserves status 1 and the numerical
+   failure while proving normal retirement; the original record is unchanged.
+   Finite thermal supervision is now implemented and software-checked; its
+   physical qualification remains open. The reviewed host at
+   `npu-stopped-capture-20261024/snapshot/sources/` conditionally captures the
+   audited numerical image after safe retirement and before RAM restoration.
+   Four fixed reads preserve 1,085,880 bytes of metadata and runtime buffers.
+   Capture failures retain ownership; correct numerical execution remains open.
+   No repeat startup is valid with the retained PLL.
 4. Qualify power and thermal behavior after reliable numerical execution. The
    optional CPU-clock path now lowers and restores supported inherited rates
    under a bounded grant while preserving voltage. Missing authority prevents
    changes. GPU healthy CLOSE→OPEN and the actual OS thermal caller are
    implemented and checked; automatic idle parking and fault recovery remain
-   open. GPU operates at 400 MHz/800 mV; NPU at 492 MHz/800 mV. NPU local CLOSE
+   open. Fixed operating targets are 400 MHz/800 mV for GPU and
+   492 MHz/800 mV for NPU; this is not a performance qualification. NPU local CLOSE
    retains its domain, PLL and rail pin; power-off and in-place restart remain
    unresolved. Late shared-domain acknowledgements now retain ownership.
 5. Keep the PMIC timing evidence. Its provisional snapshot bound is 1,268
