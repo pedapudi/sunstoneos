@@ -91,8 +91,15 @@ then ran on port `3-3` with a builder that accepts MBUS at 400 MHz: the image
 returned to the ROM with a controlled refusal at USB takeover: its 32-bit
 store to `0x04100040` (observed `0x00029940`) did not clear bit 6, which is
 the PCTL SoftConn bit (the D+ pull-up), not the device-session bit. Every
-pinned source writes PCTL with an 8-bit store; a corrected bundle that does
-so, `rank-9-usb-v3/`, awaits review. Both ports were power-cycled afterwards and
+pinned source writes PCTL with an 8-bit store. On 2026-10-24 the corrected
+bundle `rank-9-usb-v3/`, which clears SoftConn with one 8-bit store and
+checks it clear 150 ms later, passed rank 9 on port `3-3`: the image took
+over USB0 from the ROM, enumerated, received the 4-byte OUT request and sent
+the 40-byte IN response (`native_usb.functional_success` true), quiesced and
+returned to a responsive ROM (`board-session-20261023/port-3-3/r9-v3-usb/`).
+This is the first board run of the native USB device channel. The image
+used the platform revision of the passing kernel check, without the 12 GiB
+EL1 map. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
