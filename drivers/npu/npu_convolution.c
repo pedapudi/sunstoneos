@@ -122,10 +122,10 @@ static int stream_intact(const struct npu_convolution *c,unsigned k)
 /* Integrity policy. The shared SMP mappings cannot stop another privileged
  * writer, so bytes the NPU reads are rechecked against digests taken at
  * preparation. Every check covers descriptors, coefficients or shader, and
- * the job command stream. Preparation-time checks (startup, activation,
- * bootstrap publication, stop) also cover the private model copy and the
- * bootstrap stream. A job publication omits those two: the device never
- * reads the model copy, and the bootstrap stream runs only at OPEN. */
+ * the job command stream. The bootstrap publication also covers the private
+ * model copy and the bootstrap stream. A job publication omits those two: the
+ * device never reads the model copy, and the bootstrap stream runs only at
+ * OPEN. Startup, activation and stop hash nothing. */
 static int unchanged(struct npu_convolution *c,int job)
 {
     unsigned char actual[32];
