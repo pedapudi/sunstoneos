@@ -24,6 +24,9 @@ struct a733_gpu_backend_external {
      * device operations; nonzero revokes work and retains all ownership. The
      * owner never clears it or destroys its storage during this boot. */
     const atomic_uint *revoked;
+    /* Optional nonblocking, IRQ-safe current lifetime admission. Exactly 1
+     * permits normal access; any other result permanently faults and retains. */
+    int (*live)(void *);
 };
 enum a733_gpu_backend_phase { A733_GPU_BACKEND_NEW, A733_GPU_BACKEND_BOUND,
     A733_GPU_BACKEND_POWERING, A733_GPU_BACKEND_IDENTIFY, A733_GPU_BACKEND_ACTIVE,

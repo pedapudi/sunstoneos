@@ -1,10 +1,13 @@
 # Idle cores wait in WFI
 
-Status: **implemented in the instruction model; not yet in the merged
-images.** The idle function and its check are in this tree. The image change
-that enables them touches the cached image configuration, its EL1 entry code,
-the FreeRTOS kernel and four build files; the eight-core scheduler's owner
-applies it. No board has executed it. The design and its budgets are in
+Status: **merged in the cached runtime; modeled on all eight cores.** The
+configuration, EL0 nTWI enable, pinned idle affinity and kernel time-slice
+patch are present in the merged images. Single-core WFI has physical evidence;
+the bounded all-core idle/wake qualification is implemented in
+[the private CPU application](../apps/cpu-runtime-qualification/DESIGN.md)
+and still awaits physical execution. Its preceding timer/workload pass used
+busy background tasks and did not qualify all-core idle. The design and
+original budgets are in
 [designs/cpu-power-states.md](designs/cpu-power-states.md).
 
 ## Mechanism

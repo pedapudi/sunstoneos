@@ -240,6 +240,34 @@ static uint32_t dsu_mv(uint64_t hz,unsigned bin)
     }
     return 0;
 }
+/* A supported inherited operating point, including the shared DSU voltage.
+ * Read-only inspection may report other rates, but cannot adopt them for
+ * automatic thermal transitions. Rechecked under leases before each change. */
+static uint32_t inherited_mv(const struct a733_cpu_clock *c)
+{
+    const struct a733_cpu_clock_report *r=&c->report;
+    const struct a733_cpu_clock_domain *d=&r->domain[c->cluster];
+    const uint32_t *words=c->words[c->cluster];
+    unsigned nmax=c->cluster==A733_CPU_LITTLE ? 84u : 86u;
+    if((words[0]&PAT0_TYPE) || (words[1]&PAT1_LFM) || (words[2]&LFM_ON) ||
+       (r->oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002) || r->dcxo_hz!=26000000u ||
+       !r->binned || !d->decoded || (d->pll&(PLL_ON|UPDATE))!=PLL_ON ||
+       d->source!=MUX_PLL || d->n<26u || d->n>nmax || d->hz%1000000u)return 0;
+    uint32_t mv=a733_cpu_clock_opp_mv(row(c->cluster,(uint32_t)(d->hz/1000000u)),r->bin);
+    if(!mv)return 0;
+    if(c->cluster==A733_CPU_LITTLE){
+        const struct a733_cpu_clock_domain *ds=&r->domain[A733_CPU_DSU];
+        uint32_t shared=ds->decoded ? dsu_mv(ds->hz,r->bin) : 0;
+        if(!shared)return 0;
+        if(shared>mv)mv=shared;
+    }
+    return mv;
+}
+static int granted(const struct a733_cpu_clock *c,unsigned cluster,uint32_t mhz)
+{
+    const struct a733_cpu_clock_grant *g=&c->config.grant;
+    return g->session && (g->clusters&BIT(cluster)) && c->changes && mhz<=g->max_mhz[cluster];
+}
 static int time_now(struct a733_cpu_clock *c)
 {
     uint64_t now;
@@ -293,8 +321,7 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
     if(!c || c->self!=c || (cluster!=A733_CPU_LITTLE && cluster!=A733_CPU_BIG))return A733_CPU_CLOCK_INVALID;
     if(c->failed)return A733_CPU_CLOCK_RETAINED;
     if(c->state!=S_IDLE)return A733_CPU_CLOCK_BUSY;
-    const struct a733_cpu_clock_grant *g=&c->config.grant;
-    if(!g->session || !(g->clusters&BIT(cluster)) || !c->changes || mhz>g->max_mhz[cluster] ||
+    if(!granted(c,cluster,mhz) ||
        !row(cluster,mhz) || !permitted(c,cluster,mhz,USER))return A733_CPU_CLOCK_REFUSED;
     if(!time_now(c))return fault(c);
     if(c->last_now>=deadline)return A733_CPU_CLOCK_EXPIRED;
@@ -347,6 +374,10 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
        !r->binned || !o || !a733_cpu_clock_opp_mv(o,r->bin) || !permitted(c,c->cluster,c->target_mhz,c->thermal) ||
        (d->pll&(PLL_ON|UPDATE))!=PLL_ON || d->source!=MUX_PLL || d->n<26u || d->n>nmax ||
        c->n*26u!=c->target_mhz<<c->p || c->n<26u || c->n>nmax)return finish(c,A733_CPU_CLOCK_REFUSED);
+    if(c->thermal!=USER && (c->inherited&BIT(c->cluster)) &&
+       (!inherited_mv(c) || d->hz!=(uint64_t)c->applied_mhz[c->cluster]*1000000u ||
+        (c->thermal==LOWER && d->hz<=(uint64_t)c->target_mhz*1000000u)))
+        return finish(c,A733_CPU_CLOCK_REFUSED);
     c->to_uv=mv*1000u;c->raise=d->hz<(uint64_t)c->target_mhz*1000000u;c->select=d->select;
     if(d->hz==(uint64_t)c->target_mhz*1000000u){c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);}
     enum a733_pmic_status s=a733_pmic_submit(c->pmic,c->config.owner,&c->rail,rail_of(c->cluster),c->deadline,&c->request);
@@ -426,6 +457,8 @@ static enum a733_cpu_clock_status release(struct a733_cpu_clock *c)
      * complete is not retried in this THROTTLE episode. */
     if(c->thermal==LOWER && c->result==A733_CPU_CLOCK_COMPLETE)c->throttled|=BIT(c->cluster);
     else if(c->thermal==LOWER)c->throttle_failed|=BIT(c->cluster);
+    if(c->thermal==USER && !c->inspect_only && c->result==A733_CPU_CLOCK_COMPLETE)
+        c->inherited&=~BIT(c->cluster);
     c->state=S_IDLE;return c->result;
 }
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
@@ -438,6 +471,10 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         for(unsigned i=0;i<2;++i) {
             if(now==A733_THERMAL_THROTTLE && c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ &&
                !(c->throttle_failed&BIT(i))) {
+                if(c->inherited&BIT(i)){
+                    if(!granted(c,i,A733_CPU_CLOCK_THROTTLE_MHZ))continue;
+                    --c->changes;
+                }
                 c->restore_mhz[i]=c->applied_mhz[i];
                 return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,LOWER);
             }
@@ -447,7 +484,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
             c->throttle_failed&=~BIT(i);
             if(!(c->throttled&BIT(i)))continue;
             c->throttled&=~BIT(i);
-            if(c->changes && c->restore_mhz[i]>c->applied_mhz[i]) {
+            if(granted(c,i,c->restore_mhz[i]) && c->restore_mhz[i]>c->applied_mhz[i]) {
                 --c->changes;return start(c,i,c->restore_mhz[i],c->last_now+THERMAL_US,RESTORE);
             }
         }
@@ -498,10 +535,25 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
         if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
         c->rail_uv[c->cluster]=c->snapshot.programmed_uv;
-        if(c->inspect_only){c->snapshot=(struct a733_pmic_snapshot){0};return finish(c,A733_CPU_CLOCK_COMPLETE);}
+        if(c->inspect_only){
+            uint32_t mv=inherited_mv(c);
+            c->applied_mhz[c->cluster]=mv && c->rail_uv[c->cluster]>=mv*1000u ?
+                (uint32_t)(c->report.domain[c->cluster].hz/1000000u) : 0;
+            c->inherited|=BIT(c->cluster);
+            c->snapshot=(struct a733_pmic_snapshot){0};return finish(c,A733_CPU_CLOCK_COMPLETE);
+        }
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
         if(c->to_uv<floor)c->to_uv=floor;
+        /* Inherited thermal control has clock-only authority. Preserve the
+         * observed voltage even on restoration; insufficient source or target
+         * voltage refuses before either PMIC or clock writes. */
+        if(c->thermal!=USER && (c->inherited&BIT(c->cluster))){
+            uint32_t mv=inherited_mv(c);
+            if(!mv || c->from_uv<mv*1000u || c->from_uv<c->to_uv)
+                return finish(c,A733_CPU_CLOCK_REFUSED);
+            c->to_uv=c->from_uv;
+        }
         /* Raise: voltage first. Lower: frequency first, then voltage unless
          * the thermal path keeps it. Enough voltage needs no write. */
         if(c->raise && c->to_uv>c->from_uv){c->state=S_VOLTAGE;c->after=S_PARK;}

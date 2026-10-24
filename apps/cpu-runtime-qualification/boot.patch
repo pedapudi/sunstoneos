@@ -1,0 +1,41 @@
+--- a/input
++++ b/output
+@@ -3,4 +3,5 @@
+ #endif
+ #include "cached.h"
++#include "runtime.h"
+ #include "a733_cpu_continue.h"
+ #include <stddef.h>
+@@ -23,6 +24,6 @@
+     RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
+     barrier();RESULT->stage=5;barrier();
+-    /* Keep every CPU, register and memory reservation. The independently armed
+-     * watchdog owns reset; this image never feeds, disarms or resets it. */
++    /* Failure retains CPUs and reservations for coordinator-directed recovery.
++     * The separate provenance-checked qualification success path may return. */
+     for(;;)__asm__ volatile("wfe");
+ }
+@@ -70,14 +71,7 @@
+        (RESULT->magic==A733_SMP_RESULT_MAGIC && RESULT->generation==admission.generation))
+         a733_smp_stop(1,1);
+-    /* Admission values are recorded by the qualified external arm procedure.
+-     * Readback can reject changed configuration; it cannot prove timer progress. */
+-    if((read32(0x02050014)&0xffff)!=admission.watchdog_mode ||
+-       (read32(0x02050010)&0xffff)!=admission.watchdog_configuration ||
+-       (read32(0x02050018)&0xffff)!=admission.watchdog_output ||
+-       read32(0x07090108)!=admission.fel_flag ||
+-       read32(0x070501c0)!=admission.redirect_flag ||
+-       read32(0x070501c4)!=admission.redirect_entry ||
+-       read32(0x070501d4)!=admission.alternate_flag ||
+-       (read32(0x03000024)&0x100))a733_smp_stop(1,2);
++    /* Existing supervised RAM lifetime: no watchdog arm or reset redirect. */
++    if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
++       read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+@@ -88,4 +82,5 @@
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
++    if(!a733_qualification_boot(admission.epoch,admission.diagnostic_deadline))a733_smp_stop(4,0x735);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
+     /* GICv3 security/routing sequence follows the existing EL3 monitor. */

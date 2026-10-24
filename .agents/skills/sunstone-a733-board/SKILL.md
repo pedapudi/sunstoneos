@@ -61,6 +61,16 @@ An admission record describes established authority; setting its booleans cannot
 create that authority. Conversely, watchdog expiry and full multicore operation
 are not blanket prerequisites: inspect the selected image's actual dependencies.
 
+Trace the image's reset destination before imposing boot-input requirements.
+The reviewed normal return through RVBAR `0x20` and `RMR_EL3 = 2` enters FEL
+directly; it bypasses the full-reset boot-input sampler. A low input at
+`0x03000024` is therefore not a prerequisite for that return. Verify the actual
+image and pinned ROM instructions, following the
+[finite GPU return proof](../../../apps/gpu-finite/HOST.md).
+`sunxi-fel readl` writes and executes a helper at `0x71000`; protect that scratch
+before using it for a ROM check. Direct FEL reads of ROM are not an equivalent
+replacement: the recorded ROM transfer rejected them.
+
 ## Make one bounded attempt and preserve its outcome
 
 Before claiming the queue, freeze the image, host tools and required inputs.
@@ -83,6 +93,15 @@ retain its queue claim and lock while it is live or its recovery is unresolved.
 Do not kill a retained runner merely to free a lock. After explicit physical
 recovery, verify the new instance and the exact old process before closing the
 old claim. Mark a claim finished only after the associated process has stopped.
+
+A host refusal before native execution can leave uploaded SRAM behind even when
+every transfer succeeded. Same-instance rollback needs a separate, reviewed
+proof: no native launch or failed transfer, unchanged USB identity, frozen SRAM
+backups and byte-for-byte restoration readbacks. Keep the claim and quarantine
+through an explicit handoff from the verified idle holder to the rollback
+process under the same port lock. Release them only after restoration and a
+successful ROM response. This exception does not recover native non-return or
+transport failure, and does not authorize an automatic retry.
 
 On success, keep the copied result and required restoration evidence before
 releasing ownership. Report the observed function and its limits. Missing camera,

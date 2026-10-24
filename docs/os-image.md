@@ -234,8 +234,14 @@ its clock token and any mutex held across an uncertain operation. A sensor
 without a valid reading for one second triggers THROTTLE; five seconds without
 a reading triggers terminal CRITICAL.
 
-Before policy initialization and during THROTTLE, both recognition tasks sleep
-for one scheduler tick at each existing checkpoint. Each checkpoint checks
+Before every sensor has supplied a valid reading and during THROTTLE, both
+recognition tasks sleep for one scheduler tick at each existing checkpoint.
+Driver readiness alone does not permit full load. The thermal owner releases
+this startup delay only when all five channels have been seen and the policy
+is NORMAL; a stale, hot or critical earlier reading prevents that release.
+It republishes the effective load level after each successful policy update,
+because the final missing channel can arrive without a policy-level change.
+The thermal task continues sampling independently while recognition backs off. Each checkpoint checks
 board liveness before and after that sleep and reports progress only after
 it completes. NORMAL removes the delay. There is no waiting loop that could
 keep watchdog progress current while inference is stuck. The normal path adds
@@ -250,11 +256,19 @@ This policy changes no clock, voltage or device power setting.
 
 The focused [thermal integration check](../checks/os-thermal-throttle.py)
 executes the actual AArch64 thermal policy, publication callback, CPU and GPU
-recognition checkpoints, and dispatcher. Fourteen cases cover startup,
+recognition checkpoints, and dispatcher. Twenty-four cases cover startup,
 repeated throttle/recovery, owner and worker calls, liveness loss before or
-during a sleep, stale/critical sensors, and disabled GPU sessions.
+during a sleep, stale/critical sensors, and disabled GPU sessions. The startup
+cases include no data, partial sets, final-channel release, an earlier stale
+channel, and early critical retention with no further sensor reads.
 Sensor reads, scheduler delays and GPU device operations are modeled.
-Evidence is in `~/.cache/sunstoneos/evidence/os-thermal-throttle-20261024/attempt1/`.
+Evidence for the startup gate is in
+`~/.cache/sunstoneos/evidence/os-thermal-startup-20261024/checked/`.
+The change adds no state, MMIO or interrupt operations. A normal publication
+adds one acquire load of the policy channel mask; a transition to NORMAL can
+perform that load in both the callback and post-update publication. The
+consumer still performs its existing single acquire load. Sampling deadlines,
+critical retention and CPU clock/voltage permission checks are unchanged.
 No physical temperature reduction, scheduling latency or thermal recovery
 has been qualified. USB0 output does not carry thermal readings; the mimus
 result frame has no free field for them.
@@ -264,10 +278,13 @@ Power and thermal integration remains incomplete:
 - **CPU operating points.** The optional supervised CPU clock build uses
   the pinned 26 MHz tables, speed-bin limits and session grant. The tables
   extend to 1,794 MHz for CPU-L and 2,002 MHz for CPU-B, subject to the bin.
-  The existing driver lowers only clusters that it raised above **1,014 MHz**
-  to that thermal ceiling, preserving voltage. Restoration consumes an
-  authorized change; exhausted grants leave the lower rate in place.
-  Inherited high rates that the driver did not set are not reduced.
+  The driver lowers clusters that it raised above **1,014 MHz** to that
+  thermal ceiling, preserving voltage. It can also lower an inspected,
+  supported inherited point when the session grants that cluster and ceiling;
+  each inherited lowering consumes an authorized change. Source-rate and
+  voltage checks precede the transition. Restoration needs authority for the
+  original point and another change. Inherited thermal transitions never
+  change voltage. Missing or exhausted grants leave inherited rates unchanged.
   The ordinary OS build changes neither CPU clocks nor voltage.
 - **GPU lifetime.** Critical thermal failure revokes the GPU backend through
   `board.fatal`. The resident supervisor ends renewal on a stalled GPU wait

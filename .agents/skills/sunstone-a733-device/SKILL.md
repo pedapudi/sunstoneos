@@ -241,6 +241,9 @@ If setup fails, preserve completed cases, fix the cause and resume only affected
 or unexecuted work. Model hardware effects explicitly; do not present injected
 GPU outputs, simulated NPU results or emulated interrupts as physical operation.
 Host capture must match the frozen native producer's mode and result layout.
+Derive report magic, field widths and status meanings from the frozen native
+writer. A fixture assembled from the parser's own constants cannot establish
+that the native writer and host parser agree.
 For a new supervised caller, check its actual `run_session` entry policy as well
 as its capture callback. Direct callback fixtures missed unsupported result keys
 for H.264, DSI and UART. Reuse `checks/h264-supervisor-entry.py --caller <path> --case actual`

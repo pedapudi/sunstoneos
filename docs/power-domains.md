@@ -1,4 +1,4 @@
-# One owner powers PCK600 domains 1 and 5 from one service task
+# One service owns PCK600 domains 1, 4 and 5
 
 Status: **implemented and host-modeled**. On port 3-3 on 2026-10-24, two
 returning images ran it: one made 32 PMIC snapshots and the adoption reads
@@ -72,13 +72,39 @@ back, and then writes the policy word with bits 3:0 set to 8 and the other
 bits preserved. The write accessor completes with `DSB SY`, so the bound is
 timed from the command reaching the PPU. The service reads status for up to
 50 µs after the command, then once per step with a one-tick block between
-steps, until status reads 8 or 10 ms pass. A domain-5 OFF request at count
-zero rereads the GPU clock gate and reset closed, writes the OFF command and
+steps, until status reads 8 or the transition deadline expires. That
+deadline is the earlier of 10 ms after the command and the service session
+deadline. Time is checked before the status read and again after a target
+status, so a read that crosses the deadline cannot complete the transition.
+A command admitted at or after the session deadline writes no delay or
+policy register and retains the already counted row and pin. A domain-5
+OFF request at count zero rereads the GPU clock gate and reset closed, writes the OFF command and
 waits the same way for status 0, then unpins the token.
 
 The PCK600 acknowledgement is polled because the pinned `pck-600@7060000`
 device-tree node has no interrupt, and the PPU interrupt registers have no
 known GIC wiring.
+
+## Accelerator shutdown requires the consumer's quiescence proof
+
+The shared owner checks domain policy, status, clocks and rail ownership.
+Those observations alone do not establish that an accelerator has stopped
+issuing memory transactions. The existing [healthy GPU shutdown](gpu-isolation.md)
+provides that proof before requesting domain 5 OFF: fresh firmware idle/OFF
+states, queue retirement, BIF/MMU/cache idle polls and reset readback. The
+GPU controller then asserts external reset, closes its local gates and
+requests OFF through the existing row. Successful OFF permits its normal
+resource release; a deadline or clock failure preserves the row and rail pin.
+
+NPU local CLOSE retains domain 4 ON and its rail pin. The pinned NPU
+platform calls `pm_runtime_put()` before disabling local clocks; those
+calls alone do not establish when the power-domain transition completes. The A733 memory map also requires NPU power while
+shared SRAM at `0x00074000`–`0x000f3fff` is in use. A domain-4 OFF consumer
+must establish the NPU-specific stop/order contract and exclude every live
+CPU and DMA user of that SRAM. The current thermal CLOSE consumer has no
+such power-off contract, so the shared API continues to refuse domain-4
+OFF requests. The [design assessment](designs/power-domains.md#accelerator-lifecycle-assessment)
+records the primary-source anchors and missing physical evidence.
 
 ## Failures retain what is uncertain
 
@@ -87,7 +113,7 @@ known GIC wiring.
 | Consumer authorization refused | No request is stored | Nothing |
 | Supply not verified, fault bit set, wrong token, domain-level read wrong | REFUSED, before any write | Nothing |
 | Policy and status disagree at adoption | REFUSED, domain FAILED, fault bit set, no write | Nothing; later rows refused |
-| Delay-row readback wrong, status unexpected or not reached in 10 ms | FAILED, fault bit set | The domain, its rows and their rail pins |
+| Delay-row readback wrong, unexpected status or acknowledgement at/after the transition deadline | FAILED, fault bit set | The domain, its rows and their rail pins |
 | GPU gate or reset open at domain-5 power-off | FAILED, fault bit set, no write | The domain, the row and its pin |
 | Rail unpin fails after domain-5 power-off | FAILED; a later ON request from the row is answered FAILED | The row, counted, and its pin |
 | A service time read fails | Transitions FAILED; later requests REFUSED | As above |
@@ -252,7 +278,10 @@ and the limits of the cost model.
   budget started at provider READY, an expired verification request reaped
   with its token released, the slow acknowledgement bound with retention,
   domain-5 power-off and reopen, a failed unpin answered FAILED, and the NPU
-  interface. With an output path it writes the GPU power-on and
+  interface. `--deadlines` selects ON/OFF samples before, at and after the
+  bound, status reads crossing the bound, failed/regressed completion clocks,
+  earlier session cutoffs and expired command admission. With an output
+  path it writes the GPU power-on and
   power-off register trace that `checks/a733-gpu-power-reference.py`
   compares with the pinned PCK functions.
 - `checks/power-domains-service.c` runs the service step with a shim that
@@ -260,9 +289,10 @@ and the limits of the cost model.
   modeled core and with two, and the retention of the I2C mutex after a fault
   that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, the delay-row writers with no native allowlist that admits
-  the delay row, no domain-4 row while the NPU platform writes domain 4, the five service tasks and their priorities, and
-  no critical section, scheduler suspension or wait in the owner's code.
+  domains 1 and 5, four delay-row writers and no native delay-row allowlist.
+  It rejects direct NPU delay-row writes alongside a domain-4 row consumer,
+  checks the five service tasks and their priorities, and rejects critical
+  sections, scheduler suspension or waits in the owner's code.
 - `checks/rail-leases-cost.py` measures the row read, counting load/store
   exclusive and LSE atomic instructions as exclusive accesses;
   `checks/rail-leases.c` covers the rail pin.

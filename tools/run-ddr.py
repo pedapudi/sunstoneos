@@ -26,7 +26,8 @@ for name, expected in manifest["files"].items():
         sys.exit(f"Payload mismatch: {name}")
 args.evidence.mkdir(parents=True, exist_ok=False)
 record = {"manifest": manifest, "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
-          "transactions": [], "complete": False}
+          "transactions": [], "complete": False, "launch_attempted": False,
+          "device_access_attempted": False}
 
 
 def save():
@@ -36,6 +37,9 @@ def save():
 spec = importlib.util.spec_from_file_location("usb_access", ROOT / "tools/usb-access.py")
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
+spec = importlib.util.spec_from_file_location("ddr_base", ROOT / "tools/check-a733-smp.py")
+base = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(base)
 sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
 import usb_guard
 
@@ -48,6 +52,8 @@ def transaction(*commands):
     record["transactions"].append(entry)
     save()
     try:
+        record["device_access_attempted"] = True
+        record["launch_attempted"] |= "exe" in commands
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired as error:
         entry["failure"] = "Host timeout; no further device access."
@@ -66,62 +72,73 @@ try:
         access.require_rom(device)
         identity = access.identity(device)
         record.update(device=str(device), node_identity=identity)
-        version = transaction("version")
-        if "soc=00001903(A733)" not in version:
-            raise RuntimeError(f"Unexpected SoC: {version}")
-        # Save all SRAM regions this attempt uses. The live FEL interval is
-        # restored by the wrapper while interrupts are disabled, not by USB.
-        ranges = [("fel", 0x47000, 0x3000), ("body", 0x4a000, 0x39c28),
-                  ("wrapper", 0x85000, 0x1100), ("stack", 0x89000, 0x4000),
-                  ("shadow", 0x8e000, 0x3000), ("log", 0xe0000, 0x4000)]
-        commands = []
-        for name, address, size in ranges:
-            commands.extend(["read", hex(address), str(size), args.evidence / f"{name}-before.bin"])
-        transaction(*commands)
-        transaction("write", "0x71000", args.build / "cache-off.bin", "exe", "0x71000")
-        transaction("write", "0x8e000", args.build / "boot0-head.bin",
-                    "write", "0x4a000", args.build / "boot0-body.bin",
-                    "write", "0x85000", args.build / "ddr-entry.bin")
-        # A bounded upload readback establishes the complete payload before
-        # invoking power/clock setup. No firmware runs during this comparison.
-        transaction("read", "0x8e000", "12288", args.evidence / "head-upload.bin",
-                    "read", "0x4a000", "233472", args.evidence / "body-upload.bin",
-                    "read", "0x85000", str(manifest["files"]["ddr-entry.bin"]["size"]),
-                    args.evidence / "entry-upload.bin")
-        for short, source in (("head", "boot0-head.bin"), ("body", "boot0-body.bin"),
-                              ("entry", "ddr-entry.bin")):
-            if (args.evidence / f"{short}-upload.bin").read_bytes() != (args.build / source).read_bytes():
-                raise RuntimeError(f"Upload comparison failed: {short}")
-        print("Executing the DDR wrapper once.", flush=True)
-        transaction("exe", "0x85000")
-        transaction("read", "0x86000", "128", args.evidence / "mailbox.bin",
-                    "read", "0xe0000", "16384", args.evidence / "log.bin",
-                    "read", "0x831f8", "128", args.evidence / "dram-parameters.bin")
-        values = struct.unpack("<7I", (args.evidence / "mailbox.bin").read_bytes()[:28])
-        record["result"] = dict(zip(("magic", "stage", "dram_mib", "board_result",
-                                     "entry_cpsr", "entry_sctlr", "log_length"), values))
-        log = (args.evidence / "log.bin").read_bytes()[:min(values[6], 16384)].decode(errors="replace")
-        (args.evidence / "firmware.log").write_text(log)
-        print(log, end="", flush=True)
-        save()
-        if values[0] != 0x53524444 or values[1] != 5 or values[3] != 0 or values[2] < 64:
-            raise RuntimeError(f"DDR initialization did not succeed: {record['result']}")
-        pages = [(0x41000000, 0xa55a5aa5), (0x42000000, 0x73307330)]
-        commands = []
-        for address, seed in pages:
-            payload = struct.pack("<1024I", *((seed ^ address ^ (i * 0x10201)) & 0xffffffff for i in range(1024)))
-            path = args.evidence / f"ram-{address:x}.bin"
-            path.write_bytes(payload)
-            commands.extend(["write", hex(address), path])
-        for address, _ in pages:
-            commands.extend(["read", hex(address), "4096", args.evidence / f"ram-{address:x}-read.bin"])
-        transaction(*commands)
-        for address, _ in pages:
-            if (args.evidence / f"ram-{address:x}.bin").read_bytes() != (args.evidence / f"ram-{address:x}-read.bin").read_bytes():
-                raise RuntimeError(f"RAM page comparison failed: {address:#x}")
-        record["complete"] = True
-        save()
-        print(f"PASS: DDR reports {values[2]} MiB; both 4 KiB pages match. Evidence: {args.evidence}")
+        try:
+            version = transaction("version")
+            if "soc=00001903(A733)" not in version:
+                raise RuntimeError(f"Unexpected SoC: {version}")
+            # Save all SRAM regions this attempt uses. The live FEL interval is
+            # restored by the wrapper while interrupts are disabled, not by USB.
+            ranges = [("fel", 0x47000, 0x3000), ("body", 0x4a000, 0x39c28),
+                      ("wrapper", 0x85000, 0x1100), ("stack", 0x89000, 0x4000),
+                      ("shadow", 0x8e000, 0x3000), ("log", 0xe0000, 0x4000)]
+            commands = []
+            for name, address, size in ranges:
+                commands.extend(["read", hex(address), str(size), args.evidence / f"{name}-before.bin"])
+            transaction(*commands)
+            transaction("write", "0x71000", args.build / "cache-off.bin", "exe", "0x71000")
+            transaction("write", "0x8e000", args.build / "boot0-head.bin",
+                        "write", "0x4a000", args.build / "boot0-body.bin",
+                        "write", "0x85000", args.build / "ddr-entry.bin")
+            # A bounded upload readback establishes the complete payload before
+            # invoking power/clock setup. No firmware runs during this comparison.
+            transaction("read", "0x8e000", "12288", args.evidence / "head-upload.bin",
+                        "read", "0x4a000", "233472", args.evidence / "body-upload.bin",
+                        "read", "0x85000", str(manifest["files"]["ddr-entry.bin"]["size"]),
+                        args.evidence / "entry-upload.bin")
+            for short, source in (("head", "boot0-head.bin"), ("body", "boot0-body.bin"),
+                                  ("entry", "ddr-entry.bin")):
+                if (args.evidence / f"{short}-upload.bin").read_bytes() != (args.build / source).read_bytes():
+                    raise RuntimeError(f"Upload comparison failed: {short}")
+            print("Executing the DDR wrapper once.", flush=True)
+            transaction("exe", "0x85000")
+            transaction("read", "0x86000", "128", args.evidence / "mailbox.bin",
+                        "read", "0xe0000", "16384", args.evidence / "log.bin",
+                        "read", "0x831f8", "128", args.evidence / "dram-parameters.bin")
+            values = struct.unpack("<7I", (args.evidence / "mailbox.bin").read_bytes()[:28])
+            record["result"] = dict(zip(("magic", "stage", "dram_mib", "board_result",
+                                         "entry_cpsr", "entry_sctlr", "log_length"), values))
+            log = (args.evidence / "log.bin").read_bytes()[:min(values[6], 16384)].decode(errors="replace")
+            (args.evidence / "firmware.log").write_text(log)
+            print(log, end="", flush=True)
+            save()
+            if values[0] != 0x53524444 or values[1] != 5 or values[3] != 0 or values[2] < 64:
+                raise RuntimeError(f"DDR initialization did not succeed: {record['result']}")
+            pages = [(0x41000000, 0xa55a5aa5), (0x42000000, 0x73307330)]
+            commands = []
+            for address, seed in pages:
+                payload = struct.pack("<1024I", *((seed ^ address ^ (i * 0x10201)) & 0xffffffff for i in range(1024)))
+                path = args.evidence / f"ram-{address:x}.bin"
+                path.write_bytes(payload)
+                commands.extend(["write", hex(address), path])
+            for address, _ in pages:
+                commands.extend(["read", hex(address), "4096", args.evidence / f"ram-{address:x}-read.bin"])
+            transaction(*commands)
+            for address, _ in pages:
+                if (args.evidence / f"ram-{address:x}.bin").read_bytes() != (args.evidence / f"ram-{address:x}-read.bin").read_bytes():
+                    raise RuntimeError(f"RAM page comparison failed: {address:#x}")
+            record["complete"] = True
+            save()
+            print(f"PASS: DDR reports {values[2]} MiB; both 4 KiB pages match. Evidence: {args.evidence}")
+        except BaseException as error:
+            if record["device_access_attempted"]:
+                try:
+                    base.stop_after_failure(record, save, lambda: access.quarantine_instance(
+                        device, "DDR attempt stopped; no retry; coordinator recovery required.", identity), error)
+                finally:
+                    if not record["launch_attempted"]:
+                        base.hold_ownership()
+            raise
+
 except (OSError, RuntimeError, ValueError) as error:
     record["failure"] = str(error)
     save()

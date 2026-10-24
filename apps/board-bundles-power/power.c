@@ -213,7 +213,7 @@ static void service(void *unused)
     }
 }
 
-int bb_power_init(TaskFunction_t client, const char *name)
+static int power_init(TaskFunction_t client, const char *name, unsigned domain_row)
 {
     struct bb_power *p = &bb_power;
     p->deadline = RESULT->start_counter / 24 + BB_POWER_SESSION_US;
@@ -259,8 +259,14 @@ int bb_power_init(TaskFunction_t client, const char *name)
         return 0;
     /* The row makes the service verify DCDC2 and DCDC4 once; bundle 6 never
      * requests it. */
-    return a733_power_domain_row_init(&p->row, &p->domains, 1, BB_POWER_CLIENT_OWNER, &p->token);
+    return !domain_row || a733_power_domain_row_init(&p->row, &p->domains, 1, BB_POWER_CLIENT_OWNER, &p->token);
 }
+
+int bb_power_init(TaskFunction_t client, const char *name)
+{ return power_init(client, name, 1); }
+
+int bb_power_snapshot_init(TaskFunction_t client, const char *name)
+{ return power_init(client, name, 0); }
 
 uint64_t bb_power_now(void)
 {

@@ -136,43 +136,91 @@ void monitor_init(void)
     RESULT->stage = 2;
 }
 
+static int cleanup_wait(uintptr_t address, uint32_t mask, uint64_t deadline)
+{
+    for (;;) {
+        uint32_t value = mmio_read(address);
+        // A completed read at the deadline is already too late.
+        if (counter() >= deadline)
+            return 0;
+        if (!(value & mask))
+            return 1;
+    }
+}
+
+static int restore_interrupts(void)
+{
+    // Keep the existing three 100 ms windows. Readbacks share their phase's
+    // deadline; a stalled register access still needs external recovery.
+    uint64_t deadline = counter() + COUNTER_HZ / 10;
+    uint32_t live_ctlr = mmio_read(GICD_BASE) & ~(1U << 31);
+    mmio_write(GICD_BASE, live_ctlr & ~7U);
+    if (!cleanup_wait(GICD_BASE, 1U << 31, deadline) ||
+        (mmio_read(GICD_BASE) & 7U) || counter() >= deadline)
+        return 0;
+
+    deadline = counter() + COUNTER_HZ / 10;
+    mmio_write(GICR_SGI + 0x180, 0xffffffffU);
+    if (!cleanup_wait(GICR_BASE, 8, deadline) ||
+        mmio_read(GICR_SGI + 0x100) || counter() >= deadline)
+        return 0;
+    const uint32_t timers = (1U << TICK_IRQ) | (1U << RECOVERY_IRQ);
+    mmio_write(GICR_SGI + 0x280, timers);
+    mmio_write(GICR_SGI + 0x380, timers);
+    __asm__ volatile("dsb sy" ::: "memory");
+    if ((mmio_read(GICR_SGI + 0x200) & timers) ||
+        (mmio_read(GICR_SGI + 0x300) & timers) || counter() >= deadline)
+        return 0;
+    mmio_write(GICR_SGI + 0x80, saved.group);
+    mmio_write(GICR_SGI + 0xd00, saved.modifier);
+    mmio_write(GICR_SGI + 0xc04, saved.configuration);
+    mmio_write(GICR_SGI + 0x41c, saved.priorities);
+    mmio_write(GICR_SGI + 0x100, saved.enabled);
+    __asm__ volatile("dsb sy" ::: "memory");
+    // Compare values read from the implemented Secure register view, not
+    // assumed all-ones masks or unimplemented priority bits.
+    if (!cleanup_wait(GICR_BASE, 8, deadline) ||
+        mmio_read(GICR_SGI + 0x80) != saved.group ||
+        mmio_read(GICR_SGI + 0xd00) != saved.modifier ||
+        mmio_read(GICR_SGI + 0xc04) != saved.configuration ||
+        mmio_read(GICR_SGI + 0x41c) != saved.priorities ||
+        mmio_read(GICR_SGI + 0x100) != saved.enabled || counter() >= deadline)
+        return 0;
+
+    deadline = counter() + COUNTER_HZ / 10;
+    // EL1 can write the saved block. Derive the bounds again before using it.
+    unsigned banks = (mmio_read(GICD_BASE + 4) & 31) + 1;
+    if (banks != saved.banks || counter() >= deadline)
+        return 0;
+    for (unsigned i = 1; i < banks; ++i)
+        mmio_write(GICD_BASE + 0x180 + 4 * i, 0xffffffffU);
+    if (!cleanup_wait(GICD_BASE, 1U << 31, deadline))
+        return 0;
+    for (unsigned i = 1; i < banks; ++i)
+        if (mmio_read(GICD_BASE + 0x100 + 4 * i) || counter() >= deadline)
+            return 0;
+    for (unsigned i = 1; i < banks; ++i)
+        mmio_write(GICD_BASE + 0x100 + 4 * i, saved.spi_enabled[i]);
+    __asm__ volatile("dsb sy" ::: "memory");
+    for (unsigned i = 1; i < banks; ++i)
+        if (mmio_read(GICD_BASE + 0x100 + 4 * i) != saved.spi_enabled[i] ||
+            counter() >= deadline)
+            return 0;
+    // QEMU may enable ARE from cold state; never restore an enabled bit to 0.
+    uint32_t restored_ctlr = (saved.ctlr & ~(1U << 31)) | (live_ctlr & 0x30U);
+    mmio_write(GICD_BASE, restored_ctlr);
+    return cleanup_wait(GICD_BASE, 1U << 31, deadline) &&
+           mmio_read(GICD_BASE) == restored_ctlr && counter() < deadline;
+}
+
 static _Noreturn void finish(unsigned status)
 {
     __asm__ volatile("msr daifset, #0xf\n msr cntps_ctl_el1, xzr\n"
                      "msr cntp_ctl_el0, xzr\n isb" ::: "memory");
-    RESULT->status = status;
     RESULT->end_counter = counter();
-    if (saved.ready) {
-        // Bounded cleanup: a stalled GIC must not prevent the ROM reset.
-        uint32_t live_ctlr = mmio_read(GICD_BASE);
-        mmio_write(GICD_BASE, live_ctlr & ~7U);
-        uint64_t deadline = counter() + COUNTER_HZ / 10;
-        while ((mmio_read(GICD_BASE) & (1U << 31)) && counter() < deadline) {}
-        mmio_write(GICR_SGI + 0x180, 0xffffffffU);
-        deadline = counter() + COUNTER_HZ / 10;
-        while ((mmio_read(GICR_BASE) & 8) && counter() < deadline) {}
-        mmio_write(GICR_SGI + 0x280, (1U << TICK_IRQ) | (1U << RECOVERY_IRQ));
-        mmio_write(GICR_SGI + 0x380, (1U << TICK_IRQ) | (1U << RECOVERY_IRQ));
-        mmio_write(GICR_SGI + 0x80, saved.group);
-        mmio_write(GICR_SGI + 0xd00, saved.modifier);
-        mmio_write(GICR_SGI + 0xc04, saved.configuration);
-        mmio_write(GICR_SGI + 0x41c, saved.priorities);
-        mmio_write(GICR_SGI + 0x100, saved.enabled);
-        // EL1 can write this image block, so re-derive the bank count from
-        // the live distributor instead of trusting the saved loop bound.
-        // ISENABLER only sets bits: clear SPIs enabled during the run first.
-        unsigned banks = (mmio_read(GICD_BASE + 4) & 31) + 1;
-        if (banks == saved.banks) {
-            for (unsigned i = 1; i < banks; ++i)
-                mmio_write(GICD_BASE + 0x180 + 4 * i, 0xffffffffU);
-            deadline = counter() + COUNTER_HZ / 10;
-            while ((mmio_read(GICD_BASE) & (1U << 31)) && counter() < deadline) {}
-            for (unsigned i = 1; i < banks; ++i)
-                mmio_write(GICD_BASE + 0x100 + 4 * i, saved.spi_enabled[i]);
-        }
-        // QEMU may enable ARE from cold state; cleanup must never clear it.
-        mmio_write(GICD_BASE, saved.ctlr | (live_ctlr & 0x30U));
-    }
+    if (saved.ready && !restore_interrupts())
+        status = 6; // ROM return is permitted, but interrupt ownership is retained.
+    RESULT->status = status;
     RESULT->stage = 5;
     __asm__ volatile("dsb sy" ::: "memory");
 #ifdef MONITOR_QEMU

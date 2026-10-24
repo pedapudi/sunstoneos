@@ -181,8 +181,87 @@ static void retained(void)
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_RETAINED);
 }
 static const struct a733_cpu_clock_grant both={77,3,{1404,1508},8};
-int main(void)
+/* Exercise adoption through the same read-only inspection used by the OS.
+ * Only the register and thermal samples are modeled; leases, PMIC snapshots,
+ * bin/OPP admission and transition control execute their actual providers. */
+static void inherited_cases(void)
 {
+    for(unsigned cluster=0;cluster<2;++cluster){
+        setup(0x00000100,1,45,45,30,&both);
+        *word(PLL(cluster))=LOCKED|(46u<<8);*word(SEL(cluster))=0x03000000;
+        assert(a733_cpu_clock_inspect(&cpu,cluster,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1196 &&
+            cpu.inherited==1u<<cluster && !cm.writes && first(1)==cm.count && cpu.changes==8);
+        assert(heat(95000)==A733_THERMAL_THROTTLE);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1014 && cpu.changes==7);
+        assert(first(1)==cm.count && released());
+        assert(heat(50000)==A733_THERMAL_NORMAL);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1196 && cpu.changes==6);
+        assert(first(1)==cm.count && released() && cpu.inherited==1u<<cluster);
+        assert(heat(95000)==A733_THERMAL_THROTTLE);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[cluster]==1014 && cpu.changes==5);
+        printf("BUDGET inherited_cluster=%u repeated_clock_writes=%u pmic_writes=%u changes=%u\n",
+            cluster,cm.writes,cm.count-first(1),cpu.changes);
+        assert(cm.writes==15 && first(1)==cm.count);
+    }
+    for(unsigned mode=0;mode<19;++mode){
+        struct a733_cpu_clock_grant grant=both;
+        if(mode==0)grant=(struct a733_cpu_clock_grant){0};
+        if(mode==1)grant.changes=0;
+        if(mode==2)grant.clusters=2;
+        if(mode==3)grant.max_mhz[0]=416;
+        if(mode==4)grant.session=0;
+        if(mode==10)grant.max_mhz[0]=1014; /* Lower allowed, restoration is not. */
+        if(mode==11)grant.changes=1;
+        setup(0x00000100,1,45,45,30,&grant);
+        *word(PLL(0))=LOCKED|(46u<<8);*word(SEL(0))=0x03000000;
+        if(mode==5)*word(0x0300624c)=0x1100; /* Unknown bin. */
+        if(mode==6)*word(PLL(0))=LOCKED|(48u<<8); /* 1248 MHz absent from table. */
+        if(mode==7)*word(PLL(0)+4)=1u<<29;
+        if(mode==16)*word(PLL(0))=LOCKED|(69u<<8); /* 1794 MHz unsupported in this bin. */
+        if(mode==17)pm.pmic[REG_DCDC5]=30; /* Insufficient rail at inspection. */
+        if(mode==18)*word(PLL(2))=LOCKED|(44u<<8); /* DSU requires more than observed rail. */
+        assert(a733_cpu_clock_inspect(&cpu,A733_CPU_LITTLE,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+        assert(run(400)==A733_CPU_CLOCK_COMPLETE && !cm.writes && first(1)==cm.count);
+        unsigned changes=cpu.changes;
+        if(mode==8){*word(PLL(0))=LOCKED|(32u<<8);*word(SEL(0))=0x03010000;} /* External 416 MHz. */
+        if(mode==9)pm.pmic[REG_DCDC5]=30; /* Insufficient inherited rail after inspection. */
+        if(mode==12){assert(heat(115000)==A733_THERMAL_CRITICAL);assert(run(400)==A733_CPU_CLOCK_READY);}
+        else {
+            if(mode==13){pm.now+=1000000;assert(a733_thermal_policy_update(&policy,pm.now,A733_THERMAL_AGAIN,0)==A733_THERMAL_THROTTLE);}
+            else assert(heat(95000)==A733_THERMAL_THROTTLE);
+            enum a733_cpu_clock_status r=run(400);
+            if(mode<=7 || mode>=16)assert(r==A733_CPU_CLOCK_READY && cpu.changes==changes);
+            else if(mode==8 || mode==9){
+                assert(r==A733_CPU_CLOCK_REFUSED && cpu.changes==changes-1 && released());
+                unsigned reads=cm.reads;
+                assert(run(400)==A733_CPU_CLOCK_READY && cm.reads==reads && cpu.changes==changes-1);
+                assert(heat(50000)==A733_THERMAL_NORMAL && run(400)==A733_CPU_CLOCK_READY);
+                *word(PLL(0))=LOCKED|(46u<<8);*word(SEL(0))=0x03000000;pm.pmic[REG_DCDC5]=45;
+                assert(heat(95000)==A733_THERMAL_THROTTLE);
+                assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.changes==changes-2 && first(1)==cm.count);
+            } else {
+                assert(r==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[0]==1014 && cpu.changes==changes-1);
+                if(mode==14)pm.pmic[REG_DCDC5]=30; /* Restore must not raise voltage. */
+                if(mode==15){*word(PLL(0))=LOCKED|(32u<<8);*word(SEL(0))=0x03010000;}
+                unsigned writes=cm.writes;
+                assert(heat(50000)==A733_THERMAL_NORMAL);
+                r=run(400);
+                if(mode==10 || mode==11)assert(r==A733_CPU_CLOCK_READY && cm.writes==writes);
+                else if(mode>=14)assert(r==A733_CPU_CLOCK_REFUSED && cm.writes==writes && released());
+                else assert(r==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[0]==1196);
+            }
+        }
+        if(mode<=7 || mode==12 || mode>=16)assert(!cm.writes && cpu.changes==changes);
+        assert(first(1)==cm.count);
+    }
+    puts("PASS inherited thermal: both clusters, repeated lower/restore, grant limits, unsupported source, "
+        "source changes, insufficient rail, stale sensors, critical, bounded retry; zero PMIC writes");
+}
+int main(int argc,char **argv)
+{
+    inherited_cases();
+    if(argc==2 && !strcmp(argv[1],"--inherited-only"))return 0;
     /* Read-only report of the recorded configuration: 26 MHz x 38 / 2. */
     setup(0x00000100,1,30,30,30,0);
     struct a733_cpu_clock_report report;

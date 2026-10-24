@@ -63,6 +63,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--mimus-dir', type=Path, help='mimus tree whose exact_sum_hook.h the copy must match')
+    parser.add_argument('--thermal-only', action='store_true', help='only the new thermal ownership boundary cases')
     args = parser.parse_args()
     if args.mimus_dir:
         engine = args.mimus_dir / 'firmware/components/asr/include/mimus/asr/exact_sum_hook.h'
@@ -85,6 +86,7 @@ def main():
               '-DSUNSTONE_A733_OS_GPU_LINEAR=1']
     results = []
     for name, extra in (('no-hook', []), ('hook', ['-I' + str(out / 'engine-include'), '-DENGINE_HOOK=1'])):
+        if args.thermal_only and name == 'no-hook': continue
         build = out / name
         build.mkdir()
         subprocess.run(['clang', '-std=c11'] + common + extra + ['-c', 'apps/os/dispatch.c', '-o', str(build / 'dispatch.o')],
@@ -92,7 +94,7 @@ def main():
         subprocess.run(['clang++', '-std=c++20'] + common + extra +
                        ['apps/os/gpu_hook.cc', 'checks/gpu-recognition-engine.cc', str(build / 'dispatch.o'),
                         '-o', str(build / 'engine')], cwd=ROOT, check=True)
-        run = subprocess.run([str(build / 'engine')], capture_output=True, text=True,
+        run = subprocess.run([str(build / 'engine')] + (['--thermal-only'] if args.thermal_only else []), capture_output=True, text=True,
                              env={'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'print_stacktrace=1'})
         (build / 'output.log').write_text(run.stdout + run.stderr)
         print(run.stdout + run.stderr, end='')

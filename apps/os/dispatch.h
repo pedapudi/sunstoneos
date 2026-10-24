@@ -84,11 +84,16 @@ extern struct tskTaskControlBlock *os_recognizer;
  * firmware and session memory and creates the service worker on `core`, with
  * no device access; a refusal (pool, owners, tensor admission, a GPU loss in
  * the previous-boot report) keeps OPEN refused for the boot and returns 1.
- * open: the recognizer, once; the worker powers the GPU, starts the firmware,
+ * open: the recognizer, initially and after healthy thermal park; the worker
+ * powers the GPU, starts the firmware,
  * publishes the session and formats its client ring. 1 when the session is
  * ready. Its waits record no service progress. */
 int a733_gpu_mimus_start(unsigned core);
 int a733_gpu_mimus_open(void);
+/* Recognizer only, between complete matmul calls after all output reads.
+ * THROTTLE closes the healthy session; NORMAL reopens its retained backing.
+ * 1 ready, 0 parked, -1 retained failure. No automatic idle timer or reset. */
+int a733_gpu_mimus_thermal(void);
 /* One job of a placed call. begin writes the slot and wakes the worker
  * without waiting: 1 submitted (finish returns its record), 0 refused before
  * any device access (the caller computes the rows), -1 the session is lost.

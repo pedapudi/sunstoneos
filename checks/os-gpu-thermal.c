@@ -1,0 +1,98 @@
+/* Actual native GPU thermal caller; service replies and scheduler are modeled. */
+#include "../apps/os/gpu.c"
+
+struct board_application board;
+struct board_provider providers;
+volatile unsigned os_check_result;
+static unsigned mode, throttled, waiting, sends, closes, opens, pending, polls;
+static uint64_t time_us = 100, model_epoch = 1;
+static unsigned model_phase = PVR_GPU_SERVICE_READY;
+static void check(int ok, unsigned code)
+{ if (!ok) { os_check_result = code; __asm__ volatile("brk #0"); for (;;) {} } }
+uint64_t a733_smp_counter(void) { return time_us * 24; }
+int board_live(void *unused)
+{ (void)unused; return !atomic_load(&board.fatal) && time_us < board.session.deadline_us &&
+    time_us < atomic_load(&board.live_until); }
+TaskHandle_t xTaskGetCurrentTaskHandle(void) { return (TaskHandle_t)(uintptr_t)(mode == 4 ? 2 : 1); }
+int os_thermal_throttled(void) { return throttled; }
+void os_dispatch_waiting(int value) { waiting = (unsigned)value; }
+void vTaskDelay(TickType_t ticks) { check(ticks == 1, 2); time_us += 1000; }
+int pvr_gpu_service_send_epoch(struct pvr_gpu_service *s, uint64_t epoch,
+    const struct pvr_gpu_service_request *request, TickType_t wait, uint64_t *ticket)
+{
+    check(s == &gpu.service && epoch == model_epoch && wait == OS_GPU_WAIT_TICKS && !pending, 3);
+    check(board_live(NULL) && request->timeout_us <= OS_GPU_OPEN_US, 4);
+    ++sends; pending = request->operation + 1; *ticket = sends;
+    if (request->operation == PVR_GPU_SERVICE_CLOSE) {
+        check(model_phase == PVR_GPU_SERVICE_READY && request->timeout_us, 5);
+        ++closes; model_phase = PVR_GPU_SERVICE_STOPPING; polls = 0;
+    } else if (request->operation == PVR_GPU_SERVICE_OPEN) {
+        check(model_phase == PVR_GPU_SERVICE_STOPPED && request->timeout_us, 6);
+        ++opens; ++model_epoch; model_phase = PVR_GPU_SERVICE_READY;
+    } else {
+        check(request->operation == PVR_GPU_SERVICE_STATUS && !request->timeout_us, 7);
+        if (++polls == 2) model_phase = PVR_GPU_SERVICE_STOPPED;
+    }
+    return 1;
+}
+int pvr_gpu_service_collect(struct pvr_gpu_service *s, uint64_t ticket,
+    struct pvr_gpu_service_reply *reply, TickType_t wait)
+{
+    check(s == &gpu.service && ticket == sends && wait == OS_GPU_WAIT_TICKS && pending, 8);
+    if (mode == 3) { time_us += 200000; return 0; }
+    *reply = (struct pvr_gpu_service_reply){.ticket = ticket, .epoch = model_epoch,
+        .result = PVR_GPU_SERVICE_OK, .phase = model_phase};
+    pending = 0; return 1;
+}
+int pvr_mimus_service_receive(struct pvr_mimus_service *s, struct pvr_mimus_record *record, TickType_t wait)
+{
+    check(s == &gpu.session.component && wait == OS_GPU_WAIT_TICKS && opens, 9);
+    *record = (struct pvr_mimus_record){mode == 6 ? 1 : 0, PVR_MIMUS_OK};
+    if (mode == 1) throttled = 1;
+    if (mode == 2) atomic_store(&board.fatal, 1);
+    return 1;
+}
+int pvr_mimus_service_submit(struct pvr_mimus_service *s, const struct pvr_mimus_request *job)
+{ (void)s; (void)job; check(0, 10); return 0; }
+
+void os_gpu_thermal_check(unsigned selected)
+{
+    mode = selected; os_recognizer = (TaskHandle_t)(uintptr_t)1;
+    gpu.started = gpu.opened = 1; gpu.epoch = 1; gpu.component = &gpu.session.component;
+    board.session.deadline_us = 60000000; atomic_store(&board.live_until, 3000000);
+    if (mode == 0) {
+        for (unsigned i = 0; i < 2; ++i) {
+            throttled = 1;
+            check(a733_gpu_mimus_thermal() == 0 && gpu.parked && !gpu.opened && !waiting, 11);
+            throttled = 0;
+            check(a733_gpu_mimus_thermal() == 1 && !gpu.parked && gpu.opened && !waiting, 12);
+        }
+        check(opens == 2 && closes == 2 && gpu.epoch == 3, 13);
+    } else if (mode == 1 || mode == 2 || mode == 6) {
+        gpu.opened = 0; gpu.parked = 1; model_phase = PVR_GPU_SERVICE_STOPPED;
+        int result = a733_gpu_mimus_thermal();
+        check(opens == 1, 14);
+        if (mode == 1) check(result == 0 && closes == 1 && gpu.parked && !waiting, 15);
+        else {
+            check(result == -1 && !closes && gpu.failed && waiting, 16);
+            unsigned before = sends;
+            atomic_store(&board.fatal, 0); throttled = 0;
+            check(a733_gpu_mimus_thermal() == -1 && sends == before, 17);
+            check(a733_gpu_mimus_open() == 0 && sends == before, 24);
+            const struct pvr_mimus_request job = {0};
+            check(a733_gpu_mimus_begin(&job) == -1, 18);
+        }
+    } else if (mode == 3) {
+        throttled = 1;
+        check(a733_gpu_mimus_thermal() == -1 && sends == 1 && closes == 1 && gpu.failed, 19);
+        check(time_us == 1000100 && waiting, 20);
+    } else if (mode == 4) {
+        check(a733_gpu_mimus_thermal() == -1 && !sends, 21);
+    } else if (mode == 5) {
+        atomic_store(&board.live_until, time_us);
+        check(a733_gpu_mimus_thermal() == -1 && !sends, 22);
+        atomic_store(&board.live_until, 3000000);
+        check(a733_gpu_mimus_thermal() == -1 && !sends && gpu.failed, 25);
+    } else check(0, 23);
+    os_check_result = 1; __asm__ volatile("brk #0"); for (;;) {}
+}

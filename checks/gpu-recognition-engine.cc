@@ -70,6 +70,10 @@ static struct { unsigned job; Fault fault; } script = {~0u, NONE};
 static unsigned submitted_jobs, sequence;
 static pvr_mimus_request in_flight;
 static bool busy;
+static int thermal_result = 1;
+static unsigned thermal_calls;
+extern "C" int a733_gpu_mimus_thermal(void)
+{ CHECK(!busy); ++thermal_calls; return thermal_result; }
 
 extern "C" int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *out)
 {
@@ -308,8 +312,9 @@ static void map_regions()
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    const bool thermal_only = argc == 2 && std::strcmp(argv[1], "--thermal-only") == 0;
     map_regions();
     // The table: see checks/gpu-recognition-engine.py.
     struct { Spec spec; size_t n; } nominal[] = {
@@ -324,6 +329,7 @@ int main()
     };
     reset();
 #ifndef ENGINE_HOOK
+    CHECK(!thermal_only);
     // Without the engine's hook header the session is never opened.
     CHECK(!opens && !os_dispatch_place(0).n_gpu);
     for (auto &t : nominal) CHECK(compare(t.spec, t.n) == 1);
@@ -332,6 +338,22 @@ int main()
     return 0;
 #else
     CHECK(opens == 1 && os_dispatch_record.opened && engine_hook);
+    if (thermal_only) {
+        const Spec one = {0, 1, SILU, false};
+        thermal_result = 0;
+        CHECK(compare(one, 704) == 1 && !submitted_jobs && thermal_calls == 1);
+        thermal_result = 1;
+        CHECK(compare(one, 704) == 1 && submitted_jobs == 1 && thermal_calls == 2);
+        os_dispatch_incomplete();
+        CHECK(compare(one, 704) == 1 && submitted_jobs == 1 && thermal_calls == 2);
+        reset(); thermal_result = -1;
+        CHECK(compare(one, 704) == -1 && !os_dispatch_active && board_fails == 1);
+        const unsigned before = thermal_calls;
+        thermal_result = 1;
+        CHECK(compare(one, 704) == 1 && thermal_calls == before && !submitted_jobs);
+        std::printf("PASS hook thermal boundary: parked CPU path, ready GPU job, retained incomplete/failure admission\n");
+        return 0;
+    }
     // The hook is offered exactly the table's placed ordinals.
     CHECK(engine_ordinals.size() == (os_placement_rows + 7) / 8);
     for (uint32_t i = 0; i < os_placement_rows; ++i) CHECK(offered(i) == (os_placement_table[i].n_gpu != 0));

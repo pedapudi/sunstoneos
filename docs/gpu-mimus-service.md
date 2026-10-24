@@ -110,7 +110,27 @@ or shutdown state. Pending and running jobs return BUSY without changing the
 slot. A submit atomically reserves an idle slot before copying its request,
 so CLOSE also refuses while the producer writes. Once CLOSE seals the slot,
 later submits return 0. A lost session returns a CLOSE fault and keeps its
-retained slot. Mimus reopen is unsupported.
+retained slot.
+
+Healthy CLOSE permits an explicit OPEN by the same client and closed epoch.
+The native owner requires the backend's complete stopped proof, an empty
+completion queue and unchanged allocation generations and extents before
+rewriting backing. It retains all allocations and the published GPU page
+tables. It rebuilds mutable firmware contexts and context-switch storage,
+then restages firmware through the existing OPEN path.
+The service publishes a new epoch and preserves increasing job sequences;
+the new timeline starts at the last completed sequence. Older request epochs
+are refused. The slot remains CLOSED until the new OPEN result is published
+with the slot ready. Failed reconstruction, startup or result publication
+latches loss and retains backing.
+
+Reconstruction uses the existing [compute-context builder](gpu-compute-context.md)
+and [acknowledged stop sequence](gpu-stop.md). Their pinned board source is
+`linux-orangepi` revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`:
+`pvr_queue.c:init_fw_context` initializes queue pointers and saved state,
+`pvr_context.c` zeroes context storage, and `pvr_vm.c:fw_mem_context_init`
+sets the page-table root and unallocated catalogue marker.
+The evidence snapshot preserves those source files and `pvr_fw_startstop.c`.
 
 ## Failure classes
 
@@ -168,19 +188,59 @@ image identities are in
 The checks establish service admission and model shutdown behavior; physical
 shutdown and thermal qualification remain outstanding.
 
+The retained-reopen checks cover two healthy power cycles, increasing job
+sequences, stale epochs, missing stop proof, unread completions, changed
+allocation generations, failed cache publication and failed OPEN-result
+publication. They use the actual native reconstruction and service, with the
+backend stop proof supplied by the firmware model. All four focused cases
+pass; physical stop proof remains required by the native backend.
+
+The native thermal-caller check executes `apps/os/gpu.c` as AArch64 code
+with modeled service replies, clock and RTOS waits. Seven cases cover repeated
+park/reopen, throttle and critical arrival during reopen, observation timeout,
+wrong client, expired lifetime and a stale OPEN record. Three focused
+follow-up cases also verify that renewed lifetime or a direct OPEN cannot
+revive a latched failure. The hook's focused sanitizer check covers its actual
+call boundary and preserves disabled placement after incomplete output or loss.
+A native backend check verifies permanent access refusal after lifetime expiry.
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/gpu-power-runtime-20261024/`;
+`snapshot/manifest.json` binds selected final sources, executables and records.
+
+The first reopen performs 3,520 cache-line operations, compared with 5,056 at
+cold OPEN. Keeping 24 immutable table pages published avoids 1,536 cleans.
+Reconstruction clears 35,136 bytes of context-switch storage before the
+existing program builder writes its instructions, and initializes 268 bytes
+of firmware context. It allocates no pages: 79 write-back and 51 uncached
+pages remain owned. These are software operation counts, not board timings.
+
 ## Lifecycle and power limits
 
 The current image fixes the GPU at 400 MHz and 800 mV. The
 [runtime design](designs/gpu-runtime.md) reserves 600 MHz and thermal rate
 fallback for later board qualification. Startup and acknowledged shutdown
-exist, but automatic idle park and full fault recovery remain
+exist, including explicit healthy thermal park and reopen. Automatic idle
+parking and full fault recovery remain
 [unimplemented designs](gpu-recovery.md). Deadline failure retains resources;
 it does not establish that the GPU stopped or cooled.
 
-The native backend checks its external revocation flag before normal hardware
-access. Revocation prevents further access through those callbacks; it is not
-an acknowledged GPU power-off. OS thermal placement and critical-temperature
-handling therefore need their own integration evidence.
+At the next recognizer `Begin` after prior output consumption, THROTTLE closes
+the healthy session and waits for STOPPED. NORMAL reopens a parked session.
+Throttle arriving during OPEN causes one CLOSE before new work is admitted;
+each boundary performs at most two transitions. Failed or incomplete dispatch
+admission remains closed. No idle timer or frequency change is involved.
+
+Each transition targets a one-second absolute bound, clamped below the board
+session and current lifetime limits. The client checks expiry after each
+queue wait of at most ten ticks; STATUS observation also waits one tick.
+These waits add observation latency and never renew service progress.
+The backend checks permanent revocation and current `board_live` admission
+before normal operations. Lifetime expiry latches failure even if renewed
+later. Each admitted `board_live` call adds two architectural counter reads;
+the recognizer also calls it at each thermal boundary. Fault-safe interrupt
+masking remains possible after revocation. Revocation does not establish
+power-off or cooling. Physical shutdown, thermal response, automatic idle
+parking and hard-fault recovery remain outstanding.
 
 ## Board evidence that would confirm it
 

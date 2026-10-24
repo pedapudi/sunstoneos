@@ -2,8 +2,9 @@
 
 Status: the cause is not established. The first-task diagnostic returned once,
 on 2026-10-18, and did not return on port 3-1 on 2026-10-23 or, in its
-corrected form and in a clean lifetime, on 2026-10-24. The next diagnostic is
-the all-eight-core pre-scheduler in a clean lifetime
+corrected form and in a clean lifetime, on 2026-10-24. The narrower
+[CPU0 preparation proposal](rank-7-primary-publication.md) now precedes a
+decision about the separately preserved all-eight-core pre-scheduler
 (`cpu-diagnosis-20261024/pre-scheduler/`; runbook
 [rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). No board was accessed to
 produce this document.
@@ -64,11 +65,12 @@ of a hang. With the state left as it is, the diagnostic runs the same
 sequence as before; its instruction-model success report is byte-identical
 to the earlier one.
 
-The next launch is the all-eight-core pre-scheduler diagnostic on port 3-1 in
-a clean lifetime, with a byte-identical overlay to the one that preceded the
-2026-10-18 pass. A successful return would establish the shared startup and cleanup in that
-lifetime. A missing return would leave the stop location unknown. Either
-outcome informs the next diagnostic without proving a causal explanation.
+The smaller CPU0 preparation diagnostic now isolates the shared prefix before
+a decision about the preserved all-eight-core pre-scheduler proposal. The
+latter retains a byte-identical overlay to the one that preceded the
+2026-10-18 pass. Its successful return would establish shared startup and
+cleanup in that lifetime. A missing return would leave the stop location
+unknown; neither outcome alone proves a causal explanation.
 
 ## The two attempts sent the same bytes through the same transactions
 
@@ -461,9 +463,11 @@ For:
 - Both failing runs were the first launch of their lifetime to power up a
   secondary, once after FreeRTOS images and once in a clean lifetime.
 - Some state survives both CPU0's RMR warm reset and a secondary's power
-  cycle: DSU cluster registers (the native image writes `CLUSTERACTLR_EL1`,
-  `S3_0_C15_C3_3`), CPU0 system registers whose warm-reset value is
+  cycle: DSU cluster registers, CPU0 system registers whose warm-reset value is
   UNKNOWN, and GIC redistributor words that no check covers.
+  The native image contains a `CLUSTERACTLR_EL1` writer, but its plan selects
+  no shared-cluster workaround for the observed DSU revision `0x41`. Its
+  presence does not establish a cluster-register change in these runs.
 
 Against:
 
@@ -610,9 +614,13 @@ evidence are regenerated.
 
 ## Next board steps
 
-The narrowest next launch is the all-eight-core pre-scheduler diagnostic on
-port 3-1, in a clean lifetime after its power removal and a new cold DDR
-initialization ([rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). It is
+The [CPU0-only preparation proposal](rank-7-primary-publication.md) first
+isolates the still-unobserved prefix before GIC initialization or secondary
+release. Review its result before deciding on an all-core launch.
+
+The preserved all-eight-core pre-scheduler proposal uses port 3-1 after
+recovery and a new cold DDR initialization
+([rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). It is
 the 2026-10-18 step that immediately preceded the passing first-task run. It
 runs the shared native startup, secondary power-up, cached EL1 entry and
 production barrier on all eight cores, stops before task creation and

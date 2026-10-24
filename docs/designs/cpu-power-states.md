@@ -1,12 +1,11 @@
 # Design: idle cores wait in WFI; core power-off waits for a consumer
 
-Status: **WFI idle implemented in the instruction model**; the image change
-awaits the scheduler owner. On the board, core 0 has executed `WFI` from an
-EL1 task on the single-core platform (section "Board result: single-core WFI
-on core 0"); no eight-core image has executed it. The implementation,
-its measurements and its differences from this design are in
-[cpu-power.md](../cpu-power.md). Core power-off remains deferred. Section
-numbers refer to `docs/performance-architecture.md`.
+Status: **WFI idle is merged in the cached runtime and checked in the
+instruction model.** Core 0 has physical single-core WFI evidence. The
+bounded all-core idle/wake application is implemented but awaits its own
+physical result; see [cpu-power.md](../cpu-power.md). Core power-off remains
+deferred. The proposal and measurements below describe the original
+integration; section numbers refer to `docs/performance-architecture.md`.
 
 The implementation differs from the text below in three points. The idle
 function is `static inline` in `include/a733_cpu_power.h`, and the image
@@ -18,9 +17,9 @@ one tick of core 0 becoming idle. The time-slice condition is a patch to the ker
 `tasks.c`, `patches/freertos-smp-tasks.patch`, because
 `patches/freertos-smp-c.patch` changes only the port.
 
-Today an idle core never sleeps. The cached eight-core image disables both
-FreeRTOS idle hooks, so idle tasks spin. Core 0 alone takes the 1 ms tick, and
-its time-slice check in `xTaskIncrementTick` yields every core that runs an
+Before this integration, an idle core never slept. The cached image disabled both
+FreeRTOS idle hooks, so idle tasks spun. Core 0 alone took the 1 ms tick, and
+its time-slice check in `xTaskIncrementTick` yielded every core that runs an
 idle task, because the idle-priority ready list always holds all eight idle
 tasks: 7 SGI0 interrupts and 7 context switches per tick with no work
 (counted).

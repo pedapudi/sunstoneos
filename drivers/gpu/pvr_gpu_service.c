@@ -3,6 +3,7 @@
 #include "pvr_compute_service.h"
 #include "pvr_mimus_service.h"
 #include "a733_gpu_graphics_memory.h"
+#include "a733_gpu_mimus.h"
 #ifdef SUNSTONE_GPU_LIFECYCLE
 #include "a733_gpu_disposal.h"
 #endif
@@ -19,6 +20,7 @@
 #pragma weak pvr_mimus_service_deadline
 #pragma weak pvr_mimus_service_submitting
 #pragma weak pvr_mimus_service_progress
+#pragma weak a733_gpu_mimus_reopen
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -632,9 +634,18 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
             s->epoch == UINT64_MAX) return PVR_GPU_SERVICE_BUSY;
         if ((s->config.free_lists.count || s->config.compute) && s->phase == PVR_GPU_SERVICE_STOPPED)
             return PVR_GPU_SERVICE_BUSY;
+        int reopening_mimus = s->config.mimus && s->phase == PVR_GPU_SERVICE_STOPPED;
+        if (reopening_mimus) {
+            if (m->client != s->closed_owner || m->epoch != s->closed_epoch) return PVR_GPU_SERVICE_DENIED;
+            if (!s->config.mimus_owner) return PVR_GPU_SERVICE_BUSY;
+            if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
+            int result = a733_gpu_mimus_reopen(s);
+            if (result < 0) { fail(s, PVR_GPU_SERVICE_COMPUTATION); return PVR_GPU_SERVICE_FAULT; }
+            if (!result) return PVR_GPU_SERVICE_BUSY;
+        }
         s->owner = m->client; ++s->epoch;
         atomic_store_explicit(&s->published_epoch,s->epoch,memory_order_release);
-        if (!deadline(s, r->timeout_us) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
+        if ((!reopening_mimus && !deadline(s, r->timeout_us)) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
         return PVR_GPU_SERVICE_OK;
     }
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;

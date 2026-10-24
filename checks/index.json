@@ -289,7 +289,8 @@
   ],
   "docs": [
    "docs/a733-device-launch.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/watchdog.md"
   ],
   "library": false,
   "pure_host": false,
@@ -541,7 +542,9 @@
   "cache_areas": [
    "host"
   ],
-  "docs": [],
+  "docs": [
+   "docs/watchdog.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -609,7 +612,9 @@
  },
  "a733-monitor-are.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/a733-kernel.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -619,7 +624,7 @@
    "--lld",
    "--objdump"
   ],
-  "summary": "Execute monitor admission/cleanup and reject every enabled ARE-to-zero write.",
+  "summary": "Execute monitor ARE admission and bounded GIC restoration with injected faults.",
   "usb": false
  },
  "a733-pcie-reference.py": {
@@ -876,7 +881,8 @@
   "docs": [
    "docs/a733-smp-observe-host.md",
    "docs/board-test-queue.md",
-   "docs/os-image.md"
+   "docs/os-image.md",
+   "docs/watchdog.md"
   ],
   "library": false,
   "pure_host": false,
@@ -923,7 +929,8 @@
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/watchdog.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2568,6 +2575,34 @@
   "summary": "Check CPU clock tables against pinned sources and run the transition model.",
   "usb": false
  },
+ "cpu-idle-wake.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/cpu-runtime-qualification/DESIGN.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the private CPU idle phase with actual task creation and scheduling.",
+  "usb": false
+ },
+ "cpu-local-timer.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/cpu-runtime-qualification/DESIGN.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the private timer hook, SVC106 restoration and real IRQ frames.",
+  "usb": false
+ },
  "cpu-pmu-smp.py": {
   "cache_areas": [
    "host",
@@ -2617,6 +2652,20 @@
    "--freertos"
   ],
   "summary": "Measure idle-core wake-ups and idle instructions in the cached eight-core image.",
+  "usb": false
+ },
+ "cpu-runtime-qualification.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/cpu-runtime-qualification/DESIGN.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the linked current-image terminal/cleanup with modeled peripherals.",
   "usb": false
  },
  "cpu-table-walks.py": {
@@ -2764,6 +2813,17 @@
   ],
   "summary": "",
   "usb": false
+ },
+ "ddr-host-retention.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Run the production DDR script with fake FEL and a real private file lock.",
+  "usb": true
  },
  "ddr-wrapper.py": {
   "cache_areas": [],
@@ -3522,6 +3582,7 @@
   "docs": [
    "docs/board-wiring.md",
    "docs/watchdog-expiry.md",
+   "docs/watchdog.md",
    "tools/README.md"
   ],
   "library": false,
@@ -5982,7 +6043,7 @@
    "--software",
    "--evidence"
   ],
-  "summary": "One production survey post-exe fault check; all transport/access is mocked.",
+  "summary": "Check production survey failure ownership with a private lock and fake FEL.",
   "usb": true
  },
  "launch-survey.py": {
@@ -6613,6 +6674,19 @@
   "summary": "The linked image's startup register pass against six reference-clock cases.",
   "usb": false
  },
+ "npu-board-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-board.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Exercise the actual NPU host callback and retained supervisor with modeled USB only.",
+  "usb": false
+ },
  "npu-board-host.py": {
   "cache_areas": [
    "build",
@@ -6641,6 +6715,19 @@
    "--output"
   ],
   "summary": "The board image's NPU construction: borrowed providers, the domain-4 row and the runtime's pool.",
+  "usb": false
+ },
+ "npu-board-thermal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Linked NPU thermal driver, native MMIO, policy, clock registry and admission.",
   "usb": false
  },
  "npu-board-usb-stack.py": {
@@ -6746,6 +6833,32 @@
    "--evidence"
   ],
   "summary": "Execute the finite native quiescence and PMIC checkpoint with modeled scheduling.",
+  "usb": false
+ },
+ "npu-finite-thermal-client.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--elf",
+   "--evidence"
+  ],
+  "summary": "Finite thermal client completion/refusal with modeled service and provider replies.",
+  "usb": false
+ },
+ "npu-finite-thermal.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Linked finite THS providers, freshness claims, bootstrap and IRQ admission.",
   "usb": false
  },
  "npu-graph-native.py": {
@@ -7113,6 +7226,32 @@
   ],
   "summary": "One supervised native link and the supply, startup sequencer and refusal composition.",
   "usb": true
+ },
+ "os-cpu-clock-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-clock.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Exercise actual compiled OS CPU register access policy and mux completion barrier.",
+  "usb": false
+ },
+ "os-gpu-thermal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check the actual AArch64 native GPU thermal caller with modeled service replies.",
+  "usb": false
  },
  "os-image-audio.py": {
   "cache_areas": [
@@ -9719,6 +9858,7 @@
   "cache_areas": [],
   "docs": [
    "docs/watchdog-expiry.md",
+   "docs/watchdog.md",
    "tools/README.md"
   ],
   "library": false,

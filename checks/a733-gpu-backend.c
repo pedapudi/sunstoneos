@@ -18,6 +18,10 @@ volatile unsigned mapping_mode, observe, power_enabled, identity_confirmed, late
 volatile unsigned expected_access, expected_offset, expected_width, mmio_count;
 volatile uint64_t expected_value;
 static unsigned power_polls, clock_regression, off_mode;
+static int lifetime_result = 1;
+static unsigned lifetime_calls;
+static int lifetime_live(void *context)
+{ (void)context; ++lifetime_calls; return lifetime_result; }
 static uint64_t operation_deadline;
 #define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
 
@@ -165,6 +169,23 @@ static int forwarded_publish(void *ctx, uint64_t token, enum pvr_free_list_memor
 { (void)m; (void)off; (void)n; return ctx == &free_context && token == 5 ? 8 : 0; }
 static int failed_recovery(void *ctx, uint64_t token)
 { return ctx == &free_context && token == 5 ? -2 : 0; }
+unsigned backend_lifetime_check(void)
+{
+    CHECK(!setup());
+    external.live = lifetime_live;
+    CHECK(!bind()); CHECK(!enabled());
+    unsigned calls = lifetime_calls, accesses_before = mmio_count, providers_before = provider_calls;
+    lifetime_result = -1;
+    uint32_t value = 0;
+    CHECK(!config.control.read32(&backend, 0x8a8, &value));
+    CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_REVOKED && lifetime_calls == calls + 1);
+    lifetime_result = 1;
+    CHECK(!config.control.read32(&backend, 0x8a8, &value));
+    CHECK(!config.power.begin(&backend, until()));
+    CHECK(mmio_count == accesses_before && provider_calls == providers_before && lifetime_calls == calls + 1);
+    return 0;
+}
+
 unsigned backend_check(void)
 {
     CHECK(!setup());

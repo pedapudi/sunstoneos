@@ -148,6 +148,39 @@ before enabling the redirect flag. Restoration after reconnect must disable
 the redirect before restoring its entry. A watchdog expiry test also needs a
 verified way to prevent unintended storage boot if the redirect is lost.
 
+## Choose the boot-input guard from the reset path
+
+The low-input requirement protects a normal boot after a full reset or watchdog
+expiry. The captured ROM's routine at `0x10134` samples bit 8 of `0x03000024`;
+it can continue toward storage when that bit is high. A watchdog recovery path
+therefore retains this guard even when it also programs a CPU redirect whose
+retention across reset is unqualified.
+
+A successful CPU-local return that writes RVBAR to `0x20` and requests
+`RMR_EL3=2` enters forced FEL directly. At `0x3c`, the captured ROM selects FEL
+with `r6=0x5c`; the branch at `0x22c` reaches the FEL dispatcher at `0x2514`.
+That path bypasses the normal boot-input routine. Its host admission checks the
+reviewed ROM instructions and disabled watchdog; it does not require a grounded
+boot input. The [GPU return assembly](../apps/gpu-finite/return.S) and
+[host adapter](../apps/gpu-finite/host.py) implement this path. Native faults can
+still retain the board indefinitely; a successful normal-return design does not
+establish watchdog recovery.
+
+The watchdog-dependent host guards have these source-defined consumers:
+
+| Host path | Reset dependency that retains the low-input guard |
+| --- | --- |
+| `tools/check-a733-smp.py`, reused by `tools/check-a733-device-launch.py` | [SMP launcher](../platform/a733-smp/launch.c) and [device launcher](../platform/a733-device-launch/launch.c) arm the watchdog at `0x02050014`. |
+| `tools/check-a733-smp-observe.py`, `apps/dma-copy/observe.py` | [Observer launcher](../platform/a733-smp-observe/launch.c) arms the watchdog; DMA preparation verifies that launcher source. |
+| `tools/check-a733-storage-launch.py`, `tools/check-a733-mimus-native.py` | [Storage launcher](../platform/a733-storage-launch/launch.c), also built for mimus, arms the watchdog with the admitted lifetime bounds. |
+| `tools/check-watchdog-expiry.py` | The operation deliberately tests watchdog expiry. |
+
+The supervised CPU tool imports observer helpers but supplies its own
+[`launch_once`](../tools/check-a733-smp-supervised.py), which requires a disabled
+watchdog and does not sample the boot input. Imports alone do not establish a
+reset dependency. `tools/check-fel-input.py` samples the input as a diagnostic;
+it does not define admission for every returning application.
+
 ## Captured board ROM and reset ownership
 
 The reconnected board answered the A733 identity request on USB instance
