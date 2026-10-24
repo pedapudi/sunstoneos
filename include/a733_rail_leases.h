@@ -128,6 +128,12 @@ enum a733_rail_result a733_rail_borrow(struct a733_rail_leases *, const struct a
     a733_rail_mask_t rails, struct a733_rail_borrow *);
 enum a733_rail_result a733_rail_borrow_status(struct a733_rail_leases *, const struct a733_rail_borrow *);
 enum a733_rail_result a733_rail_end_borrow(struct a733_rail_leases *, const struct a733_rail_borrow *);
+/* Pin a holder for a counted power-domain row: release returns BUSY until
+ * the matching unpin. rails must be a nonempty subset of the token's outputs.
+ * Nonblocking metadata operations; a corrupt pin count retains the ledger. */
+enum a733_rail_result a733_rail_pin(struct a733_rail_leases *, const struct a733_rail_token *,
+    a733_rail_mask_t rails);
+enum a733_rail_result a733_rail_unpin(struct a733_rail_leases *, const struct a733_rail_token *);
 /* Voltage floor of a CPU rail, DCDC3 or DCDC5, under an exclusive token of
  * it. The first call records observed_uv, the selector voltage the holder read
  * before any write, as the rail's boot baseline; every call returns that
@@ -135,7 +141,7 @@ enum a733_rail_result a733_rail_end_borrow(struct a733_rail_leases *, const stru
 enum a733_rail_result a733_rail_floor(struct a733_rail_leases *, const struct a733_rail_token *,
     enum a733_rail, uint32_t observed_uv, uint32_t *floor_uv);
 /* Call only after independent consumer quiescence/restoration or cancellation
- * before device access. A token with an outstanding borrow returns BUSY. READY means the slot is free and the token is stale.
+ * before device access. A token with an outstanding borrow or pin returns BUSY. READY means the slot is free and the token is stale.
  */
 enum a733_rail_result a733_rail_release(struct a733_rail_leases *, const struct a733_rail_token *, uint64_t deadline);
 /* Latch a terminal ledger fault in the state word while preserving live

@@ -19,8 +19,15 @@ struct pmic_model {
     /* Optional bus timing: now advances by now_step per call, and each wire
      * event sets its flag wire_us after the write. Zero keeps instant flags. */
     uint64_t now_step,wire_us,flag_at;uint32_t flag_value;
-    /* Optional concurrent consumer: each bus access also calls live(). */
+    /* Optional finer timing: each time read costs now_ns and each register
+     * access access_ns nanoseconds instead of now_step, and START, repeated
+     * START and STOP complete edge_us after their write instead of wire_us. */
+    uint64_t now_ns,access_ns,frac_ns,edge_us;
+    /* Optional concurrent consumer: each bus access also calls live(), and
+     * concurrent(), when set, models a caller on another core; it also runs
+     * at every time read, which includes the service task's spins. */
     unsigned probe_live,live_busy;
+    void (*concurrent)(struct pmic_model *);
     unsigned worker,register_held,i2c_held,retained,wire,selected,reads,writes;
     unsigned fail_phase,fail_status,stall_phase,stop_stall;
     /* Optional observer of each PMIC register data write. */
@@ -42,8 +49,14 @@ static int pmic_model_now(void *v,uint64_t *out)
 {
     struct pmic_model *m=v;
     if(m->replace_parent){*m->replace_parent=m->replacement;m->replace_parent=0;}
-    *out=m->now;m->now+=m->now_step;return 1;
+    if(m->concurrent)m->concurrent(m);
+    *out=m->now;
+    if(m->now_ns){m->frac_ns+=m->now_ns;m->now+=m->frac_ns/1000;m->frac_ns%=1000;}
+    else m->now+=m->now_step;
+    return 1;
 }
+static void pmic_model_cost(struct pmic_model *m,uint64_t ns)
+{m->frac_ns+=ns;m->now+=m->frac_ns/1000;m->frac_ns%=1000;}
 static int pmic_model_current(void *v){return ((struct pmic_model *)v)->worker==1;}
 static int pmic_model_outside(void *v,const void *p,size_t n)
 {
@@ -65,7 +78,9 @@ static void pmic_model_retain(void *v)
 {struct pmic_model *m=v;assert(m->worker && m->i2c_held);m->retained=1;}
 static void pmic_model_probe(struct pmic_model *m)
 {
+    if(m->access_ns)pmic_model_cost(m,m->access_ns);
     if(m->probe_live && a733_pmic_live(&m->provider,&m->lifetime)==A733_PMIC_BUSY)++m->live_busy;
+    if(m->concurrent)m->concurrent(m);
 }
 static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
 {
@@ -100,12 +115,13 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
         assert(value==0x58 && m->wire==6);
         if(m->stop_stall){*pmic_model_word(m,address)=0x58;return 1;}
         m->wire=0;*pmic_model_word(m,0x07083010)=0xf8;
-        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+m->wire_us;m->flag_value=0x40;}
+        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+(m->edge_us ? m->edge_us : m->wire_us);m->flag_value=0x40;}
         else *pmic_model_word(m,address)=0x40;
         return 1;
     }
     uint32_t done=m->wire==m->stall_phase ? 0x40 : 0x48;
-    if(m->wire_us){*pmic_model_word(m,address)=0x40;m->flag_at=m->now+m->wire_us;m->flag_value=done;}
+    if(m->wire_us){*pmic_model_word(m,address)=0x40;
+        m->flag_at=m->now+(value==0x68 && m->edge_us ? m->edge_us : m->wire_us);m->flag_value=done;}
     else *pmic_model_word(m,address)=done;
     *pmic_model_word(m,0x07083010)=m->wire==m->fail_phase ? m->fail_status : status;return 1;
 }
