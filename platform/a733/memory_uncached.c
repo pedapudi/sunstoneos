@@ -29,6 +29,9 @@ struct device_memory_pool *a733_memory_uncached_init(void)
 }
 #else
 static int local_result; /* See a733_memory_prepare_once(). */
+/* The initialized pool, or NULL before preparation, after a refusal and when
+ * the image links none. */
+static struct device_memory_pool *published;
 
 static int check_local(void)
 {
@@ -36,21 +39,22 @@ static int check_local(void)
     if (start == end) return 1; /* The image links no uncached pool. */
     if (start != UINT32_C(0x41c00000) || end != UINT32_C(0x41e00000) ||
         (uintptr_t)__device_pool_end > start) return 0;
-    /* Normal-NC identity pages, outer or inner shareable; one write
-     * translation per page, which also proves the read translation of the
-     * same descriptor at EL1. */
+    /* Normal-NC identity mapping, outer or inner shareable; one write
+     * translation per 2 MiB block or per page (a733_memory_local_check()),
+     * which also proves the read translation of the same descriptor at EL1. */
     static const struct a733_mapping_rule nc = {A733_MAPPING_WRITE, 1,
         {{A733_MAIR_NORMAL_NC, A733_SH_OUTER | A733_SH_INNER}}, 0, 1};
-    return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
-                                     DEVICE_MEMORY_PAGE, &nc);
+    return a733_memory_local_check(start, end, &nc);
 }
 
 static int init_local(void)
 {
     uintptr_t start = (uintptr_t)__uncached_pool_start, end = (uintptr_t)__uncached_pool_end;
-    return start == end ||
-        device_memory_pool_init_typed(&uncached_pool, start, start, end - start, DEVICE_MEMORY_CLASS_NONE,
-                                      DEVICE_MEMORY_NON_CACHEABLE);
+    if (start == end) return 1;
+    if (!device_memory_pool_init_typed(&uncached_pool, start, start, end - start, DEVICE_MEMORY_CLASS_NONE,
+                                       DEVICE_MEMORY_NON_CACHEABLE)) return 0;
+    __atomic_store_n(&published, &uncached_pool, __ATOMIC_RELEASE);
+    return 1;
 }
 
 int a733_memory_uncached_prepare(void)
@@ -60,7 +64,7 @@ int a733_memory_uncached_prepare(void)
 
 struct device_memory_pool *a733_memory_uncached_init(void)
 {
-    /* Transitional, as for the write-back pool. */
-    return a733_memory_uncached_prepare() && uncached_pool.initialized ? &uncached_pool : NULL;
+    /* The boot prepared the pool before the scheduler started. */
+    return __atomic_load_n(&published, __ATOMIC_ACQUIRE);
 }
 #endif

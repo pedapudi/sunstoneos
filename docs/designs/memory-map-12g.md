@@ -1,6 +1,7 @@
 # Design: the 12 GiB EL1 map and the EL0 read-only GPU output view
 
-Status: **design**; no code exists. Readers are assumed to know AArch64
+Status: **implemented** and checked in QEMU; not qualified on the board. The
+measured values are in the budget table. Readers are assumed to know AArch64
 stage-1 translation, the cached SMP boot path and
 [memory-architecture.md](memory-architecture.md). This design applies that
 design's mapping stages 2 and 3 to the images built by the cached table
@@ -86,28 +87,35 @@ MMU and data cache on, as the EL1 form requires.
 
 **Local preparation.** A new inline `a733_memory_local_prepare()` in
 `include/a733_memory_local.h` calls `a733_memory_reservations_prepare()` and
-`a733_memory_uncached_prepare()` through weak references, and treats an
-unlinked function as an absent pool. Images that link no pool source then
+`a733_memory_uncached_prepare()`. The header holds weak definitions that
+return 1, which the strong definitions in the pool sources replace, so an
+unlinked pool source counts as an absent pool. Weak references would need a
+GOT entry, which the native linker scripts do not place. Images that link no pool source then
 link and boot unchanged. It is called once on core 0 at EL1, after the tables
 are installed and before the scheduler starts: in `platform_init()` of
 `platform/a733/platform.c` for single-core images, and on the core-0 path of
 `platform/a733-smp-cached/continue.c` for cached images. Extended-layout
 images do not call it, because `a733_device_memory_prepare()` already
 prepares both pools. A refusal stops the boot as an extended-preparation
-refusal does. Each getter then returns its
-pool when the kept result is 1 and the pool is initialized, after one
-load-acquire of the result. Before preparation it returns NULL.
+refusal does. The pool initialization publishes the pool
+pointer with a release store, and each getter returns that pointer after one
+load-acquire. Before preparation, after a refusal and when the image links no
+pool it returns NULL.
 
 **Local pool check stride.** In images whose tables come from `memory.c`,
 both pools sit in 2 MiB level-2 block descriptors; `memory.c` writes entry 14
 for the uncached pool, for example. There `check_local()` runs one write
 `AT` per 2 MiB block that holds a pool byte: at the pool start, then at each
 following 2 MiB boundary below the end. A compile definition,
-`A733_LOCAL_POOLS_BLOCK_MAPPED`, selects this stride. Every target that
-compiles `memory.c` sets it, and `memory.c` stops with `#error` without it.
-The capacity check confirms from each image's symbol table that the images
-built with the definition are exactly the images that link
-`a733_cached_memory_prepare()`. The golden local-layout comparison proves
+`A733_LOCAL_POOLS_BLOCK_MAPPED`, selects this stride. One directory-scope rule
+in `cmake/a733-smp-cached.cmake` sets it on every target in that directory
+whose sources include `memory.c`; the cached single-core cmake files, whose
+targets other projects define in other directories, set it on their targets.
+`memory.c` stops with `#error` without it. The definition
+leaves the absolute symbol `a733_local_pools_block_mapped` in the image. The
+capacity check confirms from each image's symbol table that the images with
+that symbol link `a733_cached_memory_prepare()`, and that every image that
+links the builder and a local pool has it. The golden local-layout comparison proves
 that each checked entry is a block descriptor. Images whose tables come from
 `platform/a733/platform.c` keep the per-page stride.
 
@@ -148,19 +156,29 @@ bytes before the CPU reads them.
 Instruction and barrier counts use the QEMU fixtures under `-icount shift=0`
 with an execution trace, as in [memory-architecture.md](memory-architecture.md).
 
-| Metric | Baseline | Target | Method |
-| --- | --- | --- | --- |
-| DRAM mapped at EL1 | 910 MiB extended, 126 MiB local (counted) | 12,174 MiB in both when the check passes; baseline when it fails | golden comparison |
-| Translation-table memory | 20,544 bytes: five pages and the sum line (counted) | unchanged, under 64 KiB | section size in the fixture's link map |
-| Descriptor stores added at boot | 0 | 11 extended, 403 local, plus 2 for the read-only view | fixture count |
-| `AT`, `DC` and `TLBI` added at boot | 0 | 0 | execution trace of `a733_cached_memory_prepare()` |
-| Instructions in `a733_cached_memory_prepare()` | not measured; recorded first | at most 2,000 above baseline, decode check excluded | QEMU `-icount` |
-| Extended pool check | 392 `AT` | 392 `AT` | translation callback count |
-| Local pool check, tables from `memory.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | 2 `AT` (2 to 3 with the large NPU graph), once at boot | host callback count |
-| Local pool check, tables from `platform.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | same count, once at boot | host callback count |
-| Local getter after preparation | 17 instructions, one load-acquire | at most 8 instructions, one load-acquire, no barrier | QEMU SMP fixture |
-| Critical-section hold of first local preparation | 344 instructions at the first getter call | unchanged, once at boot before the scheduler | QEMU SMP fixture |
-| `aarch64_device_translate_el0()` per call | none | equal to `aarch64_device_translate()`; one `ISB`, no `DSB` | QEMU fixture |
+Baseline values come from the same fixtures built against the integrated
+tree before the change (revision `dfa5174`), with the decode-check
+assertions removed because that builder never calls the check. Trace counts
+vary by up to about ten instructions between runs because the coherence flush
+polls the counter.
+
+| Metric | Baseline | Target | Measured | Method |
+| --- | --- | --- | --- | --- |
+| DRAM mapped at EL1 | 910 MiB extended, 126 MiB local | 12,174 MiB in both when the check passes; baseline when it fails | 12,174 MiB in both when it passes; 910 and 126 MiB when it fails | golden comparison |
+| Translation-table memory | 20,544 bytes | unchanged, under 64 KiB | 20,544 bytes in every fixture image | `__tables_end - __tables_start` |
+| Descriptor stores added at boot | 0 | 11 extended, 403 local, plus 2 for the read-only view | 11 extended, 403 local (valid blocks 455 to 466 and 63 to 466), 2 for the view | fixture count and golden comparison |
+| `AT`, `DC` and `TLBI` added at boot | 0 | 0 | 0 `AT`, 0 `TLBI`, 321 `DC` with and without the map | execution trace of `a733_cached_memory_prepare()` |
+| Instructions in `a733_cached_memory_prepare()`, decode check excluded | 20,699 extended, 15,636 local | at most 2,000 above baseline | 20,785 extended (+86); 16,882 local (+1,246); 39 and 1,227 above the decode-fail path | QEMU execution trace |
+| Extended pool check | 392 `AT` | 392 `AT` | 392 `AT`; 22,541 instructions | translation callback count |
+| Local pool check, tables from `memory.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | 2 `AT` (2 to 3 with the large NPU graph), once at boot | 3 for an unaligned 2 MiB pool and the uncached pool, 2 for a 2 MiB-aligned pool, 3 with the large NPU graph, 1 for a 64 KiB pool alone | host callback count, QEMU trace |
+| Local pool check, tables from `platform.c` | 1,024 `AT` (1,536 with the large NPU graph) at the first getter call | same count, once at boot | 1,024 and 1,536, once at boot | host callback count |
+| Local getter after preparation | 17 instructions, one load-acquire | at most 8 instructions, one load-acquire, no barrier | 5 instructions, one load-acquire, no barrier | QEMU SMP fixture |
+| Critical-section hold of first local preparation | 344 instructions at the first getter call | unchanged, once at boot before the scheduler | 347 instructions (the release store of the pool pointer), once at boot | QEMU SMP fixture |
+| `aarch64_device_translate_el0()` per call | none | equal to `aarch64_device_translate()`; one `ISB`, no `DSB` | 48 instructions in both functions; traced call 40 against 41, one `AT`, one `ISB`, no `DSB` | QEMU fixture |
+
+The getter loads a pool pointer that the preparation publishes with a release
+store, instead of the kept result and the pool's initialized flag; that change
+brings the getter from 8 instructions to 4 plus the call.
 
 ## Sources and unproven sequences
 
@@ -224,13 +242,17 @@ These go to the primary agent as one patch:
   `platform_init()`, for the QEMU fixtures that link local pools.
 - `cmake/a733-os.cmake`: `A733_GPU_OUTPUT_EL0_READ_ONLY=1` as a compile
   definition of `sunstone-a733-os` in the GPU linear branch.
-- `cmake/a733-smp-cached.cmake` and each other cmake file that compiles
-  `memory.c` without copying that target's definitions:
-  `A733_LOCAL_POOLS_BLOCK_MAPPED=1` on the target.
-- `apps/storage-read-single-core/platform.patch`: regenerated if the new call
-  in `platform_init()` moves its context.
-- Any other fixture that calls a local getter on neither platform path gains
-  one preparation call; the implementation lists each.
+- `cmake/a733-smp-cached.cmake`: `A733_LOCAL_POOLS_BLOCK_MAPPED=1` on every
+  target in that directory whose sources include `memory.c`, through one
+  `add_compile_definitions()` generator expression; and
+  `cmake/a733-application-single-core.cmake`, `cmake/a733-gpu-single-core.cmake`
+  and `cmake/a733-npu-single-core.cmake`: the same definition on their
+  targets, which other projects define in other directories.
+- `apps/storage-read-single-core/platform.patch` needed no change: it still
+  applies with `--fuzz=0` at an offset.
+- `checks/cached-device-reservations.c`, the one fixture that calls a local
+  getter on neither platform path, calls `a733_memory_local_prepare()` on core
+  0 as `continue.c` does; it is an owned file.
 
 These go to other owners as requests:
 

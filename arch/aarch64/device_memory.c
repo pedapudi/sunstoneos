@@ -10,17 +10,15 @@ unsigned aarch64_device_cache_stride(void)
     return aarch64_cache_stride_from_ctr(ctr);
 }
 
-int aarch64_device_translate(uintptr_t address, int write, struct aarch64_translation *result)
-{
-    if (!result || !aarch64_device_cache_stride()) return 0;
-    uint64_t saved_flags, saved_par, par;
+/* One AT form with DAIF masked and PAR_EL1 saved and restored; ISB orders
+ * the PAR_EL1 read after the translation. */
 #define TRANSLATE(operation) \
     __asm__ volatile("mrs %0, daif\n msr daifset, #0xf\n mrs %1, par_el1\n " \
                      operation ", %3\n isb\n mrs %2, par_el1\n msr par_el1, %1\n msr daif, %0" \
                      : "=&r"(saved_flags), "=&r"(saved_par), "=&r"(par) : "r"(address) : "memory")
-    if (write) { TRANSLATE("at s1e1w"); }
-    else { TRANSLATE("at s1e1r"); }
-#undef TRANSLATE
+static inline __attribute__((always_inline)) int decode(uint64_t par, uintptr_t address,
+                                                         struct aarch64_translation *result)
+{
     if (par & 1) return 0;
     *result = (struct aarch64_translation){
         (par & UINT64_C(0x000ffffffffff000)) | (address & 4095),
@@ -28,6 +26,25 @@ int aarch64_device_translate(uintptr_t address, int write, struct aarch64_transl
     };
     return 1;
 }
+
+int aarch64_device_translate(uintptr_t address, int write, struct aarch64_translation *result)
+{
+    if (!result || !aarch64_device_cache_stride()) return 0;
+    uint64_t saved_flags, saved_par, par;
+    if (write) { TRANSLATE("at s1e1w"); }
+    else { TRANSLATE("at s1e1r"); }
+    return decode(par, address, result);
+}
+
+int aarch64_device_translate_el0(uintptr_t address, int write, struct aarch64_translation *result)
+{
+    if (!result || !aarch64_device_cache_stride()) return 0;
+    uint64_t saved_flags, saved_par, par;
+    if (write) { TRANSLATE("at s1e0w"); }
+    else { TRANSLATE("at s1e0r"); }
+    return decode(par, address, result);
+}
+#undef TRANSLATE
 
 int aarch64_device_cache(enum aarch64_cache_op operation, uintptr_t cpu, size_t bytes)
 {

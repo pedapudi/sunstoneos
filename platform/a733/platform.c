@@ -4,6 +4,7 @@
 #include "a733_memory_boot.h"
 #include "a733_cpu_coherence.h"
 #include "a733_device_memory_layout.h"
+#include "a733_memory_local.h"
 
 #ifdef SUNSTONE_MEMTEST
 // The memory qualification record occupies the result block's last page.
@@ -139,6 +140,9 @@ void platform_init(void)
     __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
     sctlr |= (1UL << 12) | (1UL << 2) | 1;
     __asm__ volatile("msr sctlr_el1, %0\n isb" :: "r"(sctlr) : "memory");
+    // Both local pools are checked against the installed tables once, here,
+    // before the scheduler starts; their getters do not prepare.
+    configASSERT(a733_memory_local_prepare());
     // EL3 owns distributor security and the recovery timer. EL1 owns only
     // the nonsecure physical timer and its Group 1 CPU interface.
     *(volatile uint8_t *)(GICR_SGI + 0x400 + TIMER_IRQ) =

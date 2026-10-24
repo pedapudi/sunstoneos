@@ -55,7 +55,9 @@ table. Both EL3 and EL1 use identity mappings with matching inner-shareable
 attributes. Write-back blocks use the established MAIR value `0xff`;
 Non-cacheable blocks use `0x44`. The new blocks are non-executable. Their EL1
 permissions deny EL0 access. The EL3 mappings preserve the required non-secure
-physical-address selection. No additional table pages are needed. The
+physical-address selection. No additional table pages are needed. When this
+boot's DRAM decode check passes, EL1 also maps `0x8000_0000`–`0x3_4000_0000`
+as eleven 1 GiB blocks with no EL0 access, and EL3 maps nothing there. The
 complete EL1 map, with the access each range allows, is in
 [memory protection](memory-protection.md).
 
@@ -185,20 +187,42 @@ free extents and cleans each recycled page once.
 The QEMU fixture uses the production objects of the extended image: linker
 script, table builder, cache-enable helpers, eight-core barrier, pool
 preparation and getters. It compares all 1,024 EL1 level-1 and level-2
-entries with the map in [memory protection](memory-protection.md). It then
-runs a successful preparation, an interior missing mapping and a changed
-admitted deadline, and reacquires a written extent in both pools, which runs
-the production clean at EL1 on the write-back pool. QEMU runs with
-`-icount shift=0`, so the PMU instruction counter is exact; a second image
-wraps the translation helper to count `AT` instructions. The check also scans
-the sources for writes to the cached tables outside their builder.
+entries with the map in [memory protection](memory-protection.md), with the
+DRAM decode check failing and passing, and checks the ranges the builder
+passes to the check. It then runs a successful preparation, an interior
+missing mapping and a changed admitted deadline, and reacquires a written
+extent in both pools, which runs the production clean at EL1 on the
+write-back pool. QEMU runs with `-icount shift=0`, so the PMU instruction
+counter is exact; a second image wraps the translation helper to count `AT`
+instructions. Two one-core runs trace the table builder with the check
+passing and failing.
+
+A second fixture, `checks/device-memory-capacity-local.c`, links the builder
+in the local layout with the production cached linker script, in three
+images: 2 MiB write-back and uncached pools, a 64 KiB write-back pool alone,
+and both pools with the read-only GPU output view. Each runs on one core with
+the check passing and failing under an execution trace. It compares every
+EL1 and EL3 entry, checks EL1 and EL0 read and write translations of the text
+block, the GPU output region, the new blocks and the unmapped ranges, runs the
+boot preparation of both pools and one getter call, and traces
+`aarch64_device_translate()` and `aarch64_device_translate_el0()`.
+
+The check also scans the sources for writes to the cached tables outside
+their builder. With `--images DIR`, it reads the symbol table of every built
+image under `DIR`: which decode check definition it links, whether its local
+pools use the block stride exactly where the cached builder is linked, and
+whether a linked local preparation is called.
 
 | Measurement | Before | After |
 | --- | --- | --- |
 | Translations to prepare both pools | 401,408 in 3,136 calls | 392 in one call |
 | Instructions to prepare both pools | 27,474,026 | 22,547 |
-| Translations to prepare local pools, 2 MiB write-back and uncached | 1,536 | 1,024 |
-| Translations to prepare local pools, large NPU graph | 2,048 | 1,536 |
+| Translations to prepare local pools, 2 MiB write-back and uncached, tables from `platform.c` | 1,536 | 1,024 |
+| Translations to prepare local pools, large NPU graph, tables from `platform.c` | 2,048 | 1,536 |
+| Translations to prepare local pools, 2 MiB write-back and uncached, tables from the cached builder | 1,024 at the first getter call | 3 (2 for a 2 MiB-aligned pool), once at boot |
+| Translations to prepare local pools, large NPU graph, tables from the cached builder | 1,536 at the first getter call | 3, once at boot |
+| DRAM mapped at EL1, decode check passing | 910 MiB extended, 126 MiB local | 12,174 MiB in both |
+| Table builder instructions, decode check excluded | 20,699 extended, 15,636 local | 20,785 extended, 16,882 local |
 | Record comparisons per acquire, worst replayed | 1,056 bound | 160; bound 1,056 |
 | GPU MMU entries for the replayed extents | one per 4 KiB page | 24 to 137 per image, against 354 to 4,568 |
 
@@ -230,8 +254,9 @@ rounds in which one core describes a released lease while the other gives
 its slot to another owner and extent. An execution trace counts the
 barriers per call: each acquire, release or retain adds a critical-section
 pair of 485 instructions with 5 supervisor calls, 27 `DSB` and 7 `ISB`. A
-local pool getter call after preparation costs 17 instructions and no
-barrier.
+local pool getter call after preparation costs 5 instructions, one acquire
+load and no barrier; it cost 17 when the getter also ran the preparation's
+fast path.
 
 These results do not qualify physical DRAM, coherence, device transactions,
 sustained workloads or any cycle count on the board. Every cycle budget in

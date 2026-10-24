@@ -26,21 +26,32 @@ complete rounded allocation, including unused padding.
 
 The [native preparation](../platform/a733/memory_reservations.c),
 `a733_memory_reservations_prepare()`, derives CPU and physical addresses from
-the linker symbols. It makes one write address translation per pool page and
-requires identity translation, Normal write-back memory and inner
-shareability. No golden comparison covers this layout's tables, so every page
-is checked: 512 translations for a 2 MiB pool. The optional uncached pool has
-its own preparation, `a733_memory_uncached_prepare()`, with a read and a write
-translation per page. Preparation performs no writes to pool backing and no
-peripheral MMIO. It returns 1 when the pool is ready or the image links none,
-and 0 after a refusal, which it keeps. The getter returns NULL until
-preparation has succeeded.
+the linker symbols and requires identity translation, Normal write-back
+memory and inner shareability. In images whose tables come from the cached
+table builder (`platform/a733-smp-cached/memory.c`) it makes one write address
+translation per 2 MiB block that holds a pool byte, because the QEMU golden
+comparison of that builder proves every such entry is a block descriptor: two
+translations for an unaligned 2 MiB pool. In images whose tables come from
+`platform/a733/platform.c` no golden comparison covers the tables, so it
+makes one write translation per pool page: 512 for a 2 MiB pool. The optional
+uncached pool has its own preparation, `a733_memory_uncached_prepare()`, with
+the same stride and one write translation per block or page. Preparation
+performs no writes to pool backing and no peripheral MMIO. It returns 1 when
+the pool is ready or the image links none, and 0 after a refusal, which it
+keeps.
 
-`platform_init()` is to call both preparations on core 0 before the scheduler
-starts. Until it does, each getter calls its preparation. The first call
-checks the translations outside any lock and initializes the pool inside the
-kernel critical section; a later call returns the kept result after one
-load-acquire and takes no lock.
+The boot calls both preparations once through `a733_memory_local_prepare()`
+(`include/a733_memory_local.h`) on core 0 at EL1, after the tables are
+installed and before the scheduler starts: `platform_init()` of
+`platform/a733/platform.c` in single-core images, and the core-0 path of
+`platform/a733-smp-cached/continue.c` in cached multicore images. A refusal
+stops the boot. Weak definitions in that header stand for an unlinked pool
+source, so images without pools link unchanged. A preparation checks the
+translations outside any lock and initializes the pool inside the kernel
+critical section, then publishes the pool pointer with a release store. Each
+getter makes one acquire load of that pointer and returns NULL before
+preparation, after a refusal and when the image links no pool. A later
+preparation call returns the kept result after one acquire load.
 
 The pool excludes image code, driver state, translation tables, monitor state,
 exception stacks and heap allocations by construction. It also remains below
@@ -144,10 +155,13 @@ generation exhaustion, retain and release from every held state, describe
 without a lock, and the clean watermark on write-back and Non-cacheable pools.
 A traced build of the pool confirms that every critical-section entry has its
 exit. A second host build links both local preparations with modeled
-translations at fixed linker addresses. With an unaligned 2 MiB write-back
-pool and the uncached pool, preparation makes 1,024 translations; with the
-large NPU graph pool it makes 1,536. A faulting block refuses its pool, and
-later getter calls make no further translation. Native AArch64 compilation
+translations at fixed linker addresses. The getters return NULL and translate
+nothing before preparation. With an unaligned 2 MiB write-back pool and the
+uncached pool, preparation makes 1,024 translations per page and 3 per block;
+with a 2 MiB-aligned pool it makes 2 per block; with the large NPU graph pool
+it makes 1,536 per page and 3 per block. A faulting block refuses its pool,
+the boot preparation reports the refusal, and later calls make no further
+translation. Native AArch64 compilation
 covers the allocator, both preparations and the translation helper as a
 one-thread fixture, and confirms that the allocator does not compile for
 AArch64 without the kernel headers unless a fixture asks for that. The link mode

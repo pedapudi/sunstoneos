@@ -33,10 +33,25 @@ static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t
  * address pa, UXN and PXN, access flag, inner shareable (SH = 0b11), MAIR
  * index 1 (Normal write-back) and AP = 0b00 (EL1 read/write, no EL0 access).
  * Level-1 (1 GiB) and level-2 (2 MiB) blocks share the format. The cached
- * builder's stage-2 entries and the memory qualification image's tested map
- * both use it. */
+ * builder's DRAM map above the boot image and the memory qualification
+ * image's tested map both use it. */
 #define A733_EL1_DRAM_BLOCK(pa) ((uint64_t)(pa) | (UINT64_C(1) << 54) | (UINT64_C(1) << 53) | \
     (UINT64_C(1) << 10) | (UINT64_C(3) << 8) | (UINT64_C(1) << 2) | 1)
+/* The top of DRAM that the EL1 tables can map: 12 GiB from 0x40000000. */
+#define A733_DRAM_END UINT64_C(0x340000000)
+struct a733_dram_range {
+    uint64_t base, size;
+};
+/* The per-boot DRAM decode check. It runs on core 0 at EL3 with the MMU off,
+ * before the cached builder writes the EL1 entries for `ranges`. It returns 1
+ * only when, for every byte of every listed range, the DRAM controller
+ * decodes the address linearly from 0x40000000 with no alias, the decoded
+ * size reaches A733_DRAM_END, and the boot0 firewall grants Non-secure read
+ * and write with no protected region overlapping. Any other result, including
+ * an unreadable firewall, returns 0, and the builder then writes none of the
+ * entries. The DRAM-controller package owns the definition; until it lands,
+ * platform/a733-smp-cached/memory.c links a weak one that returns 0. */
+int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count);
 struct a733_device_memory_layout {
     uint64_t profile, wb_start, wb_end, nc_start, nc_end;
 };

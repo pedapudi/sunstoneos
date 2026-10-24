@@ -29,6 +29,9 @@ struct device_memory_pool *a733_memory_reservations_init(void)
 }
 #else
 static int local_result; /* See a733_memory_prepare_once(). */
+/* The initialized pool, or NULL before preparation, after a refusal and when
+ * the image links none. */
+static struct device_memory_pool *published;
 
 static int check_local(void)
 {
@@ -41,19 +44,20 @@ static int check_local(void)
         end > UINT32_C(0x41f00000) || end < start ||
         ((start | end) & 4095) || end - start > A733_LOCAL_DEVICE_POOL_BYTES ||
         !aarch64_device_cache_stride()) return 0;
-    /* Write-back identity pages, inner shareable; the write translation of
-     * every page is checked, because the local tables are not compared with a
-     * golden copy. */
+    /* Write-back identity mapping, inner shareable; one write translation per
+     * 2 MiB block or per page (a733_memory_local_check()). */
     static const struct a733_mapping_rule wb = {A733_MAPPING_WRITE, 1,
         {{A733_MAIR_NORMAL_WB, A733_SH_INNER}}, 0, 1};
-    return a733_mapping_check_stride(aarch64_device_translate, start, start, end - start,
-                                     DEVICE_MEMORY_PAGE, &wb);
+    return a733_memory_local_check(start, end, &wb);
 }
 
 static int init_local(void)
 {
     uintptr_t start = (uintptr_t)__device_pool_start, end = (uintptr_t)__device_pool_end;
-    return start == end || device_memory_pool_init(&boot_pool, start, start, end - start);
+    if (start == end) return 1;
+    if (!device_memory_pool_init(&boot_pool, start, start, end - start)) return 0;
+    __atomic_store_n(&published, &boot_pool, __ATOMIC_RELEASE);
+    return 1;
 }
 
 int a733_memory_reservations_prepare(void)
@@ -63,8 +67,7 @@ int a733_memory_reservations_prepare(void)
 
 struct device_memory_pool *a733_memory_reservations_init(void)
 {
-    /* Transitional: until platform_init() prepares the pool, the first getter
-     * call prepares it. */
-    return a733_memory_reservations_prepare() && boot_pool.initialized ? &boot_pool : NULL;
+    /* The boot prepared the pool before the scheduler started. */
+    return __atomic_load_n(&published, __ATOMIC_ACQUIRE);
 }
 #endif

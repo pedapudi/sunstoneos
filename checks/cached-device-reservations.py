@@ -68,7 +68,7 @@ target_include_directories(cached-device-check PRIVATE "{ROOT}/platform/a733-smp
   "{ROOT}/include" "{ROOT}/runtime/include" "{args.freertos.resolve()}/include"
   "{build}/sunstone/freertos-a733-smp-cached" "{fixtures}")
 target_compile_definitions(cached-device-check PRIVATE SUNSTONE_A733_CACHED_DEVICES=1
-  SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
+  SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1 A733_LOCAL_POOLS_BLOCK_MAPPED=1
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1
   INCLUDE_xSemaphoreGetMutexHolder=1 GPU_FIXTURE_BYTES={(fixtures / 'gpu.fw').stat().st_size})
 target_compile_options(cached-device-check PRIVATE -march=armv8-a -mstrict-align
