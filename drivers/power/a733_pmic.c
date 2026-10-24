@@ -187,12 +187,18 @@ int a733_pmic_bind_service(struct a733_pmic *p,void (*kick)(void *),void *contex
     if(!p || p->self!=p || !kick || !domains || p->kick || p->stage!=S_CLOCK)return 0;
     p->kick=kick;p->kick_context=context;p->domains=domains;return 1;
 }
-unsigned a733_pmic_work(const struct a733_pmic *p,uint32_t *wait_ns)
+unsigned a733_pmic_work(const struct a733_pmic *p,uint64_t now,uint64_t *spin_until)
 {
-    /* A START, repeated START or STOP condition takes about two bit times;
-     * a byte with its acknowledgement nine. */
-    const int edge=p->phase==P_WAIT_START || p->phase==P_WAIT_RESTART || p->phase==P_WAIT_STOP;
-    if(wait_ns)*wait_ns=(edge ? 2u : 9u)*p->bit_ns;
+    if(spin_until) {
+        /* A START, repeated START or STOP condition takes about two bit
+         * times, a byte with its acknowledgement nine, from the time read
+         * after the write that started it; after a poll that found it
+         * unfinished, at least a quarter bit time more. */
+        const int edge=p->phase==P_WAIT_START || p->phase==P_WAIT_RESTART || p->phase==P_WAIT_STOP;
+        const uint64_t phase_end=p->phase_at+((edge ? 2u : 9u)*(uint64_t)p->bit_ns+999u)/1000u,
+            respin=now+(p->bit_ns/4u+999u)/1000u;
+        *spin_until=phase_end>respin ? phase_end : respin;
+    }
     /* fault() sets the state word after the plain failed flag; held and
      * retained change only on this task. */
     if(a733_power_authority_load(&p->rails->authority)&A733_POWER_PMIC_TRANSFER)
@@ -303,6 +309,14 @@ static int await_status(struct a733_pmic *p,unsigned expected)
     if(!rd(p,TWI+0x10,&p->last_status) || p->last_status!=expected)return -1;
     return 1;
 }
+/* The phases that wait for a flag or status; every other phase except
+ * P_DATA and P_PUBLISH writes the control register to start a bus event. */
+static int waits(unsigned phase)
+{
+    return phase==P_WAIT_START || phase==P_WAIT_ADDRESS || phase==P_WAIT_REGISTER ||
+        phase==P_WAIT_RESTART || phase==P_WAIT_READ_ADDRESS || phase==P_WAIT_RECEIVE ||
+        phase==P_WAIT_WRITE || phase==P_WAIT_STOP;
+}
 static enum a733_pmic_status phase(struct a733_pmic *p)
 {
     struct a733_pmic_slot *s=&p->slots[p->active];struct profile f;profile(s->snapshot.rail,&f);
@@ -326,12 +340,13 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     case P_DATA:if(!rd(p,TWI+8,&value))return fault(p);p->values[p->byte_index]=(uint8_t)value;break;
     case P_STOP:ok=wr(p,TWI+0xc,0x58);break;
     case P_WAIT_STOP:
-        /* As the bootloader's twi_stop(): wait for M_STP to clear, then for
-         * the idle status 0xf8, each bounded by the request deadline. The
-         * STOP write cleared INT_FLAG and M_STA cleared after the START, so
-         * CNTR then holds BUS_EN alone (A733 manual 18.11.10.4); any other
-         * value is an error state. Line control is read after the final
-         * STOP; a line held after an earlier STOP stops the next START. */
+        /* Wait for M_STP to clear, then for the idle status 0xf8, each
+         * bounded by the request deadline. The bootloader's twi_stop() waits
+         * for 0xf8 alone; the provider adds the M_STP wait. The STOP write
+         * cleared INT_FLAG and M_STA cleared after the START, so CNTR then
+         * holds BUS_EN alone (A733 manual 18.11.10.4); any other value is an
+         * error state. Line control is read after the final STOP; a line
+         * held after an earlier STOP stops the next START. */
         if(!rd(p,TWI+0xc,&value))return fault(p);
         if(value&0x10)return A733_PMIC_PENDING;
         if((value&0xff)!=0x40 || !rd(p,TWI+0x10,&value))return fault(p);
@@ -347,8 +362,9 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
         if(p->byte_index==WRITE_INDEX+1 && p->values[WRITE_INDEX+1]!=p->values[WRITE_INDEX])return fault(p);
         if(++p->byte_index<(s->write ? 8u : 6u)){p->phase=P_START;return A733_PMIC_PENDING;}break;
     case P_PUBLISH: {
-        /* The bus was idle after the last STOP; startup verified the rest. */
-        if(!authorized(p) || !timely(p))return fault(p);
+        /* The bus was idle after the last STOP; startup verified the rest.
+         * The state word and the deadline were checked after that STOP, or
+         * at the entry of this poll. */
         struct a733_pmic_snapshot snapshot;
         a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[s->write ? 7 : 4],&snapshot);
         snapshot.page_before=p->values[0];snapshot.chip=p->values[1];snapshot.revision=p->values[2];snapshot.page_after=p->values[5];
@@ -358,9 +374,7 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     }
     default:return fault(p);
     }
-    if(ok<0 || (!ok && p->phase!=P_WAIT_START && p->phase!=P_WAIT_ADDRESS &&
-       p->phase!=P_WAIT_REGISTER && p->phase!=P_WAIT_RESTART && p->phase!=P_WAIT_READ_ADDRESS &&
-       p->phase!=P_WAIT_RECEIVE && p->phase!=P_WAIT_WRITE))return fault(p);
+    if(ok<0 || (!ok && !waits(p->phase)))return fault(p);
     /* The write byte sends its data after the register index, then STOP. */
     if(ok>0)p->phase=p->phase==P_WAIT_REGISTER && p->byte_index==WRITE_INDEX ? P_WRITE :
         p->phase==P_WAIT_WRITE ? P_STOP : p->phase+1;
@@ -372,23 +386,21 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
  * POLL_PHASES phases. The provider object is held only for those few register
  * accesses; result() and reap() callers on other cores see BUSY only then.
  * The state word is checked again before each further phase. */
-static int starts(unsigned phase)
-{
-    return phase==P_START || phase==P_RESTART || phase==P_ADDRESS || phase==P_READ_ADDRESS ||
-        phase==P_REGISTER || phase==P_RECEIVE || phase==P_WRITE || phase==P_STOP;
-}
 static enum a733_pmic_status transfer(struct a733_pmic *p)
 {
     for(unsigned n=1;;++n) {
         const unsigned before=p->phase,index=p->byte_index;
         enum a733_pmic_status r=phase(p);
         if(r!=A733_PMIC_PENDING)return r;
-        /* One time read per phase: the deadline and, after a phase-start
-         * write, the time the service spins from. */
+        /* A wait that found its flag or status not yet set ends the poll
+         * without a time read: the time read before it, after the previous
+         * phase or at the entry of this poll, is at most two reads old, and
+         * the next poll reads the time before any access. */
+        if(p->phase==before && p->byte_index==index){p->waiting=1;return r;}
+        /* One time read per completed phase: the deadline and, after a
+         * phase-start write, the time the service spins from. */
         if(!timely(p))return fault(p);
-        const int moved=p->phase!=before || p->byte_index!=index;
-        if(moved && starts(before))p->phase_at=p->last_now;
-        if(!moved){p->waiting=1;return r;}
+        if(!waits(before) && before!=P_DATA)p->phase_at=p->last_now;
         if(n==POLL_PHASES)return r;
         if(!authorized(p))return fault(p);
     }

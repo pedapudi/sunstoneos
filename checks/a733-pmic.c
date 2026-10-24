@@ -26,6 +26,18 @@ struct pmic_model {
      * in nanoseconds plus its wire time, so its fraction of a microsecond
      * counts. */
     uint64_t now_ns,access_ns,frac_ns,edge_us,flag_ns;
+    /* Optional board costs: a write costs write_ns instead of access_ns when
+     * set, and each provider poll costs poll_ns at its task check. */
+    uint64_t write_ns,poll_ns;
+    /* Optional STOP behaviour: the control register reads stop_control
+     * instead of 0x40 once M_STP clears; after each STOP the status register
+     * reads 0x58 until its stop_status_reads-th read, which gives 0xf8; after the k-th
+     * STOP of a setup (k < 8) line control reads stop_line[k] when nonzero,
+     * else 0x30. */
+    uint32_t stop_control,stop_status_reads,stop_line[8],status_late;unsigned stops,status_waits,line_reads;
+    /* Optional deadline probe: accesses that start at or after late_after,
+     * when it is nonzero. */
+    uint64_t late_after;unsigned late;
     /* Optional concurrent consumer: each bus access also calls live(), and
      * concurrent(), when set, models a caller on another core; it also runs
      * at every time read, which includes the service task's spins. */
@@ -60,7 +72,8 @@ static int pmic_model_now(void *v,uint64_t *out)
 }
 static void pmic_model_cost(struct pmic_model *m,uint64_t ns)
 {m->frac_ns+=ns;m->now+=m->frac_ns/1000;m->frac_ns%=1000;}
-static int pmic_model_current(void *v){return ((struct pmic_model *)v)->worker==1;}
+static int pmic_model_current(void *v)
+{struct pmic_model *m=v;if(m->poll_ns)pmic_model_cost(m,m->poll_ns);return m->worker==1;}
 static int pmic_model_outside(void *v,const void *p,size_t n)
 {
     struct pmic_model *m=v;
@@ -79,22 +92,26 @@ static void pmic_model_leave(void *v)
 {struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);m->i2c_held=0;}
 static void pmic_model_retain(void *v)
 {struct pmic_model *m=v;assert(m->worker && m->i2c_held);m->retained=1;}
-static void pmic_model_probe(struct pmic_model *m)
+static void pmic_model_probe(struct pmic_model *m,unsigned write)
 {
-    if(m->access_ns)pmic_model_cost(m,m->access_ns);
+    if(m->late_after && m->now>=m->late_after)++m->late;
+    const uint64_t ns=write && m->write_ns ? m->write_ns : m->access_ns;
+    if(ns)pmic_model_cost(m,ns);
     if(m->probe_live && a733_pmic_live(&m->provider,&m->lifetime)==A733_PMIC_BUSY)++m->live_busy;
     if(m->concurrent)m->concurrent(m);
 }
 static int pmic_model_read(void *v,uintptr_t address,uint32_t *out)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m);
+    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m,0);
     assert(a733_pmic_native_address(address,0));++m->reads;
     if(address==0x0708300c && m->flag_at && (m->now_ns ? m->now*1000+m->frac_ns>=m->flag_ns : m->now>=m->flag_at)){*pmic_model_word(m,address)=m->flag_value;m->flag_at=0;}
+    if(address==0x07083010 && m->status_late){++m->status_waits;if(!--m->status_late)*pmic_model_word(m,address)=0xf8;}
+    if(address==0x07083020)++m->line_reads;
     *out=*pmic_model_word(m,address);return 1;
 }
 static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
 {
-    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m);
+    struct pmic_model *m=v;assert(m->worker && m->i2c_held && !m->retained);pmic_model_probe(m,1);
     assert(a733_pmic_native_address(address,1) && value<=255);++m->writes;
     assert(m->trace_count<4096);m->trace[m->trace_count++]=(struct pmic_model_word){address,value};
     if(address==0x07083008){*pmic_model_word(m,address)=value;return 1;}
@@ -117,14 +134,16 @@ static int pmic_model_write(void *v,uintptr_t address,uint32_t value)
     } else {
         assert(value==0x58 && m->wire==6);
         if(m->stop_stall){*pmic_model_word(m,address)=0x58;return 1;}
-        m->wire=0;*pmic_model_word(m,0x07083010)=0xf8;
-        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+(m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->now*1000+m->frac_ns+(m->flag_at-m->now)*1000;m->flag_value=0x40;}
-        else *pmic_model_word(m,address)=0x40;
+        m->wire=0;m->status_late=m->stop_status_reads;*pmic_model_word(m,0x07083010)=m->status_late ? 0x58 : 0xf8;
+        *pmic_model_word(m,0x07083020)=m->stops<8 && m->stop_line[m->stops] ? m->stop_line[m->stops] : 0x30;++m->stops;
+        const uint32_t idle=m->stop_control ? m->stop_control : 0x40;
+        if(m->wire_us){*pmic_model_word(m,address)=0x50;m->flag_at=m->now+(m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->flag_at*1000+m->frac_ns;m->flag_value=idle;}
+        else *pmic_model_word(m,address)=idle;
         return 1;
     }
     uint32_t done=m->wire==m->stall_phase ? 0x40 : 0x48;
     if(m->wire_us){*pmic_model_word(m,address)=0x40;
-        m->flag_at=m->now+(value==0x68 && m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->now*1000+m->frac_ns+(m->flag_at-m->now)*1000;m->flag_value=done;}
+        m->flag_at=m->now+(value==0x68 && m->edge_us ? m->edge_us : m->wire_us);m->flag_ns=m->flag_at*1000+m->frac_ns;m->flag_value=done;}
     else *pmic_model_word(m,address)=done;
     *pmic_model_word(m,0x07083010)=m->wire==m->fail_phase ? m->fail_status : status;return 1;
 }
@@ -199,6 +218,79 @@ static void finish(struct pmic_model *m,const struct a733_pmic_request *q,struct
     assert(a733_pmic_result(&m->provider,q,out)==A733_PMIC_COMPLETE);
 }
 static struct pmic_model m;
+static enum a733_pmic_status run(struct pmic_model *m,const struct a733_pmic_request *q,unsigned steps)
+{
+    struct a733_pmic_snapshot s;enum a733_pmic_status r=A733_PMIC_PENDING;
+    for(unsigned i=0;i<steps && (r=a733_pmic_result(&m->provider,q,&s))==A733_PMIC_PENDING;++i)pmic_model_step(m);
+    return a733_pmic_result(&m->provider,q,&s);
+}
+/* The STOP wait and line control of docs/designs/pmic-access.md: the status
+ * reaching 0xf8 late, never, a control value other than 0x40, and a held
+ * line after an intermediate and after the final STOP. */
+static void stop_cases(void)
+{
+    struct a733_rail_token t;struct a733_pmic_request q;struct a733_pmic_snapshot s;
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));m.stop_status_reads=3;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    finish(&m,&q,&s);
+    assert(s.programmed_uv==3300000 && m.status_waits==6*3 && !m.retained && !m.i2c_held);
+    assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
+    /* Never 0xf8: pending with no further write until the deadline retains. */
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));m.stop_status_reads=UINT32_MAX;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    assert(run(&m,&q,40)==A733_PMIC_PENDING && m.stops==1 && m.writes==10 && m.status_waits>=20);
+    m.now=1000000;assert(pmic_model_step(&m)==A733_PMIC_RETAINED && m.retained && m.i2c_held && m.writes==10);
+    assert(a733_pmic_result(&m.provider,&q,&s)==A733_PMIC_RETAINED);
+    /* A control value other than 0x40 once M_STP clears is an error state. */
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));m.stop_control=0x48;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    assert(run(&m,&q,40)==A733_PMIC_RETAINED && m.retained && m.stops==1 && m.writes==10);
+    /* Line control: read at admission and after the final STOP only. */
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));m.stop_line[0]=0x10;
+    const unsigned before=m.line_reads;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    finish(&m,&q,&s);assert(m.line_reads==before+2 && m.stops==6);
+    assert(a733_pmic_reap(&m.provider,&q)==A733_PMIC_COMPLETE);
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));m.stop_line[5]=0x10;
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    assert(run(&m,&q,60)==A733_PMIC_RETAINED && m.retained && m.stops==6);
+}
+/* The deadline once per bus phase: each register access costs 1 us and a
+ * time read nothing, so a deadline k us after submission falls before the
+ * k-th access. A deadline that passes during admission retains the request
+ * in the admitting poll, before any transfer write, so a per-tick image does
+ * not hold the expired request's I2C mutex until its next poll; one that
+ * passes during the transfer retains it after at most three accesses that
+ * start at or after the deadline, also inside a poll that advances several
+ * phases. */
+static void deadline_cases(void)
+{
+    struct a733_rail_token t;struct a733_pmic_request q;
+    pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+    assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,1000000,&q)==A733_PMIC_PENDING);
+    const unsigned reads=m.reads;assert(pmic_model_step(&m)==A733_PMIC_PENDING && !m.writes);
+    const unsigned admission=m.reads-reads;
+    assert(admission>=7);
+    unsigned admitted=0,transferred=0,completed=0,worst=0;
+    for(unsigned k=1;k<=260;++k) {
+        pmic_model_setup(&m);ready(&m);t=rail(&m,10,A733_RAIL_BIT(A733_RAIL_DCDC1));
+        m.access_ns=1000;const uint64_t deadline=m.now+k;m.late_after=deadline;
+        assert(a733_pmic_submit(&m.provider,10,&t,A733_RAIL_DCDC1,deadline,&q)==A733_PMIC_PENDING);
+        if(k<=admission) {
+            assert(pmic_model_step(&m)==A733_PMIC_RETAINED && !m.writes && m.late<=admission && m.retained);
+            assert(a733_pmic_result(&m.provider,&q,&(struct a733_pmic_snapshot){0})==A733_PMIC_RETAINED);
+            ++admitted;continue;
+        }
+        const enum a733_pmic_status r=run(&m,&q,200);
+        if(r==A733_PMIC_COMPLETE){assert(m.now<=deadline+1 && !m.late);++completed;continue;}
+        assert(r==A733_PMIC_RETAINED && m.provider.failed);
+        assert(m.writes && m.late<=3);++transferred;
+        if(m.writes && m.late>worst)worst=m.late;
+    }
+    assert(admitted==admission && transferred>=150 && completed);
+    printf("deadline: %u admission reads; %u deadlines inside admission, %u inside the transfer, at most %u late accesses, %u complete\n",
+        admission,admitted,transferred,worst,completed);
+}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--decode")) {
@@ -273,7 +365,9 @@ int main(int argc,char **argv)
     m.now=1000000;assert(pmic_model_step(&m)==A733_PMIC_RETAINED && m.retained);
     assert(!a733_pmic_native_address(0x07083018,1) && !a733_pmic_native_address(0x07083314,1) &&
         !a733_pmic_native_address(0x07083014,1));
-    puts("PASS actual PMIC state machine, shared rail borrows, six snapshots, engine exclusion, arbitration and deadline retention");
+    stop_cases();deadline_cases();
+    puts("PASS actual PMIC state machine, shared rail borrows, six snapshots, engine exclusion, arbitration and deadline retention, "
+         "late and missing STOP status, STOP control error, line control at the final STOP, deadline per bus phase");
     return 0;
 }
 #endif

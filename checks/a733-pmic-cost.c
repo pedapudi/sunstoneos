@@ -53,15 +53,15 @@ static struct count request(const char *name,enum a733_rail rail,unsigned write,
         name,c.polls,transactions,c.writes,transfer_reads,setup,idle,c.time_reads,c.acquisitions);
     return c;
 }
-/* Budgets: one time read per bus phase, per poll, at submit, at admission
- * and two at publication, never per register access; the register accesses
- * of docs/designs/pmic-access.md; one bus acquisition, and so one
- * mutex-holder query, per request. */
+/* Budgets: one time read per completed bus phase, per poll, at submit, at
+ * admission and one at publication, never per register access; the
+ * register accesses of docs/designs/pmic-access.md; one bus acquisition, and
+ * so one mutex-holder query, per request. */
 static void limits(struct count k,unsigned max_time_reads,unsigned max_accesses)
 {
     unsigned accesses=k.other_reads+k.writes;
     for(unsigned i=0;i<8;++i)accesses+=k.reads_at[i];
-    assert(k.time_reads<=max_time_reads && k.time_reads<accesses+k.polls);
+    assert(k.time_reads<=max_time_reads);
     assert(accesses<=max_accesses);
     assert(k.acquisitions==1);
 }
@@ -79,6 +79,6 @@ int main(int argc,char **argv)
     /* DCDC3 starts at selector 0; the write programs 800 mV (selector 30). */
     const struct count snapshot=request("DCDC2 snapshot",A733_RAIL_DCDC2,0,6);
     const struct count write=request("DCDC3 selector write",A733_RAIL_DCDC3,1,8);
-    if(check){limits(snapshot,180,200);limits(write,229,255);puts("PASS PMIC cost budgets");}
+    if(check){limits(snapshot,137,200);limits(write,174,255);puts("PASS PMIC cost budgets");}
     return 0;
 }

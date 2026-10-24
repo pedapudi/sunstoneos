@@ -93,9 +93,13 @@ int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
  * domain-5 row. 1 bound, 0 refused. */
 int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context,
     struct a733_power_domains *domains);
-/* Provider task only: the work the next poll would do. wait_ns, when not
- * NULL, receives the expected duration of the bus phase being waited for:
- * two bit times for a START, repeated START or STOP, nine for a byte.
+/* Provider task only: the work the next poll would do. spin_until, when not
+ * NULL, receives the time in microseconds of the provider clock until which
+ * the provider task may spin before polling a waiting transfer again: the
+ * expected duration of the bus phase being waited for (two bit times for a
+ * START, repeated START or STOP, nine for a byte) after the time read that
+ * followed the write starting it, and at least a quarter bit time after now,
+ * the caller's time read after the last poll.
  * FAILED comes from one acquire load of the state word, so a fault that a
  * client latched on another core is seen without reading its plain fields.
  * FAILED with RETAIN means the provider task still holds the I2C mutex and
@@ -107,7 +111,7 @@ int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context
 #define A733_PMIC_WORK_WAITING (1u << 3) /* that transfer waits for a bus phase */
 #define A733_PMIC_WORK_FAILED  (1u << 4) /* a provider, clock or ledger fault is set */
 #define A733_PMIC_WORK_RETAIN  (1u << 5) /* with FAILED: the mutex is not yet retained */
-unsigned a733_pmic_work(const struct a733_pmic *,uint32_t *wait_ns);
+unsigned a733_pmic_work(const struct a733_pmic *,uint64_t now,uint64_t *spin_until);
 /* identity returns READY when the metadata copy succeeds, even during startup.
  * Only live reports provider readiness. Neither performs hardware discovery.
  * live takes no lock: it compares the immutable lifetime and makes one acquire

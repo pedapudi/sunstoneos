@@ -25,12 +25,16 @@
  * - the GPU supply consumer, which completes from the boot record with no
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
- * Board cost, 400 kHz only, one table row per register-access cost: 1,300 ns,
- * the figure at which the model's snapshot step matched the median step of
- * port 3-3 before the provider spun from the phase-start write (bundle 6,
- * 2026-10-24: 917 us for 630 us of wire time), and 850 and 900 ns, which
- * bracket the cost up to which a selector write fits in one step. These rows
- * charge 100 ns per time read. A snapshot takes one step within the interim
+ * Board cost, 400 kHz only, one table row per cost set: a register read, a
+ * register write, a provider poll (its task check, the object try-lock and
+ * per-phase software, which the per-access figures do not hold) and a time
+ * read of 100 ns. 1,300 ns per access is the figure at which the model's
+ * snapshot step matched the median step of port 3-3 before the provider spun
+ * from the phase-start write (bundle 6, 2026-10-24: 917 us for 630 us of
+ * wire time); 800 and 850 ns bracket the cost up to which a selector write
+ * fits in one step. Writes cost as much as reads and a poll 200 ns until the
+ * next bundle 6 measures them (docs/designs/pmic-access.md); the rows then
+ * take the measured values. A snapshot takes one step within the interim
  * bound of 155% of its 630 us bit-time wire time
  * (docs/designs/power-domains.md); the selector write takes the steps the
  * row states, at most two with one tick wait, because the service spins at
@@ -289,24 +293,27 @@ int main(void)
         service_step();assert(m.provider.held && m.i2c_held && !m.retained);
         a733_power_authority_set(&m.rails.authority,A733_POWER_CLOCK_FAULT);
         assert(a733_pmic_result(&m.provider,&fq,&fs)==A733_PMIC_RETAINED && m.provider.failed && !m.provider.retained);
-        assert(a733_pmic_work(&m.provider,NULL)==(A733_PMIC_WORK_FAILED|A733_PMIC_WORK_RETAIN));
+        assert(a733_pmic_work(&m.provider,0,NULL)==(A733_PMIC_WORK_FAILED|A733_PMIC_WORK_RETAIN));
         const uint32_t retain_ticks=service_step();
         assert(m.provider.retained && m.retained && m.i2c_held);
-        assert(a733_pmic_work(&m.provider,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
+        assert(a733_pmic_work(&m.provider,0,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
         m.now+=TICK_US;assert(service_step()!=1 && a733_power_service_ready(&d.owner)==-1);
         printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
     }
     {
         /* Board cost at 400 kHz. The wire time is the bit-time wire: 252 bit
          * times of 2,500 ns for a snapshot, as on the board. */
-        static const struct { uint64_t access_ns; unsigned write_steps; } rows[]={{850,1},{900,2},{1300,2}};
+        static const struct { uint64_t read_ns,write_ns,poll_ns; unsigned write_steps; } rows[]={
+            {800,800,200,1},{850,850,200,2},{1300,1300,200,2}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
         for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);++i) {
             const struct rate *r=&rates[0];
-            setup(r,rows[i].access_ns);m.now_ns=100;struct request_cost snapshot=request(0,1,0,0);
-            setup(r,rows[i].access_ns);m.now_ns=100;struct request_cost write=request(1,1,0,0);
-            printf("{\"rate\":\"400kHz, %llu ns per register access, 100 ns per time read\",",
-                (unsigned long long)rows[i].access_ns);
+            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            struct request_cost snapshot=request(0,1,0,0);
+            setup(r,rows[i].read_ns);m.now_ns=100;m.write_ns=rows[i].write_ns;m.poll_ns=rows[i].poll_ns;
+            struct request_cost write=request(1,1,0,0);
+            printf("{\"rate\":\"400kHz, %llu ns per register read, %llu per write, %llu per poll, 100 per time read\",",
+                (unsigned long long)rows[i].read_ns,(unsigned long long)rows[i].write_ns,(unsigned long long)rows[i].poll_ns);
             print_cost("snapshot",snapshot);print_cost("selector_write",write);
             printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
                 (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));

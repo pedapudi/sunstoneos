@@ -17,8 +17,9 @@ linked image; no board run has used the changed provider.
   nanoseconds, plus the phase's wire time.
 - **Base service figures** come from the base drivers compiled with this
   tree's `checks/a733-pmic.c` and `checks/power-domains-service.c`, with the
-  assertions on step times removed, because the base provider fails them.
-  That copy is `~/.cache/sunstoneos/build/pmic-access/measure-base/`.
+  assertions on step times removed, because the base provider fails them,
+  and the work query called with the base signature. That copy is
+  `~/.cache/sunstoneos/build/pmic-access/measure-base2/`.
 - **Images**: the project's AArch64 toolchain through the session's
   configure script, with the application options listed under
   "Images rebuilt".
@@ -32,21 +33,23 @@ selector write. The model's bytes take 23 µs, so its own snapshot wire is
 
 | Metric | Base | Head | Measured by |
 | --- | --- | --- | --- |
-| Time reads per DCDC2 snapshot; per DCDC3 selector write | 469; 599 | 180; 229 | `checks/a733-pmic-cost.c`, both trees; `--limits` passes on head |
+| Time reads per DCDC2 snapshot; per DCDC3 selector write | 469; 599 | 137; 174 | `checks/a733-pmic-cost.c`, both trees; `--limits` passes on head |
 | Register accesses per snapshot; per selector write | 211; 270 | 200; 255 | Same |
 | Serial accesses from a completed bus phase to the next phase-start write, per snapshot | 161 over 42 phase boundaries | 150 over 42 phase boundaries | Measurement harness over the provider model, `~/.cache/sunstoneos/build/pmic-access/serial/serial.c` |
 | Task checks per register access | 1 (`read32()` and `write32()` each call `xTaskGetSchedulerState` and `xTaskGetCurrentTaskHandle` and write DAIF twice) | 0 (no call, no DAIF access); one per poll and one per bus entry | Disassembly of `a733_pmic_native.c.obj` of the board image; `checks/pmic-tree.py` passes on head and fails on base |
 | Static instructions of `read32()`; of `write32()` | 156; 84 | 107; 34 | Same disassembly; each keeps two `DSB SY` and one `LDAR` |
+| Division in the time read `now()` | One `UDIV` per read | No `UDIV`; one `UMULH` per read, the reciprocal set by the first read | Same disassembly; `checks/a733-pmic-time.c` passes 3,200,890 comparisons |
 | Snapshot step, 400 kHz, 200 ns per access, 40 ns per time read | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Selector write, same costs | 920 µs (113%), one step | 883 µs (109%), one step | Same |
-| Snapshot step, 400 kHz, 850 ns per access, 100 ns per time read | 854 µs (136%) | 758 µs (120%) | Same, board-cost table |
-| Snapshot step, 900 ns | 856 µs (136%) | 782 µs (124%) | Same |
-| Snapshot step, 1,300 ns | 947 µs (150%); 915 µs (145%) with 40 ns per time read, the fit to the board's median | 845 µs (134%) | Same |
-| Selector write at 850 ns; 900 ns; 1,300 ns | Two steps, one tick wait, at each | One step of 975 µs (120%); two steps, one tick wait; two steps, one tick wait | Same |
+| Snapshot step, 400 kHz, 800 ns per read and write, 200 ns per poll, 100 ns per time read | 854 µs (136%) | 758 µs (120%) | Same, board-cost table |
+| Snapshot step, 850 ns | 855 µs (136%) | 782 µs (124%) | Same |
+| Snapshot step, 1,300 ns | 947 µs (150%); 915 µs (145%) with 40 ns per time read and no poll cost, the fit to the board's median | 846 µs (134%) | Same |
+| Selector write at 800 ns; 850 ns; 1,300 ns | Two steps, one tick wait, at each | One step of 975 µs (120%); two steps, one tick wait; two steps, one tick wait | Same |
 | Flags 10% later than the 400 kHz divisor implies (25 µs bytes, 6 µs conditions), 200 ns per access | Snapshot and selector write each two steps with one tick wait | Snapshot one step of 751 µs, selector write one step of 968 µs (708 µs and 913 µs of wire) | Same, slow-bus case |
 | Tick waits, 100 kHz, snapshot and selector write | 2 and 3 | 2 and 3 | Same |
 | BUSY results per other-core caller; from `a733_pmic_live` | At most 1; 0 | At most 1; 0 | Same |
-| Supply verification after the service's first step, 400 kHz; 100 kHz | 8,438 µs; 16,218 µs | 8,383 µs; 16,032 µs | Same |
+| Supply verification after the service's first step, 400 kHz; 100 kHz | 8,438 µs; 16,218 µs | 8,383 µs; 15,010 µs | Same |
+| Accesses that start at or after a deadline passing during the transfer; during admission | Not checked | At most 2 over 151 deadline positions; none in the transfer, the request retained in the admitting poll, over 7 positions | `checks/a733-pmic.c` deadline sweep |
 
 The existing 110% assertion of the 400 kHz case at 200 ns per access stays.
 It compares the step with the model's own wire time, 642 µs for a snapshot
@@ -58,7 +61,19 @@ the base gave 687 µs and 885 µs.
 The service check asserts every head figure in the table that it prints: one
 snapshot step within 155% of the bit-time wire at each board cost, the
 selector-write step counts of the table, and one step within 110% of the
-slow bus's own wire time.
+slow bus's own wire time. With no per-poll cost, the selector write stays in
+one step up to 850 ns per access; 200 ns per poll lowers that to 800 ns.
+
+The focused model check, `checks/a733-pmic.c`, also covers the changed
+error and recovery paths. Each of these provider mutants fails it:
+
+- a status other than `0xf8` after STOP treated as a fault;
+- the status wait removed;
+- the control check for `0x40` removed;
+- the admission deadline check removed;
+- the per-phase deadline check removed;
+- line control read after every STOP;
+- line control not read after the final STOP.
 
 ## Images rebuilt
 
@@ -77,10 +92,10 @@ service was built from the head tree and the base tree with
 `-thermal`, `-adc`, `-monitor`, `-pwm`, `-pwm-single-core`, `-spi`, `-rtc`,
 `-pcie`, `-pcie-test`, `-crypto`, `-crypto-single-core`, `-deinterlace`,
 `-bluetooth` and `npu-startup-model`. Each image's `.text` is between 64 B
-and 2,112 B smaller than the base's, except `npu-startup-model`, which does
+and 2,128 B smaller than the base's, except `npu-startup-model`, which does
 not link the native adapter and keeps the same size. The provider object
-shrinks from 12,340 B to 12,084 B of code and the adapter from 1,928 B to
-1,580 B; the service grows from 7,344 B to 7,376 B.
+shrinks from 12,340 B to 11,908 B of code, the adapter from 1,928 B to
+1,716 B and the service from 7,344 B to 7,328 B.
 
 The NPU board image and the supervised NPU application need reviewed
 artifacts that this build does not have, and were not built. The OS image
@@ -103,16 +118,17 @@ The returning images build from the head tree with
 
 | Check | Result |
 | --- | --- |
-| `checks/a733-pmic.c`, `-polls`, `-waits`, `-parent`, `-mmc`, `-cost` (with `--limits`) | Pass |
+| `checks/a733-pmic.c`, `-polls`, `-waits`, `-parent`, `-mmc`, `-cost` (with `--limits`), `-time` | Pass |
 | `checks/power-domains-service.c`, `checks/power-domains-pck.c` | Pass |
 | `checks/npu-startup-host.c` (with `checks/npu-startup-host/` headers) | Pass |
 | `checks/a733-storage-native-power.c`, `isp0-provider-profile.c`, `monitor-application-nominal.c`, `a733-radio-platform.c`, `pwm-service-pmic.c`, `pwm-service.c`, `a733-pwm.c` | Pass |
 | `checks/a733-camera-native.py`, `checks/a733-mmc-platform.py`, `checks/cpu-clock-check.py` | Pass |
-| `checks/pmic-tree.py` | Pass; fails on base, as intended, and fails on a tree with a planted per-access task check or a planted adapter-read call outside the provider |
+| `checks/pmic-tree.py` | Pass; fails on base, as intended, and on trees with a planted per-access task check, an adapter read in `apps/thermal-returning/adc.c`, a copied operations table in `apps/npu-returning/main.c`, an adapter read passed as a function pointer, and a call of the provider's copy of the operations |
 | `apps/thermal-returning/check.py`; `apps/usb-returning/check.py` | Pass, 13 and 27 cases |
 | Pure-host checks that `checks/check-index.py --changed` selects | 13 pass; `audit-build-safety-configure.py`, `power-domains-tree.py` and `provider-clock-reference.py` fail on the base tree too |
 | `checks/hdmi-framebuffer.py` | Fails to link (`vTaskEnterCritical` undefined) on the base tree too |
 | `checks/check-index.py --verify` | Pass with the regenerated index |
+| `checks/board-bundles-apps-model.c` and the bundle 6 and 7 units compiled for AArch64, with the primary patch applied | Pass; every bundle 6 summary line fits the 128-byte line |
 
 ## Reproduction
 

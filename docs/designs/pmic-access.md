@@ -24,13 +24,21 @@ its two `DSB SY`. The run did not measure that split.
 
 ## Change
 
-1. **One time read per bus phase.** The provider's `rd()` and `wr()` make no
-   time read. `transfer()` reads the time once after each phase's accesses
-   and checks the request deadline and the monotonic clock with it. After a
-   phase that starts a bus event (a START, repeated START, address, register
-   index, data byte, receive or STOP write), the provider stores that time as
-   `phase_at`. Request admission and startup check the deadline once after
-   their read sequences. This is item 5 of section 2 of
+1. **One time read per completed bus phase.** The provider's `rd()` and
+   `wr()` make no time read. `transfer()` reads the time once after each
+   completed phase's accesses and checks the request deadline and the
+   monotonic clock with it. After a phase that starts a bus event (a START,
+   repeated START, address, register index, data byte, receive or STOP
+   write), the provider stores that time as `phase_at`. A wait that finds its
+   flag or status not yet set ends the poll without a time read: the time
+   read before it is at most two reads old, and the next poll reads the time
+   at entry before any access. Publication reads the time once, after the
+   provider releases the I2C mutex; the state word and the deadline were
+   checked after the final STOP or at the entry of the poll. Request
+   admission and startup check the deadline once after their read
+   sequences. The native adapter divides the counter by its ticks per
+   microsecond with a multiply-high by a reciprocal that its first time read
+   computes, instead of a `UDIV`. This is item 5 of section 2 of
    [performance-architecture.md](../performance-architecture.md).
 2. **Task check once per poll.** The native adapter's `owned()`, `read32()`
    and `write32()` check the `holding` flag, one acquire load of the I2C
@@ -39,11 +47,13 @@ its two `DSB SY`. The run did not measure that split.
    of every `a733_pmic_poll()` and in the adapter's `enter()`, which also
    asserts the kernel mutex holder (section 1.1 of the same document). The
    `DSB SY` before and after every access stays.
-3. **STOP wait as the bootloader does it.** After a STOP write, the provider
-   reads the control register (`CNTR`, `+0x0c`). Bit 4 (`M_STP`) still set is
+3. **STOP wait for the idle status.** After a STOP write, the provider reads
+   the control register (`CNTR`, `+0x0c`). Bit 4 (`M_STP`) still set is
    PENDING. Once it is clear, the low byte must be `0x40`, else the provider
    faults. It then reads the status register (`+0x10`); a value other than
-   `0xf8` is PENDING. Both waits are bounded by the request deadline.
+   `0xf8` is PENDING. Both waits are bounded by the request deadline. The
+   bootloader waits for status `0xf8` alone; the provider adds the `M_STP`
+   wait.
 4. **Line-control read at the ends of a request.** The line-control idle
    check (`+0x20`) runs at admission and after the request's final STOP,
    instead of after every STOP. A mismatch after the final STOP faults, as
@@ -53,7 +63,9 @@ its two `DSB SY`. The run did not measure that split.
    bounds.
 5. **Spin from the phase-start write.** The service spins until
    `max(phase_at + phase duration, now + bit time / 4)`, in whole
-   microseconds, rounded up, where `now` is read after the poll returns. The
+   microseconds, rounded up, where `now` is read after the poll returns.
+   `a733_pmic_work()` computes that time from `now`, so the service reads
+   no private provider field. The
    first term times the wire from the write that started it, so the
    provider's work after that write overlaps the bus. The second term is the
    minimum re-spin after a poll that finds the flag still clear. It keeps
@@ -79,7 +91,11 @@ that find the flag clear and re-spin are therefore expected.
   phase is detected after at most that phase's accesses, three at most (an
   address phase writes `DATA` and `CNTR`; the final STOP wait reads three
   registers). Admission runs up to eight reads, and startup about 24, before
-  their one check. A `CNTR` write, including the one that sends the
+  their one check. A deadline that passes during admission retains the
+  request in the admitting poll, before any transfer write, so a per-tick
+  image does not hold the expired request's mutex until its next poll.
+  `checks/a733-pmic.c` sweeps the deadline across every access of a snapshot
+  and asserts both bounds. A `CNTR` write, including the one that sends the
   selector byte of a DCDC3 or DCDC5 write, can now start after the deadline
   has passed within its phase. The outcome class is unchanged: a fault
   retains the request, the held mutex and the leases, and the programmed
@@ -115,8 +131,9 @@ cleared after the START. `A_ACK` and `INT_EN` are never written. Only an
 error state can set `INT_FLAG` after a STOP, so any other value faults.
 Section 18.11.10.5 lists `0xF8` as "no relevant status information,
 INT_FLAG=0". The pinned bootloader `b791be842935b27268ae3d00e943a9075495f30a`,
-`drivers/i2c/sunxi_i2c.c`, waits after STOP for status `0xf8` with a timeout
-(`twi_stop()`, lines 469–483). It reads line control only before a clock
+`drivers/i2c/sunxi_i2c.c`, waits after STOP for status `0xf8` alone, with a
+timeout (`twi_stop()`, lines 469–483); the provider adds the `M_STP` wait
+before it. It reads line control only before a clock
 change (line 497) and in its bus-recovery pulses (lines 263–297), never after
 a STOP. The provider keeps the line-control check at admission and after the
 final STOP, so each request still starts and ends with both lines released.
@@ -127,27 +144,31 @@ Percentages are of the bit-time wire time: 630 µs for a snapshot and
 812.5 µs for a selector write (325 bit times). The model's bytes take 23 µs,
 so its own snapshot wire is 642 µs (102%). Rows at 200 ns per access keep the
 check's 40 ns per time read. The board-cost rows charge 100 ns per time read,
-an estimate for an `ISB`, a counter read and a division at 494 MHz, which
-the next bundle 6 measures. *X* is the cost of one provider register access
-after the change; the measurement section defines it from the board
-windows.
+an estimate for an `ISB`, a counter read and a reciprocal multiply at
+494 MHz. They also charge 200 ns per provider poll, for its task check, the
+provider object's try-lock and the per-phase software that no per-access
+figure holds. Writes cost as much as reads. The next bundle 6 measures each of
+these, and the rows then take the measured values. *X* is the cost of one
+provider register read after the change; the measurement section defines it
+from the board windows.
 
 | Metric | Baseline | Design | Measured by |
 | --- | --- | --- | --- |
-| Time reads per DCDC2 snapshot; per DCDC3 selector write | 469; 599 | 180; 229 | `checks/a733-pmic-cost.c --limits` |
+| Time reads per DCDC2 snapshot; per DCDC3 selector write | 469; 599 | 137; 174 | `checks/a733-pmic-cost.c --limits` |
 | Register accesses per snapshot; per selector write | 211; 270 | 200; 255 | `checks/a733-pmic-cost.c --limits` |
 | Task checks per register access | 1, plus 1 per poll | 0, plus 1 per poll | `checks/pmic-tree.py` |
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
-| Snapshot step, 400 kHz, 1,300 ns per access, 100 ns per time read | 947 µs (150%); 915 µs (145%) with the fit's 40 ns per time read | 845 µs (134%) | Same, board-cost case |
-| Snapshot step, 400 kHz, *X* = 850 ns; 900 ns | Not applicable; the current path fits 1,300 ns | 758 µs (120%); 782 µs (124%) | Same, board-cost cases |
-| Selector write, 400 kHz, *X* = 850 ns; 900 ns | Two steps, one tick wait | One step of 975 µs; two steps, one tick wait | Same |
+| Snapshot step, 400 kHz, 1,300 ns per access, 200 ns per poll, 100 ns per time read | 947 µs (150%); 915 µs (145%) with the fit's 40 ns per time read and no poll cost | 846 µs (134%) | Same, board-cost table |
+| Snapshot step, 400 kHz, *X* = 800 ns; 850 ns, same poll and time-read costs | 854 µs; 855 µs | 758 µs (120%); 782 µs (124%) | Same |
+| Selector write, 400 kHz, *X* = 800 ns; 850 ns | Two steps, one tick wait | One step of 975 µs; two steps, one tick wait | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
 | Tick waits per snapshot and selector write, 100 kHz | 2 and 3 | 2 and 3 | Same |
 | BUSY results per other-core caller; from `a733_pmic_live` | At most 1; 0 | At most 1; 0 | Same |
 
-With 40 ns per time read the selector write stays in one step up to 950 ns
-per access. Each phase boundary keeps the flag read, the status read and,
+Without the per-poll cost the selector write stays in one step up to 850 ns
+per access, and with 40 ns per time read up to 950 ns; 200 ns per poll lowers
+that limit to 800 ns. Each phase boundary keeps the flag read, the status read and,
 except before a repeated START or a receive, the next `DATA` write, then the
 `CNTR` write. With `DSB SY` on both sides of every access the step stays near
 wire time plus 150 *X*. The model reaches 110% of wire time only at about
@@ -156,36 +177,55 @@ between CCU reads; 0.71 µs median in the region that holds S_TWI0). 110%
 therefore needs a lighter barrier placement, which this design leaves out.
 
 **Bound.** The provisional bound of 155% of wire time for a 400 kHz snapshot
-step stays until the next bundle 6 has measured *X*. The post-change bound is
-then the model's step at the measured *X* plus a margin, applied to the median
-step, with a separate bound for the first step, which ran 24 µs above the
-median on the board. The model's step is taken as its maximum over *X*
-within the measurement's uncertainty, at the stated core clock (494 MHz on
-CPU-L in the measured lifetime).
+step stays until the next bundle 6 has measured the costs. The post-change
+bound is then the model's step with the measured read, write, poll and
+time-read costs, each taken at the upper end of its measured range, plus
+20 µs (3% of the 630 µs wire), applied to the median step. The first step has
+its own bound, 40 µs above the median bound: on the board it ran 24 µs above
+the median. Both hold at the stated core clock (494 MHz on CPU-L in the
+measured lifetime). Re-spins are a pass metric: at most 12 per snapshot, each
+costing a quarter bit time and one poll, about 1.5 µs, which the 20 µs margin
+covers. More re-spins than that size the counter-tick spin resolution left
+out below.
 
 ## Measurement
 
 Committed checks, added with the implementation:
 
-- `checks/power-domains-service.c`: a table of board-cost cases, 850 ns and
-  900 ns (the selector-write bracket) and 1,300 ns, at 100 ns per time read;
-  and the slow-bus case. Every service case runs with sub-microsecond flags.
+- `checks/power-domains-service.c`: a table of board-cost cases, each with a
+  read, a write, a per-poll and a time-read cost: 800 ns and 850 ns (the
+  selector-write bracket with 200 ns per poll) and 1,300 ns; and the
+  slow-bus case. Every service case runs with sub-microsecond flags.
   The 400 kHz case at 200 ns per access keeps its 110% assertion against the
   model's own wire time: the base provider fails it with sub-microsecond
   flags (712 µs for 642 µs), and the changed provider passes (685 µs).
 - `checks/a733-pmic.c` model: flags set from the write's completion time in
-  nanoseconds.
+  nanoseconds; separate write and per-poll costs; a status that reaches
+  `0xf8` late or never after a STOP; a control value other than `0x40` once
+  `M_STP` clears; a line-control value per STOP; and a count of accesses
+  that start at or after a deadline. Its cases assert:
+  - a pending then complete request for a late status;
+  - a retained request at the deadline for a status that never arrives;
+  - a retained fault for the control error;
+  - a request that completes with a held line after an intermediate STOP,
+    and one retained after the final STOP;
+  - the deadline bounds above.
+
+  Each of the matching provider mutants fails it.
+- `checks/a733-pmic-time.c`: the reciprocal division against integer
+  division for every divisor up to 4,096 and the powers of two to 2^32.
 - `checks/a733-pmic-cost.c --limits`: the counts in the table.
 
 Board measurement on the next bundle 6. A bundle built from this tree runs
 the changed provider, so the windows give *X* directly, and one window times
 the task check that the earlier adapter made per access:
 
-1. **Cost windows in the service task**, which is the provider task, after
-   the adapter's `enter()`, with the provider idle: on the provider's core at
-   its clock. The record names the core; the CPU-L rate comes from bundle 4 in
-   the same lifetime. The windows live in `apps/board-bundles-power/power.c`,
-   whose calls of the adapter's read operation the tree rule names.
+1. **Cost windows in the service task** at the park, which is the provider
+   task, after the adapter's `enter()`, with the provider idle: on the
+   provider's core at its clock. The record names the core (`MPIDR_EL1`
+   Aff1); the CPU-L rate comes from bundle 4 in the same lifetime. The
+   windows live in `apps/board-bundles-power/power.c`, which the tree rule
+   allows to use the adapter's operations.
 2. **Windows**, 256 iterations each:
    - `CNTR` reads with `a733_mmio_read32_dsb_sy_both`;
    - plain `CNTR` reads whose value is discarded, labelled as issue
@@ -196,8 +236,9 @@ the task check that the earlier adapter made per access:
    - the adapter's `read` operation;
    - `a733_task_context_owner_el1()`, with IRQs unmasked as the earlier
      adapter called it, and the scheduler ticks inside that window;
-   - `bb_twi_observe()` on a scratch record: the trace observer that
-     `apps/board-bundles-power/power.c` runs on every access.
+   - `bb_twi_observe()` on a scratch record, as a flag poll that reads the
+     flag clear: the trace observer that `apps/board-bundles-power/power.c`
+     runs on every access.
 3. **Writes**, timed inside the snapshots' own transfers: the `pmic_write`
    wrapper stamps the counter around the adapter's `write` and sums the
    ticks, with no extra bus write. Those two stamps per write, about 60 per
@@ -216,11 +257,15 @@ the task check that the earlier adapter made per access:
 
 *X* is defined conservatively as the adapter-read window plus the observer
 window per access, which is what the bundle's steps pay; production images
-pay the adapter read alone.
+pay the adapter read alone. The write cost comes from the in-transfer write
+timing. The per-poll cost is the task-check window plus the remainder of the
+baseline check: 1,380 ns minus the reconstruction, spread over the 211
+accesses of a snapshot and charged per poll at the 44 polls of a snapshot.
+The step records count re-spins: flag polls beyond the second of a phase.
 
 After the change, bundle 6 makes 32 snapshots of DCDC2 and DCDC4. Pass: the
 median and first steps within their bounds set as above; snapshot bytes
-unchanged (`0xff9e`); no fault; re-spins reported. A DCDC3 selector write in
+unchanged (`0xff9e`); no fault; at most 12 re-spins per snapshot. A DCDC3 selector write in
 one step needs a separate bundle with a PMIC write, which needs the user's
 approval.
 
@@ -269,19 +314,26 @@ image built from it. None of them is board-qualified.
   with 155% kept until the access-cost run.
 - `checks/pmic-tree.py`: fail if `owned()`, `read32()` or `write32()` in
   `drivers/power/a733_pmic_native.c` call `current(` or any
-  `a733_task_context_` function; fail if any source other than
-  `drivers/power/a733_pmic.c` and the forwarders in
-  `apps/board-bundles-power/power.c` calls the adapter's `read` or `write`
-  operation.
+  `a733_task_context_` function. Keyed on the declared type, fail when a
+  source other than the adapter and `apps/board-bundles-power/power.c` uses
+  a `struct a733_pmic_native`'s operations other than as `a733_pmic_init()`'s
+  argument (a call, a copy, a function pointer), names
+  `struct a733_pmic_ops`, or uses a `struct a733_pmic`'s register, mutex or
+  retention operations. Planted uses in `apps/thermal-returning/adc.c` and
+  `apps/npu-returning/main.c` fail it.
 - `apps/board-bundles-power/bundle6.c`, `power.c`, `power.h`, `trace.c` and
-  `trace.h`, for the next refreeze: the windows, write timing, wire-time spin
-  and core record of the measurement plan, in place of the client's
-  `access_cost()`. The same edit passes the third argument of
+  `trace.h`, for the next refreeze: the windows at the park, write timing,
+  wire-time spin, re-spin counts and core record of the measurement plan, in
+  place of the client's `access_cost()`. The same edit passes the third argument of
   `a733_power_domain_check()`, which `bundle6.c` omits on the current tree.
 - `docs/designs/board-bundles-next.md`: the bundle 6 row's measurements and
   bound procedure.
+- `checks/board-bundles-apps-model.c`, in the patch: the step records'
+  re-spin field and a re-spin case of the TWI observer.
 - `checks/board-bundles-apps.py` and `tools/prepare-board-bundles.py`, not in
-  the patch: bundles 6 and 7 reuse rank-9-usb-v4's provider objects and
-  require each to recompile byte-identical from the tree. The changed
-  provider, adapter and consumer, and the layout of `struct a733_pmic`, make
-  those objects new units of the next bundle 6.
+  the patch, at the next refreeze: bundles 6 and 7 reuse rank-9-usb-v4's
+  provider objects and require each to recompile byte-identical from the
+  tree. The changed provider, adapter and consumer, and the layout of
+  `struct a733_pmic`, make those objects new units of the next bundle 6. The
+  bundle 6 row text of `tools/prepare-board-bundles.py` still describes the
+  client's earlier cost windows.

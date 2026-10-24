@@ -87,12 +87,16 @@ makes one acquire load of the power-authority state word described in
 [power.md](power.md), which carries provider, clock registry and rail ledger
 faults. A set fault bit retains the provider before any further access. The
 provider holds its S_TWI0 lease and the request's borrow until reap, so only a
-fault can invalidate them between phases. After each phase's register accesses
-the provider reads the time once and checks the request deadline; a register
-access makes no time read. A phase that starts before the deadline therefore
-completes its accesses, at most three, before the provider retains the request.
-Admission checks the deadline once after its eight reads at most, and startup
-once after its 24 reads at most. A `CNTR` write, including the one that sends
+fault can invalidate them between phases. After each completed phase's
+register accesses the provider reads the time once and checks the request
+deadline; a register access makes no time read. A wait that finds its flag or
+status not yet set ends the poll without a time read, because the time read
+before it is at most two reads old and the next poll reads the time before
+any access. A deadline that passes during the transfer is therefore followed
+by at most three accesses before the provider retains the request. Admission
+checks the deadline once after its eight reads at most, so a deadline that
+passes during admission retains the request in the admitting poll, before
+any transfer write; startup checks once after its 24 reads at most. A `CNTR` write, including the one that sends
 the selector byte of a selector write, can start after the deadline has passed
 within its phase; the request is then retained, as after any fault that follows
 the data byte.
@@ -103,10 +107,11 @@ clock route and divisor (four or five reads), and requires an idle bus (three
 reads). Startup alone verifies the S_TWI0 gate and reset, the idle legacy and
 autonomous engines, DMA and interrupt state: only the provider could change
 them while it holds S_TWI0, and the native adapter cannot write any of them.
-After each STOP the provider waits, as the bootloader's `twi_stop()` does
-(`drivers/i2c/sunxi_i2c.c` lines 469–483), for the control register's `M_STP`
-bit to clear and then for the status register to read `0xf8`; each "not yet" is
-pending until the request deadline. Once `M_STP` clears, the control register
+After each STOP the provider waits for the control register's `M_STP` bit to
+clear and then for the status register to read `0xf8`; each "not yet" is
+pending until the request deadline. The bootloader's `twi_stop()`
+(`drivers/i2c/sunxi_i2c.c` lines 469–483) waits for `0xf8` alone; the provider
+adds the `M_STP` wait. Once `M_STP` clears, the control register
 must read `0x40`: the STOP write `0x58` cleared `INT_FLAG`, `M_STA` cleared
 after the START, and the idle state `0xF8` is the only state that does not set
 `INT_FLAG` (A733 User Manual V1.00, sections 18.11.10.4 and 18.11.10.5). Any
@@ -126,12 +131,12 @@ modeled figures compare poll designs and have not been measured on hardware.
 
 In the GPU, accelerator, GPU display, HDMI and board images the provider task
 is the power service task ([docs/power-domains.md](power-domains.md)). It
-spins on the raw counter between polls, without the provider object. Each
-spin lasts until the expected duration of the bus phase has passed since
-`phase_at`, the time the provider read after the write that started the
-phase, and at least a quarter bit time after a poll that found the phase
-unfinished. It blocks for
-one tick after at most 1 ms of spinning in a step.
+spins on the raw counter between polls, without the provider object, until a
+time that `a733_pmic_work()` gives. That time is the expected duration of the
+bus phase after the time the provider read following the write that started
+it, and at least a quarter bit time after a poll that found the phase
+unfinished. It
+blocks for one tick after at most 1 ms of spinning in a step.
 `checks/power-domains-service.c` measures it with each bus flag set at a
 sub-microsecond time. At 400 kHz with 200 ns per register access, a snapshot
 and a selector write each complete in one step with no tick wait; at 100 kHz
@@ -139,7 +144,8 @@ they take two and three tick waits. The board's snapshot steps take longer;
 section "Board result of the service steps" of
 [the power-domain design](designs/power-domains.md) records them, and
 [the access design](designs/pmic-access.md) gives the per-phase timing and its
-modeled step times. The other images keep their per-tick loops. `a733_pmic_work()` reads faults from the state word. When a
+modeled step times. The other images keep their per-tick loops.
+`a733_pmic_work()` reads faults from the state word. When a
 client latches a fault while the provider task holds the I2C mutex for a
 transfer, it reports `A733_PMIC_WORK_FAILED` with `A733_PMIC_WORK_RETAIN`,
 and the service polls once more; that poll marks the mutex retained.
@@ -159,7 +165,9 @@ The provider checks its deadline once per bus phase. The native adapter
 answers those time reads from the architectural counter
 (`ISB; MRS CNTPCT_EL0`) divided by the ticks per microsecond, which gives the
 same microseconds as `a733_counter_clock_now` without its global ticket lock
-and masked interrupts. The provider faults on a time that runs backwards, and a
+and masked interrupts. The division uses a multiply-high by a reciprocal that
+the first time read computes from the counter frequency, with no `UDIV`
+instruction; `checks/a733-pmic-time.c` compares it with integer division. The provider faults on a time that runs backwards, and a
 fault latched in the shared counter clock refuses the read.
 
 The native adapter checks the provider task and queries the kernel's I2C
@@ -176,8 +184,8 @@ board-bundle forwarders calls the adapter's read or write operation.
 
 [The cost check](../checks/a733-pmic-cost.c) counts the work of one DCDC2
 snapshot and one DCDC3 selector write through the same model. The snapshot
-makes 200 register accesses, 180 time reads and one bus acquisition; the
-selector write 255 accesses and 229 time reads. With `--limits` the check
+makes 200 register accesses, 137 time reads and one bus acquisition; the
+selector write 255 accesses and 174 time reads. With `--limits` the check
 asserts those budgets. `docs/designs/power-authority.md` and
 `docs/designs/pmic-access-measurements.md` record the counts against the
 earlier providers.
