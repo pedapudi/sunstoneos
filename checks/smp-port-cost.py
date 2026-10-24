@@ -12,11 +12,17 @@ cortex-a55 cores and once with cortex-a76 cores. It records:
   - a notification that wakes a higher-priority task on the same core, up to
     the woken task's first instruction, floating-point state included;
   - cross-core notification round trips, in instructions retired on each
-    core per round trip, with idle cores waiting in WFI, and in virtual time.
+    core per round trip, with idle cores waiting in WFI, and in virtual time;
+  - the same round trips between two EL0 tasks, whose sends keep the
+    supervisor call.
 
 With --baseline (a result.json from the base tree) it also requires that no
-operation retires more instructions than in the baseline and that a cross-core
-round trip retires at least 30% fewer instructions on both cores. It records,
+operation retires more instructions than in the baseline, that a cross-core
+round trip retires at least --round-trip-reduction fewer instructions on both
+cores (30% by default), and that an EL0 round trip retires at most 24 more
+instructions per send than in the baseline, which pays for the task-register
+and nesting test in front of the supervisor call
+(docs/designs/cpu-a76-dvfs.md). It records,
 without requiring them, the design targets of
 docs/designs/smp-heterogeneous.md: at most 100 instructions for the EL1 pair,
 180 for the EL0 pair and 800 for the same-core switch.
@@ -45,6 +51,11 @@ TARGETS = {'el1_critical_pair': 100, 'el0_critical_pair': 180, 'el1_give_switch'
 OPERATIONS = ('el1_critical_pair', 'el0_critical_pair', 'el1_current_task', 'el0_current_task',
               'el1_notify_give_take', 'el1_give_switch', 'cross_core_round_trip_instructions')
 ROUND_TRIP_REDUCTION = 0.30
+# Instructions per send, two sends per round trip. The task-register and
+# nesting test adds 5 instructions to the EL0 send; lock-wait interleaving
+# under icount amplifies a longer send path (five no-ops in the base send
+# added 10 instructions per EL0 send and 24 per EL1 send, the bound used).
+EL0_SEND_ALLOWANCE = 24
 
 
 def digest(path):
@@ -56,6 +67,8 @@ def main():
     p.add_argument('--output', type=Path, required=True, help='new directory for logs and results')
     p.add_argument('--root', type=Path, default=ROOT, help='source tree that supplies patches and platform')
     p.add_argument('--baseline', type=Path, help='result.json of the base tree; enables the comparison')
+    p.add_argument('--round-trip-reduction', type=float, default=ROUND_TRIP_REDUCTION,
+                   help='required fractional reduction of the EL1 cross-core round trip')
     p.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
     p.add_argument('--lld', type=Path, default=CACHE / 'host/usr/bin/ld.lld-21')
     p.add_argument('--qemu', type=Path, default=CACHE / 'host/usr/bin/qemu-system-aarch64')
@@ -115,6 +128,9 @@ def main():
         m['cross_core_round_trip_instructions'] = ((m['cross_core_core0_instructions'] +
                                                     m['cross_core_core1_instructions'])
                                                    // m['cross_core_round_trips'])
+        m['el0_cross_core_round_trip_instructions'] = ((m['el0_cross_core_core0_instructions'] +
+                                                        m['el0_cross_core_core1_instructions'])
+                                                       // m['cross_core_round_trips'])
         runs[cpu] = m
     checked = {}
     if a.baseline:
@@ -123,8 +139,10 @@ def main():
             for name in OPERATIONS:
                 assert m[name] <= base[cpu][name], (cpu, name, m[name], base[cpu][name])
             ratio = m['cross_core_round_trip_instructions'] / base[cpu]['cross_core_round_trip_instructions']
-            assert ratio <= 1 - ROUND_TRIP_REDUCTION, (cpu, 'cross-core round trip', ratio)
-            checked[cpu] = {'baseline': {name: base[cpu][name] for name in OPERATIONS},
+            assert ratio <= 1 - a.round_trip_reduction, (cpu, 'cross-core round trip', ratio)
+            el0 = 'el0_cross_core_round_trip_instructions'
+            assert m[el0] <= base[cpu][el0] + 2 * EL0_SEND_ALLOWANCE, (cpu, el0, m[el0], base[cpu][el0])
+            checked[cpu] = {'baseline': {name: base[cpu][name] for name in OPERATIONS + (el0,)},
                             'round_trip_ratio': ratio,
                             'targets': {name: {'limit': limit, 'met': m[name] <= limit}
                                         for name, limit in TARGETS.items()}}
@@ -142,7 +160,8 @@ def main():
               f'current task EL1 {m["el1_current_task"]} EL0 {m["el0_current_task"]}, '
               f'notify {m["el1_notify_give_take"]}, same-core switch {m["el1_give_switch"]}, '
               f'cross-core round trip {m["cross_core_round_trip_instructions"]} instructions '
-              f'({m["cross_core_round_trip_ns"]} ns virtual)')
+              f'({m["cross_core_round_trip_ns"]} ns virtual), EL0 round trip '
+              f'{m["el0_cross_core_round_trip_instructions"]}')
 
 
 if __name__ == '__main__':

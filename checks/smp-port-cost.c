@@ -76,10 +76,10 @@ static void say(const char *label, uint64_t value)
     platform_puts("\n");
 }
 
-static TaskHandle_t driver_handle, el0_handle, waker_handle, remote_handle, setup1_handle;
-static StaticTask_t tasks[5];
-static StackType_t stacks[5][4096];
-static volatile uint64_t woken_at, remote_first, remote_last;
+static TaskHandle_t driver_handle, el0_handle, waker_handle, remote_handle, setup1_handle, remote0_handle;
+static StaticTask_t tasks[6];
+static StackType_t stacks[6][4096];
+static volatile uint64_t woken_at, remote_first, remote_last, remote0_first, remote0_last;
 
 #define LEAST(result, body) do {                                   \
         uint64_t least_ = UINT64_MAX;                              \
@@ -104,10 +104,36 @@ static void common(const char *level_empty, const char *level_critical, const ch
     say(level_current, current - empty);
 }
 
+/* Core 1 at EL0: returns each notification of the EL0 round trips. */
+static void remote0(void *unused)
+{
+    (void)unused;
+    for (unsigned round = 1;; ++round) {
+        CHECK(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        const uint64_t now = retired();
+        if (round == 1) remote0_first = now;
+        if (round == ROUND_TRIPS + 1) remote0_last = now;
+        xTaskNotifyGive(el0_handle);
+    }
+}
+
 static void el0_task(void *unused)
 {
     (void)unused;
     common("el0_empty", "el0_critical_pair", "el0_current_task");
+    /* Cross-core round trips between two EL0 tasks: each send keeps the
+     * supervisor call and adds the task-register and nesting test. */
+    __atomic_store_n(&idle_wait, 1, __ATOMIC_RELEASE);
+    uint64_t first = 0;
+    for (unsigned i = 0; i <= ROUND_TRIPS; ++i) {
+        xTaskNotifyGive(remote0_handle);
+        CHECK(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+        if (!i) first = retired();
+    }
+    const uint64_t core0 = retired() - first;
+    __atomic_store_n(&idle_wait, 0, __ATOMIC_RELEASE);
+    say("el0_cross_core_core0_instructions", core0);
+    say("el0_cross_core_core1_instructions", remote0_last - remote0_first);
     xTaskNotifyGive(driver_handle);
     for (;;) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
@@ -203,7 +229,8 @@ void kernel_main(void)
     remote_handle = xTaskCreateStaticAffinitySet(remote, "remote", 4096, EL1, 3, stacks[2], &tasks[2], 2);
     setup1_handle = xTaskCreateStaticAffinitySet(setup1, "setup1", 4096, EL1, 4, stacks[3], &tasks[3], 2);
     el0_handle = xTaskCreateStaticAffinitySet(el0_task, "el0", 4096, NULL, 3, stacks[4], &tasks[4], 1);
-    CHECK(driver_handle && waker_handle && remote_handle && setup1_handle && el0_handle);
+    remote0_handle = xTaskCreateStaticAffinitySet(remote0, "remote0", 4096, NULL, 3, stacks[5], &tasks[5], 2);
+    CHECK(driver_handle && waker_handle && remote_handle && setup1_handle && el0_handle && remote0_handle);
     vTaskSuspend(el0_handle);
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);

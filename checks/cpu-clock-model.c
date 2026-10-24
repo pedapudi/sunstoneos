@@ -14,7 +14,7 @@
 #define REG_DCDC5 0x16
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
-    unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, now_cost;
+    unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, now_cost, now_reads;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     uint64_t park_at[2]; /* Time of each cluster's latest park write. */
     struct { uint32_t from_uv, to_uv; uint64_t at; } ramp[2]; /* DCDC5, DCDC3. */
@@ -74,9 +74,11 @@ static void pmic_written(void *v,uint8_t reg,uint8_t value)
     cm.ramp[r].from_uv=old;cm.ramp[r].to_uv=selector_uv(value);cm.ramp[r].at=pm.now;
     record(1,reg,value);covered();
 }
-/* Each CPU clock time read costs now_cost microseconds, so the driver's
- * settle spin sees time advance. */
-static int cpu_now(void *v,uint64_t *out){(void)v;int r=pmic_model_now(&pm,out);pm.now+=cm.now_cost;return r;}
+/* Every fourth CPU clock time read advances time by now_cost microseconds,
+ * so the driver's settle spin sees time advance and a settle shorter than
+ * 2 us cannot pass on the cost of its own time reads. */
+static int cpu_now(void *v,uint64_t *out)
+{(void)v;int r=pmic_model_now(&pm,out);if(!(++cm.now_reads&3))pm.now+=cm.now_cost;return r;}
 static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
@@ -95,9 +97,10 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
     for(unsigned d=0;d<2;++d) {
         if(a==PLL(d)) {
             /* The PLL changes only while its cluster runs from the DCXO, and
-             * at least 1 us (the mainline mux notifier delay) after the park. */
+             * at least the driver's 2 us settle after the park (twice the
+             * mainline mux notifier delay). */
             assert(((*word(SEL(d))>>24)&7)==0);
-            assert(pm.now>=cm.park_at[d]+1);
+            assert(pm.now>=cm.park_at[d]+2);
             *word(a)=value&~(1u<<28);
             if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
         }

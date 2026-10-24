@@ -16,5 +16,7 @@
 void a733_smp_startup_check(void);
 uintptr_t a733_smp_priority_address(void);
 uint64_t a733_smp_sgi_value(unsigned interrupt, unsigned core);
+/* The port's ICC_SGI1R_EL1 value for one core, from the A733 affinity map. */
+#define portSGI1R_VALUE(interrupt, core) a733_smp_sgi_value((interrupt), (core))
 #endif
 #endif
