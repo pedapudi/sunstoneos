@@ -79,7 +79,7 @@ def run(args):
     recovery,recovery_hash=claimed(args,hashlib.sha256(metadata).hexdigest(),manifest['files']['launch-survey.bin'],software_hash)
     args.evidence.mkdir(parents=True,exist_ok=False)
     record={'physical_access':True,'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
-        'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'software_sha256':software_hash,'one_attempt':True,'launch_attempted':False,'recovery_sha256':recovery_hash}
+        'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'software_sha256':software_hash,'one_attempt':True,'launch_attempted':False,'device_access_attempted':False,'recovery_sha256':recovery_hash}
     def journal():save(args.evidence/'session.json',record)
     access=module('launch_survey_access',ROOT/'tools/usb-access.py')
     sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
@@ -94,6 +94,7 @@ def run(args):
             require(not failed and access.identity(node)==identity,'Transport failed or instance changed; no further requests.')
             access.require_rom(node);entry={'arguments':list(map(str,commands))};record['transactions'].append(entry);journal()
             try:
+                record['device_access_attempted']=True
                 result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,commands)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
                 entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
                 require(result.returncode==0,'Survey FEL transaction failed.')
@@ -125,10 +126,10 @@ def run(args):
             if validation_error:raise validation_error
         except BaseException as error:
             record.update(failure=str(error),transport_failed=failed)
-            if dirty or failed:
+            if dirty or failed or (record['device_access_attempted'] and not record.get('sram_restored')):
                 try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Survey stopped; no retries; manual recovery review required.',identity),error)
                 finally:
-                    if dirty and not record['launch_attempted']:base.hold_ownership()
+                    if not record['launch_attempted']:base.hold_ownership()
             else:journal()
             raise
     return 0
