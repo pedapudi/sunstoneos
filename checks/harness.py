@@ -54,7 +54,8 @@ class Image:
 
     parts holds (address, bytes) for each PT_LOAD segment; symbols maps a symbol
     name to its addresses; functions maps a (compilation unit, name) pair to the
-    addresses of DWARF subprograms; layouts maps a structure name to its member
+    addresses of DWARF subprograms and variables maps it to the addresses of
+    statically allocated DWARF variables; layouts maps a structure name to its member
     offsets. layout_names selects the structures a fixture consumes, because
     unrelated compilation units may declare different private structures with
     the same name; any other repeated name must have one layout.
@@ -62,15 +63,19 @@ class Image:
 
     def __init__(self, path, layout_names=None):
         from elftools.elf.elffile import ELFFile
+        from elftools.dwarf.dwarf_expr import DWARFExprParser
         with Path(path).open('rb') as f:
             e = ELFFile(f)
+            dwarf = e.get_dwarf_info()
+            expressions = DWARFExprParser(dwarf.structs)
             self.parts = [(int(p['p_vaddr']), p.data()) for p in e.iter_segments() if p['p_type'] == 'PT_LOAD']
             self.symbols = {}
             self.functions = {}
+            self.variables = {}
             self.layouts = {}
             for s in e.get_section_by_name('.symtab').iter_symbols():
                 self.symbols.setdefault(s.name, set()).add(int(s['st_value']))
-            for cu in e.get_dwarf_info().iter_CUs():
+            for cu in dwarf.iter_CUs():
                 unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
                 for d in cu.iter_DIEs():
                     if 'DW_AT_name' not in d.attributes:
@@ -78,6 +83,12 @@ class Image:
                     n = d.attributes['DW_AT_name'].value.decode()
                     if d.tag == 'DW_TAG_subprogram' and 'DW_AT_low_pc' in d.attributes:
                         self.functions.setdefault((unit, n), set()).add(int(d.attributes['DW_AT_low_pc'].value))
+                    location = d.attributes.get('DW_AT_location')
+                    if d.tag == 'DW_TAG_variable' and location is not None and location.form == 'DW_FORM_exprloc':
+                        ops = expressions.parse_expr(location.value)
+                        if len(ops) == 1 and ops[0].op_name in ('DW_OP_addr', 'DW_OP_addrx'):
+                            at = ops[0].args[0] if ops[0].op_name == 'DW_OP_addr' else dwarf.get_addr(cu, ops[0].args[0])
+                            self.variables.setdefault((unit, n), set()).add(int(at))
                     if d.tag == 'DW_TAG_structure_type' and (layout_names is None or n in layout_names):
                         fields = {c.attributes['DW_AT_name'].value.decode(): int(c.attributes['DW_AT_data_member_location'].value)
                                   for c in d.iter_children() if c.tag == 'DW_TAG_member' and 'DW_AT_name' in c.attributes
@@ -88,10 +99,11 @@ class Image:
                             self.layouts[n] = fields
 
     def address(self, n, unit=None):
-        """The one nonzero address of symbol n, or of function n in the unit whose name ends with unit."""
+        """The one nonzero address of symbol n, or of function or static variable n in the unit whose name ends with unit."""
         values = self.symbols.get(n, set()) - {0}
         if unit:
-            values = set().union(*(v for (u, name), v in self.functions.items() if name == n and u.endswith(unit)))
+            values = set().union(*(v for table in (self.functions, self.variables)
+                                   for (u, name), v in table.items() if name == n and u.endswith(unit)))
         assert len(values) == 1, (n, unit, values)
         return next(iter(values))
 

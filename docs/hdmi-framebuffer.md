@@ -27,7 +27,7 @@ supplies only its session values and output callbacks: the designated task and
 unchanged session, the live output clock, rail, PMIC and PCK leases, and the
 output state that admits each DE action.
 
-Domain preparation first calls `a733_power_domain_check(domains, 1)`, which
+Domain preparation first calls `a733_power_domain_check(domains, 1, NULL)`, which
 reads the DE_SYS MBUS gates, the PPU clock and the PCK command and status
 registers, requires their low four bits to agree at OFF (0) or ON (8), and
 writes nothing. It then asserts the DE bus and module resets and waits 10 µs.

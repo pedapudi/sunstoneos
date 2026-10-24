@@ -776,10 +776,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reference-parent checks pass. Between bus phases it checks only the state
   word; around each register access it checks the deadline on the raw counter
   and takes no lock.
-  [GPU/NPU consumers](pmic-consumers.md) now retain
+  [GPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared
   provider disables their competing inherited-bus readers. Emulator checks pass
-  for both consumers and retained failures. The provider also accepts bounded
+  for the consumer and retained failures. NPU startup reads the power-domain
+  owner's DCDC2 verification instead. The provider also accepts bounded
   DCDC3 and DCDC5 selector writes, and only the [CPU clock driver](cpu-clock.md)
   may submit them; no image does. Cold bus startup, recovery, regulator
   writes and electrical qualification remain open.
@@ -2143,23 +2144,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   tables, then invokes the actual authenticated preparation path. Focused
   emulator checks execute native translation/cache operations and retain the
   parent allocation on failure. Missing startup authority still refuses
-  service binding. The [NPU PLL controller](npu-pll.md)
-  implements bounded cold enable and enabled retuning, consumer exclusion and
-  retained faults. Host checks, source comparisons and native compilation pass.
-  [Atomic startup adoption](npu-clock-handoff.md) transfers the PLL reservation
-  directly into startup ownership; focused emulator checks pass without a
-  release window. The [native convolution application](npu-application.md)
+  service binding. The [NPU startup sequencer](npu-startup.md) runs on the
+  power-domain owner: it enables PLL_NPU from its disabled state by method 2
+  ([PLL table](npu-pll.md)), opens the local clocks and resets, and requests
+  domain 4 through the owner. Host-model, two-core QEMU and linked-image checks
+  pass. The [native convolution application](npu-application.md)
   connects cached startup, reserved memory, actual providers, the convolution
   client and checked USB results. Native linking and modeled application checks
   pass; modeled output does not establish numerical inference. The supervised
-  image connects actual PMIC sampling, enabled-PLL retuning and startup token
-  adoption; focused checks pass with modeled device responses. Its host path
-  passes 33 packaging/capture cases and five frozen-input binding regressions.
-  An explicit supervised mode now enables a disabled PLL while DRAM remains
-  active and adopts a quiescent, already-powered NPU domain. Its first native
-  link and focused startup checks pass; modeled startup reaches service
-  activation without power-domain writes or changes to SRAM reset. Unsuitable
-  supply voltage remains unsupported. Concrete boot
+  image runs the power service and the startup sequencer; focused checks pass
+  with modeled device responses. Its host path passes 33 packaging/capture
+  cases and five frozen-input binding regressions. Startup admits only a
+  disabled PLL_NPU and an OFF domain 4; unsuitable supply voltage remains
+  unsupported. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 

@@ -43,7 +43,7 @@ budgets are the ones in [npu-board.md](npu-board.md).
 | Runtime parent, board image | No board image | 8,388,608 bytes at `0x48000000`, 2 MiB aligned | 8,388,608 bytes | Yes |
 | Largest free extent after admission | Not modeled | 796,917,760 bytes; the only pool callers are the CE session, USB2 and `board_application_start`, so LOAD and CLOSE leave the extents unchanged | ≥ 8,388,608 bytes; unchanged | Yes |
 | Requests, replies and client tick waits per inference | 1, 1; one `vTaskDelay(1)` per tick of waiting | 3 jobs: 3 requests, 3 replies, 0 tick waits; a STATUS and a LOAD before ready are answered not-ready | 1, 1, 0 | Yes |
-| Copies per tensor byte | No board image | Input 2 memory copies plus PIO, output 2 memory copies plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes; a READ of mimus-linear-q's 2,816-byte output fits the image's 4 KiB transmit FIFO, which `npu-board-providers.py` reads from the linked TinyUSB class | 2 plus PIO each way with the shared TinyUSB configuration | Yes |
+| Copies per tensor byte | No board image | Input 2 memory copies plus PIO, output 2 memory copies plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes; a READ of mimus-linear-q's 2,816-byte output fits the image's 4 KiB transmit FIFO, which `npu-board-providers.py` reads from the linked TinyUSB class | 2 plus PIO each way with the image's TinyUSB configuration | Yes |
 | Cache lines maintained per job | 19,442 | 19,442 | 19,442 | Yes |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | 1,093,632 | Yes |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | 1,509,856 | Yes |

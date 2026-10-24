@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Run only GPU/NPU actual-provider cases for detected DCXO and REF24."""
+"""Run only the GPU actual-provider cases for detected DCXO and REF24.
+
+The NPU reference-clock cases run in checks/npu-startup-host.c and, on the
+linked images, checks/npu-application-clock-reference.py."""
 import argparse, hashlib, json, subprocess
 from pathlib import Path
 if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMIZE and do not pass -O')
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
-p.add_argument('--providers',nargs='+',choices=['gpu','npu-platform','npu-pll'],default=['gpu','npu-platform','npu-pll'])
+p.add_argument('--providers',nargs='+',choices=['gpu'],default=['gpu'])
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 fixture=Path.home()/'.cache/sunstoneos/evidence/npu-parent-gates-20261016/npu-platform-reference.h'
 def ref(path):return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
-plans={'gpu':['drivers/gpu/a733_gpu_resources.c','checks/a733-gpu-clock-reference.c'], 'npu-platform':['drivers/clock/a733_clock_leases.c','drivers/npu/a733_npu_platform.c','checks/a733-npu-platform-clock-reference.c'], 'npu-pll':['drivers/clock/a733_clock_leases.c','drivers/npu/a733_npu_pll.c','checks/a733-npu-pll-clock-reference.c']}
+plans={'gpu':['drivers/gpu/a733_gpu_resources.c','checks/a733-gpu-clock-reference.c']}
 results=[]
 for name in a.providers:
  sources=plans[name]

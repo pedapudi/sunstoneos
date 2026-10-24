@@ -249,26 +249,28 @@ The registry can acquire fabric and selected-parent stability together with
 exclusive DMA0 ownership. Hardware selector/rate verification, remote-MCU
 handoff, clock/reset setup and production composition remain platform work.
 
-## NPU startup retains shared PLL and local power ownership
+## NPU startup holds exclusive PLL_NPU and local NPU ownership
 
-The [NPU platform controller](npu-platform.md) acquires stable PLL_NPU,
-reference, oscillator and fabric scopes together with exclusive NPU ownership.
-The NPU scope includes its local clock, resets and power domain. Separate
-PCK-clock and DCDC2 rail leases are acquired by the [startup adapter](npu-startup.md).
+The [NPU startup sequencer](npu-startup.md) acquires one token with exclusive
+PLL_NPU and NPU scopes and shared reference, oscillator and fabric scopes,
+plus PERI0 when a fabric clock selects it. The NPU scope covers the local
+clock and resets; domain 4 belongs to the [power-domain owner](power-domains.md).
+The sequencer holds the token for the session and never publishes it as
+shared. Separate PCK-clock and DCDC2 rail leases come from the GPU/PCK manager
+and the rail ledger.
 The registry's DCDC2 scope is a legacy scope that grants no rail authority; the
 [rail ledger](rail-leases.md) owns DCDC2, and nothing writes it. DCDC2 has no
 clock ancestors and does not alter audio-profile publication. Physical supply and clock qualification
 remain prerequisites for production startup.
 
-PLL_NPU can also supply memory, fabric and video clocks. Retuning it requires
+PLL_NPU can also supply memory, fabric and video clocks. Enabling it requires
 exclusion of every consumer; an idle NPU does not establish that exclusion.
 The NPU's shared SRAM also requires its power domain to remain on. Memory
 reservations must preserve the domain lifetime for every CPU and DMA user.
 
-The focused NPU platform fixture checks actual registry conflicts and refuses
-shared ownership of the local NPU scope. Native compilation passes; evidence
-is in `~/.cache/sunstoneos/evidence/npu-platform-20261016/`.
-Existing registry clients retain their earlier evidence.
+`checks/npu-startup-host.c` and `checks/npu-startup.c` run the sequencer
+against the actual registry. Existing registry clients retain their earlier
+evidence.
 
 ## Clock publication transfers ownership without a release window
 
@@ -279,11 +281,7 @@ token replaces the old identity while preserving the owner and all other scopes.
 Validation and time checks precede the metadata change. Refusal leaves the old
 reservation and output unchanged; publication itself proves no hardware state.
 
-The [NPU startup handoff](npu-clock-handoff.md) writes the replacement directly
-into persistent startup storage and transfers the source authority only after
-its actual controller completes. A late fault retains the reachable token.
-Focused emulator checks cover successful adoption and failures before and after
-publication. The USB extension passes a focused host check for reference
+The USB extension passes a focused host check for reference
 publication and concurrent independent port reservations. Its physical source
 proof and consumer adoption belong to the USB platform controller. The [display handoff](display-clock-handoff.md) adopts the completed PLL and
 media producers into actual scanout ownership. It refreshes every borrowed live

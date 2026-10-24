@@ -287,7 +287,7 @@ static int cold_step(fb_t *f)
     case 0:
         /* Refuse an incoherent domain, closed MBUS gates or a stopped PPU
          * clock before the resets change; the owner reads, never writes. */
-        if(a733_power_domain_check(f->config.domains,1)!=1)return -1;
+        if(a733_power_domain_check(f->config.domains,1,NULL)!=1)return -1;
         if(!read32(f,CCU+0xa00,&value)||(value&0x80000000)||
            !read32(f,CCU+0xa04,&value)||(value&1))return -1;
         for(unsigned i=0;i<2;++i)if(!read32(f,CCU+(i?0x5b4:0x58c),&value)||

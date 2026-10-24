@@ -382,11 +382,15 @@ int a733_power_service_ready(const struct a733_power_domains *d)
     const unsigned w=a733_power_authority_load(word(d));
     return w&A733_POWER_PMIC_TRANSFER ? -1 : w&A733_POWER_PROVIDER_READY ? 1 : 0;
 }
-int a733_power_domain_check(struct a733_power_domains *d,unsigned domain)
+int a733_power_domain_check(struct a733_power_domains *d,unsigned domain,unsigned *state)
 {
     uint32_t policy;
     if(!d || d->self!=d || slot(domain)<0)return 0;
     const struct profile *f=&profiles[slot(domain)];
-    return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) &&
-        bits(d,R_CCU+0x1ac,1,1) && coherent(d,domain,&policy)>=0;
+    if(!bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) || !bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) ||
+       !bits(d,R_CCU+0x1ac,1,1))return 0;
+    const int status=coherent(d,domain,&policy);
+    if(status<0)return 0;
+    if(state)*state=(unsigned)status;
+    return 1;
 }

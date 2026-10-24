@@ -333,10 +333,10 @@ int main(int argc,char **argv)
     struct a733_rail_token n2={0};struct a733_power_domain_row npu={0};
     assert(a733_power_domain_row_init(&npu,&d.owner,4,72,&n2));
     domains_boot();
-    from=d.trace_n;assert(a733_power_domain_check(&d.owner,4)==1 && !writes_since(from));
-    d.ccu_5e0&=~(1u<<18);assert(a733_power_domain_check(&d.owner,4)==0);d.ccu_5e0|=1u<<18;
-    d.ppu[4][2]|=8;assert(a733_power_domain_check(&d.owner,4)==0);d.ppu[4][2]&=~8u;
-    assert(!writes_since(from) && a733_power_domain_check(&d.owner,2)==0);
+    unsigned seen=99;from=d.trace_n;assert(a733_power_domain_check(&d.owner,4,&seen)==1 && seen==0 && !writes_since(from));
+    d.ccu_5e0&=~(1u<<18);assert(a733_power_domain_check(&d.owner,4,NULL)==0);d.ccu_5e0|=1u<<18;
+    d.ppu[4][2]|=8;assert(a733_power_domain_check(&d.owner,4,NULL)==0);d.ppu[4][2]&=~8u;
+    assert(!writes_since(from) && a733_power_domain_check(&d.owner,2,NULL)==0);
     n2=domains_rail(72,A733_RAIL_DCDC2);assert(a733_power_domain_request(&npu,1));
     service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && (d.ppu[4][0]&15)==8);
     assert(!a733_power_domain_request(&npu,0));

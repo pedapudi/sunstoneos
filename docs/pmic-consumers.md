@@ -1,6 +1,8 @@
 # Accelerator supplies use the shared PMIC task
 
-GPU and NPU startup can bind the [runtime PMIC provider](pmic-runtime.md).
+GPU startup can bind the [runtime PMIC provider](pmic-runtime.md). NPU startup
+takes no PMIC observation: it reads the power-domain owner's DCDC2
+verification from the power-authority word ([npu-startup.md](npu-startup.md)).
 Each consumer acquires an actual stable rail lease, submits an asynchronous
 observation, and retains the completed request for its platform lifetime.
 The provider's outstanding borrow prevents release of that parent lease.
@@ -9,7 +11,7 @@ voltage, settling behavior, wiring and hardware operation remain unqualified.
 
 The shared provider owns S_TWI0, PL0/PL1 and their clock authority. Consumers
 never poll its bus state machine. A separate designated provider task must
-continue polling while GPU or NPU startup waits for a result. Every writer of
+continue polling while GPU startup waits for a result. Every writer of
 these supplies must participate in the common rail ledger, the only rail
 authority; the provider writes neither DCDC2 nor DCDC4.
 
@@ -21,17 +23,14 @@ the PMIC provider. Obtain its lifetime identity before binding consumers.
 An identity copy does not establish provider readiness.
 
 Before scheduling or acquiring any manager resources, call
-`a733_npu_startup_bind_pmic()` for NPU startup and
-`a733_gpu_platform_bind_pmic()` for the GPU platform. Both bindings must name
-the same provider and global manager. The native adapter authenticates the
-manager's callback and context tuple, including the NPU shared-resource wrapper.
+`a733_gpu_platform_bind_pmic()` for the GPU platform. The binding must name
+the provider and the global manager. The native adapter authenticates the
+manager's callback and context tuple.
 All configuration, adapters, consumers, managers and provider backing remain
 private, immutable and at their original addresses.
 
 Selecting the provider immediately disables the native GPU inherited-bus
-reader. Until a GPU view is bound, its rail callback refuses acquisition.
-An NPU startup without its corresponding provider binding also refuses progress
-when the shared adapter selects the provider. Binding failure can leave this
+reader. Until a GPU view is bound, its rail callback refuses acquisition. Binding failure can leave this
 safe refusal state installed; it does not restore legacy access.
 
 The existing native initializer retains compatibility with isolated inherited
@@ -51,8 +50,8 @@ runs the GPU does, the snapshot is the owner's boot reading
 supply-verification done bit, requires `A733_POWER_DCDC4_VERIFIED` and no
 provider, clock or ledger fault bit, and copies the record: no bus
 transaction and no PMIC request slot per GPU start. Health is the rail token's
-status plus one acquire load of the state word. Without an owner, and for the
-NPU's DCDC2 consumer, the consumer submits its own snapshot request, and
+status plus one acquire load of the state word. Without an owner, the consumer
+submits its own snapshot request, and
 health authenticates the provider lifetime, exact request, outstanding borrow
 and stable parent before arming the native callback.
 
@@ -74,21 +73,6 @@ startup deadline governs each GPU operation; expiration of an earlier operation
 does not invalidate the still-held supply lease. Provider or authority failure
 permanently refuses later progress while preserving admitted resources.
 
-## NPU startup retains two observations around the settling interval
-
-NPU startup reserves DCDC2 through the actual rail ledger before acquiring its
-PCK lease. It then submits the first 800 mV observation. After completion it
-waits at least 5,160 microseconds on the common physical counter. Only then does
-it reap the first request, keeping the stable parent lease, and submit the
-second observation. The second completed request remains held throughout NPU
-service lifetime.
-
-Startup retains its absolute deadline through contention and both observations.
-After local power-up, the wrapper checks provider health before reporting READY.
-The service preparation callback authenticates that same retained observation
-and the existing clock/PCK tokens. Completed startup remains usable after its
-old acquisition deadline; service health is an independent requirement.
-
 An expired or uncertain operation does not trigger a reset, retry, release or
 fallback to the early reader. Provider transfer failures retain the provider's
 bus ownership according to its existing recovery contract. Consumer faults
@@ -98,7 +82,9 @@ retain their rail leases and outstanding requests.
 
 The focused native instruction fixture composes the actual PMIC transaction
 state machine, rail and clock registries, pin manager, consumer, GPU native
-adapter/platform and NPU startup. Its scheduler ownership, mutex dispatch,
+adapter/platform and, in the preserved run below, the NPU startup's former
+DCDC2 consumer. `checks/a733-pmic-consumers.c` now holds the GPU cases only.
+Its scheduler ownership, mutex dispatch,
 hardware responses and architectural counter input are modeled. Existing
 FreeRTOS mutex and scheduler evidence covers those unchanged implementations.
 The fixture contains no accelerator command execution or physical access.
@@ -120,7 +106,7 @@ passed on their first executable run. Runtime and fixture sources match the
 independently reviewed snapshot. No existing provider, scheduler or power
 lifecycle suite was repeated.
 
-Native targets using the modified GPU or NPU bindings must link
+Native targets using the modified GPU binding must link
 `drivers/power/a733_pmic_consumer.c` and the existing PMIC provider, rail ledger,
 clock registry and pin-manager dependencies. The isolated legacy APIs still
 compile against these bindings; dependency linkage is not shared-mode admission.

@@ -19,13 +19,15 @@
   "cache_areas": [
    "evidence"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-board.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "--output"
   ],
-  "summary": "Run only GPU/NPU actual-provider cases for detected DCXO and REF24.",
+  "summary": "Run only the GPU actual-provider cases for detected DCXO and REF24.",
   "usb": false
  },
  "a733-camera-capture.py": {
@@ -1259,6 +1261,9 @@
  "accelerator-providers.py": {
   "cache_areas": [],
   "docs": [
+   "docs/accelerator-composition.md",
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
    "docs/designs/npu-platform-measurements.md"
   ],
   "library": false,
@@ -2089,6 +2094,7 @@
   "docs": [
    "apps/mimus-board/README.md",
    "docs/board-application.md",
+   "docs/designs/npu-board.md",
    "docs/hardware.md",
    "docs/usb2-host.md"
   ],
@@ -3047,7 +3053,9 @@
  },
  "displayport-admission.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-board.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6539,35 +6547,51 @@
  "npu-application-clock-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/npu-platform-measurements.md"
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
+   "docs/designs/npu-platform-measurements.md",
+   "docs/npu-application.md",
+   "docs/npu-platform.md",
+   "docs/npu-pll.md",
+   "docs/npu-startup.md"
   ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "--image",
-   "--session",
    "--output"
   ],
-  "summary": "Only the native application's pre-PLL reference admission; no NPU work.",
+  "summary": "The linked image's startup register pass against six reference-clock cases.",
   "usb": false
  },
- "npu-application.py": {
+ "npu-board-host.py": {
+  "cache_areas": [
+   "build",
+   "evidence",
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Prepare the linked NPU board image with MODEL-NOT-PHYSICAL authority and check its admission.",
+  "usb": false
+ },
+ "npu-board-providers.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/npu-platform.md",
-   "docs/npu-application.md"
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md"
   ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
-   "--freertos",
-   "--tinyusb",
-   "--lld",
-   "--launcher-bundle",
-   "--artifacts",
-   "--evidence"
+   "--image",
+   "--output"
   ],
-  "summary": "One native NPU application link and focused constructor/client/frame/host composition.",
+  "summary": "The board image's NPU construction: borrowed providers, the domain-4 row and the runtime's pool.",
   "usb": false
  },
  "npu-conformance.py": {
@@ -6648,7 +6672,9 @@
  },
  "npu-finite-quiescence.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "apps/npu-returning/README.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6670,6 +6696,23 @@
    "--output"
   ],
   "summary": "Selected graph construction and copied runtime results in the actual linked image.",
+  "usb": false
+ },
+ "npu-image-checks.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--accelerators",
+   "--output"
+  ],
+  "summary": "Build the separately configured NPU images, write their session fixtures and run their checks.",
   "usb": false
  },
  "npu-interrupt-client.py": {
@@ -6793,7 +6836,8 @@
    "sources"
   ],
   "docs": [
-   "docs/designs/power-authority.md"
+   "docs/designs/power-authority.md",
+   "docs/npu-platform.md"
   ],
   "library": false,
   "pure_host": true,
@@ -6807,7 +6851,9 @@
   "cache_areas": [
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/npu-pll.md"
+  ],
   "library": false,
   "pure_host": true,
   "required_arguments": [
@@ -6837,6 +6883,8 @@
  "npu-runtime-bounds.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
    "docs/designs/npu-breadth-measurements.md",
    "docs/designs/npu-breadth.md"
   ],
@@ -6884,6 +6932,8 @@
    "host"
   ],
   "docs": [
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
    "docs/designs/npu-breadth-measurements.md",
    "docs/designs/npu-breadth.md",
    "docs/designs/npu-conformance.md",
@@ -6925,6 +6975,8 @@
  "npu-single-core.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
    "docs/designs/npu-platform-measurements.md",
    "docs/designs/npu-platform.md"
   ],
@@ -6941,22 +6993,27 @@
  "npu-stop-native.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/npu-platform-measurements.md"
+   "docs/designs/npu-board-measurements.md",
+   "docs/designs/npu-board.md",
+   "docs/designs/npu-platform-measurements.md",
+   "docs/npu-platform.md",
+   "docs/npu-pll.md",
+   "docs/npu-startup.md"
   ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "--elf",
-   "--layout-helper",
    "--evidence"
   ],
-  "summary": "Exercise the linked native local gate/reset adapter with modeled MMIO.",
+  "summary": "The linked NPU allowlist adapter: local stop writes, PLL rules and PCK600 refusals, with modeled MMIO.",
   "usb": false
  },
  "npu-supervised-host.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/npu-platform.md"
+   "docs/designs/npu-platform.md",
+   "docs/npu-application.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6977,6 +7034,7 @@
   "docs": [
    "apps/npu-runtime/README.md",
    "docs/designs/board-bundles-next.md",
+   "docs/designs/npu-board.md",
    "docs/designs/npu-platform-measurements.md",
    "docs/designs/npu-platform.md",
    "docs/designs/smp-heterogeneous.md",
@@ -6987,7 +7045,7 @@
   "required_arguments": [
    "--evidence"
   ],
-  "summary": "One supervised native link and retained supply/PLL/startup composition.",
+  "summary": "One supervised native link and the supply, startup sequencer and refusal composition.",
   "usb": true
  },
  "os-image-audio.py": {
@@ -7380,6 +7438,7 @@
  "power-domains-tree.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-board.md",
    "docs/designs/power-domains.md",
    "docs/power-domains.md"
   ],
@@ -8998,6 +9057,7 @@
  "storage-read-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-board.md",
    "docs/validation.md"
   ],
   "library": false,
@@ -9493,6 +9553,7 @@
    "docs/designs/cpu-fault-reset.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-leftovers.md",
+   "docs/designs/npu-board.md",
    "docs/performance-architecture.md",
    "docs/usb.md"
   ],

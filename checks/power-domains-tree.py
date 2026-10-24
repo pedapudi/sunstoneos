@@ -2,17 +2,17 @@
 """Check the source-tree facts that give PCK600 domains 1 and 5 one owner.
 
 docs/power-domains.md makes drivers/power/a733_power_domains.c the only writer
-of PCK600 domains 1 (DE_SYS) and 5 (GPU_TOP), and runs every PMIC transaction
+of PCK600 domains 1 (DE_SYS), 4 (NPU) and 5 (GPU_TOP), and runs every PMIC transaction
 from one service task per image. This check fails when:
 
 - a source other than the owner and its native adapter names a domain-1 or
   domain-5 PPU register, unless it is a listed reader whose lines that name
   the register only read it;
 - the set of sources that write the pinned delay row (value 0x1f1f1f) differs
-  from the owner plus the writers of domains this package does not own, or a
-  native allowlist other than the NPU's still admits the delay row;
+  from the owner plus the writers of domains the owner does not hold, or a
+  native allowlist still admits the delay row;
 - a source outside checks/ registers a domain-4 row while the NPU platform
-  still writes domain 4 itself: the owner and the NPU would both write it;
+  writes domain 4 itself: the owner and the NPU would both write it;
 - an image in the service table polls the PMIC provider itself, or does not
   create its service task at the listed priority below its USB0 task, on A55
   core 0;
@@ -47,11 +47,11 @@ READERS = {
 }
 DOMAIN_REGISTER = re.compile(r'0x0706[15][0-9a-fA-F]{3}\b|A733_DE_SYS_PCK_BASE|A733_PCK_DOMAIN_BASE\(\s*[15]\s*\)')
 WRITE_HINT = re.compile(r'write|store|update|=\s*value', re.I)
-# Writers of the delay row for domains outside this package: video (2, 3),
-# HDMI and DisplayPort (10), and the NPU (4) until its stage.
+# Writers of the delay row for domains the owner does not hold: video (2, 3),
+# HDMI and DisplayPort (10). The NPU requests domain 4 through its row.
 DELAY_WRITERS = {'drivers/power/a733_power_domains.c', 'drivers/video/a733_video_platform.c',
-                 'platform/a733/hdmi_native.c', 'apps/displayport/native.c', 'drivers/npu/a733_npu_platform.c'}
-DELAY_ALLOWLISTS = {'drivers/npu/a733_npu_platform_native.c'}
+                 'platform/a733/hdmi_native.c', 'apps/displayport/native.c'}
+DELAY_ALLOWLISTS = set()
 # Image: (source, service creation, USB0 creation or priority fact, core-0 placement).
 IMAGES = {
     'GPU': ('apps/gpu-render/main.c',
@@ -138,8 +138,9 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS power-domain tree facts in {scanned} sources: domains 1 and 5 written only by the owner; '
-          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlist; no domain-4 row while the '
-          'NPU writes domain 4; five images run their PMIC work from one service task below USB0 on core 0; '
+          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists; {len(domain4_rows)} '
+          'domain-4 row sources and no NPU write to domain 4; five images run their PMIC work from one service '
+          'task below USB0 on core 0; '
           'no critical section, scheduler suspension or wait in the owner')
 
 

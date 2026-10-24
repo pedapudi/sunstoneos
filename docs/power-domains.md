@@ -9,9 +9,8 @@ bits 3:0 request OFF (0) or ON (8), a status word (`+0x8`) that reports the
 reached state, and a delay row (`+0x170`, `+0x174`, `+0xc00`–`+0xc10`) that the
 pinned vendor driver writes before a power-on.
 [`drivers/power/a733_power_domains.c`](../drivers/power/a733_power_domains.c)
-is the only writer of domain 1 (DE_SYS, the display engine and G2D) and
-domain 5 (GPU_TOP). It also supports domain 4 (NPU) for the NPU startup's
-next stage. Domains 2, 3 and 10 keep their own writers: the video platform,
+is the only writer of domain 1 (DE_SYS, the display engine and G2D),
+domain 4 (NPU) and domain 5 (GPU_TOP). Domains 2, 3 and 10 keep their own writers: the video platform,
 HDMI and DisplayPort. The design and its review are in
 [docs/designs/power-domains.md](designs/power-domains.md).
 
@@ -44,7 +43,7 @@ first and then requests the row OFF. The framebuffer and G2D keep their
 authorization functions, which check the designated task, the exclusive
 DE_SYS, IOMMU_SYS, VI, VE_DEC and VE_ENC clock tokens, the DCDC2 rail token and
 the PCK lease, and for the framebuffer its media ownership and memory. The
-framebuffer calls `a733_power_domain_check(1)` before its first reset write,
+framebuffer calls `a733_power_domain_check(domains, 1, NULL)` before its first reset write,
 from its output task. The check makes only reads through the owner's native
 adapter, which verified at init, before the scheduler started, that the PPU,
 CCU and R_CCU windows are identity Device-nGnRnE mappings; a failed mapping
@@ -191,46 +190,33 @@ fault it sees is latched by the service's next poll. `a733_pmic_result` and
 `a733_pmic_reap` keep the provider object's try-lock, which the service holds
 only inside one poll and never across a bus-phase spin.
 
-## Interface for the NPU startup
+## Domain 4 and the NPU startup
 
-The NPU startup moves onto domain 4 in its next stage. This package provides:
+The [NPU startup sequencer](npu-startup.md) uses domain 4 through this
+interface:
 
 1. `a733_power_domain_row_init(row, domains, 4, owner, rail_token)` before the
    scheduler starts; the token must hold DCDC2.
-2. `a733_power_domain_check(domains, 4)`, which reads the MBUS gates (CCU
-   `0x5c0` bit 6, `0x5e0` bit 18), the PPU clock and the policy and status
-   words, and writes nothing. Call it before the first NPU reset or clock
-   write.
-3. The NPU deasserts its resets (`0xb04` bits 18, 17, 16), sets the module
-   rate, enables its clocks and issues its existing `DSB SY`, in the order of
-   the pinned VIPLite driver (`vip_drv_device_platform.c` lines 419–428).
+2. `a733_power_domain_check(domains, 4, &state)`, which reads the MBUS gates
+   (CCU `0x5c0` bit 6, `0x5e0` bit 18), the PPU clock and the policy and
+   status words, writes nothing, and returns the status read in `state`, 0
+   for OFF or 8 for ON. The sequencer calls it before its first NPU reset or
+   clock write, requires OFF, and does not read the policy and status words
+   again in its register pass.
+3. The sequencer releases the NPU resets (`0xb04` bits 18, 17, 16), sets the
+   module rate and enables its clocks, in the order of the pinned VIPLite
+   driver (`vip_drv_device_platform.c` lines 419–428).
 4. `a733_power_domain_request(row, 1)`, then `a733_power_domain_state(row)`
-   once per poll until it reads ON, followed by the NPU's existing 2,000 µs
+   once per step until it reads ON, followed by the sequencer's 2,000 µs
    settle and readback. REFUSED and FAILED are terminal.
 
 Domain 4 never powers off: `a733_power_domain_request(row, 0)` is refused.
-Until the NPU platform stops writing domain 4, `checks/power-domains-tree.py`
-fails on any domain-4 row registered outside `checks/`, so that the owner and
-the NPU platform never both write the domain in one image.
-`checks/power-domains-pck.c` covers the check and a domain-4 row. The design
-also names a blocking `a733_power_domain_wait(row, deadline)` with a row
-semaphore that the service gives after it publishes; it is added together
-with its first blocking caller, the NPU startup.
-
-The NPU owner must change:
-
-- `drivers/npu/a733_npu_platform.c`: remove the delay-row and domain-ON writes
-  and the adoption reads of domain 4; request the row instead.
-- `drivers/npu/a733_npu_platform_native.c`: remove the PCK write offsets from
-  the native allowlist. `checks/power-domains-tree.py` then expects four
-  delay-row writers and no native allowlist, and accepts domain-4 rows.
-- `drivers/npu/a733_npu_startup.c`: remove the DCDC2 snapshot through
-  `a733_pmic_consumer` and the direct S_TWI0 path; require
-  `A733_POWER_DCDC2_VERIFIED` through the row admission instead.
-- The images that run the NPU (`apps/npu-convolution`, the accelerator image)
-  register the domain-4 row with the image's existing owner.
-- `checks/npu-platform.c`, `checks/npu-startup.c` and the NPU clock-handoff
-  checks model the owner instead of the PCK600 writes.
+The sequencer reads domain-4 policy and status but writes no PCK600 register
+and reads no delay row. It waits for the supply by reading
+`A733_POWER_SUPPLY_DONE` and `A733_POWER_DCDC2_VERIFIED` in the authority
+word; it issues no PMIC transaction. `checks/power-domains-pck.c` covers the
+check and a domain-4 row; `checks/npu-startup-host.c` runs the sequencer with
+the actual owner.
 
 ## Measurements
 
@@ -255,8 +241,8 @@ modeled; none is a board measurement.
   modeled core and with two, and the retention of the I2C mutex after a fault
   that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, the delay-row writers, no domain-4 row while the NPU
-  platform writes domain 4, the five service tasks and their priorities, and
+  domains 1 and 5, the delay-row writers with no native allowlist that admits
+  the delay row, no domain-4 row while the NPU platform writes domain 4, the five service tasks and their priorities, and
   no critical section, scheduler suspension or wait in the owner's code.
 - `checks/rail-leases-cost.py` measures the row read, counting load/store
   exclusive and LSE atomic instructions as exclusive accesses;

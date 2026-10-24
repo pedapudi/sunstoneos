@@ -201,7 +201,7 @@ its last byte; `usb.c` refuses a READ whose response would exceed
 The 2 KiB increase is `.bss`; the image's memory is the 768 MiB pool and the
 kernel sections, which this does not approach.
 
-The shared TinyUSB configuration gives the vendor endpoints no dedicated
+The image's TinyUSB configuration gives the vendor endpoints no dedicated
 hardware FIFO, so each tensor byte is copied twice in memory and moved once by
 PIO in each direction: controller FIFO to endpoint buffer by PIO, endpoint
 buffer to the class FIFO, and class FIFO to the window by `tud_vendor_read`;
@@ -381,7 +381,7 @@ Two of the checks failed on the base for reasons outside the record change:
 | Runtime parent, board image | No board image | 8,388,608 bytes from the 768 MiB pool | `npu-board-providers.py` |
 | Largest free extent after admission; free extents after LOAD and CLOSE | Not modeled | ≥ 8,388,608 bytes; unchanged | `npu-board-providers.py`: the pool's slots, and no allocator call in runtime, service or client code |
 | Requests, replies and client tick waits per inference | Runtime check: 1 request, 1 reply; the client in `apps/npu-runtime/main.c`: one `vTaskDelay(1)` per tick of waiting | 1, 1, 0 | `checks/npu-session.py --mode board-client` |
-| Copies per tensor byte | No board image | Input and output each 2 memory copies plus PIO, with the shared TinyUSB configuration | Same check, which compiles `apps/npu-board/usb.c` against a modeled vendor class that counts each copy |
+| Copies per tensor byte | No board image | Input and output each 2 memory copies plus PIO, with the image's TinyUSB configuration | Same check, which compiles `apps/npu-board/usb.c` against a modeled vendor class that counts each copy |
 | Cache lines maintained per job | 19,442 | 19,442 | `checks/npu-session.py --mode runtime` |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | Same |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | Same |

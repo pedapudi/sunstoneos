@@ -152,6 +152,13 @@ void platform_init(void)
     // before the scheduler starts; their getters do not prepare. Extended
     // images prepare their pools in a733_device_memory_prepare() instead.
     configASSERT(a733_memory_local_prepare());
+    // The ledger's kernel critical section masks IRQs through the priority
+    // mask. In the single-core port uxPortSetInterruptMask clears DAIF.I as
+    // it returns, so every critical section before the scheduler leaves it
+    // clear. Restore the boot's IRQ mask here for the preparation admission
+    // that a733_smp_diagnostic_start() checks before it creates any task;
+    // task creation clears DAIF.I again, so that admission must stay first.
+    __asm__ volatile("msr daifset, #2" ::: "memory");
 #endif
     // EL3 owns distributor security and the recovery timer. EL1 owns only
     // the nonsecure physical timer and its Group 1 CPU interface.
