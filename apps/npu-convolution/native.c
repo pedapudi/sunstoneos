@@ -5,6 +5,9 @@
 #ifdef SUNSTONE_NPU_INTERRUPT
 #include "../npu-interrupt/irq.h"
 #endif
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+#include "../npu-finite/thermal.h"
+#endif
 #include <string.h>
 #include "a733_mapping_check.h"
 #include "a733_power_domains_native.h"
@@ -54,6 +57,11 @@ static struct {
     atomic_uint ready,worker_admitted,stopped;
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     atomic_uint pmic_stop,pmic_parked,quiescent;
+#endif
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    struct npu_finite_thermal thermal;
+    atomic_uint never_started;
+    unsigned startup_claimed;
 #endif
     unsigned used,creating;
 } app;
@@ -274,6 +282,83 @@ static void pmic_task(void *argument)
 #endif
     vTaskSuspend(NULL);fatal(NULL);
 }
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+static int untouched_startup(void)
+{
+    const struct a733_npu_startup *s=&app.startup;
+    const struct npu_convolution *c=&app.reserved.convolution;
+    return !app.startup_claimed && s->stage==A733_NPU_STARTUP_TOKENS &&
+        !s->failed && !s->register_held && !s->clock.id && !s->rail.id && !s->pck.token &&
+        !atomic_load_explicit(&s->row.request,memory_order_acquire) &&
+        !atomic_load_explicit(&s->row.state,memory_order_acquire) && !s->row.counted &&
+        !atomic_load_explicit(&app.worker_admitted,memory_order_acquire) &&
+        !atomic_load_explicit(&app.ready,memory_order_acquire) &&
+        !c->opened && !c->ready && !c->pending && !c->job &&
+        !atomic_load_explicit(&c->closed,memory_order_acquire);
+}
+unsigned a733_npu_application_never_started(void)
+{return atomic_load_explicit(&app.never_started,memory_order_acquire) &&
+    untouched_startup() && live() && npu_finite_thermal_quiet(&app.thermal);}
+unsigned a733_npu_application_thermal_live(void)
+{return npu_finite_thermal_watch(&app.thermal);}
+unsigned a733_npu_application_thermal_claim(void)
+{return npu_finite_thermal_claim(&app.thermal);}
+void a733_npu_application_thermal_complete(void)
+{npu_finite_thermal_complete(&app.thermal);}
+void a733_npu_application_thermal_close(void)
+{npu_finite_thermal_close(&app.thermal);}
+uint64_t a733_npu_application_thermal_deadline(void)
+{return npu_finite_thermal_deadline(&app.thermal)*24;}
+unsigned a733_npu_application_thermal_reason(void)
+{return npu_finite_thermal_reason(&app.thermal);}
+static void bootstrap(void *argument)
+{
+    if(argument!=&app)fatal(NULL);
+    for(;;) {
+        if(!live() || !parent() || !npu_finite_thermal_step(&app.thermal))break;
+        if(!app.startup_claimed) {
+            if(npu_finite_thermal_stopping(&app.thermal)) {
+                if(npu_finite_thermal_quiet(&app.thermal)) {
+                    if(!untouched_startup())break;
+                    atomic_store_explicit(&app.never_started,1,memory_order_release);
+                    vTaskSuspend(NULL);fatal(NULL);
+                }
+                vTaskDelay(1);continue;
+            }
+            if(!npu_finite_thermal_claim(&app.thermal)){vTaskDelay(1);continue;}
+            app.startup_claimed=1;
+        }
+        /* Once accepted, finish startup and activate the service so the
+         * client can perform the required OPEN/CLOSE even after refusal. */
+        enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
+        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(r==A733_NPU_PLATFORM_READY) {
+            atomic_store_explicit(&app.worker_admitted,1,memory_order_release);
+            enum npu_service_result a=npu_service_activate(&app.reserved.convolution.service);
+            if(a==NPU_SERVICE_OK) {
+                npu_finite_thermal_complete(&app.thermal);
+                atomic_store_explicit(&app.ready,1,memory_order_release);
+                for(;;) {
+                    if(!live() || !parent() || !npu_finite_thermal_step(&app.thermal))break;
+                    if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
+                        enum a733_npu_platform_result r=npu_convolution_stop_poll(&app.reserved.convolution);
+                        if(r==A733_NPU_PLATFORM_RETAINED)break;
+                        if(r==A733_NPU_PLATFORM_READY && npu_finite_thermal_quiet(&app.thermal)) {
+                            atomic_store_explicit(&app.stopped,1,memory_order_release);
+                            vTaskSuspend(NULL);fatal(NULL);
+                        }
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(25)?pdMS_TO_TICKS(25):1);
+                }
+                break;
+            }
+            if(a!=NPU_SERVICE_BUSY)break;
+        }
+        vTaskDelay(1);
+    }
+    a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
+}
+#else
 static void bootstrap(void *argument)
 {
     if(argument!=&app)fatal(NULL);
@@ -315,6 +400,7 @@ static void bootstrap(void *argument)
     }
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }
+#endif
 unsigned a733_npu_application_ready(void)
 {return atomic_load_explicit(&app.ready,memory_order_acquire) && live();}
 unsigned a733_npu_application_stopped(void)
@@ -327,6 +413,9 @@ static int finite_irq_quiet(void)
 {
 #ifdef SUNSTONE_NPU_INTERRUPT
     if(!npu_service_irq_stopped(&app.reserved.convolution.service))return 0;
+#endif
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    if(!npu_finite_thermal_quiet(&app.thermal))return -1;
 #endif
     /* NPU INTID97: distributor bank3, bit1. Only observe the established
      * masked interrupt; never acknowledge or change inherited GIC state. */
@@ -343,8 +432,14 @@ unsigned a733_npu_application_quiesce(void)
 {
     if(xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
        xTaskGetCurrentTaskHandle()!=app.client)return 0;
-    if(!a733_npu_application_stopped() || !parent() ||
-       !atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire) ||
+    if(
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+       !parent() || !npu_finite_thermal_watch(&app.thermal) ||
+       (!(a733_npu_application_stopped() && atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) &&
+        !a733_npu_application_never_started()) || !npu_finite_thermal_quiet(&app.thermal) ||
+#else
+       !a733_npu_application_stopped() || !parent() || !atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire) ||
+#endif
        !app.reserved.convolution.service.worker || !app.bootstrap_task || !app.pmic_task ||
        app.reserved.convolution.service.worker==app.client || app.bootstrap_task==app.client ||
        app.pmic_task==app.client || app.reserved.convolution.service.worker==app.pmic_task ||
@@ -357,8 +452,11 @@ unsigned a733_npu_application_quiesce(void)
     xTaskNotifyGive(app.pmic_task); /* The service blocks until notified. */
     while(!atomic_load_explicit(&app.pmic_parked,memory_order_acquire)) {
         uint64_t now;
-        if(!live() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.startup.config.deadline_us)goto failed;
+        if(!live() ||
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+           !npu_finite_thermal_watch(&app.thermal) ||
+#endif
+           !a733_counter_clock_now(&app.clock,&now) || now>=app.startup.config.deadline_us)goto failed;
         vTaskDelay(1);
     }
     vTaskSuspend(app.pmic_task);
@@ -374,7 +472,11 @@ unsigned a733_npu_application_quiesce(void)
     do {
         uint64_t now;
         quiet=finite_irq_quiet();
-        if(quiet<0 || !live() || !a733_counter_clock_now(&app.clock,&now) ||
+        if(quiet<0 || !live() ||
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+           !npu_finite_thermal_watch(&app.thermal) ||
+#endif
+           !a733_counter_clock_now(&app.clock,&now) ||
            now>=app.startup.config.deadline_us)goto failed;
         if(!quiet)vTaskDelay(1);
     }while(!quiet);
@@ -386,7 +488,13 @@ failed:
 unsigned a733_npu_application_quiescent(void)
 {return atomic_load_explicit(&app.quiescent,memory_order_acquire) &&
     atomic_load_explicit(&app.pmic_parked,memory_order_acquire) &&
-    a733_npu_application_stopped() && finite_irq_quiet()==1;}
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    npu_finite_thermal_watch(&app.thermal) &&
+    (a733_npu_application_stopped() || a733_npu_application_never_started()) &&
+#else
+    a733_npu_application_stopped() &&
+#endif
+    finite_irq_quiet()==1;}
 #endif
 struct npu_convolution *a733_npu_application_client(void)
 {
@@ -469,6 +577,10 @@ int a733_npu_application_init(TaskHandle_t client)
        !npu_application_irq_bind(&app.reserved.convolution.service) ||
 #endif
        !preparation_admitted())goto failed;
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    if(!npu_finite_thermal_init(&app.thermal,&b->thermal,&app.clock,&app.registry,
+        &app.locks,app.bootstrap_task,deadline))goto failed;
+#endif
     return 1;
 failed:
     a733_npu_application_fail(5);return 0;
