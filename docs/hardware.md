@@ -2599,11 +2599,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   On 2026-10-23 the corrected image passed that check on port 3-3, masked the
   ROM's interrupt enables and then refused at the soft-disconnect: its 32-bit
   store to `0x04100040` completed and SoftConn (PCTL bit 6) still read back
-  set. The provider now removes SoftConn with one PCTL byte store, the width
-  of the pinned BSP, TinyUSB and ROM, and verifies it after the 150 ms
-  interval before reset ([takeover design](designs/usb-session-takeover.md)).
-  Linked checks reproduce the board's fault record on the refused image and
-  reach PREPARED on the corrected one; no board has run it.
+  set. The native adapter now writes PCTL with one byte store, the width of
+  the pinned BSP, TinyUSB and ROM ([takeover design](designs/usb-session-takeover.md)).
+  On 2026-10-24 that image passed on port 3-3: SoftConn cleared, the 40-byte
+  OUT/IN exchange completed, the USB task quiesced and the ROM return was
+  responsive (`r9-v3-usb/`). The detach interval now starts at the first
+  clear SoftConn read; that image and the 12 GiB EL1 map platform it runs on
+  (`rank-9-usb-v4/`) have not run on a board.
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through

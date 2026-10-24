@@ -68,9 +68,15 @@ deadline bounds initialization; it does not release completed ownership.
 The native adapter permits only the addresses and fields used by this device
 profile. PMIC, watchdog, host, DMA start and upstream fabric writes are
 refused. The explicit ROM takeover mode also permits interrupt masking,
-soft-disconnect and assertion of the USB0 device reset. The soft-disconnect
-is an 8-bit store of PCTL that `platform/a733/native_usb.c` issues; it
-accepts only a word that differs from the current word by SoftConn clear. All accesses use Device mappings and full-system barriers.
+soft-disconnect and assertion of the USB0 device reset. The
+soft-disconnect is one 8-bit store of PCTL, the low byte of the word at
+USB0+0x40, in `a733_usb_platform_native_write`
+(`drivers/usb/a733_usb_platform_native.c`); it accepts only a word that
+differs from the current word by SoftConn clear. Every consumer of the
+provider reaches it through that function: gpu-display, hdmi-audio and
+npu-convolution call it directly, and the usb-returning and other
+`a733_native_usb` images through `platform/a733/native_usb.c`. All accesses
+use Device mappings and full-system barriers.
 
 | Register | Operation |
 | --- | --- |
@@ -131,9 +137,9 @@ Before mutation, the provider applies the admission rule of
 [USB0 takeover from the boot ROM's device session](designs/usb-session-takeover.md)
 to the packed word at USB0+0x40, which holds the byte registers PCTL,
 DEVCTL, EPIND and VEND0. It requires DEVCTL.BDEVICE and refuses HOSTREQ,
-HOSTMODE, LSDEV, FSDEV and any VEND0 DMA request selection. It inherits
-SESSION, the VBUS level, the endpoint index, VEND0 bus selection and the
-PCTL bits; SoftConn is then removed. All sixteen internal DMA start bits
+HOSTMODE and VEND0 DMA request selection. It inherits SESSION, the VBUS
+level, LSDEV, FSDEV, the endpoint index, VEND0 bus selection and the PCTL
+bits; SoftConn is then removed. All sixteen internal DMA start bits
 must be clear. The ROM leaves `0x00029940`: soft-connect, SESSION, valid
 VBUS, B-device and endpoint index 2. The matched nonsecure ROM tests
 BDEVICE and VBUS at offsets 0x23bc..0x23e8, and its FEL execute path waits
@@ -146,9 +152,10 @@ request/mode while allowing SESSION.
 The provider masks endpoint, bus, DMA and interface interrupts. It removes
 soft-connect with one 8-bit store of PCTL, the access width that the
 pinned BSP, TinyUSB and the matched ROM use; a 32-bit store of the packed
-word left SoftConn set on the board on 2026-10-23. The provider verifies
-SoftConn clear after the 150 ms disconnect interval, before it asserts the
-device reset for 1 ms, keeping its bus gate enabled. It then deasserts
+word left SoftConn set on the board on 2026-10-23, and the byte store
+cleared it on 2026-10-24. The 150 ms disconnect interval starts at the
+first read with SoftConn clear. The provider checks the bit again before it
+asserts the device reset for 1 ms, keeping its bus gate enabled. It then deasserts
 reset, waits 40 microseconds and verifies the detached core before
 continuing through the existing PHY preparation and TinyUSB consumer.
 The 150 ms and 1 ms intervals reuse the physically exercised

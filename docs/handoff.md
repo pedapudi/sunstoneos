@@ -3,8 +3,10 @@
 **Reconnect request, port `3-1`:** remove every power source from the board
 on host port `3-1` (the separate 5 V/3 A supply and the USB cable), wait a few
 seconds, and reconnect it in FEL mode. The corrected rank 7 diagnostic did not
-return on 2026-10-24 and the board no longer answers. Port `3-3` stays in use
-meanwhile.
+return on 2026-10-24 and the board no longer answers. After the reconnect,
+port `3-1` runs a cold DDR start and then the all-core pre-scheduler bundle
+(`docs/board-runbooks/rank-7-pre-scheduler.md`), byte-identical to the build
+that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
 
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
@@ -98,8 +100,12 @@ over USB0 from the ROM, enumerated, received the 4-byte OUT request and sent
 the 40-byte IN response (`native_usb.functional_success` true), quiesced and
 returned to a responsive ROM (`board-session-20261023/port-3-3/r9-v3-usb/`).
 This is the first board run of the native USB device channel. The image
-used the platform revision of the passing kernel check, without the 12 GiB
-EL1 map. Both ports were power-cycled afterwards and
+used the platform revision of the passing kernel check. In the same
+lifetime, `rank-9-usb-v4/`, rebuilt on the current platform with the PCTL
+byte store only in the shared native USB adapter, passed the same exchange
+and returned (`r9-v4-usb/`). The current platform's 12 GiB EL1 map code was
+present but installs no high map, because the DRAM decode check still
+returns 0. Both ports were power-cycled afterwards and
 passed a fresh cold DDR start; neither has run a FreeRTOS image since. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
