@@ -333,6 +333,12 @@ int pvr_mimus_service_deadline(const struct pvr_mimus_service *m, uint64_t *dead
     *deadline = m->deadline;
     return 1;
 }
+int pvr_mimus_service_close(struct pvr_mimus_service *m)
+{
+    if (!m || m->phase != PVR_MIMUS_SERVICE_IDLE || m->owed || atomic_load(&m->lost)) return 0;
+    unsigned idle = PVR_MIMUS_SLOT_IDLE;
+    return atomic_compare_exchange_strong(&m->slot_state, &idle, PVR_MIMUS_SLOT_CLOSED);
+}
 int pvr_mimus_service_submitting(const struct pvr_mimus_service *m)
 {
     return m && (m->phase == PVR_MIMUS_SERVICE_PUBLISHED || m->phase == PVR_MIMUS_SERVICE_FORMAT ||
@@ -348,7 +354,11 @@ uint64_t pvr_mimus_service_progress(const struct pvr_mimus_service *m)
 int pvr_mimus_service_submit(struct pvr_mimus_service *m, const struct pvr_mimus_request *job)
 {
     if (atomic_load(&m->lost)) return -1;
-    if (atomic_load_explicit(&m->slot_state, memory_order_acquire) != PVR_MIMUS_SLOT_IDLE) return 0;
+    /* Reserve before copying: CLOSE can seal only an unowned slot. The
+     * sequentially consistent publication and lost handshake also covers
+     * an abort while this producer holds RESERVED. */
+    unsigned idle = PVR_MIMUS_SLOT_IDLE;
+    if (!atomic_compare_exchange_strong(&m->slot_state, &idle, PVR_MIMUS_SLOT_RESERVED)) return 0;
     m->slot = *job;
     atomic_store(&m->slot_state, PVR_MIMUS_SLOT_SUBMITTED);
     const struct pvr_gpu_service_message wake = {.client = PVR_GPU_SERVICE_CLIENTS,

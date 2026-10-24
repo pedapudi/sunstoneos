@@ -30,7 +30,8 @@ struct pvr_gpu_service_config;
  * context-switch programs of pvr_compute_programs.c. */
 #define PVR_MIMUS_SERVICE_PUBLISH 10u
 
-enum pvr_mimus_slot_state { PVR_MIMUS_SLOT_IDLE, PVR_MIMUS_SLOT_SUBMITTED, PVR_MIMUS_SLOT_TAKEN };
+enum pvr_mimus_slot_state { PVR_MIMUS_SLOT_IDLE, PVR_MIMUS_SLOT_SUBMITTED, PVR_MIMUS_SLOT_TAKEN,
+    PVR_MIMUS_SLOT_RESERVED, PVR_MIMUS_SLOT_CLOSED };
 /* The longest hang bound bind accepts, from the kick: one third of the
  * recognizer's 3 s service window. */
 #define PVR_MIMUS_SERVICE_MAX_JOB_US UINT64_C(1000000)
@@ -105,6 +106,9 @@ int pvr_mimus_service_poll(struct pvr_mimus_service *);
 int pvr_mimus_service_event(struct pvr_mimus_service *, const unsigned char[88]);
 /* The service failed: no further submit; an owed record becomes LOST. */
 void pvr_mimus_service_abort(struct pvr_mimus_service *);
+/* Seal an idle session against further submits before CLOSE. 1 sealed,
+ * 0 busy without changing the slot. No device access or resource release. */
+int pvr_mimus_service_close(struct pvr_mimus_service *);
 /* 1 while a job is in flight, with its deadline. */
 int pvr_mimus_service_deadline(const struct pvr_mimus_service *, uint64_t *deadline);
 /* 1 while a job waits in the slot or OPEN formats the ring. */
@@ -113,7 +117,7 @@ int pvr_mimus_service_submitting(const struct pvr_mimus_service *);
 uint64_t pvr_mimus_service_progress(const struct pvr_mimus_service *);
 
 /* Client task. Submit writes the slot and wakes the worker without waiting:
- * 1 submitted (a record follows), 0 refused with the slot IDLE again, -1 the
+ * 1 submitted (a record follows), 0 refused (busy or closed), -1 the
  * session is lost. Receive waits at most `wait` ticks for one record. */
 int pvr_mimus_service_submit(struct pvr_mimus_service *, const struct pvr_mimus_request *);
 int pvr_mimus_service_receive(struct pvr_mimus_service *, struct pvr_mimus_record *, TickType_t wait);

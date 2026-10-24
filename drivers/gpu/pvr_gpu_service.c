@@ -15,6 +15,7 @@
 #pragma weak pvr_mimus_service_poll
 #pragma weak pvr_mimus_service_event
 #pragma weak pvr_mimus_service_abort
+#pragma weak pvr_mimus_service_close
 #pragma weak pvr_mimus_service_deadline
 #pragma weak pvr_mimus_service_submitting
 #pragma weak pvr_mimus_service_progress
@@ -731,6 +732,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
            atomic_load_explicit(&d->texture_output_state,memory_order_acquire) ||
            d->texture_draft || d->texture_preparing)return PVR_GPU_SERVICE_BUSY;
     }
+    if (s->config.mimus && !pvr_mimus_service_close(s->config.mimus)) return PVR_GPU_SERVICE_BUSY;
     s->closed_owner=m->client;s->closed_epoch=s->epoch;
     if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return PVR_GPU_SERVICE_FAULT; }
     if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;

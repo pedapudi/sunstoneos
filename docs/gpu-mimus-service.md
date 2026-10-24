@@ -104,6 +104,14 @@ faults. These checks retain the slot until output acquisition succeeds within
 the deadline; they cannot interrupt a CPU instruction or hardware access that
 does not return.
 
+CLOSE requires an idle mimus session with no owed record and an idle slot.
+It atomically changes that slot to CLOSED before changing interrupt, deadline
+or shutdown state. Pending and running jobs return BUSY without changing the
+slot. A submit atomically reserves an idle slot before copying its request,
+so CLOSE also refuses while the producer writes. Once CLOSE seals the slot,
+later submits return 0. A lost session returns a CLOSE fault and keeps its
+retained slot. Mimus reopen is unsupported.
+
 ## Failure classes
 
 Classes follow section 1.8 of
@@ -148,6 +156,18 @@ The earlier `before/` attempt failed fixture initialization and provides no
 deadline result. Existing 204-job arithmetic and startup evidence was reused;
 these five cases provide no physical GPU execution or timing qualification.
 
+Three focused CLOSE cases passed under the same QEMU firmware model on
+2026-10-24. One submits a job, checks BUSY while pending and running, completes
+the job, then reaches STOPPED through CLOSE and refuses later submits.
+Another injects the RESERVED slot state, checks BUSY and invokes the actual
+abort path; it verifies retention without resuming an interrupted producer.
+The third checks CLOSE fault refusal after an actual late completion produces
+LOST. Each preserves the pool allocations. Records and selected source and
+image identities are in
+`~/.cache/sunstoneos/evidence/gpu-close-20261024/snapshot/manifest.json`.
+The checks establish service admission and model shutdown behavior; physical
+shutdown and thermal qualification remain outstanding.
+
 ## Lifecycle and power limits
 
 The current image fixes the GPU at 400 MHz and 800 mV. The
@@ -160,9 +180,7 @@ it does not establish that the GPU stopped or cooled.
 The native backend checks its external revocation flag before normal hardware
 access. Revocation prevents further access through those callbacks; it is not
 an acknowledged GPU power-off. OS thermal placement and critical-temperature
-handling therefore need their own integration evidence. CLOSE also needs a
-mimus-specific check for an outstanding job before the generic service starts
-shutdown; the existing compute and render guards do not cover that session.
+handling therefore need their own integration evidence.
 
 ## Board evidence that would confirm it
 

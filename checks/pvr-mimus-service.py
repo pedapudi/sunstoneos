@@ -32,7 +32,8 @@ CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs compl
          11: 'unexpected timeline before a submit', 12: 'completion clean and invalidate fails',
          13: 'completion at deadline', 14: 'output acquisition reaches deadline',
          15: 'completion just before deadline', 16: 'failed final clock read',
-         17: 'backward final clock sample'}
+         17: 'backward final clock sample', 18: 'pending, active and drained CLOSE',
+         19: 'reserved-slot CLOSE and abort', 20: 'lost CLOSE'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',
@@ -249,7 +250,7 @@ list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
   -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--wrap=aarch64_device_cache -Wl,--wrap=aarch64_device_translate
   -Wl,--wrap=pvr_mimus_submit -Wl,--wrap=pvr_mimus_complete -Wl,--wrap=pvr_cccb_poll
-  -Wl,--wrap=pvr_gpu_service_now)
+  -Wl,--wrap=pvr_gpu_service_now -Wl,--wrap=pvr_mimus_service_poll)
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')
