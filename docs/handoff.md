@@ -5,73 +5,75 @@ exact-sum hook and the AArch64 epilogue default, on the local branch
 `port/sunstoneos` in `~/git/mimus-worktrees/sunstoneos`. That revision is
 not on the mimus remote yet; publishing it needs the user's approval.
 
-**Reconnect request, port `3-1`:** remove every power source from the board
-on host port `3-1` (the separate 5 V/3 A supply and the USB cable), wait a few
-seconds, and reconnect it in FEL mode. The corrected rank 7 diagnostic did not
-return on 2026-10-24 and the board no longer answers. After the reconnect,
-port `3-1` runs a cold DDR start and then the all-core pre-scheduler bundle
-(`docs/board-runbooks/rank-7-pre-scheduler.md`), byte-identical to the build
-that passed on 2026-10-18. Port `3-3` stays in use meanwhile.
+**Port `3-3` needs power removal when available:** disconnect and reconnect
+its USB cable, which is its only power source. The corrected finite GPU image
+launched but did not return to ROM within 90 seconds. Do not probe or retry it.
+Runner PID `3892073`, wrapper PID `3892068` and tool session `20301` retain claim
+`f5e77284cf63a0b25af8681a8798031c6a976a84166256a8eaa31d162a7c771c`.
+Evidence is under `processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
+Source diagnosis continues without board access; the failed execution boundary
+is unknown.
 
-**Current priority: CPU, GPU and NPU robustness**, including power and
-thermal management. Complete startup, repeated operation, interrupt delivery,
-bounded failure handling and safe shutdown before performance tuning. Hardware
-qualification remains required; model checks do not establish physical behavior.
+**Port `3-1` is usable:** USB is its only power source. Its last validated ROM
+return is `/dev/bus/usb/003/040`, identity `[7, 1614, 1096999, 0, 0]`.
+Refresh host metadata before access. In this powered lifetime, CPU0 publication,
+all-core preparation, first task entry, task switching and a bounded workload
+passed. All eight cores completed 32 floating-point rounds, background scheduling
+and software-generated interrupts; CPU0 also delivered its timer interrupt.
+Each diagnostic restored controls, shut down seven secondaries and returned to
+ROM with owned DRAM restored. Evidence:
+`processor-completion-20261024/port-3-1/task-workload/runtime/session.json` and
+its preceding records. A returning thermal check measured all five sensors
+below 40°C; the affected interrupt-controller state was then checked against
+the saved baseline. Thermal acquisition is disabled, with its configuration and
+clock ownership retained.
 
-**Open work, in order:**
+**Current priority: CPU, GPU and NPU robustness**, including power and thermal
+management. Complete startup, repeated operation, interrupt delivery, bounded
+failure handling and safe shutdown before performance tuning. Model checks do
+not establish physical operation.
 
-1. CPU runtime fault capture now classifies synchronous exceptions before
-   touching the interrupted stack; focused fault and SVC models pass.
-   The separate [pre-scheduler diagnostic](board-runbooks/rank-7-pre-scheduler.md)
-   has frozen host inputs and a wrapper that retains ownership after its
-   observation deadline. Its 110 input files verified locally. Port `3-1`
-   still needs the power removal described above before a new attempt.
-2. GPU completion now enforces its deadline before accepting a timeline result
-   and after acquiring output data; focused boundary models pass. The reviewed
-   single-core [entry capture](../apps/gpu-finite/ENTRY.md) passed on port `3-3`:
-   all eleven configuration words satisfy the entry predicates and all seven secondary
-   cores report OFF. The helper restored its 128 SRAM bytes exactly. Evidence:
-   `gpu-entry-capture-20261024/physical-3-3/session.json` and `entry-settings.json`.
-   Bind the remaining memory/provider ownership, cache-off and survey records
-   before launch. Correct the host's 30-second return wait against the native
-   60-second window before treating the bundle as launch-ready. Preserving its
-   802 MiB RAM reservation requires about 74 minutes of transfers at the
-   documented 0.57 MB/s rate; this is an estimate, not a new measurement.
-   The non-admitting preparation records are preserved under
-   `gpu-finite-admission-20261024/`; `proposal-DRAFT.json` lists the missing
-   facts and commands. Unresolved authority fields remain unset.
-   Numerical GPU execution and return remain unqualified. Mimus GPU CLOSE now
-   refuses outstanding work and atomically prevents later submissions.
-3. NPU startup now adopts a coherent inherited ON state through the shared
-   power-domain owner, retaining reset/gate/PLL and external ownership checks.
-   Focused checks confirm no PCK controller write during adoption and retained
-   ownership after local stop. The direct USB FIFO transfer is also integrated.
-   Numerical execution, thermal control and power transitions remain unqualified.
-4. OS thermal supervision now paces recognition at existing checkpoints during
-   THROTTLE and blocks new GPU layer placement. Existing critical-temperature
-   stop remains in effect; accepted GPU work can finish under its bounds.
-   Fourteen focused AArch64 cases pass. Physical thermal response, repeated
-   power transitions and sustained concurrent CPU/GPU/NPU operation remain open.
-5. The reviewed PMIC timing changes are integrated. The provisional snapshot
-   bound is 1,268 permille of the run's measured wire time, with 40 µs extra
-   for the first step. Exact comparisons and focused fixtures pass; the 110%
-   target remains open. Reuse that evidence. A future bundle refreeze must
-   include the revised trace and row text before physical measurement.
+**Open work:**
+
+1. Integrate a bounded return path with the current production CPU startup and
+   stackless fault capture. Today's physical diagnostics use the older frozen
+   native image; their prepared-lifetime success does not explain the earlier
+   cold failures. Repeated cold startup, sustained scheduling, per-core timers,
+   runtime core removal and cluster power-down remain unqualified or incomplete.
+2. Locate the GPU's failed execution boundary from the frozen image and its
+   host inputs before another physical attempt. The entry capture passed eleven
+   configuration predicates and confirmed seven secondaries OFF. The numerical
+   image still failed to return. Its first attempt had stopped before execution
+   at an inapplicable boot-input guard; a reviewed same-instance SRAM rollback
+   recovered that refusal. The corrected host checks the direct forced-FEL ROM
+   entry. Numerical GPU operation and normal shutdown remain unqualified.
+3. Prepare the existing single-core NPU finite path for numerical execution and
+   normal ROM return, using the production startup and power owner. The native
+   NPU board image now has thermal admission, independent supervision and bounded
+   accepted-work draining, with software checks. Its current multicore USB
+   lifetime has no normal return, so it is not the next finite board test.
+4. Qualify power and thermal behavior after reliable numerical execution. The
+   optional CPU-clock path now lowers and restores supported inherited rates
+   under a bounded grant while preserving voltage. Missing authority prevents
+   changes. GPU healthy CLOSE→OPEN and the actual OS thermal caller are
+   implemented and checked; automatic idle parking and fault recovery remain
+   open. GPU operates at 400 MHz/800 mV; NPU at 492 MHz/800 mV. NPU local CLOSE
+   retains its domain, PLL and rail pin; power-off and in-place restart remain
+   unresolved. Late shared-domain acknowledgements now retain ownership.
+5. Keep the PMIC timing evidence. Its provisional snapshot bound is 1,268
+   permille of measured wire time, with 40 µs extra for the first step. Exact
+   comparisons and focused checks pass; the 110% target remains open. Refreeze
+   the revised trace and row text before the next physical timing measurement.
 6. Publishing mimus `9c57286b7` and each physical CPU clock or PMIC voltage
    change still require their specific approvals. Independent implementation
    and modeling continue without those operations.
 
-**Remaining power and thermal limits:** ordinary OS operation performs no CPU
-frequency or voltage changes. The optional granted CPU-clock path throttles
-only clusters it previously raised, to 1,014 MHz while preserving voltage;
-it does not lower inherited high rates. Runtime CPU removal and cluster
-power-down remain unimplemented. GPU operation is fixed at 400 MHz/800 mV;
-thermal workload admission does not implement GPU frequency scaling or power-off.
-Fault handling retains resources; idle parking and full recovery remain designs.
-NPU operation is fixed at 492 MHz/800 mV. Healthy local CLOSE gates clocks and
-asserts engine resets while retaining the PLL, power domain, rail pin and leases.
-NPU thermal callbacks, OS integration and in-place restart remain unimplemented.
-These are outstanding completion requirements, alongside physical qualification.
+The finite GPU host permits 60 seconds of native execution plus 30 seconds for
+ROM discovery. Explicitly discardable, exclusively owned RAM avoids unnecessary
+preservation of the 802 MiB reservation. Failure retains ownership; discarded
+contents are never described as restored. The default restoration mode remains
+available. Physical thermal transitions, repeated power transitions and
+concurrent CPU/GPU/NPU operation remain completion requirements.
 
 The completed integration also includes bounded USB storage stall recovery,
 radio clock admission, the camera frame-enable timing correction and optional
@@ -101,23 +103,18 @@ are listed below. Check Git before publishing subsequent integrations.
 
 ## Board state and recovery
 
-The latest recorded state is from 2026-10-24: port `3-1` failed the
-corrected rank 7 diagnostic and requires removal of every power source. Port
-`3-3` returned to a responsive ROM after the native USB exchange on the
-changed PMIC provider. The subsequent GPU entry capture on the same instance
-read 32 words and restored SRAM exactly. It entered no GPU register window
-and changed no peripheral register. Its helper can change ROM cache state;
-a later native launch still needs cache-off and a fresh survey. A cached FEL
-descriptor alone does not establish recovery.
-The user can reconnect a board only once every several hours, so
-a lost connection takes that board out of use until its next reconnect. Request
-a reconnect at the top of this document, naming the port and the physical
-action, and continue with the other board or offline work meanwhile.
+The current identities, recovery need and retained processes are listed at the
+top of this document. Both boards now use USB as their only power source.
+A lost connection remains unavailable until confirmed power removal and
+reconnection. A cached FEL descriptor alone does not establish recovery.
+Continue with the other board and offline development while recovery is pending.
 
 Session access for both ports lasts until the next host reboot. After a reboot,
 the user runs `sudo python3 tools/usb-access.py enable-session --port <port>
 --user sunil` for each port; `python3 tools/usb-access.py check-session --port
 <port>` confirms access without communicating with the board.
+
+### Earlier board evidence
 
 On 2026-10-23 both boards passed the first five ranks of the board test plan,
 after the host reboot had reset both: the boot ROM answered as SoC `0x1903`,

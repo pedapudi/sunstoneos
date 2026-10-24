@@ -2765,6 +2765,17 @@
   "summary": "",
   "usb": false
  },
+ "ddr-host-retention.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--evidence"
+  ],
+  "summary": "Run the production DDR script with fake FEL and a real private file lock.",
+  "usb": true
+ },
  "ddr-wrapper.py": {
   "cache_areas": [],
   "docs": [
@@ -5982,7 +5993,7 @@
    "--software",
    "--evidence"
   ],
-  "summary": "One production survey post-exe fault check; all transport/access is mocked.",
+  "summary": "Check production survey failure ownership with a private lock and fake FEL.",
   "usb": true
  },
  "launch-survey.py": {
@@ -6613,6 +6624,19 @@
   "summary": "The linked image's startup register pass against six reference-clock cases.",
   "usb": false
  },
+ "npu-board-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-board.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Exercise the actual NPU host callback and retained supervisor with modeled USB only.",
+  "usb": false
+ },
  "npu-board-host.py": {
   "cache_areas": [
    "build",
@@ -6641,6 +6665,19 @@
    "--output"
   ],
   "summary": "The board image's NPU construction: borrowed providers, the domain-4 row and the runtime's pool.",
+  "usb": false
+ },
+ "npu-board-thermal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Linked NPU thermal driver, native MMIO, policy, clock registry and admission.",
   "usb": false
  },
  "npu-board-usb-stack.py": {
@@ -7113,6 +7150,32 @@
   ],
   "summary": "One supervised native link and the supply, startup sequencer and refusal composition.",
   "usb": true
+ },
+ "os-cpu-clock-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/cpu-clock.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Exercise actual compiled OS CPU register access policy and mux completion barrier.",
+  "usb": false
+ },
+ "os-gpu-thermal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check the actual AArch64 native GPU thermal caller with modeled service replies.",
+  "usb": false
  },
  "os-image-audio.py": {
   "cache_areas": [
