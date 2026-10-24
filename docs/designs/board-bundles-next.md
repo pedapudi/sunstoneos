@@ -1,6 +1,10 @@
 # Design: board-test bundles for the single-core paths of this tranche
 
-Status: **design**. No bundle in this document exists, and none has run.
+Status: the Read and returning classes, controlled outcomes and runbook
+generation are **implemented** and host-checked; bundles 1, 2, 3, 5 and 9 are
+prepared under `~/.cache/sunstoneos/evidence/board-bundles-20261024/`. No
+bundle has run, and the other rows stay refused until their owners supply
+their images and admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
 on 2026-10-24 ([handoff](../handoff.md)): ranks 1 to 6 of the
@@ -290,17 +294,21 @@ design. No figure above was measured on the board.
 For `primary.patch`:
 
 - `tools/check-a733-kernel.py`: controlled outcomes as specified above, and
-  their acceptance as warm-return links in `validate_platform_admission`.
+  their acceptance as warm-return links in `validate_platform_admission`, on
+  top of the admission change of `board-bundles-20261023/common/primary.patch`,
+  which the patch includes; `checks/kernel-platform-admission.py` gains the
+  matching link and runner cases.
 - `platform/a733/monitor.c`: under a build option that bundles 2 and 4 set,
   write `MDCR_EL3 = 0x10000000`, `HSTR_EL2 = 0` and `MDCR_EL2.HPMN` from
   `PMCR_EL0.N` with `TPM`, `TPMCR` and `HPME` zero, as `cpu_continue.S` does.
   After reset into EL3 the `MDCR_EL2` trap bits are UNKNOWN, so an EL1 counter
   access could trap to an EL2 vector that no image installs.
+- `platform/a733/cpu_pmu.c`: a single-core form of `a733_cpu_pmu_begin` and
+  `end` that takes core 0 instead of `vTaskCoreAffinityGet`, which exists only
+  with more than one core, and of `TPIDR_EL1`; bundle 4 measures that form.
 - `docs/board-runbooks/README.md`: list the new runbooks.
+- `checks/index.json`: index the two new checks.
 
-Requests to owners: a single-core form of `a733_cpu_pmu_begin` and `end` that
-checks core 0 instead of `vTaskCoreAffinityGet`, which exists only with more
-than one core; bundle 4 measures that form. The returning apps of bundles 1
-and 4 (CPU fault, counter, table-walk and power-state owners), 6 and 7 (power
-domains) and 8 (DRAM). The admission values of every row. The table-walk
+Requests to owners: the returning apps of bundle 4 (counter, table-walk and
+power-state owners), 6 and 7 (power domains) and 8 (DRAM). The admission values of every row. The table-walk
 owner's acceptance of one interleaved image in place of two images.

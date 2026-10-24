@@ -54,7 +54,11 @@ the rules forbid a retry.
 | 8 | Full returning eight-core workload (frozen in `all-core-task-workload-20261019/frozen/`) | Task bodies, floating point, SGIs and the CPU0 timer on all cores: the main unqualified multicore step | As in rank 7, plus scheduler faults under load |
 | 9 | Native USB device channel (`tools/check-a733-usb-returning.py`) | The native USB0 driver can carry results and hand the controller back | Any native USB failure leaves the board unreachable until power-cycled |
 
-Ranks 1 to 5 passed on both boards on 2026-10-23. [The runbooks for ranks
+Ranks 1 to 5 passed on both boards on 2026-10-23, and rank 6 passed on both
+boards afterwards. Rank 9 passed on port 3-3 on 2026-10-24, first with
+`rank-9-usb-v3/` and then with `rank-9-usb-v4/` on the current platform.
+Rank 7 did not return on port 3-1 in two lifetimes, so eight-core execution
+is unqualified and rank 8 waits for an offline diagnosis. [The runbooks for ranks
 6 to 9](../board-runbooks/README.md) list each remaining command per board,
 its admission records, success text, timeout and stop condition, and the
 frozen bundles under `~/.cache/sunstoneos/evidence/board-bundles-20261023/`.
@@ -80,6 +84,45 @@ application alone.
   recovered without a power cycle. The device paths that report through USB0
   depend on it, so it is the gate for all peripheral qualification.
 
+## Single-core bundles after rank 9
+
+[The single-core bundle design](../designs/board-bundles-next.md) orders the
+bundles that one core can run on port 3-3, starting with the least recovery
+risk. Each first access to a register block follows every bundle that can run
+without it, so a stall loses only the bundles after it. Two classes are new:
+
+- **Read.** The fixed reader `tools/board-bundles-next-read.py` reads 32-bit
+  words through FEL `readl` from a data-only word list. Each word lies in a
+  block with no software gate (CCU, R_CCU, SID, the CPU PLL block) or follows
+  a condition word that must match; the reader saves and restores the 128
+  scratch bytes that `readl` uses. No re-enumeration; queue timeout 120 s.
+- **Returning.** A single-core image on the returning platform, run by the
+  bundle's `host/tools/check-a733-kernel.py` under `supervised-ram-recovery`.
+  Its objects equal those of images that passed on the board outside a
+  declared overlay. A listed controlled outcome passes without quarantine and
+  is a valid warm-return link. Two re-enumerations; queue timeout 925 s,
+  including the churn guard's 615 s wait.
+
+| Position | Bundle | Class | State |
+| --- | --- | --- | --- |
+| 1 | Fault capture on core 0 | Returning | Prepared |
+| 2 | Kernel check with the counter option | Returning | Prepared |
+| 3 | Clock words: CPU-L, MBUS, NSI and the oscillator | Read | Prepared |
+| 4 | Event counters, core-0 walk A/B and idle WFI | Returning | Needs the counter, table-walk and power-state owners' image |
+| 5 | Policy and status words of power domains 1, 4 and 5 | Read | Prepared |
+| 6 | PMIC service task and power-domain owner, read-only | Returning | Needs the power-domain owner's image |
+| 7 | Domain 1 ON | Returning | Needs the power-domain owner's image |
+| 8 | DRAM bus priority reads and table write | Returning | Needs the DRAM owner's image |
+| 9 | NPU speed-bin and clock words | Read | Prepared |
+| 10 | NPU single-core image | Terminal | Needs completion counts in `tools/check-a733-npu-supervised.py` and the NPU owner's admission values |
+
+The prepared bundles, each with its runbook, are under
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-1/`.
+Bundles 1 and 2 need the runner change in
+`~/.cache/sunstoneos/build/board-bundles-next/primary.patch`, which the
+frozen runner already carries. Bundles that wait for ranks 7 and 8, for user
+approval or for accessories are listed in the design.
+
 ## Bundles for the memory, GPU and NPU paths
 
 [tools/prepare-board-bundles.py](../../tools/prepare-board-bundles.py)
@@ -93,7 +136,7 @@ read-only file system outside its new run directory under
 
 | Position in this plan | Row | Class | Runner | Queue timeout |
 | --- | --- | --- | --- | --- |
-| After rank 7, before rank 8, once an independent watchdog record exists | Memory qualification, one run per bundle of the three-step map chain | Monitor | Memory profile through `tools/a733-returning-host.py` | 1,200 s |
+| In its own lifetime after single-core bundle 3, once an independent watchdog record exists | Memory qualification, one run per bundle of the three-step map chain | Monitor | Memory profile through `tools/a733-returning-host.py` | 1,200 s |
 | After rank 9, first board session | NPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
 | After rank 9, next board session | GPU service in the OS image | Terminal | `tools/check-a733-os-supervised.py` | 970 s plus the uploads |
 | After rank 9, next board session | GPU and NPU jobs under the memory and power arbiter | Terminal | `tools/check-a733-accelerators-supervised.py` | 930 s plus the uploads |
@@ -122,9 +165,11 @@ read-only file system outside its new run directory under
 - **Excluded.** The test needs an accessory, a voltage or clock change, or an
   intentional hang. The tool prepares no bundle.
 
-Memory runs require ranks 1 to 7 earlier in the same power cycle, with rank 3
-reporting `dram_mib` equal to 12,288 and rank 6 reporting the boot clock. Rank
-7 re-runs a frozen ELF that has passed, so it comes first. Placing memory
+Memory runs require ranks 1 to 6 and single-core bundle 3, which reports the
+CPU-L boot clock, earlier in the same power cycle, with rank 3 reporting
+`dram_mib` equal to 12,288. Memory runs use one core, so rank 7 qualifies
+nothing they use. They run in a lifetime in which no other bundle has run,
+because domain 1 and the NSI table persist until power removal. Placing memory
 before rank 8 is a judgement: a non-linear address decode that turns a
 tested-DDR write into a monitor write is less likely than a secondary-core
 hang under load. A memory run record chains to the next run only when it shows
