@@ -1,8 +1,9 @@
 # CPU PMU regions: measurements against the design budgets
 
-Status: **host-modeled and emulated**. Every figure below comes from Unicorn
-instruction emulation or from QEMU; no figure comes from the board. The
-budgets are in [cpu-pmu.md](cpu-pmu.md).
+Status: **host-modeled and emulated**, with core-0 figures **measured on the
+board** in section "Board measurement on core 0". Every other figure comes
+from Unicorn instruction emulation or from QEMU. The budgets are in
+[cpu-pmu.md](cpu-pmu.md).
 
 ## Conditions
 
@@ -64,7 +65,7 @@ budgets are in [cpu-pmu.md](cpu-pmu.md).
 | Record / state / region size | — | 64 B / 8 × 64 B, 64-byte aligned / 24 B | 64 B / 512 B / ≤ 32 B | Yes |
 | Instructions per call in Unicorn, configured path, begin / end | 56 for the sample pair | 70 (stub affinity call included) / 95 | — | — |
 | Module code (`.text`, four functions) | 224 B (`a733_cpu_cycles_native.o`) | 1,488 B | — | — |
-| Empty-region cycles on cores 0 and 6 | Not measured | Not measured | ≤ 150 A55, ≤ 100 A76 (provisional) | Needs a board session |
+| Empty-region cycles on cores 0 and 6 | Not measured | Core 0 (A55) on the board: 64 at the minimum and median, 131 at most; core 6 not measured | ≤ 150 A55, ≤ 100 A76 (provisional) | Core 0 yes; core 6 needs a board session |
 
 The base pair of `a733_cpu_cycles_sample` calls counts 64 instructions
 between two inline counter reads on both QEMU models; one inline read is
@@ -76,6 +77,30 @@ well.
 QEMU implements `INST_RETIRED` and none of the other five events, so the
 supported mask is 0x1 on both models; the instruction model covers the other
 events with modeled `PMCEID` bits.
+
+## Board measurement on core 0
+
+Port 3-3 ran the single-core form of the module on core 0 (Cortex-A55,
+`MIDR_EL1` `0x412fd050`) on 2026-10-24, in bundle 4 of
+[board-bundles-next.md](board-bundles-next.md); raw log
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb4-run/kernel.log`.
+IRQs were masked around each region.
+
+- **Configuration.** `PMCR_EL0` reads `0x41453041` (six event counters),
+  `PMCEID0_EL0` `0x7fffffff` and `PMCEID1_EL0` `0x01f0ae7f`; all six events
+  of the record are implemented (supported mask `0x3f`), and no exception
+  occurred.
+- **Empty region.** 20 instructions in each of 64 regions, as in both QEMU
+  models; 64 cycles at the minimum and median, 131 at most.
+- **Fixed region.** 2,000 ALU instructions count 2,020, exactly 2,000 above
+  the empty median, in 7,238 cycles.
+- **Clock.** A 1 ms counter loop counts 494,104 cycles over 24,005 ticks of
+  the 24 MHz counter: 494.0 MHz, the CPU-L rate.
+- **`L2D_CACHE_REFILL`.** Implemented on the A733's A55: one load per line
+  of a cleaned and invalidated 64 KiB buffer, 1,024 lines, counts 1,031
+  refills.
+
+Cores 6 and 7 (Cortex-A76) have not run the module on the board.
 
 ## Evidence
 

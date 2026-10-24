@@ -15,12 +15,18 @@
  * steps. Every summary and detail line is formatted with each field at its
  * widest value: no line is cut, and the begin line, the summary, the outcome
  * line and the detail reserve of each image fit the 16,127 log bytes, so the
- * outcome line always reaches the log. */
+ * outcome line always reaches the log.
+ *
+ * Bundle 4: apps/board-bundles-cpu/walk.h on one walk block of port 3-3
+ * (2026-10-24) and its calibration region, accepted, and on the same block
+ * with one walk more or fewer, an unimplemented or overflowed walk event, or
+ * another calibration count, each refused. */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include "sequence.h"
 #include "trace.h"
+#include "walk.h"
 
 #define NSI(p, o) (A733_NSI_PORT(p) + (o))
 struct access { uintptr_t address; uint32_t value; unsigned write; };
@@ -261,7 +267,12 @@ static void bins_case(void)
                                      {30000, 1, 12, 24, 6, 20, 16, 2}}; /* 1,250,000 ns */
     struct bb_step_bins b;
     bb_step_bins(steps, 3, 2500, &b);
-    assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 1 && b.over_ms == 1 && b.worst == 1984);
+    assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
+           b.worst == 1984);
+    /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
+    const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2};
+    bb_step_bins(&board, 1, 2500, &b);
+    assert(b.bins[3] == 1 && b.worst == 1456);
     printf("\"step distribution against the wire time\",");
 }
 
@@ -306,9 +317,44 @@ static void log_bound_case(void)
            six, seven, room, widest);
 }
 
+/* Block 3 of the board run (cached walks) and its calibration region. */
+static struct a733_cpu_pmu_record bb4_record(uint32_t dtlb, uint32_t itlb)
+{
+    struct a733_cpu_pmu_record r = {.format = A733_CPU_PMU_FORMAT, .counters = 6, .supported = 0x3f,
+                                    .midr = 0x412fd050, .cntfrq = 24000000, .cycles = 446624, .ticks = 21698,
+                                    .events = {15388, 0, 0, 4096, 0, 0}};
+    r.events[A733_CPU_PMU_DTLB_WALK] = dtlb;
+    r.events[A733_CPU_PMU_ITLB_WALK] = itlb;
+    return r;
+}
+static void walk_case(void)
+{
+    const struct a733_cpu_pmu_record block = bb4_record(1024, 1024), calibration = bb4_record(0, 1);
+    assert(bb4_walk_accepted(&block, &calibration, 1024));
+    for (unsigned e = A733_CPU_PMU_DTLB_WALK; e <= A733_CPU_PMU_ITLB_WALK; ++e) {
+        struct a733_cpu_pmu_record r = block, c = calibration;
+        r.events[e] = 1025;
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        r.events[e] = 1023;
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        r = block;
+        r.supported &= (uint8_t)~(1u << e);
+        r.events[e] = 0;
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        r = block;
+        r.overflow = (uint8_t)(1u << e);
+        r.events[e] = 0;
+        assert(!bb4_walk_accepted(&r, &calibration, 1024));
+        c.events[e] += 1;
+        assert(!bb4_walk_accepted(&block, &c, 1024));
+    }
+    printf("\"bundle 4 walk block of port 3-3 accepted at 1,024 data and 1,024 instruction walks\",");
+}
+
 int main(void)
 {
     printf("{\"cases\":[");
+    walk_case();
     gate_case("PPU clock closed: no PPU or NSI access", ppu_closed, BB8_SKIP_PPU_CLOCK, 0);
     gate_case("domain 1 OFF: no NSI access", domain_off, BB8_SKIP_DOMAIN1, 1);
     gate_case("domain 1 in transition: no NSI access", domain_transition, BB8_SKIP_DOMAIN1, 1);

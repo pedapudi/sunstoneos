@@ -1,7 +1,10 @@
 # One owner powers PCK600 domains 1 and 5 from one service task
 
-Status: **implemented and host-modeled**. No board run has used it; the board
-evidence that would qualify it is listed at the end.
+Status: **implemented and host-modeled**. On port 3-3 on 2026-10-24, two
+returning images ran it: one made 32 PMIC snapshots and the adoption reads
+of domains 1, 4 and 5 without a PPU write, and one adopted domain 1, which
+was already ON, without a transition. The board evidence still needed to
+qualify it is listed at the end.
 
 The A733 PCK600 power controller has one 4 KiB block per power domain at
 `0x07060000 + 0x1000 × domain`. Each block has a policy word (`+0x0`), whose
@@ -223,7 +226,12 @@ the actual owner.
 The host models, the merge-base comparison and the commands are recorded in
 the design document's implementation section
 ([docs/designs/power-domains.md](designs/power-domains.md)). The figures are
-modeled; none is a board measurement.
+modeled, except the service steps of the read-only board run.
+
+On the board, 400 kHz snapshot steps took 146% of their wire time against a
+110% target; section "Board result of the service steps" of the
+[design](designs/power-domains.md) gives the cause, the provisional 155%
+bound and the provider follow-up.
 
 ## Checks
 
@@ -267,9 +275,9 @@ modeled; none is a board measurement.
 - DCDC2 and DCDC4 selectors unchanged after PSCI CPU_ON and over a session,
   and a bus capture with no second S_TWI0 master.
 - USB0 and audio latency with PMIC requests running, SMP and single core.
-- The duration of each service step during a DCDC2 snapshot and a DCDC3
-  selector write at the inherited divisor. At 400 kHz each must be at most
-  110% of the transaction's wire time, which the host model meets.
+- The duration of each service step during a DCDC3 selector write at the
+  inherited divisor, and the split of a provider register access's cost
+  (section "Board result of the service steps" of the design).
 - Delivery of the S_TWI0 interrupt (GIC SPI 203, `sun60iw2p1.dtsi` line 1962)
   for each bus phase, qualified as the shared interrupt rules require. Only
   with that qualification can the service block on the interrupt instead of

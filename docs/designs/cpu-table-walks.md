@@ -1,9 +1,12 @@
 # Design: cacheable EL1 translation-table walks and one table builder
 
 Status: **implemented** in the package files and checked in instruction
-models; not run on the board. Section "Implementation results" records the
-measured counts and where the implementation differs from the design. No
-figure below has been measured on the board. Readers are assumed to know AArch64 stage-1 translation, the
+models. Section "Implementation results" records the modeled counts and where
+the implementation differs from the design. One board run exists: the core-0
+forced-walk loop on port 3-3, in section "Board result of the core-0 walk
+loop"; the revert rule keeps the cached value for that loop, and the
+workload runs and the core-6 run are still required. Every other figure is
+modeled or estimated. Readers are assumed to know AArch64 stage-1 translation, the
 Secure and Non-secure physical address spaces, and data-cache maintenance by
 virtual address.
 
@@ -310,6 +313,65 @@ The implementation differs from the design above in these points:
   eight-core scheduler model pass. The capacity check passes its four modes
   on eight QEMU CPUs with 392 translations and 22,547 preparation
   instructions, the same counts as before.
+
+## Board result of the core-0 walk loop
+
+Conditions: port 3-3 on 2026-10-24, bundle 4 of
+[board-bundles-next.md](board-bundles-next.md), raw log
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb4-run/kernel.log`.
+The image is the cached single-core kernel check with the monitor's counter
+option; `platform_init()` had installed `TCR_EL1` `0x200803519`, which the
+image read back before the loop. Core 0 (Cortex-A55) ran at 494.0 MHz,
+measured by its cycles over a 1 ms counter loop; MBUS ran at 400 MHz with
+`MBUS_DFS_EN` clear. The CPU-B and DSU rates were not recorded. One image
+switched `TCR_EL1` between blocks: A is `0x200803019` (uncached walks) and B
+is `0x200803519` (cached walks). After one discarded warm-up block, twelve
+blocks ran in ABBA order, six per value, each 1,024 iterations of the
+forced-walk loop with IRQs masked.
+
+Result, per iteration, as the median of the six blocks of each value
+([cpu-table-walks-measurements.md](cpu-table-walks-measurements.md) lists
+every block):
+
+| Per iteration | A, uncached walks | B, cached walks |
+| --- | --- | --- |
+| `CPU_CYCLES` | 693.1 (1.40 µs) | 436.1 (0.88 µs) |
+| Spread over six blocks, (max − min) / median | 0.17% | 0.14% |
+| `BUS_ACCESS` | 7 | 4 |
+| `DTLB_WALK`, `ITLB_WALK` | 1, 1 | 1, 1 |
+
+Every block counted exactly 1,024 data walks and 1,024 instruction walks,
+one of each per iteration ([board-bundles-next.md](board-bundles-next.md),
+section "Samples in bundle 4", explains the counts). Cached walks save 257 cycles per iteration and three bus accesses.
+If the three accesses account for all of the difference, each costs about 86
+cycles (174 ns), above the 50 to 75 cycles that section "Board evidence
+required" estimates for a DRAM descriptor read.
+
+Applying the revert rule of section "Board evidence required": B uses 37%
+fewer cycles than A, against a spread below 0.2%, so the loop gives no reason
+to revert, and `A733_CPU_COHERENCE_TCR_CACHED_WALK` stays the value of the
+cached single-core images. The run differs from that section in two ways. It
+used one image that switches `TCR_EL1` instead of images built from two
+commits, and six blocks per value instead of five runs. Images from two
+commits would also differ in the boot-time flush and table check, which run
+before the loop. Whether this design accepts the interleaved form is still
+open ([board-bundles-next.md](board-bundles-next.md)).
+
+The loop does not complete the rule. These items are still required:
+
+- **Core-0 workload A/B.** The rule also requires `CPU_CYCLES`,
+  `DTLB_WALK` and `ITLB_WALK` on core 0 during a GPU frame, an NPU inference
+  and a recognizer inference, with B no slower than A beyond the spread of
+  its runs. The loop forces one walk per iteration, so it gives no walk rate
+  for any workload.
+- **Contiguous hint on `dma32` blocks.** Its trigger, `DTLB_WALK` costing
+  more than 1% of `CPU_CYCLES` in a workload, comes only from those workload
+  runs. The loop permits no decision on the hint.
+- **Core-6 run.** The eight-core images keep the uncached value until the
+  core-6 run passes; this run used only the Cortex-A55.
+- **Dirty-line experiment and eight-core boot.** Neither has run. The
+  single-core boot with the new profile has: the image read `TCR_EL1` back as
+  `0x200803519` before the loop.
 
 ## Board evidence required
 

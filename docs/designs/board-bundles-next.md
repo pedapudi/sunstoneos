@@ -10,8 +10,10 @@ four bundles are prepared in
 `~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-3/`.
 The earlier preparation of the same rows in `board-bundles-20261024-2/` is
 superseded and must not run.
-None of the four has run on a board. Bundle 10 stays refused until its runner
-declares completion counts and its owner names admission values.
+All four ran on port 3-3 on 2026-10-24; the [handoff](../handoff.md) records
+their results. Bundle 4's prepared walk check was wrong, and the next bundle
+4 set must be prepared as section "Samples in bundle 4" states. Bundle 10 stays refused until its runner declares completion counts and
+its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
 on 2026-10-24 ([handoff](../handoff.md)): ranks 1 to 6 of the
@@ -191,11 +193,27 @@ record.
   discarded warm-up block, then twelve blocks in ABBA order: A installs
   `TCR_EL1` `0x200803019` (uncached walks), B `0x200803519` (cached walks,
   the value `platform_init()` installs). Each block records `CNTPCT` and all
-  six events. The region's own return path may need a walk after the last
-  `TLBI`, depending on whether an instruction-side walk fills the unified
-  TLB, so a calibration region (`TLBI VMALLE1`, `DSB ISH`, `ISB`, then end)
-  precedes each block; `DTLB_WALK` and `ITLB_WALK` must each equal 1,024
-  plus the calibration's count, or the block is refused. The switch is:
+  six events. `DTLB_WALK` and `ITLB_WALK` must each equal 1,024, and the
+  calibration region before the block (`TLBI VMALLE1`, `DSB ISH`, `ISB`,
+  then end) must count no data walk and one instruction walk, or the block
+  is refused (`apps/board-bundles-cpu/walk.h`). Each iteration makes one
+  data walk for its load and one instruction walk for the fetch after its
+  `TLBI`; after the last iteration, the return path runs from the 2 MiB
+  block whose entry that walk filled, so it adds none. The calibration's
+  instruction walk is the walk that a block already counts once per
+  iteration. The image prepared on 2026-10-24 instead required 1,024 plus
+  the calibration's count, so on port 3-3 it refused all 13 blocks, whose
+  counts were 1,024 and 1,024 in every block. The next bundle 4 set must
+  carry the corrected check. `checks/board-bundles-apps.py` passes on the
+  bundles' source revision `74d6aeab` with the current bundle sources. The
+  bundle 4 image then differs from the prepared one only in `main.c`, and
+  the bundle 8 image is byte-identical. The bundle 6 and 7 images differ in
+  their main files, `power.c` and `trace.c`, which carry the next bundle 6's
+  additions (section "Records of bundles 6, 7 and 8"). On the `bringup` revision `f3cbec23` the check refuses before
+  any image is built, because `platform/a733/platform.c` changed after
+  bundle 2 was frozen and the central kernel-check object no longer equals
+  bundle 2's. The next set is therefore prepared from `74d6aeab` with the
+  correction, or on a new base image. The switch is:
   write `TCR_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, `ISB`. No table write
   follows the final flush of both table pages in `platform_init()`
   (`platform/a733/platform.c` lines 138–139), so uncached walks read the
@@ -236,7 +254,7 @@ record.
   then its detail lines while 256 log bytes remain free, then a count of the
   omitted lines (and bundle 7 its closing line). The host model formats
   every line with each field at its widest value: bundle 6 needs at most
-  1,240 bytes before its details and bundle 7 at most 721, of 16,127.
+  1,364 bytes before its details and bundle 7 at most 721, of 16,127.
 - **Bundle 6** records the owner adapter's mapping result and the
   `PAR_EL1` translation of the domain-1 block. The adapter requires the
   block to translate as Device-nGnRnE and outer-shareable; the descriptor's
@@ -247,8 +265,15 @@ record.
   bytes and STOPs, the flag at the first read of each byte phase and the
   most polls of one phase; the wire time follows from the phases and the bit
   time (two bit times per START, repeated START or STOP, nine per byte). The
-  summary counts the steps at most 100%, up to 105%, up to 110% and above
-  110% of their wire time.
+  summary counts the steps at most 100%, up to 105%, up to 110%, up to 155%
+  and above 155% of their wire time; 155% is the provisional bound of
+  [power-domains.md](power-domains.md), and the 155% bins are in the source
+  for the next bundle 6 set. That set also measures the cost of a provider
+  register access. After the service is parked, with IRQs masked, it times
+  by `CNTPCT` 256 back-to-back reads of the S_TWI0 control register with
+  `DSB SY` before and after each, the same reads without barriers, and 256
+  reads of the provider's time source. A control-register read has no side
+  effect, and the parked provider makes no access.
 - **Bundle 7** reads the domain-1 words before the request, then lets the
   owner run its sequence. After the owner's ON command reaches the PPU, the
   layer reads the status back to back until it reads ON or 10 ms pass, and
@@ -291,8 +316,8 @@ record.
   trigger need these workloads. Domain 4 ON is bound to bundle 10's records
   once the NPU startup requests it through the owner.
 - **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes,
-  including the service-step timing of a DCDC3 selector write, which the
-  power-domain design's 110% bound also covers;
+  including the service-step timing of a DCDC3 selector write, for which
+  the power-domain design's host model predicts two steps with one tick wait;
   domain 5 ON and OFF, repeated N times, which needs DCDC4 and is the only
   domain that powers off; WDT0 expiry with fault-record retention, which boots
   from microSD; intentional GPU and NPU hangs. Memory qualification also waits
@@ -398,13 +423,18 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
 | Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
-| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases | Bundle 6 STEP lines |
+| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases; the board measured 146% (median), and the owner's design sets a provisional bound of 155% for a snapshot step ([power-domains.md](power-domains.md)) | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
 | Host sandbox, bytes read, copies | [board-bundles-measurements.md](board-bundles-measurements.md) | Unchanged | `checks/board-bundles.py` |
 
 The board records replace the instruction-model figures of each component
-design. Bundles 1 to 3 recorded only their pass and their words; no other
-figure above was measured on the board.
+design. Bundles 1 to 3 recorded only their pass and their words. The figures
+of bundles 4 to 8 are recorded in the [handoff](../handoff.md) and in the
+designs that own them: [cpu-table-walks.md](cpu-table-walks.md),
+[cpu-pmu-measurements.md](cpu-pmu-measurements.md),
+[cpu-power-states.md](cpu-power-states.md) and
+[power-domains.md](power-domains.md). The other figures in this design are
+estimates or model results.
 
 Offline results of the four new images (`checks/board-bundles-apps.py`):
 

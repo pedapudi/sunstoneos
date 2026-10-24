@@ -1,7 +1,9 @@
 # Design: idle cores wait in WFI; core power-off waits for a consumer
 
 Status: **WFI idle implemented in the instruction model**; the image change
-awaits the scheduler owner, and no board has executed it. The implementation,
+awaits the scheduler owner. On the board, core 0 has executed `WFI` from an
+EL1 task on the single-core platform (section "Board result: single-core WFI
+on core 0"); no eight-core image has executed it. The implementation,
 its measurements and its differences from this design are in
 [cpu-power.md](../cpu-power.md). Core power-off remains deferred. Section
 numbers refer to `docs/performance-architecture.md`.
@@ -71,6 +73,28 @@ For the primary agent, as implemented and measured:
 
 In a scheduled board session: EL0 `WFI` with `nTWI`, woken by SGI0 and PPI30,
 on all eight cores under the scheduler, with the SGI counts above.
+
+## Board result: single-core WFI on core 0
+
+Port 3-3 ran `a733_cpu_idle()` (`DSB SY`, `WFI`) on core 0 on 2026-10-24, in
+bundle 4 of [board-bundles-next.md](board-bundles-next.md); raw log
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb4-run/kernel.log`.
+One task at EL1 called it with IRQs unmasked on the single-core platform,
+so the 1 ms scheduler tick woke the core each time.
+
+- **Wakes.** 1,000 wakes over 1,000 ticks, in 23,979,258 ticks of the
+  24 MHz counter (1.0 s). The longest gap between wakes was 24,001 counter
+  ticks (1.0 ms), so no tick was missed.
+- **Cycle counter.** `PMCCNTR_EL0` advanced 841,417 cycles over that second,
+  0.17% of the 494 million cycles that core 0 runs per second at 494 MHz:
+  the A55's cycle counter stops while the core waits in `WFI`. Each wake
+  costs about 841 cycles and 316 instructions for the tick handler and the
+  task's loop.
+
+The cycle counter therefore measures only the active time of a core that
+idles in `WFI`; idle time is the elapsed counter time less the active
+cycles. This run does not cover EL0 `WFI` with `nTWI`, SGI0 wakes or the
+eight-core scheduler, which remain the board evidence above.
 
 ## Left out
 

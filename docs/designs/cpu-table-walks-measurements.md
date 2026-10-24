@@ -1,11 +1,12 @@
 # Measurements: cacheable EL1 table walks and one table builder
 
-Status: **measured in host models**; not run on the board. These figures
-compare the budgets in [cpu-table-walks.md](cpu-table-walks.md) with two
-builds. The base build is commit `14c3cd8`, the integration commit that this
-change starts from. The head build is commit `130fe53`, the last commit of
-this change. No figure here describes physical cache, walk or coherence
-behaviour.
+Status: **measured in host models**, and the core-0 forced-walk loop
+**measured on the board** (section "Board measurement of the core-0 walk
+loop"). The host-model figures compare the budgets in
+[cpu-table-walks.md](cpu-table-walks.md) with two builds. The base build is
+commit `14c3cd8`, the integration commit that this change starts from. The
+head build is commit `130fe53`, the last commit of this change. Only the
+board section describes physical walk behaviour.
 
 ## Conditions
 
@@ -84,3 +85,42 @@ Each added instruction and barrier runs once per boot or once per core
 entry. No metric changes on a path that runs after the scheduler starts. The
 board runs in section "Board evidence required" of the design still decide
 whether cacheable walks reduce walk cost.
+
+## Board measurement of the core-0 walk loop
+
+Conditions: port 3-3, 2026-10-24, bundle 4 of
+[board-bundles-next.md](board-bundles-next.md); raw log
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb4-run/kernel.log`.
+Core 0, Cortex-A55 (`MIDR_EL1` `0x412fd050`), at 494,001,083 Hz: 494,104
+cycles over 24,005 ticks of the 24 MHz counter. `PMCR_EL0` reads
+`0x41453041` (six event counters), and all six events of the record are
+implemented. A is `TCR_EL1` `0x200803019` (uncached walks), B `0x200803519`
+(cached walks). Each block is 1,024 iterations of `TLBI VMALLE1`, `DSB ISH`,
+`ISB` and one load, with IRQs masked.
+
+The same run checked the counters first; the results are in section "Board
+measurement on core 0" of [cpu-pmu-measurements.md](cpu-pmu-measurements.md).
+
+Counts per block; the six blocks of each value are listed in run order.
+`INST_RETIRED` is 15,388 in every block: 15 loop instructions per iteration
+plus 28 for the calls around the loop.
+
+| Block | Value | Cycles | Cycles per iteration | `L1D_CACHE_REFILL` | `L2D_CACHE_REFILL` | `BUS_ACCESS` | `DTLB_WALK` | `ITLB_WALK` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0, warm-up, discarded | A | 715,999 | 699.2 | 63 | 63 | 7,468 | 1,024 | 1,024 |
+| 1 | A | 709,968 | 693.3 | 6 | 0 | 7,168 | 1,024 | 1,024 |
+| 2 | B | 447,234 | 436.8 | 4 | 6 | 4,124 | 1,024 | 1,024 |
+| 3 | B | 446,624 | 436.2 | 0 | 0 | 4,096 | 1,024 | 1,024 |
+| 4 | A | 709,614 | 693.0 | 1 | 0 | 7,168 | 1,024 | 1,024 |
+| 5 | A | 709,747 | 693.1 | 0 | 0 | 7,168 | 1,024 | 1,024 |
+| 6 | B | 446,597 | 436.1 | 0 | 0 | 4,096 | 1,024 | 1,024 |
+| 7 | B | 446,621 | 436.2 | 0 | 0 | 4,096 | 1,024 | 1,024 |
+| 8 | A | 709,023 | 692.4 | 0 | 0 | 7,168 | 1,024 | 1,024 |
+| 9 | A | 710,207 | 693.6 | 0 | 0 | 7,168 | 1,024 | 1,024 |
+| 10 | B | 446,609 | 436.1 | 0 | 0 | 4,096 | 1,024 | 1,024 |
+| 11 | B | 446,612 | 436.1 | 0 | 0 | 4,096 | 1,024 | 1,024 |
+| 12 | A | 709,792 | 693.2 | 0 | 0 | 7,168 | 1,024 | 1,024 |
+
+The design summarizes blocks 1 to 12 and applies its revert rule in section
+"Board result of the core-0 walk loop" of
+[cpu-table-walks.md](cpu-table-walks.md).

@@ -46,9 +46,10 @@ struct bb_step {
     uint16_t conditions, bytes, stops, first_set, first_clear, polls_max;
 };
 /* The distribution of steps against the wire time of their phases at bit
- * time bit_ns, in thousandths: at most 1000, 1050, 1100, above; steps longer
- * than 1.1 ms; and the largest ratio. */
-struct bb_step_bins { unsigned bins[4], over_ms; uint64_t worst; };
+ * time bit_ns, in thousandths: at most 1000, 1050, 1100 (the design's first
+ * target), 1550 (the interim bound of docs/designs/power-domains.md), above;
+ * steps longer than 1.1 ms; and the largest ratio. */
+struct bb_step_bins { unsigned bins[5], over_ms; uint64_t worst; };
 void bb_step_bins(const struct bb_step *, unsigned count, uint32_t bit_ns, struct bb_step_bins *);
 
 /* Domain status read back to back after the ON command, with CNTPCT stamps
@@ -93,8 +94,12 @@ struct bb6_summary {
     struct bb_step_bins bins;
     uint32_t ppu, ahb, mbus, policy[3], status[3];
     int check[3];
+    /* Register-access cost: CNTPCT ticks across cost_reads back-to-back
+     * reads of S_TWI0 CNTR with DSB SY before and after each, the same reads
+     * without barriers, and cost_reads reads of the provider's time source. */
+    uint32_t cost_reads, cntr_dsb_ticks, cntr_plain_ticks, time_read_ticks;
 };
-#define BB6_SUMMARY_LINES 10u
+#define BB6_SUMMARY_LINES 11u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {
