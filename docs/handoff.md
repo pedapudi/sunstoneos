@@ -1,13 +1,5 @@
 # Current work
 
-> **Reconnect requested, port `3-1` (original board), 2026-10-23.** Remove
-> its 5 V supply and its USB data cable, wait 5 seconds, then reconnect the
-> supply and the cable. The rank-7 all-core first-task diagnostic launched
-> and did not return to the boot ROM; the host still lists a stale FEL
-> descriptor on node `003/014`, which is quarantined, and the queue claim
-> `f87b2126…` is held. After the reconnect the board needs a cold DDR
-> start. Board `3-3` stays in use meanwhile.
-
 Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
 [accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
 new work. The [hardware matrix](hardware.md) remains the complete support
@@ -52,7 +44,22 @@ first board execution of the boot table flush in `platform/a733/platform.c`.
 After a warm ROM return the instruction cache is on, so every native launch is
 preceded by the returning cache-off helper and a fresh survey on the current
 USB instance. Evidence and the coordinator's queue scripts are in
-`~/.cache/sunstoneos/evidence/board-session-20261023/`. Earlier identities and admission
+`~/.cache/sunstoneos/evidence/board-session-20261023/`.
+
+Rank 6, the returning thermal application, then passed on both boards: two
+complete sets from all five sensors read 40.7–42.2 °C on port `3-1` and
+42.5–44.0 °C on port `3-3`, below the 90 °C throttle trip. Rank 7, the
+accepted all-core first-task diagnostic, launched on port `3-1` and did not
+return to the ROM, although its overlay and payload are byte-identical to the
+build that passed on that board on 2026-10-18; the board needed a power
+removal, after which a cold DDR start passed again. The two lifetimes differ
+at least in the MBUS clock: a read-only capture today shows `+0x588` =
+`0x84000000`, decoded as 400 MHz, where the 2026-10-18 lifetime ran it at
+600 MHz. The same capture stopped rank 9 on port `3-3` before any launch,
+because its input requires 600 MHz. Rank 7 is not repeated on either board
+until an offline diagnosis names a concrete correction or a narrower
+diagnostic. The rank 6 to 9 bundles and runbooks are in
+`~/.cache/sunstoneos/evidence/board-bundles-20261023/`. Earlier identities and admission
 records supply no current authority. The physical steps follow the
 [ranked RAM-only board test plan](audit/board-test-plan.md);
 [continuation](#continuation-and-evidence-reuse) gives the complete order.
