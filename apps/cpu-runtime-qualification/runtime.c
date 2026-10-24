@@ -36,7 +36,7 @@ int a733_qualification_boot(uint64_t epoch,uint64_t deadline)
 {
     volatile struct qualification_report *r=&a733_qualification_report;
     if(!epoch || a733_smp_counter()>=deadline || r->magic)return 0;
-    r->magic=MAGIC;r->version=1;r->bytes=sizeof(*r);r->epoch=epoch;r->deadline=deadline;
+    r->magic=MAGIC;r->version=3;r->bytes=sizeof(*r);r->epoch=epoch;r->deadline=deadline;
     uint32_t ctlr=rd(GICD),banks=(rd(GICD+4)&31)+1;
     if((ctlr&0x80000070)!=0x30)return 0;
     r->distributor=ctlr;r->banks=banks;
@@ -85,7 +85,8 @@ _Noreturn void a733_qualification_worker_done(unsigned core)
         configASSERT(a733_smp_counter()<deadline);vTaskDelay(1);
     }
     configASSERT(a733_smp_core_results[core].task_rounds==32 && a733_smp_core_results[core].sgis &&
-        !a733_smp_core_results[core].failure && (core || a733_smp_core_results[0].ticks>=32));
+        !a733_smp_core_results[core].failure && (core ? __atomic_load_n(&a733_smp_core_results[core].ticks,__ATOMIC_ACQUIRE)==1 : a733_smp_core_results[0].ticks>=32));
+    a733_qualification_idle_stage(core);
     __atomic_store_n(&arrived[core],epoch,__ATOMIC_RELEASE);
     for(unsigned i=0;i<8;++i)while(__atomic_load_n(&arrived[i],__ATOMIC_ACQUIRE)!=epoch)
         configASSERT(a733_smp_counter()<deadline);
@@ -103,7 +104,10 @@ _Noreturn void a733_qualification_captured(unsigned core)
     if(fault->magic!=A733_FAULT_SLOT_MAGIC || fault->info!=A733_FAULT_INFO(A733_FAULT_KIND_EXIT,0,core) ||
        fault->status || fault->detail || fault->epoch!=r->epoch)retained(core,3);
     const struct a733_smp_core_result *v=&a733_smp_core_results[core];
-    if(v->task_rounds!=32 || !v->background_progress || !v->sgis || v->failure || (!core && v->ticks<32))retained(core,4);
+    if(v->task_rounds!=32 || !v->background_progress || !v->sgis || v->failure || (core ? v->ticks!=1 : v->ticks<32))retained(core,4);
+    c->idle_completed=a733_qualification_idle_completed[core];
+    c->idle_wakes=a733_qualification_idle_wakes[core];
+    if(!c->idle_completed || c->idle_wakes!=(core?7u:6u))retained(core,8);
     c->rounds=v->task_rounds;c->background=v->background_progress;c->sgis=v->sgis;c->failure=v->failure;c->ticks=v->ticks;
     barrier();c->captured=r->epoch;barrier();
     for(unsigned i=0;i<8;++i)while(r->cpu[i].captured!=r->epoch){if(!before() || r->error)retained(core,5);barrier();}

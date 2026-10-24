@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES = {0: 'repeated-throttle-normal-and-critical', 1: 'owner-and-worker-checkpoints',
          2: 'before-thermal-start', 3: 'closed-before-checkpoint', 4: 'closed-during-sleep',
          5: 'placement-pause-resume-and-incomplete', 6: 'faulted-placement-stays-disabled',
-         7: 'stale-sensors-throttle-then-critical'}
+         7: 'stale-sensors-throttle-then-critical',
+         8: 'ready-without-samples-stays-throttled', 9: 'last-channel-releases-startup-throttle',
+         10: 'partial-hot-remains-throttled-until-cool', 11: 'partial-critical-retains-without-more-reads',
+         12: 'last-channel-does-not-override-earlier-stale'}
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)

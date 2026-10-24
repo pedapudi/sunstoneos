@@ -19,7 +19,7 @@ file(MAKE_DIRECTORY "${generated}")
 get_target_property(sources a733-smp-cached-diagnostic SOURCES)
 list(FILTER sources EXCLUDE REGEX "/build-id\\.c$")
 set(inputs)
-foreach(pair "boot.c|boot.patch" "continue.c|continue.patch" "continue.S|vectors.patch" "diagnostic.c|diagnostic.patch")
+foreach(pair "boot.c|boot.patch" "continue.c|continue.patch" "continue.S|vectors.patch" "diagnostic.c|diagnostic.patch" "platform.c|platform.patch")
   string(REPLACE "|" ";" parts "${pair}")
   list(GET parts 0 unit)
   list(GET parts 1 patch)
@@ -32,7 +32,7 @@ endforeach()
 list(REMOVE_ITEM sources "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/admission.c")
 list(APPEND sources "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-supervised/admission.c"
   "${SUNSTONE_SOURCE_ROOT}/platform/a733/fault.c" "${SUNSTONE_SOURCE_ROOT}/platform/a733/fault.S"
-  "${app}/runtime.c" "${app}/terminal.S")
+  "${app}/runtime.c" "${app}/terminal.S" "${app}/timer.c" "${app}/idle.c")
 add_executable(a733-cpu-runtime-qualification ${sources})
 foreach(property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_OPTIONS)
   get_target_property(value a733-smp-cached-diagnostic ${property})
@@ -48,9 +48,9 @@ set_target_properties(a733-cpu-runtime-qualification PROPERTIES LINK_OPTIONS "${
   LINK_DEPENDS "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link.ld")
 file(GLOB headers "${SUNSTONE_SOURCE_ROOT}/include/*.h" "${FREERTOS_DIR}/include/*.h"
   "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/*.h")
-sunstone_build_identity(a733-cpu-runtime-qualification TAG "current-finite-cpu-return-v1"
-  BUILD_DIR "${generated}" PROFILE "current-finite-cpu-return-v1" WORKLOAD "32-rounds-per-core"
-  INPUTS ${sources} ${inputs} ${headers} "${app}/runtime.h" "${app}/freertos_tasks_c_additions.h"
+sunstone_build_identity(a733-cpu-runtime-qualification TAG "current-finite-cpu-idle-wake-v3"
+  BUILD_DIR "${generated}" PROFILE "current-finite-cpu-idle-wake-v3" WORKLOAD "32-rounds-local-timers-idle-wake"
+  INPUTS "${app}/FreeRTOSConfig.h" ${sources} ${inputs} ${headers} "${app}/runtime.h" "${app}/freertos_tasks_c_additions.h"
     "${app}/CMakeLists.txt" "${SUNSTONE_SOURCE_ROOT}/cmake/a733-smp-cached.cmake"
     "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link.ld"
     "${CMAKE_CURRENT_BINARY_DIR}/freertos-a733-smp-cached/portmacro.h")

@@ -159,6 +159,25 @@ If no report returns, mark the location unknown. Choose a narrower observation o
 a source-backed correction; do not declare a suspected instruction the cause.
 Keep proven entry/return evidence and test only the newly crossed boundary.
 
+## Keep the global scheduler tick separate from local timer delivery
+
+The cached port routes CPU0 PPI30 to `FreeRTOS_Tick_Handler`, which advances
+FreeRTOS global time. Routing every secondary timer through that same callback
+would advance global time multiple times. Keep one global tick owner unless
+changing the scheduler's timekeeping contract with corresponding evidence.
+A secondary hardware timer may use a separate local callback.
+
+The finite qualification now demonstrates one timer interrupt on each secondary
+through the actual IRQ entry, task frame restoration and EOI path. It publishes
+armed state while interrupts are masked, before the first-task `SVC 106`.
+The timer can become pending before that SVC restores task interrupt state.
+Check that ordering, integer and floating-point frame preservation, effective
+priority, status before disabling the timer, and final masked delivery counts.
+Missing or duplicate delivery must prevent successful cleanup. Restore the
+saved Secure PPI30 priority while the redistributor remains accessible.
+The current physical result is in the hardware matrix; it does not qualify
+periodic local preemption, idle wakeup or sustained scheduling by itself.
+
 ## Check warm-image visibility across security mappings
 
 A successful upload comparison proves the loader's data view, not a later cached

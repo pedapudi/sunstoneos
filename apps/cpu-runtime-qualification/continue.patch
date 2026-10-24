@@ -20,3 +20,11 @@
 +    if(!a733_qualification_local(c,epoch))failed(c,0x735);
      if(c)prepare_core(c);
      uint64_t mpidr;__asm__ volatile("mrs %0,mpidr_el1":"=r"(mpidr));
+@@ -160,6 +163,7 @@
+         if(now<last || now>=startup)a733_cached_smc(3,0x203);
+         last=now;__asm__ volatile("yield");
+     }
++    a733_qualification_timer_arm(c);
+     __atomic_store_n(&ucSecondaryCoresReadyFlags[c-1],1,__ATOMIC_RELEASE);
+     __asm__ volatile("dsb sy\n sev\n svc #106":::"memory");
+     a733_cached_smc(4,0x204);

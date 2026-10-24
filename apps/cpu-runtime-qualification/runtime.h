@@ -12,7 +12,7 @@
 #include <stddef.h>
 struct qualification_core {
     uint64_t epoch, captured, cleaned, restored, request, acknowledged, error, reserved;
-    uint64_t rounds, background, sgis, failure, ticks, drained_epoch, reserved_result[2];
+    uint64_t rounds, background, sgis, failure, ticks, drained_epoch, idle_completed, idle_wakes;
     uint64_t system[QUAL_SYS_WORDS];
     uint64_t local[16];
     uint64_t off_observed, padding[31];
@@ -30,6 +30,12 @@ struct qualification_report {
 _Static_assert(offsetof(struct qualification_report,cpu)==688 && sizeof(struct qualification_report)==8880,"report geometry");
 extern volatile struct qualification_report a733_qualification_report;
 extern unsigned char a733_qualification_stacks[QUAL_CORES][QUAL_STACK_BYTES];
+extern uint64_t a733_qualification_idle_completed[QUAL_CORES];
+extern uint64_t a733_qualification_idle_wakes[QUAL_CORES];
+void a733_qualification_background(unsigned core,void *task);
+void a733_qualification_idle_stage(unsigned core);
+void a733_qualification_timer_arm(unsigned core);
+void a733_qualification_timer_irq(unsigned core);
 int a733_qualification_boot(uint64_t epoch,uint64_t deadline);
 int a733_qualification_local(unsigned core,uint64_t epoch);
 _Noreturn void a733_qualification_worker_done(unsigned core);

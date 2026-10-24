@@ -163,10 +163,15 @@ class Model:
             self.set('tpidr_el1',c);self.set('sctlr_el1',0x30d01805);self.set('tcr_el1',0x80803519)
             self.set('icc_sre_el1',1);self.set('icc_sre_el2',9)
             self.put64(arrived+c*8,EPOCH)
+            self.put64(self.s['a733_qualification_idle_completed']+c*8,1)
+            self.put64(self.s['a733_qualification_idle_wakes']+c*8,7 if c else 6)
             self.uc.mem_write(self.s['a733_cached_records']+c*128,struct.pack('<3Q',EPOCH,c,3))
-            self.uc.mem_write(self.s['a733_smp_core_results']+c*128,struct.pack('<5Q',32,7,2,0,40 if c==0 else 0))
+            self.uc.mem_write(self.s['a733_smp_core_results']+c*128,struct.pack('<5Q',32,7,2,0,40 if c==0 else 1))
             r=0x03460000+c*0x20000
             self.put32(r+0x14,0);self.put32(r+0x10100,0x40000001)
+            # NS priority0xe0 is Secure0xf0. Every timer now changes PPI30,
+            # while its neighboring priority bytes must survive restoration.
+            self.put32(r+0x1041c,(self.u32(r+0x1041c)&~0x00ff0000)|0x00f00000)
             self.put32(r+0x10200,0x40000001)
             if c:self.put32(0x07052008+c*0x1000,8)
             self.uc.reg_write(fault.REGS[0],c)
@@ -206,12 +211,13 @@ def main():
         assert all(model.u64(p+i*8)==EPOCH for i in range(4))
         assert model.u64(p+40)==(EPOCH if c else 0)
         assert model.u64(p+768)==(EPOCH if c else 0)
+        assert model.u32(0x03460000+c*0x20000+0x1041c)==0x50607080+c
         slot=fault.decode.decode_slot(bytes(model.uc.mem_read(fault.SLOTS+c*128,128)))
         assert slot['state']=='valid' and slot['kind']=='deliberate exit' and slot['epoch']==EPOCH
     rows=[dict(name='all-eight-success',instructions=model.count,cleaned_lines_per_core=len(expected),normal_writes_after_first_clean=0)]
     for name in ('ordinary-exit-zero','wrong-core','missing-peer','active-interrupt',
                  'unrelated-pending','wrong-ns-alias','expired-deadline',
-                 'restore-readback','ack-without-off'):
+                 'restore-readback','ack-without-off','missing-timer','duplicate-timer','missing-idle','missing-wake'):
         m=Model(image);ctx=m.initialize();missing=None
         m.put64(m.report+32,2500000 if name in ('restore-readback','ack-without-off') else 50000)
         if name=='ordinary-exit-zero':
@@ -221,6 +227,10 @@ def main():
         elif name=='wrong-core':
             m.uc.context_restore(ctx[3]);m.uc.reg_write(fault.REGS[0],2);ctx[3]=m.uc.context_save()
         elif name=='missing-peer':missing=3
+        elif name in ('missing-timer','duplicate-timer'):
+            m.put64(image.symbols['a733_smp_core_results']+3*128+32,0 if name=='missing-timer' else 2)
+        elif name=='missing-idle':m.put64(image.symbols['a733_qualification_idle_completed']+3*8,0)
+        elif name=='missing-wake':m.put64(image.symbols['a733_qualification_idle_wakes']+3*8,3)
         elif name=='active-interrupt':m.put32(0x03460000+3*0x20000+0x10300,1)
         elif name=='unrelated-pending':m.put32(0x03460000+3*0x20000+0x10200,0x40000003)
         elif name=='wrong-ns-alias':

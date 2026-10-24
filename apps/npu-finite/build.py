@@ -10,9 +10,10 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-finite-quiescence-20261018')
 p.add_argument('--entry-checkpoint',action='store_true',help='return before any provider construction')
+p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 a=p.parse_args()
-if a.interrupt and a.entry_checkpoint:p.error('Checkpoint and interrupt profiles are separate')
+if sum((a.interrupt,a.entry_checkpoint,a.thermal))>1:p.error('Checkpoint, interrupt and thermal profiles are separate')
 root=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();e.mkdir(parents=True,exist_ok=True)
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def save(name,value):(e/name).write_text(json.dumps(value,indent=2)+'\n')
@@ -23,6 +24,7 @@ def run(name,c,cwd=None):
 old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-len('/apps/npu-convolution-single-core')] for v in old if v.endswith('/apps/npu-convolution-single-core'))
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
 if a.interrupt:config+=['-DA733_NPU_INTERRUPT=ON']
+if a.thermal:config+=['-DA733_NPU_FINITE_THERMAL=ON']
 save('configure-command.json',config);run('configure',config)
 run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j6'])
 entries=[x for x in json.loads((e/'native/compile_commands.json').read_text()) if 'a733-npu-convolution-single-core.dir/' in x['command']]
@@ -48,6 +50,9 @@ script=Path(__file__).resolve()
 if a.interrupt:
  identity['irq_sources']={str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-interrupt'/n for n in ('irq.c','irq.h','irq-route.c','irq-route.h','build.py'))}
  identity['profile']='npu-interrupt-finite-return-v1';script=root/'apps/npu-interrupt/build.py'
+if a.thermal:
+ identity['profile']='npu-finite-thermal-return-v1'
+ identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
 if a.entry_checkpoint:
  identity['profile']='npu-entry-memory-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}
@@ -65,6 +70,7 @@ for value in link:
    if value.endswith(suffix):value=str(replacement);break
  newlink.append(value)
 newlink[-1]=str(e/'image.elf');newlink[-2:-2]=[str(ret),str(assembly),'-Wl,--undefined=a733_npu_application_artifact_hashes']
+if a.thermal:newlink[-2:-2]=['-Wl,--undefined=npu_finite_thermal_profile']
 if a.entry_checkpoint:newlink[-2:-2]=['-Wl,--undefined='+n for n in ('a733_npu_application_model','a733_npu_application_input','a733_npu_application_reference')]
 commands.append(newlink);run('link',newlink,cwd=e/'native')
 copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)
