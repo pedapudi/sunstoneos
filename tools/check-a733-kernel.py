@@ -26,6 +26,16 @@ FAULT_LINE = re.compile(r"FAIL exception core=([0-7]) ESR=0x([0-9a-f]{16}) ELR=0
                         r"FAR=0x([0-9a-f]{16}) SPSR=0x([0-9a-f]{16}) task=([ -~]{0,16})")
 OUTCOME_KEYS = {"name", "status", "interrupt", "fail_lines", "fault", "log_contains"}
 FAULT_KEYS = {"esr_mask", "esr_value", "far", "elr_low", "elr_high", "task"}
+# An outcome may also name a progress record that the image keeps between the
+# result header and the log: little-endian magic, stage, count and CNTPCT
+# stamp of the last progress, which the forced return preserves.
+PROGRESS_KEYS = {"offset", "magic", "stage", "count_below", "age_above"}
+
+
+def progress_record(data, offset):
+    """The four progress words at offset of the result page."""
+    magic, stage, count, stamp = struct.unpack_from("<4Q", data, offset)
+    return dict(magic=magic, stage=stage, count=count, stamp=stamp)
 
 
 def fault_lines(log):
@@ -48,7 +58,14 @@ def controlled_outcomes(raw):
         raise ValueError("Controlled outcomes have no outcome list.")
     for outcome in outcomes:
         fault = outcome.get("fault") if isinstance(outcome, dict) else None
-        if not (isinstance(outcome, dict) and set(outcome) == OUTCOME_KEYS
+        progress = outcome.get("progress") if isinstance(outcome, dict) else None
+        if not (isinstance(outcome, dict) and set(outcome) in (OUTCOME_KEYS, OUTCOME_KEYS | {"progress"})
+                and ("progress" not in outcome
+                     or (isinstance(progress, dict) and set(progress) == PROGRESS_KEYS
+                         and all(type(progress[k]) is int and progress[k] >= 0 for k in PROGRESS_KEYS)
+                         and 128 <= progress["offset"] and progress["offset"] + 32 <= 256
+                         and progress["offset"] % 8 == 0 and progress["count_below"] > 0
+                         and progress["age_above"] > 0))
                 and isinstance(outcome["name"], str) and outcome["name"]
                 and type(outcome["status"]) is int and outcome["status"] != 0
                 and (outcome["interrupt"] is None or type(outcome["interrupt"]) is int)
@@ -66,9 +83,13 @@ def controlled_outcomes(raw):
     return outcomes
 
 
-def controlled_match(outcome, terminal, faults, found):
-    """True when the result record, the parsed FAIL lines and the log texts found equal one outcome."""
+def controlled_match(outcome, terminal, faults, found, progress=None):
+    """True when the result record, the parsed FAIL lines, the log texts found and, for an outcome that names
+    one, the progress record equal one outcome. A progress outcome requires the record's magic and stage, a
+    count below its bound and a last stamp older than age_above counter ticks at the monitor's end_counter."""
     fault = outcome["fault"]
+    spec = outcome.get("progress")
+    end = terminal.get("end_counter")
     return (terminal.get("magic") == 0x534b4552 and terminal.get("stage") == 5
             and terminal.get("status") == outcome["status"]
             and (outcome["interrupt"] is None or terminal.get("interrupt") == outcome["interrupt"])
@@ -78,7 +99,12 @@ def controlled_match(outcome, terminal, faults, found):
             and (fault is None or (faults[0]["esr"] & fault["esr_mask"] == fault["esr_value"]
                                    and faults[0]["far"] == fault["far"]
                                    and fault["elr_low"] <= faults[0]["elr"] < fault["elr_high"]
-                                   and faults[0]["task"] == fault["task"])))
+                                   and faults[0]["task"] == fault["task"]))
+            and (spec is None or (isinstance(progress, dict) and type(end) is int
+                                  and all(type(progress.get(k)) is int for k in ("magic", "stage", "count", "stamp"))
+                                  and progress["magic"] == spec["magic"] and progress["stage"] == spec["stage"]
+                                  and progress["count"] < spec["count_below"]
+                                  and progress["stamp"] <= end and end - progress["stamp"] > spec["age_above"])))
 
 
 def controlled_return(returned):
@@ -93,7 +119,7 @@ def controlled_return(returned):
         return False
     return (returned.get("mode") == "kernel"
             and controlled_match(outcomes[0], returned.get("result", {}), controlled.get("faults"),
-                                 controlled.get("log_found", [])))
+                                 controlled.get("log_found", []), controlled.get("progress")))
 
 
 def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_tool_hash, warm_raw=()):
@@ -390,9 +416,12 @@ def main(argv=None, observe=None):
                     faults = fault_lines(log)
                     for item in controlled:
                         found = [text for text in item["log_contains"] if text in log]
-                        if controlled_match(item, record["result"], faults, found):
+                        progress = progress_record(data, item["progress"]["offset"]) if "progress" in item else None
+                        if controlled_match(item, record["result"], faults, found, progress):
                             outcome = item
                             record["controlled"] = dict(outcome=item, faults=faults, log_found=found)
+                            if progress is not None:
+                                record["controlled"]["progress"] = progress
                             save()
                             break
                 if outcome is None and values[:3] != (0x534b4552, 5, expected_status):

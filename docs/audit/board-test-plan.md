@@ -108,19 +108,24 @@ without it, so a stall loses only the bundles after it. Two classes are new:
 | 1 | Fault capture on core 0 | Returning | Prepared |
 | 2 | Kernel check with the counter option | Returning | Prepared |
 | 3 | Clock words: CPU-L, MBUS, NSI and the oscillator | Read | Prepared |
-| 4 | Event counters, core-0 walk A/B and idle WFI | Returning | Needs the counter, table-walk and power-state owners' image |
+| 4 | Event counters, core-0 walk A/B and idle WFI | Returning | Prepared (third set) |
 | 5 | Policy and status words of power domains 1, 4 and 5 | Read | Prepared |
-| 6 | PMIC service task and power-domain owner, read-only | Returning | Needs the power-domain owner's image |
-| 7 | Domain 1 ON | Returning | Needs the power-domain owner's image |
-| 8 | DRAM bus priority reads and table write | Returning | Needs the DRAM owner's image |
+| 6 | PMIC service task and power-domain owner, read-only | Returning | Prepared (third set) |
+| 7 | Domain 1 ON | Returning | Prepared (third set) |
+| 8 | DRAM bus priority reads and table write | Returning | Prepared (third set) |
 | 9 | NPU speed-bin and clock words | Read | Prepared |
 | 10 | NPU single-core image | Terminal | Needs completion counts in `tools/check-a733-npu-supervised.py` and the NPU owner's admission values |
 
 The prepared bundles, each with its runbook, are under
-`~/.cache/sunstoneos/evidence/board-bundles-20261024/board-bundles-20261024-1/`.
-Bundles 1 and 2 need the runner change in
-`~/.cache/sunstoneos/build/board-bundles-next/primary.patch`, which the
-frozen runner already carries. Bundles that wait for ranks 7 and 8, for user
+`~/.cache/sunstoneos/evidence/board-bundles-20261024/`: bundles 1, 2, 3, 5
+and 9 in `board-bundles-20261024-1/`, and bundles 4, 6, 7 and 8 in
+`board-bundles-20261024-3/`. Bundles 1 to 3 passed on port 3-3 on
+2026-10-24. Bundle 4's controlled outcome needs the progress record of the
+kernel runner in `~/.cache/sunstoneos/build/board-bundles-apps/primary.patch`,
+which its frozen runner already carries. On port 3-3 the remaining order is
+4, 5, 6, 7, 8, 9: bundle 4 needs bundle 3's `MBUS_DFS_EN` record of the same
+lifetime, bundle 6's domain-level reads show whether bundle 7's owner can
+admit domain 1, and bundle 8 needs domain 1 ON from bundle 7. Bundles that wait for ranks 7 and 8, for user
 approval or for accessories are listed in the design.
 
 ## Bundles for the memory, GPU and NPU paths

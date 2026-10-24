@@ -32,6 +32,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 SCRATCH = 0x71000
 SCRATCH_BYTES = 128
@@ -191,11 +192,13 @@ def main():
             a.require_rom(node)
             b.require(a.identity(node) == identity, 'Instance changed')
             command = [str(fel), '-d', device, *map(str, args)]
-            entry = {'command': command}
+            # Wall-clock seconds before and after each command, for the
+            # bundle-duration budget.
+            entry = {'command': command, 'start': time.time()}
             r['transactions'].append(entry)
             save()
             x = subprocess.run(command, capture_output=True, text=True, timeout=30, pass_fds=pass_fds)
-            entry.update(exit_code=x.returncode, stdout=x.stdout, stderr=x.stderr)
+            entry.update(end=time.time(), exit_code=x.returncode, stdout=x.stdout, stderr=x.stderr)
             save()
             b.require(x.returncode == 0, 'FEL transaction failed; no retry')
             return x.stdout

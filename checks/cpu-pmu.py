@@ -3,7 +3,9 @@
 
 platform/a733/cpu_pmu.c is compiled with the board image's SMP flags and the
 eight-core A733 configuration, linked with a stub vTaskCoreAffinityGet, and run
-under Unicorn. The model checks the event encodings and filters, the
+under Unicorn. It is also compiled with the single-core returning images'
+configuration, whose form takes core 0 and calls neither the stub nor
+TPIDR_EL1. The model checks the event encodings and filters, the
 PMCNTENSET, PMINTENCLR, PMUSERENR and PMCR values, that P and C are never
 written, PMCR_EL0.N below 6 and 0, unimplemented events, overflow marking,
 readback refusals, reconfiguration after PMCR_EL0.E reads 0, every begin and
@@ -436,6 +438,32 @@ def module_cases(machine):
     return cases, configured_counts
 
 
+def single_core_cases(machine):
+    """The single-core form: core 0 without the affinity call or TPIDR_EL1, as bundle 4 runs it."""
+    cases = []
+    reg = reset_core()
+    reg['tpidr'] = 5  # not read: the single-core form takes core 0
+    machine.reset()
+    result, log = machine.begin(reg, affinity=0)
+    assert result == STATUS['OK'] and ('affinity',) not in log and ('read', 'tpidr') not in log, log
+    generation, core, _, _ = struct.unpack('<IB3xQQ', machine.region_bytes())
+    assert (generation, core) == (1, 0)
+    result, log = machine.end(reg)
+    record = decode(machine.record_bytes())
+    assert result == STATUS['OK'] and record['core'] == 0 and record['status'] == STATUS['OK'], record
+    assert ('read', 'tpidr') not in log
+    touched(machine, log, 0, STACK)
+    cases.append('single-core begin and end on core 0 without the affinity call or TPIDR_EL1')
+    machine.begin(reg, affinity=0)
+    outer = machine.region_bytes()
+    machine.begin(reg, affinity=0)
+    assert machine.end(reg)[0] == STATUS['OK']
+    machine.buffers = outer + machine.buffers[24:]
+    assert machine.end(reg)[0] == STATUS['GENERATION_CHANGED']
+    cases.append('single-core nested region refused through the generation')
+    return cases
+
+
 def layout_cases(machine, elf):
     """Structure layouts from DWARF, the state symbol's size and alignment."""
     layouts = machine.image.layouts
@@ -525,6 +553,14 @@ def main():
     machine = Machine(elf)
     cases, counts = module_cases(machine)
     cases += layout_cases(machine, elf)
+    # The single-core build of the returning images: their FreeRTOS
+    # configuration and port, the same stub linked but never called.
+    single = out / 'cpu_pmu_single.o'
+    run('compile-single-core', [CLANG, *FLAGS, *['-I' + str(i) for i in (
+        ROOT / 'include', ROOT / 'runtime/include', a.freertos / 'include',
+        a.freertos / 'portable/GCC/ARM_AARCH64_SRE')], '-c', ROOT / 'platform/a733/cpu_pmu.c', '-o', single])
+    run('link-single-core', [LLD, '-T', out / 'module.ld', single, out / 'stub.o', '-o', out / 'cpu-pmu-single.elf'])
+    cases += single_core_cases(Machine(out / 'cpu-pmu-single.elf'))
     pinned, missing = source_cases(read)
     read(ROOT / 'platform/a733/cpu_continue.S')
     read(ROOT / 'platform/a733-smp-cached/continue.S')

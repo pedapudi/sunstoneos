@@ -32,6 +32,15 @@ CONTROLLED_FAULT = dict(name='level-1-translation-fault', status=1, interrupt=No
 FAULT_LOG = (b'CHECK fault capture: load 0x400000000\n'
              b'FAIL exception core=0 ESR=0x0000000096000005 ELR=0x0000000041001234 '
              b'FAR=0x0000000400000000 SPSR=0x00000000000003c5 task=fault\n')
+# A forced return after a WFI stage that stopped waking: the progress record
+# between the result header and the log shows fewer wakes than its bound and
+# a last wake more than one tick before the monitor's end_counter.
+CONTROLLED_PROGRESS = dict(name='wfi-stopped-waking', status=2, interrupt=29, fail_lines=0, fault=None,
+                           log_contains=['STAGE 2 walk complete', 'STAGE 3 wfi begin'],
+                           progress=dict(offset=128, magic=0x3130535342344242, stage=3, count_below=1000,
+                                         age_above=24000))
+PROGRESS_LOG = b'STAGE 1 counters complete\nSTAGE 2 walk complete\nSTAGE 3 wfi begin\n'
+PROGRESS_END = 10**9
 
 
 def main():
@@ -208,6 +217,26 @@ def main():
             try: validate_chain((warm_raw, timeout_raw, json.dumps(changed)), changed)
             except RuntimeError: passed(name)
             else: raise AssertionError(name)
+        # The same link for an outcome with a progress record.
+        progress = dict(magic=0x3130535342344242, stage=3, count=412, stamp=PROGRESS_END - 100000)
+        stopped = dict(controlled, result=dict(warm['result'], status=2, interrupt=29, end_counter=PROGRESS_END),
+                       controlled=dict(outcome=CONTROLLED_PROGRESS, faults=[], progress=progress,
+                                       log_found=list(CONTROLLED_PROGRESS['log_contains'])))
+        validate_chain((warm_raw, timeout_raw, json.dumps(stopped)), stopped)
+        passed('modeled-controlled-progress-continuity')
+        for name, change in [
+            ('progress-missing', lambda c: c['controlled'].pop('progress')),
+            ('progress-count-complete', lambda c: c['controlled']['progress'].update(count=1000)),
+            ('progress-recent-stamp', lambda c: c['controlled']['progress'].update(stamp=PROGRESS_END - 24000)),
+            ('progress-stamp-after-end', lambda c: c['controlled']['progress'].update(stamp=PROGRESS_END + 1)),
+            ('progress-wrong-magic', lambda c: c['controlled']['progress'].update(magic=0)),
+            ('progress-wrong-stage', lambda c: c['controlled']['progress'].update(stage=2)),
+            ('progress-other-interrupt', lambda c: c['result'].update(interrupt=30)),
+            ('progress-malformed-offset', lambda c: c['controlled']['outcome']['progress'].update(offset=96))]:
+            changed = json.loads(json.dumps(stopped)); change(changed)
+            try: validate_chain((warm_raw, timeout_raw, json.dumps(changed)), changed)
+            except RuntimeError: passed(name)
+            else: raise AssertionError(name)
         if args.native_return:
             # A saved native returning CPU session from another lifetime,
             # rebound to follow the forced-stall return. Offline fixture only.
@@ -233,7 +262,8 @@ def main():
     # helper. Only the device transport and lock are modeled; no USB discovery.
     modes = ('success-new-admission', 'legacy-signature-refusal', 'prelaunch-transport-loss', 'launch-transport-loss', 'prelaunch-interruption')
     if args.warm_return: modes += ('success-warm-admission',)
-    modes += ('controlled-outcome-match', 'controlled-outcome-unlisted')
+    modes += ('controlled-outcome-match', 'controlled-outcome-unlisted', 'controlled-progress-match',
+              'controlled-progress-unlisted')
     for mode in modes:
         if args.case and mode != args.case:
             continue
@@ -268,11 +298,17 @@ def main():
                 elif parts[0] == 'reset64':
                     active[0] = run_identity[:-1]+[1]
                     data = bytearray(16384); log=b'PASS kernel: modeled completion\n'; status = 0
-                    if mode.startswith('controlled-'):
+                    interrupt = end = 0
+                    if mode.startswith('controlled-progress'):
+                        log, status, interrupt, end = PROGRESS_LOG, 2, 29, PROGRESS_END
+                        # The unlisted case woke one tick before the forced return.
+                        age = 24000 if mode == 'controlled-progress-unlisted' else 100000
+                        struct.pack_into('<4Q', data, 128, 0x3130535342344242, 3, 412, PROGRESS_END - age)
+                    elif mode.startswith('controlled-'):
                         log, status = FAULT_LOG, 1
                         if mode == 'controlled-outcome-unlisted': log = log.replace(b'FAR=0x0000000400000000',
                                                                                      b'FAR=0x0000000400000008')
-                    struct.pack_into('<16Q', data, 0, 0x534b4552,5,status,len(log), *([0]*12))
+                    struct.pack_into('<16Q', data, 0, 0x534b4552,5,status,len(log), 0,0,0,interrupt, 0,end, *([0]*6))
                     data[256:256+len(log)] = log; memory[0x42000000] = bytes(data)
                 else:
                     while parts:
@@ -291,8 +327,9 @@ def main():
                 argv[-1] = str(args.warm_survey)
                 argv += ['--warm-return', str(args.warm_return)]
             if mode.startswith('controlled-'):
+                listed = CONTROLLED_PROGRESS if mode.startswith('controlled-progress') else CONTROLLED_FAULT
                 (tmp/'controlled.json').write_text(json.dumps(dict(schema='kernel-controlled-outcomes-v1',
-                                                                   outcomes=[CONTROLLED_FAULT])))
+                                                                   outcomes=[listed])))
                 argv += ['--controlled', str(tmp/'controlled.json')]
             guard=SimpleNamespace(check_health=lambda:None, reenumeration=reenumeration)
             with patch.object(runner,'load_module',modules), patch.dict(sys.modules,usb_guard=guard), \
@@ -302,7 +339,7 @@ def main():
                 try:
                     runner.main(argv)
                 except Held:
-                    if mode == 'controlled-outcome-unlisted':
+                    if mode in ('controlled-outcome-unlisted', 'controlled-progress-unlisted'):
                         # An unlisted nonzero status keeps ownership and quarantines.
                         assert len(quarantine)==1 and requests[-1][0] == 'read'
                     else:
@@ -312,7 +349,8 @@ def main():
                     assert mode == 'legacy-signature-refusal' and not quarantine
                     assert not any(r[0] in ('write','reset64') for r in requests)
                 else:
-                    assert mode in ('success-new-admission', 'success-warm-admission', 'controlled-outcome-match')
+                    assert mode in ('success-new-admission', 'success-warm-admission', 'controlled-outcome-match',
+                                    'controlled-progress-match')
                     assert sum(r[0]=='reset64' for r in requests)==1 and not quarantine
                     saved = json.loads((tmp/'run/session.json').read_text())
                     assert saved['complete']
@@ -320,6 +358,11 @@ def main():
                         assert saved['controlled']['outcome'] == CONTROLLED_FAULT
                         assert saved['controlled']['faults'] == [dict(core=0, esr=0x96000005, elr=0x41001234,
                                                                       far=0x400000000, spsr=0x3c5, task='fault')]
+                        assert runner.controlled_return(saved)
+                    if mode == 'controlled-progress-match':
+                        assert saved['controlled']['outcome'] == CONTROLLED_PROGRESS and saved['controlled']['faults'] == []
+                        assert saved['controlled']['progress'] == dict(magic=0x3130535342344242, stage=3, count=412,
+                                                                       stamp=PROGRESS_END - 100000)
                         assert runner.controlled_return(saved)
                     if mode == 'success-warm-admission':
                         assert (tmp/'run/warm-return-1.json').read_bytes() == warm_raw

@@ -1938,21 +1938,26 @@
   "summary": "Build the native board composition and exercise only its new contracts.",
   "usb": false
  },
- "board-bundles-images.py": {
+ "board-bundles-apps.py": {
   "cache_areas": [
-   "host"
+   "host",
+   "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/board-bundles-next.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "--central",
-   "--option-tree",
    "--rank4",
+   "--bundle2",
+   "--bundle2-run",
    "--v4",
+   "--tree",
    "--output"
   ],
-  "summary": "Build and check the two returning images of the single-core board bundles.",
+  "summary": "Build and check the returning images of bundles 4, 6, 7 and 8.",
   "usb": true
  },
  "board-bundles.py": {
@@ -2570,6 +2575,7 @@
   ],
   "docs": [
    "docs/cpu-pmu.md",
+   "docs/designs/board-bundles-next.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md"
   ],
