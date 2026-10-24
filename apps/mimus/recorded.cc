@@ -171,19 +171,23 @@ static bool recognize(std::span<const uint8_t> inputs[3], std::span<uint8_t> int
              static_cast<unsigned long long>(elapsed));
     platform_puts(metrics);
     platform_puts("TEXT "); platform_puts(result->text.c_str()); platform_puts("\n");
-    std::string marks, capitals;
     auto words = pipeline::SplitWords(result->text);
-    configASSERT(result->punct && words.size() == result->words.size());
-    for (size_t i = 0; i < words.size(); ++i) {
-        const auto &word = result->words[i];
-        words[i].scored = word.scored;
-        words[i].mark = static_cast<uint8_t>(word.mark);
-        words[i].capital = word.capital;
-        marks += word.scored ? char('0' + unsigned(word.mark)) : '9';
-        capitals += word.capital ? '1' : '0';
+    // A model without a punctuation head scores no word. As in host asr_cli,
+    // the output then has no MARKS or CAPS line and formats the plain words.
+    configASSERT(!result->punct || words.size() == result->words.size());
+    if (result->punct) {
+        std::string marks, capitals;
+        for (size_t i = 0; i < words.size(); ++i) {
+            const auto &word = result->words[i];
+            words[i].scored = word.scored;
+            words[i].mark = static_cast<uint8_t>(word.mark);
+            words[i].capital = word.capital;
+            marks += word.scored ? char('0' + unsigned(word.mark)) : '9';
+            capitals += word.capital ? '1' : '0';
+        }
+        platform_puts("MARKS "); platform_puts(marks.c_str()); platform_puts("\nCAPS ");
+        platform_puts(capitals.c_str()); platform_puts("\n");
     }
-    platform_puts("MARKS "); platform_puts(marks.c_str()); platform_puts("\nCAPS ");
-    platform_puts(capitals.c_str()); platform_puts("\n");
     if(cancelled())return false;
     pipeline::FormatSequence sequence;
     std::string typed = sequence.Add(words, audio->size(), result->punct_context, nullptr, nullptr);
