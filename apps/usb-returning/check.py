@@ -24,6 +24,9 @@ config['pmic_expected']=[list(raw[sl['pmic_pins']+i*3:sl['pmic_pins']+(i+1)*3]) 
 prepare=module('prepare',r/'apps/usb-returning/prepare.py');payload=prepare.input_bytes(config,1)
 (e/'fixture-config.json').write_text(json.dumps(config,indent=2)+'\n');(e/'fixture-input.bin').write_bytes(payload)
 (e/'fixture-provenance.json').write_text(json.dumps({'source':str(source),'source_sha256':hashlib.sha256(raw).hexdigest(),'layout_elf_sha256':hashlib.sha256((transport/'image.elf').read_bytes()).hexdigest(),'producer_sha256':hashlib.sha256((r/'apps/usb-returning/prepare.py').read_bytes()).hexdigest(),'input_sha256':hashlib.sha256(payload).hexdigest(),'physical_authority':False},indent=2)+'\n')
+import re
+lock_enum=re.search(r'enum a733_platform_lock \{([^}]*)\}',(r/'include/a733_platform_locks.h').read_text()).group(1)
+lock_count=[x.strip() for x in lock_enum.split(',')].index('A733_PLATFORM_LOCK_COUNT')
 variants=['complete','partial-callbacks','no-host','pending-before-mask','pending-stuck','active-dma','active-irq','held-mutex','pmic-held','write-ineffective','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric','device-session','session-host-request','session-host-mode','session-dma']
 if a.case:
     assert set(a.case)<=set(variants),a.case
@@ -69,7 +72,8 @@ for variant in variants:
             assert args[0]==image.address('pmic_task' if not state['tasks'] else 'usb_task',unit='/apps/usb-returning/main.c') and args[2]==4096 and args[4]==2
             state['tasks'].append(args[0]);ret(0x43020000+len(state['tasks'])*256)
         elif name=='vTaskStartScheduler':
-            assert len(state['tasks'])==2 and state['mutexes']==2
+            # a733_platform_locks_init creates one mutex per platform lock.
+            assert len(state['tasks'])==2 and state['mutexes']==lock_count,(state['mutexes'],lock_count)
             # Actual native USB init/bind and the actual PMIC/clock/pin/rail/USB
             # constructors have all accepted the producer configuration.
             state['constructors']=True
