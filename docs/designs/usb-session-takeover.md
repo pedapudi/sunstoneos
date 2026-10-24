@@ -6,7 +6,10 @@ takeover sequence below run in the USB platform provider
 (`platform/a733/native_usb.c`). Linked and host-compiled checks pass on the
 register values that the board reported on 2026-10-23. No board has run
 the corrected image; whether the byte store removes SoftConn on the A733 is
-unproven until one does.
+unproven until one does. The bundle
+`board-bundles-20261023/rank-9-usb-v3/` carries the correction with every
+other object byte-identical to the refused bundle
+([rank 9 runbook](../board-runbooks/rank-9-usb.md)).
 
 When the native USB returning image starts, the boot ROM's recovery-mode
 (FEL) driver still owns USB0: the controller is enumerated by the host, in

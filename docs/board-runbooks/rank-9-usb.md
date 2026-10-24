@@ -3,9 +3,9 @@
 Status: **ready** once the coordinator accepts
 [the admission patch](README.md#admission-after-the-forced-stall-return)
 and reviews the two records that step 4 writes. Runs last on each board.
-Bundle: `~/.cache/sunstoneos/evidence/board-bundles-20261023/rank-9-usb-v2/`.
-It replaces `rank-9-usb/`, whose input builder refuses every board that has
-returned to the boot ROM since DDR initialization; do not use `rank-9-usb/`.
+Bundle: `~/.cache/sunstoneos/evidence/board-bundles-20261023/rank-9-usb-v3/`.
+It replaces `rank-9-usb-v2/`, whose image refused USB takeover on port 3-3
+on 2026-10-23 (below), and `rank-9-usb/`; do not use either.
 
 The image runs the production PMIC and USB providers as two FreeRTOS tasks.
 It takes over USB0 from the boot ROM, enumerates a vendor interface as
@@ -15,34 +15,56 @@ monitor. [The application README](../../apps/usb-returning/README.md) gives
 its contract. A failure of the native stack or of the handback leaves the
 board unreachable until its power is removed.
 
+## The 2026-10-23 refusal and the correction in this bundle
+
+`rank-9-usb-v2/` ran once on port 3-3 instance `013` and returned to the
+ROM with monitor status 1 (`board-session-20261023/port-3-3/r9-v2-usb/`).
+The USB provider passed the ROM admission check, which already permitted
+the inherited DEVCTL SESSION bit, and masked the ROM's interrupt enables.
+It then refused at the soft-disconnect (stage `0x16`): its 32-bit store of
+`0x00029900` to `0x04100040` completed, and the readback still had SoftConn
+(PCTL bit 6) set. No USB exchange began and the PMIC was healthy.
+
+In this bundle the provider removes SoftConn with one 8-bit store of PCTL,
+the access width of the pinned BSP, TinyUSB and the matched ROM, and checks
+SoftConn clear after the 150 ms disconnect interval, before the device
+reset. A SoftConn bit that never clears still refuses before any reset
+write. The admission rule also refuses LSDEV, FSDEV and VEND0 DMA request
+selection. [USB0 takeover from the boot ROM's device session](../designs/usb-session-takeover.md)
+gives the decoding, the rule, the sources and what remains unproven: no
+board has run the byte store.
+
 ## Bundle
 
 | File | SHA-256 |
 | --- | --- |
-| `probe.bin` (110,912 bytes) | `27cef572d8e3865629fb26ea56f811b5a843382b20b04b3406cc2112baac6b8f` |
-| `build/probe.elf` | `18cf5ea4e2a8f5a71c568f473da55d2a261b8027e95c516814f8a82884a243da` |
-| `host/tools/check-a733-usb-returning.py`, `check-a733-kernel.py`, `usb-access.py`, `check-a733-smp.py` | the runner closure, with `common/primary.patch` applied to the kernel runner; `host-inputs.json` lists their hashes |
+| `probe.bin` (111,424 bytes) | `fe0db87004a1bd7d9e1a518abb20aa29e95c96658b01bf4d7e31ce0a7234cf53` |
+| `build/probe.elf` | `be4fbaa2bf374d45396b3f3d460969d87cde83750082c84d535027f8e2523528` |
+| `host/tools/check-a733-usb-returning.py`, `check-a733-kernel.py`, `usb-access.py`, `check-a733-smp.py` | the runner closure, with the kernel-runner part of `common/primary.patch` applied; byte-identical to `rank-9-usb-v2/` |
 | `usb-capture.py` | `7a488867ce1fb76c378ede6c0aee0c031adaf74778810b620424fdd6eb8f3b19`: read-only capture of the 17 words the input needs |
 | `usb-package.py` | `425bd2774b1ad7d42b6afb1488b9a3a98b6c9657d7ad2767c999d45ea50a5501`: offline input builder and checks |
 | `rate-admission/run.py` | `9a8b85c14f8cc66e9b320396b0bee8f4ee3b6caa65e453e21df0476c29e7204d`: the rate admission cases below |
 
 `manifest.json` in the bundle records the SHA-256 of every file and lists
-the files that differ from `rank-9-usb/`. The image, its ELF, the host
-tools, the capture script and every compiled input are byte-identical to
-`rank-9-usb/`; only `usb-package.py` and the records that the checks below
-regenerate differ.
+the files that differ from `rank-9-usb-v2/`. The capture script, the input
+builder, the rate admission runner and the host tools are byte-identical to
+`rank-9-usb-v2/`.
 
-No frozen image of the current provider code existed: the 2026-10-18
-images predate later provider changes, including the growth of
-`struct a733_platform_locks` from two locks to four, and
-`apps/usb-returning/build.py`
-refused their accepted provider objects for the same changed headers as rank
-6. The bundle is built with the new `--platform-build` option: platform and
-providers come from the tree as for rank 6, and only the five
-accepted TinyUSB objects (`dcd_sunxi_musb`, `tusb`, `tusb_fifo`, `usbd`,
-`vendor_device`) are reused, after their header closures match the tree.
-`platform-equivalence.json` shows the platform objects are those of the
-kernel-check image that passed ranks 4 and 5.
+The image is built with the same `apps/usb-returning/build.py
+--platform-build` builder as `rank-9-usb-v2/`, from the same platform
+revision, `dfa5174`, with the corrected USB files overlaid
+(`input-identities.json` records the source export as commit `c7dcafb`).
+Every reused object is byte-identical to `rank-9-usb-v2/`: monitor,
+platform, kernel, PMIC, clock, rail, pin, the native USB adapter and the
+five accepted TinyUSB objects. Only the objects of
+`apps/usb-returning/main.c`, `platform/a733/native_usb.c` and
+`drivers/usb/a733_usb_platform.c` differ. `platform-equivalence.json` shows
+that the central build of that revision reproduces the kernel-check image
+that passed ranks 4 and 5 on both boards
+(`574245e291d8ec9a2a52a405ab45ce48fe5550f323a46158b007123dbf96bc54`). The
+current tree's `platform/a733/platform.c` adds the 12 GiB EL1 map and local
+pool preparation, which no returning image has run on a board; this bundle
+keeps those out so that the run tests only the USB correction.
 
 ## Fabric rates the image accepts
 
@@ -91,32 +113,36 @@ value).
 
 All checks run offline with the bundle's files:
 
-- `apps/usb-returning/check.py`: 19 linked cases pass
-  (`check-result.json`, identical to that of `rank-9-usb/`). The check
-  derives the expected number of platform mutexes from
-  `include/a733_platform_locks.h`; the header has four locks.
-- `apps/usb-returning/host-check.py`: 23 host cases pass
-  (`host-check-result.json`, identical to that of `rank-9-usb/`) with the
-  patched kernel runner, covering capture, disappearance, admission cutoff,
-  transport failure and result consistency.
+- `apps/usb-returning/check.py`: 28 linked cases pass
+  (`check-result.json`). Nineteen are the cases of `rank-9-usb-v2/`. Nine
+  run the provider's actual ROM takeover and native callbacks from the
+  2026-10-23 port 3-3 input, clock capture and observed word `0x00029940`,
+  with a register model in which a 32-bit store to `0x04100040` leaves
+  PCTL unchanged and an 8-bit store replaces it. On the `rank-9-usb-v2/`
+  image that model reproduces the board's fault record field for field.
+  On this image the takeover reaches PREPARED with one PCTL byte store. A
+  SoftConn bit that never clears refuses at stage `0x18` before the reset
+  write. HOSTREQ, HOSTMODE, FSDEV, VEND0 DMA request selection, a missing
+  B-device role and an active DMA channel each refuse before any write.
+- `apps/usb-returning/host-check.py`: 24 host cases pass
+  (`host-check-result.json`) with the patched kernel runner. The added case
+  requires that the 2026-10-23 session record never classifies as
+  functional success.
 - `usb-package.py` on the 2026-10-18 capture of board two, port 3-3
   instance `064` (`package-fixtures/board-two-064-capture/`), with that
   lifetime's DDR record and survey: it accepts AHB, NSI and MBUS at 200, 600
-  and 600 MHz. It reproduces byte for byte the `config.json` of the USB
-  attempt on that instance (`usb-first-fault-20261018/physical-064/`) and
-  the `input.bin` that the `rank-9-usb/` builder wrote
-  (`package-fixtures/usb-fixture-admitted-package/`, and
-  `usb-fixture-signature-package/` for the signature path).
+  and 600 MHz (`package-fixtures/usb-fixture-admitted-package/`, and
+  `usb-fixture-signature-package/` for the signature path). Its
+  `config.json` is byte-identical to that of the USB attempt on that
+  instance (`usb-first-fault-20261018/physical-064/`). The input
+  generation differs from `rank-9-usb-v2/` because it hashes `probe.bin`.
 - `usb-package.py` on the 2026-10-23 port 3-3 capture of instance `013`
   (`board-session-20261023/port-3-3/r9-capture/`), with its DDR record, the
   `r9-survey` record and the three-link chain kernel check, forced stall,
-  thermal: it accepts 200, 600 and 400 MHz, the constructor decodes parents
-  of 600, 600 and 400 MHz, and the kernel runner admits the chain
-  (`package-fixtures/port-3-3-013-package/`, and
-  `port-3-3-013-signature-package/`). The `rank-9-usb/` builder refuses the
-  same capture with `Unexpected configured fabric rates`. Without the
-  thermal link, or with no link, the kernel runner refuses with
-  `DDR/survey evidence does not admit the selected live board instance.`
+  thermal: it accepts 200, 600 and 400 MHz and the kernel runner admits the
+  chain (`package-fixtures/port-3-3-013-package/`, and
+  `port-3-3-013-signature-package/`). These records are fixtures; that
+  instance no longer exists.
 - `rate-admission/run.py` on the port 3-3 capture: nine cases pass
   (`rate-admission/port-3-3-013/summary.json`). Each replaces captured words
   and runs `usb-package.py`:
@@ -136,19 +162,22 @@ All checks run offline with the bundle's files:
 ## Commands
 
 Set the variables in [the README](README.md#names-used-in-every-runbook)
-and `R=$V/rank-9-usb-v2`. The board is on the instance that the last
-returning image created. That image is rank 8's workload on a board where
-ranks 6 to 8 ran, and rank 6's thermal application on a board where ranks 7
-and 8 have not run.
+and `R=$V/rank-9-usb-v3`. After the 2026-10-23 refusal both ports were
+power-cycled and passed a fresh cold DDR start, recorded in `$S/ddr-2/`;
+set `D=$S/ddr-2/session.json`. The board is on the instance that the last
+successful run created: the DDR start itself if nothing has run since, or
+the last returning image of ranks 6 to 8. Every directory below starts with
+`r9-v3-`, because port 3-3 already holds the `r9-` and `r9-v2-` records of
+2026-10-23 and every runner refuses an existing directory.
 
 1. Turn the instruction cache off and survey:
 
    ```sh
-   $PY -B $V/common/bundle-run.py $PORT $S/r9-cache-off 120 \
+   $PY -B $V/common/bundle-run.py $PORT $S/r9-v3-cache-off 120 \
      "Board $PORT: returning instruction-cache disable before the native USB channel" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
-     -- $PY -B $V/common/cache-off.py $S/r9-cache-off
-   $PY -B $V/common/survey.py $PORT $S/r9-survey "Board $PORT before the native USB channel"
+     -- $PY -B $V/common/cache-off.py $S/r9-v3-cache-off
+   $PY -B $V/common/survey.py $PORT $S/r9-v3-survey "Board $PORT before the native USB channel"
    ```
 
 2. Capture the 14 clock and reference words and the three entry words
@@ -156,45 +185,34 @@ and 8 have not run.
    code runs:
 
    ```sh
-   $PY -B $V/common/bundle-run.py $PORT $S/r9-capture 120 \
+   $PY -B $V/common/bundle-run.py $PORT $S/r9-v3-capture 120 \
      "Board $PORT: read-only clock, reference and USB-entry words for the USB input" \
      "Seventeen 4-byte reads complete on the current ROM instance." \
-     -- $PY -B $R/usb-capture.py $S/r9-capture
+     -- $PY -B $R/usb-capture.py $S/r9-v3-capture
    ```
 
    Success: `{"port": "PORT", "complete": true, "words": 17}`.
 
-   Port 3-3 has already run steps 1 and 2 on instance `013`, identity
-   `[7,1506,1096972,0,0]` (`r9-cache-off`, `r9-survey`, `r9-capture`). While
-   the board stays on that instance, go to step 3 with those records. If the
-   instance has changed, stop: the warm-return chain below no longer reaches
-   it.
-
-3. Build and check the input offline. The output directory is
-   `r9-v2-package`, because port 3-3 already holds the empty `r9-package`
-   that the `rank-9-usb/` builder left when it refused. On a board where
-   ranks 7 and 8 ran, the chain has five links:
+3. Build and check the input offline. Give one `--warm-return` for each
+   successful returning run since the DDR start, in order. With nothing run
+   since the DDR start the chain is empty:
 
    ```sh
    $PY -B $R/usb-package.py --bundle $R \
-     --capture $S/r9-capture --ddr $S/ddr/session.json --survey $S/r9-survey/session.json \
-     --warm-return $S/kernel/session.json --warm-return $S/timeout/session.json \
-     --warm-return $S/r6-thermal/session.json \
-     --warm-return $S/r7-prepare/runtime/session.json \
-     --warm-return $S/r8-prepare/runtime/session.json \
-     --output $S/r9-v2-package
+     --capture $S/r9-v3-capture --ddr $D --survey $S/r9-v3-survey/session.json \
+     --output $S/r9-v3-package
    ```
 
-   On a board where ranks 7 and 8 have not run, which is port 3-3 on
-   2026-10-23, the chain is DDR (`003/004`) → kernel check (`003/009`) →
-   forced stall (`003/011`) → thermal (`003/013`):
+   After ranks 6, 7 and 8 ran on that DDR start, from directories `R6`,
+   `R7` and `R8`:
 
    ```sh
    $PY -B $R/usb-package.py --bundle $R \
-     --capture $S/r9-capture --ddr $S/ddr/session.json --survey $S/r9-survey/session.json \
-     --warm-return $S/kernel/session.json --warm-return $S/timeout/session.json \
-     --warm-return $S/r6-thermal/session.json \
-     --output $S/r9-v2-package
+     --capture $S/r9-v3-capture --ddr $D --survey $S/r9-v3-survey/session.json \
+     --warm-return $S/R6/session.json \
+     --warm-return $S/R7/runtime/session.json \
+     --warm-return $S/R8/runtime/session.json \
+     --output $S/r9-v3-package
    ```
 
    The builder refuses unless the capture and survey cover the same
@@ -205,37 +223,43 @@ and 8 have not run.
    validates the DDR record, survey and warm-return chain with the bundle's
    kernel runner, and writes `source-review.json`,
    `entry-prerequisites.json` and `command.json`, the complete queue
-   command of step 5. Its run directory is `$S/r9-v2-usb`.
+   command of step 5. Its run directory is `$S/r9-v3-usb`.
 
-4. Review `$S/r9-v2-package/source-review.json` and
-   `$S/r9-v2-package/entry-prerequisites.json`, in particular the PIO-only
+4. Review `$S/r9-v3-package/source-review.json` and
+   `$S/r9-v3-package/entry-prerequisites.json`, in particular the PIO-only
    USB history of this powered lifetime, secondaries OFF, no other writer,
    the requested pin and rail profile, and the availability of power-removal
-   recovery. `$S/r9-v2-package/config-provenance.json` states the configured
-   rates; on port 3-3 instance `013` they are 200, 600 and 400 MHz.
+   recovery. `$S/r9-v3-package/config-provenance.json` states the configured
+   rates.
 
 5. Run the channel once with the queue command that step 3 wrote:
 
    ```sh
-   $PY -B $V/common/exec-command.py $S/r9-v2-package/command.json
+   $PY -B $V/common/exec-command.py $S/r9-v3-package/command.json
    ```
 
    `command.json` runs `common/bundle-run.py` with a 180 s queue timeout,
    the prerequisites `supervised-ram-recovery` (written for the current
    instance), `usb-return-source-review` and `usb-entry-ownership`, and the
    runner `$R/host/tools/check-a733-usb-returning.py --fel ... --image
-   $R/probe.bin --ram-input input.bin --evidence $S/r9-v2-usb --expect
+   $R/probe.bin --ram-input input.bin --evidence $S/r9-v3-usb --expect
    "COMPLETE native USB bounded observation" --return-timeout 5
-   --ddr-evidence $S/ddr/session.json --platform-survey
-   $S/r9-survey/session.json` with the `--warm-return` links of step 3.
-   `exec-command.py` prints the command before it runs.
+   --ddr-evidence $D --platform-survey $S/r9-v3-survey/session.json` with
+   the `--warm-return` links of step 3. `exec-command.py` prints the command
+   before it runs.
 
    Success text: `COMPLETE native USB bounded observation`, `PASS: kernel
    check, FEL recovery, automatic USB access.`, `PASS native USB complete
    OUT/IN observation, quiescence and responsive ROM return.` and
    `"result": "passed"`. Functional success also requires
-   `native_usb.functional_success` true in `$S/r9-v2-usb/session.json`; the
+   `native_usb.functional_success` true in `$S/r9-v3-usb/session.json`; the
    runner exits nonzero without it.
+
+   A refusal at USB takeover returns to the ROM with status 1 and prints
+   `INCOMPLETE USB: USB preparation` with the provider's first fault.
+   `USB_FAULT_STAGE=0x18` with `USB_FAULT_MASK=0x640` and bit 6 set in
+   `USB_FAULT_OBSERVED` means the PCTL byte store did not remove SoftConn
+   within 150 ms; the design document lists the remaining causes.
 
 ## Stop conditions
 
@@ -252,9 +276,10 @@ and 8 have not run.
 
 ## Without the patch
 
-Every warm-return chain above contains a forced-stall link, and the
-five-link chain also contains two native-runner links; the unpatched kernel
-runner refuses both kinds. Two alternatives work with the unpatched runner
+A warm-return chain that contains a forced-stall link or a native-runner
+link (ranks 7 and 8) needs the patched runner; the unpatched kernel runner
+refuses both kinds. A chain of kernel-mode returns only, or an empty chain,
+needs no patch. Two alternatives work with the unpatched runner
 in `bringup`:
 
 - Initialize DDR again before step 1, then give step 3 only that DDR

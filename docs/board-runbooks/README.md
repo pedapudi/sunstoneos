@@ -20,9 +20,9 @@ forced-stall case. Each board now waits in the boot ROM's USB recovery mode
 
 Nothing in these runbooks has run. The frozen bundles are under
 `~/.cache/sunstoneos/evidence/board-bundles-20261023/`, one directory per
-rank plus `common/`. Rank 9 uses `rank-9-usb-v2/`, whose input builder
-accepts the fabric rates that the image accepts; `rank-9-usb/` is kept
-unchanged and is not used. Each command runs once. A command that exits nonzero
+rank plus `common/`. Rank 9 uses `rank-9-usb-v3/`, whose USB provider
+removes the ROM's soft-connect with a byte store; `rank-9-usb/` and
+`rank-9-usb-v2/` are kept unchanged and are not used. Each command runs once. A command that exits nonzero
 stops that board's sequence; the other board continues independently.
 
 ## Names used in every runbook
