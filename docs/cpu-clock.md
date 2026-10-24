@@ -210,7 +210,12 @@ step and never waits in a loop:
 6. When raising the rate, write a higher voltage first, then wait for the
    ramp of `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay. No write
    is made when the present voltage is already enough.
-7. Change the frequency. The remaining time before the caller's deadline
+7. Recheck the current thermal policy before the first mux or PLL write.
+   A policy change during the PMIC read or voltage ramp can now refuse the
+   target. Refusal preserves the old frequency and any confirmed higher
+   voltage, then releases both leases; it makes no rollback write. Once the
+   mux has switched, the bounded update and unpark sequence completes.
+   The remaining time before the caller's deadline
    must cover both PLL waits and a 10 ms margin for the owner polls that
    follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
    before any PLL or mux write. Then park the mux on the DCXO, write N, set
@@ -336,6 +341,23 @@ It also confirms that 1014 MHz needs 800 mV in every column and that the
 driver's sensor channels match the thermal driver's channel order. It then
 builds `checks/cpu-clock-model.c` with AddressSanitizer and
 UndefinedBehaviorSanitizer and compiles the changed units for AArch64.
+
+The focused `cpu-clock-model --late-policy-only` run covers fourteen cases
+at the last boundary before clock writes. Both clusters refuse late THROTTLE
+and CRITICAL after either sufficient inherited voltage or a completed upward
+ramp. Inherited restoration is also refused; requests at the thermal ceiling
+and safe lowerings still complete. The pre-fix driver reproduced a raise from
+1,014 to 1,404 MHz with five clock writes after THROTTLE. The corrected cases
+require zero subsequent clock or voltage writes, the old rate, the confirmed
+voltage and complete lease release. Raw results and frozen inputs are in
+`~/.cache/sunstoneos/evidence/cpu-late-thermal-20261024/`.
+
+The additional permission check executes once per attempted clock transition:
+two existing policy acquire loads, no additional state, MMIO, task wake or
+poll. Clang 21 at AArch64 `-O2` grows the driver object text from 12,956 to
+12,992 bytes. The existing PLL completion sequence and deadlines are unchanged.
+This model evidence does not qualify physical thermal response, clock changes,
+voltage changes or sustained multicore operation.
 
 The model runs the actual driver, PMIC provider, rail ledger, clock registry
 and thermal policy against modeled CPU PLL words, modeled temperature samples

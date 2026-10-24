@@ -568,6 +568,11 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(c->after==S_PARK){c->state=S_PARK;c->after=S_RELEASE;return A733_CPU_CLOCK_PENDING;}
         c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);
     case S_PARK: {
+        /* PMIC completion and ramp waits can span later thermal samples.
+         * Recheck before the first clock write; a completed upward ramp is
+         * safe for the unchanged rate and needs no voltage rollback. Once
+         * parked, finish the existing bounded update/unpark sequence. */
+        if(!permitted(c,c->cluster,c->target_mhz,c->thermal))return finish(c,A733_CPU_CLOCK_REFUSED);
         /* Park on the DCXO, then write N and request the update. A deadline
          * that cannot cover both PLL waits ends the transition first: nothing
          * is touched yet, and any confirmed voltage covers the present rate. */

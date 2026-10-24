@@ -282,7 +282,11 @@ Power and thermal integration remains incomplete:
   thermal ceiling, preserving voltage. It can also lower an inspected,
   supported inherited point when the session grants that cluster and ceiling;
   each inherited lowering consumes an authorized change. Source-rate and
-  voltage checks precede the transition. Restoration needs authority for the
+  voltage checks precede the transition. The driver checks thermal permission
+  again after any voltage ramp, before its first clock write, so a late
+  THROTTLE cannot raise a cluster above the ceiling. Refusal preserves the
+  old frequency and confirmed voltage and releases the leases.
+  Restoration needs authority for the
   original point and another change. Inherited thermal transitions never
   change voltage. Missing or exhausted grants leave inherited rates unchanged.
   The ordinary OS build changes neither CPU clocks nor voltage.
@@ -292,7 +296,9 @@ Power and thermal integration remains incomplete:
   or reusable recovery after an uncertain job; resources remain retained
   until the prescribed reset or power removal.
 - **NPU integration.** The OS start list has no NPU service. Separate NPU
-  images use a fixed 492 MHz clock and 800 mV supply configuration and have
+  images use a fixed 492 MHz clock and 800 mV supply configuration. The
+  [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
+  integrates thermal admission and orderly stop; the other NPU images have
   no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
   resets while retaining the power-domain and PLL ownership; it does not
   establish reusable whole-device power recovery.
