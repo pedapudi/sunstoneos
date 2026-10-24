@@ -1,0 +1,45 @@
+--- recognition.cc
++++ recognition-a76.cc
+@@ -2,6 +2,8 @@
+ #include "assets.h"
+ #include "../mimus/recorded.h"
+ #include "runtime.h"
++#include "../mimus/parallel_runtime.h"
++#include "a733_smp_placement.h"
+ extern "C" {
+ #include "a733_storage_digest.h"
+ #include "FreeRTOS.h"
+@@ -22,6 +24,8 @@
+ [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
+ void recognize(void *)
+ {
++    /* The engine's second worker runs on the other A76 core. */
++    mimus_parallel_bind();
+     /* Board owners must first establish live storage attachment. Hashing is
+      * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
+     while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
+@@ -67,6 +71,8 @@
+ }
+ extern "C" void mimus_native_checkpoint(void)
+ {if(!mimus_board_live())failed();mimus_board_progress();}
++/* Each parallel range that the recognizer completes is recognizer progress. */
++extern "C" void mimus_native_inference_progress(void){mimus_board_progress();}
+ extern "C" void platform_puts(const char *text)
+ {
+     mimus_native_checkpoint();
+@@ -78,7 +84,14 @@
+ extern "C" void platform_hex(uint64_t x)
+ {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
+ extern "C" int mimus_board_start(void)
+-{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}
++{
++    /* Recognition and its inference worker run on the admitted A76 pair;
++     * every other task keeps the A55 default affinity. */
++    runtime_smp_init();runtime_init();
++    mimus_parallel_init(A733_SMP_RECOGNITION_CORE,A733_SMP_INFERENCE_CORE);
++    return xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,3,stack,&task,
++        UBaseType_t{1}<<A733_SMP_RECOGNITION_CORE)!=nullptr;
++}
+ extern "C" unsigned mimus_board_started(void){return started.load(std::memory_order_acquire);}
+ extern "C" unsigned mimus_board_generation(void){return generation.load(std::memory_order_acquire);}
+ extern "C" int mimus_board_ack(unsigned current)

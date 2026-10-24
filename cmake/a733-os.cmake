@@ -31,6 +31,10 @@ endif()
 if(SUNSTONE_A733_OS_MSBC AND NOT SUNSTONE_A733_OS_HEADSET)
   message(FATAL_ERROR "Wideband mSBC speech is a headset option")
 endif()
+# A76 admission (docs/designs/cpu-a76-dvfs.md): the recognizer and its
+# inference worker run on cores 6 and 7, and every other task keeps the A55
+# default affinity. The option is also the compile definition.
+option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The recognizer waits for GPU replies without a timer of its own; only the
   # resident lifetime's mimus service window and watchdog bound those waits.
@@ -188,6 +192,18 @@ if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_HEADSET)
   set(os_recognition "${os_build}/recognition.cc")
   list(APPEND os_patches "${os_root}/apps/os/recognition.patch")
 endif()
+if(A733_A76_ADMITTED)
+  # The admission record reads the CPU clock words once before the scheduler.
+  list(APPEND os_added apps/os/cpu.c drivers/clock/a733_cpu_clock.c apps/mimus/parallel_runtime.cc)
+  list(APPEND os_external_inputs "${os_root}/include/a733_smp_placement.h" "${os_root}/include/a733_cpu_clock.h"
+    "${os_root}/apps/mimus/parallel_runtime.h")
+  if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
+    # The GPU build's recognizer patch places the recognizer itself.
+    apply_build_patch("${os_build}/recognition-a76.cc" "${os_recognition}" "${os_root}/apps/os/recognition-placement.patch")
+    set(os_recognition "${os_build}/recognition-a76.cc")
+    list(APPEND os_patches "${os_root}/apps/os/recognition-placement.patch")
+  endif()
+endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The placement table comes from the models the image embeds by hash, for
   # the recognition core pair: cores 6 and 7 once the A76 cores are admitted,
@@ -255,6 +271,9 @@ endif()
 if(SUNSTONE_A733_OS_HEADSET)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_BLUETOOTH_HEADSET=1 SUNSTONE_BLUETOOTH_RECOGNITION=1)
 endif()
+if(A733_A76_ADMITTED)
+  target_compile_definitions(sunstone-a733-os PRIVATE A733_A76_ADMITTED=1)
+endif()
 if(SUNSTONE_A733_OS_MSBC)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
   set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os
@@ -278,6 +297,9 @@ foreach(input IN LISTS os_inputs)
   file(SHA256 "${input}" hash)
   string(APPEND os_identity "${hash}")
 endforeach()
+if(A733_A76_ADMITTED)
+  string(APPEND os_identity ";a76=1")
+endif()
 string(SHA256 os_build_id "${os_identity}")
 string(REGEX REPLACE "(..)" "0x\\1," os_id_bytes "${os_build_id}")
 file(WRITE "${os_build}/build-id.c" "const unsigned char a733_smp_build_id[32]={${os_id_bytes}};\n")

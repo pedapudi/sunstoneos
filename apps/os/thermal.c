@@ -47,6 +47,11 @@ static int mappings(void)
     static const uintptr_t a[]={0x02002000,0x02002518,0x02002fc0,0x02002fe4,0x02522000,0x03006244,0x03006248,
         0x0300624c,0x07090160,0x03400000,0x03400108};
     for(unsigned i=0;i<sizeof(a)/sizeof(*a);++i)if(!device(a[i]))return 0;
+#ifdef A733_A76_ADMITTED
+    /* The CPU-L, CPU-B and DSU PLL pages that os_cpu_admit reads. */
+    static const uintptr_t cpu[]={0x08871000,0x08872000,0x08873000};
+    for(unsigned i=0;i<3;++i)if(!device(cpu[i]))return 0;
+#endif
     return 1;
 }
 static int read_register(void *v,uintptr_t a,uint32_t *out)
@@ -159,6 +164,9 @@ int os_thermal_start(void)
 {
     const struct os_session *s=os_session_admitted();
     if(!s||!construct(s))return 0;
+#ifdef A733_A76_ADMITTED
+    if(!os_cpu_admit())return 0;
+#endif
     thermal.handle=xTaskCreateStatic(os_thermal_task,"os-thermal",2048,NULL,4,thermal.stack,&thermal.task);
     return thermal.handle!=NULL;
 }
