@@ -73,7 +73,7 @@ struct a733_pmic {
     /* Service binding, set once before concurrency. */
     void (*kick)(void *);
     void *kick_context;
-    const struct a733_power_domains *domains;
+    struct a733_power_domains *domains;
 };
 /* Zero private, disjoint storage once; all arguments/callback metadata and
  * shared managers have platform lifetime. No MMIO. All clocks use the same
@@ -85,17 +85,24 @@ int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
     struct a733_rail_leases *,struct a733_pins *);
 /* Before concurrency, once: submit calls kick(context) after queuing a
  * request, and domains names the power-domain owner whose supply record the
- * GPU supply consumer reads. 1 bound, 0 refused. */
+ * GPU supply consumer reads and on which the GPU platform registers its
+ * domain-5 row. 1 bound, 0 refused. */
 int a733_pmic_bind_service(struct a733_pmic *,void (*kick)(void *),void *context,
-    const struct a733_power_domains *domains);
+    struct a733_power_domains *domains);
 /* Provider task only: the work the next poll would do. wait_ns, when not
  * NULL, receives the expected duration of the bus phase being waited for:
- * two bit times for a START, repeated START or STOP, nine for a byte. */
+ * two bit times for a START, repeated START or STOP, nine for a byte.
+ * FAILED comes from one acquire load of the state word, so a fault that a
+ * client latched on another core is seen without reading its plain fields.
+ * FAILED with RETAIN means the provider task still holds the I2C mutex and
+ * has not marked it retained: it must poll until the poll no longer returns
+ * BUSY, and that poll retains the mutex. */
 #define A733_PMIC_WORK_STARTUP (1u << 0) /* startup has not reached READY */
 #define A733_PMIC_WORK_QUEUED  (1u << 1) /* a request waits for activation */
 #define A733_PMIC_WORK_ACTIVE  (1u << 2) /* a transfer holds the I2C mutex */
 #define A733_PMIC_WORK_WAITING (1u << 3) /* that transfer waits for a bus phase */
-#define A733_PMIC_WORK_FAILED  (1u << 4) /* the provider is retained */
+#define A733_PMIC_WORK_FAILED  (1u << 4) /* a provider, clock or ledger fault is set */
+#define A733_PMIC_WORK_RETAIN  (1u << 5) /* with FAILED: the mutex is not yet retained */
 unsigned a733_pmic_work(const struct a733_pmic *,uint32_t *wait_ns);
 /* identity returns READY when the metadata copy succeeds, even during startup.
  * Only live reports provider readiness. Neither performs hardware discovery.

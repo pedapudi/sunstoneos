@@ -61,11 +61,9 @@ static int gpu_acquire(void *v,struct a733_gpu_power_resources *out)
 static int gpu_release(void *v){(void)v;return 1;}
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
-    (void)v;assert(bank!=A733_GPU_PCK);
+    (void)v;
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
-static int gpu_write(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t value)
-{(void)v;(void)bank;(void)off;(void)value;assert(0);return 0;}
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
     (void)v;assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
@@ -73,7 +71,7 @@ static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
     if(off==0xb20)*w&=~(1u<<27);
     return 1;
 }
-static const struct a733_gpu_power_ops gpu_ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_write,gpu_update};
+static const struct a733_gpu_power_ops gpu_ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_update};
 static struct a733_gpu_power gpu;
 static struct a733_rail_token gpu_rail,fb_rail,submitter;
 static struct a733_power_domain_row fb_row;
@@ -178,9 +176,10 @@ int main(void)
         printf("{\"rate\":\"%s\",",r->name);
         /* Boot: provider startup and supply verification. */
         setup(r);
+        const uint64_t first_step=d.owner.verify_at-A733_POWER_SUPPLY_SETTLE_US;
         printf("\"boot\":{\"steps\":%u,\"tick_waits\":%u,\"self_notifies\":%u,\"verified_at_us\":%llu},",
-            d.steps,d.tick_waits,d.self_notifies,(unsigned long long)(m.now-d.owner.started));
-        assert(m.now-d.owner.started>=A733_POWER_SUPPLY_SETTLE_US);
+            d.steps,d.tick_waits,d.self_notifies,(unsigned long long)(m.now-first_step));
+        assert(m.now>=d.owner.verify_at);
         /* Requests on one core and on two, at every phase of the other caller. */
         setup(r);struct request_cost snapshot=request(0,1,0,0);
         setup(r);struct request_cost write=request(1,1,0,0);
@@ -264,7 +263,22 @@ int main(void)
                 for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)assert(m.provider.slots[i].state==0);
             } else assert(result==-1 && c.failed);
         }
-        printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0}\n",park_steps);
+        /* A fault that a client latches while the service holds the I2C
+         * mutex for a transfer: the next step polls once and retains the
+         * mutex, then the service stops ticking. */
+        setup(r);
+        struct a733_rail_token ft=domains_rail(16,A733_RAIL_DCDC2);struct a733_pmic_request fq;struct a733_pmic_snapshot fs;
+        assert(a733_pmic_submit(&m.provider,16,&ft,A733_RAIL_DCDC2,m.now+1000000,&fq)==A733_PMIC_PENDING);
+        m.edge_us=m.wire_us=100000; /* the transfer stays active across steps */
+        service_step();assert(m.provider.held && m.i2c_held && !m.retained);
+        a733_power_authority_set(&m.rails.authority,A733_POWER_CLOCK_FAULT);
+        assert(a733_pmic_result(&m.provider,&fq,&fs)==A733_PMIC_RETAINED && m.provider.failed && !m.provider.retained);
+        assert(a733_pmic_work(&m.provider,NULL)==(A733_PMIC_WORK_FAILED|A733_PMIC_WORK_RETAIN));
+        const uint32_t retain_ticks=service_step();
+        assert(m.provider.retained && m.retained && m.i2c_held);
+        assert(a733_pmic_work(&m.provider,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
+        m.now+=TICK_US;assert(service_step()!=1 && a733_power_service_ready(&d.owner)==-1);
+        printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
     }
     puts("PASS PMIC service task: bounded byte spins, no lock in live(), at most one BUSY result per caller, "
          "no idle wakes, one-tick row visibility, no PMIC transaction per GPU start, park predicate");

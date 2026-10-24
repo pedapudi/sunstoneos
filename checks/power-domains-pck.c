@@ -39,11 +39,9 @@ static int gpu_acquire(void *v,struct a733_gpu_power_resources *out)
 static int gpu_release(void *v){(void)v;return 1;}
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
-    (void)v;assert(bank!=A733_GPU_PCK);
+    (void)v;
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
-static int gpu_write(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t value)
-{(void)v;(void)bank;(void)off;(void)value;assert(0);return 0;}
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
     (void)v;assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
@@ -61,7 +59,7 @@ static void gpu_run(struct a733_gpu_power *g,unsigned on)
 }
 static void gpu_trace_run(const char *path)
 {
-    static const struct a733_gpu_power_ops ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_write,gpu_update};
+    static const struct a733_gpu_power_ops ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_update};
     static struct a733_gpu_power g;struct a733_rail_token t={0};
     domains_model_setup(0x28,23);d.ack_us=0;
     assert(a733_gpu_power_init(&g,&ops,0) && a733_power_domain_row_init(&g.row,&d.owner,5,9,&t));
@@ -87,6 +85,20 @@ static enum a733_power_row_state settle(struct a733_power_domain_row *r,unsigned
     return a733_power_domain_state(r);
 }
 static void setup(void){domains_model_setup(0x28,23);}
+/* Holds the rail ledger busy from the first time read after the verification
+ * request is queued until the provider expires it, so the request cannot be
+ * activated: 1 armed, 2 holding, 3 released after the expiry. */
+static unsigned hold_ledger;
+static void ledger_hook(struct pmic_model *p)
+{
+    (void)p;
+    if(hold_ledger==1 && d.owner.supply_request.id){atomic_store(&m.rails.busy,1);hold_ledger=2;}
+    if(hold_ledger!=2)return;
+    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)if(m.provider.slots[i].state==4) {
+        assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE);
+        atomic_store(&m.rails.busy,0);hold_ledger=3;
+    }
+}
 int main(int argc,char **argv)
 {
     assert(argc<=2);
@@ -105,7 +117,7 @@ int main(int argc,char **argv)
     const unsigned w=a733_power_authority_load(&m.rails.authority);
     assert((w&(A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED))==
         (A733_POWER_SUPPLY_DONE|A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED));
-    assert(a733_power_supply_record(&d.owner,A733_RAIL_DCDC4)->programmed_uv==800000);
+    assert(d.owner.dcdc4.programmed_uv==800000 && (d.owner.dcdc4.selector&127)==30);
     unsigned starts=0;
     for(unsigned i=0;i<m.trace_count;++i)starts+=m.trace[i].address==0x0708300c && m.trace[i].value==0x68;
     const unsigned boot_transactions=starts/2; /* START and repeated START per read */
@@ -191,7 +203,6 @@ int main(int argc,char **argv)
     assert(a733_power_domain_row_init(&gpu,&d.owner,5,65,&g4) && a733_power_domain_row_init(&de,&d.owner,1,66,&g2));
     domains_boot();
     assert(!(a733_power_authority_load(&m.rails.authority)&A733_POWER_DCDC4_VERIFIED));
-    assert(!a733_power_supply_record(&d.owner,A733_RAIL_DCDC4));
     g4=domains_rail(65,A733_RAIL_DCDC4);g2=domains_rail(66,A733_RAIL_DCDC2);
     assert(a733_power_domain_request(&gpu,1) && a733_power_domain_request(&de,1));service_step();
     assert(a733_power_domain_state(&gpu)==A733_POWER_ROW_REFUSED && a733_power_domain_state(&de)==A733_POWER_ROW_ON);
@@ -201,7 +212,7 @@ int main(int argc,char **argv)
     struct a733_rail_token e4=domains_rail(67,A733_RAIL_DCDC4);struct a733_power_domain_row early={0};
     assert(a733_power_domain_row_init(&early,&d.owner,5,67,&e4) && a733_power_domain_request(&early,1));
     unsigned steps=0;assert(settle(&early,&steps)==A733_POWER_ROW_ON);
-    assert(m.now>=d.owner.started+A733_POWER_SUPPLY_SETTLE_US);
+    assert(d.owner.verify_at && m.now>=d.owner.verify_at);
 
     /* A provider fault ends verification with no verified bit; rows are
      * refused within the bound instead of waiting forever. */
@@ -210,6 +221,37 @@ int main(int argc,char **argv)
     assert(a733_power_domain_row_init(&fr,&d.owner,5,68,&f4) && a733_power_domain_request(&fr,1));
     a733_power_authority_set(&m.rails.authority,A733_POWER_LEDGER_FAULT);
     assert(settle(&fr,0)==A733_POWER_ROW_REFUSED);
+
+    /* The verification budget starts when the provider is READY: startup
+     * held off for 200 ms by another holder of the clock registry still
+     * verifies both rails. */
+    setup();
+    struct a733_rail_token l4=domains_rail(73,A733_RAIL_DCDC4);struct a733_power_domain_row late_start={0};
+    assert(a733_power_domain_row_init(&late_start,&d.owner,5,73,&l4));
+    atomic_store(&m.clocks.busy,1);const uint64_t held_from=m.now;
+    while(m.now-held_from<200000){service_step();m.now+=TICK_US;}
+    assert(!(a733_power_authority_load(&m.rails.authority)&(A733_POWER_PROVIDER_READY|A733_POWER_SUPPLY_DONE)));
+    atomic_store(&m.clocks.busy,0);domains_boot();
+    assert((a733_power_authority_load(&m.rails.authority)&(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED))==
+        (A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED));
+
+    /* A verification request that expires in the queue, its activation held
+     * off by a busy rail ledger, ends verification with no verified bit at
+     * once; the expired result is reaped and the token released, so no slot
+     * or ledger holder stays behind. */
+    setup();
+    struct a733_rail_token x4=domains_rail(74,A733_RAIL_DCDC4);struct a733_power_domain_row expired={0};
+    assert(a733_power_domain_row_init(&expired,&d.owner,5,74,&x4));
+    m.concurrent=ledger_hook;hold_ledger=1;
+    for(unsigned i=0;i<1000 && d.owner.supply_stage!=6;++i){service_step();m.now+=TICK_US;}
+    m.concurrent=0;assert(hold_ledger==3);
+    const unsigned xw=a733_power_authority_load(&m.rails.authority);
+    assert((xw&A733_POWER_SUPPLY_DONE) && !(xw&(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED|A733_POWER_PMIC_TRANSFER)));
+    assert(d.owner.supply_stage==6 && !d.owner.supply_request.id);
+    assert(a733_rail_status(&m.rails,&d.owner.supply_token)==A733_RAIL_INVALID);
+    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)assert(m.provider.slots[i].state==0);
+    assert(a733_power_domain_request(&expired,1));service_step();
+    assert(a733_power_domain_state(&expired)==A733_POWER_ROW_REFUSED);
 
     /* Slow acknowledgement: the command step spins at least 50 us, each later
      * step reads status once and returns one tick, and the domain fails by
@@ -273,6 +315,18 @@ int main(int argc,char **argv)
             assert(a733_power_domain_state(&off)==A733_POWER_ROW_ON);
         }
     }
+    /* A failed unpin after power-off leaves the row counted with the domain
+     * OFF; its next ON request is answered FAILED instead of left pending. */
+    setup();
+    struct a733_rail_token k4={0};struct a733_power_domain_row kept={0};
+    assert(a733_power_domain_row_init(&kept,&d.owner,5,75,&k4));
+    domains_boot();k4=domains_rail(75,A733_RAIL_DCDC4);assert(a733_power_domain_request(&kept,1));
+    service_step();assert(a733_power_domain_state(&kept)==A733_POWER_ROW_ON);
+    a733_power_authority_set(&m.rails.authority,A733_POWER_LEDGER_FAULT);
+    assert(a733_power_domain_request(&kept,0));service_step();
+    assert(a733_power_domain_state(&kept)==A733_POWER_ROW_FAILED && (d.ppu[5][2]&15)==0 && kept.counted);
+    assert(a733_power_domain_request(&kept,1));service_step();
+    assert(a733_power_domain_state(&kept)==A733_POWER_ROW_FAILED);
 
     /* The NPU interface: a read-only check, then a domain-4 row. */
     setup();

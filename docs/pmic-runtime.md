@@ -112,7 +112,10 @@ phase, without the provider object, and blocks for one tick after at most 1 ms
 of spinning. `checks/power-domains-service.c` measures it: at 400 kHz a
 snapshot and a selector write each complete in one step with no tick wait; at
 100 kHz they take two and three tick waits. The other images keep their
-per-tick loops.
+per-tick loops. `a733_pmic_work()` reads faults from the state word. When a
+client latches a fault while the provider task holds the I2C mutex for a
+transfer, it reports `A733_PMIC_WORK_FAILED` with `A733_PMIC_WORK_RETAIN`,
+and the service polls once more; that poll marks the mutex retained.
 
 A poll holds the provider object, so a concurrent `a733_pmic_result()` or
 `a733_pmic_reap()` caller observes BUSY while the poll runs. In the model, the

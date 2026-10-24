@@ -59,7 +59,7 @@ int a733_gpu_power_init(struct a733_gpu_power *s,
 {
     if (!s || !ops || s->phase != A733_GPU_POWER_NEW || s->ops.now ||
         !ops->now || !ops->acquire || !ops->release || !ops->read ||
-        !ops->write || !ops->update) return 0;
+        !ops->update) return 0;
     uintptr_t a = (uintptr_t)s, b = (uintptr_t)ops;
     if (a > UINTPTR_MAX - sizeof(*s) || b > UINTPTR_MAX - sizeof(*ops) ||
         !(a + sizeof(*s) <= b || b + sizeof(*ops) <= a)) return 0;

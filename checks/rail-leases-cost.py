@@ -11,9 +11,13 @@ another tree, such as the merge base, and --limits to enforce the budgets.
 
 It also measures the power-domain state read that the GPU platform poll, the
 framebuffer and G2D make once per poll (checks/rail-leases-cost-row.c): the
-instructions, the acquire loads (LDAR) and the exclusive or atomic accesses
-that a lock would need. A tree with the DE_SYS provider instead measures one
-provider poll while the domain waits, with its lock entries and register reads.
+instructions, the acquire loads (LDAR, LDAPR) and the exclusive or atomic
+accesses that a lock would need: load/store exclusive (LDXR, STXR and their
+acquire, release and pair forms) and the ARMv8.1 LSE atomics (CAS, CASP,
+SWP, LDADD, LDCLR, LDEOR, LDSET, LDSMAX, LDSMIN, LDUMAX, LDUMIN and their ST
+aliases). A tree with the DE_SYS provider, such as the merge base measured
+with --root, instead measures one provider poll while the domain waits, with
+its lock entries and register reads.
 """
 import argparse
 import json
@@ -69,8 +73,38 @@ def is_acquire_load(word):
 
 
 def is_exclusive(word):
-    # Load/store exclusive (LDXR, LDAXR, STXR, STLXR and pairs).
-    return (word & 0x3f000000) == 0x08000000 and (word & 0x00800000) == 0
+    # Load/store exclusive (LDXR, LDAXR, STXR, STLXR and pairs) and CASP:
+    # bits 29:24 0b001000 with bit 23 clear.
+    if (word & 0x3f800000) == 0x08000000:
+        return True
+    # CAS, CASA, CASL, CASAL (8 to 64 bit): bits 29:23 0b0010001, bit 21 set,
+    # bits 14:10 all set.
+    if (word & 0x3fa07c00) == 0x08a07c00:
+        return True
+    # LSE atomic memory operations (LDADD to LDUMIN, SWP and the ST aliases):
+    # bits 29:24 0b111000, bit 21 set, bits 11:10 clear. LDAPR shares the
+    # encoding space (o3 set, opc 0b100, Rs all set) and is an acquire load.
+    return (word & 0x3f200c00) == 0x38200000 and (word & 0x3ffffc00) != 0x38bfc000
+
+
+def check_decoders():
+    # Encodings from the Arm ARM, all with Rt=x0 (or w0), Rn=x1, Rs=x2.
+    exclusive = {'ldxr w0, [x1]': 0x885f7c20, 'ldaxr x0, [x1]': 0xc85ffc20, 'stxr w2, w0, [x1]': 0x88027c20,
+                 'stlxr w2, x0, [x1]': 0xc802fc20, 'ldxp w0, w3, [x1]': 0x887f0c20,
+                 'casp w2, w3, w0, w1, [x1]': 0x08227c20, 'cas w2, w0, [x1]': 0x88a27c20,
+                 'casal x2, x0, [x1]': 0xc8e2fc20, 'casb w2, w0, [x1]': 0x08a27c20,
+                 'ldadd w2, w0, [x1]': 0xb8220020, 'ldaddal x2, x0, [x1]': 0xf8e20020,
+                 'stadd w2, [x1]': 0xb822003f, 'swp w2, w0, [x1]': 0xb8228020,
+                 'ldclr w2, w0, [x1]': 0xb8221020, 'ldset w2, w0, [x1]': 0xb8223020,
+                 'ldumin w2, w0, [x1]': 0xb8227020}
+    plain = {'ldr w0, [x1]': 0xb9400020, 'ldar w0, [x1]': 0x88dffc20, 'ldapr w0, [x1]': 0xb8bfc020,
+             'ldapr x0, [x1]': 0xf8bfc020, 'stlr w0, [x1]': 0x889ffc20, 'str w0, [x1]': 0xb9000020,
+             'ldr w0, [x1, x2]': 0xb8626820}
+    for name, word in exclusive.items():
+        assert is_exclusive(word), name
+    for name, word in plain.items():
+        assert not is_exclusive(word), name
+    assert is_acquire_load(0x88dffc20) and is_acquire_load(0xb8bfc020) and not is_acquire_load(0xb8220020)
 
 
 def measure_row(root):
@@ -189,6 +223,7 @@ def main():
     ap.add_argument('--limits', action='store_true', help='enforce the design budgets')
     ap.add_argument('--json', type=Path, help='also write the results here')
     a = ap.parse_args()
+    check_decoders()
     results = measure(a.root.resolve())
     text = json.dumps(results, indent=1)
     print(text)

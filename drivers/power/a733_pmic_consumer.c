@@ -100,7 +100,7 @@ int a733_pmic_consumer_sample(struct a733_pmic_consumer *c,uint64_t deadline)
         if(c->stage==SAMPLED)return a733_pmic_consumer_health(c);
         r=record(c);if(r<=0)return r<0 ? fault(c) : 0;
         /* The verified bit, loaded with acquire order above, publishes the record. */
-        const struct a733_pmic_snapshot *s=&p->domains->supply[1];
+        const struct a733_pmic_snapshot *s=&p->domains->dcdc4;
         if(!correct(c,s) || timely(c,deadline)<0)return fault(c);
         c->snapshot=*s;c->stage=SAMPLED;return 1;
     }

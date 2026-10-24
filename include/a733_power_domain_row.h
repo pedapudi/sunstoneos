@@ -33,18 +33,12 @@ struct a733_power_domain_row {
     void *notify_context;
     uint64_t owner;
     unsigned domain;
-    unsigned counted, pinned; /* service task only */
+    unsigned counted; /* service task only: admitted, its rail pin held */
     atomic_uint request;
     atomic_uint state;
 };
 
-/* Register a zeroed row before the service task first runs: domain 1, 4 or 5,
- * the consumer's owner identity and its rail token, which must hold the
- * domain's supply (DCDC2 for domains 1 and 4, DCDC4 for domain 5) by the time
- * of the first request. The token storage stays at this address and is not
- * changed while the row is counted. Returns 1 on success, no hardware access. */
-int a733_power_domain_row_init(struct a733_power_domain_row *, struct a733_power_domains *,
-    unsigned domain, uint64_t owner, const struct a733_rail_token *rail);
+/* a733_power_domain_row_init() in a733_power_domains.h registers a row. */
 #define A733_POWER_ROW_GENERATION_MASK (UINT32_MAX >> 3)
 /* Store ON (1) or OFF (0) with release order and notify the service. Only
  * domain 5 accepts OFF. Refused (0) while the previous request is unanswered.

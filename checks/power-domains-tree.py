@@ -11,14 +11,22 @@ from one service task per image. This check fails when:
 - the set of sources that write the pinned delay row (value 0x1f1f1f) differs
   from the owner plus the writers of domains this package does not own, or a
   native allowlist other than the NPU's still admits the delay row;
+- a source outside checks/ registers a domain-4 row while the NPU platform
+  still writes domain 4 itself: the owner and the NPU would both write it;
 - an image in the service table polls the PMIC provider itself, or does not
   create its service task at the listed priority below its USB0 task, on A55
   core 0;
-- the service step enters a critical section, suspends the scheduler or
-  blocks: a higher-priority task must be able to preempt it at any point.
+- the owner's own source (drivers/power/a733_power_domains.c) enters a
+  critical section, suspends the scheduler, masks interrupts, delays, or
+  takes a semaphore, queue or notification. This covers the owner only: the
+  PMIC poll that the step calls may block in one-tick waits on the I2C mutex
+  and the register lock when it activates a request, until that request's
+  deadline, and a higher-priority task still preempts it there.
 
 It reads source text only and runs no build. It prints the delay-row writer
-count that docs/designs/power-domains.md budgets.
+count that docs/designs/power-domains.md budgets. With --root naming a tree
+before the owner, such as the merge base, it prints only the delay-row writer
+and allowlist counts, the baseline that the design's measurements record.
 """
 import argparse
 import re
@@ -61,8 +69,10 @@ IMAGES = {
                             'xTaskCreateStatic(functions[i],names[i],2048,NULL,!i?3:i==2||i==3?5:4,',
                             None, 'if(!i)vTaskCoreAffinitySet(board.handles[i],1);'),
 }
+# A domain-4 row registration: a733_power_domain_row_init(row, owner, 4, ...).
+DOMAIN4_ROW = re.compile(r'a733_power_domain_row_init\s*\([^;]*?,[^;,]*?,\s*4\s*,', re.S)
 BLOCKING = re.compile(r'\b(taskENTER_CRITICAL|portENTER_CRITICAL|vTaskSuspendAll|portDISABLE_INTERRUPTS|'
-                      r'xSemaphoreTake|vTaskDelay|ulTaskNotifyTake|xQueueReceive)\b|daifset')
+                      r'xSemaphoreTake|vTaskDelay|ulTaskNotifyTake|xTaskNotifyWait|xQueueReceive)\b|daifset')
 
 
 def files(root):
@@ -77,7 +87,7 @@ def main():
     ap.add_argument('--root', type=Path, default=ROOT)
     root = ap.parse_args().root.resolve()
     problems = []
-    writers, allowlists, scanned = set(), set(), 0
+    writers, allowlists, domain4_rows, scanned = set(), set(), set(), 0
     for path in files(root):
         rel = str(path.relative_to(root))
         text = path.read_text(errors='replace')
@@ -88,6 +98,8 @@ def main():
             (allowlists if all(uses) else writers).add(rel)
         if rel in OWNER:
             continue
+        if DOMAIN4_ROW.search(re.sub(r'/\*.*?\*/', '', text, flags=re.S)):
+            domain4_rows.add(rel)
         for n, line in enumerate(text.splitlines(), 1):
             if not DOMAIN_REGISTER.search(line):
                 continue
@@ -97,7 +109,8 @@ def main():
                 problems.append(f'{rel}:{n}: may write a domain the owner holds: {line.strip()}')
     assert scanned > 100, f'only {scanned} source files under {root}'
     if not (root / 'drivers/power/a733_power_domains.c').exists():
-        # A tree before the owner, such as the merge base: report the counts.
+        # A tree before the owner, such as the merge base (--root): report the
+        # counts that the design records as its baseline.
         print(f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists: '
               f'{sorted(writers)}; {sorted(allowlists)}')
         return
@@ -105,6 +118,9 @@ def main():
         problems.append(f'delay-row writers {sorted(writers)} differ from {sorted(DELAY_WRITERS)}')
     if allowlists != DELAY_ALLOWLISTS:
         problems.append(f'delay-row native allowlists {sorted(allowlists)} differ from {sorted(DELAY_ALLOWLISTS)}')
+    if domain4_rows and 'drivers/npu/a733_npu_platform.c' in writers:
+        problems.append(f'domain-4 rows {sorted(domain4_rows)} while drivers/npu/a733_npu_platform.c still '
+                        'writes domain 4; move the NPU onto its row first (docs/power-domains.md)')
     for image, (source, service, single, placement) in IMAGES.items():
         text = (root / source).read_text()
         if 'a733_pmic_poll(' in text:
@@ -122,8 +138,9 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS power-domain tree facts in {scanned} sources: domains 1 and 5 written only by the owner; '
-          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlist; five images run '
-          'their PMIC work from one service task below USB0 on core 0; no blocking in the service step')
+          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlist; no domain-4 row while the '
+          'NPU writes domain 4; five images run their PMIC work from one service task below USB0 on core 0; '
+          'no critical section, scheduler suspension or wait in the owner')
 
 
 if __name__ == '__main__':

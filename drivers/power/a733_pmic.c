@@ -180,7 +180,7 @@ int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
     atomic_init(&p->busy,0);atomic_init(&p->queued,0);return 1;
 }
 int a733_pmic_bind_service(struct a733_pmic *p,void (*kick)(void *),void *context,
-    const struct a733_power_domains *domains)
+    struct a733_power_domains *domains)
 {
     if(!p || p->self!=p || !kick || !domains || p->kick || p->stage!=S_CLOCK)return 0;
     p->kick=kick;p->kick_context=context;p->domains=domains;return 1;
@@ -191,7 +191,10 @@ unsigned a733_pmic_work(const struct a733_pmic *p,uint32_t *wait_ns)
      * a byte with its acknowledgement nine. */
     const int edge=p->phase==P_WAIT_START || p->phase==P_WAIT_RESTART || p->phase==P_WAIT_STOP;
     if(wait_ns)*wait_ns=(edge ? 2u : 9u)*p->bit_ns;
-    if(p->failed)return A733_PMIC_WORK_FAILED;
+    /* fault() sets the state word after the plain failed flag; held and
+     * retained change only on this task. */
+    if(a733_power_authority_load(&p->rails->authority)&A733_POWER_PMIC_TRANSFER)
+        return A733_PMIC_WORK_FAILED|(p->held && !p->retained ? A733_PMIC_WORK_RETAIN : 0);
     unsigned work=p->stage!=S_READY ? A733_PMIC_WORK_STARTUP : 0;
     if(atomic_load_explicit(&p->queued,memory_order_acquire))work|=A733_PMIC_WORK_QUEUED;
     if(p->active<A733_PMIC_REQUESTS)work|=A733_PMIC_WORK_ACTIVE|(p->waiting ? A733_PMIC_WORK_WAITING : 0);

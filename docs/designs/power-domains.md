@@ -95,8 +95,10 @@ display image links the GPU, framebuffer and HDMI copies.
 
 Owner and service state is static in kernel `.bss`, Normal write-back memory:
 the domain table and the rows in consumer storage. The PCK600, CCU and R_CCU
-windows are Device-nGnRnE and are verified once at service start with
-`a733_mapping_check.h`. No buffer is shared with a device, so no cache
+windows are Device-nGnRnE and are verified once with `a733_mapping_check.h`
+by the native adapter's init, before the scheduler starts, so the result is
+immutable before any task, including the framebuffer's output task that calls
+`a733_power_domain_check`, reads it. No buffer is shared with a device, so no cache
 maintenance occurs. Transitions occur a few times per boot, so no field gets
 its own cache line.
 
@@ -110,9 +112,10 @@ its own cache line.
   accesses are reads.
 - The provider's try-lock is held only inside one `a733_pmic_poll`, never
   across a byte wait. `a733_pmic_live` takes no lock: it compares the
-  immutable lifetime and makes acquire loads of the stage, the failed flag and
-  the state word, so it never returns BUSY. A fault it sees is latched by the
-  service's next poll. `a733_pmic_result` and `a733_pmic_reap` keep the lock.
+  immutable lifetime and makes one acquire load of the state word, so it never
+  returns BUSY. A fault it sees is latched by the service's next poll.
+  `a733_pmic_result` and `a733_pmic_reap` keep the lock. The work query that
+  the service makes reads the fault from the state word as well.
 - The service task runs below the image's USB0 and audio tasks, on A55 core 0,
   created with `xTaskCreateStaticAffinitySet` (mask 1); single-core builds use
   `xTaskCreateStatic` at the same priority. A higher-priority task preempts it
@@ -121,10 +124,16 @@ its own cache line.
 | Image (PMIC loop) | PMIC task today | USB0 and audio today | Service task |
 | --- | --- | --- | --- |
 | GPU (`apps/gpu-render/main.c`) | 2, core 0 | `gpu-usb` 2, core 0 | 1, core 0 |
-| Accelerator (`apps/npu-convolution/native.c`) | 4, core 0 | `accelerator-usb` 4, core 0 | 3, core 0 |
+| Accelerator (`apps/npu-convolution/native.c`) | 4, core 0 | `accelerator-usb` 4, core 0 | 3, core 0, see below |
 | GPU display (`apps/gpu-display/main.c`) | 4, any core | USB 3 | 2, core 0 |
 | HDMI (`apps/hdmi/main.c`) | 4, any core | output and audio USB 4 | 3, core 0 |
 | DisplayPort and G2D (`apps/board/main.c`) | 4, any core | `board-usb0` 4 | 3, core 0 |
+
+In the accelerator image the service at priority 3 on core 0 ties with
+`gpu-service` (priority 3, core 0) and preempts the `gpu-compute` client
+(priority 2, core 0). While a PMIC request is active, each service step can
+spin up to 1 ms on core 0, which delays the compute client by that much per
+step and shares the core in turns with the GPU service worker.
 
 ## Register sequences and sources
 
@@ -202,7 +211,7 @@ and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0, one step of ≤ 0.6 ms and ≤ 0.8 ms; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c` |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0, one step of at most 110% of the transaction's wire time; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c` |
 | BUSY results seen by other cores during one snapshot | `a733_pmic_live`: BUSY whenever it meets a poll | `a733_pmic_live` 0; `a733_pmic_result` and `a733_pmic_reap` ≤ 1 per caller | `power-domains-service.c`, concurrent caller on the second core |
 | CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in every image in the table | 0 on one core and on two | `power-domains-service.c` |
 | Service wakes per second with no work | 1,000 | 0 until the session deadline; park, stop and revocation notify | `power-domains-service.c` |
@@ -241,6 +250,14 @@ GPU liveness park complete before their deadlines.
 - DCDC2 and DCDC4 selectors unchanged after PSCI CPU_ON and over a session; a
   bus capture with no second S_TWI0 master.
 - USB0 and audio latency with PMIC requests running, SMP and single core.
+- A trace of the status word read back to back during each transition. The
+  owner fails on any status other than the starting or the target value,
+  while `pck600_domains.c` waits only for the target value.
+- The duration of each service step during a DCDC2 snapshot and a DCDC3
+  selector write; at 400 kHz each must be at most 110% of its wire time.
+- Qualified delivery of the S_TWI0 interrupt, GIC SPI 203, for each bus
+  phase. It is the condition under which the service blocks on the
+  interrupt instead of spinning for each bus phase.
 
 ## Changes outside this package
 
@@ -294,9 +311,9 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 
 | Metric | Merge base | Now | Target |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs); 100 kHz: 2 and 3, at most 1,000 µs spin per step | 400 kHz: 0, one step of ≤ 0.6 ms and ≤ 0.8 ms; 100 kHz: ≤ 1 ms per step, 2 and 3 |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs, so 107%); 100 kHz: 2 and 3, at most 1,000 µs spin per step | 400 kHz: 0, one step of at most 110% of wire time; 100 kHz: ≤ 1 ms per step, 2 and 3 |
 | BUSY results seen by another caller during one snapshot | `a733_pmic_live`: 211 per snapshot | `a733_pmic_live` 0; `a733_pmic_result` at most 1 with two cores, 0 with one; `a733_pmic_reap` 0 | `a733_pmic_live` 0; result and reap ≤ 1 per caller |
-| CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in all five images | 0: the service runs below USB0 in all five images, and the step has no critical section, scheduler suspension or blocking call | 0 on one core and on two |
+| CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in all five images | 0: the service runs below USB0 in all five images, and the owner's code has no critical section or scheduler suspension; the provider's lock waits at activation are one-tick blocks, which USB0 preempts | 0 on one core and on two |
 | Service wakes per second with no work | 1,000 | 0; 2 in the resident board image, which caps the block at 500 ms; one wake per park, stop or row notification | 0 until the session deadline |
 | Row-state read by GPU platform poll, framebuffer and G2D | DE_SYS poll while waiting: 344 instructions, a lock entry and 2 register reads | 12 instructions, 1 acquire load, no exclusive access | ≤ 100 instructions, 1 acquire load, no lock |
 | Ticks from row request to visible ON, acknowledgement within 50 µs | DE_SYS: 1; GPU: 0 | 1 for the GPU and the framebuffer, at their next poll; G2D reads the same row the same way | 1 for GPU, framebuffer and G2D |
@@ -306,9 +323,12 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 | Register accesses per domain-5 ON | 13 PPU operations by the GPU (14 with the native read-modify-write of the policy word) | 14 PPU accesses by the owner (2 adoption reads, 5 delay-row writes and 5 readbacks, the command, 1 status read), plus 5 domain-level reads | 14, once per transition |
 | Files that write the delay row | 6, plus 2 native allowlists | 5, plus 1 native allowlist (the NPU's) | 5 after this package; 4 after the NPU stage |
 
-The 400 kHz step durations exceed the design's 0.6 ms and 0.8 ms by the
-difference between the model's wire time and the design's estimate of 240 and
-320 bit times, plus 7% for polls and time reads. Supply verification ends
+At 400 kHz each request takes one step of 107% of the model's wire time: the
+step adds polls and time reads to the bus phases. The design's first estimate
+of 240 and 320 bit times (0.6 ms and 0.8 ms) is below the model's wire time,
+which counts nine bit times per byte and two per condition, so the target is
+stated relative to wire time; `checks/power-domains-service.c` fails above
+110%. Supply verification ends
 8.4 ms after the service's first step at 400 kHz and 14.9 ms at 100 kHz.
 
 Differences from the design, each with its reason:
@@ -334,10 +354,33 @@ Differences from the design, each with its reason:
 - **Idle cap in the resident board image.** The integrated OS image's
   watchdog requires the board PMIC service to report progress within 1 s, so
   that image's service blocks at most 500 ms when idle.
-- **The GPU row is registered by the image.** The images call
-  `a733_power_domain_row_init` on the GPU controller's row after
-  `a733_gpu_platform_bind_pmic`, with the platform's DCDC4 consumer token,
-  because the GPU platform file is outside this package.
+- **The GPU row is registered by the GPU platform.**
+  `a733_gpu_platform_bind_pmic` registers the GPU controller's row on the
+  power-domain owner bound to the PMIC provider, with the platform's owner and
+  its DCDC4 consumer token. `a733_power_domain_row_init` is inline in
+  `a733_power_domains.h`, so targets that link the GPU platform without the
+  owner still link. The GPU controller's operations, the GPU platform's
+  operations and its native adapter have no plain `write` and no PCK
+  register bank: every GPU register write is a masked update of the CCU.
+- **Fault retention through the work query.** A fault that a client latches
+  while the service holds the I2C mutex sets the state word; the work query
+  then reports FAILED with RETAIN, and the service polls once more so that the
+  provider marks its mutex retained.
+- **Mapping check at init.** The native adapter checks the five windows once
+  in its init before the scheduler, so a concurrent first access from the
+  framebuffer's output task cannot see a check in progress.
+- **Verification budget and cleanup.** The 100 ms budget starts when the
+  provider is READY after the settle time; a certain failed result is reaped
+  and the token released; only the DCDC4 reading is kept, for the GPU supply
+  consumer, which reads it after its verified bit.
+- **Domain-4 rows are accepted and checked.** The owner accepts domain-4 rows
+  for the NPU startup's next stage, and `checks/power-domains-tree.py` fails
+  on a domain-4 row outside `checks/` while the NPU platform still writes the
+  domain.
+- **Merge-base branches in two checks.** `checks/rail-leases-cost-row.c` and
+  `checks/power-domains-tree.py` keep a branch for a tree with the DE_SYS
+  provider; it serves only their `--root` measurement of the merge base,
+  whose figures the table above records.
 - **Verification only where a row exists, and a released token.** The rail
   ledger has 32 holder slots for the 31 holders the images create, so a
   permanent verification token could leave a later runtime holder without a
@@ -360,5 +403,3 @@ Not implemented, with the dependency that blocks each:
   changes).
 - The deinterlace consumer of domain 1 still requires the domain already ON
   and reads its policy and status; it moves onto a row in its own package.
-- `checks/g2d-power-native.py` emulates the merge-base DE_SYS provider inside
-  a built G2D image; it needs its owner to emulate the row instead.

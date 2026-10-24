@@ -6,14 +6,15 @@
  * Reads cover the policy, status and delay-row words of PPU domains 1, 4 and
  * 5, CCU 0x5c0, 0x5e0, 0xb20 and 0xb24 and R_CCU 0x1ac; writes cover only the
  * policy and delay-row words and only from the service task. Every access is
- * a733_mmio_*_dsb_sy_both. The first access verifies that each window is an
- * identity Device-nGnRnE mapping; a failed check refuses every later access. */
+ * a733_mmio_*_dsb_sy_both. Init verifies once that each window is an
+ * identity Device-nGnRnE mapping; a failed check refuses every access. */
 struct a733_power_domains_native {
     struct a733_power_domain_ops operations;
     void *task; /* the service task, also the PMIC provider task */
-    unsigned initialized, mapped;
+    unsigned initialized, mapped; /* both set by init and never changed */
 };
-/* Before the scheduler, with the created service task. */
+/* Before the scheduler, with the created service task. It runs the mapping
+ * check, so the page tables must already map the windows. */
 int a733_power_domains_native_init(struct a733_power_domains_native *,void *task);
 /* Pure allowlist, shared with checks/power-domains-tree.py. */
 static inline int a733_power_domains_native_address(uintptr_t a,unsigned writing)

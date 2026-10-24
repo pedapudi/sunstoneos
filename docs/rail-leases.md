@@ -136,7 +136,9 @@ of `docs/designs/power-authority.md`.
 - `checks/rail-leases-cost.py` measures the costs above and the power-domain
   row read: 12 instructions with one acquire load and no exclusive access,
   against one DE_SYS provider poll at the merge base of 344 instructions with
-  a lock entry and two register reads.
+  a lock entry and two register reads. It counts load/store exclusive
+  instructions and the ARMv8.1 LSE atomics (CAS, SWP, LDADD and the other
+  atomic memory operations) as exclusive accesses.
 
 These checks establish metadata behavior only; physical PMIC, rail and
 peripheral qualification remains pending.

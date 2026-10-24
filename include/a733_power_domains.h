@@ -11,6 +11,7 @@
  * transition. The task must be the PMIC provider's designated task. */
 #include "a733_pmic.h"
 #include "a733_power_domain_row.h"
+#include "a733_range.h"
 
 /* State-word bits set by the owner, beside those of a733_power_authority.h. */
 #define A733_POWER_SUPPLY_DONE    (1u << 1)  /* supply verification ended */
@@ -27,7 +28,9 @@ _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER
 /* Provider start to supply verification: the 1,000 us enable delay plus a
  * 1,040 mV ramp at 250 uV/us (board device tree lines 2123-2146). */
 #define A733_POWER_SUPPLY_SETTLE_US 5160u
-/* Verification ends within this time after it may start. */
+/* Verification ends within this time after the settle time has passed and
+ * the provider is READY; the provider's startup deadline bounds the wait for
+ * READY. */
 #define A733_POWER_SUPPLY_BUDGET_US 100000u
 /* Provisional spin after a PCK600 command; board evidence replaces it. */
 #define A733_POWER_PCK_SPIN_US 50u
@@ -72,8 +75,10 @@ struct a733_power_domains {
     /* Supply verification, service task only until the done bit. */
     struct a733_rail_token supply_token;
     struct a733_pmic_request supply_request;
-    struct a733_pmic_snapshot supply[2]; /* DCDC2, DCDC4: valid once verified */
-    uint64_t started, verify_at, verify_deadline, last_now;
+    /* The boot reading of DCDC4, which the GPU supply consumer copies. Valid
+     * once A733_POWER_DCDC4_VERIFIED is set, which publishes it. */
+    struct a733_pmic_snapshot dcdc4;
+    uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;
 };
 
@@ -82,6 +87,26 @@ struct a733_power_domains {
  * verification record. No hardware access. */
 int a733_power_domains_init(struct a733_power_domains *, struct a733_pmic *,
     const struct a733_power_domain_ops *, void *context, const struct a733_power_service_config *);
+/* Register a zeroed row before the service task first runs: domain 1, 4 or 5,
+ * the consumer's owner identity and its rail token, which must hold the
+ * domain's supply (DCDC2 for domains 1 and 4, DCDC4 for domain 5) by the time
+ * of the first request. The token storage stays at this address and is not
+ * changed while the row is counted. Returns 1 on success, no hardware access.
+ * Inline, so that the GPU platform registers its row without linking the
+ * owner. Until the NPU startup moves onto its row, checks/power-domains-tree.py
+ * fails on a domain-4 registration outside the checks. */
+static inline int a733_power_domain_row_init(struct a733_power_domain_row *r, struct a733_power_domains *d,
+    unsigned domain, uint64_t owner, const struct a733_rail_token *rail)
+{
+    if (!r || r->domains || !d || d->self != d || d->running || (domain != 1 && domain != 4 && domain != 5) ||
+        !owner || !rail || !a733_ranges_disjoint(r, sizeof(*r), d, sizeof(*d))) return 0;
+    *r = (struct a733_power_domain_row){.domains = d, .rail = rail, .next = d->rows, .notify = d->ops.notify,
+        .notify_context = d->context, .owner = owner, .domain = domain};
+    atomic_init(&r->request, 0);
+    atomic_init(&r->state, 0);
+    d->rows = r;
+    return 1;
+}
 /* Service task only. Advances provider startup, every queued PMIC request,
  * supply verification and every domain transition, and returns the ticks to
  * block in ulTaskNotifyTake(pdTRUE, ticks): 1 while PMIC work, a held I2C
@@ -101,7 +126,4 @@ int a733_power_service_ready(const struct a733_power_domains *);
  * command and status both OFF or both ON. 1 consistent, 0 refused. Any task;
  * no write. Only domains 1, 4 and 5. */
 int a733_power_domain_check(struct a733_power_domains *, unsigned domain);
-/* The boot reading of DCDC2 or DCDC4, or NULL until its verified bit is set. */
-const struct a733_pmic_snapshot *a733_power_supply_record(const struct a733_power_domains *,
-    enum a733_rail);
 #endif

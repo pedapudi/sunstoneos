@@ -31,7 +31,7 @@ Only domain 5, whose one bus master is the GPU, is ever powered off.
 
 | Consumer | Domain | Row owner and rail token | Reads the answer in |
 | --- | --- | --- | --- |
-| GPU controller ([`a733_gpu_power.c`](../drivers/gpu/a733_gpu_power.c)) | 5 | The GPU platform's DCDC4 consumer | `a733_gpu_power_poll` |
+| GPU controller ([`a733_gpu_power.c`](../drivers/gpu/a733_gpu_power.c)) | 5 | The GPU platform's DCDC4 consumer; `a733_gpu_platform_bind_pmic` registers the row on the owner bound to the PMIC provider | `a733_gpu_power_poll` |
 | Framebuffer ([`a733_display_framebuffer.c`](../drivers/display/a733_display_framebuffer.c)) | 1 | The output controller's DCDC2 token, lent through the configuration | Its cold-start step |
 | G2D (`apps/g2d/native.c`) | 1 | G2D's DCDC2 token | Its setup step and register guards |
 
@@ -44,7 +44,11 @@ first and then requests the row OFF. The framebuffer and G2D keep their
 authorization functions, which check the designated task, the exclusive
 DE_SYS, IOMMU_SYS, VI, VE_DEC and VE_ENC clock tokens, the DCDC2 rail token and
 the PCK lease, and for the framebuffer its media ownership and memory. The
-framebuffer calls `a733_power_domain_check(1)` before its first reset write.
+framebuffer calls `a733_power_domain_check(1)` before its first reset write,
+from its output task. The check makes only reads through the owner's native
+adapter, which verified at init, before the scheduler started, that the PPU,
+CCU and R_CCU windows are identity Device-nGnRnE mappings; a failed mapping
+check refuses every access.
 
 ## The service admits rows and runs every transition
 
@@ -83,6 +87,7 @@ known GIC wiring.
 | Policy and status disagree at adoption | REFUSED, domain FAILED, fault bit set, no write | Nothing; later rows refused |
 | Delay-row readback wrong, status unexpected or not reached in 10 ms | FAILED, fault bit set | The domain, its rows and their rail pins |
 | GPU gate or reset open at domain-5 power-off | FAILED, fault bit set, no write | The domain, the row and its pin |
+| Rail unpin fails after domain-5 power-off | FAILED; a later ON request from the row is answered FAILED | The row, counted, and its pin |
 | A service time read fails | Transitions FAILED; later requests REFUSED | As above |
 
 The fault bits (`A733_POWER_DOMAIN1_FAULT`, `…4_FAULT`, `…5_FAULT`) are part of
@@ -98,11 +103,23 @@ releases the token, so verification holds a rail-ledger slot for a few
 milliseconds only. An image that registers no row skips verification and makes
 no PMIC read. A rail enabled at 800 mV (selector 30) sets its
 verified bit (`A733_POWER_DCDC2_VERIFIED`, `A733_POWER_DCDC4_VERIFIED`), and
-then the done bit is set. Any terminal failure, including a passed deadline
-100 ms after verification may start, sets the done bit with no verified bit,
-so rows waiting for verification are refused within that bound. The GPU's
-DCDC4 consumer ([docs/pmic-consumers.md](pmic-consumers.md)) completes from
-the boot reading with no bus transaction and no PMIC request slot. Only
+then the done bit is set.
+
+Verification has a budget of 100 ms, which starts at the first step in which
+the settle time has passed and the provider is READY; before READY the
+provider's startup deadline bounds the wait, and a provider fault ends it. Any
+terminal failure sets the done bit with no verified bit at once, so
+rows waiting for verification are refused within that bound. A verification
+request whose result is certain, complete or expired, is then reaped, and the
+token is released once no request is outstanding. A request whose outcome is
+uncertain, after a provider, clock or ledger fault, keeps its PMIC slot and
+the token, which it may still borrow.
+
+The GPU's DCDC4 consumer ([docs/pmic-consumers.md](pmic-consumers.md))
+completes from the boot reading of DCDC4 (`dcdc4` in the owner), which the
+DCDC4 verified bit publishes, with no bus transaction and no PMIC request
+slot. The DCDC2 reading is not kept: domain-1 and domain-4 admission needs
+only its verified bit. Only
 selector writes to DCDC3 and DCDC5 are accepted; that no firmware writes DCDC2
 or DCDC4 after boot is established only by board evidence.
 
@@ -127,16 +144,32 @@ own submissions. During a PMIC transfer the service spins on the raw counter,
 without the provider object, for the expected duration of the bus phase (two
 bit times for a START, repeated START or STOP, nine for a byte, from the
 inherited S_TWI0 divisor), then polls once. It spins at most 1 ms in one step.
-The step uses no critical section, scheduler suspension or blocking call, so a
-higher-priority task preempts it at any point.
+The owner's code uses no critical section, scheduler suspension, delay or
+notification wait. The PMIC poll that the step calls can block when it
+activates a request: the pin check takes the register lock and the bus entry
+takes the I2C mutex, each in one-tick waits until that request's deadline. A
+higher-priority task preempts the service at any point, including those waits.
+
+When a client on another task latches a provider fault while the service holds
+the I2C mutex for a transfer, `a733_pmic_work` reports FAILED with RETAIN. The
+service then polls once more, and that poll marks the mutex retained, as the
+provider requires (`include/a733_pmic.h`); it keeps one-tick steps only while
+that poll returns BUSY. `a733_pmic_work` takes the fault from one acquire load
+of the state word, not from the provider's plain fields that other tasks
+write.
 
 | Image (loop source) | Service task | USB0 and audio tasks | Owner |
 | --- | --- | --- | --- |
 | GPU (`apps/gpu-render/main.c`) | priority 1, core 0 | `gpu-usb` 2, core 0 | `app.domains` |
-| Accelerator (`apps/npu-convolution/native.c`) | 3, core 0 | `accelerator-usb` 4, core 0 | `app.domains` |
+| Accelerator (`apps/npu-convolution/native.c`) | 3, core 0; ties with `gpu-service` (3, core 0) and preempts `gpu-compute` (2, core 0) | `accelerator-usb` 4, core 0 | `app.domains` |
 | GPU display (`apps/gpu-display/main.c`) | 2, core 0 | USB 3 | `app.domains` |
 | HDMI (`apps/hdmi/main.c`) | 3, core 0 | output and audio USB 4 | `app.domains` |
 | DisplayPort and G2D (`apps/board/main.c`) | 3, core 0 | `board-usb0` 4 | `providers.domains` |
+
+In the accelerator image a service step can therefore delay the GPU compute
+client by up to 1 ms of bus-phase spin per step while a PMIC request is
+active, and shares core 0 in turns with the GPU service worker at the same
+priority. The board evidence below includes the measured step duration.
 
 The board image is also the base of the integrated OS image, whose resident
 watchdog requires every service to report progress within 1 s. Its service
@@ -176,6 +209,9 @@ The NPU startup moves onto domain 4 in its next stage. This package provides:
    settle and readback. REFUSED and FAILED are terminal.
 
 Domain 4 never powers off: `a733_power_domain_request(row, 0)` is refused.
+Until the NPU platform stops writing domain 4, `checks/power-domains-tree.py`
+fails on any domain-4 row registered outside `checks/`, so that the owner and
+the NPU platform never both write the domain in one image.
 `checks/power-domains-pck.c` covers the check and a domain-4 row. The design
 also names a blocking `a733_power_domain_wait(row, deadline)` with a row
 semaphore that the service gives after it publishes; it is added together
@@ -187,7 +223,7 @@ The NPU owner must change:
   and the adoption reads of domain 4; request the row instead.
 - `drivers/npu/a733_npu_platform_native.c`: remove the PCK write offsets from
   the native allowlist. `checks/power-domains-tree.py` then expects four
-  delay-row writers and no native allowlist.
+  delay-row writers and no native allowlist, and accepts domain-4 rows.
 - `drivers/npu/a733_npu_startup.c`: remove the DCDC2 snapshot through
   `a733_pmic_consumer` and the direct S_TWI0 path; require
   `A733_POWER_DCDC2_VERIFIED` through the row admission instead.
@@ -207,25 +243,37 @@ modeled; none is a board measurement.
 
 - `checks/power-domains-pck.c` composes the actual provider, ledger and owner
   over modeled PPU, CCU and R_CCU words: the delay row and command, adoption,
-  incoherent and domain-level refusals, verified supplies, the slow
-  acknowledgement bound with retention, domain-5 power-off and reopen, and
-  the NPU interface. With an output path it writes the GPU power-on and
+  incoherent and domain-level refusals, verified supplies, the verification
+  budget started at provider READY, an expired verification request reaped
+  with its token released, the slow acknowledgement bound with retention,
+  domain-5 power-off and reopen, a failed unpin answered FAILED, and the NPU
+  interface. With an output path it writes the GPU power-on and
   power-off register trace that `checks/a733-gpu-power-reference.py`
   compares with the pinned PCK functions.
 - `checks/power-domains-service.c` runs the service step with a shim that
   records its ticks, wakes and notifications, at 400 kHz and 100 kHz, with one
-  modeled core and with two.
+  modeled core and with two, and the retention of the I2C mutex after a fault
+  that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, the delay-row writers, the five service tasks and their
-  priorities, and no blocking call in the step.
-- `checks/rail-leases-cost.py` measures the row read; `checks/rail-leases.c`
-  covers the rail pin.
+  domains 1 and 5, the delay-row writers, no domain-4 row while the NPU
+  platform writes domain 4, the five service tasks and their priorities, and
+  no critical section, scheduler suspension or wait in the owner's code.
+- `checks/rail-leases-cost.py` measures the row read, counting load/store
+  exclusive and LSE atomic instructions as exclusive accesses;
+  `checks/rail-leases.c` covers the rail pin.
+- `checks/g2d-power-native.py` runs the G2D task of a linked G2D image with
+  the row answered by the model: ON, REFUSED, FAILED and never answered.
 
 ## Board evidence required
 
 - The inherited S_TWI0 divisor (`TWI+0x14`) and the bus rate it gives.
 - PCK600 time to ON for domains 1, 4 and 5 and to OFF for domain 5, which
   replaces the 50 µs spin bound with the longest time plus 50%.
+- A trace of the status word (`+0x8`) read back to back during each of those
+  transitions. The owner fails a transition on any status other than the
+  starting or the target value, while the pinned `pck600_domains.c` waits
+  only for the target value. The trace shows whether an intermediate value
+  occurs.
 - GPU and framebuffer starts through the owner with the same register trace as
   before.
 - Reads of `0xc00`–`0xc10` before and after the delay-row write; the PCK-600
@@ -233,3 +281,10 @@ modeled; none is a board measurement.
 - DCDC2 and DCDC4 selectors unchanged after PSCI CPU_ON and over a session,
   and a bus capture with no second S_TWI0 master.
 - USB0 and audio latency with PMIC requests running, SMP and single core.
+- The duration of each service step during a DCDC2 snapshot and a DCDC3
+  selector write at the inherited divisor. At 400 kHz each must be at most
+  110% of the transaction's wire time, which the host model meets.
+- Delivery of the S_TWI0 interrupt (GIC SPI 203, `sun60iw2p1.dtsi` line 1962)
+  for each bus phase, qualified as the shared interrupt rules require. Only
+  with that qualification can the service block on the interrupt instead of
+  spinning for each bus phase.

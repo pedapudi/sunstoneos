@@ -2,9 +2,12 @@
 /* Freestanding AArch64 entry points for the domain-state read measured by
  * checks/rail-leases-cost.py. With the power-domain owner, cost_row_state()
  * reads an answered row the way the GPU platform poll, the framebuffer and
- * G2D do; the read is inline in the consumer. In a tree that still has the DE_SYS provider, cost_row_state()
- * runs one provider poll while the domain waits for its acknowledgement,
- * with callbacks that count lock entries and register reads. */
+ * G2D do; the read is inline in the consumer. The second branch serves only
+ * rail-leases-cost.py --root on a tree that still has the DE_SYS provider,
+ * such as the merge base whose figures docs/designs/power-domains.md
+ * records: cost_row_state() then runs one provider poll while the domain
+ * waits for its acknowledgement, with callbacks that count lock entries and
+ * register reads. */
 #include <stddef.h>
 #include <stdint.h>
 void *memset(void *d,int c,size_t n){unsigned char *p=d;while(n--)*p++=(unsigned char)c;return d;}

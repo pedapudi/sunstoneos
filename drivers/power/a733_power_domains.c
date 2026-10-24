@@ -144,9 +144,10 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
 {
     struct a733_power_domain *m=&d->domain[slot(r->domain)];const struct profile *f=&profiles[slot(r->domain)];
     if(r->counted) {
-        if(m->state==A733_POWER_DOMAIN_ON)publish(r,g,A733_POWER_ROW_ON);
-        else if(m->state==A733_POWER_DOMAIN_FAILED)publish(r,g,A733_POWER_ROW_FAILED);
-        return m->state==A733_POWER_DOMAIN_ON_WAIT || m->state==A733_POWER_DOMAIN_OFF_WAIT;
+        if(m->state==A733_POWER_DOMAIN_ON_WAIT || m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;
+        /* FAILED, or OFF for a row whose pin a failed unpin left counted. */
+        publish(r,g,m->state==A733_POWER_DOMAIN_ON ? A733_POWER_ROW_ON : A733_POWER_ROW_FAILED);
+        return 0;
     }
     if(d->failed || m->state==A733_POWER_DOMAIN_FAILED){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     if(m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;
@@ -169,7 +170,7 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     enum a733_rail_result p=a733_rail_pin(d->pmic->rails,t,A733_RAIL_BIT(f->rail));
     if(p==A733_RAIL_BUSY)return 1;
     if(p!=A733_RAIL_READY){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
-    r->pinned=r->counted=1;++m->count;
+    r->counted=1;++m->count;
     if(m->state==A733_POWER_DOMAIN_ON)publish(r,g,A733_POWER_ROW_ON);
     else if(m->state==A733_POWER_DOMAIN_OFF)command(d,m,policy,1);
     return m->state==A733_POWER_DOMAIN_ON_WAIT;
@@ -191,22 +192,26 @@ static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,
     }
     enum a733_rail_result p=a733_rail_unpin(d->pmic->rails,r->rail);
     if(p==A733_RAIL_BUSY)return 1;
-    r->pinned=0;
+    /* An unpin that fails leaves the row counted and its pin uncertain. */
     if(p!=A733_RAIL_READY){publish(r,g,A733_POWER_ROW_FAILED);return 0;}
     r->counted=0;--m->count;publish(r,g,A733_POWER_ROW_OFF);return 0;
 }
 
-/* Supply verification once per boot: snapshots of DCDC2 and DCDC4 with their
- * own deadline. Any terminal failure sets the done bit with no verified bit,
- * so waiting rows are refused within a bounded time, and keeps the token,
- * which an uncertain request may still borrow. After success the token is
- * released, so it holds a ledger slot only during verification. Returns 1
- * while it needs the next tick. */
-enum { V_TOKEN, V_SUBMIT2, V_RESULT2, V_SUBMIT4, V_RESULT4, V_RELEASE, V_DONE };
+/* Supply verification once per boot: snapshots of DCDC2 and DCDC4. It may
+ * start A733_POWER_SUPPLY_SETTLE_US after the service's first step, and its
+ * A733_POWER_SUPPLY_BUDGET_US starts when it may start and the provider is
+ * READY; before READY the provider's startup deadline bounds it. Any failure
+ * sets the done bit with no verified bit at once, so waiting rows are
+ * refused within a bounded time. A request whose result is certain (complete
+ * or expired) is then reaped; the token is released after success, or after
+ * a failure that leaves no request outstanding. An uncertain request keeps
+ * its request and the token, which it may still borrow. Returns 1 while it
+ * needs the next tick. */
+enum { V_TOKEN, V_SUBMIT2, V_RESULT2, V_SUBMIT4, V_RESULT4, V_RELEASE, V_DONE, V_REAP };
 static void verified(struct a733_power_domains *d,unsigned ok)
 {
     a733_power_authority_set(word(d),A733_POWER_SUPPLY_DONE|(ok ? d->supply_verified : 0));
-    d->supply_stage=ok ? V_RELEASE : V_DONE;
+    d->supply_stage=ok ? V_RELEASE : d->supply_request.id ? V_REAP : d->supply_stage>V_TOKEN ? V_RELEASE : V_DONE;
 }
 static int correct(const struct a733_pmic_snapshot *s,enum a733_rail rail)
 {
@@ -217,14 +222,26 @@ static int verify(struct a733_power_domains *d,uint64_t now)
 {
     if(d->supply_stage==V_DONE)return 0;
     struct a733_pmic *p=d->pmic;
+    if(d->supply_stage==V_REAP) {
+        /* After a failure: a complete or expired request ends its borrow. */
+        enum a733_pmic_status r=a733_pmic_reap(p,&d->supply_request);
+        if(r==A733_PMIC_BUSY)return 1;
+        /* A queued or active request ends at its deadline while the provider
+         * runs; after a provider fault it stays uncertain. */
+        if(r==A733_PMIC_PENDING && !(a733_power_authority_load(word(d))&A733_POWER_PMIC_TRANSFER))return 1;
+        if(r!=A733_PMIC_COMPLETE){d->supply_stage=V_DONE;return 0;}
+        d->supply_request=(struct a733_pmic_request){0};d->supply_stage=V_RELEASE;return 1;
+    }
     if(d->supply_stage==V_RELEASE) {
         enum a733_rail_result r=a733_rail_release(p->rails,&d->supply_token,d->config.deadline);
         if(r==A733_RAIL_BUSY)return 1;
         d->supply_stage=V_DONE;return 0;
     }
     const unsigned w=a733_power_authority_load(word(d));
-    if((w&A733_POWER_PMIC_TRANSFER) || now>=d->verify_deadline){verified(d,0);return 0;}
+    if(w&A733_POWER_PMIC_TRANSFER){verified(d,0);return 0;}
     if(!(w&A733_POWER_PROVIDER_READY) || now<d->verify_at)return 0;
+    if(!d->verify_deadline && !a733_deadline_after(now,A733_POWER_SUPPLY_BUDGET_US,&d->verify_deadline)){verified(d,0);return 0;}
+    if(now>=d->verify_deadline){verified(d,0);return 0;}
     const unsigned rail4=d->supply_stage>=V_SUBMIT4;const enum a733_rail rail=rail4 ? A733_RAIL_DCDC4 : A733_RAIL_DCDC2;
     switch(d->supply_stage) {
     case V_TOKEN: {
@@ -237,18 +254,21 @@ static int verify(struct a733_power_domains *d,uint64_t now)
     case V_SUBMIT2:case V_SUBMIT4: {
         enum a733_pmic_status r=a733_pmic_submit(p,d->config.owner,&d->supply_token,rail,d->verify_deadline,&d->supply_request);
         if(r==A733_PMIC_BUSY)return 1;
-        if(r!=A733_PMIC_PENDING || !d->supply_request.id){verified(d,0);return 0;}
+        if(r!=A733_PMIC_PENDING || !d->supply_request.id){d->supply_request=(struct a733_pmic_request){0};verified(d,0);return 0;}
         ++d->supply_stage;return 1;
     }
     case V_RESULT2:case V_RESULT4: {
         struct a733_pmic_snapshot s;
         enum a733_pmic_status r=a733_pmic_result(p,&d->supply_request,&s);
         if(r==A733_PMIC_BUSY || r==A733_PMIC_PENDING)return 1;
-        if(r!=A733_PMIC_COMPLETE){verified(d,0);return 0;}
-        if(correct(&s,rail)){d->supply[rail4]=s;d->supply_verified|=rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED;}
+        if(r!=A733_PMIC_COMPLETE){verified(d,0);return 1;}
+        if(correct(&s,rail)) {
+            if(rail4)d->dcdc4=s;
+            d->supply_verified|=rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED;
+        }
         r=a733_pmic_reap(p,&d->supply_request);
         if(r==A733_PMIC_BUSY)return 1;
-        if(r!=A733_PMIC_COMPLETE){verified(d,0);return 0;}
+        if(r!=A733_PMIC_COMPLETE){verified(d,0);d->supply_stage=V_DONE;return 0;}
         d->supply_request=(struct a733_pmic_request){0};
         if(++d->supply_stage==V_RELEASE)verified(d,1);
         return 1;
@@ -260,14 +280,16 @@ static int verify(struct a733_power_domains *d,uint64_t now)
 /* Every queued PMIC request and provider startup. A bus phase is waited for
  * by spinning on the raw counter without the provider object for the phase's
  * expected duration, then polling once, for at most A733_POWER_PMIC_SPIN_US in
- * one step. Returns 1 while the service must run again within a tick. */
+ * one step. After a fault latched while this task holds the I2C mutex, one
+ * poll marks the mutex retained. Returns 1 while the service must run again
+ * within a tick. */
 static int pmic(struct a733_power_domains *d,uint64_t start)
 {
     struct a733_pmic *p=d->pmic;
     for(unsigned n=0;n<PMIC_POLLS_PER_STEP;++n) {
         uint32_t wait_ns;unsigned work=a733_pmic_work(p,&wait_ns);
-        if((work&A733_PMIC_WORK_FAILED) ||
-           !(work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)))return 0;
+        if(work&A733_PMIC_WORK_FAILED)return (work&A733_PMIC_WORK_RETAIN) && a733_pmic_poll(p)==A733_PMIC_BUSY;
+        if(!(work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)))return 0;
         enum a733_pmic_status r=a733_pmic_poll(p);
         if(r==A733_PMIC_BUSY)return 1;
         if(r==A733_PMIC_RETAINED || r==A733_PMIC_INVALID)return 0;
@@ -290,9 +312,8 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     if(!clock(d,&now)){fail_service(d);return UINT32_MAX;}
     if(!d->running) {
         /* An image with no row needs no supply record and makes no bus read. */
-        d->running=1;d->started=now;
-        if(!d->rows || !a733_deadline_after(now,A733_POWER_SUPPLY_SETTLE_US,&d->verify_at) ||
-           !a733_deadline_after(d->verify_at,A733_POWER_SUPPLY_BUDGET_US,&d->verify_deadline))verified(d,0);
+        d->running=1;
+        if(!d->rows || !a733_deadline_after(now,A733_POWER_SUPPLY_SETTLE_US,&d->verify_at))verified(d,0);
     }
     const uint64_t start=now;
     int tick=0;
@@ -318,7 +339,8 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)
         tick|=d->domain[i].state==A733_POWER_DOMAIN_ON_WAIT || d->domain[i].state==A733_POWER_DOMAIN_OFF_WAIT;
     const unsigned work=a733_pmic_work(d->pmic,NULL);
-    if(!(work&A733_PMIC_WORK_FAILED) && (d->pmic->held || (work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE))))tick=1;
+    if(work&A733_PMIC_WORK_FAILED ? work&A733_PMIC_WORK_RETAIN :
+       d->pmic->held || (work&(A733_PMIC_WORK_STARTUP|A733_PMIC_WORK_QUEUED|A733_PMIC_WORK_ACTIVE)))tick=1;
     if(!clock(d,&now)){fail_service(d);return UINT32_MAX;}
     if(tick)return 1;
     uint64_t until=UINT64_MAX;
@@ -341,16 +363,6 @@ int a733_power_domains_init(struct a733_power_domains *d,struct a733_pmic *p,
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)d->domain[i].id=profiles[i].id;
     if(!a733_pmic_bind_service(p,ops.notify,context,d))return 0;
     d->self=d;return 1;
-}
-int a733_power_domain_row_init(struct a733_power_domain_row *r,struct a733_power_domains *d,
-    unsigned domain,uint64_t owner,const struct a733_rail_token *rail)
-{
-    if(!r || r->domains || !d || d->self!=d || d->running || slot(domain)<0 || !owner || !rail ||
-       !a733_ranges_disjoint(r,sizeof(*r),d,sizeof(*d)))return 0;
-    *r=(struct a733_power_domain_row){.domains=d,.rail=rail,.next=d->rows,.notify=d->ops.notify,
-        .notify_context=d->context,.owner=owner,.domain=domain};
-    atomic_init(&r->request,0);atomic_init(&r->state,0);
-    d->rows=r;return 1;
 }
 int a733_power_service_idle(const struct a733_power_domains *d)
 {
@@ -377,10 +389,4 @@ int a733_power_domain_check(struct a733_power_domains *d,unsigned domain)
     const struct profile *f=&profiles[slot(domain)];
     return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) &&
         bits(d,R_CCU+0x1ac,1,1) && coherent(d,domain,&policy)>=0;
-}
-const struct a733_pmic_snapshot *a733_power_supply_record(const struct a733_power_domains *d,enum a733_rail rail)
-{
-    if(!d || d->self!=d || (rail!=A733_RAIL_DCDC2 && rail!=A733_RAIL_DCDC4))return 0;
-    const unsigned bit=rail==A733_RAIL_DCDC2 ? A733_POWER_DCDC2_VERIFIED : A733_POWER_DCDC4_VERIFIED;
-    return a733_power_authority_load(word(d))&bit ? &d->supply[rail==A733_RAIL_DCDC4] : 0;
 }
