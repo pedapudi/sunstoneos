@@ -111,9 +111,13 @@ check only affected launcher or host behavior identified by that review.
 
 Once those conditions are satisfied, the coordinator can reserve one attempt
 on an available, qualified board using the existing queue and per-port lock.
-`host.py` saves all 802 MiB, launches once, and waits up to 30 seconds for a new
-ROM instance. The native session has a 60-second deadline; the shorter host
-window can reject a late return and does not establish native completion.
+`host.py` saves all 802 MiB, launches once, and allows 90 seconds for a new
+ROM instance after the execution request returns. The launcher grants a
+60-second native deadline; the host adds the shared transport's existing
+30-second ROM discovery allowance. This allowance does not extend native
+execution authority. The host records the selected window and rejects a node
+observed at or after expiry, retaining ownership for recovery. Other shared
+transport callers retain their default 30-second window.
 Individual memory transfers have 120-second limits and other FEL requests
 have 15-second limits. These limits do not bound the total snapshot time.
 Success requires both numerical results, normal stop, validated return and
@@ -132,3 +136,25 @@ SHA-256 `7af33010ca810084a5b5dee8f23aa0d16f461f7c34ebcc0bad8f50e779aa18c8`.
 That successful producer check models admission; it grants no board authority
 and does not execute launcher instructions. Earlier host and native behavioral
 checks were reused. No physical test or performance measurement ran.
+
+The return-window change adds no FEL requests or copies. Passive discovery
+keeps its 50 ms polling interval: at most 1,800 sleeps over the GPU window,
+compared with 600 over the default window. The fake-clock selection in
+`apps/npu-finite/transport-check.py --return-window-only` covers late success,
+strict expiry, retained failure, invalid configuration and GPU adapter selection.
+
+The snapshot budget remains 802 MiB read, 802 MiB restored and 802 MiB read
+back: 2,406 MiB total. At assumed payload rates of 570,000 and 250,000 bytes
+per second, transfers take approximately 74 and 168 minutes before overhead.
+These estimates are not new physical measurements. Saved and restored files
+need at least 1,604 MiB of disk space. The five allocated GPU parents and
+cache-publication bounds do not prove complete firmware or device write
+confinement, so they do not justify reducing the preservation envelopes.
+
+Focused evidence for the host window is preserved under
+`~/.cache/sunstoneos/evidence/gpu-launch-readiness-20261024/`.
+`return-window-final/transport-result.json` records fifteen passing cases;
+`producer/result.json` records preparation and validation with the unchanged
+native image and launcher. The producer uses modeled ownership records and
+does not grant physical admission. The prior target history and unresolved
+coordinator facts remain in `gpu-finite-admission-20261024/`.

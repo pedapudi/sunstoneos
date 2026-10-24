@@ -7,6 +7,9 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 prepare=module('finite_gpu_prepare',ROOT/'apps/gpu-finite/prepare.py');report=module('finite_gpu_report',ROOT/'apps/gpu-finite/report.py')
 base=prepare.base;require=prepare.require
+# The launcher grants 60 seconds of native execution; allow the existing
+# 30-second ROM discovery interval after that deadline.
+RETURN_TIMEOUT_SECONDS=60+30
 CHUNK_BYTES=4*1024*1024
 CAPTURE_RANGES=(('CPU',0x41000000,0x1200000),('GPU',0x48000000,0x31000000))
 def transfer(transaction,address,data,destination):
@@ -45,7 +48,7 @@ def admit(args,p,node,identity,port):
  require(all((str(x.resolve()),prepare.sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live CPU DDR/survey continuity absent from admission.')
 def run(args):
  shared=module('gpu_returning_transport',ROOT/'tools/a733-returning-host.py')
- return shared.run(args,base=base,profile=prepare.PROFILE,validate_bundle=prepare.validate_bundle,admit=admit,execute=lambda tx,wait,ready,p,record,journal:run_once(tx,wait,ready,args.bundle.resolve(),p,args.evidence,record,journal),description='GPU finite computation and validated RAM return')
+ return shared.run(args,base=base,profile=prepare.PROFILE,validate_bundle=prepare.validate_bundle,admit=admit,execute=lambda tx,wait,ready,p,record,journal:run_once(tx,wait,ready,args.bundle.resolve(),p,args.evidence,record,journal),description='GPU finite computation and validated RAM return',return_timeout=RETURN_TIMEOUT_SECONDS)
 if __name__=='__main__':
  parser=argparse.ArgumentParser(description=__doc__)
  for n in ('bundle','fel','evidence','ddr-evidence','platform-survey'):parser.add_argument('--'+n,type=Path,required=True)

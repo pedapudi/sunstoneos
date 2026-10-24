@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-attempt A733 returning-ROM transport; profile callbacks own admission and RAM."""
-import importlib.util,os,subprocess,sys,time
+import importlib.util,math,os,subprocess,sys,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
@@ -13,21 +13,24 @@ def retain_failure(base,record,save,quarantine,error,hold=None):
   finally:
    if not record.get('launch_attempted'):hold()
 
-def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None):
+def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None,return_timeout=30):
  """Call admit(args,p,node,identity,port) before launch and execute(tx,wait,ready,p,record,save).
 
  execute owns protected upload, reports and RAM restoration. Every transport error
  is terminal. No callback creates queue authority; the caller owns the claim.
  Optional access/guard are dependency injection for offline transport fixtures.
  """
- require=base.require;bundle=args.bundle.resolve();p=validate_bundle(bundle)
+ require=base.require
+ require(type(return_timeout) in (int,float) and math.isfinite(return_timeout) and return_timeout>0,
+         'Return window must be a finite positive number of seconds.')
+ bundle=args.bundle.resolve();p=validate_bundle(bundle)
  require(base.digest(args.fel)==base.FEL_HASH,'FEL executable differs from reviewed bytes.')
  access=module('returning_access',ROOT/'tools/usb-access.py') if access is None else access
  if guard is None:
   sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
   guard=usb_guard
  guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
- record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
+ record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
  def journal():base.save_json(args.evidence/'session.json',record)
  with access.board_lock() as node:
   access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False
@@ -48,12 +51,14 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    journal();return result.stdout
   def wait_return():
    nonlocal node,identity
-   old=identity;deadline=time.monotonic()+30
+   old=identity;deadline=time.monotonic()+return_timeout
    while True:
     # Identity comes from one guarded lstat; a node removed by the expected disconnect is absent.
     candidate,current=base.present_instance(access,config)
-    if candidate is not None and current!=old and os.access(candidate,os.R_OK|os.W_OK):break
-    require(time.monotonic()<deadline,'No new ROM instance within return window; no retry.');time.sleep(.05)
+    available=candidate is not None and current!=old and os.access(candidate,os.R_OK|os.W_OK)
+    require(time.monotonic()<deadline,'No new ROM instance within return window; no retry.')
+    if available:break
+    time.sleep(.05)
    node,identity=candidate,current;access.require_session(node);access.require_rom(node)
    require(access.target(node).name==port.name,'Returned instance changed physical port.')
    record.update(returned_node=str(node),returned_identity=identity,automatic_access=True);journal()
