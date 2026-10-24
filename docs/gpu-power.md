@@ -2,7 +2,8 @@
 
 The A733 GPU power controller prepares the GPU at 400 MHz and requests power
 for its top-level domain (PCK600 domain 5) through a row of the
-[power-domain owner](power-domains.md). It supports bounded startup, shutdown, and reopening.
+[power-domain owner](power-domains.md). The exclusive GPU owner also controls
+CORE (domain 6). It supports bounded startup, shutdown, and reopening.
 The native platform integrates the shared clock and rail owners and the FreeRTOS
 GPU service. Host checks and an AArch64 compilation pass. A physical power/identity
 attempt on 2026-10-24 did not return; no startup, identity or shutdown phase was
@@ -29,8 +30,8 @@ The controller performs no automatic rollback after a failure.
 
 The resource manager must acquire the following before register preparation:
 
-- Exclusive ownership of the GPU local clock, external reset, and GPU top-level
-  power domain.
+- Exclusive GPU LOCAL authority over the local clock, external reset and CORE6
+  policy/PWCR, with TOP5 controlled only through the shared owner’s row.
 - A stable 400 MHz peripheral-clock output and an established 800 mV DCDC4 rail.
 - Shared leases for the oscillator, power-controller clock, and GPU AHB and
   memory-bus gates.
@@ -54,7 +55,8 @@ Register operations use these address spaces:
 | --- | --- | --- |
 | Main clock controller | `0x02002000` | AHB gate `0x5c0[7]`, memory-bus gate `0x5e0[16]`, GPU clock `0xb20`, bus gate/reset `0xb24[0,16]` |
 | Always-on clock controller | `0x07010000` | Power-controller gate `0x1ac[0]` |
-| Power controller | `0x07060000` | GPU domain 5, policy `0x5000`, status `0x5008`, sequencing delays |
+| Shared TOP power controller | `0x07060000` | Domain 5 policy `0x5000`, status `0x5008`, sequencing delays, through its row |
+| GPU-owned CORE power controller | `0x07066000` | Policy `0`, status `8`, PWCR `0x20`; ordered 32-bit accesses |
 
 Shared gates are read-only in this controller. The platform's register-update
 callback must preserve unrelated fields atomically under the shared register
@@ -69,17 +71,22 @@ Startup checks the MBUS gates, the power-controller clock, a closed GPU clock
 gate and an asserted reset, then requests the domain-5 row ON. The owner
 adopts a coherent inherited ON domain without a command. From OFF it programs
 the source-defined power-controller delays, requests domain state 8 and waits
-for that exact status. After the row reads ON the controller selects the 400 MHz peripheral
-parent with divisor one, enables the core and bus clocks, waits at least one
-microsecond, and releases external reset. Relevant writes receive readback
+for that exact status. After the row reads ON, the controller captures CORE
+policy, status and PWCR once. Whole policy/status words must match exactly at
+0 or 8 before it writes PWCR zero and policy 8, with exact readbacks. It then
+selects the 400 MHz peripheral parent with divisor one, enables core and bus
+clocks, waits at least one microsecond and releases external reset. Only then
+does it check CORE status 8, before permitting GPU register access. Relevant writes receive readback
 checks. The selected clock requires only 80 ns for 32 cycles, so the one
 microsecond delay covers the reference driver's settling requirement.
 
 Shutdown requires stopped firmware, closed job admission, and masked GPU
-interrupts. It asserts external reset, disables the local bus and core clocks,
-and requests the row OFF. The owner rereads the gate and reset closed, initializes
+interrupts. It writes CORE policy zero and checks CORE status zero while TOP
+and local clocks remain available. It then asserts external reset, disables
+the local bus and core clocks, and requests the TOP row OFF. The owner rereads the gate and reset closed, initializes
 the delay row if needed, requests domain state zero and waits for that exact status. It then releases
-shared-resource leases through the resource manager. The controller allows no
+shared-resource leases through the resource manager, which also verifies whole
+CORE policy/status words are zero. The controller allows no
 new operation after a failed transition.
 
 A successful power-off result does not establish that outstanding memory
@@ -234,3 +241,65 @@ compilation are preserved in
 The model keeps domain 4 untouched and verifies retained ownership on uncertainty;
 it does not simulate physical PCK handshakes or prove GPU execution. No new native
 image, hardware access or retry was made for this correction.
+
+
+## CORE ownership follows the selected BXM adapter
+
+The selected `rgx_sunxi` source defines `USE_FPGA` unconditionally at
+`sunxi_platform.c:70`; the macro name does not make this an excluded FPGA path.
+`SysDevInit` calls this adapter (`sysconfig.c:281`) and installs its later
+Pre/Post callbacks (337–338). Initial setup requests TOP runtime power, writes
+CORE PWCR zero and policy 8, then enables local clocks (911–922). The later Pre
+callback enables clocks before TOP/CORE requests (345–354); Post writes CORE
+policy zero before TOP runtime suspend and clock teardown (374–380). The CORE
+node is commented out in `sun60iw2p1.dtsi:766–774`, so the generic domain driver's
+delay setup does not cover CORE. Native code writes no CORE delay registers.
+This correction adds the omitted CORE operations without changing local reset
+order, parent rate or voltage.
+
+The PCK TRM identifies policy/status/PWCR at offsets 0/8/0x20. Arm
+[DEN0051E section 5.2.8](https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99)
+requires a settled static power policy before changing device-request enables.
+Native admission therefore compares complete policy/status words, rejecting
+dynamic, locked, operating-mode or mismatched values before PWCR writes.
+PWCR zero disables the documented hardware request enables; it does not prove
+transaction drain. The existing firmware-stop or admitted never-booted
+prerequisite remains necessary for OFF.
+
+The reference helpers do not await CORE acknowledgement. Native code adds a
+conservative completion check: one status read per poll, with a fresh monotonic
+deadline check before accepting its value. A delayed or unavailable CORE status
+may fail this criterion on hardware. ON is checked after local clock/reset
+progress; OFF is checked before teardown. Timeout, failed access or unexpected
+status retains the TOP row, rail pin and GPU leases without rollback.
+
+A host inspection of the pinned
+[SCP firmware](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex)
+(SHA-256 `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749`)
+provides supporting context, not a new SunstoneOS runtime dependency. File
+offsets `0x5ec6–0x5ee8` write policy OR 8 to every row 0–10, including CORE6,
+but skip only CORE6's status poll. The fragment has no identified caller or
+proven execution on these boards and provides no OFF/drain proof. It establishes
+neither eventual acknowledgement nor actual inherited state. Its existing
+provenance and decoded bytes are preserved in
+`~/.cache/sunstoneos/evidence/npu-low-power-source-20261024/source-search.json`.
+
+With immediate acknowledgement, this change adds two CORE writes and six reads
+on ON, then one write and two reads on OFF, plus two release reads. Each waiting
+poll adds one status read and two controller clock samples. Native writes use
+the existing shared register lock. The power structure grows by 16 bytes for
+cached policy/status/PWCR and a seen mask; the mask records completed reads,
+including a read followed by deadline rejection, and is not admission authority.
+The power/identity diagnostic prints those cached values and the failure step
+without accessing hardware again.
+
+Focused evidence is in
+`~/.cache/sunstoneos/evidence/gpu-core-power-20261024/`: inherited TOP/CORE pairs,
+static-state and deadline refusals, actual native access widths and locks,
+resource-release retention, and composition with the actual TOP owner/provider
+and rail ledger. Domain4 and shared-gate sentinels remain unchanged. The corrected
+power/identity candidate rebuilds every object using the enlarged power/platform
+layout and preserves the accepted monitor cleanup checks. These are software
+checks, not physical qualification or a location for the failed `fd3d5839` run.
+The earlier provider-readiness image remains unchanged and is still the first
+proposed board test.

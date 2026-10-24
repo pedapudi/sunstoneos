@@ -24,6 +24,8 @@
 #include "power-domains-model.h"
 
 static FILE *gpu_trace;
+static uint32_t gpu_core[9];
+static unsigned gpu_core_pending;
 static uint32_t policy_before;
 static void owner_written(uintptr_t a,uint32_t v)
 {
@@ -40,11 +42,26 @@ static int gpu_release(void *v){(void)v;return 1;}
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
     (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(off==0 || off==8 || off==0x20);
+        if(off==8 && gpu_core_pending) {
+            assert((d.ppu[5][2]&15)==8 && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001);
+            gpu_core[2]=gpu_core[0];gpu_core_pending=0;
+        }
+        *out=gpu_core[off/4];return 1;
+    }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
-    (void)v;assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
+        gpu_core[off/4]=set;if(!off)gpu_core_pending=1;
+        if(gpu_trace)fprintf(gpu_trace,"1 3 %x %x %x\n",off,clear,set);
+        return 1;
+    }
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27); /* the update key reads as zero */
     if(gpu_trace)fprintf(gpu_trace,"1 0 %x %x %x\n",off,clear,set);
@@ -61,7 +78,8 @@ static void gpu_trace_run(const char *path)
 {
     static const struct a733_gpu_power_ops ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_update};
     static struct a733_gpu_power g;struct a733_rail_token t={0};
-    domains_model_setup(0x28,23);d.ack_us=0;
+    domains_model_setup(0x28,23);d.ack_us=0;memset(&g,0,sizeof(g));
+    memset(gpu_core,0,sizeof(gpu_core));gpu_core_pending=0;
     assert(a733_gpu_power_init(&g,&ops,0) && a733_power_domain_row_init(&g.row,&d.owner,5,9,&t));
     domains_boot();t=domains_rail(9,A733_RAIL_DCDC4);
     gpu_trace=fopen(path,"w");assert(gpu_trace);policy_before=d.ppu[5][0];d.written=owner_written;
@@ -284,7 +302,8 @@ static void transition_delays(void)
 
 int main(int argc,char **argv)
 {
-    assert(argc<=2);
+    assert(argc<=3);
+    if(argc==3 && !strcmp(argv[1],"--gpu-trace")){gpu_trace_run(argv[2]);puts("PASS focused GPU TOP/CORE write trace");return 0;}
     if(argc==2 && !strcmp(argv[1],"--delays")) {
         transition_delays();puts("PASS first-transition delay initialization and retained failures");return 0;
     }

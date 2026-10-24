@@ -3,14 +3,17 @@
 #include <stddef.h>
 
 #define BIT(n) (UINT32_C(1) << (n))
-enum kind { CHECK, UPDATE, DELAY, DOMAIN };
+enum kind { CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, CORE_STATUS, CORE_CONFIG, POLL };
 struct step { enum kind kind; enum a733_gpu_power_bank bank;
     uint32_t offset, mask, value; };
 /* The GPU_TOP domain is PCK domain 5, which the power-domain owner powers
  * through the GPU's row. The MBUS gates, PPU clock, closed clock gate and
  * asserted reset are checked here before the request, and again by the owner
- * at admission. GPU_CORE is not independently enabled by the board device
- * tree. GPU local clock selects pll-peri0-400m / 1.
+ * at admission. The selected BXM rgx_sunxi adapter directly controls CORE6;
+ * its device-tree node is commented out. CORE configuration/policy writes
+ * follow sunxi_platform.c:70-102,911-922 at kernel 2ac08e8c7. DEN0051E5.2.8
+ * requires settled static policy before changing PWCR device request enables.
+ * GPU local clock selects pll-peri0-400m / 1.
  */
 static const struct step on_steps[] = {
     {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
@@ -19,6 +22,13 @@ static const struct step on_steps[] = {
     {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
     {DOMAIN, A733_GPU_CCU, 0, 0, 1},
+    {CORE_POLICY, A733_GPU_CORE, 0, 0, 0},
+    {CORE_STATUS, A733_GPU_CORE, 8, 0, 0},
+    {CORE_CONFIG, A733_GPU_CORE, 0x20, 0, 0},
+    {UPDATE, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
+    {CHECK, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
+    {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 8},
+    {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x0b000000},
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x03000000},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
@@ -28,8 +38,17 @@ static const struct step on_steps[] = {
     {DELAY, A733_GPU_CCU, 0, 0, 1},
     {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(16)},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16) | BIT(0)},
+    /* The reference does not wait before enabling clocks/reset. Validate
+     * acknowledgement only after that progress, before any engine access. */
+    {POLL, A733_GPU_CORE, 8, UINT32_MAX, 8},
 };
 static const struct step off_steps[] = {
+    /* Complete firmware stop is the caller's prerequisite. The selected
+     * BXM Post callback commands CORE OFF before TOP and clock teardown.
+     * Keep TOP/local clocks available while adding bounded acknowledgement. */
+    {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 0},
+    {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 0},
+    {POLL, A733_GPU_CORE, 8, UINT32_MAX, 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16), 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
@@ -76,7 +95,10 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
     s->index = 0;
     s->requested = 0;
     s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
-    if (on) s->lease_attempted = 0;
+    if (on) {
+        s->lease_attempted = 0;
+        s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
+    }
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
 enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *s, uint64_t deadline)
@@ -150,8 +172,17 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
             if (ok) s->last_value = value;
         }
         if (!ok) return fail(s, A733_GPU_POWER_IO);
+        if (p->kind == CORE_POLICY) { s->core_policy = value; s->core_seen |= 1; }
+        if (p->kind == CORE_STATUS) { s->core_status = value; s->core_seen |= 2; }
+        if (p->kind == CORE_CONFIG) { s->core_config = value; s->core_seen |= 4; }
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
         if (p->kind == CHECK && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_STATE);
+        if (p->kind == CORE_CONFIG && ((s->core_policy != 0 && s->core_policy != 8) ||
+                                      s->core_status != s->core_policy)) return fail(s, A733_GPU_POWER_STATE);
+        if (p->kind == POLL) {
+            if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
+            if (value != p->value) return A733_GPU_POWER_AGAIN;
+        }
         ++s->index;
     }
     if (!on) {
