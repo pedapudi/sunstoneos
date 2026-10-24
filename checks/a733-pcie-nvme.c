@@ -6,9 +6,11 @@
 #include "a733-pcie.c"
 #undef main
 #include "a733_pcie_nvme.h"
+#include "dma_address_width.h"
 #include <sys/mman.h>
 #define BAR0_BYTES 0x4000u
 #define MEMORY 0x41c00000u
+#define FOUR_GIB UINT64_C(0x100000000)
 static struct a733_pcie_nvme nvme;
 static struct a733_pcie_function plain;
 static struct device_memory_pool memory;
@@ -17,7 +19,11 @@ static uint32_t sibling[8][64];static unsigned siblings;
 static uint32_t table[8][4],bar2[1024];
 static unsigned no_soft_reset,large_bar,assigned_bar,table_outside,class_mismatch;
 static unsigned inherited,fatal_at_enable,identify_error,drop,shst_stuck,link_stuck;
-static unsigned irq_armed,irq_stopped,dma_count,msi_count,intx_count,d3,d3_writes;
+static unsigned irq_armed,irq_stopped,dma_count,msi_count,intx_count,d3,d3_writes,ep_accesses;
+/* Identity-mapped pool. The 4 GiB cases move it to the boundary, which lies
+ * in AddressSanitizer's shadow gap, so they run in a build without it. */
+static uintptr_t pool_base=MEMORY;static size_t pool_bytes=2*1024*1024;
+static uint32_t high_halves; /* OR of every queue base and PRP high dword. */
 static uint64_t pm_since,ready_at,shutdown_at;
 static struct {
     uint32_t cc,csts,aqa;uint64_t asq,acq,sq[2],cq[2];
@@ -39,7 +45,7 @@ static void owned_dma(void)
 }
 static void *host(uint64_t physical,size_t bytes)
 {
-    assert(physical>=MEMORY&&physical+bytes<=MEMORY+2*1024*1024);
+    assert(physical>=pool_base&&physical+bytes<=pool_base+pool_bytes);
     return (void *)(uintptr_t)physical;
 }
 static void interrupt(unsigned vector)
@@ -62,7 +68,7 @@ static void post(unsigned q,uint16_t cid,uint32_t result,unsigned status)
 }
 static void identify(const uint32_t *c)
 {
-    uint8_t *d=host((uint64_t)c[7]<<32|c[6],4096);owned_dma();memset(d,0,4096);
+    high_halves|=c[7];uint8_t *d=host((uint64_t)c[7]<<32|c[6],4096);owned_dma();memset(d,0,4096);
     if(c[10]==1){
         d[0]=0x4d;d[1]=0x14;d[2]=0x4d;d[3]=0x14;memcpy(d+4,"S4EWNX0R123456      ",20);
         memcpy(d+24,"MODEL NVME READ-ONLY FIXTURE            ",40);memcpy(d+64,"2B2QEXM7",8);
@@ -84,15 +90,15 @@ static void execute(unsigned q)
             /* Read only: no other I/O opcode reaches the model. */
             assert(opcode==2&&c[1]==1&&!c[8]&&!c[9]);
             uint64_t lba=(uint64_t)c[11]<<32|c[10];unsigned bytes=(c[12]+1)*512;
-            assert(bytes<=4096);uint8_t *d=host((uint64_t)c[7]<<32|c[6],bytes);owned_dma();
+            high_halves|=c[7];assert(bytes<=4096);uint8_t *d=host((uint64_t)c[7]<<32|c[6],bytes);owned_dma();
             for(unsigned i=0;i<bytes;++i)d[i]=pattern(lba*512+i);
             post(1,cid,0,0);continue;
         }
         switch(opcode){
         case 6:if(identify_error){post(0,cid,0,0x2);break;}identify(c);post(0,cid,0,0);break;
         case 9:assert(c[10]==7&&!c[11]);post(0,cid,0,0);break;
-        case 5:ctl.cq[1]=(uint64_t)c[7]<<32|c[6];ctl.ien=c[11];ctl.created|=1;post(0,cid,0,0);break;
-        case 1:assert(ctl.created&1);ctl.sq[1]=(uint64_t)c[7]<<32|c[6];ctl.created|=2;post(0,cid,0,0);break;
+        case 5:high_halves|=c[7];ctl.cq[1]=(uint64_t)c[7]<<32|c[6];ctl.ien=c[11];ctl.created|=1;post(0,cid,0,0);break;
+        case 1:assert(ctl.created&1);high_halves|=c[7];ctl.sq[1]=(uint64_t)c[7]<<32|c[6];ctl.created|=2;post(0,cid,0,0);break;
         case 0:ctl.created&=~2u;post(0,cid,0,0);break;
         case 4:assert(!(ctl.created&2));ctl.created&=~1u;post(0,cid,0,0);break;
         default:assert(0);
@@ -132,9 +138,9 @@ static void nvme_write(uint32_t off,uint32_t v)
         ctl.cc=v;return;
     case 0x24:ctl.aqa=v;return;
     case 0x28:ctl.asq=(ctl.asq&~(uint64_t)UINT32_MAX)|v;return;
-    case 0x2c:ctl.asq=(ctl.asq&UINT32_MAX)|(uint64_t)v<<32;return;
+    case 0x2c:high_halves|=v;ctl.asq=(ctl.asq&UINT32_MAX)|(uint64_t)v<<32;return;
     case 0x30:ctl.acq=(ctl.acq&~(uint64_t)UINT32_MAX)|v;return;
-    case 0x34:ctl.acq=(ctl.acq&UINT32_MAX)|(uint64_t)v<<32;return;
+    case 0x34:high_halves|=v;ctl.acq=(ctl.acq&UINT32_MAX)|(uint64_t)v<<32;return;
     case 0x1000:ctl.sq_tail[0]=(uint16_t)v;execute(0);return;
     case 0x1004:ctl.cq_head[0]=(uint16_t)v;return;
     case 0x1008:ctl.sq_tail[1]=(uint16_t)v;execute(1);return;
@@ -164,7 +170,7 @@ static int native_write(uintptr_t a,unsigned width,uint32_t v)
 static int in_d3_wait(void){return pm_since&&model.now-pm_since<A733_PCIE_D3_WAIT_US;}
 static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
-    policy_read(a,width);
+    ++ep_accesses;policy_read(a,width);
     if(a>=0x20000000&&a<0x20001000){
         unsigned f=target_function();
         assert(!f||!in_d3_wait());
@@ -183,7 +189,7 @@ static int ep_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 }
 static int ep_write(void *v,uintptr_t a,unsigned width,uint32_t value)
 {
-    assert(native_write(a,width,value));
+    ++ep_accesses;assert(native_write(a,width,value));
     if(a>=0x20000000&&a<0x20001000){
         unsigned f=target_function();assert(!f&&!in_d3_wait());
         if(a>=0x20000010&&a<=0x20000024&&value==UINT32_MAX){
@@ -232,8 +238,8 @@ static void device(void)
     port.ops.read=ep_read;port.ops.write=ep_write;
     memset(&ctl,0,sizeof(ctl));ctl.phase[0]=ctl.phase[1]=1;
     if(inherited){ctl.cc=0x00460001;ctl.csts=1;}
-    memset(&memory,0,sizeof(memory));memset((void *)MEMORY,0,2*1024*1024);
-    assert(device_memory_pool_init(&memory,MEMORY,MEMORY,2*1024*1024));
+    memset(&memory,0,sizeof(memory));memset((void *)pool_base,0,pool_bytes);
+    assert(device_memory_pool_init(&memory,pool_base,pool_base,pool_bytes));
 }
 static enum a733_pcie_result advance(enum a733_pcie_result (*poll)(void *),void *object)
 {
@@ -280,7 +286,7 @@ static void read_back(uint64_t lba)
     assert(a733_pcie_nvme_copy(&nvme,out)==A733_PCIE_PENDING);
     assert(until(nvme_poll,&nvme,A733_PCIE_READY)==A733_PCIE_READY);
     assert(a733_pcie_nvme_copy(&nvme,(void *)&port)==A733_PCIE_INVALID);
-    assert(a733_pcie_nvme_copy(&nvme,(void *)MEMORY)==A733_PCIE_INVALID);
+    assert(a733_pcie_nvme_copy(&nvme,(void *)pool_base)==A733_PCIE_INVALID);
     assert(a733_pcie_nvme_copy(&nvme,out)==A733_PCIE_READY);
     for(unsigned i=0;i<4096;++i)assert(out[i]==pattern(lba*512+i));
 }
@@ -446,12 +452,42 @@ static void port_case(const char *mode)
     assert(a733_pcie_stop(&port,deadline)==A733_PCIE_STOPPED&&a733_pcie_poll(&port)==A733_PCIE_STOPPED);
     struct a733_pcie_endpoint id;assert(a733_pcie_identity(&port,&id)==A733_PCIE_STOPPED);
 }
+/* Map the six-page pool so that it ends at 4 GiB, or one page above it. */
+static void boundary(uint64_t end)
+{
+    pool_base=(uintptr_t)(end-A733_PCIE_NVME_POOL_BYTES);pool_bytes=A733_PCIE_NVME_POOL_BYTES;
+    assert(mmap((void *)pool_base,pool_bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)==(void *)pool_base);
+}
+/* Admitted at the boundary: every queue base and PRP high half is zero. */
+static void pool_at_limit(void)
+{
+    boundary(FOUR_GIB);nominal(A733_PCIE_IRQ_POLL);
+    struct device_memory_extent e;enum device_memory_state state;
+    assert(device_memory_describe(&memory,nvme.lease,&e,&state)&&e.physical+e.bytes==DMA_ADDRESS_32BIT_LIMIT);
+    assert(dma_count&&!high_halves);
+}
+/* Refused before any configuration or BAR access: the lease is released and
+ * the pool's bytes are unchanged. */
+static void pool_across_limit(void)
+{
+    boundary(FOUR_GIB+4096);device();memset((void *)pool_base,0x5a,pool_bytes);
+    const struct a733_pcie_nvme_config c={.identity=93,.timeout_us=20000,.vendor=0x144d,.device=0xa808,
+        .irq=A733_PCIE_IRQ_POLL,.namespace_id=1};
+    unsigned writes=trace_count,accesses=ep_accesses;memset(&nvme,0,sizeof(nvme));
+    assert(!a733_pcie_nvme_init(&nvme,&port,&c,&memory,NULL)&&!nvme.self);
+    assert(trace_count==writes&&ep_accesses==accesses&&!port.function);
+    for(size_t i=0;i<pool_bytes;++i)assert(((uint8_t *)pool_base)[i]==0x5a);
+    struct device_memory_lease lease;struct device_memory_extent e;
+    assert(device_memory_acquire(&memory,port.config.owner,pool_bytes,&lease,&e)&&e.physical==pool_base);
+}
 int main(int argc,char **argv)
 {
     assert(argc==2);
     assert(mmap((void *)(uintptr_t)MEMORY,2*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)!=MAP_FAILED);
     const char *mode=argv[1];
     if(!strcmp(mode,"poll"))nominal(A733_PCIE_IRQ_POLL);
+    else if(!strcmp(mode,"pool-at-4g"))pool_at_limit();
+    else if(!strcmp(mode,"pool-across-4g"))pool_across_limit();
     else if(!strcmp(mode,"msix"))nominal(A733_PCIE_IRQ_MSIX);
     else if(!strcmp(mode,"intx"))nominal(A733_PCIE_IRQ_INTX);
     else if(!strcmp(mode,"gen2")){link_speed=negotiated=2;nominal(A733_PCIE_IRQ_MSIX);assert(port.endpoint.link_status==0x12);}

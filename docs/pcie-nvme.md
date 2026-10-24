@@ -39,7 +39,9 @@ the BARs otherwise.
 DMA uses six pages of the image's non-cacheable pool at
 `0x41c00000..0x41e00000`: the admin and I/O queues, the identify page and the
 data page. The CPU reads them through that non-cacheable mapping, so no cache
-maintenance is involved. A disabled inbound translation unit forwards device
+maintenance is involved. The driver refuses pages that end above 4 GiB, because
+the root port's inbound address width is unpublished; the pool lies below
+4 GiB, so the refusal does not fire in this image. A disabled inbound translation unit forwards device
 addresses unchanged, so the controller can reach any address; the admitted
 controller is trusted, as for every PCIe client in this project.
 

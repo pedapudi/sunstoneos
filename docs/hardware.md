@@ -991,9 +991,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
   [DMA address widths](dma-address-width.md) record one rule per DMA master.
-  DMA0 and the IOMMU enforce named limits at admission, and host checks pass.
-  The NVMe refusal of pools above 4 GiB is **planned**, and no transfer above
-  4 GiB has run on hardware.
+  DMA0, the IOMMU, the native camera, NVMe and xHCI enforce named limits at
+  admission, and host checks pass. The native camera reaches its allocation
+  through fixed IOVAs, so only 184,320 bytes of DMA memory must lie below
+  4 GiB. NVMe refuses queue memory above 4 GiB. No transfer above 4 GiB has run
+  on hardware.
 
   DMA-copy [host admission](dma-pool-session.md#the-host-command-reuses-the-sealed-compact-launcher)
   now requires external digest/session-bound authority for selected-channel
