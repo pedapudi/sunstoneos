@@ -30,6 +30,7 @@ SERIAL='sunstoneos-a733-npu-board'
 REQUEST_MAGIC,RESPONSE_MAGIC=0x3151424e,0x3152424e
 STATUS,LOAD,UPLOAD,SUBMIT,READ,RETURN,CLOSE=range(1,8)
 OK,NOT_READY=1,4
+CLOSED=9  # enum a733_npu_state in include/a733_npu_controller.h
 HEADER=64
 CHUNK=4096
 
@@ -50,15 +51,18 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,
         for first in range(0,len(data),512):
             packet=data[first:first+512];count=device.write(0x02,packet,timeout=min(500,remaining()))
             require(count==len(packet),'Incomplete NPU board write.')
+    def receive(maximum):
+        fragment=bytes(device.read(0x81,maximum,timeout=min(2000,remaining())))
+        path=evidence/f'fragment-{len(fragments)+1:05}.bin';supervisor.durable_frame(path,fragment)
+        fragments.append(dict(path=path.name,bytes=len(fragment),sha256=hashlib.sha256(fragment).hexdigest()));save()
+        return fragment
     def exchange(operation,argument=0,offset=0,payload=b'',not_ready=False):
         nonlocal sequence
         sequence+=1;send(request(operation,sequence,epoch,generation,argument,offset,payload))
         frame=bytearray();expected=HEADER
         while len(frame)<expected:
             maximum=min(16384,((expected-len(frame)+packet_size-1)//packet_size)*packet_size)
-            fragment=bytes(device.read(0x81,maximum,timeout=min(2000,remaining())))
-            path=evidence/f'fragment-{len(fragments)+1:05}.bin';supervisor.durable_frame(path,fragment)
-            fragments.append(dict(path=path.name,bytes=len(fragment),sha256=hashlib.sha256(fragment).hexdigest()));save()
+            fragment=receive(maximum)
             require(0<len(fragment)<=maximum,'Empty or oversized NPU board fragment.')
             frame.extend(fragment)
             if len(frame)>=HEADER and expected==HEADER:
@@ -69,6 +73,9 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,
                 require((operation==READ and count>0) or (operation!=READ and count==0),'Invalid NPU board response extent.')
                 expected=HEADER+count
             require(len(frame)<=expected,'NPU board stream exceeds its declared extent.')
+        # The device terminates every exact-packet response with one ZLP.
+        if expected%packet_size==0:
+            require(receive(packet_size)==b'','NPU board response lacks its terminal zero-length packet.')
         return bytes(frame)
     # The image answers not-ready until its client has opened the NPU.
     while True:
@@ -91,11 +98,16 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,prepared,
     record['npu_board_result']=dict(outputs=[hashlib.sha256(c).hexdigest() for c in copies],matched=matched,
         closed_state=struct.unpack_from('<I',closed,16)[0])
     save();require(matched,'NPU board outputs differ from the references; copies retained.')
+    require(record['npu_board_result']['closed_state']==CLOSED,'NPU board did not confirm local CLOSE.')
+    remaining()  # Durable writes and final response must finish within this instance's capture window.
+    record['npu_result']='observed-success';save()
     return record['npu_board_result']
 
 def source_files():
     return [('npu-board-host-tool.py',Path(__file__)),('npu-board-preparation.py',Path(preparation.__file__)),
         ('npu-board-usb.c',ROOT/'apps/npu-board/usb.c'),('board-preparation.py',Path(preparation.board.__file__)),
+        ('thermal-preparation.py',Path(preparation.thermal.__file__)),
+        ('npu-session-models.json',ROOT/'tools/npu-session-models.json'),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 def freeze_bundle(bundle):

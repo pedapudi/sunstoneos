@@ -396,9 +396,20 @@ external conditions.
 After those conditions are established, the smallest inference attempt uses
 catalogue model 0, one upload, one SUBMIT, a byte comparison with its pinned
 72-byte reference, RETURN and CLOSE. Freeze the image, session and evidence
-before launch. Retain resources for the prescribed whole-board power removal,
-and stop communication after the first failure. This image has no qualified
-ROM-return path. Current board recovery and admission state belong in the
+before launch. The host consumes and durably records the terminal zero-length
+packet when a response occupies a whole number of USB packets, including
+every 64-byte header at full speed. It reports success only after all output
+files match, CLOSE reports controller state CLOSED, and the original USB
+instance remains within the capture deadline. Twenty modeled host cases
+exercise those boundaries and the actual supervisor
+(`checks/npu-board-capture.py`).
+
+Retain resources for the prescribed whole-board power removal,
+and stop communication after the first failure. CLOSE stops the NPU locally; USB0 remains active until the
+20-second session deadline. This image has no normal ROM-return path.
+The single-core `apps/npu-finite` consumer separately implements verified
+quiescence and normal ROM return while retaining the NPU power domain.
+That return implementation does not cover the SMP board providers. Current board recovery and admission state belong in the
 [handoff](../handoff.md).
 
 ## Reuse and change
