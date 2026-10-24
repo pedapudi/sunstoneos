@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Offline preparation and decoding for the finite current CPU workload.
+"""Prepare, run once, or decode the finite current CPU workload.
 
-This tool performs no device or queue operations. Report decoding establishes
-only the captured report's contents; ROM continuity and restoration remain the
-coordinator's responsibility.
+Physical execution requires root-supplied admission, a live queue claim and
+current DDR/survey continuity. Failures retain ownership for explicit recovery.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -168,6 +168,125 @@ def decode_report(raw, epoch):
     return {'epoch': epoch, 'state': state, 'cpus': cpus, 'scope': 'copied report only; ROM return and restoration require separate evidence'}
 
 
+# The native contract grants 20 seconds; retain the existing 30-second ROM
+# discovery allowance after that bound. Neither deadline is renewed.
+RETURN_TIMEOUT_SECONDS = 20 + 30
+CHUNK_BYTES = 4 * 1024 * 1024
+RAM_START, RAM_BYTES = 0x41000000, 0x1200000
+base = supervised.base
+returning = base.module('qualification_returning', ROOT / 'tools/a733-returning-host.py')
+kernel = base.module('qualification_kernel', ROOT / 'tools/check-a733-kernel.py')
+
+
+def caller_interval(survey):
+    # Same source-backed A32 push interval as run-native-startup-probe.py.
+    require(survey.get('complete') is True and survey.get('sram_restored') is True and
+            survey.get('rom_usable') is True, 'Completed current returning survey required.')
+    sp = survey['result']['sp']
+    require(type(sp) is int and 0x4003c <= sp <= 0x100000 and sp % 4 == 0, 'Caller SP outside reviewed SRAM.')
+    require(all(sp <= address or sp - 60 >= address + size for _, address, size in base.REGIONS),
+            'Caller stack overlaps launcher reservations.')
+    return sp - 60, 60
+
+
+def admit(args, prepared, node, identity, port):
+    require(isinstance(args.root_owned_claim, str) and args.root_owned_claim.strip(), 'Explicit root-owned claim required.')
+    validate_bundle(args.bundle.resolve())
+    admission = json.loads(prepared['_frozen']['admission.json'])
+    supervised.validate_admission(admission, prepared['image_sha256'], identity, port)
+    paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
+    raw = [p.read_bytes() for p in paths]
+    kernel.validate_platform_admission(tuple(raw[:2]), node, identity, port,
+                                      base.FEL_HASH, base.FEL_HASH, tuple(raw[2:]))
+    caller_interval(json.loads(raw[1]))
+    ddr = json.loads(supervised.artifact(admission['ddr']).read_text())
+    covered = {(item['path'], item['sha256']) for item in ddr['evidence']}
+    require(all((str(p.resolve()), hashlib.sha256(data).hexdigest()) in covered for p, data in zip(paths, raw)),
+            'Current DDR/survey/warm-return chain is absent from the admitted reservation.')
+
+
+def run_once(transaction, wait_return, ready, bundle, prepared, evidence, record, journal):
+    require(not record.get('launch_attempted'), 'One CPU attempt only.')
+    ready()
+    # Check immutable ROM code, not the boot-input pin: the native return uses RMR.
+    addresses = (0x20, 0x24, 0x28, 0x3c, 0x40)
+    words = [int(x, 16) for x in transaction(*[v for a in addresses for v in ('readl', hex(a))]).split()]
+    require(words == [0xeb00008f, 0xe3a00911, 0xe3a0193d, 0xe3a0605c, 0xea00004d], 'Direct forced-ROM entry differs.')
+    backups = []
+    for offset in range(0, RAM_BYTES, CHUNK_BYTES):
+        size = min(CHUNK_BYTES, RAM_BYTES - offset)
+        path = evidence / f'before-dram-{offset // CHUNK_BYTES}.bin'
+        transaction('read', hex(RAM_START + offset), size, path)
+        try:
+            require(path.stat().st_size == size, 'Incomplete CPU RAM snapshot.')
+            base.sync_file(path)
+            snapshot_hash = base.digest(path)
+        except (OSError, ValueError):
+            # Missing, unreadable or incomplete copied bytes leave transport
+            # health uncertain. Retain ownership even before the first write.
+            record['dirty'] = True
+            record['snapshot_incomplete'] = True
+            journal()
+            raise
+        backups.append((RAM_START + offset, size, path, snapshot_hash))
+    record.update(dram_backups=[{'address': a, 'bytes': n, 'file': p.name, 'sha256': h} for a, n, p, h in backups],
+                  dram_restored=False, sram_restored=False, dirty=True)
+    journal()
+    base.preload(transaction, bundle, prepared, evidence)
+    ready()
+    require(int(transaction('readl', '0x02050014').strip(), 16) & 1 == 0, 'Watchdog enabled before CPU execution.')
+    record.update(launch_attempted=True, backup_sha256=prepared['_backup_hashes'].copy())
+    journal()
+    transaction('exe', '0x52000')
+    wait_return()
+    require('soc=00001903(A733)' in transaction('version'), 'Returned service is not A733 ROM.')
+    report = evidence / 'qualification-report.bin'
+    transaction('read', hex(prepared['qualification']['report_address']), REPORT_BYTES, report)
+    require(report.stat().st_size == REPORT_BYTES, 'Incomplete qualification report.')
+    base.sync_file(report)
+    result = decode_report(report.read_bytes(), prepared['epoch'])
+    record.update(qualification_result=result, report_sha256=base.digest(report))
+    journal()
+    # Verify every saved byte before the first restoration write. SRAM belongs
+    # to the new ROM and is never restored by this adapter.
+    for _, size, path, expected in backups:
+        require(path.stat().st_size == size and base.digest(path) == expected, 'Saved CPU RAM changed.')
+    for index, (address, size, path, expected) in enumerate(backups):
+        data = path.read_bytes()
+        require(len(data) == size and hashlib.sha256(data).hexdigest() == expected, 'Saved CPU RAM changed before transfer.')
+        restored = evidence / f'restored-dram-{index}.bin'
+        with base.sealed_source(data) as (source, descriptor):
+            transaction('write', hex(address), source, 'read', hex(address), size, restored, pass_fds=(descriptor,))
+        require(restored.read_bytes() == data, 'CPU RAM restoration readback differs.')
+        base.sync_file(restored)
+    # This is the existing native-return branch of the warm-continuity validator;
+    # no synthetic kernel-monitor result is substituted for the native report.
+    record.pop('mode', None)
+    record.update(result=result, physical_access=True, complete=True, dirty=False,
+                  dram_restored=True, rom_usable=True, ownership_release_permitted=True)
+    journal()
+    return result
+
+
+def run(args):
+    def execute(tx, wait, ready, prepared, record, journal):
+        paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
+        record['continuity_inputs'] = []
+        for index, path in enumerate(paths):
+            raw = path.read_bytes()
+            saved = args.evidence / f'continuity-{index}.json'
+            saved.write_bytes(raw)
+            base.sync_file(saved)
+            record['continuity_inputs'].append({'path': str(path.resolve()), 'file': saved.name,
+                                               'sha256': hashlib.sha256(raw).hexdigest()})
+        record['caller_interval'] = list(caller_interval(json.loads(args.platform_survey.read_text())))
+        journal()
+        return run_once(tx, wait, ready, args.bundle.resolve(), prepared, args.evidence, record, journal)
+    return returning.run(args, base=base, profile=PROFILE, validate_bundle=validate_bundle,
+                         admit=admit, execute=execute, description='Finite current eight-core workload and validated RAM return',
+                         return_timeout=RETURN_TIMEOUT_SECONDS)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='operation', required=True)
@@ -179,9 +298,16 @@ def main():
     report = sub.add_parser('read-report')
     for name in ['bundle', 'report', 'output']:
         report.add_argument('--' + name, type=Path, required=True)
+    live = sub.add_parser('run')
+    for name in ['bundle', 'fel', 'evidence', 'ddr-evidence', 'platform-survey']:
+        live.add_argument('--' + name, type=Path, required=True)
+    live.add_argument('--warm-return', type=Path, action='append', default=[])
+    live.add_argument('--root-owned-claim', required=True)
     args = parser.parse_args()
     if args.operation == 'prepare':
         prepare(args.image, args.manifest, args.admission, args.output, args.clang, args.lld, args.objcopy)
+    elif args.operation == 'run':
+        run(args)
     else:
         prepared = validate_bundle(args.bundle)
         result = decode_report(args.report.read_bytes(), prepared['epoch'])
