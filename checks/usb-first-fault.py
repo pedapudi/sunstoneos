@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Focused native USB first-fault and no-access BUSY cases; no hardware access."""
-import argparse,hashlib,importlib.util,json
+import argparse,hashlib,importlib.util,json,re
 from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE,UC_ARM64_REG_CPACR_EL1
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/usb-returning-20261018/physical');a=p.parse_args();E=a.evidence;B=a.baseline
 spec=importlib.util.spec_from_file_location('layout',E/'layout-helper.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
+# a733_platform_locks_init creates one mutex per platform lock.
+lock_enum=re.search(r'enum a733_platform_lock \{([^}]*)\}',(Path(__file__).resolve().parents[1]/'include/a733_platform_locks.h').read_text()).group(1)
+lock_count=[x.strip() for x in lock_enum.split(',')].index('A733_PLATFORM_LOCK_COUNT')
 image=layout.Image(E/'build/probe.elf');payload=(B/'input.bin').read_bytes();captured=json.loads((B/'frozen/observations/fabric-session.json').read_text())['words'];base_regs={int(k,0):v for k,v in captured.items()}
 class Machine:
  def __init__(self,variant):
@@ -13,15 +16,18 @@ class Machine:
   for addr,data in image.parts:
    if data:u.mem_write(addr,data)
   u.mem_write(0x43000000,payload);u.reg_write(UC_ARM64_REG_PSTATE,5);u.reg_write(UC_ARM64_REG_CPACR_EL1,3<<20)
-  self.time=1000000;self.task=0;self.mutexes=0;self.tasks=[];self.scheduler=False;self.phase='constructors';self.reads=[];self.writes=[];self.exit=None
-  self.regs={**base_regs,0x03400114:0,0x03400214:0,0x03400314:0,0x04100040:0,0x04100048:1,0x04100050:0,0x04100500:0,0x04100400:0,0x02003300:0x40000000,0x02003304:0x01000100,0x02003340:0x80000000}
+  self.time=1000000;self.busy=0;self.task=0;self.mutexes=0;self.tasks=[];self.scheduler=False;self.phase='constructors';self.reads=[];self.writes=[];self.exit=None
+  # USB0+0x40 holds a B-device role (DEVCTL bit 7), which ROM admission requires.
+  self.regs={**base_regs,0x03400114:0,0x03400214:0,0x03400314:0,0x04100040:0x8000,0x04100048:1,0x04100050:0,0x04100500:0,0x04100400:0,0x02003300:0x40000000,0x02003304:0x01000100,0x02003340:0x80000000}
   self.regs.update({0x04100540+i*16:0 for i in range(16)})
   names=['platform_init','xQueueCreateMutexStatic','xTaskCreateStatic','vTaskStartScheduler','platform_exit','platform_panic','xTaskGetCurrentTaskHandle','xQueueGetMutexHolder','a733_clock_token_status','a733_rail_status','a733_platform_lock_enter','a733_platform_lock_leave','a733_platform_lock_retain','a733_clock_retain']
   self.hooks={image.address(n):n for n in names};u.hook_add(UC_HOOK_CODE,self.code);u.hook_add(UC_HOOK_MEM_READ,self.read_mmio,begin=0x02000000,end=0x07ffffff);u.hook_add(UC_HOOK_MEM_WRITE,self.write_mmio,begin=0x02000000,end=0x07ffffff)
-  self.call('kernel_main');assert self.scheduler and len(self.tasks)==2 and self.mutexes==2 and not self.writes
+  self.call('kernel_main');assert self.scheduler and len(self.tasks)==2 and self.mutexes==lock_count and not self.writes
   self.reads=[];self.phase='provider';self.shared=image.address('shared');self.nl=image.layouts['a733_native_usb'];self.ul=image.layouts['a733_usb_platform'];self.pl=image.layouts['a733_pmic'];self.tl=image.layouts['a733_clock_token'];self.usb=self.shared+self.nl['usb'];self.pmic=self.shared+self.nl['pmic'];self.task=self.get(self.shared+self.nl['usb_task'],8)
   self.put(self.shared+self.nl['usb_rail_index'],4);self.put(self.usb+self.ul['token']+self.tl['id'],42,8);self.put(self.usb+self.ul['token']+self.tl['owner'],3,8);self.put(self.shared+self.nl['usb_rail']+image.layouts['a733_rail_token']['owner'],3,8)
   self.put(self.pmic+self.pl['stage'],4)
+  # PMIC readiness is the rail ledger's power-authority word (a733_pmic_live).
+  self.authority=self.shared+self.nl['rails']+image.layouts['a733_rail_leases']['authority'];self.put(self.authority,1)
   clock=self.pmic+self.pl['clock'];self.put(clock+self.tl['owner'],2,8);self.put(clock+self.tl['shared'],(1<<69)|(1<<32)|3,16);self.put(clock+self.tl['exclusive'],1<<55,16)
   lifetime=self.shared+self.nl['usb_power'];ll=image.layouts['a733_pmic_lifetime'];self.put(lifetime+ll['provider'],self.pmic,8);self.put(lifetime+ll['owner'],2,8);self.put(lifetime+ll['identity'],int.from_bytes(payload[24:32],'little'),8)
  def put(self,addr,v,n=4):self.u.mem_write(addr,int(v).to_bytes(n,'little'))
@@ -52,24 +58,26 @@ class Machine:
   elif n=='vTaskStartScheduler':self.scheduler=True;self.u.emu_stop()
   elif n in ('xTaskGetCurrentTaskHandle','xQueueGetMutexHolder'):self.ret(0 if self.variant=='wrong-task' and n=='xTaskGetCurrentTaskHandle' else self.task)
   elif n in ('a733_platform_lock_enter','a733_platform_lock_retain'):self.ret(1)
-  elif n in ('a733_clock_token_status','a733_rail_status','a733_platform_lock_leave','a733_clock_retain'):self.ret(3 if n=='a733_rail_status' and self.variant=='rail-fault' else 0)
+  # Provider metadata contention is a BUSY rail ledger (A733_RAIL_BUSY=2);
+  # a733_pmic_live reads one lock-free word and has no BUSY result.
+  elif n in ('a733_clock_token_status','a733_rail_status','a733_platform_lock_leave','a733_clock_retain'):self.ret((3 if self.variant=='rail-fault' else 2 if self.busy else 0) if n=='a733_rail_status' else 0)
   elif n=='platform_exit':self.exit=args[0];self.u.emu_stop()
   else:raise AssertionError('Unexpected panic')
  def read_mmio(self,cpu,access,addr,size,value,unused):
   assert size==4 and addr in self.regs,(hex(addr),size)
   if self.phase=='provider':self.reads.append(addr)
   self.put(addr,self.regs[addr])
-  if self.phase=='provider' and self.variant=='busy-before-first-write' and addr==0x04100048:self.put(self.pmic+self.pl['busy'],1)
+  if self.phase=='provider' and self.variant=='busy-before-first-write' and addr==0x04100048:self.busy=1
  def write_mmio(self,cpu,access,addr,size,value,unused):
   assert self.phase=='provider' and size==4 and addr in self.regs,(hex(addr),size)
   self.writes.append([addr,value])
   if self.variant!='write-ineffective':self.regs[addr]=value
-  if self.variant=='busy-after-write':self.put(self.pmic+self.pl['busy'],1)
+  if self.variant=='busy-after-write':self.busy=1
 results=[]
 for variant in ['rail-fault','pmic-fault','authority-and-deadline','read-busy','write-busy','baseline-busy-resumes','read-error','wrong-task','value-mismatch','busy-before-first-write','busy-after-write','write-ineffective','deadline']:
  m=Machine(variant)
- if variant in ('read-busy','write-busy','baseline-busy-resumes'):m.put(m.pmic+m.pl['busy'],1)
- if variant=='pmic-fault':m.put(m.pmic+m.pl['failed'],1)
+ if variant in ('read-busy','write-busy','baseline-busy-resumes'):m.busy=1
+ if variant=='pmic-fault':m.put(m.authority,1|(1<<8)) # A733_POWER_PROVIDER_FAULT
  if variant in ('read-busy','write-busy'):
   name='usb_read' if variant=='read-busy' else 'usb_write';args=[m.shared,0x07090160,0x43030000] if variant=='read-busy' else [m.shared,0x04100048,0]
   result=m.call(name,args,'/platform/a733/native_usb.c');assert result==2 and not m.reads and not m.writes and m.get(m.shared+m.nl['usb_io_denial'])==0
@@ -81,7 +89,7 @@ for variant in ['rail-fault','pmic-fault','authority-and-deadline','read-busy','
   if variant in ('baseline-busy-resumes','busy-before-first-write'):
    assert result==1 and m.field('stage')==stage and not m.field('fault') and not m.fault('kind') and not m.writes
    if variant=='busy-before-first-write':assert m.field('writes_attempted')==1 and m.field('writes_completed')==0
-   m.put(m.pmic+m.pl['busy'],0);m.variant='resumed'
+   m.busy=0;m.variant='resumed'
    result=m.call('a733_usb_platform_poll',[m.usb]);assert result==0 and m.field('stage')==(20 if stage==2 else 22) and not m.field('fault')
   else:
    assert result==3 and m.field('stage')==19 and m.field('fault')==1 and m.fault('stage')==stage

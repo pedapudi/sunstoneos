@@ -211,9 +211,12 @@ and npu-convolution call it directly, and usb-returning and the other
 clear, the 150 ms detach interval starts. When it still reads set, the
 provider enters `ROM_WAIT_SOFTCONN` and re-reads on later polls without
 writing; the interval starts at the first clear read. A bit that never
-clears exhausts the provider deadline and retains ownership with a time
-failure (kind 1) at stage `0x1d`, whose observed value is the last word
-read; no reset is written. `ROM_RESET_ASSERT` checks SoftConn clear again
+clears exhausts the provider deadline at stage `0x1d`; no reset is
+written. The provider would record a time failure (kind 1) whose observed
+value is the last word read, but in the returning image the USB task's
+`live()` check uses the same deadline and runs first, so the board almost
+always reports `startup deadline/provider` with `USB_STAGE=0x1d` and an
+empty fault record. `ROM_RESET_ASSERT` checks SoftConn clear again
 before the reset write.
 
 The returning application's shutdown in `apps/usb-returning/main.c`

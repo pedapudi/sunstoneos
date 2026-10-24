@@ -301,9 +301,11 @@ the last returning image of ranks 6 to 8. Every directory below starts with
    With `rank-9-usb-v3/`, `USB_FAULT_STAGE=0x18` with `USB_FAULT_MASK=0x640`
    and bit 6 set in `USB_FAULT_OBSERVED` means the PCTL byte store did not
    remove SoftConn within 150 ms. With `rank-9-usb-v4/` the same condition
-   ends as `USB_FAULT_KIND=0x1` at `USB_FAULT_STAGE=0x1d` with bit 6 set in
-   `USB_FAULT_OBSERVED`, at the provider deadline. The design document lists
-   the remaining causes.
+   almost always ends as `INCOMPLETE USB: startup deadline/provider` with
+   `USB_STAGE=0x1d`, `USB_FAULT_KIND=0` and `USB_FAULT_OBSERVED=0`: the USB
+   task's own deadline check uses the provider's deadline and runs first.
+   Stage `0x1d` alone shows that SoftConn never read clear. No reset is
+   written. The design document lists the remaining causes.
 
 ## Stop conditions
 
