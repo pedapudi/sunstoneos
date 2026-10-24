@@ -2593,6 +2593,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Evidence: `usb-first-fault-20261018/physical-064/runtime/`. User-confirmed power
   removal recovered the board, and the retained processes and failed claim are
   closed. This does not qualify the native USB composition.
+  On 2026-10-23 the corrected image passed that check on port 3-3, masked the
+  ROM's interrupt enables and then refused at the soft-disconnect: its 32-bit
+  store to `0x04100040` completed and SoftConn (PCTL bit 6) still read back
+  set. The provider now removes SoftConn with one PCTL byte store, the width
+  of the pinned BSP, TinyUSB and ROM, and verifies it after the 150 ms
+  interval before reset ([takeover design](designs/usb-session-takeover.md)).
+  Linked checks reproduce the board's fault record on the refused image and
+  reach PREPARED on the corrected one; no board has run it.
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through

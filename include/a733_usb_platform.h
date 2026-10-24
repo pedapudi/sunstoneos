@@ -68,7 +68,10 @@ struct a733_usb_platform_ops {
     /* 1 succeeds; IO_BUSY waits only if this poll has issued no successful
      * write. IO_BUSY after a write retains ownership rather than replaying a
      * partial reset/write sequence. Other values fault. These registers have
-     * no read-to-clear semantics. A BUSY callback must issue no MMIO. */
+     * no read-to-clear semantics. A BUSY callback must issue no MMIO.
+     * USB0+0x40 packs the byte registers PCTL, DEVCTL, EPIND and VEND0. The
+     * provider writes that word only to clear PCTL bit 6 (SoftConn); the
+     * write callback must store the PCTL byte alone, as the pinned sources do. */
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
 };

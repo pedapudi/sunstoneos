@@ -24,6 +24,7 @@ def main():
     a=p.parse_args();root=Path(__file__).resolve().parents[1]
     a.output.mkdir(parents=True,exist_ok=False);snapshot=a.output/'source';snapshot.mkdir()
     paths=['include/a733_usb_platform.h','include/a733_clock_reference.h','include/a733_usb_platform_native.h','include/a733_clock_leases.h',
+           'include/a733_power_authority.h','include/a733_range.h',
            'drivers/usb/a733_usb_platform.c','drivers/usb/a733_usb_platform_native.c',
            'drivers/clock/a733_clock_leases.c','checks/a733-usb-platform.c','checks/a733-usb-rom-handoff.c','checks/a733-usb-platform.py']
     hashes={}
