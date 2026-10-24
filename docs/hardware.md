@@ -480,9 +480,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pools; extents take the GPU MMU's page alignment, the kernel critical section
   serializes acquire, release and retain while the per-access lease check stays
   lock-free, and acquire cleans recycled pages. The
-  [EL1 map](memory-protection.md) is **implemented** for 910 MiB of the
-  reported 12 GiB, and a QEMU check compares every EL1 entry with it; mapping
-  the remaining DRAM waits on launch evidence. Physical range ownership,
+  [EL1 map](memory-protection.md) is **implemented** for all 12,174 MiB of
+  the reported 12 GiB that lie outside the monitor and the unowned
+  `0x7900_0000`–`0x8000_0000` hole, in the OS and cached images of both
+  layouts; a QEMU check compares every EL1 entry in both layouts. The entries
+  above the boot image are written only when the per-boot DRAM decode check
+  passes, and that check has no passing definition yet, so built images keep
+  the 910 MiB (extended) or 126 MiB (local) map. The GPU linear OS image maps
+  its GPU output region read-only at EL0 and EL1. Physical range ownership,
   device reachability and the full-capacity DRAM check remain unqualified;
   external pools still need application-specific mapping access.
   A [fixed interrupt table](a733-smp-cached.md#a-fixed-interrupt-table-serves-images-with-several-device-owners)

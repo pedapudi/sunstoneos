@@ -2939,6 +2939,7 @@
    "docs/designs/cpu-table-walks-measurements.md",
    "docs/designs/cpu-table-walks.md",
    "docs/designs/memory-architecture-measurements.md",
+   "docs/designs/memory-map-12g.md",
    "docs/device-memory-capacity.md",
    "docs/memory-protection.md"
   ],
@@ -2951,7 +2952,7 @@
    "--qemu",
    "--freertos"
   ],
-  "summary": "Check pool placement and class alignment, the EL1 map, and one-call pool preparation.",
+  "summary": "Check pool placement and class alignment, the EL1 map in both layouts, and pool preparation.",
   "usb": false
  },
  "display-clock-handoff.py": {
@@ -3233,6 +3234,7 @@
    "docs/designs/dram-bus-priority.md",
    "docs/designs/dram-controller-measurements.md",
    "docs/designs/dram-controller.md",
+   "docs/designs/memory-map-12g.md",
    "docs/dram.md"
   ],
   "library": false,
@@ -5943,6 +5945,7 @@
   "docs": [
    "docs/designs/cpu-pmu.md",
    "docs/designs/memory-architecture-measurements.md",
+   "docs/designs/memory-map-12g.md",
    "docs/device-memory-capacity.md"
   ],
   "library": false,

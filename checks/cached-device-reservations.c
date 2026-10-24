@@ -1,3 +1,4 @@
+#include "a733_memory_local.h"
 #include "a733_cached_memory.h"
 #include "a733_cached_devices.h"
 #include "aarch64_device_memory.h"
@@ -133,6 +134,8 @@ void fixture_el1(unsigned core)
         CHECK(!a733_smp_device_preparation_admitted());
         a733_cached_runtime[0].startup_deadline = UINT32_MAX;
         CHECK(a733_smp_device_preparation_admitted());
+        /* As platform/a733-smp-cached/continue.c does on core 0. */
+        CHECK(a733_memory_local_prepare());
         CHECK(a733_cached_devices_prepare(&a733_cached_device_inputs));
         CHECK(!a733_cached_devices_prepare(&a733_cached_device_inputs));
         struct a733_cached_devices *d = a733_cached_devices_prepared(); CHECK(d);

@@ -1,7 +1,11 @@
 /* Local-layout pool preparation against a modeled translation callback.
  * The runner links the pool sources with --defsym pool addresses and counts
- * the address translations each preparation makes: one per write-back page
- * and two per non-cacheable page. */
+ * the write translations the boot preparation makes: one per page of either
+ * pool with the weak default stride, or one per 2 MiB block that holds a pool
+ * byte when built with TEST_POOL_STRIDE, which defines the stride as an image
+ * with 2 MiB block descriptors does. */
+#include "a733_device_memory_layout.h"
+#include "a733_memory_local.h"
 #include "a733_memory_reservations.h"
 #include "a733_memory_uncached.h"
 #include "aarch64_device_memory.h"
@@ -9,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if defined(TEST_POOL_STRIDE)
+const uintptr_t a733_local_pool_stride = TEST_POOL_STRIDE;
+#endif
 static unsigned translations, fault_block = UINT32_MAX;
 unsigned aarch64_device_cache_stride(void) { return 64; }
 int aarch64_device_cache(enum aarch64_cache_op op, uintptr_t cpu, size_t bytes)
@@ -30,15 +37,22 @@ int main(int argc, char **argv)
 {
     /* argv[1]: block index whose translation faults, or none. */
     if (argc > 1) fault_block = (unsigned)strtoul(argv[1], NULL, 0);
-    struct device_memory_pool *wb = a733_memory_reservations_init();
+    /* The getters do not prepare: before the boot preparation they return
+     * NULL and translate nothing. */
+    assert(!a733_memory_reservations_init() && !a733_memory_uncached_init() && !translations);
+    int wb_ready = a733_memory_reservations_prepare();
     unsigned wb_translations = translations;
-    struct device_memory_pool *nc = a733_memory_uncached_init();
+    int nc_ready = a733_memory_uncached_prepare();
     unsigned nc_translations = translations - wb_translations;
     printf("translations wb=%u nc=%u total=%u\n", wb_translations, nc_translations, translations);
+    struct device_memory_pool *wb = a733_memory_reservations_init(), *nc = a733_memory_uncached_init();
+    assert(!wb == !wb_ready && !nc == !nc_ready);
     if (fault_block != UINT32_MAX) {
         assert(!wb || !nc);
-        /* A refusal is kept: later getter calls translate nothing. */
+        /* A refusal is kept and stops the boot: the boot preparation reports
+         * it, and later calls translate nothing. */
         unsigned before = translations;
+        assert(!a733_memory_local_prepare());
         assert(a733_memory_reservations_init() == wb && a733_memory_uncached_init() == nc);
         assert(translations == before);
         puts("PASS local preparation: a faulting block refuses its pool, once");
@@ -54,8 +68,8 @@ int main(int argc, char **argv)
     unsigned before = translations;
     assert(a733_memory_reservations_init() == wb && a733_memory_uncached_init() == nc);
     assert(translations == before); /* Published pools make no further translations. */
-    /* Preparation called again, as platform_init() will, reports success. */
-    assert(a733_memory_reservations_prepare() == 1 && a733_memory_uncached_prepare() == 1);
+    /* Preparation called again reports success and translates nothing. */
+    assert(a733_memory_local_prepare() == 1 && translations == before);
 #endif
     puts("PASS local preparation: identity write-back and non-cacheable pools published");
     return 0;

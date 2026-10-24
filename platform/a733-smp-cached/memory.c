@@ -2,6 +2,15 @@
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
+/* This builder maps image RAM, and so every local pool byte, with 2 MiB
+ * level-2 block descriptors; the QEMU golden comparison in
+ * checks/device-memory-capacity.c fixes them. The local pool check of
+ * a733_memory_critical.h therefore makes one translation per 2 MiB block in
+ * every image that links this file. */
+const uintptr_t a733_local_pool_stride = (uintptr_t)2 << 20;
+#if defined(A733_GPU_OUTPUT_EL0_READ_ONLY) && defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#error "The read-only GPU output view rewrites local-layout entries; the extended layout has none"
+#endif
 #define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
 #define BIT(n) (UINT64_C(1) << (n))
 uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
@@ -13,6 +22,26 @@ uint64_t a733_cached_el1_table_sum[8] __attribute__((section(".bss.a733_cached_t
 extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
 extern unsigned char __device_pool_start[], __device_pool_end[];
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
+/* DRAM above the boot image that EL1 maps when this boot's decode check
+ * passes: level-2 blocks below 0x80000000, level-1 blocks from there. The same
+ * table is the list the check receives and drives the entry writes. The
+ * extended layout already maps 0x48000000-0x79000000 with its pools. */
+static const struct a733_dram_range dram_map[] = {
+#if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    {UINT64_C(0x48000000), UINT64_C(0x79000000) - UINT64_C(0x48000000)},
+#endif
+    {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)},
+};
+#define DRAM_MAP_RANGES (unsigned)(sizeof dram_map / sizeof dram_map[0])
+/* No image links drivers/dram/a733_dram_decode.c yet, so this default is the
+ * one definition in every image: no decode evidence, so no entry above the
+ * current map. The driver's definition, which has the same declaration in
+ * a733_dram.h, replaces it in an image that links the driver. */
+__attribute__((weak)) int a733_dram_decode_check(const struct a733_dram_range *ranges, unsigned count)
+{
+    (void)ranges; (void)count;
+    return 0;
+}
 
 int a733_cached_memory_prepare(void)
 {
@@ -64,6 +93,13 @@ int a733_cached_memory_prepare(void)
         a733_cached_el3_l2[14] = (a733_cached_el3_l2[14] & ~UINT64_C(28)) | 8;
         a733_cached_el1_l2[14] = (a733_cached_el1_l2[14] & ~UINT64_C(28)) | 8;
     }
+#if defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
+    /* GPU output region 0x46c00000-0x47000000: AP = 0b11, read-only at EL0
+     * and EL1 as the text block is, UXN and PXN, still write-back inner
+     * shareable. No CPU store can dirty a line of it. EL3 never touches it. */
+    a733_cached_el1_l2[54] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
+    a733_cached_el1_l2[55] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
+#endif
 #endif
     for (unsigned i = 0; i < 512; ++i) {
         uintptr_t a = 0x42000000 + (uintptr_t)i * 4096;
@@ -78,15 +114,19 @@ int a733_cached_memory_prepare(void)
     }
     a733_cached_el3_l2[16] = (uintptr_t)a733_cached_el3_l3 | 3;
     a733_cached_el1_l2[16] = 0; /* Secure monitor and tables remain inaccessible at EL1. */
-#if A733_DEVICE_MEMORY_LAYOUT >= 2
-    /* Stage 2: 1 GiB EL1 write-back blocks over 0x80000000-0xffffffff, EL1
-     * read/write, never executable. A mapped block receives speculative reads,
-     * so this boot's DRAM decode must be linear there with no protected region. */
-    extern int a733_dram_decode_check(void);
-    if (a733_dram_decode_check() != 1) return 0;
-    for (unsigned i = 2; i < 4; ++i)
-        a733_cached_el1_l1[i] = A733_EL1_DRAM_BLOCK((uint64_t)i << 30);
-#endif
+    /* DRAM above the boot image, EL1 read/write, no EL0 access, never
+     * executable. A mapped block receives speculative reads, so it is written
+     * only when this boot's decode is linear there with no protected region.
+     * EL3 entries stay invalid: EL3 does not access that range. */
+    if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES) == 1)
+        for (unsigned r = 0; r < DRAM_MAP_RANGES; ++r) {
+            uint64_t base = dram_map[r].base, level1 = base >= UINT64_C(0x80000000);
+            uint64_t step = level1 ? UINT64_C(1) << 30 : UINT64_C(1) << 21;
+            uint64_t *entry = level1 ? &a733_cached_el1_l1[base >> 30] :
+                &a733_cached_el1_l2[(base - UINT64_C(0x40000000)) >> 21];
+            for (uint64_t v = A733_EL1_DRAM_BLOCK(base), end = v + dram_map[r].size; v < end; v += step)
+                *entry++ = v;
+        }
     /* Last table step: each core compares this with its own readback. */
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];
