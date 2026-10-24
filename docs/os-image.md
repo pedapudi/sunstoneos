@@ -229,10 +229,60 @@ entry reads it through `board_session_sealed`.
 policy for the session lifetime. It reads all five channels every 25 ms, or
 sooner after the thermal interrupt, and passes each result to the policy. A
 CRITICAL level, a driver fault, a lost owner or an unexpected result ends the
-session through `board_fail`. The service then masks its interrupt and keeps
-its clock token and register mutex. THROTTLE and NORMAL are load hints; the
-image has no reduced-load mode, so it ignores them. USB0 output does not carry
-thermal readings; the mimus result frame has no free field for them.
+session through `board_fail`. The service then masks its interrupt and retains
+its clock token and any mutex held across an uncertain operation. A sensor
+without a valid reading for one second triggers THROTTLE; five seconds without
+a reading triggers terminal CRITICAL.
+
+Before policy initialization and during THROTTLE, both recognition tasks sleep
+for one scheduler tick at each existing checkpoint. Each checkpoint checks
+board liveness before and after that sleep and reports progress only after
+it completes. NORMAL removes the delay. There is no waiting loop that could
+keep watchdog progress current while inference is stuck. The normal path adds
+one thermal getter call, whose only shared-state access is one acquire load.
+
+The GPU dispatcher selects the CPU for new layers during THROTTLE. An already
+admitted layer can finish its remaining GPU batches under the existing job
+deadlines. NORMAL restores placement only for a still-open session; GPU
+failure or incomplete output remains disabled. CPU fallback can shift heat
+to the CPU, so the checkpoint delay and critical stop remain necessary.
+This policy changes no clock, voltage or device power setting.
+
+The focused [thermal integration check](../checks/os-thermal-throttle.py)
+executes the actual AArch64 thermal policy, publication callback, CPU and GPU
+recognition checkpoints, and dispatcher. Fourteen cases cover startup,
+repeated throttle/recovery, owner and worker calls, liveness loss before or
+during a sleep, stale/critical sensors, and disabled GPU sessions.
+Sensor reads, scheduler delays and GPU device operations are modeled.
+Evidence is in `~/.cache/sunstoneos/evidence/os-thermal-throttle-20261024/attempt1/`.
+No physical temperature reduction, scheduling latency or thermal recovery
+has been qualified. USB0 output does not carry thermal readings; the mimus
+result frame has no free field for them.
+
+Power and thermal integration remains incomplete:
+
+- **CPU operating points.** The optional supervised CPU clock build uses
+  the pinned 26 MHz tables, speed-bin limits and session grant. The tables
+  extend to 1,794 MHz for CPU-L and 2,002 MHz for CPU-B, subject to the bin.
+  The existing driver lowers only clusters that it raised above **1,014 MHz**
+  to that thermal ceiling, preserving voltage. Restoration consumes an
+  authorized change; exhausted grants leave the lower rate in place.
+  Inherited high rates that the driver did not set are not reduced.
+  The ordinary OS build changes neither CPU clocks nor voltage.
+- **GPU lifetime.** Critical thermal failure revokes the GPU backend through
+  `board.fatal`. The resident supervisor ends renewal on a stalled GPU wait
+  or failed recognition. The OS has no dynamic GPU operating-point control
+  or reusable recovery after an uncertain job; resources remain retained
+  until the prescribed reset or power removal.
+- **NPU integration.** The OS start list has no NPU service. Separate NPU
+  images use a fixed 492 MHz clock and 800 mV supply configuration and have
+  no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
+  resets while retaining the power-domain and PLL ownership; it does not
+  establish reusable whole-device power recovery.
+
+CPU clock and PMIC voltage board changes still need their existing individual
+approvals. Supervised manual recovery, resident watchdog recovery and physical
+thermal qualification remain separate prerequisites and evidence gaps.
 
 ## Microphone recognition
 

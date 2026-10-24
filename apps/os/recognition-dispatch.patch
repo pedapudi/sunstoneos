@@ -1,7 +1,6 @@
 --- recognition.cc
-+++ recognition-gpu.cc
-@@ -2,7 +2,14 @@
- #include "assets.h"
++++ recognition-dispatch.cc
+@@ -3,5 +3,12 @@
  #include "../mimus/recorded.h"
  #include "runtime.h"
 +#include "../mimus/parallel_runtime.h"
@@ -14,18 +13,14 @@
 +    "the mimus arena overlaps the GPU output region");
  #include "a733_storage_digest.h"
  #include "FreeRTOS.h"
- #include "task.h"
-@@ -22,6 +29,8 @@
- [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
+@@ -23,4 +30,6 @@
  void recognize(void *)
  {
 +    /* The engine's second worker runs on the pair's other core. */
 +    mimus_parallel_bind();
      /* Board owners must first establish live storage attachment. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
-     while(!mimus_board_live()){if(stopped.load()||!mimus_board_session_live()){failed();}mimus_board_progress();vTaskDelay(1);}
-@@ -35,6 +44,10 @@
-         uint8_t hash[32];storage_digest_end(&digest,hash);
+@@ -36,4 +45,8 @@
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
      }
 +    /* Every model hash matched: open the GPU session once, when the engine
@@ -34,23 +29,30 @@
 +    os_gpu_open();
      std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
          input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
-     /* Only this task mutates recognizer/transcript storage. USB0 publishes an
-@@ -65,8 +78,13 @@
-     }
+@@ -66,6 +79,21 @@
  }
  }
 +/* A RESET or LOST GPU completion ends the boot through the same path. */
 +extern "C" void os_dispatch_stop(void){failed();}
++extern "C" int os_thermal_throttled(void);
  extern "C" void mimus_native_checkpoint(void)
- {if(!mimus_board_live())failed();mimus_board_progress();}
+-{if(!mimus_board_live())failed();mimus_board_progress();}
++{
++    if(!mimus_board_live())failed();
++    /* One bounded sleep per real checkpoint; a stuck engine or GPU cannot
++     * earn progress by looping here. Both inference tasks use this hook. */
++    if(os_thermal_throttled()){
++        vTaskDelay(1);
++        if(!mimus_board_live())failed();
++    }
++    mimus_board_progress();
++}
 +/* The engine's parallel ranges on the inference worker count as recognizer
 + * progress (apps/mimus/parallel_runtime.cc). */
 +extern "C" void mimus_native_inference_progress(void){mimus_board_progress();}
  extern "C" void platform_puts(const char *text)
  {
-     mimus_native_checkpoint();
-@@ -78,7 +96,16 @@
- extern "C" void platform_hex(uint64_t x)
+@@ -79,5 +107,14 @@
  {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
  extern "C" int mimus_board_start(void)
 -{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}
@@ -66,4 +68,3 @@
 +}
  extern "C" unsigned mimus_board_started(void){return started.load(std::memory_order_acquire);}
  extern "C" unsigned mimus_board_generation(void){return generation.load(std::memory_order_acquire);}
- extern "C" int mimus_board_ack(unsigned current)

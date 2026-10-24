@@ -63,6 +63,7 @@ static jmp_buf stop;
 static unsigned board_fails, opens, open_reply = 1;
 extern "C" void os_dispatch_stop(void) { ++board_fails; longjmp(stop, 1); }
 extern "C" int a733_gpu_mimus_open(void) { ++opens; return open_reply; }
+extern "C" int os_thermal_throttled(void) { return 0; }
 
 enum Fault { NONE, REFUSE_SUBMIT, REFUSE_RECORD, LOSE, DROP_TAG, CORRUPT_SUM, LOSE_AT_SUBMIT };
 static struct { unsigned job; Fault fault; } script = {~0u, NONE};

@@ -132,11 +132,21 @@ engine's streamed row ring and its internal-arena codes.
 ## The dispatcher
 
 `os_dispatch_place(ordinal)` returns the tensor's row while the session is
-open and a zero row otherwise. It compiles for AArch64 to two loads (the
-active row count and the row) and one compare. The active count is the
+open and thermal throttling is clear, and a zero row otherwise. Its table
+lookup retains two table loads and adds one thermal getter call, an ordinal
+stack save/restore and one conditional test. The getter performs one acquire
+load; it never sleeps. The active count is the
 table's length after a successful OPEN and zero before OPEN, after a refused
 OPEN and after a GPU fault. The recognizer task runs the hook, so the count
 and the dispatch record need no atomic operations or locks.
+
+The thermal gate applies at each layer's `Begin`. A layer already admitted
+can finish its remaining batches through `Finish`. Returning to NORMAL
+restores placement only while the session remains open; it cannot reopen
+a faulted or incomplete session. Moving work to the CPU alone does not
+establish lower temperature. The OS also delays recognition checkpoints
+during THROTTLE and closes admission on CRITICAL, as described in
+[the thermal service](os-image.md#thermal-service).
 
 The dispatch record, `os_dispatch_record`, counts calls placed on the GPU and
 jobs refused before device access, and holds whether OPEN succeeded or failed,

@@ -28,7 +28,9 @@ The check covers docs/recognition-dispatch.md on the host; no device is used:
 - the patch's arena assertion compiles for a 12 MiB mimus arena at
   0x46000000 and refuses a larger arena or another base; the result records
   whether apps/mimus/recorded.h already fits;
-- os_dispatch_place compiles for AArch64 to two loads and one compare;
+- os_dispatch_place keeps two table loads and adds one thermal getter call,
+  an ordinal stack save/restore and one conditional test; the getter performs
+  one acquire load;
 - with --configure-from, CMake refuses the option in the supervised
   lifetime and with a user-supplied A733_GPU_OUTPUT_EL0_READ_ONLY, which it
   sets itself; it configures the resident build with and without the
@@ -242,8 +244,11 @@ def lookup_instructions(out):
            for line in body.strip().splitlines()]
     loads = [o for o in ops if o.startswith('ldr')]
     compares = [o for o in ops if o in ('cmp', 'cmn', 'ccmp', 'tst', 'cbz', 'cbnz')]
-    assert len(loads) == 2 and len(compares) == 1, ops
-    return {'instructions': ops, 'loads': len(loads), 'compares': len(compares)}
+    calls = [o for o in ops if o == 'bl']
+    stack_loads = sum('ldr\t' in line and '[sp' in line for line in body.splitlines())
+    assert len(loads) == 3 and stack_loads == 1 and len(compares) == 2 and len(calls) == 1, ops
+    return {'instructions': ops, 'loads': len(loads), 'stack_loads': stack_loads,
+            'compares': len(compares), 'thermal_calls': len(calls)}
 
 
 def configure_cases(out, build, models):

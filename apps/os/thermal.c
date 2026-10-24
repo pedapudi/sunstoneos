@@ -25,6 +25,11 @@ static struct {
     unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
 } thermal;
+/* Published separately from policy initialization: recognition may run before
+ * the thermal task. Until initialization, keep its load reduced. */
+static atomic_uint load_level=A733_THERMAL_THROTTLE;
+int os_thermal_throttled(void)
+{return atomic_load_explicit(&load_level,memory_order_acquire)!=A733_THERMAL_NORMAL;}
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static int live(void)
 {return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
@@ -71,11 +76,17 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
         a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
 }
 static void cancel(void)
-{atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
-/* CRITICAL: refuse new work by closing board admission. THROTTLE and NORMAL
- * are load hints; this image has no reduced-load mode, so they are ignored. */
+{atomic_store_explicit(&load_level,A733_THERMAL_CRITICAL,memory_order_release);
+ atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
+/* The recognizer backs off at its checkpoints during THROTTLE, and new GPU
+ * placements use the CPU. CRITICAL closes admission through board_fail. */
 static int policy(void *v,enum a733_thermal_level level)
-{if(v!=&thermal)return -1;if(level==A733_THERMAL_CRITICAL)cancel();return 1;}
+{
+    if(v!=&thermal)return -1;
+    atomic_store_explicit(&load_level,level,memory_order_release);
+    if(level==A733_THERMAL_CRITICAL)cancel();
+    return 1;
+}
 /* IRQ callbacks share the SMP kernel critical section with task rearm. They
  * never inspect driver fields, touch THS status or enter the platform mutex. */
 void os_thermal_irq(void)
@@ -119,6 +130,7 @@ static int step(void)
         if(r!=A733_THERMAL_READY)return 1;
         if(!a733_counter_clock_now(&providers.shared.counter,&t)||!a733_thermal_policy_init(&thermal.policy,t,policy,&thermal))
             return fault();
+        atomic_store_explicit(&load_level,A733_THERMAL_NORMAL,memory_order_release);
         thermal.active=1;
     }
     unsigned notified=atomic_exchange_explicit(&thermal.pending,0,memory_order_acq_rel);

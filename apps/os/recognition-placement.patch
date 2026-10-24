@@ -1,5 +1,5 @@
 --- recognition.cc
-+++ recognition-placed.cc
++++ recognition-placement.cc
 @@ -3,4 +3,10 @@
  #include "../mimus/recorded.h"
  #include "runtime.h"
@@ -35,15 +35,28 @@
 +#endif
          bool ok=mimus_transcribe_recorded(input,scratch,&stopped,kMimusWarm|kMimusVerified);
          started.store(0,std::memory_order_release);
-@@ -68,4 +88,7 @@
+@@ -66,6 +86,19 @@
+ }
+ }
++extern "C" int os_thermal_throttled(void);
  extern "C" void mimus_native_checkpoint(void)
- {if(!mimus_board_live())failed();mimus_board_progress();}
+-{if(!mimus_board_live())failed();mimus_board_progress();}
++{
++    if(!mimus_board_live())failed();
++    /* One bounded sleep per real checkpoint; a stuck engine or GPU cannot
++     * earn progress by looping here. Both inference tasks use this hook. */
++    if(os_thermal_throttled()){
++        vTaskDelay(1);
++        if(!mimus_board_live())failed();
++    }
++    mimus_board_progress();
++}
 +/* The engine's parallel ranges on the inference worker count as recognizer
 + * progress (apps/mimus/parallel_runtime.cc). */
 +extern "C" void mimus_native_inference_progress(void){mimus_board_progress();}
  extern "C" void platform_puts(const char *text)
  {
-@@ -79,5 +102,13 @@
+@@ -79,5 +112,13 @@
  {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
  extern "C" int mimus_board_start(void)
 -{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}

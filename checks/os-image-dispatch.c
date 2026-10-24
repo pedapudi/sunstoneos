@@ -67,6 +67,8 @@ static int open_reply=1;
 static unsigned opens;
 static struct { unsigned call,job,status; } script={~0u,~0u,JOB_OK};
 int a733_gpu_mimus_open(void){++opens;return open_reply;}
+/* This arithmetic/lifecycle fixture runs at normal temperature. */
+int os_thermal_throttled(void){return 0;}
 
 /* Modeled EL1 and EL0 translations: every page inner-shareable write-back
  * at its own address; the arena EL1-writable, the read-only span

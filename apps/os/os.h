@@ -5,6 +5,9 @@
  * radio station, an optional Bluetooth headset, one fixed interrupt table and
  * one fixed start list. */
 #include "a733_board_application.h"
+/* EL0-safe load hint. True before thermal policy initialization and while
+ * throttled or failed. It grants no clock or voltage change. */
+int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_AUDIO)
 #error The recognizer takes one capture source: the I2S microphone or the headset
 #endif

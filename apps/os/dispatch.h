@@ -49,8 +49,9 @@ extern uint32_t os_dispatch_active;
  * to OPEN the session; on success every table row becomes active, otherwise
  * every tensor stays on the CPU for the boot. Returns 1 when opened. */
 int os_dispatch_open(void);
-/* Hook, per call: the tensor's row while the session is open, else a row
- * with n_gpu = 0. Two loads (the active count and the row) and one compare. */
+/* Hook, per layer: the tensor's row while the session is open and thermal
+ * throttling is clear, else n_gpu = 0. An admitted layer may finish its
+ * remaining GPU batches; NORMAL never reopens a disabled session. */
 struct os_placement os_dispatch_place(uint32_t ordinal);
 /* Hook, per placed call and per job refused before device access. */
 void os_dispatch_placed(void);
