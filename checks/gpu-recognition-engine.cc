@@ -65,15 +65,24 @@ extern "C" void os_dispatch_stop(void) { ++board_fails; longjmp(stop, 1); }
 extern "C" int a733_gpu_mimus_open(void) { ++opens; return open_reply; }
 extern "C" int os_thermal_throttled(void) { return 0; }
 
-enum Fault { NONE, REFUSE_SUBMIT, REFUSE_RECORD, LOSE, DROP_TAG, CORRUPT_SUM, LOSE_AT_SUBMIT };
+enum Fault { NONE, REFUSE_SUBMIT, REFUSE_RECORD, LOSE, DROP_TAG, CORRUPT_SUM, LOSE_AT_SUBMIT, STALE_RECORD };
 static struct { unsigned job; Fault fault; } script = {~0u, NONE};
 static unsigned submitted_jobs, sequence;
 static pvr_mimus_request in_flight;
 static bool busy;
 static int thermal_result = 1;
 static unsigned thermal_calls;
+static unsigned retire_calls, retire_reply = 1, consumed_jobs;
+static bool output_borrowed;
 extern "C" int a733_gpu_mimus_thermal(void)
 { CHECK(!busy); ++thermal_calls; return thermal_result; }
+extern "C" int a733_gpu_mimus_retire(void)
+{
+    CHECK(!busy && !output_borrowed && consumed_jobs == script.job);
+    CHECK(os_dispatch_record.incomplete && !os_dispatch_active);
+    ++retire_calls;
+    return retire_reply;
+}
 
 extern "C" int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *out)
 {
@@ -127,6 +136,7 @@ extern "C" void a733_gpu_mimus_finish(struct pvr_mimus_record *done)
     for (uint32_t i = 0; i < tags; ++i) tag[i] = sequence;
     if (index == script.job && script.fault == DROP_TAG) tag[tags / 2] = sequence - 1;
     *done = {sequence, PVR_MIMUS_OK};
+    if (index == script.job && script.fault == STALE_RECORD) --done->sequence;
 }
 
 // ---- Engine model ---------------------------------------------------------
@@ -200,6 +210,7 @@ static void linear(const Call &c, float *y, const Sink *sink, bool use_hook, boo
         mimus::asr::ExactSumJob job;
         size_t next = 0;
         while (hook->finish(hook->ctx, &job)) {
+            output_borrowed = true;
             // The engine's rules: jobs in row order, int64 sums when K
             // rounded up to 16 exceeds 512, a stride that holds the sums.
             CHECK(job.first_row == next && job.rows && job.first_row + job.rows <= c.rows &&
@@ -217,6 +228,8 @@ static void linear(const Call &c, float *y, const Sink *sink, bool use_hook, boo
                     store(c, y, job.first_row + r, ch, convert(s, c.k), sink);
                 }
             }
+            output_borrowed = false;
+            ++consumed_jobs;
         }
     }
 #endif
@@ -295,6 +308,7 @@ static void reset()
     engine_ordinals = {};
 #endif
     opens = board_fails = 0; open_reply = 1; script = {~0u, NONE}; submitted_jobs = 0; busy = false;
+    retire_calls = consumed_jobs = 0; retire_reply = 1; output_borrowed = false;
     os_gpu_open();
 }
 
@@ -315,6 +329,7 @@ static void map_regions()
 int main(int argc, char **argv)
 {
     const bool thermal_only = argc == 2 && std::strcmp(argv[1], "--thermal-only") == 0;
+    const bool retire_only = argc == 2 && std::strcmp(argv[1], "--retire-only") == 0;
     map_regions();
     // The table: see checks/gpu-recognition-engine.py.
     struct { Spec spec; size_t n; } nominal[] = {
@@ -329,7 +344,7 @@ int main(int argc, char **argv)
     };
     reset();
 #ifndef ENGINE_HOOK
-    CHECK(!thermal_only);
+    CHECK(!thermal_only && !retire_only);
     // Without the engine's hook header the session is never opened.
     CHECK(!opens && !os_dispatch_place(0).n_gpu);
     for (auto &t : nominal) CHECK(compare(t.spec, t.n) == 1);
@@ -338,6 +353,23 @@ int main(int argc, char **argv)
     return 0;
 #else
     CHECK(opens == 1 && os_dispatch_record.opened && engine_hook);
+    if (retire_only) {
+        const Spec two = {0, 66, SILU, false};
+        script = {1, CORRUPT_SUM}; retire_reply = 0;
+        CHECK(compare(two, 704) == -1 && board_fails == 1 && retire_calls == 1 &&
+              consumed_jobs == 1 && os_dispatch_record.failure == OS_DISPATCH_LOST && !os_dispatch_active);
+        CHECK(engine_hook); // failed shutdown does not silently remove the hook and continue
+        for (Fault fault : {DROP_TAG, CORRUPT_SUM, STALE_RECORD}) {
+            reset(); script = {1, fault};
+            CHECK(compare(two, 704) == 1 && !board_fails && retire_calls == 1 && consumed_jobs == 1 &&
+                  !engine_hook && !os_dispatch_active && os_dispatch_record.incomplete);
+            const unsigned before = submitted_jobs;
+            CHECK(compare(two, 704) == 1 && submitted_jobs == before && retire_calls == 1);
+        }
+        std::printf("PASS rejected output retirement: prior borrow consumed, no rejected output lent; "
+                    "tag/sum/sequence rejection closes before CPU fallback; failed close is LOST\n");
+        return 0;
+    }
     if (thermal_only) {
         const Spec one = {0, 1, SILU, false};
         thermal_result = 0;
