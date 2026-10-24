@@ -13,7 +13,9 @@
  * access trace with its CNTPCT stamp. The layer adds no register access, with
  * one exception that only bundle 7 enables: after the owner's ON command to
  * domain 1, the domain's status is read back to back until it reads ON or
- * 10 ms pass, before the owner continues. */
+ * 10 ms pass, before the owner continues. The owner starts its own 10 ms
+ * bound when the write returns, so a domain that never reaches ON fails up
+ * to 20 ms after the command. */
 #include <stdatomic.h>
 #include "FreeRTOS.h"
 #include "task.h"
@@ -27,16 +29,16 @@
 
 #define BB_POWER_PMIC_OWNER 2u
 #define BB_POWER_CLIENT_OWNER 3u
-#define BB_POWER_STEPS 120u
+#define BB_POWER_STEPS 160u
 #define BB_POWER_ACCESSES 64u
 #define BB_POWER_STATUS_BOUND (24000000u / 100u) /* 10 ms of CNTPCT */
+/* The provider's startup and the service session end 1.5 s after the
+ * monitor's entry, inside its 2 s deadline. */
+#define BB_POWER_SESSION_US 1500000u
+/* Log bytes kept free by the detail lines: the omitted-count line and one
+ * final line. */
+#define BB_POWER_RESERVE (2u * BB_LINE_MAX)
 
-/* One service step that advanced a bus phase. */
-struct bb_power_step {
-    uint64_t ticks;                    /* CNTPCT across the step */
-    uint32_t interrupts;               /* scheduler ticks inside it */
-    uint16_t conditions, bytes, stops, first_set, first_clear, polls_max;
-};
 struct bb_power_access { uint32_t address, value, write; uint64_t at; };
 struct bb_power {
     struct a733_counter_clock counter;
@@ -49,6 +51,7 @@ struct bb_power {
     struct a733_gpu_resource_manager gpu;
     struct a733_rail_leases rails;
     struct a733_pmic_native pmic_native;
+    struct a733_pmic_ops native_pmic_ops; /* the adapter's own callbacks */
     struct a733_pmic pmic;
     struct a733_power_domains_native domains_native;
     struct a733_power_domains domains;
@@ -57,13 +60,12 @@ struct bb_power {
     TaskHandle_t service, client;
     uint64_t deadline;                 /* microseconds of the PMIC clock */
     struct bb_twi twi;
-    struct bb_power_step steps[BB_POWER_STEPS];
-    unsigned stepped, steps_dropped;
+    struct bb_step steps[BB_POWER_STEPS];
+    unsigned stepped, steps_dropped, omitted;
     struct bb_power_access accesses[BB_POWER_ACCESSES];
     unsigned accessed, writes;
     unsigned spin_after_on;            /* bundle 7 only */
     struct bb_status_trace status;
-    uint64_t status_start;
     atomic_uint stop, parked;
 };
 extern struct bb_power bb_power;
@@ -71,18 +73,20 @@ extern struct bb_power bb_power;
 /* Before the scheduler: every manager, both tasks (the service at priority
  * 2, client at priority 1), the provider with S_TWI0 pins PL0 and PL1 at
  * function 2, pull 1 and drive 1 (the rank-9-usb-v4 input), the owner, and
- * the domain-1 row naming bb_power.token. deadline_us bounds the provider's
- * startup and the service session. Returns 1 on success. */
-int bb_power_init(uint64_t deadline_us, TaskFunction_t client, const char *name);
+ * the domain-1 row naming bb_power.token. Returns 1 on success. */
+int bb_power_init(TaskFunction_t client, const char *name);
 /* Client task helpers. */
 uint64_t bb_power_now(void);             /* PMIC clock microseconds */
+void bb_power_pause(const char *what);   /* one tick, or FAIL at the session deadline */
 void bb_power_wait_ready(void);          /* provider READY and supply verification done, or FAIL */
 void bb_power_acquire(uint64_t rails);   /* the client's shared token of these rails, or FAIL */
 void bb_power_park(void);                /* service idle and parked, or FAIL */
 int bb_power_read(uintptr_t, uint32_t *);/* one owner-allowlisted read, through the trace */
 _Noreturn void bb_power_fail(const char *);
-void bb_power_put(const char *name, uint64_t value);  /* name and decimal value */
-void bb_power_put_hex(const char *name, uint64_t value);
-void bb_power_report_steps(void);
-void bb_power_report_accesses(void);
+/* Summary lines always print; a detail line prints only while the log keeps
+ * BB_POWER_RESERVE bytes free, and is counted as omitted otherwise. */
+void bb_power_print(const struct bb_line *);
+void bb_power_detail(const struct bb_line *);
+void bb_power_details_end(void);         /* the omitted-count line */
+void bb_power_detail_accesses(void);
 #endif

@@ -109,7 +109,7 @@ OS_SOURCES = ['apps/os/prepare.py', 'tools/check-a733-os-supervised.py', 'apps/m
               *TRANSPORT_SOURCES]
 
 SINGLE_CORE_SOURCES = ['tools/prepare-board-bundles.py', READER, *HOST_TOOLS]
-RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-images.py', 'tools/check-a733-kernel.py',
+RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-apps.py', 'tools/check-a733-kernel.py',
                      *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
                      'platform/a733/link.ld', 'arch/aarch64/vectors.S', 'include/a733_fault.h', 'checks/kernel.c',
                      'checks/board-bundles-fault.c']
@@ -168,8 +168,7 @@ POWER_OVERLAY = ['apps/board-bundles-power/power.c.obj', 'apps/board-bundles-pow
 POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/power.h',
                  'apps/board-bundles-power/trace.c', 'apps/board-bundles-power/trace.h',
                  'drivers/power/a733_power_domains.c', 'drivers/power/a733_power_domains_native.c',
-                 'drivers/power/a733_pmic.c', 'arch/aarch64/device_memory.c', 'checks/board-bundles-apps.py',
-                 'checks/board-bundles-apps-model.c']
+                 'drivers/power/a733_pmic.c', 'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
 
 ROWS = [
     # The single-core bundles of docs/designs/board-bundles-next.md, in the
@@ -200,23 +199,27 @@ ROWS = [
     returning_row('cpu-counters-walk-wfi', 4, 'Event counters, core-0 walk A/B and idle WFI in one image',
                   ['apps/board-bundles-cpu/main.c.obj', 'arch/aarch64/device_memory.c.obj',
                    'platform/a733/cpu_pmu.c.obj'],
-                  'PASS board bundle 4: event counters, walk A/B and WFI', True,
-                  'Monitor status 0 with the three stage records and the PASS line, or the controlled outcome '
-                  'wfi-stopped-waking: status 2, interrupt 29, after the WFI stage marker with fewer than 1,000 '
-                  'wakes and the last wake more than one tick before the forced return.',
+                  'COMPLETE board bundle 4:', True,
+                  'Monitor status 0 with the three stage records and COMPLETE board bundle 4: counters, walk A/B '
+                  'and WFI; or status 0 with COMPLETE board bundle 4: inconclusive when the WFI stage could not start '
+                  'before 0.9 s after the monitor\'s entry; or the controlled outcome wfi-stopped-waking: status 2, '
+                  'interrupt 29, after the WFI stage marker with fewer than 1,000 wakes and the last wake more than '
+                  'two ticks before the forced return.',
                   'Bundle 2\'s image with checks/kernel.c replaced by apps/board-bundles-cpu/main.c, the '
                   'single-core platform/a733/cpu_pmu.c and arch/aarch64/device_memory.c. One task runs three '
                   'stages, each with a log marker and a progress record at 0x42000080 (magic, stage, wakes, last '
-                  'wake CNTPCT). Counters: 64 empty regions, a 1 ms CNTPCT loop, a refill read of a cleaned 64 KiB '
-                  'buffer, PMCR_EL0 and PMCEID0/1_EL0, with IRQs masked around each region. Walk A/B: refused when '
-                  'CCU +0x588 reads MBUS_DFS_EN set (bundle 3 read it clear on port 3-3 on 2026-10-24); otherwise '
-                  'a discarded warm-up block and twelve blocks in ABBA order of 1,024 TLBI-and-load iterations, A '
-                  'with TCR_EL1 0x200803019 (uncached walks) and B with 0x200803519, each after a calibration region '
-                  'whose DTLB_WALK count the block must exceed by exactly 1,024. WFI: 1,000 ticks of '
-                  'a733_cpu_idle() with IRQs unmasked, reading the counters after each wake outside any masked '
-                  'region. Run it after bundle 2 and bundle 3 of the same lifetime; report each board separately.',
+                  'wake CNTPCT). Counters: 64 empty regions, 2,000 ALU instructions, a 1 ms CNTPCT loop, a refill '
+                  'read of a cleaned 64 KiB buffer, PMCR_EL0 and PMCEID0/1_EL0, with IRQs masked around each region. '
+                  'Walk A/B: refused when CCU +0x588 reads MBUS_DFS_EN set (bundle 3 read it clear on port 3-3 on '
+                  '2026-10-24); otherwise a discarded warm-up block and twelve blocks in ABBA order of 1,024 '
+                  'TLBI-and-load iterations, iteration k loading line k of block k, A with TCR_EL1 0x200803019 '
+                  '(uncached walks) and B with 0x200803519, each after a calibration region whose DTLB_WALK and '
+                  'ITLB_WALK counts the block must exceed by exactly 1,024. WFI: started only before 0.9 s after '
+                  'the monitor\'s entry, 1,000 ticks of a733_cpu_idle() with IRQs unmasked, reading the counters '
+                  'after each wake outside any masked region. Run it after bundle 2 and bundle 3 of the same '
+                  'lifetime; report each board separately.',
                   sources=['apps/board-bundles-cpu/main.c', 'platform/a733/cpu_pmu.c', 'arch/aarch64/device_memory.c',
-                           'checks/board-bundles-apps.py', 'platform/a733/link.ld']),
+                           'platform/a733/link.ld']),
     read_row('power-domain-words', 5, 'Policy and status words of power domains 1, 4 and 5',
              'Adoption state of the PCK600 domains, read only while the PPU clock is open',
              [word(PPU_CLOCK[0], 'r_ccu', note='PPU clock gate 0')] +
@@ -226,18 +229,22 @@ ROWS = [
     returning_row('pmic-power-domain-reads', 6, 'PMIC service task and power-domain owner, read-only',
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle6.c.obj'],
                   'COMPLETE board bundle 6: PMIC service and domain adoption reads', False,
-                  'Monitor status 0 with the S_TWI0 divisor and bit time, the supply verification bits, 32 DCDC2 '
-                  'and DCDC4 snapshots, one STEP line per service step that completed a bus phase, the step '
-                  'distribution against the 110% wire-time bound and the adoption reads of domains 1, 4 and 5.',
+                  'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
+                  'step distribution against the 110% wire-time bound, the domain-1 mapping and the adoption reads '
+                  'of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the STEP '
+                  'lines, the 32 snapshots and the owner accesses.',
                   'rank-9-usb-v4\'s platform and PMIC provider objects with apps/board-bundles-power/ (bundle6.c, '
                   'power.c, trace.c), the power-domain owner, its native adapter and device_memory.c; no USB unit. '
                   'The service task verifies DCDC2 and DCDC4 once; a client then takes 32 snapshots, DCDC2 and '
                   'DCDC4 in turn, and makes the adoption reads: R_CCU 0x1ac, CCU 0x5c0 and 0x5e0, and the policy '
-                  'and status of domains 1, 4 and 5 only while 0x1ac bit 0 reads 1. Each STEP line gives the step\'s '
-                  'span, the scheduler ticks inside it, the phases it completed, the TWI interrupt flag (CNTR bit '
-                  '3) at the first read of each byte phase with the interrupt enable (bit 7) clear, and its span in '
-                  'thousandths of the wire time of those phases. No GIC register is read for the record, and no PPU '
-                  'or PMIC register is written.',
+                  'and status of domains 1, 4 and 5 only while 0x1ac bit 0 reads 1. It records the owner adapter\'s '
+                  'mapping result and the PAR_EL1 translation of the domain-1 block, which must be Device-nGnRnE '
+                  'and outer-shareable for bundle 7. Each STEP line gives the step\'s CNTPCT span, the scheduler '
+                  'ticks inside it, the phases it completed, the TWI interrupt flag (CNTR bit 3) at the first read '
+                  'of each byte phase with the interrupt enable (bit 7) clear, and the most polls of one phase; '
+                  'the wire time follows from the phases and the bit time. The summary and outcome print before '
+                  'the detail lines, which stop while 256 log bytes remain, so no record cuts the outcome line. No '
+                  'GIC register is read for the record, and no PPU or PMIC register is written.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c']),
     returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner',
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle7.c.obj'], 'COMPLETE board bundle 7:', True,
@@ -249,9 +256,12 @@ ROWS = [
                   '+0x174, +0xc00, +0xc04, +0xc10), policy and status of domain 1, then requests ON through the '
                   'domain-1 row. The owner checks CCU 0x5c0 bit 5, 0x5e0 bit 11 and R_CCU 0x1ac bit 0, adopts the '
                   'domain, writes and reads back each delay-row word and writes the ON command; the status is then '
-                  'read back to back with CNTPCT stamps until it reads ON or 10 ms pass. The client reads the same '
-                  'words again. Domain 1 stays ON until power removal. A refusal (closed gate, unverified DCDC2 or '
-                  'incoherent adoption) writes nothing and is inconclusive: bundle 8 then finds domain 1 not ON.',
+                  'read back to back with CNTPCT stamps, each change with the stamp of the read before it, until it '
+                  'reads ON or 10 ms pass. The owner starts its own 10 ms bound after that spin, so a domain that '
+                  'never reaches ON fails up to 20 ms after the command. The client reads the same words again. '
+                  'Domain 1 stays ON until power removal, so the bundle gives one sample per board lifetime. A '
+                  'refusal (closed gate, unverified DCDC2 or incoherent adoption) writes nothing and is '
+                  'inconclusive: bundle 8 then finds domain 1 not ON.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/bundle7.c']),
     returning_row('dram-bus-priority', 8, 'DRAM bus priority reads and table write',
                   ['apps/board-bundles-dram/main.c.obj', 'apps/board-bundles-dram/sequence.c.obj',
@@ -270,12 +280,12 @@ ROWS = [
                   '(writes and readbacks of ports 2, 14 and 15 only), and port 13 again, which must read back '
                   'unchanged. Otherwise it makes no NSI access and ends inconclusive, which admits no NSI '
                   'comparison in bundle 10. Inherited fields that read zero on all three ports are recorded as '
-                  'possibly protected; the readback separates that case. Run it after bundle 7 of the same '
-                  'lifetime.',
+                  'possibly protected; the readback separates that case. Each timed span holds one DSB SY-fenced '
+                  'access and its barriers only, without the address translation and deadline checks of the '
+                  'framebuffer\'s register path. Run it after bundle 7 of the same lifetime.',
                   sources=['apps/board-bundles-dram/main.c', 'apps/board-bundles-dram/sequence.c',
                            'apps/board-bundles-dram/sequence.h', 'drivers/dram/a733_dram.c', 'include/a733_dram.h',
-                           'arch/aarch64/device_memory.c', 'checks/board-bundles-apps.py',
-                           'checks/board-bundles-apps-model.c']),
+                           'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']),
     read_row('npu-clock-words', 9, 'Speed-bin word and the CCU words of the NPU register pass',
              'The NPU speed bin and the CCU state that NPU startup admits, read before the NPU bundle',
              [word(0x0300624c, 'sid', note='SID speed-bin word')] +

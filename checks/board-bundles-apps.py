@@ -35,15 +35,18 @@ The check:
   (rank-4-kernel-check, kernel-check-counter-option, rank-9-usb-v4) or new,
   and refuses a new object outside the image's overlay;
 - builds bundle 4's secure QEMU model twice: the normal model must print the
-  three stage markers and the PASS line and exit 0; the model whose tick
+  three stage markers and the COMPLETE line and exit 0; the model whose tick
   stops before WFI must print the WFI marker and return through the secure
-  timer with status 2;
+  timer with status 2; each log must fit the 16,127 log bytes, and since every
+  bundle 4 value prints at a fixed width, the board's log has the same length;
 - runs checks/board-bundles-apps-model.c, the host model of bundle 8's
-  sequence and of the bundle 6 and 7 records;
+  sequence and of the bundle 6 and 7 records, which also bounds the log bytes
+  that bundles 6 and 7 print before their detail lines;
 - writes each image's controlled outcomes, which the runner of --tree must
   accept, and build.json for tools/prepare-board-bundles.py.
 
-No step contacts a device.
+Run it from the source tree, which must lie outside ~/.cache/sunstoneos: the
+provider objects record the compile directory. No step contacts a device.
 
   board-bundles-apps.py --central BUILD --rank4 BUILD --bundle2 BUNDLE --bundle2-run SESSION_DIR \\
       --v4 EVIDENCE --tree TREE --output NEW_DIRECTORY
@@ -61,15 +64,20 @@ import sys
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 LLVM = Path('/usr/lib/llvm-21/bin')
+QEMU = Path.home() / '.cache/sunstoneos/host/usr/bin/qemu-system-aarch64'
+# Log bytes after the 256-byte result header, less the terminating NUL.
+LOG_ROOM = 16384 - 256 - 1
 PASSED_KERNEL_CHECK = '574245e291d8ec9a2a52a405ab45ce48fe5550f323a46158b007123dbf96bc54'
 BUNDLE2_ELF = 'a8e6ecacd346e79112a49689de0c764c123d6325d5353f500fd86e8bc0350dee'
 KERNEL_OBJ = 'checks/kernel.c.obj'
 MONITOR_OBJ = 'platform/a733/monitor.c.obj'
 TARGETS = (('a733-kernel-check', 'image'), ('a733-kernel-model', 'model'))
-PROGRESS = {'offset': 128, 'magic': 0x3130535342344242, 'stage': 3, 'count_below': 1000, 'age_above': 24000}
+# Two ticks of the 24 MHz counter: a core that still wakes on every tick
+# has woken less than one tick before any forced return.
+PROGRESS = {'offset': 128, 'magic': 0x3130535342344242, 'stage': 3, 'count_below': 1000, 'age_above': 48000}
 BUNDLE4_MARKERS = ['STAGE 1 counters complete', 'STAGE 2 walk complete', 'STAGE 3 wfi begin']
 EXPECT = {
-    'cpu': 'PASS board bundle 4: event counters, walk A/B and WFI',
+    'cpu': 'COMPLETE board bundle 4:',
     'pmic': 'COMPLETE board bundle 6: PMIC service and domain adoption reads',
     'domain': 'COMPLETE board bundle 7:',
     'dram': 'COMPLETE board bundle 8:',
@@ -99,7 +107,46 @@ def load(name, path):
     return value
 
 
-images = load('board_bundles_images', ROOT / 'checks/board-bundles-images.py')
+def flags(central, target):
+    """C defines, includes and flags of one central target, from its flags.make."""
+    values = {}
+    for line in (central / f'CMakeFiles/{target}.dir/flags.make').read_text().splitlines():
+        if ' = ' in line and not line.startswith('#'):
+            key, value = line.split(' = ', 1)
+            values[key] = shlex.split(value)
+    return values['C_DEFINES'], values['C_INCLUDES'], values['C_FLAGS']
+
+
+def compile_object(central, target, source, output, defines=(), general_regs=False):
+    """One unit with a central target's flags, in the central build directory, which its prefix maps rename,
+    so that the same source gives the central build's object."""
+    c_defines, includes, c_flags = flags(central, target)
+    command = ['/usr/bin/clang', '--target=aarch64-none-elf', *c_defines, *defines, *includes, *c_flags]
+    if general_regs:
+        command.append('-mgeneral-regs-only')
+    command += ['-MD', '-MF', str(output) + '.d', '-o', str(output), '-c', str(source)]
+    subprocess.run(command, check=True, cwd=central)
+    return command
+
+
+def instructions(obj):
+    """Disassembly of an object without its file-name header."""
+    text = subprocess.run([str(LLVM / 'llvm-objdump'), '-d', '--no-show-raw-insn', str(obj)], check=True,
+                          capture_output=True, text=True).stdout
+    return text.split('\n', 3)[3]
+
+
+def qemu(elf, log):
+    """One run of a secure model on QEMU virt, one Cortex-A55; returns the exit status and the console."""
+    command = [str(QEMU), '-machine', 'virt,secure=on,virtualization=on,gic-version=3', '-cpu', 'cortex-a55',
+               '-smp', '1', '-m', '128M', '-nographic', '-monitor', 'none', '-serial', 'none',
+               '-semihosting-config', 'enable=on,target=native', '-device', f'loader,file={elf},cpu-num=0']
+    result = subprocess.run(command, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    # Semihosting writes the image's console to standard error.
+    Path(log).write_text(result.stdout + result.stderr)
+    return result.returncode, result.stdout + result.stderr
+
+
 sys.path.insert(0, str(ROOT / 'tools'))
 import returning_build  # noqa: E402
 
@@ -228,7 +275,7 @@ def reproduce_v4(platform, provider, rp, central, work):
     for rel, path in platform:
         mine = central / 'CMakeFiles/a733-power-probe.dir' / rel
         if rel == MONITOR_OBJ:
-            require(images.instructions(mine) == images.instructions(path),
+            require(instructions(mine) == instructions(path),
                     'This tree\'s monitor.c changes rank-9-usb-v4 monitor instructions.')
             result[rel] = 'same instructions'
         else:
@@ -271,7 +318,7 @@ def build_v4_image(name, rp, units, platform, provider, flags, origins, out):
     return directory, entry
 
 
-def bundle4(args, central, origins, out, runner, bundle2_objects):
+def bundle4(central, origins, out, runner, bundle2_objects):
     """The counter, walk and WFI image and its two QEMU models."""
     directory = out / 'cpu'
     directory.mkdir()
@@ -281,7 +328,7 @@ def bundle4(args, central, origins, out, runner, bundle2_objects):
     units = ['apps/board-bundles-cpu/main.c', 'platform/a733/cpu_pmu.c', 'arch/aarch64/device_memory.c']
     for target, suffix in TARGETS:
         monitor = objects_dir / f'monitor-{suffix}.obj'
-        images.compile_object(central, target, ROOT / 'platform/a733/monitor.c', monitor,
+        compile_object(central, target, ROOT / 'platform/a733/monitor.c', monitor,
                               ('-DSUNSTONE_MONITOR_COUNTERS=1',), general_regs=True)
         if suffix == 'image':
             require(sha(monitor) == bundle2_objects[MONITOR_OBJ]['sha256'],
@@ -291,7 +338,7 @@ def bundle4(args, central, origins, out, runner, bundle2_objects):
             new = []
             for unit in units:
                 obj = objects_dir / f'{Path(unit).stem}-{suffix}{variant}.obj'
-                images.compile_object(central, target, ROOT / unit, obj, defines if unit.endswith('main.c') else ())
+                compile_object(central, target, ROOT / unit, obj, defines if unit.endswith('main.c') else ())
                 new.append((rel_object(ROOT / unit), obj))
             elf = directory / f'{suffix}{variant}.elf'
             linked = link_target(central, target, {KERNEL_OBJ: new, MONITOR_OBJ: [(MONITOR_OBJ, monitor)]}, elf)
@@ -303,12 +350,12 @@ def bundle4(args, central, origins, out, runner, bundle2_objects):
                              elf_sha256=sha(elf), bin=str(binary), bin_sha256=sha(binary),
                              bin_bytes=binary.stat().st_size)
                 continue
-            status, log = images.qemu(elf, directory / f'qemu{variant}.log')
+            status, log = qemu(elf, directory / f'qemu{variant}.log')
             entry.setdefault('qemu', {})[variant or 'normal'] = {'exit_status': status,
                                                                   'log_sha256': sha(directory / f'qemu{variant}.log')}
             require(all(m in log for m in BUNDLE4_MARKERS), f'bundle 4 model{variant} misses a stage marker: {log}')
             if variant:
-                require(status == 2 and EXPECT['cpu'] not in log and 'WFI wakes=' not in log,
+                require(status == 2 and EXPECT['cpu'] not in log and 'WFI wakes=' not in log and len(log) <= LOG_ROOM,
                         f'the stopped-tick model did not return through the secure timer: {status}')
                 # The semihosting exit leaves no result page to read, so the
                 # model matches the outcome without its progress record; the
@@ -319,12 +366,15 @@ def bundle4(args, central, origins, out, runner, bundle2_objects):
                 require(runner.controlled_match(dict(outcome, progress=None), terminal, runner.fault_lines(log), found),
                         'the stopped-tick model does not match the controlled outcome\'s record and log')
             else:
-                require(status == 0 and EXPECT['cpu'] in log and 'STAGE 3 wfi complete' in log,
-                        f'bundle 4 model did not pass: {status}\n{log}')
+                # Every value prints at a fixed width and every line count is
+                # fixed, so the board's log has this length.
+                require(status == 0 and 'COMPLETE board bundle 4: counters, walk A/B and WFI' in log
+                        and 'STAGE 3 wfi complete' in log and len(log) <= LOG_ROOM,
+                        f'bundle 4 model did not pass: {status}, {len(log)} log bytes\n{log}')
                 wakes = int(re.search(r'WFI wakes=0x([0-9a-f]+)', log).group(1), 16)
                 blocks = len(re.findall(r'^WALK (warm-up )?block=', log, re.M))
                 require(900 <= wakes <= 1100 and blocks == 13, f'bundle 4 model: {wakes} wakes, {blocks} walk blocks')
-                entry['qemu']['normal'].update(wakes=wakes, walk_blocks=blocks)
+                entry['qemu']['normal'].update(wakes=wakes, walk_blocks=blocks, log_bytes=len(log))
     entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': [bundle4_outcome()]}
     return directory, entry
 
@@ -380,6 +430,10 @@ def main():
                         help='Source tree whose tools/check-a733-kernel.py carries the controlled-outcome progress record')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    # The provider objects record the compile directory: it must be this
+    # tree, outside the cache, as for rank-9-usb-v4.
+    require(Path.cwd().resolve() == ROOT and Path.home() / '.cache/sunstoneos' not in ROOT.parents,
+            f'Run from the source tree {ROOT}, outside ~/.cache/sunstoneos.')
     central, out, v4 = args.central.resolve(), args.output.resolve(), args.v4.resolve()
     rank4, bundle2, tree = args.rank4.resolve(), args.bundle2.resolve(), args.tree.resolve()
     require(sha(rank4 / 'a733-kernel-check.elf') == PASSED_KERNEL_CHECK,
@@ -391,7 +445,7 @@ def main():
             'bb2-run is not a passing run of bundle 2.')
     out.mkdir(parents=True, exist_ok=False)
     runner = load('apps_runner', tree / 'tools/check-a733-kernel.py')
-    result = {'physical_access': False, 'central': str(central), 'tree': str(tree), 'qemu_sha256': sha(images.QEMU),
+    result = {'physical_access': False, 'central': str(central), 'tree': str(tree), 'qemu_sha256': sha(QEMU),
               'reproduced': {}, 'images': {}}
 
     # Bundle 2's other objects are the central kernel-check objects.
@@ -410,7 +464,7 @@ def main():
     origins = Origins(rank4, bundle2, v4_linked)
 
     builds = {}
-    directory, entry = bundle4(args, central, origins, out, runner, bundle2_objects)
+    directory, entry = bundle4(central, origins, out, runner, bundle2_objects)
     entry['expect'] = EXPECT['cpu']
     builds['cpu'] = (directory, entry)
     for name, units, flags, keep in (

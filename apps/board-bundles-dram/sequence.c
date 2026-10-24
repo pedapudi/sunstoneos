@@ -18,6 +18,11 @@ uintptr_t bb8_usb_pcie(unsigned i)
 {return A733_NSI_PORT(BB8_USB_PCIE_PORT)+offsets[i];}
 static int rd(const struct a733_dram_io *io,uintptr_t a,uint32_t *v)
 {return io->read(io->context,a,v)==1;}
+struct guard { const struct a733_dram_io *io; unsigned refused; };
+static int guard_read(void *c,uintptr_t a,uint32_t *v)
+{struct guard *g=c;const int r=g->io->read(g->io->context,a,v);g->refused|=r!=1;return r;}
+static int guard_write(void *c,uintptr_t a,uint32_t v)
+{struct guard *g=c;const int r=g->io->write(g->io->context,a,v);g->refused|=r!=1;return r;}
 
 int bb8_gates(const struct a733_dram_io *io,struct bb8_record *r)
 {
@@ -47,9 +52,14 @@ enum bb8_result bb8_nsi(const struct a733_dram_io *io,struct bb8_record *r)
      * readback separates that case from inherited zero fields. */
     r->possibly_protected=zero;
     for(unsigned i=0;i<3;++i)if(!rd(io,bb8_usb_pcie(i),&r->usb_pcie_before[i]))return BB8_ACCESS_FAILED;
-    if(!a733_dram_priority(io,&r->block))
-        return r->block.failed==A733_DRAM_CCU_FAILED ? BB8_ACCESS_FAILED : r->block.failed ? BB8_MISMATCH :
-            BB8_GATE_CHANGED;
+    /* The hook's stopping field does not separate a refused access from a
+     * readback that differs, so the hook runs through a pair that notes a
+     * refusal. */
+    struct guard g={io,0};
+    const struct a733_dram_io guarded={&g,guard_read,guard_write};
+    if(!a733_dram_priority(&guarded,&r->block))
+        return g.refused || r->block.failed==A733_DRAM_CCU_FAILED ? BB8_ACCESS_FAILED :
+            r->block.failed ? BB8_MISMATCH : BB8_GATE_CHANGED;
     for(unsigned i=0;i<3;++i){
         if(!rd(io,bb8_usb_pcie(i),&r->usb_pcie_after[i]))return BB8_ACCESS_FAILED;
         if((r->usb_pcie_after[i]^r->usb_pcie_before[i])&masks[i])return BB8_USB_PCIE_CHANGED;

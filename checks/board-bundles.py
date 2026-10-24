@@ -226,7 +226,7 @@ EXTRA_REQUEST = '\n\ndef fixture_extra_request():\n    transaction("version")\n'
 
 
 def fixture_build(work, name, elf, objects=None, controlled=True, bad_bin=False, outcomes=(OUTCOME,), runner_extra=''):
-    """A build.json as checks/board-bundles-images.py writes it, for one fixture image. Its runner is the
+    """A build.json as checks/board-bundles-apps.py writes it, for one fixture image. Its runner is the
     repository's kernel runner with a fixture controlled_outcomes() and runner_extra appended."""
     directory = work / 'builds' / name
     directory.mkdir(parents=True)

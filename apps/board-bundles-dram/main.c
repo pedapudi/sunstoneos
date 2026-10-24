@@ -8,7 +8,9 @@
  * accesses: the fields of ports 2, 14 and 15, the USB_PCIE port fields, the
  * table write and readback of ports 2, 14 and 15 through
  * a733_dram_priority(), and the USB_PCIE fields again. Every access is one
- * DSB SY-fenced 32-bit access timed with CNTPCT.
+ * DSB SY-fenced 32-bit access timed with CNTPCT, so a timed span holds the
+ * bus access and its barriers only: no address translation and no deadline
+ * check, which the framebuffer's register path adds per access.
  *
  * Outcomes: status 0 with "COMPLETE board bundle 8: table written", or with
  * "COMPLETE board bundle 8: inconclusive" and the skipped stage when a gate is

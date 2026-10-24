@@ -10,30 +10,37 @@
  *   magic, stage, wakes, last wake CNTPCT (four little-endian 64-bit words)
  *
  * 1. Counters, with IRQs masked around each region, so that no tick lands in
- *    one: 64 empty a733_cpu_pmu_begin/end regions; a CNTPCT loop of at least
- *    1 ms; a read of a cleaned and invalidated 64 KiB buffer, which shows
- *    whether L2D_CACHE_REFILL counts; PMCR_EL0, PMCEID0_EL0 and PMCEID1_EL0.
+ *    one: 64 empty a733_cpu_pmu_begin/end regions; 2,000 ALU instructions,
+ *    whose INST_RETIRED less the empty median shows the event's accuracy; a CNTPCT loop of
+ *    at least 1 ms; a read of a cleaned and invalidated 64 KiB buffer, which
+ *    shows whether L2D_CACHE_REFILL counts; PMCR_EL0, PMCEID0_EL0 and
+ *    PMCEID1_EL0.
  * 2. Walk A/B, refused when CCU +0x588 reads MBUS_DFS_EN set: one discarded
  *    warm-up block, then twelve blocks in ABBA order. A is the uncached walk
  *    (TCR_EL1 0x200803019), B the cached walk that platform_init() installs
  *    (0x200803519). A block is 1,024 iterations of TLBI VMALLE1, DSB ISH, ISB
- *    and one load from a different 2 MiB block of the 128 MiB map; no load
- *    targets the result block or the block that holds this image, its stacks
- *    and the PMU state. Before each block a calibration region (TLBI VMALLE1,
- *    DSB ISH, ISB, then end) counts the walks of the region's own return
- *    path; a block whose DTLB_WALK differs from 1,024 plus that count is
- *    refused. No table write follows the final flush of both table pages in
+ *    and one load from a different 2 MiB block of the 128 MiB map, at line k
+ *    of block k, so that the loaded lines fall in different cache sets and
+ *    stay in L1 and none evicts a table line; no load targets the result
+ *    block or the block that holds this image, its stacks and the PMU state.
+ *    Before each block a calibration region (TLBI VMALLE1, DSB ISH, ISB, then
+ *    end) counts the walks of the region's own return path; a block whose
+ *    DTLB_WALK or ITLB_WALK differs from 1,024 plus that count is refused.
+ *    No table write follows the final flush of both table pages in
  *    platform_init() (checked on the host by checks/board-bundles-apps.py),
  *    so uncached walks read the descriptors that cached walks read.
- * 3. WFI, last: over 1,000 ticks the task runs a733_cpu_idle() with IRQs
- *    unmasked, and after each wake reads PMCCNTR_EL0, the event counters and
- *    CNTPCT outside any masked region, and stores the wake count and stamp
- *    in the progress record.
+ * 3. WFI, last, started only before 0.9 s after the monitor's entry, so that
+ *    it ends before the monitor's 2 s deadline: over 1,000 ticks the task
+ *    runs a733_cpu_idle() with IRQs unmasked, and after each wake reads
+ *    PMCCNTR_EL0, the event counters and CNTPCT outside any masked region,
+ *    and stores the wake count and stamp in the progress record.
  *
- * Success is status 0 with "PASS board bundle 4". If the core stops waking,
- * the monitor's secure timer returns to the ROM with status 2, interrupt 29:
- * the bundle's controlled outcome, which the runner matches on the stage
- * markers and the progress record. */
+ * Success is status 0 with "COMPLETE board bundle 4: counters, walk A/B and
+ * WFI"; a late WFI start ends with status 0 and "COMPLETE board bundle 4:
+ * inconclusive". If the core stops waking, the monitor's secure timer
+ * returns to the ROM with status 2, interrupt 29: the bundle's controlled
+ * outcome, which the runner matches on the stage markers and the progress
+ * record. */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
@@ -57,8 +64,9 @@
 #define BLOCK_SHIFT 21
 #define RESULT_BLOCK ((RESULT_BASE - DRAM_BASE) >> BLOCK_SHIFT)
 #define PROGRESS_MAGIC UINT64_C(0x3130535342344242) /* "BB4BSS01" */
-#define DEADLINE_TICKS (COUNTER_HZ * 3 / 2)        /* 1.5 s after monitor entry */
+#define WFI_START_TICKS (COUNTER_HZ * 9 / 10)      /* 0.9 s after monitor entry */
 #define L2_PROBE_BYTES 65536u
+#define ALU_INSTRUCTIONS 2000
 
 struct progress { uint64_t magic, stage, wakes, last; };
 #define PROGRESS ((volatile struct progress *)(RESULT_BASE + 128))
@@ -87,11 +95,6 @@ static void marker(unsigned stage, const char *text)
     platform_puts(text);
     platform_puts("\n");
 }
-static void within_deadline(const char *stage)
-{
-    if (counter() - RESULT->start_counter >= DEADLINE_TICKS)
-        fail(stage, counter() - RESULT->start_counter);
-}
 static uint64_t irq_mask(void)
 {
     uint64_t daif;
@@ -100,6 +103,8 @@ static uint64_t irq_mask(void)
 }
 static void irq_restore(uint64_t daif)
 { __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory"); }
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
 #define SYSREG(name) ({ uint64_t v_; __asm__ volatile("mrs %0, " #name : "=r"(v_) :: "memory"); v_; })
 
 static void record_put(const char *name, const struct a733_cpu_pmu_record *r)
@@ -129,7 +134,8 @@ static void sort(uint64_t *v, unsigned n)
         }
 }
 
-static void counters(void)
+/* Returns the event counters in use. */
+static unsigned counters(void)
 {
     struct a733_cpu_pmu_region region;
     struct a733_cpu_pmu_record record;
@@ -157,6 +163,19 @@ static void counters(void)
     put("EMPTY instructions min=", instructions[0]);
     put("EMPTY instructions median=", instructions[EMPTY_REGIONS / 2]);
     put("EMPTY instructions max=", instructions[EMPTY_REGIONS - 1]);
+    const unsigned in_use = record.counters;
+
+    /* A fixed instruction count: INST_RETIRED less the empty median. */
+    daif = irq_mask();
+    measure_status(a733_cpu_pmu_begin(&region), "fixed count begin");
+    __asm__ volatile(".rept " STRINGIFY(ALU_INSTRUCTIONS) "\n add x9, x9, #1\n .endr" ::: "x9");
+    measure_status(a733_cpu_pmu_end(&region, &record), "fixed count end");
+    irq_restore(daif);
+    put("FIXED instructions=", ALU_INSTRUCTIONS);
+    put("FIXED inst_retired=", record.events[A733_CPU_PMU_INST_RETIRED]);
+    put("FIXED inst_retired less empty median=",
+        record.events[A733_CPU_PMU_INST_RETIRED] - instructions[EMPTY_REGIONS / 2]);
+    put("FIXED cycles=", record.cycles);
 
     /* At least 1 ms of CNTPCT: cycles per tick give the CPU-L rate. */
     daif = irq_mask();
@@ -183,6 +202,7 @@ static void counters(void)
     record_put("REFILL 1024 lines", &record);
     put("L2D_CACHE_REFILL supported=", (record.supported >> A733_CPU_PMU_L2D_CACHE_REFILL) & 1);
     put("L2D_CACHE_REFILL counted=", record.events[A733_CPU_PMU_L2D_CACHE_REFILL]);
+    return in_use;
 }
 
 static void tcr_install(uint64_t tcr)
@@ -192,14 +212,16 @@ static void tcr_install(uint64_t tcr)
         fail("TCR_EL1 readback", SYSREG(tcr_el1));
 }
 
-/* n iterations; k is the first block index. Registers only: no stack and no
- * other data access, so each iteration makes one data walk. */
-static __attribute__((noinline)) void walk(uint64_t k, uint64_t n, uint64_t image)
+/* n iterations from block index k; returns the next index. Registers only:
+ * no stack and no other data access, so each iteration makes one data walk.
+ * Iteration k loads line k of block k (base + k << 21 + k << 6). */
+static __attribute__((noinline)) uint64_t walk(uint64_t k, uint64_t n, uint64_t image)
 {
     uint64_t address, value;
     __asm__ volatile(
         "1: tlbi vmalle1\n dsb ish\n isb\n"
-        "   lsl %[a], %[k], #21\n add %[a], %[a], %[base]\n ldr %[v], [%[a]]\n"
+        "   lsl %[a], %[k], #21\n add %[a], %[a], %[k], lsl #6\n add %[a], %[a], %[base]\n"
+        "   ldr %[v], [%[a]]\n"
         "   add %[k], %[k], #1\n and %[k], %[k], #63\n"
         "   cmp %[k], %[skip]\n cinc %[k], %[k], eq\n"
         "   cmp %[k], %[image]\n cinc %[k], %[k], eq\n"
@@ -207,6 +229,7 @@ static __attribute__((noinline)) void walk(uint64_t k, uint64_t n, uint64_t imag
         : [k] "+r"(k), [n] "+r"(n), [a] "=&r"(address), [v] "=&r"(value)
         : [base] "r"(DRAM_BASE), [skip] "r"((uint64_t)RESULT_BLOCK), [image] "r"(image)
         : "memory", "cc");
+    return k;
 }
 
 static void walks(void)
@@ -243,23 +266,20 @@ static void walks(void)
         __asm__ volatile("tlbi vmalle1\n dsb ish\n isb" ::: "memory");
         measure_status(a733_cpu_pmu_end(&region, &calibration), "calibration end");
         measure_status(a733_cpu_pmu_begin(&region), "walk begin");
-        walk(k, WALK_ITERATIONS, image);
+        k = walk(k, WALK_ITERATIONS, image);
         measure_status(a733_cpu_pmu_end(&region, &record), "walk end");
         irq_restore(daif);
-        for (unsigned i = 0; i < WALK_ITERATIONS; ++i) {
-            k = (k + 1) & 63;
-            k += k == RESULT_BLOCK;
-            k += k == image;
-        }
-        const uint32_t expected = WALK_ITERATIONS + calibration.events[A733_CPU_PMU_DTLB_WALK];
-        const unsigned counted = (record.supported >> A733_CPU_PMU_DTLB_WALK) & 1 &&
-            !((record.overflow >> A733_CPU_PMU_DTLB_WALK) & 1);
+        unsigned accepted = 1;
+        for (unsigned e = A733_CPU_PMU_DTLB_WALK; e <= A733_CPU_PMU_ITLB_WALK; ++e)
+            accepted &= (record.supported >> e) & 1 && !((record.overflow >> e) & 1) &&
+                record.events[e] == WALK_ITERATIONS + calibration.events[e];
         put(b ? "WALK block=" : "WALK warm-up block=", b);
         platform_puts(uncached[b] ? "  mode=A uncached walk\n" : "  mode=B cached walk\n");
         record_put("  record", &record);
         put("  calibration cycles=", calibration.cycles);
         put("  calibration dtlb_walk=", calibration.events[A733_CPU_PMU_DTLB_WALK]);
-        put("  refused=", !counted || record.events[A733_CPU_PMU_DTLB_WALK] != expected);
+        put("  calibration itlb_walk=", calibration.events[A733_CPU_PMU_ITLB_WALK]);
+        put("  refused=", !accepted);
     }
     const uint64_t daif = irq_mask();
     tcr_install(TCR_CACHED);
@@ -287,7 +307,6 @@ static void idle_wfi(unsigned counters)
     uint64_t wakes = 0, cycles = 0, span = 0, gap_max = 0, gap_min = UINT64_MAX;
     PROGRESS->wakes = 0;
     PROGRESS->last = counter();
-    PROGRESS->magic = PROGRESS_MAGIC;
     marker(3, "STAGE 3 wfi begin");
     for (unsigned i = 0; i < counters; ++i)
         last[i] = event(i);
@@ -339,20 +358,17 @@ static void bundle(void *unused)
     platform_puts("BEGIN board bundle 4: event counters, walk A/B and WFI\n");
     if (!a733_mapping_check(aarch64_device_translate, MBUS_CLK & ~UINT32_C(0xfff), MBUS_CLK & ~UINT32_C(0xfff), &rule))
         fail("CCU mapping", MBUS_CLK);
-    counters();
+    const unsigned in_use = counters();
     marker(1, "STAGE 1 counters complete");
-    within_deadline("deadline after counters");
     walks();
-    within_deadline("deadline after walks");
-    struct a733_cpu_pmu_region region;
-    struct a733_cpu_pmu_record record;
-    const uint64_t daif = irq_mask();
-    measure_status(a733_cpu_pmu_begin(&region), "counter count begin");
-    measure_status(a733_cpu_pmu_end(&region, &record), "counter count end");
-    irq_restore(daif);
-    idle_wfi(record.counters);
-    within_deadline("deadline after WFI");
-    platform_puts("PASS board bundle 4: event counters, walk A/B and WFI\n");
+    const uint64_t elapsed = counter() - RESULT->start_counter;
+    if (elapsed >= WFI_START_TICKS) {
+        put("WFI start cntpct after monitor entry=", elapsed);
+        platform_puts("COMPLETE board bundle 4: inconclusive, the WFI stage would end after the monitor's deadline\n");
+        platform_exit(0);
+    }
+    idle_wfi(in_use);
+    platform_puts("COMPLETE board bundle 4: counters, walk A/B and WFI\n");
     platform_exit(0);
 }
 

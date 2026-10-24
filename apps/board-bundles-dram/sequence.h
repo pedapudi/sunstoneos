@@ -21,7 +21,7 @@ enum bb8_result {
     BB8_MISMATCH,         /* a field read back another value; block.failed names it */
     BB8_GATE_CHANGED,     /* the hook found a gate closed after the reads */
     BB8_USB_PCIE_CHANGED, /* a USB_PCIE field differs after the table write */
-    BB8_ACCESS_FAILED     /* the register pair refused an access */
+    BB8_ACCESS_FAILED     /* the register pair refused an access, as when its trace is full */
 };
 struct bb8_record {
     uint32_t ppu_clock, domain1_status, nsi_clock, nsi_config, mbus_clock;

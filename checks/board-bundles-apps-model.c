@@ -11,7 +11,11 @@
  *
  * Bundles 6 and 7: apps/board-bundles-power/trace.c. The TWI observer is fed
  * the S_TWI0 accesses of one modeled read transaction; the status spin is fed
- * a modeled status sequence. */
+ * a modeled status sequence; the step distribution is computed for modeled
+ * steps. Every summary and detail line is formatted with each field at its
+ * widest value: no line is cut, and the begin line, the summary, the outcome
+ * line and the detail reserve of each image fit the 16,127 log bytes, so the
+ * outcome line always reaches the log. */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,7 +27,7 @@ struct access { uintptr_t address; uint32_t value; unsigned write; };
 static struct model {
     uint32_t ppu, domain1, nsi_clock, nsi_config, mbus;
     uint32_t field[16][3];
-    unsigned ignore_writes, alias;
+    unsigned ignore_writes, alias, refuse_after;
     struct access log[128];
     unsigned n;
 } m;
@@ -48,6 +52,7 @@ static uint32_t *word(uintptr_t a)
 static int model_read(void *c, uintptr_t a, uint32_t *v)
 {
     (void)c;
+    if (m.refuse_after && m.n >= m.refuse_after) return 0;
     *v = *word(a);
     m.log[m.n++] = (struct access){a, *v, 0};
     return 1;
@@ -157,6 +162,17 @@ static void mismatch_case(void)
     assert(run(&r) == BB8_MISMATCH && r.block.failed == 2);
     printf("\"writes ignored: readback mismatch at port 2 priority\",");
 }
+static void refused_case(void)
+{
+    struct bb8_record r;
+    ready_model();
+    /* The register pair refuses the hook's first readback, as when its
+     * trace is full: a refused access, not a mismatch. */
+    m.refuse_after = 5 + 12 + 2 + 2 + 1;
+    assert(bb8_gates(&io, &r) == 1);
+    assert(bb8_nsi(&io, &r) == BB8_ACCESS_FAILED && r.block.failed == 2);
+    printf("\"a refused hook access is ACCESS_FAILED, not a mismatch\",");
+}
 static void alias_case(void)
 {
     struct bb8_record r;
@@ -226,6 +242,7 @@ static void spin_case(void)
     bb_status_spin(status_read, NULL, step_now, 0x07061008, 1000, 240000, &t);
     assert(t.on && !t.bounded && t.reads == 6 && t.changes == 3 && t.first == 0);
     assert(t.change[0].value == 0 && t.change[1].value == 4 && t.change[2].value == 8 && t.on_at == 60);
+    assert(t.change[1].at == 40 && t.change[1].before == 30 && t.change[2].before == 50);
     static const uint32_t stuck[] = {0};
     statuses = stuck;
     status_count = 1;
@@ -234,6 +251,59 @@ static void spin_case(void)
     bb_status_spin(status_read, NULL, step_now, 0x07061008, 0, 100, &t);
     assert(!t.on && t.bounded && t.reads == 10 && t.changes == 1 && t.last_at == 100);
     printf("\"status spin: ON after an intermediate value; bounded when it never changes\"");
+}
+
+static void bins_case(void)
+{
+    /* 400 kHz, 2,500 ns bits: one snapshot is 252 bit times, 630,000 ns. */
+    const struct bb_step steps[3] = {{15120, 0, 12, 24, 6, 20, 16, 2},  /* 630,000 ns: 100% */
+                                     {16632, 1, 12, 24, 6, 20, 16, 2},  /* 693,000 ns: 110% */
+                                     {30000, 1, 12, 24, 6, 20, 16, 2}}; /* 1,250,000 ns */
+    struct bb_step_bins b;
+    bb_step_bins(steps, 3, 2500, &b);
+    assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 1 && b.over_ms == 1 && b.worst == 1984);
+    printf("\"step distribution against the wire time\",");
+}
+
+static size_t length(const struct bb_line *l)
+{
+    assert(l->n == strlen(l->text) && l->n + 1 < BB_LINE_MAX && l->text[l->n - 1] == '\n');
+    return l->n;
+}
+static void log_bound_case(void)
+{
+    const size_t room = 16384 - 256 - 1, reserve = 2 * BB_LINE_MAX;
+    struct bb_line lines[16];
+    struct bb6_summary s6;
+    memset(&s6, 0xff, sizeof s6);
+    for (unsigned i = 0; i < 3; ++i) s6.check[i] = 1;
+    size_t six = strlen(BB6_BEGIN) + strlen(BB6_COMPLETE) + reserve;
+    const unsigned n6 = bb6_summary_lines(&s6, lines);
+    assert(n6 == BB6_SUMMARY_LINES);
+    for (unsigned i = 0; i < n6; ++i) six += length(&lines[i]);
+    struct bb7_summary s7;
+    memset(&s7, 0xff, sizeof s7);
+    size_t seven = strlen(BB7_BEGIN) + strlen(BB7_REFUSED) + reserve;
+    assert(strlen(BB7_REFUSED) >= strlen(BB7_ON) && strlen(BB7_REFUSED) >= strlen(BB7_FAILED));
+    assert(strlen(BB7_TRACE_END) < BB_LINE_MAX);
+    const unsigned n7 = bb7_summary_lines(&s7, lines);
+    assert(n7 == BB7_SUMMARY_LINES);
+    for (unsigned i = 0; i < n7; ++i) seven += length(&lines[i]);
+    assert(six <= room && seven <= room);
+    struct bb_step step;
+    memset(&step, 0xff, sizeof step);
+    bb_step_line(&step, &lines[0]);
+    struct bb_status_trace t;
+    memset(&t, 0xff, sizeof t);
+    bb_status_line(&t, BB_STATUS_CHANGES - 1, &lines[1]);
+    bb_access_line(UINT32_MAX, UINT32_MAX, 1, UINT64_MAX, &lines[2]);
+    bb_word_line("BEFORE", UINT32_MAX, UINT32_MAX, &lines[3]);
+    bb_snapshot_line(UINT32_MAX, UINT32_MAX, &lines[4]);
+    size_t widest = 0;
+    for (unsigned i = 0; i < 5; ++i)
+        if (length(&lines[i]) > widest) widest = length(&lines[i]);
+    printf("\"log bound: bundle 6 needs %zu and bundle 7 %zu of %zu bytes before its details; widest line %zu\",",
+           six, seven, room, widest);
 }
 
 int main(void)
@@ -247,7 +317,10 @@ int main(void)
     written_case();
     at_table_case();
     mismatch_case();
+    refused_case();
     alias_case();
+    bins_case();
+    log_bound_case();
     twi_case();
     spin_case();
     printf("]}\nPASS\n");

@@ -133,8 +133,8 @@ still quarantines.
   counter and walk stages and of the WFI stage's start. The image keeps a
   progress record at `0x42000080`, between the result header and the log; it
   must hold magic `0x3130535342344242`, stage 3, a wake count below 1,000,
-  and a last wake stamp more than 24,000 counter ticks (one tick) older than
-  the monitor's `end_counter`. This outcome means the core stopped waking from
+  and a last wake stamp more than 48,000 counter ticks (two ticks) older
+  than the monitor's `end_counter`. This outcome means the core stopped waking from
   `WFI` on PPI 30. The runner reads the four words from the result page; an
   outcome may name such a record through its `progress` key.
 - **Bundle 7.** Status 1 with the owner's FAILED record and its status trace,
@@ -164,20 +164,26 @@ still quarantines.
 priority 1. `a733_cpu_pmu_begin` masks IRQs only for its own register
 accesses and restores `DAIF` before the counted window, so the image masks
 IRQs around each counter and walk region itself; a region then takes no tick.
-The three stages take about 1.01 s (*estimated*: a few milliseconds for the
-counters and walk blocks, then 1,000 ticks), inside the image's 1.5 s
-deadline, counted from the monitor's entry, and the monitor's 2 s deadline.
-Each stage writes a log marker and the stage word of the progress record.
+The counter and walk stages take a few tens of milliseconds (*estimated*),
+and the WFI stage 1,000 ticks. The image starts the WFI stage only before
+0.9 s after the monitor's entry, so that it ends before the monitor's 2 s
+deadline; a later start ends the run with status 0 and an inconclusive
+record. Each stage writes a log marker and the stage word of the progress
+record.
 
 - **Counters.** 64 empty regions (minimum, median, maximum of cycles and
-  `INST_RETIRED`); a loop of at least 1 ms, whose cycles per `CNTPCT` tick
-  give the measured CPU-L rate against bundle 3's configured rate;
-  `PMCR_EL0`, `PMCEID0_EL0`, `PMCEID1_EL0`; and one load per line of a 64 KiB
-  buffer cleaned and invalidated to the point of coherency, whose
-  `L2D_CACHE_REFILL` count shows whether the event counts.
-- **Walk A/B.** Blocks of 1,024 iterations (*estimated* 0.1 to 0.2 ms at
-  494 MHz) of `TLBI VMALLE1`, `DSB ISH`, `ISB` and one load. Consecutive
-  loads target different 2 MiB blocks of the 128 MiB map; no load targets the
+  `INST_RETIRED`); 2,000 ALU instructions, whose `INST_RETIRED` less the
+  empty median shows the event's accuracy; a loop of at least 1 ms, whose
+  cycles per `CNTPCT` tick give the measured CPU-L rate against bundle 3's
+  configured rate; `PMCR_EL0`, `PMCEID0_EL0`, `PMCEID1_EL0`; and one load
+  per line of a 64 KiB buffer cleaned and invalidated to the point of
+  coherency, whose `L2D_CACHE_REFILL` count shows whether the event counts.
+- **Walk A/B.** Blocks of 1,024 iterations of `TLBI VMALLE1`, `DSB ISH`,
+  `ISB` and one load (*estimated* 0.5 to 1.5 ms for A at 494 MHz, less for
+  B). Iteration k loads line k of 2 MiB block k (`base + (k << 21) +
+  (k << 6)`), so consecutive loads target different blocks and the loaded
+  lines fall in different cache sets: they stay in L1 and none evicts a
+  table line, and B's descriptor reads hit the caches. No load targets the
   non-cacheable result block or the block that holds the image, its stacks
   and the PMU state, which the image checks against its link symbols. One
   discarded warm-up block, then twelve blocks in ABBA order: A installs
@@ -186,15 +192,18 @@ Each stage writes a log marker and the stage word of the progress record.
   six events. The region's own return path may need a walk after the last
   `TLBI`, depending on whether an instruction-side walk fills the unified
   TLB, so a calibration region (`TLBI VMALLE1`, `DSB ISH`, `ISB`, then end)
-  precedes each block; `DTLB_WALK` must equal 1,024 plus the calibration's
-  count, or the block is refused. The switch is: write `TCR_EL1`, `ISB`,
-  `TLBI VMALLE1`, `DSB ISH`, `ISB`. No table write follows the final flush of
-  both table pages in `platform_init()` (`platform/a733/platform.c` lines
-  138–139), so uncached walks read the same descriptors as cached ones;
-  `checks/board-bundles-apps.py` checks this in the source and in the linked
-  object's relocations. The image reads CCU `+0x588` itself and refuses the
-  stage when `MBUS_DFS_EN` is set; bundle 3 read it clear on port 3-3. Each
-  board is reported separately.
+  precedes each block; `DTLB_WALK` and `ITLB_WALK` must each equal 1,024
+  plus the calibration's count, or the block is refused. The switch is:
+  write `TCR_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, `ISB`. No table write
+  follows the final flush of both table pages in `platform_init()`
+  (`platform/a733/platform.c` lines 138–139), so uncached walks read the
+  same descriptors as cached ones; `checks/board-bundles-apps.py` checks this
+  in the source and in the linked object's relocations. The image reads CCU
+  `+0x588` itself and refuses the stage when `MBUS_DFS_EN` is set; bundle 3
+  read it clear on port 3-3. Each board is reported separately. The run
+  records the CPU-L rate only; the CPU-B and DSU rates that
+  [cpu-table-walks.md](cpu-table-walks.md) asks for with each walk run wait
+  for a Read bundle of their words (see "Bundles that wait").
 - **WFI.** Over 1,000 ticks, the task runs `a733_cpu_idle()` (`DSB SY`,
   `WFI`) with IRQs unmasked, so the tick handler runs on each wake. No other
   task is ready, so the idle task does not run. The counters run free after
@@ -212,26 +221,41 @@ Each stage writes a log marker and the stage word of the progress record.
 - **Bundles 6 and 7** (`apps/board-bundles-power/`) start the PMIC provider,
   the rail ledger and the power-domain owner as `rank-9-usb-v4/` started the
   provider, with S_TWI0 pins PL0 and PL1 at function 2, pull 1 and drive 1,
-  the values of that run's input. One service task at priority 2 runs
-  `a733_power_service_step()`; a client task runs at priority 1. A recording
-  layer sits between each native adapter and its user: it passes every
-  S_TWI0 access to an observer that classifies the reads of the control
-  register (flag polls after a START or byte, STOP polls after a STOP), and
-  stores every owner access with its `CNTPCT` stamp. A domain-1 row exists in
-  both images, so the service verifies DCDC2 and DCDC4 once; bundle 6 never
-  requests it.
-- **Bundle 6** prints one line per service step that completed a bus phase.
-  The line gives the span, the scheduler ticks inside it, the completed
-  conditions, bytes and STOPs, the flag at the first read of each byte phase
-  and the most polls of one phase. It also gives the wire time of those
-  phases at the admitted bit time (two bit times per START, repeated START
-  or STOP, nine per byte) and the span in thousandths of it. A summary counts the steps at most 100%, up to 105%,
-  up to 110% and above 110% of their wire time.
+  the values of that run's input. The provider's startup and the service
+  session end 1.5 s after the monitor's entry. One service task at priority
+  2 runs `a733_power_service_step()`; a client task runs at priority 1. A
+  recording layer sits between each native adapter and its user: it passes
+  every S_TWI0 access to an observer that classifies the reads of the
+  control register (flag polls after a START or byte, STOP polls after a
+  STOP), and stores every owner access with its `CNTPCT` stamp. A domain-1
+  row exists in both images, so the service verifies DCDC2 and DCDC4 once;
+  bundle 6 never requests it.
+- **Log order.** Each image prints its summary and its outcome line first,
+  then its detail lines while 256 log bytes remain free, then a count of the
+  omitted lines (and bundle 7 its closing line). The host model formats
+  every line with each field at its widest value: bundle 6 needs at most
+  1,240 bytes before its details and bundle 7 at most 721, of 16,127.
+- **Bundle 6** records the owner adapter's mapping result and the
+  `PAR_EL1` translation of the domain-1 block. The adapter requires the
+  block to translate as Device-nGnRnE and outer-shareable; the descriptor's
+  shareability field is 0, and the architecture reports Device memory as
+  outer-shareable (unpinned), so a refusal here is identified before bundle
+  7. A detail line per service step that completed a bus phase gives the
+  `CNTPCT` span, the scheduler ticks inside it, the completed conditions,
+  bytes and STOPs, the flag at the first read of each byte phase and the
+  most polls of one phase; the wire time follows from the phases and the bit
+  time (two bit times per START, repeated START or STOP, nine per byte). The
+  summary counts the steps at most 100%, up to 105%, up to 110% and above
+  110% of their wire time.
 - **Bundle 7** reads the domain-1 words before the request, then lets the
   owner run its sequence. After the owner's ON command reaches the PPU, the
   layer reads the status back to back until it reads ON or 10 ms pass, and
-  records the first value and each change with its stamp, before the owner
-  continues. The client reads the same words again after ON.
+  records the first value and each change with its stamp and the stamp of
+  the read before it, before the owner continues. The owner starts its own
+  10 ms bound after that spin, so a domain that never reaches ON fails up to
+  20 ms after the command. The client reads the same words again after ON.
+  Domain 1 stays ON until power removal, so the bundle gives one sample per
+  board lifetime.
 - **Bundle 8** (`apps/board-bundles-dram/`) keeps its sequence in
   `sequence.c`, free of FreeRTOS and hardware, so the host model runs it.
   The gates come first; the first NSI accesses are the nine field reads of
@@ -239,10 +263,17 @@ Each stage writes a log marker and the stage word of the progress record.
   `CONFIG_ARCH_SUN60IW2` value of `MBUS_PMU_USB_PCIE` in the pinned
   `sunxi-nsi.h`), then `a733_dram_priority()` in table mode, then port 13
   again. Every access is one `DSB SY`-fenced 32-bit access through one
-  function, timed with `CNTPCT`.
+  function, timed with `CNTPCT`; a span therefore holds the bus access and
+  its barriers only, without the address translation and deadline checks
+  of the framebuffer's register path. An access that the register pair
+  refuses, as when its trace is full, ends the run as a refused access,
+  never as a readback mismatch.
 
 ## Bundles that wait
 
+- **On the next lifetime of port 3-3.** A Read bundle of the CPU-B and DSU
+  PLL and mux words beside the CPU-L words of bundle 3, so that each walk
+  run carries all three rates.
 - **On ranks 7 and 8.** Counters and a deliberate fault on an A76; WFI on
   eight cores with SGI 0 wake-ups and the EL0 `WFI` enable; the core-6 walk
   A/B and the dirty-line experiment of the cached launch paths; tasks on
@@ -257,7 +288,9 @@ Each stage writes a log marker and the stage word of the progress record.
   measures walk cost only; the owner's revert rule and its 1% contiguous-hint
   trigger need these workloads. Domain 4 ON is bound to bundle 10's records
   once the NPU startup requests it through the owner.
-- **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes;
+- **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes,
+  including the service-step timing of a DCDC3 selector write, which the
+  power-domain design's 110% bound also covers;
   domain 5 ON and OFF, repeated N times, which needs DCDC4 and is the only
   domain that powers off; WDT0 expiry with fault-record retention, which boots
   from microSD; intentional GPU and NPU hangs. Memory qualification also waits
@@ -280,7 +313,9 @@ tool builds nothing. `checks/board-bundles-apps.py` builds the images of
 bundles 4, 6, 7 and 8 and writes the `build.json` that the tool reads. It
 links each image from the exact objects of an image that passed: bundle 2's
 for bundle 4, and `rank-9-usb-v4/`'s platform and provider objects for
-bundles 6 to 8. It first reproduces those objects from this tree: every
+bundles 6 to 8. It runs from the source tree, outside
+`~/.cache/sunstoneos`, because the provider objects record the compile
+directory. It first reproduces those objects from this tree: every
 object byte-identical, except `monitor.c` in `rank-9-usb-v4/`, whose
 instructions are equal because only its line table moved with the counter
 option's lines. In `tools/prepare-board-bundles.py`:
@@ -359,7 +394,7 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 | Returning runs and re-enumerations for bundles 1 to 9 | Not applicable | 6 runs, 12 re-enumerations | Count fields of the guard events |
 | Queue timeout per Returning run | Not applicable | 925 s (*estimated*): 615 s guard wait, eight FEL transactions at the runner's 30 s bound, the 10 s return window and 60 s margin | Computed by the tool from the bundle's copy of the runner |
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
-| Log bytes per returning image | 16,127 available after the result header | At most 16,127, so no record is cut | Bundle 4 model log; bundle 6 at most 120 step lines |
+| Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
 | Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | At most 110% of the wire time of their phases | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
@@ -372,22 +407,26 @@ figure above was measured on the board.
 Offline results of the four new images (`checks/board-bundles-apps.py`):
 
 - **Bundle 4.** The secure QEMU model (Cortex-A55, one core) prints the
-  three stage markers, 13 walk blocks and 999 wakes over 1,000 ticks, and
-  exits 0 with a 7,622-byte log. QEMU implements none of the six events, so
-  every walk block is refused there. The model whose tick stops before `WFI`
-  prints the WFI marker and returns through the secure timer with status 2;
-  its log matches the controlled outcome. Image: 26,896 bytes of text, 3 new
-  objects.
-- **Bundles 6 and 7.** About 92 KB of text each and 6 new objects; no QEMU
+  three stage markers, 13 walk blocks and 1,000 wakes over 1,000 ticks, and
+  exits 0 with an 8,343-byte log; every value prints at a fixed width and
+  every line count is fixed, so the board's log has the same length. QEMU
+  implements none of the six events, so every walk block is refused there
+  and `INST_RETIRED` reads 0. The model whose tick stops before `WFI` prints
+  the WFI marker and returns through the secure timer with status 2; its log
+  matches the controlled outcome. Image: about 35 KB of text, 3 new objects.
+- **Bundles 6 and 7.** About 100 KB of text each and 6 new objects; no QEMU
   model exists for the A733 power devices. The host model checks the TWI
   observer on one read transaction (2 conditions, 4 bytes, 1 STOP, 42 bit
-  times) and the status spin with an intermediate value and with the bound.
-- **Bundle 8.** 25,852 bytes of text and 4 new objects. The host model runs
+  times), the step distribution, the status spin with an intermediate value
+  and with the bound, and the log bound above.
+- **Bundle 8.** About 26 KB of text and 4 new objects. The host model runs
   the sequence and the table-mode hook against a register file. Behind a
   closed PPU clock it makes no PPU or NSI access; with domain 1 OFF or in
   transition, or with the NSI gate or reset closed, no NSI access. From zero
   fields it writes six fields and at the table none; it reports a mismatch
-  when writes are ignored and detects a write that reaches port 13.
+  when writes are ignored, a refused access when the register pair refuses
+  a readback, and detects a write that reaches port 13. Its log holds
+  fixed-width lines for at most 64 traced accesses, under 10 KB in all.
 
 ## Left out
 
@@ -410,7 +449,9 @@ warm-return admission are merged. `primary.patch` of the bundle apps holds:
   command in the session record.
 - `checks/cpu-pmu.py`: a case for the single-core form, compiled with the
   returning images' configuration.
-- `checks/index.json`: the entry of `checks/board-bundles-apps.py`.
+- `checks/index.json`: the entry of `checks/board-bundles-apps.py`, in
+  place of that of `checks/board-bundles-images.py`, the builder of bundles
+  1 and 2, which `checks/board-bundles-apps.py` supersedes.
 - `docs/board-runbooks/README.md` and `docs/audit/board-test-plan.md`: the
   second prepared set and its runbooks.
 
