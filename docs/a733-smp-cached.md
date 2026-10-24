@@ -36,9 +36,10 @@ or table reservation. MMIO remains Device memory.
 
 The boot sequence is bounded by the contract's absolute startup deadline:
 
-1. Core 0 validates the immutable watchdog contract and readbacks. It builds and
-   publishes the tables, code and initial RAM, then applies its CPU and DSU reset
-   workarounds while the other cores remain parked.
+1. Core 0 validates the immutable watchdog contract and readbacks. It cleans and
+   invalidates the table section, writes the tables with Device stores, and
+   publishes code and initial RAM with `DC CVAC`. It then applies its CPU and
+   DSU reset workarounds while the other cores remain parked.
 2. The primary powers and releases each secondary through the authenticated
    entry protocol. Each secondary applies its local reset workarounds and checks
    that the DSU identity matches the primary. Each core prepares its GIC

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Check the EL1 table walk profile on linked images: TCR sources, table flush and checksum order.
 
+It also runs a733_cached_prepare() with its callees stubbed and records each
+range it publishes with a733_cpu_coherence_publish(); the table section, which
+a733_cached_memory_prepare() has already cleaned and invalidated, must not be
+among them.
+
 The primitive refusal cases (flush range, state and deadline refusals, malformed
 roots and a corrupted checksum) live in checks/a733-cpu-coherence.py.
 """
@@ -165,6 +170,36 @@ class Machine:
         self.trace = []
 
 
+def publications(image):
+    """(start, bytes) of each a733_cpu_coherence_publish() call in a733_cached_prepare().
+
+    Only the function's own instructions run. Each call returns at once:
+    a733_cpu_index() reports core 0, the publish calls are recorded and every
+    other callee reports success, so all three outcomes of every check pass.
+    """
+    m = Machine(image)
+    begin = image.address('a733_cached_prepare')
+    names = {a: n for n, values in image.symbols.items() for a in values}
+    seen = []
+
+    def call(uc, address, size, unused):
+        ins = m.decoded.get(address) or next(m.decoder.disasm(bytes(uc.mem_read(address, 4)), address))
+        if ins.mnemonic != 'bl':
+            return
+        target = names.get(int(ins.op_str.lstrip('#'), 16))
+        x0, x1 = m.gpr('x0'), m.gpr('x1')
+        assert target != 'a733_smp_stop', ('stop', hex(x1))
+        if target == 'a733_cpu_index':
+            uc.mem_write(x1, (0).to_bytes(4, 'little'))
+        if target == 'a733_cpu_coherence_publish':
+            seen.append((x0, x1))
+        uc.reg_write(UC_ARM64_REG_X0, 0 if target == 'a733_smp_counter' else 1)
+        uc.reg_write(UC_ARM64_REG_PC, address + 4)
+    m.uc.hook_add(UC_HOOK_CODE, call, begin=begin, end=begin + 4096)
+    m.call('a733_cached_prepare', 1, 10**9, 2 * 10**9, 1)
+    return seen
+
+
 def prepared(image):
     m = Machine(image)
     assert m.call('a733_cached_memory_prepare') == 1
@@ -192,6 +227,12 @@ def measure(image_path, baseline):
     result['enable_el1_ldp'] = m.executed.count('ldp')
     result['enable_el1_dc_civac'] = len([x for x in m.trace if x[:2] == ('dc', 'civac')])
     result['tcr_el1'] = hex(m.model['tcr_el1'])
+    published = publications(image)
+    result['prepare_publish_calls'] = len(published)
+    result['prepare_published'] = [[hex(a), n] for a, n in published]
+    # Lines of the table section that a publish call cleans with DC CVAC.
+    result['table_publication_lines'] = sum(
+        len(range(max(a, start) & ~63, min(a + n, end), 64)) for a, n in published if a < end and a + n > start)
     if baseline:
         return result, None
 
@@ -219,6 +260,12 @@ def measure(image_path, baseline):
     assert m.trace[writes[-1]][1] == total, 'the checksum is the last table-section write'
     assert m.read(root) & (3 << 8) == 2 << 8 and m.read(pages['a733_cached_el3_l1']) & (3 << 8) == 2 << 8
     cases['el3-flush-precedes-descriptors-and-checksum-is-last'] = True
+
+    # Core 0 publishes code and initial RAM only; the flush above already
+    # removed every table-section line, so the section is not published again.
+    assert result['table_publication_lines'] == 0 and all(a != start for a, _ in published), result
+    assert [a for a, _ in published] == [0x41000000, 0x41200000], result
+    cases['prepare-publishes-no-table-line'] = True
 
     budgets = {'enable_el1_instructions': 2500}
     assert result['enable_el1_instructions'] <= budgets['enable_el1_instructions'], result

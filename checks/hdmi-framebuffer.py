@@ -37,7 +37,7 @@ def main():
  image=build/'sunstone-a733-hdmi.elf'
  units=[u for u in json.loads((build/'compile_commands.json').read_text()) if 'sunstone-a733-hdmi.dir/' in u['command']]
  selected=['apps/hdmi/framebuffer.c','apps/hdmi/output.c','platform/a733/hdmi_native.c',
-  'drivers/display/a733_display_framebuffer.c','drivers/power/a733_de_sys_power.c',
+  'drivers/display/a733_display_framebuffer.c','drivers/power/a733_power_domains.c','drivers/power/a733_power_domains_native.c',
   'drivers/display/a733_display_engine.c','drivers/display/a733_tcon_lcd.c','drivers/display/a733_dsi_video.c','drivers/display/a733_dsi_phy.c',
   'drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c',
   'drivers/clock/a733_clock_leases.c','drivers/clock/a733_media_clock.c','drivers/clock/a733_media_clock_native.c',

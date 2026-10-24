@@ -41,11 +41,20 @@ legacy adapter and early reader; binding cannot discover such external users.
 
 ## GPU admission copies an authenticated snapshot under the manager lock
 
-The GPU platform acquires a stable DCDC4 lease and obtains an actual PMIC
-snapshot before calling the resource manager. It requires page zero, chip
-identity 3, revision zero, enabled DCDC4 and the source-defined 800 mV selector.
-Health checks authenticate the provider lifetime, exact request, outstanding
-borrow and stable parent before arming the native callback.
+The GPU platform acquires a stable DCDC4 lease and obtains a DCDC4 snapshot
+before calling the resource manager. It requires page zero, chip identity 3,
+revision zero, enabled DCDC4 and the source-defined 800 mV selector.
+
+When the provider is bound to a power-domain owner, which every image that
+runs the GPU does, the snapshot is the owner's boot reading
+([docs/power-domains.md](power-domains.md)). The consumer waits for the
+supply-verification done bit, requires `A733_POWER_DCDC4_VERIFIED` and no
+provider, clock or ledger fault bit, and copies the record: no bus
+transaction and no PMIC request slot per GPU start. Health is the rail token's
+status plus one acquire load of the state word. Without an owner, and for the
+NPU's DCDC2 consumer, the consumer submits its own snapshot request, and
+health authenticates the provider lifetime, exact request, outstanding borrow
+and stable parent before arming the native callback.
 
 The resource manager holds its own lock when invoking that callback. The
 callback consumes a single authorization and copies only the prepared raw
@@ -58,7 +67,8 @@ The platform checks health outside the lock before power progression and again
 before reporting ON. Contention after completed power-up preserves that progress
 and delays publication; it does not repeat the power sequence.
 
-The final request and rail lease survive GPU OFF and subsequent starts. These
+The final request, when one exists, and the rail lease survive GPU OFF and
+subsequent starts. These
 platform-lifetime objects cannot be released through the consumer API. A new
 startup deadline governs each GPU operation; expiration of an earlier operation
 does not invalidate the still-held supply lease. Provider or authority failure

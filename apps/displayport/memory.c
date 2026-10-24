@@ -23,7 +23,8 @@ int dp_memory_boot(void)
   .pck_lease=&dp_app.native.pck_lease,.pck_client=dp_app.session.pck_client,.owner=dp_app.session.owner,
   .authority=dp_app.session.authority,.deadline=dp_app.deadline,.parent_bytes=2097152,
   .frame_span=2097152-32768,.output=A733_DE_TV1_RGB565,.context=&dp_app,.current=current,
-  .output_owned=output_owned,.token_live=token_live,.admit=admit};
+  .output_owned=output_owned,.token_live=token_live,.admit=admit,
+  .domains=&providers.domains,.rail=&dp_app.native.rail};
  memcpy(c.fabric,dp_app.session.board.fabric,sizeof(c.fabric));
  memcpy(c.fabric_hz,dp_app.session.board.fabric_hz,sizeof(c.fabric_hz));
  memcpy(c.iommu_gates,dp_app.session.iommu_gates,sizeof(c.iommu_gates));

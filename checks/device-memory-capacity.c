@@ -232,7 +232,7 @@ static uint64_t startup;
 volatile uint32_t fixture_mode=0xaabbccdd; /* Runner replaces only this fixture control. */
 volatile uint8_t ucPrimaryCoreInitDoneFlag;
 struct a733_cached_runtime a733_cached_runtime[8];
-extern unsigned char __bss_start[],__bss_end[],__tables_start[],__tables_end[];
+extern unsigned char __bss_start[],__bss_end[];
 extern int a733_smp_pre_scheduler(unsigned long,uint64_t,uint64_t);
 extern _Noreturn void fixture_exit(unsigned,uint64_t);
 static void check(int condition,unsigned line)
@@ -368,7 +368,6 @@ void fixture_el3_prepare(unsigned core)
     if(fixture_mode==1){a733_cached_el1_table_sum[0]-=a733_cached_el1_l2[100];a733_cached_el1_l2[100]=0;}
     CHECK(a733_cpu_coherence_publish(0x41000000,0x200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,UINT32_MAX)==1);
-    CHECK(a733_cpu_coherence_publish((uintptr_t)__tables_start,(size_t)(__tables_end-__tables_start),UINT32_MAX)==1);
     barrier();tables_published=1;barrier();
 }
 static uint64_t translate3(uintptr_t a)

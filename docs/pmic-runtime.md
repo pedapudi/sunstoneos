@@ -101,20 +101,32 @@ master's activity.
 The [poll-count and BUSY check](../checks/a733-pmic-polls.c) models bus timing
 in software. Its clock advances 1 microsecond for each time read, and each
 completion flag sets 90 microseconds after the write that starts its bus event.
-That is about one byte with acknowledgment at 100 kHz. The provider task polls
-once per 1 ms tick. In this model a snapshot completes in 44 polls instead of
-92. These modeled figures compare poll designs and have not been measured on
-hardware.
+That is about one byte with acknowledgment at 100 kHz. A provider task that
+polls once per 1 ms tick completes a snapshot in 44 polls in this model. These
+modeled figures compare poll designs and have not been measured on hardware.
 
-A poll holds the provider object, so a concurrent `a733_pmic_live()` caller
-observes BUSY while the poll runs. The HDMI and Type-C users treat that BUSY as
-a fault, so a poll must stay short. In the model, the longest poll lasts 17
-modeled microseconds with 7 register accesses, and the polls of one snapshot
-last about 470 modeled microseconds in total. The check counts each complete
-poll as BUSY time, so these figures are upper bounds. A caller deadline bounds
-the complete snapshot, including mutex acquisition and result publication.
-`a733_pmic_live()` itself takes the provider object's try-lock and makes one
-load of the state word; it no longer queries the clock registry.
+In the GPU, accelerator, GPU display, HDMI and board images the provider task
+is the power service task ([docs/power-domains.md](power-domains.md)). It
+spins on the raw counter between polls for the expected duration of the bus
+phase, without the provider object, and blocks for one tick after at most 1 ms
+of spinning. `checks/power-domains-service.c` measures it: at 400 kHz a
+snapshot and a selector write each complete in one step with no tick wait; at
+100 kHz they take two and three tick waits. The other images keep their
+per-tick loops. `a733_pmic_work()` reads faults from the state word. When a
+client latches a fault while the provider task holds the I2C mutex for a
+transfer, it reports `A733_PMIC_WORK_FAILED` with `A733_PMIC_WORK_RETAIN`,
+and the service polls once more; that poll marks the mutex retained.
+
+A poll holds the provider object, so a concurrent `a733_pmic_result()` or
+`a733_pmic_reap()` caller observes BUSY while the poll runs. In the model, the
+longest poll lasts 17 modeled microseconds with 7 register accesses, and the
+polls of one snapshot last about 470 modeled microseconds in total. The check
+counts each complete poll as BUSY time, so these figures are upper bounds. A
+caller deadline bounds the complete snapshot, including mutex acquisition and
+result publication. `a733_pmic_live()` takes no lock: it compares the
+immutable provider lifetime and makes one acquire load of the state word, so
+it never returns BUSY. A fault it sees is latched by the provider task's next
+poll.
 
 The provider checks its deadline before and after each register access. The
 native adapter answers those time reads from the architectural counter
@@ -152,10 +164,10 @@ reads under both placements would qualify it.
 
 Request admission waits for two locks: the private pin-lease check waits for
 REGISTER_LOCK, and the bus access waits for the I2C mutex. The poll releases
-the provider object before these waits and takes it back afterwards. Consumers
-such as the USB2 platform call `a733_pmic_live()` while they hold
-REGISTER_LOCK. If the poll kept the object during its wait, each side would
-wait for the other until a deadline. When another caller holds the object as
+the provider object before these waits and takes it back afterwards. A
+consumer that holds REGISTER_LOCK and calls `a733_pmic_result()` takes the
+object. If the poll kept the object during its wait, each side would wait for
+the other until a deadline. When another caller holds the object as
 the poll returns from the waits, the poll releases the I2C mutex without any
 bus access and returns BUSY, and the next poll repeats admission. A client
 fault latched during the waits also releases the unused mutex and retains the
