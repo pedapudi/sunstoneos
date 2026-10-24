@@ -19,7 +19,7 @@ unsigned char a733_cpu_el1_stacks[8*A733_CONTINUE_STACK_BYTES] __attribute__((al
 _Static_assert(sizeof(struct a733_cached_record)==128,"assembly record layout");
 _Static_assert(offsetof(struct a733_cached_record,esr)==40,"assembly fault layout");
 extern volatile uint8_t ucPrimaryCoreInitDoneFlag,ucSecondaryCoresReadyFlags[];
-extern unsigned char __bss_start[],__bss_end[],__tables_start[],__tables_end[];
+extern unsigned char __bss_start[],__bss_end[];
 extern unsigned char __monitor_bss_start[],__monitor_bss_end[];
 static void sync_memory(void) {__asm__ volatile("dsb sy":::"memory");}
 static unsigned native_core(void)
@@ -85,9 +85,11 @@ void a733_cached_prepare(uint64_t epoch,uint64_t startup,uint64_t diagnostic,uin
     /* The source image and initial RAM are immutable/idle under external cold-boot
      * ownership. Clean publication is not a substitute for that admission. */
     sync_memory();
+    /* The table section needs no publication: a733_cached_memory_prepare() cleaned
+     * and invalidated it and then wrote it with Device stores, which allocate no
+     * line (docs/cpu-coherence.md). */
     if(a733_cpu_coherence_publish(0x41000000,0x200000,startup)!=1 ||
-       a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,startup)!=1 ||
-       a733_cpu_coherence_publish((uintptr_t)__tables_start,__tables_end-__tables_start,startup)!=1)
+       a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,startup)!=1)
         a733_smp_stop(2,0x102);
     prepare_core(0);
 #if defined(SUNSTONE_SUPERVISED_NS_PUBLICATION)
