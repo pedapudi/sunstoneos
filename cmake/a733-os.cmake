@@ -243,8 +243,10 @@ target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_GPU_LINEAR)
+  # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
+  # 0x46C00000-0x47000000 read-only at EL0 and EL1.
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1
-    OS_RECOGNITION_CORE=${os_recognition_core})
+    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1)
 endif()
 target_include_directories(sunstone-a733-os BEFORE PRIVATE "${os_root}/apps/os")
 if(os_include_dirs)

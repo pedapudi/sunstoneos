@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
+#include "a733_memory_local.h"
 
 #define UART 0x09000000UL
 #define GICD 0x08000000UL
@@ -118,6 +119,9 @@ void platform_init(void) {
     uint64_t end = counter() + frequency();
     while (__atomic_load_n(&cpu_online, __ATOMIC_ACQUIRE) != configNUMBER_OF_CORES - 1)
         configASSERT(counter() < end);
+    // Fixtures that link the local A733 pools prepare them here, as the
+    // native platform does, before the scheduler starts.
+    configASSERT(a733_memory_local_prepare());
 }
 void platform_secondary(void) {
     local_init();

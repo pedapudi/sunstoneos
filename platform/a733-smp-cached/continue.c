@@ -3,6 +3,7 @@
 #endif
 #include "cached.h"
 #include "a733_cached_memory.h"
+#include "a733_memory_local.h"
 #if defined(SUNSTONE_A733_FAULT_PAGE)
 #include "a733_fault.h"
 #endif
@@ -146,6 +147,8 @@ _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64
     if(!c) {
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
         if (a733_device_memory_prepare() != 1) a733_cached_smc(3, 0x203);
+#else
+        if (!a733_memory_local_prepare()) a733_cached_smc(3, 0x203);
 #endif
         a733_smp_primary_el1();a733_cached_smc(4,0x202);
     }

@@ -9,6 +9,7 @@ stops the check instead of letting removed assertions record a pass.
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import traceback
@@ -103,6 +104,54 @@ def instruction_sites(parts, match):
     """
     return [base + index * 4 for base, data in parts
             for index, (word,) in enumerate(struct.iter_unpack('<I', data[:len(data) & ~3])) if match(word)]
+
+
+# AArch64 DSB, DMB and ISB with every operand bit masked: (mask, value).
+BARRIERS = {'dsb': (0xfffff0ff, 0xd503309f), 'dmb': (0xfffff0ff, 0xd50330bf), 'isb': (0xfffff0ff, 0xd50330df)}
+
+
+def barriers(word):
+    """The names of the BARRIERS entries that word encodes."""
+    return [name for name, (mask, value) in BARRIERS.items() if word & mask == value]
+
+
+def trace_sections(log, classify, names):
+    """Instruction counts per section of a QEMU log written with -d int,exec,nochain,in_asm.
+
+    A section begins at each semihosting call that CPU 0 takes and ends at the
+    next one. It counts the instructions CPU 0 executes in it, from the
+    translated blocks (in_asm) and their executions (exec, nochain), and, for
+    each name in names, the instructions for which classify(word) returns a
+    list containing that name. Code before the first call is not counted.
+    """
+    blocks, sections, counts, words, address = {}, [], None, None, None
+    exec_line = re.compile(r'^Trace 0: \S+ \[[0-9a-f]+/([0-9a-f]+)/')
+    with Path(log).open(errors='replace') as stream:
+        for line in stream:
+            if line.startswith('IN:'):
+                words, address = [], None
+                continue
+            if words is not None:
+                if address is None and line.startswith('0x'):
+                    address = int(line.split(':')[0], 16)
+                    continue
+                if line.startswith('OBJD-T:'):
+                    data = bytes.fromhex(line.split(':', 1)[1].strip())
+                    words += [int.from_bytes(data[i:i + 4], 'little') for i in range(0, len(data), 4)]
+                    continue
+                blocks[address] = words
+                words = None
+            if 'Taking exception 16 [Semihosting call] on CPU 0' in line:
+                counts = {'instructions': 0, **{name: 0 for name in names}}
+                sections.append(counts)
+                continue
+            match = exec_line.match(line)
+            if match and counts is not None:
+                for word in blocks[int(match[1], 16)]:
+                    counts['instructions'] += 1
+                    for name in classify(word):
+                        counts[name] += 1
+    return sections
 
 
 def system_register_access(word):
