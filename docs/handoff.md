@@ -480,11 +480,12 @@ functions and modes beyond these bounded applications.
   128 ms, to return each copy. Preserve
   `i2s-hardware-cyclic-20261019/root-cache-review.json` and
   `identity-reuse-clarification.json`; standalone-client cases model service calls.
-- **Camera streaming:** the first DMA status interval spans the OV5640
-  stream-on sequence, so a slow start can make a stream deliver nothing while
-  every slot stays owned ([camera capture](camera-capture.md)). The status
-  interval now has a margin under half a frame. Whether a real sensor start
-  fits the first interval needs a module on the board.
+- **Camera streaming:** the first DMA status interval now opens immediately
+  before the OV5640 frame-enable write. Delayed setup, uncertain enable and
+  callback reentry pass focused host checks; later gaps still suppress
+  delivery ([camera capture](camera-capture.md)). Native ring allocation,
+  slot synchronization, stop/drain and application delivery remain missing.
+  Physical frame timing and address latching need a camera module.
 - **Bluetooth:** seven composed/eight native operation cases retain ELF
   `36bfa257…`; final `388f9f93…` changes five objects for exact profile guards.
   Its final-image case covers version admission and copied PCM commit only.
@@ -731,7 +732,7 @@ function returns the same result for every input. These copies remain:
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
 | USB host | Adoption of a new Type-C attachment after VBUS removal; Bulk-Only Transport reset and bulk clear-halt recovery; a board workload and wire format for audio capture. | USB host owner. Storage recovery needs changes to the pinned TinyUSB storage class and to bulk-endpoint recovery in the core. |
 | Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
-| Camera | A CAM2 binding: a port field in the camera boot record and `apps/camera/prepare.py`, the PK10–PK19 data pins and MCLK2, and a sourced deskew value for receiver port 1. Open the first stream status interval at the sensor's stream-on write. Continuous capture in the native application. | Camera owner. The stream-on change needs a hook inside the sensor's start sequence. |
+| Camera | A CAM2 binding: a port field in the camera boot record and `apps/camera/prepare.py`, the PK10–PK19 data pins and MCLK2, and a sourced deskew value for receiver port 1. Continuous capture in the native application. | Camera owner. The coordinator's frame-enable interval fix is host-checked; native ring ownership, synchronization and stop/drain still need integration. |
 | GPU | Compute input and output beyond one 4 KiB page, arbitrary trusted shaders, blend factors, clipping, mipmaps and multisampling. | GPU owner. Multi-page compute changes the package wire format, so it is a package of its own. |
 | NPU | Complete the FIFO-direct USB path for the [existing runtime board image](designs/npu-board.md), resolve the recorded check failures, then obtain physical inference evidence. | NPU owner. The image already shares the board provider resources and uses extended memory; do not recreate it. Any mimus offload needs an accuracy evaluation. |
 | Codecs, G2D and DI301 | Supervised capture of H.264 sequences longer than two pictures in `tools/check-a733-h264-encode-supervised.py`; H.264 frame-level rate control; supervised capture of JPEG sequences; repeated JPEG encode; an extended uncached pool for full-HD JPEG; G2D rotation once `g2d_rotate.c` is pinned, and YUV conversion; repeated DI301 jobs in one session, with gain feedback and film detection. | Video and graphics owners. Rate control needs a rate-controlled reference run of the pinned library to check against. Long-term B references stay refused until hardware evidence shows how the engine treats them. |

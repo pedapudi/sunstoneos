@@ -1970,10 +1970,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   exact only while consecutive DMA status reads lie within the status
   interval, which keeps a margin under half a frame period; after a longer
   gap the stream delivers nothing more until the owner stops it. The first
-  interval spans the OV5640 stream-on sequence, so a slow start can make a
-  stream deliver nothing while every slot stays owned
-  ([camera capture](camera-capture.md)); whether a real start fits is
-  unmeasured. Address latching at frame start and frame-done timing need a
+  interval now opens immediately before the OV5640 frame-enable write.
+  Focused host checks cover delayed setup, uncertain enable and callback
+  reentry ([camera capture](camera-capture.md)). Address latching at frame start and frame-done timing need a
   module; the native application does not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
