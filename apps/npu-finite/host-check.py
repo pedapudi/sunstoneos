@@ -55,9 +55,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  for name,offset in [('clock',112),('power',144),('supervision',176)]:
   value={**common,'conditions':{k:ref(fact) for k in required[name]},'boot_sha256':boot_hash,'supply_uv':800000,'supervisor':profile['supervisor'],'one_attempt':True};facts[name]=write(name+'.json',value);raw[offset:offset+32]=hashlib.sha256(facts[name].read_bytes()).digest()
  ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[ref(fact)]})
- conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover','usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
+ conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
  if checkpoint:
-  conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','usb-device-mapping','rom-usb0-pio-takeover','usb0-irq188-189-190-disabled-inactive-clear'}
+  conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
   conditions|= {'providers-never-constructed','npu-clock-power-registers-not-accessed'}
  platform=write('platform.json',{**common,**profile,'schema':'a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1','conditions':{k:ref(fact) for k in conditions},'entry_conditions_established':True,'physical_coherence_result':'under-test'})
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
@@ -91,6 +91,21 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   modified={**entry,key:value};encoded=(json.dumps(modified)+'\n').encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest();rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
  saved=fact.read_bytes();fact.write_bytes(saved+b'changed');h.validate_bundle(bundle);fact.write_bytes(saved);results.append({'name':'frozen-entry-independent-of-external-file-mutation','passed':True})
  frozen_fact=bundle/prepared['entry_evidence'][str(fact.resolve())]['name'];saved=frozen_fact.read_bytes();frozen_fact.write_bytes(saved+b'changed');rejected('changed-frozen-entry-refused',lambda:h.validate_bundle(bundle));frozen_fact.write_bytes(saved)
+ # Negative ELF contains a defined function renamed to an existing USB
+ # filename string. The real image's STT_FILE entries alone remain accepted.
+ import io
+ from elftools.elf.elffile import ELFFile
+ elf=ELFFile(io.BytesIO(data));table=elf.get_section_by_name('.symtab');syms=list(table.iter_symbols())
+ usb_name=next(x['st_name'] for x in syms if x['st_info']['type']=='STT_FILE' and 'usb' in x.name.lower())
+ index=next(i for i,x in enumerate(syms) if x['st_info']['type']=='STT_FUNC' and x.name=='platform_hex')
+ altered=bytearray(data);struct.pack_into('<I',altered,table['sh_offset']+index*table['sh_entsize'],usb_name)
+ rejected('linked-native-usb-function-refused',lambda:h.image_profile(bytes(altered),{**json.loads(manifest.read_bytes()),'final_elf':sha(altered)}))
+ saved_platform=platform.read_bytes()
+ for key in ('usb-supplies-stable-and-writers-excluded',)+(() if checkpoint else ('npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')):
+  changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
+  encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
+  rejected('finite-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
+ platform.write_bytes(saved_platform)
  if checkpoint:
   rejected('checkpoint-cannot-use-numerical-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   saved_platform=platform.read_bytes()

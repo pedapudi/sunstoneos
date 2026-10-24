@@ -152,3 +152,14 @@ jobs. Status 2 will mean safely cleaned thermal refusal, separate from numerical
 mismatch. This integration is not implemented by the entry checkpoint. The
 operating point remains 492 MHz at 800 mV; PLL, domain, rail and SRAM ownership
 remain retained, with no in-place restart.
+
+## Finite numerical execution leaves USB to ROM
+
+The numerical and entry-checkpoint profiles construct no native USB provider.
+The finite diagnostic excludes observer-service startup, and single-core provider
+initialization excludes USB clock acquisition. The host rejects a linked native
+USB function in either profile; filename symbols left by the linker are harmless.
+Consequently, finite admission does not require native USB mappings, PIO takeover
+or disabled IRQ188/189/190. The monitor preserves inherited SPI enables and
+restores them before ROM return. ROM USB clock, power, supply and writer-exclusion
+authority remains required, as do all numerical NPU and PMIC operating conditions.
