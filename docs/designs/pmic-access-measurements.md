@@ -3,7 +3,10 @@
 These measurements compare the provider, native adapter and service of
 [pmic-access.md](pmic-access.md) with the base tree, bringup commit
 `7816755f`. Every figure comes from a host model, a compiled object or a
-linked image; no board run has used the changed provider.
+linked image. The board result of the changed provider, its measured access
+costs and the step bound set from them are in section "Board result" of
+[pmic-access.md](pmic-access.md); the board-cost rows below take those
+costs.
 
 ## Conditions
 
@@ -19,7 +22,10 @@ linked image; no board run has used the changed provider.
   tree's `checks/a733-pmic.c` and `checks/power-domains-service.c`, with the
   assertions on step times removed, because the base provider fails them,
   and the work query called with the base signature. That copy is
-  `~/.cache/sunstoneos/build/pmic-access/measure-base2/`.
+  `~/.cache/sunstoneos/build/pmic-access/measure-base2/`. The base rows at
+  bundle 6's measured costs come from that copy with the read, write, poll
+  and time-read costs taken as arguments,
+  `~/.cache/sunstoneos/build/pmic-bound/exp/svc_base.c`.
 - **Images**: the project's AArch64 toolchain through the session's
   configure script, with the application options listed under
   "Images rebuilt".
@@ -41,10 +47,12 @@ selector write. The model's bytes take 23 µs, so its own snapshot wire is
 | Division in the time read `now()` | One `UDIV` per read | No `UDIV`; one `UMULH` per read, the reciprocal set by the first read | Same disassembly; `checks/a733-pmic-time.c` passes 3,200,890 comparisons |
 | Snapshot step, 400 kHz, 200 ns per access, 40 ns per time read | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Selector write, same costs | 920 µs (113%), one step | 883 µs (109%), one step | Same |
-| Snapshot step, 400 kHz, 800 ns per read and write, 200 ns per poll, 100 ns per time read | 854 µs (136%) | 758 µs (120%) | Same, board-cost table |
-| Snapshot step, 850 ns | 855 µs (136%) | 782 µs (124%) | Same |
-| Snapshot step, 1,300 ns | 947 µs (150%); 915 µs (145%) with 40 ns per time read and no poll cost, the fit to the board's median | 846 µs (134%) | Same |
-| Selector write at 800 ns; 850 ns; 1,300 ns | Two steps, one tick wait, at each | One step of 975 µs (120%); two steps, one tick wait; two steps, one tick wait | Same |
+| Snapshot step, 400 kHz, bundle 6's measured costs: 529 ns per read, 1,026 ns per write, 81 ns per poll, 150 ns per time read | 848 µs (135%) | 756 µs (120%) | Same, board-cost table |
+| Snapshot step, same costs with 380 ns per poll | 853 µs (135%) | 779 µs (123.6%), the board's median | Same |
+| Snapshot step, same costs with 2,340 ns per poll, the base fit's remainder | 941 µs (149%) | 850 µs (135%) | Same |
+| Snapshot step, 1,300 ns per access, 40 ns per time read, no poll cost: the fit to the base run's median | 915 µs (145%) | Not run | Base-tree copy of the check |
+| Selector write at the measured costs with 81 ns; 380 ns; 2,340 ns per poll | Two steps, one tick wait, at each | One step of 973 µs; one step of 1,001 µs; two steps, one tick wait | Same |
+| Snapshot step, every access at the bare S_TWI0 read of 379 ns; at 300 ns; no poll cost, 40 ns per time read | Not run | 712 µs (113%); 687 µs (109%) | Same |
 | Flags 10% later than the 400 kHz divisor implies (25 µs bytes, 6 µs conditions), 200 ns per access | Snapshot and selector write each two steps with one tick wait | Snapshot one step of 751 µs, selector write one step of 968 µs (708 µs and 913 µs of wire) | Same, slow-bus case |
 | Tick waits, 100 kHz, snapshot and selector write | 2 and 3 | 2 and 3 | Same |
 | BUSY results per other-core caller; from `a733_pmic_live` | At most 1; 0 | At most 1; 0 | Same |
@@ -58,11 +66,12 @@ at sub-microsecond times (712 µs and 920 µs); the head provider passes
 (685 µs and 883 µs). With whole-microsecond flags, as before this change,
 the base gave 687 µs and 885 µs.
 
-The service check asserts every head figure in the table that it prints: one
-snapshot step within 155% of the bit-time wire at each board cost, the
-selector-write step counts of the table, and one step within 110% of the
-slow bus's own wire time. With no per-poll cost, the selector write stays in
-one step up to 850 ns per access; 200 ns per poll lowers that to 800 ns.
+The service check asserts the head figures that set or test the bound: one
+snapshot step at each board cost; at 81 ns and 380 ns per poll a step
+within the median bound of 799 µs less its 20 µs margin; the selector-write
+step counts of the table; a step above 110% of the bit-time wire at 379 ns
+per access and within it at 300 ns; and one step within 110% of the slow
+bus's own wire time.
 
 The focused model check, `checks/a733-pmic.c`, also covers the changed
 error and recovery paths. Each of these provider mutants fails it:
@@ -149,7 +158,7 @@ the comparison objects are under `$P`.
 
 ## Board evidence still required
 
-The figures above do not replace the board measurements of
-[pmic-access.md](pmic-access.md): the access-cost windows and step times of
-the next bundle 6, a DCDC3 selector write in one step, and the rank 9 native
-USB image rerun on the changed provider.
+Bundle 6 has measured the access-cost windows and the step times of the
+changed provider, and the rank 9 native USB image has passed again on it
+(both on port 3-3 on 2026-10-24). A DCDC3 selector write in one step still
+needs a board run with a PMIC write.
