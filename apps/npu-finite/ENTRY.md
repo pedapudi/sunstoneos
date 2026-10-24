@@ -1,4 +1,4 @@
-# Prepare one NPU inference and normal ROM return
+# Prepare finite NPU computation and normal ROM return
 
 This single-core image runs two jobs using its immutable model and input,
 compares both outputs, reaps them, closes the NPU service and gates its local
@@ -25,6 +25,9 @@ magic. Contract admission, time and later completion fields are modeled in
 that check; it establishes no physical entry or numerical result.
 
 ## Construct the session from explicit physical inputs
+
+Use the [prerequisite capture specification](CAPTURE.md) to obtain current
+clock, power and pin observations and the separate PMIC supply evidence.
 
 Use the exact image and manifest together. The `session` operation takes an
 already reviewed admission record and the complete typed boot bytes. It
