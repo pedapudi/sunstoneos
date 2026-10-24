@@ -33,13 +33,18 @@ The implementation differs from this design in these places:
 - `mimus_parallel_init` takes the owner and worker cores as default
   arguments of 0 and 1, so `apps/mimus/main.cc` and `checks/mimus-linear.cc`
   need no change.
-- The tick misses the instruction and SGI targets: the scan of the ready
-  list costs about 350 instructions per tick in the cached instruction
-  model, and ticks that wake tasks still send their SGIs. The measurements
-  give the distribution.
-- The EL0 round-trip bound is 24 instructions per send instead of 16. A
-  control run with five no-ops in the base send path shows how much QEMU's
-  lock-wait interleaving amplifies a longer send.
+- The EL0 budget is the direct cost of the send path, 5 instructions per
+  EL0 send by disassembly of the QEMU port. The QEMU round trip, which
+  lock-wait interleaving amplifies, is recorded with a regression guard of
+  24 instructions per send.
+- The settle waits for its first time reading plus 3 µs, because the time
+  source counts whole microseconds; a 2 µs wait on a quantized reading can
+  end about 1 µs after the write.
+- The burst bounds its polls, as the settle bounds its time reads, so a
+  stopped time source ends in RETAINED.
+- The engine's inference-progress hook is defined once in `apps/os/cpu.c`.
+- A grant names one cluster: the OS admission refuses a record that names
+  both, as preparation does.
 
 ## A76 admission alone does not give the GPU design's figure
 
@@ -85,11 +90,9 @@ assume. The model ignores the DSU (L3) clock, which the driver never changes.
 ## Data flow and ownership
 
 - **Placement.** `include/a733_smp_placement.h` (new) holds preprocessor
-  constants only: `A733_SMP_A55_MASK` 0x3F, the service core 0, and the
-  recognition cores 6 and 7 with admission, or 2 and 3 without.
-  `A733_SMP_A76_MASK` (0xC0) exists only under `A733_A76_ADMITTED`, so a use
-  without admission fails to compile. A `_Static_assert` keeps each mask
-  inside the scheduled cores.
+  constants only: `A733_SMP_A55_MASK` 0x3F and the recognition core, 6 with
+  admission and 2 without, and the inference core 7, which exists only with
+  admission. A preprocessor check keeps each inside the scheduled cores.
 - **Default affinity.** Under `SUNSTONE_A733_OS`,
   `platform/a733-smp-cached/FreeRTOSConfig.h` defines
   `configTASK_DEFAULT_CORE_AFFINITY` as `A733_SMP_A55_MASK`; the pinned
@@ -220,8 +223,8 @@ change.
   `ISB`, because the handler's exception return synchronizes the context;
   otherwise it ends with `ISB`, as `gic_ipi_send_mask` does. The path is in `patches/freertos-smp-c.patch`,
   which the QEMU SMP images also apply; `portSGI1R_VALUE` defaults to the
-  upstream formula and `platform/a733-smp-cached/FreeRTOSConfig.h` maps it to
-  `a733_smp_sgi_value`.
+  upstream formula and the A733 configurations define it in line as
+  `(core << 16) | 1` after asserting SGI 0, as `a733_cpu_sgi1r` computes it.
 - Time slice: the seven sends per tick in the cached instruction model come
   from tasks of one priority pinned one per core. In the OS image the
   recognizer and the PMIC owner share priority 3, so core 6 would be asked
@@ -258,10 +261,10 @@ the diagnostic built from this branch after the bringup merge.
 | Longest park | No path | About 90 ms; RETAINED stays parked until the halt | Same |
 | Owner wake-ups added | — | 0 | Same |
 | Transitions per boot | — | At most twice the grant's change count: each THROTTLE lowering follows a raise | Model |
-| Tick on core 0, nothing woken: instructions, `SVC`, `DSB`, SGIs sent | 1,667, 7, 32, 7 | At most 700, 0, at most 18, 0 | Instruction model |
+| Tick on core 0 that wakes no task (scheduler running): instructions, `SVC`, `DSB`, SGIs sent | 1,345, 5, 28, 5 (median) | At most 700, 0, at most 18, 0 | Instruction model, ticks with no `prvYieldForTask` entry |
 | Receive work per tick on other cores | 7 × (SGI handler 15 + `vTaskSwitchContext` 305 instructions) | 0 | Same |
 | `vInterruptCore` from a handler: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | At most 80, 0, 1, 0 | Same |
-| EL0 cross-core round trip (new case in `checks/smp-port-cost.c`) | Counted on the base tree first | At most 16 instructions more per send | `checks/smp-port-cost.py` |
+| EL0 send path (QEMU port) | Upstream `vInterruptCore` | At most 5 instructions more per EL0 send | Disassembly; the QEMU EL0 round trip is recorded |
 | Other QEMU port operations | Table in [smp.md](../smp.md#measured-cost) | None higher; EL1 round trip at most 12,191 instructions | Same |
 | Recognition, bench recording | B1 at boot0's CPU-B rate | The table above at the board's highest point (A2) | Model; board |
 
@@ -394,6 +397,10 @@ These land through `primary.patch`:
 - `apps/mimus/recorded.cc`: in native builds, `report_clock` prints the line
   from a weak `os_cpu_clock_line` hook, before and after recognition.
 - `checks/index.json`: regenerated for `checks/smp-sgi-send.py`.
+- `cmake/a733-storage-maintenance.cmake`: the pinned SHA-256 of
+  `platform/a733-smp-cached/platform.c`, which no longer defines
+  `a733_smp_sgi_value`; the storage platform patch still applies with
+  `--fuzz=0`.
 
 Other owners: the GPU package regenerates its placement table with
 `--cpu-mhz` for the point that A2 qualifies once a resident-lifetime grant

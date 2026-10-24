@@ -355,5 +355,6 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --lifetime "$<IF:$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>,resident,supervised>"
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
     --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
+    --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>"
     --output "${os_build}/link-check.json"
   VERBATIM)

@@ -65,14 +65,9 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 #define OS_SESSION_BASE_BYTES A733_OS_SESSION_BYTES
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* Supervised only: the grant names the session's epoch, which the stage-2
- * loader replaces on every resident boot. */
-#ifdef SUNSTONE_BOARD_RESIDENT
-#error CPU operating-point grants need the supervised lifetime
-#endif
-#ifndef A733_A76_ADMITTED
-#error CPU operating-point grants need the admitted Cortex-A76 cores
-#endif
+/* Supervised only, with the A76 cores admitted (cmake/a733-os.cmake): the
+ * grant names the session's epoch, which the stage-2 loader replaces on every
+ * resident boot. */
 #include "a733_cpu_clock.h"
 #define OS_SESSION_BYTES (OS_SESSION_BASE_BYTES+96u)
 #else

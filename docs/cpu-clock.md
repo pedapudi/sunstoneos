@@ -216,8 +216,10 @@ when PAT0 bit 29 or 30, PAT1 bit 31 or LFM bit 31 is set. It never writes
 them. Their values after boot0 are unknown, so the first physical trial
 shows whether this check admits the board's inherited state. Parking on the
 oscillator keeps the cluster on a stable clock while the PLL relocks. After
-each mux write, the park and the reselection, the driver spins 2 µs on its
-time source before the next register write: twice the fixed 1 µs delay of
+each mux write, the park and the reselection, the driver spins at least 2 µs
+on its time source before the next register write. The time source counts
+whole microseconds, so the spin runs until the reading exceeds its first
+value by 3. That is twice the fixed 1 µs delay of
 the mainline sunxi-ng CPU mux notifier (Linux `e5f0a698`, `ccu_mux.c`
 `ccu_mux_notifier_cb`; `delay_us = 1` in `ccu-sun50i-a64.c` and
 `ccu-sun50i-h6.c`). No A733 source states a delay, because the pinned driver
@@ -231,8 +233,9 @@ grant: the leases, the report and the cluster's pattern and LFM words, and
 one PMIC snapshot, whose voltage it keeps and which records the rail's boot
 floor. It writes no clock or PMIC register and consumes no change.
 `a733_cpu_clock_burst` polls once and then keeps polling while the cluster
-is parked, up to a time budget, so an owner that polls once per tick does not
-leave a cluster on the oscillator across ticks when the PLL locks quickly.
+is parked, up to a time budget and a bounded number of polls, so an owner that
+polls once per tick does not leave a cluster on the oscillator across ticks
+when the PLL locks quickly, and a stopped time source ends in RETAINED.
 
 ## The integrated OS image owns the driver in its thermal task
 
@@ -374,17 +377,20 @@ In separate manual runs, each of these altered drivers failed the model:
   lowering across episodes;
 - one that ignores the grant's epoch, one that ignores its approval hash and
   one that accepts timing samples from two cores;
-- one without the settle after the park, and ones with a settle of 0 or
-  1 µs: the model rejects a PLL write less than 2 µs after the park;
+- one without the settle after the park, and one that waits 2 µs from its
+  first quantized reading: the model keeps time in nanoseconds, returns
+  whole microseconds and rejects a PLL write less than 2 µs after the park;
+- one whose burst has no poll bound, which never returns when the time
+  source stops while the cluster is parked;
 - one whose burst polls only once, which leaves the cluster parked at a tick
   boundary.
 
 The model also runs a read-only inspection of both clusters with no grant,
 and an A2 raise on a modeled board `3-3` (fuse word `0x00000496`, vf0400):
 CPU-B from 1,014 to 2,002 MHz with DCDC3 from 900 to 1,050 mV, 5 clock
-register writes and one PMIC write, the cluster parked 25 µs and no owner
-tick inside the parked window with a 20 µs lock. With a 300 µs lock the owner
-sleeps one tick while parked.
+register writes and one PMIC write, the cluster parked 23 µs of model time
+and no owner tick inside the parked window with a 20 µs lock. With a 300 µs
+lock the owner sleeps one tick while parked.
 
 Altered native cycle code failed the instruction model when it restored DAIF
 after all reads, ignored the filter, wrote a counter reset or kept `D` set.

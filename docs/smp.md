@@ -162,7 +162,8 @@ function from task context inside its critical section, so the task cannot
 migrate between the register read and the nesting load, and an EL0 task reads
 a zero count because no handler is active on a core that runs a task. The
 target value comes from `portSGI1R_VALUE`, which defaults to the upstream
-Aff0 formula; the A733 images map it to `a733_smp_sgi_value`.
+Aff0 formula; the A733 configurations define it in line as `(core << 16) | 1`,
+the Aff1 core number with target-list bit 0, after asserting SGI 0.
 
 The tick no longer asks a core to give up its time slice merely because its
 priority's ready list holds another task. Above the idle priority a core
@@ -172,21 +173,25 @@ per distinct running priority per tick. The idle priority keeps its length
 test, so idle tasks without per-core affinity behave as before.
 
 Measured with the cached eight-core instruction model on the diagnostic built
-from the base tree and from this tree (2026-10-24; `sgi_sends` counts the
-`vInterruptCore` calls inside each call):
+from the base tree and from this tree (2026-10-24). `checks/a733-smp-cached.py
+--count` reports, in `tick_by_wakes`, the ticks that wake no task (no
+`prvYieldForTask` entry), the ticks taken while the scheduler is suspended,
+which only pend the tick, and the ticks that wake tasks, whose SGIs are
+required preemptions:
 
 | Metric | Base | Changed |
 | --- | --- | --- |
-| `FreeRTOS_Tick_Handler` median: instructions, `SVC`, `DSB`, SGI sends | 1,667, 7, 32, 7 | 1,237, 0, 20, 2 |
-| Ticks without a send: count, median instructions | 18 of 67, 229 | 27 of 64, 574 |
-| SGI sends from ticks over the run | 314 | 181 |
-| `vInterruptCore` median: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | 39, 0, 1, 0 |
-| SGI handler calls; `vTaskSwitchContext` calls over the run | 407; 708 | 189; 484 |
+| Ticks that wake no task: count, median and largest instructions, median `SVC`, `DSB`, SGI sends | 16, 1,345, 1,667, 5, 28, 5 | 9, 554, 590, 0, 18, 0 |
+| Pended ticks: count, median instructions | 15, 229 | 8, 231 |
+| Ticks that wake tasks: count, SGI sends over the run | 36, 246 | 47, 177 |
+| `vInterruptCore` median: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | 18, 0, 1, 0 |
+| SGI handler calls; `vTaskSwitchContext` calls over the run | 407; 708 | 185; 480 |
 
-A tick without a send now costs about 345 more instructions, the scan of the
-ready lists; it removes up to seven sends of 161 instructions each and their
-receiving handlers and switches on the other cores. Ticks that wake tasks
-still send their SGIs. [checks/smp-sgi-send.py](../checks/smp-sgi-send.py)
+On a tick that wakes nothing the base sent five time-slice SGIs to cores
+whose same-priority peers are pinned elsewhere; the changed tick sends none.
+Skipping the scan when a priority's list is no longer than the cores running
+it was tried and left out: the zero-wake median rose to 618 instructions in
+that run. [checks/smp-sgi-send.py](../checks/smp-sgi-send.py)
 runs the linked `vInterruptCore` under Unicorn: an EL0 task while another
 core is in a handler takes `SVC 117`, a handler that interrupted an EL0 task
 writes the register without `ISB`, an EL1 task writes it with `ISB`, and a

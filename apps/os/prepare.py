@@ -63,21 +63,29 @@ AUDIO_CONDITIONS = {
 GRANT_MAGIC, GRANT_BYTES, GRANT_CHANGES = 0x4153373343505531, 96, 64
 APPROVAL_SCHEMA = 'a733-os-cpu-clock-approval-v1'
 B1_SCHEMA = 'a733-os-cpu-clock-b1-v1'
-BIN_CODES = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x14, 0x15)  # Columns 1..8; code 0: envelope.
 STEPS = {'A1': ('cpu-b', 1196), 'A2': ('cpu-b', None), 'A3': ('cpu-l', 1196)}
+
+
+def driver_text():
+    return (ROOT / 'drivers/clock/a733_cpu_clock.c').read_text()
+
+
+def bin_codes():
+    """The driver's codes[] for columns 1..8; code 0 selects the envelope."""
+    return [int(v, 16) for v in re.search(r'codes\[\]=\{([^}]*)\}', driver_text())[1].split(',')]
 
 
 def opp_rows(cluster):
     """The driver's 26 MHz table rows: (MHz, mV per column) for 'little' or 'big'."""
-    text = (ROOT / 'drivers/clock/a733_cpu_clock.c').read_text()
+    text = driver_text()
     body = re.search(r'static const struct a733_cpu_opp ' + cluster + r'\[\]=\{(.*?)\n\};', text, re.S)[1]
     return [(int(m[1]), [int(v) for v in m[2].split(',')]) for m in re.finditer(r'\{(\d+),\{([\d,]+)\}\}', body)]
 
 
 def bin_column(sid_word):
     """The driver's bin map: a column index, 9 for the code-0 envelope, None if refused."""
-    code = (sid_word >> 16) & 255 or (sid_word >> 8) & 255
-    return 9 if not code else BIN_CODES.index(code) + 1 if code in BIN_CODES else None
+    code, codes = (sid_word >> 16) & 255 or (sid_word >> 8) & 255, bin_codes()
+    return 9 if not code else codes.index(code) + 1 if code in codes else None
 
 
 def supported(cluster, column):
@@ -103,6 +111,13 @@ def grant_fields(raw):
     return {'magic': magic, 'version': version, 'bytes': size, 'owner': owner, 'epoch': epoch,
             'generation': generation, 'clusters': clusters, 'max_mhz': (little, big), 'changes': changes,
             'approval': bytes(g[64:96])}
+
+
+def manifest_cpu_clock(manifest, raw):
+    """The link check's record of a CPU clock build must match the session size."""
+    cpu_clock = manifest.get('cpu_clock')
+    require(type(cpu_clock) is bool and session_layout(raw)[1] is cpu_clock,
+            'The session size and the link check disagree on the CPU clock build.')
 
 
 def image_manifest_check(manifest, raw):
@@ -294,7 +309,9 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
     cluster, fixed = STEPS[a['step']]
     index = 0 if cluster == 'cpu-l' else 1
     b1 = json.loads(evidence(a.get('b1')))
-    require(b1.get('schema') == B1_SCHEMA and b1.get('identity') == record['identity'] and
+    # B1 ran this build with a grant that named no cluster, and passed.
+    require(b1.get('schema') == B1_SCHEMA and b1.get('passed') is True and b1.get('grant_clusters') == 0 and
+            b1.get('identity') == record['identity'] and
             b1.get('port') == record['port'] and b1.get('pattern_lfm_clear') is True and
             all(isinstance(b1.get(k), int) and 800 <= b1[k] <= 1050 for k in ('dcdc3_mv', 'dcdc5_mv')) and
             isinstance(b1.get('sid_word'), int), "The approval must cite this board's B1 record.")
@@ -318,6 +335,7 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
     audio = image_manifest_check(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf'])
     raw = bytearray(snapshots['session-template.bin'])
     session_check(raw, audio)
+    manifest_cpu_clock(json.loads(snapshots['image-input-manifest.json']), raw)
     record = json.loads(snapshots['admission.json'])
     cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio)
     output = Path(output)
@@ -389,6 +407,7 @@ def validate_board(bundle):
     template = (out / 'session-template.bin').read_bytes()
     raw = (out / 'session.bin').read_bytes()
     session_check(raw, audio)
+    manifest_cpu_clock(json.loads((out / 'image-input-manifest.json').read_text()), raw)
     cache = {path: (out / item['name']).read_bytes() for path, item in p['entry_evidence'].items()}
     validate_admission(json.loads((out / 'admission.json').read_text()), p['image_sha256'],
                        hashlib.sha256(template).hexdigest(), template, audio, cache, True)

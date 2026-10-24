@@ -41,32 +41,36 @@ clock or voltage changed on any board. The budgets are in
 | Call sites that place work on cores 6 or 7 (A76 build) | Every task created without affinity | Three | Recognizer (`1 << 6`), inference worker (`1 << 7`), GPU worker in the GPU build; every other task takes 0x3F | Met |
 | A76 admission | No path | 8 reads, no writes, once per boot; clock build adds 22 inspection reads and 2 PMIC snapshots | As targeted, counted from the code; the model's inspection case writes no register and no PMIC byte | Met |
 | CPU-B raise with a voltage write (A2 on board `3-3`) | No path | 5 clock writes, 2 PMIC requests, 3 adapter `DSB SY` | 5 clock writes, 1 snapshot and 1 PMIC write, 3 `DSB SY` (code) | Met |
-| Owner ticks while parked | No path | 0 with a lock of about 20 µs | 0; parked 25 µs; 15 owner ticks for the whole transition | Met |
-| Same, lock of 300 µs | No path | Recorded | 1 parked tick; parked 1,206 µs | Recorded |
+| Owner ticks while parked | No path | 0 with a lock of about 20 µs | 0; parked 23 µs of model time; 15 owner ticks for the whole transition | Met |
+| Same, lock of 300 µs | No path | Recorded | 1 parked tick; parked 1,203 µs of model time | Recorded |
 | Longest park | No path | About 90 ms; RETAINED stays parked | Bounded by the 10 ms update, 70 ms lock and 10 ms margin limits | By construction |
 | Owner wake-ups added | — | 0 | 0: the thermal task's per-tick loop is unchanged | Met |
-| Tick on core 0: instructions, `SVC`, `DSB`, SGI sends (median) | 1,667, 7, 32, 7 | At most 700, 0, at most 18, 0 | 1,237, 0, 20, 2 | `SVC` met; the rest not met |
-| SGI sends from ticks over the run | 314 in 67 ticks | — | 181 in 64 ticks | Recorded |
-| `vInterruptCore` from a handler: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | At most 80, 0, 1, 0 | 39, 0, 1, 0 | Met |
-| SGI handler calls; `vTaskSwitchContext` calls over the run | 407; 708 | — | 189; 484 | Recorded |
+| Tick on core 0 that wakes no task, scheduler running: instructions (median, largest), `SVC`, `DSB`, SGI sends | 1,345, 1,667, 5, 28, 5 (16 ticks) | At most 700, 0, at most 18, 0 | 554, 590, 0, 18, 0 (9 ticks) | Met |
+| Ticks that wake tasks: ticks, SGI sends over the run (required preemptions) | 36, 246 | Recorded | 47, 177 | Recorded |
+| Ticks taken while the scheduler is suspended: ticks, median instructions | 15, 229 | Recorded | 8, 231 | Recorded |
+| `vInterruptCore` from a handler: instructions, `SVC`, `DSB`, `ISB` | 161, 1, 2, 1 | At most 80, 0, 1, 0 | 18, 0, 1, 0 | Met |
+| SGI handler calls; `vTaskSwitchContext` calls over the run | 407; 708 | — | 185; 480 | Recorded |
 | EL1 cross-core round trip (QEMU) | 12,191 | At most 12,191 | 11,994 | Met |
-| EL0 cross-core round trip (QEMU, new) | 14,127 | At most 24 more per send | 14,169 (+21 per send) | Met at the revised bound |
+| EL0 send path (QEMU port) | Upstream `vInterruptCore` | At most 5 instructions more per EL0 send | 5 more (disassembly) | Met |
+| EL0 cross-core round trip (QEMU, new) | 14,127 | Recorded; regression guard 24 per send | 14,169 (+21 per send) | Recorded |
 | Other QEMU port operations | `smp.md` table | None higher | Unchanged | Met |
 | Recognition, bench recording | Not measured | Model at the board's highest point | Not measured; B1 and A2 measure it | Board |
 
-The tick misses its instruction, barrier and send targets for two reasons.
-The ready-list scan costs about 345 instructions: ticks without a send take
-574 instructions at the median against 229 in the base. Ticks that wake
-tasks still send SGIs; the remaining sends are 20 of 64 ticks with seven
-sends and 9 with two. The targets assumed neither. The barrier count, 20,
-is the base tick's 18 non-send barriers plus the `DSB ISHST` of each of the
-two median sends.
+The tick rows come from `checks/a733-smp-cached.py --count`, whose
+`tick_by_wakes` result sorts each tick by its `prvYieldForTask` entries and
+by whether the scheduler was suspended. The budget covers ticks that wake no
+task; in the base those ticks still sent five time-slice SGIs to cores whose
+same-priority peers are pinned elsewhere. An earlier version of this record
+compared the median of all ticks, which mixes pended and waking ticks, and
+reported the budget as missed. Skipping the ready-list scan when a list is no
+longer than the cores running its priority was measured and left out: the
+zero-wake median rose to 618 instructions in that run.
 
-The EL0 send path is 5 instructions longer (disassembly). QEMU's lock-wait
-interleaving amplifies a longer send: a control build with five no-ops in the
-base send path gave an EL0 round trip of 14,147 and an EL1 round trip of
-12,240, that is 10 and 24 instructions per send. The design's bound of 16 per
-send became 24, the larger control figure.
+The EL0 send path of the QEMU port is 5 instructions longer than upstream's
+(disassembly). QEMU's lock-wait interleaving amplifies a longer send: a
+control build with five no-ops in the base send path gave an EL0 round trip
+of 14,147 and an EL1 round trip of 12,240, that is 10 and 24 instructions per
+send. The check keeps 24 per send as a regression guard on the round trip.
 
 ## Recognition model
 
@@ -88,15 +92,18 @@ GPU, so its target is CPU-only recognition on the pair: 14.894 s × 494 ÷
 
 All passed unless stated otherwise.
 
-- `checks/cpu-clock-check.py` with the extended model: settle, inspection,
-  burst and A2 cases. Altered drivers failed the model: no settle after the
-  park, a settle of 0 µs, a settle of 1 µs, and a burst that polls once.
-- `checks/os-image-model.c` for the clock build: 36 refusals supervised and
-  57 with the microphone, including each grant-record rule; a 2,002 MHz
-  CPU-B grant for the session is admitted.
-- `checks/os-image-launch.py`: default supervised (21 cases), supervised
-  with microphone (27), clock build (31) and clock build with microphone
-  (37). The clock builds add the A2 preparation and nine refusals.
+- `checks/cpu-clock-check.py` with the extended model, whose clock runs in
+  nanoseconds and returns whole microseconds: settle, inspection, burst, A2
+  and stopped-time-source cases. Altered drivers failed the model: no settle
+  after the park, a settle that trusts its first quantized reading, a burst
+  that polls once, and a burst without a poll bound, which never returns.
+- `checks/os-image-model.c` for the clock build: 37 refusals supervised and
+  58 with the microphone, including each grant-record rule and a grant of
+  both clusters; a 2,002 MHz CPU-B grant for the session is admitted.
+- `checks/os-image-launch.py`: default supervised (22 cases) and clock build
+  (34). The clock build adds the A2 preparation and eleven refusals,
+  including a B1 record that did not pass or carried a grant, and every
+  build refuses a link check whose `cpu_clock` record differs.
 - `checks/os-image-audio.py` on the supervised microphone build and the
   clock build with microphone; `checks/os-image-headset.py` on the resident
   A76 headset build; `checks/reset-latency.py`.
@@ -110,13 +117,16 @@ All passed unless stated otherwise.
   missing-secondary refusal pass on both diagnostics.
 - `tools/check-smp.py`: `kernel` and `context`, ten trials each on
   `cortex-a55` and `cortex-a76`.
-- `soak8`: under the host load above, the real-time QEMU run failed in its
+- `soak8` deviates from its gate, ten passing real-time trials per CPU
+  model: under the host load above, the real-time QEMU run failed in its
   first trial at the soak's one-second migration acknowledgement for both
   trees. Twenty alternating single trials passed 10 times for the base and
   11 times for the measured tree, so the failures are not attributable to
   the change. Under `-icount`, which ties virtual time to instructions and
   makes each run deterministic, the measured soak passed with shifts 0 to 4
-  on both CPU models, ten distinct schedules. With shifts 5 to 7 each
+  on both CPU models, ten distinct schedules, before and after the review
+  changes. These runs and the base comparison stand in for the real-time
+  gate until a run on a lightly loaded host. With shifts 5 to 7 each
   instruction takes 32 to 128 ns of virtual time, and both trees fail the
   same one-second wait; the base passes at shifts 0 and 4 and fails at 5
   and 7.
@@ -142,5 +152,20 @@ build, `checks/os-image-launch.py` on the default (21 cases) and clock (31)
 builds, `checks/smp-sgi-send.py` on the rebuilt cached diagnostic and
 `checks/check-index.py --verify` pass.
 
+## After the code review
+
+The review changes alter the default images once more: the A733 SGI value
+is computed in line, so `vInterruptCore` is 120 bytes and the out-of-line
+`a733_smp_sgi_value` and `a733_cpu_sgi1r` (104 bytes) leave the images. The
+four default images, compared with `db7b77ce` at one shared path, now differ
+in `mimus_transcribe_recorded` (+64 bytes), `vTaskStartScheduler` (+4),
+`vInterruptCore` (28 to 120), `xTaskIncrementTick` (1,060 to 856) and those
+two removed functions. The default, A76, clock and GPU-linear builds, with
+and without admission, link and pass their link checks;
+`checks/os-image-dispatch.py --configure-from`, `checks/smp-sgi-send.py`,
+`checks/smp-port-cost.py`, `tools/check-smp.py` `kernel` and `context` (ten
+trials on each CPU model), the soak under `-icount` and
+`tools/check-mimus-smp.py` pass again.
+
 Evidence: `~/.cache/sunstoneos/build/cpu-a76-dvfs/evidence/`,
-`evidence-m/` and the build directories beside them.
+`evidence-m/`, `evidence-r/` and the build directories beside them.

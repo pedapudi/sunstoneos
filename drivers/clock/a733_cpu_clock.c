@@ -30,6 +30,7 @@
  * No A733 source states a delay; the pinned driver never reparents. */
 #define SETTLE_US 2u
 #define SETTLE_READS 100000u /* A counter that stops is a fault. */
+#define BURST_POLLS 100000u  /* Polls per burst; a counter that stops is a fault. */
 #define RELEASE_US 100000u
 #define THERMAL_US 500000u
 enum { USER, LOWER, RESTORE }; /* Who started the transition. */
@@ -265,11 +266,13 @@ static int put(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
 {return a733_cpu_clock_address(a,1) && c->ops.write(c->cookie,a,v)==1;}
 static int wr(struct a733_cpu_clock *c,uintptr_t a,uint32_t v)
 {uint32_t back;return put(c,a,v) && rd(c,a,&back) && back==v;}
-/* Spin on the time source for SETTLE_US after a mux write. */
+/* Spin on the time source for at least SETTLE_US after a mux write. The time
+ * source counts whole microseconds, so the first reading may already be up to
+ * 1 us past its value: waiting for SETTLE_US + 1 more guarantees SETTLE_US. */
 static int settle(struct a733_cpu_clock *c)
 {
     if(!time_now(c))return 0;
-    const uint64_t until=c->last_now+SETTLE_US;
+    const uint64_t until=c->last_now+SETTLE_US+1u;
     for(unsigned i=0;i<SETTLE_READS;++i){
         if(!time_now(c))return 0;
         if(c->last_now>=until)return 1;
@@ -541,8 +544,8 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         uint32_t pll;struct a733_cpu_clock_domain d;
         if(!wr(c,select_word(c->cluster),parked) || !wr(c,select_word(c->cluster),parked|(MUX_PLL<<24)) ||
            !time_now(c))return fault(c);
-        c->parked_us=c->last_now-c->park_at;
-        if(c->parked_us>c->parked_max_us)c->parked_max_us=c->parked_us;
+        const uint64_t parked_us=c->last_now-c->park_at;
+        if(parked_us>c->parked_max_us)c->parked_max_us=parked_us;
         if(!settle(c) || !rd(c,pll_word(c->cluster),&pll))return fault(c);
         a733_cpu_clock_decode(c->report.dcxo_hz,pll,parked|(MUX_PLL<<24),&d);
         if(!d.decoded || d.hz!=(uint64_t)c->target_mhz*1000000u)return fault(c);
@@ -559,7 +562,9 @@ enum a733_cpu_clock_status a733_cpu_clock_burst(struct a733_cpu_clock *c,uint64_
     enum a733_cpu_clock_status r=a733_cpu_clock_poll(c);
     if(r!=A733_CPU_CLOCK_PENDING)return r;
     const uint64_t begin=c->last_now;
-    while(r==A733_CPU_CLOCK_PENDING && a733_cpu_clock_parked(c) && c->last_now-begin<budget_us)
+    for(unsigned i=0;r==A733_CPU_CLOCK_PENDING && a733_cpu_clock_parked(c) && c->last_now-begin<budget_us;++i) {
+        if(i==BURST_POLLS)return fault(c);
         r=a733_cpu_clock_poll(c);
+    }
     return r;
 }

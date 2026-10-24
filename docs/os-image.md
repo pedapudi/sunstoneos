@@ -474,10 +474,13 @@ default; the [design](designs/cpu-a76-dvfs.md) and its
   `A733_A76_ADMITTED` only. The session appends the CPU clock driver's
   96-byte grant record and is 904 bytes, or 1,088 with the microphone. The
   admission loads the record against the board session's epoch and
-  generation and refuses a grant owner equal to any other owner. The
+  generation and refuses a grant owner equal to any other owner and a grant
+  that names both clusters. The
   thermal task owns the driver ([CPU clock](cpu-clock.md#the-integrated-os-image-owns-the-driver-in-its-thermal-task));
   a record that names no cluster changes no clock or voltage. The recognizer
-  starts each timed run only after the owner has finished its requests.
+  starts each timed run only after the owner has finished its requests; an
+  owner that has not finished within one second ends the session with an
+  `ERROR` line. The link check records the build as `cpu_clock`.
 
 Preparation (`apps/os/prepare.py`) writes a session whose grant names a
 cluster only from an approval record of schema
@@ -486,10 +489,11 @@ The approval names the board identity and port, the image SHA-256, the
 session's epoch, generation and lease, the step (A1: CPU-B at 1,196 MHz; A2:
 CPU-B at the highest point of the board's bin; A3: CPU-L at 1,196 MHz), the
 cluster, the highest point, the change count, the user's approval text and
-date, and the board's read-only B1 record (`a733-os-cpu-clock-b1-v1`: fuse
-word, DCDC3 and DCDC5 readings, pattern and LFM enables clear). Every grant
-field must equal the approval's, and the grant's approval hash is the
-record's SHA-256. No new start entry, interrupt, task or resident service is
+date, and the board's read-only B1 record (`a733-os-cpu-clock-b1-v1`: a
+passed run with a grant that named no cluster, the fuse word, DCDC3 and
+DCDC5 readings, pattern and LFM enables clear). Every grant field must equal
+the approval's, and the grant's approval hash is the record's SHA-256. The
+session size must agree with the link check's `cpu_clock` record. No new start entry, interrupt, task or resident service is
 added.
 
 ## Build and checks

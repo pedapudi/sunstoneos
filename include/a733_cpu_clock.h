@@ -113,7 +113,7 @@ struct a733_cpu_clock {
     unsigned inspect_only;    /* The active transition only reads (a733_cpu_clock_inspect). */
     uint32_t rail_uv[2];      /* Last read or confirmed voltage of DCDC5 and DCDC3; 0 unread. */
     uint32_t words[2][3];     /* Last pattern 0, pattern 1 and LFM words read per cluster. */
-    uint64_t park_at, parked_us, parked_max_us; /* Park write to select readback, microseconds. */
+    uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
 };
 /* Zeroed private storage once. Managers, the PMIC provider and the thermal
  * policy have platform lifetime; the policy must already be initialized. The
@@ -164,7 +164,9 @@ enum a733_cpu_clock_status a733_cpu_clock_inspect(struct a733_cpu_clock *,enum a
  * settle spin on the time source before the next register write. */
 int a733_cpu_clock_parked(const struct a733_cpu_clock *);
 /* Owner task: one poll, then further polls while the cluster stays parked
- * and the driver's time has advanced less than budget_us since the first. */
+ * and the driver's time has advanced less than budget_us since the first.
+ * A time source that stops advancing ends in RETAINED after a bounded number
+ * of polls. */
 enum a733_cpu_clock_status a733_cpu_clock_burst(struct a733_cpu_clock *,uint64_t budget_us);
 
 /* Cycle timing on one core. A sample holds MIDR_EL1, MPIDR_EL1, PMCCNTR_EL0

@@ -11,6 +11,7 @@
  * no cluster leaves every clock and voltage unchanged. */
 #include "os.h"
 #include "../board/application.h"
+#include "../mimus-board/application.h"
 #include "a733_cpu_clock.h"
 #include "a733_mmio.h"
 #include "FreeRTOS.h"
@@ -22,9 +23,10 @@ static struct a733_cpu_clock_report report;
  * the owner and one load-acquire by a reader; aligned 64-bit accesses are
  * single-copy atomic on AArch64. A zero voltage was not read. */
 static _Atomic uint64_t record;
-/* Written by the owner before the record's store-release. */
-static uint32_t pattern_bits;     /* Pattern or LFM enables seen: bit 0 CPU-L, bit 1 CPU-B. */
-static uint64_t parked_max_us;
+/* Written by the owner before the record's store-release and read after its
+ * load-acquire; relaxed atomics because a later publication may race a read. */
+static _Atomic uint32_t pattern_bits;  /* Pattern or LFM enables seen: bit 0 CPU-L, bit 1 CPU-B. */
+static _Atomic uint64_t parked_max_us; /* Longest park of any transition, microseconds. */
 static uint64_t pack(const uint32_t mhz[2],const uint32_t mv[2],uint32_t count)
 {
     return (uint64_t)(mhz[0]&0x7ff)|(uint64_t)(mhz[1]&0x7ff)<<11|(uint64_t)(mv[0]&0x7ff)<<22|
@@ -40,6 +42,9 @@ static int read_word(void *cookie,uintptr_t a,uint32_t *v)
 }
 static uint32_t mhz(enum a733_cpu_domain d)
 {return report.domain[d].decoded?(uint32_t)(report.domain[d].hz/1000000u):0;}
+/* The engine's parallel ranges on the inference worker count as recognizer
+ * progress (apps/mimus/parallel_runtime.cc). */
+void mimus_native_inference_progress(void){mimus_board_progress();}
 int os_cpu_admit(void)
 {
     if(!a733_cpu_clock_report(read_word,NULL,&report))return 0;
@@ -57,7 +62,8 @@ int os_cpu_clock_line(char *line,size_t bytes)
         "dsu_mhz=%u sid=%08x bin=%u core=%u pattern=%u parked_max_us=%llu\n",(unsigned)(w&0x7ff),
         (unsigned)(w>>11&0x7ff),(unsigned)(w>>22&0x7ff),(unsigned)(w>>33&0x7ff),(unsigned)(w>>44&0xfffff),
         (unsigned)mhz(A733_CPU_DSU),(unsigned)report.sid_word,report.binned?report.bin:99u,
-        (unsigned)portGET_CORE_ID(),(unsigned)pattern_bits,(unsigned long long)parked_max_us);
+        (unsigned)portGET_CORE_ID(),(unsigned)atomic_load_explicit(&pattern_bits,memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&parked_max_us,memory_order_relaxed));
     return n>0&&(size_t)n<bytes?n:0;
 }
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
@@ -89,13 +95,14 @@ static const struct a733_cpu_clock_ops clock_ops={clock_now,clock_read,clock_wri
 static void publish(void)
 {
     const struct a733_cpu_clock *c=&owner.driver;
-    uint32_t points[2],mv[2];
+    uint32_t points[2],mv[2],pattern=0;
     for(unsigned i=0;i<2;++i){
         points[i]=c->applied_mhz[i]?c->applied_mhz[i]:mhz(i);
         mv[i]=c->rail_uv[i]/1000u;
-        if((c->words[i][0]&(UINT32_C(3)<<29))||(c->words[i][1]>>31)||(c->words[i][2]>>31))pattern_bits|=1u<<i;
+        if((c->words[i][0]&(UINT32_C(3)<<29))||(c->words[i][1]>>31)||(c->words[i][2]>>31))pattern|=1u<<i;
     }
-    parked_max_us=c->parked_max_us;
+    atomic_store_explicit(&pattern_bits,pattern,memory_order_relaxed);
+    atomic_store_explicit(&parked_max_us,c->parked_max_us,memory_order_relaxed);
     atomic_store_explicit(&record,pack(points,mv,owner.count),memory_order_release);
 }
 /* EL0-safe: the recognizer waits for this before each timed run. */

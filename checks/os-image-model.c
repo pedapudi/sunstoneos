@@ -387,6 +387,9 @@ static void admission_cases(void)
         g->epoch=0x1234,g->generation=9));
     SESSION_REFUSED((g->clusters=2,g->max_mhz[1]=2002,g->changes=65,memset(g->approval,7,32),
         g->epoch=0x1234,g->generation=9));
+    /* One cluster per approved step: a grant of both is refused. */
+    SESSION_REFUSED((g->clusters=3,g->max_mhz[0]=1196,g->max_mhz[1]=2002,g->changes=2,memset(g->approval,7,32),
+        g->epoch=0x1234,g->generation=9));
     /* A grant of 2,002 MHz on CPU-B for this session is admitted. */
     nominal_session(SESSION,9);g->clusters=2;g->max_mhz[1]=2002;g->changes=1;memset(g->approval,7,32);
     g->epoch=0x1234;g->generation=9;c=nominal_contract(SESSION,armed);

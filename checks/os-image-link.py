@@ -133,7 +133,8 @@ def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
             'image_end': hex(max(end for _, _, end in sections))}
 
 
-def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False):
+def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False,
+          cpu_clock=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -194,6 +195,10 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         assert core in (2, 6), 'recognition core %d is not the first of a core pair' % core
         assert interrupts[ids.index(95)]['core'] == core, \
             'INTID 95 is routed to core %d, the recognizer runs on core %d' % (interrupts[ids.index(95)]['core'], core)
+    # The CPU clock build's owner step is linked exactly when the build says so,
+    # so preparation can tell the session size from this record.
+    owner = [s for s in defined if s['name'] == 'os_cpu_clock_step']
+    assert bool(owner) == cpu_clock, 'os_cpu_clock_step linked: %s, CPU clock build: %s' % (bool(owner), cpu_clock)
     return {'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
@@ -210,17 +215,19 @@ def main():
     parser.add_argument('--radio', choices=('0', '1'), default='0')
     parser.add_argument('--headset', choices=('0', '1'), default='0')
     parser.add_argument('--gpu-linear', choices=('0', '1'), default='0')
+    parser.add_argument('--cpu-clock', choices=('0', '1'), default='0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     audio, radio, headset = args.audio == '1', args.radio == '1', args.headset == '1'
-    gpu_linear = args.gpu_linear == '1'
+    gpu_linear, cpu_clock = args.gpu_linear == '1', args.cpu_clock == '1'
     try:
-        result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear)
+        result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
+                       cpu_clock)
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
     result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
-                   'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear,
+                   'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear, 'cpu_clock': cpu_clock,
                    'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
     if args.build_id:
         result['build_id'] = args.build_id.read_text().strip()

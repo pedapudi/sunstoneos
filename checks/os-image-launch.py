@@ -66,7 +66,8 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     binding."""
     tail = len(raw) - prep.GRANT_BYTES
     assert struct.unpack_from('<4I', raw, tail + 48) == (0, 0, 0, 0), 'the nominal grant names nothing'
-    b1 = {**target, 'schema': prep.B1_SCHEMA, 'sid_word': 0x496, 'dcdc3_mv': 900, 'dcdc5_mv': 850,
+    b1 = {**target, 'schema': prep.B1_SCHEMA, 'passed': True, 'grant_clusters': 0, 'sid_word': 0x496,
+          'dcdc3_mv': 900, 'dcdc5_mv': 850,
           'pattern_lfm_clear': True, 'warning': 'Synthetic fixture only. Never physical authority.'}
     approval = {**target, **identities, 'schema': prep.APPROVAL_SCHEMA, 'step': 'A2', 'cluster': 'cpu-b',
                 'highest_mhz': 2002, 'changes': 1, 'approval_text': 'MODEL: no user approval exists',
@@ -92,10 +93,14 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     assert prep.grant_fields(session)['max_mhz'] == (0, 2002)
     cases['prepared-a2-grant-bound-to-board-image-session-and-b1'] = True
     other_b1 = put('cpu-clock-b1-envelope', dict(b1, sid_word=0))
+    failed_b1 = put('cpu-clock-b1-failed', dict(b1, passed=False))
+    granted_b1 = put('cpu-clock-b1-granted', dict(b1, grant_clusters=2))
     refusals = {
         'approval-for-another-port': granted('port', dict(approval, port='OTHER-PORT')),
         'approval-for-another-session': granted('lease', dict(approval, lease=identities['lease'] + 1)),
         'b1-envelope-bin-tops-at-1508': granted('envelope', dict(approval, b1=other_b1)),
+        'b1-run-not-passed': granted('b1-failed', dict(approval, b1=failed_b1)),
+        'b1-with-a-grant': granted('b1-granted', dict(approval, b1=granted_b1)),
         'grant-above-approval': granted('above', maxima=(0, 1794)),
         'a1-at-2002': granted('a1', dict(approval, step='A1')),
         'grant-without-approval-record': granted('missing', with_record=False),
@@ -268,6 +273,8 @@ def main():
     other = dict(manifest, audio=not audio)
     (out / 'other-link-check.json').write_text(json.dumps(other))
     refusals['link-check-of-other-configuration'] = lambda: prepare('r6', check=out / 'other-link-check.json')
+    (out / 'other-clock-link-check.json').write_text(json.dumps(dict(manifest, cpu_clock=not cpu_clock)))
+    refusals['link-check-of-other-cpu-clock-build'] = lambda: prepare('r10', check=out / 'other-clock-link-check.json')
     resident = dict(manifest, lifetime='resident')
     (out / 'resident-link-check.json').write_text(json.dumps(resident))
     refusals['resident-link-check'] = lambda: prepare('r7', check=out / 'resident-link-check.json')
@@ -305,7 +312,7 @@ def main():
         assert refused(action), name
         cases['refuses-' + name] = True
     # Every refusal comes before the bundle directory is created.
-    assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'a1', 'a2', 'a3',
+    assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r10', 'a1', 'a2', 'a3',
                                                  'a4', 'a5', 'a6', 'a7', 'n1'))
 
     if cpu_clock:
