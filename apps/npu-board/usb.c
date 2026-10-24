@@ -137,6 +137,12 @@ static void request(void)
         return;
     case READ:
         if(window!=NPU_BOARD_WRITE_LENT||argument>=c->outputs)stop();
+        /* The whole response enters the empty transmit FIFO in one exchange,
+         * so TinyUSB sends a zero-length packet only after its last byte. A
+         * larger tensor would let the FIFO drain on a packet boundary
+         * mid-response; it is refused. The catalogue's largest output is
+         * 2,816 bytes. */
+        if(sizeof(response)+c->output[argument].bytes>CFG_TUD_VENDOR_TX_BUFSIZE){respond(NPU_BOARD_RESULT_REFUSED,0,0);return;}
         respond(NPU_BOARD_RESULT_OK,c->output[argument].bytes,c->output[argument].cpu);return;
     case LOAD:case SUBMIT:case RETURN:case CLOSE:
         /* Hand the lent window back before the client acts on the request. */

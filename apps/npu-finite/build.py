@@ -21,7 +21,7 @@ old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-le
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
 if a.interrupt:config+=['-DA733_NPU_INTERRUPT=ON']
 save('configure-command.json',config);run('configure',config)
-run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j8'])
+run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j6'])
 entries=[x for x in json.loads((e/'native/compile_commands.json').read_text()) if 'a733-npu-convolution-single-core.dir/' in x['command']]
 link=shlex.split((e/'native/CMakeFiles/a733-npu-convolution-single-core.dir/link.txt').read_text());commands=[]
 obj=e/'objects';obj.mkdir(exist_ok=True)

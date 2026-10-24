@@ -7,6 +7,7 @@
  * transmitted bytes go caller -> transmit FIFO -> endpoint buffer -> controller
  * FIFO (PIO). It counts every copy. */
 #include "../../apps/npu-board/client.h"
+#include "../../drivers/usb/tusb_config.h"
 #include <stdbool.h>
 #include <stdint.h>
 extern struct npu_board_client board_client;
