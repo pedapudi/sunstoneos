@@ -54,7 +54,22 @@ int os_services_healthy(uint64_t now)
 /* Supervising task only: why renewal was refused. The supervisor stops at
  * its first refusal, so the value is never reset. */
 static uint64_t stop_detail;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+/* A GPU loss: a GPU fault ended the boot, or the recognizer went silent while
+ * it waited for OPEN or for a job's record. The supervisor calls this after
+ * board_live's acquire of the board failure, and the recognizer records the
+ * session state before its release of that failure, so no renewal pass is
+ * needed: after board_fail, supervise() never calls board_resident_renew. */
+uint64_t board_resident_stop_detail(void)
+{
+    unsigned gpu=os_dispatch_gpu_state();
+    if(gpu==OS_DISPATCH_GPU_FAULT||(gpu==OS_DISPATCH_GPU_WAITING&&stop_detail==OS_SERVICE_MIMUS+1))
+        return OS_STOP_DETAIL_GPU_LOSS;
+    return stop_detail;
+}
+#else
 uint64_t board_resident_stop_detail(void){return stop_detail;}
+#endif
 /* Supervising task only. */
 int board_resident_renew(void *supervisor,uint64_t first_expiry)
 {

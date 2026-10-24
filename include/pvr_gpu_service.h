@@ -8,6 +8,7 @@
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
 struct pvr_compute_service;
+struct pvr_mimus_service;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
@@ -16,6 +17,10 @@ struct pvr_render_texture_request;
 struct pvr_render_texture_frame;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
+/* Wake messages carry client PVR_GPU_SERVICE_CLIENTS. Ticket 0 is the
+ * interrupt handler's, the only one that clears irq_wake_pending; ticket
+ * PVR_GPU_SERVICE_MIMUS_WAKE is the mimus session's job wake. */
+#define PVR_GPU_SERVICE_MIMUS_WAKE 1u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
 /* Worker pacing, in microseconds. Steps that progress continue without waiting
@@ -138,6 +143,8 @@ struct pvr_gpu_service_config {
     /* Standalone lifecycle images only: the exclusive owner of child disposal
      * and reconstruction. NULL, as in every other image, refuses DISPOSE. */
     struct a733_gpu_disposal *disposal;
+    /* Optional mimus session (pvr_mimus_service.h); excludes compute. */
+    struct pvr_mimus_service *mimus;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;

@@ -1,12 +1,23 @@
 #include "pvr_gpu_service.h"
 #include "a733_range.h"
 #include "pvr_compute_service.h"
+#include "pvr_mimus_service.h"
 #include "a733_gpu_graphics_memory.h"
 #ifdef SUNSTONE_GPU_LIFECYCLE
 #include "a733_gpu_disposal.h"
 #endif
 #include <string.h>
 
+/* Only images with the mimus session link pvr_mimus_service.c. Elsewhere
+ * config.mimus is null and these references stay unresolved and uncalled. */
+#pragma weak pvr_mimus_service_prepare
+#pragma weak pvr_mimus_service_publish_poll
+#pragma weak pvr_mimus_service_poll
+#pragma weak pvr_mimus_service_event
+#pragma weak pvr_mimus_service_abort
+#pragma weak pvr_mimus_service_deadline
+#pragma weak pvr_mimus_service_submitting
+#pragma weak pvr_mimus_service_progress
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -91,6 +102,8 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
     if (c->compute && (c->compute->service != s ||
         c->compute->phase != PVR_COMPUTE_SERVICE_BOUND)) return 0;
     if (c->render && (!c->graphics || c->render != &c->graphics->submission)) return 0;
+    if (c->mimus && (c->compute || c->graphics || c->free_lists.count || c->mimus->service != s ||
+        c->mimus->phase != PVR_MIMUS_SERVICE_BOUND)) return 0;
     if (c->graphics && !a733_gpu_graphics_memory_validate(c->graphics, c, s)) return 0;
     return free_list_allocations(s, c);
 }
@@ -144,6 +157,7 @@ static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
     if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
     if (s->config.compute) pvr_compute_service_abort(s->config.compute, PVR_COMPUTE_SERVICE_LIFECYCLE);
+    if (s->config.mimus) pvr_mimus_service_abort(s->config.mimus);
     if (s->config.graphics) a733_gpu_graphics_memory_abort(s->config.graphics);
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
@@ -185,6 +199,7 @@ static int service_event(void *ctx, const unsigned char command[PVR_CCB_COMMAND_
     struct pvr_gpu_service *s = instance;
     if (!s || ctx != s->config.context || s->phase == PVR_GPU_SERVICE_FAILED) return 0;
     if (s->config.compute && !pvr_compute_service_event(s->config.compute, command)) return 0;
+    if (s->config.mimus && !pvr_mimus_service_event(s->config.mimus, command)) return 0;
     uint32_t kind = (uint32_t)command[0] | (uint32_t)command[1] << 8 |
                     (uint32_t)command[2] << 16 | (uint32_t)command[3] << 24;
     if (kind == (PVR_CCB_MAGIC | 107u))
@@ -243,7 +258,8 @@ static int opening_clock(struct pvr_gpu_service *s)
 }
 static int start_firmware(struct pvr_gpu_service *s)
 {
-    if (s->config.compute && pvr_compute_service_admit_mode(s->config.compute) != 1) {
+    if ((s->config.compute && pvr_compute_service_admit_mode(s->config.compute) != 1) ||
+        (s->config.mimus && s->config.compute_mode(s->config.context) != 1)) {
         fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
     }
     if (pvr_gpu_start_begin(&s->start, s->deadline) != PVR_GPU_START_AGAIN) {
@@ -267,6 +283,12 @@ static int enable_firmware(struct pvr_gpu_service *s)
 }
 static int publish_compute(struct pvr_gpu_service *s)
 {
+    if (s->config.mimus) {
+        if (pvr_mimus_service_prepare(s->config.mimus, s->deadline) != 1) {
+            fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
+        }
+        s->phase = PVR_GPU_SERVICE_PUBLISHING; return 1;
+    }
     if (!s->config.compute) return enable_firmware(s);
     if (pvr_compute_service_prepare(s->config.compute, s->deadline) != 1) {
         fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
@@ -300,6 +322,12 @@ static int prepare(struct pvr_gpu_service *s)
                        "firmware object capacity");
         memcpy(s->mappings + objects, c->compute->objects, sizeof(c->compute->objects));
         objects += PVR_COMPUTE_SERVICE_OBJECTS;
+    }
+    if (c->mimus) {
+        _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_MIMUS_SERVICE_OBJECTS <= PVR_MIPS_MAX_OBJECTS,
+                       "mimus firmware object capacity");
+        memcpy(s->mappings + objects, c->mimus->objects, sizeof(c->mimus->objects));
+        objects += PVR_MIMUS_SERVICE_OBJECTS;
     }
     if (c->graphics) {
         _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_COMPUTE_SERVICE_OBJECTS + 2 <= PVR_MIPS_MAX_OBJECTS,
@@ -372,7 +400,8 @@ static int submitting(const struct pvr_gpu_service *s)
     const struct pvr_render_service *r = s->config.render;
     return (c && (c->phase == PVR_COMPUTE_SERVICE_FORMAT ||
                   (c->phase == PVR_COMPUTE_SERVICE_RUNNING && c->job.phase <= PVR_JOB_KICK))) ||
-        (r && r->phase >= PVR_RENDER_SERVICE_FORMAT_GEOMETRY && r->phase <= PVR_RENDER_SERVICE_SUBMIT);
+        (r && r->phase >= PVR_RENDER_SERVICE_FORMAT_GEOMETRY && r->phase <= PVR_RENDER_SERVICE_SUBMIT) ||
+        (s->config.mimus && pvr_mimus_service_submitting(s->config.mimus));
 }
 static void advance(struct pvr_gpu_service *s)
 {
@@ -397,7 +426,8 @@ static void advance(struct pvr_gpu_service *s)
     }
     case PVR_GPU_SERVICE_PUBLISHING: {
         if (!opening_clock(s)) return;
-        int r = pvr_compute_service_poll(s->config.compute);
+        int r = s->config.mimus ? pvr_mimus_service_publish_poll(s->config.mimus) :
+            pvr_compute_service_poll(s->config.compute);
         if (r < 0) { fail(s, PVR_GPU_SERVICE_COMPUTATION); return; }
         if (!opening_clock(s)) return;
         if (r == 1) (void)enable_firmware(s);
@@ -437,6 +467,10 @@ static void advance(struct pvr_gpu_service *s)
         }
         if (render_polled(s) && pvr_render_service_poll(s->config.render) < 0) {
             fail(s, PVR_GPU_SERVICE_GRAPHICS); return;
+        }
+        if (s->config.mimus && s->phase == PVR_GPU_SERVICE_READY &&
+            pvr_mimus_service_poll(s->config.mimus) < 0) {
+            fail(s, PVR_GPU_SERVICE_COMPUTATION); return;
         }
         break;
     }
@@ -734,7 +768,8 @@ static uint64_t progress(const struct pvr_gpu_service *s)
         c ? c->client.cursor : 0,
         r ? r->phase : 0, r ? r->checked : 0, r ? r->texture_cursor : 0, r ? r->pair.phase : 0,
         r ? r->geometry.phase : 0, r ? r->geometry.index : 0, r ? r->geometry.cursor : 0,
-        r ? r->fragment.phase : 0, r ? r->fragment.index : 0, r ? r->fragment.cursor : 0};
+        r ? r->fragment.phase : 0, r ? r->fragment.index : 0, r ? r->fragment.cursor : 0,
+        s->config.mimus ? pvr_mimus_service_progress(s->config.mimus) : 0};
     uint64_t hash = UINT64_C(0xcbf29ce484222325);
     for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i)
         hash = (hash ^ values[i]) * UINT64_C(0x100000001b3);
@@ -748,6 +783,10 @@ static int step(struct pvr_gpu_service *s)
     uint64_t before = progress(s);
     advance(s);
     if (s->phase == PVR_GPU_SERVICE_FAILED) return 0;
+    /* A ready mimus session whose step rearmed the interrupt has no CPU work
+     * until the next slot wake, the interrupt or the job poll bound. */
+    if (phase == PVR_GPU_SERVICE_READY && s->phase == PVR_GPU_SERVICE_READY && s->config.mimus &&
+        !s->irq_masked && !pvr_mimus_service_submitting(s->config.mimus)) return 0;
     if (phase == PVR_GPU_SERVICE_BUILDING || phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS ||
         phase == PVR_GPU_SERVICE_PUBLISHING || phase == PVR_GPU_SERVICE_DISPOSING) return 1;
     return progress(s) != before;
@@ -783,6 +822,8 @@ static TickType_t wait_ticks(struct pvr_gpu_service *s)
     int busy = 0;
     if (compute_polled(s)) { busy = 1; earliest = c->deadline; }
     if (render_polled(s)) { busy = 1; if (r->deadline < earliest) earliest = r->deadline; }
+    uint64_t job;
+    if (s->config.mimus && pvr_mimus_service_deadline(s->config.mimus, &job)) { busy = 1; if (job < earliest) earliest = job; }
     if (s->config.free_lists.count &&
         (s->free_lists.phase != PVR_FREE_LIST_IDLE || s->free_lists.request_count)) {
         uint64_t operation = free_list_deadline(s);
@@ -857,6 +898,9 @@ static void worker(void *argument)
             taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
             continue;
         }
+        /* The mimus job wake: the next step takes the slot. */
+        if (message.client == PVR_GPU_SERVICE_CLIENTS && message.ticket == PVR_GPU_SERVICE_MIMUS_WAKE &&
+            s->config.mimus) continue;
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
         reply.result = execute(s, &message);
@@ -916,7 +960,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
     if (!s || instance || s->initialized || !c || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
-        (c->compute && !c->compute_mode) ||
+        ((c->compute || c->mimus) && !c->compute_mode) ||
         (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||
         !c->start.now || !c->start.read || !c->start.write || !c->start.started || !c->start.publish ||
