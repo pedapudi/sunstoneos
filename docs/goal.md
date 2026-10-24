@@ -10,11 +10,11 @@ Support all CPU cores, memory, interrupts, clocks, resets, power, DMA, storage, 
 
 FreeRTOS must be the runtime OS. Linux may supply driver source and development references but must not be a runtime dependency.
 
-2. Finish multicore bring-up directly
+2. Finish multicore bring-up
 
-The primary agent must personally handle multicore diagnosis, implementation, review and board testing without delegation.
+Multicore diagnosis, implementation and review may be delegated like any other work. The coordinator runs every board test.
 
-Reuse the successful physical core-1 release, preparation, shutdown and ROM-return evidence. Continue from the implemented GIC-600 redistributor power-up correction: establish the relevant physical state, provide matching diagnostic cleanup, and qualify per-core interrupt initialization, all remaining cores, cache coherence and FreeRTOS scheduling.
+Reuse the physical evidence that exists: all eight cores reach their first FreeRTOS task and shut down with their state restored. Qualify FreeRTOS scheduling under load on all eight cores, cache coherence between them, per-core interrupt delivery and admission of the two Cortex-A76 cores.
 
 Do not repeat a failed launch without a concrete correction or a narrower diagnostic justified by new evidence.
 
@@ -24,7 +24,7 @@ Keep independent identities, permissions, locks, queues and evidence for the boa
 
 Use the original board for direct multicore work and the second for eligible independent hardware integration. The primary agent coordinates physical access. Subagents develop without hardware access and submit frozen artifacts for queued testing.
 
-Use Sol 6.1 medium implementation workers and focused Astra review for substantive correctness risks. Run independent complete device workstreams concurrently when they can advance without conflicting edits or integration bottlenecks. Integrate completed work promptly and reassign useful work instead of leaving workers idle unnecessarily.
+Use implementation workers for device paths and a separate focused reviewer for substantive correctness risks. Run independent complete device workstreams concurrently when they can advance without conflicting edits or integration bottlenecks. Integrate completed work promptly and reassign useful work instead of leaving workers idle unnecessarily.
 
 4. Preserve recovery and storage
 
@@ -72,8 +72,8 @@ Keep GitHub issues, the hardware matrix and handoff current. Let the existing da
 
 Use the writing skill. Never add vendor attribution tags, generated-by notices or assistant co-author tags; preserve required legal notices.
 
-Local commits and issue updates are authorized. Do not push or merge without authorization.
+Local commits, issue updates and merges into `bringup` are authorized. The coordinator pushes `bringup` to `origin` under the push rule in AGENTS.md.
 
-Continue across intermediate milestones while useful authorized work remains. Ask only for necessary physical actions, genuinely blocking information or actions outside scope. Report usage-limit interruptions explicitly.
+Continue across intermediate milestones while useful authorized work remains. Ask only for necessary physical actions, genuinely blocking information or actions outside scope. Report usage-limit interruptions explicitly, and resume when the limit resets.
 
 Completion requires reproducible bootable images, recovery and update procedures, native mimus, physical qualification of every required hardware function, representative concurrent workloads and the 0.05-times recognition target. Missing accessories and documented limitations remain outstanding requirements.

@@ -30,8 +30,8 @@ tests only; it does not reserve unrelated boards.
 
 | USB port | Card | Queue database | Coordinator token |
 | --- | --- | --- | --- |
-| `3-1` | Original microSD; preserve contents | `board-tests.sqlite3` | `board-test-coordinator.token` |
-| `3-3` | User-reported 32 GB microSD; preserve contents | `board-tests-3-3.sqlite3` | `board-test-coordinator-3-3.token` |
+| `3-1` | Original microSD; preserve contents apart from [goal section 4](goal.md) writes | `board-tests.sqlite3` | `board-test-coordinator.token` |
+| `3-3` | User-reported 32 GB microSD; preserve contents apart from [goal section 4](goal.md) writes | `board-tests-3-3.sqlite3` | `board-test-coordinator-3-3.token` |
 
 Set `SUNSTONE_USB_PORT=3-1` or `SUNSTONE_USB_PORT=3-3` on each runner command.
 This selects a physical port before the existing lock and identity checks.
