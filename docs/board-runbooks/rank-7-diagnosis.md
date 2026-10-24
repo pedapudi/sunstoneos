@@ -4,7 +4,7 @@ Status: the cause is not established. The first-task diagnostic returned once,
 on 2026-10-18, and did not return on port 3-1 on 2026-10-23 or, in its
 corrected form and in a clean lifetime, on 2026-10-24. The next diagnostic is
 the all-eight-core pre-scheduler in a clean lifetime
-(`board-bundles-20261023/rank-7-pre-scheduler/`; runbook
+(`cpu-diagnosis-20261024/pre-scheduler/`; runbook
 [rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). No board was accessed to
 produce this document.
 
@@ -48,13 +48,14 @@ On 2026-10-24 the corrected diagnostic ran on port 3-1 in a clean lifetime:
 power cycle, cold DDR, surveys, a 32-bit state capture that matched port 3-3
 word for word, the cache-off helper and a survey. It did not return, and the
 old ROM instance no longer answered `sunxi-fel version`, so CPU0 had left
-the ROM. No FreeRTOS image had run and no admission check refused. The only
-difference from the passing run that remains is that the 2026-10-18 lifetime
-ran five native CPU diagnostics first, the last of them the all-eight-core
-pre-scheduler; both failing launches were the first launch of their lifetime
-to power up a secondary. The leading explanation is that the first-task run
-depends on state that an earlier native diagnostic in the same lifetime
-establishes; an intermittent failure of the first-task interval is second.
+the ROM. No FreeRTOS image had run, and no refusal report was recovered. Without a
+returned report, neither entry into the admission nor completion of its reads
+is observed. One known difference is that the 2026-10-18 lifetime ran five
+native CPU diagnostics first, ending with the all-eight-core pre-scheduler.
+Both failing launches were the first launch of their lifetime to request a
+secondary power-up. Dependence on earlier diagnostic state and intermittent
+failure remain hypotheses; the records do not establish their relative
+probability.
 
 The corrected diagnostic makes the state checks before it releases any
 secondary. If a check fails, CPU0 records a failure code, the word's address
@@ -65,9 +66,9 @@ to the earlier one.
 
 The next launch is the all-eight-core pre-scheduler diagnostic on port 3-1 in
 a clean lifetime, with a byte-identical overlay to the one that preceded the
-2026-10-18 pass. Whether it returns, and then whether the first-task
-diagnostic returns after it in the same lifetime, separates the two
-explanations.
+2026-10-18 pass. A successful return would establish the shared startup and cleanup in that
+lifetime. A missing return would leave the stop location unknown. Either
+outcome informs the next diagnostic without proving a causal explanation.
 
 ## The two attempts sent the same bytes through the same transactions
 
@@ -181,9 +182,9 @@ Three differences follow from the table:
 `identity_primary_run` returns 0 on failure, and so does every deadline wait.
 A refusal therefore leaves CPU0 inside the diagnostic, the ROM never
 reinitializes USB, and the host keeps its stale descriptor. That matches the
-2026-10-23 observation. The stale descriptor also shows that the SoC did not
-reset: a watchdog, thermal or supply reset would have disconnected the USB
-device.
+2026-10-23 observation. The stale descriptor is a host observation, not proof that CPU0 remained
+running or that no reset or supply disturbance occurred. No returned report
+or electrical measurement identifies the stop mechanism.
 
 The checks that read state left by an earlier image, in execution order:
 
@@ -318,7 +319,7 @@ saves and restores the FEL scratch bytes, and it reads the GIC only when the
 gate is open and the resets are de-asserted. `state-capture.py` is unchanged
 because two queue proposals pin its SHA-256.
 
-## MBUS ran at 400 MHz in both lifetimes
+## MBUS at the failing instruction is unobserved
 
 The rank-9 USB input builder refused the 2026-10-23 port 3-3 capture
 (`CCU+0x588` = `0x84000000`: source 4, divider 1, 400 MHz). The 600 MHz
@@ -357,18 +358,20 @@ Answers to the three questions about MBUS:
    cached EL3 diagnostic then returned through the ROM, and four more
    diagnostics followed, each ending with a ROM entry. Under the rule above,
    MBUS ran at 400 MHz from instance `121` onwards, as it did on 2026-10-23.
-2. **The diagnostic does not depend on MBUS or NSI rates.** Its only time
-   base is the 24 MHz generic counter: all deadlines are absolute counter
-   values. Neither the overlay nor the native ELF contains a CCU fabric
+2. **The diagnostic does not program MBUS or NSI rates.** Its deadlines use
+   the 24 MHz generic counter. Memory and interconnect timing can still
+   affect execution. Neither the overlay nor the native ELF contains a CCU fabric
    address in a literal pool. The only native code that builds a CCU
    address, in `a733_usb_prepare`, is unreachable from the overlay's entry.
    DSU and interconnect settings are system-register writes independent of
-   the bus clocks. A slower memory bus could stretch the 5.3 ms run. With
-   the corrected diagnostic's extra scan of the 20,736-byte report, the
-   worst case is estimated at about 10.6 ms against the 0.996 s startup
-   deadline, a margin of about 94 times.
-3. **Rank: last.** The rate was the same in both lifetimes and nothing in the
-   executed path reads it.
+   the bus clocks. The 5.3 ms passing duration is one measurement; it does
+   not establish a worst-case bound for a failed run or another lifetime.
+3. **The clean 2026-10-24 lifetime differs.** It contains no native return
+   through an RMR reset before the failed launch. The cache-off helper ends
+   with `BX LR`, and the survey and capture preserve the same USB instance.
+   No record captures MBUS in that lifetime. Under the ROM sequence above,
+   it could still have boot0's 600 MHz setting. Neither equality nor a clock
+   cause is established for that attempt.
 
 **Where 600 MHz belongs.** Boot0 selects 600 MHz, and a production boot that
 never re-enters the ROM keeps it. In a returning
@@ -406,20 +409,46 @@ Every input and step of the three launches compares as follows:
 | Cache-off helper before the launch | Yes, helper SHA-256 `1417834e…` (queue row 165) | Yes, same helper |
 | Launcher survey | SCTLR `0x00c50838`, CPSR `0x60000153`, MPIDR `0x81000000`, LR `0x1a138`, SP `0xf2200`, RMR 0, CNTFRQ 0, all six gates pass | Same; on 2026-10-24 the saved `r12` reads `0xcac69d82` instead of 0, a scratch register the launcher saves and restores without reading |
 | DDR initialization | Wrapper tool `4a54cdc1…`; same head, body, entry and parameter uploads | Same uploads; same frequencies, training results and 12,288 MiB |
-| MBUS | 400 MHz after the first ROM re-entry | 400 MHz |
+| MBUS | 400 MHz inferred from ROM re-entry; no lifetime capture | 2026-10-23: 400 MHz inferred after ROM re-entry. 2026-10-24: unobserved; no earlier RMR return |
 | Native `.bss` and monitor `.bss` | Zeroed by `a733_smp_entry` before use | Same code |
 | Lifetime before the launch | Cold DDR, CPU power check, five native CPU diagnostics: CPU0 cached EL3, CPU0 cached EL1 with local GIC, CPU0 timer interrupt, CPU0 production context, all-eight-core pre-scheduler (queue rows 148 to 163) | 2026-10-23: three FreeRTOS images under the kernel monitor. 2026-10-24: none; the state capture only. In both, no secondary had been powered up |
 
-The native startup and the base overlay are unlikely stop points. In the
-2026-10-18 lifetime that passed, the CPU0 cached EL3 diagnostic (queue row 148)
-was the first launch after cold DDR. It runs the same native ELF, native
-startup, `a733_cached_prepare` and base publication overlay, and it returned.
-The admission did not refuse, and its reads of the GIC and power words are
-the same words that the 32-bit capture had just read. `identity_primary_run`
-repeats checks that the base overlay had passed. The stop is therefore most
-likely after release.
+The CPU0 cached EL3 diagnostic returned as the first native launch after
+cold DDR on 2026-10-18 (queue row 148). That result demonstrates the native
+startup, `a733_cached_prepare` and base publication overlay under those
+inputs. It does not locate the 2026-10-24 stop. The preceding 32-bit capture
+establishes the sampled register values at capture time; admission execution
+and secondary release remain unobserved. CPU0 can park before admission,
+stall within a read, or fail later during execution or cleanup.
 
-## Ranked hypotheses
+## Primary-source constraints on the next diagnostic
+
+The pinned [Arm/Linux comparison](../a733-multicore-reference-audit.md)
+separates CPU release, redistributor power, wake, CPU-interface access and
+interrupt delivery. Those boundaries prevent three unsupported corrections:
+
+- Arm IHI 0069G section 12.1.3 permits unknown data for unsupported access
+  sizes. A zero returned by the ROM copy path does not prove a clock fault;
+  the matched 32-bit captures supply the relevant GIC observations.
+- Section 11.1 explicitly permits SRE writes while the redistributor sleeps.
+  The differing Linux and TF-A orderings do not justify changing that order
+  to explain an unlocated stop.
+- Linux `cpu_psci_cpu_boot()` delegates power-on to firmware. Its kernel
+  sequence cannot replace the direct EL3 power and shutdown contracts.
+
+Linux's pinned boot contract also requires instruction visibility and image
+publication to the point of coherency. Upload readback alone does not satisfy
+that requirement. The pre-scheduler keeps the accepted Nonsecure publication
+and owned-line cleanup; a successful report must cover both execution and
+cleanup. A synchronous exception handler cannot recover a bus access that
+never completes.
+
+The cached Linux sources are pinned by `sources.json` in
+`multicore-reference-audit-20261018/`, at revision
+`e5f0a698b34ed76002dc5cff3804a61c80233a7a`. The Arm text hashes are in
+`sources/cpu-audit/reference-cache.json`, beneath the SunstoneOS cache.
+
+## Hypotheses and evidence limits
 
 ### 1. The first-task run depends on state that an earlier native diagnostic establishes
 
@@ -456,20 +485,28 @@ For:
 
 Against:
 
-- The executed bytes and inputs are identical, and the run takes 5.3 ms
-  against a one-second deadline.
+- The passing run took 5.3 ms against a one-second deadline. No returned
+  timing record exists for either failed run, so this does not bound their
+  duration or exclude a timing-dependent failure.
 
-### 3. Excluded explanations
+### 3. What the comparisons exclude or leave open
 
-- **State left by the FreeRTOS images.** The clean-lifetime launch failed
-  without them.
-- **Secondary power or GIC state.** The 32-bit capture matched, and the
-  admission read the same words before release without refusing.
-- **A launcher refusal.** The old ROM instance did not answer.
-- **Host, runner, upload, DDR, MBUS, memory residue.** Identical in every
-  compared item.
-- **Supply or temperature.** Port 3-1 has a separate 5 V, 3 A supply, and
-  the SoC did not reset in either failure.
+- **Earlier FreeRTOS images are not a necessary trigger.** The clean-lifetime
+  launch failed without them.
+- **Captured secondary power and GIC words match.** Uncaptured state and
+  subsequent transitions remain open; the admission produced no report.
+- **A clean launcher refusal is unsupported.** The old ROM did not answer,
+  but no launcher report establishes where execution stopped.
+- **Compared host inputs match.** The native payloads and recorded upload
+  transactions agree. The corrected overlay adds admission, and the sessions
+  have distinct epochs and lifetime histories. DDR training and upload
+  readback do not qualify memory behavior during concurrent cached execution.
+- **MBUS is not an established difference.** The 400 MHz value for the passing
+  lifetime is inferred from ROM code and intervening returns, not a capture
+  from that lifetime.
+- **Supply and temperature remain unmeasured during the failing interval.**
+  The separate supply rating and earlier thermal readings do not exclude a
+  transient fault.
 
 ## The corrected diagnostic checks the inherited state before releasing any secondary
 
@@ -580,29 +617,24 @@ the 2026-10-18 step that immediately preceded the passing first-task run. It
 runs the shared native startup, secondary power-up, cached EL1 entry and
 production barrier on all eight cores, stops before task creation and
 returns. Its overlay is byte-identical to the build that returned on
-2026-10-18. One launch separates the remaining explanations:
+2026-10-18. The returned report is the observation boundary. Interpret one attempt as
+follows:
 
-- **It does not return.** The eight-core path up to the barrier fails in a
-  lifetime without the four CPU0 diagnostics that preceded it on 2026-10-18.
-  Hypothesis 1 then points at CPU0 state that those diagnostics leave. The
-  next step reruns the CPU0 cached EL3 diagnostic before the pre-scheduler in
-  a new clean lifetime.
-- **It returns.** The shared eight-core path works from a clean lifetime.
-  Then run the corrected first-task diagnostic once in the same lifetime,
-  which reproduces the 2026-10-18 order:
-  - If it returns, the first-task run depends on a preceding eight-core run
-    (hypothesis 1, narrowed to what the pre-scheduler leaves).
-  - If it does not return, the first-task interval fails even after a
-    preceding eight-core run: intermittent failure (hypothesis 2) or
-    dependence on the CPU0 diagnostics. The next diagnostic then has to stop
-    part-way through the first-task interval and return.
+- **It does not return.** Startup, the barrier, cleanup and return remain
+  indistinguishable stop locations. Preserve the failed instance and request
+  power removal. Review a smaller returning CPU0 boundary before proposing
+  another launch; the result does not justify an automatic retry.
+- **It returns.** The report establishes all eight participants, the barrier,
+  owned-line cleaning, restored controls and seven OFF secondaries in that
+  lifetime. Review that report before a separate first-task proposal.
+  Success of a later first-task run would be consistent with dependence on
+  prior state, but one sequence cannot distinguish causation from intermittency.
 
 A stop marker that the host can read after a failure is not available
 without changing the runner: after release CPU0 can return only with the
 secondaries still running, and the runner restores DRAM after every return.
-Run on port 3-1 only. Port 3-3 has never run an eight-core diagnostic and is
-powered from USB alone, so a failure there could not be separated from a
-supply limit. The unchanged bundle `rank-7-first-task/` is superseded and is
+Run on port 3-1 only, preserving the board identity of the historical
+comparison. Port 3-3 remains outside this proposal. The unchanged bundle `rank-7-first-task/` is superseded and is
 not run again.
 
 ## Evidence
@@ -632,6 +664,10 @@ All paths are under `~/.cache/sunstoneos/evidence/`.
   `primary-interrupt-probe-20261018/physical-002/`,
   `primary-context-probe-20261018/physical-005/`,
   `all-core-pre-scheduler-20261018/entry-corrected/physical-008/`.
+- Offline revalidation and frozen pre-scheduler package:
+  `cpu-diagnosis-20261024/ready-proposal.json`, `snapshot/manifest.json` and
+  `offline-validation.json`; scoped model and wrapper evidence are in that
+  package. The original bundles remain preserved.
 - Bundles: `board-bundles-20261023/rank-7-first-task/` (superseded),
   `board-bundles-20261023/rank-7-corrected/` and
   `board-bundles-20261023/rank-7-pre-scheduler/`.
