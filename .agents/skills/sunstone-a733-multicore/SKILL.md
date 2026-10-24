@@ -74,6 +74,14 @@ attempt to restore them from one to zero. The returning monitor's admission and
 the [kernel evidence](../../../docs/a733-kernel.md) explain the applicable
 security-state and interrupt-group requirements.
 
+Preserve enabled GIC system-register interfaces during cleanup. Arm IHI 0069G
+section 12.1.6, pages 12-193 and 12-194, makes a one-to-zero transition of
+`ICC_SRE_EL3.SRE`, `ICC_SRE_EL2.SRE` or Secure `ICC_SRE_EL1.SRE`
+unpredictable. Saving an earlier zero does not authorize restoring it after
+startup enables the interface. The Nonsecure EL1 exception does not apply to
+these other banks. Existing returning helpers record the earlier SRE value
+and keep the enables set; qualify permitted restoration fields separately.
+
 Treat CPU-interface access, interrupt delivery and redistributor wake as separate
 operations. Compare their ordering with the pinned
 [TF-A CPU-interface implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_main.c).

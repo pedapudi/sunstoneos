@@ -1,0 +1,23 @@
+--- a/input
++++ b/output
+@@ -336,4 +336,5 @@
+     str x2, [x1, #16]
+     dsb sy
++    cbz x20, a733_qualification_success_dispatch
+     cbnz x19, .Lpark
+     mov x0, x20
+@@ -425,8 +426,14 @@
+     mrs x0, esr_el1
+     and x0, x0, #0xffff
++    mov x1, #0x735
++    cmp x0, x1
++    b.eq .Lqualification
+     cmp x0, #119
+     b.eq .Lexit
+     ldp x0, x1, [sp], #16
+     b FreeRTOS_SWI_Handler
++.Lqualification:
++    ldp x0, x1, [sp], #16
++    b a733_qualification_terminal_privileged
+ .Lexit:
+     ldp x0, x1, [sp], #16
