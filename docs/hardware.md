@@ -1359,6 +1359,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   domain. Repeated transitions and eighteen injected-failure cases pass in
   software; physical shutdown remains unqualified. This correction does not
   establish the failed probe's location. Evidence: `gpu-first-off-delays-20261024/`.
+  The OS GPU caller now closes its session before removing the recognition
+  hook after rejecting a completed result. A matching stopped result permits
+  CPU fallback; failed or uncertain shutdown retains ownership. Focused native
+  caller and hook checks pass under `gpu-terminal-retire-20261024/`, with no
+  physical shutdown claim. The official Zero 3W current build selects BXM;
+  its additional internal-core power sequence is under source review.
   The earlier wrong-guard refusal was recovered through reviewed restoration
   of five SRAM regions on the same instance; that recovery does not qualify
   GPU execution. The preceding entry capture remains configuration evidence
