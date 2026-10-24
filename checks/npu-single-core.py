@@ -29,7 +29,7 @@ for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','-
  if m:e.ops[int(m[1],16)]=m[2].strip()
 private_digest=original_address('digest',unit='drivers/npu/npu_convolution.c')
 events={private_digest}|{a for a,op in e.ops.items() if op.split()[0].lower() in ('mrs','msr','at','wfe')}
-raw=bytearray(args.session.read_bytes());_,_,build,layout=prep.image_data(image.read_bytes());raw[48:80]=build;struct.pack_into('<Q',raw,8,2);raw=bytes(raw)
+raw=bytearray(args.session.read_bytes());_,_,build,layout=prep.image_data(image.read_bytes());raw[48:80]=build;struct.pack_into('<Q',raw,8,prep.SINGLE_CORE_VERSION);raw=bytes(raw)
 class Machine(shared.Machine):
  def __init__(self,variant='nominal'):
   compat=types.SimpleNamespace(session_check=lambda raw:prep.session_profile(raw,layout),embedded_reference=lambda *a:None,request_bytes=lambda address,identity,raw,*ids:prep.request_bytes(address,identity,raw,prep.session_profile(raw,layout)))

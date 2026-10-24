@@ -22,7 +22,9 @@ SESSION_ADDRESS=0x41f00000
 PROFILE='accelerators-single-core-supervised-v1'
 # This supported ABI is checked against the selected image's DWARF, not inferred
 # from the enclosing structure's size. Stripped or changed images are refused.
-NPU_LAYOUT=(608,224,296,520,88,112,160,192)
+NPU_LAYOUT=(456,224,232,72,96,128)
+# Combined envelope version; its embedded single-core NPU record has version 3.
+SESSION_VERSION=2
 GPU_CONDITIONS={
  'initial':{'initial-power-removal-and-gpu-drain','gpu-reset-clocks-off-no-requests',
      'remote-gpu-masters-excluded','identity-device-gpu-gic-mappings','irq-ownership'},
@@ -36,10 +38,9 @@ GPU_CONDITIONS={
 def dwarf_layout(elf):
     require(elf.has_dwarf_info(),'Combined image must retain its ABI debug information.')
     wanted={
-      'npu_session':(608,{'boot':224,'pll':520}),
-      'a733_npu_application_boot':(296,{'npu':112,'pmic':160,'pins':192}),
-      'a733_npu_pll_config':(88,{}),
-      'accelerator_session':(9080,{'npu':24,'gpu_initial':632,'package_digest':760,'package':792})}
+      'npu_session':(456,{'boot':224}),
+      'a733_npu_application_boot':(232,{'npu':72,'pmic':96,'pins':128}),
+      'accelerator_session':(8928,{'npu':24,'gpu_initial':480,'package_digest':608,'package':640})}
     found={}
     for cu in elf.get_dwarf_info().iter_CUs():
         for die in cu.iter_DIEs():
@@ -88,7 +89,7 @@ def image_data(raw):
     address,build=read('a733_smp_build_id',32)
     require(0x41000000<=address<=0x411fffe0 and any(build),'Build identity outside executable prefix.')
     layout=struct.unpack('<8Q',read('accelerator_session_layout',64)[1])
-    require(layout==(9080,24,608,632,760,792,8288,20),'Unsupported combined session layout.')
+    require(layout==(8928,24,456,480,608,640,8288,20),'Unsupported combined session layout.')
     require(read('accelerator_single_core_geometry',32)[1]==struct.pack('<4Q',SESSION_MAGIC,1,layout[0],20),'Combined execution geometry differs.')
     dwarf_layout(elf)
     model=npu.selected_model(raw);require(model.get('family')=='nn-pool','Complete NN pool model required.')
@@ -113,9 +114,9 @@ def image_manifest_check(manifest,raw,session=None):
 
 def session_profile(raw,layout):
     size,no,ns,go,ho,po,ps,_=layout
-    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,1,size),'Combined session envelope differs.')
+    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,SESSION_VERSION,size),'Combined session envelope differs.')
     inner=raw[no:no+ns];p=npu.session_profile(inner,NPU_LAYOUT)
-    require(struct.unpack_from('<Q',inner,8)[0]==2 and all(p[k] not in (9,10) for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')),'Combined owners/version conflict.')
+    require(struct.unpack_from('<Q',inner,8)[0]==npu.SINGLE_CORE_VERSION and all(p[k] not in (9,10) for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')),'Combined owners/version conflict.')
     require(all(any(raw[go+i:go+i+32]) for i in range(0,128,32)) and raw[ho:ho+32]==hashlib.sha256(raw[po:po+ps]).digest(),'Combined GPU evidence/package digest differs.')
     return p
 
@@ -123,7 +124,7 @@ def assemble_session(npu_session,package,admission_raw,layout):
     """Copy typed inputs and reviewed proof digests into the native envelope."""
     size,no,ns,go,ho,po,ps,_=layout;record=json.loads(admission_raw)
     require(len(npu_session)==ns and len(package)==ps,'Combined input extent differs.')
-    raw=bytearray(size);struct.pack_into('<3Q',raw,0,SESSION_MAGIC,1,size)
+    raw=bytearray(size);struct.pack_into('<3Q',raw,0,SESSION_MAGIC,SESSION_VERSION,size)
     raw[no:no+ns]=npu_session
     for i,name in enumerate(GPU_CONDITIONS):
         ref=record['gpu_'+name]

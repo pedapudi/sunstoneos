@@ -116,10 +116,23 @@ def main():
     assert client and result==1,dict(client=client,scheduler=m.scheduler,tasks=m.tasks,result=result,failed=m.get(image.address('a733_npu_application_failed'),4),used=m.get(m.app+m.af['used'],4),trace=m.trace[-30:])
     assert m.call('accelerator_gpu_prepare')==1
     view=0x43e00000;assert m.call('accelerator_providers_get',view)==1
-    p=image.layouts['accelerator_providers'];res=m.app+m.af['resources'];rs=image.layouts['a733_npu_startup_resources']
+    p=image.layouts['accelerator_providers']
     expected=dict(counter=m.app+m.af['clock'],clocks=m.app+m.af['registry'],locks=m.app+m.af['locks'],
-                  gpu=res+rs['manager'],gpu_native=res+rs['native'],pmic=m.app+m.af['pmic'])
+                  gpu=m.app+m.af['gpu'],gpu_native=m.app+m.af['gpu_native'],pmic=m.app+m.af['pmic'])
     assert all(m.get(view+p[key])==value for key,value in expected.items())
+    # One GPU/PCK manager: the startup borrows the application's, with its
+    # ledger, counter, registry, locks and the power-domain owner, whose row
+    # list holds the NPU's domain-4 row.
+    sl=image.layouts['a733_npu_startup'];pl=image.layouts['a733_npu_startup_providers']
+    startup=m.app+m.af['startup'];providers=startup+sl['providers']
+    assert m.get(providers+pl['pck'])==expected['gpu'] and m.get(providers+pl['counter'])==expected['counter']
+    assert m.get(providers+pl['clocks'])==expected['clocks'] and m.get(providers+pl['locks'])==expected['locks']
+    assert m.get(providers+pl['rails'])==m.app+m.af['rails'] and m.get(providers+pl['domains'])==m.app+m.af['domains']
+    rl=image.layouts['a733_power_domain_row'];row=m.get(m.app+m.af['domains']+image.layouts['a733_power_domains']['rows'])
+    listed=[]
+    while row and len(listed)<8:listed.append((row,m.get(row+rl['domain'],4)));row=m.get(row+rl['next'])
+    assert (startup+sl['row'],4) in listed and [d for _,d in listed].count(4)==1,listed
+    assert m.get(m.app+m.af['pmic']+image.layouts['a733_pmic']['domains'])==m.app+m.af['domains']
     assert m.clocks==[expected['counter']] and len(m.tasks)==6,dict(clocks=m.clocks,tasks=m.tasks)
     wb=m.call('a733_memory_reservations_init');nc=m.call('a733_memory_uncached_init');pl=image.layouts['device_memory_pool'];al=image.layouts['device_memory_allocation']
     stride=32;allocations={}
@@ -138,13 +151,20 @@ def main():
     for name,field,typ,member in [('counter','clock','a733_counter_clock','failed'),
                                   ('registry','registry','a733_clock_leases','failed'),
                                   ('lock','locks','a733_platform_locks','retained'),
-                                  ('manager','resources','a733_npu_startup_resources',None)]:
+                                  ('manager','gpu','a733_gpu_resource_manager','failed')]:
         branch=Machine(image,a.image,raw,contract);branch.u.mem_write(0x41200000,snapshot)
-        address=m.app+m.af[field]+(rs['manager']+image.layouts['a733_gpu_resource_manager']['failed'] if member is None else image.layouts[typ][member])
+        address=m.app+m.af[field]+image.layouts[typ][member]
         branch.put(address,1,4)
         assert branch.call('accelerator_shared_live')==0
         assert branch.get(image.address('a733_npu_application_failed'),4) and branch.get(m.g+m.gl['failed'],4)
         cases[name+'-fault-revokes-both']=True
+    # A domain-4 fault is the NPU's own: the shared providers stay live and the
+    # GPU keeps running.
+    branch=Machine(image,a.image,raw,contract);branch.u.mem_write(0x41200000,snapshot)
+    word=m.app+m.af['rails']+image.layouts['a733_rail_leases']['authority']
+    branch.put(word,branch.get(word,4)|(1<<12),4)
+    assert branch.call('accelerator_shared_live')==1 and not branch.get(m.g+m.gl['failed'],4)
+    cases['domain-4-fault-leaves-shared-providers-live']=True
     record=dict(passed=True,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),
                 actual_allocations=allocations,exact_provider_view={k:hex(v) for k,v in expected.items()},created_tasks=len(m.tasks),
                 cases=cases,physical_access=False,scope=__doc__)

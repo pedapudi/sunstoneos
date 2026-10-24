@@ -19,7 +19,7 @@ static int present(const uint8_t p[32])
 {unsigned v=0;for(unsigned i=0;i<32;++i)v|=p[i];return v!=0;}
 int accelerator_session_valid(const struct accelerator_session *s)
 {
-    if(!s||s->magic!=ACCELERATOR_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||
+    if(!s||s->magic!=ACCELERATOR_SESSION_MAGIC||s->version!=ACCELERATOR_SESSION_VERSION||s->bytes!=sizeof(*s)||
        !npu_session_valid(&s->npu)||!present(s->gpu_initial)||!present(s->gpu_memory)||
        !present(s->gpu_electrical)||!present(s->gpu_supervision)||
        !pvr_compute_package_valid(&s->package))return 0;
