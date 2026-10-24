@@ -905,6 +905,7 @@
   ],
   "docs": [
    "docs/a733-smp-supervised.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-test-queue.md",
    "docs/designs/board-bundles.md",
    "docs/handoff.md"
@@ -1479,7 +1480,10 @@
  },
  "all-core-first-task-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/rank-7-corrected.md",
+   "docs/board-runbooks/rank-7-diagnosis.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6204,6 +6208,7 @@
   "docs": [
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
    "docs/a733-smp-supervised.md",
+   "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-test-queue.md",
    "docs/designs/cpu-table-walks.md"
   ],
@@ -8501,7 +8506,10 @@
  },
  "secondary-identity-probe.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/rank-7-corrected.md",
+   "docs/board-runbooks/rank-7-diagnosis.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
