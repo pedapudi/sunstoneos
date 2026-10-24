@@ -7,7 +7,14 @@
 namespace mimus::asr { class Recognizer; }
 // Fixed inference arena shared by recorded and paced recognition.
 inline constexpr uintptr_t kMimusArenaBase = 0x46000000;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+// The GPU option reads codes from the first 12 MiB and owns the output region
+// above it (docs/recognition-dispatch.md); the bench recording's peak is
+// below 2.8 MiB.
+inline constexpr size_t kMimusArenaBytes = 12 * 1024 * 1024;
+#else
 inline constexpr size_t kMimusArenaBytes = 16 * 1024 * 1024;
+#endif
 // kMimusWarm keeps the loaded model and recognizer in static storage owned by
 // the single calling recognition task and reuses them for later calls on the
 // same model spans. Without it, both are destroyed before return. Pass

@@ -31,6 +31,17 @@ int board_identity_prepare(uint64_t deadline)
     if(el!=12||(sctlr&5)||!a733_board_session_valid(s,a733_smp_counter())||!os_workload_valid(s->workload))return 0;
     for(unsigned i=0;i<3;++i)
         if(a733_cpu_coherence_publish(mimus_asset_address[i],mimus_asset_bytes[i],deadline)!=1)return 0;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    /* The GPU's 64 KiB tag area, before a733_cached_prepare maps the output
+     * region read-only at EL1 too: here EL3 runs with translation off, so
+     * every access is a Device access and only aligned 64-bit volatile stores
+     * are made, no memset or DC ZVA. Publication then removes any stale line,
+     * so DRAM holds no tag of an earlier boot when the session opens. */
+    volatile uint64_t *tags=(volatile uint64_t *)(uintptr_t)OS_DISPATCH_OUTPUT;
+#pragma clang loop unroll(disable)
+    for(unsigned i=0;i<OS_DISPATCH_TAG_BYTES/8;++i)tags[i]=0;
+    if(a733_cpu_coherence_publish(OS_DISPATCH_OUTPUT,OS_DISPATCH_TAG_BYTES,deadline)!=1)return 0;
+#endif
 #if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifdef SUNSTONE_A733_OS_HEADSET
     const volatile struct bluetooth_profile *source=(const void *)OS_HEADSET_PROFILE_ADDRESS;

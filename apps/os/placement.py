@@ -19,6 +19,12 @@ other tensor gets n_gpu = 0 and stays on the CPU.
   placement.py --models BASE OVERLAY --cores a55 --output placement.h
   placement.py --models BASE OVERLAY --cores a55 --calls 222   # call list
   placement.py --models BASE OVERLAY --cores a55 --summary     # time model
+  placement.py ... --summary --load-cycles 200                  # latency-bound GPU
+
+The header also lists, for every row with n_gpu > 0, the weights' model file
+(region 0 for the base file, 1 for the overlay), the byte offset of weight row
+0 in that file, the row stride and K, which OPEN admits once per tensor. The
+GPU maps each file at the start of its own 8 MiB region.
 
 docs/recognition-dispatch.md describes the time model and its seeds. No
 hardware is accessed.
@@ -51,13 +57,25 @@ SUBSAMPLING_BLOCK = 224   # rows per subsampling producer block
 OUT_CHUNK = 32            # mimus kOutChunk: subsampling output rows per call
 SUBSAMPLING = 'encoder.pre_encode.conv.2.weight'
 
-# Time model seeds; board measurements replace them.
-USC_INSTRUCTIONS_PER_MAC = 1.75   # inner loop of the GPU kernel
+# Time model seeds; board measurements replace them. The GPU and read-out
+# rates are the measured counts of docs/designs/gpu-mimus-compute-measurements.md:
+# 217 USC instruction groups per 64 MACs, and 37.6 M read-out instructions for
+# the bench recording's 12,923,134 GPU outputs.
+USC_INSTRUCTIONS_PER_MAC = 217 / 64   # inner loop of the GPU kernel, 3.39
 A55_MAC_PER_CYCLE = 4167910560 / 14.894 / 494e6   # NEON profile, one A55
 A76_MAC_FACTOR = 2.0              # A76 NEON MACs per clock against an A55
-READOUT_INSTRUCTIONS = 12.0       # per GPU output, conversion and scaling
+READOUT_INSTRUCTIONS = 37.6e6 / 12923134   # per GPU output, 2.9: conversion and scaling
 LINE_CYCLES = 20.0                # one DC CVAC or DC CIVAC line
 SUBMIT_US, FIRMWARE_US, WAKE_US, DISPATCH_US = 25.0, 25.0, 25.0, 10.0
+# Optional latency-bound GPU term (checks/gpu-mimus-time-model.py): a pass of
+# 4 K steps issues 64 x USC_INSTRUCTIONS_PER_MAC groups with 12 waited loads,
+# a lane's last pass adds 32 waited sum stores, and a workgroup's chain hides
+# behind at most RESIDENT_TASKS others, the tasks the program's 106 temps
+# leave resident. 0 load cycles keeps the issue-bound default.
+GPU_HZ = 400e6
+LOADS_PER_PASS, FENCED_STORES, RESIDENT_TASKS = 12, 32, 8
+JOB_POLL_S = 4e-3                 # PVR_GPU_SERVICE_JOB_POLL_US: worker wait bound per job
+REGION_BYTES = 8 << 20            # one model file per GPU region
 CORES = {'a55': {'mhz': 494.0, 'pair': (2, 3), 'factor': 1.0, 'ipc': 1.0},
          'a76': {'mhz': 2002.0, 'pair': (6, 7), 'factor': A76_MAC_FACTOR, 'ipc': 2.0}}
 
@@ -71,7 +89,8 @@ def read_model(path):
         e = ENTRY.unpack_from(data, table + ENTRY.size * i)
         start = strings + e[0]
         tensors.append({'name': data[start:data.index(b'\0', start)].decode(), 'dtype': e[1],
-                        'act': e[2], 'n': e[5], 'k': e[6], 'k_padded': e[9], 'row_stride': e[10]})
+                        'act': e[2], 'n': e[5], 'k': e[6], 'k_padded': e[9], 'row_stride': e[10],
+                        'data_offset': e[11], 'data_size': e[12], 'file_bytes': len(data)})
     return flags, tensors
 
 
@@ -83,6 +102,9 @@ def merged_tensors(base, overlay):
             '%s differs from the model the image embeds' % path
     base_flags, merged = read_model(base)
     overlay_flags, additions = read_model(overlay)
+    for region, group in enumerate((merged, additions)):
+        for t in group:
+            t['region'] = region
     assert base_flags == 1 and overlay_flags == 2, 'base and overlay files required'
     index = {t['name']: i for i, t in enumerate(merged)}
     for t in additions:
@@ -144,17 +166,29 @@ def split(rows, k, n):
 
 
 class Clocks:
-    def __init__(self, cores='a55', cpu_mhz=None, gpu_mhz=400.0, cpu_rate=None, gpu_rate=None):
+    def __init__(self, cores='a55', cpu_mhz=None, gpu_mhz=400.0, cpu_rate=None, gpu_rate=None,
+                 load_cycles=0.0):
         c = CORES[cores]
         self.cores, self.hz, self.ipc = cores, (cpu_mhz or c['mhz']) * 1e6, c['ipc']
         self.cpu_rate = cpu_rate or A55_MAC_PER_CYCLE * c['factor'] * self.hz
-        self.gpu_rate = gpu_rate or gpu_mhz * 1e6 * LANES / USC_INSTRUCTIONS_PER_MAC
+        self.gpu_hz = gpu_mhz * 1e6
+        self.gpu_rate = gpu_rate or self.gpu_hz * LANES / USC_INSTRUCTIONS_PER_MAC
+        self.load_cycles = load_cycles
 
 
 def gpu_seconds(rows, k, n, clocks):
-    """One job on the padded grid of 32-row by 16-channel workgroups."""
+    """One job on the padded grid of 32-row by 16-channel workgroups:
+    issue-bound, or with load_cycles the larger of issue and each
+    workgroup's latency chain shared among the resident tasks."""
     padded = math.ceil(rows / TILE_ROWS) * TILE_ROWS * math.ceil(n / TILE_CHANNELS) * TILE_CHANNELS
-    return FIRMWARE_US * 1e-6 + padded * k / clocks.gpu_rate
+    issue = padded * k / clocks.gpu_rate
+    if not clocks.load_cycles:
+        return FIRMWARE_US * 1e-6 + issue
+    groups = padded // (TILE_ROWS * TILE_CHANNELS)
+    passes = k / 4
+    chain = (passes * (64 * USC_INSTRUCTIONS_PER_MAC + LOADS_PER_PASS * clocks.load_cycles) +
+             FENCED_STORES * clocks.load_cycles) / clocks.gpu_hz
+    return FIRMWARE_US * 1e-6 + max(issue, groups * chain / min(RESIDENT_TASKS, groups))
 
 
 def call_seconds(rows, k, n_all, n, clocks, totals=None):
@@ -184,6 +218,7 @@ def call_seconds(rows, k, n_all, n, clocks, totals=None):
             (readout if n < n_all else DISPATCH_US * 1e-6 + readout / 2)
         if totals is not None:
             totals['jobs'] = totals.get('jobs', 0) + 1
+            totals.setdefault('job_seconds', []).append(gpu_seconds(r, k, n, clocks))
             totals['clean_lines'] = totals.get('clean_lines', 0) + clean
             totals['invalidate_lines'] = totals.get('invalidate_lines', 0) + invalidate
             totals['gpu_seconds'] = totals.get('gpu_seconds', 0.0) + gpu_seconds(r, k, n, clocks)
@@ -235,10 +270,39 @@ def summary(tensors, placement, clocks, frames):
     for t, (n, j) in zip(tensors, placement):
         if n:
             shapes['%dx%d' % (t['k'], t['n'])] = {'n_gpu': n, 'job_rows': j}
-    return {'cores': clocks.cores, 'cpu_mhz': clocks.hz / 1e6, 'frames': frames,
+    durations = totals.pop('job_seconds', [])
+    ordered = sorted(durations)
+    middle = len(ordered) // 2
+    median = (ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2) \
+        if ordered else 0.0
+    # The worker wakes for the hook's message and the completion interrupt,
+    # and once per JOB_POLL_S timed wait while the job runs.
+    wakes = sum(2 + math.ceil(d / JOB_POLL_S) for d in durations)
+    return {'cores': clocks.cores, 'cpu_mhz': clocks.hz / 1e6, 'gpu_mhz': clocks.gpu_hz / 1e6,
+            'load_cycles': clocks.load_cycles, 'frames': frames,
             'linear_seconds': seconds, 'gpu_share': totals.get('gpu_macs', 0) / macs, 'macs': macs,
             'placed_calls': sum(1 for c in call_list(tensors, frames) if placement[c[0]][0]),
-            **totals, 'shapes': shapes}
+            **totals, 'job_median_seconds': median, 'job_max_seconds': max(durations, default=0.0),
+            'job_total_seconds': sum(durations), 'worker_wakes': wakes,
+            'job_durations_us': [round(d * 1e6, 3) for d in durations], 'shapes': shapes}
+
+
+def gpu_tensors(tensors, placement):
+    """(offset, ordinal, stride, k, region) for every row with n_gpu > 0:
+    the admission record OPEN passes to pvr_mimus_tensor_open. offset is the
+    entry's data_offset, the byte offset of weight row 0 in its own file."""
+    out = []
+    for ordinal, (t, (n, _)) in enumerate(zip(tensors, placement)):
+        if not n:
+            continue
+        offset, stride, k = t['data_offset'], t['row_stride'], t['k']
+        extent = (n - 1) * stride + k
+        assert k % 4 == 0 and stride % 4 == 0 and offset % 4 == 0 and k <= stride < 65536, t['name']
+        assert ordinal < 65536 and t['region'] in (0, 1), t['name']
+        assert extent <= t['data_size'] and offset + extent <= t['file_bytes'] and \
+            offset + extent <= REGION_BYTES, '%s leaves its model region' % t['name']
+        out.append((offset, ordinal, stride, k, t['region']))
+    return out
 
 
 def header(tensors, placement, clocks, frames):
@@ -252,6 +316,16 @@ def header(tensors, placement, clocks, frames):
     for i in range(0, len(placement), 8):
         lines.append('    ' + ''.join('{%d,%d},' % row for row in placement[i:i + 8]))
     lines.append('};')
+    admitted = gpu_tensors(tensors, placement)
+    lines += ['/* OPEN admission, one entry per row with n_gpu > 0 in ordinal order:',
+              ' * {offset, ordinal, stride, k, region}. offset is the tensor entry\'s',
+              ' * data_offset, weight row 0 within its model file; region 0 is the base',
+              ' * file and 1 the overlay, each mapped at the start of its own 8 MiB. */',
+              '#define OS_PLACEMENT_GPU_TENSORS %du' % len(admitted),
+              'const struct os_placement_tensor os_placement_tensors[OS_PLACEMENT_GPU_TENSORS]={']
+    for i in range(0, len(admitted), 4):
+        lines.append('    ' + ''.join('{%d,%d,%d,%d,%d},' % row for row in admitted[i:i + 4]))
+    lines.append('};')
     return '\n'.join(lines) + '\n'
 
 
@@ -263,12 +337,15 @@ def main():
     parser.add_argument('--gpu-mhz', type=float, default=400.0)
     parser.add_argument('--cpu-rate', type=float, help='MACs per second per core (default: profile seed)')
     parser.add_argument('--gpu-rate', type=float, help='GPU MACs per second (default: clock seed)')
+    parser.add_argument('--load-cycles', type=float, default=0.0,
+                        help='GPU load and store latency in GPU clocks (default 0: issue-bound)')
     parser.add_argument('--frames', type=int, default=222, help='encoder frames (default: bench recording)')
     parser.add_argument('--output', type=Path, help='write the C table')
     parser.add_argument('--calls', type=int, metavar='FRAMES', help='print the call list for FRAMES frames')
     parser.add_argument('--summary', action='store_true', help='print the time model summary as JSON')
     args = parser.parse_args()
-    clocks = Clocks(args.cores, args.cpu_mhz, args.gpu_mhz, args.cpu_rate, args.gpu_rate)
+    clocks = Clocks(args.cores, args.cpu_mhz, args.gpu_mhz, args.cpu_rate, args.gpu_rate,
+                    args.load_cycles)
     tensors = merged_tensors(*args.models)
     placement = table(tensors, clocks, args.frames)
     if args.output:

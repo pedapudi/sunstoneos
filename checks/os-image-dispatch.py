@@ -5,8 +5,12 @@ The check covers docs/recognition-dispatch.md on the host; no device is used:
 
 - apps/os/placement.py emits the placement table for the A55 pair at 494 MHz
   and the A76 pair at 2,002 MHz from the bench models; the table and the
-  call and job counts equal the values the design records, and the modeled
-  linear-stage time is within the design's regression bound;
+  call and job counts equal the values docs/designs/gpu-recognition.md
+  records, and the modeled linear-stage time is within its regression bound;
+- the header's OPEN admission list has one entry per placed row, in ordinal
+  order, whose weight extent lies inside its model file and its 8 MiB GPU
+  region; a C program compiled against apps/os/dispatch.h reads the entries
+  back with the values the time model computed;
 - every row's job_rows is at most the GPU worker's own bound, computed here
   with the GPU kernel design's formula;
 - a placement bound that rounds to zero rows gives n_gpu = 0;
@@ -14,7 +18,7 @@ The check covers docs/recognition-dispatch.md on the host; no device is used:
   UndefinedBehaviorSanitizer, runs apps/os/dispatch.c over the bench call
   list with exact integer sums compared against a CPU-only reference, and
   over the longest accepted input (the 1 MiB WAV slot), where both tables
-  split a call into three or more jobs. It covers no OPEN before the model
+  split a call into several jobs, as many as the time model splits it into. It covers no OPEN before the model
   hashes, a refused OPEN, a refused job, a job with a missing tag, RESET and
   LOST, a reply that never comes, two jobs that end at the worker's deadline,
   and the read-only mapping rule with one writable, unreadable or Device page
@@ -25,8 +29,10 @@ The check covers docs/recognition-dispatch.md on the host; no device is used:
   0x46000000 and refuses a larger arena or another base; the result records
   whether apps/mimus/recorded.h already fits;
 - os_dispatch_place compiles for AArch64 to two loads and one compare;
-- with --configure-from, CMake refuses the option without the resident
-  lifetime or either build constant, and configures with both.
+- with --configure-from, CMake refuses the option in the supervised
+  lifetime, without SUNSTONE_A733_OS_GPU_VALIDATE, and with a user-supplied
+  A733_GPU_OUTPUT_EL0_READ_ONLY, which it sets itself; it configures the
+  validation build with and without the microphone.
 """
 import argparse
 import hashlib
@@ -47,15 +53,16 @@ placement = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(placement)
 
 # Emitted tables by shape (K x N: n_gpu, job_rows) for the bench recording,
-# as docs/designs/recognition-dispatch.md records them.
+# as docs/designs/gpu-recognition.md records them, from the measured GPU and
+# read-out rates.
 EXPECTED = {
-    'a55': {'1584x176': (176, 224), '3520x176': (176, 96), '176x704': (704, 352), '704x176': (176, 512),
-            '176x176': (176, 1472), '176x352': (352, 736), '176x1025': (1025, 224)},
-    'a76': {'1584x176': (112, 352), '3520x176': (112, 160), '176x704': (432, 576), '704x176': (112, 832),
-            '176x176': (112, 2336), '176x352': (208, 1248), '176x1025': (625, 384)},
+    'a55': {'1584x176': (160, 256), '3520x176': (160, 96), '176x704': (624, 416), '704x176': (160, 576),
+            '176x176': (160, 1632), '176x352': (304, 832), '176x1025': (897, 256)},
+    'a76': {'1584x176': (80, 512), '3520x176': (80, 224), '176x704': (320, 800), '704x176': (80, 1184),
+            '176x176': (80, 3264), '176x352': (160, 1632), '176x1025': (449, 544)},
 }
 # The design's regression bound on the modeled linear stage, in seconds.
-DESIGN_BOUND = {'a55': 0.82, 'a76': 0.42}
+DESIGN_BOUND = {'a55': 1.15, 'a76': 0.54}
 BENCH = {'placed_calls': 204, 'jobs': 204, 'block_jobs': 20, 'block_padded_rows': 8,
          'block_codes': 7032960, 'block_clean_lines': 219780, 'outputs': 12923134}
 BENCH_FRAMES = 222
@@ -66,6 +73,20 @@ COMPILE = ['-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-fsanitize=address
            '-fno-sanitize-recover=all', '-Iinclude', '-Iplatform/a733-smp-cached', '-Iapps/os',
            '-DSUNSTONE_BOARD_SUPERVISED=1', '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_BOARD_RESIDENT=1',
            '-DSUNSTONE_A733_OS_GPU_LINEAR=1']
+
+
+def replay_sizes():
+    """Allocation sizes for the C model's pool replay, from headers that the
+    host compiler cannot include (they include FreeRTOS)."""
+    def find(path, pattern):
+        return int(re.search(pattern, (ROOT / path).read_text()).group(1), 0)
+    return ['-DREPLAY_FIRMWARE_WB_PAGES=%d' % find('include/a733_gpu_reserved.h', r'A733_GPU_RESERVED_WB_BYTES \((\d+)u \*'),
+            '-DREPLAY_FIRMWARE_NC_PAGES=%d' % find('include/a733_gpu_reserved.h', r'A733_GPU_RESERVED_NC_BYTES \((\d+)u \*'),
+            '-DREPLAY_SESSION_WB_PAGES=%d' % find('include/a733_gpu_mimus.h', r'A733_GPU_MIMUS_PAYLOAD_PAGES (\d+)u'),
+            '-DREPLAY_SESSION_NC_PAGES=%d' % find('include/pvr_mimus_service.h', r'PVR_MIMUS_SERVICE_OBJECTS (\d+)u'),
+            '-DREPLAY_XHCI_BYTES=%d' % find('include/a733_xhci.h', r'A733_XHCI_MEMORY_BYTES (\d+)u')]
+
+
 CACHE_ENTRIES = ('FREERTOS_DIR', 'TINYUSB_DIR', 'SUNSTONE_LLD', 'SUNSTONE_NETWORK_C_HEADERS', 'SUNSTONE_RSN_DIR',
                  'SUNSTONE_TCP_DIR', 'SUNSTONE_BOARD_SUPERVISED', 'SUNSTONE_GPU_FIRMWARE', 'MIMUS_DIR',
                  'NEWLIB_ROOT', 'NEWLIB_SMP_ROOT', 'SUNSTONE_BT_SECURITY_DIR', 'SUNSTONE_MIMUS_BOARD_APPLICATION')
@@ -78,16 +99,18 @@ def patch(source, patch_file, output):
 
 
 def recognizer_order(out):
-    """The patch applies to both recognizer sources and opens after the hashes."""
+    """The patch applies to both recognizer sources, opens the session (through
+    apps/os/gpu_hook.cc) after the hashes and records the recognizer task."""
     base = ROOT / 'apps/mimus-board/recognition.cc'
     capture = out / 'recognition-capture.cc'
     patch(base, ROOT / 'apps/os/recognition.patch', capture)
     for name, source in (('recorded', base), ('capture', capture)):
         text = patch(source, ROOT / 'apps/os/recognition-dispatch.patch', out / ('recognition-gpu-%s.cc' % name))
         hashed = text.index('if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}')
-        opened = text.index('os_dispatch_open();')
-        assert text.count('os_dispatch_open();') == 1 and hashed < opened < text.index('mimus_transcribe_recorded'), name
-        assert 'xTaskCreateStaticAffinitySet(recognize' in text and 'void os_dispatch_stop(void){failed();}' in text
+        opened = text.index('os_gpu_open();')
+        assert text.count('os_gpu_open();') == 1 and hashed < opened < text.index('mimus_transcribe_recorded'), name
+        assert 'os_recognizer=xTaskCreateStaticAffinitySet(recognize' in text and \
+            'void os_dispatch_stop(void){failed();}' in text
     return ['recorded', 'capture']
 
 
@@ -135,8 +158,9 @@ def run_model(out, cores, models, numeric_frames):
     for t, (n_gpu, rows) in zip(tensors, table):
         assert not n_gpu or 32 <= rows <= worker_job_rows(t['k'], n_gpu), (t['name'], n_gpu, rows)
     core = placement.CORES[cores]['pair'][0]
+    admitted = admission_list(directory, tensors, table, models, core)
     binary = directory / 'dispatch'
-    subprocess.run(['clang'] + COMPILE + ['-I' + str(directory), '-DOS_RECOGNITION_CORE=%d' % core,
+    subprocess.run(['clang'] + COMPILE + replay_sizes() + ['-I' + str(directory), '-DOS_RECOGNITION_CORE=%d' % core,
                     'checks/os-image-dispatch.c', '-o', str(binary)], cwd=ROOT, check=True)
     results = {}
     for frames in (BENCH_FRAMES, LONGEST_FRAMES):
@@ -153,12 +177,45 @@ def run_model(out, cores, models, numeric_frames):
     if cores == 'a55':
         for key, value in BENCH.items():
             assert bench[key] == value, (key, bench[key], value)
-    # The output head's bound (224 rows on the A55 pair, 384 on the A76
-    # pair) splits the longest input's 820-row call into three or more jobs.
-    assert results[LONGEST_FRAMES]['max_jobs_per_call'] >= 3, results[LONGEST_FRAMES]
+    # The longest input's calls split into several jobs (the output head's
+    # 820 rows into four on the A55 pair, the feed-forward first linear's into
+    # two on the A76 pair), exactly as the time model splits them.
+    expected_jobs = max(len(placement.split(r, k, table[o][0])) for o, r, k, _, _, _ in
+                        placement.call_list(tensors, LONGEST_FRAMES) if table[o][0])
+    assert expected_jobs >= 2 and results[LONGEST_FRAMES]['max_jobs_per_call'] == expected_jobs, \
+        (results[LONGEST_FRAMES], expected_jobs)
     return {'summary': summary, 'bench': bench, 'longest': results[LONGEST_FRAMES],
-            'design_bound_s': DESIGN_BOUND[cores],
+            'admission': admitted, 'design_bound_s': DESIGN_BOUND[cores],
             'placement_h_sha256': hashlib.sha256((directory / 'placement.h').read_bytes()).hexdigest()}
+
+
+def admission_list(directory, tensors, table, models, core):
+    """The OPEN admission entries: one per placed row in ordinal order, each
+    weight extent inside its model file and its 8 MiB GPU region, read back
+    through apps/os/dispatch.h's struct."""
+    entries = placement.gpu_tensors(tensors, table)
+    placed = [i for i, (n, _) in enumerate(table) if n]
+    assert [e[1] for e in entries] == placed, 'admission list differs from the placed rows'
+    sizes = [m.stat().st_size for m in models]
+    for offset, ordinal, stride, k, region in entries:
+        t, n_gpu = tensors[ordinal], table[ordinal][0]
+        end = offset + (n_gpu - 1) * stride + k
+        assert region in (0, 1) and k == t['k'] and stride == t['row_stride'] and k % 4 == 0 and \
+            stride % 4 == 0 and k <= stride < 65536 and end <= sizes[region] and end <= 8 << 20, t['name']
+    source = directory / 'admission.c'
+    source.write_text('#include <stdio.h>\n#include "dispatch.h"\n#include "placement.h"\nint main(void){\n'
+                      '    for(unsigned i=0;i<OS_PLACEMENT_GPU_TENSORS;++i){const struct os_placement_tensor *t='
+                      '&os_placement_tensors[i];\n'
+                      '        printf("%u %u %u %u %u\\n",(unsigned)t->offset,(unsigned)t->ordinal,(unsigned)t->stride,'
+                      '(unsigned)t->k,(unsigned)t->region);}\n    return 0;\n}\n')
+    binary = directory / 'admission'
+    subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-Iinclude', '-Iapps/os', '-I' + str(directory),
+                    '-DOS_RECOGNITION_CORE=%d' % core, str(source), '-o', str(binary)], cwd=ROOT, check=True)
+    lines = subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.split('\n')
+    read = [tuple(int(v) for v in line.split()) for line in lines if line]
+    assert read == entries, 'the C struct reads other values than the time model wrote'
+    return {'entries': len(entries), 'regions': [sum(1 for e in entries if e[4] == r) for r in (0, 1)],
+            'largest_end': max(e[0] + (table[e[1]][0] - 1) * e[2] + e[3] for e in entries)}
 
 
 def zero_bound():
@@ -198,19 +255,19 @@ def configure_cases(out, build, models):
             '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_A733_OS_GPU_LINEAR=ON'] + \
         ['-D%s=%s' % item for item in sorted(cache.items())]
     env = dict(os.environ, PATH=str(Path(cache['SUNSTONE_LLD']).parent) + os.pathsep + os.environ['PATH'])
+    model_dir = '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)
+    validate = '-DSUNSTONE_A733_OS_GPU_VALIDATE=ON'
+    # Until the board items on GPU cache invalidation, cross-core code writes
+    # and GPU read-only enforcement pass, only the validation build
+    # configures; CMake sets the read-only view's constant itself.
     cases = [
-        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
-                        '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON'], 'resident lifetime'),
-        ('no-constants', ['-DSUNSTONE_A733_OS_RESIDENT=ON'], 'read-only at EL0'),
-        ('no-clean-invalidate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON'],
-         'clean-and-invalidate'),
-        ('no-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON'],
-         'read-only at EL0'),
-        ('both', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
-                  '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON', '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)], None),
-        ('both-audio', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON',
-                        '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON', '-DA733_GPU_OUTPUT_CLEAN_INVALIDATE=ON',
-                        '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)], None),
+        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', validate, model_dir], 'resident lifetime'),
+        ('no-validate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', model_dir], 'SUNSTONE_A733_OS_GPU_VALIDATE'),
+        ('user-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', validate, '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
+                            model_dir], 'A733_GPU_OUTPUT_EL0_READ_ONLY'),
+        ('validate', ['-DSUNSTONE_A733_OS_RESIDENT=ON', validate, model_dir], None),
+        ('validate-audio', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON', validate,
+                            model_dir], None),
     ]
     results = {}
     for name, options, refusal in cases:
