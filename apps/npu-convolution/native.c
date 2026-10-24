@@ -16,20 +16,16 @@
 #include "platform.h"
 #include "result.h"
 #include "cached.h"
-#ifdef SUNSTONE_NPU_SUPERVISED
-#include "clock.h"
-#endif
+#include "session.h"
 
 static struct {
-#ifdef SUNSTONE_NPU_SUPERVISED
-    struct npu_application_clock pll;
-#endif
     struct a733_counter_clock clock;
     struct a733_clock_leases registry;
     struct a733_platform_locks locks;
-    struct a733_npu_startup_resources resources;
+    /* The image's only GPU/PCK resource manager. */
+    struct a733_gpu_resource_manager gpu;
+    struct a733_gpu_resource_native gpu_native;
     struct a733_npu_startup startup;
-    struct a733_npu_handoff handoff;
     struct a733_pins_native pin_native;
     struct a733_pins pins;
     struct a733_rail_leases rails;
@@ -76,13 +72,7 @@ static int preparation_admitted(void)
 static void pmic_task(void *);
 static void bootstrap(void *);
 const struct a733_npu_application_boot *a733_npu_application_boot_record(void)
-{
-#ifdef SUNSTONE_NPU_SUPERVISED
-    const struct npu_session *s=npu_session_get();return s ? &s->boot : NULL;
-#else
-    return &a733_npu_application_boot;
-#endif
-}
+{const struct npu_session *s=npu_session_get();return s ? &s->boot : NULL;}
 
 void a733_npu_application_fail(unsigned reason)
 {
@@ -141,7 +131,7 @@ static int worker(void *cookie)
        !atomic_load_explicit(&app.worker_admitted,memory_order_acquire) ||
        xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
        xTaskGetCurrentTaskHandle()!=app.reserved.convolution.service.worker ||
-       !a733_counter_clock_now(&app.clock,&now) || now>=app.handoff.allowed.deadline_us) {
+       !a733_counter_clock_now(&app.clock,&now) || now>=app.startup.config.deadline_us) {
         a733_npu_application_fail(2);return 0;
     }
     return 1;
@@ -178,10 +168,10 @@ int accelerator_shared_live(void)
      * busy lock. BUSY leaves this observation pending; it never authorizes a
      * concurrent metadata read or clears the permanent shared fault latch. */
     unsigned expected=0,manager_failed=0;
-    if(app.resources.initialized && atomic_compare_exchange_strong_explicit(
-       &app.resources.manager.busy,&expected,1,memory_order_acquire,memory_order_relaxed)){
-        manager_failed=app.resources.manager.failed;
-        atomic_store_explicit(&app.resources.manager.busy,0,memory_order_release);
+    if(app.gpu.initialized && atomic_compare_exchange_strong_explicit(
+       &app.gpu.busy,&expected,1,memory_order_acquire,memory_order_relaxed)){
+        manager_failed=app.gpu.failed;
+        atomic_store_explicit(&app.gpu.busy,0,memory_order_release);
     }
     if(manager_failed || atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
@@ -192,16 +182,49 @@ int accelerator_shared_live(void)
 }
 int accelerator_providers_get(struct accelerator_providers *out)
 {
-    if(!out || !app.used || !app.resources.initialized || !app.pmic_task ||
+    if(!out || !app.used || !app.gpu.initialized || !app.pmic_task ||
        !accelerator_shared_live())return 0;
     *out=(struct accelerator_providers){&app.clock,&app.registry,&app.locks,
-        &app.resources.manager,&app.resources.native,&app.pmic};
+        &app.gpu,&app.gpu_native,&app.pmic};
     return 1;
 }
 #define provider_live accelerator_shared_live
 #else
 #define provider_live live
 #endif
+/* The GPU/PCK resource manager: its time, register and rail callbacks use the
+ * image's counter and register lock, and a failed update retains the lock. */
+static void retain_owned(void)
+{
+    TaskHandle_t self=xTaskGetCurrentTaskHandle();
+    for(unsigned i=0;i<2;++i)
+        if(xSemaphoreGetMutexHolder(app.locks.mutex[i])==self)
+            (void)a733_platform_lock_retain(&app.locks,(enum a733_platform_lock)i);
+}
+static int gpu_now(void *v,uint64_t *out)
+{return v==&app && !atomic_load_explicit(&app.locks.retained,memory_order_acquire) && a733_counter_clock_now(&app.clock,out);}
+static int gpu_read(void *v,uintptr_t address,uint32_t *out)
+{return v==&app && app.gpu_native.operations.read32(&app.gpu_native,address,out);}
+static int gpu_update(void *v,uintptr_t address,uint32_t required,uint32_t set,uint64_t deadline)
+{
+    int ok=v==&app && app.gpu_native.operations.update32(&app.gpu_native,address,required,set,deadline);
+    if(!ok)retain_owned();
+    return ok;
+}
+static int gpu_rail(void *v,struct a733_gpu_resource_rail *out,uint64_t deadline)
+{
+    int ok=v==&app && app.gpu_native.operations.rail(&app.gpu_native,out,deadline);
+    if(!ok)retain_owned();
+    return ok;
+}
+static int gpu_manager_init(void)
+{
+    if(!a733_gpu_resources_native_init(&app.gpu_native,&app.locks.callbacks))return 0;
+    const struct a733_gpu_resource_ops ops={gpu_now,gpu_read,gpu_update,gpu_rail};
+    if(!a733_gpu_resources_init(&app.gpu,&ops,&app))return 0;
+    app.gpu_native.manager=&app.gpu;app.gpu_native.manager_operations=ops;app.gpu_native.manager_context=&app;
+    return 1;
+}
 static int pin_enter(void *cookie,uint64_t deadline)
 {
     return cookie==&app && provider_live() && xTaskGetCurrentTaskHandle()==app.pmic_task &&
@@ -257,18 +280,7 @@ static void bootstrap(void *argument)
     for(;;) {
         uint64_t now;
         if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.handoff.allowed.deadline_us)break;
-        #ifdef SUNSTONE_NPU_SUPERVISED
-        if(!a733_npu_pll_ready(&app.pll.pll)) {
-            /* Observe the real retained DCDC2 supply before any PLL change. */
-            int rail=a733_npu_startup_supply_sample(&app.startup);
-            if(rail<0)break;
-            if(!rail){vTaskDelay(1);continue;}
-            enum a733_npu_pll_result pll=a733_npu_pll_poll(&app.pll.pll);
-            if(pll==A733_NPU_PLL_RETAINED)break;
-            if(pll!=A733_NPU_PLL_READY){vTaskDelay(1);continue;}
-        }
-#endif
+           now>=app.startup.config.deadline_us)break;
         enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
         if(r==A733_NPU_PLATFORM_RETAINED)break;
         if(r==A733_NPU_PLATFORM_READY) {
@@ -281,7 +293,7 @@ static void bootstrap(void *argument)
 #if defined(SUNSTONE_NPU_FINITE_RETURN) || defined(SUNSTONE_NPU_RUNTIME_INPUT)
                 for(;;) {
                     if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
-                       now>=app.handoff.allowed.deadline_us)break;
+                       now>=app.startup.config.deadline_us)break;
                     if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
                         enum a733_npu_platform_result stopped=npu_convolution_stop_poll(&app.reserved.convolution);
                         if(stopped==A733_NPU_PLATFORM_RETAINED)break;
@@ -346,7 +358,7 @@ unsigned a733_npu_application_quiesce(void)
     while(!atomic_load_explicit(&app.pmic_parked,memory_order_acquire)) {
         uint64_t now;
         if(!live() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.handoff.allowed.deadline_us)goto failed;
+           now>=app.startup.config.deadline_us)goto failed;
         vTaskDelay(1);
     }
     vTaskSuspend(app.pmic_task);
@@ -363,7 +375,7 @@ unsigned a733_npu_application_quiesce(void)
         uint64_t now;
         quiet=finite_irq_quiet();
         if(quiet<0 || !live() || !a733_counter_clock_now(&app.clock,&now) ||
-           now>=app.handoff.allowed.deadline_us)goto failed;
+           now>=app.startup.config.deadline_us)goto failed;
         if(!quiet)vTaskDelay(1);
     }while(!quiet);
     atomic_store_explicit(&app.quiescent,1,memory_order_release);
@@ -398,16 +410,15 @@ int a733_npu_application_init(TaskHandle_t client)
        !p->npu_owner || !p->pmic_owner || !p->usb_owner || !p->bridge_owner ||
        p->npu_owner==p->pmic_owner || p->npu_owner==p->usb_owner || p->pmic_owner==p->usb_owner ||
        p->bridge_owner==p->npu_owner || p->bridge_owner==p->pmic_owner || p->bridge_owner==p->usb_owner ||
-       b->npu.owner!=p->npu_owner || b->npu.handoff!=p->npu_evidence || b->npu.deadline_us ||
-       b->pmic.owner!=p->pmic_owner || b->pmic.identity!=p->pmic_evidence || b->pmic.startup_deadline)return 0;
+       !p->command_admission || b->pmic.owner!=p->pmic_owner || b->pmic.identity!=p->pmic_evidence || b->pmic.startup_deadline)return 0;
     app.used=1;app.client=client;
     uint64_t deadline=a733_observe_identity.deadline/24;
     if(!a733_counter_clock_init(&app.clock,24000000) ||
        !a733_clock_leases_init(&app.registry,a733_counter_clock_now,&app.clock) ||
        !a733_platform_locks_init(&app.locks,a733_counter_clock_now,&app.clock) ||
-       !a733_npu_startup_resources_init(&app.resources,&app.clock,&app.locks))goto failed;
+       !gpu_manager_init())goto failed;
     const struct a733_pins_locks pin_locks={pin_enter,pin_leave,pin_now,&app};
-    const struct a733_rail_binding rail_binding={&app.registry,&app.resources.manager,
+    const struct a733_rail_binding rail_binding={&app.registry,&app.gpu,
         p->bridge_owner,a733_counter_clock_now,&app.clock};
     if(!a733_pins_native_init(&app.pin_native,&pin_locks) ||
        !a733_pins_init_banks(&app.pins,&app.pin_native.operations,&app.pin_native,&b->pins) ||
@@ -434,23 +445,19 @@ int a733_npu_application_init(TaskHandle_t client)
     if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.pmic_task) ||
        !a733_pmic_init(&app.pmic,&app.pmic_config,&app.pmic_native.operations,&app.pmic_native,
            &app.registry,&app.rails,&app.pins) ||
-       a733_pmic_identity(&app.pmic,&app.pmic_lifetime)!=A733_PMIC_READY)goto failed;
+       a733_pmic_identity(&app.pmic,&app.pmic_lifetime)!=A733_PMIC_READY ||
+       !a733_gpu_resources_native_use_pmic(&app.gpu_native,&app.gpu,&app.pmic))goto failed;
     const struct a733_power_service_config service={p->pmic_owner,deadline,1000000u/configTICK_RATE_HZ,0};
     if(!a733_power_domains_native_init(&app.domains_native,app.pmic_task) ||
        !a733_power_domains_init(&app.domains,&app.pmic,&app.domains_native.operations,&app.domains_native,&service))
         goto failed;
-    struct a733_npu_handoff base={.allowed=b->npu,.controller=0x03600000,
-        .evidence=p->npu_evidence,.command_admission=p->command_admission,
-        .established=(uint32_t)p->npu_established,.pck_client=0};
-    base.allowed.deadline_us=deadline;
-    if(!npu_convolution_handoff(&app.reserved.convolution,&base,&app.handoff) ||
-       !a733_npu_startup_init(&app.startup,&app.handoff,&app.resources,&app.registry) ||
-       !a733_npu_startup_bind_pmic(&app.startup,&app.pmic,&app.pmic_lifetime) ||
+    /* The startup borrows the image's providers; the domain-4 row is
+     * registered here, before the power service first runs. */
+    const struct a733_npu_startup_config startup={b->npu,p->npu_owner,deadline,0};
+    const struct a733_npu_startup_providers providers={&app.clock,&app.registry,&app.locks,
+        &app.gpu,&app.rails,&app.domains};
+    if(!a733_npu_startup_init(&app.startup,&startup,&providers,NULL,NULL) ||
        !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
-#ifdef SUNSTONE_NPU_SUPERVISED
-       !npu_application_clock_init(&app.pll,npu_session_get(),&app.registry,&app.locks,&app.clock,
-           app.bootstrap_task,deadline) || !a733_npu_startup_bind_pll(&app.startup,&app.pll.pll) ||
-#endif
        !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,
 #ifdef SUNSTONE_NPU_SINGLE_CORE
            1

@@ -21,8 +21,10 @@ SESSION_MAGIC=0x415337334e504131
 CONTRACT_MAGIC=0x415337334e504331
 SCHEMA='a733-npu-supervised-bundle-v1'
 SESSION_ADDRESS=0x41f00000
-PROFILE_FIELDS=('epoch','generation','lease','npu_evidence','command_admission','usb_evidence',
-    'pmic_evidence','pin_evidence','npu_owner','pmic_owner','usb_owner','bridge_owner','npu_established','usb_established')
+PROFILE_FIELDS=('npu_evidence','command_admission','usb_evidence','pmic_evidence','pin_evidence',
+    'npu_owner','pmic_owner','usb_owner','bridge_owner')
+# Session versions: 3 for the single-core profiles, 2 for the all-core one.
+SINGLE_CORE_VERSION,ALL_CORE_VERSION=3,2
 def sha(data):return hashlib.sha256(data).hexdigest()
 
 
@@ -70,11 +72,10 @@ def image_data(raw):
         require(name in symbols and int(symbols[name]['st_value'])==a,'Compact linker reservation differs.')
     address,build=read('a733_smp_build_id',32)
     require(0x41000000<=address<=0x411fffe0,'Build identity outside immutable code.')
-    _,layout_raw=read('a733_npu_session_layout',64);layout=struct.unpack('<8Q',layout_raw)
-    size,boot,boot_bytes,pll,pll_bytes,npu,pmic,pins=layout
-    require(224==boot and 112<=boot_bytes<4096 and pll==boot+boot_bytes and pll_bytes>=84 and
-        pll+pll_bytes==size and size<=4096 and not size%8 and 112<=npu<npu+48<=boot_bytes and
-        npu+48<=pmic<pmic+24<=pins<boot_bytes,'Invalid exported native session layout.')
+    _,layout_raw=read('a733_npu_session_layout',48);layout=struct.unpack('<6Q',layout_raw)
+    size,boot,boot_bytes,npu,pmic,pins=layout
+    require(224==boot and 72<=boot_bytes<4096 and boot+boot_bytes==size and size<=4096 and not size%8 and
+        72==npu and npu+24<=pmic<pmic+24<=pins<boot_bytes,'Invalid exported native session layout.')
     hashes=[]
     selected=selected_model(raw)
     for name,(n,expected) in protocol.selected_artifacts({'model_name':selected['name']}).items():
@@ -128,25 +129,23 @@ def image_manifest_check(manifest,raw,session=None):
         require(geometry==(0x415337334e505331,1,image_data(raw)[3][0],20),'NPU execution geometry differs.')
     else:require(marker is None,'Single-core NPU image requires its execution profile.')
     if session is not None:
-        require(struct.unpack_from('<Q',session,8)[0]==(2 if marker is not None else 1),
+        require(struct.unpack_from('<Q',session,8)[0]==(SINGLE_CORE_VERSION if marker is not None else ALL_CORE_VERSION),
             'Session execution version differs from native image.')
     return profile
 
 
 def session_profile(raw,layout):
-    size,boot,boot_bytes,pll,pll_bytes,npu,pmic,pins=layout
-    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,struct.unpack_from("<Q",raw,8)[0],size) and struct.unpack_from("<Q",raw,8)[0] in (1,2),'Distinct native NPU session required.')
+    size,boot,boot_bytes,npu,pmic,pins=layout
+    version=struct.unpack_from("<Q",raw,8)[0]
+    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,version,size) and
+        version in (SINGLE_CORE_VERSION,ALL_CORE_VERSION),'Distinct native NPU session required.')
     epoch,generation,lease=struct.unpack_from('<3Q',raw,24);owner,whole=struct.unpack_from('<2Q',raw,208)
     require(all((epoch,generation,lease,owner,whole)),'Session identities must be nonzero.')
-    p=dict(zip(PROFILE_FIELDS,struct.unpack_from('<14Q',raw,boot)))
-    require((p['epoch'],p['generation'],p['lease'])==(epoch,generation,lease) and
-        all(p[k] for k in PROFILE_FIELDS[:12]) and len({p[k] for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')})==4 and
-        p['npu_established']==0xf7 and p['usb_established']==0x17,'Supervised NPU profile differs.')
-    require(struct.unpack_from('<3Q',raw,boot+npu+24)==(p['npu_owner'],p['npu_evidence'],0) and
-        struct.unpack_from('<3Q',raw,boot+pmic)==(p['pmic_owner'],p['pmic_evidence'],0) and
-        struct.unpack_from('<3Q',raw,pll)==(p['npu_owner'],p['npu_evidence'],0) and
-        struct.unpack_from('<I',raw,pll+24)[0] in (2,3),'Uploaded deadlines/PLL authority differ.')
-    return {**p,'supervisor':owner,'whole_platform':whole}
+    p=dict(zip(PROFILE_FIELDS,struct.unpack_from('<9Q',raw,boot)))
+    require(all(p.values()) and len({p[k] for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')})==4,
+        'Supervised NPU profile differs.')
+    require(struct.unpack_from('<3Q',raw,boot+pmic)==(p['pmic_owner'],p['pmic_evidence'],0),'Uploaded PMIC deadline differs.')
+    return {'epoch':epoch,'generation':generation,'lease':lease,**p,'supervisor':owner,'whole_platform':whole}
 
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,frozen=False):
@@ -158,15 +157,14 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,froz
         if str(path) not in cache:
             require(not frozen,'Missing frozen entry evidence.');cache[str(path)]=path.read_bytes()
         data=cache[str(path)];require(sha(data)==item['sha256'],'Entry evidence changed.');return data
-    profile=session_profile(raw,layout);boot,boot_bytes,pll,pll_bytes=layout[1:5]
+    profile=session_profile(raw,layout);boot,boot_bytes=layout[1:3]
     require(record.get('schema')=='a733-npu-supervised-entry-v1' and record.get('image_sha256')==image_hash and
         raw[48:80]==build and raw[80:112]==hashlib.sha256(admission_raw).digest(),
         'Session/admission does not bind the native image.')
     # Record bytes are authenticated by the caller before JSON parsing. The
     # session digest comparison below uses their original frozen representation.
     require(all(record.get(k)==v for k,v in profile.items()),'Admission/profile identities differ.')
-    require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]) and
-        record.get('pll_sha256')==sha(raw[pll:pll+pll_bytes]),'Typed boot/PLL bytes differ from reviewed admission.')
+    require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]),'Typed boot bytes differ from reviewed admission.')
     identity,port=record.get('identity'),record.get('port');require(identity and port,'Fresh target identity required.')
     ddr=json.loads(evidence(record['ddr']))
     require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and
@@ -176,23 +174,20 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,froz
     for ref in ddr['evidence']:evidence(ref)
     platform=json.loads(evidence(record['platform']));original=protocol.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':('npu-single-core-supervised-v1' if struct.unpack_from('<Q',raw,8)[0]==2 else 'npu-supervised-v1')},identity,port)
+    validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':('npu-single-core-supervised-v1' if struct.unpack_from('<Q',raw,8)[0]==SINGLE_CORE_VERSION else 'npu-supervised-v1')},identity,port)
+    # Startup admits only PLL_NPU disabled and domain 4 OFF, and always enables
+    # the PLL with method 2, which the manual warns can disturb other PLLs.
     required={
-        'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','enabled-retune-snapshot'},
+        'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
+                 'no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},
         'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},
         'supervision':{'manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure'}}
-    if struct.unpack_from('<I',raw,pll+24)[0]==3:
-        required['clock'].remove('enabled-retune-snapshot')
-        required['clock'].update({'live-disabled-pll-quiescent-on-snapshot',
-            'native-dram-continuations-and-shared-sram-abandonment',
-            'supervised-cross-pll-disturbance-risk'})
     for name,offset in [('clock',112),('power',144),('supervision',176)]:
         data=evidence(record[name]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],name+' record digest differs.')
         facts=json.loads(data)
         require(facts.get('image_sha256')==image_hash and facts.get('identity')==identity and facts.get('port')==port and
             facts.get('whole_platform')==profile['whole_platform'] and set(facts.get('conditions',{}))==required[name],name+' facts do not cover this entry.')
         for ref in facts['conditions'].values():evidence(ref)
-        if name=='clock':require(facts.get('pll_sha256')==record['pll_sha256'],'Clock record covers another snapshot.')
         if name=='power':require(facts.get('supply_uv')==800000 and facts.get('boot_sha256')==record['boot_sha256'],'Power record covers another inherited configuration.')
         if name=='supervision':require(facts.get('supervisor')==profile['supervisor'] and facts.get('one_attempt') is True,'One-attempt supervision identity differs.')
     return cache

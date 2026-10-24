@@ -8,12 +8,9 @@ set(npu_target a733-npu-convolution)
 if(A733_NPU_SUPERVISED)
   set(npu_target a733-npu-convolution-supervised)
 endif()
-set(A733_NPU_HANDOFF_SOURCE "" CACHE FILEPATH "Immutable board-qualified NPU/PMIC/pin/USB handoff source")
-if(NOT A733_NPU_SUPERVISED AND (NOT EXISTS "${A733_NPU_HANDOFF_SOURCE}" OR IS_DIRECTORY "${A733_NPU_HANDOFF_SOURCE}"))
-  message(FATAL_ERROR "Supply A733_NPU_HANDOFF_SOURCE defining a733_npu_application_boot; no default admission is provided")
-endif()
+# The authenticated session page is the only admission path.
 if(NOT A733_NPU_SUPERVISED)
-  get_filename_component(A733_NPU_HANDOFF_SOURCE "${A733_NPU_HANDOFF_SOURCE}" ABSOLUTE)
+  message(FATAL_ERROR "The NPU application requires A733_NPU_SUPERVISED and its session page")
 endif()
 function(apply_build_patch output source patch_file)
   execute_process(COMMAND patch --silent --output "${output}.tmp" "${source}" "${patch_file}"
@@ -54,10 +51,7 @@ if(A733_NPU_SUPERVISED)
   list(REMOVE_ITEM npu_sources "${a733_root}/platform/a733-smp-cached/admission.c")
   list(APPEND npu_sources "${a733_root}/apps/npu-convolution/admission.c"
     "${a733_root}/apps/npu-convolution/session-valid.c"
-    "${a733_root}/apps/npu-convolution/clock.c" "${a733_root}/drivers/npu/a733_npu_pll_native.c"
     "${a733_root}/drivers/storage/storage_digest.c")
-else()
-  list(APPEND npu_sources "${A733_NPU_HANDOFF_SOURCE}")
 endif()
 apply_build_patch("${npu_build}/usb_service.c" "${a733_root}/platform/a733-smp-observe/usb_service.c"
   "${a733_root}/apps/npu-convolution/usb-service.patch")
@@ -143,7 +137,7 @@ list(APPEND npu_inputs
   "${a733_root}/patches/freertos-smp-macro.patch" "${a733_root}/patches/freertos-a733-smp.patch")
 if(A733_NPU_SUPERVISED)
   list(APPEND npu_inputs "${a733_root}/apps/npu-convolution/session.h"
-    "${a733_root}/apps/npu-convolution/clock.h" "${a733_root}/apps/npu-convolution/boot-supervised.patch"
+    "${a733_root}/apps/npu-convolution/boot-supervised.patch"
     "${a733_root}/cmake/a733-npu-supervised.cmake")
 endif()
 list(REMOVE_DUPLICATES npu_inputs)

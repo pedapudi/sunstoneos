@@ -6,28 +6,22 @@
 
 #define A733_NPU_APPLICATION_COMMAND UINT32_C(0x33)
 #define A733_NPU_APPLICATION_FRAME UINT64_C(0x415337334e505531)
-#define A733_NPU_APPLICATION_USB_REQUIRED UINT64_C(15)
-#define A733_NPU_APPLICATION_USB_SUPERVISED UINT64_C(23)
 
-/* Immutable input supplied by a separately qualified board admission. USB bits
- * 0..3 cover exclusive USB0/PHY/whole CCU words, Device mappings, remote-owner
- * exclusion and independent watchdog/ROM recovery. NPU flags retain the existing
- * startup meaning, including complete SRAM ownership and effective confinement.
- * These identities and flags cannot establish any physical fact themselves. */
+/* Immutable identities of the authenticated session record. The evidence
+ * identities name reviewed records; the owners are the clock, rail and
+ * provider owners of the image. None establishes a physical fact itself. */
 struct a733_npu_application_profile {
-    uint64_t epoch,generation,lease,npu_evidence,command_admission,usb_evidence;
-    uint64_t pmic_evidence,pin_evidence,npu_owner,pmic_owner,usb_owner,bridge_owner;
-    uint64_t npu_established,usb_established;
+    uint64_t npu_evidence,command_admission,usb_evidence,pmic_evidence,pin_evidence;
+    uint64_t npu_owner,pmic_owner,usb_owner,bridge_owner;
 };
 struct a733_npu_application_boot {
     struct a733_npu_application_profile profile;
-    /* Deadlines must be zero in this input. Initialization derives actual
-     * bounded deadlines from the authenticated boot contract's counter value. */
+    /* The fabric record; the PMIC startup deadline must be zero in this
+     * input, and initialization derives it from the boot contract. */
     struct a733_npu_platform_config npu;
     struct a733_pmic_config pmic;
     struct a733_pin_handoff pins;
 };
-extern const struct a733_npu_application_boot a733_npu_application_boot;
 const struct a733_npu_application_boot *a733_npu_application_boot_record(void);
 extern const unsigned char a733_npu_application_model[];
 extern const unsigned char a733_npu_application_input[];

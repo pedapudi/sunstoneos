@@ -2,6 +2,7 @@
 #define SUNSTONE_NPU_SESSION_H
 #include "a733_npu_native.h"
 #include "a733_npu_startup.h"
+#include "npu_service.h"
 #include "nbg_assembly.h"
 
 /* Up to eight trusted compiled models, one per service client, sharing the
@@ -77,18 +78,14 @@ size_t npu_session_requirements(const struct npu_session_model *, unsigned count
  * every 16 MiB of device addresses. Each model's buffers form session group
  * model+1 in the memory policy. Descriptors and coefficients are CONSTANT.
  *
- * Integrity follows the single-model registration: the bootstrap publication,
- * activation, startup and stop check every model copy, every descriptor and
- * coefficient digest and every command stream; a job publication checks the
+ * Integrity follows the single-model registration: the bootstrap publication
+ * checks every model copy, every descriptor and coefficient digest and every
+ * command stream before the device reads them; a job publication checks the
  * submitting model's descriptors, coefficients and command stream. Any
  * failure after admission is terminal and retains the parent allocation.
  * Hashes do not prove device access extents; physical confinement, SRAM
  * ownership, power, clocks and recovery remain independent prerequisites. */
 int npu_session_prepare(struct npu_sessions *, const struct npu_session_config *);
-/* As npu_convolution_handoff: copy the template and install the private
- * backend, MMU image and command table (bootstrap, then one per model). */
-int npu_session_handoff(struct npu_sessions *, const struct a733_npu_handoff *,
-                        struct a733_npu_handoff *);
 /* Pre-scheduler. clients[i] is the only task that may use model i; tasks are
  * distinct and none is the startup task. Constructs the deferred service in
  * shared mode with one command per model. */

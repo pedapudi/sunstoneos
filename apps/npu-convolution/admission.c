@@ -14,9 +14,8 @@
  * hashed and validated; a later write to the uploaded page cannot reach startup. */
 static struct npu_session session RETAINED;
 static unsigned copied RETAINED,admitted RETAINED;
-const uint64_t a733_npu_session_layout[8]={sizeof(struct npu_session),
+const uint64_t a733_npu_session_layout[6]={sizeof(struct npu_session),
     offsetof(struct npu_session,boot),sizeof(struct a733_npu_application_boot),
-    offsetof(struct npu_session,pll),sizeof(struct a733_npu_pll_config),
     offsetof(struct a733_npu_application_boot,npu),offsetof(struct a733_npu_application_boot,pmic),
     offsetof(struct a733_npu_application_boot,pins)};
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
