@@ -31,25 +31,3 @@
                  {
                      xAllCoresReady = pdFALSE;
                      break;
-@@ -1548,18 +1549,9 @@
- 
-     void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID )
-     {
--        uint64_t ulRegVal = 0;
--        uint32_t ulCoreMask = ( 1UL << ucCoreID );
--        ulRegVal |= ( (ulCoreMask & 0xFFFF) | ( ( ulInterruptID & 0xF ) << 24U ) );
--        __asm volatile (
--            "str  x0, [ sp, #-0x10 ]!       \n"
--            "mov  x0, %0                    \n"
--            "svc  %1                        \n"
--            "ldr  x0, [ sp ], # 0x10        \n"
--            :
--            : "r" ( ulRegVal ), "i" ( portSVC_INTERRUPT_CORE )
--            : "memory", "w1"
--        );
-+        register uint64_t ulRegVal __asm( "x0" ) = a733_smp_sgi_value( ulInterruptID, ucCoreID );
-+        __asm volatile ( "svc %1" : "+r" ( ulRegVal )
-+                         : "i" ( portSVC_INTERRUPT_CORE ) : "memory" );
-     }
- 
- /*-----------------------------------------------------------*/

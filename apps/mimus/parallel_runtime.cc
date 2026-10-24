@@ -21,6 +21,8 @@ QueueHandle_t jobs, done;
 StaticTask_t worker_state;
 StackType_t worker_stack[8192];
 TaskHandle_t owner;
+// Cores of the owner (the recognition task) and of the worker.
+unsigned owner_core, worker_core = 1;
 uint64_t submitted, completed, async_jobs;
 bool busy, async_pending;
 
@@ -28,7 +30,7 @@ void worker(void *) {
     for (;;) {
         Job job;
         configASSERT(xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE);
-        configASSERT(portGET_CORE_ID() == 1);
+        configASSERT(portGET_CORE_ID() == worker_core);
 #ifdef SUNSTONE_MIMUS_SUPERVISED
         mimus_native_checkpoint();
 #endif
@@ -44,7 +46,7 @@ void worker(void *) {
 }
 void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending);
-    configASSERT(portGET_CORE_ID() == 0);
+    configASSERT(portGET_CORE_ID() == owner_core);
 #ifdef SUNSTONE_MIMUS_SUPERVISED
     mimus_native_checkpoint();
 #endif
@@ -83,7 +85,7 @@ bool async_available() {
 }
 bool async_start(TaskFn task, void *context, bool /*sync*/) {
     if (!async_available()) return false;
-    configASSERT(task && portGET_CORE_ID() == 0);
+    configASSERT(task && portGET_CORE_ID() == owner_core);
 #ifdef SUNSTONE_MIMUS_SUPERVISED
     mimus_native_checkpoint();
 #endif
@@ -106,15 +108,20 @@ void async_wait() {
 }
 }
 
-void mimus_parallel_init() {
+void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
+    configASSERT(owner_index != worker_index && owner_index < configNUMBER_OF_CORES &&
+                 worker_index < configNUMBER_OF_CORES);
+    owner_core = owner_index;
+    worker_core = worker_index;
     jobs = xQueueCreateStatic(1, sizeof(Job), jobs_storage, &jobs_state);
     done = xQueueCreateStatic(1, sizeof(uint64_t), done_storage, &done_state);
     configASSERT(jobs && done);
     configASSERT(xTaskCreateStaticAffinitySet(worker, "asr_worker", 8192, nullptr, 3,
-                                              worker_stack, &worker_state, 2));
+                                              worker_stack, &worker_state,
+                                              UBaseType_t{1} << worker_core));
 }
 void mimus_parallel_bind() {
-    configASSERT(!owner && portGET_CORE_ID() == 0);
+    configASSERT(!owner && portGET_CORE_ID() == owner_core);
     owner = xTaskGetCurrentTaskHandle();
     mimus::asr::SetParallelFor(dispatch, workers);
 #ifndef SUNSTONE_MIMUS_NO_ASYNC
@@ -125,8 +132,8 @@ void mimus_parallel_report() {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending &&
                  completed == submitted);
     char line[96];
-    snprintf(line, sizeof(line), "WORKERS count=2 jobs=%llu core_mask=3\n",
-             static_cast<unsigned long long>(completed));
+    snprintf(line, sizeof(line), "WORKERS count=2 jobs=%llu core_mask=%x\n",
+             static_cast<unsigned long long>(completed), (1u << owner_core) | (1u << worker_core));
     platform_puts(line);
     // Separate record: existing checks match the WORKERS line exactly.
     snprintf(line, sizeof(line), "WORKERS async=%llu\n",

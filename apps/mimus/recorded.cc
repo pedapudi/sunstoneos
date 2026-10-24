@@ -19,6 +19,11 @@
 #include <cstdio>
 #include <optional>
 #include <string>
+#ifdef SUNSTONE_MIMUS_NATIVE
+// The integrated OS image supplies its CPU clock record; other native images
+// leave the weak reference null and print no clock line.
+extern "C" __attribute__((weak)) int os_cpu_clock_line(char *line, size_t bytes);
+#endif
 static void report_clock()
 {
 #if !defined(MONITOR_QEMU) && !defined(SUNSTONE_MIMUS_NATIVE)
@@ -42,6 +47,9 @@ static void report_clock()
              static_cast<unsigned long long>(configured_hz),
              static_cast<unsigned long long>(COUNTER_HZ));
     platform_puts(line);
+#elif defined(SUNSTONE_MIMUS_NATIVE)
+    char line[192];
+    if (os_cpu_clock_line && os_cpu_clock_line(line, sizeof(line)) > 0) platform_puts(line);
 #endif
 }
 static bool recognition_error(const char *message)
@@ -151,6 +159,10 @@ static bool recognize(std::span<const uint8_t> inputs[3], std::span<uint8_t> int
     uint64_t start = asr::platform::MonotonicNanos();
     auto result = recognizer->Recognize(*audio, arena, stop);
     uint64_t elapsed = (asr::platform::MonotonicNanos() - start) / 1000;
+#ifdef SUNSTONE_MIMUS_NATIVE
+    // A second record shows whether the clock changed during recognition.
+    report_clock();
+#endif
     if (!result) return recognition_error(asr::ErrorName(result.error()));
     if(cancelled())return false;
     char metrics[192];

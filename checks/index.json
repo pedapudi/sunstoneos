@@ -788,6 +788,8 @@
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
    "docs/cpu-power.md",
+   "docs/designs/cpu-a76-dvfs-measurements.md",
+   "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
@@ -2523,6 +2525,8 @@
   ],
   "docs": [
    "docs/cpu-clock.md",
+   "docs/designs/cpu-a76-dvfs-measurements.md",
+   "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
    "docs/designs/power-authority-measurements.md"
@@ -6991,6 +6995,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -7008,6 +7013,7 @@
    "inputs"
   ],
   "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/designs/gpu-recognition-measurements.md",
    "docs/designs/gpu-recognition.md",
    "docs/designs/recognition-dispatch-measurements.md",
@@ -7030,6 +7036,7 @@
   "docs": [
    "docs/designs/bluetooth-voice-recognition-measurements.md",
    "docs/designs/bluetooth-voice-recognition.md",
+   "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -7062,6 +7069,8 @@
    "host"
   ],
   "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
+   "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-leftovers.md",
    "docs/handoff.md",
@@ -8299,6 +8308,7 @@
  "reset-latency.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/designs/cpu-fault-reset-measurements.md",
    "docs/designs/cpu-fault-reset.md",
    "docs/fault-capture.md",
@@ -8740,6 +8750,7 @@
    "sources"
   ],
   "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
    "docs/designs/smp-heterogeneous-measurements.md",
    "docs/designs/smp-heterogeneous.md",
    "docs/smp.md"
@@ -8750,6 +8761,22 @@
    "--output"
   ],
   "summary": "Count FreeRTOS SMP port instructions per operation on two QEMU cores.",
+  "usb": false
+ },
+ "smp-sgi-send.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/cpu-a76-dvfs-measurements.md",
+   "docs/designs/cpu-a76-dvfs.md",
+   "docs/smp.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Run the linked vInterruptCore of a cached eight-core image under Unicorn.",
   "usb": false
  },
  "spi-application-fixture.py": {
