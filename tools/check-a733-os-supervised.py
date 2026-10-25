@@ -47,6 +47,9 @@ PREREQUISITES = {'supervised-ram-recovery', 'os-supervised-software'}
 # Each generation of the audio image first captures up to 5 s and then
 # recognizes it; at the recorded 4.41 times real time two fit the window.
 MAX_AUDIO_GENERATIONS = 2
+# The NPU report needs one request and one 104-byte reply. With less than
+# this left of the capture window it is not requested.
+NPU_REPORT_MIN_SECONDS = 0.1
 
 
 def source_files():
@@ -203,11 +206,11 @@ def npu_profile(prepared):
 def read_npu_report(device, same, deadline, prepared, evidence, record, save, now=time.monotonic):
     """One operation 6 exchange after the capture; any error ends the run.
 
-    A capture that used the whole window leaves no time for the request, so
-    none is sent. A retained NPU failure fails the board, after which USB0
+    A capture that leaves less than NPU_REPORT_MIN_SECONDS of its window
+    gets no request. A retained NPU failure fails the board, after which USB0
     sends nothing, so that outcome appears here as an error with no report."""
-    if now() >= deadline:
-        record['npu_report'] = {'state': 'not-requested', 'reason': 'capture window ended'}
+    if deadline - now() < NPU_REPORT_MIN_SECONDS:
+        record['npu_report'] = {'state': 'not-requested', 'reason': 'less than 100 ms of the capture window left'}
         save()
         return
     record['npu_report'] = 'unobserved'

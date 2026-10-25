@@ -412,8 +412,9 @@ report once after a completed capture when the image's link check records
 the NPU profile, and saves it as `npu-report.bin` with its decoding and
 classification in the run record. A report of another session keeps its
 decoding error instead of a classification. A retained failure leaves that
-request unanswered, which ends the run. A capture that ends the 59-second
-window, and any image without the profile, gets no operation 6 request.
+request unanswered, which ends the run. A capture that leaves less than
+100 ms of the 59-second window, and any image without the profile, gets no
+operation 6 request.
 
 [os-npu.py](../checks/os-npu.py) runs the linked image's session validator,
 constructor, allocator, startup binding, application calls, task frames,
@@ -921,8 +922,8 @@ A modeled USB0 device then serves the capture callback. With the NPU profile
 set in a copy of the frozen link check, operation 6 follows a completed
 capture once, after any fault report, and its matched and mismatch reports
 are classified. A report of another session is kept unclassified, an
-unanswered request ends the run, and a failed capture or an ended capture
-window sends no request. Without the profile no operation 6 is sent.
+unanswered request ends the run, and a failed capture or one that leaves
+less than 100 ms of the window sends no request. Without the profile no operation 6 is sent.
 In the CPU clock build it also prepares an A2 grant for a modeled board
 `3-3` and refuses an approval for another port or session, a B1 record whose
 bin tops at 1,508 MHz, a grant above the approval, the A1 step at 2,002 MHz,
