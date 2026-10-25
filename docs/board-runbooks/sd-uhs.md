@@ -83,6 +83,19 @@ the earlier storage-read bundles.
    requests at fixed pseudo-random offsets below sector 4,194,304 (2 GiB) and
    32 single sectors. The record's `storage_read_throughput` holds MB/s per
    pattern and the per-block and per-request costs.
+
+   Through the board queue, `common/bundle-run.py` takes the timeout and
+   the three `--artifact` paths from
+   `$PY $SR/tools/storage-read-queue-plan.py --bundle <bundle-A> --format shell`.
+   The checker refuses a claim whose submission does not cover the bundle's
+   `prepared.json`, `image.elf` and `launch.bin`. The timeout is the sum of the
+   checker's own bounds: every FEL request bounded by `fel_timeout`, the
+   59-second capture window, the refusal path and 60 seconds of setup. It is
+   638 s for the bundles of 2026-10-25. After the capture window every outcome
+   but a clean refusal holds the port lock and claim, so the timeout ends that
+   hold. `checks/storage-read-queue-plan.py` builds the queue row in a scratch
+   database and requires the checker's claim check to refuse it without the
+   artifacts and accept it with them.
 3. Remove board power, restore it, and bring the board to FEL and DDR again.
 4. Lifetime B: the same command with `<bundle-B>` and `$S/sd-uhs-b-sdr104`.
 5. Remove board power. This step is mandatory even after a failure: the card
@@ -97,6 +110,39 @@ the earlier storage-read bundles.
 Each command runs once. A retained or failed lifetime A stops the sequence
 before B. A retained lifetime B is recorded and not retried; its recovery is
 step 5.
+
+## How the result reaches the host
+
+The single-core image does not return to the ROM. After `exe`, it takes over
+the ROM's USB0 device controller (start mode 2): one soft disconnect, a device
+reset, and enumeration as a new device, product `sunstoneos native SD0 read`,
+serial `sunstoneos-a733-storage-read`, `bcdDevice` 0x0100. The checker waits
+up to 59 s for that instance, sends the read requests and stores each reply.
+If the original FEL instance is still present and unchanged at the end of the
+window, it makes one FEL read of the launcher's report at `0x52d00`, which
+answers only if the launcher refused before leaving the ROM. Every other
+outcome, success included, quarantines the port and holds it.
+`--supervised-manual-reconnect` names that recovery: the operator removes
+whole-board power before the port or the card is used again. On boards whose
+USB-C cable is their only supply, that is a power removal and DRAM is lost.
+A successful capture survives it, because the replies are on the host first.
+A stop before enumeration does not: the image's `a733_smp_stop` writes its
+status to DRAM at `0x42000000` and waits in WFE. FEL cannot read that address
+while the CPU is outside the ROM, and the power removal erases it.
+
+Lifetime A on 2026-10-25
+(`board-session-20261025-14/port-3-3/sd-uhs-a-hs-2/`) ran `exe` 12.2 s after
+the version request. For 59 s the original instance `003:051` stayed present
+with the same identity, so the image never made its USB0 disconnect. The
+report read then failed in `usb_bulk_send` with a timeout: the ROM's
+endpoints were still configured, but no code serviced them, so the launcher
+had not refused and the CPU had left the ROM. The image stopped or stalled
+after entry and before the takeover's disconnect: in startup, in the PMIC
+and supply checks, or in a takeover check that refused. Rank 9's first two
+returning USB images stopped at such checks and could report them because
+they returned to the ROM (`apps/usb-returning/README.md`). This record cannot
+tell where the image stopped.
+
 
 ## Predictions
 
