@@ -257,18 +257,19 @@ the past, and the timer fired N more times in a row. The tick IRQ
 - After the first tick handler call it reads `ISTATUS` again. When the
   condition still holds, the IRQ was late and at least one more period is
   due. It makes at most three tick handler calls in all, as
-  `hrtimer_interrupt` retries at most three times (`hrtimer.c` 1921–1922), so
-  one comparison of the counter with the next deadline plus a period decides
-  whether a third call is due, where `hrtimer_forward` divides
-  (`kernel/time/hrtimer.c` 1042–1074). The level-sensitive timer interrupt is taken again
-  for any period still due.
+  `hrtimer_interrupt` retries at most three times (`hrtimer.c` 1921–1922),
+  so one comparison of the counter with the next deadline plus a period
+  decides whether a third call is due, where `hrtimer_forward` divides
+  (`kernel/time/hrtimer.c` 1042–1074). The level-sensitive timer interrupt
+  is taken again for any period still due.
 - Each call advances the compare value by one period, so the next deadline
   stays in phase. Linux programs its next event from the current count
   instead (`arm_arch_timer.c` 741–757); keeping the phase keeps the kernel's
   tick count equal to the elapsed periods.
-- A counter read taken early can only lower the count of due periods. The first call relies on the IRQ mask of exception entry;
-  the further calls mask IRQs again, because the tick handler's FromISR
-  critical section clears `PSTATE.I`.
+- A counter read taken early can only lower the count of due periods. The
+  first call relies on the IRQ mask of exception entry; the further calls
+  mask IRQs again, because the tick handler's FromISR critical section
+  clears `PSTATE.I`.
 
 ## Correctness evidence
 
