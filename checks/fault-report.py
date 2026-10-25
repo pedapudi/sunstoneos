@@ -40,6 +40,8 @@ def device_rules():
     text = (ROOT / 'apps/mimus-board/usb0.c').read_text()
     op = int(re.search(r'#define FAULT_OP (\d+)u', text)[1])
     condition = re.search(r'if\(op==FAULT_OP\)\{\s*if\(([^)]*)\)stop\(\);', text)[1]
+    # The NPU report (operation 6) refuses the same fields, so Device serves both.
+    assert re.search(r'if\(op==OS_NPU_REPORT_OP\)\{\s*if\(([^)]*)\)stop\(\);', text)[1] == condition
     # Where usb0.c assembles each named field from the request bytes.
     assert 'request[4+i]<<(8*i)' in text and 'request[2]|(unsigned)request[3]<<8' in text
     assert 'request[8+i]<<(8*i)' in text and 'op=request[0]' in text
@@ -75,11 +77,15 @@ class Stopped(OSError):
 
 
 class Device:
-    """Operation 5 of usb0.c, served in bounded fragments, with a transfer log."""
+    """Operation 5 of usb0.c, served in bounded fragments, with a transfer log.
+
+    response is the operation 5 report, or a map from operation (5 or 6, whose
+    request rules are the same) to the report that operation returns."""
 
     def __init__(self, response, fragment, *, after=b'', change_at=None, stop=False):
         self.queue = bytearray()
-        self.response, self.after, self.fragment = response, after, fragment
+        self.responses = response if isinstance(response, dict) else {FAULT_OP: response}
+        self.after, self.fragment = after, fragment
         self.stop = stop
         self.writes, self.reads, self.transfers = [], [], 0
         self.change_at = change_at
@@ -88,9 +94,9 @@ class Device:
         assert endpoint == 0x02 and 1 <= timeout <= 500
         self.transfers += 1
         self.writes.append(bytes(packet))
-        ok = len(packet) == 16 and packet[0] == FAULT_OP and not any(packet[i] for i in ZERO_BYTES)
+        ok = len(packet) == 16 and packet[0] in self.responses and not any(packet[i] for i in ZERO_BYTES)
         if ok and not self.stop:
-            self.queue += self.response + self.after
+            self.queue += self.responses[packet[0]] + self.after
         else:
             self.stop = True
         return len(packet)

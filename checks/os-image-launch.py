@@ -20,8 +20,8 @@ then checks that:
   (operation 6) once after a completed capture, saves it and records its
   decoding and classification; a report of another session is kept with
   its decoding error, a device that never answers ends the run, a failed
-  capture or an ended capture window sends no request, and an image without
-  the profile never sends operation 6;
+  capture, or one that leaves less than 100 ms of its window, sends no
+  request, and an image without the profile never sends operation 6;
 - in the CPU clock build (docs/designs/cpu-a76-dvfs.md), a grant that names
   a cluster is prepared only with an approval record bound to one board, the
   image, the session and one step, which cites that board's B1 record, and
@@ -524,31 +524,9 @@ def main():
                       mismatches, 0, 0, 1, 4096, kept, tool.npu_report.PATTERN)
             return struct.pack(tool.npu_report.LAYOUT, *fields) + bytes(range(32))
 
-        class Device:
-            """Operations 5 and 6 of usb0.c: each fixed report for its 16-byte
-            request with zero fields, in 64-byte fragments; anything else
-            stops the device, which then answers nothing."""
-
-            def __init__(self, responses, stop=False):
-                self.responses, self.stop, self.queue, self.writes = responses, stop, bytearray(), []
-
-            def write(self, endpoint, packet, timeout):
-                assert endpoint == 0x02 and 1 <= timeout <= 500
-                self.writes.append(bytes(packet))
-                op = packet[0]
-                if not self.stop and op in self.responses and packet == struct.pack('<BBHIQ', op, 0, 0, 0, 0):
-                    self.queue += self.responses[op]
-                else:
-                    self.stop = True
-                return len(packet)
-
-            def read(self, endpoint, size, timeout):
-                assert endpoint == 0x81 and 1 <= timeout <= 500 and size % 512 == 0
-                if self.stop or not self.queue:
-                    raise faults.Stopped('modeled transfer timeout')
-                part = bytes(self.queue[:min(size, 64)])
-                del self.queue[:len(part)]
-                return part
+        def Device(responses, stop=False):
+            """checks/fault-report.py's operation 5 and 6 model, in 64-byte fragments."""
+            return faults.Device(responses, 64, stop=stop)
 
         matched = npu_bytes()
         device = Device({6: matched})
@@ -601,12 +579,15 @@ def main():
         assert not device.writes and 'npu_report' not in records[-1]
         cases['failed-capture-sends-no-operation-6'] = True
 
-        device = Device({6: matched})
-        window[0] = 0
-        record = launch('npu-window-ended', with_npu)
-        window[0] = 60
-        assert not device.writes and record['npu_report'] == {'state': 'not-requested', 'reason': 'capture window ended'}
+        for name, seconds in (('npu-window-ended', 0), ('npu-window-short', 0.05)):
+            device = Device({6: matched})
+            window[0] = seconds
+            record = launch(name, with_npu)
+            window[0] = 60
+            assert not device.writes and record['npu_report'] == {
+                'state': 'not-requested', 'reason': 'less than 100 ms of the capture window left'}, record['npu_report']
         cases['no-operation-6-after-the-capture-window'] = True
+        cases['no-operation-6-with-under-100-ms-left'] = True
     finally:
         (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
          tool.combined.capture_device, tool.supervisor.base.fel_request) = saved
