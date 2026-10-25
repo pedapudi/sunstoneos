@@ -8,14 +8,15 @@ and 839 µs for the first step), 1,268 permille of the step's own wire time; 110
 stays open for writes. The boards stay untouched until the user reports both
 reconnected.
 
-**Reconnect request, port 3-1:** remove every power source, the separate 5 V
-supply as well as USB, then reconnect the board in FEL. Then run set
-`~/.cache/sunstoneos/evidence/board-bundles-20261024-11/`, in a new session
-`board-session-20261024-11/port-3-1`. The steps are cold DDR, then
-`gpu-provider-ready`, then `gpu-power-only` (`ade71834`). That image writes the
-vendor CORE6 delay row and takes 35-word read-only snapshots. `gpu-power-identity`
-runs only if both cycles reach `core_status=0x8`. The set merged into bringup at
-`12c9f746`.
+**Port 3-1, third lifetime** (session `board-session-20261024-11/port-3-1`,
+set `board-bundles-20261024-11`). Cold DDR and GPU provider readiness passed.
+The delay-row probe (`ade71834`) failed like the earlier one: CORE6 status
+stayed 0 after the delay row, after PWCR 0 and after policy 8, and the final
+poll timed out (`step=38`). The snapshot before any write shows that the CORE6
+delay row already holds the vendor values at reset, so a missing delay row is
+ruled out. CORE6 `+0x10` reads 1 where TOP5 reads 0, and TOP5's MISR reads
+0x100 (its device accepted) where CORE6's reads 0. The claim is held, the
+lifetime has ended, and analysis continues on `work/gpu-core6-c-1024`.
 
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
