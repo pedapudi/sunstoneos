@@ -76,6 +76,26 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**CPU top operating points, step 1 passed on port 3-3** (set
+`cpu-top-opp-20261025/step1-set`, `board-session-20261025-17/port-3-3`,
+branch `work/cpu-top-opp-1025`). The kernel check passed. With cores 6 and 7
+off, CPU-B went from 1014 MHz to 1404 MHz (PLL `0xf8803600`) and back to
+1014 MHz (`0xf8802700`) at 800 mV, with no PMIC write. The clock read-back
+words matched, and every sensor read about 39 °C before and after. The
+vendor top points for bin 4 are CPU-L 1794 MHz at 1000 mV, CPU-B 2002 MHz
+at 1050 mV and DSU 1274 MHz (`docs/designs/cpu-top-opp.md`); steps 2 to 6
+climb there.
+
+**Clock audit** (`work/clock-audit-1025`, `docs/clock-audit.md`): MBUS reads
+600 MHz after the cold DDR start but 400 MHz after every ROM return, and no
+SunstoneOS code writes it. Every image after the first in a lifetime has
+therefore run the memory bus at two thirds of boot0's rate, which confounds
+the ShuffleNetV2 852 MHz timing. G2D (100 against 300 MHz), the video engine
+and JPEG (unread against 624 MHz) and SDIO (25 against up to 208 MHz) are
+below the vendor rates. The board's single LPDDR5 chip has no part number in
+the schematic, and no vendor DRAM set faster than 2040 MHz exists for its
+strap.
+
 **GPU firmware-start step 1 passed on port 3-1** (set `board-bundles-20261025-18`,
 `board-session-20261025-14/port-3-1`, branch `work/gpu-fw-start-1025`). The
 probe-read on the vendor-default path made all 15 accesses, after CORE6 had
