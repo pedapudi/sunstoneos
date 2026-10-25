@@ -237,6 +237,20 @@ Merged on 2026-10-25:
   equal the clean capture. The new EL1 entry (VPIDR/VMPIDR_EL2, CNTHP_CTL_EL2,
   zeroed active priorities, nTWE/nTWI) and the RWP-waiting controller have
   now run on all eight cores.
+- **Performance session on port 3-3** (`board-session-20261025-10/port-3-3`,
+  sets `multicore-performance-session-c4eadf9f`, three control and three
+  changed runs, alternating):
+  - every run completed (32 rounds on every core, no failures), and all
+    seven 91-word captures equal the clean capture;
+  - A55/A76 counter skew was 3 to 8 ticks;
+  - the late-tick change behaved as predicted (2 IRQs for 5 kernel ticks).
+
+  The pass criterion failed: the changed image was lower on every core in
+  only 6, 5 and 6 of 8 cores per pair. The median change per core was −7%,
+  −12%, −9%, −17%, −44%, −28%, −61% and +2%, with single runs ranging from
+  −71% to +361%. The 64-pair figure is dominated by lock contention under
+  eight cores, not by barrier cost. The four changes stay off `bringup` until
+  an uncontended per-core measurement exists.
 - `work/mc-perf-1025` (lock DSBs, IRQ-exit barriers, wake placement,
   missed-tick catch-up) stays held for the board session in
   `docs/board-runbooks/multicore-performance-session.md`.
