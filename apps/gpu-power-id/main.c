@@ -8,6 +8,9 @@
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
 
+/* GPU_POWER_ONLY builds the power-only variant: TOP and CORE ON with CORE
+ * status 8, then OFF and provider park, with no access to the GPU register
+ * window at 0x01800000 (README.md). */
 #define GPU_CLIENT 7u
 #define GPU_BASE UINT32_C(0x01800000)
 #define EXPECTED_BVNC (UINT64_C(36) << 48 | UINT64_C(56) << 32 | UINT64_C(104) << 16 | 183)
@@ -15,7 +18,9 @@
 static struct a733_gpu_platform_native native;
 static struct a733_gpu_platform gpu;
 static uint64_t last_now;
+#ifndef GPU_POWER_ONLY
 static unsigned id_reads;
+#endif
 
 static _Noreturn void gpu_fail(const char *reason)
 {
@@ -46,6 +51,7 @@ static void before(void)
     last_now = now;
 }
 
+#ifndef GPU_POWER_ONLY
 /* Only the identity registers are accessible to this consumer. The actual
  * native translation and access width are checked before each ordered read. */
 static uint64_t id_read(unsigned offset, unsigned width)
@@ -66,6 +72,7 @@ static uint64_t id_read(unsigned offset, unsigned width)
     before();
     return value;
 }
+#endif
 
 static void off_proof(void)
 {
@@ -92,6 +99,12 @@ void gpu_power_id_client(void *unused)
     while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
     if (result != 1) gpu_fail("GPU ON poll");
 
+#ifdef GPU_POWER_ONLY
+    /* The last controller read is the CORE status poll; ON requires 8. */
+    const uint32_t core_status = gpu.power.last_value;
+    if (gpu.phase != A733_GPU_PLATFORM_ON || gpu.power.phase != A733_GPU_POWER_ON || core_status != 8)
+        gpu_fail("GPU CORE status");
+#else
     uint64_t raw = id_read(0x20, 8), bvnc = raw;
     uint32_t revision = 0, core = 0;
     if (!(raw >> 48)) {
@@ -101,6 +114,7 @@ void gpu_power_id_client(void *unused)
                (uint64_t)((revision >> 8) & 255) << 32 |
                (uint64_t)((core >> 8) & 255) << 16 | (core & 255);
     }
+#endif
 
     /* No firmware was constructed or booted, and no GPU command/DMA backing
      * exists. The admitted clean initial state is required for this unwind. */
@@ -119,6 +133,12 @@ void gpu_power_id_client(void *unused)
     before();
 
     struct bb_line line;
+#ifdef GPU_POWER_ONLY
+    bb_line_start(&line, "GPU power");
+    bb_line_hex(&line, "core_status", core_status);
+    bb_line_end(&line); bb_power_print(&line);
+    platform_puts("COMPLETE GPU power only: CORE status 8, OFF and provider parked\n");
+#else
     bb_line_start(&line, "GPU identity");
     bb_line_hex(&line, "raw", raw);
     bb_line_hex(&line, "bvnc", bvnc);
@@ -130,6 +150,7 @@ void gpu_power_id_client(void *unused)
     bb_line_dec(&line, "reads", id_reads);
     bb_line_end(&line); bb_power_print(&line);
     platform_puts("COMPLETE GPU power identity: OFF and provider parked\n");
+#endif
     platform_exit(0);
 }
 

@@ -243,6 +243,41 @@ it does not simulate physical PCK handshakes or prove GPU execution. No new nati
 image, hardware access or retry was made for this correction.
 
 
+## An unpowered GPU core is the leading hypothesis for both failed GPU runs
+
+Two GPU images started on a board and did not return:
+
+- the power/identity probe, ELF `fd3d5839…`, on port 3-1, observed for
+  30 seconds;
+- the finite GPU computation, ELF
+  `2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d` from
+  `gpu-returning-repeat-fix-20261019/build/return.elf`, on port 3-3, observed
+  for 90 seconds.
+
+Both were built before the controller gained CORE6 control (commit
+`9bd65b98`). Each powered GPU_TOP (domain 5) and never wrote CORE6 policy 8
+before its first access to the GPU register window at `0x01800000`. The
+leading hypothesis is that the first GPU register read stalled the CPU because
+the core domain was unpowered. A read whose target cannot respond does not
+complete and raises no exception, so no bounded failure path runs and no
+report is written. The probe's own limits argue against an ordinary bounded
+failure: its client deadline is 1.5 seconds from monitor entry and the
+returning CPU monitor's deadline is 2 seconds, so a refused step would have
+reported and returned well inside the 30-second observation.
+
+The hypothesis is not proven. Neither run produced a native report, so the
+stage at which each stopped is unknown, and a stop before the GPU access
+(entry, provider readiness or the TOP transition) remains possible.
+
+The [power-only variant](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
+of the diagnostic separates the two explanations. It powers TOP and CORE,
+checks CORE status 8, powers both OFF and releases them, and never accesses
+the GPU register window. Following the lowest-recovery-risk order of
+AGENTS.md, it runs before any identity probe. If it returns, CORE power
+control works on that board and a later identity probe tests the register
+read alone. If it does not return, the failure lies in power control and
+involves no GPU register access.
+
 ## CORE ownership follows the selected BXM adapter
 
 The selected `rgx_sunxi` source defines `USE_FPGA` unconditionally at

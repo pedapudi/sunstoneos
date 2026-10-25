@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Build the GPU identity consumer on the qualified returning PMIC platform."""
+"""Build the GPU identity consumer, or with --power-only the power-only
+variant that never accesses the GPU register window, on the qualified
+returning PMIC platform."""
 import argparse
 import hashlib
 import json
@@ -50,6 +52,8 @@ def shared_layouts(path, names):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--power-only', action='store_true',
+                        help='TOP and CORE ON, CORE status 8, OFF and release; no GPU register access')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -84,7 +88,8 @@ def main():
                     matches.append(item)
         assert len(matches) == 1, (source, symbol, matches)
         obj = out / f'new-{i}.obj'
-        command = flags + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
+        variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
+        command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
         replacements[matches[0]['object']] = str(obj)
@@ -149,7 +154,10 @@ def main():
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
-              'expect': 'COMPLETE GPU power identity: OFF and provider parked',
+              'variant': 'power-only' if args.power_only else 'identity',
+              'gpu_register_window_access': not args.power_only,
+              'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
+                         else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))
