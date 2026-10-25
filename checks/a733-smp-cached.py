@@ -13,7 +13,16 @@ counts the calls of vInterruptCore and woken the entries of prvYieldForTask
 (a task made ready that must run now) during the counted call. tick_by_wakes
 separates the tick handler's calls that woke nothing, those taken while the
 scheduler was suspended, which only pend the tick, and those that woke a
-task, whose SGIs are required preemptions.
+task, whose SGIs are required preemptions. irq_round_trip counts each IRQ
+from its vector entry to its exception return on the taking core, grouped by
+interrupt ID and by whether the exit path called vTaskSwitchContext; the tick
+group also reports how many tick handler calls the IRQs made.
+
+With --late-ticks N, once the kernel tick count reaches 16 and core 0 has no
+IRQ in progress, the model counter jumps to N tick periods past the pending
+tick deadline, so N + 1 periods are due when the next tick IRQ arrives;
+late_catch_up then gives the tick IRQs, tick handler calls and instructions,
+counted from that IRQ, that the kernel needs to account for them.
 """
 import argparse
 import ctypes
@@ -89,6 +98,7 @@ def main():
     p.add_argument('--cold-vectors-only',action='store_true')
     p.add_argument('--image',type=Path,help='Reuse preserved ELF without rebuilding')
     p.add_argument('--count',action='store_true',help='Count instructions per kernel and port call')
+    p.add_argument('--late-ticks',type=int,default=0,help='Make one tick IRQ this many tick periods late')
     a=p.parse_args();e=a.evidence.resolve()
     if a.image:
         e.mkdir(parents=True,exist_ok=False);image=a.image.resolve()
@@ -96,7 +106,7 @@ def main():
     else:
         assert a.freertos;image=build(e,a.freertos)
     if a.build_only:print(f'BUILT {image}');return
-    try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume,a.count)
+    try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume,a.count,a.late_ticks)
     except Exception as error:
         (e/'failure.txt').write_text(repr(error)+'\n');raise
     (e/'result.json').write_text(json.dumps(result,indent=2)+'\n')
@@ -129,6 +139,7 @@ class Machine:
         self.versions={};self.exclusive=[None]*8
         self.decoded={};self.decoder=Cs(CS_ARCH_ARM64,CS_MODE_ARM)
         self.counting=count;self.calls=[[] for _ in range(8)];self.exceptions=[[] for _ in range(8)]
+        self.irq_samples=[[] for _ in range(8)];self.irq_done=[];self.late_ticks=0;self.late_applied=None
         self.samples={name:[] for name in COUNTED}
         self.entries={self.symbols[n]:n for n in COUNTED if n in self.symbols}
         self.trace=[];self.sticky_sif=None;self.sif_cleared=set();self.el3_enabled=set();self.el1_enabled=set();self.first_task=set()
@@ -190,11 +201,21 @@ class Machine:
         m[f'spsr_el{level}']=u.reg_read(UC_ARM64_REG_NZCV)|m['daif']|(old*4+(m['spsel'] if old else 0))
         m[f'esr_el{level}']=esr
         self.exceptions[c].append(irq)
+        if irq and self.counting:
+            self.irq_samples[c].append({'depth':len(self.exceptions[c]),'intid':None,'switched':0,
+                'counts':dict.fromkeys(('instructions','svc','dsb','dmb','isb','tick_handlers'),0)})
         offset=(0x200 if m['spsel'] else 0) if old==level else 0x400
         if irq:offset+=0x80
         m['currentel']=level*4;m['spsel']=1;m['daif']=0x3c0
         u.reg_write(UC_ARM64_REG_SP,m[f'sp_el{level}'])
         u.reg_write(UC_ARM64_REG_PC,m[f'vbar_el{level}']+offset)
+    def timer_level(self,c):
+        # Core 0's timer PPI 30 is level-sensitive: it is pending while the
+        # timer condition holds, and a compare or control write that ends the
+        # condition also ends the pending state.
+        m=self.regs[c]
+        if m['cntp_ctl_el0']&3==1 and self.clock>=m['cntp_cval_el0']:self.pending[c].add(30)
+        else:self.pending[c].discard(30)
     def changed(self,a,size):
         for line in range(a//64,(a+size-1)//64+1):self.versions[line]=self.versions.get(line,0)+1
     def memory(self,u,access,a,size,value,c):
@@ -257,7 +278,12 @@ class Machine:
             elif name=='icc_iar1_el1':
                 choices=self.pending[c]
                 v=min(choices) if choices else 1023
-                if v<1020:choices.remove(v);self.irq_active[c]=v
+                if v<1020:
+                    choices.remove(v);self.irq_active[c]=v
+                    if self.irq_samples[c]:self.irq_samples[c][-1]['intid']=v
+            elif name=='cntp_ctl_el0':
+                # ISTATUS (bit 2) reports the timer condition.
+                v=m[name]&~4|(4 if m[name]&1 and self.clock>=m['cntp_cval_el0'] else 0)
             else:
                 assert name in m,('unknown sysreg',c,name,hex(a));v=m[name]
             self.put(c,dest,v);skip=True
@@ -285,6 +311,7 @@ class Machine:
                 target=(v>>16)&255;assert target<8 and v&0xffff==1
                 self.pending[target].add(0)
             if name=='icc_eoir1_el1':assert self.irq_active[c]==v;self.irq_active[c]=None
+            if name in ('cntp_cval_el0','cntp_ctl_el0') and not c:self.timer_level(c)
             skip=True
         elif op in ('isb','dsb','dmb','tlbi','dc','ic','sev','sevl','yield'):skip=True
         elif op in ('wfe','wfi'):
@@ -335,6 +362,13 @@ class Machine:
             if a==self.symbols['vPortRecursiveLock']:counts['lock_calls']+=1
             if a==self.symbols['vInterruptCore']:counts['sgi_sends']+=1
             if a==self.symbols['prvYieldForTask']:counts['woken']+=1
+        samples=self.irq_samples[c]
+        if samples and samples[-1]['depth']==len(self.exceptions[c]):
+            sample=samples[-1];counts=sample['counts'];counts['instructions']+=1
+            if op in counts:counts[op]+=1
+            if a==self.symbols['vTaskSwitchContext']:sample['switched']=1
+            if a==self.symbols['FreeRTOS_Tick_Handler']:counts['tick_handlers']+=1
+            if op=='eret':self.irq_done.append(samples.pop())
     def counts(self):
         result={name:{'calls':len(samples),**{key:statistics.median_low(s[key] for s in samples)
             for key in samples[0]}} for name,samples in self.samples.items() if samples}
@@ -347,6 +381,24 @@ class Machine:
             'pended':{'ticks':sum(s['suspended'] for s in ticks),'instructions':median([s for s in ticks if s['suspended']],'instructions')},
             'woke_tasks':{'ticks':len(woke),'sgi_sends_total':sum(s['sgi_sends'] for s in woke),
                 **{key:median(woke,key) for key in ('instructions','woken','sgi_sends')}}}
+        groups={}
+        for sample in self.irq_done:
+            name=('sgi' if sample['intid']==0 else 'tick' if sample['intid']==30 else f"intid_{sample['intid']}")
+            groups.setdefault(name+('_switched' if sample['switched'] else '_returned'),[]).append(sample['counts'])
+        result['irq_round_trip']={name:{'irqs':len(rows),**{key:median(rows,key) for key in
+            ('instructions','svc','dsb','dmb','isb')},**({'tick_handlers':sum(r['tick_handlers'] for r in rows)}
+            if name.startswith('tick') else {})} for name,rows in sorted(groups.items())}
+        ticks=[s for s in self.irq_done if s['intid']==30]
+        result['tick_irqs']={'irqs':len(ticks),'tick_handler_calls':sum(s['counts']['tick_handlers'] for s in ticks),
+            'late_ticks_injected':self.late_ticks if self.late_applied is not None else 0}
+        if self.late_applied is not None:
+            irqs=calls=instructions=0
+            for sample in self.irq_done[self.late_applied:]:
+                if sample['intid']!=30:continue
+                irqs+=1;calls+=sample['counts']['tick_handlers'];instructions+=sample['counts']['instructions']
+                if calls>=self.late_ticks+1:break
+            result['late_catch_up']={'periods':self.late_ticks+1,'irqs':irqs,'tick_handler_calls':calls,
+                'instructions':instructions}
         return result
     def mappings(self):
         names=['a733_cached_el3_l1','a733_cached_el3_l2','a733_cached_el3_l3',
@@ -403,8 +455,7 @@ class Machine:
                 c=(index+quantum)%8;u=self.cpus[c]
                 if not self.active[c]:continue
                 m=self.regs[c]
-                if not c and m['cntp_ctl_el0']&3==1 and self.clock>=m['cntp_cval_el0']:
-                    self.pending[c].add(30)
+                if not c:self.timer_level(c)
                 if m['currentel']<=4 and not m['daif']&0x80 and m['icc_igrpen1_el1']&1 and \
                    m['icc_pmr_el1']>0xe0 and self.pending[c] and self.irq_active[c] is None:
                     self.exception(c,1,u.reg_read(UC_ARM64_REG_PC),irq=True)
@@ -418,13 +469,17 @@ class Machine:
                 return self.summary()
             if stop_clock is not None and self.clock>=stop_clock:return self.summary()
             self.clock+=1000
+            if self.late_ticks and self.late_applied is None and self.irq_active[0] is None and \
+               not self.irq_samples[0] and struct.unpack('<I',self.read(self.symbols['xTickCount'],4))[0]>=16:
+                self.clock=max(self.clock,self.regs[0]['cntp_cval_el0']+self.late_ticks*24000)
+                self.late_applied=len(self.irq_done)
             if self.missing is not None and self.mmio[0x07052008+self.missing*0x1000]==8:
                 self.clock=max(self.clock,24000001)
         raise AssertionError(('instruction budget',self.steps,[hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus]))
 
 
-def execute(image,e,stop_clock=None,resume=None,count=False):
-    machine=Machine(image,count=count)
+def execute(image,e,stop_clock=None,resume=None,count=False,late_ticks=0):
+    machine=Machine(image,count=count);machine.late_ticks=late_ticks
     for r in machine.regs:r['tpidrro_el0']=TPIDRRO_RESET
     if resume:machine.restore(resume)
     success=machine.run(stop_clock);machine.save(e/'machine.pkl')
