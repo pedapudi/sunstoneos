@@ -134,6 +134,9 @@ def manifest_cpu_clock(manifest, raw):
 def image_manifest_check(manifest, raw):
     """The OS link check of these exact bytes; returns whether audio is built in."""
     audio = manifest.get('audio')
+    # A link check from before the NPU profile has no 'npu' key: NPU is off.
+    npu = manifest.get('npu', False)
+    require(type(npu) is bool, 'The link check records the NPU profile as a boolean.')
     require(not manifest.get('radio') and not manifest.get('headset'),
             'Preparation does not yet stage the radio or Bluetooth profile and firmware.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
@@ -141,8 +144,8 @@ def image_manifest_check(manifest, raw):
             manifest.get('image_sha256') == hashlib.sha256(raw).hexdigest(),
             'Passed supervised OS link check of this image required.')
     require([a.get('name') for a in manifest.get('applications', [])] ==
-            ['mimus', 'thermal'] + (['npu'] if manifest.get('npu') else []) + (['audio'] if audio else []) and
-            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if manifest.get('npu') else []) + ([143] if audio else []),
+            ['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) and
+            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if npu else []) + ([143] if audio else []),
             'OS start list or interrupt table differs from the link check.')
     return audio
 
@@ -337,6 +340,8 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
     mimus.input_admission(record, image_hash, evidence)
     if len(raw) == OS_BYTES + NPU_BYTES:
         npu_admission(record, image_hash, raw, evidence)
+    else:
+        require('npu' not in record, 'NPU authority supplied for an image without NPU.')
     cpu_clock_admission(record, image_hash, raw, profile, evidence)
     if not audio:
         require('audio' not in record and 'dma_nonsecure_access' not in record,

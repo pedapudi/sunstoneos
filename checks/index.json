@@ -5658,6 +5658,7 @@
  "integration-gate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/validation.md"
   ],
   "library": false,
@@ -7432,6 +7433,22 @@
    "--output"
   ],
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
+  "usb": false
+ },
+ "os-npu.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/handoff.md",
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session-base",
+   "--output"
+  ],
+  "summary": "Focused linked OS NPU constructor/API checks; RTOS and device effects modeled.",
   "usb": false
  },
  "os-staged-recorded.py": {

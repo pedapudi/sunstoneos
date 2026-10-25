@@ -295,8 +295,10 @@ Power and thermal integration remains incomplete:
   or failed recognition. The OS has no dynamic GPU operating-point control
   or reusable recovery after an uncertain job; resources remain retained
   until the prescribed reset or power removal.
-- **NPU integration.** The OS start list has no NPU service. Separate NPU
-  images use a fixed 492 MHz clock and 800 mV supply configuration. The
+- **NPU integration.** Only the optional
+  [NPU catalogue service](#optional-npu-catalogue-service) adds the NPU to
+  the OS start list. NPU images use a fixed 492 MHz clock and 800 mV supply
+  configuration. The
   [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
   integrates thermal admission and orderly stop; the other NPU images have
   no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
@@ -306,6 +308,110 @@ Power and thermal integration remains incomplete:
 CPU clock and PMIC voltage board changes still need their existing individual
 approvals. Supervised manual recovery, resident watchdog recovery and physical
 thermal qualification remain separate prerequisites and evidence gaps.
+
+## Optional NPU catalogue service
+
+`SUNSTONE_A733_OS_NPU=ON` links the five-model NPU runtime into the
+supervised OS with recorded input. Configuration stops when it is combined
+with the resident lifetime, the microphone, the radio, the headset, CPU
+operating-point grants or GPU linear layers. `SUNSTONE_OS_NPU_CATALOGUE` names
+the artifact map; [npu-catalogue.py](../apps/os/npu-catalogue.py) compares
+every model, input and reference with the sizes and SHA-256 hashes in
+`tools/npu-session-models.json` before embedding them.
+`SUNSTONE_OS_NPU_CLIENT_MODEL` selects the catalogue entry whose linked input
+and reference the application client uses (default 0, the 192-byte to 72-byte
+convolution).
+
+- **Memory.** The service owns `0x47400000..0x47c00000` as one write-back
+  DMA32 pool, separate from the board's local pool. The link check refuses
+  any loaded section in that interval, and startup checks the write-back
+  mapping of every 2 MiB block before preparing the runtime.
+- **Session.** A 272-byte extension follows the 808-byte OS session. It
+  names an owner distinct from every board and thermal owner, a PCK600 client
+  other than the board's, one to eight jobs, the pool, the catalogue digest
+  and the digests of the admission, clock, power, supervision and DDR
+  records. Preparation refuses NPU authority for an image without the
+  service. A link-check record without an `npu` field describes an image
+  without it.
+- **Tasks.** A bootstrap task, one registered application client and the NPU
+  service worker run on core 1, which receives INTID 97. The bootstrap and
+  the client read the counter clock, which masks interrupts, so both start at
+  EL1t; the task privilege hook admits their entry points only while
+  `os_npu_start` creates them. The application calls (`apps/os/npu.h`) refuse
+  every other task.
+- **Thermal gate.** The OS thermal service admits a job only at the normal
+  level with all five channels read within the last second. Any other level
+  or a critical failure stops the NPU, and so does the next NPU call or
+  bootstrap step once the oldest channel reading is 5 s old. The stop is
+  terminal and leaves only CLOSE.
+- **Application client.** [npu-client.c](../apps/os/npu-client.c) loads the
+  selected model and, for each job, copies the linked input and fills every
+  output tensor with the word `0xc35a3ca5`, as the convolution SUBMIT does.
+  The runtime cleans and invalidates the output lines before the job, so an
+  output byte that the job does not write keeps its pattern byte. After the
+  job, the client compares the outputs with the linked reference, counts the
+  bytes that kept the pattern and records the SHA-256 digest of the outputs.
+- **Failure.** A mismatched or late service reply, a lost lifetime or a
+  failed stop fails the board and keeps the pool, the runtime and every
+  power and clock owner. No restart within the lifetime exists.
+
+### NPU report: USB0 operation 6
+
+A request with operation 6 and zero flags, count, offset and generation
+returns the 104-byte report of `struct os_npu_report` alone, without the
+64-byte frame header. Any other field value stops USB0, and so does
+operation 6 on an image without the service. The mimus operations 0 to 4
+and the fault report (operation 5) are unchanged; the supervised and
+resident images without the service link the same `.text` as before.
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | magic `0x5255504e` ("NPUR") |
+| 4 | 4 | version 1 |
+| 8 | 4 | size, 104 |
+| 12 | 4 | finished: 0 before the client publishes, then 1 |
+| 16 | 8 | session epoch |
+| 24 | 8 | session generation |
+| 32 | 4 | catalogue entry used by the client |
+| 36 | 4 | jobs selected by the session |
+| 40 | 4 | jobs completed and compared |
+| 44 | 4 | completed jobs whose outputs differ from the reference |
+| 48 | 4 | refused: 1 when a stop or the lifetime ended the jobs early |
+| 52 | 4 | retained: 1 after a runtime, transport or hardware failure |
+| 56 | 4 | stopped: 1 when the runtime stop completed |
+| 60 | 4 | output bytes of the last completed job |
+| 64 | 4 | of those, bytes that kept the fill pattern |
+| 68 | 4 | fill pattern, `0xc35a3ca5` |
+| 72 | 32 | SHA-256 of the last completed job's outputs |
+
+Before the client finishes, the report carries only the first four fields
+and the session identities; every other field is zero. The client writes
+the complete report once and then stores finished=1 with release ordering;
+nothing writes the report afterwards. A retained failure fails the board,
+and USB0 sends no frame after that, so its report stays in RAM.
+
+[npu-report.py](../apps/os/npu-report.py) requests and decodes the report on
+a device that a supervised launcher has already claimed, and classifies it
+as pending, matched, mismatch, refused or retained. A numerical mismatch
+therefore appears as a completed report with a nonzero mismatch count, while
+a transport error raises during the exchange and yields no report. A job
+that wrote nothing appears as a mismatch whose pattern count equals its
+output size. The OS launcher does not yet request operation 6.
+
+[os-npu.py](../checks/os-npu.py) runs the linked image's session validator,
+constructor, allocator, startup binding, application calls, task frames,
+client and USB0 exchange in an AArch64 emulator. Service replies, application
+call replies for the client cases, TinyUSB calls, scheduler and cache effects
+are modeled. With `--default-image`, it also runs operations 5 and 6 on an
+image without the service. The first task frames of the bootstrap, the
+client and the service worker carry SPSR 4 (EL1t); a frame for the same
+entry points outside `os_npu_start` carries SPSR 0 (EL0t).
+
+The supervised NPU build measured 1,999,721 bytes of `.text` and `.rodata`;
+the 2 MiB code region keeps 96,400 bytes free after the remaining read-only
+sections. The service's static state is 140,329 bytes, including three
+32 KiB task stacks and the report. No NPU job, interrupt delivery or thermal
+behavior of this image has run on a board.
 
 ## Microphone recognition
 
@@ -588,6 +694,7 @@ the interrupt table follow the options:
 | `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `headset` | 71 |
 | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
 | `SUNSTONE_A733_OS_GPU_LINEAR`, resident only, with any row above | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
+| `SUNSTONE_A733_OS_NPU`, supervised only, alone | `mimus`, `thermal`, `npu` | 71, 97 |
 
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is

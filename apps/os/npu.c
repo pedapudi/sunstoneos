@@ -25,6 +25,7 @@ static struct os_npu_application {
     uint64_t initial_deadline,end;
     unsigned attempted,started,opened,jobs;
 } npu;
+static unsigned creating; /* Only while os_npu_start creates its two tasks. */
 extern unsigned char __os_npu_pool_start[],__os_npu_pool_end[];
 static int clock_now(uint64_t *now)
 {return a733_counter_clock_now(&providers.shared.counter,now);}
@@ -172,8 +173,12 @@ static void bootstrap(void *unused)
 failed:
     (void)fail();vTaskSuspend(NULL);
 }
+/* The bootstrap and the registered client call a733_counter_clock_now, which
+ * masks DAIF, so both start at EL1t. Only their two creations in
+ * os_npu_start qualify; any other task with these entries starts at EL0. */
 int os_npu_task_privileged(void (*entry)(void *),void *context)
-{return (!context&&entry==bootstrap)||npu_service_task_privileged(entry,context)==pdTRUE;}
+{return (creating&&!context&&(entry==bootstrap||entry==os_npu_client_task))||
+    npu_service_task_privileged(entry,context)==pdTRUE;}
 int os_npu_pins(struct a733_pin_handoff *pins){return pins&&os_session_admitted();}
 int os_npu_start(void)
 {
@@ -202,8 +207,10 @@ int os_npu_start(void)
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
     if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return 0;
+    creating=1;
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
+    creating=0;
     TaskHandle_t clients[]={npu.client};
     uint64_t now;
     if(!npu.bootstrap||!npu.client||!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap)||

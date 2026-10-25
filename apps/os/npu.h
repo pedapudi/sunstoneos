@@ -49,11 +49,33 @@ int os_npu_irq_bind(struct npu_runtime *);
 /* Existing OS thermal owner only. Freshness is the minimum of all five
  * channel timestamps+1s. STOP is terminal; its first deadline is immutable. */
 void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now);
-/* Independent caller result: mismatch survives successful local shutdown. */
-struct os_npu_result {
+/* SUBMIT output fill: the word of NPU_CONVOLUTION_OUTPUT_POISON
+ * (include/npu_convolution.h), little-endian and repeated from each output
+ * tensor's first byte. The client writes it before SUBMIT; the runtime cleans
+ * and invalidates the output lines before the job, so a byte that the job does
+ * not write still holds its pattern byte afterwards. */
+#define OS_NPU_OUTPUT_PATTERN UINT32_C(0xc35a3ca5)
+/* USB0 operation 6 returns this report alone, without the 64-byte frame
+ * header. The client fills it once when it finishes and then publishes
+ * finished=1 with release ordering; nothing writes it afterwards. Before
+ * that, operation 6 returns the header and session identities with
+ * finished=0 and every other field zero. A completed job counts in jobs;
+ * a job whose outputs differ from the linked reference also counts in
+ * mismatches. retained=1 is a runtime, transport or hardware failure that
+ * kept every NPU resource. refused=1 means a thermal stop or the lifetime
+ * ended the work before the selected number of jobs. */
+#define OS_NPU_REPORT_OP 6u
+#define OS_NPU_REPORT_MAGIC UINT32_C(0x5255504e) /* "NPUR" */
+#define OS_NPU_REPORT_BYTES 104u
+struct os_npu_report {
+    uint32_t magic,version,bytes;
     atomic_uint finished;
-    unsigned model,jobs,mismatches,refused,retained;
-    uint8_t last_digest[32];
+    uint64_t epoch,generation;
+    uint32_t model,jobs_selected,jobs,mismatches,refused,retained,stopped;
+    uint32_t output_bytes,pattern_bytes,pattern; /* of the last completed job */
+    uint8_t last_digest[32]; /* SHA-256 of the last completed job's outputs */
 };
-extern struct os_npu_result os_npu_result;
+_Static_assert(sizeof(struct os_npu_report)==OS_NPU_REPORT_BYTES,"OS NPU report geometry");
+/* USB0 owner: copies the published report, or the pending header. */
+void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES]);
 #endif

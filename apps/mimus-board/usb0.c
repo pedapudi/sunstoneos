@@ -18,6 +18,12 @@ _Static_assert(sizeof(struct a733_fault_report)>=1088,"frame holds every respons
 #else
 static uint8_t frame[1088],request[16];
 #endif
+#ifdef SUNSTONE_A733_OS_NPU
+#include "../os/npu.h"
+/* Operation 6 returns the OS NPU client's 104-byte report alone, without the
+ * 64-byte frame header (apps/os/npu.h). It reads no recognizer state. */
+_Static_assert(sizeof(frame)>=OS_NPU_REPORT_BYTES,"frame holds the NPU report");
+#endif
 static unsigned frame_bytes,sent,transferred,request_used,frame_success;
 /* USB0 owner only. Receipt publication follows the final TX completion. */
 static unsigned delivery_generation,delivered_text,delivered_sector,delivered_trigger;
@@ -61,6 +67,13 @@ static void exchange(void)
         if(request[1]||offset||bytes||expected)stop();
         memcpy(frame,&a733_fault_previous,sizeof(a733_fault_previous));
         frame_success=0;sent=transferred=0;frame_bytes=sizeof(a733_fault_previous);return;
+    }
+#endif
+#ifdef SUNSTONE_A733_OS_NPU
+    if(op==OS_NPU_REPORT_OP){
+        if(request[1]||offset||bytes||expected)stop();
+        os_npu_report_copy(frame);
+        frame_success=0;sent=transferred=0;frame_bytes=OS_NPU_REPORT_BYTES;return;
     }
 #endif
     if(op>(keyboard?4u:mimus_board_staged()?1u:2u)||request[1]||bytes>1024)stop();
