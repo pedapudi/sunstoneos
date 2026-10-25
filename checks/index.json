@@ -9458,6 +9458,21 @@
   "summary": "Focused actual-image SD0 task/controller/native trace with modeled board services.",
   "usb": false
  },
+ "storage-read-queue-plan.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/sd-uhs.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--software",
+   "--output"
+  ],
+  "summary": "Check the queue artifacts and host timeout of a supervised SD0 read run.",
+  "usb": true
+ },
  "storage-read-retain.py": {
   "cache_areas": [],
   "docs": [],
