@@ -1,11 +1,21 @@
 """Bounded returned-RAM capture for the audited numerical image only.
 
-Every read uses immutable image-bound addresses. Captured pointers are checked
-against them and never authorize a read. Payload differences remain diagnostic.
+The capture is bound to the non-thermal numerical image 9e4adabf, which runs
+without thermal supervision; the thermal and checkpoint profiles never
+capture. Every read uses immutable image-bound addresses. Captured pointers
+are checked against them and never authorize a read. Payload differences
+remain diagnostic.
+
+After the DRAM reads, one read-only ROM read copies the part of the NPU SRAM
+CPU alias that the model uses: 101,376 bytes from 0x74000, the 12x12 model's
+VIP SRAM size in tools/npu-models.json. The image never powers domain 4 or
+the SRAM off, and the read ends below the ROM scratchpad at 0xee800. It runs
+last, so a failure there leaves the DRAM evidence already saved.
 """
 import hashlib,struct
 IMAGE='9e4adabf7c8fb19c2cfc2fb4260971cc32a3b6e5ee0fa09bcad0d4b4208c0e95'
 PARENT=0x41239000;BYTES=0x109000;ARENA=PARENT+0x104000
+SRAM=(0x74000,101376);SRAM_ALIAS=(0x74000,0xf4000);ROM_SCRATCH=0xee800
 METADATA=(('lengths-buffers',0x412156d8,368),('extent',0x4121f268,24),('memory',0x41216088,48))
 SLOTS=((0,4096,0xe0000000,4),(0x1000,4096,0xe0002000,4),
        (0x2000,524288,0xe0004000,2),(0x82000,4096,0xe0085000,0),
@@ -25,8 +35,10 @@ def layout(image_hash,symbols,read,clean_start,clean_end):
         'Audited convolution artifacts differ.')
     ranges=[(at,size) for _,at,size in METADATA]+[(PARENT,BYTES)]
     require(all(0x41000000<=clean_start<=at<at+size<=clean_end<=0x42200000 for at,size in ranges),'Capture escapes published DRAM.')
+    require(SRAM_ALIAS[0]<=SRAM[0]<SRAM[0]+SRAM[1]<=ROM_SCRATCH<SRAM_ALIAS[1],'SRAM capture escapes the model range.')
     return {'image_sha256':IMAGE,'metadata':[{'name':name,'address':at,'bytes':size} for name,at,size in METADATA],
-        'parent':{'address':PARENT,'bytes':BYTES},'input_sha256':sha(read('a733_npu_application_input'))}
+        'parent':{'address':PARENT,'bytes':BYTES},'sram':{'address':SRAM[0],'bytes':SRAM[1]},
+        'input_sha256':sha(read('a733_npu_application_input'))}
 def validate_metadata(raw):
     header,extent,memory=(raw[name] for name,_,_ in METADATA)
     require(all(len(raw[name])==size for name,_,size in METADATA),'Short stopped metadata capture.')
@@ -59,6 +71,9 @@ def capture(transaction,base,p,evidence,record,save,result):
     raw={item['name']:read(item) for item in plan['metadata']};validate_metadata(raw)
     record['stopped_capture']['metadata_validated']=True;save()
     parent=read({'name':'parent',**plan['parent']})
-    record['stopped_capture'].update(complete=True,input_matches_immutable=sha(parent[0x82000:0x82000+432])==plan['input_sha256'],
+    record['stopped_capture'].update(input_matches_immutable=sha(parent[0x82000:0x82000+432])==plan['input_sha256'],
         output_matches_returned_copy=parent[0x83000:0x83000+400]==bytes.fromhex(result['second_output']))
     save()
+    require(plan['sram']=={'address':SRAM[0],'bytes':SRAM[1]},'SRAM capture plan differs.')
+    read({'name':'sram',**plan['sram']})
+    record['stopped_capture'].update(complete=True);save()

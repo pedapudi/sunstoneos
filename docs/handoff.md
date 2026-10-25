@@ -223,7 +223,8 @@ defect was found. Evidence: `accelerator-shared-owner-20261024/`.
    physical qualification remains open. The reviewed host at
    `npu-stopped-capture-20261024/snapshot/sources/` conditionally captures the
    audited numerical image after safe retirement and before RAM restoration.
-   Four fixed reads preserve 1,085,880 bytes of metadata and runtime buffers.
+   Four fixed DRAM reads preserve 1,085,880 bytes of metadata and runtime
+   buffers, and a fifth reads the 101,376 bytes of NPU SRAM the model uses.
    Capture failures retain ownership; correct numerical execution remains open.
    The reviewed `apps/npu-finite/analyze-capture.py` compares that capture
    with the accepted commands, tensors and MMU mappings. Nineteen synthetic

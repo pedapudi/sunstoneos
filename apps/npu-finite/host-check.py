@@ -294,7 +294,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if g.get('stopped_capture'):
    capture=record.get('stopped_capture')
    if variant in ('mismatch','capture-output-differs'):
-    assert capture and capture['complete'] and len(state['capture_reads'])==4
+    assert capture and capture['complete'] and len(state['capture_reads'])==5
     assert capture['output_matches_returned_copy']==(variant=='mismatch')
     for item in capture['files']:assert sha((out/item['name']).read_bytes())==item['sha256']
    elif variant in ('nominal','invalid-time','capture-transport-failure'):assert capture is None and not state.get('capture_reads')
@@ -302,7 +302,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     assert capture and not capture['complete'] and not state['restore_writes']
     assert len(state['capture_reads'])=={'capture-metadata-invalid':3,'capture-parent-short':4,'capture-extent-transport-failure':2,'capture-durability-failure':1}[variant]
    if state.get('capture_reads'):
-    expected=[[item['address'],item['bytes']] for item in g['stopped_capture']['metadata']]+[[h.stopped.PARENT,h.stopped.BYTES]]
+    expected=[[item['address'],item['bytes']] for item in g['stopped_capture']['metadata']]+[[h.stopped.PARENT,h.stopped.BYTES],list(h.stopped.SRAM)]
     assert state['capture_reads']==expected[:len(state['capture_reads'])]
   assert all(address>=h.DRAM[0] for address,size,after_ROM in state['writes'] if after_ROM)
   results.append({'name':variant,'passed':True,'restore_writes':state['restore_writes'],'retained':not normal,'functional_success':record.get('npu_result',{}).get('functional_success'),'capture_reads':state.get('capture_reads',[]),'stopped_capture':record.get('stopped_capture')})
