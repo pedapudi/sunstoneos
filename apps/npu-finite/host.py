@@ -208,6 +208,25 @@ def validate_bundle(bundle):
  require(0<len(frozen['launch.bin'])<=0xc00 and sha(frozen['launch.bin'])==root_review.get('launcher_sha256'),'Launcher differs from root review.')
  p['_frozen']=frozen;p['_sizes']={k:len(v) for k,v in frozen.items()};return p
 
+# SUBMIT fills each job's device output with NPU_CONVOLUTION_OUTPUT_POISON
+# (include/npu_convolution.h), little-endian and repeated from offset zero.
+OUTPUT_POISON=0xc35a3ca5
+def output_poison(size):return (OUTPUT_POISON.to_bytes(4,'little')*(size//4+1))[:size]
+def output_pattern(first_digest,second):
+ """Copied output bytes that still hold the SUBMIT pattern, as [start, end)
+ ranges. A short range can match by chance; a range covering the output means
+ the job wrote nothing. Only images whose SUBMIT fills the pattern give these
+ fields meaning. The first job returns only its digest, which identifies an
+ output that kept the pattern in every byte."""
+ pattern=output_poison(len(second));ranges=[];start=None
+ for i in range(len(second)+1):
+  same=i<len(second) and second[i]==pattern[i]
+  if same and start is None:start=i
+  elif not same and start is not None:ranges.append([start,i]);start=None
+ return {'second_pattern_bytes':sum(b-a for a,b in ranges),'second_pattern_ranges':ranges,
+  'second_unwritten':bool(second) and ranges==[[0,len(second)]],
+  'first_unwritten':bytes(first_digest)==hashlib.sha256(pattern).digest()}
+
 def validate_reports(monitor,platform,receipt,p):
  thermal=p.get('execution_profile')==THERMAL
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
@@ -248,9 +267,9 @@ def validate_reports(monitor,platform,receipt,p):
    matches[0][3].startswith('PASS' if status==0 else 'FAIL' if status==1 else 'REFUSED'),'Thermal status disagrees with completed numerical work.')
   return {'normal_return':True,'functional_success':status==0,'controlled_negative':status==1,
    'thermal_refusal':status==2,'thermal_reason':reason,'jobs':jobs,'status':status,'diagnostic_deadline':deadline,
-   'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'log':text}
+   'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'log':text}
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
- return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'log':text}
+ return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'log':text}
 
 def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))

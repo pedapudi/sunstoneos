@@ -161,9 +161,13 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   rejected('missing-thermal-electrical-authority',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
  saved=(bundle/'request.bin').read_bytes();(bundle/'request.bin').write_bytes(bytes(len(saved)));rejected('changed-packet-refused',lambda:h.validate_bundle(bundle));(bundle/'request.bin').write_bytes(saved)
  def reports(variant):
-  status=int(variant=='mismatch' or variant.startswith('capture-') or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
+  status=int(variant in ('mismatch','unwritten-second','unwritten-tail') or variant.startswith('capture-') or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
   if status:first=bytes([first[0]^1])+first[1:]
   if variant=='false-success':second=bytes([second[0]^1])+second[1:]
+  # The second job wrote nothing, or only its first 100 bytes, after a
+  # matching first job; the copy holds the SUBMIT pattern there.
+  if variant=='unwritten-second':first=hashlib.sha256(reference).digest();second=h.output_poison(len(reference))
+  if variant=='unwritten-tail':first=hashlib.sha256(reference).digest();second=reference[:100]+h.output_poison(len(reference))[100:]
   jobs=2;reason=0
   if thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch'):
    jobs=int(variant!='thermal-zero');reason=2;status=1 if variant=='thermal-one-mismatch' else 2
@@ -192,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
   return struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<14Q' if thermal else '<11Q',*receipt)
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
- variants=['nominal','old-generic-monitor-magic','mismatch','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
+ variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal:variants.append('ordinary-receipt')
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
@@ -266,10 +270,18 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   try:
    with patch.object(h.base,'sync_file',sync):result=h.run_once(transaction,wait_return,lambda:None,bundle,p2,out,record,lambda:None)
   except (ValueError,OSError) as error:failure=error
-  normal=variant in ('nominal','capture-output-differs') or variant=='mismatch' and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
+  normal=variant in ('nominal','capture-output-differs') or variant in ('mismatch','unwritten-second','unwritten-tail') and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','thermal-one-mismatch','capture-output-differs'))
+   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
+   if not checkpoint:
+    size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
+    assert not pattern['first_unwritten']
+    if variant=='unwritten-second':assert pattern['second_unwritten'] and pattern['second_pattern_ranges']==[[0,size]],pattern
+    elif variant=='unwritten-tail':
+     assert not pattern['second_unwritten'] and pattern['second_pattern_ranges'][-1]==[100,size],pattern
+     assert pattern['second_pattern_bytes']-(size-100)<=4,pattern
+    else:assert not pattern['second_unwritten'],pattern
    assert state['restore_writes']==1
    if result['status']:
     kernel=h.module('check_controlled_outcome',r/'tools/check-a733-kernel.py');assert kernel.controlled_return(record)
