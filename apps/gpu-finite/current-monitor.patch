@@ -43,20 +43,19 @@
      /* SPI95 stays disabled until the real service owns its interrupt binding. */
      mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1U<<31));
      mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1U<<31));
-@@ -324,15 +327,18 @@
+@@ -324,15 +327,16 @@
  
  _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
  {
-+    uint64_t esr,elr,far;
-     __asm__ volatile("mrs %0,esr_el3\n mrs %1,elr_el3\n mrs %2,far_el3"
+-    __asm__ volatile("mrs %0,esr_el3\n mrs %1,elr_el3\n mrs %2,far_el3"
 -      :"=r"(RESULT->esr),"=r"(RESULT->elr),"=r"(RESULT->far));
-+      :"=r"(esr),"=r"(elr),"=r"(far));
++    uint64_t esr;
++    __asm__ volatile("mrs %0,esr_el3":"=r"(esr));
 +    if(kind==1&&(esr>>26)==0x17&&operation==0x733&&status==0)
 +        gpu_return_finish(&gpu_admission,&saved);
      if(kind==2){
          uint64_t irq;__asm__ volatile("mrs %0,ICC_IAR0_EL1":"=r"(irq));
 -        RESULT->interrupt=irq;
-+        (void)elr;(void)far;
          if(irq<1020)__asm__ volatile("msr ICC_EOIR0_EL1,%0\n isb"::"r"(irq):"memory");
          a733_smp_stop(irq==RECOVERY_IRQ?2:5,irq);
      }
