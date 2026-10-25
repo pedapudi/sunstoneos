@@ -123,13 +123,12 @@ static int supply_raise(struct a733_gpu_platform *p)
     int r;
     switch (p->supply_stage) {
     case RAISE_LEASE: {
+        /* A boot verification that ended without DCDC4 refuses domain 5, so
+         * no raise is made. While it runs it holds DCDC4 shared. */
+        const unsigned w = a733_power_authority_load(&rails->authority);
+        if (provider->domains && (w & A733_POWER_SUPPLY_DONE) && !(w & A733_POWER_DCDC4_VERIFIED)) return -1;
         lease = a733_rail_acquire(rails, owner, 0, A733_RAIL_BIT(A733_RAIL_DCDC4), p->deadline, &p->supply_token);
-        if (lease == A733_RAIL_BUSY) {
-            /* The owner's boot verification holds DCDC4 shared until it ends;
-             * a verification that ended without DCDC4 refuses domain 5. */
-            const unsigned w = a733_power_authority_load(&rails->authority);
-            return provider->domains && (w & A733_POWER_SUPPLY_DONE) && !(w & A733_POWER_DCDC4_VERIFIED) ? -1 : 0;
-        }
+        if (lease == A733_RAIL_BUSY) return 0;
         if ((lease != A733_RAIL_PENDING && lease != A733_RAIL_READY) || !p->supply_token.id) return -1;
         p->supply_stage = RAISE_LEASED;
         return 0;

@@ -153,7 +153,8 @@ consumer and power-domain owner. DCDC4 at 800 mV is written to 960 mV once,
 with bit 7 kept, and the consumer samples it only after the 1.2 ms settle;
 DCDC4 already at 960 mV is not written; a write submit that meets a busy
 provider is retried; DCDC4 at 860 mV is refused with no write, its snapshot
-reaped and the lease released.
+reaped and the lease released; after an owner's boot check that refused
+DCDC4, the platform fails before it takes a lease.
 
 The [reference check](../checks/a733-gpu-power-reference.py) compiles the original
 power-domain initialization and transition functions with a register model. All

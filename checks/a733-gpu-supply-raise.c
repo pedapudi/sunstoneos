@@ -10,8 +10,10 @@
  *   exclusive lease is released and the consumer samples only after 1.2 ms;
  * - DCDC4 already at 960 mV is not written and the consumer samples at once;
  * - a write submit that meets a busy provider is retried, not failed;
- * - DCDC4 at another voltage, which the owner's boot check refuses, fails
- *   the platform with the snapshot reaped, the lease released and no write.
+ * - DCDC4 at another voltage fails the platform with the snapshot reaped,
+ *   the lease released and no write;
+ * - after an owner's boot check that refused DCDC4, the platform fails
+ *   before it takes a lease.
  * Build: clang-21 -std=c11 -O1 -g -Wall -Wextra -Werror
  *   -fsanitize=address,undefined -Iinclude -Ichecks
  *   checks/a733-gpu-supply-raise.c drivers/power/a733_pmic.c
@@ -82,7 +84,6 @@ static int admit(unsigned dcdc4, unsigned busy_submit, uint64_t *sampled_at, uin
 
 int main(void)
 {
-    (void)domains_boot;
     uint64_t sampled, written;
     /* 800 mV: one write to 960 mV, bit 7 kept, sample after the settle. */
     assert(admit(0x1e, 0, &sampled, &written) == 1);
@@ -103,8 +104,19 @@ int main(void)
     assert(gpu.phase == A733_GPU_PLATFORM_FAILED && m.pmic[0x15] == (0x80 | 0x24) && !gpu.supply_written);
     assert(!gpu.supply_request.id && !gpu.supply_token.id && !gpu.pmic.rail.id);
     for (unsigned i = 0; i < A733_PMIC_REQUESTS; ++i) assert(!m.provider.slots[i].state);
+    /* DCDC4 at 900 mV with a domain-5 row: the owner's boot check refuses
+     * DCDC4, and the platform fails without a lease or a write. */
+    domains_model_setup(0x28, 23); m.pmic[0x15] = 0x80 | 0x28;
+    memset(&gpu, 0, sizeof(gpu)); memset(&native, 0, sizeof(native)); native.initialized = 1;
+    static const struct a733_gpu_platform_ops refused_ops = {gpu_now, gpu_read, gpu_update};
+    assert(a733_gpu_platform_init(&gpu, &m.gpu, 3, &refused_ops, 0));
+    assert(a733_gpu_platform_bind_pmic(&gpu, &native, &m.provider, &m.lifetime, 9));
+    domains_boot();
+    assert(!(a733_power_authority_load(&m.rails.authority) & A733_POWER_DCDC4_VERIFIED));
+    assert(a733_gpu_platform_begin(&gpu, m.now + 1000000) && a733_gpu_platform_poll(&gpu) == -1);
+    assert(!gpu.supply_token.id && !gpu.supply_request.id && m.pmic[0x15] == (0x80 | 0x28));
     printf("PASS GPU DCDC4 raise: 800 mV written to 960 mV once with bit 7 kept and the consumer sampling "
            "after %u us of settling, 960 mV not written, a busy write submit retried, 860 mV refused with "
-           "its snapshot reaped and the lease released\n", A733_GPU_SUPPLY_SETTLE_US);
+           "its snapshot reaped and the lease released, a refused boot check failing before any lease\n", A733_GPU_SUPPLY_SETTLE_US);
     return 0;
 }
