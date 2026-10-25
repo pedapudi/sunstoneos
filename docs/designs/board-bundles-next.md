@@ -105,6 +105,8 @@ that [the runbook README](../board-runbooks/README.md) requires.
 | 11 | Returning, port 3-1 | GPU provider readiness (`apps/gpu-provider-ready/`, frozen image `3adfa4ad…`) | First board run of the CPU monitor that bundles 12 and 13 reuse; no GPU or PCK access | Supply verification and empty owner records |
 | 12 | Returning, port 3-1, after 11 | GPU TOP5 and CORE6 ON and OFF (`apps/gpu-power-id/`, `--power-only`) | First CORE6 policy and PWCR writes; no GPU register access | CORE6 status 8 after ON |
 | 13 | Returning, port 3-1, after 12 | GPU power and identity (`apps/gpu-power-id/`) | First GPU register read | BVNC |
+| 14 | Read | SID speed-bin word `0x0300624c`; R_CCU `0x20c` as condition, then the oscillator word; the PLL, pattern (`+0x4`, `+0x8`), LFM (`+0x18`) and mux/P (`+0x1c`) words of CPU-L at `0x08871000` and CPU-B at `0x08872000`; the DSU PLL and mux/P words at `0x08873000` and `0x0887301c` | First reads of the CPU-B and DSU words; all lie in the reader's ungated SID and CPU PLL blocks | The clock part of the A76 record B1 of [cpu-a76-dvfs.md](cpu-a76-dvfs.md): bin code, CPU-B rate, pattern and LFM enables |
+| 15 | Returning, base bundle 2 | DCDC3 and DCDC5 snapshots (`apps/board-bundles-power/cpu-supply.c`): the bundle 6 image without a domain row, one shared token of both rails, one snapshot of each, reaped, service parked | First provider transactions on DCDC3 and DCDC5; read-only, no PMIC write | The supply part of B1: enable, selector and programmed voltage of DCDC3 (CPU-B) and DCDC5 (CPU-L and DSU) |
 
 **S_TWI0 interrupt.** Bundle 6 records the TWI controller's interrupt flag
 and leaves out the distributor pending bit of S_TWI0's interrupt (SPI 203 in
