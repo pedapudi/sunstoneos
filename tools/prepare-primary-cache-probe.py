@@ -67,7 +67,7 @@ def branch(address, target):
 
 
 def patch_points(symbols, context=False):
-    entry = symbols['a733_cached_enter_el1'] + 0x144
+    entry = symbols['a733_cached_enter_el1'] + 0x194  # MSR ICC_CTLR_EL1, XZR
     vector = symbols['a733_cached_el3_vectors'] + 8 * 128 + 4
     return ((entry, 0xd518cc9f, 'el1_observe_checkpoint'),
             (vector, branch(vector, symbols['a733_cached_el3_fault']), 'el1_return_checkpoint')) + (
@@ -146,7 +146,7 @@ def decode(raw, nonce, manifest=None):
                 'EL1 entry inherited different preparation.')
         require(0x42000000 <= entry[3] < 0x421f0000 and not entry[3] & 15,
                 'EL3 stack is outside reserved Device memory.')
-        require(entry[9:23] == (0x733, 4, 0x30d01805, 0x200803019, 0x421f4000, 0x44ff00, 0,
+        require(entry[9:23] == (0x733, 4, survey.PROBE['NATIVE_EL1_SCTLR'], 0x200803019, 0x421f4000, 0x44ff00, 0,
                 0x4124b000, 0, 24000000, 0x81000000, 0, 0x5e000733, manifest['hooks']['el1_smc_return']) and
                 entry[23] & 0x3ff == 0x3c5 and entry[29:] == (0, 8, 12), 'Primary EL1/SMC observation differs.')
         require(entry[24:29] == entry[4:9], 'Primary EL1 controls were not restored.')

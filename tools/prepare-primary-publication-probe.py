@@ -10,7 +10,7 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE = '762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3'
+NATIVE = 'a8228eaa8a664a22479b6d358654ced6563ede10366231c04a3a43a8418a4920'
 OVERLAY = (0x41020000, 0x4000)
 REPORT = (0x42018000, 256)
 MAGIC = 0x4137335052494d31

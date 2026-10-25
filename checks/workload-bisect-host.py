@@ -107,7 +107,11 @@ def main():
                                    final=held_after_failed_quarantine, quarantine_fails=True)
         elif case == 'deadline-record-checked':
             record = host.deadline_record(stalled, stalled[32:48])
-            assert record and record['reason'] == 2 and not record['inconsistent']
+            # Reason 2 when CPU0 took its tick's deadline exit; reason 1 when it
+            # waited in identity_park and the deadline interrupt returned it.
+            source = a.models if not quiet else a.models.parent/'deadline-check'
+            parked = json.loads((source/'stalled-core.json').read_text()).get('cpu0_parked')
+            assert record and record['reason'] == (1 if parked else 2) and not record['inconsistent']
             try:
                 host.decode(stalled, stalled[32:48], manifest)
             except host.DeadlineReturn as returned:

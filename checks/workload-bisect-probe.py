@@ -13,7 +13,9 @@ cleaning SMC. Cases:
   finished their rounds and no core has stopped its writers, then stops
   executing core 5, which therefore never publishes its completion record. The others wait for
   it until the startup deadline and park, at EL0 in the arrival barrier or,
-  if core 5 had already arrived, at EL1 in identity_park. CPU0's next tick then
+  if core 5 had already arrived, at EL1 in identity_park; from identity_park
+  CPU0 takes no tick and the deadline interrupt returns it, as in
+  stalled-no-tick. Otherwise CPU0's next tick then
   takes the production IRQ-handler deadline exit, an SMC that the deadline
   unit captures: CPU0 records its state, cleans the owned writable interval
   from EL1 and returns to the ROM. Secondaries that take an interrupt after
@@ -107,6 +109,7 @@ class Bisect(workload.Workload):
         self.clock_step = workload.COUNTER_STEP
         self.rwp_injected = False
         self.rwp_reads = self.rwp_seen = 0
+        self.cpu0_parked = False
 
     def in_hook(self, name, address, length):
         start = self.survey_hooks[name]
@@ -173,6 +176,8 @@ class Bisect(workload.Workload):
             assert r['currentel'] == 4 and r['daif'] & 0x40
             if core:
                 self.target_parked.add(core); self.active[core] = False
+            else:
+                self.cpu0_parked = True
             u.emu_stop(); return
         if self.in_hook('identity_deadline_arm', address, 0x58):
             assert r['currentel'] == 12
@@ -291,6 +296,7 @@ def main():
         machine.checkpoint = None
         machine.fault = a.case
         machine.rwp_injected, machine.rwp_reads, machine.rwp_seen = False, 0, 0
+        machine.cpu0_parked = False
         assert all(machine.q(COMPLETIONS+c*64) != machine.epoch for c in range(8))
         if a.case.startswith('stalled'):
             machine.stalled = STALLED_CORE
@@ -344,7 +350,10 @@ def main():
                 assert rounds == 32 and background > 0 and sgis > 0 and failed == 0
             assert results[0][4] >= 32
         else:
-            if a.case == 'stalled-no-tick':
+            if a.case == 'stalled-no-tick' or machine.cpu0_parked:
+                # CPU0 took no interrupt after the deadline: without a tick, or
+                # waiting in identity_park with interrupts masked because the
+                # stalled core had already arrived. The deadline FIQ returns it.
                 assert len(machine.fiq_taken) == 1 and machine.fiq_taken[0] >= machine.deadline+DEADLINE_TICKS
                 assert record[:4] == (RECORD_MAGIC, 1, 1, 3) and record[19] == 29, record[:4]
             else:
@@ -371,7 +380,7 @@ def main():
         'report_sha256': digest(report), 'sources': {name: digest(ROOT/name) for name in SOURCES},
         'workload_checkpoint': str(a.resume_workload) if a.resume_workload else None,
         'deadline': machine.deadline+DEADLINE_TICKS, 'fiq_taken': machine.fiq_taken,
-        'stalled_core': getattr(machine, 'stalled', None), 'injected_reads': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
+        'stalled_core': getattr(machine, 'stalled', None), 'cpu0_parked': machine.cpu0_parked, 'injected_reads': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
         'workload_results': results, 'off': machine.stopped,
         'clean_complete': sorted(machine.clean_complete), 'helper_lines': machine.helper_lines,
         'limits': __doc__}, indent=2)+'\n')

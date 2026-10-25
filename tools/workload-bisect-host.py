@@ -163,5 +163,7 @@ def validate_software(software, manifest_hash):
         else:
             record = deadline_record(raw, raw[32:48])
             require(record and not record['inconsistent'] and
-                    record['reason'] == (1 if case == 'stalled-no-tick' else 2) and
+                    # stalled-core ends through the deadline interrupt too when CPU0
+                    # was waiting in identity_park (see checks/workload-bisect-probe.py).
+                    record['reason'] == (1 if case == 'stalled-no-tick' or result.get('cpu0_parked') else 2) and
                     record['stage'] == 3 and result.get('off') == [], 'Deadline return case differs.')

@@ -29,7 +29,7 @@ def expected_memory(epoch):
 def decode(raw, nonce, smc_return, first_task=False, task_workload=False):
     result = cache.decode(raw, nonce, smc_return, pre_scheduler=True, first_task=first_task, task_workload=task_workload)
     require(result['cached_entry_completed'], 'Every secondary must finish cached execution.')
-    observed_sctlr = 0x30d41805 if first_task else 0x30d01805
+    observed_sctlr = cache.local.identity.builder.PROBE['NATIVE_EL1_SCTLR']
     clean_lines = 9280 if first_task else 192
     binding = (result['epoch'], result['startup_deadline'])
     local = struct.unpack_from('<64Q', raw, 0xa00)

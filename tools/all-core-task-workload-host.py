@@ -44,7 +44,7 @@ def load(build, image, manifest, **deadline):
         'pending': 'Instruction execution, host report validation and root review required.'},
         'Workload task-switch scope changed.')
     require(manifest.get('task_workload') == {
-        'physical_eligible': False, 'rounds_per_core': 32, 'completion_patch': 0x410012ec,
+        'physical_eligible': False, 'rounds_per_core': 32, 'completion_patch': manifest['native_symbols']['worker']+0x6c,
         'pending': 'Returning workload instruction checks, host validation and root review required.'},
         'Workload scope or completion patch changed.')
     require(manifest['native_symbols'].get('a733_smp_core_results') == 0x41201080,

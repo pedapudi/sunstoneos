@@ -92,7 +92,8 @@ class Probe(parent.Probe):
                     assert address in (0x03460000, 0x03470100, 0x03470180, 0x03470200,
                                        0x03470280, 0x03470300, 0x0347041c), hex(address)
                 else:
-                    assert not write and 0x41000000 <= address < 0x41200000, 'EL1 must not dirty Normal data'
+                    assert not write and (0x41000000 <= address < 0x41200000 or self.sealed_el1_table_read(address, size)), (
+                        'EL1 must not dirty Normal data', hex(address))
             if self.interrupts:
                 if address == 0x03470200:
                     self.mmio[address] = sum(1 << n for n in self.pending[0])
@@ -154,7 +155,7 @@ class Probe(parent.Probe):
                 u.mem_write(self.symbols['ullPortYieldRequired'], struct.pack('<Q', 1))
             if address == self.cache_manifest['hooks']['primary_context_clean'] and self.fault == 'cleanup-deadline':
                 self.clock = self.reg(core, 'x22') + 1
-            if op == 'dc' and args[0] == 'civac':
+            if op == 'dc' and args[0] == 'civac' and not self.production_table_clean(address):
                 line = self.reg(core, args[1])
                 assert self.regs[0]['currentel'] == 4 and line % 64 == 0 and line & ~4095 in self.context_pages
                 self.context_cleaned.add(line); self.context_dirty.discard(line)

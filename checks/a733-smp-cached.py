@@ -126,6 +126,7 @@ class Machine:
         with image.open('rb') as f:
             elf=ELFFile(f)
             self.symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            self.sizes={s.name:s['st_size'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
             segments=[(s['p_vaddr'],s['p_memsz'],s['p_flags'],s.data()) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
         assert self.symbols['a733_smp_entry']==0x41000000
         for addr,size,flags,data in segments:
@@ -185,6 +186,16 @@ class Machine:
         contract=contract[:16]+struct.pack('<Q',len(contract))+contract[24:]
         ctypes.memmove(self.ram_pointer+0x1004000,contract,len(contract))
     def read(self,a,n):return ctypes.string_at(self.ram_pointer+a-0x41000000,n)
+    def production_table_clean(self,address):
+        """A cache-maintenance instruction of the production EL1 coherence
+        helper, which cleans its own table lines before enabling the MMU."""
+        helper=self.symbols['a733_cpu_coherence_enable_el1']
+        return helper<=address<helper+self.sizes['a733_cpu_coherence_enable_el1']
+    def sealed_el1_table_read(self,address,size):
+        """A read by the production EL1 coherence helper, which sums the two
+        sealed EL1 table pages and compares the sum with the stored word."""
+        tables,total=self.symbols['a733_cached_el1_l1'],self.symbols.get('a733_cached_el1_table_sum')
+        return tables<=address and address+size<=tables+0x2000 or total is not None and total<=address and address+size<=total+8
     def active_priority(self,c,name,value):
         """Record a zeroed ICC_AP0R0_EL1 or ICC_AP1R0_EL1. At EL3 SCR_EL3.NS
         selects the ICC_AP1R0_EL1 copy; below EL3 the Nonsecure copy is

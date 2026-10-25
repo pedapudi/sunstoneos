@@ -2,6 +2,7 @@
  * the checkpoint replaces the first EL1 interrupt-interface configuration.
  * EL1 executes no data stores. EL3 stack/report accesses remain Device memory.
  * This is not a general cache shutdown or a live context switch. */
+#include "secondary-local-probe.h"
 .section .text.native_el1_cache_probe,"ax"
 .balign 4
 .global native_el1_cache_probe, el1_observe_checkpoint, el1_return_checkpoint
@@ -217,11 +218,7 @@ el1_return_checkpoint_continue:
     b.ne .Lel1_refuse
     cmp x1, #4
     b.ne .Lel1_refuse
-#ifdef SUNSTONE_FIRST_TASK
-    ldr x16, =0x30d41805
-#else
-    ldr x16, =0x30d01805
-#endif
+    ldr x16, =NATIVE_EL1_SCTLR
     cmp x2, x16
     b.ne .Lel1_refuse
     ldr x16, =0x200803019
