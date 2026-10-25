@@ -56,6 +56,18 @@ and no VQMMC regulator exists on this board. The second board reports adaptive
 mode 1, sensed 3.3 V and selector 1
 (`second-board-20261018-3-3/single-core-admission/remaining-facts.md`).
 
+The two A733 pin descriptors disagree on the polarity of `GPIO_POW_VAL` bit
+10. The first silicon version uses hardware type 4, which reads bit 10 set as
+3.3 V (`power_mode_reverse = false`, `pinctrl-sunxi.c:184–186`); version B
+uses type 10, which reads it set as 1.8 V (`auto_power_detect_mode_reverse =
+true`, `pinctrl-sunxi.c:342–345`), and `pinctrl-sun60iw2.c:2605–2614` chooses
+between them by `sunxi_get_soc_ver()`. The manual's two-bit field matches
+type 10: value 2 (bit 10 clear) is 3.3 V and value 3 is 1.8 V. The second
+board read value 2 at 3.3 V, which is the type-10 polarity. Under type-4
+polarity a 3.3 V bank would read 3, and the existing admission, which requires
+2 before any card command, refuses that board, so a wrong polarity cannot lead
+to a switch.
+
 The schematic shows no external pull-up on CMD or DAT; the SoC pulls them up
 internally from the bank supply (15 kΩ on PF1, 100 kΩ on the others,
 datasheet lines 5880–5900). PF6 reaches the socket's switch through 1 kΩ and
@@ -110,8 +122,14 @@ timing, blank.
     (`ccu-sun60iw2.c:118–124`, `1893–1923`). Tuning moves the controller to
     the old sample mode (`sunxi-mmc.c:2475–2480`; `sunxi-mmc-v4p5x.c:813`)
     with 180-degree command and data drive (`sunxi-mmc-v4p5x.c:303–305`).
-    SDR104 reads use a 512-byte read threshold (`sunxi-mmc-v5p3x.c:647–691`;
-    manual 11.3.8.29).
+    In SDR50 and SDR104 reads the read threshold equals the block size, so a
+    block starts only with room for all of it; other timings disable it
+    (`sunxi-mmc-v5p3x.c:647–700`; manual 11.3.8.29).
+    The vendor's `SMHC_DRV_DL` bit 7 write for clocks above 400 kHz
+    (`sunxi-mmc-v5p3x.c:565–575`, `sunxi-mmc-v4p5x.c:773–783`) sits inside
+    `#ifdef MMC_FPGA` (`v5p3x.c:556–600`, `v4p5x.c:763–809`); the production
+    branch only clears the clock divider, and manual 11.3.8.36 marks
+    `DRV_DL` bits 15:0 reserved. SunstoneOS therefore leaves bit 7 alone.
 11. **Tuning.** The board kernel sweeps `SAMP_DL_SW` over 64 delays (manual
     11.3.8.37; `sunxi-mmc-v4p5x.c:1000–1010`). A delay passes only after 20
     matching 64-byte CMD19 blocks (`sunxi-mmc.c:2505–2580`;
@@ -137,7 +155,9 @@ tuning; it confirms the core sequence only.
 | PF bank | Read-only checks of 3.3 V | One write of 0 to `0x070` with the card clock stopped; live checks then require 1.8 V |
 | CMD6 | Function 1 (high speed) only | Function 3 (SDR104), then function 1 as the fallback |
 | Module clock | PERI0_400M / 4..32 | Adds PERI0_300M / 1 and PERI0_400M / 2 for profile 3 |
-| Sampling | New mode, fixed phases | Old mode, CMD19 sweep of `SAMP_DL_SW`, 512-byte read threshold |
+| Sampling | New mode, fixed phases | Old mode, CMD19 sweep of `SAMP_DL_SW` |
+| Read threshold | Reset value | SDR104 reads: the block size (64 bytes for CMD6 and CMD19, 512 for sectors); disabled in the profile's other timings, including the `NO_WINDOW` fallback; untouched in profiles 0–2 |
+| `DRV_DL` bit 7 | Not written | Not written: the vendor sets it only in FPGA builds, and the manual marks it reserved |
 | Data timeout | `0xffffffff` | 1.7 ms during tuning, then `0xffffffff` |
 
 SunstoneOS also performs checks that the references do not: it requires
@@ -169,11 +189,17 @@ an early completion raised; the record keeps `RINTSTS` for comparison.
   default aperture filter still refuses the selector; the adapter admits one
   write of 0 only for profile 3. CMD11 and CMD19 are admitted in their exact
   forms with zero arguments, and CMD6 with `0x00fffff3` and `0x80fffff3`.
-  `THLD` at `0x100` becomes a selected SMHC register.
+  `THLD` at `0x100` becomes a selected SMHC register for SD only, and the
+  adapter writes it only in profile 3; eMMC still refuses it.
+- **Stage-2 loader.** It builds the core with `SUNXI_MMC_NO_UHS`, which puts
+  every UHS-I path behind a constant false condition so that the compiler
+  drops the code.
 - **Read-only SD service** (`apps/storage-read`). Sessions may select profile
   3. Negotiated profiles poll an active read for up to 1 ms in one wake,
   as USB0 does within its 200 µs budget, so that each read's time measures the
-  controller path rather than tick pacing. Records become version 4: fact
+  controller path rather than tick pacing. This also changes profiles 1 and
+  2, which must use the same polling for the high-speed reads to be a fair
+  comparison; profile 0 and the eMMC build keep one poll per tick. Records become version 4: fact
   words 6 and 7, which hold write diagnostics that this read-only service
   never sets, carry the read's elapsed microseconds and the UHS-I state, and
   the divisor byte's bit 7 marks the 300 MHz parent. The supervised launcher
@@ -234,10 +260,10 @@ the larger of the bus time and the PIO time.
 | Random 4 KiB reads | 6.0–7.9 MB/s | 6.0–8.9 MB/s |
 | Per-block cost | 20.8–34 µs | 14–34 µs |
 
-The programmed I/O path limits the gain to about 1.2 times, against the bus's
-3 times. If the SDR104 per-block cost equals the high-speed one, PIO bounds
+The programmed I/O path limits the gain to 1.0–1.2 times for sequential and
+1.0–1.12 times for random reads, against the bus's 3 times. If the SDR104 per-block cost equals the high-speed one, PIO bounds
 both, and the next change is the controller's descriptor DMA with larger
-requests, under its own design. Acceptance: SDR104 throughput is at least the
+requests; [the follow-up note](sd-dma.md) plans both. Acceptance: SDR104 throughput is at least the
 high-speed throughput in both patterns, with identical sector digests. An
 unexplained shortfall blocks the merge.
 
@@ -248,12 +274,12 @@ Other budgets:
   per tick, plus up to 2 ms per failing delay: 0.4–0.6 s. Sessions allow up to
   10 s; the runbook uses 5 s.
 - **CPU.** The 1 ms read budget keeps the MMC task busy for each read's
-  duration, at most about 0.7 ms per 4 KiB read; the legacy profile keeps one
-  poll per tick.
+  duration in profiles 1–3, at most about 0.7 ms per 4 KiB read; profile 0
+  keeps one poll per tick.
 - **Memory.** `struct sunxi_mmc` grows by 136 bytes, 16 of them in the card
   record, and `struct a733_mmc_platform` by 160 bytes; each read-service client
   slot gains 12 bytes of fields. `sunxi_mmc_init`'s frame grows from 864 to
-  992 bytes (AArch64, `-O2`), and `command_step` stays at 560 bytes.
+  992 bytes (AArch64, `-O2`), and `command_step` from 560 to 576 bytes.
 
 ## Board qualification reads every card area and writes none
 

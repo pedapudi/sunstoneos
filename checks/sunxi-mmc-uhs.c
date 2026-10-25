@@ -48,6 +48,9 @@ static void read_back(struct uhs *u, struct sunxi_mmc *h)
     assert(sunxi_mmc_read(h, 8, 8, data, sizeof(data), h->last_us + 10000000)); drive(u, h);
     assert(h->state == SUNXI_MMC_DONE && sunxi_mmc_take(h, &result) && result.received == 4096);
     assert(u->base.reg[0x10/4] == 512 && u->base.reg[8/4] == UINT32_MAX);
+    /* SDR104 reads start a block only with 512 bytes free; other timings
+     * leave the read threshold disabled. */
+    assert((u->base.reg[0x100/4] & 0x1fff0001u) == (h->card.timing == 3 ? (512u << 16) | 1u : 0u));
 }
 static void faulted(struct uhs *u, struct sunxi_mmc *h, enum sunxi_mmc_error error)
 {
@@ -79,7 +82,7 @@ int main(void)
     assert(h.card.tuning_start == 20 && h.card.tuning_width == 24 && h.card.sample_delay == 32);
     assert(h.card.tuning_map == (((UINT64_C(1) << 24) - 1) << 20) && u->cmd19 == 24 * 20 + 40);
     assert(u->base.reg[0x144/4] == (0x80u | 32) && !(u->base.reg[0x5c/4] & 0x80000331u));
-    assert(((u->base.reg[0x140/4] >> 16) & 3) == 3 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((512u << 16) | 1u));
+    assert(((u->base.reg[0x140/4] >> 16) & 3) == 3 && (u->base.reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
     read_back(u, &h); unsigned first = u->cmd19;
     /* 100 MHz from 400 MHz when the 300 MHz branch is absent. */
     begin(u, &h, 1); drive(u, &h);

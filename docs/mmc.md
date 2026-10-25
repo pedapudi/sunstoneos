@@ -314,8 +314,8 @@ response with S18A leads to CMD11 before CMD2:
 
 After ACMD6, CMD6 checks and selects SDR104. The module clock becomes
 PERI0_300M / 1 (150 MHz card clock), or PERI0_400M / 2 (100 MHz) without that
-parent. The controller moves to the old sample mode with 180-degree drive and
-a 512-byte read threshold. It then sweeps the 64 sample delays with CMD19: a
+parent. The controller moves to the old sample mode with 180-degree drive,
+and each SDR104 read sets the read threshold to its block size. It then sweeps the 64 sample delays with CMD19: a
 delay passes after 20 matching tuning blocks, a failed block resets the FIFO
 and state machines, and the core selects the midpoint of the first longest
 passing run of at least 12 delays.

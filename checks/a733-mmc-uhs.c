@@ -148,6 +148,8 @@ int main(void)
      * selected SMHC register. */
     assert(!a733_mmc_platform_native_address(SUNXI_MMC_SD, 0x02000070, 1));
     assert(a733_mmc_platform_native_address(SUNXI_MMC_SD, 0x04020100, 1));
+    assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC2, 0x04022100, 1));
+    assert(!a733_mmc_platform_native_address_selected(SUNXI_MMC_EMMC, A733_MMC_EMMC_SDC3, 0x04023100, 0));
     puts("PASS UHS-I platform: one adaptive-mode PF write, 150 MHz from PERI0_300M, 100 MHz without it, "
          "3.3 V high speed in manual PF mode, retained bank timeout and three retained losses after the switch");
     return 0;

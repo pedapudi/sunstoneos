@@ -75,7 +75,12 @@ the earlier storage-read bundles.
 4. Lifetime B: the same command with `<bundle-B>` and `$S/sd-uhs-b-sdr104`.
 5. Remove board power. This step is mandatory even after a failure: the card
    stays at 1.8 V until it loses power, and the boot ROM's microSD boot and
-   every later SD lifetime expect 3.3 V.
+   every later SD lifetime expect 3.3 V. Between lifetime B and this power
+   removal, do not reset the board in any way (watchdog, FEL reset or ROM
+   return followed by a new launch) and launch no other image on `$PORT`: a
+   reset returns `GPIO_POW_VAL_SET_CTL` to its 3.3 V reset value while the
+   card keeps 1.8 V signalling, so the bank would drive 3.3 V into the
+   card.
 
 Each command runs once. A retained or failed lifetime A stops the sequence
 before B. A retained lifetime B is recorded and not retried; its recovery is
@@ -85,11 +90,11 @@ step 5.
 
 | Quantity | Lifetime A | Lifetime B |
 | --- | --- | --- |
-| Capability query, `uhs_caps` (UHS word bits 5–6) | Not issued | 3: the 1.8 V switch and PERI0_300M. Port 3-1 read the manual-default PERI0 gates `0x8fff0fff` and status `0x0fff0000` and PLL `0xff126310` (`board-session-20261025-4/port-3-1/bb9-read/`): every PERI0 branch, including 300 MHz, is enabled at 2.4 GHz |
+| Capability query, `uhs_caps` (UHS word bits 5–6) | Not issued | 3: the 1.8 V switch and PERI0_300M. Port 3-3 read the manual-default PERI0 gates `0x8fff0fff`, status `0x0fff0000` and PLL `0xff126310` in four reads on 2026-10-25 (`board-session-20261025-3/port-3-3/bb9-read/`, `board-session-20261025-7/port-3-3/ts-read-0` to `-3`): every PERI0 branch, including 300 MHz, is enabled at 2.4 GHz. If an earlier test in the window has gated PERI0 bit 4, 5, 9 or 11, the value is 1 and the card runs at 100 MHz |
 | ACMD41 | S18R not requested | S18R requested; S18A set if the card is UHS-I |
 | CMD11 and switch | Not issued | R1 without errors; DAT3 low 1 ms later; PF value 2 becomes 3 within 10 ms of the one selector write; DAT3 high and `RINTSTS` bit 10 set within 1–11 ms of the restarted clock |
 | Outcome | Not applicable | `SDR104` (1); `DECLINED` (3) if the card is not UHS-I, leaving high speed at 3.3 V |
-| Mode word | width 4, timing 1, divisor 4, 50 MHz | width 4, timing 3, divisor byte `0x81` (300 MHz / 1), 150 MHz |
+| Mode word | width 4, timing 1, divisor 4, 50 MHz | width 4, timing 3, divisor byte `0x81` (300 MHz / 1), 150 MHz; with `uhs_caps` 1, divisor byte 2 (400 MHz / 2), 100 MHz |
 | Tuning window | Not applicable | One longest passing run of at least 12 delays, likely 20–40; the chosen delay is its midpoint. The vendor's untuned default at up to 150 MHz is delay 5 (`sunxi-mmc-v4p5x.c:1258`), which suggests that low delays pass. A run shorter than 12 gives outcome `NO_WINDOW` (5), SDR25 at 50 MHz |
 | Identification | Under 0.2 s | 0.4–0.6 s, mostly about 520 CMD19 |
 | Sequential 4 KiB reads | 8.5–13.0 MB/s | 8.5–15.6 MB/s, at least lifetime A's |

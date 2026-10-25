@@ -154,7 +154,11 @@ static void step(void)
     slot->elapsed_us=us>UINT32_MAX?UINT32_MAX:(uint32_t)us;storage_read.stage=5;break;
    }
    if(r!=A733_MMC_PENDING&&r!=A733_MMC_BUSY){failure(6);break;}
+#ifdef SUNSTONE_EMMC_READ
+   break; /* eMMC keeps its single legacy profile and one poll per tick. */
+#else
    if(!storage_read.session.sd_profile||(a733_smp_counter()-wake)/24>=1000)break;
+#endif
   }
   break;
  }

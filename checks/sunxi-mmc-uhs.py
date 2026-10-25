@@ -96,6 +96,11 @@ assert re.search(r'#define\s+SDXC_MASK_DATA0\s+BIT\(31\)', vh) and re.search(r'#
 assert 'best = s[j] + (w[j] >> 1);' in vendor
 assert 'SDXC_START | SDXC_UPCLK_ONLY | SDXC_WAIT_PRE_OVER | SDXC_VOLTAGE_SWITCH' in text[BOARD + 'bsp/drivers/mmc/sunxi-mmc-v5p3x.c']
 v4 = text['mmc-sdc3/sunxi-mmc-v4p5x.c']
+# DRV_DL bit 7 is set only in FPGA builds; production clears the divider only.
+for source, name in [(text[BOARD + 'bsp/drivers/mmc/sunxi-mmc-v5p3x.c'], 'static int sunxi_mmc_clk_set_rate_for_sdmmc_v5p3x'),
+                     (v4, 'static int sunxi_mmc_clk_set_rate_for_sdmmc_v4p5x')]:
+    rate = body(source, name)
+    assert rate.index('#ifdef MMC_FPGA') < rate.index('rval |= (1 << 7);') < rate.index('#else\n\t/* clear internal divider */')
 assert 'case MMC_TIMING_UHS_SDR104:\n\t\tdat_drv_ph = 1;' in v4 and 'rval &= ~(SDXC_2X_TIMING_MODE);' in v4
 # Upstream sunxi-mmc has no tuning and no bank switch; it masks UHS without delay chains.
 upstream = text[LINUX + 'drivers/mmc/host/sunxi-mmc.c']
@@ -163,12 +168,21 @@ steps = [('core-build', sanitize + ['drivers/storage/sunxi_mmc.c', 'checks/sunxi
          ('platform-build', sanitize + ['-Wno-unused-function'] + sources + ['checks/a733-mmc-uhs.c', '-o', str(a.output / 'platform')]),
          ('platform-run', [str(a.output / 'platform')]),
          ('native-core', native + ['drivers/storage/sunxi_mmc.c', '-o', str(a.output / 'sunxi_mmc.o')]),
-         ('native-platform', native + ['drivers/storage/a733_mmc_platform.c', '-o', str(a.output / 'a733_mmc_platform.o')])]
+         ('native-platform', native + ['drivers/storage/a733_mmc_platform.c', '-o', str(a.output / 'a733_mmc_platform.o')]),
+         # The stage-2 loader's build: no UHS-I code may remain.
+         ('native-core-no-uhs', native + ['-DSUNXI_MMC_NO_UHS=1', '-ffunction-sections', 'drivers/storage/sunxi_mmc.c',
+                                          '-o', str(a.output / 'sunxi_mmc-no-uhs.o')])]
 for name, command in steps:
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     (a.output / (name + '.log')).write_text(result.stdout + result.stderr)
     assert result.returncode == 0, (name, result.stdout, result.stderr)
     if name.endswith('-run'): print(result.stdout, end='')
+    if name == 'native-core-no-uhs':
+        sizes = subprocess.run(['/usr/lib/llvm-21/bin/llvm-size', str(a.output / 'sunxi_mmc.o'), str(a.output / 'sunxi_mmc-no-uhs.o')],
+                               capture_output=True, text=True, check=True).stdout
+        (a.output / 'sizes.txt').write_text(sizes)
+nm = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', str(a.output / 'sunxi_mmc-no-uhs.o')], capture_output=True, text=True, check=True).stdout
+assert not any(name in nm.split() for name in ('sd_signal', 'tune_recover', 'tune_advance', 'uhs_registers', 'tuning_pattern', 'set_delay'))
 frames = {}
 for su in ['sunxi_mmc.su', 'a733_mmc_platform.su']:
     for line in (a.output / su).read_text().splitlines():

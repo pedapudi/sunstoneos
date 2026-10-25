@@ -123,7 +123,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         } else {
             unsigned d = m->reg[0x144/4] & 63;
             assert(u->sdr == 3 && u->phase == 3 && !arg && m->reg[0x10/4] == 64 && (m->reg[0x144/4] & 0x80));
-            assert(!(m->reg[0x5c/4] & (1u << 31)) && (m->reg[0x100/4] & 0x1fff0001u) == ((512u << 16) | 1u));
+            assert(!(m->reg[0x5c/4] & (1u << 31)) && (m->reg[0x100/4] & 0x1fff0001u) == ((64u << 16) | 1u));
             assert(m->reg[8/4] == 0x040000ffu);
             ++u->cmd19; m->data_command = value; m->fifo_total = 64; memcpy(u->data, pattern, 64);
             if (d == u->fatal_delay) m->reg[0x38/4] |= 1u << 11;

@@ -119,6 +119,8 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     unsigned uhs=n->kind==SUNXI_MMC_SD&&n->sd_profile==SUNXI_MMC_SD_UHS_SDR104;
     if(a==base+SUNXI_SMHC_FIFO) {
         if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
+    } else if(a==base+SUNXI_SMHC_THLD) {
+        if(!uhs)return 0; /* The SDR104 read threshold; no other profile writes it. */
     } else if(a==0x03400198) {
         if(v!=A733_MMC_GIC_BIT(slot))return 0;
     } else if(a==module||a==A733_MMC_BUS(slot)) {
