@@ -148,9 +148,9 @@ first step; a second run gave 784 µs and 807 µs. The provisional median limit 
 40 µs. At nominal wire time these limits round to 799 µs and 839 µs.
 They come from the observed median plus approximately 20 µs, not an
 independent model prediction. At the measured access costs, including a
-plain write of 198 ns, the native adapter's barrier placement is predicted
-to shorten the step by about 8 µs, and no placement reaches 110% while the
-provider polls each bus phase. Section "Board result" of [the access design](designs/pmic-access.md)
+plain write of 198 ns, no placement reaches 110% while the provider polls
+each bus phase. With the native adapter's barrier placement a bundle 6 run
+measured a median 1.9 µs below the run with `DSB SY` pairs. Section "Board result" of [the access design](designs/pmic-access.md)
 gives the windows, model limitations and provisional bound. The other images keep their
 per-tick loops.
 `a733_pmic_work()` reads faults from the state word. When a
@@ -206,14 +206,15 @@ so the provider's time read after that barrier follows the write's
 completion. The adapter's reads of the R_CCU, CCU, GIC and R_PIO blocks at
 admission and startup keep `DSB SY` on both sides. On the board a `DSB SY`
 pair adds about 41 ns to a 378 ns S_TWI0 read, and a plain write costs
-198 ns against about 325 ns for a fenced one. The model predicts a
-snapshot step about 8 µs shorter. This placement is **unqualified**:
-[shared-helpers.md](shared-helpers.md) requires a board run for a weaker
-barrier. A bundle 6 run with this adapter whose snapshots, bus-idle reads
-and step bound pass would qualify it for snapshots; a DCDC3 selector-write
-run would also cover the write of the selector byte. Images that link the adapter, including the
-board-qualified native USB image of rank 9, need that run before they rely
-on it.
+198 ns against about 325 ns for a fenced one. A bundle 6 run with this
+placement on port 3-3 passed with the same snapshots, `XADDR` window and
+bus-idle reads as a run with `DSB SY` pairs, which **qualifies it for
+snapshots**. Its byte phases' completing polls were 0.33 µs shorter, and
+its median 1.9 µs shorter, because a step moves in whole microseconds per
+bus phase ([pmic-access.md](designs/pmic-access.md), section "Board
+result"). A DCDC3 selector-write run would also cover the write of the
+selector byte. The native USB image of rank 9 needs a rerun on this adapter
+before it relies on it.
 
 Request admission waits for two locks: the private pin-lease check waits for
 REGISTER_LOCK, and the bus access waits for the I2C mutex. The poll releases

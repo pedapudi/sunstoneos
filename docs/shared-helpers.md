@@ -118,7 +118,7 @@ clobber. The accessor name states where the barriers are.
 | Variant | Meaning | Helper | Files | Example callers |
 | --- | --- | --- | --- | --- |
 | Fenced on both sides | DSB SY; access; DSB SY | `a733_mmio_readN_dsb_sy_both`, `a733_mmio_writeN_dsb_sy_both` | 49 | `read32`/`write32` in the native adapters other than the PMIC adapter's S_TWI0 accesses, `apps/*/native.c` register loads |
-| Completion after | Access; DSB SY | `a733_mmio_readN_dsb_sy_after`, `a733_mmio_writeN_dsb_sy_after` | 29 | `platform/a733/dma_native.c` reads, `apps/rtc/*.c` writes, `apps/npu-interrupt/irq-route.c`, the PMIC adapter's S_TWI0 control write (unqualified on the board; [pmic-runtime.md](pmic-runtime.md)) |
+| Completion after | Access; DSB SY | `a733_mmio_readN_dsb_sy_after`, `a733_mmio_writeN_dsb_sy_after` | 29 | `platform/a733/dma_native.c` reads, `apps/rtc/*.c` writes, `apps/npu-interrupt/irq-route.c`, the PMIC adapter's S_TWI0 control write (qualified for snapshots on the board; [pmic-runtime.md](pmic-runtime.md)) |
 | Fenced sequence | DSB SY, then several accesses, such as a read-modify-write check | `a733_mmio_dsb_sy()` with the plain accessors | 21 | read-modify-write paths in the native adapters, `apps/rtc/*.c` status reads |
 | Plain | One volatile access, no barrier, no memory clobber | `a733_mmio_readN`, `a733_mmio_writeN` | 24 | the accesses that follow `a733_mmio_dsb_sy()`; `drivers/pci/a733_pcie_native.c` 8- and 16-bit accesses |
 
