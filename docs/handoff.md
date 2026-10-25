@@ -58,24 +58,26 @@ and global PMIC transport retention. No production defect was found. Reuse
 this pause or documentation commit. The associated power-domain documentation
 is saved with this handoff. Check-index aggregation remains pending.
 
-**Uncommitted GPU integration:** preserve
-`/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024`, branch
-`work/gpu-provider-ready-1024`, based on merge `50db83c6`.
-The finite returning GPU and resident OS GPU-linear profiles both build using
-current dependency objects. The GPU-specific CMake option and current-monitor
-patch remove historical application-object mixing. Return admission now checks
-CORE6 OFF as well as TOP5. Actual typed allocator output exposed a further
-legacy-geometry defect: payload starts at `0x48030000`, the first-fit table fills
-`0x48022000..0x4802e000`, and the WB span ends at `0x48088000`. Earlier estimates
-of table/end addresses were superseded by these producer results.
-Six affected linked return cases passed; three OS caller cases and three finite
-backend cases were preserved. Evidence: `gpu-full-integration-20261024/`.
-Final review still needs the immutable ELF span marker, native-report-to-host
-round trip, malformed-span refusal and final dependency/artifact closure.
-The marker must preserve the historical `0x86000` span only when absent and
-refuse malformed present values. Do not replay unchanged successful cases.
-Untracked files include `apps/gpu-finite/current-monitor.patch` and
-`checks/gpu-linked-lifecycle.py`; preserve them with all tracked edits.
+**Returning GPU image (merged 2026-10-24):** the finite GPU image that runs
+one job and returns builds from current objects; the shared monitor and
+`platform/a733/platform.c` are configure inputs. The image is `9005499a…`.
+- **Return quiet check:** it requires TOP5 and CORE6 policy and status 0, at EL1
+  and again at EL3.
+- **Write-back span:** a read-only ELF marker holds the span
+  `0x48000000..0x48088000`. A malformed marker is refused. An image without the
+  marker is accepted with the historical `0x86000` span only if it lacks the
+  typed allocator.
+- **Clean deadline:** it is checked once per 4 KiB page, so the normal case
+  issues 312 ISBs rather than about 19,600.
+- **Checks:** all 29 return cases, the 9 marker cases and the linked lifecycle
+  cases pass.
+- **Evidence:** `gpu-full-integration-20261024/merged/`, with closure snapshot
+  `snapshot-2`.
+
+The image is not physically eligible. Running it needs a single-core admission
+record granting exclusive CORE6 and TOP5 control, confirmed supply, clock and
+isolation, and a reviewed return and recovery plan. The default GPU single-core
+profile also patches `platform.c` without listing it as a configure input.
 
 **Uncommitted NPU OS integration:** preserve
 `/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
