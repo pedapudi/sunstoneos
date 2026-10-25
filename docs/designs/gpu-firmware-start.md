@@ -226,7 +226,9 @@ The run, from monitor entry to exit, took 19.9 ms.
 
 The firmware-start image (`apps/gpu-power-id/fw-start.c`, build and check
 option `--fw-start`, bundle row 19) starts the pinned open firmware with
-the vendor's prerequisites:
+the vendor's prerequisites. It is frozen for port 3-1 in set
+`board-bundles-20261025-20`, after the provider-readiness checkpoint, in a
+lifetime of its own (`board-session-20261025-16`):
 
 1. Before any power change it prepares the firmware. Code (102,400 bytes),
    data (20,480 bytes) and the 16 KiB MIPS page table lie in write-back
