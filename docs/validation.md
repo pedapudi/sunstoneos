@@ -51,8 +51,11 @@ runs. The gate refuses a source with uncommitted or untracked changes unless
 `--allow-dirty` is given. It records `git status --porcelain` in `status.txt`,
 and in the summary the SHA-256 of `git diff --binary HEAD` and a SHA-256 over
 the name and content digest of every untracked file that Git does not ignore,
-so evidence from a dirty tree names the changes it built. After taking the
-lock the gate reads this state again and stops if it changed. There are no automatic retries, including for emulator timeouts.
+so evidence from a dirty tree names the changes it built. The revision in the
+summary comes from the same reading. The gate reads the revision, status,
+diff and untracked files again after taking the lock and after its last step,
+and writes a FAIL line and fails if any of them changed or could not be read,
+for example an unreadable untracked file. There are no automatic retries, including for emulator timeouts.
 Diagnose a failure and run only the affected work with a new label; reuse the
 successful evidence from the earlier invocation. The soak defaults to one
 trial; `--trials N` declares a repeatability sample in advance and needs a

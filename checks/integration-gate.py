@@ -34,6 +34,8 @@ with open(os.environ['GATE_TEST_CALLS'], 'a') as f:
     f.write(json.dumps([name, *args]) + '\\n')
 if '--target' in args and 'help' in args:
     print('... all\\n... clean\\n... kernel-check\\n... other-image\\n... ignored.o')
+if os.environ.get('GATE_TEST_TOUCH'):
+    pathlib.Path(os.environ['GATE_TEST_TOUCH']).write_text('written during a step\\n')
 if os.environ.get('GATE_TEST_FAIL') in args:
     print('host deadline exceeded')
     sys.exit(1)
@@ -147,27 +149,70 @@ if os.environ.get('GATE_TEST_FAIL') in args:
             summaries.append(summary)
         self.assertNotEqual(summaries[0], summaries[1])
 
-    def test_change_before_the_lock_stops_the_gate(self):
-        # A git wrapper adds an untracked file just before the status check
-        # that the gate repeats after taking the lock.
+    def wrap_git(self, command, index, action):
+        """Put a git wrapper first on the gate's PATH that runs the shell
+        action, in the source checkout, just before the index-th (from 0)
+        invocation of the git subcommand command. $REAL names the real git."""
         real = subprocess.run(['sh', '-c', 'command -v git'], capture_output=True, text=True, check=True).stdout.strip()
         wrapper = self.sandbox / 'wrapper/git'
         wrapper.parent.mkdir()
+        counter = self.sandbox / ('count-' + command)
         wrapper.write_text(f'''#!/bin/sh
-if [ "$1" = status ]; then
-  count=$(cat "{self.sandbox}/status-count" 2>/dev/null || echo 0)
-  echo $((count + 1)) > "{self.sandbox}/status-count"
-  [ "$count" = 1 ] && echo late > late.c
+REAL={real}
+if [ "$1" = {command} ]; then
+  count=$(cat "{counter}" 2>/dev/null || echo 0)
+  echo $((count + 1)) > "{counter}"
+  if [ "$count" = {index} ]; then {action}; fi
 fi
-exec {real} "$@"
+exec "$REAL" "$@"
 ''')
         wrapper.chmod(0o755)
         self.env['PATH'] = str(wrapper.parent) + os.pathsep + self.env['PATH']
-        result = self.run_gate('--reason', 'Kernel build', '--target', 'kernel-check')
+
+    def assert_changed(self, result, when):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
+        self.assertIn('FAIL the source revision, status, diff or untracked files changed or could not be read '
+                      + when, summary)
+        self.assertNotIn('PASS selected integration checks', summary)
+
+    def test_change_before_the_lock_stops_the_gate(self):
+        # Status runs before the refusal, in the recorded state and again after the lock.
+        self.wrap_git('status', 2, 'echo late > late.c')
+        result = self.run_gate('--reason', 'Kernel build', '--target', 'kernel-check')
         self.assertTrue((self.source / 'late.c').exists())
-        self.assertIn('FAIL the source changed between its status check and the lock',
-                      (self.sandbox / 'build/gate-case/summary.txt').read_text())
+        self.assert_changed(result, 'between the status check and the lock')
+        self.assertEqual(self.records(), [])
+
+    def test_head_move_before_the_lock_stops_the_gate(self):
+        # A new commit leaves the tree clean; only the revision changes.
+        before = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=self.source, capture_output=True, text=True).stdout
+        self.wrap_git('rev-parse', 1,
+                      '"$REAL" -c user.name=gate -c user.email=gate@example.invalid commit -q --allow-empty -m moved')
+        result = self.run_gate('--reason', 'Kernel build', '--target', 'kernel-check')
+        after = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=self.source, capture_output=True, text=True).stdout
+        self.assertNotEqual(before, after)
+        self.assertIn('revision: ' + before.strip(), (self.sandbox / 'build/gate-case/summary.txt').read_text())
+        self.assert_changed(result, 'between the status check and the lock')
+        self.assertEqual(self.records(), [])
+
+    def test_change_during_the_steps_fails_the_gate(self):
+        # The fake build writes an untracked file into the checkout it builds.
+        self.env['GATE_TEST_TOUCH'] = str(self.source / 'generated.c')
+        result = self.run_gate('--reason', 'Kernel build', '--target', 'kernel-check')
+        self.assertEqual([c[0] for c in self.records()], ['cfg.sh', 'cmake'])
+        self.assert_changed(result, 'during the selected steps')
+
+    def test_unreadable_untracked_file_fails_the_gate(self):
+        if os.geteuid() == 0:
+            self.skipTest('root reads every file')
+        hidden = self.source / 'hidden.c'
+        hidden.write_text('int hidden;\n')
+        hidden.chmod(0)
+        self.addCleanup(hidden.chmod, 0o644)
+        result = self.run_gate('--reason', 'Dashboard edit', '--check', 'progress', '--allow-dirty')
+        self.assertIn('untracked-sha256: unavailable', (self.sandbox / 'build/gate-case/summary.txt').read_text())
+        self.assert_changed(result, 'between the status check and the lock')
         self.assertEqual(self.records(), [])
 
     def test_clean_source_records_its_state(self):
