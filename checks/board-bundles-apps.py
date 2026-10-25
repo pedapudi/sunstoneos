@@ -33,11 +33,13 @@ The check:
 - recompiles checks/kernel.c and platform/a733/monitor.c and requires each to
   equal the central object, so the compile method adds nothing of its own;
 - takes each returning platform object of rank-9-usb-v4 when this tree's
-  a733-power-probe object equals it (monitor.c: equal instructions, its line
-  table moved with the counter option's lines), and otherwise this tree's
-  object, which must equal the base's object of the same unit;
+  a733-power-probe object equals it, byte for byte or apart from its debug
+  sections (monitor.c: equal instructions); a monitor.c with other
+  instructions is replaced by the base's monitor object, and any other
+  object is this tree's, which must equal the base's object of the same unit;
 - recompiles every provider unit and takes rank-9-usb-v4's object when they
-  are byte-identical; a differing unit must be a declared new provider unit;
+  are byte-identical or identical apart from their debug sections; a
+  differing unit must be a declared new provider unit;
 - checks that no translation-table write follows platform_init()'s final
   flush of both table pages: in the source, every table write and every call
   that receives a table precedes the two final flush calls, and in the linked
@@ -101,14 +103,15 @@ KERNEL_PASS = 'PASS kernel: timer preemption, queue ordering, blocking wakeup, F
 # equals bundle 2's object with the counter option.
 BASE_OVERLAY = ['platform/a733/monitor.c.obj', 'platform/a733/platform.c.obj']
 # Provider units that the PMIC access path changed (docs/designs/pmic-access.md):
-# the provider, its native adapter and its consumer, and the GPU resource
-# adapter, whose instructions are unchanged but whose debug information
-# records the changed layout of struct a733_pmic. Any other provider unit must
-# recompile byte-identical to rank-9-usb-v4's.
+# the provider, its native adapter and its consumer; and, since GPU CORE6
+# control, the GPU resource manager, whose LOCAL release also checks CORE6
+# policy and status zero, and its adapter, whose read allowlist adds those two
+# words. No bundle takes a LOCAL lease. Any other provider unit must recompile
+# byte-identical to rank-9-usb-v4's, or identical apart from debug sections.
 PROVIDER_NEW = ('drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c', 'drivers/power/a733_pmic_consumer.c',
-                'drivers/gpu/a733_gpu_resources_native.c')
+                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/gpu/a733_gpu_resources.c')
 # Declared new for their debug information only: their instructions must equal rank-9-usb-v4's.
-PROVIDER_SAME_INSTRUCTIONS = ('drivers/gpu/a733_gpu_resources_native.c',)
+PROVIDER_SAME_INSTRUCTIONS = ()
 EXPECT = {
     'base': KERNEL_PASS,
     'cpu': 'COMPLETE board bundle 4:',
@@ -249,6 +252,14 @@ def link_target(central, target, replace, elf):
     return objects
 
 
+def without_debug(obj, work):
+    """The digest of an object with its debug sections removed: code, data, symbols and relocations."""
+    stripped = Path(work) / ('stripped-' + sha(obj) + '.obj')
+    if not stripped.exists():
+        subprocess.run([str(LLVM / 'llvm-objcopy'), '--strip-debug', str(obj), str(stripped)], check=True)
+    return sha(stripped)
+
+
 def objcopy(elf, binary):
     subprocess.run([str(LLVM / 'llvm-objcopy'), '-O', 'binary', str(elf), str(binary)], check=True)
 
@@ -308,25 +319,38 @@ def v4_parts(v4):
     return platform, provider, linked
 
 
-def platform_and_provider(platform, provider, rp, central, base_objects, work):
+def platform_and_provider(platform, provider, rp, central, base_objects, work, base_monitor=None):
     """The returning platform and provider objects of the v4-based images, each with how it was chosen.
 
     A platform object is rank-9-usb-v4's when this tree's a733-power-probe
-    object equals it (monitor.c: equal instructions), and otherwise this
-    tree's, which must equal the base's object of the same unit. A provider
-    object is rank-9-usb-v4's when the unit recompiles byte-identical, and
-    otherwise the recompiled one, which must be a declared new unit."""
+    object equals it, byte for byte or apart from its debug sections (a
+    header's lines moved), or for monitor.c in its instructions. A monitor.c
+    with other instructions is replaced by the base's monitor object. Any
+    other object is this tree's, which must equal the base's object of the
+    same unit. A provider object is rank-9-usb-v4's when the unit recompiles
+    byte-identical, and otherwise the recompiled one, which must be a
+    declared new unit."""
     chosen, result = [], {}
     for rel, path in platform:
         mine = central / 'CMakeFiles/a733-power-probe.dir' / rel
         if sha(mine) == sha(path):
             chosen.append((rel, path))
             result[rel] = 'rank-9-usb-v4, byte-identical'
-        elif rel == MONITOR_OBJ:
-            require(instructions(mine) == instructions(path),
-                    'This tree\'s monitor.c changes rank-9-usb-v4 monitor instructions.')
+        elif without_debug(mine, work) == without_debug(path, work):
+            chosen.append((rel, path))
+            result[rel] = 'rank-9-usb-v4, identical apart from debug sections'
+        elif rel == MONITOR_OBJ and instructions(mine) == instructions(path):
             chosen.append((rel, path))
             result[rel] = 'rank-9-usb-v4, same instructions as this tree'
+        elif rel == MONITOR_OBJ:
+            # The monitor changed since rank-9-usb-v4 (the cleanup readbacks).
+            # The images then link the base's monitor object, the same unit
+            # with the counter option, so that the base's pass covers it.
+            require(base_monitor is not None and sha(base_monitor) == base_objects[MONITOR_OBJ]['sha256'],
+                    'This tree\'s monitor.c changes rank-9-usb-v4 monitor instructions and the base has no '
+                    'monitor object.')
+            chosen.append((rel, Path(base_monitor)))
+            result[rel] = 'set-base, the base\'s monitor with the counter option'
         else:
             require(rel in base_objects and sha(mine) == base_objects[rel]['sha256'],
                     f'This tree\'s {rel} differs from rank-9-usb-v4\'s and from the base\'s.')
@@ -342,6 +366,9 @@ def platform_and_provider(platform, provider, rp, central, base_objects, work):
         if sha(obj) == sha(provider[unit]):
             units[unit] = provider[unit]
             result[unit] = 'rank-9-usb-v4, byte-identical'
+        elif unit not in PROVIDER_NEW and without_debug(obj, work) == without_debug(provider[unit], work):
+            units[unit] = provider[unit]
+            result[unit] = 'rank-9-usb-v4, identical apart from debug sections'
         else:
             require(unit in PROVIDER_NEW, f'{unit} recompiled differs from rank-9-usb-v4\'s provider object and is not '
                                           'a declared new provider unit.')
@@ -603,7 +630,7 @@ def main():
     rp = returning_build.ReturningPlatform(out / 'platform', build=central)
     (out / 'provider').mkdir()
     platform, provider, chosen = platform_and_provider(platform, provider, rp, central, base['objects'],
-                                                       out / 'provider')
+                                                       out / 'provider', base['monitor'])
     result['reproduced'].update(chosen)
     result['table_flush'] = table_flush_check(dict(platform)['platform/a733/platform.c.obj'])
     provider_new = {u: p for u, p in provider.items() if chosen[u].startswith('new provider unit')}

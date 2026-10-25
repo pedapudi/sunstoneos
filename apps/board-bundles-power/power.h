@@ -78,6 +78,13 @@ struct bb_power {
     unsigned wire_in_step, wire_excluded;
 };
 extern struct bb_power bb_power;
+/* Bundle 6 only: the windows of trace.h's struct bb_cost_next. The access
+ * windows run at the park with the others; the poll window runs on the next
+ * queued snapshots after bb_power_arm_poll_window(), until 256 samples or
+ * BB_POLL_WINDOW_SNAPSHOTS snapshots. */
+#define BB_POLL_WINDOW_SNAPSHOTS 4u
+extern struct bb_cost_next bb_power_next;
+void bb_power_arm_poll_window(void);
 
 /* Before the scheduler: every manager, both tasks (the service at priority
  * 2, client at priority 1), the provider with S_TWI0 pins PL0 and PL1 at

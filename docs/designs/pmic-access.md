@@ -434,31 +434,46 @@ The model is not used to claim an independently measured margin. Reuse
 this provisional limit only under the stated bundle conditions; changed
 clock rates, instrumentation or bus timing require a new assessment.
 
-**Next bundle 6 windows, not yet implemented or run.**
+**Bundle 6 windows of the seventh set: implemented, not run.** The
+bundle 6 image of `board-bundles-20261024-7/` adds three windows at the park
+and one during the snapshots. Each uses the same 256 iterations in eight
+sub-windows of 32 as the other windows, with IRQs masked unless stated.
 
-- **A whole provider poll with the flag clear**: `a733_pmic_poll()` on a
-  transfer whose flag phase reads clear, so it returns PENDING after its
-  entry, try-lock, time read and flag read, timed in the same sub-windows
-  as the other windows; and the service loop between polls, with the
-  provider object's try-lock and `a733_pmic_work()`. These time the per-poll
-  work that no current window covers and test whether it accounts for the
-  23 µs gap.
-- **Plain writes**, below.
+- **Counter overhead:** the window loop with no body and a `DSB SY` at the
+  end of each sub-window, the structure of the write window.
+- **Plain writes:** 256 plain writes of the extended slave address register
+  `XADDR` (S_TWI0 `+0x04`, `0x07083004`) with the value it read, and one
+  `DSB SY` after each sub-window before its end stamp. A733 User Manual
+  V1.00 section 18.11.10.2 with 18.11.10.1 (printed pages 1498 and 1499) gives
+  XADDR one use: the second byte of a 10-bit slave address, compared only
+  after the first byte matched `11110b` and ADDR bits 2:1. Section
+  18.11.10.4 (printed pages 1499 to 1501) states that the controller does not
+  respond as a slave unless `CNTR.A_ACK` is set, which the provider never
+  writes. A START or STOP needs `M_STA` or `M_STP`, `INT_FLAG` is a CNTR
+  bit, and the pins follow the line-control register `LCR` (section
+  18.11.10.9). An XADDR write therefore starts no bus phase, acknowledges no
+  flag and drives no line. The window runs only when ADDR bits 7:3 are not
+  `11110b`, CNTR reads `0x40`, STAT reads `0xf8` and LCR reads both lines
+  high with neither forced (`bb_xaddr_admitted()` in
+  `apps/board-bundles-power/trace.c`). Afterwards XADDR, ADDR and the three
+  idle reads must be unchanged, or the image fails without a controlled
+  outcome. A refused precondition skips the window and is recorded.
+- **Service loop between polls:** the work query, the time read and the
+  work query with the spin time, as `pmic()` in
+  `drivers/power/a733_power_domains.c` runs them.
+- **Whole provider poll with the flag clear:** the last four client
+  snapshots carry this window. The service polls a queued snapshot back to
+  back, without its spin, and stamps each `a733_pmic_poll()`. A poll that
+  read only CNTR in a flag phase, wrote nothing, completed no phase and
+  returned PENDING is a whole poll with the flag clear: entry, the provider
+  object's try-lock, the time read and the flag read. IRQs stay unmasked as
+  in the service, and a sample with a scheduler tick inside is left out and
+  counted. 256 samples are grouped into eight sub-windows of 32; 256 samples
+  of the stamp pair alone give the per-sample overhead. Those snapshots
+  leave the step records.
 
-To resolve the write-cost gap, first select an S_TWI0 register whose pinned manual
-semantics establish that same-value writes while idle cannot start a bus
-phase, acknowledge a flag or alter an output. Record that source and the
-register address in the coordinator's proposal before enabling the window.
-No register is admitted merely because its value can be read back.
-
-Under the provider's existing ownership and idle checks, save the value
-and perform 256 plain back-to-back writes in eight sub-windows of 32.
-Place one completion barrier after each sub-window, before its end stamp.
-Report the total and sub-window distribution with the same statistic as
-reads, and record the counter overhead separately. Preserve the register
-value and verify controller idle state before and after. This window needs
-its own reviewed board procedure and gives no authority for a PMIC rail
-write. Production barrier placement remains a separate reviewed change.
+The windows give no authority for a PMIC rail write, and production barrier
+placement remains a separate reviewed change.
 
 ## Left out
 
@@ -498,7 +513,8 @@ member and the current power-domain check signature. The bundle builder
 admits the changed provider objects through its explicit overlay.
 
 The trace evaluator, distribution labels, host fixtures, controlled-outcome
-helper and bundle preparation row now use 1,268 permille. Only the next
-board image freeze remains pending. The fifth and sixth sets' preserved
-images and runbooks retain their original 1,550-permille acceptance limit;
-their existing passes do not establish execution of the revised evaluator.
+helper and bundle preparation row use 1,268 permille. The seventh set's
+bundle 6 image applies it and has not run. The fifth and sixth sets'
+preserved images and runbooks retain their original 1,550-permille
+acceptance limit; their existing passes do not establish execution of the
+revised evaluator.

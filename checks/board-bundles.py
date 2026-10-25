@@ -484,8 +484,8 @@ def check_table():
             # blank, reset64, version, the result read), the 10 s return
             # window and 60 s of margin.
             assert prerequisites == [queue.SUPERVISED_RECOVERY] and timeout == 615 + 8 * 30 + 10 + 60 == 925, parts
-            assert r['admission'] is None or r['admission'] == {'schema': 'board-returning-bundle-v1',
-                                                                'row': r['name']}
+            schema = 'board-gpu-returning-bundle-v1' if r.get('variant') else 'board-returning-bundle-v1'
+            assert r['admission'] is None or r['admission'] == {'schema': schema, 'row': r['name']}
             assert r['admission'] is not None or r['needs'], r['name']
             missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
             assert not missing, (r['name'], missing)

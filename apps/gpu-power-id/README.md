@@ -115,7 +115,13 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
 
-Add `--power-only` to both commands for the power-only variant. The build
+Add `--power-only` to both commands for the power-only variant.
+`prepare.py` turns a build and its check result into a board bundle for
+`tools/prepare-board-bundles.py` (rows 11 to 13 of
+[board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
+power variants it reads `on_steps` and `off_steps` from the image and
+requires the domain-5 (TOP5) ON request before the first CORE6 access and
+the last CORE6 access before domain-5 OFF. The build
 records `"variant": "power-only"` and its completion text in `build.json`.
 The check refuses an image of the other variant: only the identity variant
 defines the identity read counter. Its nine cases cover the normal path, the

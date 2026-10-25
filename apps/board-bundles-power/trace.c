@@ -104,6 +104,33 @@ unsigned bb_byte_ns(uint32_t bit_ns, unsigned seen, uint64_t clear_ticks, uint32
     return 1;
 }
 
+unsigned bb_xaddr_admitted(uint32_t addr, uint32_t cntr, uint32_t stat, uint32_t lcr)
+{
+    /* ADDR 7:3 = 11110b selects 10-bit addressing, the only use of XADDR;
+     * CNTR 0x40 is BUS_EN alone; STAT 0xf8 is idle; LCR: no line forced and
+     * both read high. */
+    return (addr & 0xf8) != 0xf0 && (cntr & 0xff) == 0x40 && (stat & 0xff) == 0xf8 && (lcr & 0x35) == 0x30;
+}
+
+void bb_samples_start(struct bb_samples *s)
+{ *s = (struct bb_samples){0, 0, UINT32_MAX, 0, 0, UINT32_MAX, 0}; }
+
+unsigned bb_samples_add(struct bb_samples *s, uint32_t ticks)
+{
+    if (s->count >= BB_COST_SAMPLES)
+        return 0;
+    s->ticks += ticks;
+    s->group += ticks;
+    if (ticks < s->min) s->min = ticks;
+    if (ticks > s->max) s->max = ticks;
+    if (++s->count % (BB_COST_SAMPLES / BB_COST_SUBWINDOWS) == 0) {
+        if (s->group < s->sub_min) s->sub_min = s->group;
+        if (s->group > s->sub_max) s->sub_max = s->group;
+        s->group = 0;
+    }
+    return s->count < BB_COST_SAMPLES;
+}
+
 void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, uint64_t (*now)(void),
     uintptr_t status, uint32_t mask, uint32_t done, uint64_t start, uint64_t bound, struct bb_status_trace *t)
 {
@@ -269,6 +296,49 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "cntpct", s->cost.write_ticks);
     bb_line_dec(l, "min", s->cost.write_min);
     bb_line_dec(l, "max", s->cost.write_max);
+    bb_line_end(l++);
+    const struct { const char *name; const struct bb_window *w; } next[] = {
+        {"TWI_COST empty", &s->next.empty}, {"TWI_COST xaddr_write", &s->next.xaddr_write},
+        {"TWI_COST loop", &s->next.loop}};
+    for (unsigned i = 0; i < sizeof next / sizeof next[0]; ++i) {
+        bb_line_start(l, next[i].name);
+        bb_line_dec(l, "cntpct", next[i].w->ticks);
+        bb_line_dec(l, "sub_min", next[i].w->sub_min);
+        bb_line_dec(l, "sub_max", next[i].w->sub_max);
+        bb_line_end(l++);
+    }
+    bb_line_start(l, "TWI_WRITE before");
+    bb_line_dec(l, "run", s->next.write_run);
+    bb_line_hex(l, "addr", s->next.addr);
+    bb_line_hex(l, "xaddr", s->next.xaddr);
+    bb_line_hex(l, "cntr", s->next.cntr);
+    bb_line_hex(l, "stat", s->next.stat);
+    bb_line_hex(l, "lcr", s->next.lcr);
+    bb_line_end(l++);
+    bb_line_start(l, "TWI_WRITE after");
+    bb_line_dec(l, "changed", s->next.write_changed);
+    bb_line_hex(l, "xaddr", s->next.xaddr_after);
+    bb_line_hex(l, "cntr", s->next.cntr_after);
+    bb_line_hex(l, "stat", s->next.stat_after);
+    bb_line_hex(l, "lcr", s->next.lcr_after);
+    bb_line_end(l++);
+    const struct { const char *name; const struct bb_samples *x; } samples[] = {
+        {"TWI_POLL clear", &s->next.poll}, {"TWI_POLL stamp", &s->next.stamp}};
+    for (unsigned i = 0; i < 2; ++i) {
+        bb_line_start(l, samples[i].name);
+        bb_line_dec(l, "count", samples[i].x->count);
+        bb_line_dec(l, "cntpct", samples[i].x->ticks);
+        bb_line_dec(l, "sub_min", samples[i].x->sub_min);
+        bb_line_dec(l, "sub_max", samples[i].x->sub_max);
+        bb_line_dec(l, "min", samples[i].x->min);
+        bb_line_dec(l, "max", samples[i].x->max);
+        bb_line_end(l++);
+    }
+    bb_line_start(l, "TWI_POLL window");
+    bb_line_dec(l, "polls", s->next.polls);
+    bb_line_dec(l, "ticked", s->next.poll_ticked);
+    bb_line_dec(l, "snapshots", s->next.poll_snapshots);
+    bb_line_hex(l, "loop_work", s->next.loop_work);
     bb_line_end(l++);
     bb_line_start(l, "PPU_MAPPING");
     bb_line_dec(l, "adapter_mapped", s->mapped);
