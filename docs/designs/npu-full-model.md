@@ -91,9 +91,10 @@ range, so many wrong computations would produce it too, and a match is weak
 evidence of correct arithmetic. No unsaturated intermediate or larger
 reference exists for this graph. A later run can compare one: the SDK's
 `vpm_run --layer_dump` (`examples/vpm_run/vpm_run.c:57`, `:2411-2428`) dumps
-each layer's output on the host simulator, and the last 1 × 1 convolution's
-output, before pooling, lies in the DRAM pool, where the host can read it
-before it restores DRAM. The submit and publish phases run on the CPU before the doorbell;
+each layer's output on the host simulator. An unsaturated layer output that
+the graph keeps in the DRAM pool rather than in VIP SRAM, such as the last
+1 × 1 convolution's before pooling if the relocations place it there, could
+be read by a host change before the host restores DRAM, and compared. The submit and publish phases run on the CPU before the doorbell;
 they are predicted at 1–5 ms and 5–30 ms per job, dominated by clearing the
 pool and hashing about 0.92 MB with the software SHA-256.
 
