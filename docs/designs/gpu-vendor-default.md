@@ -50,8 +50,8 @@ remain the candidates.
 **Decision.** Every EL3 entry makes every cold-boot security write of
 BL31's `sunxi_security_setup`, cold-boot writes 9 to 17 of
 `docs/vendor-firmware/tf-a-monitor.md` (branch `work/blob-doc-monitor-1025`),
-in BL31's order, before any core enters EL1. SunstoneOS has three EL3
-entries:
+in BL31's order, before any core enters EL1. SunstoneOS has four EL3
+entries into an image:
 
 - `platform/a733/monitor.c`, which the returning images use;
 - `apps/storage-read-single-core/monitor.c`, which the single-core
@@ -59,9 +59,14 @@ entries:
 - `platform/a733-smp-cached/boot.c` (`a733_smp_boot`), which the multicore
   application and OS images use through their boot patches. It makes the
   writes after starting the secondaries, which wait for the primary's
-  continuation, and before that continuation.
+  continuation, and before that continuation;
+- `platform/a733-smp/boot.c`, the same sequence in the uncached eight-core
+  diagnostic `a733-smp-diagnostic`.
 
-One definition, `include/a733_el3_security.h`, serves all three. The two
+The two assembly interrupt probes (`boot/a733/primary-interrupt-probe.S`
+and `secondary-interrupt-probe.S`) also enter EL1, only to take a timer or
+software interrupt; they access no peripheral behind the SPC and are left
+unchanged. One definition, `include/a733_el3_security.h`, serves all four. The two
 build pins of the SMP cached boot source (`cmake/a733-storage-maintenance.cmake`
 and `cmake/a733-smp-observe.cmake`) name its new SHA-256; every boot patch
 applied to it still applies unchanged. QEMU models (`MONITOR_QEMU`) omit the

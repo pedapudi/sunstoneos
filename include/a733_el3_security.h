@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_A733_EL3_SECURITY_H
 #define SUNSTONE_A733_EL3_SECURITY_H
 /* The cold-boot security setup of the vendor's EL3 firmware, which both EL3
- * monitors and the SMP cached boot make as their last step before entering EL1
+ * monitors and both SMP boots make as their last step before entering EL1
  * (docs/designs/gpu-vendor-default.md). The writes are BL31's
  * sunxi_security_setup (monitor.fex, SHA-256 8af16b86...5b2632, loaded at
  * 0x48000000), cold-boot writes 9 to 17 of docs/vendor-firmware/

@@ -55,7 +55,10 @@ images, 34 change:
   loadable bytes are unchanged.
 
 The 22 unchanged images are `a733-smp-diagnostic`, `kernel-check` and the
-DMA, I2S stream and duplex, NPU service, radio and SMP models.
+DMA, I2S stream and duplex, NPU service, radio and SMP models. The commit
+after `a071620a` adds the writes to `platform/a733-smp/boot.c`, so
+`a733-smp-diagnostic` also changes in code from that commit on; the SMP
+models do not compile that file.
 
 Images built by application scripts change when rebuilt from this tree,
 because they compile one of the three EL3 entries: the four GPU diagnostic
