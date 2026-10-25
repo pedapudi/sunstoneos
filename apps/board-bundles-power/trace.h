@@ -148,6 +148,54 @@ struct bb_cost {
     uint32_t wire_reads, wire_seen;    /* reads; 1 when INT_FLAG was seen set */
     uint64_t wire_clear, wire_set;     /* ticks from the write's return to the last read with INT_FLAG clear, the first set */
 };
+/* The windows that the earlier record lacks (docs/designs/pmic-access.md,
+ * "Next bundle 6 windows"), kept outside struct bb_power so that images
+ * that link an earlier power.c object keep its layout.
+ *
+ * Plain writes go to the extended slave address register XADDR (+0x04).
+ * The A733 User Manual V1.00, section 18.11.10.2 with 18.11.10.1, gives
+ * XADDR one use: the second byte of a 10-bit slave address, compared only
+ * after the first byte matched 11110b and ADDR bits 2:1, in slave mode.
+ * Section 18.11.10.4 states that the controller does not respond as a slave
+ * unless CNTR.A_ACK (bit 2) is set, which the provider never writes. A START
+ * or STOP needs CNTR.M_STA or M_STP, INT_FLAG is a CNTR bit, and the pins
+ * follow LCR (+0x20), so an XADDR write starts no bus phase, acknowledges no
+ * flag and drives no line. The window runs only when ADDR bits 7:3 are not
+ * 11110b, CNTR reads 0x40 (BUS_EN alone: A_ACK, INT_EN, M_STA, M_STP and
+ * INT_FLAG clear), STAT reads 0xf8 and LCR reads both lines released with
+ * neither line forced (bb_xaddr_admitted), and it writes the value it read. */
+#define BB_TWI_ADDR UINT32_C(0x07083000)
+#define BB_TWI_XADDR UINT32_C(0x07083004)
+#define BB_TWI_LCR UINT32_C(0x07083020)
+unsigned bb_xaddr_admitted(uint32_t addr, uint32_t cntr, uint32_t stat, uint32_t lcr);
+/* Samples timed one by one, grouped as the windows are: BB_COST_SAMPLES
+ * samples in BB_COST_SUBWINDOWS consecutive groups. A group's ticks are the
+ * sum of its samples' stamps. */
+#define BB_COST_SAMPLES 256u
+struct bb_samples { uint32_t count, ticks, sub_min, sub_max, group, min, max; };
+void bb_samples_start(struct bb_samples *);
+unsigned bb_samples_add(struct bb_samples *, uint32_t ticks); /* 0 once the record is full */
+struct bb_cost_next {
+    /* With IRQs masked, at the park, in the provider task with the I2C mutex
+     * entered and the provider idle. */
+    struct bb_window empty;            /* window loop and stamps, a DSB SY end, no body: counter overhead */
+    struct bb_window xaddr_write;      /* plain XADDR writes of its own value; one DSB SY ends each sub-window */
+    struct bb_window loop;             /* the service loop's work between polls: a733_pmic_work, time read, a733_pmic_work */
+    unsigned write_run;                /* 1: the write window ran; 0: a precondition read refused it */
+    unsigned write_changed;            /* 1: XADDR, ADDR or the idle reads changed across the window */
+    uint32_t addr, xaddr, cntr, stat, lcr;             /* before the write window */
+    uint32_t xaddr_after, cntr_after, stat_after, lcr_after;
+    uint32_t loop_work;                /* OR of the work bits the loop window saw; 0 while idle */
+    /* During one snapshot, which the service polls back to back without its
+     * spin and which leaves the step records: each a733_pmic_poll() that
+     * read only CNTR, in a flag phase, with the flag clear, and returned
+     * PENDING; each with IRQs as the service runs it. */
+    struct bb_samples poll;
+    struct bb_samples stamp;           /* two back-to-back stamps per sample, the per-sample overhead */
+    uint32_t polls, poll_ticked, poll_snapshots; /* polls of the window; samples left out for a tick; snapshots */
+};
+#define BB_POLL_WINDOW_POLLS 4096u     /* a back-to-back snapshot needs about 500 */
+
 /* Bundle 6's summary. */
 struct bb6_summary {
     uint32_t divisor, bit_ns, state, mapped, par_attributes, par_shareability;
@@ -165,8 +213,9 @@ struct bb6_summary {
     uint32_t byte_ns, byte_ok;          /* byte time of the wire model; 0 when bb_byte_ns() refused the sample */
     struct bb_bound bound;
     struct bb_cost cost;
+    struct bb_cost_next next;
 };
-#define BB6_SUMMARY_LINES 23u
+#define BB6_SUMMARY_LINES 31u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {

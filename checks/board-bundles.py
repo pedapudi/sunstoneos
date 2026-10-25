@@ -484,8 +484,8 @@ def check_table():
             # blank, reset64, version, the result read), the 10 s return
             # window and 60 s of margin.
             assert prerequisites == [queue.SUPERVISED_RECOVERY] and timeout == 615 + 8 * 30 + 10 + 60 == 925, parts
-            assert r['admission'] is None or r['admission'] == {'schema': 'board-returning-bundle-v1',
-                                                                'row': r['name']}
+            schema = 'board-gpu-returning-bundle-v1' if r.get('variant') else 'board-returning-bundle-v1'
+            assert r['admission'] is None or r['admission'] == {'schema': schema, 'row': r['name']}
             assert r['admission'] is not None or r['needs'], r['name']
             missing = [s for s in r['sources'] if not (ROOT / s).is_file()]
             assert not missing, (r['name'], missing)
@@ -794,6 +794,24 @@ def main():
                              evidence, repo, lifetime=unknown)
     record = json.loads((third / 'run.json').read_text())
     assert status == 1 and 'no-such-outcome' in record['lifetime_refused'] and not (third / 'runbook.md').exists()
+    # --run-dir: a named new directory under the evidence directory given, here
+    # with a lifetime that starts with no warm-return link and a start section.
+    fresh = {'port': '3-1', 'ddr': 'n-ddr', 'chain': [], 'start': ['Fixture start.'],
+             'order': [{'row': 'returning-base', 'stem': 'n-base', 'run': 'n-base-run'}]}
+    named = evidence / 'named-set' / 'port-3-1'
+    harness.refused(lambda: tool.run({'returning-base': inputs['returning-base']}, rows, evidence, repo,
+                                     lifetime=fresh, run_dir=work / 'elsewhere' / 'port-3-1'),
+                    'is not under the evidence directory')
+    assert not (work / 'elsewhere').exists(), 'a refused run directory is not created'
+    status, chosen = tool.run({'returning-base': inputs['returning-base']}, rows, evidence, repo, lifetime=fresh,
+                              run_dir=named)
+    assert status == 0 and chosen == named.resolve(), (status, chosen)
+    base_book = (chosen / 'returning-base/runbook.md').read_text()
+    assert 'no `--warm-return`' in base_book and '--warm-return $S' not in base_book, base_book
+    assert f'--platform-survey $S/n-base-survey/session.json\n   ```' in base_book, base_book
+    assert 'Fixture start.' in (chosen / 'runbook.md').read_text() and 'no returning run' in (chosen / 'runbook.md').read_text()
+    harness.refused(lambda: tool.run({}, rows, evidence, repo, run_dir=named), 'exists', kind=FileExistsError)
+    prepared['run_dir'] = str(chosen.relative_to(evidence))
     status, second = tool.run({}, rows, evidence, repo)
     assert status == 0 and second.name.endswith('-3'), 'a later run gets its own directory'
 

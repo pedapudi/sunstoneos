@@ -66,6 +66,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tempfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -172,12 +173,13 @@ NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500,
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
-                  passes=True, sources=(), base=None, after=()):
+                  passes=True, sources=(), base=None, after=(), failures=()):
     """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one.
     base: the row whose image this row links objects of, prepared in the same run and run first; after: further
-    rows of the same run that must pass first."""
+    rows of the same run that must pass first. failures: the image's own failure lines, which the runbook lists
+    among the paths that end in a quarantine."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
-            'base': base, 'after': list(after),
+            'base': base, 'after': list(after), 'failures': list(failures),
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
@@ -189,10 +191,43 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
                           '{bundle}/probe.bin with the DDR record and warm-return chain of this lifetime.']}
 
 
+GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
+               'apps/gpu-power-id/main.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
+               'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
+               'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
+               'drivers/gpu/a733_gpu_resources_native.c', 'drivers/power/a733_power_domains.c',
+               'include/a733_gpu_power.h', 'checks/a733-gpu-core-owner.c', 'tools/prepare-board-bundles.py',
+               'tools/check-a733-kernel.py', *HOST_TOOLS]
+GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admission is separate"): a cold DDR start '
+                     'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
+                     'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
+                     'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
+                     'exclusive GPU-local authority over the GPU CCU words and CORE6 policy and PWCR at 0x07066000, '
+                     'with TOP5 through the shared domain-5 row. No NPU image runs in this lifetime.')
+GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after `GPU power phase=...` and `GPU CORE '
+                'entry seen=... policy=... status=... pwcr=...` lines that hold cached values only; `GPU ON poll` '
+                'or `GPU ON deadline` also ends a CORE6 status poll that never read 8',
+                '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
+                '`FAIL GPU provider park proof` or `GPU provider request retained`',
+                'a `FAIL` line of the provider or service (`provider fault`, `provider startup and supply '
+                'verification deadline`, `service park deadline`, `provider not quiescent at park`, `PMIC clock`)']
+
+
+def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=()):
+    """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record."""
+    row = returning_row(name, position, component, [], expect, False, expected, intro, after=after,
+                        failures=list(failures) + GPU_FAILURES)
+    row.update(module='apps/gpu-power-id/prepare.py', function='prepare_bundle', variant=variant,
+               admission={'schema': 'board-gpu-returning-bundle-v1', 'row': name}, sources=list(GPU_SOURCES),
+               admission_text=GPU_PREREQUISITES)
+    return row
+
+
 # The PMIC provider, its native adapter and consumer, and the GPU resource
 # adapter, which recompile differently since the PMIC access path
 # (docs/designs/pmic-access.md); checks/board-bundles-apps.py declares them.
-PROVIDER_OVERLAY = ['drivers/gpu/a733_gpu_resources_native.c.obj', 'drivers/power/a733_pmic.c.obj',
+PROVIDER_OVERLAY = ['drivers/gpu/a733_gpu_resources.c.obj', 'drivers/gpu/a733_gpu_resources_native.c.obj',
+                    'drivers/power/a733_pmic.c.obj',
                     'drivers/power/a733_pmic_consumer.c.obj', 'drivers/power/a733_pmic_native.c.obj']
 POWER_OVERLAY = ['apps/board-bundles-power/power.c.obj', 'apps/board-bundles-power/trace.c.obj',
                  'arch/aarch64/device_memory.c.obj', 'drivers/power/a733_power_domains.c.obj',
@@ -222,9 +257,12 @@ ROWS = [
                   'The kernel check\'s 100 rounds pass and the monitor returns to a responsive ROM.',
                   'The rank 4 kernel check with SUNSTONE_MONITOR_COUNTERS, built from the source revision: the '
                   'monitor writes MDCR_EL3, HSTR_EL2 and MDCR_EL2.HPMN before EL1 entry. Against bundle 2, which '
-                  'passed on port 3-3, only platform/a733/platform.c differs: platform_init() now sets DAIF.I again '
-                  'after the local pool preparation. Its pass makes it the equivalence base of the other returning '
-                  'images prepared in the same run, which link its platform.c object.'),
+                  'passed on port 3-3, platform/a733/platform.c and platform/a733/monitor.c differ: platform_init() '
+                  'sets DAIF.I again after the local pool preparation, and the monitor reads back the interrupt '
+                  'state it restores on return and, when that fails, publishes status 6 with the image\'s status in '
+                  'replaced_status. Its pass makes it the equivalence base of the other returning images prepared '
+                  'in the same run, which link its platform.c object and, when the monitor changed since '
+                  'rank-9-usb-v4, its monitor object.'),
     read_row('clock-words', 3, 'Clock words for the CPU-L boot-clock report, MBUS and NSI',
              'CPU-L configured rate, MBUS_DFS_EN and the NSI gate and reset, read before any image needs them',
              [word(CCU + 0x580, 'ccu', note='NSI_CLK_REG: gate 31, reset 30'),
@@ -271,7 +309,8 @@ ROWS = [
                   'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
                   'provisional bound and its verdict, the byte time and the wire-time spin, the re-spins, the step '
                   'distribution against 1000, 1050, 1100 and 1268 permille of measured wire time, the access-cost windows with their '
-                  'fastest and slowest sub-windows, the domain-1 mapping and the adoption '
+                  'fastest and slowest sub-windows, the XADDR write, service-loop and whole-poll windows, the '
+                  'domain-1 mapping and the adoption '
                   'reads of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the '
                   'STEP lines, the 32 snapshots and the owner accesses; or the controlled outcome '
                   'provisional-step-bound-missed: status 1 after the same summary with BOUND pass=0 and FAILED '
@@ -295,14 +334,41 @@ ROWS = [
                   'reads with DSB SY on both sides, plain CNTR reads (issue throughput), dependent CNTR reads '
                   '(latency), the adapter\'s time and read operations, the task check with IRQs unmasked, and the '
                   'TWI observer, and prints each total with its fastest and slowest sub-window; it names its '
-                  'core. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
+                  'core. Three windows follow there, also with IRQs masked: the window loop alone with a DSB SY end '
+                  '(counter overhead); 256 plain writes of S_TWI0 XADDR (+0x04) with its own value, one DSB SY after '
+                  'each sub-window of 32, run only when ADDR bits 7:3 are not 11110b, CNTR reads 0x40, STAT 0xf8 and '
+                  'LCR both lines high with neither forced, and followed by the same reads and an XADDR and ADDR '
+                  'readback (A733 User Manual V1.00 sections 18.11.10.1, 18.11.10.2 and 18.11.10.4: XADDR only '
+                  'matches a 10-bit slave address, and the controller answers as a slave only with A_ACK set, '
+                  'which the provider never writes); and the service loop\'s work between two polls '
+                  '(a733_pmic_work, the time read, a733_pmic_work). Up to four of the last four client snapshots carry '
+                  'the poll window, which stops at 256 samples, normally after the first of them: the service polls '
+                  'a queued snapshot back to back without its spin and stamps each '
+                  'a733_pmic_poll(); a poll that read only CNTR in a flag phase, wrote nothing and returned PENDING '
+                  'is a whole poll with the flag clear, through the provider object\'s try-lock, its time read and '
+                  'its flag read. 256 such samples, those with a scheduler tick left out and counted, are grouped '
+                  'in eight sub-windows of 32, beside 256 samples of the stamp pair alone. Those snapshots leave '
+                  'the step records: of the 34 snapshots, the wire-time spin step is excluded and the poll window '
+                  'normally takes one, so STEPS normally reads recorded=32 and excluded=1, one fewer recorded for '
+                  'each further snapshot the window takes. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
                   'provisional empirical bound of docs/designs/pmic-access.md: at CPU-L 494 MHz, the median step at most '
                   '1268 permille of its measured wire time and the first step at most that limit plus 40 us. A missed '
                   'bound, or a measured byte that is missing or above 110%, is the controlled outcome; a supply, '
-                  'snapshot or record mismatch is not. The summary and outcome print before the detail lines, which stop '
+                  'snapshot or record mismatch, an S_TWI0 value that changed across the write window or a provider '
+                  'that was not idle in the loop window is not. A refused write window (TWI_WRITE before run=0) or '
+                  'an empty poll window (TWI_POLL clear count=0) is recorded and does not fail the run. The summary '
+                  'and outcome print before the detail lines, which stop '
                   'while 256 log bytes remain. No GIC register is read for the record, and no PPU or PMIC register '
-                  'is written.',
-                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c'], base=BASE_ROW),
+                  'is written; the only S_TWI0 write outside the provider writes XADDR\'s own value.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c'], base=BASE_ROW,
+                  failures=['`FAIL board bundle 6: supply verification or snapshot mismatch`',
+                            '`FAIL board bundle 6: snapshot count or step record`',
+                            '`FAIL board bundle 6: S_TWI0 state changed across the XADDR write window`',
+                            '`FAIL board bundle 6: provider not idle in the loop window`',
+                            '`FAIL board bundle 6: cost windows could not enter the I2C mutex` or `cost window '
+                            'operation refused`',
+                            'a `FAIL` line of the provider or service (`provider fault`, a deadline, `provider not '
+                            'quiescent at park`)']),
     returning_row('power-domain-1-on', 7, 'Domain 1 ON through the power-domain owner',
                   POWER_OVERLAY + ['apps/board-bundles-power/bundle7.c.obj'], 'COMPLETE board bundle 7:', True,
                   'Monitor status 0 with COMPLETE board bundle 7: domain 1 ON, the owner\'s access trace and every '
@@ -360,6 +426,41 @@ ROWS = [
      'expected_result': 'Startup reaches READY and the outputs match the SDK simulator.' + TERMINAL_COUNTS,
      'needs': 'tools/check-a733-npu-supervised.py must declare and report COMPLETION_COUNTS, and the NPU owner must '
               'name admission values and record domain 1 and NSI state with the outputs.'},
+    # The returning GPU images of port 3-1, in their run order.
+    gpu_row('gpu-provider-ready', 11, 'GPU provider readiness before any GPU power request', 'provider-ready',
+            'COMPLETE GPU provider readiness: supplies verified, parked, no GPU power request',
+            'Monitor status 0 with COMPLETE GPU provider readiness: supplies verified, parked, no GPU power request, '
+            'then a responsive ROM.',
+            'The frozen provider-readiness checkpoint `3adfa4ad…` (apps/gpu-provider-ready/README.md): the GPU '
+            'diagnostic\'s constructors, the PMIC service and the domain-5 row, which is never requested; the '
+            'service verifies DCDC2 and DCDC4 and parks, and the client checks every owner record empty. No GPU or '
+            'PCK register access. Its CPU monitor, the accepted restoration-readback monitor, is the one the two GPU '
+            'power images reuse, so its return is their first board run of that monitor. It runs first on port 3-1, '
+            'as apps/gpu-power-id/README.md orders it.'),
+    gpu_row('gpu-power-only', 12, 'GPU TOP5 and CORE6 power without a GPU register access', 'power-only',
+            'COMPLETE GPU power only: CORE status 8, OFF and provider parked',
+            'Monitor status 0 with GPU power core_status=0x8 and COMPLETE GPU power only: CORE status 8, OFF and '
+            'provider parked, then a responsive ROM.',
+            'apps/gpu-power-id built with --power-only. The GPU platform requests domain 5 (TOP5) ON through the '
+            'shared row, then, under the exclusive LOCAL lease, captures CORE6 policy, status and PWCR, writes PWCR '
+            '0 and policy 8 with readbacks, opens the GPU clock and reset, and requires the CORE6 status poll to '
+            'read 8; OFF writes CORE6 policy 0 and requires status 0 before the clock and reset close and domain 5 '
+            'goes OFF, in the order of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the '
+            'image\'s own on_steps and off_steps tables. The image never reads or writes the GPU register window at '
+            '0x01800000: the identity reads and their mapping check are compiled out.',
+            after=['gpu-provider-ready']),
+    gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
+            'COMPLETE GPU power identity: OFF and provider parked',
+            'Monitor status 0 with the two GPU identity lines (raw and BVNC with matches=1 for 36.56.104.183, or '
+            'matches=0 for another identity, which is a valid observation that qualifies nothing) and COMPLETE GPU '
+            'power identity: OFF and provider parked, then a responsive ROM.',
+            'apps/gpu-power-id, identity variant: the power-only sequence with one 64-bit read of 0x01800020 (and, '
+            'only when its branch field is zero, the legacy 32-bit reads of 0x01800020 and 0x01800018) between ON '
+            'and OFF, each after an identity Device-nGnRnE mapping check and a deadline check. No GPU register '
+            'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime.',
+            after=['gpu-power-only'],
+            failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
+                      'deadline/clock`']),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -625,12 +726,13 @@ def prepare_returning(row, build, output):
 
 def validate_returning(row, output):
     """The uploaded bytes are image.elf's loadable segments, and the equivalence and outcome files hold."""
-    flat = output.parent / (output.name + '-objcopy.bin')
-    result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
-                            text=True)
-    require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
-    same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
-    flat.unlink()
+    # A temporary directory, so that a frozen, read-only set can be validated again.
+    with tempfile.TemporaryDirectory() as scratch:
+        flat = Path(scratch) / 'objcopy.bin'
+        result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
+                                text=True)
+        require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
+        same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
     require(same, 'probe.bin is not the loadable segments of image.elf.')
     equivalence = json.loads((output / 'equivalence.json').read_text())
     require(equivalence['image_sha256'] == sha256(output / 'image.elf'), 'image.elf is not the built image.')
@@ -709,7 +811,27 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
     lines += ['']
-    if row['class'] == 'monitor':
+    if row.get('admission_text'):
+        lines += ['## Admission', '', row['admission_text'], '']
+    if row.get('variant'):
+        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which has not run on a board',
+                  'gpu-power-id-fd3d5839': 'the power and identity image `fd3d5839…`, which launched on port 3-1 '
+                                           'and did not return'}
+        lines += [f'Equivalence: {value["reused_objects"]} linked objects are those of '
+                  + ' and '.join(reused[x] for x in value['reused_from'])
+                  + '; ' + str(len(value['new_objects'])) + ' are compiled from the source revision: '
+                  + ', '.join(f'`{x}`' for x in value['new_objects'])
+                  + '. No object of this image has a board pass of its own. `equivalence.json` lists every object '
+                  'with its origin, and `build.json` and `host-check.json` are the build record and the '
+                  f'{value["check_cases"]} passing host-check cases of this image.', '']
+        if value.get('power_order'):
+            o = value['power_order']
+            lines += [f'Power order, read from the image\'s `on_steps` ({o["on_steps"]} steps) and `off_steps` '
+                      f'({o["off_steps"]} steps): domain 5 (TOP5) ON is step {o["on_domain_step"] + 1} and the first '
+                      f'CORE6 access step {o["on_first_core_step"] + 1}; ON ends with the CORE6 status poll for 8. '
+                      f'At OFF the last CORE6 access is step {o["off_last_core_step"] + 1} and domain 5 OFF step '
+                      f'{o["off_domain_step"] + 1}.', '']
+    elif row['class'] == 'monitor':
         origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
                          - {'new'})
         passed = sorted(set(origins) & set(PASSED_RECORDS))
@@ -749,10 +871,12 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
             tail = [f'        --ddr-evidence $D --platform-survey $S/{stem}-survey/session.json [--warm-return ...]']
         else:
             lines += [f'2. Run the image once, with the DDR record `{lifetime["ddr"]}` of this lifetime\'s cold start '
-                      f'and one `--warm-return` for each of the {len(links)} returning runs since then, in order:',
+                      + (f'and one `--warm-return` for each of the {len(links)} returning '
+                         + ('run' if len(links) == 1 else 'runs') + ' since then, in order:'
+                         if links else 'and no `--warm-return`: no returning run precedes it in this lifetime:'),
                       '', '   ```sh']
             tail = [f'        --ddr-evidence $S/{lifetime["ddr"]}/session.json '
-                    f'--platform-survey $S/{stem}-survey/session.json \\']
+                    f'--platform-survey $S/{stem}-survey/session.json' + (' \\' if links else '')]
             tail += [f'        --warm-return $S/{x}/session.json' + (' \\' if i + 1 < len(links) else '')
                      for i, x in enumerate(links)]
         lines += [f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-run {timeout} \\',
@@ -778,6 +902,8 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
             lines += ['']
         else:
             lines += [f'   Success: {passed}', '']
+    if row.get('returning'):
+        lines += outcome_paths(row, bundle)
     lines += ['## Stop conditions', '', f'- {row["stop_condition"]}', '']
     if row['class'] == 'monitor':
         lines += ['## Runner', '',
@@ -797,6 +923,8 @@ def set_runbook(run_dir, lifetime, rows, table):
              'not run: a gate row passed only with status 0 and its success text, and a controlled outcome '
              '(which the runner reports as `CONTROLLED` and exits 0) is not a pass. The operator applies the '
              'gates; the runner does not check them.', '']
+    if lifetime.get('start'):
+        lines += ['## Start of the lifetime', ''] + list(lifetime['start']) + ['']
     lines += ['## Order', '', '| Step | Bundle | Records | Run only after |', '| --- | --- | --- | --- |']
     for i, entry in enumerate(lifetime['order'], 1):
         if 'row' in entry:
@@ -811,8 +939,9 @@ def set_runbook(run_dir, lifetime, rows, table):
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
     lines += ['', '## Warm-return chain', '',
-              f'Before step 1 the lifetime holds `{lifetime["ddr"]}` and these returning runs, in order: '
-              + ', '.join(f'`{x}`' for x in lifetime['chain']) + '. Each step\'s runbook gives its complete '
+              f'Before step 1 the lifetime holds `{lifetime["ddr"]}` and '
+              + ('these returning runs, in order: ' + ', '.join(f'`{x}`' for x in lifetime['chain'])
+                 if lifetime['chain'] else 'no returning run') + '. Each step\'s runbook gives its complete '
               '`--warm-return` list: this chain, then the record of every earlier step of the order. A controlled '
               'outcome is a valid link; a step that did not return ends the lifetime.', '']
     for item in lifetime.get('state', []):
@@ -820,6 +949,42 @@ def set_runbook(run_dir, lifetime, rows, table):
     if lifetime.get('state'):
         lines += ['']
     return '\n'.join(lines)
+
+
+def outcome_paths(row, bundle):
+    """The outcome of every path of a returning run: a warm return or a recorded quarantine."""
+    lines = ['## Outcome of each path', '', '| Path | Record | Ends in |', '| --- | --- | --- |']
+    if row.get('passes', True):
+        lines.append(f'| Pass | Status 0 and `{row["expect"]}` | Warm return: `PASS: kernel check, FEL recovery, '
+                     'automatic USB access.`; the session is a `--warm-return` link |')
+    if row['controlled']:
+        for o in json.loads((bundle / 'controlled.json').read_text())['outcomes']:
+            lines.append(f'| Controlled `{o["name"]}` | Status {o["status"]}, matched as the section "Controlled outcomes" '
+                         'above lists it | Warm return: '
+                         f'`CONTROLLED: {o["name"]}, ...`; a `--warm-return` link, not a pass of any gate |')
+    for text in row.get('failures', []):
+        lines.append(f'| Image failure | Status 1 with {text} | Quarantine |')
+    lines += ['| Any other image failure | Status 1 with a `FAIL` line, or one `FAIL exception` line (a fault) | '
+              'Quarantine |',
+              '| Hang | The monitor\'s secure timer returns 2 s after entry: status 2, interrupt 29 | Quarantine |',
+              '| Monitor cleanup failure | Status 6 (`replaced_status` holds the image\'s status) | Quarantine |',
+              '| No return | No new FEL instance within the runner\'s return window: a stalled bus access or a '
+              'monitor that never ran | Quarantine of the old instance; only whole-board power removal recovers it |',
+              '| Transport failure | A FEL transfer, readback or identity check fails, before or after launch | '
+              'Quarantine |',
+              '| Runner refusal before launch | The runner refuses its inputs (the DDR record, the survey, a '
+              'warm-return link, a file hash) before any device access | No device access and no recovery file; '
+              '`bundle-run.py` prints `"result": "failed", "claim": "held"`. Repair the input and resume this '
+              'step; the instance is not quarantined |',
+              '| Host timeout | `bundle-run.py` reaches the queue timeout and kills the runner | No recovery file, '
+              'and the port lock is released with the killed runner; the claim stays held. The board state is '
+              'unknown: treat it as a quarantine and run nothing more on this board until power removal |', '',
+              'Quarantine: the runner records the failure in `session.json` and writes '
+              '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, which refuses '
+              'further FEL requests to it. It keeps the port lock and the queue claim, and `bundle-run.py` prints '
+              '`"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board waits '
+              'for power removal.', '']
+    return lines
 
 
 def outcome_text(o):
@@ -1060,8 +1225,9 @@ def check_lifetime(lifetime, names, inputs):
     """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems in
     which every gate names a row placed earlier."""
     require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
-            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state'},
-            'The lifetime names port, ddr, chain and order, and optionally state.')
+            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start'},
+            'The lifetime names port, ddr, chain and order, and optionally state and start.')
+    require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
     stems, runs, placed = set(), set(lifetime['chain']), []
@@ -1092,8 +1258,9 @@ def check_lifetime(lifetime, names, inputs):
             placed.append(entry['row'])
 
 
-def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None):
-    """Create the run directory and wait once on the sandboxed step; return (exit status, run directory)."""
+def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None, run_dir=None):
+    """Create the run directory, the next board-bundles-<date>-<n> under evidence or the new directory run_dir,
+    and wait once on the sandboxed step; return (exit status, run directory)."""
     names = {row['name']: row for row in rows}
     unknown = sorted(set(inputs) - set(names))
     require(not unknown, 'Inputs name unknown rows: ' + ', '.join(unknown))
@@ -1102,17 +1269,23 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=N
     excluded = sorted(n for n in inputs if names[n]['class'] == 'excluded')
     require(not excluded, 'Inputs name excluded rows: ' + ', '.join(excluded))
     require(Path(BWRAP).is_file(), f'{BWRAP} is missing; preparation needs the sandbox.')
-    evidence = Path(evidence)
-    evidence.mkdir(parents=True, exist_ok=True)
-    date = datetime.now(timezone.utc).strftime('%Y%m%d')
-    n = 1
-    while True:
-        run_dir = evidence / f'board-bundles-{date}-{n}'
-        try:
-            run_dir.mkdir()
-            break
-        except FileExistsError:
-            n += 1
+    if run_dir is not None:
+        run_dir = Path(run_dir).resolve()
+        require(Path(evidence).resolve() in run_dir.parents, f'{run_dir} is not under the evidence directory {evidence}.')
+        run_dir.parent.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir()
+    else:
+        evidence = Path(evidence)
+        evidence.mkdir(parents=True, exist_ok=True)
+        date = datetime.now(timezone.utc).strftime('%Y%m%d')
+        n = 1
+        while True:
+            run_dir = evidence / f'board-bundles-{date}-{n}'
+            try:
+                run_dir.mkdir()
+                break
+            except FileExistsError:
+                n += 1
     save(run_dir / 'request.json', {'rows': rows, 'inputs': inputs, 'repository': str(repository), 'nm': str(nm),
                                     'lifetime': lifetime})
     command = sandbox(run_dir) + [sys.executable, str(Path(__file__).resolve()), '--step', str(run_dir)]
@@ -1126,6 +1299,8 @@ def main():
     parser.add_argument('--inputs', type=Path, help='JSON object: row name to prepare() keyword arguments')
     parser.add_argument('--lifetime', type=Path, help='JSON object: the board lifetime and order the runbooks name')
     parser.add_argument('--evidence', type=Path, default=EVIDENCE, help='Directory that receives the run directory')
+    parser.add_argument('--run-dir', type=Path, help='A new run directory under the evidence directory, in place of '
+                        'the next board-bundles-<date>-<n>')
     parser.add_argument('--nm', default=NM)
     parser.add_argument('--check-externals', type=Path, metavar='RUN_DIR',
                         help='Check the external runbooks of a prepared run against its lifetime order')
@@ -1139,7 +1314,8 @@ def main():
     if args.inputs is None:
         parser.error('--inputs is required')
     lifetime = json.loads(args.lifetime.read_text()) if args.lifetime else None
-    status, run_dir = run(json.loads(args.inputs.read_text()), evidence=args.evidence, nm=args.nm, lifetime=lifetime)
+    status, run_dir = run(json.loads(args.inputs.read_text()), evidence=args.evidence, nm=args.nm, lifetime=lifetime,
+                          run_dir=args.run_dir)
     print(run_dir)
     return status
 

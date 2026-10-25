@@ -38,7 +38,14 @@
  * reads with the DSB SY helper, plain and discarded, and plain with each
  * address depending on the previous value; the adapter's time and read
  * operations; the task check that the adapter no longer makes per access;
- * and the TWI observer. A CNTR read has no side effect. */
+ * and the TWI observer. A CNTR read has no side effect. It then runs the
+ * windows of struct bb_cost_next (trace.h): the counter overhead, plain
+ * writes of XADDR's own value when the idle reads admit them, and the
+ * service loop's work between polls. Up to the last BB_POLL_WINDOW_SNAPSHOTS
+ * snapshots carry the poll window, which stamps whole provider polls that
+ * read the flag clear and stops at 256 samples, normally after the first. A changed S_TWI0 value after the write window, or a
+ * provider that was not idle in the loop window, is an uncontrolled
+ * failure. */
 #include "power.h"
 #include "platform.h"
 #include "boot.h"
@@ -82,8 +89,13 @@ static void client(void *unused)
     s.state = a733_power_authority_load(&bb_power.rails.authority);
     bb_power_acquire(A733_RAIL_BIT(A733_RAIL_DCDC2) | A733_RAIL_BIT(A733_RAIL_DCDC4));
     atomic_store_explicit(&bb_power.wire_armed, 1, memory_order_release);
-    for (unsigned i = 0; i < SNAPSHOTS; ++i)
+    for (unsigned i = 0; i < SNAPSHOTS; ++i) {
+        /* Up to the last four snapshots carry the poll window, after the
+         * first step and the wire-time spin; it stops at 256 samples. */
+        if (i == SNAPSHOTS - BB_POLL_WINDOW_SNAPSHOTS)
+            bb_power_arm_poll_window();
         snapshot(i);
+    }
     if (!bb_power_read(0x070101ac, &s.ppu) || !bb_power_read(0x020025c0, &s.ahb) || !bb_power_read(0x020025e0, &s.mbus))
         bb_power_fail("board bundle 6: domain-level read");
     static const unsigned domains[3] = {1, 4, 5};
@@ -103,6 +115,7 @@ static void client(void *unused)
     bb_power.cost_at_park = 1;
     bb_power_park();
     s.cost = bb_power.cost;
+    s.next = bb_power_next;
     s.wire_excluded = bb_power.wire_excluded;
     for (unsigned i = 0; i < bb_power.stepped; ++i)
         s.respins += bb_power.steps[i].respins;
@@ -139,6 +152,12 @@ static void client(void *unused)
      * is wrong. */
     if (s.snapshots != SNAPSHOTS + 2 || !s.steps)
         bb_power_fail("board bundle 6: snapshot count or step record");
+    /* XADDR, ADDR and the idle reads hold across the write window, and the
+     * provider stayed idle through the loop window. */
+    if (s.next.write_changed)
+        bb_power_fail("board bundle 6: S_TWI0 state changed across the XADDR write window");
+    if (s.next.loop_work)
+        bb_power_fail("board bundle 6: provider not idle in the loop window");
     platform_puts(s.bound.pass ? BB6_COMPLETE : BB6_BOUND_MISSED);
     for (unsigned i = 0; i < bb_power.stepped; ++i) {
         bb_step_line(&bb_power.steps[i], &lines[0]);

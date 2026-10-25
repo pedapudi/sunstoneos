@@ -448,6 +448,41 @@ static void log_bound_case(void)
            six, seven, room, widest);
 }
 
+/* Bundle 6's next windows: the XADDR write admission and the grouping of
+ * individually stamped samples. */
+static void next_window_case(void)
+{
+    assert(bb_xaddr_admitted(0, 0x40, 0xf8, 0x3a));            /* reset values with BUS_EN */
+    assert(bb_xaddr_admitted(0xe8, 0x40, 0xf8, 0x30));
+    assert(!bb_xaddr_admitted(0xf0, 0x40, 0xf8, 0x3a));         /* 10-bit addressing selects XADDR */
+    assert(!bb_xaddr_admitted(0xf7, 0x40, 0xf8, 0x3a));
+    assert(!bb_xaddr_admitted(0, 0x44, 0xf8, 0x3a));            /* A_ACK: slave responses */
+    assert(!bb_xaddr_admitted(0, 0x48, 0xf8, 0x3a));            /* INT_FLAG */
+    assert(!bb_xaddr_admitted(0, 0xc0, 0xf8, 0x3a));            /* INT_EN */
+    assert(!bb_xaddr_admitted(0, 0x50, 0xf8, 0x3a) && !bb_xaddr_admitted(0, 0x60, 0xf8, 0x3a));
+    assert(!bb_xaddr_admitted(0, 0x00, 0xf8, 0x3a));            /* bus disabled */
+    assert(!bb_xaddr_admitted(0, 0x40, 0x08, 0x3a));            /* not idle */
+    assert(!bb_xaddr_admitted(0, 0x40, 0xf8, 0x3b) && !bb_xaddr_admitted(0, 0x40, 0xf8, 0x3e)); /* a line forced */
+    assert(!bb_xaddr_admitted(0, 0x40, 0xf8, 0x2a) && !bb_xaddr_admitted(0, 0x40, 0xf8, 0x1a)); /* a line low */
+    struct bb_samples s;
+    bb_samples_start(&s);
+    uint32_t sum = 0, group[BB_COST_SUBWINDOWS] = {0};
+    for (unsigned i = 0; i < BB_COST_SAMPLES; ++i) {
+        const uint32_t v = 30 + (i * 7) % 11 + (i / 32 == 5 ? 40 : 0);
+        sum += v;
+        group[i / (BB_COST_SAMPLES / BB_COST_SUBWINDOWS)] += v;
+        assert(bb_samples_add(&s, v) == (i + 1 < BB_COST_SAMPLES));
+    }
+    assert(!bb_samples_add(&s, 1000) && s.count == BB_COST_SAMPLES && s.ticks == sum && s.max == 80 && s.min == 30);
+    uint32_t lo = UINT32_MAX, hi = 0;
+    for (unsigned g = 0; g < BB_COST_SUBWINDOWS; ++g) {
+        if (group[g] < lo) lo = group[g];
+        if (group[g] > hi) hi = group[g];
+    }
+    assert(s.sub_min == lo && s.sub_max == hi && s.group == 0);
+    printf("\"bundle 6 next windows: XADDR writes admitted only in 7-bit mode with BUS_EN alone, idle status and both lines released; samples grouped as the windows\",");
+}
+
 /* Block 3 of the board run (cached walks) and its calibration region. */
 static struct a733_cpu_pmu_record bb4_record(uint32_t dtlb, uint32_t itlb)
 {
@@ -499,6 +534,7 @@ int main(void)
     bins_case();
     bound_case();
     log_bound_case();
+    next_window_case();
     twi_case();
     spin_case();
     printf("]}\nPASS\n");

@@ -22,8 +22,11 @@ except the base on the changed PMIC provider or the base's platform
 those of the fifth set, `board-bundles-20261024-5/`; that set's native USB
 runbook names wrong record directories and must not be used. The fourth
 set, `board-bundles-20261024-4/`, is superseded and must not run.
-Bundle 10 stays refused until its runner declares completion counts and its
-owner names admission values.
+The eighth set, `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/`, is
+prepared for the next lifetimes of both boards and is not run (section "The
+eighth set"). It supersedes the seventh set, `board-bundles-20261024-7/`,
+which must not run. Bundle 10 stays refused until its runner declares completion
+counts and its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
 on 2026-10-24 ([handoff](../handoff.md)): ranks 1 to 6 of the
@@ -97,6 +100,9 @@ that [the runbook README](../board-runbooks/README.md) requires.
 | 8 | Returning, base `rank-9-usb-v4/` | DRAM bus priority: R_CCU `0x1ac` bit 0 before the domain 1 status read; CCU `+0x580` bits 31 and 30, `+0x584` bits 0 and 16, and `+0x588`; then, only while domain 1 status reads ON and those gates are open and resets released, Non-secure reads of the fields of ports 2, 14 and 15, then the table write and readback of those ports only; the USB_PCIE port fields read back unchanged; each access timed with `CNTPCT` | First NSI access; NSI fields persist until power removal | Inherited and final fields, access times, controlled outcomes below |
 | 9 | Read | Speed-bin word `0x0300624c`; PLL_NPU and NPU clock words of NPU evidence item 1 | First reads | NPU speed bin |
 | 10 | Terminal | NPU single-core image through `tools/check-a733-npu-supervised.py` (NPU items 3 to 7 of [npu-platform.md](npu-platform.md)) | Native USB takeover; ends the board session | Outputs against the simulator; per-job completion counts; domain 1 and NSI state from bundles 7 and 8, which confound its bus timing |
+| 11 | Returning, port 3-1 | GPU provider readiness (`apps/gpu-provider-ready/`, frozen image `3adfa4ad…`) | First board run of the CPU monitor that bundles 12 and 13 reuse; no GPU or PCK access | Supply verification and empty owner records |
+| 12 | Returning, port 3-1, after 11 | GPU TOP5 and CORE6 ON and OFF (`apps/gpu-power-id/`, `--power-only`) | First CORE6 policy and PWCR writes; no GPU register access | CORE6 status 8 after ON |
+| 13 | Returning, port 3-1, after 12 | GPU power and identity (`apps/gpu-power-id/`) | First GPU register read | BVNC |
 
 **S_TWI0 interrupt.** Bundle 6 records the TWI controller's interrupt flag
 and leaves out the distributor pending bit of S_TWI0's interrupt (SPI 203 in
@@ -367,6 +373,57 @@ which bundle 7 and the native USB image also run. A controlled outcome is
 not a pass for any gate, and the operator applies the gates: the runner
 does not check them. Bundle 8 is not in the set; its NSI priority writes of
 `bb8-run` persist until power removal.
+
+## The eighth set
+
+`board-bundles-20261024-8/` holds one run directory per board, each with
+its order, gates and warm-return chain in `runbook.md`. Both boards start a
+new lifetime: whole-board power removal, then a cold DDR start whose record
+`s7-ddr` begins the chain. `manifest.json` lists every frozen file with its
+SHA-256 and the host checks that ran.
+
+- **`port-3-1/`:** bundle 11, then bundle 12 only after bundle 11 passed,
+  then bundle 13 only after bundle 12 passed. Bundle 12 is the power-only
+  variant. Its preparation reads the GPU controller's step tables from the
+  image and requires the domain-5 (TOP5) ON request before the first CORE6
+  access and the last CORE6 access before domain-5 OFF. The images reuse
+  the provider-readiness image's objects; none has run to completion on a
+  board.
+- **`port-3-3/`:** the base image, then bundle 6. The base differs from the
+  fifth set's base in `monitor.c` (the interrupt cleanup readbacks) and
+  `platform.c`, so its pass is needed again. Bundle 6 adds the windows of
+  [pmic-access.md](pmic-access.md) (section "Bundle 6 windows of the
+  eighth set") and applies the 1,268-permille bound. The bound assumes
+  CPU-L at 494 MHz, which this set does not measure; the frozen clock-words
+  Read bundle of `board-bundles-20261024-1/` reads the CPU-L words before
+  the base when the coordinator wants that record in the lifetime.
+
+Since rank-9-usb-v4, the returning monitor and two GPU provider units
+changed. `checks/board-bundles-apps.py` therefore links the base's monitor
+object (the same unit with the counter option) into the images built on
+rank-9-usb-v4's platform. It takes rank-9-usb-v4's object for a platform or
+provider unit that recompiles identical apart from its debug sections, and
+declares the GPU resource manager and its adapter new provider units.
+
+Every returning runbook lists the outcome of each path. A pass or a listed
+controlled outcome is a warm return. Any other status, including the
+monitor's forced return after a hang (status 2) and a failed monitor cleanup
+(status 6), and a run that does not return, ends in the runner's recorded
+quarantine of the instance with the claim held until power removal. A
+runner refusal before launch makes no device access and quarantines
+nothing; the input is repaired and the step resumed. A host timeout of
+`bundle-run.py` kills the runner and writes no recovery file, so the
+operator treats it as a quarantine.
+
+The seventh set differs from the eighth in bundle 6, whose write window
+there re-applied the admission test after the writes instead of requiring
+the values read before them, and in the power-only GPU image, which the
+merged CORE-status cleanup changed.
+
+The A76 operating-point runs and the DCDC3 selector write are not in the
+set. They need ranks 7 and 8 to pass on the board and the per-board record
+of the supervised A76 build with the CPU clock option (B1 in
+[cpu-a76-dvfs.md](cpu-a76-dvfs.md)); neither exists.
 
 ## Bundles that wait
 

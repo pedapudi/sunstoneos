@@ -10,6 +10,8 @@
 #include "a733_task_context.h"
 
 struct bb_power bb_power;
+struct bb_cost_next bb_power_next;
+static atomic_uint poll_armed;
 static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
@@ -161,6 +163,47 @@ static void measure(struct bb_power *p)
     /* As a flag poll after a phase-start write that reads the flag clear. */
     struct bb_twi scratch = {.mode = 1};
     WINDOW(c->observer, bb_twi_observe(&scratch, 0, cntr, v & ~UINT32_C(8)), (void)0);
+    struct bb_cost_next *x = &bb_power_next;
+    /* The counter overhead of a window whose sub-windows end in DSB SY, as
+     * the write window's do. */
+    WINDOW(x->empty, __asm__ volatile("" ::: "memory"), a733_mmio_dsb_sy());
+    /* Plain writes of XADDR's own value, admitted by the idle reads of
+     * trace.h; the barrier after each sub-window waits for the writes. */
+    x->addr = a733_mmio_read32_dsb_sy_both(BB_TWI_ADDR);
+    x->xaddr = a733_mmio_read32_dsb_sy_both(BB_TWI_XADDR);
+    x->cntr = a733_mmio_read32_dsb_sy_both(BB_TWI_CNTR);
+    x->stat = a733_mmio_read32_dsb_sy_both(BB_TWI_STAT);
+    x->lcr = a733_mmio_read32_dsb_sy_both(BB_TWI_LCR);
+    x->write_run = bb_xaddr_admitted(x->addr, x->cntr, x->stat, x->lcr);
+    if (x->write_run) {
+        const uint32_t saved = x->xaddr;
+        WINDOW(x->xaddr_write, a733_mmio_write32(BB_TWI_XADDR, saved), a733_mmio_dsb_sy());
+        x->xaddr_after = a733_mmio_read32_dsb_sy_both(BB_TWI_XADDR);
+        x->cntr_after = a733_mmio_read32_dsb_sy_both(BB_TWI_CNTR);
+        x->stat_after = a733_mmio_read32_dsb_sy_both(BB_TWI_STAT);
+        x->lcr_after = a733_mmio_read32_dsb_sy_both(BB_TWI_LCR);
+        /* Every register read before the window must read the same after it. */
+        x->write_changed = x->xaddr_after != saved || a733_mmio_read32_dsb_sy_both(BB_TWI_ADDR) != x->addr ||
+            x->cntr_after != x->cntr || x->stat_after != x->stat || x->lcr_after != x->lcr;
+    }
+    /* The service loop's work between two polls (drivers/power/a733_power_domains.c,
+     * pmic()): the work query, the time read and the work query with the
+     * spin time. */
+    uint64_t loop_now = 0, loop_last = 0, until = 0;
+    unsigned work = 0;
+    WINDOW(x->loop, ({
+        work |= a733_pmic_work(&p->pmic, 0, NULL);
+        failed |= a733_pmic_now(&p->pmic, &loop_now) != 1 || !a733_monotonic_advance(loop_now, &loop_last);
+        work |= a733_pmic_work(&p->pmic, loop_now, &until);
+    }), (void)0);
+    /* The overhead of one stamped poll sample. */
+    bb_samples_start(&x->stamp);
+    for (unsigned i = 0; i < BB_COST_SAMPLES; ++i) {
+        const uint64_t t0 = counter();
+        const uint64_t t1 = counter();
+        (void)bb_samples_add(&x->stamp, (uint32_t)(t1 - t0));
+    }
+    x->loop_work = work;
     __asm__ volatile("msr daif, %0" :: "r"(daif) : "memory");
     const TickType_t first = xTaskGetTickCount();
     WINDOW(c->task_check, failed |= a733_task_context_owner_el1(p->service) != 1, (void)0);
@@ -173,6 +216,46 @@ static void measure(struct bb_power *p)
     c->task_ticks = (uint32_t)(last - first);
 }
 
+/* Bundle 6's poll window: one queued snapshot polled back to back, without
+ * the service's spin, by the provider task. Each a733_pmic_poll() is stamped;
+ * one that read only CNTR, wrote nothing and completed no phase, in a flag
+ * phase, and returned PENDING with the transfer waiting, is a whole poll
+ * with the flag clear. A sample with a scheduler tick inside is left out and
+ * counted. The transfer's phases complete outside a service step, so the
+ * snapshot leaves the step records; the observer still counts its STOPs. */
+static void poll_window(struct bb_power *p)
+{
+    struct bb_cost_next *x = &bb_power_next;
+    if (x->poll_snapshots++ == 0)
+        bb_samples_start(&x->poll);
+    for (unsigned n = 0; n < BB_POLL_WINDOW_POLLS; ++n) {
+        const struct bb_twi before = p->twi;
+        const uint32_t writes = p->cost.writes;
+        const TickType_t first = xTaskGetTickCount();
+        const uint64_t t0 = counter();
+        const enum a733_pmic_status r = a733_pmic_poll(&p->pmic);
+        const uint64_t t1 = counter();
+        const TickType_t last = xTaskGetTickCount();
+        ++x->polls;
+        const struct bb_twi *t = &p->twi;
+        if (r == A733_PMIC_PENDING && p->pmic.waiting && t->mode == 1 && t->reads == before.reads + 1 &&
+            p->cost.writes == writes && t->conditions == before.conditions && t->bytes == before.bytes &&
+            t->stops == before.stops) {
+            if (last != first)
+                ++x->poll_ticked;
+            else
+                (void)bb_samples_add(&x->poll, (uint32_t)(t1 - t0));
+        }
+        if (r != A733_PMIC_PENDING && r != A733_PMIC_BUSY)
+            return;
+        if (!(a733_pmic_work(&p->pmic, 0, NULL) & (A733_PMIC_WORK_QUEUED | A733_PMIC_WORK_ACTIVE)))
+            return;
+    }
+}
+
+void bb_power_arm_poll_window(void)
+{ atomic_store_explicit(&poll_armed, 1, memory_order_release); }
+
 /* The one service task: each step that completes a bus phase is recorded
  * with its CNTPCT span and the scheduler ticks inside it, except a step that
  * held the wire-time spin. */
@@ -181,6 +264,15 @@ static void service(void *unused)
     (void)unused;
     struct bb_power *p = &bb_power;
     for (;;) {
+        /* The wire-time spin comes first: it is armed before the first
+         * snapshot and must not fall inside a poll window. */
+        if (atomic_load_explicit(&poll_armed, memory_order_acquire) &&
+            !atomic_load_explicit(&p->wire_armed, memory_order_acquire) &&
+            (a733_pmic_work(&p->pmic, 0, NULL) & A733_PMIC_WORK_QUEUED)) {
+            poll_window(p);
+            if (bb_power_next.poll.count >= BB_COST_SAMPLES || bb_power_next.poll_snapshots >= BB_POLL_WINDOW_SNAPSHOTS)
+                atomic_store_explicit(&poll_armed, 0, memory_order_relaxed);
+        }
         const struct bb_twi before = p->twi;
         p->twi.polls_max = 0;
         const TickType_t first = xTaskGetTickCount();
@@ -220,6 +312,7 @@ static int power_init(TaskFunction_t client, const char *name, unsigned domain_r
     atomic_init(&p->stop, 0);
     atomic_init(&p->parked, 0);
     atomic_init(&p->wire_armed, 0);
+    atomic_init(&poll_armed, 0);
     p->cost.write_min = UINT32_MAX;
     if (!a733_counter_clock_init(&p->counter, 24000000) ||
         !a733_platform_locks_init(&p->locks, a733_counter_clock_now, &p->counter) ||
