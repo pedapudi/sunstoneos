@@ -953,30 +953,42 @@ localizes the stall against the returning wrapper-read run.
 ### The vendor-clk probe reorders the clock and reset
 
 The vendor-clk variant (`apps/gpu-power-id/vendor-clk.c`, build and check
-option `--vendor-clk`, bundle row 18) runs the power-only ON exactly as the
-returning wrapper-read run did (set `board-bundles-20261024-14`): the same
-CORE6 PWCR 0 and policy 8 writes, 400 MHz from PERI0, DCDC4 at 800 mV. It
-changes the clock and reset order to the vendor's and reads the identity.
-It is implemented and host-checked; it has not run on a board.
+option `--vendor-clk`, bundle row 18) keeps the returning wrapper-read run's
+power and clock setting (set `board-bundles-20261024-14`): the same CORE6
+PWCR 0 and policy 8 writes, 400 MHz from PERI0 and DCDC4 at 800 mV. Its
+intended variable is the clock and reset order; it then reads the
+identity. It is implemented and host-checked; it has not run on a board.
 
 The controller is a copy of the shared one, `vendor-clk-power.c`, compiled
 only for this variant in place of `a733_gpu_power.c`, so no other image
-changes. Its ON step table differs from the shared one in two places,
-`apps/gpu-power-id/prepare.py` pins the exact table:
+changes. `apps/gpu-power-id/prepare.py` pins its exact ON table. Every
+difference from the set-14 run is listed here; only the first is meant to
+change the outcome.
 
 - **Clock and reset order.** `sunxi_enable_clks_wrap`
   (`sunxi_platform.c:167–223`) deasserts the GPU bus reset (`0xb24` bit 16)
   first, then opens the bus gate (`0xb24` bit 0), then the core clock
   (`0xb20` bit 31) and the update bit. Our returning sequence selected and
   gated the core clock on, opened the bus gate, waited 1 µs and released
-  the reset last. The variant uses the vendor order; the 1 µs delay is
-  dropped, since no gate is opened before the reset.
+  the reset last. The variant uses the vendor order. This is the intended
+  variable.
+- **The 1 µs delay step dropped.** The shared table's `DELAY` step
+  (`a733_gpu_power.c:70`) waits 1 µs between opening the bus gate and
+  releasing the reset. With the reset released first, no gate is open
+  before it, so the variant has no such step.
 - **CORE6 delay row dropped.** The vendor never writes the CORE6 delay row
   (`pck600_domains.c` leaves the CORE6 node out), and the set-14 snapshot
   showed CORE6 already holds those values at reset, so writing them was
   inert. Dropping the five writes and their readbacks is therefore not a
   second behavioural variable; it only removes accesses that changed
   nothing.
+- **Controller deadline.** The set-14 client passed its 200 ms ON deadline
+  to the controller (`wrapper.c:96`), so the controller cancelled itself
+  at 200 ms (error 6) before the wrapper reads. The vendor-clk client
+  passes the 1.5 s client deadline (`vendor-clk.c:77`) and ends its own
+  observation at 200 ms, so the controller is still waiting at its final
+  CORE6 status poll, not cancelled, when the identity read runs. No
+  further controller access follows, because the client stops polling.
 
 After the reset release the variant waits at most 200 ms for CORE6 status
 8 as an observation, maps the GPU core page, reads `0x01800024` then
@@ -1046,6 +1058,18 @@ If the identity read still stalls with the vendor's reset order, the
 vendor's operating point is the next difference to test: 1008 MHz from the GPU PLL
 at the highest operating point's voltage. This is a plan; no image sets
 it.
+
+Two further vendor differences remain after the reset order, and belong
+with the operating point because both concern the GPU clock source:
+
+- **The GPU PLL is enabled first.** `sunxi_enable_clks_wrap` enables
+  `clk_parent`, the GPU PLL (`pll-gpu`, CCU `0x0e0`), before any other GPU
+  clock (`sunxi_platform.c:172–173`). Our sequence leaves the GPU PLL
+  disabled (`0x0e0` reads `0x41104500`).
+- **The gate opens on the default source.** The vendor opens the core
+  clock gate on its boot parent (213) and only later switches it to the
+  GPU PLL at 1008 MHz (922). We select PERI0 400 MHz before opening the
+  gate, so the core clock never runs on the default source.
 
 - **Source.** `sunxi_get_opp` takes the highest operating point
   (`sunxi_platform.c:754–759`), `sunxi_platform_init` sets its voltage
