@@ -149,7 +149,7 @@ seven 64-byte lines, against the 432-byte input copy that SUBMIT already
 makes. At the large-graph output capacity of 262,144 bytes it is at most 32,768
 stores, a quarter of the 1 MiB pool clear that SUBMIT already makes in that
 profile. These are
-counts from the code and the disassembly, not board measurements.
+counts from the code and the disassembly; no board measurement exists.
 
 A finite collect timeout preserves the pending ticket. The client must collect
 that request before sending another or accessing output. DONE follows the

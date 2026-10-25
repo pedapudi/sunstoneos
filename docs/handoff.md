@@ -114,7 +114,7 @@ The queue still retains claim
 `f5e77284cf63a0b25af8681a8798031c6a976a84166256a8eaa31d162a7c771c`.
 Evidence is under `processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
 Source diagnosis continues without board access; the failed execution boundary
-is unknown. The leading hypothesis, not proven, is that the image predates
+is unknown. The leading, unproven hypothesis is that the image predates
 CORE6 power control (`9bd65b98`) and its first GPU register read stalled the
 CPU with the core domain unpowered
 ([gpu-power.md](gpu-power.md#an-unpowered-gpu-core-is-the-leading-hypothesis-for-both-failed-gpu-runs)).
@@ -131,7 +131,7 @@ unproven hypothesis applies: the client's 1.5-second deadline and the
 monitor's 2-second deadline would have ended an ordinary bounded failure well
 inside 30 seconds. After recovery, the
 [power-only GPU diagnostic](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
-runs before any identity probe; it is built and host-checked, not frozen. A preceding command-path error stopped before board access and
+runs before any identity probe; it is built and host-checked, and no board bundle is frozen. A preceding command-path error stopped before board access and
 was closed as blocked; it did not require physical recovery. USB is the only
 power source. A reconnect request is pending while software work continues.
 Host metadata checked at 21:49 UTC still identifies both failed USB instances;

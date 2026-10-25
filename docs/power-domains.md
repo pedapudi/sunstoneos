@@ -115,9 +115,10 @@ resource release; a deadline or clock failure preserves the row and rail pin.
 
 CORE status zero is not a quiescence proof. GPU startup writes the CORE6
 power configuration register (PWCR, offset `0x20`) to zero, which disables
-the PPU's device interface channels and so its handshake with the GPU:
-transitions then proceed without issuing requests to the GPU or waiting for
-its responses ([DEN0051E](https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99),
+the PPU's device interface channels and so its handshake with the GPU.
+CORE6 transitions then proceed without issuing requests to the GPU or
+waiting for its responses
+([DEN0051E](https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99),
 page 4-13, "Device Interface Channel Enables"). The firmware-stop proof above
 therefore remains the only evidence that the GPU has stopped issuing
 transactions before CORE6 and domain 5 power off.
