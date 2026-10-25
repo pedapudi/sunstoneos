@@ -62,7 +62,8 @@ function(a733_smp_observer target tag)
     "${build}/tinyusb/musb_def.h" "${root}/platform/${target}/CMakeLists.txt" "${root}/cmake/${target}.cmake"
     "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" "${root}/cmake/a733-smp-cached.cmake"
     "${root}/platform/a733/cpu_continue.c" "${cached}/continuation-core.patch" "${cached}/cached.h"
-    "${cached}/FreeRTOSConfig.h" "${cached}/boot.h" "${cached}/link.ld" "${root}/include/FreeRTOSConfig.h"
+    "${cached}/FreeRTOSConfig.h" "${root}/include/a733_smp_placement.h" "${cached}/boot.h" "${cached}/link.ld"
+    "${root}/include/FreeRTOSConfig.h"
     "${observe}/result.h" "${observe}/tusb_config.h" "${observe}/a733_usb.h"
     "${root}/include/platform.h" "${root}/runtime/include/string.h")
   foreach(header cpu_start cpu_entry cpu_continue cpu_coherence cached_memory cpu_power)

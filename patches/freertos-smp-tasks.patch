@@ -1,6 +1,41 @@
 --- tasks.c
 +++ tasks.c
-@@ -1085,6 +1085,9 @@
+@@ -875,6 +875,13 @@
+ 
+ /*-----------------------------------------------------------*/
+ 
++/* Whether two cores have the same type, for the tie rule in prvYieldForTask.
++ * A configuration with cores of several types, such as the A733's Cortex-A55
++ * and Cortex-A76 clusters, defines it. */
++#ifndef configCORES_SHARE_TYPE
++    #define configCORES_SHARE_TYPE( xCoreA, xCoreB )    pdTRUE
++#endif
++
+ #if ( configNUMBER_OF_CORES > 1 )
+     STATIC void prvYieldForTask( const TCB_t * pxTCB )
+     {
+@@ -923,7 +930,19 @@
+                         if( taskTASK_IS_RUNNING( pxTCB ) == pdFALSE )
+                     #endif
+                     {
+-                        if( xCurrentCoreTaskPriority <= xLowestPriorityToPreempt )
++                        /* A tie goes to the last such core, except that an
++                         * idle calling core, once chosen, keeps a tie against
++                         * another idle core of its own type: its yield needs
++                         * no SGI, and the woken task runs where its waker's
++                         * data is cached. An idle core of another type, such
++                         * as an A76 against an A55, still takes the tie. Linux
++                         * select_idle_sibling likewise returns an idle target
++                         * CPU only when asym_fits_cpu accepts its capacity. */
++                        if( ( xCurrentCoreTaskPriority < xLowestPriorityToPreempt ) ||
++                            ( ( xCurrentCoreTaskPriority == xLowestPriorityToPreempt ) &&
++                              ( ( xLowestPriorityCore != xCurrentCoreID ) ||
++                                ( xCurrentCoreTaskPriority != ( ( BaseType_t ) tskIDLE_PRIORITY - 1 ) ) ||
++                                ( configCORES_SHARE_TYPE( xCoreID, xCurrentCoreID ) == pdFALSE ) ) ) )
+                         {
+                             #if ( configUSE_CORE_AFFINITY == 1 )
+                                 if( ( pxTCB->uxCoreAffinityMask & ( ( UBaseType_t ) 1U << ( UBaseType_t ) xCoreID ) ) != 0U )
+@@ -1085,6 +1104,9 @@
                              #endif
                              pxTCB->xTaskRunState = xCoreID;
                              pxCurrentTCBs[ xCoreID ] = pxTCB;
@@ -10,7 +45,7 @@
                              xTaskScheduled = pdTRUE;
                          }
                      }
-@@ -4981,9 +4984,68 @@
+@@ -4981,9 +5003,68 @@
              {
                  BaseType_t xCoreID;
  
@@ -80,7 +115,7 @@
                      {
                          xYieldPendings[ xCoreID ] = pdTRUE;
                      }
-@@ -6665,11 +6727,19 @@
+@@ -6665,11 +6746,19 @@
  
              traceENTER_xTaskGetCurrentTaskHandle();
  

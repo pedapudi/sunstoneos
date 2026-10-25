@@ -28,6 +28,11 @@ list(TRANSFORM a733_sources PREPEND "${a733_root}/")
 apply_build_patch("${a733_build}/continue-core.c" "${a733_root}/platform/a733/cpu_continue.c"
   "${a733_root}/platform/a733-smp-cached/continuation-core.patch")
 list(APPEND a733_sources "${a733_build}/continue-core.c")
+# Measurements for docs/board-runbooks/multicore-performance-session.md.
+option(SUNSTONE_A733_PERF_SESSION "Cached eight-core images with the multicore performance session measurements" OFF)
+if(SUNSTONE_A733_PERF_SESSION)
+  list(APPEND a733_sources "${a733_root}/platform/a733-smp-cached/perf_session.c")
+endif()
 # This is a build-input identity, not the final ELF digest. The host records both.
 set(a733_identity_inputs ${a733_sources}
   "${a733_root}/platform/a733/cpu_continue.c"
@@ -37,7 +42,8 @@ set(a733_identity_inputs ${a733_sources}
   "${a733_root}/include/a733_cpu_continue.h" "${a733_root}/include/a733_cpu_coherence.h"
   "${a733_root}/include/a733_cached_memory.h" "${a733_root}/include/a733_cpu_power.h"
   "${a733_root}/platform/a733-smp-cached/cached.h" "${a733_root}/include/FreeRTOSConfig.h"
-  "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/platform/a733-smp-cached/boot.h"
+  "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/include/a733_smp_placement.h"
+  "${a733_root}/platform/a733-smp-cached/boot.h"
   "${a733_root}/platform/a733-smp-cached/link.ld" "${a733_root}/cmake/a733-smp-cached.cmake"
   "${a733_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${a733_build}/port.c" "${a733_build}/portASM.S" "${a733_build}/portmacro.h")
@@ -45,6 +51,10 @@ file(GLOB a733_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND a733_identity_inputs ${a733_kernel_headers}
   "${a733_root}/include/platform.h" "${a733_root}/runtime/include/string.h")
 set(a733_identity "${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;Device-monitor;8")
+if(SUNSTONE_A733_PERF_SESSION)
+  list(APPEND a733_identity_inputs "${a733_root}/platform/a733-smp-cached/perf_session.h")
+  string(APPEND a733_identity ";perf-session")
+endif()
 foreach(input IN LISTS a733_identity_inputs)
   file(SHA256 "${input}" digest)
   string(APPEND a733_identity "${digest}")
@@ -65,7 +75,8 @@ add_executable(a733-smp-cached-diagnostic EXCLUDE_FROM_ALL ${a733_sources}
   "${a733_build}/port.c" "${a733_build}/portASM.S" "${a733_build}/build-id.c")
 target_include_directories(a733-smp-cached-diagnostic PRIVATE "${a733_root}/platform/a733-smp-cached"
   "${a733_root}/include" "${a733_root}/runtime/include" "${FREERTOS_DIR}/include" "${a733_build}")
-target_compile_definitions(a733-smp-cached-diagnostic PRIVATE SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_SECURE_MONITOR=1)
+target_compile_definitions(a733-smp-cached-diagnostic PRIVATE SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_SECURE_MONITOR=1
+  $<$<BOOL:${SUNSTONE_A733_PERF_SESSION}>:SUNSTONE_A733_PERF_SESSION=1>)
 target_compile_options(a733-smp-cached-diagnostic PRIVATE -march=armv8-a -mstrict-align
   $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
   -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables

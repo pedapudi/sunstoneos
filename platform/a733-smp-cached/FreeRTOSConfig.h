@@ -11,12 +11,16 @@
  * deleted tasks runs on core 0, which the tick wakes every millisecond. */
 #define configUSE_PASSIVE_IDLE_HOOK 1
 #define configIDLE_AFFINITY 1
+#include "../../include/a733_smp_placement.h"
 #ifdef SUNSTONE_A733_OS
 /* The integrated OS image keeps every task created without an affinity on
  * the A55 cluster; only explicit placements reach the Cortex-A76 cores. */
-#include "../../include/a733_smp_placement.h"
 #define configTASK_DEFAULT_CORE_AFFINITY A733_SMP_A55_MASK
 #endif
+/* Cores 0-5 are Cortex-A55 and cores 6-7 Cortex-A76. A woken task's tie
+ * between idle cores keeps the waking core only within its own type. */
+#define configCORES_SHARE_TYPE(a, b) \
+    ((((A733_SMP_A55_MASK >> (a)) ^ (A733_SMP_A55_MASK >> (b))) & 1u) == 0u)
 #define INCLUDE_vTaskDelete 1
 /* The patched port obtains the primary redistributor from discovery. */
 #define configINTERRUPT_CONTROLLER_BASE_ADDRESS 0

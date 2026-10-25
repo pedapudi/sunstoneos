@@ -14,6 +14,9 @@ extern void FreeRTOS_SGI_Handler(void);
 #ifdef SUNSTONE_A733_IRQ_TABLE
 #include "irq_table.h"
 #endif
+#ifdef SUNSTONE_A733_PERF_SESSION
+#include "perf_session.h"
+#endif
 extern void a733_smp_diagnostic_start(void);
 static unsigned core(void)
 {uint64_t c;__asm__ volatile("mrs %0, tpidr_el1":"=r"(c));return (unsigned)c;}
@@ -54,6 +57,9 @@ int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
     }
     while(!__atomic_load_n(&probe_release,__ATOMIC_ACQUIRE))
         if(a733_smp_counter()/24>=deadline)return 0;
+#ifdef SUNSTONE_A733_PERF_SESSION
+    if(!a733_perf_pre_scheduler((unsigned)c,deadline))return 0;
+#endif
     return 1;
 }
 int a733_smp_device_preparation_admitted(void)
@@ -121,6 +127,13 @@ void platform_tick_setup(void)
     uint64_t one=1;
     __asm__ volatile("msr cntp_ctl_el0,%0\n isb"::"r"(one):"memory");
 }
+/* CNTP_CTL_EL0.ISTATUS: the counter has reached the compare value. */
+static inline uint64_t tick_due(void)
+{uint64_t v;__asm__ volatile("mrs %0, cntp_ctl_el0":"=r"(v)::"memory");return v&4u;}
+/* Tick handler calls per IRQ, as Linux hrtimer_interrupt retries its expiry
+ * at most three times; the level-sensitive timer interrupt is taken again
+ * for any period still due. */
+#define TICK_CALLS_PER_IRQ 3u
 void platform_tick_ack(void)
 {
     next_tick+=tick_interval;
@@ -131,9 +144,37 @@ void vApplicationIRQHandler(uint64_t interrupt)
     unsigned c=core();
     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
     if(interrupt==30 && !c) {
-        ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+#ifdef SUNSTONE_A733_PERF_SESSION
+        a733_perf_tick_irq();
+#endif
+        /* An IRQ whose timer condition no longer holds processes no tick, as
+         * Linux's timer handler acts only on ISTATUS. Each tick handler call
+         * advances the compare value by one period (platform_tick_ack), so
+         * the next deadline stays in phase. When the condition still holds
+         * after the first call, the IRQ was late, and at least one more
+         * period is due. With TICK_CALLS_PER_IRQ at 3, one comparison of the
+         * counter with the next deadline plus a period decides whether a
+         * second is due as well; no division is needed. A counter read taken
+         * early can only lower that count. The FromISR critical section of
+         * the first call cleared PSTATE.I, which every further call requires
+         * set. */
+        if(tick_due()) {
+            ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+            if(tick_due()) {
+                _Static_assert(TICK_CALLS_PER_IRQ==3u,"one comparison counts the due periods");
+                uint64_t now;
+                __asm__ volatile("mrs %0, cntpct_el0":"=r"(now)::"memory");
+                unsigned due=1u+(now>=next_tick && now-next_tick>=tick_interval);
+                while(due--) {
+                    __asm__ volatile("msr daifset,#2":::"memory");
+                    ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+                }
+            }
+        }
     } else if(interrupt==0 && c<8) {
-        __atomic_add_fetch(&a733_smp_core_results[c].sgis,1,__ATOMIC_RELAXED);
+        /* Only this core writes its count, so a plain load and store suffice;
+         * the relaxed store keeps other cores' relaxed loads untorn. */
+        __atomic_store_n(&a733_smp_core_results[c].sgis,a733_smp_core_results[c].sgis+1,__ATOMIC_RELAXED);
         FreeRTOS_SGI_Handler();
 #ifdef SUNSTONE_A733_IRQ_TABLE
     } else if(interrupt<1020 && a733_irq_table_dispatch((unsigned)interrupt,c)) {

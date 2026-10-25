@@ -89,9 +89,13 @@ def validate_software(software, manifest_hash):
             require(result.get('workload_results') == actual and len(result.get('interrupt_counts', [])) == 8,
                     'Workload summary differs from copied memory.')
             for core, (rounds, background, sgis, failed, ticks) in enumerate(actual):
+                # A late tick IRQ makes up to TICK_CALLS_PER_IRQ (3) tick handler
+                # calls (platform/a733-smp-cached/platform.c), so CPU0 takes
+                # between ticks/3 and ticks tick IRQs; every other IRQ is an SGI.
+                irqs = result['interrupt_counts'][core]
                 require(rounds == 32 and background > 0 and sgis > 0 and failed == 0 and
                         (ticks >= 32 if core == 0 else ticks == 0) and
-                        result['interrupt_counts'][core] == sgis+ticks,
+                        sgis+(ticks+2)//3 <= irqs <= sgis+ticks,
                         'Instruction worker or interrupt counts differ.')
         else:
             require(result.get('off') == [] and result.get('clean_complete') == [],
