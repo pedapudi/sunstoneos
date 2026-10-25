@@ -1,11 +1,11 @@
 /* Actual GPU controller, TOP owner, PMIC provider and rail ledger; modeled IO. */
 #include "power-domains-model.h"
-static uint32_t core[0xc14/4]; /* policy..PWCR and the delay row, by word */
+static uint32_t core[0x24/4]; /* policy..PWCR, by word */
 static unsigned pending, stalled, release_count;
 static struct a733_gpu_power gpu;
 static int now(void *context, uint64_t *out) { (void)context; return pmic_model_now(&m, out); }
 static int acquire(void *context, struct a733_gpu_power_resources *out)
-{ (void)context; *out = (struct a733_gpu_power_resources){400000000,800000}; return 1; }
+{ (void)context; *out = (struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_SUPPLY_UV}; return 1; }
 static int release(void *context)
 {
     (void)context; assert(!core[0] && !core[2] && !(d.ppu[5][2] & 15));
@@ -17,8 +17,7 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
     (void)context;
     if (bank == A733_GPU_CORE) {
         assert((d.ppu[5][2] & 15) == 8 && gpu.row.counted);
-        assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0 ||
-               off == 0x170 || off == 0x174 || off == 0xc00 || off == 0xc04 || off == 0xc10);
+        assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0);
         /* A pending transition completes at a status read after GPU
          * clock/reset progress; earlier ON reads are observations. */
         if (off == 8 && pending) {
@@ -29,19 +28,21 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
         *out = off == 0xfb0 ? 0x00031001 : core[off/4]; return 1;
     }
     uint32_t *word = level_word((bank == A733_GPU_CCU ? CCU_BASE : RCCU_BASE) + off);
-    assert(word); *out = *word; return 1;
+    assert(word);
+    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
+    if (bank == A733_GPU_CCU && off == 0xe0)
+        *word = (*word & 0xe0000000) == 0xe0000000 ? *word | (1u << 28) : *word & ~(1u << 28);
+    *out = *word; return 1;
 }
 static int update(void *context, enum a733_gpu_power_bank bank, uint32_t off, uint32_t clear, uint32_t set)
 {
     (void)context;
     if (bank == A733_GPU_CORE) {
         assert(gpu.row.counted && a733_power_domain_state(&gpu.row) == A733_POWER_ROW_ON);
-        assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && !set) ||
-               (off == 0x170 && set == 0x1f1f1f) || (off == 0x174 && set == 0x1f1f)
-               || (off == 0xc00 && set == 0x08080808) || (off == 0xc04 && set == 0x0808) || (off == 0xc10 && set == 8)));
+        assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && !set)));
         core[off/4] = set; if (!off) pending = 1; return 1;
     }
-    assert(bank == A733_GPU_CCU && (off == 0xb20 || off == 0xb24));
+    assert(bank == A733_GPU_CCU && (off == 0xb20 || off == 0xb24 || off == 0xe0));
     if (gpu.phase == A733_GPU_POWER_STOPPING) assert(!core[0] && !core[2] && !pending);
     uint32_t *word = level_word(CCU_BASE + off); *word = (*word & ~clear) | set;
     if (off == 0xb20) *word &= ~(1u << 27);
@@ -81,7 +82,8 @@ int main(void)
         if (mode != 4) {
             assert(result == A733_GPU_POWER_OK); stalled = mode == 5; result = run(0);
         }
-        if (mode >= 6) assert(gpu.core_policy == 8 && !gpu.core_status && gpu.core_seen == 0x1ff && !core[8] && core[0xc10/4] == 8);
+        if (mode >= 6) assert(gpu.core_policy == 8 && !gpu.core_status && gpu.core_seen == 0xff && !core[8]);
+        if (mode != 4 && mode != 5) assert(d.ccu_e0 == 0x01105300);
         if (mode == 4 || mode == 5) {
             assert(result == A733_GPU_POWER_FAULT && gpu.error == A733_GPU_POWER_TIMEOUT);
             assert(gpu.lease_held && gpu.row.counted && !release_count);

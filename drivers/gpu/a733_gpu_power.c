@@ -5,89 +5,141 @@
 #define BIT(n) (UINT32_C(1) << (n))
 /* apps/gpu-power-id/prepare.py reads the step tables of a linked image and
  * relies on the values of DOMAIN and of the CORE bank. NOTE and SETTLE carry
- * their enum a733_gpu_core_note slot in value. */
+ * their enum a733_gpu_core_note slot in value. PLL is a CHECK of a PLL_GPU0
+ * word that fails with A733_GPU_POWER_PLL. LOCK reads the word until mask
+ * reads set three times in a row, 3 us apart, at most value reads, as
+ * ccu_helper_wait_for_lock does (ccu_common.c:47-61), and fails with
+ * A733_GPU_POWER_LOCK. UPDATED reads the word until mask reads clear, at most
+ * value reads, and fails with A733_GPU_POWER_UPDATE. */
 enum kind { CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, CORE_STATUS, CORE_CONFIG, POLL,
-            NOTE, SETTLE };
+            NOTE, SETTLE, PLL, LOCK, UPDATED };
 struct step { enum kind kind; enum a733_gpu_power_bank bank;
     uint32_t offset, mask, value; };
-/* The GPU_TOP domain is PCK domain 5, which the power-domain owner powers
- * through the GPU's row. The MBUS gates, PPU clock, closed clock gate and
- * asserted reset are checked here before the request, and again by the owner
- * at admission. The selected BXM rgx_sunxi adapter directly controls CORE6;
- * its device-tree node is commented out. CORE configuration/policy writes
- * follow sunxi_platform.c:70-102,911-922 at kernel 2ac08e8c7. DEN0051E5.2.8
- * requires settled static policy before changing PWCR device request enables.
- * After power-up CORE6 reads policy 8, status 0 and the one-Q-Channel reset
- * PWCR: its default ON policy has a transition outstanding that the GPU's
- * Q-Channel cannot accept while the GPU is gated and in reset. The BXM
- * adapter writes PWCR 0 and policy 8 in that state, before any GPU clock,
- * and this controller admits it as the one unsettled exception. NOTE and
- * SETTLE steps record CORE6 words for diagnosis and require no particular
- * value; a SETTLE status other than 0 or 8 still fails.
- * GPU local clock selects pll-peri0-400m / 1.
- */
+/* PLL_GPU0 (CCU 0x0e0, manual 4.1.6.16): enable 31, LDO 30, lock enable 29,
+ * lock 28 (read-only), output gate 27, P0 22:20, N 15:8 and M1 1. 1008 MHz is
+ * N 84 and P0 2 from 24 MHz. Read-backs leave out the lock bit and boot0's
+ * reserved bit 24. */
+#define PLL_CONTROL (BIT(31) | BIT(30) | BIT(29) | BIT(27))
+#define PLL_FACTORS UINT32_C(0x0070ff02)
+#define PLL_1008 (PLL_CONTROL | UINT32_C(0x00105300))
+_Static_assert(UINT64_C(24000000) * 84 / 2 == A733_GPU_CORE_HZ, "PLL_GPU0 factors give the operating point");
+/* The vendor's order (sunxi_platform.c at kernel 2ac08e8c7;
+ * docs/designs/gpu-vendor-default.md). The GPU_TOP domain is PCK domain 5,
+ * which the power-domain owner powers through the GPU's row; the owner
+ * requires the GPU clock gate, bus gate and reset closed whenever domain 5
+ * changes, so TOP5 is ON before any GPU clock and OFF after the last. The
+ * MBUS gates, PPU clock, closed clock gate on its reset source 0 (PLL_GPU0)
+ * and divider 1, asserted reset and a disabled PLL_GPU0 are checked first.
+ * The selected BXM rgx_sunxi adapter controls CORE6 directly; its
+ * device-tree node is commented out, and nothing writes its delay row.
+ * DEN0051E 5.2.8 requires settled static policy before changing PWCR device
+ * request enables. After power-up CORE6 reads policy 8, status 0 and the
+ * one-Q-Channel reset PWCR: its default ON policy has a transition
+ * outstanding that the GPU's Q-Channel accepts only once the GPU is clocked.
+ * The vendor writes PWCR 0 in that state at its first power-on, and this
+ * controller admits it as the one unsettled exception. ON then follows
+ * sunxi_enable_clks_wrap and sunxiSetFrequency:
+ * - PLL_GPU0 enabled at its present factors as ccu_pll_gate_helper_enable
+ *   does (ccu_gate.c:157-203), each write read back;
+ * - the GPU bus reset released, the bus gate opened, the core clock gate
+ *   opened with the update bit, and the word written again with the update
+ *   bit; each update bit must clear;
+ * - PLL_GPU0 set to 1008 MHz as ccu_nm_set_rate does with AW_STANDARD_CCU
+ *   (ccu_nm.c:250-345).
+ * CORE6 policy 8 comes last, as in the vendor's later power-ons
+ * (sunxiPrePowerState); at power-up the policy already reads 8, so the first
+ * ON's transition completes when the clocks run, as the board showed. NOTE
+ * and SETTLE steps record CORE6 words for diagnosis and require no
+ * particular value; a SETTLE status other than 0 or 8 still fails. */
 static const struct step on_steps[] = {
     {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
     {CHECK, A733_GPU_CCU, 0x05e0, BIT(16), BIT(16)},
     {CHECK, A733_GPU_R_CCU, 0x01ac, BIT(0), BIT(0)},
-    {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
+    {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
+    {CHECK, A733_GPU_CCU, 0x00e0, BIT(31) | BIT(29) | BIT(27), 0},
     {DOMAIN, A733_GPU_CCU, 0, 0, 1},
     {CORE_POLICY, A733_GPU_CORE, 0, 0, 0},
     {CORE_STATUS, A733_GPU_CORE, 8, 0, 0},
     {NOTE, A733_GPU_CORE, 0xfb0, 0, A733_GPU_NOTE_IDR0},
     {NOTE, A733_GPU_CORE, 0x14, 0, A733_GPU_NOTE_MISR},
     {CORE_CONFIG, A733_GPU_CORE, 0x20, 0, 0},
-    /* The CORE6 delay row of the vendor domain table
-     * (pck600_domains.c:554, SUN60IW2_PCK_GPU_CORE), the same row that
-     * the power-domain owner writes for TOP5. The vendor's sunxi_pd_init
-     * writes it only for a registered domain, and its device tree leaves
-     * the CORE6 node out, so no reference path writes it. 0xc00-0xc10 are
-     * absent from the PCK-600 TRM. */
-    {UPDATE, A733_GPU_CORE, 0x170, UINT32_MAX, 0x1f1f1f},
-    {CHECK, A733_GPU_CORE, 0x170, UINT32_MAX, 0x1f1f1f},
-    {UPDATE, A733_GPU_CORE, 0x174, UINT32_MAX, 0x1f1f},
-    {CHECK, A733_GPU_CORE, 0x174, UINT32_MAX, 0x1f1f},
-    {UPDATE, A733_GPU_CORE, 0xc00, UINT32_MAX, 0x08080808},
-    {CHECK, A733_GPU_CORE, 0xc00, UINT32_MAX, 0x08080808},
-    {UPDATE, A733_GPU_CORE, 0xc04, UINT32_MAX, 0x0808},
-    {CHECK, A733_GPU_CORE, 0xc04, UINT32_MAX, 0x0808},
-    {UPDATE, A733_GPU_CORE, 0xc10, UINT32_MAX, 8},
-    {CHECK, A733_GPU_CORE, 0xc10, UINT32_MAX, 8},
-    {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_DELAYS},
     {UPDATE, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
     {CHECK, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
     {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_PWCR},
+    /* PLL_GPU0 enable: output gate cleared, LDO, enable and lock enable set,
+     * the lock wait, 20 us (ccu_common.c:61), the output gate set. */
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(27), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, BIT(31) | BIT(29) | BIT(27), 0},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(30)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(30)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(31)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(29)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30) | BIT(29)},
+    {LOCK, A733_GPU_CCU, 0x00e0, BIT(28), 100},
+    {DELAY, A733_GPU_CCU, 0, 0, 20},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(27)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, PLL_CONTROL},
+    /* sunxi_enable_clks_wrap: reset, bus gate, core gate with the update bit,
+     * then the update bit again. */
+    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(16)},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16)},
+    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(0)},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16) | BIT(0)},
+    {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
+    {UPDATED, A733_GPU_CCU, 0x0b20, BIT(27), 100},
+    {CHECK, A733_GPU_CCU, 0x0b20, 0x8f00000f, BIT(31)},
+    {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(27)},
+    {UPDATED, A733_GPU_CCU, 0x0b20, BIT(27), 100},
+    {CHECK, A733_GPU_CCU, 0x0b20, 0x8f00000f, BIT(31)},
+    /* ccu_nm_set_rate to 1008 MHz: output gate cleared, N 84 and P0 2, lock
+     * enable cleared and set, the lock wait, 20 us, the output gate set. */
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(27), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30) | BIT(29)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0x0070ff00, 0x00105300},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL | PLL_FACTORS, PLL_1008 & ~BIT(27)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(29), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(29)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30) | BIT(29)},
+    {LOCK, A733_GPU_CCU, 0x00e0, BIT(28), 100},
+    {DELAY, A733_GPU_CCU, 0, 0, 20},
+    {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(27)},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL | PLL_FACTORS, PLL_1008},
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_POLICY},
-    {UPDATE, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x0b000000},
-    {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x03000000},
-    {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
-    {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x83000000},
-    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(0)},
-    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(0)},
-    {DELAY, A733_GPU_CCU, 0, 0, 1},
-    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(16)},
-    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16) | BIT(0)},
     {NOTE, A733_GPU_CORE, 0x14, 0, A733_GPU_NOTE_MISR_LATE},
-    /* The reference does not wait before enabling clocks/reset. Validate
-     * acknowledgement only after that progress, before any engine access. */
+    /* The reference never reads CORE6 status. Validate acknowledgement after
+     * the clocks run, before any engine access. */
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 8},
 };
+/* Complete firmware stop is the caller's prerequisite. The vendor's
+ * sunxiPostPowerState writes CORE6 policy 0, powers TOP5 off and then
+ * disables the clocks (sunxi_disable_clks_wrap): bus gate, core gate,
+ * PLL_GPU0 as ccu_pll_gate_helper_disable does (ccu_gate.c:40-69), then the
+ * reset. This controller keeps that clock order, waits for CORE6 OFF while
+ * the GPU is still clocked, and powers TOP5 off last, as the owner
+ * requires. */
 static const struct step off_steps[] = {
-    /* Complete firmware stop is the caller's prerequisite. The selected
-     * BXM Post callback commands CORE OFF before TOP and clock teardown.
-     * Keep TOP/local clocks available while adding bounded acknowledgement. */
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 0},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 0},
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 0},
-    {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
-    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16), 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
-    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16)},
     {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
     {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(27), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30) | BIT(29)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(29), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(31) | BIT(30)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(31), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, BIT(30)},
+    {UPDATE, A733_GPU_CCU, 0x00e0, BIT(30), 0},
+    {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, 0},
+    {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
     {DOMAIN, A733_GPU_CCU, 0, 0, 0},
 };
 static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
@@ -144,8 +196,9 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
         s->lease_attempted = 0;
         s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
         for (unsigned i = 0; i < A733_GPU_CORE_NOTES; ++i) s->core_note[i] = 0;
-        s->core_wait_us[0] = s->core_wait_us[1] = s->core_wait_us[2] = s->core_power_up = 0;
+        s->core_power_up = 0;
     }
+    s->pll_lock_reads[0] = s->pll_lock_reads[1] = s->clock_update_reads[0] = s->clock_update_reads[1] = 0;
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
 enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *s, uint64_t deadline)
@@ -167,7 +220,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         s->lease_attempted = 1;
         if (!s->ops.acquire(s->context, &r)) return fail(s, A733_GPU_POWER_IO);
         s->lease_held = 1;
-        if (r.parent_hz != A733_GPU_INITIAL_HZ || r.supply_uv != A733_GPU_INITIAL_UV)
+        if (r.parent_hz != A733_GPU_INITIAL_HZ || r.supply_uv != A733_GPU_SUPPLY_UV)
             return fail(s, A733_GPU_POWER_RESOURCES);
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
     }
@@ -180,8 +233,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
      * deadline. A CORE status poll re-reads for up to A733_GPU_SPIN_US
      * within one call, with the clock advancing, before it returns AGAIN;
      * each step list has one poll. A SETTLE observation reads CORE status
-     * once; after the power-up entry state it re-reads the same way while
-     * the status is 0. It then continues with the status it saw. */
+     * once. A LOCK or UPDATED wait runs to its read bound inside one call. */
     struct a733_gpu_spin spin = {0};
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
@@ -215,18 +267,38 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
             ++s->index;
             continue;
         }
-        if (p->kind == SETTLE) {
-            struct a733_gpu_spin wait = {0};
-            const uint64_t start = s->last_now;
-            uint32_t value;
-            do {
+        if (p->kind == LOCK || p->kind == UPDATED) {
+            /* slot: the first or second wait of this kind in the table. */
+            const struct step *table = on ? on_steps : off_steps;
+            unsigned slot = 0;
+            for (uint32_t i = 0; i < s->index; ++i) slot += table[i].kind == p->kind;
+            struct a733_gpu_spin stall = {0};
+            uint32_t value = 0, reads = 0, run = 0;
+            while (reads < p->value && (p->kind == LOCK ? run < 3 : !reads || (value & p->mask))) {
                 if (!s->ops.read(s->context, p->bank, p->offset, &value)) return fail(s, A733_GPU_POWER_IO);
-                s->last_value = s->core_note[p->value] = value;
-                s->core_seen |= UINT32_C(8) << p->value;
+                ++reads;
+                s->last_value = value;
                 if (!clock_read(s)) return A733_GPU_POWER_FAULT;
-                s->core_wait_us[p->value - A733_GPU_NOTE_AFTER_DELAYS] = (uint32_t)(s->last_now - start);
-                if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
-            } while (value != 8 && s->core_power_up && a733_gpu_spin_again(&wait, s->last_now));
+                if (p->kind == UPDATED) continue;
+                s->pll_word = value;
+                run = value & p->mask ? run + 1 : 0;
+                /* udelay(3) after each read (ccu_common.c:52-59). A clock that
+                 * stops advancing returns AGAIN, and the wait starts again. */
+                uint64_t until;
+                if (!a733_deadline_after(s->last_now, 3 + 1, &until)) return fail(s, A733_GPU_POWER_TIMEOUT);
+                (void)a733_gpu_spin_advancing(&stall, s->last_now);
+                while (s->last_now < until) {
+                    if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+                    if (!a733_gpu_spin_advancing(&stall, s->last_now)) return A733_GPU_POWER_AGAIN;
+                }
+            }
+            if (p->kind == LOCK) {
+                s->pll_lock_reads[slot & 1] = reads;
+                if (run < 3) return fail(s, A733_GPU_POWER_LOCK);
+            } else {
+                s->clock_update_reads[slot & 1] = reads;
+                if (value & p->mask) return fail(s, A733_GPU_POWER_UPDATE);
+            }
             ++s->index;
             continue;
         }
@@ -242,9 +314,15 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         if (p->kind == CORE_POLICY) { s->core_policy = value; s->core_seen |= 1; }
         if (p->kind == CORE_STATUS) { s->core_status = value; s->core_seen |= 2; }
         if (p->kind == CORE_CONFIG) { s->core_config = value; s->core_seen |= 4; }
-        if (p->kind == NOTE) { s->core_note[p->value] = value; s->core_seen |= UINT32_C(8) << p->value; }
+        if (p->kind == NOTE || p->kind == SETTLE) {
+            s->core_note[p->value] = value;
+            s->core_seen |= UINT32_C(8) << p->value;
+        }
+        if (p->kind == PLL) s->pll_word = value;
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
         if (p->kind == CHECK && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_STATE);
+        if (p->kind == PLL && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_PLL);
+        if (p->kind == SETTLE && value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
         if (p->kind == CORE_CONFIG) {
             if (!core_admitted(s)) return fail(s, A733_GPU_POWER_STATE);
             s->core_power_up = (uint32_t)core_power_up(s);

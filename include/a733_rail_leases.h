@@ -94,7 +94,8 @@ struct a733_rail_leases {
  * monotonic microsecond history. Initialization binds the registry's fault
  * reporting to this ledger's state word. No hardware access.
  * The ledger is the only rail authority: the PMIC provider writes an output
- * only under an exclusive token of it, and only DCDC3 and DCDC5 are writable.
+ * only under an exclusive token of it, and only DCDC3, DCDC4 and DCDC5 are
+ * writable.
  * S_TWI0/PL0/PL1, remote-firmware exclusion and electrical proof are separate.
  */
 int a733_rail_leases_init(struct a733_rail_leases *, const struct a733_rail_binding *);
@@ -102,7 +103,7 @@ int a733_rail_leases_init(struct a733_rail_leases *, const struct a733_rail_bind
  * exclusive dominates shared. Shared enable-register bytes still require the
  * PMIC provider's bus lock and preservation of unrelated bits. An exclusive
  * mask excludes every other holder of those outputs; it grants a selector
- * write only for DCDC3 and DCDC5.
+ * write only for DCDC3, DCDC4 and DCDC5.
  * acquire returns PENDING and a token, and poll returns READY on its first
  * call without bus access. The pair keeps the existing poll call sites
  * working; a pending token is already admitted. BUSY and refusals leave the

@@ -580,6 +580,17 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<4;++i)a733_rail_poll(&pm.rails,&npu);
     assert(a733_rail_poll(&pm.rails,&npu)==A733_RAIL_READY);
     assert(a733_pmic_submit_write(&pm.provider,6,&npu,A733_RAIL_DCDC2,30,35,pm.now+100000,&q)==A733_PMIC_INVALID);
+    /* DCDC4, the GPU supply: only a voltage of the GPU operating point's
+     * speed-bin row (860-960 mV), under an exclusive lease. */
+    struct a733_rail_token gpu={0};
+    assert(a733_rail_acquire(&pm.rails,7,0,A733_RAIL_BIT(A733_RAIL_DCDC4),pm.now+100000,&gpu)==A733_RAIL_PENDING);
+    for(unsigned i=0;i<4;++i)a733_rail_poll(&pm.rails,&gpu);
+    assert(a733_rail_poll(&pm.rails,&gpu)==A733_RAIL_READY);
+    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,30,pm.now+100000,&q)==A733_PMIC_INVALID);
+    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,0x2f,pm.now+100000,&q)==A733_PMIC_INVALID);
+    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,0x25,pm.now+100000,&q)==A733_PMIC_INVALID);
+    assert(!q.id);
+    assert(a733_pmic_submit_write(&pm.provider,7,&gpu,A733_RAIL_DCDC4,30,0x2e,pm.now+100000,&q)==A733_PMIC_PENDING && q.id);
     /* Snapshots of the two new outputs decode like DCDC2/4. */
     struct a733_pmic_snapshot s;
     assert(a733_pmic_decode(A733_RAIL_DCDC3,0x04,40,&s) && s.enabled && s.programmed_uv==900000);

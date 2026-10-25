@@ -1,10 +1,11 @@
 # GPU power and identity diagnostic
 
-This returning single-core diagnostic powers GPU_TOP and GPU_CORE, reads the GPU
-hardware identity, powers CORE and TOP off, and parks the shared PMIC service. The earlier TOP-only image
-`fd3d5839` did not return on hardware, without an observed failure stage. This
-corrected candidate is checked in software only. GPU power and identity operation
-remain physically unqualified.
+This returning single-core diagnostic powers GPU_TOP and GPU_CORE on the
+default GPU power path ([gpu-vendor-default.md](../../docs/designs/gpu-vendor-default.md)),
+reads the GPU hardware identity, powers CORE and TOP off, does that twice, and
+parks the shared PMIC service. The ON sequence read the identity
+`36.56.104.183` on port 3-1 on 2026-10-25 from an image that made no OFF. The
+OFF and a second ON in one lifetime are checked in software only.
 
 The diagnostic creates no firmware, command buffers, GPU mappings or DMA
 backing. Its successful return establishes a narrower boundary than firmware
@@ -39,67 +40,71 @@ for `pvr_power.c`. The identity decoding retains the Imagination notice in
 
 The initializer creates the existing PMIC service without a display-domain row.
 The GPU platform registers its sole domain-5 row before scheduler startup.
-Its retained DCDC4 lease uses the shared owner's actual boot observation.
-The service verifies supplies and the GPU resource manager checks the inherited
-400 MHz parent and enabled 800 mV DCDC4 before local clock changes.
+Before the first ON the platform raises DCDC4 from 800 mV to the GPU operating
+point's 960 mV under an exclusive DCDC4 lease, with a readback, and waits
+1.2 ms; its supply consumer then samples DCDC4 and keeps a shared lease. The
+GPU resource manager checks the inherited PERI0 400 MHz parent and DCDC4 at
+960 mV before local clock changes.
 
 The [resource manager](../../docs/gpu-resources.md) may enable the shared PPU,
 AHB and MBUS gates. The [power owner](../../docs/power-domains.md) adopts coherent
-GPU_TOP policy/status 0 or 8. When ON needs a transition, it programs the pinned
-PCK600 delay row and requests ON. Under the exclusive LOCAL lease, the GPU controller then captures CORE6
+GPU_TOP policy/status 0 or 8, and requests ON when a transition is needed.
+Under the exclusive LOCAL lease, the GPU controller then captures CORE6
 policy/status/PWCR. It requires whole policy/status words to match at 0 or 8,
 or the power-up state of policy 8, status 0 and PWCR `0x101`. It writes PWCR
-zero and policy 8 with readbacks, and progresses local clocks/reset.
-After that progress it checks CORE status 8 before identity access. It selects
-the existing 400 MHz parent, opens local clock/bus gates, waits for settling
-and releases external reset in the existing order. No PLL retuning or voltage programming occurs.
+zero, enables PLL_GPU0, releases the GPU reset, opens the bus and core clock
+gates, sets PLL_GPU0 to 1008 MHz, writes CORE6 policy 8 and polls CORE6
+status until 8 before identity access. Every PLL_GPU0 write is read back.
 
-Only these identity reads reach the GPU register window:
+Only these identity reads reach the GPU register window, in each cycle:
 
 | Address | Width | Meaning |
 | --- | --- | --- |
-| `0x01800020` | 64 bits | Packed branch, version, units and configuration (BVNC) |
-| `0x01800020` | 32 bits | Legacy revision, only if packed branch is zero |
-| `0x01800018` | 32 bits | Legacy core identity, under the same condition |
+| `0x01800024` | 32 bits | High word of `RGX_CR_CORE_ID__PBVNC`: branch and version |
+| `0x01800020` | 32 bits | Low word: units and configuration |
 
+The vendor's probe reads the identity the same way (`rgxbvnc.c:119`;
+`OSReadHWReg64` is two 32-bit loads, high word first, `osfunc.h:1086–1095`).
 Each read requires an identity Device-nGnRnE mapping, held platform ownership,
-and monotonic deadline checks before and after access. The normal format costs
-one GPU read; the legacy format costs three. There are no GPU register writes.
-The expected identity is `36.56.104.183`. A different identity is still a valid
-observation if OFF and provider park complete; it does not qualify that GPU.
+and monotonic deadline checks before and after access. There are no GPU
+register writes. The expected identity is `36.56.104.183`; another value ends
+the run, after OFF and provider park, with `FAIL GPU identity not
+36.56.104.183`.
 
-OFF first writes CORE policy zero and checks status zero with TOP and local
-clocks still available. It then asserts external reset, closes local bus/clock
-gates, requests domain-5 OFF, and releases the platform’s resource token.
-Resource release independently checks CORE policy and status zero. Completion requires
+OFF first writes CORE policy zero and polls status zero with TOP and the GPU
+clocks still running. It then closes the bus gate and the core clock gate,
+disables PLL_GPU0, asserts the GPU reset, requests domain-5 OFF, and releases
+the platform's resource token. Resource release independently checks CORE
+policy and status zero and PLL_GPU0 disabled. Completion requires
 the actual OFF phases, no token or delegated lease, an answered OFF row with no
 count, a healthy OFF domain with no users, and no retained client resource slot.
 After service park, the client checks those conditions again and refuses any
 remaining PMIC request or borrow. The DCDC4 stable rail lease remains held until
-the image lifetime ends. Shared gates remain enabled for their other users.
+the image lifetime ends, and DCDC4 stays at 960 mV. Shared gates remain enabled
+for their other users.
 
 The client uses the existing absolute 1.5-second service deadline from monitor
 entry. Each PCK transition also has the owner's 10-millisecond bound. Pending
 client polls wait one scheduler tick; elapsed bounds are observed on resumption.
-The returning CPU monitor retains its two-second deadline and uses the accepted
-restoration-readback fix from the provider-readiness candidate. The failed
-`fd3d5839` image lacked that fix; this does not locate its failure. A failure can return a CPU error report while partial device
-ownership remains. Every failed or missing completion retains the claim and
-owned RAM for coordinator recovery; ROM visibility alone does not authorize reuse.
+The returning CPU monitor retains its two-second deadline and makes the vendor
+BL31's cold-boot security writes before EL1 starts. A failure can return a CPU
+error report while partial device ownership remains. Every failed or missing
+completion retains the claim and owned RAM for coordinator recovery; ROM
+visibility alone does not authorize reuse.
 
 ## The power-only variant runs before any identity probe
 
-`GPU_POWER_ONLY` builds a variant of the same client that runs two full
-cycles. Each cycle powers TOP and CORE, records the controller's final CORE
-status read, which ON completion requires to be 8, then powers CORE and TOP
-OFF and releases the platform token. After the second cycle the client parks
-the provider. The second ON shows whether TOP5 OFF returned CORE6 to its
-power-up state. The variant makes no access to the GPU register window at
+`GPU_POWER_ONLY` builds a variant of the same client that runs the same two
+cycles without the identity reads. Each cycle powers TOP and CORE, records
+the controller's final CORE status read, which ON completion requires to be 8,
+then powers CORE and TOP OFF and releases the platform token. After the second
+cycle the client parks the provider. The second ON shows that OFF left a state
+from which ON succeeds. The variant makes no access to the GPU register window at
 `0x01800000`: the identity reads and their mapping check are compiled out.
 Its completion text is
 `COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after the
 lines `GPU power cycle=1 core_status=0x8` and `GPU power cycle=2
-core_status=0x8`. The identity variant runs one cycle.
+core_status=0x8`.
 
 Both variants print the controller's cached CORE6 observations after each
 ON and on any failure, without another device read. Each line carries the
@@ -107,11 +112,12 @@ cycle number, starting at 1:
 
 - `GPU CORE entry`: the seen mask (255 when every observation completed)
   and the policy, status and PWCR words before any write.
-- `GPU CORE inputs`: `PPU_IDR0`, and `PPU_MISR` before any write and after
-  reset release.
-- `GPU CORE after`: the status after the CORE6 delay-row writes, after
-  the PWCR write and after the policy write, each with the microseconds its
-  observation waited.
+- `GPU CORE inputs`: `PPU_IDR0`, and `PPU_MISR` before any write and before
+  the final status poll.
+- `GPU CORE after`: the status after the PWCR write and after the policy
+  write.
+- `GPU clock`: the last PLL_GPU0 word read, the reads of each PLL lock wait
+  and the reads until each GPU clock update bit cleared.
 
 Both variants also print a read-only snapshot of the candidate CORE6
 prerequisites, one `GPU SNAP n=<k> a=<address> v=<value>` line per word.
@@ -126,18 +132,11 @@ result and the resource manager's error, stage and last value. A release
 that finds CORE6 policy or status nonzero after TOP5 OFF fails there with
 error `A733_GPU_RESOURCE_LIVE`.
 
-[gpu-power.md](../../docs/gpu-power.md#hypotheses-for-the-next-run) maps
-these values to the explanations for the power-only run that stopped at
-CORE6 admission.
-
-Both GPU images that failed to return on a board predate CORE6 control. The
-leading, unproven hypothesis is that their first GPU register read stalled
-the CPU with the core domain unpowered
-([gpu-power.md](../../docs/gpu-power.md#an-unpowered-gpu-core-is-the-leading-hypothesis-for-both-failed-gpu-runs)).
-The power-only variant tests CORE power control without that read, so it
-has the lower recovery risk. On a recovered board it runs after the frozen
-provider-readiness checkpoint and before any identity probe; the identity
-variant runs only after the power-only variant has returned on that board. Admission is the same for both variants.
+The power-only variant tests OFF and the second ON without a GPU register
+read, so it has the lower recovery risk. On a recovered board it runs after
+the frozen provider-readiness checkpoint and before the identity variant,
+which runs only after the power-only variant has returned on that board.
+Admission is the same for both variants.
 
 ## The wrapper-read variant reads four GPU wrapper words
 
@@ -146,14 +145,14 @@ power-only variant with that variant's client and entry renamed, so the
 power-only source and binary stay unchanged, and adds its own client and
 entry. Its client:
 
-1. takes snapshot 0 and runs one ON of the power-only sequence, waiting at
+1. takes snapshot 0 and runs one ON of the default sequence, waiting at
    most 200 ms for CORE6 status 8; at least 100 ms of the client deadline
    must remain after that bound;
 2. takes snapshot 1 and prints the controller's phase, error, step and last
    read, the resource manager's record and the CORE6 lines, without ending
    the run;
-3. refuses the wrapper reads unless the controller completed the GPU clock,
-   bus gate and reset steps, shown by its MISR read after reset release;
+3. refuses the wrapper reads unless the controller completed the GPU clock
+   steps, shown by its MISR read before the final status poll;
 4. reads `0x01880104` (`pwr_qchan_cfg`), `0x01880100` (`pwr_cmp_dly`),
    `0x01880018` (`mult_core_cnt`) and `0x0188001c` (`mult_core_id`) in that
    order, each a 32-bit load after an identity mapping check of the page and
@@ -189,8 +188,8 @@ a prefix of them.
 ## The probe-read variant reads the core identity as the vendor's probe does
 
 `probe-read.c` builds the probe-read variant the way `wrapper.c` builds the
-wrapper-read variant. After the power-only ON sequence through the reset
-release, with the CORE6 status poll kept only as a 200 ms observation, it
+wrapper-read variant. After the default ON sequence, with the CORE6 status
+poll kept only as a 200 ms observation, it
 reads `drm_ctrl` (`0x01880014`), `irq_ctrl` (`0x01880010`) and the SMC0
 word `0x0a0000b0`, then the core identity as the vendor's probe reads it:
 two 32-bit reads, `0x01800024` and then `0x01800020`. It then writes 2 to
@@ -212,51 +211,6 @@ gives the vendor trace, the write exception and the meaning of each
 result. `check.py --probe-read` runs thirteen cases, and bundle preparation
 requires the image's table to hold exactly the fifteen rows.
 
-## The vendor-state variant reads the identity in the vendor's GPU state
-
-`vendor-state.c` builds the vendor-state variant (`build.py --vendor-state`).
-It applies the three differences that the
-[reference backsolve](../../docs/gpu-power.md#the-vendor-state-probe-applies-the-vendors-clock-supply-and-secure-state)
-found between the vendor's probe-time state and every earlier image, in the
-vendor's order, and then reads the identity:
-
-1. **At EL3, before EL1 starts.** The monitor copy `vendor-state-monitor.c`
-   makes BL31's cold-boot security writes: SPC ports 0–13 and 16–23, R_SPC,
-   R_PRCM `0x07010290 |= 7`, the clock-controller security switch
-   `0x02003f00` = 7 and SPC port 14. It reads each word before and after its
-   write into an EL3 record at `0x42010000`. The client prints the record as
-   28 `GPU VST el3` lines and stops unless it is complete and the switch
-   reads 7.
-2. **DCDC4 to 960 mV.** Under an exclusive DCDC4 token, the provider copy
-   `vendor-state-pmic.c` writes selector `0x2e` over the expected `0x1e`
-   and reads it back. The client requires 960 mV in the readback, releases
-   the token and waits 1.2 ms. `vendor-state-approval.json` records the
-   change and the user's approval.
-3. **One ON.** TOP5 is adopted ON and CORE6 receives PWCR 0 and policy 8, as
-   in the vendor-clk variant. The controller copy `vendor-state-power.c`
-   then enables PLL_GPU0 with a bounded lock wait, releases the GPU bus
-   reset, opens the bus gate and the core clock on source 0 (the PLL) with
-   the update bit, and sets the PLL to 1008 MHz (`0xe9105300`). Every PLL
-   write is read back. The supply consumer and resource manager copies
-   admit DCDC4 only at 960 mV. CORE6 status is observed for at most
-   200 ms.
-4. **The identity**, as two 32-bit loads, `0x01800024` then `0x01800020`,
-   only after the controller read the PLL at 1008 MHz. The client exits
-   through `platform_exit` with no OFF.
-
-Before each step the progress record at result offset 128 (magic
-`GPUVST01`) holds the step number and a counter stamp; before each identity
-read it also holds the completed reads. The completion text is `COMPLETE
-GPU vendor-state: identity 36.56.104.183 at 1008 MHz from the GPU PLL, DCDC4
-960 mV and the BL31 security setup, GPU left powered`.
-
-`vendor-state-units.py` compiles the copies with the image's flags and runs
-22 unit cases under Unicorn: the controller's ON writes and each PLL, lock,
-update-bit, admission and resource refusal, the native allowlist, the
-supply copies' admission checks, the approval record and the monitor's EL3
-writes. It pins each copy's diff from its original. `check.py
---vendor-state` runs twelve client cases on the linked image.
-
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 
@@ -271,25 +225,19 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ```
 
 Add `--power-only` to both commands for the power-only variant,
-`--wrapper-read` for the wrapper-read variant, `--probe-read` for the
-probe-read variant, `--vendor-clk` for the vendor-clk variant or
-`--vendor-state` for the vendor-state variant. The vendor-state variant
-also needs its unit check:
+`--wrapper-read` for the wrapper-read variant or `--probe-read` for the
+probe-read variant. The vendor-clock-order and vendor-state variants, whose
+controller, monitor and supply copies the default path replaced, were
+removed after the vendor-state image read the identity.
 
-```sh
-~/.cache/sunstoneos/venv/bin/python apps/gpu-power-id/vendor-state-units.py --output /absolute/new/units
-```
-
-The vendor-state build reuses 27 objects and compiles ten: the seven of the
-other variants, with the vendor-state copies in place of the client,
-controller, native operations and resource manager, and the monitor, PMIC
-provider and supply consumer copies in place of the accepted objects.
 `prepare.py` turns a build and its check result into a board bundle for
 `tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
-requires the domain-5 (TOP5) ON request before the first CORE6 access and
-the last CORE6 access before domain-5 OFF. The build
+requires the domain-5 (TOP5) ON request before the first CORE6 access, the
+last CORE6 access before domain-5 OFF, PLL_GPU0 at 1008 MHz before CORE6
+policy 8, the clocks and PLL_GPU0 closed after CORE6 OFF, and no CORE6
+delay-row access. The build
 records `"variant": "power-only"` and its completion text in `build.json`.
 The check refuses an image of the other variant: only the identity variant
 defines the identity read counter. Its eleven cases cover the normal path of
@@ -298,21 +246,22 @@ second cycle, an ON that reaches the deadline, a wrong snapshot-page
 translation, the CORE-refusal, partial CORE capture, OFF, retained token,
 counted row and unparked failures. A failed or expired ON must take its
 snapshot before the failure report, and the snapshot reads exactly its 35
-words. Board-bundle preparation requires the normal case to have
-run two cycles for the power-only variant and one for the identity variant. Every case requires that no load,
+words. Board-bundle preparation requires the normal case to have run two
+cycles for the power-only and identity variants. Every case requires that no load,
 store or address translation reaches the GPU register window.
 
-The build reuses 30 objects from the frozen provider-readiness candidate,
-including its accepted CPU monitor. Seven replacements compile the consumer,
-GPU platform/native adapter, power controller, resource manager/native adapter,
-and current shared TOP owner. The input-object audit checks every power/platform
+The build reuses 27 objects from the frozen provider-readiness candidate. Ten
+replacements compile the client, GPU platform/native adapter, power
+controller, resource manager/native adapter, the current shared TOP owner,
+the CPU monitor with its EL3 security setup, and the PMIC provider and supply
+consumer that admit DCDC4 at 960 mV. The input-object audit checks every power/platform
 layout user and its actual dependency file; all three layout users are rebuilt.
 The power structure holds the cached CORE6 diagnostics. Eleven shared structure sizes and member offsets must match across
 old and new objects. The recorded private PMIC callback-member rename does not
 change its offset or callback order.
 
-Thirteen focused cases execute the linked client, mapping predicate and identity
-loads. They cover both identity formats, unexpected identity, ON/OFF faults,
+Twelve focused cases execute the linked client, mapping predicate and identity
+loads. They cover two cycles of two 32-bit identity loads, unexpected identity, ON/OFF faults,
 wrong translation, a read crossing the deadline, backward time, retained token,
 counted row, missing provider park, and complete/partial cached CORE refusals.
 A seen bit records a completed read, including one whose following clock check
@@ -321,9 +270,7 @@ cached CORE values, phase, step, error and last read, then take retained error
 return. No new hardware read is made for the report. Power transitions and provider progress
 are modeled; these cases do not requalify their physical behavior. Existing
 shared-owner deadline and resource evidence is preserved by reference rather
-than rerun. The normal client case makes six explicit clock samples; the
-legacy case makes twelve, in addition to the shared drivers' checks. These are
-observation costs, not performance results.
+than rerun.
 
 ## Physical admission is separate
 
@@ -335,8 +282,9 @@ RAM disposition and retains the existing supervised failure policy.
 PMIC admission requires the inherited S_TWI0 gate/reset, APBS route, PL0/PL1
 configuration, settled supplies and excluded PMU writers. GPU admission adds
 stable oscillator/REF/PERI0 ownership, closed local GPU gates, asserted reset,
-inactive INT95 and exclusive GPU-local authority covering CCU and CORE6
-policy/PWCR at `0x07066000`. TOP5 remains controlled by the shared row. An older
+inactive INT95 and exclusive GPU-local authority covering CCU, PLL_GPU0 and
+CORE6 policy/PWCR at `0x07066000`, and the user's approval of 2026-10-25 for
+DCDC4 at 960 mV and the GPU core at 1008 MHz. TOP5 remains controlled by the shared row. An older
 root record granting only TOP5 does not authorize these new CORE writes: the
 coordinator must extend the existing GPU-local grant explicitly. No prior GPU boot or command
 execution may have occurred in this powered lifetime. These conditions prevent
@@ -345,7 +293,7 @@ the identity-only OFF path from retiring an inherited executing device.
 The seven parent words and their decoding are specified in
 [gpu-resources.md](../../docs/gpu-resources.md). They are RTC/CCU reads and do not
 require a GPU engine access. A successful DCDC4 snapshot establishes an observed
-800 mV setting only while the coordinator preserves its supply continuity.
+960 mV setting only while the coordinator preserves its supply continuity.
 
 After the finite NPU host validates copied/reaped jobs and local stop/quiescence,
 it restores the 18 MiB interval and releases the former CPU DRAM allocations.
@@ -361,7 +309,8 @@ it does not release inherited NPU ownership or prove global NPU quiescence.
 The coordinator separately authorizes the 18 MiB CPU overwrite interval.
 
 Use the existing retaining queue wrapper and frozen returning-kernel runner
-with expected text `COMPLETE GPU power identity: OFF and provider parked`.
+with expected text `COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF
+cycles, provider parked`.
 Require status zero, normal CPU return and the complete identity lines before
 classifying BVNC. A draft proposal or a model pass grants no device access.
 
@@ -371,7 +320,7 @@ The selected BXM source and the architectural PWCR restriction are documented in
 candidate's bounded exact status check is a conservative acceptance condition,
 not a promise that hardware will acknowledge. Policy 8 and status 0 with any
 PWCR other than the reset value `0x101` is refused before PWCR or local clock
-writes. No CORE delay values are invented.
+writes. Nothing writes the CORE6 delay row.
 The pinned SCP fragment is a host-inspected source clue, not a runtime dependency
 or evidence that its boot path executed on either board.
 

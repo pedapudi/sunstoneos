@@ -28,6 +28,13 @@ struct a733_gpu_platform {
     struct a733_pmic_consumer pmic;
     struct a733_gpu_resource_native *pmic_native;
     unsigned pmic_observed;
+    /* DCDC4 raise to the GPU operating point before the first ON: the
+     * exclusive DCDC4 lease, the PMIC snapshot or write request, the time the
+     * written output has settled, the stage and whether a write was made. */
+    struct a733_rail_token supply_token;
+    struct a733_pmic_request supply_request;
+    uint64_t supply_settled;
+    unsigned supply_stage, supply_written;
 };
 /* Zero storage, initialize once, then serialize all calls through one privileged
  * task. Register this client exclusively; manager/context outlive the platform.
@@ -35,8 +42,17 @@ struct a733_gpu_platform {
 int a733_gpu_platform_init(struct a733_gpu_platform *, struct a733_gpu_resource_manager *,
     unsigned client, const struct a733_gpu_platform_ops *, void *);
 /* Optional pre-concurrency binding. The adapter must actually back this global
- * manager; its private identity, provider and view stay immutable. A completed
- * DCDC4 observation and rail lease remain held through OFF and later starts. */
+ * manager; its private identity, provider and view stay immutable. Before
+ * the first ON the platform raises DCDC4 to the GPU operating point
+ * (a733_gpu_opp.h): under an exclusive DCDC4 lease it reads the selector and,
+ * at the power-on 800 mV, writes 960 mV with a readback, releases the lease
+ * and waits A733_GPU_SUPPLY_SETTLE_US; a DCDC4 already at 960 mV is not
+ * written. A failed raise retains its lease and request. A completed DCDC4
+ * observation and rail lease remain held through OFF and later starts, and
+ * DCDC4 stays at 960 mV. */
+/* The regulator's ramp for 160 mV at 250 uV/us rounded up to 1 ms
+ * (axp2101-regulator.c:383-410) plus the vendor's 200 us (sunxiSetVoltage). */
+#define A733_GPU_SUPPLY_SETTLE_US 1200u
 int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *,struct a733_gpu_resource_native *,
     struct a733_pmic *,const struct a733_pmic_lifetime *,uint64_t owner);
 /* Direct service callback signatures. Begin returns 1 accepted, 0 refused.

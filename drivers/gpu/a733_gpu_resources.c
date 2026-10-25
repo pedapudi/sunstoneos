@@ -1,6 +1,7 @@
 #include "a733_gpu_resources.h"
 #include "a733_range.h"
 #include "a733_clock_reference.h"
+#include "a733_gpu_opp.h"
 #include <stddef.h>
 
 #define CCU UINT32_C(0x02002000)
@@ -126,9 +127,11 @@ static int supply(struct a733_gpu_resource_manager *m, uint32_t mask,
     if (!m->ops.rail(m->context, &m->rail, m->deadline)) return fail(m, A733_GPU_RESOURCE_IO);
     if (!time_ok(m)) return 0;
     const struct a733_gpu_resource_rail *r = &m->rail;
+    /* DCDC4 at the GPU operating point, which the GPU platform set before
+     * this acquisition (a733_gpu_opp.h). */
     if (r->page_before || r->page_after || r->chip != 3 || r->revision != 0 ||
-        !(r->enable & 8) || (r->voltage & 127) != 30) return fail(m, A733_GPU_RESOURCE_SUPPLY);
-    ready->supply_uv = A733_GPU_INITIAL_UV;
+        !(r->enable & 8) || (r->voltage & 127) != A733_GPU_DCDC4_SELECTOR) return fail(m, A733_GPU_RESOURCE_SUPPLY);
+    ready->supply_uv = A733_GPU_SUPPLY_UV;
     return 1;
 }
 int a733_gpu_resources_init(struct a733_gpu_resource_manager *m,
@@ -224,6 +227,7 @@ enum a733_gpu_resource_result a733_gpu_resources_release(
     if (ok && (l->mask & A733_GPU_RESOURCE_LOCAL))
         ok = check(m, CCU + 0xb20, 0x80000000, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, CCU + 0xb24, 0x10001, 0, A733_GPU_RESOURCE_LIVE) &&
+             check(m, CCU + 0xe0, 0x80000000, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, PCK + 0x5008, 15, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, PCK + 0x6000, UINT32_MAX, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, PCK + 0x6008, UINT32_MAX, 0, A733_GPU_RESOURCE_LIVE);

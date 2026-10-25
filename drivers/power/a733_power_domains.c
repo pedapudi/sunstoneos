@@ -8,6 +8,7 @@
  */
 #include "a733_power_domains.h"
 #include "a733_range.h"
+#include "a733_gpu_opp.h"
 
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
@@ -245,10 +246,15 @@ static void verified(struct a733_power_domains *d,unsigned ok)
     wake_rows(d);
     d->supply_stage=ok ? V_RELEASE : d->supply_request.id ? V_REAP : d->supply_stage>V_TOKEN ? V_RELEASE : V_DONE;
 }
+/* DCDC2 at its power-on 800 mV. DCDC4 at its power-on 800 mV or at the GPU
+ * operating point's 960 mV, which the GPU platform sets before the GPU's
+ * first ON and an earlier image of the same power lifetime may have left. */
 static int correct(const struct a733_pmic_snapshot *s,enum a733_rail rail)
 {
+    const unsigned code=s->selector&127;
     return s->rail==rail && !s->page_before && s->chip==3 && !s->revision && !s->page_after &&
-        s->enabled==1 && s->decoded==1 && s->programmed_uv==800000 && (s->selector&127)==30;
+        s->enabled==1 && s->decoded==1 && ((s->programmed_uv==800000 && code==30) ||
+        (rail==A733_RAIL_DCDC4 && s->programmed_uv==A733_GPU_SUPPLY_UV && code==A733_GPU_DCDC4_SELECTOR));
 }
 static int verify(struct a733_power_domains *d,uint64_t now)
 {

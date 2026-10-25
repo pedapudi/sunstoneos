@@ -217,16 +217,8 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
-               'apps/gpu-power-id/vendor-clk.c', 'apps/gpu-power-id/vendor-clk-power.c',
-               'apps/gpu-power-id/vendor-state.c', 'apps/gpu-power-id/vendor-state.h',
-               'apps/gpu-power-id/vendor-state-power.c', 'apps/gpu-power-id/vendor-state-native.c',
-               'apps/gpu-power-id/vendor-state-resources.c', 'apps/gpu-power-id/vendor-state-pmic.c',
-               'apps/gpu-power-id/vendor-state-consumer.c', 'apps/gpu-power-id/vendor-state-monitor.c',
-               'apps/gpu-power-id/vendor-state-approval.json', 'apps/gpu-power-id/vendor-state-units.py',
-               'apps/gpu-power-id/vendor-state-units.c', 'apps/gpu-power-id/vendor-state-units-pmic.c',
-               'apps/gpu-power-id/vendor-state-units-supply.c', 'apps/gpu-power-id/vendor-state-units-supply.h',
-               'apps/gpu-power-id/vendor-state-units-monitor.c', 'drivers/power/a733_pmic.c',
-               'drivers/power/a733_pmic_consumer.c',
+               'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
+               'platform/a733/monitor.c', 'platform/a733/el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
@@ -237,22 +229,26 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
-                     'exclusive GPU-local authority over the GPU CCU words and the CORE6 power policy unit at '
-                     '0x07066000: its policy (+0x00) and PWCR (+0x20) writes; on every ON, after admission and '
-                     'before PWCR 0, whole-word writes of the vendor delay row (pck600_domains.c:554), each read '
-                     'back: 0x1f1f1f at +0x170, 0x1f1f at +0x174, 0x08080808 at +0xc00, 0x0808 at +0xc04 and 8 at '
-                     '+0xc10; and reads of its status (+0x08), MISR (+0x14) and IDR0 (+0xfb0). The grant covers each '
-                     'CORE6 entry state the controller admits: settled OFF (policy and status 0), settled ON (both '
-                     '8) and the power-up state (policy 8, status 0, PWCR 0x101, the reset value), from which ON '
-                     'writes the delay row, PWCR 0 and then policy 8. Any other entry is refused before a write. The '
+                     'exclusive GPU-local authority over the GPU CCU words, PLL_GPU0 (CCU 0x0e0) and the CORE6 power '
+                     'policy unit at 0x07066000: its policy (+0x00) and PWCR (+0x20) writes and reads of its status '
+                     '(+0x08), MISR (+0x14) and IDR0 (+0xfb0). The grant covers each CORE6 entry state the controller '
+                     'admits: settled OFF (policy and status 0), settled ON (both 8) and the power-up state (policy '
+                     '8, status 0, PWCR 0x101, the reset value). Any other entry is refused before a write. Voltage '
+                     'and clock grant, approved by the user on 2026-10-25: before the first ON the GPU platform '
+                     'raises DCDC4 (AXP8191 register 0x15) from 0x1e (800 mV) to 0x2e (960 mV) under an exclusive '
+                     'DCDC4 lease, read back, and waits 1.2 ms; DCDC4 stays at 960 mV; each ON enables PLL_GPU0 and '
+                     'sets it to 1008 MHz as the GPU core clock, and each OFF disables it, every PLL_GPU0 write read '
+                     'back. Every image\'s EL3 monitor makes the vendor BL31\'s cold-boot security writes before EL1 '
+                     'starts (platform/a733/el3_security.h). The '
                      'client also reads, without writing, a 35-word snapshot before the first ON and after each ON '
                      'attempt: the CORE6 and TOP5 PPU rows, R_CCU 0x1ac and 0x250, and CCU 0x0e0, 0xb20 and 0xb24. '
                      'TOP5 is written only through the shared domain-5 row. No NPU image runs in this lifetime.')
 GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after the `GPU power phase=...` and `GPU '
-                'CORE entry`, `inputs` and `after` lines of the failing cycle, which hold cached values only; `GPU '
-                'ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU ON poll` an '
-                'entry state that admission refuses or a CORE6 delay-row word that does not read back its written '
-                'value; `GPU SNAP` lines of the failed ON precede it',
+                'CORE entry`, `inputs`, `after` and `GPU clock` lines of the failing cycle, which hold cached values '
+                'only; `GPU ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU '
+                'ON poll` an entry state that admission refuses, a DCDC4 raise that failed, or controller error 8 (a '
+                'PLL_GPU0 write that did not read back), 9 (a lock wait that ended unlocked) or 10 (a GPU clock '
+                'update bit that did not clear); `GPU SNAP` lines of the failed ON precede it',
                 '`FAIL GPU snapshot mapping`: a snapshot page is not an identity Device-nGnRnE mapping; no snapshot '
                 'word was read',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
@@ -499,30 +495,35 @@ ROWS = [
             'Monitor status 0 with GPU power cycle=1 core_status=0x8, GPU power cycle=2 core_status=0x8 and '
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked, then a responsive ROM. Record the '
             'GPU CORE entry, inputs and after lines of both cycles and every GPU SNAP line.',
-            'apps/gpu-power-id built with --power-only. Two ON/OFF cycles run before the provider park. Each ON '
-            'requests domain 5 (TOP5) ON through the shared row, then, under the exclusive LOCAL lease, captures '
-            'CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or the power-up state (policy 8, '
-            'status 0, PWCR 0x101), writes the vendor CORE6 delay row, PWCR 0 and policy 8 with readbacks and a '
-            'status observation after each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
-            'policy 0 and requires status 0 before the clock and reset close and domain 5 goes OFF, in the order '
-            'of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the image\'s own on_steps and '
+            'apps/gpu-power-id built with --power-only. Two ON/OFF cycles of the default GPU power path '
+            '(docs/designs/gpu-vendor-default.md) run before the provider park. Before the first ON, DCDC4 is '
+            'raised to 960 mV. Each ON requests domain 5 (TOP5) ON through the shared row, then, under the '
+            'exclusive LOCAL lease, captures CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or '
+            'the power-up state (policy 8, status 0, PWCR 0x101), writes PWCR 0, enables PLL_GPU0, releases the GPU '
+            'reset, opens the bus and core clock gates, sets PLL_GPU0 to 1008 MHz, writes CORE6 policy 8 and '
+            'requires the CORE6 status poll to read 8; OFF writes CORE6 policy 0 and requires status 0, then closes '
+            'the bus and core gates, disables PLL_GPU0, asserts the reset and powers domain 5 OFF, in the order of '
+            'drivers/gpu/a733_gpu_power.c. The second ON is the first board run of an ON after an OFF. The '
+            'preparation reads that order from the image\'s own on_steps and '
             'off_steps tables. A read-only snapshot of 35 CORE6, TOP5, R_CCU and CCU words precedes the first ON '
             'and follows each ON attempt. The image never reads or writes the GPU register window at 0x01800000: '
             'the identity reads and their mapping check are compiled out.',
             after=['gpu-provider-ready']),
     gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
-            'COMPLETE GPU power identity: OFF and provider parked',
-            'Monitor status 0 with the two GPU identity lines (raw and BVNC with matches=1 for 36.56.104.183, or '
-            'matches=0 for another identity, which is a valid observation that qualifies nothing) and COMPLETE GPU '
-            'power identity: OFF and provider parked, then a responsive ROM.',
-            'apps/gpu-power-id, identity variant: the power-only sequence with one 64-bit read of 0x01800020 (and, '
-            'only when its branch field is zero, the legacy 32-bit reads of 0x01800020 and 0x01800018) between ON '
-            'and OFF, each after an identity Device-nGnRnE mapping check and a deadline check. No GPU register '
+            'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked',
+            'Monitor status 0 with GPU identity cycle=1 and cycle=2 lines, each matches=1 for 36.56.104.183, and '
+            'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked, then a responsive '
+            'ROM.',
+            'apps/gpu-power-id, identity variant: the power-only sequence with the GPU core identity read in each '
+            'cycle between ON and OFF as the vendor\'s probe reads it, two 32-bit loads of 0x01800024 and then '
+            '0x01800020, each after an identity Device-nGnRnE mapping check and a deadline check. No GPU register '
             'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime and '
             'printed GPU power cycle=1 core_status=0x8 and GPU power cycle=2 core_status=0x8.',
             after=['gpu-power-only'],
             failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
-                      'deadline/clock`']),
+                      'deadline/clock`',
+                      '`FAIL GPU identity not 36.56.104.183`, after the GPU identity lines and the provider park: '
+                      'the core answered with another value in at least one cycle; record both lines']),
     read_row('cpu-b1-words', 14, 'Speed-bin word and the CPU-L, CPU-B and DSU clock words of the A76 record',
              'The read-only clock part of the B1 record of docs/designs/cpu-a76-dvfs.md: the SID speed-bin word, '
              'the oscillator, and the PLL, mux/P, pattern and LFM words that boot0 leaves',
@@ -550,16 +551,16 @@ ROWS = [
                   sources=POWER_SOURCES + ['apps/board-bundles-power/cpu-supply.c'], base=BASE_ROW,
                   failures=['a `FAIL` line of the provider or service (`snapshot submit`, `snapshot result`, '
                             '`snapshot reap`, a deadline, `provider fault`, `provider not quiescent at park`)']),
-    gpu_row('gpu-wrapper-read', 16, 'GPU wrapper reads with TOP5 ON and CORE6 not acknowledged', 'wrapper-read',
+    gpu_row('gpu-wrapper-read', 16, 'GPU wrapper reads after the default GPU ON', 'wrapper-read',
             'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked',
             'Either monitor status 1 with the four GPU WRAPPER n=1 to n=4 lines, the decoded GPU WRAPPER qchan and '
             'delay lines and FAIL GPU wrapper read: CORE6 not ON, four wrapper words read, the expected result '
             'while CORE6 never reports ON; or status 0 with COMPLETE GPU wrapper read: CORE status 8, four wrapper '
             'words, OFF and provider parked. Either is followed by a responsive ROM. Record every line of kernel.log '
             'and the progress record at result.bin offset 128.',
-            'apps/gpu-power-id, wrapper-read variant (apps/gpu-power-id/wrapper.c): the power-only ON sequence, with '
-            'its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release, waited for at '
-            'most 200 ms; then the read-only snapshot, the controller and CORE6 report lines, and only then four '
+            'apps/gpu-power-id, wrapper-read variant (apps/gpu-power-id/wrapper.c): the power-only ON sequence of '
+            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, CORE6 policy 8 after the clocks), '
+            'waited for at most 200 ms; then the read-only snapshot, the controller and CORE6 report lines, and only then four '
             '32-bit reads of the GPU wrapper in this order: 0x01880104 (pwr_qchan_cfg), 0x01880100 (pwr_cmp_dly), '
             '0x01880018 (mult_core_cnt) and 0x0188001c (mult_core_id), names from the vendor sunxi_dvfs_ctrl.c. '
             'Before each read the image writes the read number into the progress record at result offset 128 and '
@@ -575,10 +576,8 @@ ROWS = [
                       '`FAIL GPU wrapper read order`: an internal refusal before the read it names'],
             admission='GPU-window read exception: this row alone reads four words of the GPU wrapper, 0x01880104, '
                       '0x01880100, 0x01880018 and 0x0188001c, in that order, each a 32-bit Device-nGnRnE load after '
-                      'an identity mapping check and a deadline check, with TOP5 ON and CORE6 not acknowledged; it '
-                      'makes no other GPU-window access and no GPU-window write. Risk: the two earlier GPU images '
-                      'that did not return (fd3d5839 and 2ab2cb1b) read the GPU window with CORE6 in the same '
-                      'power-up state; a wrapper read that never completes stops the CPU without an exception, the '
+                      'an identity mapping check and a deadline check, after the default ON; it '
+                      'makes no other GPU-window access and no GPU-window write. Risk: a wrapper read that never completes stops the CPU without an exception, the '
                       'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
                       'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
                       'record and log, which name each read before it is issued, survive only on a return.'),
@@ -591,9 +590,9 @@ ROWS = [
             'left powered after those lines; or a fault line from a synchronous abort in the write window; or no '
             'return. A return is followed by a responsive ROM. Record every line of kernel.log and the progress record '
             'at result.bin offset 128, which holds the row in flight and every completed value.',
-            'apps/gpu-power-id, probe-read variant (apps/gpu-power-id/probe-read.c): the power-only ON sequence through '
-            'its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release; the CORE6 status '
-            'poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and CORE6 lines, '
+            'apps/gpu-power-id, probe-read variant (apps/gpu-power-id/probe-read.c): the power-only ON sequence of '
+            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, CORE6 policy 8 after the clocks); the '
+            'CORE6 status poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and CORE6 lines, '
             'identity Device-nGnRnE mapping checks of the wrapper, SMC0 and GPU core pages, and these 32-bit accesses '
             'in order: reads of 0x01880014 (drm_ctrl), 0x01880010 (irq_ctrl) and 0x0a0000b0 (SMC0); the core identity '
             'as the vendor reads it at probe time, 0x01800024 and then 0x01800020; then, with D, A, I and F masked and '
@@ -616,8 +615,7 @@ ROWS = [
                       'the image\'s table, so nothing was written',
                       'status 7 with `FAIL GPU probe read window refused: monitor deadline too near, nothing written`: '
                       'the write window would have ended less than 500 ms before the monitor\'s 2 s deadline'],
-            admission='GPU-window and SMC0 exception: this row alone, with TOP5 ON, the GPU clock open, its reset '
-                      'released and CORE6 not acknowledged, reads the GPU core identity as the vendor probe does '
+            admission='GPU-window and SMC0 exception: this row alone, after the default ON, reads the GPU core identity as the vendor probe does '
                       '(rgxbvnc.c:119 through OSReadHWReg64, two 32-bit reads of 0x01800024 and 0x01800020, '
                       'osfunc.h:1086-1095), then makes the two writes of the vendor sunxi_secure_config '
                       '(sunxi_platform.c:964-979) in its order and with its values, 2 to SMC0 0x0a0000b0 and 0 to the '
@@ -628,8 +626,8 @@ ROWS = [
                       'SMC0 write as part of the GPU grant for this row, because the vendor driver makes it on every '
                       'GPU power-on. The A733 user manual places SMC0 at 0x0A000000-0x0A00FFFF in the memory '
                       'controller block (MEMC0, interrupt 213, MEMC0_SMC0) and describes none of its registers; the '
-                      'name SMC_DRM_GPU_HW_RST of offset 0xb0 comes only from the vendor source. The GPU stays at the '
-                      'existing 400 MHz from PERI0 and 800 mV. Risk: a GPU core read that never completes stops the '
+                      'name SMC_DRM_GPU_HW_RST of offset 0xb0 comes only from the vendor source. The GPU runs at '
+                      '1008 MHz from PLL_GPU0 and 960 mV. Risk: a GPU core read that never completes stops the '
                       'CPU without an exception, the monitor does not return and only a power removal recovers the '
                       'board; after the writes such a stall leaves SMC0 at 2 and drm_ctrl at 0 until that removal. A '
                       'synchronous abort in the write window restores both words before the fault report; an '
@@ -638,94 +636,6 @@ ROWS = [
                       '500 ms remain before it, and a recovery inside the window would leave both words written until '
                       'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
                       'run would not return. The progress record survives only on a return.'),
-    gpu_row('gpu-vendor-clk', 18, 'GPU core identity read after a power-only ON in the vendor clock and reset order',
-            'vendor-clk', 'COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, GPU left powered',
-            'Status 0 with GPU VCLK identity matches=1 and COMPLETE GPU vendor-clk: identity 36.56.104.183 with the '
-            'vendor clock and reset order, GPU left powered; or status 1 with a GPU VCLK identity line of another '
-            'value and FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered; or no return. A return is '
-            'followed by a responsive ROM. Record every line of kernel.log and the progress record at result.bin '
-            'offset 128, which holds the read in flight and each completed value.',
-            'apps/gpu-power-id, vendor-clk variant (apps/gpu-power-id/vendor-clk.c), which links the reordered '
-            'controller apps/gpu-power-id/vendor-clk-power.c in place of drivers/gpu/a733_gpu_power.c. The power-only '
-            'ON runs as in the wrapper-read run that returned (set board-bundles-20261024-14), with the same CORE6 '
-            'PWCR 0 and policy 8 writes, 400 MHz from PERI0 and DCDC4 at 800 mV, with two changes: the GPU bus reset '
-            '(0xb24 bit 16) is deasserted before the bus gate (0xb24 bit 0) and the core clock (0xb20 bit 31), as '
-            'sunxi_enable_clks_wrap (sunxi_platform.c:167-223) does; and the CORE6 delay row is not written, because '
-            'the vendor does not write it and the set-14 snapshot showed CORE6 already holds those values. The CORE6 '
-            'status poll runs at most 200 ms as an observation only. Then the GPU core identity is read as the vendor '
-            'reads it, two 32-bit loads of 0x01800024 and then 0x01800020. The image makes no write and no OFF; CORE6 '
-            'and TOP5 stay ON until the power removal. docs/gpu-power.md, "The vendor-clk probe reorders the clock and '
-            'reset", maps each result to its meaning. It is the last step of its lifetime.',
-            after=['gpu-provider-ready'],
-            failures=['`FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered`, after the GPU VCLK '
-                      'identity line: the core answered with another value; record it',
-                      '`FAIL GPU vendor-clk refused before clock and reset progress`, `GPU vendor-clk mapping` or `GPU '
-                      'vendor-clk time budget`: no identity word was read',
-                      '`FAIL GPU ON poll` after the GPU VCLK core6 line: the controller failed during ON'],
-            admission='GPU-window read exception: this row alone reads the GPU core identity as two 32-bit '
-                      'Device-nGnRnE loads, 0x01800024 then 0x01800020, with TOP5 ON and CORE6 not acknowledged, after '
-                      'an identity mapping check of the GPU core page. It makes no GPU-window write and no SMC0 '
-                      'access. Its controller releases the GPU bus reset (0xb24 bit 16) before the bus gate (0xb24 '
-                      'bit 0) and the core clock (0xb20 bit 31), the vendor order, and does not write the CORE6 delay '
-                      'row; every other CCU, R_CCU and CORE6 access is the one the accepted power-only sequence '
-                      'makes. The GPU stays at 400 MHz from PERI0 and 800 mV. Risk: a core read that never completes '
-                      'stops the CPU without an exception, the monitor does not return and only a power removal '
-                      'recovers the board; the progress record survives only on a return.'),
-
-    gpu_row('gpu-vendor-state', 19, 'GPU core identity read in the vendor\'s GPU state: BL31 security setup, DCDC4 '
-            '960 mV and 1008 MHz from the GPU PLL', 'vendor-state',
-            'COMPLETE GPU vendor-state: identity 36.56.104.183 at 1008 MHz from the GPU PLL, DCDC4 960 mV and the BL31 '
-            'security setup, GPU left powered',
-            'Status 0 with GPU VST identity matches=1 and COMPLETE GPU vendor-state: identity 36.56.104.183 at 1008 '
-            'MHz from the GPU PLL, DCDC4 960 mV and the BL31 security setup, GPU left powered; or status 1 with a GPU '
-            'VST identity line of another value and FAIL GPU vendor-state: identity not 36.56.104.183, GPU left '
-            'powered; or status 1 with a FAIL GPU vendor-state line or GPU ON poll before any identity read; or no '
-            'return. A return is followed by a responsive ROM. Record every line of kernel.log, including the 28 GPU '
-            'VST el3 lines, the GPU VST dcdc4 and GPU VST clock lines, and the progress record at result.bin offset '
-            '128, which holds the step in flight and each completed identity value.',
-            'apps/gpu-power-id, vendor-state variant (apps/gpu-power-id/vendor-state.c). It applies the three '
-            'differences of docs/reference-backsolve-gpu.md in the vendor\'s order: at EL3, before EL1 starts, the '
-            'monitor copy vendor-state-monitor.c makes BL31\'s cold-boot security writes (SPC ports 0-13 and '
-            '16-23, R_SPC, R_PRCM 0x07010290 |= 7, CCU 0x02003f00 = 7, SPC port 14), each read before and after; '
-            'the client raises DCDC4 from selector 0x1e (800 mV) to 0x2e (960 mV) through the provider copy '
-            'vendor-state-pmic.c with its readback and waits 1.2 ms; one ON writes CORE6 PWCR 0 and policy 8, then '
-            'the controller copy vendor-state-power.c enables PLL_GPU0 with a bounded lock wait, releases the GPU '
-            'bus reset, opens the bus gate and the core clock on PLL_GPU0 with the update bit, and sets PLL_GPU0 '
-            'to 1008 MHz (0xe9105300), every PLL write read back; the CORE6 status poll runs at most 200 ms as an '
-            'observation. Then the GPU core identity is read as two 32-bit loads, 0x01800024 and then 0x01800020. '
-            'The image makes no OFF; CORE6 and TOP5 stay ON, DCDC4 at 960 mV and the GPU clock at 1008 MHz until '
-            'the power removal. approval.json beside the image records the DCDC4 change and the user\'s approval '
-            'of 2026-10-25. docs/gpu-power.md, "The vendor-state probe applies the vendor\'s clock, supply and '
-            'secure state", maps each result to its meaning. It is the last step of its lifetime.',
-            after=['gpu-provider-ready'],
-            failures=['`FAIL GPU vendor-state: identity not 36.56.104.183, GPU left powered`, after the GPU VST '
-                      'identity line: the core answered with another value; record it',
-                      '`FAIL GPU vendor-state: EL3 security record incomplete` or `FAIL GPU vendor-state: CCU '
-                      'security switch did not read 7`, after the GPU VST el3 lines: no PMIC or GPU write was made',
-                      '`FAIL GPU vendor-state DCDC4 write refused`, `DCDC4 write not complete`, `DCDC4 readback not '
-                      '960 mV`, `DCDC4 lease`, `DCDC4 reap` or `DCDC4 release`, or one of their deadlines: no GPU '
-                      'power request was made; DCDC4 may be at 800 mV or 960 mV, as the GPU VST dcdc4 line shows',
-                      '`FAIL GPU ON poll` after the GPU VST clock line: the controller failed during ON; error 8 is '
-                      'a PLL_GPU0 write that did not read back, 9 a lock wait that ended unlocked, 10 a GPU clock '
-                      'update bit that did not clear',
-                      '`FAIL GPU vendor-state refused before the GPU clock reached 1008 MHz`, `GPU vendor-state '
-                      'mapping` or `GPU vendor-state time budget`: no identity word was read'],
-            admission='GPU-window read exception: this row alone reads the GPU core identity, as two 32-bit '
-                      'Device-nGnRnE loads, 0x01800024 then 0x01800020, with TOP5 ON and CORE6 not acknowledged, '
-                      'after an identity mapping check of the GPU core page. It makes no GPU-window write and no '
-                      'SMC0 access. Voltage and clock exception, approved by the user on 2026-10-25 for GPU clock '
-                      'and voltage changes and recorded in the bundle\'s approval.json: one DCDC4 selector write, '
-                      'register 0x15 from 0x1e (800 mV) to 0x2e (960 mV) with bit 7 kept, through the PMIC provider '
-                      'under an exclusive DCDC4 token, read back; and PLL_GPU0 (CCU 0x020020e0) enabled from '
-                      '0x41104500 and set to 0xe9105300 (1008 MHz) as the GPU core clock on source 0. EL3 exception: '
-                      'before EL1 starts, the monitor writes 0xffffffff to SPC 0x02054004 + 0x10 n for ports 0-13 '
-                      'and 16-23 and to R_SPC 0x07002004, 0x07002014 and 0x07002024, ORs 7 into R_PRCM 0x07010290, '
-                      'writes 7 to CCU 0x02003f00 and 0xfffffbff to SPC 0x020540e0, BL31\'s sunxi_security_setup '
-                      'writes in its order, and restores none before the ROM return. The CORE6 delay row is not '
-                      'written. Risk: a core read, PLL access or EL3 access that never completes stops the CPU '
-                      'without an exception, the monitor does not return and only a power removal recovers the '
-                      'board; the progress record survives only on a return.'),
-
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

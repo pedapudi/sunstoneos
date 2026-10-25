@@ -31,7 +31,7 @@ struct domains_model {
     struct a733_power_domains owner;
     struct a733_power_service_config config;
     uint32_t ppu[6][0x1000/4];
-    uint32_t ccu_5c0,ccu_5e0,ccu_b20,ccu_b24,rccu_1ac;
+    uint32_t ccu_5c0,ccu_5e0,ccu_b20,ccu_b24,rccu_1ac,ccu_e0;
     uint64_t ack_at[6];
     unsigned target[6],pending[6],stall[6],status_override[6];
     unsigned in_step,notified,notifies,self_notifies;
@@ -50,6 +50,7 @@ static uint32_t *level_word(uintptr_t a)
     case CCU_BASE+0x5e0:return &d.ccu_5e0;
     case CCU_BASE+0xb20:return &d.ccu_b20;
     case CCU_BASE+0xb24:return &d.ccu_b24;
+    case CCU_BASE+0xe0:return &d.ccu_e0;
     case RCCU_BASE+0x1ac:return &d.rccu_1ac;
     default:return 0;
     }
@@ -99,6 +100,7 @@ static void domains_model_setup(uint32_t divider,uint64_t wire_us)
     m.pmic[0x10]=0xff;m.pmic[0x13]=m.pmic[0x15]=30;
     d.ccu_5c0=0x04000000|(1u<<5)|(1u<<6)|(1u<<7);d.ccu_5e0=(1u<<11)|(1u<<16)|(1u<<18);
     d.rccu_1ac=0x00400001;d.ccu_b20=0x10200100;d.ccu_b24=0x24680000;
+    d.ccu_e0=0x41104500; /* PLL_GPU0 as boot0 leaves it */
     for(unsigned i=1;i<6;++i){d.ppu[i][0]=0xa5a50000;d.ppu[i][2]=0x42000000;}
     d.ack_us=10;
     d.config=(struct a733_power_service_config){50,4000000,TICK_US,0};

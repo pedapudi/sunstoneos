@@ -107,7 +107,7 @@ static int power_acquire(void *ctx, struct a733_gpu_power_resources *out)
 {
     callback(ctx); configASSERT(!get(&power_lease)); set(&power_lease, 1);
     if (gpu_service_case == 6) return 0; /* Admission took effect before failure. */
-    *out = (struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ, A733_GPU_INITIAL_UV};
+    *out = (struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ, A733_GPU_SUPPLY_UV};
     return 1;
 }
 static int power_release(void *ctx)
@@ -115,6 +115,11 @@ static int power_release(void *ctx)
 static int power_read(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t *out)
 {
     callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
+    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
+    if (bank == A733_GPU_CCU && off == 0xe0) {
+        uint32_t *pll = &power_registers[bank][off/4];
+        *pll = (*pll & 0xe0000000) == 0xe0000000 ? *pll | (1u << 28) : *pll & ~(1u << 28);
+    }
     *out = power_registers[bank][off/4]; return 1;
 }
 static int power_update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t clear, uint32_t value)

@@ -81,33 +81,33 @@ static void second_core(struct pmic_model *p)
 }
 static int gpu_now(void *v,uint64_t *out){(void)v;return pmic_model_now(&m,out);}
 static int gpu_acquire(void *v,struct a733_gpu_power_resources *out)
-{(void)v;*out=(struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_INITIAL_UV};return 1;}
+{(void)v;*out=(struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_SUPPLY_UV};return 1;}
 static int gpu_release(void *v){(void)v;return 1;}
 /* The GPU CORE PPU: a policy write sets the status at its next read. */
-static uint32_t gpu_core[0xc14/4]; /* policy..PWCR and the delay row, by word */
+static uint32_t gpu_core[0x24/4]; /* policy..PWCR, by word */
 static unsigned gpu_core_pending;
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0 ||
-               off==0x170 || off==0x174 || off==0xc00 || off==0xc04 || off==0xc10);
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && gpu_core_pending){gpu_core[2]=gpu_core[0];gpu_core_pending=0;}
         *out=off==0xfb0 ? 0 : gpu_core[off/4];return 1;
     }
-    uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
+    uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);
+    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
+    if(bank==A733_GPU_CCU && off==0xe0)*w=(*w&0xe0000000)==0xe0000000 ? *w|(1u<<28) : *w&~(1u<<28);
+    *out=*w;return 1;
 }
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set) ||
-               (off==0x170 && set==0x1f1f1f) || (off==0x174 && set==0x1f1f)
-               || (off==0xc00 && set==0x08080808) || (off==0xc04 && set==0x0808) || (off==0xc10 && set==8)));
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
         gpu_core[off/4]=set;if(!off)gpu_core_pending=1;
         return 1;
     }
-    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24 || off==0xe0));
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27);
     return 1;
@@ -290,21 +290,23 @@ int main(int argc,char **argv)
         assert(a733_gpu_power_on(&gpu,m.now+1000000)==A733_GPU_POWER_AGAIN && a733_gpu_power_poll(&gpu)==A733_GPU_POWER_AGAIN);
         assert(!a733_power_service_idle(&d.owner));service_step();assert(!a733_power_service_idle(&d.owner));
         d.stall[5]=0;m.now=d.wake_at;service_step();assert(a733_power_service_idle(&d.owner));
-        /* The GPU supply consumer takes the boot record of DCDC4. */
-        for(unsigned verified=0;verified<2;++verified) {
-            domains_model_setup(r->divider,r->wire_us);if(!verified)m.pmic[0x15]=31;
+        /* The GPU supply consumer samples DCDC4 through the provider, one
+         * snapshot transaction, and requires the GPU operating point's
+         * 960 mV, which the GPU platform sets before it samples. */
+        for(unsigned raised=0;raised<2;++raised) {
+            domains_model_setup(r->divider,r->wire_us);m.pmic[0x15]=raised ? 0x2e : 30;
             static struct a733_power_domain_row row;row=(struct a733_power_domain_row){0};
             assert(a733_power_domain_row_init(&row,&d.owner,5,15,&gpu_rail));domains_boot();
             static struct a733_pmic_consumer c;c=(struct a733_pmic_consumer){0};
             const struct a733_pmic_consumer_config config={&m.provider,m.lifetime,15,A733_RAIL_DCDC4};
             assert(a733_pmic_consumer_init(&c,&config));
-            const unsigned before=m.writes;const uint64_t until=m.now+100000;int result=0;
-            for(unsigned i=0;i<4 && !result;++i)result=a733_pmic_consumer_sample(&c,until);
-            assert(m.writes==before);
-            if(verified) {
-                assert(result==1 && !c.request.id && c.snapshot.programmed_uv==800000 && (c.snapshot.selector&127)==30);
-                assert(a733_pmic_consumer_health(&c)==1 && a733_pmic_consumer_refresh(&c,until)==1);
-                for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)assert(m.provider.slots[i].state==0);
+            const uint64_t until=m.now+100000;int result=0;
+            for(unsigned i=0;i<40 && !result;++i)
+                if(!(result=a733_pmic_consumer_sample(&c,until))){service_step();m.now+=TICK_US;}
+            if(raised) {
+                assert(result==1 && c.request.id && c.snapshot.programmed_uv==A733_GPU_SUPPLY_UV &&
+                       (c.snapshot.selector&127)==A733_GPU_DCDC4_SELECTOR);
+                assert(a733_pmic_consumer_health(&c)==1);
             } else assert(result==-1 && c.failed);
         }
         /* A fault that a client latches while the service holds the I2C
@@ -322,7 +324,7 @@ int main(int argc,char **argv)
         assert(m.provider.retained && m.retained && m.i2c_held);
         assert(a733_pmic_work(&m.provider,0,NULL)==A733_PMIC_WORK_FAILED && retain_ticks!=1);
         m.now+=TICK_US;assert(service_step()!=1 && a733_power_service_ready(&d.owner)==-1);
-        printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":0,\"retain_steps\":1}\n",park_steps);
+        printf("\"park_steps_after_transfer\":%u,\"gpu_supply_transactions\":1,\"retain_steps\":1}\n",park_steps);
     }
     {
         /* 252 nominal bit times; the board bound is empirical and is

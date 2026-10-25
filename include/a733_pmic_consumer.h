@@ -8,11 +8,10 @@ struct a733_pmic_consumer_config {
     uint64_t owner;
     enum a733_rail rail;
 };
-/* Private, immovable, single-task storage for a platform-lifetime 800 mV
- * accelerator supply. The completed request retains its real provider borrow.
- * A DCDC4 consumer of a provider bound to a power-domain owner instead takes
- * the owner's boot verification record: it submits no request, and health is
- * its rail token plus one acquire load of the state word.
+/* Private, immovable, single-task storage for a platform-lifetime
+ * accelerator supply: DCDC2 at 800 mV, or DCDC4 at the GPU operating point's
+ * 960 mV (a733_gpu_opp.h), which the GPU platform sets before its first
+ * sample. The completed request retains its real provider borrow.
  * No consumer release or automatic retry is provided after uncertainty. */
 struct a733_pmic_consumer {
     struct a733_pmic_consumer *self;

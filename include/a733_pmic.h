@@ -160,17 +160,21 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
  */
 enum a733_pmic_status a733_pmic_submit(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint64_t deadline,struct a733_pmic_request *);
-/* Selector write for the CPU rails DCDC3 and DCDC5 only, under an exclusive
- * lease of that rail. target must decode to 800-1050 mV, the range of the
- * pinned CPU operating points. Under one mutex the request reads the six
+/* Selector write for the CPU rails DCDC3 and DCDC5 and the GPU supply DCDC4
+ * only, under an exclusive lease of that rail. For DCDC3 and DCDC5 target
+ * must decode to 800-1050 mV, the range of the pinned CPU operating points;
+ * for DCDC4 to a voltage of the GPU operating point's speed-bin row
+ * (a733_gpu_opp.h). Under one mutex the request reads the six
  * snapshot bytes, requires the output enabled and its selector code equal to
  * expected, writes target while preserving bit7, then reads the selector back.
  * A mismatch, a readback other than the written byte or any later fault
  * retains the request: the programmed voltage is then uncertain. The result
  * snapshot carries the readback selector. It proves a programmed value only;
  * the caller waits for the output to settle. The CPU clock driver is the only
- * permitted caller: it alone keeps the voltage covering the applied CPU-L,
- * CPU-B and DSU rates, which an exclusive rail lease does not ensure. */
+ * permitted caller for the CPU rails: it alone keeps the voltage covering the
+ * applied CPU-L, CPU-B and DSU rates, which an exclusive rail lease does not
+ * ensure. The GPU platform (a733_gpu_platform.c) is the only caller for
+ * DCDC4, before the GPU's first ON. */
 enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *,uint64_t owner,
     const struct a733_rail_token *,enum a733_rail,uint8_t expected,uint8_t target,
     uint64_t deadline,struct a733_pmic_request *);

@@ -2,19 +2,21 @@
 """Check the source-tree facts that keep PMIC outputs under the provider's control.
 
 The power-domain owner (docs/power-domains.md) reads DCDC2 and DCDC4 once per
-boot, so no agent the OS controls may change those outputs afterwards. This
-check fails when:
+boot. No agent the OS controls may change DCDC2 afterwards; DCDC4 changes only
+through the GPU platform's raise to the GPU operating point
+(docs/designs/gpu-vendor-default.md), which the owner's boot check and the GPU
+supply consumer accept. This check fails when:
 
 - a PSCI CPU_OFF, CPU_SUSPEND or SYSTEM_SUSPEND function identifier appears in
   OS sources, because firmware may change PMIC outputs on those calls;
-- the PMIC provider admits a selector write to any output other than DCDC3 and
-  DCDC5, or its native adapter can write any register other than the S_TWI0
-  data and control registers;
-- the provider copy of the GPU vendor-state diagnostic
-  (apps/gpu-power-id/vendor-state-pmic.c) admits any selector write other
-  than DCDC4 code 0x2e (960 mV). The user approved that one GPU voltage
-  change on 2026-10-25; only that diagnostic compiles the copy, and it
-  raises DCDC4 after the power-domain owner's boot read;
+- the PMIC provider admits a selector write to any output other than DCDC3,
+  DCDC4 and DCDC5, admits a DCDC4 write other than through
+  a733_gpu_opp_voltage() (the GPU operating point's speed-bin voltages,
+  include/a733_gpu_opp.h), or its native adapter can write any register
+  other than the S_TWI0 data and control registers. The user approved the
+  GPU's 960 mV on 2026-10-25;
+- a source other than the GPU platform (drivers/gpu/a733_gpu_platform.c) and
+  the CPU clock driver submits a selector write;
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
   235), which only the provider may use;
 - the native adapter's register accessors leave the barrier placement of
@@ -30,10 +32,9 @@ check fails when:
   must not call current() or an a733_task_context_ predicate, because
   a733_pmic_poll() checks the provider task at entry and the adapter's
   enter() when it takes the I2C mutex;
-- a source other than the provider, its native adapter, the board-bundle
+- a source other than the provider, its native adapter and the board-bundle
   forwarders and cost windows (apps/board-bundles-power/power.c and
-  power.h) and the vendor-state provider copy names pmic_bus_ops, struct
-  a733_pmic_ops or a733_pmic_init.
+  power.h) names pmic_bus_ops, struct a733_pmic_ops or a733_pmic_init.
   pmic_bus_ops is the member that holds the adapter operations in both
   struct a733_pmic_native and struct a733_pmic, and no other code uses the
   name. Any use of it could reach the register accessors without the poll's
@@ -67,11 +68,11 @@ def files(root):
             yield from (p for p in base.rglob('*') if p.suffix in {'.c', '.h', '.S', '.s', '.patch', '.cc'})
 
 
-VENDOR_STATE_PMIC = Path('apps/gpu-power-id/vendor-state-pmic.c')
 ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pmic_native.h'),
                  Path('drivers/power/a733_pmic.c'), Path('include/a733_pmic.h'),
-                 Path('apps/board-bundles-power/power.c'), Path('apps/board-bundles-power/power.h'),
-                 VENDOR_STATE_PMIC}
+                 Path('apps/board-bundles-power/power.c'), Path('apps/board-bundles-power/power.h')}
+# The only callers of the selector write, with the rails each writes.
+WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'), Path('drivers/clock/a733_cpu_clock.c')}
 
 
 def strip_comments(text):
@@ -121,14 +122,15 @@ def main():
     writable = re.search(r'static int writable\([^)]*\)\s*\{(.*?)\n\}', pmic, re.S)
     assert writable, 'writable() not found'
     rails = set(re.findall(r'A733_RAIL_[A-Z0-9]+', writable[1]))
-    if rails != {'A733_RAIL_DCDC3', 'A733_RAIL_DCDC5'}:
+    if rails != {'A733_RAIL_DCDC3', 'A733_RAIL_DCDC4', 'A733_RAIL_DCDC5'}:
         problems.append(f'drivers/power/a733_pmic.c: writable() admits {sorted(rails)}')
-    copy = (root / VENDOR_STATE_PMIC).read_text()
-    writable = re.search(r'static int writable\([^)]*\)\s*\{(.*?)\n\}', copy, re.S)
-    if (not writable or set(re.findall(r'A733_RAIL_[A-Z0-9]+', writable[1])) != {'A733_RAIL_DCDC4'} or
-            'target==VENDOR_STATE_DCDC4_TARGET' not in writable[1] or
-            not re.search(r'#define VENDOR_STATE_DCDC4_TARGET 0x2eu\b', (root / 'apps/gpu-power-id/vendor-state.h').read_text())):
-        problems.append(f'{VENDOR_STATE_PMIC}: writable() admits more than DCDC4 code 0x2e')
+    if not re.search(r'if\(which==A733_RAIL_DCDC4\)return a733_gpu_opp_voltage\(s\.programmed_uv\);', writable[1]):
+        problems.append('drivers/power/a733_pmic.c: writable() admits DCDC4 other than at a GPU operating-point voltage')
+    for path in files(root):
+        rel = path.relative_to(root)
+        if rel not in WRITERS and rel not in ADAPTER_FILES and 'a733_pmic_submit_write(' in strip_comments(
+                path.read_text(errors='replace')):
+            problems.append(f'{rel}: submits a PMIC selector write')
     native = (root / 'include/a733_pmic_native.h').read_text()
     allow = re.search(r'if\(writing\)return (.*?);', native)
     if not allow or set(re.findall(r'0x[0-9a-fA-F]+', allow[1])) != {'0x07083008', '0x0708300c'}:
@@ -168,7 +170,8 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
-          'only to DCDC3 and DCDC5 (DCDC4 code 0x2e only in the vendor-state copy), INTID 235 only in the provider, no lock in the native adapter\'s '
+          'only to DCDC3 and DCDC5 and to DCDC4 at GPU operating-point voltages, from the CPU clock driver and the GPU '
+          'platform only, INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, the adapter\'s '
           'barrier placement, adapter '
           'operations named only by the provider, its adapter and the bundle forwarders')
