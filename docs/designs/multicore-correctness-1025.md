@@ -23,7 +23,8 @@ status that hardware changes on its own:
 
 - GICR_CTLR: UWP (bit 31) and RWP (bit 3), write-pending status
   (IHI 0069G 12.11.2);
-- GICR_WAKER: ChildrenAsleep (bit 2), which follows ProcessorSleep;
+- GICR_WAKER: Quiescent (bit 31, GIC-600 TRM table 4-24) and
+  ChildrenAsleep (bit 2), which follow ProcessorSleep;
 - GICR_ISPENDR0: the pending state, which a disabled level-sensitive PPI can
   still assert;
 - GICR_PWRR: RDGPO (bit 3) and RDGPD (bit 2), the power state of the
@@ -40,8 +41,13 @@ is defined in `secondary-distributor-probe.c` because that is the one unit
 linked by both overlay builders that run a restoration. The baseline
 comparison of GICR_PWRR with the earlier power read uses the same mask. The
 host decoders (`tools/secondary-local-host.py`, formerly `:23`;
-`tools/all-core-pre-scheduler-host.py`, formerly `:40`) read the masks from
-the header and apply them in the same before/after equalities.
+`tools/all-core-pre-scheduler-host.py`, formerly `:40`; and CPU0's in
+`tools/prepare-primary-cache-probe.py`) apply the same masks in the same
+before/after equalities, and mask only GICR_CTLR's status bits in the
+baseline, as the probes do. The survey builder
+(`tools/prepare-secondary-identity-probe.py`) reads the masks from the
+header and holds the masking function and the distributor record check
+that all three decoders call.
 
 These checks are unchanged:
 
@@ -75,7 +81,11 @@ restoring priority write returns both group bits inverted. Both deadline
 profiles must return normally; `tools/workload-bisect-host.py` requires the
 two cases. The `-unfixed` variants, run against the overlays built from
 `10863b20`, must reproduce the expected failures: cleanup error 3 on CPU0, or
-cleanup error 6 and a parked core 3.
+cleanup error 6 and a parked core 3. The CPU0 host check
+(`checks/primary-cache-host.py`) adds `restore-pwrr`, an after-snapshot that
+differs only in the PWRR group bits, GICR_CTLR.RWP and
+GICR_WAKER.Quiescent and must be accepted, and `restore-group-refused`, one
+that differs in the SGI/PPI group word and must be refused.
 
 ## 2. Distributor write-pending bits are waited for
 
@@ -85,13 +95,14 @@ reports a timeout with its own code:
 
 | Site | Before | After; timeout result |
 | --- | --- | --- |
-| `platform/a733/cpu_continue.c:67`, phase 0 of the per-core controller | refusal, `ERROR_INITIAL` | the phase repeats until RWP reads clear; a timeout fails with `ERROR_TIME` in phase 0, which no other outcome of that phase produces |
+| `platform/a733/cpu_continue.c:67`, phase 0 of the per-core controller | refusal, `ERROR_INITIAL` | the phase repeats until RWP reads clear; a timeout fails with `ERROR_DISTRIBUTOR_BUSY` (5), and the controller state keeps the last GICD_CTLR value read, in a field appended after the existing ones so that their layout still matches the frozen native image |
 | `boot/a733/secondary-distributor-probe.c:26`, distributor preparation | refusal | wait, then read the configuration; `DISTRIBUTOR_ERROR_RWP_TIMEOUT` (2) in the record's new `error` word, and `DISTRIBUTOR_ERROR_CONFIGURATION` (1) for a wrong configuration |
 | `secondary-distributor-probe.c:51`, final restoration check | whole-word equality | equality outside RWP, after the existing wait |
 | `platform/a733-smp-cached/irq_table.c:44` and `:77`, SPI routing | refusal before routing; RWP clear required after routing | wait before reading the distributor and after the route writes; `A733_IRQ_TABLE_RWP_TIMEOUT` (2), which the boot patches of the OS, I2S and NPU images report as stop detail `0x311` (a refusal keeps `0x310`) |
 
 The `error` word of the distributor record takes the first reserved word, so
-a successful record is unchanged.
+a successful record is unchanged. The host decoders name a nonzero error
+word when they refuse a record.
 
 **Reference.** Linux `gic_do_wait_for_rwp` (`irq-gic-v3.c:344`–`359`) and TF-A
 `gicd_wait_for_pending_write` (`gicv3_private.h:264`–`268`) poll RWP until it
@@ -99,7 +110,10 @@ clears. The backsolve ranks the refusal second among the divergences most
 likely to stop a core: in the cached image a refusal parks the core, the
 other cores then fail their arrival barrier, and the image stops without a
 report. No board record shows this failure; it needs a concurrent
-distributor writer.
+distributor writer. The same holds for the waits in `irq_table.c`: the
+primary boot waits for RWP after its own distributor writes just before
+routing, and no secondary runs yet, so those waits can fire only if
+another writer is added.
 
 **Blast radius.** `cpu_continue.c` is linked into every image built from
 the cached sources (among them the supervised, observer,
@@ -112,9 +126,10 @@ distributor writes finish before any secondary starts.
 
 **Verification.** `checks/a733-cpu-continue.c` adds a distributor that
 reports RWP for three reads, which must reach `GIC_READY`, and one whose
-RWP never clears, which must fail with `ERROR_TIME` in phase 0
-with no write attempted. `checks/a733-irq-table.c` adds a route after five
-pending reads, which must succeed, and turns its pending-write refusal into
+RWP never clears, which must fail with `ERROR_DISTRIBUTOR_BUSY` in phase 0,
+with no write attempted and the last GICD_CTLR value kept. `checks/a733-irq-table.c` adds a route after five
+pending reads, which must return `A733_IRQ_TABLE_ROUTED`, as the nominal
+route now must too, and turns its pending-write refusal into
 a timeout case that must return `A733_IRQ_TABLE_RWP_TIMEOUT` with no route
 write. The returning profiles' models run the changed distributor probe.
 
@@ -127,8 +142,8 @@ at EL1 with EL2 unused:
 - beside CNTHCTL_EL2 and CNTVOFF_EL2: VPIDR_EL2 = MIDR_EL1,
   VMPIDR_EL2 = MPIDR_EL1, CNTHP_CTL_EL2 = 0;
 - at EL3, after the group enables are cleared and before SCR_EL3 is set:
-  SCR_EL3.NS cleared, then ICC_AP0R0_EL1 = 0 and the Secure
-  ICC_AP1R0_EL1 = 0;
+  SCR_EL3.NS cleared, then ICC_AP0R0_EL1 = 0, an ISB as Linux issues
+  (`irq-gic-v3.c:1258`), and the Secure ICC_AP1R0_EL1 = 0;
 - at EL1, after the priority mask and before Group 1 is enabled: the
   Nonsecure ICC_AP1R0_EL1 = 0.
 
@@ -168,9 +183,9 @@ devices images. The
 observer and storage-maintenance builds apply patches to `continue.S` and pin
 its hash; both patches apply unchanged at new offsets, and the pinned hash in
 `cmake/a733-smp-observe.cmake` and `cmake/a733-storage-maintenance.cmake` is
-updated. Each core executes 12 more instructions once per entry (counted:
-five at EL3 for the active priorities, five for EL2, two at EL1). The mirror
-adds 17 instructions once per core to the returning profiles from the
+updated. Each core executes 13 more instructions once per entry (counted:
+six at EL3 for the active priorities, five for EL2, two at EL1). The mirror
+adds 18 instructions once per core to the returning profiles from the
 secondary cache profile onwards, and to the CPU0 profiles with
 `--el1`. A future refreeze of the native image moves the offsets of
 `a733_cached_enter_el1+0xac` and `+0x144` in the patch plan (item 5);
@@ -257,17 +272,22 @@ and the return-deadline model built on it) advanced the counter 1,000 ticks
 per scheduling quantum, in which each core runs 211 to 887 instructions:
 about 12,500 CPU0 instructions per 1 ms tick period. The image reprograms
 its tick as the previous compare value plus the period, so a tick handled
-late fires again at once. With item 3's 17 probe instructions, CPU0's
+late fires again at once. With item 3's first 17 probe instructions, CPU0's
 worker made one of its 32 rounds while CPU0 took back-to-back ticks; its
 compare value had fallen 21 periods behind the counter. Replacing those
 instructions with 4, 8, 12, 16, 20 or 24 `NOP`s gives the same stall; with
 one `NOP`, or none, the workload completes. The stall therefore depends
 only on the number of instructions that precede EL1 entry.
 
-The models now advance 500 ticks per quantum (`COUNTER_STEP`). The
-workload then completes with 4, 8, 17 and 24 inserted `NOP`s and with the
-probe code, in 86 to 97 ticks instead of 524 to 870 (97 for the
-committed profiles). A core on the board
+At 500 ticks per quantum the workload completed with 4, 8, 17 and 24
+inserted `NOP`s and with the probe code, in 86 to 97 ticks instead of 524
+to 870. The models now advance 250 ticks per quantum (`COUNTER_STEP`),
+about 50,000 CPU0 instructions per period, and the committed profiles'
+workload completes in 38 ticks. Both workload models also fail at once,
+with a message that names the saturated model, when CPU0's enabled tick
+compare value falls more than one period (24,000 counter ticks) behind the
+modeled counter; at 1,000 ticks per quantum that check stops the run at
+counter 1,566,024. A core on the board
 executes roughly a million instructions per tick period, so the board does
 not approach this limit. Programming the tick from the counter, as Linux
 does, removes the catch-up behavior; that change belongs to the separate
@@ -286,22 +306,22 @@ off.
 Budgets follow [docs/performance-architecture.md](../performance-architecture.md):
 no hot path changes, and each added step runs once per core per launch.
 
-- **Counted instruction costs.** The runtime entry adds 12 instructions per
-  core per entry. The probe mirror adds 17 per core. Phase 0 of the
+- **Counted instruction costs.** The runtime entry adds 13 instructions per
+  core per entry. The probe mirror adds 18 per core. Phase 0 of the
   controller reads GICD_CTLR once, as before, when RWP is clear. The SPI
   routing reads GICD_CTLR twice more and the counter once more; the
   overlay's distributor preparation reads GICD_CTLR once more.
 - **Overlay space** (text bytes, base `10863b20` to head; the limit is
-  12,288): local 6,708 to 6,656; cached 8,040 to 8,048; coherent 8,768 to
-  8,784; interrupt profile 11,512 to 11,520 (including its 2,048-byte vector
-  table); pre-scheduler 10,724 to 10,588; first-task 11,604 to 11,476; task
-  switch 10,972 to 10,844; task workload 11,404 to 11,276; both
-  return-deadline profiles 12,112 to 11,984. The identity profile and the
+  12,288): local 6,708 to 6,660; cached 8,040 to 8,064; coherent 8,768 to
+  8,792; interrupt profile 11,512 to 11,536 (including its 2,048-byte vector
+  table); pre-scheduler 10,724 to 10,604; first-task 11,604 to 11,484; task
+  switch 10,972 to 10,852; task workload 11,404 to 11,284; both
+  return-deadline profiles 12,112 to 11,992. The identity profile and the
   CPU0 cache profile without `--el1` are byte-identical to the base.
 - **Native payload segments** of every returning profile differ from the
   base only in patched branch words whose overlay targets moved.
 - **Instruction models** (evidence under
-  `~/.cache/sunstoneos/evidence/mc-correct-20261025/final-94852e47/`): the
+  `~/.cache/sunstoneos/evidence/mc-correct-20261025/final-2517b0ae/`): the
   secondary local, cache, coherence and interrupt models; the pre-scheduler
   model; five first-task, two task-switch and two workload cases; nine
   return-deadline cases (success, two stalls, four RWP and two PWRR
@@ -314,25 +334,18 @@ no hot path changes, and each added step runs once per core per launch.
   cleanup error 6 with core 3 parked (`reproduce-base/`).
 - **Host checks**: every returning profile's host check and its evidence
   validator pass, including the deadline host module's requirement of the
-  two PWRR cases.
-- **Default images** from clean archives of `10863b20` and `94852e47`:
+  two PWRR cases, and the CPU0 host checks of the cache, local-interrupt,
+  interrupt and context profiles, with `restore-pwrr` and
+  `restore-group-refused`.
+- **Default images** from clean archives of `10863b20` and `2517b0ae`:
   `kernel-check.elf` is byte-identical. `a733-smp-supervised.elf` differs
-  in `a733_cached_enter_el1` (the 12 instructions),
-  `a733_cpu_continue_poll` and its jump table (item 2), six routines after
-  the entry that move 48 bytes into alignment padding before the EL3
+  in `a733_cached_enter_el1` (the 13 instructions),
+  `a733_cpu_continue_poll` (17 more instructions) and its jump table
+  (item 2), six routines after the entry that move 52 bytes into alignment
+  padding before the EL3
   vectors (every vector table keeps its address), the branches into those
   routines, and `a733_smp_build_id`, which digests the sources
   (`image-comparison.md` in the evidence directory).
-
-- **Integration gate** `mc-correct-1025-1428f1a9` on `1428f1a9` (clean
-  tree): the supervised, cached diagnostic, uncached diagnostic, observer,
-  storage-maintenance and devices images, the SMP kernel and context
-  models, the supervised OS variant (which applies the OS boot patch), and
-  the kernel, eight-core soak and check-index checks pass. The SMP kernel
-  and context models then pass under QEMU
-  (`tools/check-smp.py --case kernel`, `--case context`). The I2S image
-  builds with its changed boot patch. The NPU board image was not built: no
-  reviewed NPU catalogue is configured on the build host.
 
 ## Frozen bundles that need a refreeze
 
@@ -348,7 +361,9 @@ board use:
   `rank-7-pre-scheduler/` and `rank-8-workload/`; the board-qualified
   deadline bundles under `workload-bisect-20261025/rwp3/`;
   `cpu-next-20261024/` (first task, task switch, task workload) and
-  `cpu-diagnosis-20261024/pre-scheduler/`.
+  `cpu-diagnosis-20261024/pre-scheduler/`; and the CPU0 bundles
+  `primary-el1-probe-20261018/`, `primary-interrupt-probe-20261018/` and
+  `primary-context-probe-20261018/`.
 - Identity survey builds (`workload-bisect-20261025/*/build-identity`):
   bytes unchanged; only their source digests need rebinding.
 - The frozen native image (`762237cd…`) still lacks items 2 and 3 at
