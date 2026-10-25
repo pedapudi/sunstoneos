@@ -211,18 +211,41 @@ def main():
     raw_reports=[(e/('normal-'+n+'.bin')).read_bytes() for n in ('monitor','platform','receipt','packet')]
     receipt=struct.unpack('<13Q',raw_reports[2]);prepared={'epoch':receipt[1],'generation':receipt[2],'lease':receipt[3],'geometry':geometry}
     assert parser.validate_reports(*raw_reports,prepared)['functional_success']
+    # The receipt carries the native span, so the historical span must not validate it.
+    try:parser.validate_reports(*raw_reports,dict(prepared,geometry=dict(geometry,wb_end=0x48086000)))
+    except ValueError as error:assert str(error)=='GPU receipt ownership/publication extent differs.'
+    else:raise AssertionError('Historical span accepted a current receipt')
     # Corrupt the immutable producer metadata while rebinding the file hash;
-    # rejection must come from geometry, not a stale manifest digest.
+    # rejection must come from the marker, not a stale manifest digest.
     with path.open('rb') as stream:
-     elf=ELFFile(stream);symbol=next(x for x in elf.get_section_by_name('.symtab').iter_symbols() if x.name=='gpu_return_wb_geometry');address=int(symbol['st_value'])
-     segment=next(x for x in elf.iter_segments() if x['p_type']=='PT_LOAD' and int(x['p_vaddr'])<=address< int(x['p_vaddr'])+int(x['p_filesz']))
+     elf=ELFFile(stream);symtab=elf.get_section_by_name('.symtab');entries=list(symtab.iter_symbols())
+     index=next(i for i,x in enumerate(entries) if x.name=='gpu_return_wb_geometry');address=int(entries[index]['st_value'])
+     other=next(i for i,x in enumerate(entries) if x.name=='last_tick')
+     loads=[(i,x) for i,x in enumerate(elf.iter_segments()) if x['p_type']=='PT_LOAD']
+     seg,segment=next((i,x) for i,x in loads if int(x['p_vaddr'])<=address<int(x['p_vaddr'])+int(x['p_filesz']))
      offset=int(segment['p_offset'])+address-int(segment['p_vaddr'])
-    corrupt=bytearray(path.read_bytes());struct.pack_into('<Q',corrupt,offset+8,m.wb_end+4096);bad=e/'changed-span.elf';bad.write_bytes(corrupt)
-    changed=dict(manifest,final_elf=hashlib.sha256(corrupt).hexdigest())
-    try:prepare.image_profile(bad,changed)
-    except ValueError as error:assert str(error)=='Unknown GPU WB geometry.'
-    else:raise AssertionError('Changed WB span accepted')
-    (e/'host-geometry.json').write_text(json.dumps({'image_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'passed':True,'geometry':geometry,'cases':['actual-writer-profile-report','changed-span-refused'],'scope':'Actual native monitor/receipt/packet/final log header; GPU arithmetic and terminal log modeled. No physical access.'},indent=2)+'\n')
+     entry=lambda i:int(symtab['sh_offset'])+i*int(symtab['sh_entsize'])
+     phdr=int(elf.header['e_phoff'])+seg*int(elf.header['e_phentsize'])
+     unbacked=image.address('__bss_start');assert not any(int(x['p_vaddr'])<=unbacked<int(x['p_vaddr'])+int(x['p_filesz']) for _,x in loads)
+    data=path.read_bytes();name=struct.unpack_from('<I',data,entry(index))[0];flags=struct.unpack_from('<I',data,phdr+4)[0]
+    malformed=[('changed-span',[('<Q',offset+8,m.wb_end+4096)],'Unknown GPU WB geometry.'),
+     ('changed-start',[('<Q',offset,0x48001000)],'Unknown GPU WB geometry.'),
+     ('marker-size',[('<Q',entry(index)+16,8)],'Malformed GPU WB geometry marker.'),
+     ('marker-duplicate',[('<I',entry(other),name)],'Malformed GPU WB geometry marker.'),
+     ('marker-writable',[('<I',phdr+4,flags|2)],'GPU WB geometry must be immutable and file-backed.'),
+     ('marker-unbacked',[('<Q',entry(index)+8,unbacked)],'GPU WB geometry must be immutable and file-backed.')]
+    for label,edits,message in malformed:
+     corrupt=bytearray(data)
+     for fmt,at,value in edits:struct.pack_into(fmt,corrupt,at,value)
+     bad=e/(label+'.elf');bad.write_bytes(corrupt)
+     try:prepare.image_profile(bad,dict(manifest,final_elf=hashlib.sha256(corrupt).hexdigest()))
+     except ValueError as error:assert str(error)==message,(label,str(error))
+     else:raise AssertionError(label+' accepted')
+    # A frozen image built before the marker keeps its historical span.
+    old=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019'
+    historical=prepare.image_profile(old/'build/return.elf',json.loads((old/'manifest.json').read_text()))[3]
+    assert (historical['wb_start'],historical['wb_end'])==(0x48000000,0x48086000)
+    (e/'host-geometry.json').write_text(json.dumps({'image_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'passed':True,'geometry':geometry,'cases':['actual-writer-profile-report','historical-span-refused-for-current-receipt']+[x[0]+'-refused' for x in malformed]+['historical-marker-absent'],'historical_image_sha256':hashlib.sha256((old/'build/return.elf').read_bytes()).hexdigest(),'scope':'Actual native monitor/receipt/packet/final log header through the host parser; malformed markers are single-field edits of the final ELF with a rebound manifest digest. GPU arithmetic and terminal log modeled. No physical access.'},indent=2)+'\n')
    report=image.layouts['gpu_return_result'];assert m.read(0x42000100)==0x3154455255504741;assert list(struct.unpack('<64I',m.cpu.mem_read(0x42000100+report['words'],256)))==m.output
   else:assert m.parked and not m.reset and not any(x[0] in (0x08001004,0x08001008) for x in m.writes),variant
   if variant in ['not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','pending-irq','cache-geometry','nonzero-exit']:assert not any(0x48000000<=x<0x78000000 for x in m.cleans),variant

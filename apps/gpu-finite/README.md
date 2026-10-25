@@ -2,7 +2,7 @@
 
 The returning single-core application runs two fixed arithmetic jobs, completes healthy CLOSE, parks its providers and returns through the application-local EL1 publication shim and EL3 monitor. Build it through the normal CMake target with `SUNSTONE_GPU_FINITE_RETURN=ON`; the [return contract](RETURN.md) describes its ownership and cleanup. The [host adapter](HOST.md) prepares authenticated inputs and validates returned results before RAM restoration or authorized discard.
 
-The complete finite runtime and resident OS GPU-linear profile have been built with the current CORE6 controller and terminal retirement path. Their selected linked-image checks are recorded under `~/.cache/sunstoneos/evidence/gpu-full-integration-20261024/`. These are software integration results. Physical GPU firmware execution, computation, shutdown and ROM return remain unqualified.
+The complete finite runtime and resident OS GPU-linear profile have been built with the current CORE6 controller and terminal retirement path. Their selected linked-image checks are recorded under `~/.cache/sunstoneos/evidence/gpu-full-integration-20261024/merged/`. These are software integration results. Physical GPU firmware execution, computation, shutdown and ROM return remain unqualified.
 
 `SUNSTONE_GPU_FINITE_RETURN=1` requires the supervised, single-core compute configuration. The existing authenticated GPU contract and session validators remain in use. The client waits for the real PMIC provider, runs two sequential jobs and copies both results before CLOSE. It waits for STOPPED before invoking the finite completion helper. The finite path creates no USB task and performs no native USB controller construction or operation. Its PMIC binding uses the same existing provider constructors as the shared USB binding.
 
@@ -26,7 +26,7 @@ Physical admission must establish that the composition preserves the complete 28
 
 ## Current complete builds
 
-`gpu-full-integration-20261024/profiles.json` records the complete configure and build commands, including compiler, linker, FreeRTOS, mimus, firmware and model inputs. The finite profile enables supervised fixed compute and single-core startup, then builds `sunstone-a733-gpu-compute-single-core`. It emits the existing `sunstone-a733-gpu-finite-returning` manifest identity and `gpu-single-core-returning-v1` profile. Program, runtime-input, draw, texture, lifecycle and transport-only combinations are refused. The default non-returning target remains available.
+`gpu-full-integration-20261024/merged/profiles.json` records the complete configure and build commands, including compiler, linker, FreeRTOS, mimus, firmware and model inputs. The finite profile enables supervised fixed compute and single-core startup, then builds `sunstone-a733-gpu-compute-single-core`. It emits the existing `sunstone-a733-gpu-finite-returning` manifest identity and `gpu-single-core-returning-v1` profile. Program, runtime-input, draw, texture, lifecycle and transport-only combinations are refused. The default non-returning target remains available.
 
 The OS profile builds `sunstone-a733-os` with `SUNSTONE_A733_OS_RESIDENT=ON` and `SUNSTONE_A733_OS_GPU_LINEAR=ON`, using the recorded-WAV application and A55 recognizer cores 2 and 3. Its existing link check confirms the GPU start list and INT95 route. Three linked caller cases cover terminal retirement, CLOSE refusal and lifetime loss during CLOSE. Service replies, time and scheduling are modeled; the actual caller latches retirement and prevents later OPEN, BEGIN or thermal activity.
 
@@ -34,6 +34,17 @@ Both builds compile through their complete dependency graphs. The closure record
 
 The finite backend checks cover pending, failed and completed platform power admission before identification. The return checks execute actual typed allocation producers and require the native return guard to accept their exact extents before any mutation. They cover changed extent/generation and live or dynamic CORE6 refusal. Hardware effects, GPU results and stop state remain modeled. The existing provider-readiness checkpoint is still the first proposed board test; smaller probe results cannot qualify either complete image.
 
-The final finite image adds two read-only CORE6 observations to each normal device-off check. Its typed pool layout requires 128 additional 64-byte cache cleans for the two owned gap pages; no extra GPU work or copy is introduced. The immutable ELF span marker adds 16 bytes of read-only metadata and no runtime instructions. Host preparation checks its unique file-backed, nonwritable location and exact supported values. Existing frozen images without that marker retain their historical host geometry.
+The final finite image adds two read-only CORE6 observations to each normal device-off check. Its typed pool layout requires 128 additional 64-byte cache cleans for the two owned gap pages; no extra GPU work or copy is introduced. The image carries its write-back span in `gpu_return_wb_geometry`, a 16-byte read-only object that adds no runtime instructions. Host preparation requires exactly one such symbol of that size in a file-backed, nonwritable load segment, holding exactly `0x48000000..0x48088000`. An image without the symbol is a frozen image built before it and keeps the historical span `0x48000000..0x48086000`; a present but malformed symbol is refused and never falls back to that span.
+
+The return check feeds the monitor, platform log, receipt and packet bytes that the linked image writes in its normal case to the host report parser, with the geometry that host preparation reads from the ELF. The parser accepts them, and refuses the same receipt under the historical span. Single-field edits of the final ELF, each with a rebound manifest digest, show refusal of a changed span end or start, a wrong symbol size, a duplicate symbol, a writable segment and a symbol outside file-backed data. The frozen historical image still prepares with its historical span.
+
+The selected checks run from the repository root. `EVIDENCE` holds `build/return.elf` and its `manifest.json`; `BUILD` holds the two profile builds:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/gpu-finite/return-check.py --evidence EVIDENCE --cases normal lease-generation changed-extent core-policy-on core-status-on core-dynamic
+cd checks
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python gpu-linked-lifecycle.py --profile finite --image BUILD/finite/sunstone-a733-gpu-compute-single-core.elf --output finite-backend.json
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python gpu-linked-lifecycle.py --profile os --image BUILD/os-gpu/sunstone-a733-os.elf --output os-linked.json
+```
 
 The resident OS profile still requires its actual watchdog/stage-2 entry, multicore and model-memory authority, plus GPU power/clock/mapping ownership. The finite profile requires fresh single-core admission, exclusive CORE6 ownership, supported TOP5/supply/clock state and reviewed return/recovery. No live-board admission accompanies either image. Successful model cases do not supply those facts.

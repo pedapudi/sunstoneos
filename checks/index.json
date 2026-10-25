@@ -4370,6 +4370,22 @@
   "summary": "Actual retained depth lifecycle client/USB producer; GPU/service effects modeled.",
   "usb": false
  },
+ "gpu-linked-lifecycle.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/gpu-finite/README.md",
+   "docs/handoff.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--profile",
+   "--output"
+  ],
+  "summary": "Execute selected GPU boundaries in the full linked finite or OS image.",
+  "usb": false
+ },
  "gpu-mimus-layers.py": {
   "cache_areas": [],
   "docs": [
@@ -5658,6 +5674,7 @@
  "integration-gate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/validation.md"
   ],
   "library": false,
