@@ -32,6 +32,20 @@ regenerating.
   925 s queue timeout. The claim is held and the lifetime has ended. A corrected
   driver and runner are under review on `work/gpu-core6-1024`, and the next
   port 3-1 run needs another power removal.
+- **Port 3-1, second lifetime** (session
+  `board-session-20261024-9/port-3-1`, after the user's power removal). Cold DDR
+  and GPU provider readiness both passed. The corrected power-only image
+  (`4ade8fdf`, set `board-bundles-20261024-9`) admitted CORE6's power-up state
+  but still failed:
+  - after the PWCR 0 write, status was still 0 after 51 µs;
+  - after the policy 8 write, status was still 0 after 51 µs;
+  - the final status poll timed out (`phase=5 error=6 step=27`);
+  - MISR read 0 before any write and after reset release;
+  - IDR0 read `0x10130101`.
+
+  CORE6 therefore needs a prerequisite outside the PCK and the GPU clock bits.
+  The fixed runner exited as soon as the board returned. The claim is held,
+  the lifetime has ended, and analysis continues on `work/gpu-core6-b-1024`.
 - **Port 3-3, base kernel check (`88bce618`): passed** all 100 rounds.
 - **Port 3-3, bundle 6 (`2291f78e`): passed.**
   - **Step bound:** median 1,243 permille against the 1,268 bound; the first
