@@ -9,6 +9,16 @@
 #include "a733_mmio.h"
 #include "a733_task_context.h"
 
+/* BB6_COMPLETE_WINDOW=1 builds the completing-poll window of
+ * docs/designs/pmic-access.md (item 6 under "Measurement"): a counter stamp
+ * at the entry of every a733_pmic_poll() and a span per completing poll.
+ * The default image omits it, because its stamp lengthens each snapshot
+ * step by about 12 us at whole-microsecond phase granularity; the
+ * TWI_COMPLETE lines then print window=0 and empty records. */
+#ifndef BB6_COMPLETE_WINDOW
+#define BB6_COMPLETE_WINDOW 0
+#endif
+
 struct bb_power bb_power;
 struct bb_cost_next bb_power_next;
 static atomic_uint poll_armed;
@@ -36,6 +46,7 @@ static int pmic_read(void *c, uintptr_t a, uint32_t *v)
         bb_twi_observe(&bb_power.twi, 0, a, *v);
     return r;
 }
+#if BB6_COMPLETE_WINDOW
 /* The poll's task check: the first callback of every a733_pmic_poll(). The
  * stamp starts the poll's span; one counter read per poll. */
 static int pmic_current(void *c)
@@ -48,6 +59,7 @@ static int pmic_current(void *c)
     p->poll_data = 0;
     return p->native_pmic_ops.current(c);
 }
+#endif
 /* The wire-time spin's read: the adapter reads S_TWI0 without a barrier, so
  * a DSB SY completes each read before bb_status_spin() stamps it. */
 static int spin_read(void *c, uintptr_t a, uint32_t *v)
@@ -88,6 +100,7 @@ static int pmic_write(void *c, uintptr_t a, uint32_t v)
     if (ticks < p->cost.write_min) p->cost.write_min = ticks;
     if (ticks > p->cost.write_max) p->cost.write_max = ticks;
     bb_twi_observe(&p->twi, 1, a, v);
+#if BB6_COMPLETE_WINDOW
     /* A poll that completed a bus phase ends its span at its first
      * phase-start CNTR write; the wire-time spin's write is left out. A byte
      * phase writes DATA before CNTR; a receive writes CNTR alone. */
@@ -100,6 +113,7 @@ static int pmic_write(void *c, uintptr_t a, uint32_t v)
                 v == 0x58 ? BB_COMPLETE_STOP : p->twi.stops != p->poll_stops ? BB_COMPLETE_START :
                 BB_COMPLETE_RESTART], (uint32_t)(after - p->poll_at));
     }
+#endif
     return r;
 }
 /* Caller buffers must also stay clear of the records this layer writes. */
@@ -308,21 +322,27 @@ static void service(void *unused)
         const struct bb_twi before = p->twi;
         p->twi.polls_max = 0;
         const TickType_t first = xTaskGetTickCount();
+#if BB6_COMPLETE_WINDOW
         for (unsigned k = 0; k < BB_COMPLETE_KINDS; ++k)
             p->step_complete[k] = (struct bb_span){0};
         p->in_step = 1;
+#endif
         const uint64_t start = counter();
         const uint32_t ticks = a733_power_service_step(&p->domains);
         const uint64_t end = counter();
+#if BB6_COMPLETE_WINDOW
         p->in_step = 0;
+#endif
         const TickType_t last = xTaskGetTickCount();
         const struct bb_twi *t = &p->twi;
         if (p->wire_in_step) {
             p->wire_in_step = 0;
             p->wire_excluded = 1;
         } else if (t->conditions != before.conditions || t->bytes != before.bytes || t->stops != before.stops) {
+#if BB6_COMPLETE_WINDOW
             for (unsigned k = 0; k < BB_COMPLETE_KINDS; ++k)
                 bb_span_merge(&bb_power_next.complete[k], &p->step_complete[k]);
+#endif
             if (p->stepped < BB_POWER_STEPS)
                 p->steps[p->stepped++] = (struct bb_step){end - start, last - first,
                     (uint16_t)(t->conditions - before.conditions), (uint16_t)(t->bytes - before.bytes),
@@ -374,7 +394,10 @@ static int power_init(TaskFunction_t client, const char *name, unsigned domain_r
         return 0;
     p->native_pmic_ops = p->pmic_native.pmic_bus_ops;
     struct a733_pmic_ops ops = p->native_pmic_ops;
+#if BB6_COMPLETE_WINDOW
     ops.current = pmic_current;
+#endif
+    bb_power_next.complete_window = BB6_COMPLETE_WINDOW;
     ops.read = pmic_read;
     ops.write = pmic_write;
     ops.outside = pmic_outside;
