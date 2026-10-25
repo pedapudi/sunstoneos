@@ -1,7 +1,9 @@
 # PMIC register access and service spin timing
 
-Status: **implemented and measured on the board.** Bundle 6 ran the changed
-provider three times on port 3-3 on 2026-10-24, read-only. Section "Board result"
+Status: **implemented and measured on the board**, except the barrier
+placement of item 6 of section "Change", which is implemented and has not
+run on the board. Bundle 6 ran the changed provider, with a `DSB SY` pair
+around every access, three times on port 3-3 on 2026-10-24, read-only. Section "Board result"
 gives the steps, the access costs, the provisional empirical bound and what
 the measured costs predict. The modeled step times come from the host model
 of the power service, `checks/power-domains-service.c`, which sets each bus
@@ -46,8 +48,7 @@ accounts for the remaining 45 µs (section "Board result").
    lock's retained bit and the address allowlist. The task check
    (`a733_task_context_owner_el1`) runs where it already runs: at the entry
    of every `a733_pmic_poll()` and in the adapter's `enter()`, which also
-   asserts the kernel mutex holder (section 1.1 of the same document). The
-   `DSB SY` before and after every access stays.
+   asserts the kernel mutex holder (section 1.1 of the same document).
 3. **STOP wait for the idle status.** After a STOP write, the provider reads
    the control register (`CNTR`, `+0x0c`). Bit 4 (`M_STP`) still set is
    PENDING. Once it is clear, the low byte must be `0x40`, else the provider
@@ -73,6 +74,15 @@ accounts for the remaining 45 µs (section "Board result").
    polls at least a quarter bit time apart. The backstop on polls per step,
    `PMIC_POLLS_PER_STEP`, rises from 64 to 256, because with a slow bus a
    selector write needs about 56 polls plus re-spins.
+
+6. **Barrier placement.** The native adapter reads S_TWI0 plainly, writes
+   `DATA` plainly and completes each `CNTR` write with one `DSB SY`
+   (`a733_mmio_write32_dsb_sy_after`), which makes `phase_at` follow the
+   write's completion. Its reads of R_CCU, CCU, GIC and R_PIO at admission
+   and startup keep `DSB SY` on both sides. Section 1.2 of the performance
+   architecture prescribes this placement. It is **unqualified on the
+   board**; section "Board result" predicts its step time, and
+   `checks/pmic-tree.py` keeps the placement.
 
 `phase_at` is a microsecond time truncated from the counter and read after
 the write completes, so a spin ends within about ±1 µs of the flag. Polls
@@ -175,7 +185,8 @@ finish slightly later than 1 ms.
 target is 693 µs for a snapshot. With every software cost set to zero, the
 model charges only the register accesses and a 35 ns counter read per time
 read. It then gives 712 µs (113%) with a `DSB SY` pair around each access
-and 694 µs (110.2%) with the lighter placement under "Left out". Each phase
+and 694 µs (110.2%) with the adapter's placement (item 6 of section
+"Change"). Each phase
 of a snapshot spins its rounded wire time, 23 µs for a byte and 5 µs for a
 condition, which already makes 642 µs of the 693 µs. The 51 µs that remain
 cover 42 phases, about 1.2 µs each. The serial register accesses of a
@@ -560,9 +571,10 @@ with 2 to 3 µs for the window. The 87 ns moves most phases across a whole
 microsecond, so the window costs about 12 µs per step although its stamps
 spend about 3.6 µs.
 
-**Lighter barrier placement, predicted.** The placement under "Left out"
-reads S_TWI0 plainly, writes `DATA` plainly and completes the `CNTR` write
-with one `DSB SY`. From the windows, each read costs 41 ns less. A phase
+**Barrier placement of item 6, predicted.** Both runs used a `DSB SY` pair
+around every access. The placement of item 6 of section "Change" reads
+S_TWI0 plainly, writes `DATA` plainly and completes the `CNTR` write with one
+`DSB SY`. From the windows, each read costs 41 ns less. A phase
 that writes `DATA` and `CNTR` costs 104 to 124 ns less, because the `DATA`
 write overlaps the `CNTR` write, and a phase with one `CNTR` write costs 20 to
 40 ns less. Over the 18 two-write and 24 one-write phases of a snapshot, the
@@ -601,16 +613,10 @@ The windows give no authority for a PMIC rail write.
 
 ## Left out
 
-- **Lighter barriers.** Per section 1.2 of the performance architecture:
-  the flag and status reads of a phase plain, the `DATA` write then the
-  `CNTR` write plain, and one `DSB SY` after the phase-start `CNTR` write,
-  which makes `phase_at` follow the write's completion. Reads of R_CCU, CCU,
-  GIC and R_PIO at admission and startup keep their barriers. Section
-  "Board result" predicts a step about 8 µs shorter. It needs the board
-  qualification of [shared-helpers.md](../shared-helpers.md).
 - **A Device-nGnRE mapping of S_TWI0**, which lets the interconnect
   acknowledge a write before it reaches the controller. No window measures
-  it, and it needs the same qualification.
+  it, and it needs the board qualification of
+  [shared-helpers.md](../shared-helpers.md).
 - **The S_TWI0 packet engine.** It would sequence a transaction's
   conditions and bytes in hardware, the one route to 110% that section
   "Budgets" identifies. Its registers, interrupt and failure handling have

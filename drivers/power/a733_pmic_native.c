@@ -52,18 +52,27 @@ static int owned(struct a733_pmic_native *n)
 {
     return n->holding && !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&2u);
 }
-/* DSB SY before and after every access, as the shared MMIO rules require
- * until a lighter placement is qualified on the board (docs/pmic-runtime.md). */
+/* S_TWI0 is Device-nGnRnE: its accesses reach the controller in program
+ * order, a read completes before its value is used, and owned()'s acquire
+ * load orders each access after the revocation check. Its reads and the
+ * DATA write are therefore plain. The CNTR write that starts a bus phase is
+ * followed by DSB SY, so the provider's next time read, which sets
+ * phase_at, follows the write's completion. The clock, reset, GIC and pin
+ * registers that admission and startup read keep DSB SY on both sides
+ * (docs/designs/pmic-access.md, "Barrier placement"). */
+static int twi(uintptr_t a){return (a&~(uintptr_t)0xfffu)==0x07083000u;}
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {
     if(!out || !owned(v) || !a733_pmic_native_address(a,0))return 0;
-    *out=a733_mmio_read32_dsb_sy_both(a);return 1;
+    *out=twi(a) ? a733_mmio_read32(a) : a733_mmio_read32_dsb_sy_both(a);return 1;
 }
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
     if(!owned(v) || !a733_pmic_native_address(a,1) || value>255 ||
        (a==0x0708300cu && value!=0x48 && value!=0x58 && value!=0x68))return 0;
-    a733_mmio_write32_dsb_sy_both(a,value);return 1;
+    if(a==0x0708300cu)a733_mmio_write32_dsb_sy_after(a,value);
+    else a733_mmio_write32(a,value);
+    return 1;
 }
 static int outside(void *v,const void *p,size_t size)
 {
