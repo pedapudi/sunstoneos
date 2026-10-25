@@ -76,7 +76,11 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
         a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
 }
 static void cancel(void)
-{atomic_store_explicit(&load_level,A733_THERMAL_CRITICAL,memory_order_release);
+{
+#ifdef SUNSTONE_A733_OS_NPU
+ os_npu_thermal(0,1,0,a733_smp_counter()/24);
+#endif
+ atomic_store_explicit(&load_level,A733_THERMAL_CRITICAL,memory_order_release);
  atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
 static void publish_load(enum a733_thermal_level level)
 {
@@ -153,6 +157,17 @@ static int step(void)
         /* The final missing channel may arrive without changing policy level,
          * so the transition callback alone cannot release startup throttling. */
         publish_load(level);
+#ifdef SUNSTONE_A733_OS_NPU
+        uint64_t until=thermal.policy.start_us+1000000;
+        const unsigned seen=a733_thermal_policy_seen(&thermal.policy);
+        if(seen==31) {
+            until=UINT64_MAX;
+            for(unsigned i=0;i<5;++i)if(thermal.policy.seen_us[i]<until)until=thermal.policy.seen_us[i];
+            until+=1000000;
+        }
+        os_npu_thermal(level==A733_THERMAL_NORMAL&&seen==31,
+            level!=A733_THERMAL_NORMAL,until,t);
+#endif
         thermal.next_read=n+25000;
     }
     if(!rearm())return fault();

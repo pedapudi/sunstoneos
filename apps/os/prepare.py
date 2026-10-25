@@ -50,6 +50,8 @@ SESSION_MAGIC = 0x415337334f534131
 AUDIO_MAGIC = 0x415337334f415531
 SESSION_ADDRESS = 0x41f00000
 BOARD_BYTES, OS_BYTES, AUDIO_BYTES = 592, 808, 184
+NPU_BYTES, NPU_MAGIC = 272, 0x415337334f4e5031
+NPU_RANGE = [0x47400000, 0x47c00000]
 # Offsets in the audio extension, which starts at OS_BYTES (apps/os/os.h).
 AUDIO_EVIDENCE, AUDIO_DMA, AUDIO_DMA_BYTES, AUDIO_TAIL = 832, 864, 104, 968
 AUDIO_CONDITIONS = {
@@ -97,6 +99,8 @@ def supported(cluster, column):
 def session_layout(raw):
     """(audio, grant): the session sizes that apps/os/os.h defines."""
     extra = len(raw) - OS_BYTES
+    if extra == NPU_BYTES:
+        return False, False
     require(extra in (0, AUDIO_BYTES, GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES), 'Unknown OS session size.')
     return extra >= AUDIO_BYTES, extra in (GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES)
 
@@ -118,11 +122,21 @@ def manifest_cpu_clock(manifest, raw):
     cpu_clock = manifest.get('cpu_clock')
     require(type(cpu_clock) is bool and session_layout(raw)[1] is cpu_clock,
             'The session size and the link check disagree on the CPU clock build.')
+    npu = len(raw) == OS_BYTES + NPU_BYTES
+    require(manifest.get('npu', False) is npu, 'NPU image/session profile differs.')
+    if npu:
+        profile = manifest.get('npu_profile', {})
+        require(profile.get('range') == NPU_RANGE and profile.get('catalogue') == bytes(raw[888:920]).hex() and
+                profile.get('client_model') == struct.unpack_from('<I', raw, 860)[0],
+                'NPU linked reservation/catalogue/client differs.')
 
 
 def image_manifest_check(manifest, raw):
     """The OS link check of these exact bytes; returns whether audio is built in."""
     audio = manifest.get('audio')
+    # A link check from before the NPU profile has no 'npu' key: NPU is off.
+    npu = manifest.get('npu', False)
+    require(type(npu) is bool, 'The link check records the NPU profile as a boolean.')
     require(not manifest.get('radio') and not manifest.get('headset'),
             'Preparation does not yet stage the radio or Bluetooth profile and firmware.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
@@ -130,8 +144,8 @@ def image_manifest_check(manifest, raw):
             manifest.get('image_sha256') == hashlib.sha256(raw).hexdigest(),
             'Passed supervised OS link check of this image required.')
     require([a.get('name') for a in manifest.get('applications', [])] ==
-            ['mimus', 'thermal'] + (['audio'] if audio else []) and
-            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([143] if audio else []),
+            ['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) and
+            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if npu else []) + ([143] if audio else []),
             'OS start list or interrupt table differs from the link check.')
     return audio
 
@@ -174,6 +188,8 @@ def session_check(raw, audio):
         else:
             require((g['epoch'], g['generation']) == (epoch, generation) and 0 < g['changes'] <= GRANT_CHANGES and
                     any(g['approval']), 'The CPU clock grant must name this session and an approval.')
+    if len(raw) == OS_BYTES + NPU_BYTES:
+        npu_session_check(raw)
     if not audio:
         return
     a = raw[OS_BYTES:]
@@ -190,6 +206,65 @@ def session_check(raw, audio):
     require(fabric == raw[488:500] and rates == raw[500:512], 'Audio DMA and board fabric profiles differ.')
     require(audio_cold <= 1 and 16000 <= samples <= 80000 and raw[985:992] == bytes(7),
             'Unsupported audio capture profile.')
+
+
+def npu_session_check(raw):
+    npu_rules = module('os_npu_preparation', ROOT / 'apps/npu-board/prepare.py')
+    n = raw[OS_BYTES:]
+    require(len(n) == NPU_BYTES and struct.unpack_from('<3Q', n) == (NPU_MAGIC, 1, NPU_BYTES),
+            'Invalid OS NPU extension.')
+    owner, command, supervisor = struct.unpack_from('<3Q', n, 24)
+    pck, model, jobs, reserved = struct.unpack_from('<4I', n, 48)
+    owners = struct.unpack_from('<4Q', raw, 456) + (struct.unpack_from('<Q', raw, 616)[0],
+              struct.unpack_from('<Q', raw, 416)[0], struct.unpack_from('<Q', raw, 440)[0])
+    require(owner and command and supervisor and owner not in owners and pck < 16 and
+            pck != struct.unpack_from('<I', raw, 540)[0] and model < 5 and 1 <= jobs <= 8 and not reserved,
+            'NPU identity or bounded caller selection differs.')
+    require(struct.unpack_from('<2Q', n, 64) == (NPU_RANGE[0], NPU_RANGE[1] - NPU_RANGE[0]) and
+            all(any(n[i:i+32]) for i in range(80, 272, 32)), 'Missing NPU reservation or evidence.')
+    # The image links only the client's model (apps/os/npu-catalogue.py).
+    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    expected = hashlib.sha256(bytes.fromhex(catalogue[model]['model']['sha256'])).digest()
+    require(n[80:112] == expected, 'NPU catalogue differs.')
+    npu_rules.fabric_check(raw)
+
+
+def npu_admission(record, image_hash, raw, evidence):
+    npu_rules = module('os_npu_preparation', ROOT / 'apps/npu-board/prepare.py')
+    npu_rules.physical_authority(record)
+    refs = record.get('npu')
+    require(isinstance(refs, dict) and set(refs) == {'admission', 'clock', 'power', 'supervision', 'ddr'},
+            'Complete OS NPU authority required.')
+    n = raw[OS_BYTES:]
+    identity = {key: record[key] for key in ('identity', 'port')}
+    def fact(key, offset):
+        data = evidence(refs[key])
+        require(hashlib.sha256(data).digest() == n[offset:offset+32], 'NPU evidence digest differs: ' + key)
+        f = json.loads(data)
+        npu_rules.physical_authority(f)
+        require(all(f.get(k) == v for k, v in identity.items()) and f.get('image_sha256') == image_hash and
+                all(f.get(k) == struct.unpack_from('<Q', raw, 24+8*i)[0]
+                    for i, k in enumerate(('epoch', 'generation', 'lease'))), 'NPU authority names another lifetime.')
+        return f
+    ddr = fact('ddr', 240)
+    require(ddr.get('schema') == 'a733-ddr-reservation-v1' and ddr.get('ranges') == [NPU_RANGE] and
+            ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
+            ddr.get('remote_writers_excluded') is True and ddr.get('evidence'), 'NPU private DDR reservation differs.')
+    for item in ddr['evidence']:
+        evidence(item)
+    for key, offset in zip(('admission', 'clock', 'power', 'supervision'), (112, 144, 176, 208)):
+        f = fact(key, offset)
+        require(f.get('schema') == 'a733-npu-board-' + key + '-v1' and f.get('reviewed') is True and
+                set(f.get('conditions', {})) == npu_rules.CONDITIONS[key], 'Incomplete NPU ' + key + ' authority.')
+        for item in f['conditions'].values():
+            evidence(item)
+        if key == 'admission':
+            require(f.get('ddr_sha256') == refs['ddr']['sha256'], 'NPU admission covers another DDR reservation.')
+        if key == 'power':
+            require(f.get('supply_uv') == 800000, 'NPU rail differs from fixed operating point.')
+        if key == 'supervision':
+            require(f.get('supervisor') == struct.unpack_from('<Q', n, 40)[0] and f.get('one_attempt') is True,
+                    'NPU one-attempt supervision differs.')
 
 
 def capture_profile(raw):
@@ -264,6 +339,10 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
+    if len(raw) == OS_BYTES + NPU_BYTES:
+        npu_admission(record, image_hash, raw, evidence)
+    else:
+        require('npu' not in record, 'NPU authority supplied for an image without NPU.')
     cpu_clock_admission(record, image_hash, raw, profile, evidence)
     if not audio:
         require('audio' not in record and 'dma_nonsecure_access' not in record,

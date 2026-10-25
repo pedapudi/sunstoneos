@@ -626,7 +626,9 @@ static void client(void *argument)
                 memset(out.data, 0x5a, out.bytes);
                 flushes = 0;
                 configASSERT(job(slot, n).result == NPU_SERVICE_OK);
-                configASSERT(was_flushed((uintptr_t)out.data, 64) &&
+                /* Clean and invalidate of every output byte before the job:
+                 * the OS client's fill pattern depends on it. */
+                configASSERT(was_flushed((uintptr_t)out.data, out.bytes) &&
                              was_flushed((uintptr_t)rt.slot[slot].targets[NBG_ALLOC_POOL].cpu, 4096));
             }
             in_job[slot] = 0;

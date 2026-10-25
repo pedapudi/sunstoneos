@@ -1,8 +1,9 @@
 /* INTID 97 (SPI 65, level high) bound to the NPU service. The single-core
  * images compile this file as it is: the route is core 0 at priority 0xb0.
- * The board image includes it from apps/npu-board/irq.c with NPU_IRQ_CORE,
- * NPU_IRQ_PRIORITY and NPU_IRQ_HANDLER set and NPU_IRQ_EXTERNAL_BIND defined,
- * and attaches the callbacks to its runtime itself. */
+ * The runtime images include it (apps/npu-board/irq.c, apps/os/npu-irq.c)
+ * with NPU_IRQ_CORE, NPU_IRQ_PRIORITY and NPU_IRQ_HANDLER set and
+ * NPU_IRQ_EXTERNAL_BIND naming their bind function, which attaches the
+ * callbacks to an NPU runtime. */
 #include "irq.h"
 #include "npu_service.h"
 #include "gicv3_spi.h"
@@ -118,6 +119,17 @@ int npu_application_irq_bind(struct npu_service *service)
      * be pinned to that core alone. */
     if(!npu_service_bind_irq(service,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE))return 0;
     binding.service=service;return 1;
+}
+#else
+#include "npu_runtime.h"
+/* Before the scheduler, on the boot core. The idle-register hint stays until
+ * the board shows one INTID 97 per job. */
+int NPU_IRQ_EXTERNAL_BIND(struct npu_runtime *rt)
+{
+    if(!rt || !bind_ready())return 0;
+    binding.masked=1;
+    if(!npu_runtime_bind_irq(rt,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE,1))return 0;
+    binding.service=&rt->service;return 1;
 }
 #endif
 void NPU_IRQ_HANDLER(void)
