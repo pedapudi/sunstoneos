@@ -265,7 +265,10 @@ the image must agree on the sizes and member offsets of eleven shared
 structures, and those the reused objects still define must equal the
 candidate's. A unit that only declares a structure emits no DWARF for it,
 so the audit cannot see it; the client's main.c is such a unit for
-bb_power, which is why power.c is rebuilt with it. The recorded private PMIC
+bb_power, which is why power.c is rebuilt with it. Beyond those eleven, every
+structure, union and enumeration that a header defines and two compile units
+of the image both define must agree in size and member offsets, or in
+enumerator names and values; 96 such types do. The recorded private PMIC
 callback-member rename does not change its offset or callback order.
 
 Twelve focused cases execute the linked client, mapping predicate and identity

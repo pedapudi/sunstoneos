@@ -52,6 +52,50 @@ def shared_layouts(path, names):
     return layouts
 
 
+def consistent_types(path):
+    """Every named structure, union and enumeration that two compile units of
+    the image define in a header must agree: size and member offsets, or enumerator
+    names and values. Reused and new objects meet in one image, so this
+    compares each definition a reused object makes with every new object's.
+    A renamed member at the same offset, such as boot_result's reserved
+    word that became replaced_status, is not a layout change. A type that a
+    .c file defines is private to that unit and two units may reuse its
+    name (struct profile in the power owner and the PMIC provider). Returns the
+    number of names defined in more than one unit."""
+    from elftools.elf.elffile import ELFFile
+    seen, shared = {}, set()
+    tags = {'DW_TAG_structure_type': 'struct', 'DW_TAG_union_type': 'union', 'DW_TAG_enumeration_type': 'enum'}
+    with path.open('rb') as stream:
+        dwarf = ELFFile(stream).get_dwarf_info()
+        for cu in dwarf.iter_CUs():
+            unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
+            program = dwarf.line_program_for_CU(cu)
+            files = program['file_entry']
+            base = 0 if program.header['version'] >= 5 else 1
+            for die in cu.iter_DIEs():
+                attrs = die.attributes
+                if die.tag not in tags or 'DW_AT_name' not in attrs or 'DW_AT_declaration' in attrs:
+                    continue
+                if 'DW_AT_decl_file' not in attrs or \
+                        not files[attrs['DW_AT_decl_file'].value - base].name.decode().endswith('.h'):
+                    continue
+                if die.tag == 'DW_TAG_enumeration_type':
+                    value = tuple((c.attributes['DW_AT_name'].value.decode(), c.attributes['DW_AT_const_value'].value)
+                                  for c in die.iter_children() if c.tag == 'DW_TAG_enumerator')
+                else:
+                    value = (attrs['DW_AT_byte_size'].value if 'DW_AT_byte_size' in attrs else None,
+                             tuple(c.attributes['DW_AT_data_member_location'].value
+                                   if 'DW_AT_data_member_location' in c.attributes else 0
+                                   for c in die.iter_children() if c.tag == 'DW_TAG_member'))
+                key = (tags[die.tag], attrs['DW_AT_name'].value.decode())
+                if key in seen:
+                    shared.add(key)
+                    assert seen[key][0] == value, (key, seen[key][1], unit)
+                else:
+                    seen[key] = (value, unit)
+    return len(shared)
+
+
 # Units the default GPU power path changed beyond the GPU units: the
 # monitor's EL3 security setup, and the PMIC provider and supply consumer's
 # admission of DCDC4 at 960 mV. The monitor compiles with the monitor's flags.
@@ -192,6 +236,7 @@ def main():
     # Every compile unit of the new image agrees on each layout; the ones
     # that reused objects still define equal the checkpoint's.
     current = shared_layouts(out / 'image.elf', names)
+    consistent = consistent_types(out / 'image.elf')
     kept = [n for n in names if n not in CHANGED_LAYOUTS]
     old = shared_layouts(baseline / 'image.elf', names)
     assert {n: old[n] for n in kept} == {n: current[n] for n in kept}, 'Shared old/new object layouts differ'
@@ -202,7 +247,7 @@ def main():
               'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': [n for n in names if n not in CHANGED_LAYOUTS],
-              'layouts_rebuilt': list(CHANGED_LAYOUTS), 'image_sha256': sha(out / 'image.elf'),
+              'layouts_rebuilt': list(CHANGED_LAYOUTS), 'types_consistent_across_units': consistent, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
                           else 'probe-read' if args.probe_read else 'identity'),
