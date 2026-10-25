@@ -5,6 +5,10 @@
 
 #define RDIST UINT32_C(0x03460000)
 #define SGI (RDIST + UINT32_C(0x10000))
+/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status that other
+ * agents' writes can set at any time (IHI 0069G 12.11.2); the board has shown
+ * RWP set after a completed wait. Comparisons and baselines ignore them. */
+#define CTLR_STATUS UINT32_C(0x80000008)
 struct primary_local_record {
     uint64_t state, epoch, deadline, phase, error, writes;
     uint64_t sre_before, group0, group1, pmr;
@@ -88,7 +92,9 @@ static int restore_local(void)
     const volatile uint64_t *before = (const volatile uint64_t *)b;
     const volatile uint64_t *after = (const volatile uint64_t *)&report->after;
     for (unsigned i = 0; i < sizeof(*b) / 8; ++i)
-        if (before[i] != after[i]) { report->cleanup_error = 3; return 0; }
+        if ((before[i] ^ after[i]) & (i ? UINT64_MAX : ~(uint64_t)CTLR_STATUS)) {
+            report->cleanup_error = 3; return 0;
+        }
     return 1;
 }
 int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
@@ -107,7 +113,7 @@ int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
         barrier(); report->state = 4; barrier(); return 2;
     }
     snapshot(&report->before);
-    if (report->before.ctlr || report->before.waker || report->before.enable ||
+    if ((report->before.ctlr & ~CTLR_STATUS) || report->before.waker || report->before.enable ||
         report->before.pending || report->before.active || report->before.pwrr != power) {
         report->error = 0x1002; barrier(); report->state = 4; barrier(); return 2;
     }

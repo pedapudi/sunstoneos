@@ -512,7 +512,7 @@ def run(a):
                 name,address,size=primary.SNAPSHOT
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
                 record.update(deadline_return=returned.record,rom_usable=True,dram_restored=False);journal()
-                raise RuntimeError(str(returned)+' Secondaries were not stopped and DRAM was not restored; remove power before the next run.')
+                raise primary.DeadlineRetained(str(returned)+' Secondaries were not stopped and DRAM was not restored; remove power before the next run.')
             except (ValueError,struct.error) as e:error=e
             for name,address,size in dram:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
@@ -520,7 +520,11 @@ def run(a):
         except BaseException as error:
             record.update(failure=str(error),transport_failed=failed)
             if dirty or failed:
-                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity),error)
+                # A deadline return is a known outcome: quarantine and exit with the claim
+                # held. Every other post-launch failure holds the lock until recovery.
+                known=isinstance(error,getattr(primary,'DeadlineRetained',()))
+                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity),error,
+                                            **({'hold':lambda:None} if known else {}))
                 finally:
                     if dirty and not record['launch_attempted']:base.hold_ownership()
             else:journal()

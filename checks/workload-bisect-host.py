@@ -40,7 +40,9 @@ def deadline_transform(model_report, damage=None):
 
 
 def check_deadline_return(state, record, dram, originals):
-    assert state['quarantined'] and state['retained'] and not record['complete']
+    # Quarantined and finished: the runner exits instead of holding the lock;
+    # the queue claim stays held because the run failed.
+    assert state['quarantined'] and not state['retained'] and not record['complete']
     assert record['dram_restored'] is False and record['rom_usable'] is True
     assert record['deadline_return']['reason'] in host.REASONS
     assert record['failure'].startswith('CPU0 returned through the deadline unit'), record['failure']

@@ -130,7 +130,7 @@ def run_case(args, case, software, report_transform=None, final=None):
          patch.object(host.subprocess, 'run', fake_run), patch.dict(sys.modules, {'usb_guard': guard}), \
          patch.object(host.time, 'monotonic', monotonic), patch.object(host.time, 'sleep', lambda n: None), \
          patch.object(host.base, 'hold_ownership', held), \
-         patch.object(host.base, 'stop_after_failure', lambda r, s, q, e: stop(r, s, q, e, hold=held)):
+         patch.object(host.base, 'stop_after_failure', lambda r, s, q, e, hold=None: stop(r, s, q, e, hold=held if hold is None else hold)):
         try:
             host.run(a)
         except (ValueError, Retained):

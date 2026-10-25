@@ -1573,7 +1573,8 @@
  "all-core-pre-scheduler-host.py": {
   "cache_areas": [],
   "docs": [
-   "docs/designs/cpu-table-walks.md"
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/workload-bisect.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7797,7 +7798,8 @@
  "primary-publication-host.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/designs/workload-bisect.md"
   ],
   "library": false,
   "pure_host": false,
@@ -9071,7 +9073,9 @@
  },
  "secondary-local-host.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/workload-bisect.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

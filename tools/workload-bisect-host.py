@@ -24,8 +24,9 @@ MODEL_SOURCES = base.MODEL_SOURCES+('checks/workload-bisect-probe.py',)
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
          'deadline-return-retained', 'damaged-deadline-retained', 'deadline-record-checked',
          'changed-input-refused')
-INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', 'restore-rwp', 'restore-rwp-secondary'),
-                     True: ('success', 'restore-rwp', 'restore-rwp-secondary')}
+RWP_CASES = ('restore-rwp', 'restore-rwp-secondary', 'restore-rwp-late', 'restore-rwp-late-secondary')
+INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', *RWP_CASES),
+                     True: ('success', *RWP_CASES)}
 RECORD = (0x4201b200, 512)
 RECORD_OFFSET = RECORD[0]-0x42018000
 RECORD_MAGIC = 0x413733444c4e5231
@@ -41,6 +42,12 @@ FIELDS = ('magic', 'version', 'reason', 'stage', 'counter', 'deadline', 'elr_el3
           'x0', 'x1', 'elr_el1', 'spsr_el1', 'esr_el1', 'reserved_112', 'sp_el0', 'sp_el1', 'x29', 'x30',
           'fiq_intid', 'cntp_ctl', 'cntp_cval', 'reserved_176', 'reserved_184', 'unused', 'cleaned_lines', 'cleaned_counter',
           'survey_state', 'survey_completed')
+
+
+class DeadlineRetained(ValueError):
+    """Raised by the runner after a deadline return has been read and the
+    instance quarantined: the outcome is known, so the runner exits instead of
+    holding the board lock, and the queue claim stays held for power removal."""
 
 
 class DeadlineReturn(ValueError):
@@ -143,7 +150,7 @@ def validate_software(software, manifest_hash):
         raw = report.read_bytes()
         require(not case.startswith('restore-rwp') or result.get('rwp_reads_injected') == 1,
                 'The restoration RWP case did not inject RWP.')
-        if case in ('success', 'restore-rwp', 'restore-rwp-secondary'):
+        if case == 'success' or case in RWP_CASES:
             require(result.get('off') == list(range(1, 8)) and result.get('clean_complete') == list(range(8)) and
                     not result.get('fiq_taken'), 'Completed workload or disarmed deadline missing.')
             actual = [list(struct.unpack_from('<5Q', raw, 0x4280+c*128)) for c in range(8)]

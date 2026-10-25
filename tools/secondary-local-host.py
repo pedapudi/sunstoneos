@@ -19,7 +19,8 @@ def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=
     cores=[]
     for core in range(1,8):
         r=struct.unpack_from('<64Q',raw,0xa00+core*512)
-        before,after=r[17:27],r[27:37]
+        # GICR_CTLR.UWP and RWP (bits 31 and 3) are read-only status.
+        before,after=(r[17]&~0x80000008,*r[18:27]),(r[27]&~0x80000008,*r[28:37])
         require(r[0] in (3,4) and r[1:5]==(result['epoch'],core,result['startup_deadline'],0x03460000+core*0x20000),
                 'Local result is incomplete or belongs to another target.')
         require(r[5]==r[6] and not r[5]&1 and r[11:13]==(0,7) and r[14]&7==7 and

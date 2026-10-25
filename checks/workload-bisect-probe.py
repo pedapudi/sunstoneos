@@ -29,6 +29,12 @@ cleaning SMC. Cases:
   wait. The restoration's comparison fails (cleanup error 3), the survey
   returns 0 and CPU0 returns through the deadline unit with reason 3, as on
   the board. Run it only against such an overlay; it reproduces the fault.
+- restore-rwp-late and restore-rwp-late-secondary (with -unfixed
+  variants): RWP reads clear at the first GICR_CTLR read after the priority
+  write and set at the second, as port 3-3 recorded on CPU0 after the RWP
+  wait was added. The corrected comparisons ignore GICR_CTLR's read-only
+  status bits and the run returns normally; an overlay that compares them
+  fails as in the -unfixed cases above.
 - restore-rwp-secondary and restore-rwp-secondary-unfixed: the same
   injection on core 3's redistributor during its EL3 cleanup. Corrected,
   the cleanup waits for RWP and the run returns normally; uncorrected, its
@@ -58,8 +64,12 @@ RECORD = 0x4201b200
 RECORD_MAGIC = 0x413733444c4e5231
 DEADLINE_TICKS = 12000000
 STALLED_CORE = 5
-RWP_TARGET = {'restore-rwp': 0, 'restore-rwp-unfixed': 0,
-              'restore-rwp-secondary': 3, 'restore-rwp-secondary-unfixed': 3}
+# Fault: (core whose GICR_CTLR reads RWP set, index of that read after the
+# core's priority write: 0 the first read, 1 the second).
+RWP_TARGET = {'restore-rwp': (0, 0), 'restore-rwp-unfixed': (0, 0),
+              'restore-rwp-secondary': (3, 0), 'restore-rwp-secondary-unfixed': (3, 0),
+              'restore-rwp-late': (0, 1), 'restore-rwp-late-unfixed': (0, 1),
+              'restore-rwp-late-secondary': (3, 1), 'restore-rwp-late-secondary-unfixed': (3, 1)}
 COMPLETIONS = 0x41243000  # CPU0 EL1 stack page: one 64-byte completion record per core.
 SOURCES = (*first.barrier.SOURCES, 'checks/all-core-first-task-probe.py',
            'checks/all-core-task-workload-probe.py', 'checks/workload-bisect-probe.py')
@@ -95,10 +105,12 @@ class Bisect(workload.Workload):
                 not self.mmio[g+0x80] & (1 << 29) and self.mmio[g+0x100] & (1 << 29))
 
     def memory(self, u, access, address, size, value, core):
-        target = RWP_TARGET.get(self.fault)
+        target, skip = RWP_TARGET.get(self.fault, (None, 0))
         if core == target and self.regs[core]['currentel'] == 12:
             if access == workload.UC_MEM_WRITE and address == self.rdist[core]+0x10400 and not self.rwp_injected:
-                self.rwp_injected = True; self.rwp_reads = 1
+                self.rwp_injected = True; self.rwp_reads = 1; self.rwp_skip = skip
+            elif access != workload.UC_MEM_WRITE and address == self.rdist[core] and self.rwp_reads and self.rwp_skip:
+                self.rwp_skip -= 1
             elif access != workload.UC_MEM_WRITE and address == self.rdist[core] and self.rwp_reads:
                 self.rwp_reads -= 1; self.rwp_seen += 1
                 u.mem_write(address, (self.mmio[address] | 8).to_bytes(4, 'little'))
@@ -262,19 +274,20 @@ def main():
         assert machine.returned and not machine.retained
         if a.case in RWP_TARGET:
             assert machine.rwp_injected and machine.rwp_seen == 1
-        if a.case == 'restore-rwp-secondary-unfixed':
+        if a.case in ('restore-rwp-secondary-unfixed', 'restore-rwp-late-secondary-unfixed'):
             local = struct.unpack_from('<37Q', raw, 0xa00+3*512)  # Words 17-26 before, 27-36 after.
             assert record[:4] == (RECORD_MAGIC, 1, 3, 1) and record[62] == 1, record[:4]
             assert local[11] == 6 and local[27] == 8 and local[17] == 0, local
             assert 3 in machine.target_parked and not machine.stopped
             results = [struct.unpack_from('<5Q', machine.read(0x41201080+c*128, 40)) for c in range(8)]
-        elif a.case == 'restore-rwp-unfixed':
+        elif a.case in ('restore-rwp-unfixed', 'restore-rwp-late-unfixed'):
             primary_record = struct.unpack_from('<34Q', raw, 0xa00)
             assert record[:4] == (RECORD_MAGIC, 1, 3, 1) and record[62] == 1, record[:4]
             assert primary_record[30] == 3 and primary_record[20] == 8, primary_record
             assert machine.started == list(range(1, 8)) and not machine.stopped
             results = [struct.unpack_from('<5Q', machine.read(0x41201080+c*128, 40)) for c in range(8)]
-        elif a.case in ('success', 'restore-rwp', 'restore-rwp-secondary'):
+        elif a.case in ('success', 'restore-rwp', 'restore-rwp-secondary',
+                        'restore-rwp-late', 'restore-rwp-late-secondary'):
             assert machine.armed == [machine.deadline+DEADLINE_TICKS] and machine.disarmed_at_completion
             # The completed survey copies CPU0's EL1 record page over this area.
             assert not machine.fiq_taken and record[0] != RECORD_MAGIC
