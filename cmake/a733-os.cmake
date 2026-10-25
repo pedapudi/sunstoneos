@@ -23,6 +23,7 @@ option(SUNSTONE_A733_OS_AUDIO "Integrated OS with I2S microphone recognition" OF
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_HEADSET "Integrated OS with Bluetooth headset recognition" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
+option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
 if(NOT SUNSTONE_A733_OS)
   return()
@@ -45,6 +46,17 @@ if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT)
 endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
   message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
+endif()
+if(SUNSTONE_A733_OS_NPU)
+  if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
+     SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_CPU_CLOCK OR SUNSTONE_A733_OS_GPU_LINEAR)
+    message(FATAL_ERROR "The initial NPU OS profile is supervised recorded audio, without other optional devices")
+  endif()
+  set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated five-model NPU artifacts map")
+  set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Catalogue entry used by the separate NPU application")
+  if(NOT EXISTS "${SUNSTONE_OS_NPU_CATALOGUE}")
+    message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_CATALOGUE")
+  endif()
 endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The recognizer waits for GPU replies without a timer of its own; only the
@@ -123,6 +135,23 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
     drivers/audio/a733_i2s_stream.c drivers/audio/a733_i2s_platform.c drivers/audio/a733_i2s_platform_native.c
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
+endif()
+if(SUNSTONE_A733_OS_NPU)
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
+    --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}"
+    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
+  list(APPEND os_sources "${os_build}/npu-models.c")
+  list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
+    platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c
+    drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c drivers/npu/a733_npu_memory.c
+    drivers/npu/a733_npu_mmu.c drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c
+    drivers/npu/nbg_relocation.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_platform.c
+    drivers/npu/a733_npu_platform_native.c)
+  file(GLOB os_npu_headers "${os_root}/include/*npu*.h" "${os_root}/include/nbg*.h")
+  list(APPEND os_external_inputs ${os_npu_headers} "${os_root}/apps/os/npu-catalogue.py"
+    "${os_root}/apps/npu-interrupt/irq.c" "${os_root}/apps/npu-interrupt/irq.h"
+    "${os_root}/tools/npu-session-models.json" "${os_root}/drivers/npu/npu_session_models.inc"
+    "${os_root}/drivers/npu/nbg_command.h" "${os_build}/npu-models.c" "${SUNSTONE_OS_NPU_CATALOGUE}")
 endif()
 set(os_include_dirs)
 if(SUNSTONE_A733_OS_HEADSET)
@@ -296,6 +325,9 @@ target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
+if(SUNSTONE_A733_OS_NPU)
+  target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_NPU=1)
+endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
   # 0x46C00000-0x47000000 read-only at EL0 and EL1.
@@ -322,6 +354,15 @@ if(SUNSTONE_A733_OS_MSBC)
 endif()
 get_target_property(os_link sunstone-a733-os LINK_OPTIONS)
 list(FILTER os_link EXCLUDE REGEX "Map,")
+if(SUNSTONE_A733_OS_NPU)
+  # A fixed private reservation, not an expansion of the board's local pool.
+  file(READ "${mb_build}/link.ld" os_npu_link)
+  string(APPEND os_npu_link "\n__os_npu_pool_start = 0x47400000;\n__os_npu_pool_end = 0x47c00000;\n")
+  file(WRITE "${os_build}/link-npu.ld" "${os_npu_link}")
+  list(FILTER os_link EXCLUDE REGEX "-T,")
+  list(APPEND os_link "-Wl,-T,${os_build}/link-npu.ld")
+  list(APPEND os_generated "${os_build}/link-npu.ld")
+endif()
 set_property(TARGET sunstone-a733-os PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os PRIVATE "-Wl,-Map,${os_build}/image.map")
 file(GLOB os_headers "${os_root}/apps/os/*.h")
@@ -333,7 +374,7 @@ if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
   list(APPEND os_inputs "${os_recognition}")
 endif()
 list(REMOVE_ITEM os_inputs "${mb_build}/build-id.c")
-set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
+set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};npu=${SUNSTONE_A733_OS_NPU};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
 foreach(input IN LISTS os_inputs)
   file(SHA256 "${input}" hash)
   string(APPEND os_identity "${hash}")
@@ -358,6 +399,6 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --lifetime "$<IF:$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>,resident,supervised>"
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
     --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
-    --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>"
+    --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>" --npu "$<BOOL:${SUNSTONE_A733_OS_NPU}>"
     --output "${os_build}/link-check.json"
   VERBATIM)

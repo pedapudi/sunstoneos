@@ -70,6 +70,11 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 #else
 #define OS_SESSION_BASE_BYTES A733_OS_SESSION_BYTES
 #endif
+#ifdef SUNSTONE_A733_OS_NPU
+#include "npu.h"
+#undef OS_SESSION_BASE_BYTES
+#define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_NPU_SESSION_BYTES)
+#endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
 /* Supervised only, with the A76 cores admitted (cmake/a733-os.cmake): the
  * grant names the session's epoch, which the stage-2 loader replaces on every
@@ -91,6 +96,9 @@ struct os_session {
     uint8_t configure_adc_clock,alarm_mask,critical_mask,reserved0;
     uint16_t limits[5][3]; /* hot, hysteresis, critical hardware codes */
     uint8_t reserved[6];
+#ifdef SUNSTONE_A733_OS_NPU
+    struct os_npu_session npu;
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     struct os_audio_session audio;
 #endif

@@ -134,7 +134,7 @@ def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
 
 
 def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False,
-          cpu_clock=False):
+          cpu_clock=False, npu=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -182,10 +182,10 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     assert len(entries) == len(set(entries)), 'a start function is listed twice'
     hooks = {one(n)['value'] for n in HOOKS[:3]}
     assert not hooks & set(entries), 'a start entry is a board hook itself'
-    expected = (['mimus', 'thermal'] + (['audio'] if audio else []) + (['radio'] if radio else []) +
+    expected = (['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) + (['radio'] if radio else []) +
                 (['headset'] if headset else []) + (['gpu-linear'] if gpu_linear else []))
     assert names == expected, 'start entries %s differ from %s' % (names, expected)
-    assert ids == [71] + ([143] if audio else []) + ([95] if gpu_linear else []), \
+    assert ids == [71] + ([97] if npu else []) + ([143] if audio else []) + ([95] if gpu_linear else []), \
         'interrupt IDs %s differ from the build' % ids
     if gpu_linear:
         # Any other core takes the status-4 stop on a GPU completion.
@@ -199,7 +199,21 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     # so preparation can tell the session size from this record.
     owner = [s for s in defined if s['name'] == 'os_cpu_clock_step']
     assert bool(owner) == cpu_clock, 'os_cpu_clock_step linked: %s, CPU clock build: %s' % (bool(owner), cpu_clock)
-    return {'interrupts': interrupts, 'applications': applications,
+    npu_profile = None
+    if npu:
+        assert not any((audio, radio, headset, gpu_linear, cpu_clock)), 'Unsupported combined NPU profile'
+        symbols = {s['name']: s for s in elf.symbols if s['shndx'] != 0}
+        start, end = (symbols[n]['value'] for n in ('__os_npu_pool_start', '__os_npu_pool_end'))
+        assert (start, end) == (0x47400000, 0x47c00000), 'NPU reservation differs'
+        for name, section in zip(elf.names, elf.sections):
+            if section[2] & 2 and section[5]:
+                assert section[3] + section[5] <= start or section[3] >= end, ('NPU overlap', name)
+        assert interrupts[ids.index(97)]['core'] == 1, 'NPU interrupt core differs'
+        catalogue = one('os_npu_catalogue_digest')
+        selected = one('os_npu_client_model')
+        npu_profile = {'range': [start, end], 'catalogue': elf.read(catalogue['value'], 32).hex(),
+                       'client_model': struct.unpack('<I', elf.read(selected['value'], 4))[0]}
+    return {'npu_profile': npu_profile, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
 
@@ -215,6 +229,7 @@ def main():
     parser.add_argument('--radio', choices=('0', '1'), default='0')
     parser.add_argument('--headset', choices=('0', '1'), default='0')
     parser.add_argument('--gpu-linear', choices=('0', '1'), default='0')
+    parser.add_argument('--npu', choices=('0', '1'), default='0')
     parser.add_argument('--cpu-clock', choices=('0', '1'), default='0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -222,12 +237,12 @@ def main():
     gpu_linear, cpu_clock = args.gpu_linear == '1', args.cpu_clock == '1'
     try:
         result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
-                       cpu_clock)
+                       cpu_clock, args.npu == '1')
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
     result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
-                   'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear, 'cpu_clock': cpu_clock,
+                   'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear, 'cpu_clock': cpu_clock, 'npu': args.npu == '1',
                    'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
     if args.build_id:
         result['build_id'] = args.build_id.read_text().strip()

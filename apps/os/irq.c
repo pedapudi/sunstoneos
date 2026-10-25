@@ -4,6 +4,9 @@
 #include "irq_table.h"
 #include "a733_thermal.h"
 void os_thermal_irq(void);
+#ifdef SUNSTONE_A733_OS_NPU
+#include "npu.h"
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
 void os_audio_irq(void);
 #endif
@@ -12,6 +15,9 @@ void os_audio_irq(void);
 #endif
 const struct a733_irq_route a733_irq_routes[]={
     {A733_THERMAL_INTID,0,0xd8,os_thermal_irq},
+#ifdef SUNSTONE_A733_OS_NPU
+    {97,OS_NPU_CORE,0xd8,os_npu_irq},
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     /* DMA0 (A733_DMA0_INTID), on the core of the audio DMA worker. */
     {143,0,0xd8,os_audio_irq},

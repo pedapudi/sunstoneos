@@ -59,6 +59,18 @@ int os_session_valid(const struct os_session *s)
     if(cpu.owner==s->audio.dma.owner)return 0;
 #endif
 #endif
+#ifdef SUNSTONE_A733_OS_NPU
+    const struct os_npu_session *n=&s->npu;
+    if(n->magic!=OS_NPU_SESSION_MAGIC||n->version!=1||n->bytes!=sizeof(*n)||!n->owner||
+       !n->command_admission||!n->supervisor||n->pck_client>=16||n->pck_client==s->board.pck_client||
+       n->client_model!=os_npu_client_model||!n->jobs||n->jobs>8||n->reserved||
+       n->pool_start!=OS_NPU_POOL_START||n->pool_bytes!=OS_NPU_POOL_BYTES||
+       memcmp(n->catalogue,os_npu_catalogue_digest,32)||!present(n->admission,32)||
+       !present(n->clock,32)||!present(n->power,32)||!present(n->supervision,32)||!present(n->ddr,32)||
+       n->owner==s->thermal_owner||n->owner==s->board.latch_owner||n->owner==s->board.latch_m_owner)
+        return 0;
+    for(unsigned i=0;i<4;++i)if(n->owner==owners[i])return 0;
+#endif
     return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)

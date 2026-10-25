@@ -26,6 +26,9 @@ struct os_application {
 __attribute__((used,retain)) const struct os_application os_applications[]={
     {"mimus",mimus_board_task_privileged,mimus_board_pins,mimus_board_application_start},
     {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},
+#ifdef SUNSTONE_A733_OS_NPU
+    {"npu",os_npu_task_privileged,os_npu_pins,os_npu_start},
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     {"audio",os_audio_task_privileged,os_audio_pins,os_audio_start},
 #endif
