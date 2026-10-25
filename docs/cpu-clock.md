@@ -144,9 +144,10 @@ While idle, the owner's poll applies the level:
   without readings is itself a reason to throttle. It consumes no change and
   keeps the voltage. It can also lower an inspected inherited point when the
   session grants that cluster, permits at least 1014 MHz and has a remaining
-  change. Each inherited lowering attempt consumes one change. If it ends
-  REFUSED or EXPIRED, the driver does not start it again in the same THROTTLE
-  episode.
+  change. An inherited lowering consumes one change when its first clock
+  write, the park on the oscillator, begins; one refused or expired before
+  that write consumes none. If it ends REFUSED or EXPIRED, the driver does
+  not start it again in the same THROTTLE episode.
 - At NORMAL, the driver raises a cluster that THROTTLE lowered back to the
   point it ran before, once. The raise needs the cluster's sensor reading and
   consumes a change, as a request does. The grant must also cover the original
