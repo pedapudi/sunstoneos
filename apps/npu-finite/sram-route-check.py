@@ -5,12 +5,14 @@
 
 DIR holds the variant's image.elf from apps/npu-finite/build-sram-route.py.
 Unicorn runs the linked wrapper functions of sram-route.c and sram-route-el3.c;
-the functions they redirect (the startup initializer, service activation, local
-stop, the native register callbacks, the ROM return and a733_smp_stop) are
-stopped at their entry and answered by the check. SYSCTRL 0x03000008 is
-modeled, including a word that ignores writes. The check also confirms that
-the image's call sites and its native-callback loads reach the wrappers, and
-that no loadable segment, symbol or host SRAM region of the finite launch
+the functions they redirect (the startup initializer, the startup's platform
+register write, service activation, local stop, the native register
+callbacks, the ROM return and a733_smp_stop) are stopped at their entry and
+answered by the check. SYSCTRL 0x03000008 and the NPU clock and bus words are
+modeled, including a SYSCTRL word that ignores writes. The check also confirms
+that the image's call sites and its native-callback loads reach the wrappers,
+that the image's only RMR_EL3 write is reachable only through the EL3 restore,
+and that no loadable segment, symbol or host SRAM region of the finite launch
 lies in the shared SRAM at 0x00074000-0x000f3fff. No device access.
 """
 import argparse, hashlib, importlib.util, json, re, struct, sys
@@ -41,18 +43,22 @@ def enum(header, names):
     raise AssertionError((header, names))
 
 
-STAGE = enum('include/a733_npu_startup.h', ('A733_NPU_STARTUP_FINAL', 'A733_NPU_STARTUP_READY',
+STAGE = enum('include/a733_npu_startup.h', ('A733_NPU_STARTUP_ENABLE', 'A733_NPU_STARTUP_OPEN',
+                                            'A733_NPU_STARTUP_FINAL', 'A733_NPU_STARTUP_READY',
                                             'A733_NPU_STARTUP_STOPPED'))
+CCU_CLOCK, CCU_BUS = 0x02002b00, 0x02002b04
 PLATFORM = enum('include/a733_npu_platform.h', ('A733_NPU_PLATFORM_READY', 'A733_NPU_PLATFORM_BUSY',
                                                'A733_NPU_PLATFORM_RETAINED'))
 SERVICE = enum('include/npu_service.h', ('NPU_SERVICE_OK', 'NPU_SERVICE_DENIED', 'NPU_SERVICE_FAULT'))
 stage_offset = im.layouts['a733_npu_startup']['stage']
-wrap = {n: im.address('__wrap_' + n) for n in ('a733_npu_startup_init', 'npu_service_activate',
-                                               'npu_convolution_stop_poll', 'npu_finite_rom_return')}
-real = {n: im.address(n) for n in ('a733_npu_startup_init', 'npu_service_activate', 'npu_convolution_stop_poll',
-                                   'npu_finite_rom_return', 'a733_smp_stop')}
+NAMES = ('a733_npu_startup_init', 'a733_npu_platform_native_write', 'npu_service_activate',
+         'npu_convolution_stop_poll', 'npu_finite_rom_return')
+wrap = {n: im.address('__wrap_' + n) for n in NAMES}
+real = {n: im.address(n) for n in (*NAMES, 'a733_smp_stop')}
 startup_ptr = im.address('sram_route_startup', 'sram-route.c')
 routed_flag = im.address('sram_route_npu', 'sram-route.c')
+# The compiler stores this two-valued flag in one byte; its symbol names that byte.
+attempted_flag = im.address('sram_route_attempted')
 ops_wrap, ops_real = im.address('__wrap_a733_npu_native_operations'), im.address('a733_npu_native_operations')
 
 
@@ -70,7 +76,7 @@ STUBS = {**{real[n]: n for n in real}, real_read: 'real_read', real_write: 'real
 
 
 class Machine:
-    def __init__(self, sysctrl=0x2, stuck=False, real_returns=None):
+    def __init__(self, sysctrl=0x2, stuck=False, real_returns=None, bus=0x00080000, clock=0):
         self.u = u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         u.mem_map(0x02000000, 0x02000000)
         u.mem_map(0x40000000, 0x04000000)
@@ -85,6 +91,8 @@ class Machine:
         u.hook_add(UC_HOOK_MEM_WRITE, self.write, begin=SYSCTRL, end=SYSCTRL + 3)
         u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self.npu, begin=0x03600000, end=0x03600fff)
         u.mem_write(SYSCTRL, struct.pack('<I', sysctrl))
+        u.mem_write(CCU_BUS, struct.pack('<I', bus))
+        u.mem_write(CCU_CLOCK, struct.pack('<I', clock))
 
     def read(self, u, access, at, size, value, unused):
         self.reads += 1
@@ -125,10 +133,11 @@ class Machine:
         self.u.emu_start(at, SENTINEL, count=100000)
         return self.u.reg_read(UC_ARM64_REG_X0) & 0xffffffff
 
-    def prepared(self, stage, routed=0):
+    def prepared(self, stage, routed=0, attempted=None):
         self.put(startup_ptr, STARTUP)
         self.put(STARTUP + stage_offset, stage, 4)
         self.put(routed_flag, routed, 4)
+        self.put(attempted_flag, routed if attempted is None else attempted, 1)
 
 
 results = []
@@ -150,33 +159,50 @@ second = m.call(wrap['a733_npu_startup_init'], STARTUP + 0x1000, 1, 2, 0, 0)
 case('startup-init-records-one-sequencer', first == 1 and recorded == STARTUP and second == 0 and
      m.calls.count('a733_npu_startup_init') == 1 and m.get(startup_ptr) == STARTUP)
 
+# The clear before the first write of the NPU bus and reset word.
+pw = wrap['a733_npu_platform_native_write']
+m = Machine(sysctrl=0x6)
+m.prepared(STAGE['A733_NPU_STARTUP_OPEN'], attempted=0)
+pll = m.call(pw, 0, 0x020022a0, 0xe8305100)
+before = (list(m.writes), m.reads)
+r = m.call(pw, 0, CCU_BUS, 0x000c0000)
+order = list(m.calls)
+again = m.call(pw, 0, CCU_BUS, 0x000e0000)
+case('clear-before-first-reset-release-then-write', pll == 1 and before == ([], 0) and r == 1 and
+     m.writes == [0x4] and m.sysctrl == 0x4 and m.get(routed_flag, 4) == 1 and
+     order == ['a733_npu_platform_native_write', 'a733_npu_platform_native_write'] and again == 1 and
+     m.writes == [0x4], sysctrl_entry='0x6', sysctrl_after='0x4', bus_word_at_clear='0x00080000')
+for name, kwargs, stage in (('clear-refused-when-a-reset-is-released', {'bus': 0x000c0000}, 'A733_NPU_STARTUP_OPEN'),
+                            ('clear-refused-when-the-bus-gate-is-open', {'bus': 0x00080001}, 'A733_NPU_STARTUP_OPEN'),
+                            ('clear-refused-when-the-module-gate-is-open', {'clock': 0x80000000}, 'A733_NPU_STARTUP_OPEN'),
+                            ('clear-refused-outside-the-open-stage', {}, 'A733_NPU_STARTUP_ENABLE'),
+                            ('clear-refused-when-entry-routes-to-npu', {'sysctrl': 0x0}, 'A733_NPU_STARTUP_OPEN'),
+                            ('clear-refused-on-failed-readback', {'sysctrl': 0x2, 'stuck': True}, 'A733_NPU_STARTUP_OPEN')):
+    m = Machine(**kwargs)
+    m.prepared(STAGE[stage], attempted=0)
+    r = m.call(pw, 0, CCU_BUS, 0x000c0000)
+    first_calls, first_writes = list(m.calls), list(m.writes)
+    second = m.call(pw, 0, CCU_BUS, 0x000c0000)
+    case(name, r == 0 and first_calls == [] and m.get(routed_flag, 4) == 0 and
+         first_writes == ([0x0] if kwargs.get('stuck') else []) and m.writes == first_writes and second == 1,
+         note='the failed write fails the startup table; a later call is not routed again')
+
 m = Machine()
-m.prepared(STAGE['A733_NPU_STARTUP_FINAL'])
+m.prepared(STAGE['A733_NPU_STARTUP_FINAL'], routed=1)
 r = m.call(wrap['npu_service_activate'], 0x43c00000)
-case('activation-before-ready-denied', r == SERVICE['NPU_SERVICE_DENIED'] and not m.reads and not m.writes and
+case('activation-before-ready-denied', r == SERVICE['NPU_SERVICE_DENIED'] and 'npu_service_activate' not in m.calls)
+
+m = Machine()
+m.prepared(STAGE['A733_NPU_STARTUP_READY'], routed=0, attempted=1)
+r = m.call(wrap['npu_service_activate'], 0x43c00000)
+case('activation-refused-without-routing', r == SERVICE['NPU_SERVICE_FAULT'] and not m.reads and not m.writes and
      'npu_service_activate' not in m.calls)
 
-m = Machine(sysctrl=0x0)
-m.prepared(STAGE['A733_NPU_STARTUP_READY'])
+m = Machine(sysctrl=0x4, real_returns={'npu_service_activate': SERVICE['NPU_SERVICE_OK']})
+m.prepared(STAGE['A733_NPU_STARTUP_READY'], routed=1)
 r = m.call(wrap['npu_service_activate'], 0x43c00000)
-case('activation-refuses-entry-not-routed-to-cpu', r == SERVICE['NPU_SERVICE_FAULT'] and not m.writes and
-     m.get(routed_flag, 4) == 0 and 'npu_service_activate' not in m.calls)
-
-m = Machine(sysctrl=0x2, stuck=True)
-m.prepared(STAGE['A733_NPU_STARTUP_READY'])
-r = m.call(wrap['npu_service_activate'], 0x43c00000)
-case('activation-refuses-failed-readback', r == SERVICE['NPU_SERVICE_FAULT'] and m.writes == [0x0] and
-     m.get(routed_flag, 4) == 0 and 'npu_service_activate' not in m.calls)
-
-m = Machine(sysctrl=0x6, real_returns={'npu_service_activate': SERVICE['NPU_SERVICE_OK']})
-m.prepared(STAGE['A733_NPU_STARTUP_READY'])
-r = m.call(wrap['npu_service_activate'], 0x43c00000)
-routed_writes = list(m.writes)
-again = m.call(wrap['npu_service_activate'], 0x43c00000)
-case('activation-routes-sram-to-npu-once-then-activates', r == SERVICE['NPU_SERVICE_OK'] and
-     routed_writes == [0x4] and m.writes == [0x4] and m.sysctrl == 0x4 and m.get(routed_flag, 4) == 1 and
-     m.calls.count('npu_service_activate') == 2 and again == SERVICE['NPU_SERVICE_OK'],
-     sysctrl_entry='0x6', sysctrl_after='0x4', other_bits_preserved=True)
+case('activation-after-routing-and-ready', r == SERVICE['NPU_SERVICE_OK'] and not m.writes and
+     m.calls == ['npu_service_activate'])
 
 m.steps = 0
 r = m.call(wrapped_read, 0x43b00000, 0x20, 0x43b00100)
@@ -245,12 +271,49 @@ for i in range(0, len(text) - 3, 4):
         target = 0x41000000 + i + ((((word & 0x3ffffff) ^ 0x2000000) - 0x2000000) << 2)
         calls.setdefault(target, []).append(0x41000000 + i)
 inside = lambda at, name: any(lo <= at < lo + 0x200 for lo in [im.address('__wrap_' + name)])
-for name in ('a733_npu_startup_init', 'npu_service_activate', 'npu_convolution_stop_poll', 'npu_finite_rom_return'):
+for name in NAMES:
     sites = calls.get(real[name], [])
     case('only-the-wrapper-reaches-' + name, sites and all(inside(s, name) for s in sites),
          sites=[hex(s) for s in sites])
 case('native-callbacks-load-the-wrapper-table', wrapped_read != real_read and wrapped_write != real_write and
      ops_wrap != ops_real, wrapper_table=hex(ops_wrap), native_table=hex(ops_real))
+
+# The image's only RMR_EL3 write sits in npu_finite_rom_return, and the only
+# branch to that function is the EL3 restore's call.
+def sites(match):
+    return [base + i for base, data in im.parts for i in range(0, len(data) - 3, 4)
+            if match(struct.unpack_from('<I', data, i)[0])]
+rmr_writes = sites(lambda w: (w & 0xffffffe0) == 0xd51ec040)
+rom = real['npu_finite_rom_return']
+rom_end = min(v for vs in im.symbols.values() for v in vs if v > rom)
+# Branches from outside the function; its own WFI loop branches back inside it.
+branches_in = sorted(at for target, ats in calls.items() if rom <= target < rom_end for at in ats
+                     if not rom <= at < rom_end)
+literal_refs = [base + i for base, data in im.parts for i in range(0, len(data) - 7, 8)
+                if struct.unpack_from('<Q', data, i)[0] == rom]
+adr_refs = []
+for base, data in im.parts:
+    for i in range(0, len(data) - 3, 4):
+        w = struct.unpack_from('<I', data, i)[0]
+        at = base + i
+        if w & 0x9f000000 == 0x10000000:   # ADR
+            imm = ((w >> 3) & 0x1ffffc) | ((w >> 29) & 3)
+            imm -= (1 << 21) if imm & (1 << 20) else 0
+            if rom <= at + imm < rom_end:
+                adr_refs.append(at)
+        elif w & 0x9f000000 == 0x90000000 and i + 4 < len(data):   # ADRP then ADD
+            imm = ((w >> 3) & 0x1ffffc) | ((w >> 29) & 3)
+            imm -= (1 << 21) if imm & (1 << 20) else 0
+            page = (at & ~0xfff) + (imm << 12)
+            nxt = struct.unpack_from('<I', data, i + 4)[0]
+            if nxt & 0xffc00000 == 0x91000000 and rom <= page + ((nxt >> 10) & 0xfff) < rom_end:
+                adr_refs.append(at)
+wrap_rom = wrap['npu_finite_rom_return']
+case('only-rmr-write-reached-only-through-the-el3-restore',
+     len(rmr_writes) == 1 and rom <= rmr_writes[0] < rom_end and len(branches_in) == 1 and
+     wrap_rom <= branches_in[0] < wrap_rom + 0x200 and not literal_refs and not adr_refs,
+     rmr_write=[hex(x) for x in rmr_writes], call_site=[hex(x) for x in branches_in],
+     function=[hex(rom), hex(rom_end)])
 
 # Shared SRAM audit of the image and of the finite launch regions.
 segments = [(base, base + len(data)) for base, data in im.parts]

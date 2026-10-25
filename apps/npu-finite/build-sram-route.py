@@ -2,17 +2,17 @@
 """Build the SRAM-routing variant of the finite numerical NPU image.
 
 The variant is the default image of apps/npu-finite/build.py with two changes:
-sram-route.c routes the shared SRAM to the NPU after startup reaches READY and
-back to the CPU after local stop, and refuses NPU register access unless the
-SRAM is routed and startup is READY; sram-route-el3.c restores the CPU routing
-again before the ROM return. The builder first runs build.py unchanged into
+sram-route.c routes the shared SRAM to the NPU before the startup sequencer
+releases the NPU resets and back to the CPU after local stop, and refuses NPU
+register access unless the SRAM is routed and startup is READY;
+sram-route-el3.c restores the CPU routing before the ROM return. The builder first runs build.py unchanged into
 OUTPUT/default, then compiles the two files with the flags of the objects they
 sit beside, gives the variant its own build identity and relinks the default
 link command with the two objects and these linker redirections:
 
-  --wrap=a733_npu_startup_init --wrap=npu_service_activate
-  --wrap=npu_convolution_stop_poll --wrap=a733_npu_native_operations
-  --wrap=npu_finite_rom_return
+  --wrap=a733_npu_startup_init --wrap=a733_npu_platform_native_write
+  --wrap=npu_service_activate --wrap=npu_convolution_stop_poll
+  --wrap=a733_npu_native_operations --wrap=npu_finite_rom_return
 
 No other object changes, so the default image and every other image are
 unchanged. The execution profile stays npu-finite-return-v1, so the finite
@@ -21,8 +21,8 @@ host prepares and validates the variant as it does the default image.
 import argparse, hashlib, json, shlex, shutil, subprocess, sys
 from pathlib import Path
 
-WRAPS = ('a733_npu_startup_init', 'npu_service_activate', 'npu_convolution_stop_poll',
-         'a733_npu_native_operations', 'npu_finite_rom_return')
+WRAPS = ('a733_npu_startup_init', 'a733_npu_platform_native_write', 'npu_service_activate',
+         'npu_convolution_stop_poll', 'a733_npu_native_operations', 'npu_finite_rom_return')
 
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--evidence', type=Path, required=True, help='new output directory')
@@ -115,7 +115,7 @@ save('input-identities.json', {'compiled_inputs': closure, 'identity_inputs': id
                                'default_image_sha256': sha(default / 'image.elf'),
                                'elf_sha256': sha(e / 'image.elf'), 'binary_sha256': sha(e / 'image.bin'),
                                'physical_access': False, 'physical_admission': False,
-                               'note': 'Default finite image plus the two SRAM-routing objects and five linker '
+                               'note': 'Default finite image plus the two SRAM-routing objects and six linker '
                                        'redirections. Root review and real session and board evidence remain '
                                        'mandatory.'})
 save('manifest.json', {'execution_profile': identity['profile'], 'build_id': build_id,

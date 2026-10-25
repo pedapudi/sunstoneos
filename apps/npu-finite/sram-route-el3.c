@@ -1,11 +1,16 @@
 /* EL3 half of the SRAM-routing variant (sram-route.c): before the forced-FEL
  * reset that returns to the boot ROM, route the shared SRAM to the CPU again.
- * The ROM keeps its stack (0x000f3400) and FEL scratchpad (0x000ee800) in that
- * SRAM. EL1 has already restored the bit after local stop on the only path
- * that reaches here; this store covers that path again at the last software
- * step. A readback that still shows the NPU routing parks instead of
- * returning. The linker redirects the monitor's one call of
- * npu_finite_rom_return here. */
+ *
+ * This store is the one the ROM depends on. The forced-FEL return enters the
+ * ROM at 0x20, and that path zeroes 0x00044000-0x000f3ffc before it reaches
+ * the bit-1 store at 0x20c; with the SRAM still routed to the NPU those CPU
+ * stores would target the NPU's SRAM. Only a cold entry at 0x0 sets bit 1
+ * before touching the SRAM. EL1 sets the bit after local stop too, but only
+ * as an earlier diagnostic readback.
+ *
+ * A readback that still shows the NPU routing parks instead of returning.
+ * The linker redirects the monitor's one call of npu_finite_rom_return here;
+ * that function holds the image's only RMR_EL3 write. */
 #include <stdint.h>
 
 #define SRAM_ROUTING UINT32_C(0x03000008)
