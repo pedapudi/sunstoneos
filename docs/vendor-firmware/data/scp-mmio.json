@@ -1,0 +1,6406 @@
+{
+ "binary": "scp.fex",
+ "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
+ "bytes": 105912,
+ "source": "orangepi-xunlong/orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/scp.fex",
+ "provenance": "docs/vendor-firmware/README.md",
+ "reference": "docs/vendor-firmware/scp-firmware.md",
+ "load_address": "0x40004000 (E902 view; SRAM A2 + 0x4000)",
+ "offset_rule": "blob offset = address - 0x40004000",
+ "status_labels": {
+  "observed": "read from the instructions or data of this blob",
+  "inferred": "purpose deduced from strings, register names or data flow",
+  "unknown": "not analysed"
+ },
+ "peripherals": [
+  {
+   "peripheral": "CCU",
+   "base": "0x02002000",
+   "registers": 14,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/adc/native.c",
+    "apps/board-bundles-cpu/main.c",
+    "apps/board-bundles-dram/main.c",
+    "apps/board-bundles-power/bundle6.c"
+   ]
+  },
+  {
+   "peripheral": "CPU AXI2HIF0",
+   "base": "0x0a030000",
+   "registers": 3,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "CPU AXI2HIF1",
+   "base": "0x0a040000",
+   "registers": 3,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "CPUIDLE",
+   "base": "0x07050000",
+   "registers": 9,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/accelerators/admission.c",
+    "apps/board/admission.c",
+    "apps/camera/admission.c",
+    "apps/cpu-runtime-qualification/runtime.c"
+   ]
+  },
+  {
+   "peripheral": "CPUS_E902_CFG",
+   "base": "0x07032000",
+   "registers": 2,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/remote-writers-model.py",
+    "checks/remote-writers-sources.py"
+   ]
+  },
+  {
+   "peripheral": "CPUX_MSGBOX",
+   "base": "0x03004000",
+   "registers": 1,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "CPU_PLL_CFG",
+   "base": "0x08870000",
+   "registers": 4,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/cpu-clock-model.c",
+    "checks/os-cpu-clock-native.py",
+    "drivers/clock/a733_cpu_clock.c",
+    "tools/board-bundles-next-read.py"
+   ]
+  },
+  {
+   "peripheral": "CPU_SUBSYS_CTRL",
+   "base": "0x08000000",
+   "registers": 4,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/accelerators/usb.c",
+    "apps/cpu-runtime-qualification/runtime.c",
+    "apps/cpu-runtime-qualification/terminal.S",
+    "apps/deinterlace/native.c"
+   ]
+  },
+  {
+   "peripheral": "DRAM PHY",
+   "base": "0x0a900000",
+   "registers": 186,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "DRAM controller 0",
+   "base": "0x0a100000",
+   "registers": 24,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/a733-usb-platform.c",
+    "checks/a733-usb-platform.py",
+    "checks/gpu-display-capture-native.py"
+   ]
+  },
+  {
+   "peripheral": "DRAM controller 1",
+   "base": "0x0a500000",
+   "registers": 22,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/a733-ce-cipher.c",
+    "checks/a733-ce-entropy.c",
+    "checks/a733-ce-hash.c",
+    "checks/a733-ce.c"
+   ]
+  },
+  {
+   "peripheral": "DRAMC common",
+   "base": "0x0a020000",
+   "registers": 10,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "NSI",
+   "base": "0x02020000",
+   "registers": 16,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/board-bundles-dram/main.c",
+    "checks/board-bundles-apps.py",
+    "checks/dram-controller.py",
+    "drivers/camera/isp600_default.h"
+   ]
+  },
+  {
+   "peripheral": "PPU (PCK-600)",
+   "base": "0x07060000",
+   "registers": 2,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/a733-camera-native.c",
+    "checks/a733-gpu-power-reference.py",
+    "checks/a733-media-clock.c",
+    "checks/camera-supervised-native.c"
+   ]
+  },
+  {
+   "peripheral": "RTC",
+   "base": "0x07090000",
+   "registers": 10,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/adc/native.c",
+    "apps/crypto/native.c",
+    "apps/deinterlace/native.c",
+    "apps/displayport/native.c"
+   ]
+  },
+  {
+   "peripheral": "SID",
+   "base": "0x03006000",
+   "registers": 1,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/bluetooth/identity.c",
+    "apps/board/identity.c",
+    "apps/monitor/native.c",
+    "apps/npu-board/thermal.c"
+   ]
+  },
+  {
+   "peripheral": "SMC0",
+   "base": "0x0a000000",
+   "registers": 9,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/deinterlace/native.c",
+    "apps/monitor/parent.c",
+    "apps/thermal-returning/adc-check.py",
+    "apps/thermal-returning/check.py"
+   ]
+  },
+  {
+   "peripheral": "SMC1",
+   "base": "0x0a010000",
+   "registers": 9,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "SYSCTRL",
+   "base": "0x03000000",
+   "registers": 2,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/adc/prepare.py",
+    "apps/camera/prepare.py",
+    "apps/deinterlace/native.c",
+    "apps/dma-copy/observe.py"
+   ]
+  },
+  {
+   "peripheral": "S_INTC",
+   "base": "0x07024000",
+   "registers": 1,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "S_MBOX",
+   "base": "0x07094000",
+   "registers": 4,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "S_PRCM (R_CCU)",
+   "base": "0x07010000",
+   "registers": 22,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/board-bundles-dram/main.c",
+    "apps/board-bundles-dram/sequence.h",
+    "apps/board-bundles-power/bundle6.c",
+    "apps/board-bundles-power/bundle7.c"
+   ]
+  },
+  {
+   "peripheral": "S_TIMER",
+   "base": "0x07091000",
+   "registers": 6,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/pcie-nvme/native.c",
+    "apps/pcie-test/native.c",
+    "apps/pcie/native.c"
+   ]
+  },
+  {
+   "peripheral": "S_TWI0",
+   "base": "0x07083000",
+   "registers": 7,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/board-bundles-power/trace.h",
+    "apps/npu-returning/check.py",
+    "apps/npu-returning/main.c",
+    "apps/thermal-returning/adc-check.py"
+   ]
+  },
+  {
+   "peripheral": "S_UART0",
+   "base": "0x07080000",
+   "registers": 8,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/a733-uart-platform.c",
+    "checks/uart-dma-core.c",
+    "drivers/uart/a733_uart_platform_native.c",
+    "include/a733_uart_platform_native.h"
+   ]
+  },
+  {
+   "peripheral": "S_WDG (WDT_CPUS)",
+   "base": "0x07021000",
+   "registers": 2,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  },
+  {
+   "peripheral": "TIMESTAMP_CTRL",
+   "base": "0x08020000",
+   "registers": 4,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/a733-rom-recovery.py",
+    "checks/npu-stop-native.py"
+   ]
+  },
+  {
+   "peripheral": "TIMESTAMP_STA",
+   "base": "0x08010000",
+   "registers": 2,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "checks/deinterlace-native.py",
+    "checks/deinterlace-plan.c",
+    "checks/nbg-loader-reference.py",
+    "checks/npu-controller.c"
+   ]
+  },
+  {
+   "peripheral": "USB0",
+   "base": "0x04100000",
+   "registers": 1,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/accelerators/prepare.py",
+    "apps/board-bundles-cpu/main.c",
+    "apps/board/prepare.py",
+    "apps/camera/prepare.py"
+   ]
+  },
+  {
+   "peripheral": "USB1",
+   "base": "0x04200000",
+   "registers": 1,
+   "sunstoneos_touches_block": true,
+   "example_files": [
+    "apps/accelerators/prepare.py",
+    "apps/accelerators/session.h",
+    "apps/camera/prepare.py",
+    "apps/cpu-runtime-qualification/host.py"
+   ]
+  },
+  {
+   "peripheral": "unmapped",
+   "base": "",
+   "registers": 1,
+   "sunstoneos_touches_block": false,
+   "example_files": []
+  }
+ ],
+ "registers": {
+  "CCU": [
+   {
+    "address": "0x02002020",
+    "name": "PLL_DDR_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0x7fffffff",
+     "rmw or 0x1000000"
+    ],
+    "functions": [
+     "0x4000b3ee",
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "drivers/camera/isp600_default.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002028",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xe486cccc",
+     "0xf5860000"
+    ],
+    "functions": [
+     "0x4000b3ee"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002580",
+    "name": "NSI_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xf8ffffff, or 0xcb000000"
+    ],
+    "functions": [
+     "0x4000d2d0"
+    ],
+    "sunstoneos_files": [
+     "apps/storage-read/native.c",
+     "checks/a733-camera-native.c",
+     "checks/a733-clock-reference-sd.c",
+     "checks/a733-mmc-platform.c",
+     "checks/a733-pcie.c",
+     "checks/a733-radio-platform.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002584",
+    "name": "NSI_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff",
+     "rmw and 0xfffffffe",
+     "rmw or 0x1",
+     "rmw or 0x10000"
+    ],
+    "functions": [
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "checks/dram-controller.py",
+     "include/a733_dram.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002588",
+    "name": "MBUS_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0x7fffffff, or 0x8000000",
+     "rmw and 0xf8ffffff, or 0x89000000"
+    ],
+    "functions": [
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-cpu/main.c",
+     "apps/storage-read/native.c",
+     "checks/a733-camera-native.c",
+     "checks/a733-clock-reference-sd.c",
+     "checks/a733-mmc-platform.c",
+     "checks/a733-pcie.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002724",
+    "name": "SPINLOCK_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002744",
+    "name": "MSGBOX0_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff, or ?",
+     "rmw and 0xfffffffe, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002c00",
+    "name": "DRAM0_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0x7fffffff, or 0x8000000",
+     "rmw and 0xf8ffffff, or 0x8000000",
+     "rmw and 0xffffffe0, or 0x3, or 0x8000000",
+     "rmw or 0x88000000"
+    ],
+    "functions": [
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "checks/npu-supervised.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02002c0c",
+    "name": "DRAM0_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff",
+     "rmw and 0xfffffffe",
+     "rmw or 0x1",
+     "rmw or 0x10000"
+    ],
+    "functions": [
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "checks/npu-supervised.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02003300",
+    "name": "USB0_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xbfffffff",
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "apps/usb-returning/check.py",
+     "checks/a733-smp-observe.py",
+     "checks/gpu-display-capture-native.py",
+     "checks/usb-first-fault.py",
+     "include/a733_dma_copy_application.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02003304",
+    "name": "USB0_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xffeeffff",
+     "rmw or 0x11"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "apps/usb-returning/check.py",
+     "checks/a733-smp-observe.py",
+     "checks/a733-usb-platform.py",
+     "checks/gpu-display-capture-native.py",
+     "checks/usb-first-fault.py",
+     "include/a733_dma_copy_application.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x02003308",
+    "name": "USB1_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xbfffffff",
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0200330c",
+    "name": "USB1_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xffeeffff",
+     "rmw or 0x11"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02003340",
+    "name": "USB0_USB1_REF_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "apps/usb-returning/check.py",
+     "checks/a733-usb-platform.py",
+     "checks/gpu-display-capture-native.py",
+     "checks/usb-first-fault.py"
+    ],
+    "status": "observed"
+   }
+  ],
+  "CPU AXI2HIF0": [
+   {
+    "address": "0x0a030008",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x3"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a030018",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x8002"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a030068",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "CPU AXI2HIF1": [
+   {
+    "address": "0x0a040008",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x3"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a040018",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x8002"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a040068",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "CPUIDLE": [
+   {
+    "address": "0x07050000",
+    "name": "CPUIDLE word 0x000",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "apps/cpu-runtime-qualification/terminal.S",
+     "checks/a733-cpu-continue.py",
+     "checks/a733-cpu-start.py",
+     "checks/a733-device-launch.py",
+     "checks/a733-smp-launch.py",
+     "checks/a733-smp-supervised-launch.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0705000c",
+    "name": "CPUIDLE window enable mask",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400054f4"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07050044",
+    "name": "CPUIDLE power-off gating",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07050070",
+    "name": "CPUIDLE power-off gating",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07050074",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07050078",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0705007c",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07050220",
+    "name": "core 0 power mode",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x400056d0"
+    ],
+    "sunstoneos_files": [
+     "apps/accelerators/admission.c",
+     "apps/board/admission.c",
+     "apps/camera/admission.c",
+     "apps/gpu-display/admission.c",
+     "apps/gpu-render/admission.c",
+     "apps/hdmi/admission.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07051008",
+    "name": "cluster PPU status (PWSR)",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40005668"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "CPUS_E902_CFG": [
+   {
+    "address": "0x07032064",
+    "name": "E902_WAKEUP_MASK0",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and ?",
+     "rmw or ?"
+    ],
+    "functions": [
+     "0x40005360"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07032068",
+    "name": "E902_WAKEUP_MASK1",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or ?"
+    ],
+    "functions": [
+     "0x40005360"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "CPUX_MSGBOX": [
+   {
+    "address": "0x0300407c",
+    "name": "MSGBOX_MSG_REG channel 3 (CPUS to CPUX queue)",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000721e",
+     "0x4000733e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "CPU_PLL_CFG": [
+   {
+    "address": "0x08870000",
+    "name": "CPU_BACK_PLL_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0x7fffffff",
+     "rmw and 0xbfffffff",
+     "rmw and 0xdfffffff",
+     "rmw and 0xf7ffffff",
+     "rmw and 0xffc000f0, or ?",
+     "rmw or 0x20000000",
+     "rmw or 0x4000000",
+     "rmw or 0x40000000"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/cpu-clock-model.c",
+     "checks/os-cpu-clock-native.py",
+     "drivers/clock/a733_cpu_clock.c",
+     "tools/board-bundles-next-read.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0887101c",
+    "name": "CPU_L_PLL_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001deb0: and 0x30000, or ?",
+     "from 0x4001deb0: and 0x7000000, or ?",
+     "rmw and 0xf8ffffff, or 0x2000000",
+     "rmw and 0xfffcffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/os-cpu-clock-native.py",
+     "include/a733_clock_leases.h",
+     "tools/prepare-board-bundles.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0887201c",
+    "name": "CPU_B_PLL_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001deb4: and 0x30000, or ?",
+     "from 0x4001deb4: and 0x7000000, or ?",
+     "rmw and 0xf8ffffff, or 0x2000000",
+     "rmw and 0xfffcffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/os-cpu-clock-native.py",
+     "include/a733_clock_leases.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0887301c",
+    "name": "CPU_DSU_PLL_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001deb8: and 0x30000, or ?",
+     "from 0x4001deb8: and 0x7000000, or ?",
+     "rmw and 0xf8ffffff, or 0x2000000",
+     "rmw and 0xfffcffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/os-cpu-clock-native.py",
+     "include/a733_clock_leases.h",
+     "tools/prepare-board-bundles.py"
+    ],
+    "status": "observed"
+   }
+  ],
+  "CPU_SUBSYS_CTRL": [
+   {
+    "address": "0x08000200",
+    "name": "CPU_DA_DDR_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4002aeb0: "
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x08001000",
+    "name": "CLU0_CPU0_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x40005604",
+     "0x400056ec"
+    ],
+    "sunstoneos_files": [
+     "apps/accelerators/admission.c",
+     "apps/board/admission.c",
+     "apps/camera/admission.c",
+     "apps/cpu-runtime-qualification/runtime.c",
+     "apps/gpu-display/admission.c",
+     "apps/gpu-render/admission.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x08001004",
+    "name": "CLU0_RVBARADDR0_L",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40005604",
+     "0x400056ec"
+    ],
+    "sunstoneos_files": [
+     "apps/cpu-runtime-qualification/runtime.c",
+     "apps/gpu-finite/return-check.py",
+     "apps/gpu-finite/return.S",
+     "apps/npu-finite/check.py",
+     "apps/npu-finite/return.S",
+     "boot/a733/a64-entry-probe.S"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x08001008",
+    "name": "CLU0_RVBARADDR0_H",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x40005604",
+     "0x400056ec"
+    ],
+    "sunstoneos_files": [
+     "apps/cpu-runtime-qualification/runtime.c",
+     "apps/gpu-finite/return-check.py",
+     "apps/npu-finite/check.py",
+     "boot/a733/stage2/loader.c",
+     "checks/a64-entry-probe.py",
+     "checks/a733-cpu-entry.c"
+    ],
+    "status": "observed"
+   }
+  ],
+  "DRAM PHY": [
+   {
+    "address": "0x0a900d04",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a910510",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000b522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9200ac",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a920100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000b824"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a92017c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "from 0x400108ac: "
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9220ac",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a922100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000b824"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a92217c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "from 0x400108ac: "
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9240ac",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a924100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000b824"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a92417c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "from 0x400108ac: "
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9260ac",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a926100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000b824"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a92617c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "from 0x400108ac: "
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a940116",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a940120",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9401de",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x7fff"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a940620",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x1",
+     "from 0x400108ac: "
+    ],
+    "functions": [
+     "0x4000eb7c",
+     "0x4000f1f8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a940622",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a94064c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "computed"
+    ],
+    "functions": [
+     "0x4000eb7c",
+     "0x4000f1f8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a94064e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "computed"
+    ],
+    "functions": [
+     "0x4000eb7c",
+     "0x4000f1f8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a960120",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a960122",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a960124",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a960126",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a960128",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a96012a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a96012c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a962120",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a962122",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a962124",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a962126",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a962128",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a96212a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a96212c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000ba16"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982010",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982018",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982030",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982038",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982050",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982058",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982070",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982078",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982090",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982098",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9820b0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9820b8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9820d0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9820d8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982108",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982120",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982128",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982140",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982148",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982160",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982168",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982170",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff88d8"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982176",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982178",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff9748"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98217e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982180",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982186",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982188",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98218e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982190",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff86d8"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982196",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982198",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8008"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98219e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821a6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821ae",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821b0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8b58"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821b6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821b8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8008"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821be",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821c6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821ce",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821d0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8cd8"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821d6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821d8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8008"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821de",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821e0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821e6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821e8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821ee",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821f0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8658"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821f6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821f8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffa208"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9821fe",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982200",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982206",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982208",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98220e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982210",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8758"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982226",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98222e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982230",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982236",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x3b00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982238",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98223e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2400"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982240",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff87d8"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982248",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff9988"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982256",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98225e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982260",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982266",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x3b00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982268",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98226e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2400"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982270",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8c58"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982280",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982286",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982288",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98228e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982290",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8f58"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982298",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8008"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822a6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822ae",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822b0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff89d8"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822b6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822b8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffff8808"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822be",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822c6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822ce",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x800"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822d6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xb00"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822de",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822e0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822e2",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822e6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822e8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822ea",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822ee",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822f0",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822f2",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822f6",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822f8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a9822fa",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982302",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982306",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98230a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98230e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982310",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982312",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982316",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982318",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98231a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98231e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982320",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982322",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982326",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982328",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98232a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982332",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982336",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98233a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98233e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982340",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982342",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982346",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982348",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98234a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98234e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982350",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982352",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982356",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982358",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98235a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982362",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982366",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98236a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x2000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98236e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982370",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982372",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982376",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982378",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98237a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98237e",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x10"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982380",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982382",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982386",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x410"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a982388",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a98238a",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1000"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0aa21208",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffe400"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0aa2130c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffe400"
+    ],
+    "functions": [
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0aa40000",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001e00c: "
+    ],
+    "functions": [
+     "0x4000ead0",
+     "0x4000eb7c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0aa80100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x3"
+    ],
+    "functions": [
+     "0x4000ead0",
+     "0x4000eb7c",
+     "0x4000f1a8",
+     "0x4000f1f8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0aaa0000",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x1"
+    ],
+    "functions": [
+     "0x4000bb4c",
+     "0x4000ead0",
+     "0x4000eb7c",
+     "0x4000f1a8",
+     "0x4000f1f8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "DRAM controller 0": [
+   {
+    "address": "0x0a100008",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfdc: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100024",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfe4: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100060",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfe0: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100584",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfe8: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100588",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfec: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100d04",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfd4: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a100d08",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x4001dfd8: "
+    ],
+    "functions": [
+     "0x4000f054",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110014",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110180",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffff00, or 0x800",
+     "rmw and 0xffffffee",
+     "rmw or 0x11",
+     "rmw or 0x800"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110184",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x2",
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110208",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x4000bba6",
+     "0x4000cf1c",
+     "0x4000ded8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110224",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1c0"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110500",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffefffff",
+     "rmw and 0xffffffef"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110508",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffff7fff",
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110510",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffff3fff, or ?",
+     "rmw and 0xffffffdf",
+     "rmw and 0xfffffffe",
+     "rmw and ?",
+     "rmw or 0x1",
+     "rmw or 0x1f00",
+     "rmw or 0x20"
+    ],
+    "functions": [
+     "0x4000b522",
+     "0x4000bba6",
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110514",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110518",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110b84",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe",
+     "rmw or 0x1",
+     "rmw or 0x2"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110b88",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110c80",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x1"
+    ],
+    "functions": [
+     "0x4000bba6",
+     "0x4000d522",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110c84",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000bba6",
+     "0x4000d522",
+     "0x4000f0cc"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a110d00",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0xc0000000"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a400c04",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a400c78",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "DRAM controller 1": [
+   {
+    "address": "0x0a500008",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500024",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500060",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500584",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500588",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500d04",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a500d08",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000f054"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510014",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510180",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffff00, or 0x800",
+     "rmw and 0xffffffee",
+     "rmw or 0x11",
+     "rmw or 0x800"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510184",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x2",
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510208",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510224",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1c0"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510500",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffefffff",
+     "rmw and 0xffffffef"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510508",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffff7fff",
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510510",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0xa110510: and 0xfffffffe",
+     "rmw and 0xffffffdf",
+     "rmw and 0xfffffffe",
+     "rmw or 0x1f00",
+     "rmw or 0x20"
+    ],
+    "functions": [
+     "0x4000b522",
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510514",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510518",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510b84",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x1",
+     "rmw or 0x2"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510b88",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510c80",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x1"
+    ],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510c84",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a510d00",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0xc0000000"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "DRAMC common": [
+   {
+    "address": "0x0a020010",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffc0c0, or 0x2208",
+     "rmw and 0xffffc0ff",
+     "rmw and 0xffffd9ff, or 0x100",
+     "rmw and 0xfffffeff, or 0x2600",
+     "rmw and 0xffffffbf",
+     "rmw and 0xffffffd5",
+     "rmw and 0xffffffd7",
+     "rmw and 0xffffffeb"
+    ],
+    "functions": [
+     "0x4000cf1c",
+     "0x4000d2d0",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a020014",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffc, or 0x2, or 0x1"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a02002c",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000b376"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a020040",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000b376"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a02021c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x103",
+     "0x107"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a020220",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x13ff"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a020224",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x103",
+     "0x107"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a020228",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x13ff"
+    ],
+    "functions": [
+     "0x4000cf1c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a021000",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x4000ded8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a02101c",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000ded8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "NSI": [
+   {
+    "address": "0x0202200c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202220c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02023a14",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x3f"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02023c14",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x7f"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02023e14",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xf"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02024014",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xf1"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02024214",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xf1"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202446c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x40a05"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202448c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x020244a8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202466c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x40a05"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202468c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x020246a8",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02024818",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x8002"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0202481c",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x02024838",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000bba6"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "PPU (PCK-600)": [
+   {
+    "address": "0x07060000",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x8"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-camera-native.c",
+     "checks/a733-gpu-power-reference.py",
+     "checks/a733-media-clock.c",
+     "checks/camera-supervised-native.c",
+     "checks/deinterlace-native.py",
+     "checks/display-clock-handoff.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07060008",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-camera-native.c",
+     "checks/camera-supervised-native.c",
+     "checks/isp0-native.py"
+    ],
+    "status": "observed"
+   }
+  ],
+  "RTC": [
+   {
+    "address": "0x07090000",
+    "name": "LOSC_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xffffffec"
+    ],
+    "functions": [
+     "0x40005ba8",
+     "0x40005c44"
+    ],
+    "sunstoneos_files": [
+     "apps/adc/native.c",
+     "apps/monitor/native.c",
+     "apps/pcie-nvme/native.c",
+     "apps/pcie-test/native.c",
+     "apps/pcie/native.c",
+     "apps/rtc-alarm-returning/main.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07090004",
+    "name": "LOSC_AUTO_SWT_STA",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40005c44"
+    ],
+    "sunstoneos_files": [
+     "apps/rtc-returning/check.py",
+     "checks/lradc-core.c",
+     "checks/lradc-native.py",
+     "checks/rtc-service-native-cases.py",
+     "checks/rtc-single-core.py",
+     "drivers/adc/a733_adc_native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709000c",
+    "name": "INTOSC_CLK_AUTO_CALI",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe"
+    ],
+    "functions": [
+     "0x40005ba8"
+    ],
+    "sunstoneos_files": [
+     "apps/rtc-returning/check.py",
+     "checks/lradc-native.py",
+     "drivers/adc/a733_adc_native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07090010",
+    "name": "RTC_DAY",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400093f2"
+    ],
+    "sunstoneos_files": [
+     "apps/rtc-returning/check.py",
+     "checks/rtc-single-core.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07090014",
+    "name": "RTC_HH_MM_SS",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400093f2"
+    ],
+    "sunstoneos_files": [
+     "apps/rtc-returning/check.py",
+     "checks/rtc-service-native-cases.py",
+     "checks/rtc-single-core.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709010c",
+    "name": "GP_DATA_REG3",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40005846",
+     "0x4000585a"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709015c",
+    "name": "XO_CTRL_WP",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x16aa"
+    ],
+    "functions": [
+     "0x40005ba8",
+     "0x40005c44"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07090160",
+    "name": "XO_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffd",
+     "rmw or 0x2"
+    ],
+    "functions": [
+     "0x40005ba8",
+     "0x40005c44",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "apps/crypto/native.c",
+     "apps/deinterlace/native.c",
+     "apps/displayport/native.c",
+     "apps/emmc-read/checks/native.py",
+     "apps/g2d/native.c",
+     "apps/gpu-display/usb.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x070901f4",
+    "name": "VDD_OFF_GATING_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffff7f",
+     "rmw and 0xfffffffe",
+     "rmw or 0x1",
+     "rmw or 0x80"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07090310",
+    "name": "RTC_SPI_CLK_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x80000000"
+    ],
+    "functions": [
+     "0x40005ba8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "SID": [
+   {
+    "address": "0x030060a0",
+    "name": "SID word 0xa0 (bit 0 tested as secure-chip flag)",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000956e",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-rom-recovery.py"
+    ],
+    "status": "observed"
+   }
+  ],
+  "SMC0": [
+   {
+    "address": "0x0a000004",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400094ea",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000018",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x90"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000070",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000074",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000080",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000084",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000100",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000104",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a000108",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "SMC1": [
+   {
+    "address": "0x0a010004",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400094ea"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010018",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x90"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010070",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010074",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010080",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010084",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0xffffffff"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010100",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010104",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0a010108",
+    "name": "",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "SYSCTRL": [
+   {
+    "address": "0x03000160",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x100"
+    ],
+    "functions": [
+     "0x4000d45c"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-hdmi.c",
+     "checks/hdmi-audio-native.py",
+     "checks/hdmi-clock-native.py",
+     "drivers/display/a733_hdmi_phy.c",
+     "platform/a733/hdmi_native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x03000168",
+    "name": "",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffff00"
+    ],
+    "functions": [
+     "0x4000d45c"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_INTC": [
+   {
+    "address": "0x070240c0",
+    "name": "S_INTC enable word",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40005fe4"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_MBOX": [
+   {
+    "address": "0x07094024",
+    "name": "MSGBOX_RD_IRQ_STATUS",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x40"
+    ],
+    "functions": [
+     "0x400073e0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709406c",
+    "name": "MSGBOX_MSG_STATUS channel 3",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400073e0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709406d",
+    "name": "",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400073e0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0709407c",
+    "name": "MSGBOX_MSG_REG channel 3 (CPUX to CPUS queue)",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000721e",
+     "0x400073e0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_PRCM (R_CCU)": [
+   {
+    "address": "0x07010000",
+    "name": "AHBS_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xf8ffffff",
+     "rmw and 0xf8ffffff, or 0x2000000",
+     "rmw and 0xf8ffffff, or 0x3000000",
+     "rmw and 0xf8ffffff, or ?",
+     "rmw and 0xffffffe0"
+    ],
+    "functions": [
+     "0x40005710",
+     "0x400057f4",
+     "0x40005e9c"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-dram/main.c",
+     "apps/gpu-power-id/check.py",
+     "apps/gpu-power-id/main.c",
+     "apps/gpu-provider-ready/check.py",
+     "apps/pcie-nvme/native.c",
+     "apps/pcie-test/native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701000c",
+    "name": "APBS0_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xf8ffffff, or 0x3000000",
+     "rmw and 0xffffffe0, or 0x1"
+    ],
+    "functions": [
+     "0x400057f4"
+    ],
+    "sunstoneos_files": [
+     "apps/npu-returning/check.py",
+     "apps/pwm/native.c",
+     "apps/thermal-returning/adc-check.py",
+     "checks/hdmi-audio-native.py",
+     "checks/npu-supervised.py",
+     "checks/provider-clock-reference.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010010",
+    "name": "APBS1_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xf8ffffff, or 0x4000000",
+     "rmw and 0xffffffe0"
+    ],
+    "functions": [
+     "0x400057f4",
+     "0x40005e9c"
+    ],
+    "sunstoneos_files": [
+     "apps/npu-returning/check.py",
+     "apps/thermal-returning/adc-check.py",
+     "checks/a733-clock-reference-pmic.c",
+     "checks/a733-clock-reference-sd.c",
+     "checks/a733-pcie.c",
+     "checks/a733-pmic-parent.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010100",
+    "name": "S_TIMER0_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffffcf",
+     "rmw and 0xffffffcf, or 0x10",
+     "rmw and 0xfffffff1, or 0x1"
+    ],
+    "functions": [
+     "0x4000636e",
+     "0x40006438"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010104",
+    "name": "S_TIMER1_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffffcf",
+     "rmw and 0xffffffcf, or 0x10",
+     "rmw and 0xfffffff1, or 0x1"
+    ],
+    "functions": [
+     "0x4000636e",
+     "0x40006438"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701011c",
+    "name": "S_TIMER_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x701019c: and 0xfffffffe, or ?, or ?, or ?",
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701013c",
+    "name": "S_PWM_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701017c",
+    "name": "S_MBOX_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff, or ?",
+     "rmw and 0xfffffffe, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701018c",
+    "name": "S_UART_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x701019c: and 0xfffffffe, or ?, or ?",
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [
+     "include/a733_uart_platform_native.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701019c",
+    "name": "S_TWI_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffeffff, or ?",
+     "rmw and 0xfffffffe, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [
+     "apps/npu-returning/check.py",
+     "apps/thermal-returning/adc-check.py",
+     "checks/a733-camera-native.c",
+     "checks/a733-hdmi-native.c",
+     "checks/a733-pmic-consumers.c",
+     "checks/a733-pmic.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x070101c0",
+    "name": "S_IRRX_CLK",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xfeffffff",
+     "rmw and 0xfffffce0, or ?, or ?"
+    ],
+    "functions": [
+     "0x400058c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x070101cc",
+    "name": "S_IRRX_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x701019c: and 0xfffffffe, or ?, or ?, or ?, or ?, or ?",
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701020c",
+    "name": "RTC_BGR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "from 0x701019c: and 0xfffffffe, or ?, or ?, or ?, or ?",
+     "rmw and 0xfffeffff, or ?"
+    ],
+    "functions": [
+     "0x400058c8",
+     "0x40005d32"
+    ],
+    "sunstoneos_files": [
+     "apps/rtc-alarm-returning/main.c",
+     "apps/rtc-alarm-returning/monitor.c",
+     "apps/rtc-returning/check.py",
+     "apps/rtc-returning/main.c",
+     "apps/rtc-source-returning/check.py",
+     "apps/rtc-source-returning/main.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010210",
+    "name": "RISCV_24M_CLK",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x82000000"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/remote-writers-sources.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010244",
+    "name": "undocumented (DCXO control, key 0xa7)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe, or 0xa7000000",
+     "rmw or 0xa7000000",
+     "rmw or 0xa7000001"
+    ],
+    "functions": [
+     "0x40005ba8",
+     "0x40005c44"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010250",
+    "name": "undocumented power gates: bit0 vdd-ddr, bit2 vdd-sys2cpus, bit3 vdd-sys2usb, bit8 vdd-usb2cpus (vendor clock driver names)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed",
+     "rmw and 0xfffffef7",
+     "rmw and 0xfffffffb",
+     "rmw and 0xfffffffe",
+     "rmw or 0x1",
+     "rmw or 0x108",
+     "rmw or 0x4"
+    ],
+    "functions": [
+     "0x400095a0",
+     "0x4000b522",
+     "0x4000cf1c",
+     "0x4000d522"
+    ],
+    "sunstoneos_files": [
+     "apps/gpu-power-id/check.py",
+     "apps/gpu-power-id/main.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010254",
+    "name": "undocumented (low nibble set in standby)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffff0",
+     "rmw or 0xf"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010260",
+    "name": "undocumented (vendor driver: RST_BUS_MODULE bit 0)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffe",
+     "rmw and 0xfffffffe, or ?",
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x40005d32",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010324",
+    "name": "NMI_INT_EN",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfffffffd",
+     "rmw or 0x2"
+    ],
+    "functions": [
+     "0x40007afe",
+     "0x40007b1c",
+     "0x40007b30"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010338",
+    "name": "DEV_BUS_AUTOG_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0xf01"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0701033c",
+    "name": "BUS_ACG",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xfefffffe"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07010360",
+    "name": "MSRAMOC_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_TIMER": [
+   {
+    "address": "0x07091000",
+    "name": "TMR_IRQ_EN",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and ?",
+     "rmw or ?"
+    ],
+    "functions": [
+     "0x40006584"
+    ],
+    "sunstoneos_files": [
+     "apps/pcie-nvme/native.c",
+     "apps/pcie-test/native.c",
+     "apps/pcie/native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07091004",
+    "name": "TMR_IRQ_STA",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40006308",
+     "0x40006584",
+     "0x40006676"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07091020",
+    "name": "TMR0_CTRL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "rmw or 0x80"
+    ],
+    "functions": [
+     "0x40006438"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07091024",
+    "name": "TMR0_INTV",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000636e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07091040",
+    "name": "TMR1_CTRL",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x40006438"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07091044",
+    "name": "TMR1_INTV",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x4000636e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_TWI0": [
+   {
+    "address": "0x07083008",
+    "name": "TWI_DATA",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40006c44"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-power/trace.h",
+     "apps/npu-returning/check.py",
+     "apps/thermal-returning/adc-check.py",
+     "checks/a733-pmic-cost.c",
+     "checks/a733-pmic-mmc.c",
+     "checks/a733-pmic-parent.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0708300c",
+    "name": "TWI_CNTR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x44",
+     "rmw and 0xf3",
+     "rmw and 0xfffffff7, or 0x10",
+     "rmw and 0xfffffff7, or 0x4",
+     "rmw or 0x8"
+    ],
+    "functions": [
+     "0x40006a42",
+     "0x40006b96",
+     "0x40006c44",
+     "0x400070d4"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-power/trace.h",
+     "apps/npu-returning/check.py",
+     "apps/npu-returning/main.c",
+     "apps/thermal-returning/adc-check.py",
+     "apps/thermal-returning/adc.c",
+     "checks/a733-camera-native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07083010",
+    "name": "TWI_STAT",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40006c44",
+     "0x400070ac"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-power/trace.h",
+     "apps/npu-returning/check.py",
+     "apps/npu-returning/main.c",
+     "apps/thermal-returning/adc-check.py",
+     "apps/thermal-returning/adc.c",
+     "checks/a733-camera-native.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07083014",
+    "name": "TWI_CCR",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x40006ad6"
+    ],
+    "sunstoneos_files": [
+     "apps/npu-returning/check.py",
+     "apps/npu-returning/main.c",
+     "apps/thermal-returning/adc-check.py",
+     "apps/thermal-returning/adc.c",
+     "checks/a733-camera-native.c",
+     "checks/a733-clock-reference-pmic.c"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07083018",
+    "name": "TWI_SRST",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x1"
+    ],
+    "functions": [
+     "0x40006a5c",
+     "0x40006a84"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-pmic-cost.c",
+     "checks/a733-pmic.c",
+     "checks/hdmi-audio-native.py",
+     "checks/npu-supervised.py",
+     "include/a733_pmic_native.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x0708301c",
+    "name": "TWI_EFR",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0"
+    ],
+    "functions": [
+     "0x40006c44"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-pmic-cost.c",
+     "checks/hdmi-audio-native.py",
+     "checks/npu-supervised.py",
+     "include/a733_pmic_native.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07083020",
+    "name": "TWI_LCR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0xa",
+     "computed",
+     "rmw and 0xfffffffb"
+    ],
+    "functions": [
+     "0x40006a84",
+     "0x40006b96",
+     "0x40006c44",
+     "0x4000702c",
+     "0x400070ac",
+     "0x400070d4"
+    ],
+    "sunstoneos_files": [
+     "apps/board-bundles-power/trace.h",
+     "apps/npu-returning/check.py",
+     "apps/npu-returning/main.c",
+     "apps/thermal-returning/adc-check.py",
+     "apps/thermal-returning/adc.c",
+     "checks/a733-camera-native.c"
+    ],
+    "status": "observed"
+   }
+  ],
+  "S_UART0": [
+   {
+    "address": "0x07080000",
+    "name": "UART RBR/THR/DLL",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400067a0",
+     "0x40006876",
+     "0x4000690e"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-uart-platform.c",
+     "drivers/uart/a733_uart_platform_native.c",
+     "include/a733_uart_platform_native.h"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x07080004",
+    "name": "UART IER/DLH",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400067a0",
+     "0x4000690e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07080008",
+    "name": "UART FCR",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x7"
+    ],
+    "functions": [
+     "0x400067a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0708000c",
+    "name": "UART LCR",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x3",
+     "rmw and 0xffffff7f",
+     "rmw or 0x80"
+    ],
+    "functions": [
+     "0x400067a0",
+     "0x4000690e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0708007c",
+    "name": "UART USR",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40006876",
+     "0x400069c8"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07080080",
+    "name": "UART TFL",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x4000690e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07080084",
+    "name": "UART RFL",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40006876"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x070800a4",
+    "name": "UART HALT",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "rmw and 0xfffffffd, or 0x4",
+     "rmw or 0x2",
+     "rmw or 0x4"
+    ],
+    "functions": [
+     "0x400067a0",
+     "0x4000690e"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "S_WDG (WDT_CPUS)": [
+   {
+    "address": "0x07021014",
+    "name": "WDT_MODE (key 0x16aa required)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw ",
+     "rmw and 0xfffffeff",
+     "rmw and 0xfffffffc",
+     "rmw or 0x1"
+    ],
+    "functions": [
+     "0x40007c18"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x07021018",
+    "name": "WDT_OCFG (key 0x16aa required)",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "rmw and 0xffffff0f",
+     "rmw or 0x40"
+    ],
+    "functions": [
+     "0x40007c18"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "TIMESTAMP_CTRL": [
+   {
+    "address": "0x08020000",
+    "name": "TSTAMP_CTRL",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "0x1",
+     "computed"
+    ],
+    "functions": [
+     "0x40005604",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [
+     "checks/a733-rom-recovery.py"
+    ],
+    "status": "observed"
+   },
+   {
+    "address": "0x08020008",
+    "name": "CNT_CTRL_LOW",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "computed"
+    ],
+    "functions": [
+     "0x400054f4",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x0802000c",
+    "name": "CNT_CTRL_HI",
+    "read": false,
+    "write": true,
+    "write_values": [
+     "0x0",
+     "from 0x4001de3c: add ?, add ?"
+    ],
+    "functions": [
+     "0x400054f4",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x08020020",
+    "name": "CNT_FREQID",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "0x16e3600",
+     "from 0x4001de40: "
+    ],
+    "functions": [
+     "0x400054ce",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "TIMESTAMP_STA": [
+   {
+    "address": "0x08010000",
+    "name": "CNT_LOW",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40005604",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   },
+   {
+    "address": "0x08010004",
+    "name": "CNT_HI",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x40005604",
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "USB0": [
+   {
+    "address": "0x04101800",
+    "name": "USB0 controller word 0x800",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "USB1": [
+   {
+    "address": "0x04200800",
+    "name": "USB1 controller word 0x800",
+    "read": true,
+    "write": false,
+    "write_values": [],
+    "functions": [
+     "0x400095a0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ],
+  "unmapped": [
+   {
+    "address": "0x0702723c",
+    "name": "address produced by an unreachable GPIO interrupt helper with placeholder port 0xff",
+    "read": true,
+    "write": true,
+    "write_values": [
+     "computed"
+    ],
+    "functions": [
+     "0x400061f0"
+    ],
+    "sunstoneos_files": [],
+    "status": "observed"
+   }
+  ]
+ },
+ "computed_accesses": [
+  {
+   "addresses": "0x07060000+0x1000*n, n=0..10",
+   "peripheral": "PPU (PCK-600)",
+   "register": "PPU_PWPR (policy)",
+   "access": "rmw or 0x8 (policy ON)",
+   "functions": "0x400095a0",
+   "when": "resume"
+  },
+  {
+   "addresses": "0x07060008+0x1000*n, n=0..10 except 6",
+   "peripheral": "PPU (PCK-600)",
+   "register": "PPU_PWSR (status)",
+   "access": "poll bit 3, no bound",
+   "functions": "0x400095a0",
+   "when": "resume"
+  },
+  {
+   "addresses": "0x07050200+4n",
+   "peripheral": "CPUIDLE",
+   "register": "core n hotplug enable",
+   "access": "bit 0 set then cleared",
+   "functions": "0x40005678",
+   "when": "resume (n=0)"
+  },
+  {
+   "addresses": "0x07050220+4n",
+   "peripheral": "CPUIDLE",
+   "register": "core n power mode",
+   "access": "bit 0 set (resume) / cleared (suspend)",
+   "functions": "0x40005678, 0x400056d0",
+   "when": "suspend/resume (n=0)"
+  },
+  {
+   "addresses": "0x07052008+0x1000n",
+   "peripheral": "PPU (PCK-600)",
+   "register": "core n PPU status",
+   "access": "poll for 8 (ON), no bound",
+   "functions": "0x40005652",
+   "when": "resume (n=0)"
+  },
+  {
+   "addresses": "table at 0x4002adc4: 14 PLL words",
+   "peripheral": "CCU",
+   "register": "PLL control words",
+   "access": "suspend: save bits 24:0 except 7, clear 31,30,29; resume: restore, clear 27, set 31,30,29, poll 28, delay, set 27",
+   "functions": "0x400095a0",
+   "when": "suspend/resume"
+  },
+  {
+   "addresses": "0x0887n000, n=0..3",
+   "peripheral": "CPU_PLL_CFG",
+   "register": "CPU back/L/B/DSU PLL control",
+   "access": "suspend: save, clear 27,29,31,30; resume: set 30,27,31,29,26, poll 28; then restore factors, relock, set 27",
+   "functions": "0x400095a0",
+   "when": "suspend/resume"
+  },
+  {
+   "addresses": "table at 0x4002ae78: CCU 0x500/0x510/0x518/0x538, PRCM 0x000/0x00c/0x010",
+   "peripheral": "CCU / S_PRCM",
+   "register": "bus clock registers",
+   "access": "suspend: source 2, divider cleared; resume: saved source and divider",
+   "functions": "0x40009454",
+   "when": "suspend/resume"
+  },
+  {
+   "addresses": "table at 0x4001ddf8: CCU 0x580/0x588/0x560/0x540",
+   "peripheral": "CCU",
+   "register": "NSI, MBUS, GIC, TRACE clocks",
+   "access": "suspend: source, divider and bit 31 cleared; resume: bit 31 set",
+   "functions": "0x400094ea",
+   "when": "suspend/resume"
+  },
+  {
+   "addresses": "0x07024fd0+0x30*port+4*(pin/8), and pull/drive words",
+   "peripheral": "S_GPIO",
+   "register": "pin function, pull, drive",
+   "access": "PL0/PL1 function 2 pull-up; PL2/PL3 function 2",
+   "functions": "0x40006164, 0x400061aa, 0x400061f0",
+   "when": "start-up"
+  },
+  {
+   "addresses": "0x03004060+4*ch, 0x03004070+4*ch (ch=3)",
+   "peripheral": "CPUX_MSGBOX",
+   "register": "MSG_STATUS / MSG_REG",
+   "access": "poll not full (8), write words",
+   "functions": "0x400071b2, 0x4000721e, 0x4000733e",
+   "when": "runtime"
+  },
+  {
+   "addresses": "0x07094060+4*ch (ch=3)",
+   "peripheral": "S_MBOX",
+   "register": "MSG_STATUS",
+   "access": "poll non-empty",
+   "functions": "0x400071ea",
+   "when": "runtime"
+  },
+  {
+   "addresses": "0x07091020+0x20*n, +4",
+   "peripheral": "S_TIMER",
+   "register": "TMRn_CTRL, TMRn_INTV",
+   "access": "interval, reload, single/periodic, enable",
+   "functions": "0x40006584, 0x40006676",
+   "when": "runtime"
+  },
+  {
+   "addresses": "0xe0801001+4*irq",
+   "peripheral": "E902 CLIC (core-local)",
+   "register": "CLICINTIE",
+   "access": "bit 0 enable/disable",
+   "functions": "0x40005f54..0x40006016",
+   "when": "runtime"
+  },
+  {
+   "addresses": "0x07050010+8n, 0x07050014+8n",
+   "peripheral": "CPUIDLE",
+   "register": "address window n start/end",
+   "access": "window 0 = device-tree address .. +1 MiB",
+   "functions": "0x400054f4",
+   "when": "start-up"
+  },
+  {
+   "addresses": "0x0a110080/84/90 + 0x400000*ch",
+   "peripheral": "DRAM controller 0/1",
+   "register": "mode-register command, data, busy",
+   "access": "command sequence",
+   "functions": "0x4000b318, 0x4000b376",
+   "when": "DRAM"
+  },
+  {
+   "addresses": "4,441 + 5,717 + 3,374 addresses in tables at 0x400108bc, 0x40014e20, 0x4001a774",
+   "peripheral": "DRAM PHY",
+   "register": "PHY registers (16-bit)",
+   "access": "saved to SRAM on the first standby, restored on resume",
+   "functions": "0x4000ead0, 0x4000eb7c, 0x4000f1a8, 0x4000f1f8",
+   "when": "DRAM"
+  },
+  {
+   "addresses": "0x0aa40000..0x0aa47ffe",
+   "peripheral": "DRAM PHY",
+   "register": "PHY memory (32 KiB)",
+   "access": "copied to SRAM 0x4001e00c on the first standby",
+   "functions": "0x4000ead0",
+   "when": "DRAM"
+  }
+ ]
+}
