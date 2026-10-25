@@ -13,7 +13,7 @@ image, which runs first, and its declared new units:
 - bundle 4 (apps/board-bundles-cpu/) on the base: its checks/kernel.c object
   is replaced by the bundle's main.c, platform/a733/cpu_pmu.c and
   arch/aarch64/device_memory.c, and every other object equals the base's;
-- bundles 6 and 7 (apps/board-bundles-power/) on rank-9-usb-v4 and the
+- bundles 6, 7 and 15 (apps/board-bundles-power/) on rank-9-usb-v4 and the
   base: the 13 returning platform objects and 14 provider objects, without
   the USB units, plus the bundle's main file, power.c, trace.c, the
   power-domain owner, its native adapter and device_memory.c, with bundle
@@ -118,6 +118,7 @@ EXPECT = {
     'cpu': 'COMPLETE board bundle 4:',
     'pmic': 'COMPLETE board bundle 6: PMIC service and domain adoption reads',
     'domain': 'COMPLETE board bundle 7:',
+    'supply': 'COMPLETE board bundle 15: DCDC3 and DCDC5 snapshots, reaped and provider parked',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',
@@ -658,6 +659,7 @@ def main():
             ('pmic', POWER_UNITS + ['apps/board-bundles-power/bundle6.c'],
              ('-DBB6_COMPLETE_WINDOW=1',) if args.complete_window else (), None),
             ('domain', POWER_UNITS + ['apps/board-bundles-power/bundle7.c'], (), None),
+            ('supply', POWER_UNITS + ['apps/board-bundles-power/cpu-supply.c'], (), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
         directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out,
