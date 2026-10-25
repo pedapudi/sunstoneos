@@ -92,6 +92,18 @@ regenerating.
     S_TWI0 packet engine, plus a cut to the roughly 38 µs of step work outside
     the polls.
 
+- **Port 3-3, set `board-bundles-20261024-12`:** bundle 6 from the merged
+  tree (`22f8dada`), with plain S_TWI0 reads and the completing-poll window
+  compiled out (now the default; `BB6_COMPLETE_WINDOW=1` builds it). It passed
+  with a warm return (`s12-bb6-run`): median 1,224 permille against the 1,268
+  bound; first step 808.0 µs against an 846.4 µs limit. Snapshots and
+  `TWI_WRITE` match the earlier runs.
+  - **Rank 9 is not yet rerun on the merged adapter.** The native USB image
+    links the central `monitor.c` object built without the counter option, and
+    no board run has executed that object since `rank-9-usb-v4`. The chosen
+    route is to link the board-qualified base monitor object (the
+    counter-option build) into the native USB image.
+
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
 `main` is unchanged.
