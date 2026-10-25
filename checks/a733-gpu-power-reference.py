@@ -99,6 +99,12 @@ int main(void) {
     assert [x for x in native if x[1] == 3] == [
         (1, 3, 0x20, 0xffffffff, 0), (1, 3, 0, 0xffffffff, 8),
         (1, 3, 0, 0xffffffff, 0)]
+    # BXM sunxi_platform_init writes PWCR 0 and policy 8 after the TOP request
+    # and before it enables any GPU clock (sunxi_platform.c:911-920). The trace
+    # starts from the board's power-up CORE state, policy 8 and status 0.
+    first_ccu = next(i for i, x in enumerate(native) if x[1] == 0)
+    top_on = native.index((1, 2, 0x5000, 0xf, 8))
+    assert top_on < native.index((1, 3, 0x20, 0xffffffff, 0)) < native.index((1, 3, 0, 0xffffffff, 8)) < first_ccu
     core = block(ccu, r'static struct ccu_div gpu0_clk\s*=')
     assert '_SUNXI_CCU_DIV_TABLE(0, 4, gpu_div_table)' in core
     assert '_SUNXI_CCU_MUX(24, 3)' in core and '.enable         = BIT(31)' in core

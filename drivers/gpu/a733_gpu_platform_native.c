@@ -9,7 +9,8 @@ static uintptr_t address(enum a733_gpu_power_bank bank, uint32_t off)
     if (bank == A733_GPU_CCU && (off == 0x5c0 || off == 0x5e0 || off == 0xb20 || off == 0xb24))
         return 0x02002000u + off;
     if (bank == A733_GPU_R_CCU && off == 0x1ac) return 0x07010000u + off;
-    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x20)) return 0x07066000u + off;
+    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0))
+        return 0x07066000u + off;
     /* GPU_TOP (PCK domain 5) belongs to the power-domain owner. */
     return 0;
 }

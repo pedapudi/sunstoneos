@@ -83,9 +83,9 @@ static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t 
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert(off==0 || off==8 || off==0x20);
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && gpu_core_pending){gpu_core[2]=gpu_core[0];gpu_core_pending=0;}
-        *out=gpu_core[off/4];return 1;
+        *out=off==0xfb0 ? 0 : gpu_core[off/4];return 1;
     }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }

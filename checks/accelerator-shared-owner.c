@@ -41,9 +41,9 @@ static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
     (void)v;assert(gpu_token && delegated);
     if(bank==A733_GPU_CORE) {
         assert(gpu.row.counted && (d.ppu[5][2]&15)==8);
-        assert(off==0 || off==8 || off==0x20);
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && core_pending){core[2]=core[0];core_pending=0;}
-        *out=core[off/4];return 1;
+        *out=off==0xfb0 ? 0 : core[off/4];return 1;
     }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);
     assert(w);*out=*w;return 1;

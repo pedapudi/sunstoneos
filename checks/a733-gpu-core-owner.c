@@ -17,12 +17,15 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
     (void)context;
     if (bank == A733_GPU_CORE) {
         assert((d.ppu[5][2] & 15) == 8 && gpu.row.counted);
-        assert(off == 0 || off == 8 || off == 0x20);
+        assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0);
+        /* A pending transition completes at a status read after GPU
+         * clock/reset progress; earlier ON reads are observations. */
         if (off == 8 && pending) {
-            assert((d.ccu_b20 & 0x80000000) && (d.ccu_b24 & 0x10001) == 0x10001);
-            if (!stalled) { core[2] = core[0]; pending = 0; }
+            if ((d.ccu_b20 & 0x80000000) && (d.ccu_b24 & 0x10001) == 0x10001) {
+                if (!stalled) { core[2] = core[0]; pending = 0; }
+            } else assert(gpu.phase == A733_GPU_POWER_STARTING);
         }
-        *out = core[off/4]; return 1;
+        *out = off == 0xfb0 ? 0x00031001 : core[off/4]; return 1;
     }
     uint32_t *word = level_word((bank == A733_GPU_CCU ? CCU_BASE : RCCU_BASE) + off);
     assert(word); *out = *word; return 1;
@@ -53,12 +56,17 @@ static enum a733_gpu_power_result run(unsigned on)
 int main(void)
 {
     const struct a733_gpu_power_ops ops = {now, acquire, release, read_reg, update};
-    for (unsigned mode = 0; mode < 6; ++mode) {
+    /* Modes 0-3: CORE and TOP inherited OFF or ON; 4 and 5: CORE ON and OFF
+     * stall; 6 and 7: the power-up CORE state (policy 8, status 0, reset
+     * PWCR, transition pending) with TOP OFF or ON. */
+    for (unsigned mode = 0; mode < 8; ++mode) {
         domains_model_setup(0x28,23); d.ack_us = 0;
         memset(&gpu,0,sizeof(gpu)); memset(core,0,sizeof(core));
         core[0] = core[2] = (mode & 1) ? 8 : 0; core[8] = 0x010101ff;
-        d.ppu[5][0] |= (mode & 2) ? 8 : 0; d.ppu[5][2] |= (mode & 2) ? 8 : 0;
+        const unsigned top = mode < 6 ? (mode & 2) : mode == 7;
+        d.ppu[5][0] |= top ? 8 : 0; d.ppu[5][2] |= top ? 8 : 0;
         pending = stalled = release_count = 0;
+        if (mode >= 6) { core[0] = 8; core[2] = 0; core[8] = A733_GPU_CORE_RESET_PWCR; pending = 1; }
         struct a733_rail_token token = {0};
         assert(a733_gpu_power_init(&gpu,&ops,0));
         assert(a733_power_domain_row_init(&gpu.row,&d.owner,5,9,&token));
@@ -70,7 +78,8 @@ int main(void)
         if (mode != 4) {
             assert(result == A733_GPU_POWER_OK); stalled = mode == 5; result = run(0);
         }
-        if (mode >= 4) {
+        if (mode >= 6) assert(gpu.core_policy == 8 && !gpu.core_status && gpu.core_seen == 0xff && !core[8]);
+        if (mode == 4 || mode == 5) {
             assert(result == A733_GPU_POWER_FAULT && gpu.error == A733_GPU_POWER_TIMEOUT);
             assert(gpu.lease_held && gpu.row.counted && !release_count);
             assert(a733_power_domain_state(&gpu.row) == A733_POWER_ROW_ON);
@@ -85,5 +94,5 @@ int main(void)
         for (unsigned i = 0; i < d.trace_n; ++i)
             assert(d.trace[i].address < 0x07066000 || d.trace[i].address >= 0x07067000);
     }
-    puts("PASS six CORE/TOP composition cases: four inherited pairs, ON/OFF timeouts retain TOP row and rail pin; NPU, rail and shared gates preserved");
+    puts("PASS eight CORE/TOP composition cases: four inherited pairs, two power-up CORE states, ON/OFF timeouts retain TOP row and rail pin; NPU, rail and shared gates preserved");
 }

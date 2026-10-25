@@ -48,7 +48,8 @@ AHB and MBUS gates. The [power owner](../../docs/power-domains.md) adopts cohere
 GPU_TOP policy/status 0 or 8. When ON needs a transition, it programs the pinned
 PCK600 delay row and requests ON. Under the exclusive LOCAL lease, the GPU controller then captures CORE6
 policy/status/PWCR. It requires whole policy/status words to match at 0 or 8,
-writes PWCR zero and policy 8 with readbacks, and progresses local clocks/reset.
+or the power-up state of policy 8, status 0 and PWCR `0x101`. It writes PWCR
+zero and policy 8 with readbacks, and progresses local clocks/reset.
 After that progress it checks CORE status 8 before identity access. It selects
 the existing 400 MHz parent, opens local clock/bus gates, waits for settling
 and releases external reset in the existing order. No PLL retuning or voltage programming occurs.
@@ -96,6 +97,20 @@ reads and their mapping check are compiled out. Its completion text is
 `COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after a
 `GPU power core_status=0x8` line.
 
+Both variants print the controller's cached CORE6 observations after ON and
+on any failure, without another device read:
+
+- `GPU CORE entry`: the seen mask (255 when every observation completed)
+  and the policy, status and PWCR words before any write.
+- `GPU CORE inputs`: `PPU_IDR0`, and `PPU_MISR` before any write and after
+  reset release.
+- `GPU CORE after`: the status after the PWCR write and after the policy
+  write, each with the microseconds its observation waited.
+
+[gpu-power.md](../../docs/gpu-power.md#hypotheses-for-the-next-run) maps
+these values to the explanations for the power-only run that stopped at
+CORE6 admission.
+
 Both GPU images that failed to return on a board predate CORE6 control. The
 leading, unproven hypothesis is that their first GPU register read stalled
 the CPU with the core domain unpowered
@@ -134,7 +149,7 @@ including its accepted CPU monitor. Seven replacements compile the consumer,
 GPU platform/native adapter, power controller, resource manager/native adapter,
 and current shared TOP owner. The input-object audit checks every power/platform
 layout user and its actual dependency file; all three layout users are rebuilt.
-The power structure grows by 16 bytes for cached diagnostics. Eleven shared structure sizes and member offsets must match across
+The power structure holds the cached CORE6 diagnostics. Eleven shared structure sizes and member offsets must match across
 old and new objects. The recorded private PMIC callback-member rename does not
 change its offset or callback order.
 
@@ -196,8 +211,9 @@ classifying BVNC. A draft proposal or a model pass grants no device access.
 The selected BXM source and the architectural PWCR restriction are documented in
 [gpu-power.md](../../docs/gpu-power.md). BXM writes CORE without polling it; this
 candidate's bounded exact status check is a conservative acceptance condition,
-not a promise that hardware will acknowledge. Inherited policy 8/status 0 is
-refused before PWCR or local clock writes. No CORE delay values are invented.
+not a promise that hardware will acknowledge. Policy 8 and status 0 with any
+PWCR other than the reset value `0x101` is refused before PWCR or local clock
+writes. No CORE delay values are invented.
 The pinned SCP fragment is a host-inspected source clue, not a runtime dependency
 or evidence that its boot path executed on either board.
 

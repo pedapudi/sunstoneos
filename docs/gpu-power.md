@@ -7,7 +7,10 @@ CORE (domain 6). It supports bounded startup, shutdown, and reopening.
 The native platform integrates the shared clock and rail owners and the FreeRTOS
 GPU service. Host checks and an AArch64 compilation pass. A physical power/identity
 attempt on 2026-10-24 did not return; no startup, identity or shutdown phase was
-observed. GPU operation remains unqualified.
+observed. A later power-only run returned after refusing the power-up state
+of CORE6, which the controller now admits
+([CORE6 starts with an unfinished ON transition](#core6-starts-with-an-unfinished-on-transition)).
+GPU operation remains unqualified.
 
 The implementation is [a733_gpu_power.c](../drivers/gpu/a733_gpu_power.c), with
 its callback contract in [a733_gpu_power.h](../include/a733_gpu_power.h).
@@ -113,14 +116,14 @@ UndefinedBehaviorSanitizer. Successful startup, shutdown, and reopening preserve
 unrelated fields and shared gates. Reset release follows the clock gate by at
 least the settling delay. A second clock model counts one 24 MHz tick per
 clock read and callback and reports whole microseconds rounded down; under it,
-reset release followed the clock gate by 44 counter ticks, at least the 24 that
+reset release followed the clock gate by 50 counter ticks, at least the 24 that
 one microsecond requires. A stand-in for the owner answers the row from the
 modeled power-controller words. The first poll checks the preconditions and
 requests the row without waiting; the poll after the answer runs every
 remaining step, including 10 µs register updates. An unanswered row keeps the
 controller at the domain step with no register write, and with a stopped
 clock the settling delay returns without advancing and completes once the
-clock runs. The check covers 69 retained faults, including every callback
+clock runs. The check covers 101 retained faults, including every callback
 failure on a successful startup/shutdown path, stalled transitions, invalid
 prerequisites, a refused and a failed row, a partially applied write, and a
 late resource release. The owner itself is covered by
@@ -243,6 +246,123 @@ it does not simulate physical PCK handshakes or prove GPU execution. No new nati
 image, hardware access or retry was made for this correction.
 
 
+## CORE6 starts with an unfinished ON transition
+
+### The power-only run stopped at admission
+
+The power-only image (ELF `81d4a728…`) ran on port 3-1 on 2026-10-24 after
+a passing provider-readiness run in the same powered lifetime. It returned
+to the ROM through the monitor with status 1 about 2 s after launch. Its log
+was:
+
+```
+GPU power phase=5 error=5 step=8 last=0x101
+GPU CORE entry seen=7 policy=0x8 status=0x0 pwcr=0x101
+FAIL GPU ON poll
+```
+
+Against that image's step table, phase 5 is FAILED and error 5 is STATE.
+Step 8 is the admission step, which reads PWCR (`0x101`, the `last` value)
+and then requires the CORE policy and status words to be equal. Seen mask 7
+records that the policy, status and PWCR reads all completed. TOP5 was ON,
+because the domain step (step 5) had finished. The image refused CORE6
+because its policy was already 8 while its status was 0. It wrote neither
+PWCR nor policy, opened no GPU clock and released no reset. "FAIL GPU ON
+poll" is the client's message for any failed ON poll; the final status poll
+never ran.
+
+### The entry words are the PPU's power-up values
+
+- **PWCR `0x101`.** DEN0051E Table 5-10 gives this reset value for a PPU
+  with one device Q-Channel: DEVQACTIVE 0 enabled (bit 8) and the
+  channel's handshake enabled (DEVREQEN bit 0).
+- **Policy 8 with status 0.** A PPU configured with a default ON policy
+  starts its transition to ON at reset and updates `PWR_STATUS` only when
+  that transition completes (DEN0051E section 4.2.1 and Table 5-4, note a).
+- **Other domains finish that transition.** On port 3-3, a read-only bundle
+  run in a lifetime with no GPU or NPU power request found domains 1, 4
+  and 5 at policy 8 and status 8.
+- **No SunstoneOS writer.** The provider-readiness image that ran earlier
+  in that lifetime makes no PCK access, and the three words match the
+  reset values.
+
+In that reset-time transition, and in any OFF-to-ON transition of a
+Q-Channel PPU, the PPU powers the domain, releases isolation and its own
+reset, and then raises the device Q-Channel request and waits for the
+device to accept (DEN0051E Figures 4-18 and 4-21). The device on CORE6's
+channel is the GPU. With its core clock gated
+(`0xb20[31]` clear) and its bus reset asserted (`0xb24[16]` clear), the
+GPU's Q-Channel logic is not running and cannot accept. A Q-Channel
+transition to a higher-power mode cannot be denied (DEN0051E section 4.2.9),
+so the PPU waits indefinitely with status 0.
+
+The BXM adapter meets the same state. `sunxi_platform_init`
+(`sunxi_platform.c:912–920`) requests TOP5, writes CORE PWCR 0 and policy
+8, and only then enables the GPU clocks. With the channel disabled,
+"transitions continue without issuing requests or waiting for responses on
+the disabled channels"
+(DEN0051E section 4.1.3). The SCP fragment described under CORE ownership
+below, which writes policy 8 to every row but skips only CORE6's status
+poll, is consistent with the same behaviour.
+
+### Native admission accepts the power-up state
+
+The controller admits CORE6 when its policy and status words are both 0 or
+both 8, or when policy is 8, status is 0 and PWCR equals
+`A733_GPU_CORE_RESET_PWCR` (`0x101`). Any other PWCR with policy 8 and
+status 0 means another writer changed CORE6, and the controller refuses it
+before any write. In the admitted power-up state, the PWCR write happens
+while a transition is outstanding, which DEN0051E section 5.2.8 calls
+UNPREDICTABLE. The vendor adapter performs that write before any GPU clock,
+so it meets the same pending transition unless earlier boot firmware
+completed it. No other documented sequence leaves the pending transition.
+
+After admission the sequence is unchanged: PWCR 0, policy 8, GPU parent,
+clocks, 1 µs, reset release, then a bounded poll for status 8 before any
+GPU register access. After each of the two CORE writes the controller reads
+CORE status once, and from the power-up state it re-reads for up to 50 µs
+until the status is 8. These observations require no value. They record
+the status and the microseconds waited, and the sequence continues either
+way. The final poll alone decides acknowledgement.
+
+### Hypotheses for the next run
+
+The observations separate four explanations. They are ranked by the
+evidence above.
+
+1. **The enabled Q-Channel handshake blocks the reset-time transition.**
+   Disabling it lets the transition finish. Prediction: status 8 at the
+   observation after the PWCR write. Evidence: the reset values, the
+   vendor's write order, the SCP fragment, and domains 1, 4 and 5 reaching
+   8 by themselves.
+2. **The disabled channel takes effect only at a new transition.** The
+   PPU drops or keeps the stalled transition until the policy is written
+   again. Prediction: status 0 after PWCR, 8 after the policy write.
+3. **The PWCR write has no effect during the stalled transition, or CORE6
+   needs the GPU clock for another reason.** The transition completes once
+   the GPU clock runs and reset is released, through the device handshake.
+   Prediction: 0 at both observations, then status 8 at the final poll.
+4. **A prerequisite outside the PCK row and the GPU's CCU bits is
+   missing.** Examples are a power switch elsewhere in the PRCM or a PCK
+   field outside DEN0051E. Prediction: status never 8, and the final poll
+   times out and retains the TOP row and leases. The MISR words then show
+   whether the power switch accepted (`PCSMPACCEPT`, bit 0) and whether the
+   GPU accepted (bit 8).
+
+Outcomes 1 to 3 continue to the OFF path and return with the power-only
+completion text, which qualifies CORE6 power control on that board. Outcome 4 returns status 1 with the
+timeout and needs a power removal before the next run.
+
+### The failed lifetime and the next one
+
+The monitor returns through an `RMR_EL3` warm reset of the CPU, which does
+not reset the PCK or CCU. In the failed lifetime, TOP5 therefore stayed ON
+with its row unreleased. CORE6 kept policy 8, status 0 and PWCR `0x101`,
+and the GPU clock stayed gated with reset asserted. That lifetime is closed
+by the queue's quarantine. After a power removal, CORE6 returns to the same
+power-up state. The frozen `81d4a728` image would then refuse it again at
+the same step, so it has no value as a repeat.
+
 ## An unpowered GPU core is the leading hypothesis for both failed GPU runs
 
 Two GPU images started on a board and did not return:
@@ -296,8 +416,10 @@ The PCK TRM identifies policy/status/PWCR at offsets 0/8/0x20. Arm
 [DEN0051E section 5.2.8](https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99)
 requires a settled static power policy before changing device-request enables.
 Native admission therefore compares complete policy/status words, rejecting
-dynamic, locked, operating-mode or mismatched values before PWCR writes.
-PWCR zero disables the documented hardware request enables; it does not prove
+dynamic, locked, operating-mode or mismatched values before PWCR writes, with
+one exception: the state that CORE6 holds after power-up, described in the
+next section. PWCR zero disables the device handshake for transitions
+(DEN0051E section 4.1.3, "Device Interface Channel Enables"); it does not prove
 transaction drain. The existing firmware-stop or admitted never-booted
 prerequisite remains necessary for OFF.
 
@@ -320,16 +442,21 @@ neither eventual acknowledgement nor actual inherited state. Its existing
 provenance and decoded bytes are preserved in
 `~/.cache/sunstoneos/evidence/npu-low-power-source-20261024/source-search.json`.
 
-With immediate acknowledgement, this change adds two CORE writes and six reads
-on ON, then one write and two reads on OFF, plus two release reads. A waiting
-poll adds at most 50 µs of status reads, one controller clock sample per read.
-An acknowledgement inside that window completes the step in the same poll
-instead of one scheduler tick later. Native writes use
-the existing shared register lock. The power structure grows by 16 bytes for
-cached policy/status/PWCR and a seen mask; the mask records completed reads,
-including a read followed by deadline rejection, and is not admission authority.
-The power/identity diagnostic prints those cached values and the failure step
-without accessing hardware again.
+With immediate acknowledgement, CORE control costs two CORE writes and eleven
+reads on ON, then one write and two reads on OFF, plus two release reads. Five
+of the ON reads are diagnostic: identification (`PPU_IDR0`, `0xfb0`), the
+accept and deny inputs (`PPU_MISR`, `0x14`) before any write and after reset
+release, and the status after the PWCR write and after the policy write. The
+native adapter permits those two offsets for reads only. A waiting poll adds
+at most 50 µs of status reads, one controller clock sample per read. An
+acknowledgement inside that window completes the step in the same poll
+instead of one scheduler tick later. Native writes use the existing shared
+register lock. The power structure holds the cached policy, status and PWCR,
+the five diagnostic words, the two observation waits and a seen mask; the
+mask records completed reads, including a read followed by deadline
+rejection, and is not admission authority. The power/identity diagnostic
+prints those cached values and the failure step without accessing hardware
+again.
 
 Focused evidence is in
 `~/.cache/sunstoneos/evidence/gpu-core-power-20261024/`: inherited TOP/CORE pairs,
@@ -341,3 +468,16 @@ layout and preserves the accepted monitor cleanup checks. These are software
 checks, not physical qualification or a location for the failed `fd3d5839` run.
 The earlier provider-readiness image remains unchanged and is still the first
 proposed board test.
+
+The power-up admission and the CORE6 observations have focused results in
+`~/.cache/sunstoneos/build/gpu-core6-1024/checks-1/`. The controller model
+completes the power-up state at each of the four points that the hypotheses
+name: after the PWCR write, after the policy write, after clock/reset
+progress, and never. For each, it checks the recorded status, the wait and
+the final result; the last case times out and retains its leases. The model
+refuses policy 8 and status 0 with PWCR `0x010101ff`, 0 or `0x100` before
+any write. The owner composition adds the power-up state with TOP5 inherited
+OFF and ON. The PCK trace starts from the power-up state, and the reference
+check confirms the BXM order: PWCR 0 and policy 8 follow the TOP5 request
+and precede the first CCU write. The native check reads the two diagnostic
+offsets with 32-bit accesses and refuses writes to them.

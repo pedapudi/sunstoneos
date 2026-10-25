@@ -22,6 +22,29 @@ static uint64_t last_now;
 static unsigned id_reads;
 #endif
 
+/* The controller's cached CORE6 observations of the last ON: entry words,
+ * identification and accept/deny inputs, and the status after the PWCR and
+ * policy writes with the microseconds each observation waited. */
+static void core_report(void)
+{
+    const struct a733_gpu_power *p = &gpu.power;
+    struct bb_line line;
+    bb_line_start(&line, "GPU CORE entry");
+    bb_line_dec(&line, "seen", p->core_seen); bb_line_hex(&line, "policy", p->core_policy);
+    bb_line_hex(&line, "status", p->core_status); bb_line_hex(&line, "pwcr", p->core_config);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU CORE inputs");
+    bb_line_hex(&line, "idr0", p->core_note[A733_GPU_NOTE_IDR0]);
+    bb_line_hex(&line, "misr", p->core_note[A733_GPU_NOTE_MISR]);
+    bb_line_hex(&line, "misr_late", p->core_note[A733_GPU_NOTE_MISR_LATE]);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU CORE after");
+    bb_line_hex(&line, "pwcr_status", p->core_note[A733_GPU_NOTE_AFTER_PWCR]);
+    bb_line_dec(&line, "pwcr_us", p->core_wait_us[0]);
+    bb_line_hex(&line, "policy_status", p->core_note[A733_GPU_NOTE_AFTER_POLICY]);
+    bb_line_dec(&line, "policy_us", p->core_wait_us[1]);
+    bb_line_end(&line); bb_power_print(&line);
+}
 static _Noreturn void gpu_fail(const char *reason)
 {
     /* Cached observations only: a refusal must not make another device read. */
@@ -31,10 +54,7 @@ static _Noreturn void gpu_fail(const char *reason)
     bb_line_dec(&line, "phase", p->phase); bb_line_dec(&line, "error", p->error);
     bb_line_dec(&line, "step", p->index); bb_line_hex(&line, "last", p->last_value);
     bb_line_end(&line); bb_power_print(&line);
-    bb_line_start(&line, "GPU CORE entry");
-    bb_line_dec(&line, "seen", p->core_seen); bb_line_hex(&line, "policy", p->core_policy);
-    bb_line_hex(&line, "status", p->core_status); bb_line_hex(&line, "pwcr", p->core_config);
-    bb_line_end(&line); bb_power_print(&line);
+    core_report();
     bb_power_fail(reason);
 }
 static void gpu_pause(const char *reason)
@@ -98,6 +118,7 @@ void gpu_power_id_client(void *unused)
     int result;
     while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
     if (result != 1) gpu_fail("GPU ON poll");
+    core_report();
 
 #ifdef GPU_POWER_ONLY
     /* The controller's last ON step polls CORE status until it reads 8, so a

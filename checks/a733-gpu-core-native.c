@@ -19,13 +19,15 @@ unsigned core_native_check(unsigned mode)
         CHECK(n.operations.read(&n, A733_GPU_CORE, 0, &out) && out == 8);
         CHECK(n.operations.read(&n, A733_GPU_CORE, 8, &out) && out == 8);
         CHECK(n.operations.read(&n, A733_GPU_CORE, 0x20, &out) && out == 0x010101ff);
+        CHECK(n.operations.read(&n, A733_GPU_CORE, 0x14, &out) && out == 0x100);
+        CHECK(n.operations.read(&n, A733_GPU_CORE, 0xfb0, &out) && out == 0x00031001);
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0x20, UINT32_MAX, 0, 100000));
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 8, 100000));
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 0, 100000));
         CHECK(native_read(0, 0x07066000, &out) && out == 0);
         CHECK(native_read(0, 0x07066008, &out) && out == 8);
     } else if (mode == 1) {
-        const uint32_t offsets[] = {1, 4, 0xc, 0x24, 0x100, 0x5000, 0x6000};
+        const uint32_t offsets[] = {1, 4, 0xc, 0x10, 0x24, 0x38, 0x100, 0xfb4, 0x5000, 0x6000};
         for (unsigned i = 0; i < sizeof(offsets)/sizeof(*offsets); ++i) {
             CHECK(!n.operations.read(&n, A733_GPU_CORE, offsets[i], &out));
             CHECK(!n.operations.update(&n, A733_GPU_CORE, offsets[i], UINT32_MAX, 0, 100000));
@@ -33,6 +35,8 @@ unsigned core_native_check(unsigned mode)
         CHECK(!n.operations.read(&n, A733_GPU_CORE, 0, 0));
         CHECK(!n.operations.read(&n, (enum a733_gpu_power_bank)3, 0, &out));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 8, UINT32_MAX, 0, 100000));
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0x14, UINT32_MAX, 0, 100000));
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0xfb0, UINT32_MAX, 0, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0, 15, 8, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 1, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0x20, UINT32_MAX, 1, 100000));
