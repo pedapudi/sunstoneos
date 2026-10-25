@@ -52,6 +52,28 @@ the first identity read, with no write made. The two 32-bit loads alone do
 not make the core readable at 400 MHz from PERI0 at 800 mV. The claim is
 held, and the board needs a power removal.
 
+**Port 3-1, sixth lifetime** (session `board-session-20261025-3/port-3-1`,
+set `board-bundles-20261025-4`): cold DDR and readiness passed. The vendor
+clock and reset order probe (bus reset released before the bus gate and core
+clock, then the identity as two 32-bit loads, no other new access) did not
+return. Reset order, access width and the never-proven reads are ruled out.
+
+**Reference backsolves (2026-10-25).** At the user's request, CPU, GPU and
+NPU bring-up are being derived from the vendor sources and blobs before any
+further board run of each. Board runs test only predictions from those diffs.
+- GPU (`work/backsolve-gpu-1025`, `docs/reference-backsolve-gpu.md`): the
+  kernel GPU driver powers CORE6 itself and never waits for its status. Three
+  differences remain: the GPU PLL at 1008 MHz (ours: PERI0 400 MHz, PLL off),
+  DCDC4 at 960 mV (ours: 800 mV), and BL31's cold-boot secure setup (SPC ports
+  non-secure, CCU security switch `0x02003f00` = 7), which SunstoneOS never
+  performs. The next image applies all three in the vendor order, confined to
+  one variant.
+- NPU (`work/backsolve-npu-1025`, `docs/reference-backsolve-npu.md`): the
+  boot ROM routes shared SRAM away from the NPU (SYSCTRL `0x03000008` bit 1)
+  and U-Boot routes it back; FEL-loaded images never do. This best explains
+  the wrong NPU outputs of the earlier two-job run.
+- CPU: in progress.
+
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
 reported both boards reconnected after power removal. The two claims held from
