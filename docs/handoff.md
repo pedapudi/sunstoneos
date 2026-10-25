@@ -206,8 +206,18 @@ regenerating.
   - So the failure is intermittent within one lifetime (one in five) and
     occurs during startup, not in the floating-point rounds. Decoding is in
     progress on `work/workload-bisect-1025`.
-  - The claim `5a49569e…` is held. **Needed from the user:** unplug port
-    3-3's USB-C cable and reconnect it in FEL mode.
+  - The claim `5a49569e…` was closed as failed after the user's reconnect.
+  - Run 5 decoded as CPU0's local restore comparing GICR_CTLR while RWP
+    (bit 3) was still set. `work/workload-bisect-1025` (`1c885abf`) adds a
+    bounded RWP wait on CPU0 and on every secondary, as Linux does.
+- **Port 3-3, second 2026-10-25 lifetime** (session
+  `board-session-20261025-2/port-3-3`, bundles `workload-bisect-20261025/rwp-fix`):
+  after cold DDR and a clean 91-word capture, the RWP-corrected deadline
+  profile failed on its first run (`tw1-prepare`) with the same record
+  class: reason 3, stage 1, a deadline return about 5 s after launch. So the
+  RWP wait does not remove the failure; decoding is in progress. The host
+  runner again stayed alive after saving the record and was stopped. The
+  claim `e86e3137…` is held, and port 3-3 needs a power removal.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
