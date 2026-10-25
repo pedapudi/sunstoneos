@@ -1,9 +1,12 @@
 # Design: a CPU0 return deadline for the returning eight-core workload
 
-Status: **implemented**; instruction-model and host checks pass. The first
-profile completed normally once on port 3-3, in a fresh lifetime on
-2026-10-25 (below); its deadline return path has not run on a board.
-Section numbers refer to
+Status: **implemented and used on a board.** In one port 3-3 lifetime on
+2026-10-25 the first profile completed four times and then failed once; the
+deadline unit returned CPU0 to the ROM with a record that locates the fault
+in CPU0's own GIC restoration (below). A correction waits for the
+redistributor's write-pending bit before that check; it passes the
+instruction-model and host checks and has not run on a board. Section
+numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 
 The returning eight-core workload runs the frozen native image
@@ -30,13 +33,85 @@ CPU-configuration and GIC capture after the thermal run equalled the clean
 capture.
 
 In a fresh port 3-3 lifetime on 2026-10-25 (cold DDR, a 91-word capture
-equal to the clean one, the cache-off helper and a survey), the first
-profile below completed normally: 32 rounds on every core, 32 ticks on CPU0,
-33 SGIs on each secondary, controls and DRAM restored and the ROM usable
-(`board-session-20261025-1/port-3-3/tw-deadline-prepare/runtime`). Repeats
-in the same lifetime, each followed by a capture, separate the first two
-candidates below: failures that appear only as the lifetime grows point at
-accumulated state, and isolated failures at a race.
+equal to the clean one), the first profile ran five times, each after the
+cache-off helper and a survey
+(`board-session-20261025-1/port-3-3/`). Runs 1 to 4 completed normally:
+32 rounds on every core, 32 ticks on CPU0, 33 SGIs on each secondary,
+controls and DRAM restored, and each capture after runs 2 to 4 equal to the
+clean one. Run 5 (`tw5-prepare/runtime`) returned through the deadline unit
+about 12 s after launch.
+
+## Run 5 failed in CPU0's GIC restoration after a complete workload
+
+The deadline record of run 5 has reason 3 (a failed survey at EL3) and
+stage 1 (captured, no EL1 cleaning). Decoded against the overlay and the
+native image:
+
+- **Where CPU0 was.** x30 `0x4102175c` is the return address of the BL to
+  `identity_primary_run` in `identity_primary_gate`; x0 0 is its result.
+  ELR_EL3 `0x41022f10` (`el1_smc_return`) with ESR_EL3 `0x5e000733` shows
+  that CPU0's last entry to EL3 was its completion SMC, and ELR_EL1
+  `0x41023328` with ESR_EL1 `0x56000734` shows that its last EL1 exception
+  was the completion SVC in `identity_first_task_svc`. CPU0 therefore
+  finished its EL1 interval and failed later, at EL3. The counter at
+  capture was 949 ms before the startup deadline, so no wait timed out.
+- **Which check.** The identity header has state 1, completed mask 0 and
+  core 7, and its restored SCTLR_EL1/TCR_EL1 words are 0, so
+  `primary_local_cache_probe` returned 0 before `identity_primary_run`
+  reached its OFF handshakes. That probe's record at `0x42018a00` has state
+  2, cleanup error 3, a before-snapshot of all zeros and an after-snapshot
+  whose only nonzero word is GICR_CTLR = 8. `restore_local` rewrote CPU0's
+  SGI/PPI group, modifier, configuration and priority words
+  (`primary-local-cache-probe.c:80`–`81` at `d1e39b77`), read its snapshot
+  immediately (`:83`) and required every word to equal the original
+  (`:86`–`87`). Bit 3 of GICR_CTLR is RWP, a read-only write-pending status
+  (IHI 0069G 12.11.2, page 12-622). The comparison failed on that status
+  bit alone, on CPU0.
+- **The other cores.** Every core reports pending, active and enabled 0, so
+  every redistributor had been drained and disabled. Power status `0x108`
+  on every core is the ON state (low nibble 8; bit 8 is set in every
+  capture). Each secondary's slot has ready 1 and request 0: all seven
+  finished their own restoration and waited for CPU0's shutdown request,
+  which never came because the survey stopped first.
+- **The workload.** The snapshot `owned-writable-after.bin` shows 32 rounds
+  on every core, 33 SGIs on each secondary and 32 ticks on CPU0, every
+  completion and arrival word equal to the epoch, and each
+  `pxCurrentTCBs[n]` at core n's worker (`0x41241498 + 168·n`). The
+  workload itself completed.
+
+The frozen workload profile runs the same `restore_local`; there a failed
+survey branches to `identity_park` (`secondary-identity-probe.S:7`–`8`),
+an EL3 `WFI` loop, so the same fault produces the silent non-return of the
+first port 3-3 run. It is intermittent: it depends on whether the
+redistributor is still propagating the restoring writes at the first read.
+The secondaries' cleanup rewrites the same registers but then requests
+redistributor sleep and waits for ChildrenAsleep before its comparison
+(`secondary-local-probe.c:89`–`92`), which leaves time for RWP to clear.
+
+The instruction model reproduces the board record. With the overlay of
+`d1e39b77` and GICR_CTLR reading RWP set once after the priority write,
+CPU0 returns with reason 3, stage 1, cleanup error 3 and after-GICR_CTLR 8
+(`workload-bisect-20261025/rwp-fix/reproduce/restore-rwp-unfixed.json`).
+
+## The correction follows the reference GIC initialization
+
+Linux's `gic_cpu_init` writes the SGI/PPI groups and priorities and then
+calls `gic_redist_wait_for_rwp` before relying on them
+(`irq-gic-v3.c:1342`–`1346`); TF-A waits for RWP after its enable-clear
+writes (`gicv3_helpers.c:310`–`311`); neither compares GICR_CTLR for
+equality. `restore_local` now waits for RWP to clear, within the existing
+deadline, after its restoring writes and before the snapshot, and reports a
+timeout as cleanup error 4. The comparison itself is unchanged.
+
+The change is in `boot/a733/primary-local-cache-probe.c`, so it changes the
+overlay of every profile that restores CPU0's GIC that way: the
+pre-scheduler, first-task, task-switch and workload profiles and both
+deadline profiles. The identity survey overlays and every native payload
+are unchanged. To fit the deadline unit into the reservation, its record no
+longer captures FAR_EL1, ICC_PMR_EL1 and ICC_RPR_EL1 (offsets 112, 176 and
+184 read 0), its EL1 helper no longer clears CNTP_CTL_EL0 (the warm reset
+does), and the SMC hook compares the syndrome once; the extension uses all
+12,288 bytes.
 
 ## Every failure parks CPU0, so a non-return carries no information
 
@@ -77,6 +152,7 @@ A733 TF-A port (`5bc9605c`) and the FreeRTOS kernel of `sources.lock.json`
 | Cortex-A76 errata (cores 6 and 7, r4p1) | TF-A defines 1946160, 2356586 and 3888013 (`cortex_a76.S:429`–`488`) and applies each only when a build flag selects it; the pinned A733 port selects none of them (`allwinner-common.mk`, `allwinner-common-ncat2.mk`, `sun60i_a733/platform.mk`). 2743102 needs a DSB before the power-down ISB. The DSU errata 798953 and 936184 are at `cortex_a76.S:312`–`321`. | `platform/a733/cpu_coherence.c` applies 1946160, 2356586 and 3888013 on every A76 and the DSU conditions; the secondary shutdown has the 2743102 DSB. | SunstoneOS applies more than the A733 port. No missing workaround. |
 | Cortex-A55 errata (cores 0–5, CPU0 included, r2p0) | TF-A's A55 reset workarounds (768277, 778703, 798797, 846532, 903758, 1221012) apply only to r1p0 and earlier; the A733 port sets `ERRATA_A55_1530923` (`allwinner-common-a55.mk`), a speculative address-translation erratum that generic code handles. | `cpu_coherence.c` applies none at r2p0 and requires the speculative-AT sequence that `el1_return_checkpoint` and the EL3 fault entry run. | None. |
 | Power-on and GIC wake | The A733 TF-A port sets the hotplug power mode and enable, then clears GIC_WAKEUP_DISABLE (`sunxi_native_pm_ncat2.c`). | `cpu_continue.c` clears control bit 1 in the same register. | None. |
+| CPU0 SGI/PPI configuration and its check | Linux writes the groups and priorities and then waits for GICR_CTLR.RWP (`irq-gic-v3.c:1342`–`1346`); TF-A waits for RWP after its enable-clear writes (`gicv3_helpers.c:310`–`311`). Neither compares GICR_CTLR, whose RWP bit is read-only status. | Before the correction, `restore_local` rewrote CPU0's group, modifier, configuration and priority words and compared a snapshot that includes GICR_CTLR at once (`primary-local-cache-probe.c:80`–`87` at `d1e39b77`). | The cause of run 5 (described above). The correction waits for RWP before the snapshot. |
 
 No difference explains a deterministic failure of bytes that returned on
 port 3-1. The first three rows remain candidates because their effect depends
@@ -85,20 +161,26 @@ header and the A733 port's A55 fragment, are pinned in that `sources.json`.
 
 ## Candidate causes, most likely first
 
-1. **State left by earlier images in the lifetime** outside the 91
+The first candidate is observed; the rest stay unobserved.
+
+1. **RWP still set at CPU0's GIC restoration check**
+   (`primary-local-cache-probe.c:80`–`87` at `d1e39b77`), recorded on the
+   board in run 5 and reproduced in the model. It explains both the
+   non-return of the first run and the intermittent failure.
+2. **State left by earlier images in the lifetime** outside the 91
    captured words. The failing run followed about twelve returning images;
    the passing run on port 3-1 and the passing run in a fresh port 3-3
    lifetime followed far fewer.
-2. **An intermittent race.** The tick programming (first table row) is the
+3. **Another intermittent race.** The tick programming (first table row) is the
    leading example: a late tick leaves CVAL behind the counter and produces
    back-to-back ticks, each with seven SGIs and seven context switches under
    the kernel locks. A lost wake in a kernel-lock WFE (second row) is the
    other: it needs a missed event and would leave a core, possibly CPU0,
    waiting with interrupts masked.
-3. **An unexpected pending PPI at the drain** (third row), which parks one
+4. **An unexpected pending PPI at the drain** (third row), which parks one
    core in `identity_park` and then CPU0 at its completion barrier. It
-   depends on reset or inherited state, so it can combine with candidate 1.
-4. **Sustained eight-core load on USB power.** This is the first profile
+   depends on reset or inherited state, so it can combine with candidate 2.
+5. **Sustained eight-core load on USB power.** This is the first profile
    that keeps all eight cores busy: the background loop
    (`diagnostic.c:8`–`14`, `0x41001424`–`0x4100143c`) never waits, for at
    least 32 ms, on both A76 cores as well. Both boards share the same
@@ -143,9 +225,9 @@ deadline. The builder option `--return-deadline` of
 The quiet profile does not isolate the sustained load. Before the core-index
 check, `ucPortGetCoreID` (`0x410109b8`) issues `SVC #0x6d` on every loop
 iteration, so the replacement also removes that supervisor-call traffic on
-all eight cores. That changes when interrupts arrive, and it removes the check that a background task has not moved
-to another core (W0 keeps the first result). A completed quiet run is
-therefore consistent with the race candidates as well as with candidate 4.
+all eight cores. That changes when interrupts arrive, and it removes the
+check that a background task has not moved to another core (W0 keeps the first result). A completed quiet run is
+therefore consistent with the race candidates as well as with candidate 5.
 
 Profiles that disable the tick, the SGIs or the floating-point rounds are not
 built. Each round's floating-point check sleeps for one tick
@@ -156,7 +238,7 @@ the tick and SGI counts of every core directly. Two one-word follow-ups
 remain available if the first profile's record points at them: programming
 the tick from the current counter (replacing the CVAL load in
 `platform_tick_ack`) and enabling the CNTKCTL event stream, both for
-candidate 2.
+candidate 3.
 
 ### Record at `0x4201b200`
 
@@ -167,16 +249,16 @@ completed run. Fields are 64-bit words at the byte offsets given.
 | Offset | Content |
 | --- | --- |
 | 0, 8 | Magic `0x413733444c4e5231`, version 1 |
-| 16 | Reason: 1 deadline interrupt, 2 CPU0 exit SMC before completion, 3 failed survey at EL3, 4 refused completion SMC |
-| 24 | Stage: 1 captured, 3 captured and cleaned |
+| 16 | Reason: 1 deadline interrupt, 2 CPU0 exit SMC before completion, 3 failed survey at EL3 (`identity_primary_run` returned 0; x30 is then the gate's return address), 4 refused completion SMC |
+| 24 | Stage: 1 captured, 3 captured and cleaned. Reasons 3 and 4 always end at stage 1: CPU0 has left EL1, and with it the cleaning helper's translation regime |
 | 32, 40 | Counter at capture; armed deadline |
 | 48, 56, 64 | ELR_EL3, SPSR_EL3, ESR_EL3 (meaningful only for an SMC, reasons 2 and 4) |
 | 72, 80 | x0 and x1 at entry (status and detail of an exit SMC) |
-| 88–128 | ELR_EL1, SPSR_EL1, ESR_EL1, FAR_EL1, SP_EL0, SP_EL1 |
+| 88–128 | ELR_EL1, SPSR_EL1, ESR_EL1, FAR_EL1 (0 since the correction), SP_EL0, SP_EL1 |
 | 136, 144 | x29 and x30 at entry |
 | 152 | Acknowledged Group 0 interrupt (29, or 1023 for other reasons) |
 | 160, 168 | CPU0 CNTP_CTL_EL0 and CNTP_CVAL_EL0 (the FreeRTOS tick) |
-| 176, 184 | ICC_PMR_EL1 and ICC_RPR_EL1 |
+| 176, 184 | ICC_PMR_EL1 and ICC_RPR_EL1 (0 since the correction) |
 | 200, 208 | Lines cleaned by the EL1 helper; counter after cleaning |
 | 216, 224 | Survey state and completed mask from the identity report header |
 | 232 + 32·n | Core n: GICR_ISPENDR0, GICR_ISACTIVER0, GICR_ISENABLER0, power status |
@@ -196,27 +278,24 @@ from DRAM with their GIC and power state unrestored, so the board needs a
 power removal before its next run. A completed run is validated exactly as
 the workload, and the runner restores DRAM as before.
 
-## The deadline return itself is unproven on a board
+## The deadline return ran on a board
 
-The return path, a CPU0 warm reset through RVBAR and RMR while seven
-coherent secondaries keep running, has never run on a board; only the
-instruction model has executed it. Once CPU0 leaves, nothing takes the
-secondaries' own deadline exit, because CPU0's tick drives every interrupt
-they receive: in the first profile their background loops keep running at
-full load. A run with no return is therefore inconclusive: either CPU0
-could not take the deadline interrupt, or the reset and return themselves
-hung with the secondaries running.
-
-The follow-up is a forced-stall proof variant: the first profile with one
-secondary deliberately stopped before its completion record, as in the
-modeled stalled-core case, run once in a lifetime that has nothing else to
-test. Its expected outcome is a deadline return with reason 2. A return
-proves the path on that board; no return isolates the path itself.
+Run 5 exercised the return path: a CPU0 warm reset through RVBAR and RMR
+while seven coherent secondaries were still powered and waiting at EL3. The
+ROM re-enumerated about 12 s after launch, answered FEL, and the runner
+read the record and the owned memory. That run used reason 3, which
+captures at EL3 without the EL1 cleaning step; the FIQ entry (reason 1) and
+the EL1 cleaning helper (reasons 1 and 2) have still run only in the model.
+Once CPU0 leaves, nothing takes the secondaries' own deadline exit, so a run
+without a return still cannot separate a CPU0 that took no interrupt from a
+return that hung. A forced-stall variant (the first profile with one
+secondary stopped before its completion record, expected to return with
+reason 2) would prove the cleaning path; it is not built.
 
 ## State the deadline return leaves changed
 
-The capture and return (`workload-deadline-probe.S:115`–`135`,
-`:238`–`254`) restore only SCR_EL3. They leave:
+The capture and return (`workload-deadline-probe.S:115`–`135` and
+`:238`–`254` at `d1e39b77`) restore only SCR_EL3. They leave:
 
 - TCR_EL3, TTBR0_EL3 and MAIR_EL3 with the production cached values, and
   SCTLR_EL3 with M, C and I cleared; the completed path restores all of
@@ -264,11 +343,14 @@ launch.
 Besides its new files, the change edits files that other returning
 profiles share: `boot/a733/native-el1-cache-probe.S`,
 `boot/a733/secondary-identity-probe.S`,
+`boot/a733/primary-local-cache-probe.c` (the RWP correction),
 `tools/prepare-secondary-identity-probe.py`,
 `tools/run-native-startup-probe.py` and the host modules
 `tools/secondary-identity-host.py`, `tools/all-core-first-task-host.py` and
-`tools/all-core-task-workload-host.py`. The default builds stay
-byte-identical, but the source and host-evidence digests change, so frozen
+`tools/all-core-task-workload-host.py`. The RWP correction changes the
+overlays of the pre-scheduler, first-task, task-switch and workload
+profiles; the other edits leave default builds byte-identical. The source
+and host-evidence digests change as well, so frozen
 returning bundles fail their source checks against the merged tree. Each
 frozen bundle still runs from its own source copy; a refreeze of the rank 7
 and rank 8 bundles is planned at merge.
@@ -281,11 +363,16 @@ module and the model. Both should move to one definition.
 
 ## Budgets and measurements
 
-- **Default images.** With the new options absent, the identity, first-task,
+- **Default images.** Without the RWP correction, the identity, first-task,
   task-switch and task-workload builds of this tree equal the builds of
   `79b54841` in all 24 compared files (overlay, three payload segments,
-  `identity.bin`, `identity.elf`).
-- **Overlay space.** The extension uses 12,272 of its 12,288 bytes.
+  `identity.bin`, `identity.elf`). With it, the identity build and every
+  native payload segment are unchanged; the first-task, task-switch and
+  workload overlays change in `restore_local` only. The central images
+  (`a733-smp-supervised.elf`, `kernel-check.elf`) are byte-identical to a
+  `bringup` build.
+- **Overlay space.** The extension uses all 12,288 of its bytes after the
+  correction (12,272 before it).
 - **Completed-path cost (counted).** CPU0 executes 22 more instructions once
   at EL1 entry and 17 more at its completion SMC; each secondary executes 3
   more at entry and 4 more per SMC. The workload loops are unchanged.
@@ -303,7 +390,13 @@ module and the model. Both should move to one definition.
   quiet profile's fall from 1,069–1,864 to 279–490 per secondary is the
   intended reduction. The model runs take 105 s (default), 120 s (deadline)
   and 113 s (quiet); the two stall cases, resumed from the completed-worker
-  checkpoint, take 8 s and 10 s. Host cases
+  checkpoint, take 8 s and 10 s. The `restore-rwp` case injects RWP once
+  after the restoring writes: the corrected deadline and quiet overlays
+  return normally, and the same injection on the overlay of `d1e39b77`
+  reproduces run 5's record. With the correction, the pre-scheduler,
+  first-task (five cases), task-switch (two), workload (two), deadline
+  (four) and quiet (two) instruction cases and their host cases pass again
+  (`workload-bisect-20261025/rwp-fix/`). Host cases
   (`checks/workload-bisect-host.py`) run the actual runner with a modeled
   FEL for a completed return, a transport failure, an invalid report, and a
   deadline return and a damaged deadline record that both restore nothing;
