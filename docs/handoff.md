@@ -76,6 +76,20 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**NPU interrupt completion and job timing, qualified on port 3-3**
+(set `board-bundles-20261025-13`, `board-session-20261025-9/port-3-3`;
+`work/npu-followups-1025` merged). Both starts passed, with all four
+outputs matching and all three state reads matching their predictions.
+- Startup: 4,024 µs at 492 MHz and 4,025 µs at 852 MHz.
+- Job start to IRQ97: 22.7 to 23.9 µs at both rates. IRQ to recorded
+  completion: about 16 µs.
+- NPU cycle counters: active cycles 2,015 to 2,151 at 492 MHz and 3,409 to
+  3,731 at 852 MHz, which is about 4.3 µs of activity at both rates. About 90%
+  of each job's cycles are idle.
+So this test job is too small for the clock to matter: its latency is fixed
+overhead (command fetch, DRAM traffic, interrupt delivery). The 852 MHz
+comparison needs a full model, such as the ShuffleNetV2 slot.
+
 **Vendor EL3 security setup in every image, qualified on port 3-3**
 (set `board-bundles-20261025-10`, session `board-session-20261025-8/port-3-3`).
 `work/gpu-vendor-default-1025` is merged: every EL3 entry makes BL31's
