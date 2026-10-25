@@ -50,7 +50,7 @@ static int write32(void *context, uintptr_t address, uint32_t value)
         address != SGI + 0x400 && address != SGI + 0x100) return 0;
     write_word(address, value); return 1;
 }
-static int wait_rwp(void)
+static __attribute__((noinline)) int wait_rwp(void)
 {
     uint64_t previous = ticks();
     do {
@@ -79,6 +79,10 @@ static int restore_local(void)
     const volatile struct secondary_local_state *b = &report->before;
     write_word(SGI + 0x80, b->group); write_word(SGI + 0xd00, b->modifier);
     write_word(SGI + 0xc04, b->configuration); write_word(SGI + 0x400, b->priority);
+    /* GICR_CTLR.RWP is read-only status, and the board has shown it still set
+     * here (port 3-3, 2026-10-25). Wait for it, as Linux gic_cpu_init does
+     * after configuring the SGI/PPI groups and priorities, before comparing. */
+    if (!wait_rwp()) { report->cleanup_error = 4; return 0; }
     /* CPU0 was awake and remains awake. Do not apply secondary sleep/OFF cleanup. */
     snapshot(&report->after);
     const volatile uint64_t *before = (const volatile uint64_t *)b;

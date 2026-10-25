@@ -24,7 +24,7 @@ MODEL_SOURCES = base.MODEL_SOURCES+('checks/workload-bisect-probe.py',)
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
          'deadline-return-retained', 'damaged-deadline-retained', 'deadline-record-checked',
          'changed-input-refused')
-INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick'), True: ('success',)}
+INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', 'restore-rwp'), True: ('success', 'restore-rwp')}
 RECORD = (0x4201b200, 512)
 RECORD_OFFSET = RECORD[0]-0x42018000
 RECORD_MAGIC = 0x413733444c4e5231
@@ -37,8 +37,8 @@ REASONS = {1: 'the CPU0 deadline interrupt',
            3: 'a failed survey at EL3',
            4: 'a refused CPU0 completion SMC'}
 FIELDS = ('magic', 'version', 'reason', 'stage', 'counter', 'deadline', 'elr_el3', 'spsr_el3', 'esr_el3',
-          'x0', 'x1', 'elr_el1', 'spsr_el1', 'esr_el1', 'far_el1', 'sp_el0', 'sp_el1', 'x29', 'x30',
-          'fiq_intid', 'cntp_ctl', 'cntp_cval', 'pmr', 'rpr', 'unused', 'cleaned_lines', 'cleaned_counter',
+          'x0', 'x1', 'elr_el1', 'spsr_el1', 'esr_el1', 'reserved_112', 'sp_el0', 'sp_el1', 'x29', 'x30',
+          'fiq_intid', 'cntp_ctl', 'cntp_cval', 'reserved_176', 'reserved_184', 'unused', 'cleaned_lines', 'cleaned_counter',
           'survey_state', 'survey_completed')
 
 
@@ -140,7 +140,9 @@ def validate_software(software, manifest_hash):
         report = path.with_suffix('.bin')
         require(digest(report) == result['report_sha256'], 'Instruction report changed.')
         raw = report.read_bytes()
-        if case == 'success':
+        require(case != 'restore-rwp' or result.get('rwp_reads_injected') == 1,
+                'The restoration RWP case did not inject RWP.')
+        if case in ('success', 'restore-rwp'):
             require(result.get('off') == list(range(1, 8)) and result.get('clean_complete') == list(range(8)) and
                     not result.get('fiq_taken'), 'Completed workload or disarmed deadline missing.')
             actual = [list(struct.unpack_from('<5Q', raw, 0x4280+c*128)) for c in range(8)]

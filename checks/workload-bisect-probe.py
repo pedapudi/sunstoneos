@@ -20,6 +20,15 @@ cleaning SMC. Cases:
 - stalled-no-tick: as stalled-core, and CPU0's tick timer also stops, so
   CPU0 takes no interrupt. The EL3 deadline interrupt then takes CPU0 from
   its EL0 wait to the same capture, cleaning and return.
+- restore-rwp: resumes from the same checkpoint with every core running.
+  After CPU0's EL3 restoration rewrites its SGI/PPI priorities, the next
+  read of its GICR_CTLR returns RWP set, as port 3-3 recorded on
+  2026-10-25. The corrected restoration waits for RWP and the run returns
+  normally.
+- restore-rwp-unfixed: the same injection against an overlay without that
+  wait. The restoration's comparison fails (cleanup error 3), the survey
+  returns 0 and CPU0 returns through the deadline unit with reason 3, as on
+  the board. Run it only against such an overlay; it reproduces the fault.
 
 Timing, cache visibility and interrupt delivery remain modeled. After the
 stall the modeled clock advances 20,000 ticks per scheduling quantum instead
@@ -62,6 +71,8 @@ class Bisect(workload.Workload):
         self.disarmed_at_completion = False
         self.helper_lines = 0
         self.clock_step = 1000
+        self.rwp_injected = False
+        self.rwp_reads = self.rwp_seen = 0
 
     def in_hook(self, name, address, length):
         start = self.survey_hooks[name]
@@ -77,6 +88,13 @@ class Bisect(workload.Workload):
                 not self.mmio[g+0x80] & (1 << 29) and self.mmio[g+0x100] & (1 << 29))
 
     def memory(self, u, access, address, size, value, core):
+        if core == 0 and self.regs[0]['currentel'] == 12 and self.fault in ('restore-rwp', 'restore-rwp-unfixed'):
+            if access == workload.UC_MEM_WRITE and address == self.rdist[0]+0x10400 and not self.rwp_injected:
+                self.rwp_injected = True; self.rwp_reads = 1
+            elif access != workload.UC_MEM_WRITE and address == self.rdist[0] and self.rwp_reads:
+                self.rwp_reads -= 1; self.rwp_seen += 1
+                u.mem_write(address, (self.mmio[address] | 8).to_bytes(4, 'little'))
+                return
         # The capture reads every redistributor's pending, active and enable
         # words and every core's power status; nothing else changes there.
         pc = self.cpus[core].reg_read(UC_ARM64_REG_PC)
@@ -191,7 +209,8 @@ def main():
         p.add_argument('--'+name, type=Path, required=True)
     p.add_argument('--prefix', type=Path, help='Primary-return snapshot (success case)')
     p.add_argument('--resume-workload', type=Path, help='Completed-worker checkpoint of this bundle (stalled-core case)')
-    p.add_argument('--case', choices=('success', 'stalled-core', 'stalled-no-tick'), required=True)
+    p.add_argument('--case', choices=('success', 'stalled-core', 'stalled-no-tick', 'restore-rwp',
+                                      'restore-rwp-unfixed'), required=True)
     a = p.parse_args()
     manifest = json.loads((a.bundle/'manifest.json').read_text())
     assert manifest['schema'] == 'a733-all-core-task-workload-probe-v1' and 'workload_bisect' in manifest
@@ -221,18 +240,28 @@ def main():
         assert machine.armed == [machine.deadline+DEADLINE_TICKS] and not machine.fiq_taken
         machine.checkpoint = None
         machine.fault = a.case
-        machine.stalled = STALLED_CORE
+        machine.rwp_injected, machine.rwp_reads, machine.rwp_seen = False, 0, 0
         assert all(machine.q(COMPLETIONS+c*64) != machine.epoch for c in range(8))
-        machine.active[machine.stalled] = False
+        if a.case.startswith('stalled'):
+            machine.stalled = STALLED_CORE
+            machine.active[machine.stalled] = False
+            machine.clock_step = 20000
         if a.case == 'stalled-no-tick':
             machine.regs[0]['cntp_ctl_el0'] = 0
-        machine.clock_step = 20000
     try:
         machine.execute()
         raw = machine.read(0x42018000, 0x5200)
         record = struct.unpack_from('<64Q', raw, RECORD-0x42018000)
         assert machine.returned and not machine.retained
-        if a.case == 'success':
+        if a.case in ('restore-rwp', 'restore-rwp-unfixed'):
+            assert machine.rwp_injected and machine.rwp_seen == 1
+        if a.case == 'restore-rwp-unfixed':
+            primary_record = struct.unpack_from('<34Q', raw, 0xa00)
+            assert record[:4] == (RECORD_MAGIC, 1, 3, 1) and record[62] == 1, record[:4]
+            assert primary_record[30] == 3 and primary_record[20] == 8, primary_record
+            assert machine.started == list(range(1, 8)) and not machine.stopped
+            results = [struct.unpack_from('<5Q', machine.read(0x41201080+c*128, 40)) for c in range(8)]
+        elif a.case in ('success', 'restore-rwp'):
             assert machine.armed == [machine.deadline+DEADLINE_TICKS] and machine.disarmed_at_completion
             # The completed survey copies CPU0's EL1 record page over this area.
             assert not machine.fiq_taken and record[0] != RECORD_MAGIC
@@ -275,7 +304,7 @@ def main():
         'report_sha256': digest(report), 'sources': {name: digest(ROOT/name) for name in SOURCES},
         'workload_checkpoint': str(a.resume_workload) if a.resume_workload else None,
         'deadline': machine.deadline+DEADLINE_TICKS, 'fiq_taken': machine.fiq_taken,
-        'stalled_core': getattr(machine, 'stalled', None), 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
+        'stalled_core': getattr(machine, 'stalled', None), 'rwp_reads_injected': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
         'workload_results': results, 'off': machine.stopped,
         'clean_complete': sorted(machine.clean_complete), 'helper_lines': machine.helper_lines,
         'limits': __doc__}, indent=2)+'\n')

@@ -84,14 +84,12 @@ identity_deadline_smc:
     ubfx x16, x16, #8, #3
     cbnz x16, el1_return_checkpoint_continue
     mrs x16, esr_el3
-    mov x17, #(SMC_CLEANED & 0xffff)
-    movk x17, #(SMC_CLEANED >> 16), lsl #16
-    cmp x16, x17
-    b.eq identity_deadline_finish
     mov x17, #(SMC_COMPLETE & 0xffff)
     movk x17, #(SMC_COMPLETE >> 16), lsl #16
-    cmp x16, x17
-    b.ne 1f
+    sub x16, x16, x17
+    cmp x16, #(SMC_CLEANED - SMC_COMPLETE)
+    b.eq identity_deadline_finish
+    cbnz x16, 1f
     // Completed workload: the deadline must not fire during the unchanged
     // restoration, and restore_local requires Group 0 disabled.
     msr cntps_ctl_el1, xzr
@@ -155,9 +153,8 @@ identity_deadline_capture:
     mrs x2, spsr_el1
     mrs x3, esr_el1
     stp x2, x3, [x15, #96]
-    mrs x2, far_el1
     mrs x3, sp_el0
-    stp x2, x3, [x15, #112]
+    str x3, [x15, #120]
     mrs x2, sp_el1
     stp x2, x29, [x15, #128]
     stp x30, x9, [x15, #144]
@@ -166,13 +163,9 @@ identity_deadline_capture:
     msr icc_eoir0_el1, x9
 2:
     msr icc_igrpen0_el1, xzr
-    isb
     mrs x2, cntp_ctl_el0
     mrs x3, cntp_cval_el0
     stp x2, x3, [x15, #160]
-    mrs x2, icc_pmr_el1
-    mrs x3, icc_rpr_el1
-    stp x2, x3, [x15, #176]
     mov x3, #(IDENTITY_REPORT & 0xffff)
     movk x3, #(IDENTITY_REPORT >> 16), lsl #16
     ldp x2, x3, [x3, #40]
@@ -208,9 +201,8 @@ identity_deadline_capture:
 
 identity_deadline_el1:
     // Nonsecure EL1h with DAIF masked, on CPU0's own translation regime.
-    msr cntp_ctl_el0, xzr
+    // The warm reset that follows stops CPU0's tick timer.
     msr icc_igrpen1_el1, xzr
-    isb
     dsb sy
     ldr x0, =probe_writable_start
     ldr x2, =probe_writable_end
