@@ -18,6 +18,10 @@ apply_build_patch("${sdsc_build}/freertos-port.c" "${sdsc_port}/port.c"
 apply_build_patch("${sdsc_build}/platform.c" "${sdsc_root}/platform/a733/platform.c" "${sdsc_app}/platform.patch")
 apply_build_patch("${sdsc_build}/board-session.c" "${sdsc_root}/apps/board/session.c" "${sdsc_app}/board-session.patch")
 apply_build_patch("${sdsc_build}/sd-session.c" "${sdsc_root}/apps/storage-read/snapshot.c" "${sdsc_app}/sd-session.patch")
+# The SMP base links its patched tasks.c from the port directory, which the
+# filter removes; a boot-CPU-only image links the kernel's own tasks.c, as the
+# single-core GPU and NPU images do (cmake/a733-gpu-single-core.cmake).
+list(APPEND sdsc_sources "${FREERTOS_DIR}/tasks.c")
 list(APPEND sdsc_sources "${sdsc_app}/start.S" "${sdsc_app}/monitor.c" "${sdsc_app}/runtime.c"
  "${sdsc_build}/platform.c" "${sdsc_build}/board-session.c" "${sdsc_build}/sd-session.c"
  "${sdsc_build}/freertos-port.c" "${sdsc_port}/portASM.S"
