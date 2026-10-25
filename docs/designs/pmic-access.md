@@ -421,6 +421,21 @@ placement for snapshots. The native USB image of rank 9 needs a rerun on
 this adapter before it relies on it, and a DCDC3 selector write, under its
 own gate, covers the write of the selector byte.
 
+Rank 9 cannot yet be rebuilt for that rerun.
+`apps/usb-returning/build.py --platform-build` links the central
+`monitor.c` object, compiled without the monitor's counter option. Since
+`rank-9-usb-v4/`, `monitor.c` gained the interrupt-cleanup readbacks and the
+replaced status, so that object's instructions differ from every monitor
+object that ran on a board. The board-qualified monitor of this tree is the
+base image's, compiled with the counter option, which ran as
+`s7-bb2-run` and inside every bundle 6 run since.
+`checks/board-bundles-apps.py --usb` therefore refuses the rebuilt image
+("The native USB image's monitor.c changes rank-9-usb-v4 monitor
+instructions"). Two routes remain: link the base image's monitor object
+into the native USB image, which needs the USB runner to accept the
+counter option's record, or qualify the plain monitor object in its own
+run.
+
 ## Board result
 
 Three runs used port 3-3 on 2026-10-24 and the read-only bundle 6 built from
