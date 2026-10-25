@@ -59,10 +59,10 @@ for mode, name in enumerate(('exact-access', 'allowlist-refusal', 'lock-refusal'
     uc.emu_start(image.address('core_native_check'), 0x80000000, count=100000)
     assert uc.reg_read(UC_ARM64_REG_PC) == 0x80000000, 'instruction budget exhausted'
     assert uc.reg_read(UC_ARM64_REG_X0) == 0, (name, uc.reg_read(UC_ARM64_REG_X0))
-    expected = [(False, 0), (False, 8), (False, 0x20), (False, 0x14), (False, 0xfb0), (True, 0x20),
+    expected = [(False, 0), (False, 8), (False, 0x20), (False, 0x14), (False, 0xfb0), (True, 0xc10), (False, 0xc10), (True, 0x20),
                 (True, 0), (True, 0), (False, 0), (False, 8)] if mode == 0 else []
     assert [(v['write'], v['address'] - 0x07066000) for v in accesses] == expected
     results.append(dict(case=name, accesses=accesses, passed=True))
 (out / 'results.json').write_text(json.dumps(dict(cases=results,
     elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(), physical_access=False), indent=2) + '\n')
-print('PASS four actual AArch64 CORE native cases: exact 32-bit accesses including the read-only MISR and IDR0, write locks, allowlists and refusals')
+print('PASS four actual AArch64 CORE native cases: exact 32-bit accesses including the read-only MISR and IDR0 and a pinned delay-row word, write locks, allowlists and refusals')

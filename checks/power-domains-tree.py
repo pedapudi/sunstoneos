@@ -60,6 +60,7 @@ READERS = {
     'apps/board-bundles-dram/sequence.h': ('1', 'defines the domain-1 status that the bundle 8 gate reads'),
     'apps/board-bundles-dram/sequence.c': ('1', 'reads the domain-1 status as the bundle 8 gate'),
     'apps/board-bundles-dram/main.c': ('1', 'maps the domain-1 PPU page read-only for the bundle 8 gate'),
+    'apps/gpu-power-id/main.c': ('5', 'reads domain-5 words in its read-only CORE6 prerequisite snapshot'),
 }
 SUFFIX = r'(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?'
 DOMAIN_REGISTER = re.compile(r'\b0[xX]0*706(?P<literal>[15])[0-9a-fA-F]{3}' + SUFFIX + r'\b|'
@@ -67,10 +68,13 @@ DOMAIN_REGISTER = re.compile(r'\b0[xX]0*706(?P<literal>[15])[0-9a-fA-F]{3}' + SU
                              r'\bA733_PCK_DOMAIN_BASE\(\s*(?P<base>[15])' + SUFFIX + r'\s*\)')
 WRITE_HINT = re.compile(r'write|store|update|=\s*value', re.I)
 # Writers of the delay row for domains the owner does not hold: video (2, 3),
-# HDMI and DisplayPort (10). The NPU requests domain 4 through its row.
+# GPU_CORE (6), HDMI and DisplayPort (10). The NPU requests domain 4 through
+# its row.
 DELAY_WRITERS = {'drivers/power/a733_power_domains.c', 'drivers/video/a733_video_platform.c',
-                 'platform/a733/hdmi_native.c', 'apps/displayport/native.c'}
-DELAY_ALLOWLISTS = set()
+                 'drivers/gpu/a733_gpu_power.c', 'platform/a733/hdmi_native.c', 'apps/displayport/native.c'}
+# The GPU native adapter admits the pinned row only for its CORE bank,
+# PCK row 6 at 0x07066000.
+DELAY_ALLOWLISTS = {'drivers/gpu/a733_gpu_platform_native.c'}
 # Image: (source, service creation, USB0 creation or priority fact, core-0 placement).
 IMAGES = {
     'GPU': ('apps/gpu-render/main.c',

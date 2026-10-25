@@ -19,8 +19,9 @@ struct model {
     unsigned core_entry_reads, core_entry_fail, core_entry_late;
     /* When an outstanding CORE transition completes without clock/reset
      * progress: 0 never (only after progress), 1 at a status read once PWCR
-     * is 0, 2 at a status read after a policy write with PWCR 0. */
-    unsigned core_early, core_rewritten;
+     * is 0, 2 at a status read after a policy write with PWCR 0, 3 at a
+     * status read once the delay row is written. */
+    unsigned core_early, core_rewritten, core_delays;
     /* A status read after the PWCR write and before the policy write
      * returns this value when it is nonzero. */
     uint32_t core_after_pwcr_value;
@@ -93,8 +94,12 @@ static int read_reg(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint
     assert(ctx == &m && bank <= A733_GPU_CORE && off % 4 == 0 && off < 0x6000);
     if (!call()) return 0;
     if (bank == A733_GPU_CORE) {
-        assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0);
+        assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0 || off == 0x170 ||
+               off == 0x174 || off == 0xc00 || off == 0xc04 || off == 0xc10);
         assert((m.regs[2][0x5008/4] & 15) == 8);
+        /* Each ON starts with its policy read. */
+        if (off == 0 && s.phase == A733_GPU_POWER_STARTING && !(s.core_seen & 1))
+            m.core_rewritten = m.core_delays = 0;
         /* Policy, status, IDR0, MISR and PWCR precede admission. */
         if ((s.core_seen & 0x1f) != 0x1f) {
             ++m.core_entry_reads;
@@ -107,8 +112,10 @@ static int read_reg(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint
              * reads at ON are the diagnostic observations. */
             const int progressed = (m.regs[0][0xb20/4] & 0x80000000) &&
                                    (m.regs[0][0xb24/4] & 0x10001) == 0x10001;
-            const int early = !m.core_stalled && m.regs[2][0x6020/4] == 0 &&
-                              (m.core_early == 1 || (m.core_early == 2 && m.core_rewritten));
+            const int early = !m.core_stalled &&
+                              ((m.core_early == 3 && m.core_delays) ||
+                               (m.regs[2][0x6020/4] == 0 &&
+                                (m.core_early == 1 || (m.core_early == 2 && m.core_rewritten))));
             if (progressed) {
                 ++m.core_reads;
                 if (m.core_late) m.now = s.deadline;
@@ -138,13 +145,21 @@ static int update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off,
     if (!call()) return 0;
     if (bank == A733_GPU_CORE) {
         assert((m.regs[2][0x5008/4] & 15) == 8 && m.held);
-        assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0)));
+        assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0) ||
+               (off == 0x170 && set == 0x1f1f1f) || (off == 0x174 && set == 0x1f1f) ||
+               (off == 0xc00 && set == 0x08080808) || (off == 0xc04 && set == 0x0808) ||
+               (off == 0xc10 && set == 8)));
+        /* The delay row precedes the PWCR and policy writes of each ON. */
+        if (off >= 0x170) assert(s.phase == A733_GPU_POWER_STARTING && !m.core_rewritten &&
+                                 m.regs[2][0x6020/4] == (s.core_config));
+        if (off == 0xc10) m.core_delays = 1;
         /* PWCR changes only in a settled state or the power-up state. */
         if (off == 0x20) assert(((m.regs[2][0x6000/4] == 0 || m.regs[2][0x6000/4] == 8) &&
                                  m.regs[2][0x6000/4] == m.regs[2][0x6008/4]) ||
                                 (m.regs[2][0x6000/4] == 8 && m.regs[2][0x6008/4] == 0 &&
                                  m.regs[2][0x6020/4] == A733_GPU_CORE_RESET_PWCR));
         if (off == 0) m.core_pending = m.core_rewritten = 1;
+        if (off == 0x20) assert(m.core_delays);
         off += 0x6000;
     }
     event(1, bank, off, clear, set); ++m.writes; m.now += m.slow;
@@ -209,12 +224,15 @@ static void core_cases(void)
         m.regs[2][0x6000/4] = m.regs[2][0x6008/4] = core*8;
         m.regs[2][0x4000/4] = 0x12345678; m.regs[2][0x4008/4] = 0xabcdef08;
         on();
-        assert(s.core_seen == 0xff && s.core_policy == core*8 && s.core_status == core*8 &&
+        assert(s.core_seen == 0x1ff && s.core_policy == core*8 && s.core_status == core*8 &&
                s.core_config == 0x010101ff && m.core_reads == 1);
         /* A settled entry reads each observation once, without a wait. */
         assert(s.core_note[A733_GPU_NOTE_IDR0] == 0x00031001 && s.core_note[A733_GPU_NOTE_MISR] == 0x100 &&
+               s.core_note[A733_GPU_NOTE_AFTER_DELAYS] == core*8 &&
                s.core_note[A733_GPU_NOTE_AFTER_PWCR] == core*8 && s.core_note[A733_GPU_NOTE_AFTER_POLICY] == core*8 &&
-               s.core_wait_us[0] <= 1 && s.core_wait_us[1] <= 1 && !s.core_power_up);
+               s.core_wait_us[0] <= 1 && s.core_wait_us[1] <= 1 && s.core_wait_us[2] <= 1 && !s.core_power_up);
+        assert(m.regs[2][0x6170/4] == 0x1f1f1f && m.regs[2][0x6174/4] == 0x1f1f &&
+               m.regs[2][0x6c00/4] == 0x08080808 && m.regs[2][0x6c04/4] == 0x0808 && m.regs[2][0x6c10/4] == 8);
         off(); on(); off();
         assert(m.releases == 2 && m.regs[2][0x4000/4] == 0x12345678 &&
                m.regs[2][0x4008/4] == 0xabcdef08 && m.regs[0][0x5e0/4] == 0x50000);
@@ -244,33 +262,34 @@ static void core_cases(void)
     }
     /* The power-up state: policy 8, status 0 and the reset PWCR, with the
      * default ON transition outstanding. It completes at a status read
-     * after PWCR 0, after the policy write, only after clock/reset
-     * progress, or never. Each observation after a write waits up to
-     * A733_GPU_SPIN_US for status 8 and continues either way. */
-    for (unsigned mode = 0; mode < 4; ++mode) {
+     * after the delay row, after PWCR 0, after the policy write, only after
+     * clock/reset progress, or never. Each observation after a write waits
+     * up to A733_GPU_SPIN_US for status 8 and continues either way. */
+    for (unsigned mode = 0; mode < 5; ++mode) {
         fresh(); m.regs[2][0x6000/4] = 8; m.regs[2][0x6020/4] = A733_GPU_CORE_RESET_PWCR;
-        m.core_pending = 1; m.core_early = mode == 0 ? 1 : mode == 1 ? 2 : 0; m.core_stalled = mode == 3;
+        m.core_pending = 1; m.core_early = mode == 0 ? 3 : mode == 1 ? 1 : mode == 2 ? 2 : 0;
+        m.core_stalled = mode == 4;
         assert(a733_gpu_power_on(&s, m.now + 1000) == A733_GPU_POWER_AGAIN);
         const enum a733_gpu_power_result r = drain();
-        const uint32_t after_pwcr = mode == 0 ? 8 : 0, after_policy = mode <= 1 ? 8 : 0;
+        const uint32_t seen8[3] = {mode == 0 ? 8u : 0u, mode <= 1 ? 8u : 0u, mode <= 2 ? 8u : 0u};
         assert(s.core_policy == 8 && s.core_status == 0 && s.core_config == A733_GPU_CORE_RESET_PWCR &&
                s.core_power_up);
-        assert(s.core_note[A733_GPU_NOTE_AFTER_PWCR] == after_pwcr &&
-               s.core_note[A733_GPU_NOTE_AFTER_POLICY] == after_policy &&
-               s.core_note[A733_GPU_NOTE_MISR_LATE] == 0x100);
-        assert(after_pwcr ? s.core_wait_us[0] <= 1 : s.core_wait_us[0] >= A733_GPU_SPIN_US);
-        assert(after_policy ? s.core_wait_us[1] <= 1 : s.core_wait_us[1] >= A733_GPU_SPIN_US);
-        assert(s.core_wait_us[0] <= A733_GPU_SPIN_US + 2 && s.core_wait_us[1] <= A733_GPU_SPIN_US + 2);
-        assert(!m.regs[2][0x6020/4] && m.regs[2][0x6000/4] == 8);
-        if (mode < 3) {
-            assert(r == A733_GPU_POWER_OK && s.core_seen == 0xff && m.regs[2][0x6008/4] == 8);
-            assert(m.core_reads == (mode == 2));
+        for (unsigned i = 0; i < 3; ++i) {
+            assert(s.core_note[A733_GPU_NOTE_AFTER_DELAYS + i] == seen8[i]);
+            assert(seen8[i] ? s.core_wait_us[i] <= 1 : s.core_wait_us[i] >= A733_GPU_SPIN_US);
+            assert(s.core_wait_us[i] <= A733_GPU_SPIN_US + 2);
+        }
+        assert(s.core_note[A733_GPU_NOTE_MISR_LATE] == 0x100);
+        assert(!m.regs[2][0x6020/4] && m.regs[2][0x6000/4] == 8 && m.regs[2][0x6c10/4] == 8);
+        if (mode < 4) {
+            assert(r == A733_GPU_POWER_OK && s.core_seen == 0x1ff && m.regs[2][0x6008/4] == 8);
+            assert(m.core_reads == (mode == 3));
             off(); assert(!m.regs[2][0x6000/4] && !m.regs[2][0x6008/4] && m.releases == 1);
             /* Reopening starts from settled OFF with PWCR 0. */
             on(); assert(s.core_policy == 0 && !s.core_config && s.core_wait_us[0] <= 1 && !s.core_power_up); off();
         } else {
             assert(r == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT && m.held && !m.releases);
-            assert(s.index == 27 && !m.regs[2][0x6008/4]); /* the final status poll */
+            assert(s.index == 38 && !m.regs[2][0x6008/4]); /* the final status poll */
             terminal();
         }
     }
@@ -318,12 +337,13 @@ static void core_cases(void)
         }
         assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
-        assert(s.index == 13 && s.core_power_up == power_up && s.last_value == 4 &&
-               s.core_note[A733_GPU_NOTE_AFTER_PWCR] == 4 && (s.core_seen & 0x20));
-        assert(m.writes == 1 && m.held && !m.releases && m.regs[2][0x6000/4] == power_up*8);
+        assert(s.index == 24 && s.core_power_up == power_up && s.last_value == 4 &&
+               s.core_note[A733_GPU_NOTE_AFTER_PWCR] == 4 && (s.core_seen & 0x40));
+        /* The five delay-row writes and PWCR 0, no policy write. */
+        assert(m.writes == 6 && m.held && !m.releases && m.regs[2][0x6000/4] == power_up*8);
         terminal();
     }
-    puts("PASS CORE6: four inherited pairs/reopen, eight entry refusals, ten partial samples, four power-up completions, two invalid observed statuses, eight bounded acknowledgement cases; NPU/shared gates retained");
+    puts("PASS CORE6: four inherited pairs/reopen, eight entry refusals, ten partial samples, five power-up completions, two invalid observed statuses, eight bounded acknowledgement cases; NPU/shared gates retained");
 }
 int main(int argc, char **argv)
 {
@@ -430,7 +450,7 @@ int main(int argc, char **argv)
      * clock runs again. */
     fresh(); m.tick = 0; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(poll() == A733_GPU_POWER_AGAIN && s.index == 5);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 23);
+    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 34);
     assert(!(m.regs[0][0xb24/4] & 0x10000) && poll() == A733_GPU_POWER_AGAIN);
     m.tick = 1; assert(drain() == A733_GPU_POWER_OK); off();
     fresh(); m.tick = 0; m.stalled = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);

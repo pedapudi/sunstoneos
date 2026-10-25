@@ -15,7 +15,7 @@ static struct a733_pmic_consumer supply;
 static struct a733_gpu_power_resources ready_gpu;
 static uint64_t gpu_token, gpu_deadline;
 static unsigned delegated, core_pending, both_pending;
-static uint32_t core[9];
+static uint32_t core[0xc14/4]; /* policy..PWCR and the delay row, by word */
 
 static int shared_read(void *v,uintptr_t a,uint32_t *out)
 {
@@ -41,7 +41,8 @@ static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
     (void)v;assert(gpu_token && delegated);
     if(bank==A733_GPU_CORE) {
         assert(gpu.row.counted && (d.ppu[5][2]&15)==8);
-        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0 ||
+               off==0x170 || off==0x174 || off==0xc00 || off==0xc04 || off==0xc10);
         if(off==8 && core_pending){core[2]=core[0];core_pending=0;}
         *out=off==0xfb0 ? 0 : core[off/4];return 1;
     }
@@ -53,7 +54,9 @@ static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint3
     (void)v;assert(gpu_token && delegated && !r.held);
     if(bank==A733_GPU_CORE) {
         assert(gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON);
-        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set) ||
+               (off==0x170 && set==0x1f1f1f) || (off==0x174 && set==0x1f1f)
+               || (off==0xc00 && set==0x08080808) || (off==0xc04 && set==0x0808) || (off==0xc10 && set==8)));
         core[off/4]=set;if(!off)core_pending=1;return 1;
     }
     assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));

@@ -442,16 +442,17 @@ ROWS = [
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked',
             'Monitor status 0 with GPU power cycle=1 core_status=0x8, GPU power cycle=2 core_status=0x8 and '
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked, then a responsive ROM. Record the '
-            'GPU CORE entry, inputs and after lines of both cycles.',
+            'GPU CORE entry, inputs and after lines of both cycles and every GPU SNAP line.',
             'apps/gpu-power-id built with --power-only. Two ON/OFF cycles run before the provider park. Each ON '
             'requests domain 5 (TOP5) ON through the shared row, then, under the exclusive LOCAL lease, captures '
             'CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or the power-up state (policy 8, '
-            'status 0, PWCR 0x101), writes PWCR 0 and policy 8 with readbacks and a status observation after '
-            'each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
+            'status 0, PWCR 0x101), writes the vendor CORE6 delay row, PWCR 0 and policy 8 with readbacks and a '
+            'status observation after each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
             'policy 0 and requires status 0 before the clock and reset close and domain 5 goes OFF, in the order '
             'of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the image\'s own on_steps and '
-            'off_steps tables. The image never reads or writes the GPU register window at 0x01800000: the '
-            'identity reads and their mapping check are compiled out.',
+            'off_steps tables. A read-only snapshot of 35 CORE6, TOP5, R_CCU and CCU words precedes the first ON '
+            'and follows each ON attempt. The image never reads or writes the GPU register window at 0x01800000: '
+            'the identity reads and their mapping check are compiled out.',
             after=['gpu-provider-ready']),
     gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
             'COMPLETE GPU power identity: OFF and provider parked',

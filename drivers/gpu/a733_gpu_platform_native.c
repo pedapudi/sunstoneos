@@ -9,7 +9,8 @@ static uintptr_t address(enum a733_gpu_power_bank bank, uint32_t off)
     if (bank == A733_GPU_CCU && (off == 0x5c0 || off == 0x5e0 || off == 0xb20 || off == 0xb24))
         return 0x02002000u + off;
     if (bank == A733_GPU_R_CCU && off == 0x1ac) return 0x07010000u + off;
-    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0))
+    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0 ||
+                                  off == 0x170 || off == 0x174 || off == 0xc00 || off == 0xc04 || off == 0xc10))
         return 0x07066000u + off;
     /* GPU_TOP (PCK domain 5) belongs to the power-domain owner. */
     return 0;
@@ -42,7 +43,10 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
         (bank == A733_GPU_CCU && off == 0xb24 &&
          ((clear == 0 && (set == 1 || set == 0x10000)) || (set == 0 && (clear == 1 || clear == 0x10000)))) ||
         (bank == A733_GPU_CORE && clear == UINT32_MAX &&
-         ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0)));
+         ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0) ||
+          (off == 0x170 && set == 0x1f1f1f) || (off == 0x174 && set == 0x1f1f) ||
+          (off == 0xc00 && set == 0x08080808) || (off == 0xc04 && set == 0x0808) ||
+          (off == 0xc10 && set == 8)));
     if (!allowed || !enter(n, deadline)) return 0;
     uint32_t old = 0;
     if (clear != UINT32_MAX) (void)read_reg(n, bank, off, &old);

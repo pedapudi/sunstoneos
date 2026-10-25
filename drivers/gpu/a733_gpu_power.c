@@ -38,6 +38,23 @@ static const struct step on_steps[] = {
     {NOTE, A733_GPU_CORE, 0xfb0, 0, A733_GPU_NOTE_IDR0},
     {NOTE, A733_GPU_CORE, 0x14, 0, A733_GPU_NOTE_MISR},
     {CORE_CONFIG, A733_GPU_CORE, 0x20, 0, 0},
+    /* The CORE6 delay row of the vendor domain table
+     * (pck600_domains.c:554, SUN60IW2_PCK_GPU_CORE), the same row that
+     * the power-domain owner writes for TOP5. The vendor's sunxi_pd_init
+     * writes it only for a registered domain, and its device tree leaves
+     * the CORE6 node out, so no reference path writes it. 0xc00-0xc10 are
+     * absent from the PCK-600 TRM. */
+    {UPDATE, A733_GPU_CORE, 0x170, UINT32_MAX, 0x1f1f1f},
+    {CHECK, A733_GPU_CORE, 0x170, UINT32_MAX, 0x1f1f1f},
+    {UPDATE, A733_GPU_CORE, 0x174, UINT32_MAX, 0x1f1f},
+    {CHECK, A733_GPU_CORE, 0x174, UINT32_MAX, 0x1f1f},
+    {UPDATE, A733_GPU_CORE, 0xc00, UINT32_MAX, 0x08080808},
+    {CHECK, A733_GPU_CORE, 0xc00, UINT32_MAX, 0x08080808},
+    {UPDATE, A733_GPU_CORE, 0xc04, UINT32_MAX, 0x0808},
+    {CHECK, A733_GPU_CORE, 0xc04, UINT32_MAX, 0x0808},
+    {UPDATE, A733_GPU_CORE, 0xc10, UINT32_MAX, 8},
+    {CHECK, A733_GPU_CORE, 0xc10, UINT32_MAX, 8},
+    {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_DELAYS},
     {UPDATE, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
     {CHECK, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
     {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_PWCR},
@@ -127,7 +144,7 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
         s->lease_attempted = 0;
         s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
         for (unsigned i = 0; i < A733_GPU_CORE_NOTES; ++i) s->core_note[i] = 0;
-        s->core_wait_us[0] = s->core_wait_us[1] = s->core_power_up = 0;
+        s->core_wait_us[0] = s->core_wait_us[1] = s->core_wait_us[2] = s->core_power_up = 0;
     }
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
@@ -207,7 +224,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                 s->last_value = s->core_note[p->value] = value;
                 s->core_seen |= UINT32_C(8) << p->value;
                 if (!clock_read(s)) return A733_GPU_POWER_FAULT;
-                s->core_wait_us[p->value - A733_GPU_NOTE_AFTER_PWCR] = (uint32_t)(s->last_now - start);
+                s->core_wait_us[p->value - A733_GPU_NOTE_AFTER_DELAYS] = (uint32_t)(s->last_now - start);
                 if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
             } while (value != 8 && s->core_power_up && a733_gpu_spin_again(&wait, s->last_now));
             ++s->index;

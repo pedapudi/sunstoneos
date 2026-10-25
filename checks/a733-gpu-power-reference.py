@@ -82,6 +82,11 @@ int main(void) {
     assert(!sunxi_pd_init(&pd));
     sunxi_do_pmu_set_power_domain(&pd,true);
     sunxi_do_pmu_set_power_domain(&pd,false);
+    /* The vendor table's CORE6 row, which sunxi_pd_init would write for a
+     * registered CORE6 domain; its device-tree node is commented out. */
+    puts("--");
+    struct sunxi_pm_domain core={&pmu,&sun60iw2_pck600_pm_domains[SUN60IW2_PCK_GPU_CORE],{"gpu-core"}};
+    assert(!sunxi_pd_init(&core));
 }
 '''
     c = a.evidence / 'reference.c'
@@ -91,12 +96,22 @@ int main(void) {
     subprocess.run(command, check=True)
     output = subprocess.check_output([str(exe)], text=True)
     (a.evidence / 'reference-writes.txt').write_text(output)
+    top_lines, core_lines = output.split('--\n')
     expected = [tuple(int(v, 16 if i >= 2 else 10) for i, v in enumerate(line.split()))
-                for line in output.splitlines()]
+                for line in top_lines.splitlines()]
     assert [x for x in native if x[1] == 2] == expected
+    # The CORE6 delay row: the reference writes PCK row 6 (BASE 0x6000) in
+    # place; the native controller writes the same words through its CORE
+    # bank with whole-word updates.
+    core_delays = []
+    for line in core_lines.splitlines():
+        kind, bank, offset, mask, value = line.split()
+        assert (kind, bank, mask) == ('0', '2', '0') and int(offset, 16) >> 12 == 6
+        core_delays.append((1, 3, int(offset, 16) & 0xfff, 0xffffffff, int(value, 16)))
+    assert [x[2] for x in core_delays] == [0x170, 0x174, 0xc00, 0xc04, 0xc10]
     # CORE is not initialized by the generic domain driver. Its three writes
     # follow the selected BXM helpers documented in docs/gpu-power.md.
-    assert [x for x in native if x[1] == 3] == [
+    assert [x for x in native if x[1] == 3] == core_delays + [
         (1, 3, 0x20, 0xffffffff, 0), (1, 3, 0, 0xffffffff, 8),
         (1, 3, 0, 0xffffffff, 0)]
     # BXM sunxi_platform_init writes PWCR 0 and policy 8 after the TOP request
@@ -105,6 +120,8 @@ int main(void) {
     first_ccu = next(i for i, x in enumerate(native) if x[1] == 0)
     top_on = native.index((1, 2, 0x5000, 0xf, 8))
     assert top_on < native.index((1, 3, 0x20, 0xffffffff, 0)) < native.index((1, 3, 0, 0xffffffff, 8)) < first_ccu
+    # The native CORE6 delay row precedes PWCR 0.
+    assert top_on < native.index(core_delays[0]) and native.index(core_delays[-1]) < native.index((1, 3, 0x20, 0xffffffff, 0))
     core = block(ccu, r'static struct ccu_div gpu0_clk\s*=')
     assert '_SUNXI_CCU_DIV_TABLE(0, 4, gpu_div_table)' in core
     assert '_SUNXI_CCU_MUX(24, 3)' in core and '.enable         = BIT(31)' in core
