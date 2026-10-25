@@ -8,9 +8,13 @@
 #include "boot.h"
 #include "a733_mapping_check.h"
 static atomic_uint attached,usb0_started;
+/* An undefined macro would read as 0 below and silently refuse workload 2. */
+#if defined(SUNSTONE_A733_OS) && !defined(OS_STAGED_WORKLOAD)
+#error The OS build must include os.h, which defines OS_STAGED_WORKLOAD
+#endif
 int mimus_board_staged(void)
 {
-#if defined(SUNSTONE_A733_OS) && OS_STAGED_WORKLOAD /* os.h, which the OS build includes */
+#if defined(SUNSTONE_A733_OS) && OS_STAGED_WORKLOAD
     return board.session.workload==2;
 #else
     return 0;

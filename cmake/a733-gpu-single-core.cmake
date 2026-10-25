@@ -117,16 +117,18 @@ set_property(SOURCE "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c" "${gps
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,${gpsc_target}>:-include>"
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,${gpsc_target}>:${gpsc_app}/boot.h>")
 file(GLOB gpsc_headers "${gpsc_app}/*.h")
+# gpsc_sources holds the patched copy of platform.c; its source and patch
+# must also re-run configuration when edited.
 set(gpsc_inputs ${gpu_app_inputs} ${gpsc_sources} ${gpsc_headers}
  "${gpsc_port}/portmacro.h" "${gpsc_port}/port.c" "${gpsc_shared}/boot.h" "${gpsc_shared}/cached.h"
- "${gpsc_shared}/FreeRTOSConfig.h" "${gpsc_shared}/link.ld" "${gpsc_shared}/platform.patch"
+ "${gpsc_shared}/FreeRTOSConfig.h" "${gpsc_shared}/link.ld" "${gpsc_root}/platform/a733/platform.c"
+ "${gpsc_shared}/platform.patch"
  "${gpsc_app}/link.patch" "${CMAKE_CURRENT_LIST_FILE}" "${gpsc_root}/patches/freertos-aarch64-clang.patch")
 if(SUNSTONE_GPU_FINITE_RETURN)
-  # The patched monitor replaces the shared one in gpsc_sources; its source and
-  # that of the patched platform must still re-run configuration when edited.
+  # The patched monitor replaces the shared one in gpsc_sources; its source
+  # must still re-run configuration when edited.
   list(APPEND gpsc_inputs "${gpsc_root}/apps/gpu-finite/current-monitor.patch"
-    "${gpsc_shared}/monitor.c" "${gpsc_root}/platform/a733/platform.c"
-    "${gpsc_root}/apps/gpu-finite/link.patch" "${gpsc_root}/apps/gpu-finite/return.h"
+    "${gpsc_shared}/monitor.c" "${gpsc_root}/apps/gpu-finite/link.patch" "${gpsc_root}/apps/gpu-finite/return.h"
     "${gpsc_root}/apps/gpu-finite/finite.h" "${gpsc_link}")
 endif()
 list(REMOVE_DUPLICATES gpsc_inputs)

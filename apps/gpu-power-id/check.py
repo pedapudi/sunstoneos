@@ -93,7 +93,7 @@ def run(image, case, power_only=False):
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
             # The controller's last read is the CORE status poll.
             field(power, 'a733_gpu_power', 'phase', 2)
-            field(power, 'a733_gpu_power', 'last_value', 0 if case == 'core-status-zero' else 8)
+            field(power, 'a733_gpu_power', 'last_value', 8)
             ret()
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
@@ -160,12 +160,12 @@ def run(image, case, power_only=False):
             assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < state['calls'].index('platform_puts')
         else:
             reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll',
-                       'core-status-zero': 'GPU CORE status', 'off-fault': 'GPU OFF poll',
+                       'off-fault': 'GPU OFF poll',
                        'retained-token': 'GPU OFF ownership proof', 'counted-row': 'GPU OFF ownership proof',
                        'unparked': 'GPU provider park proof'}
             assert state['failure'] == reasons[case], state
             assert state['exit_status'] is None and 'COMPLETE' not in output
-            if case in ['on-fault', 'core-refused', 'core-partial', 'core-status-zero']:
+            if case in ['on-fault', 'core-refused', 'core-partial']:
                 assert 'a733_gpu_platform_off_begin' not in state['calls']
         return state
     if case in ['normal', 'legacy-id', 'unexpected-id']:
@@ -228,7 +228,7 @@ def main():
     cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
              'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
     if a.power_only:
-        cases = ['normal', 'on-fault', 'core-refused', 'core-partial', 'core-status-zero',
+        cases = ['normal', 'on-fault', 'core-refused', 'core-partial',
                  'off-fault', 'retained-token', 'counted-row', 'unparked']
     if a.cases:
         assert set(a.cases) <= set(cases)

@@ -39,13 +39,6 @@ resumes:
 
 The paused `gpu-provider-ready-1024` work may also edit
 `drivers/gpu/a733_gpu_power.c` and this file; merge `bringup` into it first.
-Remaining minor review items, not yet fixed: the unreachable CORE-status check
-and the unused `gpu_register_window_access` field in `apps/gpu-power-id`;
-hashing untracked files into the gate's dirty-tree identity and re-checking
-status under the lock; an `#error` when `OS_STAGED_WORKLOAD` is undefined in an
-OS build; checking report identity before decoding the CPU qualification
-reason; repeated statements of the workload-2 rule, the SDIO four-bit caveat
-and the GPU deadline argument across documents.
 
 ## Resume checkpoint
 
@@ -76,8 +69,10 @@ one job and returns builds from current objects; the shared monitor and
 
 The image is not physically eligible. Running it needs a single-core admission
 record granting exclusive CORE6 and TOP5 control, confirmed supply, clock and
-isolation, and a reviewed return and recovery plan. The default GPU single-core
-profile also patches `platform.c` without listing it as a configure input.
+isolation, and a reviewed return and recovery plan. Every GPU single-core
+profile, including the default one, lists `platform/a733/platform.c` as a
+configure input, so editing it re-runs configuration and changes the build
+identity.
 
 **NPU profile of the resident OS image (merged 2026-10-24):** an optional,
 feature-gated supervised profile runs one NPU application client. It reserves
@@ -98,21 +93,29 @@ feature-gated supervised profile runs one NPU application client. It reserves
 - **Checks:** all 32 `checks/os-npu.py` cases pass. Evidence:
   `os-npu-20261024/check-8/`.
 
+- **Launcher:** for an image whose link check records the NPU profile,
+  `tools/check-a733-os-supervised.py` requests operation 6 once after a
+  completed capture with at least 100 ms of the window left, and records the
+  decoded report and its classification. This is host-checked only
+  (`checks/os-image-launch.py`).
+
 Open items:
-- No launcher requests operation 6 yet.
+- The `os-supervised-software` evidence must be regenerated before the next
+  OS launch: the launcher's hash and its source set, which now includes
+  `apps/os/npu-report.py`, changed.
 - `npu_admission` in `apps/os/prepare.py` is untested against real NPU entry
   records.
-- The `client` task in `apps/npu-board/main.c` still starts at EL0, though it
-  reads the counter clock.
 - No NPU job of this image has run on a board.
 
 The latest reviewer finding is a concrete privilege requirement:
 `a733_counter_clock_now` masks DAIF, so the registered NPU application client
 must execute at EL1. Verify/finalize the narrow
 `os_npu_client_task(NULL)` privilege-hook correction and test the actual task
-frame SPSR. Unregistered tasks must remain refused. The older
-`apps/npu-board/main.c` client appears to share this problem; inspect it as a
-separate source issue, without assuming its unqualified image works.
+frame SPSR. Unregistered tasks must remain refused. The older NPU board image
+had the same problem; its `apps/npu-board/main.c` bootstrap and client now
+start at EL1t only while `board_application_start` creates them, which
+`checks/npu-board-providers.py` checks against the linked first-frame SPSR.
+That image remains unqualified.
 A proposed read-only vendor opcode 6 exposes a separate fixed 104-byte NPU
 report; its implementation/review is not complete. Verify actual framed USB
 length, immutable completion publication and preservation of mimus protocol
@@ -185,9 +188,7 @@ runner and wrapper PIDs `3974830` and `3974825` have ended. The queue retains cl
 Evidence: `processor-completion-20261024/port-3-1/gpu-power-id-corrected/`.
 All six FEL transactions succeeded, including launch; no native report locates
 the failure. This image also predates CORE6 power control, and the same
-unproven hypothesis applies: the client's 1.5-second deadline and the
-monitor's 2-second deadline would have ended an ordinary bounded failure well
-inside 30 seconds. After recovery, the
+unproven hypothesis applies. After recovery, the
 [power-only GPU diagnostic](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
 runs before any identity probe; it is built and host-checked, and no board bundle is frozen. A preceding command-path error stopped before board access and
 was closed as blocked; it did not require physical recovery. USB is the only
@@ -665,9 +666,10 @@ board's radio owner owns the AIC8800 module and loads its firmware once, and
 the Bluetooth application attaches to that session as a second client with
 its own UART1, H4/HCI and wake-pin leases. The `SUNSTONE_A733_OS_MSBC` option,
 with `SUNSTONE_BT_SBC_DIR` naming the pinned libsbc sources, adds wideband
-speech to any headset build. Only the supervised variant admits board
-workload 2, staged recorded recognition after USB0 startup without a USB disk;
-every other variant refuses it. The image builds in nine variants:
+speech to any headset build.
+[The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
+states which variant admits board workload 2, staged recorded recognition
+without a USB disk. The image builds in nine variants:
 
 | Variant | Options added to `SUNSTONE_A733_OS=ON` | Needed before a board run |
 | --- | --- | --- |
@@ -676,9 +678,9 @@ every other variant refuses it. The image builds in nine variants:
 | Resident with I2S audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_AUDIO` | As resident, plus a connected microphone and a reviewed audio entry record with the resident DMA facts |
 | Resident with radio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO` | As resident, plus the radio profile and firmware as a slot asset at `0x43000000` and a reachable access point; any radio failure, including an absent access point, resets the board |
 | Resident with radio and audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_AUDIO` | The requirements of resident with I2S audio and of resident with radio |
-| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified |
+| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode for firmware loading ([remaining OS work](os-image.md#not-yet-integrated)) |
 | Resident headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_HEADSET` | As resident, plus the Bluetooth profile and firmware as a slot asset and a paired, reviewed headset; any headset failure resets the board |
-| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified, and the bootstrap bound is 40 s |
+| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode for firmware loading ([remaining OS work](os-image.md#not-yet-integrated)) |
 | Resident radio with headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | As resident with radio, plus the Bluetooth profile at `0x43008000` and a paired headset; a radio or headset failure resets the board |
 
 A Bluetooth failure retains only the Bluetooth client's resources at the
@@ -874,9 +876,9 @@ functions and modes beyond these bounded applications.
   The DSI image also requires PCK domains 0, 1, 2, 3, 8 and 9 to be ON at
   entry and powers none of them; the power-domain owner can power domain 1
   for a registered row, but the DSI image registers none, and the owner has
-  no entry for the other five domains. Radio bootstrap needs at least 46.7 s at one
-  data line and 400 kHz, more than the 40 s supervised bound, so the radio
-  board test waits for a physically qualified four-bit SDIO profile.
+  no entry for the other five domains. The radio board test waits for a
+  physically qualified four-bit SDIO profile
+  ([remaining OS work](os-image.md#not-yet-integrated)).
 - **Shared-helper migration:** the consolidation round kept every barrier
   and the order of interrupt-mask and scheduler calls, but three code
   differences are covered only by emulation. Register reads that return

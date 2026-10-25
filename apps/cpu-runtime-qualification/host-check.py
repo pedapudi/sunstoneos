@@ -92,6 +92,19 @@ int main(void) {
             else:
                 raise AssertionError(f'Reason {code} accepted')
             passed.append(f'reason-{code}-decoded')
+        # A report of another layout or session is refused before its error word is decoded.
+        for name, offset, value in [('magic', 0, 0), ('version', 8, 2), ('size', 16, host.REPORT_BYTES - 8),
+                                    ('epoch', 24, args.epoch + 1)]:
+            changed = bytearray(raw)
+            struct.pack_into('<Q', changed, offset, value)
+            struct.pack_into('<Q', changed, 48, 9)
+            try:
+                host.decode_report(changed, args.epoch)
+            except ValueError as error:
+                host.require(str(error) == 'No native report of this session.', f'Foreign {name} decoded as: {error}')
+            else:
+                raise AssertionError(f'Foreign {name} accepted')
+            passed.append(f'foreign-{name}-identity-before-reason')
         refused('truncated-report', lambda: host.decode_report(raw[:-1], args.epoch))
         refused('oversized-report', lambda: host.decode_report(raw + b'\0', args.epoch))
     host.save_json(args.output / 'result.json', {'passed': passed, 'geometry': g,

@@ -180,9 +180,10 @@ def validate_bundle(bundle):
 def decode_report(raw, epoch):
     require(type(epoch) is int and 0 < epoch < 2**64 and len(raw) == REPORT_BYTES, 'Report size or expected epoch differs.')
     magic, version, size, actual, deadline, state, error, core = struct.unpack_from('<8Q', raw)
+    # The error word has a meaning only in this session's report of this layout.
+    require((magic, version, size, actual) == (MAGIC, 3, REPORT_BYTES, epoch), 'No native report of this session.')
     require(not error, f'Native retained failure: {reason(error)}.')
-    require((magic, version, size, actual, state, error, core) == (MAGIC, 3, REPORT_BYTES, epoch, 4, 0, 0) and deadline,
-            'No matching successful native report.')
+    require((state, core) == (4, 0) and deadline, 'No matching successful native report.')
     cpus = []
     for i in range(8):
         offset = CPU_OFFSET + CPU_BYTES * i
