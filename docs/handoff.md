@@ -76,6 +76,21 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**The GPU firmware starts** (set `board-bundles-20261025-20`,
+`board-session-20261025-16/port-3-1`, record `s16-gfs-run`;
+`work/gpu-fw-start-1025` merged). After cold DDR and readiness, the start
+image ran on the vendor-default power path:
+- the secure configuration;
+- the firmware clock at 1008 MHz;
+- the `RGX_CR_TIMER`-based timing record;
+- 64-bit registers accessed as two 32-bit halves;
+- no `SOFT_RESET2`.
+
+It ended `COMPLETE GPU firmware start: started word 1`, and the ROM answered.
+The image leaves the GPU running, so port 3-1 needs a power removal before
+its next run. Nothing from the firmware binary was used, only the open DDK
+host sources (`docs/designs/gpu-firmware-start.md`).
+
 **CPU top operating points, step 1 passed on port 3-3** (set
 `cpu-top-opp-20261025/step1-set`, `board-session-20261025-17/port-3-3`,
 branch `work/cpu-top-opp-1025`). The kernel check passed. With cores 6 and 7
