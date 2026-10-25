@@ -7848,7 +7848,8 @@
  "primary-publication-probe.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/designs/native-refreeze-1025.md"
   ],
   "library": false,
   "pure_host": false,

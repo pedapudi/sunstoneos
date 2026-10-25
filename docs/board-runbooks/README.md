@@ -9,6 +9,10 @@ ranks 6 to 9 of the [ranked board test plan](../audit/board-test-plan.md):
    and its [bisection with a CPU0 return deadline](rank-8-workload-bisect.md)
 4. [Rank 9: native USB device channel](rank-9-usb.md)
 
+[Qualifying the refrozen native image](refreeze-qualification.md) runs the
+pre-scheduler, first-task, task-switch and deadline-workload diagnostics on
+the image built from `bringup` at `d502f8ea`, in one fresh port 3-3 lifetime.
+
 They start from the state that ranks 1 to 5 left on 2026-10-23. Both boards
 trained 12,288 MiB of DDR, passed the single-core kernel check and passed the
 forced-stall case. Each board now waits in the boot ROM's USB recovery mode
