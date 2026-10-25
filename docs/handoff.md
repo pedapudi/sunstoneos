@@ -135,6 +135,28 @@ regenerating.
     - The hold on ranks 7 and 8 is lifted. The first-task, task-switch and
       workload profiles for port 3-3 come next.
 
+- **Port 3-3, set `board-bundles-20261025-2`** (same lifetime, records
+  `u2-*`): ranks 7 and 8 in order, each launch followed by the 91-word
+  capture.
+  - **First task (`u2-ft-prepare`) and task switch (`u2-ts-prepare`):** both
+    returned on all eight cores. The capture after each equals the clean
+    capture in all 91 words; no secondary-power word changed.
+  - **Thermal reading (`u2-th-run`):** returned; the hottest sensor read
+    42.3 °C, below the 90 °C admission limit for the workload. The capture
+    after it is unchanged.
+  - **Full returning workload (`u2-tw-prepare`): did not return.** This is
+    the first board execution of the workload (32 floating-point rounds per
+    core, tick and SGI handlers, background tasks). The launcher started at
+    00:47:55 on 2026-10-25, and no new FEL instance appeared in the
+    following 6.7 hours; the USB device kept its pre-launch number. The
+    journal records `launch_attempted` with no transport failure. Nothing
+    after the launch was read, so the stopping point is unknown.
+  - The claim (`31032df3…`) is held. The timer step and rank 8 did not run.
+    B1 and the CPU clock and voltage runs stay blocked behind this result.
+  - **Needed from the user:** remove every power source from port 3-3, then
+    reconnect it in FEL mode. Port 3-1 still needs the same action before
+    the GPU wrapper-read probe.
+
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
 `main` is unchanged.
