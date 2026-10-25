@@ -95,6 +95,18 @@ further board run of each. Board runs test only predictions from those diffs.
   in `board-session-20261025-4/port-3-1` and `board-session-20261025-3/port-3-3`).
   All 21 predicted words matched on both boards, including SYSCTRL
   `0x03000008` = 2: bit 1 set, so the shared SRAM is routed to the CPU.
+  **The NPU computes correctly with the SRAM routed to it** (set
+  `board-bundles-20261025-7`, branch `work/npu-sram-route-1025` at
+  `43bbb1e7`, record `nr-npu` in `board-session-20261025-3/port-3-3`). The
+  image clears SYSCTRL `0x03000008` bit 1 while the NPU resets are held, as
+  U-Boot does at board init, and sets it again at EL3 before the ROM return.
+  Both jobs matched the reference: the first output's SHA-256 and every byte
+  of the second output. The run ended with status 0, a normal ROM return and
+  verified DRAM restoration. The `9e4adabf…` run without the routing step had
+  produced wrong, input-independent outputs, so the routing bit is the cause.
+  Before the run: IRQ97 captured, DCDC2 enabled at 800 mV (`nr-dcdc2`), fresh
+  cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered, so
+  another NPU startup needs a power removal.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
