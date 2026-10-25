@@ -3,7 +3,12 @@
 
 Pass --platform-build with a central CMake build whose a733-power-probe target
 supplies the platform; platform and providers then come from the current tree
-and only the five accepted TinyUSB objects are reused. --baseline only
+and only the five accepted TinyUSB objects are reused. With --base-monitor,
+the image links that monitor.c object in place of the central one: the
+board-qualified base image's monitor, built with the monitor's counter option,
+which --base-bundle's equivalence record names and whose image --base-run ran
+on the board with status 0. The counter option only sets the EL1 event-counter
+access registers before EL1 entry and adds no field to the result record. --baseline only
 reproduces the 2026-10-18 evidence: its accepted provider objects predate the
 current provider headers and are refused for current source."""
 import argparse
@@ -18,6 +23,9 @@ from returning_build import CENTRAL_PLATFORM,PROVIDER_UNITS,ROOT,digest,image_ob
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
 platform_arguments(p)
+p.add_argument('--base-monitor',type=Path,help='monitor.c object of the board-qualified base image, linked in place of the central one')
+p.add_argument('--base-bundle',type=Path,help='frozen base bundle whose equivalence.json names --base-monitor')
+p.add_argument('--base-run',type=Path,help='session directory of that base image\'s passing board run')
 p.add_argument('--transport',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-transport-only-20261018')
 # Per-object compiler dependencies of the accepted TinyUSB objects.
 p.add_argument('--transport-records',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-integration-20261018/frozen/image-objects.json')
@@ -27,6 +35,21 @@ if not a.platform_build and not a.baseline:
 # The accepted TinyUSB objects exist only in evidence.
 central=a.platform_build is not None
 platform=platform_from(a,e)
+base_monitor=None
+if a.base_monitor or a.base_bundle or a.base_run:
+    if not (central and a.base_monitor and a.base_bundle and a.base_run):
+        p.error('--base-monitor, --base-bundle and --base-run go together, with --platform-build')
+    equivalence=json.loads((a.base_bundle/'equivalence.json').read_text())
+    run=json.loads((a.base_run/'session.json').read_text())
+    if digest(a.base_monitor)!=equivalence['objects']['platform/a733/monitor.c.obj']['sha256'] or \
+       equivalence['image_sha256']!=digest(a.base_bundle/'image.elf'):
+        p.error('--base-monitor is not the monitor object of the base bundle\'s image')
+    if not (run.get('complete') is True and run['result']['status']==0 and run.get('image_sha256')==digest(a.base_bundle/'probe.bin')):
+        p.error('--base-run is not a passing board run of the base bundle\'s image')
+    platform.replace_platform_object('platform/a733/monitor.c',a.base_monitor.resolve())
+    base_monitor={'object':str(a.base_monitor.resolve()),'sha256':digest(a.base_monitor),
+                  'base_bundle':str(a.base_bundle.resolve()),'base_image_sha256':equivalence['image_sha256'],
+                  'base_run':str(a.base_run.resolve()),'base_run_image_sha256':run['image_sha256']}
 tiny=Path.home()/'.cache/sunstoneos/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973/src'
 flags=['-DSUNSTONE_A733_USB=1',f'-I{r}/platform/a733-storage-update',f'-I{r}/drivers/usb',f'-I{tiny}']
 config_pin=Path.home()/'.cache/sunstoneos/evidence/gpu-software-failure-20261018/snapshot/inputs/188-tusb_config.h'
@@ -41,7 +64,7 @@ recorded=image_object_closures(a.transport_records,'apps/gpu-render/main.c')
 platform.reuse(names,usb,{x['sha256']:recorded[x['sha256']] for x in usb if 'accepted' in x and x['sha256'] in recorded})
 assert len(platform.reused)==(len(CENTRAL_PLATFORM)+5 if central else 31),len(platform.reused)
 platform.link();platform.binary();platform.run()
-platform.record(__file__,{'transport_input_records_sha256':digest(transport/'input-identities.json')})
+platform.record(__file__,{'transport_input_records_sha256':digest(transport/'input-identities.json'),'base_monitor':base_monitor})
 for root,name in [(transport,'transport')]+([] if central else [(a.baseline.resolve(),'baseline')]):
  for source in ['input-identities.json','reused-objects.json']:
   shutil.copy2(root/source,e/(name+'-'+source))

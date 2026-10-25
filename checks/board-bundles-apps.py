@@ -541,8 +541,9 @@ def bundle8_outcomes(elf):
 def usb_origins(usb, origins, provider_new, v4_monitor):
     """Each object of a native USB image built from this tree: its origin and, for the platform and provider
     objects, its unit. Platform and provider objects must come from an image that passed, the base or bundle
-    6's new provider objects; the builder links this tree's monitor.c object, whose instructions must equal
-    rank-9-usb-v4's. Only the USB units and the accepted TinyUSB objects may be new."""
+    6's new provider objects. Its monitor.c object is the base's (apps/usb-returning/build.py --base-monitor) or
+    this tree's central one with rank-9-usb-v4's instructions. Only the USB units and the accepted TinyUSB
+    objects may be new."""
     known = dict(origins.known)
     for unit, path in provider_new.items():
         known.setdefault(sha(path), 'set-bundle-6')
