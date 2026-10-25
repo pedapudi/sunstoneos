@@ -212,6 +212,7 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/wrapper-write.c',
+               'apps/gpu-power-id/vendor-order.c',
                'apps/gpu-power-id/abandon.h', 'apps/gpu-power-id/power-abandon.c',
                'apps/gpu-power-id/platform-abandon.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
@@ -560,7 +561,9 @@ ROWS = [
                       'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
                       'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
                       'record and log, which name each read before it is issued, survive only on a return.'),
-    gpu_row('gpu-wrapper-write', 17, 'GPU wrapper writes with TOP5 ON and CORE6 not acknowledged', 'wrapper-write',
+    # Not admitted (docs/gpu-power.md): no vendor source writes these wrapper
+    # values, so preparation refuses the row.
+    {**gpu_row('gpu-wrapper-write', 17, 'GPU wrapper writes with TOP5 ON and CORE6 not acknowledged', 'wrapper-write',
             'COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked',
             'Either monitor status 1 with the GPU WRAPPER lines of all twelve accesses, three pairs of GPU WRAPPER '
             'stage lines, GPU WRAPPER result stage=0, snapshot 2 and FAIL GPU wrapper write: CORE6 not ON after three '
@@ -608,6 +611,58 @@ ROWS = [
                       'exception, the monitor does not return and only a power removal recovers the board; the '
                       'progress record survives only on a return. TOP5 OFF has not run on a board with CORE6\'s '
                       'transition outstanding; a refusal returns FAIL GPU OFF poll with the claim retained.'),
+     'admission': None,
+     'needs': 'Coordinator admission, which was refused: no vendor source writes the wrapper values of this row '
+              '(docs/gpu-power.md, "The wrapper-write probe is not admitted").'},
+    gpu_row('gpu-vendor-order', 18, 'GPU secure configuration in vendor order, then one GPU core identity read',
+            'vendor-order', 'COMPLETE GPU vendor order: identity 36.56.104.183, OFF and provider parked',
+            'Either monitor status 0 with GPU VENDOR identity raw=0x240038006800b7 ... matches=1, the restore lines, '
+            'snapshot 2 and COMPLETE GPU vendor order: identity 36.56.104.183, OFF and provider parked; or status 1 '
+            'with a GPU VENDOR identity line of another value and FAIL GPU vendor order: identity not 36.56.104.183, '
+            'OFF and provider parked; or no return. A return is followed by a responsive ROM. Record every line of '
+            'kernel.log and the progress record at result.bin offset 128, which holds the number of the access in '
+            'flight and the value of each completed access.',
+            'apps/gpu-power-id, vendor-order variant (apps/gpu-power-id/vendor-order.c): the power-only ON sequence '
+            'through its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release; the '
+            'CORE6 status poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and '
+            'CORE6 lines, identity Device-nGnRnE mapping checks of the wrapper, SMC0 and GPU core pages, and these '
+            'accesses in order: 32-bit reads of 0x01880014 (drm_ctrl), 0x01880010 (irq_ctrl), 0x01880018 '
+            '(mult_core_cnt) and 0x0a0000b0 (SMC0, SMC_DRM_GPU_HW_RST); the vendor sunxi_secure_config writes, 2 to '
+            '0x0a0000b0 and then 0 to 0x01880014, each read back; the GPU core identity as the vendor reads it, '
+            'two 32-bit reads of 0x01800024 and then 0x01800020; then 0x01880014 and 0x0a0000b0 written back to their entry values, each read back. It then '
+            'powers CORE6 and TOP5 OFF, from the unacknowledged ON through the controller\'s OFF steps if needed, '
+            'takes snapshot 2 and parks the provider. Before each access the image writes the access number into '
+            'the progress record at result offset 128 and prints a GPU VENDOR reading or writing line; after it, it '
+            'stores the value in the record. docs/gpu-power.md, "The vendor-order probe makes the vendor\'s secure '
+            'configuration before the core read", maps each result to its meaning. It is the last step of its '
+            'lifetime, after the cold DDR start and the provider-readiness row.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU vendor order: identity not 36.56.104.183, OFF and provider parked`, after the GPU '
+                      'VENDOR identity line and the restore: the core answered with another value; record it',
+                      '`FAIL GPU vendor order refused before clock and reset progress`, `GPU vendor order mapping` or '
+                      '`GPU vendor order time budget`: no wrapper, SMC0 or core word was accessed, and no OFF ran',
+                      '`FAIL GPU ON poll` after the GPU VENDOR result line: the controller failed at the last status '
+                      'observation, after the restore; no OFF ran',
+                      '`FAIL GPU OFF begin`, `GPU OFF deadline` or `GPU OFF poll` after snapshot 2: the OFF from the '
+                      'unacknowledged ON was refused or failed; record snapshot 2',
+                      '`FAIL GPU vendor order`: an internal refusal before the access it names'],
+            admission='GPU-window and SMC0 exception: this row alone, with TOP5 ON, the GPU clock open, its reset '
+                      'released and CORE6 not acknowledged, makes the two writes of the vendor sunxi_secure_config '
+                      '(sunxi_platform.c:964-979) in its order and with its values: 2 to SMC0 0x0a0000b0 and 0 to the '
+                      'GPU wrapper drm_ctrl 0x01880014; then two 32-bit reads of the GPU core identity, 0x01800024 and '
+                      '0x01800020; then '
+                      'writes both words back to the values it read before them. Each access is a Device-nGnRnE access '
+                      'after an identity mapping check of its page; each write is read back. It also reads 0x01880010, '
+                      '0x01880018 and the SMC0 word before the writes; these reads and the readbacks are the '
+                      'probe\'s own, not the vendor\'s. The coordinator accepted the SMC0 write as part of the GPU grant for this row, '
+                      'because the vendor driver makes it on every GPU power-on. The A733 user manual places SMC0 at '
+                      '0x0A000000-0x0A00FFFF in the memory controller block (MEMC0, interrupt 213, MEMC0_SMC0) and '
+                      'gives no register description; the name SMC_DRM_GPU_HW_RST of offset 0xb0 comes only from the '
+                      'vendor source. Outside these words the row adds an OFF of CORE6 and TOP5 from the '
+                      'unacknowledged ON. Risk: a non-secure write that SMC0 refuses would signal an asynchronous '
+                      'abort that this image leaves masked, so only the readback shows it; a core read that never completes stops the CPU without an exception, the monitor does '
+                      'not return and only a power removal recovers the board, with the SMC0 and drm_ctrl values '
+                      'left as written; the progress record survives only on a return.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -789,8 +844,8 @@ def returning_timeout(path):
 def admit(row, admitted):
     """The admitted value names this row's build."""
     expected = row.get('admission')
-    require(expected is not None, f'No owning package has named the admission values of {row["name"]}; '
-                                  'the row is refused until it does.')
+    require(expected is not None, row.get('needs') and f'{row["name"]} is refused: {row["needs"]}' or
+            f'No owning package has named the admission values of {row["name"]}; the row is refused until it does.')
     require(isinstance(admitted, dict), 'prepare() returned no admission record.')
     wrong = sorted(k for k, v in expected.items() if admitted.get(k) != v)
     require(not wrong, 'The admitted bundle is not this row\'s build: ' +

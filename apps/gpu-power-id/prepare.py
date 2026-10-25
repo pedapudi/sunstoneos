@@ -4,7 +4,8 @@
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
 output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
 (apps/gpu-provider-ready/build.py), and the power-only, identity,
-wrapper-read and wrapper-write variants of apps/gpu-power-id/build.py. The function copies the image, its binary,
+wrapper-read, wrapper-write and vendor-order variants of
+apps/gpu-power-id/build.py. The function copies the image, its binary,
 its build record and its focused host-check result into the bundle with the
 kernel runner's host tools, and validate() checks the copy:
 
@@ -29,7 +30,10 @@ kernel runner's host tools, and validate() checks the copy:
   wrapper accesses, and every host-check case made only accesses of that
   table, in its order, and no access of the GPU core window; each write was
   followed by its readback, and once a stage wrote, the restore ran in full
-  unless the controller failed or the check refused an access.
+  unless the controller failed or the check refused an access;
+- the vendor-order image's vendor_steps table holds exactly its fourteen
+  accesses, every host-check case made only accesses of that table, in its
+  order, and every vendor write was followed by its restore.
 
 Nothing here contacts a device.
 """
@@ -49,19 +53,25 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'wrapper-write': 15}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'wrapper-write': 15, 'vendor-order': 12}
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'wrapper-write': 1}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'wrapper-write': 1, 'vendor-order': 1}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'wrapper-write': 'ww-none'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'wrapper-write': 'ww-none', 'vendor-order': 'vo-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 # The wrapper-write image's access table: address, value, write (1) or read (0).
 WRAPPER_STEPS = [(0x01880104, 0, 0), (0x01880100, 0, 0), (0x01880100, 0x00640064, 1), (0x01880100, 0, 0),
                  (0x01880104, 0x100, 1), (0x01880104, 0, 0), (0x01880104, 0x107, 1), (0x01880104, 0, 0),
                  (0x01880104, 0, 1), (0x01880104, 0, 0), (0x01880100, 0, 1), (0x01880100, 0, 0)]
+# The vendor-order image's access table: address, value, kind (0 read32, 1
+# write32, 2 write32 of the value read by the row named in value).
+VENDOR_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x01880018, 0, 0), (0x0a0000b0, 0, 0),
+                (0x0a0000b0, 2, 1), (0x0a0000b0, 0, 0), (0x01880014, 0, 1), (0x01880014, 0, 0),
+                (0x01800024, 0, 0), (0x01800020, 0, 0), (0x01880014, 0, 2), (0x01880014, 0, 0),
+                (0x0a0000b0, 3, 2), (0x0a0000b0, 0, 0)]
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -111,6 +121,12 @@ def table(elf, name, size):
 def wrapper_words(elf):
     """The wrapper_words table of a linked wrapper-read image."""
     return list(struct.unpack('<4I', table(elf, 'wrapper_words', 16)))
+
+
+def vendor_steps(elf):
+    """The vendor_steps table of a linked vendor-order image."""
+    data = table(elf, 'vendor_steps', 12 * len(VENDOR_STEPS))
+    return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(VENDOR_STEPS))]
 
 
 def wrapper_steps(elf):
@@ -222,6 +238,22 @@ def validate(row, output):
                     require(not set(rows) & set(range(2, 8)) or case['failure'] == 'GPU ON poll' or
                             set(range(8, 12)) <= set(rows), 'A host-check case left a stage write unrestored.')
             value['wrapper_steps'] = [[hex(a), hex(v), w] for a, v, w in WRAPPER_STEPS]
+        vendor = 'vendor_access' in names or 'vendor_steps' in names
+        require(vendor == (variant == 'vendor-order'), 'The image\'s vendor-order client does not match its variant.')
+        if variant == 'vendor-order':
+            require(vendor_steps(output / 'image.elf') == VENDOR_STEPS,
+                    'The vendor_steps table is not the fourteen vendor-order accesses in their order.')
+            for case in checked['cases']:
+                rows = [a[0] for a in case['vo_accesses']]
+                require(rows == sorted(set(rows)) and all(
+                    a[1] == hex(VENDOR_STEPS[r][0]) and a[2] == int(VENDOR_STEPS[r][2] in (1, 2))
+                    for r, a in zip(rows, case['vo_accesses'])),
+                    'A host-check case made an access outside the vendor-order table or its order.')
+                require(not case['gpu_reads'], 'A host-check case read the GPU core window outside the table.')
+                if 'refused' not in case:
+                    require((4 not in rows or {12, 13} <= set(rows)) and (6 not in rows or {10, 11} <= set(rows)),
+                            'A host-check case left a vendor write unrestored.')
+            value['vendor_steps'] = [[hex(a), hex(v), k] for a, v, k in VENDOR_STEPS]
         if variant == 'wrapper-read':
             require(wrapper_words(output / 'image.elf') == WRAPPER_WORDS,
                     'The wrapper_words table is not the four GPU wrapper words in their order.')

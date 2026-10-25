@@ -390,10 +390,12 @@ domain never powered up, or it is not wired to this PPU.
   the bus and core clocks, and sets the update bit. It never reads CORE6.
   SunstoneOS does the same apart from the GPU PLL: its GPU clock runs from
   PERI0 400 MHz, and the readback above shows that selection in effect.
-  Each later power-on also calls `sunxi_secure_config` just before the
-  first GPU core access; it writes the SMC0 word `0x0a0000b0` and the
+  Each power-on of the device also calls `sunxi_secure_config` just
+  before `RGXStart`; it writes the SMC0 word `0x0a0000b0` and the
   wrapper's `drm_ctrl`
   ([below](#the-vendor-code-never-writes-the-q-channel-or-delay-registers)).
+  The vendor's first GPU core read precedes it
+  ([below](#the-vendor-reads-the-core-identity-before-any-secure-configuration)).
 - **Vendor domain table** (`pck600_domains.c:554`). It pins a CORE6 delay
   row: `0x1f1f1f`, `0x1f1f`, `0x08080808`, `0x0808` and `8` at `0x170`,
   `0x174`, `0xc00`, `0xc04` and `0xc10`, the same row as TOP5's.
@@ -583,13 +585,14 @@ The vendor writes, in the order of one GPU power-on:
    calls `RGXDoStart` (865–889). Without `SUPPORT_TRUSTED_DEVICE` it calls
    `pfnTDSystemSecureConfig`, which `sysconfig.c:371` sets to
    `sunxi_secure_config` (`sunxi_platform.c:964–979`), and then `RGXStart`,
-   the first GPU core register access. `sunxi_secure_config` writes 2 to
+   the register accesses of the GPU start sequence; the core identity and
+   timer reads come earlier (next section). `sunxi_secure_config` writes 2 to
    `0x0a0000b0` (`SMC_DRM_GPU_HW_RST`, in the SMC0 DRAM firewall) and 0 to
    wrapper `+0x14` (`drm_ctrl`: `drm_bypass` bit 0, `tb_bypass` bit 8).
 
 The only wrapper write of the active vendor build is therefore `drm_ctrl`
 0, after TOP5, CORE6 policy 8, the clocks and the reset release, and
-immediately before the first GPU core access. It sets DRAM security
+immediately before `RGXStart`. It sets DRAM security
 bypasses, which `sunxi_dvfs_ctrl.c` declares with no power meaning.
 
 The BSP 1.4.6 revision `142ce05b` of the same files writes no CORE6 word
@@ -602,7 +605,13 @@ So no reference supplies a value for `pwr_qchan_cfg`, and none shows
 software driving CORE6's Q-Channel. The probe below takes its values from
 the field definitions, and its one delay value from the commented-out line.
 
-### The wrapper-write probe sets the core-0 controls one at a time
+### The wrapper-write probe is not admitted
+
+The coordinator did not admit this probe to a board: no vendor source
+writes `pwr_cmp_dly` or `pwr_qchan_cfg`, and holding `q_accept` HIGH by
+software has no reference. Its bundle row stays in the table as refused.
+The vendor-order probe below replaces it as the next board step. The
+design stays recorded here because its abandon call is reused.
 
 The wrapper-write variant (`apps/gpu-power-id/wrapper-write.c`, build and
 check option `--wrapper-write`) runs the power-only ON sequence and then,
@@ -832,6 +841,179 @@ A lower-risk variant would issue the wrapper accesses from a DMA engine, so
 that the CPU keeps running and can report an access that never completes.
 It needs its own design, and a stalled DMA access could still hold an
 interconnect path; it is not evaluated here.
+
+### The vendor reads the core identity before any secure configuration
+
+The vendor's first GPU core accesses, traced in the same pinned sources:
+
+1. **Probe.** `PVRSRVCommonDeviceCreate` calls `SysDevInit`
+   (`pvrsrv.c:2258`), which runs `sunxi_platform_init` (`sysconfig.c:281`):
+   TOP5 ON, CORE6 PWCR 0 and policy 8, clocks and reset release. It then
+   calls `RGXRegisterDevice` (`pvrsrv.c:2348`), whose
+   `RGXBvncInitialiseConfiguration` (`rgxinit.c:5267`) reads the identity
+   from the hardware when no load parameter names it (`rgxbvnc.c:694`).
+   Its request for system power ON (`rgxbvnc.c:687–690`) changes nothing,
+   because `sunxi_platform_init` has already marked the GPU ON
+   (`sunxi_platform.c:918`). The read is `OSReadHWReg64` of
+   `RGX_CR_CORE_ID__PBVNC` (`0x01800020`, `rgxbvnc.c:119`), which the
+   kernel build defines as two 32-bit `readl` calls, `+0x24` and `+0x20`,
+   combined with `|` (`osfunc.h:1086–1095`); C leaves the order of the
+   two operands to the compiler, and the source names `+0x24` first. No
+   CORE6 status poll and no `sunxi_secure_config` precede that read. It is
+   the first GPU core access of a boot. The power/identity probe
+   `fd3d5839…` read the same register with one 64-bit load, a width the
+   vendor never uses on this bus, which is a further candidate cause of
+   its stall.
+2. **Every later power-on.** `RGXPostPowerState` calls `RGXTimeCorrBegin`
+   (`rgxpower.c:1031`), which reads `RGX_CR_TIMER` (`0x01800160`,
+   `rgxtimecorr.c:300`, `rgxfwutils.h:349`), and only then `RGXDoStart`
+   (1036) with `sunxi_secure_config` followed by `RGXStart`.
+3. **After the secure configuration.** BXM `36.V.104.183` has
+   `SYS_BUS_SECURE_RESET` (`rgxconfig_km_36.V.104.183.h:94`), so
+   `RGXStart` first writes 0 to `RGX_CR_SYS_BUS_SECURE` (`0x0180a100`) and
+   reads it back as a fence (`rgxstartstop.c:859–860`), before its soft
+   reset sequence (876).
+
+So the vendor reads the core identity with the secure configuration
+unmade, and reads the core timer before making it on each power-on. The
+missing secure configuration does not by itself explain the two stalled
+core reads: the vendor makes the same read without it. What the vendor
+had in place before that read, and `fd3d5839…` did not, is CORE6 PWCR 0
+and policy 8 and its own clock setup; the vendor never waits for CORE6
+status 8.
+
+### The vendor-order probe makes the vendor's secure configuration before the core read
+
+The vendor-order variant (`apps/gpu-power-id/vendor-order.c`, build and
+check option `--vendor-order`) runs the power-only ON sequence through the
+reset release and then makes the vendor's secure configuration and one
+GPU core identity read. It is implemented and host-checked; it has not run
+on a board. The coordinator chose this order: the secure configuration
+first, because the vendor makes it on every power-on before `RGXStart`;
+the identity read second, because it is the vendor's first core read and
+its value is checkable. The trace above shows that the vendor's own first
+identity read comes before any secure configuration, which a later image
+can repeat by leaving the two writes out.
+
+Sequence:
+
+1. Snapshot 0, then ON with the client deadline as the controller's bound.
+   The CORE6 status poll for 8 runs at most 200 ms as an observation;
+   `GPU VENDOR core6` prints whether status 8 came, the last status and
+   the wait. Status 8 is not required.
+2. Snapshot 1 and the controller and CORE6 lines. The accesses are refused
+   unless the controller is ON or has read MISR after the reset release,
+   the step before its final status poll, so the GPU clock is open and its
+   reset released.
+3. Identity Device-nGnRnE mapping checks of the wrapper page and the SMC0
+   page for read and write, and of the GPU core page for read.
+4. The rows of `vendor_steps`, in order. Before each access the client
+   writes the row number and a counter stamp into the progress record at
+   result offset 128 (magic `GPUVND01`) and prints the access; after it,
+   it stores the 32-bit value in the record and prints it. The client
+   clears the value slots at entry. Each access has `DSB SY` before and
+   after.
+
+| # | Access | Purpose |
+| --- | --- | --- |
+| 1 | read `0x01880014` | `drm_ctrl` entry value |
+| 2 | read `0x01880010` | `irq_ctrl` entry value |
+| 3 | read `0x01880018` | `mult_core_cnt`, 2 on port 3-1 |
+| 4 | read `0x0a0000b0` | SMC0 `SMC_DRM_GPU_HW_RST` entry value |
+| 5, 6 | write `0x0a0000b0` ← 2, read back | `sunxi_platform.c:969–970` |
+| 7, 8 | write `0x01880014` ← 0, read back | `sunxi_platform.c:973–975` |
+| 9, 10 | read `0x01800024`, then `0x01800020` | Core identity, high word first, as `osfunc.h:1086–1095` names them for `rgxbvnc.c:119` |
+| 11, 12 | write `0x01880014` ← row 1's value, read back | Restore |
+| 13, 14 | write `0x0a0000b0` ← row 4's value, read back | Restore |
+
+Rows 1 to 4, 6, 8 and the restore are the probe's own: the vendor reads
+none of these words and reads back neither write.
+
+5. One more CORE6 status observation, then the `GPU VENDOR result` line.
+6. OFF: from ON, the existing OFF; otherwise the abandon call of the
+   wrapper-write variant, which turns the controller's waiting ON into its
+   OFF steps. Snapshot 2 follows every OFF attempt; then the ownership
+   proofs and the provider park.
+7. The identity `36.56.104.183` (`0x240038006800b7`) ends with `COMPLETE
+   GPU vendor order: identity 36.56.104.183, OFF and provider parked`
+   (status 0). Any other value ends with `FAIL GPU vendor order: identity
+   not 36.56.104.183, OFF and provider parked` (status 1) after the park.
+
+These paths return without OFF, with the claim retained: a controller
+failure (`GPU ON poll`, also at the observation after the restore), the
+refusal before the reset release, a wrong mapping, the time budget, and an
+OFF failure (after snapshot 2). A core read that does not return leaves
+the SMC0 word at 2 and `drm_ctrl` at 0 until the power removal.
+
+What each result means:
+
+- **The read returns `36.56.104.183`.** The GPU core answers in this
+  power state with CORE6 not reporting ON, so CORE6 status does not gate
+  core register access. This state differs from that of `fd3d5839…` by
+  CORE6 PWCR 0 and policy 8, the delay row and the secure configuration.
+  A later image that leaves out the two writes, as the vendor's probe
+  does, shows whether the secure configuration matters.
+- **The read returns another value.** The core answers, but not with its
+  identity. 0 or all ones would mean that the read reached a block that
+  is held in reset, isolated or unpowered; a value with branch 0 would be
+  the legacy format, which the vendor then reads as `CORE_REVISION` and
+  `CORE_ID` (`rgxbvnc.c:131–132`). The value and the CORE6 snapshot after
+  OFF decide the next step.
+- **No return.** The core read stalls even after the vendor's secure
+  configuration and CORE6's vendor writes. Nothing reaches the host, and
+  the progress record survives only on a return. Among the remaining
+  differences from the vendor are its GPU PLL as clock parent and its
+  timing between steps, and CORE6 power returns as the leading question.
+- **A write readback that differs** shows that the register ignores
+  writes in this state: SMC0 may be secure-only. A refused non-secure
+  write could also signal an asynchronous abort; this image routes it to
+  EL1 (the monitor sets `SCR_EL3` to `0x505`, so `EA` is 0) and never
+  unmasks it, so it would stay pending and the readback is the only
+  evidence.
+
+**Write exception for coordinator acceptance.** The state is TOP5 ON, the
+GPU clock open, its reset released and CORE6 not acknowledged. The image
+writes 2 to SMC0 `0x0a0000b0` and then 0 to the wrapper's `drm_ctrl`
+`0x01880014`: the two writes of `sunxi_secure_config`, in its order and
+with its values. After the core read it writes both back to the values it
+read before them. Each write is a 32-bit Device-nGnRnE store followed by a
+readback. It also reads `0x01880010`, `0x01880018` and the SMC0 word
+before the writes, and makes two 32-bit reads of the core identity,
+`0x01800024` and `0x01800020`. The coordinator accepted the SMC0 write as part of
+the GPU grant for this variant, because the vendor driver makes it on
+every GPU power-on. The A733 user manual places SMC0 at
+`0x0A000000`–`0x0A00FFFF` in the memory controller block (MEMC0,
+interrupt 213, `MEMC0_SMC0`) and describes none of its registers; the name
+of offset `0xb0` comes only from the vendor source.
+
+**Performance design note.** The probe runs once per board lifetime and
+has no hot path. Its cost is 14 accesses, three translation walks (two
+for read and write), three 35-word snapshots and at most 200 ms of status
+observation in one-tick pauses. The client refuses to start unless the
+client deadline leaves 200 ms and a 300 ms reserve after the ON begins.
+`DSB SY` on both sides of each access orders the progress record in DRAM
+against the device access, and each write against its readback
+(performance architecture section 1.2). Failures fall in the existing
+classes of section 1.8.
+
+The host check (`check.py --vendor-order`, twelve cases) runs the linked
+client against modeled controller results. It requires:
+
+- the three pages checked before the first access;
+- every access to be the table row that its progress record names, in
+  order, after its log line and before any OFF call;
+- the restore writes to carry the entry values, and the progress record
+  to hold each value.
+
+The cases are the board's state, CORE6 ON during the observation, an
+identity of 0, a controller refusal, an ON before the reset release, a
+wrong SMC0 translation, an OFF failure, a refused abandon, a short client
+deadline and a controller failure after the restore. Two seeded table
+mutants, an SMC0 write of 3 and an SMC0 restore that takes `drm_ctrl`'s
+entry value, are each refused at that write.
+
+The probe is bundle row 18. It is the last step of its lifetime, and runs
+after the cold DDR start and the provider-readiness row (bundle row 11).
 
 ### The delay-row writes stay
 

@@ -188,6 +188,9 @@ a prefix of them.
 
 ## The wrapper-write variant writes two wrapper words in three stages
 
+The coordinator did not admit this variant to a board; its values have no
+vendor source.
+
 `wrapper-write.c` builds the wrapper-write variant the way `wrapper.c`
 builds the wrapper-read variant, and links `power-abandon.c` and
 `platform-abandon.c` in place of the shared controller and platform
@@ -212,7 +215,7 @@ result offset 128 (magic `GPUWRW01`) and a `GPU WRAPPER reading` or
 `writing` line name it. The completion text is `COMPLETE GPU wrapper
 write: CORE status 8, OFF and provider parked`; CORE6 not ON ends with
 `FAIL GPU wrapper write: CORE6 not ON after three stages, OFF and provider
-parked` after the park. [gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-sets-the-core-0-controls-one-at-a-time)
+parked` after the park. [gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-is-not-admitted)
 gives the design, the write exception and the meaning of each result.
 
 `check.py --wrapper-write` runs fifteen cases on the linked image and
@@ -222,6 +225,28 @@ GPU core window access.
 Bundle preparation requires the image's `wrapper_steps` table to hold
 exactly the twelve rows and every host-check case to access only those
 rows in order.
+
+## The vendor-order variant makes the vendor's secure configuration, then reads the core identity
+
+`vendor-order.c` builds the vendor-order variant like the wrapper-write
+variant, with the same abandon calls. After the power-only ON sequence
+through the reset release, with the CORE6 status poll kept only as a 200 ms
+observation, it reads `drm_ctrl` (`0x01880014`), `irq_ctrl`
+(`0x01880010`), `mult_core_cnt` (`0x01880018`) and the SMC0 word
+`0x0a0000b0`; writes 2 to `0x0a0000b0` and then 0 to `0x01880014`, as the
+vendor `sunxi_secure_config` does, each read back; reads the core identity
+as the vendor does, as two 32-bit reads of `0x01800024` and `0x01800020`; writes both words back to their entry values,
+each read back; then powers CORE6 and TOP5 OFF, takes snapshot 2 and parks
+the provider. The fourteen accesses are the rows of `vendor_steps`; the
+progress record at result offset 128 (magic `GPUVND01`) holds the row in
+flight and every completed value. The completion text is `COMPLETE GPU
+vendor order: identity 36.56.104.183, OFF and provider parked`; another
+identity ends with `FAIL GPU vendor order: identity not 36.56.104.183, OFF
+and provider parked` after the park.
+[gpu-power.md](../../docs/gpu-power.md#the-vendor-order-probe-makes-the-vendors-secure-configuration-before-the-core-read)
+gives the vendor trace, the write exception and the meaning of each
+result. `check.py --vendor-order` runs twelve cases, and bundle
+preparation requires the image's table to hold exactly the fourteen rows.
 
 ## Build and evidence
 
@@ -234,10 +259,10 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ```
 
 Add `--power-only` to both commands for the power-only variant,
-`--wrapper-read` for the wrapper-read variant or `--wrapper-write` for the
-wrapper-write variant.
+`--wrapper-read` for the wrapper-read variant, `--wrapper-write` for the
+wrapper-write variant or `--vendor-order` for the vendor-order variant.
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
+`tools/prepare-board-bundles.py` (rows 11 to 13 and 16 to 18 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access and
