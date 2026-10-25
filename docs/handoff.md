@@ -95,7 +95,16 @@ completed cycle 1 ON, with PLL_GPU0 locked at 1008 MHz, then reported a
 resource-release failure (`GPU resources result=3 error=7 stage=8`). Cycle 2
 did not re-enable the PLL, and its ON poll failed. The image returned to the
 ROM with status 1, and the claim was closed as failed. Decoding is in progress;
-the next GPU run needs a power removal. `work/sd-uhs-1025` (read-only UHS-I
+the next GPU run needs a power removal.
+The decode showed that OFF had completed. Cycle 2 failed because TOP5 OFF
+closes the GPU master gates. The second attempt (set
+`board-bundles-20261025-12`, `board-session-20261025-9/port-3-1`, record
+`s12-gpo-run`) logged them. Cycle 1 ON and OFF passed again. After TOP5 OFF,
+AHB `0x5c0` bit 7 and MBUS `0x5e0` bit 16 read clear (`0x110103ff` to
+`0x1101037f`, `0xf1055803` to `0xf1045803`). Cycle 2 then relocked PLL_GPU0,
+but TOP5 ON timed out with both gates closed (`error=7 step=48`), and the
+image returned to the ROM with status 1. What the vendor stack does to power
+TOP5 on again after an OFF is under investigation. `work/sd-uhs-1025` (read-only UHS-I
 SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
 board run is `docs/board-runbooks/sd-uhs.md`.
 
