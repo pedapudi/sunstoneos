@@ -87,10 +87,17 @@ shared data:
   `ullPortInterruptNestings` and `ullPortYieldRequired` keep their names and
   8-byte stride because drivers and checks outside the port read them.
 
-Lock acquisition and release keep their `DMB SY`, `DSB SY`, `SEV` and `ISB`.
-Weaker acquire and release ordering, and `PMR` writes without `DSB`, wait for a
-supervised eight-core board session, as
-[the design](designs/smp-heterogeneous.md) requires.
+The lock gate keeps its `DMB SY` after a successful trylock and its `DMB SY`,
+`DSB SY`, `SEV` and `ISB` around the release store. The recursion count and
+ownership bits that only the holder or its core touches are read and written
+without `DSB`, and the IRQ exit, wake placement and late ticks have lighter
+paths. These four changes are implemented and checked in emulation only; they
+merge after the board session in
+[the multicore performance runbook](board-runbooks/multicore-performance-session.md),
+and the [multicore performance design](designs/multicore-performance-1025.md)
+gives their references and measurements. Weaker acquire and release ordering
+of the gate, and `PMR` writes without `DSB`, wait for a supervised eight-core
+board session, as [the design](designs/smp-heterogeneous.md) requires.
 
 ### Measured cost
 
