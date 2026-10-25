@@ -89,8 +89,13 @@ OFF order) is the default GPU path. After a cold DDR start:
   `refreeze-el3-20261025/bundles-22501205`), the pre-scheduler, first task,
   task switch and three deadline-workload runs all returned with DRAM
   restored, and all seven 91-word captures equal the clean capture.
-GPU OFF from ON and the second ON have not yet run; the port 3-1 set is
-`board-bundles-20261025-9/port-3-1`. `work/sd-uhs-1025` (read-only UHS-I
+GPU OFF from ON then ran once on port 3-1 (`board-session-20261025-7/port-3-1`,
+record `s11-gpo-run`). Cold DDR and readiness passed. The power-only image
+completed cycle 1 ON, with PLL_GPU0 locked at 1008 MHz, then reported a
+resource-release failure (`GPU resources result=3 error=7 stage=8`). Cycle 2
+did not re-enable the PLL, and its ON poll failed. The image returned to the
+ROM with status 1, and the claim was closed as failed. Decoding is in progress;
+the next GPU run needs a power removal. `work/sd-uhs-1025` (read-only UHS-I
 SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
 board run is `docs/board-runbooks/sd-uhs.md`.
 
