@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant, with --probe-read the probe-read variant or with
---vendor-clk the vendor-clk variant, on the
-qualified returning PMIC platform."""
+wrapper-read variant, with --probe-read the probe-read variant, with
+--vendor-clk the vendor-clk variant or with --vendor-state the vendor-state
+variant, on the qualified returning PMIC platform."""
 import argparse
 import hashlib
 import json
@@ -53,6 +53,20 @@ def shared_layouts(path, names):
 
 VCLK_EXPECT = ('COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, '
                'GPU left powered')
+VST_EXPECT = ('COMPLETE GPU vendor-state: identity 36.56.104.183 at 1008 MHz from the GPU PLL, DCDC4 960 mV '
+              'and the BL31 security setup, GPU left powered')
+# The vendor-state variant's copies, each compiled in place of the shared
+# unit that defines the symbol; vendor-state-units.py checks each copy.
+VENDOR_STATE = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/vendor-state.c',
+                'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/vendor-state-power.c',
+                'drivers/gpu/a733_gpu_platform_native.c': 'apps/gpu-power-id/vendor-state-native.c',
+                'drivers/gpu/a733_gpu_resources.c': 'apps/gpu-power-id/vendor-state-resources.c',
+                'platform/a733/monitor.c': 'apps/gpu-power-id/vendor-state-monitor.c',
+                'drivers/power/a733_pmic.c': 'apps/gpu-power-id/vendor-state-pmic.c',
+                'drivers/power/a733_pmic_consumer.c': 'apps/gpu-power-id/vendor-state-consumer.c'}
+# Units that only the vendor-state variant replaces, with their symbols.
+VENDOR_STATE_UNITS = [('platform/a733/monitor.c', 'monitor_init'), ('drivers/power/a733_pmic.c', 'a733_pmic_init'),
+                      ('drivers/power/a733_pmic_consumer.c', 'a733_pmic_consumer_init')]
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                 'restored, GPU left powered')
 
@@ -68,8 +82,11 @@ def main():
                         help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
     parser.add_argument('--vendor-clk', action='store_true',
                         help="one ON in the vendor clock and reset order, then the identity read; no OFF")
+    parser.add_argument('--vendor-state', action='store_true',
+                        help="BL31's EL3 security writes, DCDC4 at 960 mV, one ON with the GPU PLL at 1008 MHz, "
+                             "then the identity read; no OFF")
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read + args.vendor_clk > 1:
+    if args.power_only + args.wrapper_read + args.probe_read + args.vendor_clk + args.vendor_state > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -81,6 +98,10 @@ def main():
     oldroot = '/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024'
     flags = base['compile'][0][:base['compile'][0].index('-MD')]
     flags = [v.replace(oldroot, str(ROOT)) for v in flags]
+    # The monitor's own flags (-mgeneral-regs-only), for the vendor-state monitor copy.
+    monitor_flags = base['compile'][1][:base['compile'][1].index('-MD')]
+    assert base['compile'][1][-1].endswith('/monitor.obj') and '-mgeneral-regs-only' in monitor_flags
+    monitor_flags = [v.replace(oldroot, str(ROOT)) for v in monitor_flags]
     units = [
         ('apps/gpu-power-id/main.c', 'kernel_main'),
         ('drivers/gpu/a733_gpu_platform.c', 'a733_gpu_platform_init'),
@@ -89,7 +110,7 @@ def main():
         ('drivers/gpu/a733_gpu_resources.c', 'a733_gpu_resources_init'),
         ('drivers/gpu/a733_gpu_resources_native.c', 'a733_gpu_resources_native_init'),
         ('drivers/power/a733_power_domains.c', 'a733_power_domains_init'),
-    ]
+    ] + (VENDOR_STATE_UNITS if args.vendor_state else [])
     from elftools.elf.elffile import ELFFile
     replacements = {}
     commands, new = [], []
@@ -117,8 +138,14 @@ def main():
         if args.vendor_clk:
             source = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/vendor-clk.c',
                       'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/vendor-clk-power.c'}.get(source, source)
+        # The vendor-state variant compiles each copy of VENDOR_STATE in place
+        # of its shared unit, the monitor copy with the monitor's flags.
+        unit_flags = flags
+        if args.vendor_state:
+            unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
+            source = VENDOR_STATE.get(source, source)
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
-        command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
+        command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
         replacements[matches[0]['object']] = str(obj)
@@ -140,7 +167,11 @@ def main():
         elif value.startswith('-Wl,-Map,'):
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
-    assert len(reused) == 30 and len(new) == 7
+    assert (len(reused), len(new)) == ((27, 10) if args.vendor_state else (30, 7)), (len(reused), len(new))
+    if args.vendor_state:
+        assert sorted(item['source'] for item in new) == sorted(list(VENDOR_STATE.values()) + [
+            'drivers/gpu/a733_gpu_platform.c', 'drivers/power/a733_power_domains.c',
+            'drivers/gpu/a733_gpu_resources_native.c']), new
     # Audit every input object, not a guessed list of layout consumers. A
     # complete power/platform DWARF declaration identifies the three objects
     # using the enlarged structures; all must be replaced in this candidate.
@@ -184,13 +215,25 @@ def main():
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'probe-read' if args.probe_read else 'vendor-clk' if args.vendor_clk else 'identity'),
+                          else 'probe-read' if args.probe_read else 'vendor-clk' if args.vendor_clk
+                          else 'vendor-state' if args.vendor_state else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
                          if args.wrapper_read else PROBE_EXPECT if args.probe_read
-                         else VCLK_EXPECT if args.vendor_clk
+                         else VCLK_EXPECT if args.vendor_clk else VST_EXPECT if args.vendor_state
                          else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
+    if args.vendor_state:
+        approval = ROOT / 'apps/gpu-power-id/vendor-state-approval.json'
+        record['vendor_state'] = {
+            'copies': VENDOR_STATE,
+            'monitor_source': {'path': str(harness.CACHE / 'evidence/cpu-monitor-cleanup-20261024/snapshot/sources/'
+                                          'platform/a733/monitor.c'),
+                               'sha256': '08c3a6adfd85c6125dfdba37635f2dc690318ee3614b6eb4d83424f5c812ab82'},
+            'approval': {'path': str(approval), 'sha256': sha(approval)},
+            'unit_check': 'apps/gpu-power-id/vendor-state-units.py'}
+        record['local_authority_required'] += ('; PLL_GPU0 (CCU 0x0e0); DCDC4 selector 0x15 to 0x2e (960 mV); at EL3, '
+                                               'the SPC, R_SPC, R_PRCM 0x290 and CCU 0x3f00 security writes')
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))
 

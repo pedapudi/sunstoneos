@@ -212,6 +212,51 @@ gives the vendor trace, the write exception and the meaning of each
 result. `check.py --probe-read` runs thirteen cases, and bundle preparation
 requires the image's table to hold exactly the fifteen rows.
 
+## The vendor-state variant reads the identity in the vendor's GPU state
+
+`vendor-state.c` builds the vendor-state variant (`build.py --vendor-state`).
+It applies the three differences that the
+[reference backsolve](../../docs/gpu-power.md#the-vendor-state-probe-applies-the-vendors-clock-supply-and-secure-state)
+found between the vendor's probe-time state and every earlier image, in the
+vendor's order, and then reads the identity:
+
+1. **At EL3, before EL1 starts.** The monitor copy `vendor-state-monitor.c`
+   makes BL31's cold-boot security writes: SPC ports 0–13 and 16–23, R_SPC,
+   R_PRCM `0x07010290 |= 7`, the clock-controller security switch
+   `0x02003f00` = 7 and SPC port 14. It reads each word before and after its
+   write into an EL3 record at `0x42010000`. The client prints the record as
+   28 `GPU VST el3` lines and stops unless it is complete and the switch
+   reads 7.
+2. **DCDC4 to 960 mV.** Under an exclusive DCDC4 token, the provider copy
+   `vendor-state-pmic.c` writes selector `0x2e` over the expected `0x1e`
+   and reads it back. The client requires 960 mV in the readback, releases
+   the token and waits 1.2 ms. `vendor-state-approval.json` records the
+   change and the user's approval.
+3. **One ON.** TOP5 is adopted ON and CORE6 receives PWCR 0 and policy 8, as
+   in the vendor-clk variant. The controller copy `vendor-state-power.c`
+   then enables PLL_GPU0 with a bounded lock wait, releases the GPU bus
+   reset, opens the bus gate and the core clock on source 0 (the PLL) with
+   the update bit, and sets the PLL to 1008 MHz (`0xe9105300`). Every PLL
+   write is read back. The supply consumer and resource manager copies
+   admit DCDC4 only at 960 mV. CORE6 status is observed for at most
+   200 ms.
+4. **The identity**, as two 32-bit loads, `0x01800024` then `0x01800020`,
+   only after the controller read the PLL at 1008 MHz. The client exits
+   through `platform_exit` with no OFF.
+
+Before each step the progress record at result offset 128 (magic
+`GPUVST01`) holds the step number and a counter stamp; before each identity
+read it also holds the completed reads. The completion text is `COMPLETE
+GPU vendor-state: identity 36.56.104.183 at 1008 MHz from the GPU PLL, DCDC4
+960 mV and the BL31 security setup, GPU left powered`.
+
+`vendor-state-units.py` compiles the copies with the image's flags and runs
+22 unit cases under Unicorn: the controller's ON writes and each PLL, lock,
+update-bit, admission and resource refusal, the native allowlist, the
+supply copies' admission checks, the approval record and the monitor's EL3
+writes. It pins each copy's diff from its original. `check.py
+--vendor-state` runs twelve client cases on the linked image.
+
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 
@@ -226,8 +271,19 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ```
 
 Add `--power-only` to both commands for the power-only variant,
-`--wrapper-read` for the wrapper-read variant or `--probe-read` for the
-probe-read variant.
+`--wrapper-read` for the wrapper-read variant, `--probe-read` for the
+probe-read variant, `--vendor-clk` for the vendor-clk variant or
+`--vendor-state` for the vendor-state variant. The vendor-state variant
+also needs its unit check:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python apps/gpu-power-id/vendor-state-units.py --output /absolute/new/units
+```
+
+The vendor-state build reuses 27 objects and compiles ten: the seven of the
+other variants, with the vendor-state copies in place of the client,
+controller, native operations and resource manager, and the monitor, PMIC
+provider and supply consumer copies in place of the accepted objects.
 `prepare.py` turns a build and its check result into a board bundle for
 `tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
