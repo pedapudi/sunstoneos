@@ -48,6 +48,14 @@ static int pmic_current(void *c)
     p->poll_data = 0;
     return p->native_pmic_ops.current(c);
 }
+/* The wire-time spin's read: the adapter reads S_TWI0 without a barrier, so
+ * a DSB SY completes each read before bb_status_spin() stamps it. */
+static int spin_read(void *c, uintptr_t a, uint32_t *v)
+{
+    const int r = bb_power.native_pmic_ops.read(c, a, v);
+    a733_mmio_dsb_sy();
+    return r;
+}
 static int pmic_write(void *c, uintptr_t a, uint32_t v)
 {
     struct bb_power *p = &bb_power;
@@ -63,7 +71,7 @@ static int pmic_write(void *c, uintptr_t a, uint32_t v)
     const uint64_t after = counter();
     if (r == 1 && spin) {
         struct bb_status_trace t;
-        bb_status_spin(p->native_pmic_ops.read, c, cntpct, BB_TWI_CNTR, 8, 8, after, BB_POWER_STATUS_BOUND, &t);
+        bb_status_spin(spin_read, c, cntpct, BB_TWI_CNTR, 8, 8, after, BB_POWER_STATUS_BOUND, &t);
         p->cost.wire_seen = t.on;
         p->cost.wire_clear = t.on ? t.on_before : 0;
         p->cost.wire_set = t.on ? t.on_at : 0;

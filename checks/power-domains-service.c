@@ -37,7 +37,9 @@
  * second run's median; it is a fit and measures nothing. The 919 ns poll row
  * matches the model's completing-poll spans to the third run's measured span
  * total per step (118.2 us) at that run's 395 ns per write; its step, 758 us
- * against the run's 796 us, leaves the work outside the completing polls. The register-access rows
+ * against the run's 796 us, leaves the work outside the completing polls. The
+ * 896 ns row does the same for the fourth run, with the lighter placement's
+ * 475 ns per read and 331 ns per write: 748 us against 795 us. The register-access rows
  * charge only the accesses and a 35 ns counter read: 419 ns per read and
  * 281 ns per write with a DSB SY pair, or 378 ns per plain read and 235 ns
  * per write in the lighter placement. No row is a floor of another design.
@@ -333,6 +335,7 @@ int main(int argc,char **argv)
             {"poll term fitted to the board median",505,403,1500,145,23,2,783},
             {"fitted poll term, lighter barriers",465,364,1500,145,23,1,775},
             {"poll term matched to the measured completing-poll spans",505,395,919,145,23,1,758},
+            {"poll term matched to the spans of the lighter placement",475,331,896,145,23,1,748},
             {"register accesses only, DSB SY pairs",419,281,0,35,23,1,712},
             {"register accesses only, lighter barriers",378,235,0,35,23,1,694}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);

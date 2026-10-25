@@ -238,9 +238,6 @@ GPU liveness park complete before their deadlines.
 - Power-off of domains 1 and 4, which have several masters; no caller needs it.
 - The S_TWI0 packet engine and both interrupts: delivery is unqualified, and the
   spin is capped at 1 ms per step at a few requests per second.
-- Lighter barriers, which need the board qualification in
-  [docs/shared-helpers.md](../shared-helpers.md); the measured costs predict
-  a step about 8 µs shorter ([pmic-access.md](pmic-access.md)).
 
 ## Board evidence required
 
@@ -437,7 +434,8 @@ The 110% target, 693 µs, is out of reach of a provider that polls each bus
 phase. Charging the register accesses alone, with no software cost, the
 model gives 712 µs with `DSB SY` pairs and 694 µs with plain reads, a plain
 `DATA` write and a `DSB SY` after the `CNTR` write. That lighter placement
-is predicted to shorten the board step by about 8 µs. A route to 110% needs
+is implemented in the PMIC native adapter and qualified for snapshots by a
+bundle 6 run; it shortened that run's median by 1.9 µs. A route to 110% needs
 fewer serial accesses per snapshot, such as the S_TWI0 packet engine, which
 runs a transaction's conditions and bytes in hardware; neither it nor a
 Device-nGnRE mapping of S_TWI0 is designed here.
