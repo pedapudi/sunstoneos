@@ -118,7 +118,17 @@ AHB `0x5c0` bit 7 and MBUS `0x5e0` bit 16 read clear (`0x110103ff` to
 `0x1101037f`, `0xf1055803` to `0xf1045803`). Cycle 2 then relocked PLL_GPU0,
 but TOP5 ON timed out with both gates closed (`error=7 step=48`), and the
 image returned to the ROM with status 1. What the vendor stack does to power
-TOP5 on again after an OFF is under investigation. `work/sd-uhs-1025` (read-only UHS-I
+TOP5 on again after an OFF is under investigation.
+The decode was corrected: TOP5 ON had never been requested. After a TOP5 OFF,
+the owner's exact read-back of the delay row failed, because `+0xc10` reads
+`0x00ff0008`; the vendor writes that row once and never reads it back. With
+the read-back limited to the delay bits (`work/gpu-second-on-1025`), the third
+attempt (set `board-bundles-20261025-15`, `board-session-20261025-11/port-3-1`,
+record `s13-gpo-run`) got further:
+- cycle 2 powered TOP5 up from OFF with both gates closed;
+- TOP5 ON reopened both gates (AHB `0x110103ff`, MBUS `0xf1055803`);
+- the run then failed with `GPU provider request retained`, and the image
+  returned to the ROM. Decoding is in progress. `work/sd-uhs-1025` (read-only UHS-I
 SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
 board run is `docs/board-runbooks/sd-uhs.md`.
 
